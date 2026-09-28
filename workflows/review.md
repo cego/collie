@@ -49,8 +49,10 @@ worth raising; name the file it is about and say why the change puts it wrong.
 
 You may be the only reviewer of this change, in which case your review is the review the
 human reads: write `summary` — two sentences, what this change does and what is wrong with
-it — and `dropped: []`, alongside the fields below. Write them whether or not anyone else
-is reviewing; they cost a line and they are what makes your review readable on its own.
+it — `dropped: []`, and `fixed`: each finding of the review above that is gone, as
+`{"file": "path", "title": "its title", "note": "how it was fixed"}`, alongside the fields
+below. Write them whether or not anyone else is reviewing; they cost a line and they are
+what makes your review readable on its own.
 
 Already disputed — the implementer looked at these and did not apply them, with reasons:
 

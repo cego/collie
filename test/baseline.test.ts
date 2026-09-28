@@ -850,7 +850,7 @@ test(
           "review-on-pi",
           `{ ...shipped.agents, roles: { ...shipped.agents?.roles, reviewer: { harness: "pi", model: "openai-codex/gpt-6-astra", effort: "max" } } }`,
         );
-        yield* rig.queueOutputs([REVIEW, SYNTHESIS]);
+        yield* rig.queueOutputs([SYNTHESIS]);
         yield* parked({
           entry,
           runId: "r-review-pi",
@@ -862,7 +862,7 @@ test(
           expect(one.kind).toBe("pi");
           expect(one.args).toContain("--model openai-codex/gpt-6-astra --thinking max");
         }
-        expect(yield* launched()).toHaveLength(2);
+        expect(yield* launched()).toHaveLength(1);
         // What the reviewers are told is still the shipped review's.
         expect(yield* asked("r-review-pi", "review-1")).toContain(
           "Review target: branch:main...HEAD",
@@ -948,7 +948,7 @@ scenario(
   () =>
     runEffect(
       Effect.gen(function* () {
-        yield* rig.queueOutputs([REVIEW, SYNTHESIS]);
+        yield* rig.queueOutputs([SYNTHESIS]);
 
         yield* parked({
           entry: shipped("review"),
@@ -958,16 +958,14 @@ scenario(
           decision: "post-1",
         });
 
-        expect(yield* prompts()).toHaveLength(2);
+        expect(yield* prompts()).toHaveLength(1);
         const first = yield* asked("r-review", "review-1");
         expect(first).toContain("Review target: branch:main...HEAD");
         // The axes a human asked for are on top of the complete review, said once.
         expect(first).toContain("Additional axes requested for this change: security");
         expect(first).toContain("Iteration 1 of at most 1");
-        // The synthesis is given the reviews to reconcile, as files it can read.
-        expect(yield* asked("r-review", "synthesize")).toContain(
-          `${dir}/agents/r-review/review-1.json`,
-        );
+        // One seat is one review: there is nothing for a synthesis to reconcile.
+        expect(first).toContain("You may be the only reviewer of this change");
 
         const fs = yield* FileSystem.FileSystem;
         const where = runDir(dir, "r-review");
@@ -986,7 +984,7 @@ scenario(
   () =>
     runEffect(
       Effect.gen(function* () {
-        yield* rig.queueOutputs([REVIEW, SYNTHESIS]);
+        yield* rig.queueOutputs([SYNTHESIS]);
         const rows = yield* parked({
           entry: shipped("review"),
           runId: "r-review-branch",
@@ -1026,7 +1024,7 @@ scenario(
           disputed: [],
           checks: [{ name: "test" }],
         };
-        yield* rig.queueOutputs([REVIEW, SYNTHESIS, fixed]);
+        yield* rig.queueOutputs([SYNTHESIS, fixed]);
         const target = "mr:gitlab.example.com/group/project!42";
         const rows = yield* parked({
           entry: shipped("review"),
@@ -1045,7 +1043,7 @@ scenario(
           until: "post-2",
         });
 
-        expect(yield* prompts()).toHaveLength(3);
+        expect(yield* prompts()).toHaveLength(2);
         expect(yield* asked("r-review-mr", "fix")).toContain(
           "glab mr checkout <iid> --repo gitlab.example.com/group/project",
         );
@@ -1068,7 +1066,7 @@ scenario(
   () =>
     runEffect(
       Effect.gen(function* () {
-        yield* rig.queueOutputs([REVIEW, SYNTHESIS]);
+        yield* rig.queueOutputs([SYNTHESIS]);
         // Another Run's implementer, live in this checkout's workspace and registered as it.
         yield* rig.addAgent("impl-live", "9-1");
         const env = hostOf().env;
@@ -1101,8 +1099,8 @@ scenario(
         const handed = (yield* prompts()).filter((text) => text.includes("review.md"));
         expect(handed).toHaveLength(1);
         expect(handed[0]).toContain(`${runDir(dir, "r-review-live")}/review.md`);
-        // Two agents, the reviewer and the synthesis; the fix went to the one already here.
-        expect((yield* rig.cmds()).filter((cmd) => cmd === "agent start")).toHaveLength(2);
+        // One agent, the lone reviewer; the fix went to the one already here.
+        expect((yield* rig.cmds()).filter((cmd) => cmd === "agent start")).toHaveLength(1);
       }),
     ),
   120_000,
@@ -1311,7 +1309,6 @@ const BUILT = {
   commits: ["made the registry one"],
   tests: "unit: pass",
 };
-const CLEAN_REVIEW = { verdict: "clean", findings: [] };
 const CLEAN_SYNTHESIS = {
   verdict: "clean",
   summary: "It merges the two registries. Nothing is wrong with it.",
@@ -1342,7 +1339,7 @@ scenario(
           { file: "02-second.md", title: "the second one", checks: "unit" },
         ]);
         yield* approve("r-impl", ["unit"]);
-        yield* rig.queueOutputs([BUILT, BUILT, CLEAN_REVIEW, CLEAN_SYNTHESIS, OPENED]);
+        yield* rig.queueOutputs([BUILT, BUILT, CLEAN_SYNTHESIS, OPENED]);
 
         const result = yield* ran({
           entry: shipped("implement"),
@@ -1352,12 +1349,12 @@ scenario(
         yield* bin.restore();
 
         expect(said(result)).toBe(OPENED.mr_url);
-        // One implementer for the build, the fixes and the merge request; the reviewer and
-        // the synthesis are their own, because neither may vouch for the change.
+        // One implementer for the build, the fixes and the merge request; the reviewer is
+        // its own, because it may not vouch for the change.
         const starts = yield* rig
           .cmds()
           .pipe(Effect.map((cmds) => cmds.filter((cmd) => cmd === "agent start")));
-        expect(starts).toHaveLength(3);
+        expect(starts).toHaveLength(2);
         // Tabs open in the order their agents started, whatever the workflow is called.
         const tabs = yield* rig
           .calls()
@@ -1368,7 +1365,7 @@ scenario(
                 .map((call) => call.argv?.[(call.argv?.indexOf("--label") ?? -2) + 1]),
             ),
           );
-        expect(tabs).toEqual(["Implementer", "Reviewer · review-1", "Reviewer · synthesize"]);
+        expect(tabs).toEqual(["Implementer", "Reviewer · review-1"]);
         // The second ticket is handed what the first left, not the whole transcript.
         const second = yield* asked("r-impl", "02-second.md");
         expect(second).toContain("Ticket: 02-second.md — the second one");
@@ -1401,7 +1398,7 @@ scenario(
         ]);
         yield* approve("r-live", ["unit"]);
         // The first ticket's Output is written by hand, once the plan has moved under it.
-        yield* rig.queueOutputs([null, BUILT, CLEAN_REVIEW, CLEAN_SYNTHESIS, OPENED]);
+        yield* rig.queueOutputs([null, BUILT, CLEAN_SYNTHESIS, OPENED]);
         const running = yield* Effect.forkChild(
           ran({ entry: shipped("implement"), runId: "r-live", input: { plan } }),
         );
@@ -1441,7 +1438,7 @@ scenario(
           { file: "01-first.md", title: "the first one", checks: "unit" },
         ]);
         yield* approve("r-grow", ["unit"]);
-        yield* rig.queueOutputs([null, BUILT, CLEAN_REVIEW, CLEAN_SYNTHESIS, OPENED]);
+        yield* rig.queueOutputs([null, BUILT, CLEAN_SYNTHESIS, OPENED]);
         const running = yield* Effect.forkChild(
           ran({ entry: shipped("implement"), runId: "r-grow", input: { plan } }),
         );
@@ -1480,7 +1477,7 @@ scenario(
         yield* repository();
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
         yield* approve("r-impl-mr", ["unit"]);
-        yield* rig.queueOutputs([BUILT, CLEAN_REVIEW, CLEAN_SYNTHESIS, OPENED]);
+        yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, OPENED]);
 
         yield* ran({ entry: shipped("implement"), runId: "r-impl-mr", input: { plan } });
         yield* bin.restore();
@@ -1513,10 +1510,8 @@ scenario(
         };
         yield* rig.queueOutputs([
           BUILT,
-          { verdict: "findings", findings: [finding] },
           { ...CLEAN_SYNTHESIS, verdict: "findings", findings: [finding], scope_met: true },
           { verdict: "clean", fixed: [{ title: finding.title, file: finding.file }], checks: [] },
-          CLEAN_REVIEW,
           { ...CLEAN_SYNTHESIS },
           OPENED,
         ]);
@@ -1571,7 +1566,7 @@ scenario(
         yield* fs.writeFileString(`${reviewed}/review.md`, "# Review\n\nThe guard is wrong.\n");
         yield* fs.writeFileString(`${reviewed}/findings.json`, "[]");
         yield* approve("r-impl-review", ["unit"]);
-        yield* rig.queueOutputs([BUILT, CLEAN_REVIEW, CLEAN_SYNTHESIS, OPENED]);
+        yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, OPENED]);
 
         yield* ran({
           entry: shipped("implement"),
@@ -1605,7 +1600,7 @@ scenario(
           `${evidenceDir(dir, "r-impl-gate")}/approved.json`,
           asApproved([{ name: "unit", executable: "false", argv: [], cwd: rig.projectDir }]),
         );
-        yield* rig.queueOutputs([BUILT, CLEAN_REVIEW, CLEAN_SYNTHESIS]);
+        yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS]);
 
         const result = yield* ran({
           entry: shipped("implement"),
@@ -1621,7 +1616,7 @@ scenario(
         // a feature Run held to it is not told it is missing when a reviewer gave it.
         expect(said(result)).not.toContain("scope_met");
         // Nothing was opened, so nobody was asked to open it.
-        expect(yield* prompts()).toHaveLength(3);
+        expect(yield* prompts()).toHaveLength(2);
       }),
     ),
   120_000,
@@ -1726,7 +1721,7 @@ scenario(
         yield* stalled({ entry: shipped("implement"), runId: "r-impl-grant", input: { plan } });
 
         yield* approve("r-impl-grant", ["unit"]);
-        yield* rig.queueOutputs([BUILT, CLEAN_REVIEW, CLEAN_SYNTHESIS, OPENED]);
+        yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, OPENED]);
         const result = yield* resumed({
           entry: shipped("implement"),
           runId: "r-impl-grant",
@@ -1757,7 +1752,7 @@ scenario(
         yield* repository();
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
         yield* approve("r-impl-emptied", ["unit"]);
-        yield* rig.queueOutputs([BUILT, CLEAN_REVIEW, CLEAN_SYNTHESIS, OPENED]);
+        yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, OPENED]);
         // A human withdraws the last grant once the build has been handed out.
         let asks = 0;
         const withdrawn: HostOverride = Layer.effect(Host)(
@@ -1783,7 +1778,7 @@ scenario(
           "collie run intent verification r-impl-emptied --name",
         );
         // Stopped at the gate: built and reviewed, and nobody asked to open anything.
-        expect(yield* prompts()).toHaveLength(3);
+        expect(yield* prompts()).toHaveLength(2);
         // Nor asked to approve a list with nothing in it.
         expect(
           yield* session(Store.pipe(Effect.flatMap((store) => store.asked("r-impl-emptied")))),
@@ -1793,25 +1788,28 @@ scenario(
   120_000,
 );
 
-scenario("a Run whose outcome needs no evidence is not stopped for having nothing approved", () =>
-  runEffect(
-    Effect.gen(function* () {
-      yield* repository();
-      yield* approve("r-impl-inv", []);
-      yield* rig.queueOutputs([null]);
+scenario(
+  "a Run whose outcome needs no evidence is not stopped for having nothing approved",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* repository();
+        yield* approve("r-impl-inv", []);
+        yield* rig.queueOutputs([null]);
 
-      yield* stalled({
-        entry: shipped("implement"),
-        runId: "r-impl-inv",
-        input: { plan: "why is the board slow?" },
-        options: { outcome: "investigation" },
-      }).pipe(Effect.timeout("3 seconds"), Effect.ignore);
+        yield* stalled({
+          entry: shipped("implement"),
+          runId: "r-impl-inv",
+          input: { plan: "why is the board slow?" },
+          options: { outcome: "investigation" },
+        }).pipe(Effect.timeout("3 seconds"), Effect.ignore);
 
-      // Its agent writes nothing, which parks it for that; never for what was approved.
-      expect(yield* parkedWhy("r-impl-inv")).not.toContain("approved");
-      expect((yield* rig.cmds()).filter((cmd) => cmd === "agent start")).toHaveLength(1);
-    }),
-  ),
+        // Its agent writes nothing, which parks it for that; never for what was approved.
+        expect(yield* parkedWhy("r-impl-inv")).not.toContain("approved");
+        expect((yield* rig.cmds()).filter((cmd) => cmd === "agent start")).toHaveLength(1);
+      }),
+    ),
+  30_000,
 );
 
 /**

@@ -134,6 +134,21 @@ export const reviewPass = (ask: ReviewAsk) =>
       seat,
       operation: reviewOp(seat.name ?? String(at + 1)),
     }));
+    // One seat is one review, already the one the human reads: its prompt asks a lone
+    // reviewer for the synthesis's own fields, so a second agent would only copy it.
+    if (seats.length === 1) {
+      const [only] = seats;
+      const alone: SynthesisReport = yield* agentWork({
+        operation: only!.operation,
+        role: "reviewer",
+        seat: only!.seat,
+        instructions: REVIEW,
+        input,
+        output: SynthesisSchema,
+      });
+      yield* leaveReview(dir, alone);
+      return alone;
+    }
     yield* Effect.forEach(
       seats,
       ({ seat, operation }) =>

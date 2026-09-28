@@ -86,6 +86,13 @@ export function guarded<E, R>(operation: Effect.Effect<void, E, R>, json: boolea
   return operation.pipe(
     Effect.catch((cause) => printResult(err("operation_failed", String(cause)), json)),
     Effect.catchDefect((defect) => printResult(err("operation_failed", String(defect)), json)),
+    // A signal is still an ending: a caller piping this into a parser otherwise reads an
+    // empty stream and cannot tell a wait that was cut short from one that said nothing.
+    Effect.onInterrupt(() =>
+      printResult(err("operation_failed", "interrupted before it finished"), json).pipe(
+        Effect.ignore,
+      ),
+    ),
   );
 }
 

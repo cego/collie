@@ -13,5 +13,9 @@ export default defineWorkflow({
   hints: { target: "diff-target" },
   outcome: { fixed: "review" },
   run: ({ input }) =>
-    Activity.make({ name: "report", success: Schema.String, execute: Effect.succeed(input.target) }),
+    Activity.make({
+      name: "report",
+      success: Schema.String,
+      execute: Effect.succeed(input.target),
+    }),
 });

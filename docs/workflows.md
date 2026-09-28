@@ -163,8 +163,9 @@ for a refactor, `supported`, `accurate` or `compatible` — which is the field t
 the merge request reads ([Outcomes](cli.md#outcomes)).
 
 **What happens:** one reviewer reads the target and writes the review — the whole spec, the
-whole change, and the code around it. A synthesis then reconciles what the reviewers wrote
-into the one review a human reads — findings deduplicated across models, disagreements
+whole change, and the code around it. Where a fork seats more than one reviewer, a
+synthesis then reconciles what they wrote into the one review a human reads; a lone
+reviewer's review is that review — findings deduplicated across models, disagreements
 settled against the diff, and anything that cannot be defended listed under `dropped` with
 a reason — rendered to `review.md` in the run directory, which is what you read and what
 **Post to MR** sends. The shipped review has one reviewer; a fork that wants another adds an

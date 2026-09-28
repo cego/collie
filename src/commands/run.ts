@@ -2,6 +2,7 @@ import {
   Cause,
   Duration,
   Effect,
+  Exit,
   FileSystem,
   Option,
   Path,
@@ -640,7 +641,7 @@ const waitForRun = Effect.fn("collie.waitForRun")(function* (
   const seen = yield* Ref.make<RunView | null>(null);
   const enough = (view: RunView) =>
     isSettled(view) || (options.wantsAttention && view.status.status === "suspended");
-  const watching = watchRun(env, runId, (view) =>
+  const once = watchRun(env, runId, (view) =>
     Effect.gen(function* () {
       const last = yield* Ref.getAndSet(seen, view);
       // One line per change, not per look: a run polled while it waits is not news.
@@ -654,6 +655,22 @@ const waitForRun = Effect.fn("collie.waitForRun")(function* (
       return enough(view);
     }).pipe(Effect.orDie),
   ).pipe(Effect.scoped);
+  // A host replaced or restarted under the wait ends its stream before the Run got
+  // anywhere. The engine is durable and the next host serves the same Run, so the wait
+  // goes on against it rather than reporting a Run that has not moved.
+  const watching = Effect.gen(function* () {
+    for (;;) {
+      const exit = yield* Effect.exit(once);
+      const last = yield* Ref.get(seen);
+      if (Exit.isSuccess(exit) && (exit.value !== null || last === null || enough(last))) {
+        return exit.value;
+      }
+      if (Exit.isFailure(exit) && !Cause.hasInterruptsOnly(exit.cause)) {
+        return yield* Effect.failCause(exit.cause);
+      }
+      yield* Effect.sleep("500 millis");
+    }
+  });
   const bounded = options.ms === null ? watching : watching.pipe(Effect.timeout(options.ms));
   const failed = yield* bounded.pipe(
     Effect.catch((cause) =>
