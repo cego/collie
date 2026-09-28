@@ -1,6 +1,6 @@
 id = "cego.collie"
 name = "Collie"
-version = "0.24.3"
+version = "0.24.4"
 min_herdr_version = "0.8.2"
 description = "Pick and run codified agent workflows (plan, implement, review) as multi-tab orchestrations."
 platforms = ["linux", "macos"]
@@ -54,4 +54,9 @@ command = ["sh", "-c", 'exec "$HERDR_PLUGIN_ROOT/bin/collie" herdr picker']
 id = "workspace"
 title = "🐕 Collie"
 placement = "tab"
-command = ["sh", "-c", 'exec "$HERDR_PLUGIN_ROOT/bin/collie" herdr workspace']
+# Exit 75 is the board saying its binary was rebuilt: start the new one in the same pane.
+command = [
+  "sh",
+  "-c",
+  'while :; do "$HERDR_PLUGIN_ROOT/bin/collie" herdr workspace; c=$?; [ "$c" -eq 75 ] || exit "$c"; done',
+]
