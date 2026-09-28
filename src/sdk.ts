@@ -345,11 +345,11 @@ const isPanel = (seats: Seat | ReadonlyArray<Seat>): seats is ReadonlyArray<Seat
  * The panel this workflow's definition seats for a role: every seat it names, or one that
  * prefers nothing of its own where it names none. Work given a seat sits at it.
  */
-export const panelOf = (role: string): Effect.Effect<ReadonlyArray<Seat>> =>
+export const panelOf = (role: string): Effect.Effect<readonly [Seat, ...Seat[]]> =>
   Effect.gen(function* () {
     const given = (yield* WorkflowAgents)?.roles?.[role];
-    const seats = given === undefined ? [] : isPanel(given) ? given : [given];
-    return seats.length === 0 ? [{}] : seats;
+    const [first = {}, ...rest] = given === undefined ? [] : isPanel(given) ? given : [given];
+    return [first, ...rest];
   });
 
 /**

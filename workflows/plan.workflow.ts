@@ -133,7 +133,7 @@ export default defineWorkflow({
   agents: {
     harness: "claude",
     model: "fable",
-    effort: "medium",
+    effort: "high",
     roles: { reviewer: { harness: "claude", model: "opus", effort: "xhigh" } },
   },
   hints: { goal: "goal", ticket: "ticket" },

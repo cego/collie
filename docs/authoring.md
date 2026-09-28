@@ -192,6 +192,12 @@ that switches harness keeps nothing chosen for the one below, and a combination 
 does not take is refused rather than replaced. [The SDK](sdk.md#which-agent-does-the-work)
 has the whole of it.
 
+The shipped workflows plan and design on `fable` at `high` (plan's planner, architecture),
+build on `opus` at `medium` (the implementer, in implement and in review's fix) and review
+on `opus` at `xhigh` (every reviewer and synthesis, and plan's second opinion); renovate
+runs on the pinned default at `medium`. Each is a role in the workflow's `agents`, which is
+what a fork overrides.
+
 The auto mode is passed unless `permissions` says `bypass` or `harness`, in your
 `config.json` or on the operation; see [Permissions](using.md#permissions-auto-by-default)
 for what each means. pi says none because it does not ask before a tool call — its

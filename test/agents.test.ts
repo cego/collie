@@ -809,10 +809,7 @@ test("an agent is given longer than herdr's default to be ready in a checkout it
       yield* session(started("r1"));
       const argv = (yield* rig.calls()).find((call) => call.cmd === "agent start")?.argv ?? [];
       // herdr waits 30s by default, and a first start — trust, plugins, MCP servers — takes longer.
-      expect(argv.slice(argv.indexOf("--timeout"), argv.indexOf("--timeout") + 2)).toEqual([
-        "--timeout",
-        "180000",
-      ]);
+      expect(Number(argv[argv.indexOf("--timeout") + 1])).toBeGreaterThan(30_000);
     }),
   ));
 

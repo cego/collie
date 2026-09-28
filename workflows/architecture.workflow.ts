@@ -63,6 +63,8 @@ export default defineWorkflow({
   description:
     "Runs the architecture skill over this project, writes a report into the run dir, then asks what next.",
   output: Schema.String,
+  // Design, like planning: the planner's model and effort.
+  agents: { harness: "claude", model: "fable", effort: "high" },
   run: () =>
     Effect.gen(function* () {
       const host = yield* Host;

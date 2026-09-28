@@ -750,7 +750,10 @@ Ask about the flock and you get an answer about the flock. Chat reads the whole 
 always: nothing on the board narrows what Collie may see. Where there are
 more Runs than one answer carries, it says how many it left out rather than answering as
 though that was all of them. A follow-up is understood — the conversation is the harness's
-own session, and it is still there when you reopen the Home.
+own session, running for as long as its pane does. A chat that has to be started again —
+its process gone — starts a new conversation rather than resuming the last one, which
+would carry that whole history into every turn. Claude's runs on the latest Opus at
+medium effort.
 
 **Chat knows which card you have open.** Every message you send carries one line naming
 the open card, attached as you send it and never when you click — so opening ten cards and
@@ -773,9 +776,8 @@ collie chat harness pi
 
 `chat harness` is a **launch preference**. It never stops, replaces or summarises a
 conversation that is running: `chat status` shows what is running and, separately, what is
-chosen for next time. When Pi does open it opens on Pi's own history and fresh Herd state —
-there is no handoff, no generated switch summary and no transcript conversion, and your
-Claude conversation is still there when you choose Claude again.
+chosen for next time. When Pi does open it opens a new conversation on fresh Herd state —
+there is no handoff, no generated switch summary and no transcript conversion.
 
 **What chat can do.** Ask it to hold a run, answer a Choice, steer an agent, stop or resume
 one, follow up a finished run, amend an Intent, start a workflow, fork a Workflow or a

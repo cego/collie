@@ -232,10 +232,8 @@ const live = Effect.fn("live.run")(function* (harness: string, keep: boolean) {
     self,
   );
   say(
-    "a relaunch resumes this Herd's own session",
-    again.kind === "launched" &&
-      again.resumed &&
-      again.record.sessions[chosen] === before?.sessions[chosen]
+    "a relaunch starts a new conversation",
+    again.kind === "launched" && again.record.sessions[chosen] !== before?.sessions[chosen]
       ? "pass"
       : "fail",
     again.kind === "unavailable"
