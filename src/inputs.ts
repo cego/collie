@@ -545,6 +545,14 @@ export function classifyGivenTarget(
   });
 }
 
+/** The Linear issue a typed work source names, by its URL or bare id, and null for anything else. */
+export function linearIssueOf(typed: string): string | null {
+  const text = typed.trim();
+  const url = /linear\.app\/[^/\s]+\/issue\/([A-Za-z][A-Za-z0-9]*-\d+)/.exec(text);
+  if (url) return url[1]!.toUpperCase();
+  return /^[A-Za-z][A-Za-z0-9]*-\d+$/.test(text) ? text.toUpperCase() : null;
+}
+
 /** What the human typed: a plan directory, a Linear issue, or the work in their own words. */
 export function classifyWorkSource(
   typed: string,
@@ -560,11 +568,8 @@ export function classifyWorkSource(
     if (text.startsWith("followup:"))
       return { kind: "followup", value: text, source, label: text.slice("followup:".length) };
 
-    const url = /linear\.app\/[^/\s]+\/issue\/([A-Za-z][A-Za-z0-9]*-\d+)/.exec(text);
-    if (url) return { kind: "linear", source, value: url[1]!.toUpperCase() };
-
-    if (/^[A-Za-z][A-Za-z0-9]*-\d+$/.test(text))
-      return { kind: "linear", value: text.toUpperCase(), source };
+    const issue = linearIssueOf(text);
+    if (issue !== null) return { kind: "linear", value: issue, source };
 
     // A review run's own dir: the findings are the spec, and the reviewed target is
     // what the work happens on.

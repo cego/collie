@@ -505,6 +505,14 @@ test("two descriptions that start alike are two branches", () =>
       expect(
         yield* plan({ plan_kind: "linear", plan: "ENG-123" }, undefined, { name: "ENG-123" }),
       ).toMatchObject({ branch: `${LOGIN}/eng-123` });
+      // So does its URL, which is how an issue is usually pasted.
+      expect(
+        yield* plan(
+          { plan_kind: "linear", plan: "https://linear.app/acme/issue/ENG-123/add-a-picker" },
+          undefined,
+          { name: "ENG-123" },
+        ),
+      ).toMatchObject({ branch: `${LOGIN}/eng-123` });
       // A chained Run is named after its parent, and its work source is a path the
       // parent wrote rather than anything a human said — that name is already whole,
       // and slugging the path would refuse every chained run.

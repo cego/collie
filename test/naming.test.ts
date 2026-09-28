@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import {
+  agentTabLabel,
   agentName,
   COLLIE_TAB,
   disambiguate,
@@ -161,4 +162,20 @@ test("a task workspace is named for its project and what the task is", () => {
   // A half-answer still names something rather than reading as a stray separator.
   expect(taskWorkspaceLabel({ project: "", title: "Task workspaces" })).toBe("Task workspaces");
   expect(taskWorkspaceLabel({ project: "Collie", title: "" })).toBe("Collie");
+  // A repository's name is what the model answers with, and a label is Capitalized.
+  expect(taskWorkspaceLabel({ project: " monorepo ", title: "FRO-343" })).toBe(
+    "Monorepo | FRO-343",
+  );
+});
+
+test("an agent's tab names its role, and the one piece of work an agent of its own does", () => {
+  expect(agentTabLabel({ role: "implementer", operation: "build", agent: "builder" })).toBe(
+    "Implementer",
+  );
+  expect(agentTabLabel({ role: "reviewer", operation: "review-1", agent: null })).toBe(
+    "Reviewer · review-1",
+  );
+  expect(agentTabLabel({ role: "reviewer", operation: "use:review.synthesize", agent: null })).toBe(
+    "Reviewer · synthesize",
+  );
 });

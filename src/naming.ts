@@ -155,6 +155,20 @@ export function disambiguate(name: string, target: string): string {
   return target ? `${name} · ${target}` : name;
 }
 
+/**
+ * `Reviewer · synthesize`: an agent's tab names its role and, for an agent kept for one
+ * piece of work, which piece — a reviewer seat and the synthesis are otherwise two tabs
+ * that read the same. A shared agent does several, so its tab names only the role.
+ */
+export function agentTabLabel(ask: {
+  role: string;
+  operation: string;
+  agent: string | null;
+}): string {
+  const step = ask.agent === null ? ask.operation.slice(ask.operation.lastIndexOf(".") + 1) : "";
+  return disambiguate(displayName(ask.role), step);
+}
+
 /** `openai-codex/gpt-5.6-sol` is a model id; `gpt-5.6-sol` is the model. */
 function shortModel(model: string): string {
   return model.slice(model.lastIndexOf("/") + 1);
@@ -193,8 +207,7 @@ export function runTitle(run: { readonly workflow: string; readonly settled: Set
 
 /** `Collie | Task workspaces`: a task workspace's own label, from its two halves. */
 export function taskWorkspaceLabel(name: { project: string; title: string }): string {
-  return [name.project, name.title]
-    .map(oneLine)
+  return [displayName(oneLine(name.project)), oneLine(name.title)]
     .filter((part) => part !== "")
     .join(" | ");
 }
