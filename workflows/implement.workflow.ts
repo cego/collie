@@ -195,6 +195,14 @@ export default defineWorkflow({
               waves: read.waves.map((wave) => [...wave]),
               refusal: read.refusal?.message ?? null,
             })),
+            // A plan that cannot be read is refused by name, not a defect the Run dies of.
+            Effect.catch((cause) =>
+              Effect.succeed({
+                single: false,
+                waves: [],
+                refusal: `the plan at ${source.value} could not be read: ${cause.message}`,
+              }),
+            ),
           ),
         });
         if (plan.refusal !== null) return yield* new WorkflowError({ reason: plan.refusal });

@@ -21,6 +21,7 @@ import {
   Effect,
   Exit,
   FileSystem,
+  Formatter,
   Layer,
   Option,
   Path,
@@ -2364,7 +2365,7 @@ const exitStatus = (
     if (Option.isSome(encoded) && isJson(encoded.value)) {
       return { status: "complete", value: encoded.value };
     }
-    return { status: "complete", value: isJson(result) ? result : String(result) };
+    return { status: "complete", value: isJson(result) ? result : Formatter.format(result) };
   }
   // A failure of the workflow's own is what it says it is, in the words its schema writes.
   const failure = Cause.findErrorOption(exit.cause);
@@ -4445,7 +4446,8 @@ const JsonObject = Schema.Record(Schema.String, Schema.Json);
 const isJsonObject = Schema.is(JsonObject);
 const readJsonObject = Schema.decodeUnknownOption(Schema.fromJsonString(JsonObject));
 const writeJsonObject = Schema.encodeSync(Schema.fromJsonString(JsonObject, { space: 2 }));
-const objectIn = (value: Schema.Json | undefined) => (isJsonObject(value) ? value : {});
+const objectIn = (value: Schema.Json | undefined): Readonly<Record<string, Schema.Json>> =>
+  isJsonObject(value) ? value : {};
 
 /**
  * An author's package.json with what a module is typechecked against added where it is

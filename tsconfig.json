@@ -10,8 +10,12 @@
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "noEmit": true,
+    "allowImportingTsExtensions": true,
     "skipLibCheck": true,
     "verbatimModuleSyntax": true,
+    // What `engine.ts` serves a module as `collie`, so the shipped workflows are checked
+    // against the objects they actually run with.
+    "paths": { "collie": ["./src/collie-module.ts"] },
     "plugins": [
       {
         "name": "@effect/language-service",
@@ -25,5 +29,5 @@
   // Workflow modules an author would write, typechecked by the toolchain Collie
   // provisions rather than by this project — one of them is deliberately wrong.
   "exclude": ["test/fixtures/workflows"],
-  "include": ["src", "test"]
+  "include": ["src", "test", "workflows"]
 }

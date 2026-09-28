@@ -336,7 +336,11 @@ export class Rig {
         (): ReadonlyArray<Schema.JsonObject> => [],
       );
       const renewed = agents.map((agent) =>
-        agent.name === name ? { ...agent, terminal_id: `${agent.terminal_id}+next` } : agent,
+        agent.name === name
+          ? Object.assign({}, agent, {
+              terminal_id: `${typeof agent.terminal_id === "string" ? agent.terminal_id : ""}+next`,
+            })
+          : agent,
       );
       yield* fs.writeFileString(
         statePath,
@@ -435,7 +439,9 @@ export class Rig {
         encodeJson(
           Object.assign({}, state, {
             workspaces: list("workspaces").filter((w) => w.workspace_id !== workspaceId),
-            agents: list("agents").filter((a) => !agents.includes(String(a.name))),
+            agents: list("agents").filter(
+              (a) => !(typeof a.name === "string" && agents.includes(a.name)),
+            ),
             closedWorkspaces: [...closed, workspaceId],
           }),
         ),

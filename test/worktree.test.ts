@@ -1603,25 +1603,26 @@ const worktreeOwnedBy = Effect.fn("worktreeTest.worktreeOwnedBy")(function* (
 });
 
 /** A Renovate Run that recorded this checkout, as one that is still running would. */
-const renovateRunAt = Effect.fn("worktreeTest.renovateRunAt")(function* (at: string) {
-  const run = runFacts({
-    id: "renovate-project",
-    workflow: "renovate",
-    cwd: at,
-    worktree: {
-      path: at,
-      branch: "",
-      created_by_collie: true,
-      managed_by: "git",
-      workspace_id: null,
-      made_at: null,
-      root_tab_id: null,
-      root_pane_id: null,
-    },
+const renovateRunAt = (at: string) =>
+  Effect.sync(() => {
+    const run = runFacts({
+      id: "renovate-project",
+      workflow: "renovate",
+      cwd: at,
+      worktree: {
+        path: at,
+        branch: "",
+        created_by_collie: true,
+        managed_by: "git",
+        workspace_id: null,
+        made_at: null,
+        root_tab_id: null,
+        root_pane_id: null,
+      },
+    });
+    recorded.push(run);
+    return run.id;
   });
-  recorded.push(run);
-  return run.id;
-});
 
 test("a second Renovate Run on one repository is refused, never handed the first's tree", () =>
   runEffect(

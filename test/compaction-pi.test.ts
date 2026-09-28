@@ -325,8 +325,10 @@ onMachineWith("pi")(
           stdout: "ignore",
           stderr: "ignore",
         });
-        child.stdin.write(`${asRpc({ type: "prompt", message: "/collie-compact req-live" })}\n`);
-        child.stdin.flush();
+        void child.stdin.write(
+          `${asRpc({ type: "prompt", message: "/collie-compact req-live" })}\n`,
+        );
+        void child.stdin.flush();
 
         const outcome = yield* pi.poll(ctx(), "req-live").pipe(
           Effect.repeat({

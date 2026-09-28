@@ -934,7 +934,7 @@ export function checkEntry(entry: WorkflowEntry): ReadonlyArray<string> {
   problems.push(...outcomeProblems(entry.metadata?.outcome));
   const checkout: unknown = entry.metadata?.checkout;
   if (checkout !== undefined && !isDeclaredCheckout(checkout)) {
-    problems.push(`checkout "${String(checkout)}" is not branch or roaming`);
+    problems.push(`checkout ${JSON.stringify(checkout)} is not branch or roaming`);
   }
   problems.push(...offerProblems(entry.metadata));
   return problems;

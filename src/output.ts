@@ -209,7 +209,8 @@ const encodeFindings = Schema.encodeSync(FindingsJson);
  */
 export const leaveReview = (
   dir: string,
-  synthesis: Synthesis,
+  // What the schema decodes, readonly, as the declarations an author is given say it is.
+  synthesis: typeof SynthesisSchema.Type,
 ): Effect.Effect<void, never, FileSystem.FileSystem> =>
   FileSystem.FileSystem.pipe(
     Effect.flatMap((fs) =>
@@ -684,7 +685,7 @@ const oneLine = (f: Finding) => `[${f.severity}] ${f.title}${f.file ? ` (${f.fil
 /** Worst first; anything a fork's own vocabulary adds sorts after these, by name. */
 const SEVERITIES = ["blocker", "major", "minor"];
 
-function severityOrder(findings: Finding[]): string[] {
+function severityOrder(findings: ReadonlyArray<Finding>): string[] {
   const present = [...new Set(findings.map((f) => f.severity))];
   const known = SEVERITIES.filter((s) => present.includes(s));
   return [...known, ...present.filter((s) => !SEVERITIES.includes(s)).sort()];
@@ -695,7 +696,7 @@ function severityOrder(findings: Finding[]): string[] {
  * rather than asked for, so every review is the same shape: the summary, then the
  * findings under their severity, and nothing about how it was produced.
  */
-export function renderReview(synthesis: Synthesis): string {
+export function renderReview(synthesis: typeof SynthesisSchema.Type): string {
   const blocks = [synthesis.summary.trim()];
   // Read first: it is what says the rally is converging rather than repeating.
   if (synthesis.fixed.length > 0) {

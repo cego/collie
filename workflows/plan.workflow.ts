@@ -167,6 +167,9 @@ export default defineWorkflow({
           success: Schema.NullOr(Schema.String),
           execute: planReposOf(planDir, place.cwd).pipe(
             Effect.map((plan) => plan.refusal?.message ?? null),
+            Effect.catch((cause) =>
+              Effect.succeed(`the plan at ${planDir} could not be read: ${cause.message}`),
+            ),
           ),
         });
       const planner = { agent: PLANNER, role: "planner" };

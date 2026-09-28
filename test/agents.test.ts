@@ -723,7 +723,11 @@ test("a definition's own preference sits under a scope's, and parallel scopes ke
           Effect.orDie,
         );
       const models = everyLaunch(yield* rig.calls()).map((args) => args[1]);
-      expect([...models].sort()).toEqual(["haiku", "opus", "sonnet"]);
+      expect([...models].sort((a, b) => (a ?? "").localeCompare(b ?? ""))).toEqual([
+        "haiku",
+        "opus",
+        "sonnet",
+      ]);
     }),
   ));
 
