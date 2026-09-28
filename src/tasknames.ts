@@ -61,18 +61,21 @@ export function repositoryOf(cwd: string): string {
 export function establishedProject(live: LiveNames, repo: string): string | null {
   const wanted = normal(repo);
   if (wanted === "") return null;
-  for (const label of live.workspaces) {
-    const prefix = PREFIXED.exec(oneLine(label))?.[1]?.trim();
-    if (prefix === undefined) continue;
-    const project = normal(prefix);
-    if (
-      project !== "" &&
-      (project === wanted || project.includes(wanted) || wanted.includes(project))
-    )
-      return prefix;
-  }
+  for (const prefix of prefixesIn(live)) if (names(normal(prefix), wanted)) return prefix;
   return null;
 }
+
+/** Every `<project> |` prefix on the person's live workspaces, as they spelled it. */
+function prefixesIn(live: LiveNames): string[] {
+  return live.workspaces.flatMap((label) => {
+    const prefix = PREFIXED.exec(oneLine(label))?.[1]?.trim();
+    return prefix === undefined || normal(prefix) === "" ? [] : [prefix];
+  });
+}
+
+/** Whether a normalised project names the same thing as a normalised repository. */
+const names = (project: string, repo: string) =>
+  project === repo || project.includes(repo) || repo.includes(project);
 
 /**
  * How much of a mechanical title is worth putting on a sidebar row. Not a rule anybody
@@ -144,8 +147,19 @@ export function namePack(context: TaskContext, live: LiveNames): string {
  */
 export function cleanName(answer: TaskName, context: TaskContext, live: LiveNames): TaskName {
   const otherwise = fallbackName(context, live);
+  // A prefix the person already uses belongs to the repository it names: borrowed for
+  // another one, it files this work under somebody else's project on the board.
+  // Any part of the path counts, since a worktree's last part is its branch's folder.
+  const project = oneLine(answer.project);
+  const parts = context.cwd
+    .split("/")
+    .map(normal)
+    .filter((part) => part.length >= 3);
+  const borrowed =
+    prefixesIn(live).some((prefix) => normal(prefix) === normal(project)) &&
+    !parts.some((part) => names(normal(project), part));
   return {
-    project: oneLine(answer.project) || otherwise.project,
+    project: borrowed ? otherwise.project : project || otherwise.project,
     title: oneLine(answer.title) || otherwise.title,
   };
 }

@@ -625,7 +625,9 @@ test(
       Effect.gen(function* () {
         yield* rig.queueOutputs([null, { verdict: "clean", note: "back" }]);
         yield* interrupted("r1", 600);
-        yield* session(halted("r1"));
+        // The halting host recovers the work too, and must not give up its wait while the
+        // agent it is halting is still there to be seen.
+        yield* session(halted("r1"), { collectMs: 30_000 });
 
         // The operator changes the model between the two hosts; the work already has one.
         const result = yield* session(started("r1"), { model: "sonnet" });
@@ -706,6 +708,86 @@ test("a definition's own preference sits under a scope's, and parallel scopes ke
     }),
   ));
 
+test("a definition's preference for a role reaches that role's work, under a scope's and the work's own", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs(["one", "two", "three", "four"]);
+      const entry = yield* loadEntry(
+        new URL("fixtures/workflows/prefers-roles.workflow.ts", import.meta.url).pathname,
+      ).pipe(Effect.orDie);
+      const { workflow, layer } = entry.make("prefers-roles@1");
+      const none = Effect.die("this workflow starts no child");
+      yield* workflow
+        .execute({ runId: "r1", input: {} })
+        .pipe(
+          Effect.provide(layer),
+          Effect.provide(
+            Layer.succeed(Children)(Children.of({ start: () => none, result: () => none })),
+          ),
+          Effect.provide(agentsLayer(hostOf())),
+          Effect.provide(foundationLayer({ dir })),
+          Effect.scoped,
+          Effect.orDie,
+        );
+      const chosen = everyLaunch(yield* rig.calls()).map((args) => {
+        const effort = args.indexOf("--effort");
+        return `${args[1]}${effort === -1 ? "" : `/${args[effort + 1]}`}`;
+      });
+      // The role's model and effort over the workflow's; the work's own model and a scope's
+      // over the role's, each keeping the role's effort where it names none of its own.
+      expect([...chosen].sort()).toEqual(["fable/high", "haiku", "opus/high", "sonnet/high"]);
+    }),
+  ));
+
+test("each seat of a panel is its own agent, persona and instructions; the role's other work takes the first seat's agent", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const personas = `${rig.pluginEnv().userDir}/personas`;
+      yield* fs.makeDirectory(personas, { recursive: true });
+      yield* fs.writeFileString(`${personas}/strict-critic.md`, "You are strict.\n");
+      yield* rig.queueOutputs(["one", "two", "three"]);
+      const entry = yield* loadEntry(
+        new URL("fixtures/workflows/panel.workflow.ts", import.meta.url).pathname,
+      ).pipe(Effect.orDie);
+      const { workflow, layer } = entry.make("panel@1");
+      const none = Effect.die("this workflow starts no child");
+      yield* workflow
+        .execute({ runId: "r1", input: {} })
+        .pipe(
+          Effect.provide(layer),
+          Effect.provide(
+            Layer.succeed(Children)(Children.of({ start: () => none, result: () => none })),
+          ),
+          Effect.provide(agentsLayer(hostOf())),
+          Effect.provide(foundationLayer({ dir })),
+          Effect.scoped,
+          Effect.orDie,
+        );
+      // Each launch as the operation its persona file is named for, and the agent it got.
+      const chosen = Object.fromEntries(
+        everyLaunch(yield* rig.calls()).map((args) => {
+          const persona = args[args.indexOf("--append-system-prompt-file") + 1] ?? "";
+          const effort = args.indexOf("--effort");
+          const operation = persona.slice(persona.lastIndexOf("/") + 1, -".persona.md".length);
+          return [operation, `${args[1]}${effort === -1 ? "" : `/${args[effort + 1]}`}`];
+        }),
+      );
+      expect(chosen).toEqual({
+        "critique-1": "sonnet/high",
+        "critique-strict": "opus",
+        summary: "sonnet/high",
+      });
+      const at = `${dir}/agents/r1`;
+      expect(yield* read(`${at}/critique-1.prompt.md`)).toContain("Critique the plan.");
+      expect(yield* read(`${at}/critique-strict.prompt.md`)).toContain("Be strict about the plan.");
+      expect(yield* read(`${at}/summary.prompt.md`)).toContain("Sum up.");
+      expect(yield* read(`${at}/critique-strict.persona.md`)).toContain("You are strict.");
+      expect(yield* read(`${at}/critique-1.persona.md`)).not.toContain("You are strict.");
+      expect(yield* read(`${at}/summary.persona.md`)).not.toContain("You are strict.");
+    }),
+  ));
+
 onMachineWith("claude")(
   "compaction controls are installed into the launch, as they are for a Step",
   () =>
@@ -719,6 +801,67 @@ onMachineWith("claude")(
     ),
   60_000,
 );
+
+test("an agent is given longer than herdr's default to be ready in a checkout it has never opened", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+      yield* session(started("r1"));
+      const argv = (yield* rig.calls()).find((call) => call.cmd === "agent start")?.argv ?? [];
+      // herdr waits 30s by default, and a first start — trust, plugins, MCP servers — takes longer.
+      expect(argv.slice(argv.indexOf("--timeout"), argv.indexOf("--timeout") + 2)).toEqual([
+        "--timeout",
+        "180000",
+      ]);
+    }),
+  ));
+
+test("a pane whose shell is not up yet is started in again, not failed", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+      const result = yield* session(started("r1"), {
+        herdr: new FakeHerdr(
+          rig.pluginEnv({
+            FAKE_HERDR_FAIL: `{"agent start":"agent target pane 1-2 is not an available shell"}`,
+            FAKE_HERDR_FAIL_TIMES: "2",
+          }),
+        ),
+      });
+      expect(result._tag === "Success" && result.success.note).toBe("done");
+      expect((yield* rig.cmds()).filter((cmd) => cmd === "agent start")).toHaveLength(3);
+    }),
+  ));
+
+test("an agent blocked during startup is waited for, not taken for a failed start", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+      // herdr answers agent_not_ready at once and keeps the name: the agent is there,
+      // behind a first-run dialog a human answers.
+      const result = yield* session(started("r1"), {
+        herdr: new FakeHerdr(rig.pluginEnv({ FAKE_HERDR_BLOCK_START: "2" })),
+      });
+      expect(result._tag === "Success" && result.success.note).toBe("done");
+      expect((yield* rig.cmds()).filter((cmd) => cmd === "agent start")).toHaveLength(1);
+      expect(yield* read(`${dir}/agents/r1/agents.log`)).toContain("blocked during startup");
+    }),
+  ));
+
+test("a start herdr refused says what herdr said", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const result = yield* session(started("r1"), {
+        herdr: new FakeHerdr(
+          rig.pluginEnv({ FAKE_HERDR_FAIL: `{"agent start":"claude exited: no API key"}` }),
+        ),
+      });
+      expect(result._tag).toBe("Failure");
+      expect(result._tag === "Failure" ? result.failure.reason : "").toContain(
+        "claude exited: no API key",
+      );
+    }),
+  ));
 
 test("a herdr that cannot say what it has blocks the work rather than starting an agent", () =>
   runEffect(
@@ -1006,7 +1149,7 @@ test(
           collectMs: 900,
         });
         expect(sent(yield* rig.calls(), "not usable")).toBe(1);
-        yield* session(halted("r1"));
+        yield* session(halted("r1"), { collectMs: 30_000 });
 
         yield* control("stop", "r1", false);
         const result = yield* releasedInto("r1");
@@ -1428,9 +1571,12 @@ test(
         expect(reopened).not.toBe("wT");
         const create = (yield* rig.calls()).find((call) => call.cmd === "workspace create");
         expect(create?.argv).toContain(rig.projectDir);
-        // Every id this Run's place is known by is the new one: the Task, the tab the new
-        // agent was opened in, and the register a later step looks the agent up in.
-        expect(tabsIn(yield* rig.calls())).toEqual(["wT", reopened]);
+        // Every id this Run's place is known by is the new one: the Task, the pane the new
+        // agent was started in — the shell the reopened workspace came with, not a tab
+        // beside it — and the register a later step looks the agent up in.
+        expect(tabsIn(yield* rig.calls())).toEqual(["wT"]);
+        const starts = (yield* rig.calls()).filter((call) => call.cmd === "agent start");
+        expect(starts.at(-1)?.argv).toEqual(expect.arrayContaining(["--pane", `${reopened}-p1`]));
         const env = hostOf().env;
         const registered = yield* readRegistry(
           yield* registryPath(env.stateDir, scopeFor(env, rig.projectDir)),

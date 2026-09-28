@@ -55,7 +55,7 @@ import {
   type PermissionMode,
   type Preferences,
 } from "./harness";
-import { Herdr } from "./herdr";
+import { Herdr, herdrFailureReason, type HerdrError, type PaneInfo } from "./herdr";
 import { agentName, reason, shellQuote, unsafePathComponent } from "./naming";
 import { askRouteTo } from "./handoff";
 import { liveAgent, registerAgent, registryPath, scopeFor, verifyIncarnation } from "./registry";
@@ -67,11 +67,13 @@ import {
   WorkflowAgents,
   Template,
   WorkflowError,
+  panelOf,
   type HostApi,
   type Projection,
+  type Seat,
 } from "./sdk";
 import { deliveriesOf } from "./steering";
-import { readTask, withTaskLock, writeTask } from "./task";
+import { readTask, taskOfWorkspace, withTaskLock, writeTask } from "./task";
 import { malformedIn, renderTemplate, skillMention, skillsIn } from "./template";
 
 /** A schema that decodes an agent's Output without services of the author's own. */
@@ -83,6 +85,8 @@ export interface AgentAsk {
   readonly operation: string;
   /** What this agent is being asked to be, stated rather than inferred from a name. */
   readonly role: string;
+  /** The persona it is started as, where it is not its role's. */
+  readonly persona?: string | null;
   /** The agent this work goes to, where several pieces share one. Null gives it its own. */
   readonly agent: string | null;
   readonly workflow: string;
@@ -309,6 +313,12 @@ interface Doing<Output extends OutputContract> {
   readonly model?: string;
   readonly effort?: string;
   readonly permissions?: PermissionMode;
+  /**
+   * The panel seat this work sits at: its agent over the role's, and its persona and
+   * instructions where it names them. Work for a role given none takes the agent of the
+   * role's first seat, and keeps its own persona and instructions.
+   */
+  readonly seat?: Seat;
 }
 
 /**
@@ -340,10 +350,10 @@ export const agentWork = <
     const plain = given.output === undefined;
     // SAFETY: Output defaults to Schema.String exactly where no output was given.
     const contract = (given.output ?? Schema.String) as Output;
+    const told = given.seat?.instructions ?? given.instructions;
     const work = {
       ...given,
-      instructions:
-        given.instructions instanceof Template ? given.instructions.text : given.instructions,
+      instructions: told instanceof Template ? told.text : told,
       runId,
       cwd: given.cwd ?? place.cwd,
       workflow: given.workflow ?? run.workflow,
@@ -403,6 +413,8 @@ export const agentWork = <
     }
     // Decided and recorded before anything is started, so a recovery, a revival and a
     // restart all start the agent this work was given, whatever is configured by then.
+    const preferred = yield* WorkflowAgents;
+    const seated = given.seat ?? (yield* panelOf(role))[0] ?? {};
     const choice = yield* Activity.make({
       name: `${work.operation}.agent`,
       success: AgentChoiceSchema,
@@ -410,7 +422,8 @@ export const agentWork = <
       execute:
         held === null
           ? agents.choose([
-              yield* WorkflowAgents,
+              preferred,
+              preferencesIn(seated),
               preferencesIn(place.options),
               ...scopes,
               preferencesIn(given),
@@ -421,6 +434,7 @@ export const agentWork = <
       runId: work.runId,
       operation: work.operation,
       role,
+      persona: given.seat?.persona ?? null,
       agent: work.agent ?? null,
       workflow: work.workflow ?? work.operation,
       task: place.task,
@@ -772,6 +786,23 @@ export interface AgentHost {
 type AgentServices = FileSystem.FileSystem | Path.Path | BunServices;
 
 const DEFAULT_POLL_MS = 2000;
+
+/**
+ * How long a harness may take to be ready. In a checkout it has never opened it settles
+ * trust, loads plugins and starts MCP servers, which outlasts herdr's own 30s.
+ */
+const START_TIMEOUT_MS = 180_000;
+
+/** herdr says this of a pane that exists but whose shell has not come up yet. */
+const paneNotReady = (error: HerdrError) =>
+  /agent_pane_busy|not an available shell/.test(error.detail);
+
+/**
+ * herdr keeps the name of an agent blocked during startup — a first-run dialog in its
+ * pane — so it is there, and its prompt waits for it as any blocked agent's does.
+ */
+const blockedAtStartup = (error: HerdrError) =>
+  error.code === "agent_not_ready" || /blocked during startup/.test(error.detail);
 const DEFAULT_COLLECT_MS = 2 * 60 * 60 * 1000;
 
 /**
@@ -953,7 +984,11 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
           });
         }
         const reopened = yield* host.herdr.workspaceCreate({ cwd: ask.cwd, label: task.label });
-        yield* writeTask(stateDir, { ...task, workspace: reopened.workspaceId });
+        yield* writeTask(stateDir, {
+          ...task,
+          workspace: reopened.workspaceId,
+          root_pane: reopened.rootTab?.paneId ?? null,
+        });
         yield* log(
           ask.runId,
           `${id}'s workspace ${task.workspace} had closed; reopened on ${ask.cwd} as ${reopened.workspaceId}`,
@@ -961,6 +996,32 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
         return reopened.workspaceId;
       }),
     );
+  });
+
+  /**
+   * The shell pane the Task's workspace was made with, for its first agent to take over
+   * rather than leave an empty first tab beside one of its own. Taken once, under the
+   * Task's lock, and used only while it is still there with nothing running in it.
+   */
+  const rootPane = Effect.fn("Agents.rootPane")(function* (ask: AgentAsk) {
+    const id = ask.task;
+    if (id === null) return null;
+    const stateDir = host.env.stateDir;
+    const taken = yield* withTaskLock(
+      stateDir,
+      id,
+      Effect.gen(function* () {
+        const task = yield* readTask(stateDir, id);
+        const pane = task?.root_pane ?? null;
+        if (task === null || pane === null) return null;
+        yield* writeTask(stateDir, { ...task, root_pane: null });
+        return pane;
+      }),
+    );
+    if (taken === null) return null;
+    const panes = yield* host.herdr.paneList().pipe(Effect.orElseSucceed(() => []));
+    const pane = panes.find((one) => one.paneId === taken && one.agent === null);
+    return pane === undefined ? null : { tabId: pane.tabId, paneId: pane.paneId };
   });
 
   /** A reused agent's work boundary: compacted past the limit, held while a compaction is unresolved. */
@@ -988,7 +1049,7 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
         : false;
     const permissions = forbidden ? "auto" : asked;
     const persona = `${dirFor(ask.runId)}/${ask.operation}.persona.md`;
-    yield* write(persona, `${yield* personaOf(ask.role)}\n`);
+    yield* write(persona, `${yield* personaOf(ask.persona ?? ask.role)}\n`);
     return yield* withControlLock(
       host.env.stateDir,
       agent,
@@ -1000,24 +1061,35 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
           cwd: ask.cwd,
         });
         const workspace = ask.workspace ?? (yield* taskWorkspace(ask));
-        const tab = yield* host.herdr.tabCreate({ label: ask.role, cwd: ask.cwd, workspace });
+        const reused = ask.workspace ? null : yield* rootPane(ask);
+        if (reused !== null) yield* Effect.ignore(host.herdr.tabRename(reused.tabId, ask.role));
+        const tab =
+          reused ?? (yield* host.herdr.tabCreate({ label: ask.role, cwd: ask.cwd, workspace }));
         // herdr ignores --cwd on tab create, so the pane is told where it is explicitly.
         yield* host.herdr.paneRun(tab.paneId, `cd ${shellQuote(ask.cwd)}`);
-        yield* host.herdr.agentStart({
-          name: agent,
-          kind: adapter.kind,
-          paneId: tab.paneId,
-          args: [
-            ...startArgs(
-              adapter,
-              ask.model ?? host.model,
-              persona,
-              ask.effort ?? undefined,
-              permissions,
+        yield* host.herdr
+          .agentStart({
+            name: agent,
+            kind: adapter.kind,
+            paneId: tab.paneId,
+            timeoutMs: START_TIMEOUT_MS,
+            args: [
+              ...startArgs(
+                adapter,
+                ask.model ?? host.model,
+                persona,
+                ask.effort ?? undefined,
+                permissions,
+              ),
+              ...controls,
+            ],
+          })
+          .pipe(
+            Effect.retry({ while: paneNotReady, times: 5, schedule: Schedule.spaced("1 second") }),
+            Effect.catchIf(blockedAtStartup, () =>
+              log(ask.runId, `${agent}: blocked during startup in ${tab.paneId}; its prompt waits`),
             ),
-            ...controls,
-          ],
-        });
+          );
         yield* log(
           ask.runId,
           `${agent}: ${adapter.id} in ${tab.paneId}, permissions ${permissions}${forbidden ? `: ${adapter.id}'s managed settings forbid bypass` : ""}`,
@@ -1070,7 +1142,7 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
         };
         const launched = terminalId === undefined ? landed : { ...landed, terminalId };
         const adapter = adapterFor(launched.harness);
-        const prefix = personaPrefix(adapter, yield* personaOf(ask.role));
+        const prefix = personaPrefix(adapter, yield* personaOf(ask.persona ?? ask.role));
         const file = `${dirFor(ask.runId)}/${ask.operation}.prompt.md`;
         // Written before it goes out and never rewritten: what a human reads to see what
         // was actually asked, rather than what a prompt would be built as now.
@@ -1267,6 +1339,35 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
       ),
     );
 
+  /**
+   * herdr drops a workspace with its last pane, and a stop never takes a Task's workspace:
+   * where this pane is the last one in its workspace, a shell is opened there first, and
+   * left as the Task's first pane for its next agent to take over.
+   */
+  const keepWorkspace = (paneId: string, panes: ReadonlyArray<PaneInfo>) =>
+    Effect.gen(function* () {
+      const pane = panes.find((one) => one.paneId === paneId);
+      const workspace = pane?.workspaceId ?? null;
+      if (workspace === null) return;
+      if (panes.some((one) => one.workspaceId === workspace && one.paneId !== paneId)) return;
+      const shell = yield* host.herdr.tabCreate({
+        label: "shell",
+        cwd: pane?.cwd ?? host.env.cwd,
+        workspace,
+      });
+      const stateDir = host.env.stateDir;
+      const task = yield* taskOfWorkspace(stateDir, workspace);
+      if (task === null) return;
+      yield* withTaskLock(
+        stateDir,
+        task.id,
+        Effect.gen(function* () {
+          const current = yield* readTask(stateDir, task.id);
+          if (current !== null) yield* writeTask(stateDir, { ...current, root_pane: shell.paneId });
+        }),
+      );
+    }).pipe(Effect.ignore);
+
   const halt = (runId: string) =>
     under(
       Effect.gen(function* () {
@@ -1281,6 +1382,7 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
         }
         const stopped: string[] = [];
         const left: string[] = [];
+        let panes = yield* host.herdr.paneList().pipe(Effect.orElseSucceed(() => []));
         for (const one of listing.success) {
           const ours = launches.findLast((launched) => launched.agent === one.name);
           if (ours === undefined) continue;
@@ -1289,7 +1391,9 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
             continue;
           }
           if (ours.terminalId !== one.terminalId) continue;
+          yield* keepWorkspace(one.paneId, panes);
           const closed = yield* host.herdr.paneClose(one.paneId).pipe(Effect.result);
+          panes = panes.filter((pane) => pane.paneId !== one.paneId);
           if (closed._tag === "Success") stopped.push(one.name);
           else
             left.push(
@@ -1447,7 +1551,7 @@ const isParked = Schema.is(AgentParked);
 /** Anything a launch failed on, said as what it means: nobody can be sure what happened. */
 const isUncertain = Schema.is(AgentUncertain);
 const asUncertain = (operation: string, cause: unknown): AgentUncertain =>
-  isUncertain(cause) ? cause : new AgentUncertain({ operation, reason: reason(cause) });
+  isUncertain(cause) ? cause : new AgentUncertain({ operation, reason: herdrFailureReason(cause) });
 
 /** A persona's own front matter, which its definition reads and its agent is not told. */
 const PERSONA_FRONT_MATTER = /^---\r?\n[\s\S]*?\r?\n---\r?\n?/;

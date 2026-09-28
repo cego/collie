@@ -5,7 +5,18 @@
 // `test/support/` enough to test everything above it.
 
 import type { BunServices } from "@effect/platform-bun/BunServices";
-import { Data, Effect, FileSystem, Option, Path, Result, Schema, Stream } from "effect";
+import {
+  Data,
+  Duration,
+  Effect,
+  FileSystem,
+  Option,
+  Path,
+  Result,
+  Schedule,
+  Schema,
+  Stream,
+} from "effect";
 import * as BunSocket from "@effect/platform-bun/BunSocket";
 import * as Socket from "effect/unstable/socket/Socket";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
@@ -34,7 +45,8 @@ export class HerdrError extends Data.TaggedError("HerdrError")<{
 }> {}
 
 export function herdrFailureReason(cause: unknown): string {
-  return cause instanceof HerdrError ? `${cause.message}: ${cause.detail}` : reason(cause);
+  if (!(cause instanceof HerdrError)) return reason(cause);
+  return cause.detail === "" ? cause.message : `${cause.message}: ${cause.detail}`;
 }
 
 type HerdrEffect<A> = Effect.Effect<A, HerdrError, BunServices>;
@@ -315,6 +327,9 @@ export type Submission = "observed" | "unobserved";
 
 /** Between turns, as herdr itself says so: anything else may be hiding a turn. */
 const isSettled = (status: AgentStatus) => status === "idle" || status === "done";
+
+/** How long a submission that saw no turn waits for herdr to give its agent a status. */
+const STATUS_WAIT = { every: Duration.millis(500), times: 20 } as const;
 
 /** The code herdr named, where a failed call printed an error envelope as its output. */
 function envelopeCode(text: string): string | undefined {
@@ -905,11 +920,21 @@ export class Herdr {
       const outcome = yield* submit.pipe(Effect.result);
       if (Result.isSuccess(outcome)) return settled ? "observed" : "unobserved";
       const { code } = outcome.failure;
-      if (code === "timeout") return "unobserved";
-      if (code !== "agent_prompt_stalled") return yield* Effect.fail(outcome.failure);
-      // One Enter sends what is in the editor. Never the text again — the work would
-      // run twice — and never at an agent whose dialog would take it.
-      if (!isSettled(yield* statusNow())) return "unobserved";
+      if (code !== "timeout" && code !== "agent_prompt_stalled") {
+        return yield* Effect.fail(outcome.failure);
+      }
+      // No turn was seen, so the text may be in the editor unsent. One Enter sends it:
+      // never the text again — the work would run twice — and never at an agent whose
+      // dialog would take it. An agent herdr has only just seen start has no status yet,
+      // which is "not yet" rather than "mid-turn", so this waits for one.
+      const now = yield* statusNow().pipe(
+        Effect.repeat({
+          until: (status) => status !== "unknown",
+          times: STATUS_WAIT.times,
+          schedule: Schedule.spaced(STATUS_WAIT.every),
+        }),
+      );
+      if (!isSettled(now)) return "unobserved";
       yield* press;
       // Nothing seen is not proof it was lost: a turn can start and finish inside the
       // wait, so this is unobserved like any other and the Output is still collected.

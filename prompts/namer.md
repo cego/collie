@@ -24,6 +24,8 @@ Answer only in the JSON schema you were given, and nothing else.
 - **`project`** is the project or theme this work belongs to. Look at the existing names
   in the data first: where several already share a prefix for this project, use that
   prefix exactly as it is spelled there, so the new workspace is recognisably a sibling.
+  A prefix is this project's only where it names this repository: one the person uses for
+  other repositories is theirs, however often it appears.
   Where nothing matches, name the project from the repository and the work itself. One or
   two words.
 - **`title`** says what this particular piece of work is, in a handful of words a person

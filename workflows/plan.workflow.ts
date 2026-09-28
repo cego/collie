@@ -128,8 +128,14 @@ export default defineWorkflow({
     ticket: Schema.optionalKey(Schema.String),
   }),
   output: Schema.String,
-  // The planner's own, which a Run's --model or a scope around it can still change.
-  agents: { harness: "claude", model: "fable", effort: "medium" },
+  // The planner's own, which a Run's --model or a scope around it can still change, and a
+  // second opinion's: another model than the one that wrote the plan.
+  agents: {
+    harness: "claude",
+    model: "fable",
+    effort: "medium",
+    roles: { reviewer: { harness: "claude", model: "opus", effort: "xhigh" } },
+  },
   hints: { goal: "goal", ticket: "ticket" },
   // A plan proves it wrote tickets; nobody chooses that, so it is fixed rather than asked.
   outcome: { fixed: "plan" },
@@ -247,8 +253,6 @@ export default defineWorkflow({
           const opinion = yield* agentWork({
             operation: `second-opinion-${opinions}`,
             role: "reviewer",
-            model: "opus",
-            effort: "xhigh",
             instructions: prompts.secondOpinion,
             input,
             output: ReviewOutputSchema,

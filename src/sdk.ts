@@ -302,6 +302,28 @@ export interface AgentPreferences {
   readonly effort?: string;
 }
 
+/**
+ * One place at a panel: the agent that sits there, and what it is and is told where that
+ * is not its role's persona and its work's own instructions.
+ */
+export interface Seat extends AgentPreferences {
+  /** Tells this seat's work apart from the others', in its operation's name. */
+  readonly name?: string;
+  /** The persona it is started as, in place of its role's. */
+  readonly persona?: string;
+  /** What it is told in place of its work's instructions, filled from the same input. */
+  readonly instructions?: string | Template<unknown>;
+}
+
+/**
+ * What a definition prefers: for all of its work, and over that for the work of a role —
+ * one seat, or a panel of them — which is how a fork moves one role's agents and leaves
+ * everything else the original's.
+ */
+export interface WorkflowAgentPreferences extends AgentPreferences {
+  readonly roles?: Readonly<Record<string, Seat | ReadonlyArray<Seat>>>;
+}
+
 /** The agent preferences in force where work is asked for, outermost first. */
 export const AgentScopes = Context.Reference<ReadonlyArray<AgentPreferences>>(
   "collie/AgentScopes",
@@ -311,10 +333,24 @@ export const AgentScopes = Context.Reference<ReadonlyArray<AgentPreferences>>(
 );
 
 /** What a definition prefers for its own work, under anything a Run or a scope prefers. */
-export const WorkflowAgents = Context.Reference<AgentPreferences | undefined>(
+export const WorkflowAgents = Context.Reference<WorkflowAgentPreferences | undefined>(
   "collie/WorkflowAgents",
   { defaultValue: () => undefined },
 );
+
+const isPanel = (seats: Seat | ReadonlyArray<Seat>): seats is ReadonlyArray<Seat> =>
+  Array.isArray(seats);
+
+/**
+ * The panel this workflow's definition seats for a role: every seat it names, or one that
+ * prefers nothing of its own where it names none. Work given a seat sits at it.
+ */
+export const panelOf = (role: string): Effect.Effect<ReadonlyArray<Seat>> =>
+  Effect.gen(function* () {
+    const given = (yield* WorkflowAgents)?.roles?.[role];
+    const seats = given === undefined ? [] : isPanel(given) ? given : [given];
+    return seats.length === 0 ? [{}] : seats;
+  });
 
 /**
  * Every piece of agent work inside `effect` prefers these — through any helper and into any
@@ -368,7 +404,7 @@ export interface WrittenDefinition extends Declarations {
   /** A typed failure of the workflow's own, beside the `WorkflowError` every workflow has. */
   readonly error?: HostCodec;
   /** The agent every piece of work defaults to, over the operator's configuration. */
-  readonly agents?: AgentPreferences;
+  readonly agents?: WorkflowAgentPreferences;
   readonly layer?: Layer.Layer<never, never, Exclude<Lent, Run | WorkflowInstance>>;
   readonly run: (context: { readonly input: never }) => Effect.Effect<unknown, unknown, Lent>;
 }
@@ -394,7 +430,7 @@ export interface Definition<
   readonly input?: Schema.Struct<Fields>;
   readonly output?: Output;
   readonly error?: Err;
-  readonly agents?: AgentPreferences;
+  readonly agents?: WorkflowAgentPreferences;
   readonly layer?: Layer.Layer<Provided, never, Exclude<Lent, Run | WorkflowInstance>>;
   readonly run: (context: {
     readonly input: Schema.Struct<Fields>["Type"];
@@ -720,7 +756,7 @@ export interface WorkflowEntry {
   readonly input: InputFields;
   readonly metadata?: WorkflowMetadata;
   /** What the workflow prefers for its own agents, under a Run's own and its scopes'. */
-  readonly agents?: AgentPreferences;
+  readonly agents?: WorkflowAgentPreferences;
   readonly make: (registrationName: string) => Registration;
 }
 

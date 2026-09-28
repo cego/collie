@@ -23,6 +23,12 @@ const TaskSchema = Schema.Struct({
   label: Schema.String,
   /** Where the Task's first Run was rooted, which is what a picker shows beside it. */
   cwd: Schema.String,
+  /**
+   * The shell pane the workspace was made with, until the Task's first agent takes it
+   * over rather than leaving it an empty first tab. Null once taken, or where Collie did
+   * not make the workspace.
+   */
+  root_pane: Schema.optionalKey(Schema.NullOr(Schema.String)),
   created_at: Schema.String,
 });
 export type TaskRecord = Schema.Schema.Type<typeof TaskSchema>;
@@ -122,12 +128,14 @@ export const newTask = Effect.fn("task.newTask")(function* (opts: {
   readonly workspace: string;
   readonly label: string;
   readonly cwd: string;
+  readonly rootPane?: string | null;
 }) {
   return {
     id: `task-${(yield* (yield* Crypto.Crypto).randomUUIDv4).slice(0, 8)}`,
     workspace: opts.workspace,
     label: opts.label,
     cwd: opts.cwd,
+    root_pane: opts.rootPane ?? null,
     created_at: yield* nowIso(),
   } satisfies TaskRecord;
 });

@@ -185,6 +185,27 @@ import review from "../../workflows/review.workflow.ts";
 export default defineWorkflow({ ...review, id: "our-review", agents: { model: "sonnet" } });
 ```
 
+To move one role's agent and leave every other choice the original's, spread its `agents`
+too and name the role:
+
+```ts
+export default defineWorkflow({
+  ...review,
+  id: "review",
+  agents: {
+    ...review.agents,
+    roles: {
+      ...review.agents?.roles,
+      reviewer: { harness: "pi", model: "openai-codex/gpt-6-astra" },
+    },
+  },
+});
+```
+
+The shipped workflows put every choice they make for a role there — review's and
+implement's reviewer, implement's implementer, plan's second opinion — rather than on the
+work itself, so a fork like this reaches all of it and an upgrade still reaches the fork.
+
 A fork that changes part of what a workflow does imports the rest. Where a shipped module
 expects to be varied it takes the varying parts as ordinary functions, and a fork supplies
 its own:
@@ -330,6 +351,7 @@ work takes the nearest layer that names one, lowest first:
 built-in defaults
 → the operator's configuration
 → the definition's own agents
+→ the definition's own agents for the work's role: the seat it sits at (agents.roles)
 → the Run's own: --harness, --model, --effort
 → an enclosing withAgents scope
 → agentWork's own options
@@ -347,8 +369,10 @@ setting that one branch changes for another. A child is handed what its parent p
 where it starts it — the Run's own preferences and the scopes around the call — as options
 it is started with, never the parent's Context, services or Layers. A workflow's ordinary
 preference goes in its definition's `agents`, not into every call, so `--model` still
-reaches all of its work; a preference written on one call is a deliberate choice for that
-work, and wins.
+reaches all of its work; one for a kind of work goes in `agents.roles`, keyed by the role
+the work names, so a fork can move it; a preference written on one call is a deliberate
+choice for that work, and wins over all of these. `roles` is a definition's alone: a scope
+names harness, model and effort, which is what a child can be handed.
 
 The three are decided together. A layer that switches harness keeps nothing chosen below
 it, so a model named for Claude never follows the work onto codex: what is left open is the
@@ -364,6 +388,83 @@ for at the work itself — its options, or a scope around it — has to agree wi
 running as, and one that does not is refused rather than ignored. What only defaults below
 that decides for fresh agents alone. `permissions` is none of this: preferring a model never
 changes what an agent is allowed to do, or which commands Collie may run for the Run.
+
+## Panels: several agents for one role
+
+A role in `agents.roles` may be given a list of seats rather than one — a panel. A `Seat` is
+a harness, model and effort, and optionally a `persona` it is started as in place of its
+role's, `instructions` it is told in place of its work's own (filled from the same input),
+and a `name` to tell its work apart from the others'. `panelOf(role)` is the panel the
+definition seats, and `agentWork({ seat })` sits one piece of work at one seat. Nothing else
+is decided for you: run the seats together, one after another, or pick one — a panel is a
+list, not a step.
+
+```ts
+export default defineWorkflow({
+  id: "consulted-plan",
+  agents: {
+    roles: {
+      planner: { harness: "claude", model: "fable" },
+      consultant: [
+        { harness: "codex", model: "gpt-5" },
+        { name: "risks", harness: "pi", model: "openai-codex/gpt-6-astra", persona: "skeptic" },
+      ],
+    },
+  },
+  run: ({ input }) =>
+    Effect.gen(function* () {
+      const draft = yield* agentWork({ operation: "draft", role: "planner", instructions: DRAFT });
+      const advice = yield* Effect.forEach(
+        yield* panelOf("consultant"),
+        (seat, at) =>
+          agentWork({
+            operation: `consult-${seat.name ?? at + 1}`,
+            role: "consultant",
+            seat,
+            instructions: CONSULT,
+            input: { draft },
+          }),
+        { concurrency: "unbounded" },
+      );
+      return yield* agentWork({
+        operation: "revise",
+        role: "planner",
+        instructions: REVISE,
+        input: { advice: advice.join("\n\n") },
+      });
+    }),
+});
+```
+
+A seat's agent sits where its role's preference does — over the definition's own, under a
+Run's `--harness`, `--model` and `--effort`, a scope, and the work's own options — so a Run
+that names a model without a harness asks every seat for it, and a seat on a harness that
+does not take it is refused. Work for the role that is given no seat takes the agent of the
+role's first seat and keeps its own persona and instructions: the shipped review's
+synthesis is reviewer work that sits at no seat. A role given no seat, or an empty list, is
+a panel of one seat that prefers nothing of its own.
+
+Because the panel is part of the definition, a fork seats its own and keeps everything else:
+
+```ts
+export default defineWorkflow({
+  ...review,
+  id: "review",
+  agents: {
+    ...review.agents,
+    roles: {
+      ...review.agents?.roles,
+      reviewer: [
+        { harness: "claude", model: "opus", effort: "medium" },
+        { name: "pi", harness: "pi", model: "openai-codex/gpt-6-astra", effort: "max" },
+      ],
+    },
+  },
+});
+```
+
+The shipped review, and implement's review rounds, run one reviewer per seat of the
+`reviewer` panel at once and reconcile them on the first seat.
 
 ## Where your Run is, and what it was given
 

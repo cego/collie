@@ -370,6 +370,8 @@ test(
         expect(text).toContain("workflows/implement.workflow.ts");
         expect(text).toContain("...original");
         expect(text).toContain('id: "ours"');
+        // Its title and description are the original's too, so they follow an upgrade.
+        expect(text).not.toContain("title:");
 
         // Both are runnable, each under its own id, and the fork takes what it inherited.
         const shown = yield* cli(["--json", "workflow", "show", "ours"], scratch);

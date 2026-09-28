@@ -245,16 +245,19 @@ So `agentPrompt` answers a `Submission` — what herdr could actually tell us �
 nothing. It reads the agent's status first, because only a submission that started from a
 settled agent can be told apart from a turn that was already running; then it submits with
 herdr's own gate, `--wait --until working --until blocked`. A turn observed after a settled
-start is `observed`. A gate that times out, and a prompt to an agent that was already
-working, are `unobserved`: the text and the Enter were written, and nothing at this
-boundary can say whether the agent took them. The engine records that line against the
+start is `observed`. A prompt to an agent that was already working is `unobserved`: the
+text and the Enter were written, and nothing at this boundary can say whether the agent
+took them. The engine records that line against the
 variant, because a step that goes quiet later is explained by it.
 
 Settled means a status herdr actually gave — `idle` or `done`. A status it could not
 give rules nothing out, so it is treated like a turn already running: no evidence.
 
-`agent_prompt_stalled` is herdr saying it saw no turn come of a settled agent's
-submission, and it is the one case with a recovery: one `agent send-keys <agent> enter`.
+`agent_prompt_stalled`, and a gate that times out, are herdr saying it saw no turn come
+of the submission, and both have one recovery: one `agent send-keys <agent> enter`. A
+freshly started agent is the usual case — herdr has no status for it yet, so there is no
+stall to detect and the wait simply runs out with the text in the editor — which is why an
+agent with no status yet is waited for, up to ten seconds, rather than read as mid-turn.
 The Enter, never the text again — re-sending the text would run the step's work twice —
 and never to an agent that is no longer settled, because a dialog that came up after the
 stall would take that Enter as its answer, which is exactly what herdr refuses to do on a
