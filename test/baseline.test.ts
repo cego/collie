@@ -1024,7 +1024,14 @@ scenario(
           disputed: [],
           checks: [{ name: "test" }],
         };
-        yield* rig.queueOutputs([SYNTHESIS, fixed]);
+        const settled = {
+          verdict: "clean",
+          summary: "It moves the guard. Nothing is wrong with it now.",
+          findings: [],
+          dropped: [],
+          fixed: [{ title: "the guard is on the wrong side", file: "src/a.ts" }],
+        };
+        yield* rig.queueOutputs([SYNTHESIS, fixed, settled]);
         const target = "mr:gitlab.example.com/group/project!42";
         const rows = yield* parked({
           entry: shipped("review"),
@@ -1043,12 +1050,14 @@ scenario(
           until: "post-2",
         });
 
-        expect(yield* prompts()).toHaveLength(2);
+        // The fix is reviewed again at once: a round of the rally, not a fix taken on its word.
+        expect(yield* prompts()).toHaveLength(3);
+        expect(yield* asked("r-review-mr", "review-2-1")).toContain("Iteration 2");
         expect(yield* asked("r-review-mr", "fix")).toContain(
           "glab mr checkout <iid> --repo gitlab.example.com/group/project",
         );
         expect(yield* persona("r-review-mr", "fix")).toContain("You are an implementer");
-        // Fixing is offered once: a second round of it would be the same findings again.
+        // Nothing is left to fix after a clean review, so fixing is not offered again.
         const rows2 = yield* parked({
           entry: shipped("review"),
           runId: "r-review-mr",
@@ -1062,11 +1071,81 @@ scenario(
 );
 
 scenario(
+  "fix findings goes on by itself until a review is clean",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fixed = { verdict: "clean", findings: [], fixed: [], disputed: [], checks: [] };
+        const other = {
+          ...SYNTHESIS,
+          findings: [
+            { severity: "major", title: "the empty list is not guarded", file: "src/b.ts" },
+          ],
+        };
+        const clean = { ...SYNTHESIS, verdict: "clean", findings: [] };
+        yield* rig.queueOutputs([SYNTHESIS, fixed, other, fixed, clean]);
+        const target = "branch:main...HEAD";
+        yield* parked({
+          entry: shipped("review"),
+          runId: "r-rally",
+          input: { target },
+          decision: "post-1",
+        });
+        const rows = yield* answeredThen({
+          entry: shipped("review"),
+          runId: "r-rally",
+          input: { target },
+          decision: "post-1",
+          value: "Fix findings",
+          until: "post-3",
+        });
+        // Review, fix, review, fix, review: the second fix nobody was asked about.
+        expect(yield* prompts()).toHaveLength(5);
+        // Pointed at the review it follows, which is where the second round's finding is.
+        expect(yield* asked("r-rally", "fix-2")).toContain(`${runDir(dir, "r-rally")}/review.md`);
+        expect(rows.some((row) => row.decision === "post-2")).toBe(false);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a fix round that leaves the same findings asks rather than going round again",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fixed = { verdict: "clean", findings: [], fixed: [], disputed: [], checks: [] };
+        const target = "branch:main...HEAD";
+        // The same finding back after a fix is a round that changed nothing: the human decides.
+        yield* rig.queueOutputs([SYNTHESIS, fixed, SYNTHESIS]);
+        yield* parked({
+          entry: shipped("review"),
+          runId: "r-stuck",
+          input: { target },
+          decision: "post-1",
+        });
+        const stuck = yield* answeredThen({
+          entry: shipped("review"),
+          runId: "r-stuck",
+          input: { target },
+          decision: "post-1",
+          value: "Fix findings",
+          until: "post-2",
+        });
+        expect(optionsOf(stuck, "post-2")).toContain("Fix findings");
+        // Review, fix, review, and then the question: no fix nobody asked for.
+        expect(yield* prompts()).toHaveLength(3);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
   "an implementer already live here takes the findings, and no second agent starts on them",
   () =>
     runEffect(
       Effect.gen(function* () {
-        yield* rig.queueOutputs([SYNTHESIS]);
+        yield* rig.queueOutputs([SYNTHESIS, SYNTHESIS]);
         // Another Run's implementer, live in this checkout's workspace and registered as it.
         yield* rig.addAgent("impl-live", "9-1");
         const env = hostOf().env;
@@ -1101,6 +1180,26 @@ scenario(
         expect(handed[0]).toContain(`${runDir(dir, "r-review-live")}/review.md`);
         // One agent, the lone reviewer; the fix went to the one already here.
         expect((yield* rig.cmds()).filter((cmd) => cmd === "agent start")).toHaveLength(1);
+
+        // Collie cannot see that agent finish, so the human says when to look again, and
+        // the next review is a follow-up of this one rather than a fresh start.
+        const rows = yield* parked({
+          entry: shipped("review"),
+          runId: "r-review-live",
+          input: { target },
+          decision: "post-2",
+        });
+        expect(optionsOf(rows, "post-2")).toContain("Review again");
+        expect(optionsOf(rows, "post-2")).not.toContain("Fix findings");
+        yield* answeredThen({
+          entry: shipped("review"),
+          runId: "r-review-live",
+          input: { target },
+          decision: "post-2",
+          value: "Review again",
+          until: "post-3",
+        });
+        expect(yield* asked("r-review-live", "review-2-1")).toContain("Iteration 2");
       }),
     ),
   120_000,
