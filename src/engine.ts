@@ -216,6 +216,7 @@ export const TOOLCHAIN = {
  */
 export const SDK_DECLARATIONS = `declare module "collie" {
   import type { Context, Effect, FileSystem, Layer, Path, Schema } from "effect";
+  import type { PlatformError } from "effect/PlatformError";
   import type { Workflow } from "effect/unstable/workflow/Workflow";
   import type {
     WorkflowEngine,
@@ -1090,7 +1091,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
   export function planReposOf(
     planDir: string,
     root: string,
-  ): Effect.Effect<PlanRepos, never, FileSystem.FileSystem | Path.Path>;
+  ): Effect.Effect<PlanRepos, PlatformError, FileSystem.FileSystem | Path.Path>;
 
   /** Whether this plan is one repository and that repository is the run's own root. */
   export function isSingleRepo(plan: PlanRepos): boolean;

@@ -606,7 +606,12 @@ repository's own checkout, or `new` for a worktree workspace of its own. It is h
 repository gets its share of a plan that spans several:
 
 ```ts
-const plan = yield * planReposOf(asked.plan, asked.root);
+// A plan that cannot be read fails with a PlatformError; say so rather than die of it.
+const plan =
+  yield *
+  planReposOf(asked.plan, asked.root).pipe(
+    Effect.mapError((cause) => new WorkflowError({ reason: `unreadable plan: ${cause.message}` })),
+  );
 if (plan.refusal !== null) return yield * new WorkflowError({ reason: plan.refusal.message });
 for (const wave of plan.waves) {
   yield *
