@@ -392,7 +392,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
    * The panel this workflow's definition seats for a role: every seat it names, or one that
    * prefers nothing of its own where it names none. Work given a seat sits at it.
    */
-  export function panelOf(role: string): Effect.Effect<ReadonlyArray<Seat>>;
+  export function panelOf(role: string): Effect.Effect<readonly [Seat, ...Seat[]]>;
 
   /**
    * Every piece of agent work inside the effect prefers these — through any helper and into
@@ -3390,7 +3390,6 @@ const makeRegistry: (
       yield* ask.record({ workspace: made.workspaceId });
       return { workspace: made.workspaceId, rootPane: made.rootTab?.paneId ?? null };
     });
-    // The shell a workspace Collie made comes with, for the Task's first agent to take.
     const { workspace, rootPane } =
       opened !== null
         ? { workspace: opened.id, rootPane: placed.worktree?.root_pane_id ?? null }

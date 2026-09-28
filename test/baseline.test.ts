@@ -815,7 +815,6 @@ const fork = (name: Shipped, id: string, agents: string) =>
     Effect.orDie,
   );
 
-/** Each agent started, as the harness it runs on and the arguments it was started with. */
 const launched = () =>
   rig.calls().pipe(
     Effect.map((calls) =>

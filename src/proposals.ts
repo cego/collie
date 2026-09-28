@@ -136,7 +136,8 @@ export interface Recorded {
 }
 
 export const record = Effect.fn("Proposals.record")(function* (file: string, what: Recorded) {
-  const at = yield* nowIso();
+  const now = yield* DateTime.now;
+  const at = DateTime.formatIso(now);
   const line: ProposalRecord = {
     kind: "proposal",
     id: `p-${Bun.hash(`${at}${what.by}${contentHash(what.targets, what.actions)}`).toString(16)}`,
@@ -146,9 +147,7 @@ export const record = Effect.fn("Proposals.record")(function* (file: string, wha
     actions: [...what.actions],
     allowed_now: [...what.allowedNow],
     created_at: at,
-    expires_at: DateTime.formatIso(
-      DateTime.addDuration(yield* DateTime.now, Duration.millis(EXPIRES_AFTER_MS)),
-    ),
+    expires_at: DateTime.formatIso(DateTime.addDuration(now, Duration.millis(EXPIRES_AFTER_MS))),
     intent_versions: what.intentVersions,
     by: what.by,
     state: "pending",

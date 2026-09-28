@@ -414,7 +414,7 @@ export const agentWork = <
     // Decided and recorded before anything is started, so a recovery, a revival and a
     // restart all start the agent this work was given, whatever is configured by then.
     const preferred = yield* WorkflowAgents;
-    const seated = given.seat ?? (yield* panelOf(role))[0] ?? {};
+    const seated = given.seat ?? (yield* panelOf(role))[0];
     const choice = yield* Activity.make({
       name: `${work.operation}.agent`,
       success: AgentChoiceSchema,
@@ -1348,11 +1348,11 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
     Effect.gen(function* () {
       const pane = panes.find((one) => one.paneId === paneId);
       const workspace = pane?.workspaceId ?? null;
-      if (workspace === null) return;
+      if (pane === undefined || workspace === null) return;
       if (panes.some((one) => one.workspaceId === workspace && one.paneId !== paneId)) return;
       const shell = yield* host.herdr.tabCreate({
         label: "shell",
-        cwd: pane?.cwd ?? host.env.cwd,
+        cwd: pane.cwd ?? host.env.cwd,
         workspace,
       });
       const stateDir = host.env.stateDir;
