@@ -441,8 +441,10 @@ const own = (dir: string) =>
  * A client of the host that owns `dir`, starting one if nothing is there. Every client
  * gets the same host, and the first of them pays for it.
  *
- * `build` is what this client is; a host that says it is something else is reported
- * rather than talked to.
+ * `build` is what this client is. A host older than it is replaced: stopped, started
+ * again as this build, and asked to recover, so an upgrade can never leave the two
+ * apart. A host newer than it is reported rather than talked to — the client is what is
+ * stale, and it must not take the host back down to its own build.
  */
 export const connect = (
   dir: string,
@@ -453,8 +455,13 @@ export const connect = (
   FileSystem.FileSystem | ChildProcessSpawner.ChildProcessSpawner | Scope.Scope
 > =>
   Effect.gen(function* () {
-    const who = yield* ensureRunning(dir);
     const build = options?.build ?? BUILD;
+    let who = yield* ensureRunning(dir);
+    const replaced = who.build !== build && Bun.semver.order(build, who.build) === 1;
+    if (replaced) {
+      yield* stopOwner(dir, who.pid);
+      who = yield* ensureRunning(dir);
+    }
     if (who.build !== build) {
       return yield* new HostVersionMismatch({
         dir,
@@ -464,8 +471,29 @@ export const connect = (
         restart: `the host for ${dir} is collie ${who.build} and this is ${build}: stop it (pid ${who.pid}) and run this again`,
       });
     }
-    return yield* open(dir);
+    const client = yield* open(dir);
+    // The engine is durable, so what the old host was doing is picked up, not lost.
+    if (replaced) {
+      yield* client.recover().pipe(Effect.mapError((cause) => unavailable(dir, String(cause))));
+    }
+    return client;
   });
+
+/** Stops the host at `pid` and waits for it to let go of the directory. */
+const stopOwner = Effect.fn("Host.stopOwner")(function* (dir: string, pid: number) {
+  try {
+    process.kill(pid, "SIGTERM");
+  } catch {
+    // Already gone, which is what this is for.
+  }
+  yield* ownerOf(dir).pipe(
+    Effect.filterOrFail(
+      (owner) => owner?.pid !== pid,
+      () => unavailable(dir, `pid ${pid} is an older host and did not stop`),
+    ),
+    Effect.retry({ times: 100, schedule: Schedule.spaced("100 millis") }),
+  );
+});
 
 /** One connection, in the caller's scope: theirs to keep, and theirs to close. */
 const open = (dir: string) =>

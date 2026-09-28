@@ -182,7 +182,7 @@ export function describeAction(action: Action): string {
     case "fork_definition":
       return `fork ${action.what} ${action.name} as ${action.as} in the ${action.layer ?? "user"} layer`;
     case "home_cleanup":
-      return "close the Collie panes an older release left";
+      return "close the Collie panes an older release left, and forget Tasks whose workspace is gone";
     case "upgrade":
       return "upgrade this installation of Collie";
     case "hold":

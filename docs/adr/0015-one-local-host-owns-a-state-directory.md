@@ -43,11 +43,13 @@ execution is started with `discard` so it belongs to the engine rather than to t
 that admitted it. Hanging up therefore cancels nothing: not the accepted work, not a
 registration, not another client.
 
-**D5. The host advertises its build, and a client that is not it stops.** `collie upgrade`
-replaces the binary; it does not replace a host that is already running, and the two need
-not agree. A mismatched client says which build is running, which one it is, and the pid to
-stop — and sends nothing else. It does not kill the host, take the directory, or drain and
-hand over: an upgrade that interrupts running work to install itself is worse than waiting.
+**D5. The host advertises its build, and the newer side wins.** `collie upgrade` replaces
+the binary, not a running host. A client newer than the host stops it, waits for the lock
+to go, starts a host of its own build and asks it to recover: the engine is durable (ADR
+0014), so a restart pauses running work rather than losing it, and a host left on the old
+build is what broke workflows that import the new SDK. A client older than the host is the
+stale one: it says which build is running, which one it is, and sends nothing else — it
+never takes the host back down to its own build.
 
 **D6. Unavailability is a typed answer, not a hang.** A host that will not start is
 `HostUnavailable` with what can be seen from here — nothing owns the directory, or a pid

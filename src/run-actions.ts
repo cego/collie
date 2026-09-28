@@ -24,7 +24,9 @@ import {
   startRun,
   steerRun,
   resumeRun,
+  runViews,
 } from "./lifecycle";
+import { listTasks, removeTask } from "./task";
 import {
   clearOverride,
   err,
@@ -316,9 +318,21 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
       const { close, listed } = closable(panes);
       for (const paneId of close)
         yield* herdr.paneClose(paneId).pipe(Effect.catch(() => Effect.void));
+      // A Task whose workspace herdr no longer has, and that no Run belongs to, is work
+      // nobody can reach. A listing that could not be read keeps every Task.
+      const open = new Set((yield* herdr.workspaceList()).map((one) => one.workspaceId));
+      const listing = yield* runViews(env, null);
+      const owned = new Set(listing.runs.map((run) => run.task));
+      const gone =
+        listing.unreadable === null
+          ? (yield* listTasks(env.stateDir)).filter(
+              (task) => !open.has(task.workspace) && !owned.has(task.id),
+            )
+          : [];
+      for (const task of gone) yield* removeTask(env.stateDir, task.id);
       return {
         state: "applied" as const,
-        note: `closed ${close.length}, left ${listed.length} sharing a tab`,
+        note: `closed ${close.length}, left ${listed.length} sharing a tab, forgot ${gone.length} Tasks whose workspace is gone`,
       };
     }).pipe(Effect.catch((cause) => Effect.succeed(failed(String(cause))))),
   );

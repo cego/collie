@@ -19,6 +19,7 @@ import { executorFor, resetExecutors } from "../src/executors";
 import { LEGACY_PANE_TOKEN } from "../src/home";
 import { registerRunExecutors } from "../src/operations";
 import { scopeKey } from "../src/registry";
+import { listTasks, writeTask } from "../src/task";
 import { runEffect } from "./support/effect";
 
 let stateDir: string;
@@ -243,6 +244,18 @@ test("a cleanup closes the panes that are Collie's alone, and leaves the shared 
       expect(log).toContain("p-collie");
       expect(log).not.toContain("p-other");
       expect(done.note).toContain("left 1 sharing a tab");
+    }),
+  ));
+
+test("a cleanup forgets the Tasks whose workspace herdr no longer has, and keeps the rest", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const at = { label: "t", cwd: stateDir, created_at: "2026-09-28T00:00:00Z" };
+      yield* writeTask(stateDir, { ...at, id: "kept", workspace: "w1" });
+      yield* writeTask(stateDir, { ...at, id: "gone", workspace: "w-closed" });
+      const done = yield* carry({ kind: "home_cleanup" });
+      expect(done.note).toContain("forgot 1 Tasks");
+      expect((yield* listTasks(stateDir)).map((task) => task.id)).toEqual(["kept"]);
     }),
   ));
 
