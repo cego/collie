@@ -107,6 +107,13 @@ export const writeTask = Effect.fn("task.writeTask")(function* (
   return task;
 });
 
+/** Forgets the Task; its Runs' records are the store's and are left alone. */
+export const removeTask = Effect.fn("task.removeTask")(function* (stateDir: string, id: string) {
+  const fs = yield* FileSystem.FileSystem;
+  if (unsafePathComponent(id)) return;
+  yield* fs.remove(yield* taskFile(stateDir, id), { force: true });
+});
+
 export class TaskBusy extends Data.TaggedError("TaskBusy")<{ id: string }> {}
 
 /** Ten seconds: long enough for another Run of the Task to reopen its workspace. */

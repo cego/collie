@@ -302,6 +302,31 @@ test(
 );
 
 test(
+  "a client newer than the host stops it and starts a host of its own",
+  () =>
+    proves(
+      Effect.gen(function* () {
+        const { state } = yield* workspace("collie-host-newer-");
+        const old = yield* Effect.scoped(
+          connect(state).pipe(Effect.flatMap((client) => client.identity())),
+        ).pipe(Effect.orDie);
+
+        // This process can only start a host of its own build, so a client from the future
+        // still ends up refused — but only after the host it found was replaced.
+        const refused = yield* Effect.scoped(connect(state, { build: "999.0.0" })).pipe(
+          Effect.flip,
+        );
+        expect(refused._tag).toBe("HostVersionMismatch");
+        const now = yield* ownerOf(state);
+        expect(now?.pid).not.toBe(old.pid);
+        expect(yield* signalProcess(old.pid)).toBe(false);
+        yield* stopHost(state);
+      }),
+    ),
+  120_000,
+);
+
+test(
   "a host that will not start is said out loud rather than waited on forever",
   () =>
     proves(
