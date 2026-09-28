@@ -59,7 +59,8 @@ herdr actions, and the `collie` CLI.
 - **Changing the Home's panes, the chat harness, or what native chat may read** →
   [`docs/using.md`](docs/using.md#talking-to-collie-about-the-flock), alongside
   `src/chat.ts` (the harness and the session), `src/tools.ts` (the read contract) and
-  [ADR-0011](docs/adr/0011-the-conversation-is-a-native-harness.md). What the board has
+  [ADR-0011](docs/adr/0011-the-conversation-is-a-native-harness.md), whose sessions and
+  model [ADR-0032](docs/adr/0032-a-chat-starts-new-on-the-latest-opus.md) replaces. What the board has
   selected is an explicit input chat may read, never a filter over the reads
   ([ADR-0012](docs/adr/0012-the-boards-selection-is-an-explicit-chat-input.md), alongside
   `src/selection.ts` and `src/statusline.ts`).

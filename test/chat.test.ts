@@ -120,29 +120,13 @@ test("a changed preference is the next launch, never a swap", () => {
   });
 });
 
-test("a conversation is this Herd's session, not whatever ran here last", () => {
-  // Nothing yet: a new conversation, and it says so rather than resuming something.
-  expect(decideChat(null, "1-2", [], [], "claude")).toMatchObject({
+test("a chat that has to be launched starts a new conversation, whatever was recorded", () => {
+  // Resumed, it would carry its whole history into every turn, and the model it began on.
+  expect(decideChat(record(), "1-2", [pane()], [], "claude")).toEqual({
     kind: "launch",
     harness: "claude",
-    resume: null,
+    why: `herdr no longer has ${record().agent}`,
   });
-  // The process is gone but this Herd's session id is recorded: that one is resumed.
-  expect(decideChat(record(), "1-2", [pane()], [], "claude")).toMatchObject({
-    kind: "launch",
-    resume: "abcd1234-0000-4000-8000-000000000000",
-  });
-  // Choosing the other harness carries nothing across — no handoff and no summary — and
-  // Pi has no session of its own here yet, so it honestly starts a new one.
-  expect(decideChat(record(), "1-2", [pane()], [], "pi")).toMatchObject({
-    kind: "launch",
-    harness: "pi",
-    resume: null,
-  });
-  // Each harness keeps its own history, and coming back finds it.
-  const both = record({ sessions: { claude: "c-1", pi: "p-1" } });
-  expect(decideChat(both, "1-2", [pane()], [], "pi")).toMatchObject({ resume: "p-1" });
-  expect(decideChat(both, "1-2", [pane()], [], "claude")).toMatchObject({ resume: "c-1" });
 });
 
 test("a pane that outlived its process is not the conversation that was recorded", () => {
@@ -159,18 +143,6 @@ test("a pane that outlived its process is not the conversation that was recorded
   );
   // And with no chat pane at all there is nothing to launch into. The board is untouched.
   expect(decideChat(record(), null, [], [], "claude")).toEqual({ kind: "no_pane" });
-});
-
-test("a launch keeps every harness's session and names the one it started", () => {
-  const next = started(record({ sessions: { claude: "c-1" } }), {
-    harness: "pi",
-    agent: "collie-chat-p",
-    paneId: "1-2",
-    terminalId: "term-3",
-    sessionId: "p-1",
-    at: "2026-09-14T11:00:00Z",
-  });
-  expect(next).toMatchObject({ harness: "pi", sessions: { claude: "c-1", pi: "p-1" } });
 });
 
 test("the record survives a round trip through disk", () =>
@@ -190,7 +162,7 @@ test("chat keeps native tools and adds Collie's tools", () => {
     extension: "/d/c.ts",
     settings: "/d/settings.json",
   };
-  const claude = chatArgs("claude", "s-1", files, false);
+  const claude = chatArgs("claude", "s-1", files);
   expect(claude).toEqual([
     "--session-id",
     "s-1",
@@ -200,13 +172,12 @@ test("chat keeps native tools and adds Collie's tools", () => {
     "/d/mcp.json",
     "--settings",
     "/d/settings.json",
+    "--model",
+    "opus",
+    "--effort",
+    "medium",
   ]);
-  // Reopening one is a different flag: Claude's `--session-id` refuses an id that has
-  // been used before, however long ago, and only `--resume` reopens it.
-  expect(chatArgs("claude", "s-1", files, true).slice(0, 2)).toEqual(["--resume", "s-1"]);
-  // pi's one flag does both, so it is the same either way.
-  const pi = chatArgs("pi", "s-2", files, false);
-  expect(chatArgs("pi", "s-2", files, true)).toEqual(pi);
+  const pi = chatArgs("pi", "s-2", files);
   expect(pi).toEqual([
     "--session-id",
     "s-2",
@@ -216,15 +187,6 @@ test("chat keeps native tools and adds Collie's tools", () => {
     "/d/c.ts",
     "--no-context-files",
   ]);
-  // Neither pins a model, an effort level or a spend: native selection stays the
-  // human's, and neither rewrites the harness's own configuration.
-  for (const args of [claude, pi]) {
-    expect(args).not.toContain("--model");
-    expect(args).not.toContain("--effort");
-    expect(args).not.toContain("--thinking");
-    // And never "the most recent conversation here", which is somebody else's.
-    expect(args).not.toContain("--continue");
-  }
 });
 
 test("both harnesses are wired to the same Collie reads", () => {

@@ -68,11 +68,7 @@ const RecordSchema = Schema.Struct({
   agent: Schema.String,
   paneId: Schema.String,
   terminalId: Schema.NullOr(Schema.String),
-  /**
-   * One native session id per harness. Choosing another harness carries nothing across —
-   * no handoff, no summary, no transcript — and coming back to the first finds its own
-   * conversation where it left it.
-   */
+  /** The native session id the running chat was started with, under its harness. */
   sessions: Schema.Record(Schema.String, Schema.String),
   startedAt: Schema.String,
 });
@@ -110,15 +106,10 @@ export type ChatDecision =
    */
   | { readonly kind: "adopt"; readonly record: ChatRecord; readonly next: ChatHarness | null }
   /**
-   * Start one. `resume` is this harness's own recorded session, or null — and null is
-   * said out loud rather than papered over by attaching to whatever ran here last.
+   * Start one, on a new conversation: a resumed one would carry its whole history into
+   * every turn, and the model it began on (ADR-0032).
    */
-  | {
-      readonly kind: "launch";
-      readonly harness: ChatHarness;
-      readonly resume: string | null;
-      readonly why: string;
-    }
+  | { readonly kind: "launch"; readonly harness: ChatHarness; readonly why: string }
   /** The Home has no chat pane to launch into; the board is still usable. */
   | { readonly kind: "no_pane" };
 
@@ -138,12 +129,7 @@ export function decideChat(
   preferred: ChatHarness,
 ): ChatDecision {
   if (chatPaneId === null) return { kind: "no_pane" };
-  const launch = (why: string): ChatDecision => ({
-    kind: "launch",
-    harness: preferred,
-    resume: record?.sessions[preferred] ?? null,
-    why,
-  });
+  const launch = (why: string): ChatDecision => ({ kind: "launch", harness: preferred, why });
   if (record === null) return launch("no chat has been started for this Herd");
   if (record.paneId !== chatPaneId) return launch("the Home's chat pane is a different pane");
   const agent = agents.find((entry) => entry.name === record.agent);
@@ -175,9 +161,9 @@ export interface LaunchFiles {
  * What `herdr agent start ... -- <args>` is given.
  *
  * Every flag is this launch only. Nothing here rewrites `~/.claude` or `~/.pi`, and
- * nothing pins a model, an effort level or a spend: native model selection and native
- * authentication are the human's, and a chat that silently overrode them would be a
- * different product wearing the harness's name.
+ * nothing pins a spend: native authentication is the human's, and a chat that silently
+ * overrode it would be a different product wearing the harness's name. Claude runs on the
+ * latest Opus at medium effort (ADR-0032).
  *
  * Both harnesses keep their native tools and configuration alongside Collie's tools.
  */
@@ -185,16 +171,13 @@ export function chatArgs(
   harness: ChatHarness,
   sessionId: string,
   files: LaunchFiles,
-  /** Whether this session already exists, which is a different flag in Claude. */
-  resuming: boolean,
 ): ReadonlyArray<string> {
   return harness === "claude"
     ? [
-        // `--session-id` **creates** the id and refuses one that has been used, however
-        // long ago; `--resume` is the one that reopens it. Never `--continue`: "the most
-        // recent conversation in this directory" is how a Home reopens into somebody
-        // else's.
-        ...(resuming ? ["--resume", sessionId] : ["--session-id", sessionId]),
+        // Never `--continue`: "the most recent conversation in this directory" is how a
+        // Home reopens into somebody else's.
+        "--session-id",
+        sessionId,
         "--append-system-prompt-file",
         files.systemPrompt,
         "--mcp-config",
@@ -202,10 +185,12 @@ export function chatArgs(
         // Additional settings, never a rewrite of the human's own.
         "--settings",
         files.settings,
+        "--model",
+        "opus",
+        "--effort",
+        "medium",
       ]
     : [
-        // pi's `--session-id` creates the id if it is missing and reopens it if it is
-        // not, so one flag covers both.
         "--session-id",
         sessionId,
         // pi reads a path here as file contents.
@@ -266,24 +251,21 @@ export function whyUnavailable(harness: ChatHarness, found: string | null): stri
     : null;
 }
 
-/** A record for a launch that has just happened, keeping every harness's session. */
-export function started(
-  previous: ChatRecord | null,
-  opts: {
-    readonly harness: ChatHarness;
-    readonly agent: string;
-    readonly paneId: string;
-    readonly terminalId: string | null;
-    readonly sessionId: string;
-    readonly at: string;
-  },
-): ChatRecord {
+/** A record for a launch that has just happened. */
+export function started(opts: {
+  readonly harness: ChatHarness;
+  readonly agent: string;
+  readonly paneId: string;
+  readonly terminalId: string | null;
+  readonly sessionId: string;
+  readonly at: string;
+}): ChatRecord {
   return {
     harness: opts.harness,
     agent: opts.agent,
     paneId: opts.paneId,
     terminalId: opts.terminalId,
-    sessions: { ...previous?.sessions, [opts.harness]: opts.sessionId },
+    sessions: { [opts.harness]: opts.sessionId },
     startedAt: opts.at,
   };
 }
@@ -305,10 +287,9 @@ export const chatHarnessOf = Effect.fn("Chat.harnessOf")(function* (userDir: str
 });
 
 export const startedNow = Effect.fn("Chat.startedNow")(function* (
-  previous: ChatRecord | null,
-  opts: Omit<Parameters<typeof started>[1], "at">,
+  opts: Omit<Parameters<typeof started>[0], "at">,
 ) {
-  return started(previous, { ...opts, at: yield* nowIso() });
+  return started({ ...opts, at: yield* nowIso() });
 });
 
 // ---------------------------------------------------------------------------
@@ -515,8 +496,8 @@ export const writeLaunchFiles = Effect.fn("Chat.writeLaunchFiles")(function* (op
 export type Ensured =
   /** A conversation is live. `next` is a preference for the launch after this one. */
   | { readonly kind: "running"; readonly record: ChatRecord; readonly next: ChatHarness | null }
-  /** One was just started. `resumed` says whether it picked its own history back up. */
-  | { readonly kind: "launched"; readonly record: ChatRecord; readonly resumed: boolean }
+  /** One was just started, on a new conversation. */
+  | { readonly kind: "launched"; readonly record: ChatRecord }
   /** There is no conversation, and why. The board and every Run are unaffected. */
   | { readonly kind: "unavailable"; readonly harness: ChatHarness; readonly why: string };
 
@@ -611,7 +592,7 @@ export const ensureChatFor = Effect.fn("Chat.ensureFor")(function* (
       const crypto = yield* Crypto.Crypto;
       const paneId = home.chatPaneId ?? "";
       const kind = HARNESSES[decision.harness]?.kind ?? decision.harness;
-      const start = Effect.fn("Chat.start")(function* (sessionId: string, resuming: boolean) {
+      const start = Effect.fn("Chat.start")(function* (sessionId: string) {
         // A fresh name every attempt, never derived from the session: herdr keeps a name
         // until the process holding it has gone, so a relaunch under the same name was
         // refused `agent_name_taken` and left the Home with a pane and nothing in it.
@@ -621,7 +602,7 @@ export const ensureChatFor = Effect.fn("Chat.ensureFor")(function* (
             name: agent,
             kind,
             paneId,
-            args: [...chatArgs(decision.harness, sessionId, files, resuming)],
+            args: [...chatArgs(decision.harness, sessionId, files)],
           })
           .pipe(
             Effect.as(null),
@@ -630,19 +611,7 @@ export const ensureChatFor = Effect.fn("Chat.ensureFor")(function* (
         return { agent, sessionId, failed };
       });
 
-      let resumed = decision.resume !== null;
-      let attempt = yield* start(decision.resume ?? (yield* crypto.randomUUIDv4), resumed);
-      // A recorded session the harness will not reopen — it is still holding the id, or
-      // the history has gone — must not cost the human their conversation. A new one is
-      // started and said to be new: claiming continuity that was not recovered is the
-      // one answer worse than losing it.
-      if (attempt.failed !== null && resumed) {
-        yield* log(
-          `chat: ${decision.harness} would not resume this Herd's session: ${attempt.failed}`,
-        );
-        attempt = yield* start(yield* crypto.randomUUIDv4, false);
-        resumed = false;
-      }
+      const attempt = yield* start(yield* crypto.randomUUIDv4);
       if (attempt.failed !== null) {
         // herdr's own words: "would not start it" is not something a human can act on.
         const why = `herdr would not start ${decision.harness} in the Home's chat pane: ${attempt.failed}`;
@@ -652,7 +621,7 @@ export const ensureChatFor = Effect.fn("Chat.ensureFor")(function* (
       const after = (yield* herdr.paneList().pipe(nothing<ReadonlyArray<PaneInfo>>([]))).find(
         (entry) => entry.paneId === paneId,
       );
-      const next = yield* startedNow(record, {
+      const next = yield* startedNow({
         harness: decision.harness,
         agent: attempt.agent,
         paneId,
@@ -660,12 +629,8 @@ export const ensureChatFor = Effect.fn("Chat.ensureFor")(function* (
         sessionId: attempt.sessionId,
       });
       yield* writeChat(file, next);
-      yield* log(
-        `chat: started ${decision.harness} (${decision.why}); ${
-          resumed ? "resuming this Herd's own session" : "a new conversation"
-        }`,
-      );
-      return { kind: "launched", record: next, resumed } satisfies Ensured;
+      yield* log(`chat: started ${decision.harness} (${decision.why}); a new conversation`);
+      return { kind: "launched", record: next } satisfies Ensured;
     }),
   );
 });
