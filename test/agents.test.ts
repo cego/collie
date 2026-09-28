@@ -398,6 +398,25 @@ test(
 );
 
 test(
+  "an agent that outlives its budget parks the Run, and the resume reads what it wrote late",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        // Nothing within the budget: a long build still working, not one that did nothing.
+        yield* rig.queueOutputs([null]);
+        yield* interrupted("r1", 1200, { collectMs: 400 });
+
+        yield* fs.writeFileString(outputPath("r1"), `{"verdict":"clean","note":"late"}`);
+        const result = yield* releasedInto("r1");
+        expect(result._tag === "Success" && result.success.note).toBe("late");
+        expect((yield* rig.cmds()).filter((cmd) => cmd === "agent start")).toHaveLength(1);
+      }),
+    ),
+  120_000,
+);
+
+test(
   "a restart between the attempts hands out no second repair",
   () =>
     runEffect(

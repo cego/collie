@@ -489,8 +489,13 @@ const reviewedBranch = Effect.fn("worktree.reviewedBranch")(function* (
       ? { branch: head, reviewed: true }
       : { refused: `${head} is not a branch, so there is nothing to fix on it` };
   }
-  // `worktree`, or a target this build does not know: the caller's own branch is what
-  // the reviewed work is sitting on.
+  // Only the working tree is the caller's own branch. A target of any other shape was
+  // never normalised, and guessing the checkout it was typed in is how a fix of one
+  // merge request landed on another's branch.
+  if (target === "") return { refused: "the review names no target, so no branch holds its work" };
+  if (target.trim() !== "worktree") {
+    return { refused: `${target} is not a target Collie can find a branch for` };
+  }
   const at = yield* run("git", ["rev-parse", "--abbrev-ref", "HEAD"], cwd);
   const branch = at.stdout.trim();
   if (at.code !== 0 || branch === "" || branch === "HEAD") {

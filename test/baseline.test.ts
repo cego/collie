@@ -1807,7 +1807,8 @@ scenario("a Run whose outcome needs no evidence is not stopped for having nothin
         options: { outcome: "investigation" },
       }).pipe(Effect.timeout("3 seconds"), Effect.ignore);
 
-      expect(yield* parkedWhy("r-impl-inv")).toBe("");
+      // Its agent writes nothing, which parks it for that; never for what was approved.
+      expect(yield* parkedWhy("r-impl-inv")).not.toContain("approved");
       expect((yield* rig.cmds()).filter((cmd) => cmd === "agent start")).toHaveLength(1);
     }),
   ),

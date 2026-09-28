@@ -135,7 +135,7 @@ import { Herdr, herdrFailureReason } from "./herdr";
 import type { PluginEnv } from "./env";
 import { WorktreeRecordSchema } from "./run";
 import { newTask, taskOfWorkspace, writeTask } from "./task";
-import { classifyWorkSource } from "./inputs";
+import { classifyGivenTarget, classifyWorkSource } from "./inputs";
 import type { BunServices } from "@effect/platform-bun/BunServices";
 import { approvedFrom, VerifySpecSchema, type VerifySpec } from "./verify-spec";
 import {
@@ -3163,6 +3163,29 @@ const makeRegistry: (
     ));
   // Captured, so placing a Run asks git and herdr without its callers providing either.
   const bun = yield* Effect.context<BunServices | Crypto.Crypto>();
+
+  /**
+   * Every `diff-target` as `mr:`, `branch:` or `worktree`, however it was given. Every
+   * reader downstream — the target's kind, the post offer, the branch a fix builds on —
+   * decides from that shape, so a value in any other one is refused here, where nothing
+   * exists yet, rather than read as the working tree later.
+   */
+  const settleTargets = Effect.fn("Engine.settleTargets")(function* (
+    generation: Generation,
+    settled: Settled,
+    cwd: string,
+  ) {
+    const field = fieldWith(generation.hints, "diff-target");
+    const value = field === undefined ? undefined : settled.input[field];
+    if (field === undefined || !isText(value) || value.trim() === "") return settled;
+    const target = yield* classifyGivenTarget(value, { cwd }).pipe(Effect.provideContext(bun));
+    if (target === null) {
+      return yield* refusedInput(
+        `"${field}" is not a merge request, a branch diff or the working tree: ${value}`,
+      );
+    }
+    return { ...settled, input: { ...settled.input, [field]: target.value } };
+  });
   /** Every generation this host is holding, by its registration name. */
   const live = new Map<string, Generation>();
   /** Why a recorded generation is not holdable, so a caller hears the file, not a timeout. */
@@ -3525,7 +3548,10 @@ const makeRegistry: (
     const request = yield* checkoutRequest(generation, asked).pipe(
       Effect.mapError((failure) => refused(failure.reason)),
     );
+    // Where its parent works, unless it named a checkout of its own.
+    const from = request.kind === "existing" ? request.path : placedOf(parent, parentOptions).cwd;
     const settled = yield* settleInput(generation.fields, { json: ask.input, text: {} }).pipe(
+      Effect.flatMap((given) => settleTargets(generation, given, from)),
       Effect.mapError((failure) => refused(failure.reason)),
     );
     const payload = yield* Schema.decodeUnknownEffect(
@@ -3533,8 +3559,6 @@ const makeRegistry: (
     )({ runId, input: settled.input }).pipe(
       Effect.mapError((cause) => refused(`${REFUSED_INPUT}: ${cause.message}`)),
     );
-    // Where its parent works, unless it named a checkout of its own.
-    const from = request.kind === "existing" ? request.path : placedOf(parent, parentOptions).cwd;
     const claimed = yield* claimAndPlace({
       // The invocation is the claim, so replaying the parent admits nothing new and
       // changing what an invocation is given is refused rather than run twice.
@@ -4076,7 +4100,15 @@ const makeRegistry: (
     const settled = yield* settleInput(generation.fields, {
       json: options.input,
       text: options.text ?? {},
-    });
+    }).pipe(
+      Effect.flatMap((given) =>
+        settleTargets(
+          generation,
+          given,
+          request.kind === "existing" ? request.path : options.project,
+        ),
+      ),
+    );
     const payload = yield* Schema.decodeUnknownEffect(
       generation.registration.workflow.payloadSchema,
     )({ runId, input: settled.input }).pipe(

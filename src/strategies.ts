@@ -42,11 +42,14 @@ export function fieldsWithStrategy(
 /** What a review is pointed at, which its value's own shape says. */
 export type TargetKind = "mr" | "branch" | "worktree";
 
-/** A diff target's kind is its value's shape; both the picker and a resume read it back. */
-export function targetKind(value: string): TargetKind {
+/**
+ * A diff target's kind is its value's shape; both the picker and a resume read it back.
+ * Empty for any other shape, which is a target nobody normalised, never the working tree.
+ */
+export function targetKind(value: string): TargetKind | "" {
   if (value.startsWith("mr:")) return "mr";
   if (value.startsWith("branch:")) return "branch";
-  return "worktree";
+  return value.trim() === "worktree" ? "worktree" : "";
 }
 
 /**

@@ -1122,6 +1122,27 @@ test("a review of a merge request whose branch is only on the remote is cut from
     }),
   ));
 
+test("a review whose target nobody normalised is refused, not fixed on the caller's branch", () =>
+  runEffect(
+    Effect.gen(function* () {
+      // The caller stands on another merge request's branch, which is what a guess took.
+      yield* fakeGit("someone-elses-branch", []);
+      yield* bin.add("glab", `echo '{"source_branch": "fix-the-parser"}'`);
+
+      const raw = yield* plan({
+        plan: "/runs/review-1",
+        plan_kind: "review",
+        target: "https://gitlab.example.com/acme/app/-/merge_requests/42",
+      });
+      expect(raw.branch).toBe("");
+      expect(raw.refused).toContain("not a target Collie can find a branch for");
+
+      const none = yield* plan({ plan: "/runs/review-1", plan_kind: "review" });
+      expect(none.branch).toBe("");
+      expect(none.refused).toContain("names no target");
+    }),
+  ));
+
 test("a mutating run makes its checkout with git and stays in the workspace it started in", () =>
   runEffect(
     Effect.gen(function* () {

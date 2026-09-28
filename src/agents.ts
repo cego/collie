@@ -482,6 +482,18 @@ export const agentWork = <
             ),
           }).pipe(Effect.as(value));
 
+    // Nothing in the time allowed is not nothing done: an agent past its budget may still
+    // be working, so the Run parks for a resume that reads what it writes, rather than
+    // recording a null that every replay fails on again.
+    const written = (text: string | null) =>
+      text !== null
+        ? Effect.succeed(text)
+        : Effect.fail(
+            new AgentParked({
+              operation: work.operation,
+              reason: `${launched.agent} has written nothing to ${output} yet. If it is still working, resume once it has written it; if it has stopped, ask it to write it and resume.`,
+            }),
+          );
     const launched = yield* Activity.make({
       name: `${work.operation}.launch`,
       success: Launched,
@@ -493,8 +505,12 @@ export const agentWork = <
       success: Schema.NullOr(Schema.String),
       error: AgentUncertain,
       execute: stoppable(
-        parkedWhenStuck(agents.revive(ask), host, work.runId).pipe(
-          Effect.andThen(watching(agents.collect(launched))),
+        parkedWhenStuck(
+          agents
+            .revive(ask)
+            .pipe(Effect.andThen(watching(agents.collect(launched)).pipe(Effect.flatMap(written)))),
+          host,
+          work.runId,
         ),
         host,
         work.runId,
@@ -533,6 +549,8 @@ export const agentWork = <
           success: Schema.NullOr(Schema.String),
           error: AgentUncertain,
           execute: stoppable(
+            // Null here is also the same unusable Output written again, which a repair
+            // has had its one chance at, so it ends the work rather than parking it.
             parkedWhenStuck(agents.revive(ask, first), host, work.runId).pipe(
               Effect.andThen(watching(agents.collect(launched, first))),
             ),
