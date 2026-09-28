@@ -191,8 +191,10 @@ see [CLI](cli.md).
 Starting a workflow starts a **task**, and a task gets a herdr workspace of its own —
 created and focused, so you land on the work. Everything the task takes stays there: the
 plan's tabs, the implementation it chains into, the review of that, and any follow-up.
-Starting fresh from inside a task workspace makes another one, because a fresh start is
-always new work; unrelated tasks never accumulate beside each other.
+A start on a branch a task already works — reviewing its merge request, fixing that review
+— joins that task wherever you start it from. Any other fresh start, including one from
+inside a task workspace, makes another one; unrelated tasks never accumulate beside each
+other.
 
 To put more work into a task you already have, continue it rather than starting fresh:
 the `cego.collie.continue` action, or `C` on the Control Plane. Inside the task's own

@@ -506,6 +506,32 @@ const reviewedBranch = Effect.fn("worktree.reviewedBranch")(function* (
   return { branch, reviewed: false };
 });
 
+/**
+ * The piece of work a Run is about: its repository and the branch the work is on — the
+ * one it was placed on, the one its diff target names, or the one its checkout has out.
+ * Null on the default branch, which is everybody's and so names no one piece of work,
+ * and wherever git or glab will not say.
+ */
+export const workOf = Effect.fn("worktree.workOf")(function* (
+  opts: BranchAsk & { readonly branch: string | null },
+  run: Runner<ChildProcessSpawner.ChildProcessSpawner>,
+) {
+  const listing = yield* gitWorktrees(run, opts.cwd);
+  if (listing === null) return null;
+  const reviewed =
+    opts.branch === null && diffTargetOf(opts) != null
+      ? yield* reviewedBranch(opts.cwd, opts, run)
+      : null;
+  if (reviewed !== null && !("branch" in reviewed)) return null;
+  const out = yield* run("git", ["rev-parse", "--abbrev-ref", "HEAD"], opts.cwd);
+  const branch = opts.branch ?? reviewed?.branch ?? (out.code === 0 ? out.stdout.trim() : "");
+  if (branch === "" || branch === "HEAD") return null;
+  const origin = yield* run("git", ["rev-parse", "--abbrev-ref", "origin/HEAD"], opts.cwd);
+  const base = origin.code === 0 ? origin.stdout.trim().replace(/^origin\//, "") : "";
+  if (base === "" ? branch === "main" || branch === "master" : branch === base) return null;
+  return `${listing.repo}#${branch}`;
+});
+
 /** Whether this ref is a branch — here or on the remote — rather than a sha or HEAD. */
 const isBranch = Effect.fn("worktree.isBranch")(function* (
   ref: string,

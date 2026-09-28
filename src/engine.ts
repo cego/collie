@@ -131,11 +131,11 @@ import { isSingleRepo, planIssuesIn, planReposOf } from "./plan";
 import { SELF, inputsFor, offersFrom, type Declared, type Offer } from "./offers";
 import { isOutcome } from "./outcome";
 import { RequestConflict, Store, storeLayer, type Admission, type RunRow } from "./store";
-import { TASK_INPUT, checkoutFor, repositoryName } from "./worktree";
+import { TASK_INPUT, checkoutFor, repositoryName, workOf } from "./worktree";
 import { Herdr, herdrFailureReason } from "./herdr";
 import type { PluginEnv } from "./env";
 import { WorktreeRecordSchema } from "./run";
-import { newTask, taskOfWorkspace, writeTask } from "./task";
+import { listTasks, newTask, taskOfWorkspace, writeTask } from "./task";
 import { classifyGivenTarget, classifyWorkSource } from "./inputs";
 import type { BunServices } from "@effect/platform-bun/BunServices";
 import { approvedFrom, VerifySpecSchema, type VerifySpec } from "./verify-spec";
@@ -3408,6 +3408,15 @@ const makeRegistry: (
       yield* ask.record({ checkout: { placed, opened } });
     }
     if (ask.taskLabel === undefined) return { placed, task: ask.task };
+    // One workspace per Task: a start on a branch an open Task already works — a review
+    // of its merge request, a fix of that review — is that Task's, wherever it came from.
+    if (ask.workspace === undefined && opened === null) {
+      const joined = yield* taskWorking(generation, ask, placed);
+      if (joined !== null) {
+        yield* Effect.ignore(placing.herdr.workspaceFocus(joined.workspace));
+        return { placed, task: joined.id };
+      }
+    }
     const label = opened?.label ?? ask.taskLabel;
     const openWorkspace = Effect.gen(function* () {
       if (ask.workspace === null) {
@@ -3447,6 +3456,41 @@ const makeRegistry: (
     // Focused, not just created: a human who started work is taken to it.
     yield* Effect.ignore(placing.herdr.workspaceFocus(workspace));
     return { placed, task: task.id };
+  }, Effect.provideContext(bun));
+
+  /** The open Task already working the branch this Run is about, or null. */
+  const taskWorking = Effect.fn("Engine.taskWorking")(function* (
+    generation: Generation,
+    ask: {
+      readonly runId: string;
+      readonly input: Readonly<Record<string, Schema.Json>>;
+      readonly provenance: Readonly<Record<string, string>>;
+      readonly options: Readonly<Record<string, string>>;
+    },
+    placed: Placed,
+  ) {
+    const about = (ask: Parameters<typeof workOf>[0]) =>
+      workOf(ask, runShell).pipe(Effect.orElseSucceed(() => null));
+    const work = yield* about({
+      cwd: placed.cwd,
+      branch: placed.branch,
+      name: ask.runId,
+      inputs: yield* branchInputs(generation, ask.input, ask.options),
+      strategies: generation.hints,
+      sources: ask.provenance,
+    });
+    if (work === null) return null;
+    const open = yield* placing.herdr
+      .workspaceList()
+      .pipe(Effect.orElseSucceed((): ReadonlyArray<{ workspaceId: string }> => []));
+    const tasks = yield* listTasks(placing.env.stateDir).pipe(Effect.orElseSucceed(() => []));
+    for (const task of tasks) {
+      if (!open.some((one) => one.workspaceId === task.workspace)) continue;
+      // A Task's own work is the branch its checkout has out.
+      if ((yield* about({ cwd: task.cwd, branch: null, name: task.id, inputs: {} })) === work)
+        return task;
+    }
+    return null;
   }, Effect.provideContext(bun));
 
   // One admission of a request at a time: placing is external, and only its claimant places.

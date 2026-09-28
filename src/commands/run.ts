@@ -114,7 +114,8 @@ function namedConstraints(texts: ReadonlyArray<string>, severities: ReadonlyArra
 /**
  * Which Task this start belongs to. Fresh unless the caller said otherwise: neither the
  * Workflow's name nor the workspace this happens to be in continues anything, because a
- * continuation that was never asked for is how two pieces of work become one.
+ * continuation that was never asked for is how two pieces of work become one. The host
+ * still gives a fresh start the open Task already working its branch.
  *
  * The programmatic front door never waits for a prompt. Outside a Task's workspace,
  * `--continue-task` is missing input and says which flag would supply it.

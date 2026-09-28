@@ -338,7 +338,7 @@ export class Rig {
       const renewed = agents.map((agent) =>
         agent.name === name
           ? Object.assign({}, agent, {
-              terminal_id: `${typeof agent.terminal_id === "string" ? agent.terminal_id : ""}+next`,
+              terminal_id: `${isText(agent.terminal_id) ? agent.terminal_id : ""}+next`,
             })
           : agent,
       );
@@ -439,9 +439,7 @@ export class Rig {
         encodeJson(
           Object.assign({}, state, {
             workspaces: list("workspaces").filter((w) => w.workspace_id !== workspaceId),
-            agents: list("agents").filter(
-              (a) => !(typeof a.name === "string" && agents.includes(a.name)),
-            ),
+            agents: list("agents").filter((a) => !(isText(a.name) && agents.includes(a.name))),
             closedWorkspaces: [...closed, workspaceId],
           }),
         ),
@@ -640,3 +638,5 @@ export class Rig {
 interface RigEnvInput {
   [key: string]: string;
 }
+
+const isText = Schema.is(Schema.String);

@@ -262,13 +262,17 @@ unusable one ends the Run with the reasons named.
 ### Tasks
 
 A **Task** is the work itself, and the Runs it takes: a plan, the implementation it chains
-into, the review of that. Every fresh start is a new Task, and gets a herdr workspace of
-its own, created and focused — including when it is started from inside another Task's
-workspace. Chains, follow-ups and resumes stay in the Task they came from.
+into, the review of that. A fresh start on a branch an open Task already works — the
+branch it was placed on, the one its diff target names, or the one its checkout has out —
+is that Task's, and opens in its workspace wherever it was started from. Any other fresh
+start is a new Task, and gets a herdr workspace of its own, created and focused. The
+default branch names no one piece of work, so a start on it is always new. Chains,
+follow-ups and resumes stay in the Task they came from.
 
-Continuing is explicit. `--task <id>` names one; `--continue-task` means the Task whose
-workspace this command was run in, and is `needs_input` anywhere else rather than a
-prompt. Neither the workflow's name nor a similar label ever continues a Task on its own.
+Continuing anything else is explicit. `--task <id>` names one; `--continue-task` means the
+Task whose workspace this command was run in, and is `needs_input` anywhere else rather
+than a prompt. Neither the workflow's name nor a similar label ever continues a Task on
+its own.
 
 `--here` keeps the work where you are: this workspace becomes the Run's Task — the one
 already kept here, or a new one — and its agents open beside you. A mutating workflow
