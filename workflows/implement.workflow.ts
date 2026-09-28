@@ -23,6 +23,7 @@ import {
   Run,
   WorkflowError,
   agentWork,
+  ask,
   classifyWorkSource,
   contentOf,
   defineWorkflow,
@@ -142,6 +143,11 @@ const ROUNDS = 4;
 
 /** One agent for the whole Run, so its model is named once and the fixes know the build. */
 const BUILDER = "build";
+
+/** What the gate offers when the checks it ran leave something unproved. */
+const VERIFY_AGAIN = "Verify again";
+const FIX_GAPS = "Hand it to the implementer";
+const NO_MR = "Stop without a merge request";
 
 export default defineWorkflow({
   id: "implement",
@@ -330,21 +336,59 @@ export default defineWorkflow({
       // this kind of result still has no evidence for. An Output saying the tests pass is
       // a claim; a record in the journal, bound to this tree, is not.
       const granted = yield* requireApproved(kind);
-      for (const spec of granted) {
-        yield* host.verify({ runId, name: spec.name, cwd });
-      }
-      const evidence = yield* host.evidence(runId, cwd);
-      const gaps = evidenceGapsOf({
-        kind: isOutcome(kind) ? kind : "unspecified",
-        evidence,
-        approved: granted,
-        outputs: { build: { ...build }, synthesize: { ...rallied.reviewed } },
-        // Only a reviewer may vouch for what a reviewer is asked: read from any Output,
-        // the agent that wrote the change could vouch for its own scope.
-        reviewed: ["synthesize"],
-        roots: [place.dir, cwd],
-        tickets: tickets.map((ticket) => ({ file: ticket.file, checks: ticket.checks })),
+      const gapsNow = Effect.gen(function* () {
+        for (const spec of granted) {
+          yield* host.verify({ runId, name: spec.name, cwd });
+        }
+        return evidenceGapsOf({
+          kind: isOutcome(kind) ? kind : "unspecified",
+          evidence: yield* host.evidence(runId, cwd),
+          approved: granted,
+          outputs: { build: { ...build }, synthesize: { ...rallied.reviewed } },
+          // Only a reviewer may vouch for what a reviewer is asked: read from any Output,
+          // the agent that wrote the change could vouch for its own scope.
+          reviewed: ["synthesize"],
+          roots: [place.dir, cwd],
+          tickets: tickets.map((ticket) => ({ file: ticket.file, checks: ticket.checks })),
+        });
       });
+      let gaps = yield* gapsNow;
+      // Once more before anyone is asked: a check that fails and then passes on the same
+      // tree is a flake, and a Run that ends on one has proved nothing about the change.
+      if (gaps.length > 0) gaps = yield* gapsNow;
+      // Then the human decides, rather than the Run ending with the work one step short
+      // of its merge request. Bounded like the rally, so it cannot go round for ever.
+      for (let at = 1; gaps.length > 0 && at <= ROUNDS; at++) {
+        const chosen = yield* ask({
+          name: `gate-${at}`,
+          prompt: `No merge request yet: ${gaps.join("; ")}. What next?`,
+          options: [VERIFY_AGAIN, FIX_GAPS, NO_MR],
+        });
+        if (chosen === NO_MR) break;
+        if (chosen === FIX_GAPS) {
+          yield* agentWork({
+            operation: `gate-fix-${at}`,
+            agent: BUILDER,
+            role: "implementer",
+            instructions: prompts.fix,
+            input: {
+              ...input,
+              iteration: String(at),
+              max_iterations: String(ROUNDS),
+              findings: formatFindings(
+                gaps.map((gap) => ({
+                  severity: "blocker",
+                  title: gap,
+                  detail:
+                    "Collie ran the approved checks on this tree, and this is what they did not prove.",
+                })),
+              ),
+            },
+            output: FixOutputSchema,
+          });
+        }
+        gaps = yield* gapsNow;
+      }
       if (gaps.length > 0) {
         yield* host.record(runId, `no merge request: ${gaps.join("; ")}`);
         return yield* unbuilt(`no merge request: ${gaps.join("; ")}`);
@@ -365,7 +409,8 @@ export default defineWorkflow({
         instructions: prompts.mr,
         input: {
           ...input,
-          evidence: renderEvidence(evidence),
+          // Read after the gate settled, so the merge request cites the passing runs.
+          evidence: renderEvidence(yield* host.evidence(runId, cwd)),
           unreviewed: rallied.unreviewed,
           mr: {
             assignee: gitlab.assignee,

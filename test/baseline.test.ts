@@ -1602,11 +1602,22 @@ scenario(
         );
         yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS]);
 
-        const result = yield* ran({
+        // Checked twice, and then asked rather than ended: the work is one step short of
+        // its merge request, and whether that step is taken is the human's call.
+        const asking = yield* parked({
           entry: shipped("implement"),
           runId: "r-impl-gate",
           input: { plan },
           options: { outcome: "feature" },
+          decision: "gate-1",
+        });
+        expect(asking.find((row) => row.decision === "gate-1")?.prompt).toContain("unit failed");
+        const result = yield* answered({
+          entry: shipped("implement"),
+          runId: "r-impl-gate",
+          input: { plan },
+          decision: "gate-1",
+          value: "Stop without a merge request",
         });
         yield* bin.restore();
 
