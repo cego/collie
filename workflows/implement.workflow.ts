@@ -23,7 +23,6 @@ import {
   Run,
   WorkflowError,
   agentWork,
-  ask,
   classifyWorkSource,
   contentOf,
   defineWorkflow,
@@ -82,6 +81,7 @@ const prompts = {
     ...Implementing.fields,
     evidence: text,
     unreviewed: text,
+    unsettled: text,
     mr: Schema.Struct({ assignee: text, template: text, issues: text }),
     target_repo: text,
   }),
@@ -106,6 +106,9 @@ const Built = Schema.Struct({
   evidence: Schema.optionalKey(Schema.Array(Schema.String)),
   patch: Schema.optionalKey(Schema.Boolean),
   documented_commands: Schema.optionalKey(Schema.Array(Schema.String)),
+  assumptions: Schema.optionalKey(Schema.Array(Schema.String)).annotate({
+    description: "each decision you made that the spec did not settle, and why, one sentence each",
+  }),
 });
 
 /** Which repositories a plan names, as a reading of it records them. */
@@ -143,11 +146,6 @@ const ROUNDS = 4;
 
 /** One agent for the whole Run, so its model is named once and the fixes know the build. */
 const BUILDER = "build";
-
-/** What the gate offers when the checks it ran leave something unproved. */
-const VERIFY_AGAIN = "Verify again";
-const FIX_GAPS = "Hand it to the implementer";
-const NO_MR = "Stop without a merge request";
 
 export default defineWorkflow({
   id: "implement",
@@ -270,6 +268,7 @@ export default defineWorkflow({
       const whole = tickets.length < 2;
       const built = new Set<string>();
       const handed: Handed[] = [];
+      const assumed: string[] = [];
       let build: typeof Built.Type | null = null;
       for (;;) {
         // Identities before work: two tickets nobody can tell apart would share one
@@ -305,6 +304,7 @@ export default defineWorkflow({
             .map((one) => `${one.name}: ${one.result}`),
         };
         handed.push(done);
+        for (const one of build.assumptions ?? []) assumed.push(`assumed in ${done.item}: ${one}`);
         built.add(done.item);
         if (ticket === null) for (const one of tickets) built.add(one.file);
         if (ticket !== null) yield* checkpoint(place.dir, ticket, "done", claimsOf(build, ticket));
@@ -375,59 +375,51 @@ export default defineWorkflow({
         return pass.gaps;
       });
       let gaps = yield* gapsNow;
-      // Once more before anyone is asked: a check that fails and then passes on the same
-      // tree is a flake, and a Run that ends on one has proved nothing about the change.
+      // Once more before a fix: a check that fails and then passes on the same tree is a
+      // flake, and a Run that ends on one has proved nothing about the change.
       if (gaps.length > 0) gaps = yield* gapsNow;
       // A gate fix lands after the last review, so the merge request says it was not re-reviewed.
       let unreviewed = rallied.unreviewed;
-      // Then the human decides, rather than the Run ending with the work one step short
-      // of its merge request. Bounded like the rally, so it cannot go round for ever.
+      // The implementer fixes what is unproved, bounded like the rally; the human reads
+      // what is left in the merge request, before it lands.
       for (let at = 1; gaps.length > 0 && at <= ROUNDS; at++) {
-        const chosen = yield* ask({
-          name: `gate-${at}`,
-          prompt: `No merge request yet: ${gaps.join("; ")}. What next?`,
-          options: [VERIFY_AGAIN, FIX_GAPS, NO_MR],
-        });
-        if (chosen === NO_MR) break;
         passed = [];
-        if (chosen === FIX_GAPS) {
-          const findings = gaps.map((gap) => ({
-            severity: "blocker",
-            title: gap,
-            detail:
-              "Collie ran the approved checks on this tree, and this is what they did not prove.",
-          }));
-          const fixed = yield* agentWork({
-            operation: `gate-fix-${at}`,
-            agent: BUILDER,
-            role: "implementer",
-            instructions: prompts.fix,
-            input: {
-              ...input,
-              iteration: String(at),
-              max_iterations: String(ROUNDS),
-              findings: formatFindings(findings),
-            },
-            output: FixOutputSchema,
-          });
-          gaps = yield* gapsNow;
-          const settled = settleFinalFix(findings, fixed, yield* host.evidence(runId, cwd));
-          unreviewed = [
-            unreviewed,
-            settled.ok
-              ? `gate fix ${at}: ${settled.attestation}`
-              : `gate fix ${at}, not re-reviewed: ${settled.reasons.join("; ")}`,
-          ]
-            .filter((line) => line !== "")
-            .join("\n");
-          continue;
-        }
+        const findings = gaps.map((gap) => ({
+          severity: "blocker",
+          title: gap,
+          detail:
+            "Collie ran the approved checks on this tree, and this is what they did not prove.",
+        }));
+        const fixed = yield* agentWork({
+          operation: `gate-fix-${at}`,
+          agent: BUILDER,
+          role: "implementer",
+          instructions: prompts.fix,
+          input: {
+            ...input,
+            iteration: String(at),
+            max_iterations: String(ROUNDS),
+            findings: formatFindings(findings),
+          },
+          output: FixOutputSchema,
+        });
         gaps = yield* gapsNow;
+        const settled = settleFinalFix(findings, fixed, yield* host.evidence(runId, cwd));
+        unreviewed = [
+          unreviewed,
+          settled.ok
+            ? `gate fix ${at}: ${settled.attestation}`
+            : `gate fix ${at}, not re-reviewed: ${settled.reasons.join("; ")}`,
+        ]
+          .filter((line) => line !== "")
+          .join("\n");
       }
-      if (gaps.length > 0) {
-        yield* host.record(runId, `no merge request: ${gaps.join("; ")}`);
-        return yield* unbuilt(`no merge request: ${gaps.join("; ")}`);
-      }
+      const unsettled = [
+        ...assumed,
+        ...rallied.unsettled,
+        ...gaps.map((gap) => `unproved after ${ROUNDS} gate fixes: ${gap}`),
+      ];
+      if (unsettled.length > 0) yield* host.record(runId, `unsettled: ${unsettled.join("; ")}`);
 
       // A step that needs something this machine or repository does not have is not a
       // failure: it is work that cannot be done here, and the Run says so.
@@ -447,6 +439,7 @@ export default defineWorkflow({
           // Read after the gate settled, so the merge request cites the passing runs.
           evidence: renderEvidence(yield* host.evidence(runId, cwd)),
           unreviewed,
+          unsettled: unsettled.map((line) => `- ${line}`).join("\n"),
           mr: {
             assignee: gitlab.assignee,
             template: gitlab.template,
@@ -562,12 +555,23 @@ const asCheckpoint = Schema.encodeSync(
   ),
 );
 
+/** Each blocking dispute left standing, as the merge request lists it for the human. */
+const disputesOf = (findings: ReadonlyArray<Finding>): string[] =>
+  findings
+    .filter(isBlocking)
+    .map(
+      (one) =>
+        `disputed blocking finding: [${one.severity}] ${one.title}${one.file ? ` (${one.file})` : ""}${one.reason ? `: ${one.reason}` : ""}`,
+    );
+
 /** Where a rally stood when it stopped: what halted it, and what the last fix left. */
 interface Rallied {
   /** Why the loop stopped short, or null where it converged. */
   readonly halted: string | null;
   /** What the last fix is attested by where no review came after it; empty otherwise. */
   readonly unreviewed: string;
+  /** Blocking disputes nobody answered, for the human to settle in the merge request. */
+  readonly unsettled: ReadonlyArray<string>;
   /** The review that decided it, which is the one judgement the gate may read. */
   readonly reviewed: SynthesisReport;
 }
@@ -612,8 +616,21 @@ const rally = (ask: {
       });
       const split = splitDisputed(synthesis.findings, disputed);
       const round = settleRound({ live: split.live, disputed, at, seen });
+      if (round.go === "halt" && round.halt === "dispute_unresolved") {
+        return {
+          halted: null,
+          unreviewed: "",
+          unsettled: disputesOf(round.outstanding),
+          reviewed: synthesis,
+        };
+      }
       if (round.go === "halt") {
-        return { halted: `${round.halt}: ${round.reason}`, unreviewed: "", reviewed: synthesis };
+        return {
+          halted: `${round.halt}: ${round.reason}`,
+          unreviewed: "",
+          unsettled: [],
+          reviewed: synthesis,
+        };
       }
       if (round.go === "clean") {
         // Nothing blocking is not nothing found: what is left is carried to the merge
@@ -624,7 +641,7 @@ const rally = (ask: {
             `carried ${synthesis.findings.length} non-blocking finding(s) unfixed: ${synthesis.findings.map((one) => one.title).join("; ")}`,
           );
         }
-        return { halted: null, unreviewed: "", reviewed: synthesis };
+        return { halted: null, unreviewed: "", unsettled: [], reviewed: synthesis };
       }
       seen = { at, keys: round.keys };
 
@@ -648,13 +665,21 @@ const rally = (ask: {
 
       if (at === ROUNDS) {
         const settled = settleFinalFix(round.live, fixed, yield* host.evidence(runId, ask.cwd));
-        return settled.ok
-          ? { halted: null, unreviewed: settled.attestation, reviewed: synthesis }
-          : {
-              halted: `${settled.halt}: ${settled.reasons.join("; ")}`,
-              unreviewed: "",
-              reviewed: synthesis,
-            };
+        if (settled.ok)
+          return {
+            halted: null,
+            unreviewed: settled.attestation,
+            unsettled: [],
+            reviewed: synthesis,
+          };
+        if (settled.halt === "dispute_unresolved")
+          return { halted: null, unreviewed: "", unsettled: settled.reasons, reviewed: synthesis };
+        return {
+          halted: `${settled.halt}: ${settled.reasons.join("; ")}`,
+          unreviewed: "",
+          unsettled: [],
+          reviewed: synthesis,
+        };
       }
     }
     return yield* new WorkflowError({ reason: "the rally ran no rounds at all" });

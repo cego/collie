@@ -862,14 +862,14 @@ What kind of result a run has to prove, and so what evidence closes it:
 
 The gate runs before the merge request, which is where the claim is made. Collie runs the
 run's own approved set itself at the tree as it stands, then says what is missing. A check
-that failed runs once more; gaps left after that are asked about, each one named, and
-**Stop without a merge request** ends the run without one. A run with
-nothing approved is told so rather than passed — an empty set would make the gate say yes
-to anything — and it is told before any agent works: a run whose outcome needs the approved
-set, started with none, parks at once, and `run show` gives both repairs. `collie run intent
-verification <run-id> --name … -- <command>` and then `collie run resume <run-id>` carry this
-run on; `.collie/verify.json` only helps the runs started after it, because a run reads that
-file when it starts. A grant withdrawn while the run works parks it at its gate the same way.
+that failed runs once more; gaps left after that go to the implementer for up to four
+fixes, and whatever is still unproved is named in the merge request, which opens anyway: the
+human verifies before it lands. A run with nothing approved is told so rather than passed —
+an empty set would make the gate say yes to anything — and a run whose outcome needs the
+approved set is refused at `run start` when it has none (see [What Collie may run
+itself](#what-collie-may-run-itself)). A grant withdrawn while the run works parks it at its
+gate; `collie run intent verification <run-id> --name … -- <command>` and then `collie run
+resume <run-id>` carry it on.
 
 An investigation that concludes there is nothing to change skips the merge request with a
 note and finishes. That is a real outcome, and nothing is invented to have something to
