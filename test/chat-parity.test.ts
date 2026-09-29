@@ -191,8 +191,14 @@ const INVENTORY: ReadonlyArray<readonly [string, Route]> = [
   [
     "run intent verification",
     {
-      route: "human-only",
-      why: "chat sets a Run's checks as it starts it (`start` with `verify`); amending a running Run's set has no route yet",
+      route: "propose",
+      kind: "set_verification",
+      action: {
+        kind: "set_verification",
+        run: RUN,
+        name: "unit",
+        command: { executable: "bun", argv: ["test"], cwd: "worktree" },
+      },
     },
   ],
   ["run intent defaults show", { route: "read", tool: "collie_installation" }],

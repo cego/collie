@@ -8,7 +8,7 @@
 // proposal; `validate` says which of a proposal's actions the target's own authority
 // already grants and which need a human. Running them is somebody else's module.
 
-import { Clock, Data, Effect, Path, Schema, Option } from "effect";
+import { Clock, Data, Effect, Path, Schema, Option, Struct } from "effect";
 import { herdOf } from "./steering";
 import { isArray, isRecord, isString } from "./schema";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
@@ -63,6 +63,14 @@ export const ActionSchema = Schema.Union([
     change: Schema.Literals(["set-goal", "add-constraint", "remove-constraint"]),
     patch: Schema.String,
     base_version: Schema.Int,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("set_verification"),
+    run: Schema.String,
+    /** The check's name; a grant of a name already there replaces it. */
+    name: Schema.String,
+    /** What Collie runs for it; absent withdraws the check of that name. */
+    command: Schema.optionalKey(VerifySpecSchema.mapFields(Struct.omit(["name"]))),
   }),
   Schema.Struct({
     kind: Schema.Literal("deliver"),

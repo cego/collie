@@ -19,6 +19,7 @@ import type { PluginEnv } from "./env";
 import {
   answerRun,
   controlRun,
+  grantRun,
   invokeOffer,
   offersOf,
   startRun,
@@ -195,6 +196,43 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
       // Nothing is told: a Run reads its Intent at its next boundary, from the file this
       // has just written.
       return { state: "applied" as const, note: `intent v${next.amended.version}` };
+    }).pipe(Effect.catch((cause) => Effect.succeed(failed(String(cause))))),
+  );
+  // Through the same host grant as `run intent verification`, and the same Intent amendment,
+  // so what `intent show` lists is what the gate will run.
+  registerExecutor("set_verification", (action, by) =>
+    Effect.gen(function* () {
+      const command = action.command ?? null;
+      const granted = yield* grantRun(env, { runId: action.run, name: action.name, command });
+      if (!granted.ok) return failed(granted.error.message);
+      const dir = runDir(env.stateDir, action.run);
+      yield* withDirLock(
+        dir,
+        Effect.gen(function* () {
+          const intent: Intent | null = yield* readIntent(dir).pipe(
+            Effect.catch(() => Effect.succeed(null)),
+          );
+          if (intent === null) return;
+          const kept = intent.authority.run_verification.filter(
+            (spec) => spec.name !== action.name,
+          );
+          const run_verification =
+            command === null ? kept : [...kept, { name: action.name, ...command }];
+          yield* writeIntentHeld(
+            dir,
+            amendIntent(
+              intent,
+              { kind: "authority", patch: { run_verification } },
+              by,
+              yield* nowIso(),
+            ),
+          );
+        }),
+      );
+      return {
+        state: "applied" as const,
+        note: command === null ? `${action.name} withdrawn` : `${action.name} granted`,
+      };
     }).pipe(Effect.catch((cause) => Effect.succeed(failed(String(cause))))),
   );
   // Which Workflow carries a follow-up is the Workflow's own declaration — the offer it

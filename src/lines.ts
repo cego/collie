@@ -173,6 +173,10 @@ export function describeAction(action: Action): string {
       return `deliver to ${action.agent} (${action.mode}): ${action.text}`;
     case "update_intent":
       return `${action.change} on ${action.run}'s intent: ${action.patch}`;
+    case "set_verification":
+      return action.command === undefined
+        ? `withdraw ${action.run}'s check ${action.name}`
+        : `let Collie run ${action.name} for ${action.run}: ${[action.command.executable, ...action.command.argv].join(" ")} (in ${action.command.cwd})`;
     // Which workspace, always: this writes the file that workspace's next Runs begin
     // with, and a line that left it out asked for a yes to a change nobody could see.
     case "update_defaults":
