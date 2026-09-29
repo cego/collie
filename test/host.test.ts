@@ -327,6 +327,34 @@ test(
 );
 
 test(
+  "a newer client from another installation leaves the host running and says why",
+  () =>
+    proves(
+      Effect.gen(function* () {
+        const { state } = yield* workspace("collie-host-elsewhere-");
+        const who = yield* Effect.scoped(
+          connect(state).pipe(Effect.flatMap((client) => client.identity())),
+        ).pipe(Effect.orDie);
+
+        // A checkout under development: newer by its version, and not what this host serves.
+        const refused = yield* Effect.scoped(connect(state, { build: "999.0.0" })).pipe(
+          Effect.flip,
+          Effect.provide(
+            ConfigProvider.layer(ConfigProvider.fromUnknown({ HERDR_PLUGIN_ROOT: "/elsewhere" })),
+          ),
+        );
+        if (refused._tag !== "HostVersionMismatch") {
+          throw new Error(`connected, or refused with ${refused._tag}`);
+        }
+        expect(refused.restart).toContain("HERDR_PLUGIN_STATE_DIR");
+        expect((yield* ownerOf(state))?.pid).toBe(who.pid);
+        yield* stopHost(state);
+      }),
+    ),
+  120_000,
+);
+
+test(
   "a host that will not start is said out loud rather than waited on forever",
   () =>
     proves(

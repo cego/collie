@@ -27,11 +27,11 @@ interface Target {
 const echoed = Effect.fn("collie.verify.echoed")(function* () {
   const stdio = yield* Stdio.Stdio;
   const json = (yield* root).json;
-  const to = (sink: typeof stdio.stdout) => (text: string) =>
-    Stream.make(text).pipe(Stream.run(sink({ endOnDone: false })), Effect.ignore);
+  const to = (stream: "stdout" | "stderr") => (text: string) =>
+    Stream.make(text).pipe(Stream.run(stdio[stream]({ endOnDone: false })), Effect.ignore);
   return {
-    stdout: to(json ? stdio.stderr : stdio.stdout),
-    stderr: to(stdio.stderr),
+    stdout: to(json ? "stderr" : "stdout"),
+    stderr: to("stderr"),
   } satisfies Echo;
 });
 

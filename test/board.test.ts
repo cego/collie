@@ -622,6 +622,23 @@ test("a working agent leaves the Task working, and says what it is doing", () =>
     }),
   ));
 
+test("a check Collie is running outranks what an idle agent last said", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const run = yield* madeRun(dir, { task: "task-1" });
+      const fs = yield* FileSystem.FileSystem;
+      yield* fs.writeFileString(`${run.dir}/verifying`, "typecheck-spilnu");
+
+      const [view] = yield* board(env, [run], {
+        alive: [agent("impl-1", "idle", "Code review findings application")],
+        registered: [registered("impl-1", run.id)],
+      });
+
+      expect(view!.sentence).toBe("Running the typecheck-spilnu check.");
+    }),
+  ));
+
 test("a hold is held, not a question: nothing is waiting for an answer", () =>
   runEffect(
     Effect.gen(function* () {

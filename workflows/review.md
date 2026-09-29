@@ -49,8 +49,10 @@ worth raising; name the file it is about and say why the change puts it wrong.
 
 You may be the only reviewer of this change, in which case your review is the review the
 human reads: write `summary` — two sentences, what this change does and what is wrong with
-it — and `dropped: []`, alongside the fields below. Write them whether or not anyone else
-is reviewing; they cost a line and they are what makes your review readable on its own.
+it — `dropped: []`, and `fixed`: each finding of the review above that is gone, as
+`{"file": "path", "title": "its title", "note": "how it was fixed"}`, alongside the fields
+below. Write them whether or not anyone else is reviewing; they cost a line and they are
+what makes your review readable on its own.
 
 Already disputed — the implementer looked at these and did not apply them, with reasons:
 
@@ -150,6 +152,14 @@ Work where the review was pointed — `target_kind` is `{{inputs.target_kind}}`:
 - `mr` — `glab mr checkout <iid> {{target_repo}}`, so the fixes land on that merge
   request's own branch.
 - `worktree` — stay on the branch you are on.
+
+This is fix round {{iteration}} of at most {{max_iterations}}. The findings to act on:
+
+{{findings}}
+
+Already disputed, and the human's to settle rather than yours to redo:
+
+{{disputed}}
 
 Apply the findings you agree with and commit them. A finding you believe is wrong is not
 silently skipped: record it under `disputed` with your reason, and the human sees it. Run

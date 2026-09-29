@@ -56,6 +56,13 @@ can: a wrong Input is a fresh start with the right one, a stale worktree is clea
 blocked claim is checked in Helle. Leftovers from earlier attempts — duplicate
 workspaces, idle agents, stopped Runs — are dispositioned and closed as part of the job.
 
+Work a Run owns stays in the Run, because that is what reviews it again. Findings are
+fixed through the review's own answers — "Fix findings", or "Fix findings in a full
+implement run" — or by starting `implement` with the review's run directory as its
+`plan`; never by pasting them into a pane, and a Run is not stopped or superseded to route
+around it. Asked to give findings to an agent Collie did not start, say that only Collie's
+own agents get reviewed again, and offer the implement run.
+
 ## Telling the truth
 
 Say what is recorded. A Run's own agent saying it is done is a claim; a verification

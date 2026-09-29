@@ -191,8 +191,10 @@ see [CLI](cli.md).
 Starting a workflow starts a **task**, and a task gets a herdr workspace of its own —
 created and focused, so you land on the work. Everything the task takes stays there: the
 plan's tabs, the implementation it chains into, the review of that, and any follow-up.
-Starting fresh from inside a task workspace makes another one, because a fresh start is
-always new work; unrelated tasks never accumulate beside each other.
+A start about a branch a task already works — one placed on it, or reviewing it — joins
+that task wherever you start it from. Any other fresh start, including one from
+inside a task workspace, makes another one; unrelated tasks never accumulate beside each
+other.
 
 To put more work into a task you already have, continue it rather than starting fresh:
 the `cego.collie.continue` action, or `C` on the Control Plane. Inside the task's own
@@ -945,7 +947,9 @@ session.
 
 - **Fix findings** — the implementer already live in this workspace is handed them, where
   there is one; otherwise an implementer on this review's own run applies them as a fix
-  round, `disputed` and all. It is offered once.
+  round, `disputed` and all, and the fix is reviewed again at once. The rally goes on by
+  itself until nothing blocking is left, it stops making progress, or four rounds have run,
+  and then asks again. A hand-off offers **Review again** for when the implementer is done.
 - **Fix findings in a full implement run** — starts `implement` with the review itself as
   the work source: `review.md` is the spec, the findings are the tickets, and the
   implementer works where the review was pointed — checking out the branch, or `glab mr

@@ -16,7 +16,6 @@ import {
   piExtension,
   preferredHarness,
   readChat,
-  started,
   writeLaunchFiles,
   whyUnavailable,
   writeChat,

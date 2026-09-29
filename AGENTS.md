@@ -208,5 +208,5 @@ binary still starts.
    [ADR-0009](docs/adr/0009-the-collie-tab-is-the-herds.md) (one board per Herd, in the
    Home). ADR-0009 supersedes only ADR-0006's sentence about where the Collie tab is
    created. A Run no longer stays in the workspace it was started from: it belongs to its
-   Task, and a fresh start opens one of its own ([`CONTEXT.md`](CONTEXT.md), Task
-   workspace).
+   Task, and a fresh start opens one of its own unless it is about an open Task's branch
+   ([`CONTEXT.md`](CONTEXT.md), Task).

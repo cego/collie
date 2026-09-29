@@ -2,6 +2,7 @@ import {
   Cause,
   Duration,
   Effect,
+  Exit,
   FileSystem,
   Option,
   Path,
@@ -113,7 +114,8 @@ function namedConstraints(texts: ReadonlyArray<string>, severities: ReadonlyArra
 /**
  * Which Task this start belongs to. Fresh unless the caller said otherwise: neither the
  * Workflow's name nor the workspace this happens to be in continues anything, because a
- * continuation that was never asked for is how two pieces of work become one.
+ * continuation that was never asked for is how two pieces of work become one. The host
+ * still gives a fresh start the open Task already working its branch.
  *
  * The programmatic front door never waits for a prompt. Outside a Task's workspace,
  * `--continue-task` is missing input and says which flag would supply it.
@@ -640,7 +642,7 @@ const waitForRun = Effect.fn("collie.waitForRun")(function* (
   const seen = yield* Ref.make<RunView | null>(null);
   const enough = (view: RunView) =>
     isSettled(view) || (options.wantsAttention && view.status.status === "suspended");
-  const watching = watchRun(env, runId, (view) =>
+  const once = watchRun(env, runId, (view) =>
     Effect.gen(function* () {
       const last = yield* Ref.getAndSet(seen, view);
       // One line per change, not per look: a run polled while it waits is not news.
@@ -654,6 +656,22 @@ const waitForRun = Effect.fn("collie.waitForRun")(function* (
       return enough(view);
     }).pipe(Effect.orDie),
   ).pipe(Effect.scoped);
+  // A host replaced or restarted under the wait ends its stream before the Run got
+  // anywhere. The engine is durable and the next host serves the same Run, so the wait
+  // goes on against it rather than reporting a Run that has not moved.
+  const watching = Effect.gen(function* () {
+    for (;;) {
+      const exit = yield* Effect.exit(once);
+      const last = yield* Ref.get(seen);
+      if (Exit.isSuccess(exit) && (exit.value !== null || last === null || enough(last))) {
+        return exit.value;
+      }
+      if (Exit.isFailure(exit) && !Cause.hasInterruptsOnly(exit.cause)) {
+        return yield* Effect.failCause(exit.cause);
+      }
+      yield* Effect.sleep("500 millis");
+    }
+  });
   const bounded = options.ms === null ? watching : watching.pipe(Effect.timeout(options.ms));
   const failed = yield* bounded.pipe(
     Effect.catch((cause) =>
@@ -1144,32 +1162,53 @@ function intentChange(
         const resolved = yield* resolveCommandRun(global, runId);
         if (resolved._tag === "RunFailure") return resolved.result;
         const hosted = options.hosted;
-        if (hosted !== undefined)
-          return yield* mutation(resolved.env, operation, requestId, () => hosted(resolved.env));
         const dir = resolved.dir;
+        // Read, decide and write as one act. Two amendments that both read v1 would
+        // otherwise both report v2 and the later rename would erase the earlier one.
+        const amendHeld = (id: string) =>
+          withDirLock<
+            Failure | Intent,
+            Error | PlatformError.PlatformError,
+            FileSystem.FileSystem | Path.Path | BunServices
+          >(
+            dir,
+            Effect.gen(function* () {
+              const intent = yield* readIntent(dir).pipe(
+                Effect.mapError((cause) => new Error(String(cause))),
+              );
+              if (intent === null)
+                return err("invalid_state", `Run "${runId}" has no Intent to amend.`);
+              const wanted = change(intent);
+              if ("ok" in wanted) return wanted;
+              const next = amend(intent, wanted, actorName(actorNow(id)), yield* nowIso());
+              if (next !== intent) yield* writeIntentHeld(dir, next);
+              return next;
+            }),
+          );
+        if (hosted !== undefined)
+          return yield* mutation(resolved.env, operation, requestId, (id) =>
+            hosted(resolved.env).pipe(
+              // The host keeps what it acts on; the Intent says the same, so what `intent
+              // show` and oversight read is what the gate will run, not an empty list.
+              Effect.flatMap((result): Effect.Effect<Result, CollieError, BunServices> =>
+                Effect.gen(function* () {
+                  if (!result.ok) return result;
+                  const failed = yield* amendHeld(id).pipe(
+                    Effect.map((amended) => ("ok" in amended ? amended.error.message : "")),
+                    Effect.catch((cause) => Effect.succeed(String(cause))),
+                  );
+                  if (failed === "") return result;
+                  return {
+                    ...result,
+                    human: `${result.human}\nThe grant holds, but intent show will not list it: ${failed}`,
+                  };
+                }),
+              ),
+            ),
+          );
         return yield* mutation(resolved.env, operation, requestId, (id) =>
           Effect.gen(function* () {
-            // Read, decide and write as one act. Two amendments that both read v1 would
-            // otherwise both report v2 and the later rename would erase the earlier one.
-            const amended = yield* withDirLock<
-              Failure | Intent,
-              Error | PlatformError.PlatformError,
-              FileSystem.FileSystem | Path.Path | BunServices
-            >(
-              dir,
-              Effect.gen(function* () {
-                const intent = yield* readIntent(dir).pipe(
-                  Effect.mapError((cause) => new Error(String(cause))),
-                );
-                if (intent === null)
-                  return err("invalid_state", `Run "${runId}" has no Intent to amend.`);
-                const wanted = change(intent);
-                if ("ok" in wanted) return wanted;
-                const next = amend(intent, wanted, actorName(actorNow(id)), yield* nowIso());
-                if (next !== intent) yield* writeIntentHeld(dir, next);
-                return next;
-              }),
-            );
+            const amended = yield* amendHeld(id);
             if ("ok" in amended) return amended;
             // Nothing is told: a Run reads its Intent at its next boundary, from the file
             // it has just been written to, which is what makes this one write rather than

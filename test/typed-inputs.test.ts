@@ -59,7 +59,7 @@ const collie = Effect.fn("TypedTest.collie")(function* (world: World, args: Read
   return { exit, envelope: yield* asEnvelope(stdout).pipe(Effect.orDie) };
 });
 
-const MODULE = ["typed.workflow.ts"] as const;
+const MODULE = ["typed.workflow.ts", "targeted.workflow.ts"] as const;
 
 const asCommand = Schema.encodeSync(Schema.fromJsonString(Schema.Array(Schema.String)));
 
@@ -223,6 +223,47 @@ test(
         expect(refused.reason).toContain("count");
         // Nothing was admitted, so there is no run to clean up.
         expect(yield* client.runs({ task: null }).pipe(Effect.orDie)).toEqual([]);
+        yield* stopHost(world.state);
+      }),
+    ),
+  120_000,
+);
+
+test(
+  "a pasted merge request URL is handed over as mr:, and a target of no known shape starts nothing",
+  () =>
+    proves("collie-typed-target-", (world) =>
+      Effect.gen(function* () {
+        const client = yield* connect(world.state).pipe(Effect.orDie);
+        const url = "https://gitlab.example.com/acme/app/-/merge_requests/42";
+        const started = yield* client
+          .start({
+            project: world.project,
+            id: "targeted",
+            request: "req-url",
+            input: {},
+            text: { target: url },
+          })
+          .pipe(Effect.orDie);
+        const done = yield* until(
+          () => client.status({ runId: started.runId }),
+          (status) => status.status === "complete" || status.status === "failed",
+        );
+        // The shape every reader after this decides from; a raw URL was read as `worktree`.
+        expect(done).toEqual({ status: "complete", value: "mr:gitlab.example.com/acme/app!42" });
+
+        // Not a checkout, so a bare word has no base to diff against and names nothing.
+        const refused = yield* client
+          .start({
+            project: world.project,
+            id: "targeted",
+            request: "req-word",
+            input: {},
+            text: { target: "fix-the-parser" },
+          })
+          .pipe(Effect.flip, Effect.orDie);
+        expect(refused.reason).toStartWith("invalid_input:");
+        expect(refused.reason).toContain("target");
         yield* stopHost(world.state);
       }),
     ),

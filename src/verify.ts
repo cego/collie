@@ -142,6 +142,20 @@ export const appendVerification = Effect.fn("Verify.append")(function* (
   yield* appendJournal(yield* verificationsPath(runDir), VerificationJson, record);
 });
 
+/**
+ * The check Collie itself is running for a Run, in its run directory while it runs. Its
+ * agents are idle then, and without this a card reads whatever the last of them was doing.
+ */
+export const VERIFYING_FILE = "verifying";
+
+/** The name of the check running for the Run in `dir`, or "" when none is. */
+export const verifyingIn = (dir: string) =>
+  FileSystem.FileSystem.pipe(
+    Effect.flatMap((fs) => fs.readFileString(`${dir}/${VERIFYING_FILE}`)),
+    Effect.map((text) => text.trim()),
+    Effect.orElseSucceed(() => ""),
+  );
+
 export const readVerifications = Effect.fn("Verify.read")(function* (runDir: string) {
   return yield* readJournal(yield* verificationsPath(runDir), VerificationJson);
 });

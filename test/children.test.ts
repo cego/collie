@@ -45,6 +45,9 @@ const projectOf = Effect.fn("ChildrenTest.project")(function* (
   return project;
 });
 
+/** What a grading child recorded itself, apart from oversight's lines in the same log. */
+const graded = (lines: ReadonlyArray<string>) => lines.filter((line) => line.startsWith("graded "));
+
 test(
   "two projects grade the same notes with their own reviewer, parent and child alike",
   () =>
@@ -199,7 +202,8 @@ test(
             value: "strict:one,two+strict:one/pass+strict:two/pass+ok",
           });
           for (const note of ["one", "two"]) {
-            expect(yield* events(world.state, `${started.runId}.grade-${note}`)).toEqual([
+            // The workflow's own records, once each: oversight writes to the same log.
+            expect(graded(yield* events(world.state, `${started.runId}.grade-${note}`))).toEqual([
               `graded strict:${note}/pass`,
             ]);
           }
@@ -267,7 +271,8 @@ test(
             value: "strict:a,b+strict:a/pass+strict:b/pass+ok",
           });
           for (const note of ["a", "b"]) {
-            expect(yield* events(world.state, `${runId}.grade-${note}`)).toEqual([
+            // The workflow's own records, once each: oversight writes to the same log.
+            expect(graded(yield* events(world.state, `${runId}.grade-${note}`))).toEqual([
               `graded strict:${note}/pass`,
             ]);
           }
@@ -381,7 +386,8 @@ test(
             value: "strict:a,b+strict:a/pass+strict:b/pass+ok",
           });
           for (const note of ["a", "b"]) {
-            expect(yield* events(world.state, `${runId}.grade-${note}`)).toEqual([
+            // The workflow's own records, once each: oversight writes to the same log.
+            expect(graded(yield* events(world.state, `${runId}.grade-${note}`))).toEqual([
               `graded strict:${note}/pass`,
             ]);
           }

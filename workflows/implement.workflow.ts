@@ -23,6 +23,7 @@ import {
   Run,
   WorkflowError,
   agentWork,
+  ask,
   classifyWorkSource,
   contentOf,
   defineWorkflow,
@@ -143,6 +144,11 @@ const ROUNDS = 4;
 /** One agent for the whole Run, so its model is named once and the fixes know the build. */
 const BUILDER = "build";
 
+/** What the gate offers when the checks it ran leave something unproved. */
+const VERIFY_AGAIN = "Verify again";
+const FIX_GAPS = "Hand it to the implementer";
+const NO_MR = "Stop without a merge request";
+
 export default defineWorkflow({
   id: "implement",
   title: "implement — build the plan, review it, fix until nothing blocks",
@@ -195,6 +201,14 @@ export default defineWorkflow({
               waves: read.waves.map((wave) => [...wave]),
               refusal: read.refusal?.message ?? null,
             })),
+            // A plan that cannot be read is refused by name, not a defect the Run dies of.
+            Effect.catch((cause) =>
+              Effect.succeed({
+                single: false,
+                waves: [],
+                refusal: `the plan at ${source.value} could not be read: ${cause.message}`,
+              }),
+            ),
           ),
         });
         if (plan.refusal !== null) return yield* new WorkflowError({ reason: plan.refusal });
@@ -322,21 +336,93 @@ export default defineWorkflow({
       // this kind of result still has no evidence for. An Output saying the tests pass is
       // a claim; a record in the journal, bound to this tree, is not.
       const granted = yield* requireApproved(kind);
-      for (const spec of granted) {
-        yield* host.verify({ runId, name: spec.name, cwd });
-      }
-      const evidence = yield* host.evidence(runId, cwd);
-      const gaps = evidenceGapsOf({
-        kind: isOutcome(kind) ? kind : "unspecified",
-        evidence,
-        approved: granted,
-        outputs: { build: { ...build }, synthesize: { ...rallied.reviewed } },
-        // Only a reviewer may vouch for what a reviewer is asked: read from any Output,
-        // the agent that wrote the change could vouch for its own scope.
-        reviewed: ["synthesize"],
-        roots: [place.dir, cwd],
-        tickets: tickets.map((ticket) => ({ file: ticket.file, checks: ticket.checks })),
+      // Each pass is journaled, so a replay follows the results the human was shown rather
+      // than a fresh run of checks that may come out differently. What passed is not run
+      // again until a gate answer says to.
+      let passes = 0;
+      let passed: ReadonlyArray<string> = [];
+      const gapsNow = Effect.gen(function* () {
+        passes += 1;
+        const pass = yield* Activity.make({
+          name: `gate.${passes}`,
+          success: Schema.Struct({
+            gaps: Schema.Array(Schema.String),
+            passed: Schema.Array(Schema.String),
+          }),
+          execute: Effect.gen(function* () {
+            const now = [...passed];
+            for (const spec of granted) {
+              if (now.includes(spec.name)) continue;
+              const ran = yield* host.verify({ runId, name: spec.name, cwd });
+              if (ran.result === "pass") now.push(spec.name);
+            }
+            const gaps = evidenceGapsOf({
+              kind: isOutcome(kind) ? kind : "unspecified",
+              evidence: yield* host.evidence(runId, cwd),
+              approved: granted,
+              outputs: { build: { ...build }, synthesize: { ...rallied.reviewed } },
+              // Only a reviewer may vouch for what a reviewer is asked: read from any Output,
+              // the agent that wrote the change could vouch for its own scope.
+              reviewed: ["synthesize"],
+              roots: [place.dir, cwd],
+              tickets: tickets.map((ticket) => ({ file: ticket.file, checks: ticket.checks })),
+            });
+            return { gaps, passed: now };
+          }).pipe(Effect.orDie),
+        });
+        passed = pass.passed;
+        return pass.gaps;
       });
+      let gaps = yield* gapsNow;
+      // Once more before anyone is asked: a check that fails and then passes on the same
+      // tree is a flake, and a Run that ends on one has proved nothing about the change.
+      if (gaps.length > 0) gaps = yield* gapsNow;
+      // A gate fix lands after the last review, so the merge request says it was not re-reviewed.
+      let unreviewed = rallied.unreviewed;
+      // Then the human decides, rather than the Run ending with the work one step short
+      // of its merge request. Bounded like the rally, so it cannot go round for ever.
+      for (let at = 1; gaps.length > 0 && at <= ROUNDS; at++) {
+        const chosen = yield* ask({
+          name: `gate-${at}`,
+          prompt: `No merge request yet: ${gaps.join("; ")}. What next?`,
+          options: [VERIFY_AGAIN, FIX_GAPS, NO_MR],
+        });
+        if (chosen === NO_MR) break;
+        passed = [];
+        if (chosen === FIX_GAPS) {
+          const findings = gaps.map((gap) => ({
+            severity: "blocker",
+            title: gap,
+            detail:
+              "Collie ran the approved checks on this tree, and this is what they did not prove.",
+          }));
+          const fixed = yield* agentWork({
+            operation: `gate-fix-${at}`,
+            agent: BUILDER,
+            role: "implementer",
+            instructions: prompts.fix,
+            input: {
+              ...input,
+              iteration: String(at),
+              max_iterations: String(ROUNDS),
+              findings: formatFindings(findings),
+            },
+            output: FixOutputSchema,
+          });
+          gaps = yield* gapsNow;
+          const settled = settleFinalFix(findings, fixed, yield* host.evidence(runId, cwd));
+          unreviewed = [
+            unreviewed,
+            settled.ok
+              ? `gate fix ${at}: ${settled.attestation}`
+              : `gate fix ${at}, not re-reviewed: ${settled.reasons.join("; ")}`,
+          ]
+            .filter((line) => line !== "")
+            .join("\n");
+          continue;
+        }
+        gaps = yield* gapsNow;
+      }
       if (gaps.length > 0) {
         yield* host.record(runId, `no merge request: ${gaps.join("; ")}`);
         return yield* unbuilt(`no merge request: ${gaps.join("; ")}`);
@@ -357,8 +443,9 @@ export default defineWorkflow({
         instructions: prompts.mr,
         input: {
           ...input,
-          evidence: renderEvidence(evidence),
-          unreviewed: rallied.unreviewed,
+          // Read after the gate settled, so the merge request cites the passing runs.
+          evidence: renderEvidence(yield* host.evidence(runId, cwd)),
+          unreviewed,
           mr: {
             assignee: gitlab.assignee,
             template: gitlab.template,
@@ -527,7 +614,17 @@ const rally = (ask: {
       if (round.go === "halt") {
         return { halted: `${round.halt}: ${round.reason}`, unreviewed: "", reviewed: synthesis };
       }
-      if (round.go === "clean") return { halted: null, unreviewed: "", reviewed: synthesis };
+      if (round.go === "clean") {
+        // Nothing blocking is not nothing found: what is left is carried to the merge
+        // request unfixed, and the record says so rather than the loop going quiet.
+        if (synthesis.findings.length > 0) {
+          yield* host.record(
+            runId,
+            `carried ${synthesis.findings.length} non-blocking finding(s) unfixed: ${synthesis.findings.map((one) => one.title).join("; ")}`,
+          );
+        }
+        return { halted: null, unreviewed: "", reviewed: synthesis };
+      }
       seen = { at, keys: round.keys };
 
       const fixed = yield* agentWork({

@@ -201,13 +201,16 @@ export const writeCard = Effect.fn("Oversight.writeCard")(function* (
   return card;
 });
 
-/** The Run's own log, which its record's log tab shows: what the host saw of its work. */
-export const said = (at: { readonly runDir: string }, line: string) =>
+/** A line of the Run's own log, which its record's log tab shows: what the host saw of its work. */
+export const appendLog = (runDir: string, line: string) =>
   FileSystem.FileSystem.pipe(
-    Effect.tap((fs) => fs.makeDirectory(at.runDir, { recursive: true })),
-    Effect.flatMap((fs) => fs.writeFileString(`${at.runDir}/log.txt`, `${line}\n`, { flag: "a" })),
-    Effect.ignore,
+    Effect.tap((fs) => fs.makeDirectory(runDir, { recursive: true })),
+    Effect.flatMap((fs) => fs.writeFileString(`${runDir}/log.txt`, `${line}\n`, { flag: "a" })),
   );
+
+/** Best effort: oversight's notes never fail the thing they are about. */
+export const said = (at: { readonly runDir: string }, line: string) =>
+  appendLog(at.runDir, line).pipe(Effect.ignore);
 
 const JudgedJson = Schema.fromJsonString(
   Schema.Struct({ semantic: Schema.Boolean, truncated: Schema.Boolean, goal: Schema.Boolean }),

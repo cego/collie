@@ -21,6 +21,7 @@ import {
   Effect,
   Exit,
   FileSystem,
+  Formatter,
   Layer,
   Option,
   Path,
@@ -104,6 +105,7 @@ import {
   cardCheckpoints,
   checkDrift,
   grantedToRun,
+  appendLog,
   said,
   settleAtFinish,
   standForElection,
@@ -130,12 +132,12 @@ import { isSingleRepo, planIssuesIn, planReposOf } from "./plan";
 import { SELF, inputsFor, offersFrom, type Declared, type Offer } from "./offers";
 import { isOutcome } from "./outcome";
 import { RequestConflict, Store, storeLayer, type Admission, type RunRow } from "./store";
-import { TASK_INPUT, checkoutFor, repositoryName } from "./worktree";
+import { TASK_INPUT, checkoutFor, repositoryName, workOf } from "./worktree";
 import { Herdr, herdrFailureReason } from "./herdr";
 import type { PluginEnv } from "./env";
 import { WorktreeRecordSchema } from "./run";
-import { newTask, taskOfWorkspace, writeTask } from "./task";
-import { classifyWorkSource } from "./inputs";
+import { listTasks, newTask, taskOfWorkspace, writeTask } from "./task";
+import { classifyGivenTarget, classifyWorkSource } from "./inputs";
 import type { BunServices } from "@effect/platform-bun/BunServices";
 import { approvedFrom, VerifySpecSchema, type VerifySpec } from "./verify-spec";
 import {
@@ -143,6 +145,7 @@ import {
   insideRun,
   readVerifications,
   runApproved,
+  VERIFYING_FILE,
   type Verification,
 } from "./verify";
 import * as Workflow from "effect/unstable/workflow/Workflow";
@@ -215,6 +218,7 @@ export const TOOLCHAIN = {
  */
 export const SDK_DECLARATIONS = `declare module "collie" {
   import type { Context, Effect, FileSystem, Layer, Path, Schema } from "effect";
+  import type { PlatformError } from "effect/PlatformError";
   import type { Workflow } from "effect/unstable/workflow/Workflow";
   import type {
     WorkflowEngine,
@@ -1089,7 +1093,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
   export function planReposOf(
     planDir: string,
     root: string,
-  ): Effect.Effect<PlanRepos, never, FileSystem.FileSystem | Path.Path>;
+  ): Effect.Effect<PlanRepos, PlatformError, FileSystem.FileSystem | Path.Path>;
 
   /** Whether this plan is one repository and that repository is the run's own root. */
   export function isSingleRepo(plan: PlanRepos): boolean;
@@ -1764,13 +1768,10 @@ export const handOverClaim = Effect.fn("Engine.handOverClaim")(function* (option
     for (const one of tree.runs) late.push(...(yield* options.halt(one)).left);
     if (late.length > 0) return yield* refused(late);
     yield* fs.remove(file, { force: true }).pipe(Effect.orDie);
-    yield* fs
-      .writeFileString(
-        `${options.dir}/events.${runId}.log`,
-        `claim on ${options.slug} taken over by ${options.to}; its agents were closed\n`,
-        { flag: "a" },
-      )
-      .pipe(Effect.orDie);
+    yield* appendLog(
+      runDir(options.dir, runId),
+      `claim on ${options.slug} taken over by ${options.to}; its agents were closed`,
+    ).pipe(Effect.orDie);
     handed.push(runId);
   }
   return handed;
@@ -1878,9 +1879,12 @@ export const hostLayer = (options: {
         held: (runId) => set(HOLD, runId),
         stopRequested: (runId) => set(STOP, runId),
         record: (runId, event) =>
-          fs
-            .writeFileString(`${dir}/events.${runId}.log`, `${event}\n`, { flag: "a" })
-            .pipe(Effect.orDie),
+          // A replay writes its records again, as it re-enters every step: the log is what
+          // the Run did each time it ran, not a deduplicated story.
+          appendLog(runDir(dir, runId), event).pipe(
+            Effect.provideService(FileSystem.FileSystem, fs),
+            Effect.orDie,
+          ),
         parked: (runId, why) => {
           const path = controlPath(dir, PARKED, runId);
           return why === null
@@ -1945,6 +1949,8 @@ export const hostLayer = (options: {
                 });
               }
               const journal = evidenceDir(dir, asked.runId);
+              const marker = `${runDir(dir, asked.runId)}/${VERIFYING_FILE}`;
+              yield* fs.writeFileString(marker, spec.name).pipe(Effect.ignore);
               return yield* runApproved(
                 journal,
                 { ...own, cwd: asked.cwd },
@@ -1954,6 +1960,7 @@ export const hostLayer = (options: {
               ).pipe(
                 Effect.tap((record) => noteVerification(journal, record)),
                 Effect.mapError((refused) => new WorkflowError({ reason: refused.why })),
+                Effect.ensuring(fs.remove(marker).pipe(Effect.ignore)),
               );
             }),
           ),
@@ -2364,7 +2371,7 @@ const exitStatus = (
     if (Option.isSome(encoded) && isJson(encoded.value)) {
       return { status: "complete", value: encoded.value };
     }
-    return { status: "complete", value: isJson(result) ? result : String(result) };
+    return { status: "complete", value: isJson(result) ? result : Formatter.format(result) };
   }
   // A failure of the workflow's own is what it says it is, in the words its schema writes.
   const failure = Cause.findErrorOption(exit.cause);
@@ -3163,6 +3170,27 @@ const makeRegistry: (
     ));
   // Captured, so placing a Run asks git and herdr without its callers providing either.
   const bun = yield* Effect.context<BunServices | Crypto.Crypto>();
+
+  /**
+   * Every `diff-target` as `mr:`, `branch:` or `worktree`, since every reader decides from
+   * that shape; any other is refused here, before anything exists.
+   */
+  const settleTargets = Effect.fn("Engine.settleTargets")(function* (
+    generation: Generation,
+    settled: Settled,
+    cwd: string,
+  ) {
+    const field = fieldWith(generation.hints, "diff-target");
+    const value = field === undefined ? undefined : settled.input[field];
+    if (field === undefined || !isText(value) || value.trim() === "") return settled;
+    const target = yield* classifyGivenTarget(value, { cwd }).pipe(Effect.provideContext(bun));
+    if (target === null) {
+      return yield* refusedInput(
+        `"${field}" is not a merge request, a branch diff or the working tree: ${value}`,
+      );
+    }
+    return { ...settled, input: { ...settled.input, [field]: target.value } };
+  });
   /** Every generation this host is holding, by its registration name. */
   const live = new Map<string, Generation>();
   /** Why a recorded generation is not holdable, so a caller hears the file, not a timeout. */
@@ -3371,6 +3399,15 @@ const makeRegistry: (
       yield* ask.record({ checkout: { placed, opened } });
     }
     if (ask.taskLabel === undefined) return { placed, task: ask.task };
+    // One workspace per Task: a start on a branch an open Task already works — a review
+    // of its merge request, a fix of that review — is that Task's, wherever it came from.
+    if (ask.workspace === undefined && opened === null) {
+      const joined = yield* taskWorking(generation, ask, placed);
+      if (joined !== null) {
+        yield* Effect.ignore(placing.herdr.workspaceFocus(joined.workspace));
+        return { placed, task: joined.id };
+      }
+    }
     const label = opened?.label ?? ask.taskLabel;
     const openWorkspace = Effect.gen(function* () {
       if (ask.workspace === null) {
@@ -3410,6 +3447,44 @@ const makeRegistry: (
     // Focused, not just created: a human who started work is taken to it.
     yield* Effect.ignore(placing.herdr.workspaceFocus(workspace));
     return { placed, task: task.id };
+  }, Effect.provideContext(bun));
+
+  /** The open Task already working the branch this Run is about, or null. */
+  const taskWorking = Effect.fn("Engine.taskWorking")(function* (
+    generation: Generation,
+    ask: {
+      readonly runId: string;
+      readonly input: Readonly<Record<string, Schema.Json>>;
+      readonly provenance: Readonly<Record<string, string>>;
+      readonly options: Readonly<Record<string, string>>;
+    },
+    placed: Placed,
+  ) {
+    const about = (ask: Parameters<typeof workOf>[0]) =>
+      workOf(ask, runShell).pipe(Effect.orElseSucceed(() => null));
+    const work = yield* about({
+      cwd: placed.cwd,
+      branch: placed.branch,
+      name: ask.runId,
+      inputs: yield* branchInputs(generation, ask.input, ask.options),
+      strategies: generation.hints,
+      sources: ask.provenance,
+    });
+    if (work === null) return null;
+    const open = yield* placing.herdr
+      .workspaceList()
+      .pipe(Effect.orElseSucceed((): ReadonlyArray<{ workspaceId: string }> => []));
+    const tasks = yield* listTasks(placing.env.stateDir).pipe(Effect.orElseSucceed(() => []));
+    for (const task of tasks) {
+      if (!open.some((one) => one.workspaceId === task.workspace)) continue;
+      // A Task's own work is the branch its checkout has out.
+      if (
+        (yield* about({ cwd: task.cwd, branch: null, name: task.id, inputs: {}, task: true })) ===
+        work
+      )
+        return task;
+    }
+    return null;
   }, Effect.provideContext(bun));
 
   // One admission of a request at a time: placing is external, and only its claimant places.
@@ -3525,7 +3600,10 @@ const makeRegistry: (
     const request = yield* checkoutRequest(generation, asked).pipe(
       Effect.mapError((failure) => refused(failure.reason)),
     );
+    // Where its parent works, unless it named a checkout of its own.
+    const from = request.kind === "existing" ? request.path : placedOf(parent, parentOptions).cwd;
     const settled = yield* settleInput(generation.fields, { json: ask.input, text: {} }).pipe(
+      Effect.flatMap((given) => settleTargets(generation, given, from)),
       Effect.mapError((failure) => refused(failure.reason)),
     );
     const payload = yield* Schema.decodeUnknownEffect(
@@ -3533,8 +3611,6 @@ const makeRegistry: (
     )({ runId, input: settled.input }).pipe(
       Effect.mapError((cause) => refused(`${REFUSED_INPUT}: ${cause.message}`)),
     );
-    // Where its parent works, unless it named a checkout of its own.
-    const from = request.kind === "existing" ? request.path : placedOf(parent, parentOptions).cwd;
     const claimed = yield* claimAndPlace({
       // The invocation is the claim, so replaying the parent admits nothing new and
       // changing what an invocation is given is refused rather than run twice.
@@ -4076,7 +4152,15 @@ const makeRegistry: (
     const settled = yield* settleInput(generation.fields, {
       json: options.input,
       text: options.text ?? {},
-    });
+    }).pipe(
+      Effect.flatMap((given) =>
+        settleTargets(
+          generation,
+          given,
+          request.kind === "existing" ? request.path : options.project,
+        ),
+      ),
+    );
     const payload = yield* Schema.decodeUnknownEffect(
       generation.registration.workflow.payloadSchema,
     )({ runId, input: settled.input }).pipe(
@@ -4413,7 +4497,8 @@ const JsonObject = Schema.Record(Schema.String, Schema.Json);
 const isJsonObject = Schema.is(JsonObject);
 const readJsonObject = Schema.decodeUnknownOption(Schema.fromJsonString(JsonObject));
 const writeJsonObject = Schema.encodeSync(Schema.fromJsonString(JsonObject, { space: 2 }));
-const objectIn = (value: Schema.Json | undefined) => (isJsonObject(value) ? value : {});
+const objectIn = (value: Schema.Json | undefined): Readonly<Record<string, Schema.Json>> =>
+  isJsonObject(value) ? value : {};
 
 /**
  * An author's package.json with what a module is typechecked against added where it is

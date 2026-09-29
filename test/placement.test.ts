@@ -1125,3 +1125,62 @@ for (const chain of CHAINS) {
     180_000,
   );
 }
+
+test(
+  "a fresh start about a branch an open Task works is that Task's; one about no branch is new",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* rig.queueOutputs([{ verdict: "clean" }]);
+        const views = yield* hosted(
+          Effect.gen(function* () {
+            const registry = yield* Registry;
+            const [builds, targeted, hello] = yield* loaded(registry, [
+              `${fixtures}/builds.workflow.ts`,
+              `${fixtures}/targeted.workflow.ts`,
+              `${fixtures}/hello.workflow.ts`,
+            ]);
+            const ids: string[] = [];
+            for (const [generation, ask] of [
+              [
+                builds!,
+                { request: "r1", text: { work: "Add a picker" }, taskLabel: "Project | P" },
+              ],
+              [
+                targeted!,
+                {
+                  request: "r2",
+                  text: { target: `branch:master...${LOGIN}/add-a-picker` },
+                  taskLabel: "Project | Review",
+                },
+              ],
+              [hello!, { request: "r3", text: { name: "you" }, taskLabel: "Project | Hello" }],
+              // Typed in the Task's own checkout, but about no branch: not the Task's.
+              [
+                hello!,
+                {
+                  request: "r4",
+                  project: worktreeOf("add-a-picker"),
+                  text: { name: "there" },
+                  taskLabel: "Project | There",
+                },
+              ],
+            ] as const) {
+              const started = yield* start(generation, ask);
+              if (started._tag === "Failure") return yield* Effect.die(started.failure);
+              ids.push(started.success.runId);
+              yield* finished(started.success.runId);
+            }
+            return yield* Effect.forEach(ids, (id) => registry.view(id));
+          }),
+        );
+
+        const [build, review, hello, there] = views;
+        expect(review?.task).toBe(build?.task);
+        expect(hello?.task).not.toBe(build?.task);
+        expect(there?.task).not.toBe(build?.task);
+        expect((yield* rig.cmds()).filter((cmd) => cmd === "workspace create")).toHaveLength(3);
+      }),
+    ),
+  120_000,
+);

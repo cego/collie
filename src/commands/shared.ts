@@ -66,6 +66,20 @@ const contextFailure = (result: Failure): ContextResolution => ({
   result,
 });
 
+/**
+ * Where a command scoped to a workspace works. An explicitly named directory wins. A
+ * workspace named with `--workspace` roots it at that workspace's directory; one only
+ * inherited from the pane the command was typed in does not, because the directory the
+ * caller is standing in says more — the Home's pane rooted every command typed there in
+ * its state directory.
+ */
+export const contextCwd = (at: {
+  readonly explicit: string;
+  readonly named: boolean;
+  readonly workspace: string;
+  readonly caller: string;
+}) => at.explicit || (at.named ? at.workspace || at.caller : at.caller || at.workspace);
+
 export const context = Effect.fn("collie.context")(function* (
   global: Global,
   resolveLive: boolean,
@@ -93,13 +107,12 @@ export const context = Effect.fn("collie.context")(function* (
     {
       ...base,
       workspaceId: id,
-      // An explicitly named directory wins; the workspace's is an inference (its
-      // panes' shells move), and the caller's own cwd is the last resort.
-      cwd:
-        (base.cwdExplicit ? base.cwd : "") ||
-        lookup.workspace.cwd ||
-        base.context.workspace_cwd ||
-        base.cwd,
+      cwd: contextCwd({
+        explicit: base.cwdExplicit ? base.cwd : "",
+        named: Option.isSome(global.workspace),
+        workspace: lookup.workspace.cwd || base.context.workspace_cwd || "",
+        caller: base.cwd,
+      }),
     },
     lookup.workspace,
   );

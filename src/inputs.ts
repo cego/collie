@@ -332,13 +332,14 @@ export function reviewedTargets(
     for (const run of finishedHere(runs, cwd, task)) {
       if (found.length >= limit) break;
       const target = diffTargetOf(run.settled)?.value;
-      if (!target) continue;
+      const kind = targetKind(target ?? "");
+      if (!target || kind === "") continue;
       if (seen.has(target)) continue;
       seen.add(target);
       const open = yield* openFindingsIn(run.dir);
       const when = ago(run.finished ?? run.created, now);
       found.push({
-        kind: targetKind(target),
+        kind,
         value: target,
         source: open > 0 ? `reviewed ${when} · ${open} finding(s) open` : `reviewed ${when}`,
         label: targetLabel(run.workflow, run.task ?? run.id, target),
@@ -525,23 +526,17 @@ export function classifyTarget(
 export function classifyGivenTarget(
   typed: string,
   ctx: InferContext,
-): Effect.Effect<Candidate, never, ChildProcessSpawner.ChildProcessSpawner> {
+): Effect.Effect<Candidate | null, never, ChildProcessSpawner.ChildProcessSpawner> {
   return Effect.gen(function* () {
     // An already-normalised target — from a chained Run, a resume, or a careful
     // human — is passed through: classifying it again would nest its prefix.
-    if (/^(mr:|branch:|worktree$)/.test(typed.trim())) {
-      return { kind: targetKind(typed.trim()), value: typed.trim(), source: "typed" };
-    }
+    const kind = targetKind(typed.trim());
+    if (kind !== "") return { kind, value: typed.trim(), source: "typed" };
     const run = ctx.run ?? shell;
     const baseRef = (yield* defaultBase(run, ctx.cwd)) ?? "";
     const project = yield* projectHere(ctx.cwd, run);
-    return (
-      classifyTarget(typed, baseRef, project) ?? {
-        kind: targetKind(typed),
-        value: typed,
-        source: "typed",
-      }
-    );
+    // Null for a shape nothing here recognises: the caller refuses it rather than guess.
+    return classifyTarget(typed, baseRef, project);
   });
 }
 

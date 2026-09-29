@@ -9,6 +9,7 @@
 // reviewer is asked for, and what the fix is told about where it stands.
 
 import {
+  Agents,
   FINDINGS_FILE,
   FixOutputSchema,
   Children,
@@ -23,7 +24,11 @@ import {
   parseMrTarget,
   repoArgs,
   riskLine,
+  findingKey,
+  settleRound,
+  splitDisputed,
   targetKind,
+  type Finding,
 } from "collie";
 import { Effect, FileSystem, Schema } from "effect";
 import { FIX_PROMPT, IMPLEMENTER, REVIEWER, reviewPass } from "./reviewing.ts";
@@ -32,8 +37,9 @@ const FIX = "Fix findings";
 const IMPLEMENT = "Fix findings in a full implement run";
 const POST = "Post to MR";
 const DONE = "Don't post";
+const AGAIN = "Review again";
 
-/** How often the menu may come back. A post that did not land asks again; not for ever. */
+/** How many fix rounds one "Fix findings" may run before the human is asked again. */
 const ROUNDS = 4;
 
 export default defineWorkflow({
@@ -97,9 +103,8 @@ export default defineWorkflow({
               .readFileString(`${(yield* host.place(previous)).dir}/${REVIEW_FILE}`)
               .pipe(Effect.orElseSucceed(() => ""));
 
-      // A standalone review is one round of one review: the rally belongs to whoever
-      // embeds this, and the numbers say what is true here rather than what is usual.
-      const synthesis = yield* reviewPass({
+      // The first review; "Fix findings" below rallies from it.
+      let synthesis = yield* reviewPass({
         target: asked.target,
         plan: asked.plan ?? "",
         proves: asked.proves ?? "",
@@ -128,17 +133,80 @@ export default defineWorkflow({
         obstacle: "",
       };
 
+      const agents = yield* Agents;
+      // The fix and the review after it are one round of a rally, as in implement: a fix
+      // Collie ran is reviewed again at once, and one handed to an agent Collie does not
+      // watch waits for the human to say it is ready to look at.
+      const reviewedAgain = (at: number, answered: string) =>
+        Effect.gen(function* () {
+          const last = yield* fs
+            .readFileString(`${place.dir}/${REVIEW_FILE}`)
+            .pipe(Effect.orElseSucceed(() => ""));
+          return yield* reviewPass({
+            target: asked.target,
+            plan: asked.plan ?? "",
+            proves: asked.proves ?? "",
+            previous: last,
+            answered,
+            risks: place.options.risks ?? "",
+            at,
+            // This review, and one for every fix round the rally may still run after it.
+            of: at + (fixing ? ROUNDS - rallied : 0),
+            disputed: [...disputed],
+          });
+        });
+
+      let handed = false;
+      // Reviews are numbered by how many there have been, not by how often the menu came.
+      let reviews = 1;
       let fixes = 0;
-      for (let round = 1; round <= ROUNDS; round++) {
+      let asks = 0;
+      // Set by the human's "Fix findings": the rally then goes on by itself, through the
+      // same `settleRound` implement's does, and asks again once it settles or runs out.
+      let fixing = false;
+      let rallied = 0;
+      let seen: { readonly at: number; readonly keys: ReadonlyArray<string> } | null = null;
+      let settled = "";
+      // A dispute is carried into the next review rather than re-argued, as in implement.
+      let disputed: ReadonlyArray<Finding> = [];
+      for (;;) {
+        const split = splitDisputed(synthesis.findings, disputed);
+        const round = settleRound({ live: split.live, disputed, at: reviews, seen });
+        let chosen: string = FIX;
+        if (fixing) {
+          if (round.go !== "fix" || rallied >= ROUNDS) {
+            fixing = false;
+            settled =
+              round.go === "halt"
+                ? `${round.halt}: ${round.reason}`
+                : round.go === "clean"
+                  ? "nothing blocking is left"
+                  : `the rally ran ${ROUNDS} rounds and findings remain`;
+            yield* host.record(run.id, `rally settled after review ${reviews}: ${settled}`);
+          }
+        }
         // Posting is offered for a merge request and nothing else; whether this is one to
         // post to is decided when it is invoked, by whoever can actually see GitLab.
-        const chosen = yield* ask({
-          name: `post-${round}`,
-          prompt: "What next?",
-          options: [FIX, IMPLEMENT, ...(kind === "mr" ? [POST] : []), DONE].filter(
-            (one) => one !== FIX || fixes === 0,
-          ),
-        });
+        if (!fixing) {
+          chosen = yield* ask({
+            name: `post-${(asks += 1)}`,
+            prompt: settled === "" ? "What next?" : `What next? The rally stopped: ${settled}.`,
+            options: [
+              ...(handed ? [AGAIN] : split.live.length > 0 ? [FIX] : []),
+              IMPLEMENT,
+              ...(kind === "mr" ? [POST] : []),
+              DONE,
+            ],
+          });
+          settled = "";
+          if (chosen === FIX) {
+            fixing = true;
+            rallied = 0;
+            seen = null;
+          }
+        }
+        // What this fix is for, so a review that raises the same blockers again halts.
+        if (chosen === FIX && round.go === "fix") seen = { at: reviews, keys: round.keys };
         if (chosen === DONE) return `${synthesis.findings.length} finding(s), not posted`;
 
         if (chosen === POST) {
@@ -165,32 +233,52 @@ export default defineWorkflow({
           return `${synthesis.findings.length} finding(s), fixed in ${child.runId}`;
         }
 
-        fixes += 1;
+        if (chosen === AGAIN) {
+          handed = false;
+          synthesis = yield* reviewedAgain((reviews += 1), "");
+          continue;
+        }
+
         // An implementer already live here is building this work, so it is the one to
         // fix it: a second agent on the same checkout would be two hands on one index.
         // Recorded, so a replay takes the same road rather than asking again.
-        const handed = yield* handOffWork({
-          operation: "fix",
+        fixes += 1;
+        rallied += 1;
+        const operation = fixes === 1 ? "fix" : `fix-${fixes}`;
+        const to = yield* handOffWork({
+          operation,
           role: "implementer",
           text: handOffText(place.dir),
         });
-        if (handed !== null) {
-          yield* host.record(run.id, `handed the findings to ${handed}`);
+        if (to !== null) {
+          yield* host.record(run.id, `${operation}: handed the findings to ${to}`);
+          handed = true;
+          fixing = false;
           continue;
         }
         const fixed = yield* agentWork({
-          operation: "fix",
+          operation,
           role: "implementer",
           instructions: FIX_PROMPT,
-          input: { inputs, ...input },
+          input: {
+            inputs,
+            ...input,
+            iteration: String(rallied),
+            max_iterations: String(ROUNDS),
+            // What the rally is fixing: a dispute raised again with no rebuttal is not work.
+            findings: formatFindings(split.live),
+            disputed: formatFindings(disputed),
+          },
           output: FixOutputSchema,
         });
         yield* host.record(
           run.id,
-          `fixed ${fixed.fixed.length}, disputed ${fixed.disputed.length}`,
+          `${operation}: fixed ${fixed.fixed.length}, disputed ${fixed.disputed.length}`,
         );
+        const known = new Set(disputed.map(findingKey));
+        disputed = [...disputed, ...fixed.disputed.filter((one) => !known.has(findingKey(one)))];
+        synthesis = yield* reviewedAgain((reviews += 1), agents.outputFor(run.id, operation));
       }
-      return `${synthesis.findings.length} finding(s), asked ${ROUNDS} times what to do next`;
     }),
 });
 

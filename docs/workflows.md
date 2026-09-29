@@ -89,8 +89,11 @@ chained build is never asked again. Left empty, a run is held to this project's 
 verifications and nothing more: unclassified work is not a feature by default, and asking
 documentation for a feature's evidence would ask for tickets that do not exist.
 
-**Ends:** with the merge request, or with the reason there is none. There is no question
-at the end.
+**Ends:** with the merge request, or with the reason there is none. The gate re-runs a
+failed check once, since a check that fails and then passes is a flake; gaps left after
+that are a question (**Verify again**, **Hand it to the implementer**, or **Stop without a
+merge request**) rather than the end of the run. A gate fix lands after the last review, so
+the merge request says it was not re-reviewed.
 
 Module: [`workflows/implement.workflow.ts`](../workflows/implement.workflow.ts), with its
 content in [`workflows/implement.md`](../workflows/implement.md).
@@ -163,8 +166,9 @@ for a refactor, `supported`, `accurate` or `compatible` — which is the field t
 the merge request reads ([Outcomes](cli.md#outcomes)).
 
 **What happens:** one reviewer reads the target and writes the review — the whole spec, the
-whole change, and the code around it. A synthesis then reconciles what the reviewers wrote
-into the one review a human reads — findings deduplicated across models, disagreements
+whole change, and the code around it. Where a fork seats more than one reviewer, a
+synthesis then reconciles what they wrote into the one review a human reads; a lone
+reviewer's review is that review — findings deduplicated across models, disagreements
 settled against the diff, and anything that cannot be defended listed under `dropped` with
 a reason — rendered to `review.md` in the run directory, which is what you read and what
 **Post to MR** sends. The shipped review has one reviewer; a fork that wants another adds an
@@ -180,8 +184,11 @@ change breaks is exactly the blocker worth raising. Minor findings are exempt.
 - **Fix findings** — handed, through the one sender, to the implementer already live in
   this workspace where there is one, so no second agent works the same checkout; otherwise
   an implementer of this run's own, given the findings and the target, which fixes them
-  where the review was pointed. Offered once: a second round of it would be the same
-  findings again.
+  where the review was pointed. A fix Collie ran is reviewed again at once, and the rally
+  goes on by itself, through the same `settleRound` as implement's, until nothing blocking
+  is left, a round raises the same blockers, a dispute stands unanswered, or four rounds
+  have run. Then the menu comes back. A hand-off to a live implementer offers **Review
+  again** instead, for when it is done.
 - **Fix findings in a full implement run** — chains `implement` with this run as the work
   source. The build is placed on the branch this review was pointed at — a branch target's
   head, or a merge request's source branch — read from the review's own Run.

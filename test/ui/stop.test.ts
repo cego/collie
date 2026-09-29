@@ -145,11 +145,8 @@ test("three stops nobody took back are three stops", () =>
           driven.dispatch({ _tag: "StopRun", runId });
         yield* until("all three stops", () => acted.length === 3);
 
-        expect(acted.map((command) => command._tag === "StopRun" && command.runId).sort()).toEqual([
-          "run:a",
-          "run:b",
-          "run:c",
-        ]);
+        const stopped = acted.map((command) => (command._tag === "StopRun" ? command.runId : ""));
+        expect(stopped.sort((a, b) => a.localeCompare(b))).toEqual(["run:a", "run:b", "run:c"]);
         expect(driven.state().stopping).toEqual([]);
       }),
     ),

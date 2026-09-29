@@ -718,7 +718,7 @@ scenario(
         });
 
         expect(started).toEqual([]);
-        expect(yield* fs.readFileString(`${dir}/events.r-plan-gone.log`)).toContain(
+        expect(yield* fs.readFileString(`${runDir(dir, "r-plan-gone")}/log.txt`)).toContain(
           "Implement now cannot run here: These repositories are named by a ticket but not checked out",
         );
       }),
@@ -850,7 +850,7 @@ test(
           "review-on-pi",
           `{ ...shipped.agents, roles: { ...shipped.agents?.roles, reviewer: { harness: "pi", model: "openai-codex/gpt-6-astra", effort: "max" } } }`,
         );
-        yield* rig.queueOutputs([REVIEW, SYNTHESIS]);
+        yield* rig.queueOutputs([SYNTHESIS]);
         yield* parked({
           entry,
           runId: "r-review-pi",
@@ -862,7 +862,7 @@ test(
           expect(one.kind).toBe("pi");
           expect(one.args).toContain("--model openai-codex/gpt-6-astra --thinking max");
         }
-        expect(yield* launched()).toHaveLength(2);
+        expect(yield* launched()).toHaveLength(1);
         // What the reviewers are told is still the shipped review's.
         expect(yield* asked("r-review-pi", "review-1")).toContain(
           "Review target: branch:main...HEAD",
@@ -948,7 +948,7 @@ scenario(
   () =>
     runEffect(
       Effect.gen(function* () {
-        yield* rig.queueOutputs([REVIEW, SYNTHESIS]);
+        yield* rig.queueOutputs([SYNTHESIS]);
 
         yield* parked({
           entry: shipped("review"),
@@ -958,16 +958,14 @@ scenario(
           decision: "post-1",
         });
 
-        expect(yield* prompts()).toHaveLength(2);
+        expect(yield* prompts()).toHaveLength(1);
         const first = yield* asked("r-review", "review-1");
         expect(first).toContain("Review target: branch:main...HEAD");
         // The axes a human asked for are on top of the complete review, said once.
         expect(first).toContain("Additional axes requested for this change: security");
         expect(first).toContain("Iteration 1 of at most 1");
-        // The synthesis is given the reviews to reconcile, as files it can read.
-        expect(yield* asked("r-review", "synthesize")).toContain(
-          `${dir}/agents/r-review/review-1.json`,
-        );
+        // One seat is one review: there is nothing for a synthesis to reconcile.
+        expect(first).toContain("You may be the only reviewer of this change");
 
         const fs = yield* FileSystem.FileSystem;
         const where = runDir(dir, "r-review");
@@ -986,7 +984,7 @@ scenario(
   () =>
     runEffect(
       Effect.gen(function* () {
-        yield* rig.queueOutputs([REVIEW, SYNTHESIS]);
+        yield* rig.queueOutputs([SYNTHESIS]);
         const rows = yield* parked({
           entry: shipped("review"),
           runId: "r-review-branch",
@@ -1026,7 +1024,14 @@ scenario(
           disputed: [],
           checks: [{ name: "test" }],
         };
-        yield* rig.queueOutputs([REVIEW, SYNTHESIS, fixed]);
+        const settled = {
+          verdict: "clean",
+          summary: "It moves the guard. Nothing is wrong with it now.",
+          findings: [],
+          dropped: [],
+          fixed: [{ title: "the guard is on the wrong side", file: "src/a.ts" }],
+        };
+        yield* rig.queueOutputs([SYNTHESIS, fixed, settled]);
         const target = "mr:gitlab.example.com/group/project!42";
         const rows = yield* parked({
           entry: shipped("review"),
@@ -1045,12 +1050,14 @@ scenario(
           until: "post-2",
         });
 
+        // The fix is reviewed again at once: a round of the rally, not a fix taken on its word.
         expect(yield* prompts()).toHaveLength(3);
+        expect(yield* asked("r-review-mr", "review-2-1")).toContain("Iteration 2");
         expect(yield* asked("r-review-mr", "fix")).toContain(
           "glab mr checkout <iid> --repo gitlab.example.com/group/project",
         );
         expect(yield* persona("r-review-mr", "fix")).toContain("You are an implementer");
-        // Fixing is offered once: a second round of it would be the same findings again.
+        // Nothing is left to fix after a clean review, so fixing is not offered again.
         const rows2 = yield* parked({
           entry: shipped("review"),
           runId: "r-review-mr",
@@ -1064,11 +1071,120 @@ scenario(
 );
 
 scenario(
+  "fix findings goes on by itself until a review is clean",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fixed = { verdict: "clean", findings: [], fixed: [], disputed: [], checks: [] };
+        const other = {
+          ...SYNTHESIS,
+          findings: [
+            { severity: "major", title: "the empty list is not guarded", file: "src/b.ts" },
+          ],
+        };
+        const clean = { ...SYNTHESIS, verdict: "clean", findings: [] };
+        yield* rig.queueOutputs([SYNTHESIS, fixed, other, fixed, clean]);
+        const target = "branch:main...HEAD";
+        yield* parked({
+          entry: shipped("review"),
+          runId: "r-rally",
+          input: { target },
+          decision: "post-1",
+        });
+        const rows = yield* answeredThen({
+          entry: shipped("review"),
+          runId: "r-rally",
+          input: { target },
+          decision: "post-1",
+          value: "Fix findings",
+          until: "post-2",
+        });
+        // Review, fix, review, fix, review: the second fix nobody was asked about.
+        expect(yield* prompts()).toHaveLength(5);
+        // Pointed at the review it follows, which is where the second round's finding is.
+        expect(yield* asked("r-rally", "fix-2")).toContain(`${runDir(dir, "r-rally")}/review.md`);
+        // A clean review still asks, so a merge request review can still be posted.
+        expect(optionsOf(rows, "post-2")).not.toContain("Fix findings");
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a rally that runs out of rounds asks, with every option still on the menu",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fixed = { verdict: "clean", findings: [], fixed: [], disputed: [], checks: [] };
+        const raising = (title: string) => ({
+          ...SYNTHESIS,
+          findings: [{ severity: "major", title, file: "src/a.ts" }],
+        });
+        const target = "branch:main...HEAD";
+        yield* rig.queueOutputs([
+          SYNTHESIS,
+          ...["a", "b", "c", "d"].flatMap((title) => [fixed, raising(title)]),
+        ]);
+        yield* parked({
+          entry: shipped("review"),
+          runId: "r-out",
+          input: { target },
+          decision: "post-1",
+        });
+        const rows = yield* answeredThen({
+          entry: shipped("review"),
+          runId: "r-out",
+          input: { target },
+          decision: "post-1",
+          value: "Fix findings",
+          until: "post-2",
+        });
+        // Four fixes, each reviewed, and then the human: not the Run ending on its own.
+        expect(yield* prompts()).toHaveLength(9);
+        expect(optionsOf(rows, "post-2")).toContain("Fix findings");
+        expect(optionsOf(rows, "post-2")).toContain("Don't post");
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a fix round that leaves the same findings asks rather than going round again",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fixed = { verdict: "clean", findings: [], fixed: [], disputed: [], checks: [] };
+        const target = "branch:main...HEAD";
+        // The same finding back after a fix is a round that changed nothing: the human decides.
+        yield* rig.queueOutputs([SYNTHESIS, fixed, SYNTHESIS]);
+        yield* parked({
+          entry: shipped("review"),
+          runId: "r-stuck",
+          input: { target },
+          decision: "post-1",
+        });
+        const stuck = yield* answeredThen({
+          entry: shipped("review"),
+          runId: "r-stuck",
+          input: { target },
+          decision: "post-1",
+          value: "Fix findings",
+          until: "post-2",
+        });
+        expect(optionsOf(stuck, "post-2")).toContain("Fix findings");
+        // Review, fix, review, and then the question: no fix nobody asked for.
+        expect(yield* prompts()).toHaveLength(3);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
   "an implementer already live here takes the findings, and no second agent starts on them",
   () =>
     runEffect(
       Effect.gen(function* () {
-        yield* rig.queueOutputs([REVIEW, SYNTHESIS]);
+        yield* rig.queueOutputs([SYNTHESIS, SYNTHESIS]);
         // Another Run's implementer, live in this checkout's workspace and registered as it.
         yield* rig.addAgent("impl-live", "9-1");
         const env = hostOf().env;
@@ -1101,8 +1217,28 @@ scenario(
         const handed = (yield* prompts()).filter((text) => text.includes("review.md"));
         expect(handed).toHaveLength(1);
         expect(handed[0]).toContain(`${runDir(dir, "r-review-live")}/review.md`);
-        // Two agents, the reviewer and the synthesis; the fix went to the one already here.
-        expect((yield* rig.cmds()).filter((cmd) => cmd === "agent start")).toHaveLength(2);
+        // One agent, the lone reviewer; the fix went to the one already here.
+        expect((yield* rig.cmds()).filter((cmd) => cmd === "agent start")).toHaveLength(1);
+
+        // Collie cannot see that agent finish, so the human says when to look again, and
+        // the next review is a follow-up of this one rather than a fresh start.
+        const rows = yield* parked({
+          entry: shipped("review"),
+          runId: "r-review-live",
+          input: { target },
+          decision: "post-2",
+        });
+        expect(optionsOf(rows, "post-2")).toContain("Review again");
+        expect(optionsOf(rows, "post-2")).not.toContain("Fix findings");
+        yield* answeredThen({
+          entry: shipped("review"),
+          runId: "r-review-live",
+          input: { target },
+          decision: "post-2",
+          value: "Review again",
+          until: "post-3",
+        });
+        expect(yield* asked("r-review-live", "review-2-1")).toContain("Iteration 2");
       }),
     ),
   120_000,
@@ -1311,7 +1447,6 @@ const BUILT = {
   commits: ["made the registry one"],
   tests: "unit: pass",
 };
-const CLEAN_REVIEW = { verdict: "clean", findings: [] };
 const CLEAN_SYNTHESIS = {
   verdict: "clean",
   summary: "It merges the two registries. Nothing is wrong with it.",
@@ -1342,7 +1477,7 @@ scenario(
           { file: "02-second.md", title: "the second one", checks: "unit" },
         ]);
         yield* approve("r-impl", ["unit"]);
-        yield* rig.queueOutputs([BUILT, BUILT, CLEAN_REVIEW, CLEAN_SYNTHESIS, OPENED]);
+        yield* rig.queueOutputs([BUILT, BUILT, CLEAN_SYNTHESIS, OPENED]);
 
         const result = yield* ran({
           entry: shipped("implement"),
@@ -1352,12 +1487,12 @@ scenario(
         yield* bin.restore();
 
         expect(said(result)).toBe(OPENED.mr_url);
-        // One implementer for the build, the fixes and the merge request; the reviewer and
-        // the synthesis are their own, because neither may vouch for the change.
+        // One implementer for the build, the fixes and the merge request; the reviewer is
+        // its own, because it may not vouch for the change.
         const starts = yield* rig
           .cmds()
           .pipe(Effect.map((cmds) => cmds.filter((cmd) => cmd === "agent start")));
-        expect(starts).toHaveLength(3);
+        expect(starts).toHaveLength(2);
         // Tabs open in the order their agents started, whatever the workflow is called.
         const tabs = yield* rig
           .calls()
@@ -1368,7 +1503,7 @@ scenario(
                 .map((call) => call.argv?.[(call.argv?.indexOf("--label") ?? -2) + 1]),
             ),
           );
-        expect(tabs).toEqual(["Implementer", "Reviewer · review-1", "Reviewer · synthesize"]);
+        expect(tabs).toEqual(["Implementer", "Reviewer · review-1"]);
         // The second ticket is handed what the first left, not the whole transcript.
         const second = yield* asked("r-impl", "02-second.md");
         expect(second).toContain("Ticket: 02-second.md — the second one");
@@ -1401,7 +1536,7 @@ scenario(
         ]);
         yield* approve("r-live", ["unit"]);
         // The first ticket's Output is written by hand, once the plan has moved under it.
-        yield* rig.queueOutputs([null, BUILT, CLEAN_REVIEW, CLEAN_SYNTHESIS, OPENED]);
+        yield* rig.queueOutputs([null, BUILT, CLEAN_SYNTHESIS, OPENED]);
         const running = yield* Effect.forkChild(
           ran({ entry: shipped("implement"), runId: "r-live", input: { plan } }),
         );
@@ -1441,7 +1576,7 @@ scenario(
           { file: "01-first.md", title: "the first one", checks: "unit" },
         ]);
         yield* approve("r-grow", ["unit"]);
-        yield* rig.queueOutputs([null, BUILT, CLEAN_REVIEW, CLEAN_SYNTHESIS, OPENED]);
+        yield* rig.queueOutputs([null, BUILT, CLEAN_SYNTHESIS, OPENED]);
         const running = yield* Effect.forkChild(
           ran({ entry: shipped("implement"), runId: "r-grow", input: { plan } }),
         );
@@ -1480,7 +1615,7 @@ scenario(
         yield* repository();
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
         yield* approve("r-impl-mr", ["unit"]);
-        yield* rig.queueOutputs([BUILT, CLEAN_REVIEW, CLEAN_SYNTHESIS, OPENED]);
+        yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, OPENED]);
 
         yield* ran({ entry: shipped("implement"), runId: "r-impl-mr", input: { plan } });
         yield* bin.restore();
@@ -1490,6 +1625,39 @@ scenario(
         // What was collected, by whom — Collie ran it, so it is not the agent's claim.
         expect(opening).toContain("unit");
         expect(opening).toContain("by collie");
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a review with only minor findings ends the rally, and the record says what it carried",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* bin.add("glab", `exit 0`);
+        yield* repository();
+        const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
+        yield* approve("r-impl-minor", ["unit"]);
+        const minor = { severity: "minor", title: "the test depends on test order", file: "a.ts" };
+        yield* rig.queueOutputs([
+          BUILT,
+          { ...CLEAN_SYNTHESIS, verdict: "findings", findings: [minor] },
+          OPENED,
+        ]);
+
+        yield* ran({ entry: shipped("implement"), runId: "r-impl-minor", input: { plan } });
+        yield* bin.restore();
+
+        // No fix round for a minor finding, by design; but not silently either.
+        expect(yield* prompts()).toHaveLength(3);
+        const log = yield* (yield* FileSystem.FileSystem).readFileString(
+          `${runDir(dir, "r-impl-minor")}/log.txt`,
+        );
+        expect(log).toContain(
+          "carried 1 non-blocking finding(s) unfixed: the test depends on test order",
+        );
       }),
     ),
   120_000,
@@ -1513,10 +1681,8 @@ scenario(
         };
         yield* rig.queueOutputs([
           BUILT,
-          { verdict: "findings", findings: [finding] },
           { ...CLEAN_SYNTHESIS, verdict: "findings", findings: [finding], scope_met: true },
           { verdict: "clean", fixed: [{ title: finding.title, file: finding.file }], checks: [] },
-          CLEAN_REVIEW,
           { ...CLEAN_SYNTHESIS },
           OPENED,
         ]);
@@ -1571,7 +1737,7 @@ scenario(
         yield* fs.writeFileString(`${reviewed}/review.md`, "# Review\n\nThe guard is wrong.\n");
         yield* fs.writeFileString(`${reviewed}/findings.json`, "[]");
         yield* approve("r-impl-review", ["unit"]);
-        yield* rig.queueOutputs([BUILT, CLEAN_REVIEW, CLEAN_SYNTHESIS, OPENED]);
+        yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, OPENED]);
 
         yield* ran({
           entry: shipped("implement"),
@@ -1605,13 +1771,24 @@ scenario(
           `${evidenceDir(dir, "r-impl-gate")}/approved.json`,
           asApproved([{ name: "unit", executable: "false", argv: [], cwd: rig.projectDir }]),
         );
-        yield* rig.queueOutputs([BUILT, CLEAN_REVIEW, CLEAN_SYNTHESIS]);
+        yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS]);
 
-        const result = yield* ran({
+        // Checked twice, and then asked rather than ended: the work is one step short of
+        // its merge request, and whether that step is taken is the human's call.
+        const asking = yield* parked({
           entry: shipped("implement"),
           runId: "r-impl-gate",
           input: { plan },
           options: { outcome: "feature" },
+          decision: "gate-1",
+        });
+        expect(asking.find((row) => row.decision === "gate-1")?.prompt).toContain("unit failed");
+        const result = yield* answered({
+          entry: shipped("implement"),
+          runId: "r-impl-gate",
+          input: { plan },
+          decision: "gate-1",
+          value: "Stop without a merge request",
         });
         yield* bin.restore();
 
@@ -1621,7 +1798,66 @@ scenario(
         // a feature Run held to it is not told it is missing when a reviewer gave it.
         expect(said(result)).not.toContain("scope_met");
         // Nothing was opened, so nobody was asked to open it.
-        expect(yield* prompts()).toHaveLength(3);
+        expect(yield* prompts()).toHaveLength(2);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a gate fix reaches the merge request as not re-reviewed",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* bin.add("glab", `exit 0`);
+        yield* repository();
+        const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
+        // Fails twice before the question and passes once the fix has run: the resume to
+        // the answer replays the journaled passes rather than running the check again.
+        const count = `${rig.root}/runs`;
+        yield* approve("r-gate-fix", ["unit"]);
+        const fs = yield* FileSystem.FileSystem;
+        yield* fs.writeFileString(
+          `${evidenceDir(dir, "r-gate-fix")}/approved.json`,
+          asApproved([
+            {
+              name: "unit",
+              executable: "sh",
+              argv: [
+                "-c",
+                `n=$(($(cat ${count} 2>/dev/null || echo 0) + 1)); echo $n > ${count}; [ $n -ge 3 ]`,
+              ],
+              cwd: rig.projectDir,
+            },
+          ]),
+        );
+        const fix = {
+          verdict: "clean",
+          findings: [],
+          fixed: [],
+          disputed: [],
+          checks: [{ name: "unit" }],
+        };
+        yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, fix, OPENED]);
+        yield* parked({
+          entry: shipped("implement"),
+          runId: "r-gate-fix",
+          input: { plan },
+          options: { outcome: "feature" },
+          decision: "gate-1",
+        });
+        const result = yield* answered({
+          entry: shipped("implement"),
+          runId: "r-gate-fix",
+          input: { plan },
+          decision: "gate-1",
+          value: "Hand it to the implementer",
+        });
+        yield* bin.restore();
+
+        expect(said(result)).toBe(OPENED.mr_url);
+        expect(yield* asked("r-gate-fix", "mr")).toContain("gate fix 1");
       }),
     ),
   120_000,
@@ -1726,7 +1962,7 @@ scenario(
         yield* stalled({ entry: shipped("implement"), runId: "r-impl-grant", input: { plan } });
 
         yield* approve("r-impl-grant", ["unit"]);
-        yield* rig.queueOutputs([BUILT, CLEAN_REVIEW, CLEAN_SYNTHESIS, OPENED]);
+        yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, OPENED]);
         const result = yield* resumed({
           entry: shipped("implement"),
           runId: "r-impl-grant",
@@ -1757,7 +1993,7 @@ scenario(
         yield* repository();
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
         yield* approve("r-impl-emptied", ["unit"]);
-        yield* rig.queueOutputs([BUILT, CLEAN_REVIEW, CLEAN_SYNTHESIS, OPENED]);
+        yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, OPENED]);
         // A human withdraws the last grant once the build has been handed out.
         let asks = 0;
         const withdrawn: HostOverride = Layer.effect(Host)(
@@ -1783,7 +2019,7 @@ scenario(
           "collie run intent verification r-impl-emptied --name",
         );
         // Stopped at the gate: built and reviewed, and nobody asked to open anything.
-        expect(yield* prompts()).toHaveLength(3);
+        expect(yield* prompts()).toHaveLength(2);
         // Nor asked to approve a list with nothing in it.
         expect(
           yield* session(Store.pipe(Effect.flatMap((store) => store.asked("r-impl-emptied")))),
@@ -1793,24 +2029,28 @@ scenario(
   120_000,
 );
 
-scenario("a Run whose outcome needs no evidence is not stopped for having nothing approved", () =>
-  runEffect(
-    Effect.gen(function* () {
-      yield* repository();
-      yield* approve("r-impl-inv", []);
-      yield* rig.queueOutputs([null]);
+scenario(
+  "a Run whose outcome needs no evidence is not stopped for having nothing approved",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* repository();
+        yield* approve("r-impl-inv", []);
+        yield* rig.queueOutputs([null]);
 
-      yield* stalled({
-        entry: shipped("implement"),
-        runId: "r-impl-inv",
-        input: { plan: "why is the board slow?" },
-        options: { outcome: "investigation" },
-      }).pipe(Effect.timeout("3 seconds"), Effect.ignore);
+        yield* stalled({
+          entry: shipped("implement"),
+          runId: "r-impl-inv",
+          input: { plan: "why is the board slow?" },
+          options: { outcome: "investigation" },
+        }).pipe(Effect.timeout("3 seconds"), Effect.ignore);
 
-      expect(yield* parkedWhy("r-impl-inv")).toBe("");
-      expect((yield* rig.cmds()).filter((cmd) => cmd === "agent start")).toHaveLength(1);
-    }),
-  ),
+        // Its agent writes nothing, which parks it for that; never for what was approved.
+        expect(yield* parkedWhy("r-impl-inv")).not.toContain("approved");
+        expect((yield* rig.cmds()).filter((cmd) => cmd === "agent start")).toHaveLength(1);
+      }),
+    ),
+  30_000,
 );
 
 /**
@@ -1900,7 +2140,7 @@ scenario(
         expect(yield* prompts()).toHaveLength(5);
         const fs = yield* FileSystem.FileSystem;
         expect(yield* fs.exists(`${dir}/agents/r-pkg/batch.prompt.md`)).toBe(false);
-        expect(yield* fs.readFileString(`${dir}/events.r-pkg.log`)).toContain(
+        expect(yield* fs.readFileString(`${runDir(dir, "r-pkg")}/log.txt`)).toContain(
           "a package has no batch branch: skipped batch, stage, approval",
         );
       }),

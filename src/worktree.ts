@@ -489,8 +489,11 @@ const reviewedBranch = Effect.fn("worktree.reviewedBranch")(function* (
       ? { branch: head, reviewed: true }
       : { refused: `${head} is not a branch, so there is nothing to fix on it` };
   }
-  // `worktree`, or a target this build does not know: the caller's own branch is what
-  // the reviewed work is sitting on.
+  // Only the working tree is the caller's own branch; any other shape is refused, not guessed.
+  if (target === "") return { refused: "the review names no target, so no branch holds its work" };
+  if (target.trim() !== "worktree") {
+    return { refused: `${target} is not a target Collie can find a branch for` };
+  }
   const at = yield* run("git", ["rev-parse", "--abbrev-ref", "HEAD"], cwd);
   const branch = at.stdout.trim();
   if (at.code !== 0 || branch === "" || branch === "HEAD") {
@@ -499,6 +502,34 @@ const reviewedBranch = Effect.fn("worktree.reviewedBranch")(function* (
   // The caller's own branch: it is checked out here, so it needs no fetching and may
   // legitimately have nothing on the remote yet.
   return { branch, reviewed: false };
+});
+
+/**
+ * The piece of work a Run or Task is about: its repository and branch. A Run's is the
+ * branch it was placed on or its diff target names — never the caller's HEAD, which says
+ * where it was typed, not what it is about. A Task's (`task: true`) is the branch its
+ * checkout has out. Null on the default branch, which names no one piece of work, and
+ * wherever git or glab will not say.
+ */
+export const workOf = Effect.fn("worktree.workOf")(function* (
+  opts: BranchAsk & { readonly branch: string | null; readonly task?: boolean },
+  run: Runner<ChildProcessSpawner.ChildProcessSpawner>,
+) {
+  const listing = yield* gitWorktrees(run, opts.cwd);
+  if (listing === null) return null;
+  const reviewed =
+    opts.branch === null && diffTargetOf(opts) != null
+      ? yield* reviewedBranch(opts.cwd, opts, run)
+      : null;
+  if (reviewed !== null && !("branch" in reviewed)) return null;
+  if (opts.branch === null && reviewed === null && opts.task !== true) return null;
+  const out = yield* run("git", ["rev-parse", "--abbrev-ref", "HEAD"], opts.cwd);
+  const branch = opts.branch ?? reviewed?.branch ?? (out.code === 0 ? out.stdout.trim() : "");
+  if (branch === "" || branch === "HEAD") return null;
+  const origin = yield* run("git", ["rev-parse", "--abbrev-ref", "origin/HEAD"], opts.cwd);
+  const base = origin.code === 0 ? origin.stdout.trim().replace(/^origin\//, "") : "";
+  if (base === "" ? branch === "main" || branch === "master" : branch === base) return null;
+  return `${listing.repo}#${branch}`;
 });
 
 /** Whether this ref is a branch — here or on the remote — rather than a sha or HEAD. */

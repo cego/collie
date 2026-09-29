@@ -23,7 +23,11 @@ export default defineWorkflow({
   outcome: { fixed: "feature" },
   run: ({ input: asked }) =>
     Effect.gen(function* () {
-      const plan = yield* planReposOf(asked.plan, asked.root);
+      const plan = yield* planReposOf(asked.plan, asked.root).pipe(
+        Effect.mapError(
+          (cause) => new WorkflowError({ reason: `the plan could not be read: ${cause.message}` }),
+        ),
+      );
       if (plan.refusal !== null) {
         return yield* new WorkflowError({
           reason: `${plan.refusal.kind}: ${plan.refusal.message}`,

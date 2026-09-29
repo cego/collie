@@ -146,8 +146,10 @@ its worktree under guards. A finished Run is immutable; there is no mode that re
 implementation it chains into, the review of that. Recorded on every Run at creation and
 inherited by chains, follow-ups and resumes, so membership is a fact rather than a reading
 of a label — two Tasks may share a project prefix, and a workspace renamed by hand is
-still its Task's. A Run started fresh is a new Task; only an explicit **Continue task**
-puts new work in an existing one.
+still its Task's. A Run started fresh is a new Task, unless it is about a branch an open
+Task's checkout has out — the branch it is placed on, or the one its diff target names —
+and then it is that Task's: one workspace per Task. Anything else joins a Task only by an
+explicit **Continue task**.
 
 **Task workspace** — The herdr workspace a Task's Runs, tabs and agents live in. One per
 Task, made and focused when its first Run is admitted, on the checkout that Run is given,
@@ -272,7 +274,7 @@ blocker is not an exception: it leaves the entry unchecked and the Run open.
 
 **Fan-in** — Combining several parallel Outputs into one: an operation handed the other operations' Output files, which reconciles them itself. Nothing unions findings for it.
 
-**Synthesis** — What the fan-in over reviewers writes: one review of the change, deduplicated across models, disagreements settled from the diff, plus a `summary` and the findings it `dropped` with a reason for each. It is rendered to `review.md`, which is what a human reads and what a review may post. It is the loop's gate: the fix sees the Synthesis, never the raw reviews.
+**Synthesis** — What the fan-in over reviewers writes, or a lone reviewer writes itself: one review of the change, deduplicated across models, disagreements settled from the diff, plus a `summary` and the findings it `dropped` with a reason for each. It is rendered to `review.md`, which is what a human reads and what a review may post. It is the loop's gate: the fix sees the Synthesis, never the raw reviews.
 
 **Disputed** — A finding the implementer declined, with its reason. The reviewers are shown the reason, and a disputed finding no longer drives the loop, so the Run converges and the human decides. A reviewer who can answer the reason raises it again with a `rebuttal`, which puts the finding back in front of the implementer.
 

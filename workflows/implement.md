@@ -190,7 +190,7 @@ not a passing check, whatever the note says.
 
 ## mr
 
-The branch is reviewed and the loop found nothing blocking. Push it and open the merge
+The review loop found nothing blocking and the gate passed. Push it and open the merge
 request.
 
 What was actually verified, and by whom — `by collie` is a command Collie ran itself,
@@ -203,8 +203,8 @@ stands. An Output that says the tests pass is a claim; these are not.
 
 {{unreviewed}}
 
-Where the line above is not empty, the last fix pass was checked by its own tests and
-dispositions and not by a reviewer: say so in the description, in one sentence, and list
+Where the lines above are not empty, a fix after the last review was checked by its own
+tests and dispositions and not by a reviewer: say so in the description, in one sentence, and list
 what that fix changed. Where findings were left open as non-blocking, list them too.
 
 - Assignee: `{{mr.assignee}}`

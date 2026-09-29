@@ -90,6 +90,8 @@ const Identity = Schema.Struct({
   build: Schema.String,
   pid: Schema.Int,
   dir: Schema.String,
+  /** The installation it serves; absent from a host older than the field. */
+  root: Schema.optionalKey(Schema.String),
 });
 
 const Loaded = Schema.Struct({
@@ -254,7 +256,7 @@ const handlers = (dir: string) =>
         discover(searchPath({ pluginRoot: env.pluginRoot, userDir: env.userDir, project }));
 
       return HostRpcs.of({
-        identity: () => Effect.succeed({ build: BUILD, pid, dir }),
+        identity: () => Effect.succeed({ build: BUILD, pid, dir, root: env.pluginRoot }),
         load: ({ entry }) =>
           registry.load(entry).pipe(
             Effect.map((loaded) => ({
@@ -457,7 +459,10 @@ export const connect = (
   Effect.gen(function* () {
     const build = options?.build ?? BUILD;
     let who = yield* ensureRunning(dir);
-    const replaced = who.build !== build && Bun.semver.order(build, who.build) === 1;
+    // Only a newer copy of the same installation upgrades the host; a dev checkout is not one.
+    const install = (yield* currentEnv.pipe(Effect.orDie)).pluginRoot;
+    const ours = who.root === undefined || who.root === install;
+    const replaced = ours && who.build !== build && Bun.semver.order(build, who.build) === 1;
     if (replaced) {
       yield* stopOwner(dir, who.pid);
       who = yield* ensureRunning(dir);
@@ -468,7 +473,9 @@ export const connect = (
         host: who.build,
         client: build,
         pid: who.pid,
-        restart: `the host for ${dir} is collie ${who.build} and this is ${build}: stop it (pid ${who.pid}) and run this again`,
+        restart: ours
+          ? `the host for ${dir} is collie ${who.build} and this is ${build}: stop it (pid ${who.pid}) and run this again`
+          : `the host for ${dir} serves ${who.root} and this is collie ${build} from ${install}: point HERDR_PLUGIN_STATE_DIR at a directory of its own, or stop that host (pid ${who.pid}) and run this again`,
       });
     }
     const client = yield* open(dir);

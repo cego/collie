@@ -262,13 +262,17 @@ unusable one ends the Run with the reasons named.
 ### Tasks
 
 A **Task** is the work itself, and the Runs it takes: a plan, the implementation it chains
-into, the review of that. Every fresh start is a new Task, and gets a herdr workspace of
-its own, created and focused — including when it is started from inside another Task's
-workspace. Chains, follow-ups and resumes stay in the Task they came from.
+into, the review of that. A fresh start about a branch an open Task's checkout has out —
+the branch it is placed on, or the one its diff target names; never merely the branch the
+caller is standing on — is that Task's, and opens in its workspace wherever it was started from. Any other fresh
+start is a new Task, and gets a herdr workspace of its own, created and focused. The
+default branch names no one piece of work, so a start on it is always new. Chains,
+follow-ups and resumes stay in the Task they came from.
 
-Continuing is explicit. `--task <id>` names one; `--continue-task` means the Task whose
-workspace this command was run in, and is `needs_input` anywhere else rather than a
-prompt. Neither the workflow's name nor a similar label ever continues a Task on its own.
+Continuing anything else is explicit. `--task <id>` names one; `--continue-task` means the
+Task whose workspace this command was run in, and is `needs_input` anywhere else rather
+than a prompt. Neither the workflow's name nor a similar label ever continues a Task on
+its own.
 
 `--here` keeps the work where you are: this workspace becomes the Run's Task — the one
 already kept here, or a new one — and its agents open beside you. A mutating workflow
@@ -390,7 +394,9 @@ Without `--follow`, `run wait` prints one envelope when the run has ended — `c
 `failed`. A stopped or held run is suspended rather than ended, so a plain wait waits
 through it. `--timeout` takes a spelled-out duration — `30 seconds`, `10 minutes`, `2 hours` — and
 comes back as the `timeout` error code. Abbreviations like `30s` are refused as
-`invalid_input`.
+`invalid_input`. A wait whose host is replaced under it reconnects and keeps waiting, and
+one interrupted before it has an answer still prints an envelope: `operation_failed`,
+"interrupted before it finished".
 
 A Run is watched from the host's own stream: every update
 is the whole current state rather than a change to apply, so a `wait` started long after
@@ -854,8 +860,9 @@ What kind of result a run has to prove, and so what evidence closes it:
 | `migration`     | `migrate-up` and `migrate-down` (or `rollback`) both passing                                                                                                |
 
 The gate runs before the merge request, which is where the claim is made. Collie runs the
-run's own approved set itself at the tree as it stands, then says what is missing; gaps
-end the run without a merge request, each one named. A run with
+run's own approved set itself at the tree as it stands, then says what is missing. A check
+that failed runs once more; gaps left after that are asked about, each one named, and
+**Stop without a merge request** ends the run without one. A run with
 nothing approved is told so rather than passed — an empty set would make the gate say yes
 to anything — and it is told before any agent works: a run whose outcome needs the approved
 set, started with none, parks at once, and `run show` gives both repairs. `collie run intent
@@ -1190,9 +1197,11 @@ with what may be left behind, and keeps its claim, so the same request never mak
 second one. The rows behind that are in the same SQLite file as the engine's own, and
 [ADR-0017](adr/0017-one-request-is-one-run.md) is why each of them is there.
 
-It says which build it is. A client of another build — after `collie upgrade` has replaced
-the binary under a host that is still running — is told which build is running and which
-pid to stop, and sends nothing else: no takeover, and no drain-and-upgrade service manager.
+It says which build it is, and which installation it serves. A client newer than the host,
+from the same installation (after `collie upgrade`), stops it and starts itself in its
+place. Any other client of another build is told which build is running and which pid to
+stop, and sends nothing else. That includes a checkout under development, which is pointed
+at a state directory of its own rather than replacing the installed host.
 A host that cannot be started at all is `HostUnavailable`, with whether anything owns the
 directory. [ADR-0015](adr/0015-one-local-host-owns-a-state-directory.md) is why each of
 those is the way it is.

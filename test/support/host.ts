@@ -528,7 +528,7 @@ export const events = Effect.fn("HostTest.events")(function* (state: string, run
   const fs = yield* FileSystem.FileSystem;
   const named = (yield* readNames(fs, layoutOf(state).names)).runs[runId] ?? runId;
   const text = yield* fs
-    .readFileString(`${state}/events.${named}.log`)
+    .readFileString(`${state}/runs/${named}/log.txt`)
     .pipe(Effect.orElseSucceed(() => ""));
   return text.split("\n").filter((line) => line.length > 0);
 });
