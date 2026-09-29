@@ -7,7 +7,7 @@ import type { PlatformError } from "effect/PlatformError";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import type { YamlValue } from "./yaml";
 import { isString } from "./schema";
-import { workSourceOf, type Settled } from "./strategies";
+import { targetKind, workSourceOf, type Settled } from "./strategies";
 
 export type Runner<R = never> = (
   cmd: string,
@@ -154,15 +154,7 @@ export function mrTarget(project: string | null, iid: string): string {
   return project ? `mr:${project}!${iid}` : `mr:${iid}`;
 }
 
-/**
- * Which of the three kinds of change a settled diff target names, and empty for a target
- * nothing can be made of. What a reviewer is told to run to see the change depends on it.
- */
-export function targetKind(target: string): "mr" | "branch" | "worktree" | "" {
-  if (parseMrTarget(target) !== null) return "mr";
-  if (branchTargetHead(target) !== null) return "branch";
-  return target.trim() === "worktree" ? "worktree" : "";
-}
+export { targetKind };
 
 /** The glab arguments that point a command at a project rather than at the cwd. */
 export function repoArgs(project: string | null): string[] {

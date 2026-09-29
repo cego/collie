@@ -45,9 +45,10 @@ export type TargetKind = "mr" | "branch" | "worktree";
 /**
  * A diff target's kind is its value's shape; both the picker and a resume read it back.
  * Empty for any other shape, which is a target nobody normalised, never the working tree.
+ * The one definition: an `mr:` is one `parseMrTarget` reads, so `mr:group/app` is none.
  */
 export function targetKind(value: string): TargetKind | "" {
-  if (value.startsWith("mr:")) return "mr";
+  if (/^mr:(?:.*!)?\d+$/.test(value)) return "mr";
   if (value.startsWith("branch:")) return "branch";
   return value.trim() === "worktree" ? "worktree" : "";
 }

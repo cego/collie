@@ -62,6 +62,10 @@ const SYNTHESIZE = content.template("synthesize", {
 export const FIX_PROMPT = content.template("fix", {
   ...change,
   run: Schema.Struct({ dir: text }),
+  iteration: text,
+  max_iterations: text,
+  findings: text,
+  disputed: text,
 });
 
 /**

@@ -103,8 +103,7 @@ export default defineWorkflow({
               .readFileString(`${(yield* host.place(previous)).dir}/${REVIEW_FILE}`)
               .pipe(Effect.orElseSucceed(() => ""));
 
-      // A standalone review is one round of one review: the rally belongs to whoever
-      // embeds this, and the numbers say what is true here rather than what is usual.
+      // The first review; "Fix findings" below rallies from it.
       let synthesis = yield* reviewPass({
         target: asked.target,
         plan: asked.plan ?? "",
@@ -151,7 +150,8 @@ export default defineWorkflow({
             answered,
             risks: place.options.risks ?? "",
             at,
-            of: ROUNDS + 1,
+            // This review, and one for every fix round the rally may still run after it.
+            of: at + (fixing ? ROUNDS - rallied : 0),
             disputed: [...disputed],
           });
         });
@@ -182,7 +182,7 @@ export default defineWorkflow({
                 : round.go === "clean"
                   ? "nothing blocking is left"
                   : `the rally ran ${ROUNDS} rounds and findings remain`;
-            yield* host.record(run.id, `rally settled: ${settled}`);
+            yield* host.record(run.id, `rally settled after review ${reviews}: ${settled}`);
           }
         }
         // Posting is offered for a merge request and nothing else; whether this is one to
@@ -251,7 +251,7 @@ export default defineWorkflow({
           text: handOffText(place.dir),
         });
         if (to !== null) {
-          yield* host.record(run.id, `handed the findings to ${to}`);
+          yield* host.record(run.id, `${operation}: handed the findings to ${to}`);
           handed = true;
           fixing = false;
           continue;
@@ -265,13 +265,15 @@ export default defineWorkflow({
             ...input,
             iteration: String(rallied),
             max_iterations: String(ROUNDS),
+            // What the rally is fixing: a dispute raised again with no rebuttal is not work.
+            findings: formatFindings(split.live),
             disputed: formatFindings(disputed),
           },
           output: FixOutputSchema,
         });
         yield* host.record(
           run.id,
-          `fixed ${fixed.fixed.length}, disputed ${fixed.disputed.length}`,
+          `${operation}: fixed ${fixed.fixed.length}, disputed ${fixed.disputed.length}`,
         );
         const known = new Set(disputed.map(findingKey));
         disputed = [...disputed, ...fixed.disputed.filter((one) => !known.has(findingKey(one)))];

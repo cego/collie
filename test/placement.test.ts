@@ -1127,7 +1127,7 @@ for (const chain of CHAINS) {
 }
 
 test(
-  "a fresh start on a branch an open Task works is that Task's; one on the default branch is new",
+  "a fresh start about a branch an open Task works is that Task's; one about no branch is new",
   () =>
     runEffect(
       Effect.gen(function* () {
@@ -1155,6 +1155,16 @@ test(
                 },
               ],
               [hello!, { request: "r3", text: { name: "you" }, taskLabel: "Project | Hello" }],
+              // Typed in the Task's own checkout, but about no branch: not the Task's.
+              [
+                hello!,
+                {
+                  request: "r4",
+                  project: worktreeOf("add-a-picker"),
+                  text: { name: "there" },
+                  taskLabel: "Project | There",
+                },
+              ],
             ] as const) {
               const started = yield* start(generation, ask);
               if (started._tag === "Failure") return yield* Effect.die(started.failure);
@@ -1165,10 +1175,11 @@ test(
           }),
         );
 
-        const [build, review, hello] = views;
+        const [build, review, hello, there] = views;
         expect(review?.task).toBe(build?.task);
         expect(hello?.task).not.toBe(build?.task);
-        expect((yield* rig.cmds()).filter((cmd) => cmd === "workspace create")).toHaveLength(2);
+        expect(there?.task).not.toBe(build?.task);
+        expect((yield* rig.cmds()).filter((cmd) => cmd === "workspace create")).toHaveLength(3);
       }),
     ),
   120_000,

@@ -1813,8 +1813,8 @@ scenario(
         yield* bin.add("glab", `exit 0`);
         yield* repository();
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
-        // Fails until its fifth run: twice before the question, twice more when the Run
-        // resumes to it, and passes once the fix has run.
+        // Fails twice before the question and passes once the fix has run: the resume to
+        // the answer replays the journaled passes rather than running the check again.
         const count = `${rig.root}/runs`;
         yield* approve("r-gate-fix", ["unit"]);
         const fs = yield* FileSystem.FileSystem;
@@ -1826,7 +1826,7 @@ scenario(
               executable: "sh",
               argv: [
                 "-c",
-                `n=$(($(cat ${count} 2>/dev/null || echo 0) + 1)); echo $n > ${count}; [ $n -ge 5 ]`,
+                `n=$(($(cat ${count} 2>/dev/null || echo 0) + 1)); echo $n > ${count}; [ $n -ge 3 ]`,
               ],
               cwd: rig.projectDir,
             },

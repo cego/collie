@@ -105,6 +105,7 @@ import {
   cardCheckpoints,
   checkDrift,
   grantedToRun,
+  appendLog,
   said,
   settleAtFinish,
   standForElection,
@@ -1729,16 +1730,6 @@ export class Executions extends Context.Service<
  * what the claim guards. An agent that will not close, or a Run still in a step when
  * patience runs out, refuses the adoption. Answers the Runs it was taken from.
  */
-/** One line of the Run's own log, the file its detail shows. */
-const logLine = (dir: string, runId: string, line: string) =>
-  FileSystem.FileSystem.pipe(
-    Effect.tap((fs) => fs.makeDirectory(runDir(dir, runId), { recursive: true })),
-    Effect.flatMap((fs) =>
-      fs.writeFileString(`${runDir(dir, runId)}/log.txt`, `${line}\n`, { flag: "a" }),
-    ),
-    Effect.orDie,
-  );
-
 export const handOverClaim = Effect.fn("Engine.handOverClaim")(function* (options: {
   readonly dir: string;
   readonly slug: string;
@@ -1777,11 +1768,10 @@ export const handOverClaim = Effect.fn("Engine.handOverClaim")(function* (option
     for (const one of tree.runs) late.push(...(yield* options.halt(one)).left);
     if (late.length > 0) return yield* refused(late);
     yield* fs.remove(file, { force: true }).pipe(Effect.orDie);
-    yield* logLine(
-      options.dir,
-      runId,
+    yield* appendLog(
+      runDir(options.dir, runId),
       `claim on ${options.slug} taken over by ${options.to}; its agents were closed`,
-    );
+    ).pipe(Effect.orDie);
     handed.push(runId);
   }
   return handed;
@@ -1889,7 +1879,12 @@ export const hostLayer = (options: {
         held: (runId) => set(HOLD, runId),
         stopRequested: (runId) => set(STOP, runId),
         record: (runId, event) =>
-          logLine(dir, runId, event).pipe(Effect.provideService(FileSystem.FileSystem, fs)),
+          // A replay writes its records again, as it re-enters every step: the log is what
+          // the Run did each time it ran, not a deduplicated story.
+          appendLog(runDir(dir, runId), event).pipe(
+            Effect.provideService(FileSystem.FileSystem, fs),
+            Effect.orDie,
+          ),
         parked: (runId, why) => {
           const path = controlPath(dir, PARKED, runId);
           return why === null
@@ -3483,7 +3478,10 @@ const makeRegistry: (
     for (const task of tasks) {
       if (!open.some((one) => one.workspaceId === task.workspace)) continue;
       // A Task's own work is the branch its checkout has out.
-      if ((yield* about({ cwd: task.cwd, branch: null, name: task.id, inputs: {} })) === work)
+      if (
+        (yield* about({ cwd: task.cwd, branch: null, name: task.id, inputs: {}, task: true })) ===
+        work
+      )
         return task;
     }
     return null;

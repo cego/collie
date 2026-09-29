@@ -505,13 +505,14 @@ const reviewedBranch = Effect.fn("worktree.reviewedBranch")(function* (
 });
 
 /**
- * The piece of work a Run is about: its repository and the branch the work is on — the
- * one it was placed on, the one its diff target names, or the one its checkout has out.
- * Null on the default branch, which is everybody's and so names no one piece of work,
- * and wherever git or glab will not say.
+ * The piece of work a Run or Task is about: its repository and branch. A Run's is the
+ * branch it was placed on or its diff target names — never the caller's HEAD, which says
+ * where it was typed, not what it is about. A Task's (`task: true`) is the branch its
+ * checkout has out. Null on the default branch, which names no one piece of work, and
+ * wherever git or glab will not say.
  */
 export const workOf = Effect.fn("worktree.workOf")(function* (
-  opts: BranchAsk & { readonly branch: string | null },
+  opts: BranchAsk & { readonly branch: string | null; readonly task?: boolean },
   run: Runner<ChildProcessSpawner.ChildProcessSpawner>,
 ) {
   const listing = yield* gitWorktrees(run, opts.cwd);
@@ -521,6 +522,7 @@ export const workOf = Effect.fn("worktree.workOf")(function* (
       ? yield* reviewedBranch(opts.cwd, opts, run)
       : null;
   if (reviewed !== null && !("branch" in reviewed)) return null;
+  if (opts.branch === null && reviewed === null && opts.task !== true) return null;
   const out = yield* run("git", ["rev-parse", "--abbrev-ref", "HEAD"], opts.cwd);
   const branch = opts.branch ?? reviewed?.branch ?? (out.code === 0 ? out.stdout.trim() : "");
   if (branch === "" || branch === "HEAD") return null;

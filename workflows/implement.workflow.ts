@@ -336,25 +336,42 @@ export default defineWorkflow({
       // this kind of result still has no evidence for. An Output saying the tests pass is
       // a claim; a record in the journal, bound to this tree, is not.
       const granted = yield* requireApproved(kind);
-      // What passed on this tree needs no second run; a change to the tree clears it.
-      const passed = new Set<string>();
+      // Each pass is journaled, so a replay follows the results the human was shown rather
+      // than a fresh run of checks that may come out differently. What passed is not run
+      // again until a gate answer says to.
+      let passes = 0;
+      let passed: ReadonlyArray<string> = [];
       const gapsNow = Effect.gen(function* () {
-        for (const spec of granted) {
-          if (passed.has(spec.name)) continue;
-          const ran = yield* host.verify({ runId, name: spec.name, cwd });
-          if (ran.result === "pass") passed.add(spec.name);
-        }
-        return evidenceGapsOf({
-          kind: isOutcome(kind) ? kind : "unspecified",
-          evidence: yield* host.evidence(runId, cwd),
-          approved: granted,
-          outputs: { build: { ...build }, synthesize: { ...rallied.reviewed } },
-          // Only a reviewer may vouch for what a reviewer is asked: read from any Output,
-          // the agent that wrote the change could vouch for its own scope.
-          reviewed: ["synthesize"],
-          roots: [place.dir, cwd],
-          tickets: tickets.map((ticket) => ({ file: ticket.file, checks: ticket.checks })),
+        passes += 1;
+        const pass = yield* Activity.make({
+          name: `gate.${passes}`,
+          success: Schema.Struct({
+            gaps: Schema.Array(Schema.String),
+            passed: Schema.Array(Schema.String),
+          }),
+          execute: Effect.gen(function* () {
+            const now = [...passed];
+            for (const spec of granted) {
+              if (now.includes(spec.name)) continue;
+              const ran = yield* host.verify({ runId, name: spec.name, cwd });
+              if (ran.result === "pass") now.push(spec.name);
+            }
+            const gaps = evidenceGapsOf({
+              kind: isOutcome(kind) ? kind : "unspecified",
+              evidence: yield* host.evidence(runId, cwd),
+              approved: granted,
+              outputs: { build: { ...build }, synthesize: { ...rallied.reviewed } },
+              // Only a reviewer may vouch for what a reviewer is asked: read from any Output,
+              // the agent that wrote the change could vouch for its own scope.
+              reviewed: ["synthesize"],
+              roots: [place.dir, cwd],
+              tickets: tickets.map((ticket) => ({ file: ticket.file, checks: ticket.checks })),
+            });
+            return { gaps, passed: now };
+          }).pipe(Effect.orDie),
         });
+        passed = pass.passed;
+        return pass.gaps;
       });
       let gaps = yield* gapsNow;
       // Once more before anyone is asked: a check that fails and then passes on the same
@@ -371,7 +388,7 @@ export default defineWorkflow({
           options: [VERIFY_AGAIN, FIX_GAPS, NO_MR],
         });
         if (chosen === NO_MR) break;
-        passed.clear();
+        passed = [];
         if (chosen === FIX_GAPS) {
           const findings = gaps.map((gap) => ({
             severity: "blocker",

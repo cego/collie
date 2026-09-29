@@ -146,8 +146,10 @@ its worktree under guards. A finished Run is immutable; there is no mode that re
 implementation it chains into, the review of that. Recorded on every Run at creation and
 inherited by chains, follow-ups and resumes, so membership is a fact rather than a reading
 of a label — two Tasks may share a project prefix, and a workspace renamed by hand is
-still its Task's. A Run started fresh is a new Task; only an explicit **Continue task**
-puts new work in an existing one.
+still its Task's. A Run started fresh is a new Task, unless it is about a branch an open
+Task's checkout has out — the branch it is placed on, or the one its diff target names —
+and then it is that Task's: one workspace per Task. Anything else joins a Task only by an
+explicit **Continue task**.
 
 **Task workspace** — The herdr workspace a Task's Runs, tabs and agents live in. One per
 Task, made and focused when its first Run is admitted, on the checkout that Run is given,

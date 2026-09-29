@@ -670,6 +670,7 @@ test("a diff-target given on the command line is normalised, not just shaped", (
       });
       // A shape nothing recognises is refused by whoever admits it, never read as `worktree`.
       expect(targetKind("https://gitlab.cego.dk/cego/collie/-/merge_requests/2")).toBe("");
+      expect(targetKind("mr:group/app")).toBe("");
     }),
   ));
 

@@ -153,6 +153,14 @@ Work where the review was pointed — `target_kind` is `{{inputs.target_kind}}`:
   request's own branch.
 - `worktree` — stay on the branch you are on.
 
+This is fix round {{iteration}} of at most {{max_iterations}}. The findings to act on:
+
+{{findings}}
+
+Already disputed, and the human's to settle rather than yours to redo:
+
+{{disputed}}
+
 Apply the findings you agree with and commit them. A finding you believe is wrong is not
 silently skipped: record it under `disputed` with your reason, and the human sees it. Run
 the project's tests and say what you ran.
