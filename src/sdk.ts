@@ -386,6 +386,8 @@ export interface Declarations {
    * in the checkout the Run was started for.
    */
   readonly checkout?: "branch" | "roaming";
+  /** Its gate runs the approved set, so a start with nothing approved is refused. */
+  readonly verifies?: boolean;
   readonly followUps?: ReadonlyArray<FollowUp>;
   readonly actions?: ReadonlyArray<ActionProvider>;
 }
@@ -779,6 +781,8 @@ export interface WorkflowMetadata {
    * in the checkout the Run was started for.
    */
   readonly checkout?: typeof DeclaredCheckout.Type;
+  /** Its gate runs the approved set, so a start with nothing approved is refused. */
+  readonly verifies?: boolean;
   readonly followUps?: ReadonlyArray<FollowUp>;
   readonly actions?: ReadonlyArray<ActionProvider>;
 }
@@ -879,6 +883,7 @@ const OfferFields = {
 /** What metadata has to be before any of it can be read: a module is JavaScript by now. */
 const DeclaredMetadata = Schema.Struct({
   hints: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
+  verifies: Schema.optionalKey(Schema.Boolean),
   outcome: Schema.optionalKey(
     Schema.Struct({
       fixed: Schema.optionalKey(Schema.String),

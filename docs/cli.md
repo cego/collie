@@ -138,6 +138,7 @@ collie --json run start <workflow> --inputs-json '{"goal":"ship it"}'
 | `--task <id>`     | Continue that Task instead of starting a new one, as `task list` prints it. |
 | `--continue-task` | Continue the Task whose workspace this is; `needs_input` outside one.       |
 | `--here`          | Keep the Run in this workspace, as its Task, instead of opening one.        |
+| `--verify <json>` | Repeatable. A check Collie may run to prove it, as one `verify.json` entry. |
 | `--harness <h>`   | The harness this Run's agents run on, over the workflow's own preference.   |
 | `--model <m>`     | The model this Run's agents run on, over the workflow's own preference.     |
 | `--effort <e>`    | The effort this Run's agents are asked for, over the workflow's own.        |
@@ -944,9 +945,9 @@ collie verify --run <run-id> --name regression --expect fail -- bun test test/bu
 ### What Collie may run itself
 
 An agent may `collie verify` anything; Collie runs only this run's
-[approved set](../CONTEXT.md), matched argument for argument. The set is read when the run starts — `.collie/verify.json`
-in the project, else `~/.collie/user/verify.json`, whichever is found first and
-taken whole — and copied into the run's Intent as its `run_verification` grant. Editing the file afterwards changes the next run and never a
+[approved set](../CONTEXT.md), matched argument for argument. The set is settled when the run starts — the `--verify`
+entries given with it, else `.collie/verify.json` in the project, else
+`~/.collie/user/verify.json`, whichever is found first and taken whole — and copied into the run's Intent as its `run_verification` grant. Editing the file afterwards changes the next run and never a
 running one. From then on the Intent is the set: `run intent verification` adds to it or
 removes from it, and an Intent whose list has been emptied is a run Collie may run nothing
 for — the seed is not put back behind the human who removed it. A Run of a workflow module
@@ -956,7 +957,15 @@ keeps its set with the host rather than in an Intent, and the same command amend
 [{ "name": "tests", "executable": "bun", "argv": ["test"], "cwd": "worktree" }]
 ```
 
-A file that is there and does not decode is an error naming it, never an empty set.
+A file that is there and does not decode is an error naming it, never an empty set, and
+the start is refused. So is a start of a workflow that [declares](sdk.md#what-a-definition-declares)
+`verifies` when its outcome needs the set and nothing is approved: nothing could prove it,
+so it is `invalid_input` with the repair, and no Run, worktree or Task is made.
+
+```sh
+collie run start implement --input plan=… \
+  --verify '{"name":"tests","executable":"bun","argv":["test"],"cwd":"worktree"}'
+```
 
 Everything after `--` is the executable and its arguments, spawned directly. There is no
 shell: what was written down is what ran. The command's own exit status is passed

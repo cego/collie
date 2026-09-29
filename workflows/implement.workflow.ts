@@ -168,6 +168,7 @@ export default defineWorkflow({
   outcome: {
     selectable: ["feature", "bug", "refactor", "investigation", "docs", "migration"],
   },
+  verifies: true,
   // A follow-up builds on the same branch, so it is this workflow again rather than
   // another one — and there is nothing to carry on from without a branch to carry it on.
   followUps: [
