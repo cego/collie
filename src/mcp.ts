@@ -8,11 +8,24 @@
 // answer it gives is a read through the shared operations.
 
 import type { BunServices } from "@effect/platform-bun/BunServices";
-import { Cause, Context, Effect, Exit, Fiber, Logger, Schema } from "effect";
+import {
+  Cause,
+  Context,
+  Duration,
+  Effect,
+  Exit,
+  Fiber,
+  FileSystem,
+  Logger,
+  Ref,
+  Schema,
+} from "effect";
 import { McpProtocol, McpSchema, McpServer } from "effect/unstable/ai";
 import manifest from "../herdr-plugin.toml";
 import { currentEnv } from "./env";
-import { isJsonObject } from "./schema";
+import { replacedOnDisk } from "./flows";
+import { shell } from "./mr";
+import { isJsonObject, type JsonObject } from "./schema";
 import { TOOLS } from "./tools";
 
 /**
@@ -24,6 +37,15 @@ export const serveMcp = Effect.fn("Mcp.serve")(
     const env = yield* currentEnv;
     const services = yield* Effect.context<BunServices>();
     const server = yield* McpServer.McpServer;
+    const answer = yield* answering({
+      binary: process.execPath,
+      direct: (name, input) =>
+        (TOOLS.find((tool) => tool.name === name)?.call(env, input) ?? Effect.succeed("")).pipe(
+          Effect.provideContext(services),
+        ),
+      rebuilt: (name, input) =>
+        rebuiltAnswer(process.execPath, env.cwd, name, input).pipe(Effect.provideContext(services)),
+    });
     for (const tool of TOOLS) {
       const descriptor = yield* Schema.decodeUnknownEffect(McpSchema.Tool)({
         name: tool.name,
@@ -38,8 +60,7 @@ export const serveMcp = Effect.fn("Mcp.serve")(
         tool: descriptor,
         annotations: Context.empty(),
         handle: (input) =>
-          tool.call(env, isJsonObject(input) ? input : {}).pipe(
-            Effect.provideContext(services),
+          answer(tool.name, isJsonObject(input) ? input : {}).pipe(
             Effect.map(
               (text) => new McpSchema.CallToolResult({ content: [{ type: "text", text }] }),
             ),
@@ -65,3 +86,48 @@ export const serveMcp = Effect.fn("Mcp.serve")(
   ),
   Effect.scoped,
 );
+
+/**
+ * How a tool call is answered: here, until `collie upgrade` renames a new binary over this
+ * one, and then by that binary, so a chat keeps its server across an upgrade and is still
+ * answered by the build the host runs. Tool names and schemas stay this build's until
+ * the chat reconnects.
+ */
+export const answering = Effect.fn("Mcp.answering")(function* <R>(opts: {
+  readonly binary: string;
+  readonly every?: Duration.Input;
+  readonly direct: (name: string, input: JsonObject) => Effect.Effect<string, never, R>;
+  readonly rebuilt: (name: string, input: JsonObject) => Effect.Effect<string, never, R>;
+}) {
+  const replaced = yield* Ref.make(false);
+  yield* Effect.forkScoped(
+    replacedOnDisk(opts.binary, opts.every).pipe(Effect.andThen(Ref.set(replaced, true))),
+  );
+  return (name: string, input: JsonObject) =>
+    Ref.get(replaced).pipe(
+      Effect.flatMap((now) => (now ? opts.rebuilt(name, input) : opts.direct(name, input))),
+    );
+});
+
+const Answered = Schema.fromJsonString(
+  Schema.Union([
+    Schema.Struct({ ok: Schema.Literal(true), data: Schema.Struct({ text: Schema.String }) }),
+    Schema.Struct({
+      ok: Schema.Literal(false),
+      error: Schema.Struct({ message: Schema.String }),
+    }),
+  ]),
+);
+const encodeInput = Schema.encodeSync(Schema.fromJsonString(Schema.JsonObject));
+
+/** One tool call made by the binary now on disk, through the `tools call` a human can run. */
+const rebuiltAnswer = (binary: string, cwd: string, name: string, input: JsonObject) =>
+  shell(binary, ["--json", "tools", "call", name, "--input", encodeInput(input)], cwd, "say").pipe(
+    Effect.flatMap((ran) => Schema.decodeUnknownEffect(Answered)(ran.stdout)),
+    Effect.map((answered) =>
+      answered.ok ? answered.data.text : `Collie could not answer: ${answered.error.message}`,
+    ),
+    Effect.orElseSucceed(
+      () => "Collie could not answer: the upgraded binary gave no answer. Reconnect with /mcp.",
+    ),
+  );

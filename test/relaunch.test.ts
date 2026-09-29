@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { Effect, Fiber, FileSystem, Option } from "effect";
 import { replacedOnDisk } from "../src/flows";
+import { answering } from "../src/mcp";
 import { runEffect } from "./support/effect";
 
 test("a board notices its binary renamed over, and nothing while it is left alone", () =>
@@ -31,6 +32,30 @@ test("a board notices its binary renamed over, and nothing while it is left alon
           Effect.timeoutOption(100),
         );
         expect(Option.isNone(missing)).toBe(true);
+      }),
+    ),
+  ));
+
+test("the MCP server answers here until its binary is renamed over, then through the new one", () =>
+  runEffect(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const dir = yield* fs.makeTempDirectoryScoped({ prefix: "hw-mcp-upgrade-" });
+        const bin = `${dir}/collie`;
+        yield* fs.writeFileString(bin, "old");
+        const answer = yield* answering({
+          binary: bin,
+          every: "10 millis",
+          direct: (name) => Effect.succeed(`old ${name}`),
+          rebuilt: (name) => Effect.succeed(`new ${name}`),
+        });
+        expect(yield* answer("collie_herd", {})).toBe("old collie_herd");
+
+        yield* fs.writeFileString(`${bin}.new`, "new");
+        yield* fs.rename(`${bin}.new`, bin);
+        yield* Effect.sleep(100);
+        expect(yield* answer("collie_herd", {})).toBe("new collie_herd");
       }),
     ),
   ));
