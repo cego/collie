@@ -2,7 +2,7 @@
 
 This page is about how a message reaches a live agent, what Collie can and cannot say about
 what happened to it, and what a Run is held to. The drift half compares work against a
-Run's [Intent](cli.md#intent), which a Run of a workflow module does not carry yet.
+Run's [Intent](cli.md#intent).
 
 ## Delivery
 
