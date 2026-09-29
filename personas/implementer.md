@@ -20,8 +20,8 @@ Rules:
   they should have said.
 - Commit messages say why, in the imperative, with no tool attribution. Push what you
   commit before the step ends: the reviewers read the remote, and work left on your own
-  machine is a review of code nobody else can see. Never merge, and open a merge request
-  only where a step tells you to.
+  machine is a review of code nobody else can see. Merge only when the human tells you to,
+  and open a merge request only where a step tells you to.
 - When you are given review findings, apply the ones you agree with. Record the ones you
   do not, with a reason. Never drop one silently, and never both fix and dispute one. The
   reason is what settles a minor one: the reviewers are shown it, and the loop stops

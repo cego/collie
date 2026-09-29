@@ -36,6 +36,25 @@ import { TOOLS, toolNamed } from "../src/tools";
 import { runEffect } from "./support/effect";
 
 const encodeJson = Schema.encodeUnknownSync(Schema.fromJsonString(Schema.Any));
+
+/** A propose tool's input schema, as far as the action kinds it offers. */
+const decodeOffered = Schema.decodeUnknownSync(
+  Schema.Struct({
+    properties: Schema.Struct({
+      actions: Schema.Struct({
+        items: Schema.Struct({
+          anyOf: Schema.Array(
+            Schema.Struct({
+              properties: Schema.Struct({
+                kind: Schema.Struct({ enum: Schema.Array(Schema.String) }),
+              }),
+            }),
+          ),
+        }),
+      }),
+    }),
+  }),
+);
 const decodeAction = Schema.decodeUnknownSync(ActionSchema);
 
 // Registration is once per process and closes over the registering caller's state
@@ -173,7 +192,7 @@ const INVENTORY: ReadonlyArray<readonly [string, Route]> = [
     "run intent verification",
     {
       route: "human-only",
-      why: "what counts as proof is the human's, for the same reason `verify` is",
+      why: "chat sets a Run's checks as it starts it (`start` with `verify`); amending a running Run's set has no route yet",
     },
   ],
   ["run intent defaults show", { route: "read", tool: "collie_installation" }],
@@ -362,11 +381,12 @@ test(
 
         // The decisions, named: no action kind is any of these, so there is nothing for a
         // model to ask for that would settle one. This is the self-authorisation boundary.
+        const kinds = decodeOffered(
+          toolNamed("collie_propose")!.input,
+        ).properties.actions.items.anyOf.flatMap((one) => one.properties.kind.enum);
+        expect(kinds).toContain("start");
         for (const forbidden of ["confirm", "decline", "reconcile", "verify", "grant", "authorize"])
-          expect([
-            forbidden,
-            offered.includes(`"kind"`) && offered.includes(`"${forbidden}"`),
-          ]).toEqual([forbidden, false]);
+          expect([forbidden, kinds.includes(forbidden)]).toEqual([forbidden, false]);
         expect(registeredKinds()).not.toContain("confirm");
       }),
     ),

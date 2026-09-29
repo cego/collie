@@ -14,6 +14,7 @@ import { isArray, isRecord, isString } from "./schema";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { Stream } from "effect";
 import type { Authority } from "./intent";
+import { VerifySpecSchema } from "./verify-spec";
 
 /** Where a claim points. Validated against the Run's own directories before it is stored. */
 const RefSchema = Schema.Struct({
@@ -105,6 +106,8 @@ export const ActionSchema = Schema.Union([
      * worktree: what someone asking from a workspace usually means by "start it here".
      */
     here: Schema.optionalKey(Schema.Boolean),
+    /** Checks Collie may run to prove it, over the project's and the user's verify.json. */
+    verify: Schema.optionalKey(Schema.Array(VerifySpecSchema)),
   }),
   Schema.Struct({ kind: Schema.Literal("resume"), run: Schema.String }),
   Schema.Struct({ kind: Schema.Literal("followup"), run: Schema.String, text: Schema.String }),

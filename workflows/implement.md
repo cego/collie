@@ -218,8 +218,9 @@ tests pass is a claim. Say in your Output which verifications you ran, by name.
 
 Push anything the earlier steps have not pushed yet, this time **without** `ci.skip`:
 yours is the push that runs the pipeline, and the state a human will look at.
-Never merge the MR, and never pass a merge flag to `glab`: this is the only step in the
-whole run allowed to open or update a merge request, and doing that is the entire job.
+Do not merge the MR unless the human tells you to: they verify the work at the end, and
+merging is theirs to ask for. This is the only step in the whole run allowed to open or
+update a merge request.
 
 **Before that push, check for auto-merge** (`glab mr view <iid> {{target_repo}}` shows
 it). If the merge request has auto-merge enabled, **do not push** — a push that goes
