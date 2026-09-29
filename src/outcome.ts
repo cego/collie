@@ -114,6 +114,16 @@ export function nothingApproved(run = "<run>"): string {
   );
 }
 
+/** Why a start was refused because nothing it could run would prove it. */
+export function nothingApprovedToStart(): string {
+  return (
+    "nothing is approved for Collie to run, so no command could prove this Run and it was not started. " +
+    'Give the checks with `--verify \'{"name":…,"executable":…,"argv":[…],"cwd":"worktree"}\'` ' +
+    "(repeatable), or add .collie/verify.json to the project, or verify.json in your Collie config, " +
+    "and start it again"
+  );
+}
+
 /**
  * Every approved command, passing, on this exact tree. A Run with nothing approved is
  * reported rather than passed: an empty set would make this gate say yes to anything, and

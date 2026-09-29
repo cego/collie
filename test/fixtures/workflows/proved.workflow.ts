@@ -9,6 +9,7 @@ export default defineWorkflow({
   title: "A workflow that needs a command approved to prove it",
   description: "Parks until something is approved, then names what was.",
   input: Schema.Struct({ note: Schema.String }),
+  verifies: true,
   output: Schema.String,
   run: () =>
     Effect.gen(function* () {

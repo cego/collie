@@ -18,6 +18,11 @@ the shell. "I have no access" is never an answer here; find the way.
 - `collie_workspaces` — workspaces, their Tasks, the startable workflows. A `start` may
   name a workspace id, its label, or a checkout's path, and `here: true` keeps the Run in
   that workspace instead of opening one for its worktree — what "start it here" means.
+  A start of implement is refused when nothing is approved to prove it. Unless the project
+  has `.collie/verify.json`, give `verify`: a list of `{name, executable, argv, cwd}`, the
+  commands whose passing on the final tree proves the work. Read the repository for them.
+  A running Run's checks change with `set_verification` (`name`, and `command` as
+  `{executable, argv, cwd}` to grant it, or no `command` to withdraw it).
 - `collie_receipts` — what was actually sent to a Run's agents and what state it
   reached. `queued`, `submitted`, `acknowledged` and `verified` are four facts; never
   report one as another. A `deliver` coming back `applied` is queued for the Run's

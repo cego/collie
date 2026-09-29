@@ -89,11 +89,14 @@ chained build is never asked again. Left empty, a run is held to this project's 
 verifications and nothing more: unclassified work is not a feature by default, and asking
 documentation for a feature's evidence would ask for tickets that do not exist.
 
-**Ends:** with the merge request, or with the reason there is none. The gate re-runs a
-failed check once, since a check that fails and then passes is a flake; gaps left after
-that are a question (**Verify again**, **Hand it to the implementer**, or **Stop without a
-merge request**) rather than the end of the run. A gate fix lands after the last review, so
-the merge request says it was not re-reviewed.
+**Ends:** with the merge request, or with the reason there is none. Nobody is asked along
+the way: the human verifies the work in the merge request, before it lands. The gate re-runs
+a failed check once, since a check that fails and then passes is a flake, and then hands
+what is unproved to the implementer for up to four fixes. A gate fix lands after the last
+review, so the merge request says it was not re-reviewed. What the Run could not settle —
+checks still unproved, blocking disputes the reviewers left unanswered, and the assumptions
+an implementer made where the spec was silent — goes into the description under **Not
+settled by the run**, and the merge request opens anyway.
 
 Module: [`workflows/implement.workflow.ts`](../workflows/implement.workflow.ts), with its
 content in [`workflows/implement.md`](../workflows/implement.md).

@@ -138,6 +138,7 @@ collie --json run start <workflow> --inputs-json '{"goal":"ship it"}'
 | `--task <id>`     | Continue that Task instead of starting a new one, as `task list` prints it. |
 | `--continue-task` | Continue the Task whose workspace this is; `needs_input` outside one.       |
 | `--here`          | Keep the Run in this workspace, as its Task, instead of opening one.        |
+| `--verify <json>` | Repeatable. A check Collie may run to prove it, as one `verify.json` entry. |
 | `--harness <h>`   | The harness this Run's agents run on, over the workflow's own preference.   |
 | `--model <m>`     | The model this Run's agents run on, over the workflow's own preference.     |
 | `--effort <e>`    | The effort this Run's agents are asked for, over the workflow's own.        |
@@ -861,14 +862,14 @@ What kind of result a run has to prove, and so what evidence closes it:
 
 The gate runs before the merge request, which is where the claim is made. Collie runs the
 run's own approved set itself at the tree as it stands, then says what is missing. A check
-that failed runs once more; gaps left after that are asked about, each one named, and
-**Stop without a merge request** ends the run without one. A run with
-nothing approved is told so rather than passed — an empty set would make the gate say yes
-to anything — and it is told before any agent works: a run whose outcome needs the approved
-set, started with none, parks at once, and `run show` gives both repairs. `collie run intent
-verification <run-id> --name … -- <command>` and then `collie run resume <run-id>` carry this
-run on; `.collie/verify.json` only helps the runs started after it, because a run reads that
-file when it starts. A grant withdrawn while the run works parks it at its gate the same way.
+that failed runs once more; gaps left after that go to the implementer for up to four
+fixes, and whatever is still unproved is named in the merge request, which opens anyway: the
+human verifies before it lands. A run with nothing approved is told so rather than passed —
+an empty set would make the gate say yes to anything — and a run whose outcome needs the
+approved set is refused at `run start` when it has none (see [What Collie may run
+itself](#what-collie-may-run-itself)). A grant withdrawn while the run works parks it at its
+gate; `collie run intent verification <run-id> --name … -- <command>` and then `collie run
+resume <run-id>` carry it on.
 
 An investigation that concludes there is nothing to change skips the merge request with a
 note and finishes. That is a real outcome, and nothing is invented to have something to
@@ -944,9 +945,9 @@ collie verify --run <run-id> --name regression --expect fail -- bun test test/bu
 ### What Collie may run itself
 
 An agent may `collie verify` anything; Collie runs only this run's
-[approved set](../CONTEXT.md), matched argument for argument. The set is read when the run starts — `.collie/verify.json`
-in the project, else `~/.collie/user/verify.json`, whichever is found first and
-taken whole — and copied into the run's Intent as its `run_verification` grant. Editing the file afterwards changes the next run and never a
+[approved set](../CONTEXT.md), matched argument for argument. The set is settled when the run starts — the `--verify`
+entries given with it, else `.collie/verify.json` in the project, else
+`~/.collie/user/verify.json`, whichever is found first and taken whole — and copied into the run's Intent as its `run_verification` grant. Editing the file afterwards changes the next run and never a
 running one. From then on the Intent is the set: `run intent verification` adds to it or
 removes from it, and an Intent whose list has been emptied is a run Collie may run nothing
 for — the seed is not put back behind the human who removed it. A Run of a workflow module
@@ -956,7 +957,15 @@ keeps its set with the host rather than in an Intent, and the same command amend
 [{ "name": "tests", "executable": "bun", "argv": ["test"], "cwd": "worktree" }]
 ```
 
-A file that is there and does not decode is an error naming it, never an empty set.
+A file that is there and does not decode is an error naming it, never an empty set, and
+the start is refused. So is a start of a workflow that [declares](sdk.md#what-a-definition-declares)
+`verifies` when its outcome needs the set and nothing is approved: nothing could prove it,
+so it is `invalid_input` with the repair, and no Run, worktree or Task is made.
+
+```sh
+collie run start implement --input plan=… \
+  --verify '{"name":"tests","executable":"bun","argv":["test"],"cwd":"worktree"}'
+```
 
 Everything after `--` is the executable and its arguments, spawned directly. There is no
 shell: what was written down is what ran. The command's own exit status is passed

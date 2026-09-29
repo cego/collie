@@ -21,6 +21,27 @@ export const VerifySpecSchema = Schema.Struct({
 });
 export type VerifySpec = Schema.Schema.Type<typeof VerifySpecSchema>;
 
+const decodeGiven = Schema.decodeUnknownResult(Schema.fromJsonString(VerifySpecSchema));
+
+/** `--verify` values, each one verify.json entry as JSON; the first that is not one is named. */
+export function givenVerifications(
+  values: ReadonlyArray<string>,
+):
+  | { readonly ok: true; readonly specs: ReadonlyArray<VerifySpec> }
+  | { readonly ok: false; readonly error: string } {
+  const specs: VerifySpec[] = [];
+  for (const value of values) {
+    const decoded = decodeGiven(value);
+    if (decoded._tag === "Failure")
+      return {
+        ok: false,
+        error: `--verify ${value} is not a verification: ${String(decoded.failure)}`,
+      };
+    specs.push(decoded.success);
+  }
+  return { ok: true, specs };
+}
+
 /** A file that is there and is not a list of verifications. Named, never read as empty. */
 export class ApprovedUnreadable extends Data.TaggedError("ApprovedUnreadable")<{
   file: string;

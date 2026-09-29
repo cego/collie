@@ -155,6 +155,8 @@ export interface StoreApi {
   readonly accepted: (run: string) => Effect.Effect<void>;
   readonly pending: Effect.Effect<ReadonlyArray<RunRow>>;
   readonly run: (run: string) => Effect.Effect<RunRow | null>;
+  /** The run a request id was already admitted as, or null. */
+  readonly requested: (request: string) => Effect.Effect<RunRow | null>;
   readonly runs: Effect.Effect<ReadonlyArray<RunRow>>;
   /** Whatever this reads, again, whenever a run changes. */
   readonly watching: <A, E>(read: Effect.Effect<A, E>) => Stream.Stream<A, E>;
@@ -448,6 +450,11 @@ function makeStore(): Effect.Effect<StoreApi, never, SqlClient.SqlClient | React
       runs: all,
       run: (run: string) =>
         byRun(run).pipe(
+          Effect.map((rows) => rows[0] ?? null),
+          Effect.orDie,
+        ),
+      requested: (request: string) =>
+        byRequest(request).pipe(
           Effect.map((rows) => rows[0] ?? null),
           Effect.orDie,
         ),

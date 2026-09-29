@@ -551,6 +551,10 @@ test(
           `${rig.projectDir}/api/.collie/verify.json`,
           '[{"name":"api-unit","executable":"true","argv":[],"cwd":"worktree"}]',
         );
+        yield* fs.writeFileString(
+          `${rig.projectDir}/web/.collie/verify.json`,
+          '[{"name":"web-unit","executable":"true","argv":[],"cwd":"worktree"}]',
+        );
 
         const seen = yield* hosted(
           Effect.gen(function* () {
@@ -583,6 +587,37 @@ test(
         expect(seen.approved).toContain('"api-unit"');
         // The web waits on the api, so nothing has started it yet.
         expect(seen.web).toBeNull();
+      }),
+    ),
+  120_000,
+);
+
+test(
+  "implement on a plan spanning repositories is refused naming each one that approves nothing",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const plan = yield* twoRepoPlan;
+        for (const repo of ["api", "web"]) {
+          yield* fs.makeDirectory(`${rig.projectDir}/${repo}/.collie`, { recursive: true });
+          gitRepo(`${rig.projectDir}/${repo}`);
+        }
+        yield* fs.writeFileString(
+          `${rig.projectDir}/api/.collie/verify.json`,
+          '[{"name":"api-unit","executable":"true","argv":[],"cwd":"worktree"}]',
+        );
+        const outcome = yield* hosted(
+          Effect.gen(function* () {
+            const [implement] = yield* loaded(yield* Registry, [shipped("implement")]);
+            return {
+              started: yield* start(implement!, { request: "r1", text: { plan } }),
+              rows: yield* (yield* Store).runs,
+            };
+          }),
+        );
+        expect(refusedWith(outcome.started)).toContain("nothing is approved in web");
+        expect(outcome.rows).toEqual([]);
       }),
     ),
   120_000,

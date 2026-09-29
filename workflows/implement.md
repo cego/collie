@@ -46,8 +46,8 @@ The work source above is one of five kinds. Do the one that matches
   immutable, so nothing you do belongs in it.
 - **text** — the work in the human's own words. Same as `linear` without the fetch: write
   `{{run.dir}}/plan/SPEC.md` and the task list from the text, with the same `**Checks:**`
-  line on every ticket, then build. If the text does not say enough to build from, stop and
-  say what you need — do not guess.
+  line on every ticket, then build. Where the text does not settle something, decide it the
+  way the text most plausibly means, and record the decision under `assumptions`.
 
 This run has a checkout of its own, on the branch it is building: Collie resolved the
 branch and opened the worktree before you started, so never create a branch or switch
@@ -77,8 +77,9 @@ essential comment to the fewest words that preserve its meaning.
 
 Build the complete approved scope before you report the step done. A ticket or a
 required behaviour you did not build is not an optional follow-up, and the size of the
-work is not a reason to leave it out or to dispute it. Where the spec genuinely
-conflicts with itself or with the code, stop and ask rather than choose for the human.
+work is not a reason to leave it out or to dispute it. Where the spec conflicts with itself
+or with the code, choose, and record the choice and why under `assumptions` in your Output:
+the human reads each one in the merge request before it lands.
 
 Push before you finish: `git push -u origin HEAD -o ci.skip`, onto the branch the work
 source named where there is one. The reviewers read the merge request when there is one,
@@ -171,7 +172,8 @@ When you start each ticket and when you finish it, write
 claims, and Collie labels them as such.
 Never defer a blocking finding to a follow-up or leave it out of your Output: every
 `blocker` and `major` above is either under `fixed` or under `disputed`, never both and
-never neither. Disputing every blocking finding stops the run for the human at once. On
+never neither. A blocking finding you dispute goes to the next review, and one still
+disputed after the last round is written into the merge request for the human. On
 iteration {{max_iterations}} there is no review after you: Collie reads your `fixed`,
 `disputed` and `checks` against the findings above and the merge request says the last
 fix was implementer-reported, not re-reviewed — so report exactly what you did. What your
@@ -190,8 +192,7 @@ not a passing check, whatever the note says.
 
 ## mr
 
-The review loop found nothing blocking and the gate passed. Push it and open the merge
-request.
+The review loop and the gate are done. Push it and open the merge request.
 
 What was actually verified, and by whom — `by collie` is a command Collie ran itself,
 `by agent` is one an agent ran through the collector:
@@ -207,6 +208,13 @@ Where the lines above are not empty, a fix after the last review was checked by 
 tests and dispositions and not by a reviewer: say so in the description, in one sentence, and list
 what that fix changed. Where findings were left open as non-blocking, list them too.
 
+{{unsettled}}
+
+Where the list above is not empty, the Run could not settle these, and the human reads
+them before the merge request lands. Open the merge request anyway, and put each one, as
+written, in the description under this heading:
+**Not settled by the run**
+
 - Assignee: `{{mr.assignee}}`
 - MR template: `{{mr.template}}`
 - Linear tickets: `{{mr.issues}}`
@@ -218,8 +226,9 @@ tests pass is a claim. Say in your Output which verifications you ran, by name.
 
 Push anything the earlier steps have not pushed yet, this time **without** `ci.skip`:
 yours is the push that runs the pipeline, and the state a human will look at.
-Never merge the MR, and never pass a merge flag to `glab`: this is the only step in the
-whole run allowed to open or update a merge request, and doing that is the entire job.
+Do not merge the MR unless the human tells you to: they verify the work at the end, and
+merging is theirs to ask for. This is the only step in the whole run allowed to open or
+update a merge request.
 
 **Before that push, check for auto-merge** (`glab mr view <iid> {{target_repo}}` shows
 it). If the merge request has auto-merge enabled, **do not push** — a push that goes

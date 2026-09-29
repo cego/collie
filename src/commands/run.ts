@@ -57,6 +57,7 @@ import {
 import { scopeFor, scopeKey } from "../registry";
 import { readTask, taskOfWorkspace, type TaskChoice } from "../task";
 import { runDeliveries } from "./steer";
+import { givenVerifications } from "../verify-spec";
 import { currentReports, readDrift } from "../drift";
 import { newest, readCards } from "../cards";
 import { metricsOf, readMetrics } from "../metrics";
@@ -248,6 +249,12 @@ const runStart = Command.make(
       ),
       Flag.withDefault(false),
     ),
+    verify: Flag.String("verify").pipe(
+      Flag.withDescription(
+        'A check Collie may run to prove this Run, repeatable: one verify.json entry, {"name","executable","argv","cwd"}',
+      ),
+      Flag.atLeast(0),
+    ),
     harness: Flag.String("harness").pipe(
       Flag.withDescription("The harness this Run's agents run on, over the workflow's own"),
       Flag.optional,
@@ -273,6 +280,7 @@ const runStart = Command.make(
     task: taskId,
     continueTask,
     here,
+    verify,
     harness,
     model,
     effort,
@@ -288,6 +296,8 @@ const runStart = Command.make(
           if (!explicit.ok) return explicit.error;
           const named = namedConstraints(constraint, severity);
           if (named.error !== null) return err("invalid_input", named.error);
+          const given = givenVerifications(verify);
+          if (!given.ok) return err("invalid_input", given.error);
           return yield* mutation(base.env, "run-start", request, (requestId) =>
             Effect.gen(function* () {
               // The live workspace is resolved inside the mutation, so replaying a
@@ -324,6 +334,7 @@ const runStart = Command.make(
                   intent: Option.isSome(goal)
                     ? { goal: goal.value, constraints: named.constraints }
                     : { constraints: named.constraints },
+                  verify: given.specs.length > 0 ? given.specs : undefined,
                 });
                 if (!started.ok) return started;
                 return {

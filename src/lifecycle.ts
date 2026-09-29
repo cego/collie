@@ -158,6 +158,8 @@ export const startRun = Effect.fn("Lifecycle.startRun")(function* (
     readonly parent?: string | null;
     /** The goal and constraints named at launch, beside the workspace's own defaults. */
     readonly intent?: Pick<IntentSeed, "goal" | "constraints">;
+    /** The approved set given with the start, over the project's and the user's files. */
+    readonly verify?: ReadonlyArray<VerifySpec> | undefined;
   },
 ) {
   // The defaults of the workspace this was started from, which only a front door knows.
@@ -181,6 +183,7 @@ export const startRun = Effect.fn("Lifecycle.startRun")(function* (
       taskLabel: placed.label ?? undefined,
       parent: options.parent ?? undefined,
       intent: defaults === null ? { ...options.intent } : { ...options.intent, defaults },
+      verify: options.verify,
     }),
   ).pipe(
     Effect.map((answered) =>

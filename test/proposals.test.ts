@@ -469,6 +469,45 @@ test(
   60_000,
 );
 
+test(
+  "a confirmed set_verification grants a running Run a check, and a later one withdraws it",
+  () =>
+    inHerd(({ world, env, herdFile }) =>
+      Effect.gen(function* () {
+        const run = yield* hostedRun(world, "a picker");
+        const confirm = (action: Action) =>
+          Effect.gen(function* () {
+            const version = (yield* readIntent(run.dir))?.version ?? 1;
+            const proposal = yield* record(herdFile, {
+              interpretation: "change what proves it",
+              targets: [{ run: run.id }],
+              actions: [action],
+              allowedNow: [],
+              intentVersions: { [run.id]: version },
+              by: "evaluator:call-1",
+            });
+            return yield* carryOutProposal(env, proposal.id, proposal.content_hash, board);
+          });
+
+        const granted = yield* confirm({
+          kind: "set_verification",
+          run: run.id,
+          name: "unit",
+          command: { executable: "true", argv: [], cwd: "worktree" },
+        });
+        expect(granted.ok).toBe(true);
+        expect((yield* readIntent(run.dir))?.authority.run_verification).toEqual([
+          { name: "unit", executable: "true", argv: [], cwd: "worktree" },
+        ]);
+
+        const withdrawn = yield* confirm({ kind: "set_verification", run: run.id, name: "unit" });
+        expect(withdrawn.ok).toBe(true);
+        expect((yield* readIntent(run.dir))?.authority.run_verification).toEqual([]);
+      }),
+    ),
+  60_000,
+);
+
 test("a proposal is pending until it is answered or it expires", () => {
   const now = Date.parse("2026-09-09T10:00:00Z");
   const proposal: ProposalLine = {
