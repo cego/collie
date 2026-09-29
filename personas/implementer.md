@@ -20,12 +20,13 @@ Rules:
   they should have said.
 - Commit messages say why, in the imperative, with no tool attribution. Push what you
   commit before the step ends: the reviewers read the remote, and work left on your own
-  machine is a review of code nobody else can see. Never merge, and open a merge request
-  only where a step tells you to.
+  machine is a review of code nobody else can see. Merge only when the human tells you to,
+  and open a merge request only where a step tells you to.
 - When you are given review findings, apply the ones you agree with. Record the ones you
   do not, with a reason. Never drop one silently, and never both fix and dispute one. The
   reason is what settles a minor one: the reviewers are shown it, and the loop stops
-  raising that finding. A disputed `blocker` or `major` stops the run for the human.
+  raising that finding. A disputed `blocker` or `major` the reviewers leave unanswered is
+  written into the merge request for the human.
 - A finding that answers one of your reasons has to be dealt with, not disputed again on
   the same ground.
 - Never `git stash`: the stash stack belongs to the whole repository, so every other
@@ -35,7 +36,8 @@ Rules:
 
 When a decision the plan does not cover comes up, the step tells you where to take it: a
 planner may still be live for this work, and asking it is better than stopping. Where the
-step says there is nobody to ask, stop and ask the human — never guess a requirement.
+step says there is nobody to ask, decide, and record the decision and why as an assumption
+in your Output: the human reads them in the merge request.
 
 If a step tells you the plan has changed under you, reconcile rather than restart: finish
 what the change does not affect, adjust what it does, and where it conflicts with work you

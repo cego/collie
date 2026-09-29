@@ -142,6 +142,8 @@ export const HostRpcs = RpcGroup.make(
       taskLabel: Schema.optional(Schema.String),
       parent: Schema.optional(Schema.String),
       intent: Schema.optional(IntentSeedSchema),
+      /** The approved set given with the start, over the project's and the user's files. */
+      verify: Schema.optional(Schema.Array(VerifySpecSchema)),
     },
     success: Started,
     error: Schema.Union([HostRefused, RequestConflict]),
@@ -281,7 +283,19 @@ const handlers = (dir: string) =>
               problems: found.problems,
             })),
           ),
-        start: ({ project, id, request, input, text, options, task, taskLabel, parent, intent }) =>
+        start: ({
+          project,
+          id,
+          request,
+          input,
+          text,
+          options,
+          task,
+          taskLabel,
+          parent,
+          intent,
+          verify,
+        }) =>
           registry.resolve({ project, id }).pipe(
             Effect.flatMap((generation) =>
               registry.start({
@@ -295,6 +309,7 @@ const handlers = (dir: string) =>
                 taskLabel,
                 parent,
                 intent,
+                verify,
               }),
             ),
           ),

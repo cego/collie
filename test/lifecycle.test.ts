@@ -364,42 +364,78 @@ test(
 );
 
 test(
-  "a Run nothing is approved to prove stops before it works, and a grant and a resume carry it on",
+  "a start nothing is approved to prove is refused with the repair, and nothing is admitted",
   () =>
     provesWith(
       "collie-lifecycle-unprovable-",
       (world) =>
         Effect.gen(function* () {
           const started = yield* collie(world, ["run", "start", "proved", "--input", "note=x"]);
-          const runId = (yield* payloadOf(started.envelope)).runId ?? "";
-          yield* collie(world, ["run", "wait", runId, "--until", "attention"]);
-          const parked = (yield* payloadOf((yield* collie(world, ["run", "show", runId])).envelope))
-            .run?.parked;
-          expect(parked).toContain(`collie run intent verification ${runId} --name`);
-          expect(parked).toContain(".collie/verify.json");
+          expect(started.exit).toBe(2);
+          expect(started.envelope.error?.code).toBe("invalid_input");
+          expect(started.envelope.error?.message).toContain("--verify");
+          expect(started.envelope.error?.message).toContain(".collie/verify.json");
+          const listed = yield* collie(world, ["run", "list"]);
+          expect(listed.envelope.data).toMatchObject({ runs: [] });
+          yield* stopHost(world.state);
+        }),
+      ["proved.workflow.ts"],
+    ),
+  240_000,
+);
 
-          const grant = (...args: ReadonlyArray<string>) =>
-            collie(world, ["run", "intent", "verification", runId, ...args]);
-          expect((yield* grant("--name", "unit", "--", "true")).envelope.ok).toBe(true);
-          yield* grant("--name", "lint", "--", "true");
-          // Withdrawn by name, as a human who granted the wrong thing would.
-          const withdrawn = yield* grant("--name", "lint", "--remove");
-          expect(withdrawn.envelope.data).toMatchObject({ approved: [{ name: "unit" }] });
-          // The Intent says what the gate will run: an empty list here read as nothing
-          // granted, while the host held the grant and was running it.
+test(
+  "a start given its checks with --verify is admitted, and its Intent grants exactly those",
+  () =>
+    provesWith(
+      "collie-lifecycle-verify-flag-",
+      (world) =>
+        Effect.gen(function* () {
+          const started = yield* collie(world, [
+            "run",
+            "start",
+            "proved",
+            "--input",
+            "note=x",
+            "--verify",
+            '{"name":"unit","executable":"true","argv":[],"cwd":"worktree"}',
+            "--verify",
+            '{"name":"lint","executable":"true","argv":[],"cwd":"worktree"}',
+          ]);
+          expect(started.envelope.ok).toBe(true);
+          const runId = (yield* payloadOf(started.envelope)).runId ?? "";
           const shown = yield* collie(world, ["run", "intent", "show", runId]);
           expect(shown.envelope.data).toMatchObject({
-            intent: { authority: { run_verification: [{ name: "unit" }] } },
+            intent: { authority: { run_verification: [{ name: "unit" }, { name: "lint" }] } },
           });
-          yield* collie(world, ["run", "resume", runId]);
           const finished = yield* collie(world, ["run", "wait", runId]);
           expect((yield* payloadOf(finished.envelope)).run?.status).toEqual({
             status: "complete",
-            value: "unit",
+            value: "unit,lint",
           });
           yield* stopHost(world.state);
         }),
       ["proved.workflow.ts"],
+    ),
+  240_000,
+);
+
+test(
+  "a verify.json that does not read is refused by name, never taken as nothing approved",
+  () =>
+    provesWith(
+      "collie-lifecycle-bad-verify-",
+      (world) =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          yield* fs.makeDirectory(`${world.project}/.collie`, { recursive: true });
+          yield* fs.writeFileString(`${world.project}/.collie/verify.json`, '[{"name":');
+          const started = yield* collie(world, ["run", "start", "proof", "--input", "note=x"]);
+          expect(started.envelope.ok).toBe(false);
+          expect(started.envelope.error?.message).toContain(".collie/verify.json");
+          yield* stopHost(world.state);
+        }),
+      [...MODULE],
     ),
   240_000,
 );

@@ -130,7 +130,7 @@ import { latest, readDispositions, type Disposition } from "./disposition";
 import { openFindingsIn } from "./output";
 import { isSingleRepo, planIssuesIn, planReposOf } from "./plan";
 import { SELF, inputsFor, offersFrom, type Declared, type Offer } from "./offers";
-import { isOutcome } from "./outcome";
+import { isOutcome, needsApproved, nothingApprovedToStart } from "./outcome";
 import { RequestConflict, Store, storeLayer, type Admission, type RunRow } from "./store";
 import { TASK_INPUT, checkoutFor, repositoryName, workOf } from "./worktree";
 import { Herdr, herdrFailureReason } from "./herdr";
@@ -423,6 +423,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly outcome?: OutcomeContract;
     /** A worktree the host cuts before the Run exists; absent works where it was started. */
     readonly checkout?: "branch" | "roaming";
+    /** Its gate runs the approved set, so a start with nothing approved is refused. */
+    readonly verifies?: boolean;
     readonly followUps?: ReadonlyArray<FollowUp>;
     readonly actions?: ReadonlyArray<ActionProvider>;
   }
@@ -1273,9 +1275,9 @@ const isWritten = (exported: unknown): exported is WrittenDefinition =>
 
 /** A definition as the entry the rest of the host reads. */
 const entryOf = (definition: WorkflowDefinition): WorkflowEntry => {
-  const { hints, outcome, checkout, followUps, actions } = definition;
+  const { hints, outcome, checkout, verifies, followUps, actions } = definition;
   const declared = Object.fromEntries(
-    Object.entries({ hints, outcome, checkout, followUps, actions }).filter(
+    Object.entries({ hints, outcome, checkout, verifies, followUps, actions }).filter(
       ([, value]) => value !== undefined,
     ),
   );
@@ -1668,14 +1670,18 @@ export const freezeApproved = Effect.fn("Engine.freezeApproved")(function* (opti
   readonly runId: string;
   readonly project: string;
   readonly userDir: string;
+  /** The set the start already settled; without it, the files are read here. */
+  readonly approved?: ReadonlyArray<VerifySpec>;
 }) {
   const fs = yield* FileSystem.FileSystem;
   const path = approvedPath(options.dir, options.runId);
   if (yield* fs.exists(path).pipe(Effect.orElseSucceed(() => false))) return;
-  const approved = yield* approvedFrom({
-    cwd: options.project,
-    userDir: options.userDir,
-  }).pipe(Effect.orElseSucceed((): ReadonlyArray<VerifySpec> => []));
+  const approved =
+    options.approved ??
+    (yield* approvedFrom({
+      cwd: options.project,
+      userDir: options.userDir,
+    }).pipe(Effect.orElseSucceed((): ReadonlyArray<VerifySpec> => [])));
   yield* fs.makeDirectory(evidenceDir(options.dir, options.runId), { recursive: true });
   yield* fs.writeFileString(path, encodeApproved(approved));
 });
@@ -2694,6 +2700,50 @@ const fanOutOf = Effect.fn("Engine.fanOutOf")(function* (
 });
 
 /**
+ * The approved set a start is admitted with, settled before anything exists: a Run of a
+ * workflow that verifies, whose outcome needs the set, is refused where nothing is approved
+ * — in each repository, for a plan that fans out over several.
+ */
+const refuseUnprovable = Effect.fn("Engine.refuseUnprovable")(function* (o: {
+  readonly generation: Generation;
+  readonly input: Readonly<Record<string, Schema.Json>>;
+  readonly launch: Readonly<Record<string, string>>;
+  readonly from: string;
+  readonly project: string;
+  readonly verify: ReadonlyArray<VerifySpec> | undefined;
+  readonly userDir: string;
+}) {
+  const readApproved = (cwd: string) =>
+    approvedFrom({ cwd, userDir: o.userDir }).pipe(
+      Effect.catch((cause) => refusedInput(cause.message)),
+    );
+  const approved = o.verify ?? (yield* readApproved(o.project));
+  const kind = o.launch.outcome ?? "";
+  if (!o.generation.verifies || !needsApproved(isOutcome(kind) ? kind : "unspecified"))
+    return approved;
+  const fanOut = yield* fanOutOf(o.generation, o.input, o.launch, o.from);
+  if (fanOut === null) {
+    if (approved.length === 0) return yield* refusedInput(nothingApprovedToStart());
+    return approved;
+  }
+  // Placement refuses a plan it cannot fan out, and says why.
+  if (fanOut.refusal !== null) return approved;
+  if (o.verify !== undefined)
+    return yield* refusedInput(
+      "--verify gives one repository's checks, and this plan spans repositories: each is held to its own .collie/verify.json",
+    );
+  const path = yield* Path.Path;
+  const bare: string[] = [];
+  for (const repo of fanOut.repos)
+    if ((yield* readApproved(path.join(o.from, repo.path))).length === 0) bare.push(repo.path);
+  if (bare.length > 0)
+    return yield* refusedInput(
+      `${nothingApprovedToStart()}. A plan spanning repositories is held to each one's own .collie/verify.json, and nothing is approved in ${bare.join(", ")}`,
+    );
+  return approved;
+});
+
+/**
  * A new Run's Intent, version 1: the workspace's defaults and what was named at launch
  * from the front door, what its work source asks for, and what it may verify. A Run
  * started from another inherits that one's Intent as it stands. Written once, before the
@@ -2908,6 +2958,7 @@ export interface Generation {
   readonly fixedOutcome: string | null;
   /** What it needs of the repository, which is what the host places a Run of it on. */
   readonly checkout: CheckoutKind;
+  readonly verifies: boolean;
   /** The file and the revision this was built from: what makes a later start the same code. */
   readonly source: string;
   readonly metadata: Schema.Json;
@@ -2979,6 +3030,8 @@ export interface RegistryApi {
     readonly parent?: string | null;
     /** What the front door knows of the Run's Intent. */
     readonly intent?: IntentSeed;
+    /** The approved set given with the start, over the project's and the user's files. */
+    readonly verify?: ReadonlyArray<VerifySpec> | undefined;
   }) => Effect.Effect<Admitted, HostRefused | RequestConflict, HostServices>;
   readonly status: (
     runId: string,
@@ -3229,6 +3282,7 @@ const makeRegistry: (
       fields: entry.input,
       hints: entry.metadata?.hints ?? {},
       fixedOutcome: entry.metadata?.outcome?.fixed ?? null,
+      verifies: entry.metadata?.verifies === true,
       checkout: entry.metadata?.checkout ?? "none",
       source: yield* sourceOf(route.entry),
       metadata: describeMetadata(entry.metadata),
@@ -4138,6 +4192,7 @@ const makeRegistry: (
     readonly taskLabel?: string | undefined;
     readonly parent?: string | null;
     readonly intent?: IntentSeed;
+    readonly verify?: ReadonlyArray<VerifySpec> | undefined;
   }) {
     const generation = options.generation;
     const runId =
@@ -4166,6 +4221,19 @@ const makeRegistry: (
     )({ runId, input: settled.input }).pipe(
       Effect.mapError((cause) => new HostRefused({ reason: `${REFUSED_INPUT}: ${cause.message}` })),
     );
+    // A retry of a Run already admitted is not a new start, and keeps what it froze.
+    const approved =
+      (yield* store.requested(options.request)) === null
+        ? yield* refuseUnprovable({
+            generation,
+            input: settled.input,
+            launch,
+            from: request.kind === "existing" ? request.path : options.project,
+            project: options.project,
+            verify: options.verify,
+            userDir,
+          })
+        : undefined;
     const claimed = yield* claimAndPlace({
       request: options.request,
       run: runId,
@@ -4189,6 +4257,7 @@ const makeRegistry: (
       runId: claimed.row.run,
       project: options.project,
       userDir,
+      approved,
     }).pipe(Effect.ignore);
     yield* seedIntentOf({
       dir,
@@ -4298,6 +4367,8 @@ const makeRegistry: (
       const filled = { ...inputsFor(offer, { runDir: where, facts, input }), ...options.input };
       // The offer's own workflow settles what it was given, so arguments it will not
       // take are refused here and nothing is started.
+      // Held to what its parent was, grants included, where the parent had anything.
+      const inherited = yield* approvedOf(dir, row.run);
       return yield* startWork({
         generation: starting,
         request: options.request,
@@ -4305,6 +4376,7 @@ const makeRegistry: (
         input: filled,
         task: row.task,
         parent: row.run,
+        verify: inherited.length > 0 ? inherited : undefined,
       });
     }),
 

@@ -741,7 +741,8 @@ before it starts — `renderApproved` writes it out — and `renderEvidence(host
 is what was actually collected and by whom, for a merge request to say what it proved.
 
 `requireApproved(kind)` is the same list where your Run's kind of result needs it.
-With nothing approved it parks the Run with the repair — a grant through `collie run intent
+A workflow that [declares](#what-a-definition-declares) `verifies` is never started with
+nothing approved, so this is the backstop: with nothing approved it parks the Run with the repair — a grant through `collie run intent
 verification`, then `collie run resume` — instead of paying agents for work no gate could
 accept, and a resume asks again. Call it before your first agent and again at your gate, so
 a grant withdrawn meanwhile parks the Run there rather than failing it.
@@ -834,6 +835,13 @@ export default defineWorkflow({
   from a directory that is not a git checkout is refused naming that directory, and no
   Run, worktree, workspace or agent is left behind. Absent, the Run works where it was
   started.
+- **`verifies: true`** says the workflow's gate runs the approved set. A start of it whose
+  outcome needs that set (anything but `investigation`, `plan` and `review`) and has nothing
+  approved is refused as `invalid_input`, with the repair, before any Run, worktree or Task
+  exists. The set comes from `--verify`, else the project's `.collie/verify.json`, else the
+  user's `verify.json`. A follow-up started from a card is held to its parent's set. A plan
+  spanning repositories is checked in each repository it names, against that one's own
+  `.collie/verify.json`, and `--verify` is refused for it.
 - **`followUps` and `actions`** carry an `id` that is stable and a `title` a human reads.
   Two fields, because a retitled action is the same action and a card matching on the
   title would start a different one. `workflow` is a public id or `"self"` for the one

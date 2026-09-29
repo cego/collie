@@ -8,12 +8,13 @@
 // proposal; `validate` says which of a proposal's actions the target's own authority
 // already grants and which need a human. Running them is somebody else's module.
 
-import { Clock, Data, Effect, Path, Schema, Option } from "effect";
+import { Clock, Data, Effect, Path, Schema, Option, Struct } from "effect";
 import { herdOf } from "./steering";
 import { isArray, isRecord, isString } from "./schema";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { Stream } from "effect";
 import type { Authority } from "./intent";
+import { VerifySpecSchema } from "./verify-spec";
 
 /** Where a claim points. Validated against the Run's own directories before it is stored. */
 const RefSchema = Schema.Struct({
@@ -64,6 +65,14 @@ export const ActionSchema = Schema.Union([
     base_version: Schema.Int,
   }),
   Schema.Struct({
+    kind: Schema.Literal("set_verification"),
+    run: Schema.String,
+    /** The check's name; a grant of a name already there replaces it. */
+    name: Schema.String,
+    /** What Collie runs for it; absent withdraws the check of that name. */
+    command: Schema.optionalKey(VerifySpecSchema.mapFields(Struct.omit(["name"]))),
+  }),
+  Schema.Struct({
     kind: Schema.Literal("deliver"),
     run: Schema.String,
     agent: Schema.String,
@@ -105,6 +114,8 @@ export const ActionSchema = Schema.Union([
      * worktree: what someone asking from a workspace usually means by "start it here".
      */
     here: Schema.optionalKey(Schema.Boolean),
+    /** Checks Collie may run to prove it, over the project's and the user's verify.json. */
+    verify: Schema.optionalKey(Schema.Array(VerifySpecSchema)),
   }),
   Schema.Struct({ kind: Schema.Literal("resume"), run: Schema.String }),
   Schema.Struct({ kind: Schema.Literal("followup"), run: Schema.String, text: Schema.String }),

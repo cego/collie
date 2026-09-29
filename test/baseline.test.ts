@@ -1755,7 +1755,7 @@ scenario(
 );
 
 scenario(
-  "no merge request where the evidence is not there, and the reason is what the Run says",
+  "a gate the fixes cannot satisfy still opens the merge request, and it says what is unproved",
   () =>
     runEffect(
       Effect.gen(function* () {
@@ -1763,49 +1763,44 @@ scenario(
         yield* bin.add("glab", `exit 0`);
         yield* repository();
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
-        // Approved, and it fails: an Output that says the tests pass is a claim, and the
-        // journal is what the gate reads.
+        // Approved, and it always fails: an Output that says the tests pass is a claim,
+        // and the journal is what the gate reads.
         yield* approve("r-impl-gate", ["unit"]);
         const fs = yield* FileSystem.FileSystem;
         yield* fs.writeFileString(
           `${evidenceDir(dir, "r-impl-gate")}/approved.json`,
           asApproved([{ name: "unit", executable: "false", argv: [], cwd: rig.projectDir }]),
         );
-        yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS]);
+        const fix = {
+          verdict: "clean",
+          findings: [],
+          fixed: [],
+          disputed: [],
+          checks: [{ name: "unit" }],
+        };
+        yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, fix, fix, fix, fix, OPENED]);
 
-        // Checked twice, and then asked rather than ended: the work is one step short of
-        // its merge request, and whether that step is taken is the human's call.
-        const asking = yield* parked({
+        // Nobody is asked: the fixes run by themselves, and the human reads what is left
+        // in the merge request before it lands.
+        const result = yield* ran({
           entry: shipped("implement"),
           runId: "r-impl-gate",
           input: { plan },
           options: { outcome: "feature" },
-          decision: "gate-1",
-        });
-        expect(asking.find((row) => row.decision === "gate-1")?.prompt).toContain("unit failed");
-        const result = yield* answered({
-          entry: shipped("implement"),
-          runId: "r-impl-gate",
-          input: { plan },
-          decision: "gate-1",
-          value: "Stop without a merge request",
         });
         yield* bin.restore();
 
-        expect(said(result)).toContain("no merge request");
-        expect(said(result)).toContain("unit failed");
-        // The reviewer said the scope was met, and that judgement survived being decoded:
-        // a feature Run held to it is not told it is missing when a reviewer gave it.
-        expect(said(result)).not.toContain("scope_met");
-        // Nothing was opened, so nobody was asked to open it.
-        expect(yield* prompts()).toHaveLength(2);
+        expect(said(result)).toBe(OPENED.mr_url);
+        expect(yield* asked("r-impl-gate", "gate-fix-4")).toContain("unit failed");
+        const opening = yield* asked("r-impl-gate", "mr");
+        expect(opening).toContain("- unproved after 4 gate fixes: unit failed");
       }),
     ),
   120_000,
 );
 
 scenario(
-  "a gate fix reaches the merge request as not re-reviewed",
+  "a gate fix runs without asking, and reaches the merge request as not re-reviewed",
   () =>
     runEffect(
       Effect.gen(function* () {
@@ -1813,8 +1808,7 @@ scenario(
         yield* bin.add("glab", `exit 0`);
         yield* repository();
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
-        // Fails twice before the question and passes once the fix has run: the resume to
-        // the answer replays the journaled passes rather than running the check again.
+        // Fails twice, then passes once the fix has run.
         const count = `${rig.root}/runs`;
         yield* approve("r-gate-fix", ["unit"]);
         const fs = yield* FileSystem.FileSystem;
@@ -1840,24 +1834,66 @@ scenario(
           checks: [{ name: "unit" }],
         };
         yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, fix, OPENED]);
-        yield* parked({
+        const result = yield* ran({
           entry: shipped("implement"),
           runId: "r-gate-fix",
           input: { plan },
           options: { outcome: "feature" },
-          decision: "gate-1",
-        });
-        const result = yield* answered({
-          entry: shipped("implement"),
-          runId: "r-gate-fix",
-          input: { plan },
-          decision: "gate-1",
-          value: "Hand it to the implementer",
         });
         yield* bin.restore();
 
         expect(said(result)).toBe(OPENED.mr_url);
-        expect(yield* asked("r-gate-fix", "mr")).toContain("gate fix 1");
+        const opening = yield* asked("r-gate-fix", "mr");
+        expect(opening).toContain("gate fix 1");
+        expect(opening).not.toContain("- unproved after");
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a blocking dispute nobody answers, and an assumption nobody settled, go to the merge request",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* bin.add("glab", `exit 0`);
+        yield* repository();
+        const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
+        yield* approve("r-impl-dispute", ["unit"]);
+        const finding = {
+          severity: "blocker",
+          title: "the guard is on the wrong side",
+          file: "src/a.ts",
+        };
+        yield* rig.queueOutputs([
+          // An assumption the spec did not settle travels the same way.
+          { ...BUILT, assumptions: ["callers never pass an empty list"] },
+          { ...CLEAN_SYNTHESIS, verdict: "findings", findings: [finding] },
+          {
+            verdict: "clean",
+            findings: [],
+            fixed: [],
+            disputed: [{ ...finding, reason: "the list is never empty here" }],
+            checks: [{ name: "unit" }],
+          },
+          // The next review neither raises it again nor answers the reason.
+          { ...CLEAN_SYNTHESIS },
+          OPENED,
+        ]);
+        const result = yield* ran({
+          entry: shipped("implement"),
+          runId: "r-impl-dispute",
+          input: { plan },
+        });
+        yield* bin.restore();
+
+        expect(said(result)).toBe(OPENED.mr_url);
+        const opening = yield* asked("r-impl-dispute", "mr");
+        expect(opening).toContain(
+          "- disputed blocking finding: [blocker] the guard is on the wrong side (src/a.ts): the list is never empty here",
+        );
+        expect(opening).toContain("- assumed in build: callers never pass an empty list");
       }),
     ),
   120_000,
