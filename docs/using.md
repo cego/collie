@@ -1249,6 +1249,11 @@ skips what is already in place, so re-running is cheap: an unchanged checkout is
 rebuilt. The one difference is the keybindings, which `setup.sh` writes and nothing else
 touches — if a binding you expect is missing, `setup.sh` is the one to run.
 
+Nothing already running has to be restarted by hand. The host is replaced by the first
+client of the new build, the Control Plane relaunches itself on the new binary, and the
+Home chat's Collie tools are answered by the new binary from the next call on. Only a tool
+the new build added or renamed needs the chat's `/mcp` to reconnect before it shows up.
+
 **Something is missing and you would rather not find out mid-run.** `collie doctor` checks
 every prerequisite at once — herdr and its minimum version, the plugin link, the runner and
 the shim's directory on PATH, a Node runtime, the skills and harnesses your workflows name,
