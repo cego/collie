@@ -7,6 +7,8 @@ Collie opens the tabs, runs the agents, reviews their work, and brings you back 
 decisions that are yours. One board shows every task in the session: what needs you, what
 is working, what finished.
 
+https://github.com/user-attachments/assets/2a42a576-e263-4412-bf00-2dec314f38b5
+
 ## Install
 
 Run one command. It's safe to run again, and it ends by telling you whether you're ready or
