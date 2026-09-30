@@ -28,7 +28,7 @@ import { asRun, enveloped } from "./support/enveloped";
 import { PARKED, controlPath, foundationLayer, loadEntry, pollStatus, runDir } from "../src/engine";
 import { readCards } from "../src/cards";
 import { readDrift } from "../src/drift";
-import { FixOutputSchema } from "../src/output";
+import { FixOutputSchema, SynthesisSchema } from "../src/output";
 import { seedIntent, writeIntent } from "../src/intent";
 import { appendLine, deliveriesOf, readLedger, reconcile } from "../src/steering";
 import { Store } from "../src/store";
@@ -197,7 +197,13 @@ test("a broken rule is named in the problem a repair is given, never as <filter>
     `{"verdict":"findings","findings":[{"severity":"major","title":" "}]}`,
   );
   expect(!blank.ok && blank.problem).toContain("title is required");
-  for (const read of [empty, blank]) expect(!read.ok && read.problem).not.toContain("<filter>");
+  const unexplained = decodeOutput(
+    SynthesisSchema,
+    `{"verdict":"clean","summary":"s","dropped":[{"severity":"minor","title":"t"}]}`,
+  );
+  expect(!unexplained.ok && unexplained.problem).toContain("needs a reason");
+  for (const read of [empty, blank, unexplained])
+    expect(!read.ok && read.problem).not.toContain("<filter>");
 });
 
 test("a valid Output reaches the workflow as a typed value, from a real launch", () =>
