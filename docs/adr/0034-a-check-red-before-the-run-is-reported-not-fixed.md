@@ -43,3 +43,11 @@ make it fail when it would not have, and excuse a real breakage. The merge reque
 comparison is by exit code only rather than claiming more. A promise that such a check cannot
 keep is reported in the merge request, not fixed. Comparing the failure output as well is
 the upgrade, when a hidden new failure happens in practice.
+
+While a check runs at the base, the Run's checkout is detached there, for as long as the
+check takes. A worktree a human also works in — a Task's, or one a follow-up reopened — is
+not theirs in that window: a commit made then lands on the detached HEAD and is left off the
+branch when it is checked out again, and an edit to a file that differs between the two
+makes the restore fail, which stops the Run with the checkout left at the base for the next
+verification to put back. A comparison in a separate checkout would avoid this, at the price
+of installing the project's dependencies there, which Collie does not know how to do.

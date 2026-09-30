@@ -265,7 +265,7 @@ export function evidenceGapsOf(options: {
     readonly file: string;
     readonly checks: ReadonlyArray<string>;
   }>;
-  /** Approved checks that already failed on the tree this Run started from. */
+  /** Approved checks that also failed where the branch leaves the default branch. */
   readonly preexisting?: ReadonlyArray<string>;
 }): ReadonlyArray<string> {
   return evidenceGaps(options.kind, {

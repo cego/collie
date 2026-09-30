@@ -171,6 +171,14 @@ test("a check that already failed before the Run is not a gap the Run can close"
       collected({ verifications: [record({ name: "tests" })], preexisting: new Set(["tests"]) }),
     ),
   ).toEqual([]);
+  // Only a check that still fails is excused: one the tree moved under is the Run's to settle.
+  const moved = [...failing, record({ name: "tests", result: "unstable" })];
+  expect(
+    evidenceGaps(
+      "unspecified",
+      collected({ verifications: moved, preexisting: new Set(["tests"]) }),
+    ),
+  ).toHaveLength(1);
   // A ticket's promise of the same check is the same statement, and is reported, not fixed.
   const promised = {
     verifications: failing,
