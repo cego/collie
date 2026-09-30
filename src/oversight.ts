@@ -470,9 +470,13 @@ const correctDrift = Effect.fn("Oversight.correctDrift")(function* (
 /** Delivery states nothing follows, so a correction in one is not in flight. */
 const SETTLED: ReadonlySet<string> = new Set(["verified", "failed", "superseded", "expired"]);
 
-/** The Run's own SPEC, read into its Intent before anything is judged against it. */
+/**
+ * The Run's own SPEC, read into its Intent before anything is judged against it. Only a
+ * Run on a worktree of its own builds from it; elsewhere the SPEC is its product.
+ */
 const followRunPlan = Effect.fn("Oversight.followRunPlan")(
   function* (at: Watched) {
+    if (at.worktree === null) return;
     const fs = yield* FileSystem.FileSystem;
     const text = yield* fs.readFileString(`${at.runDir}/plan/SPEC.md`);
     const found = extractRequirements(text, "plan/SPEC.md").constraints;

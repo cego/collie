@@ -228,12 +228,12 @@ export function amend(intent: Intent, change: Change, by: string, at: string): I
   };
 }
 
-/** Who an amendment from the Run's own plan is by: never a human, so never a human's removal. */
+/** Who an amendment from the Run's own plan is by; every other author's removal stands. */
 export const PLAN_AUTHOR = "plan:plan/SPEC.md";
 
 /**
  * The Intent with the Run's own plan's constraints as the plan now says them: new ones
- * added, ones the plan dropped removed. A constraint a human removed is never put back,
+ * added, ones the plan dropped removed. A constraint anyone else removed is never put back,
  * and nothing from anyone else is touched.
  */
 export function followPlan(
@@ -241,13 +241,13 @@ export function followPlan(
   found: ReadonlyArray<Omit<Constraint, "since">>,
   at: string,
 ): Intent {
-  const removedByHuman = new Set(
+  const removedByOthers = new Set(
     intent.history.filter((entry) => entry.by !== PLAN_AUTHOR).map((entry) => entry.change),
   );
   const held = new Set(intent.constraints.map((c) => c.id));
   const wanted = new Set(found.map((c) => c.id));
   const added = found
-    .filter((c) => !held.has(c.id) && !removedByHuman.has(`constraint ${c.id} removed`))
+    .filter((c) => !held.has(c.id) && !removedByOthers.has(`constraint ${c.id} removed`))
     .reduce(
       (next, constraint) =>
         next.constraints.some((c) => c.id === constraint.id)

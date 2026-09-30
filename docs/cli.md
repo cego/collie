@@ -546,11 +546,11 @@ what `--goal` and `--constraint` named — later beating earlier where they name
 constraint. For a plan directory the work source's ask is read from its `SPEC.md`: the
 bullets under a heading matching `Requirements`, `Success criteria`, `Boundaries`,
 `Constraints`, `Out of scope` or `Done when` become `warn` constraints carrying the file,
-heading and line they came from; an out-of-scope bullet reads `Out of scope: <bullet>`. A
-Run's own `plan/SPEC.md`, written by its planner, is read the same way at every work
-boundary: new bullets are added, dropped ones are removed, and a constraint a human removed
-stays removed. **No text ever grants authority** — not a plan, not the repository, not a
-prompt.
+heading and line they came from; an out-of-scope bullet reads `Out of scope: <bullet>`. In a
+Run on a worktree of its own, its `plan/SPEC.md`, written by its planner, is read the same
+way at every work boundary: new bullets are added, dropped ones are removed, and a
+constraint anyone but the plan removed stays removed. **No text ever grants authority** —
+not a plan, not the repository, not a prompt.
 
 `--severity` pairs with the `--constraint` in the same position; a constraint given
 without one is `warn`. A `block` constraint stops work; a `warn` one is reported.

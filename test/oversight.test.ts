@@ -24,6 +24,7 @@ import { herdOf } from "../src/steering";
 import { readVerifications } from "../src/verify";
 import { VerifySpecSchema } from "../src/verify-spec";
 import {
+  amend,
   readIntent,
   seedIntent,
   writeIntent,
@@ -157,7 +158,7 @@ test("a Run whose own plan moved its Intent still has a slice to try", () =>
         `${runDir(dir, "r1")}/plan/SPEC.md`,
         "## Done when\n\n- it works\n",
       );
-      yield* checkDrift(watchedAt("r1"), "build collected", "none", null, null);
+      yield* checkDrift(watchedAt("r1", false, dir), "build collected", "none", null, null);
       yield* session(
         Effect.gen(function* () {
           yield* fs.writeFileString(`${dir}/thing.ts`, "export const one = 1;\n");
@@ -172,6 +173,32 @@ test("a Run whose own plan moved its Intent still has a slice to try", () =>
       expect(cards.map((card) => `${card.readiness}/${card.significance}`)).toEqual([
         "inspect-ready/try-it",
       ]);
+    }),
+  ));
+
+test("a Run whose Intent a human moved says so on its card", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      Bun.spawnSync(["git", "init", "-q"], { cwd: dir });
+      yield* intended("r1", []);
+      const intent = (yield* readIntent(runDir(dir, "r1")))!;
+      yield* writeIntent(
+        runDir(dir, "r1"),
+        amend(intent, { kind: "set-goal", goal: "ship it" }, "human:req-1", "t"),
+      );
+      yield* session(
+        Effect.gen(function* () {
+          yield* fs.writeFileString(`${dir}/thing.ts`, "export const one = 1;\n");
+          yield* (yield* Oversight).card("r1", {
+            kind: "slice",
+            step: "build",
+            claims: ["built it"],
+          });
+        }),
+      );
+      const cards = yield* cardsOf("r1");
+      expect(cards.map((card) => card.significance)).toEqual(["consequential"]);
     }),
   ));
 
@@ -318,14 +345,14 @@ const SRC_ONLY: Constraint = {
 };
 
 /** The Run as the host would describe it, working in the host's own directory. */
-const watchedAt = (runId: string, held = false): Watched => ({
+const watchedAt = (runId: string, held = false, worktree: string | null = null): Watched => ({
   runId,
   stateDir: dir,
   runDir: runDir(dir, runId),
   evidenceDir: `${dir}/evidence/${runId}`,
   agentsDir: `${dir}/agents/${runId}`,
   cwd: dir,
-  worktree: null,
+  worktree,
   mr: null,
   asking: false,
   held,
@@ -376,12 +403,27 @@ test("a Run's own SPEC reaches its Intent at the next drift check", () =>
         `${runDir(dir, "r1")}/plan/SPEC.md`,
         "# Spec\n\n## Out of scope\n\n- Rewriting the scheduler\n",
       );
-      yield* checkDrift(watchedAt("r1"), "build collected", "none", null, null);
+      yield* checkDrift(watchedAt("r1", false, dir), "build collected", "none", null, null);
       const after = yield* readIntent(runDir(dir, "r1"));
       expect(after!.constraints).toHaveLength(1);
       expect(after!.constraints[0]!.source).toBe("plan");
       expect(after!.constraints[0]!.provenance?.file).toBe("plan/SPEC.md");
       expect(after!.authority).toEqual(before!.authority);
+    }),
+  ));
+
+test("a Run with no worktree of its own is not bounded by the SPEC it writes for another", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* intended("r1", []);
+      yield* fs.makeDirectory(`${runDir(dir, "r1")}/plan`, { recursive: true });
+      yield* fs.writeFileString(
+        `${runDir(dir, "r1")}/plan/SPEC.md`,
+        "## Done when\n\n- it works\n",
+      );
+      yield* checkDrift(watchedAt("r1"), "spec collected", "none", null, null);
+      expect((yield* readIntent(runDir(dir, "r1")))!.version).toBe(1);
     }),
   ));
 

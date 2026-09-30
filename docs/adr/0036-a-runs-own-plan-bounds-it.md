@@ -31,8 +31,11 @@ headings keep their bullet text, so no existing constraint id changes.
 Intent, it reads `<runDir>/plan/SPEC.md` and, under the Run directory's lock, amends the
 Intent to match: constraints the plan now has are added, and constraints from
 `plan/SPEC.md` it no longer has are removed. Each amendment is by `plan:plan/SPEC.md`.
+Only a Run on a worktree of its own (a workflow declaring `checkout`) does this: it builds
+from its SPEC. A plan or architecture Run works in the checkout it was started for, and
+its SPEC is the product it writes for a later Run, not a bound on its own work.
 
-**D3. A human's removal stands.** A constraint whose removal the history records by anyone
+**D3. Anyone else's removal stands.** A constraint whose removal the history records by anyone
 other than the plan is never put back. Nothing with another source, or from a plan
 directory's `SPEC.md`, is touched, and authority is never read from text.
 
@@ -43,5 +46,6 @@ directory's `SPEC.md`, is touched, and authority is never read from text.
 - More semantic judgements: each work boundary with a semantic constraint is one model
   call. That is usage and is recorded, never a quota.
 - The Intent is no longer amended only by a human. A planner that keeps rewriting its SPEC
-  bumps the version, and every bump makes earlier drift reports stale.
+  bumps the version. An open drift report found again at the new version is moved to it,
+  so its correction and escalation carry on.
 - If planners start writing other headings, they are added only when a real SPEC uses them.
