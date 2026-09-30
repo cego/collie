@@ -11,5 +11,6 @@ export default defineWorkflow({
   title: "A workflow that does not typecheck",
   description: "Its note is a number where a string belongs.",
   input: Schema.Struct({ note: Schema.String }),
+  hints: { note: "goal" },
   run: () => Effect.log(note),
 });

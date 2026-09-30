@@ -543,6 +543,9 @@ where the module loads, as the shipped ones are, it is checked by every load of 
 so `collie workflow check` and `collie doctor` report it against the workflow it is in. A
 section the file does not have is refused the same way, never sent empty.
 
+A name under `inputs.` whose value is the empty string renders as `not given`, so an Input
+the Run was not given is said rather than left as a blank the agent has to interpret.
+
 ## Waiting for a human
 
 `ask({ name, prompt, options })` asks a human and waits for the answer. It is asked when the
@@ -823,8 +826,9 @@ export default defineWorkflow({
 - **`agents`** is what the workflow's own work prefers, under anything a Run or a scope
   prefers: [which agent does the work](#which-agent-does-the-work).
 
-- **`hints`** attach inference to a field. `work-source`, `diff-target` and
-  `gitlab-repository` are exclusive: one field each, so renaming `plan` to `spec` changes
+- **`hints`** attach inference to a field. `goal`, `work-source`, `diff-target` and
+  `gitlab-repository` are the launch strategies, and a module with inputs hints exactly one
+  field with one of them ([one launch Input](authoring.md#writing-one)). They are exclusive: one field each, so renaming `plan` to `spec` changes
   nothing about how it is inferred, what it names a branch after, which label its Run is
   listed under, or which previous review it is given.
 - **`outcome`** is `fixed` or `selectable`, never both. `selectable` offers only the kinds

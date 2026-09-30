@@ -2,7 +2,6 @@ The goal, in my words:
 
 {{inputs.goal}}
 
-Ticket (may be empty): {{inputs.ticket}}
 Project root: {{cwd}}
 This run's plan directory: {{run.dir}}/plan
 This run's id: {{run.id}}

@@ -14,6 +14,7 @@ export default defineWorkflow({
     /** What this repository's share of the plan is. Settled by the parent, decided here. */
     tickets: Schema.NonEmptyArray(Schema.String),
   }),
+  hints: { plan: "goal" },
   output: Schema.String,
   run: ({ input }) =>
     Effect.gen(function* () {

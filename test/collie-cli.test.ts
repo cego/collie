@@ -260,6 +260,51 @@ test("discovery is global when an inherited workspace id no longer resolves", ()
     }),
   ));
 
+test(
+  "plan takes a goal and no ticket, and architecture needs a goal",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const inputsOf = (stdout: string) =>
+          Schema.decodeUnknownSync(ShownModule)(stdout).data.workflow.inputs.map((one) => [
+            one.name,
+            one.strategy,
+          ]);
+        expect(inputsOf((yield* cli(["--json", "workflow", "show", "plan"])).stdout)).toEqual([
+          ["goal", "goal"],
+        ]);
+        expect(
+          inputsOf((yield* cli(["--json", "workflow", "show", "architecture"])).stdout),
+        ).toEqual([["goal", "goal"]]);
+
+        const ticket = yield* cli([
+          "--json",
+          "run",
+          "start",
+          "plan",
+          "--input",
+          "goal=one registry",
+          "--input",
+          "ticket=ENG-1",
+        ]);
+        expect(yield* parseEnvelope(ticket.stdout)).toMatchObject({
+          ok: false,
+          error: {
+            code: "invalid_input",
+            message: expect.stringContaining('"ticket" is not an input'),
+          },
+        });
+
+        const bare = yield* cli(["--json", "run", "start", "architecture"]);
+        expect(yield* parseEnvelope(bare.stdout)).toMatchObject({
+          ok: false,
+          error: { code: "needs_input", details: { inputs: [{ name: "goal" }] } },
+        });
+      }),
+    ),
+  60_000,
+);
+
 test("the names the host settles are published beside the ones a module declares", () =>
   runEffect(
     Effect.gen(function* () {

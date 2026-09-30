@@ -33,6 +33,7 @@ const registration = (): Registration => {
   throw new Error("checkEntry does not construct a registration");
 };
 
+/** A module with one launch Input, unless a test says otherwise. */
 const entry = (over: Partial<WorkflowEntry>): WorkflowEntry => ({
   id: "echo",
   title: "Echo",
@@ -40,6 +41,7 @@ const entry = (over: Partial<WorkflowEntry>): WorkflowEntry => ({
   input: { text: Schema.String },
   make: registration,
   ...over,
+  metadata: { hints: { text: "goal" }, ...over.metadata },
 });
 
 test("a module that says nothing wrong is registered", () => {
@@ -75,15 +77,39 @@ test("only one input may claim each strategy inference reads", () => {
   expect(
     checkEntry(
       entry({
-        input: { here: Schema.String, there: Schema.String },
-        metadata: { hints: { here: "optional", there: "optional" } },
+        input: { text: Schema.String, here: Schema.String, there: Schema.String },
+        metadata: { hints: { text: "goal", here: "optional", there: "optional" } },
       }),
     ),
   ).toEqual([]);
 });
 
+test("a module with inputs names exactly one launch Input, and one with none names none", () => {
+  expect(checkEntry(entry({ input: { text: Schema.String }, metadata: { hints: {} } }))).toEqual([
+    'no input is the launch Input: hint one of "text" as goal, work-source, diff-target or gitlab-repository',
+  ]);
+  expect(
+    checkEntry(
+      entry({
+        input: { goal: Schema.String, target: Schema.String },
+        metadata: { hints: { goal: "goal", target: "diff-target" } },
+      }),
+    ),
+  ).toEqual(['"goal" and "target" are both launch Inputs; a workflow has one']);
+  // Two goals are the exclusive clash every launch strategy has.
+  expect(
+    checkEntry(
+      entry({
+        input: { goal: Schema.String, aim: Schema.String },
+        metadata: { hints: { goal: "goal", aim: "goal" } },
+      }),
+    ),
+  ).toEqual(['"aim" and "goal" both claim goal']);
+  expect(checkEntry(entry({ input: {}, metadata: { hints: {} } }))).toEqual([]);
+});
+
 test("a hint names an input this workflow takes, and a strategy that exists", () => {
-  expect(checkEntry(entry({ metadata: { hints: { nope: "optional" } } }))).toEqual([
+  expect(checkEntry(entry({ metadata: { hints: { text: "goal", nope: "optional" } } }))).toEqual([
     'hint for "nope", which is not an input',
   ]);
   expect(checkEntry(entry({ metadata: { hints: { text: "telepathy" } } })).join("\n")).toContain(

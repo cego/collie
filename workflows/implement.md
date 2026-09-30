@@ -1,9 +1,9 @@
 Work source ({{inputs.plan_kind}}): {{inputs.plan}}
-Repository (may be empty): {{inputs.repo}}
+Repository: {{inputs.repo}}
 Project root: {{cwd}}
 This run's directory: {{run.dir}}
 
-Outcome to prove (empty means unclassified): {{inputs.outcome}}
+Outcome to prove (not given means unclassified): {{inputs.outcome}}
 
 The verifications this run is held to — Collie runs exactly these itself, and nothing
 else it may be told to run, before it will open the merge request:
@@ -107,7 +107,7 @@ claims, and Collie labels them as such.
 ### What this run has to prove
 
 `{{inputs.outcome}}` above decides what closes this run. Do the one that matches and
-ignore the others; an empty outcome means only the approved verifications have to pass.
+ignore the others; an outcome not given means only the approved verifications have to pass.
 
 - **feature** — every ticket you were given is built and named in `tickets_done`, and the
   review has to be able to say the agreed scope was met.

@@ -6,6 +6,7 @@ export default defineWorkflow({
   title: "Roam a repository's branches",
   description: "Works in the one checkout the host cut for this repository.",
   input: Schema.Struct({ work: Schema.String }),
+  hints: { work: "goal" },
   output: Schema.String,
   checkout: "roaming",
   run: () =>

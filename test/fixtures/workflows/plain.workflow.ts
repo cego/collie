@@ -9,6 +9,7 @@ export default defineWorkflow({
   title: "A workflow that just finishes",
   description: "Records one line and completes.",
   input: Schema.Struct({ note: Schema.String }),
+  hints: { note: "goal" },
   output: Schema.String,
   run: ({ input }) =>
     Effect.gen(function* () {

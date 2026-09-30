@@ -371,7 +371,7 @@ everything you need to fill the gaps and retry:
     "message": "plan needs input.",
     "details": {
       "inputs": [{ "name": "goal", "candidates": [], "question": "What is the goal?" }],
-      "schema": { "goal": "goal", "ticket": "ticket" },
+      "schema": { "goal": "goal" },
       "requestId": "33c306ee-…"
     }
   }

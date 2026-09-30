@@ -1012,7 +1012,7 @@ const CHAINS: ReadonlyArray<{
   {
     name: "architecture",
     outputs: [REPORT],
-    text: {},
+    text: { goal: "why are there two registries" },
     decision: "next",
   },
   {

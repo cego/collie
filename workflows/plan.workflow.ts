@@ -34,7 +34,7 @@ const text = Schema.String;
 
 /** What every planning prompt is told: what to plan, and where this Run keeps its work. */
 const planning = {
-  inputs: Schema.Struct({ goal: text, ticket: text }),
+  inputs: Schema.Struct({ goal: text }),
   run: Schema.Struct({ dir: text, id: text }),
 };
 
@@ -123,10 +123,7 @@ export default defineWorkflow({
   title: "plan — turn a goal into a spec and tickets",
   description:
     "Uses the goal and repository context to write a spec and tickets, asking only for missing decisions.",
-  input: Schema.Struct({
-    goal: Schema.String,
-    ticket: Schema.optionalKey(Schema.String),
-  }),
+  input: Schema.Struct({ goal: Schema.String }),
   output: Schema.String,
   // The planner's own, which a Run's --model or a scope around it can still change, and a
   // second opinion's: another model than the one that wrote the plan.
@@ -136,7 +133,7 @@ export default defineWorkflow({
     effort: "high",
     roles: { reviewer: { harness: "claude", model: "opus", effort: "xhigh" } },
   },
-  hints: { goal: "goal", ticket: "ticket" },
+  hints: { goal: "goal" },
   // A plan proves it wrote tickets; nobody chooses that, so it is fixed rather than asked.
   outcome: { fixed: "plan" },
   // What a finished plan offers: the tickets it wrote, built by the workflow that builds.
@@ -156,7 +153,7 @@ export default defineWorkflow({
       const run = yield* Run;
       const place = yield* host.place(run.id);
       const input = {
-        inputs: { goal: asked.goal, ticket: asked.ticket ?? "" },
+        inputs: { goal: asked.goal },
         run: { dir: place.dir, id: run.id },
       };
       const planDir = `${place.dir}/plan`;
@@ -237,7 +234,7 @@ export default defineWorkflow({
           const child = yield* children.start({
             invocation: building ? "implement" : "architecture",
             workflow: building ? "implement" : "architecture",
-            input: building ? { plan: planDir } : {},
+            input: building ? { plan: planDir } : { goal: asked.goal },
             // What kind of result this is, and what it is called: settled during the
             // interview rather than asked for again at the start of the build.
             options: launch({

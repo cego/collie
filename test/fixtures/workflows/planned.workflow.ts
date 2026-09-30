@@ -8,6 +8,7 @@ export default defineWorkflow({
   title: "Leave a plan",
   description: "Its tickets are for another workflow to build.",
   input: Schema.Struct({ goal: Schema.String }),
+  hints: { goal: "goal" },
   output: Schema.String,
   followUps: [
     {

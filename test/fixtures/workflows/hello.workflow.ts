@@ -5,6 +5,7 @@ export default defineWorkflow({
   id: "hello",
   title: "Say hello",
   input: Schema.Struct({ name: Schema.String }),
+  hints: { name: "goal" },
   output: Schema.String,
   run: ({ input }) =>
     Effect.gen(function* () {

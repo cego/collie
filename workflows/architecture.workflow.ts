@@ -18,14 +18,17 @@ import {
 import { Effect, Schema } from "effect";
 import markdown from "./architecture.md" with { type: "text" };
 
-// It takes nothing: the project to look at is the checkout this Run was started for. No
-// outcome is declared either: what building this report would prove is what the report
+// It takes the goal it is asked about; the project to look at is where the Run is rooted. No
+// outcome is declared: what building this report would prove is what the report
 // itself says — usually a refactor, a feature where we agreed to build something that is
 // not there yet — so it is the architect's own answer below rather than a kind fixed here.
 
 const content = contentOf(markdown);
 /** What the architect is asked; the report goes in this Run's own directory. */
-const attended = content.template("attended", { run: Schema.Struct({ dir: Schema.String }) });
+const attended = content.template("attended", {
+  inputs: Schema.Struct({ goal: Schema.String }),
+  run: Schema.Struct({ dir: Schema.String }),
+});
 
 /** What the architect is held to: the report, what it applied, and what it left. */
 const Report = Schema.Struct({
@@ -62,10 +65,12 @@ export default defineWorkflow({
   title: "architecture — look at what is there, then improve it",
   description:
     "Runs the architecture skill over this project, writes a report into the run dir, then asks what next.",
+  input: Schema.Struct({ goal: Schema.String }),
+  hints: { goal: "goal" },
   output: Schema.String,
   // Design, like planning: the planner's model and effort.
   agents: { harness: "claude", model: "fable", effort: "high" },
-  run: () =>
+  run: ({ input: asked }) =>
     Effect.gen(function* () {
       const host = yield* Host;
       const run = yield* Run;
@@ -75,7 +80,7 @@ export default defineWorkflow({
         role: "architect",
         skill: "improve-codebase-architecture",
         instructions: attended,
-        input: { run: { dir: place.dir } },
+        input: { inputs: { goal: asked.goal }, run: { dir: place.dir } },
         output: Report,
       });
       const next = yield* ask({ name: "next", prompt: "What next?", options: [IMPLEMENT, STOP] });

@@ -165,25 +165,6 @@ test("no glab and no git leaves nothing to infer, so the human types it", () =>
     }),
   ));
 
-test("ticket comes from the branch name and is optional", () =>
-  runEffect(
-    Effect.gen(function* () {
-      yield* bin.add("git", `echo feature/ABC-123-add-picker`);
-      expect(yield* inferInput("ticket", "ticket", ctx())).toMatchObject({
-        value: "ABC-123",
-        source: "branch feature/ABC-123-add-picker",
-        needsAsking: false,
-      });
-
-      yield* bin.add("git", `echo add-picker`);
-      expect(yield* inferInput("ticket", "ticket", ctx())).toMatchObject({
-        value: "",
-        source: "none",
-        needsAsking: false,
-      });
-    }),
-  ));
-
 test("goal is always asked and a flag always defaults to false", () =>
   runEffect(
     Effect.gen(function* () {

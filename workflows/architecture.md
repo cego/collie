@@ -1,3 +1,7 @@
+The goal, in my words:
+
+{{inputs.goal}}
+
 Project root: {{cwd}}
 Report: {{run.dir}}/plan/ARCHITECTURE.md
 

@@ -52,6 +52,9 @@ export function malformedIn(text: string): string[] {
   return [...text.replace(SKILL, "").replace(EXPRESSION, "").matchAll(BRACES)].map(([all]) => all);
 }
 
+/** An Input the Run was not given, said rather than left blank. */
+const NOT_GIVEN = "not given";
+
 export function renderTemplate(text: string, input: YamlMap, opts: RenderOptions = {}): Rendered {
   const missing: string[] = [];
   // Skills first, so `{{skill:x}}` is never mistaken for missing input.
@@ -64,6 +67,7 @@ export function renderTemplate(text: string, input: YamlMap, opts: RenderOptions
       if (!missing.includes(path)) missing.push(path);
       return "";
     }
+    if (value === "" && path.startsWith("inputs.")) return NOT_GIVEN;
     return isText(value) ? value : JSON.stringify(value, null, 2);
   });
   return { text: out, missing };

@@ -24,7 +24,7 @@ import * as DurableDeferred from "effect/unstable/workflow/DurableDeferred";
 import * as Workflow from "effect/unstable/workflow/Workflow";
 import type { Agents } from "./agents";
 import { bodySections, INPUT_STRATEGIES, type InputStrategy } from "./definitions";
-import { exclusiveClashes } from "./strategies";
+import { exclusiveClashes, launchInputProblem } from "./strategies";
 import { expressionsIn, malformedIn } from "./template";
 import {
   KINDS,
@@ -957,6 +957,8 @@ function hintProblems(
     }
   }
   problems.push(...exclusiveClashes(hints));
+  const launch = launchInputProblem([...fields], hints);
+  if (launch !== null) problems.push(launch);
   return problems;
 }
 

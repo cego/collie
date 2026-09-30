@@ -1,6 +1,6 @@
-Repository checkout or GitLab URL (empty means the workspace this run started from): {{inputs.repository}}
-Linear team (empty means `{{config.linear.team}}`): {{inputs.team}}
-Linear Renovate issue (empty means find it): {{inputs.issue}}
+Repository checkout or GitLab URL (not given means the workspace this run started from): {{inputs.repository}}
+Linear team (not given means `{{config.linear.team}}`): {{inputs.team}}
+Linear Renovate issue (not given means find it): {{inputs.issue}}
 This run's checkout: {{cwd}}
 This run's directory: {{run.dir}}
 

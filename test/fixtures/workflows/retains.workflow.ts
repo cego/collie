@@ -6,6 +6,7 @@ export default defineWorkflow({
   title: "Fail partway through shared work",
   description: "Fails where its note says, and offers what a retained claim needs.",
   input: Schema.Struct({ note: Schema.String }),
+  hints: { note: "goal" },
   output: Schema.String,
   followUps: [
     {
