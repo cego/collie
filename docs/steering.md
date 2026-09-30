@@ -239,8 +239,8 @@ verifications.
 **Significance** decides whether this is worth interrupting somebody, by rules over facts:
 `decision` when something is waiting for the human (a Choice, unresolved drift, a pending
 proposal, an unacknowledged correction), `consequential` when something happened they
-should know about (blocking drift, a correction sent, the Intent moved, the run failed or
-stopped), `try-it` when there is something to look at or a merge request moved, and
+should know about (blocking drift, a correction sent, a human moved the Intent, the run
+failed or stopped), `try-it` when there is something to look at or a merge request moved, and
 `routine` otherwise. A `decision` outranks a `consequential` because a decision is the
 human being _waited on_.
 

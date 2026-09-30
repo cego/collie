@@ -146,6 +146,35 @@ test("a card a human could go and try says so, and a routine one does not", () =
     }),
   ));
 
+test("a Run whose own plan moved its Intent still has a slice to try", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      Bun.spawnSync(["git", "init", "-q"], { cwd: dir });
+      yield* intended("r1", []);
+      yield* fs.makeDirectory(`${runDir(dir, "r1")}/plan`, { recursive: true });
+      yield* fs.writeFileString(
+        `${runDir(dir, "r1")}/plan/SPEC.md`,
+        "## Done when\n\n- it works\n",
+      );
+      yield* checkDrift(watchedAt("r1"), "build collected", "none", null, null);
+      yield* session(
+        Effect.gen(function* () {
+          yield* fs.writeFileString(`${dir}/thing.ts`, "export const one = 1;\n");
+          yield* (yield* Oversight).card("r1", {
+            kind: "slice",
+            step: "build",
+            claims: ["built it"],
+          });
+        }),
+      );
+      const cards = yield* cardsOf("r1");
+      expect(cards.map((card) => `${card.readiness}/${card.significance}`)).toEqual([
+        "inspect-ready/try-it",
+      ]);
+    }),
+  ));
+
 test("a ticket an agent says it finished is carded once, with its own words as claims", () =>
   runEffect(
     Effect.gen(function* () {

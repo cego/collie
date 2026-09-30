@@ -259,9 +259,13 @@ const fromOwnPlan = (text: string) => ({
 
 test("following the plan adds and removes only its own constraints", () => {
   const human = { ...fromOwnPlan("h"), source: "human" as const, provenance: undefined };
-  const intent = seedIntent("r1", { constraints: [human, fromOwnPlan("A")] });
+  const planDir = {
+    ...fromOwnPlan("d"),
+    provenance: { file: "SPEC.md", heading: "Done when", line: 3 },
+  };
+  const intent = seedIntent("r1", { constraints: [human, planDir, fromOwnPlan("A")] });
   const next = followPlan(intent, [fromOwnPlan("B")], "2026-09-30T00:00:00Z");
-  expect(next.constraints.map((c) => c.id).toSorted()).toEqual(["B", "h"]);
+  expect(next.constraints.map((c) => c.id).toSorted()).toEqual(["B", "d", "h"]);
   expect(next.version).toBe(intent.version + 2);
   expect(next.history.slice(-2).map((entry) => entry.by)).toEqual([PLAN_AUTHOR, PLAN_AUTHOR]);
   expect(next.authority).toEqual(intent.authority);
@@ -276,6 +280,12 @@ test("a constraint a human removed is never brought back by the plan", () => {
     "2026-09-30T00:00:00Z",
   );
   expect(followPlan(intent, [fromOwnPlan("A")], "2026-09-30T00:01:00Z")).toBe(intent);
+});
+
+test("a bullet the plan repeats is one amendment", () => {
+  const intent = seedIntent("r1", {});
+  const next = followPlan(intent, [fromOwnPlan("A"), fromOwnPlan("A")], "2026-09-30T00:00:00Z");
+  expect(next.version).toBe(intent.version + 1);
 });
 
 test("following an unchanged plan changes nothing", () => {

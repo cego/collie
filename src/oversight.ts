@@ -38,6 +38,7 @@ import {
 import {
   extractRequirements,
   followPlan,
+  PLAN_AUTHOR,
   readIntent,
   writeIntentHeld,
   type Intent,
@@ -198,7 +199,7 @@ export const writeCard = Effect.fn("Oversight.writeCard")(function* (
       correctionUnacknowledged: open.some((report) => report.resolution === "correction_submitted"),
       blockingDrift: open.some((report) => report.severity === "block"),
       correctionSent: open.some((report) => report.correction !== undefined),
-      intentChanged: (intent?.version ?? 1) > 1,
+      intentChanged: intent?.history.some((entry) => entry.by !== PLAN_AUTHOR) ?? false,
       ended: null,
     },
     narrative: null,

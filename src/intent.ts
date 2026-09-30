@@ -249,7 +249,10 @@ export function followPlan(
   const added = found
     .filter((c) => !held.has(c.id) && !removedByHuman.has(`constraint ${c.id} removed`))
     .reduce(
-      (next, constraint) => amend(next, { kind: "add-constraint", constraint }, PLAN_AUTHOR, at),
+      (next, constraint) =>
+        next.constraints.some((c) => c.id === constraint.id)
+          ? next
+          : amend(next, { kind: "add-constraint", constraint }, PLAN_AUTHOR, at),
       intent,
     );
   return intent.constraints
