@@ -1989,6 +1989,73 @@ scenario(
   120_000,
 );
 
+scenario(
+  "a dispute from an early round still reaches the merge request when the last fix holds",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* bin.add("glab", `exit 0`);
+        yield* repository();
+        const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
+        yield* approve("r-early-dispute", ["unit"]);
+        yield* collect(evidenceDir(dir, "r-early-dispute"), {
+          run: "r-early-dispute",
+          name: "unit",
+          executable: "true",
+          argv: [],
+          cwd: rig.projectDir,
+          by: "agent",
+        }).pipe(Effect.orDie);
+        const blocker = (title: string) => ({
+          severity: "blocker",
+          title,
+          file: "src/a.ts",
+          detail: "it breaks",
+        });
+        const review = (title: string) => ({
+          ...CLEAN_SYNTHESIS,
+          verdict: "findings",
+          findings: [blocker(title)],
+        });
+        const fixes = (title: string) => ({
+          verdict: "clean",
+          fixed: [{ title, file: "src/a.ts" }],
+          checks: [{ name: "unit" }],
+        });
+        yield* rig.queueOutputs([
+          BUILT,
+          { ...CLEAN_SYNTHESIS, verdict: "findings", findings: [blocker("X"), blocker("one")] },
+          {
+            verdict: "clean",
+            fixed: [{ title: "one", file: "src/a.ts" }],
+            disputed: [{ ...blocker("X"), reason: "X is by design" }],
+            checks: [{ name: "unit" }],
+          },
+          review("two"),
+          fixes("two"),
+          review("three"),
+          fixes("three"),
+          review("four"),
+          fixes("four"),
+          OPENED,
+        ]);
+        const result = yield* ran({
+          entry: shipped("implement"),
+          runId: "r-early-dispute",
+          input: { plan },
+        });
+        yield* bin.restore();
+
+        expect(said(result)).toBe(OPENED.mr_url);
+        expect(yield* asked("r-early-dispute", "mr")).toContain(
+          "- disputed blocking finding: [blocker] X (src/a.ts): X is by design",
+        );
+      }),
+    ),
+  120_000,
+);
+
 /** A Run of a shipped module that stops by itself, waited on until it has. */
 const stalled = (options: {
   readonly entry: string;
