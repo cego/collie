@@ -170,8 +170,9 @@ export interface AgentsApi {
   readonly skills: (names: ReadonlyArray<string>) => Effect.Effect<ReadonlyMap<string, string>>;
   /**
    * What an agent is told about asking for a decision its work does not cover: the pane
-   * of whoever is live in that role, and otherwise to stop and ask the human. A role, not
-   * a bare route: who may be asked is the workflow's own declaration.
+   * of whoever is live in that role, and otherwise to decide and record it under
+   * `assumptions` in its Output. A role, not a bare route: who may be asked is the
+   * workflow's own declaration.
    */
   readonly askRoute: (role: string, cwd: string) => Effect.Effect<string>;
   /** How often anything here looks again, which a workflow's own watch for a stop shares. */

@@ -581,7 +581,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     ) => Effect.Effect<ReadonlyMap<string, string>>;
     /**
      * What an agent is told about asking for a decision its work does not cover: the
-     * pane of whoever is live in that role, and otherwise to stop and ask the human.
+     * pane of whoever is live in that role, and otherwise to decide and record it under
+     * \`assumptions\` in its Output, which that Output's schema has to have.
      */
     readonly askRoute: (role: string, cwd: string) => Effect.Effect<string>;
     readonly launch: (ask: AgentAsk) => Effect.Effect<Launched, AgentUncertain | AgentParked>;
