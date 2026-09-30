@@ -859,6 +859,9 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
     `${dirFor(runId)}/${operation}${LAUNCH_SUFFIX}`;
   const outputFor = (runId: string, operation: string) => `${dirFor(runId)}/${operation}.json`;
   const launchOrder = (runId: string) => `${dirFor(runId)}/launches`;
+  /** What went out as a step's prompt or its repair, kept so a resend is the same words. */
+  const sentPath = (about: Launched, kind: "step" | "repair") =>
+    `${dirFor(about.runId)}/${about.operation}.${kind}.md`;
   const log = (runId: string, line: string) => append(`${dirFor(runId)}/agents.log`, line);
 
   /**
@@ -1209,11 +1212,9 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
         // A skill marked `disable-model-invocation` refuses an agent that invokes it
         // itself; this is the human's channel, so a slash command here runs.
         const started = ask.skill === null ? "" : `${adapter.skillCommand(ask.skill)} `;
-        const asked = yield* deliver(
-          launched,
-          `${started}Your task for this step is in ${file} — read it and follow it.`,
-          { kind: "step", ref: ask.operation },
-        );
+        const pointer = `${started}Your task for this step is in ${file} — read it and follow it.`;
+        yield* write(sentPath(launched, "step"), pointer);
+        const asked = yield* deliver(launched, pointer, { kind: "step", ref: ask.operation });
         if (asked.refused) {
           return yield* refusedWith(ask, `${agent} was not given its work (${asked.why})`, file);
         }
@@ -1236,16 +1237,37 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
     );
 
   /**
-   * A step's prompt or repair herdr could not see taken, checked while its Output is
-   * awaited: taken, finished with one Enter, or raised to a human. Never silent.
+   * The step's prompt, or the repair when `unless` is set, that herdr could not see taken,
+   * checked while its Output is awaited: taken, finished with one Enter, or raised to a
+   * human. Never silent. One a human settled as not sent goes out once more first.
    */
-  const confirmed = (launched: Launched) =>
+  const confirmed = (launched: Launched, unless: string | null) =>
     Effect.gen(function* () {
       const found = yield* entryFor(launched, launched.agent, null);
       if (found.entry === null) return;
       const dir = yield* controlDir(host.env.stateDir, launched.agent);
-      const about = (kind: "step" | "repair") =>
-        causalKey(launched.runId, { kind, ref: launched.operation }, 0);
+      const kind = unless === null ? "step" : "repair";
+      const key = causalKey(launched.runId, { kind, ref: launched.operation }, 0);
+      const last = (yield* deliveriesOf(host.env.stateDir, launched.runId))
+        .filter(({ delivery }) => delivery.causal_key === key)
+        .at(-1)?.delivery;
+      if (last?.note?.startsWith("reconciled as not-sent") === true) {
+        const fs = yield* FileSystem.FileSystem;
+        const again = yield* fs.readFileString(sentPath(launched, kind)).pipe(
+          Effect.flatMap((text) =>
+            deliver(launched, text, { kind, ref: launched.operation, attempt: last.attempt + 1 }),
+          ),
+          Effect.orElseSucceed(() => ({ sent: false, why: "what was sent is not on file" })),
+        );
+        if (!again.sent) {
+          return yield* new dispatch.Unconfirmed({
+            agent: launched.agent,
+            pane: found.entry.paneId,
+            delivery: last.id,
+            why: `sending it again failed (${again.why})`,
+          });
+        }
+      }
       yield* dispatch.confirmSubmitted(
         {
           stateDir: host.env.stateDir,
@@ -1260,7 +1282,7 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
           graceMs: host.confirmGraceMs ?? CONFIRM_GRACE_MS,
         },
         found.entry,
-        [about("step"), about("repair")],
+        [key],
       );
     }).pipe(
       Effect.catchIf(
@@ -1275,7 +1297,7 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
         Effect.fail(
           new AgentParked({
             operation: launched.operation,
-            reason: `${unconfirmed.agent} in pane ${unconfirmed.pane} was sent delivery ${unconfirmed.delivery}, and nothing shows it took it: ${unconfirmed.why}. Look at the pane. If the prompt is there, press Enter; if the agent has it, let it finish; otherwise settle it with \`collie run deliveries ${launched.runId} --reconcile ${unconfirmed.delivery} --as sent|not-sent\`. Then \`collie run resume ${launched.runId}\`.`,
+            reason: `${unconfirmed.agent} in pane ${unconfirmed.pane} was sent delivery ${unconfirmed.delivery}, and nothing shows it took it: ${unconfirmed.why}. Look at the pane, then settle it with \`collie run deliveries ${launched.runId} --reconcile ${unconfirmed.delivery} --as sent|not-sent\`: \`sent\` once the agent has it (press Enter if the prompt is still in its box), \`not-sent\` to have the resume send it once more. Then \`collie run resume ${launched.runId}\`.`,
           }),
         ),
       ),
@@ -1288,7 +1310,7 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
           pollMs: host.pollMs ?? DEFAULT_POLL_MS,
           budgetMs: host.collectMs ?? DEFAULT_COLLECT_MS,
         }),
-        confirmed(launched).pipe(Effect.andThen(Effect.never)),
+        confirmed(launched, unless ?? null).pipe(Effect.andThen(Effect.never)),
       ),
     );
 
@@ -1300,7 +1322,7 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
         // Rewritten while nobody was asking, as across a stop: that Output is the one to read.
         if (now.trim() !== "" && now !== unusable) return true;
         const text = repairText(launched.output, problem);
-        const file = `${dirFor(launched.runId)}/${launched.operation}.repair.md`;
+        const file = sentPath(launched, "repair");
         yield* write(file, text);
         const sent = yield* deliver(launched, text, {
           kind: "repair",

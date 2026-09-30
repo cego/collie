@@ -50,6 +50,8 @@ ignored look the same from here, and the note is what tells a later reader that.
 The terminal states are `failed` (herdr refused), `unknown` (herdr never answered, so
 nobody can say), `superseded` and `expired`. `unknown` blocks further deliveries about the
 same work until a human reconciles it, and Collie never retries out of it on its own.
+A step's prompt or repair left `unobserved` with nothing to show it was taken parks its
+Run the same way, and is reconciled the same way; `not-sent` has the resume send it again.
 
 `deferred` is the one refusal that is retried, because it is the one that proves the prompt
 was not delivered and says why the next try may land. Which refusals count is decided by

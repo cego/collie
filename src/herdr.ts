@@ -328,10 +328,7 @@ export type Submission = "observed" | "unobserved";
 /** Between turns, as herdr itself says so: anything else may be hiding a turn. */
 export const isSettled = (status: AgentStatus) => status === "idle" || status === "done";
 
-/**
- * As much of `agent explain --json` as Collie reads. herdr publishes no schema for it
- * (`explain: true`), so everything is optional and a shape it cannot read is no answer.
- */
+/** As much of `agent explain --json` as Collie reads; a shape it cannot read is no answer. */
 const ExplainReply = Schema.Struct({
   evaluated_rules: Schema.Array(
     Schema.Struct({

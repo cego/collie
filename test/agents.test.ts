@@ -1017,8 +1017,7 @@ const control = (name: string, runId: string, set: boolean) =>
     Effect.orDie,
   );
 
-/** What was typed into an agent's pane, in the order herdr was asked to type it. */
-/** What each prompt said, without the delivery token every prompt starts with. */
+/** What was typed into an agent's pane, in order, without a leading delivery token. */
 const prompts = (calls: ReadonlyArray<Call>) =>
   calls
     .filter((call) => (call.argv ?? [])[0] === "agent" && (call.argv ?? [])[1] === "prompt")
@@ -1843,6 +1842,55 @@ test(
         const calls = yield* rig.calls();
         expect(sent(calls, "Your task for this step")).toBe(1);
         expect(enters(calls)).toBe(0);
+      }),
+    ),
+  120_000,
+);
+
+/** What the park's own instructions say to run, done as the command does it. */
+const reconciled = (runId: string, as: "sent" | "not-sent") =>
+  Effect.gen(function* () {
+    const why = yield* read(controlPath(dir, PARKED, runId));
+    const [step] = yield* steps(runId);
+    expect(why).toContain(`--reconcile ${step!.delivery.id} --as sent|not-sent`);
+    const settled = reconcile(yield* readLedger(step!.file), step!.delivery.id, as, "tester", "t");
+    if ("error" in settled) throw new Error(settled.error);
+    yield* appendLine(step!.file, settled);
+  });
+
+test(
+  "a vanished step pointer settled as not sent goes out once more on resume, under a new delivery",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* rig.queueOutputs([{ verdict: "clean", note: "never" }]);
+        yield* interrupted("r1", 8_000, { herdr: promptNotTaken("text"), confirmGraceMs: 300 });
+        yield* reconciled("r1", "not-sent");
+
+        yield* rig.queueOutputs([{ verdict: "clean", note: "sent again" }]);
+        const result = yield* releasedInto("r1");
+        expect(result._tag === "Success" && result.success.note).toBe("sent again");
+        expect(sent(yield* rig.calls(), "Your task for this step")).toBe(2);
+        expect(new Set((yield* steps("r1")).map((one) => one.delivery.id)).size).toBe(2);
+      }),
+    ),
+  120_000,
+);
+
+test(
+  "a vanished step pointer settled as sent is not sent again: the resume waits for its Output",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        yield* rig.queueOutputs([{ verdict: "clean", note: "never" }]);
+        yield* interrupted("r1", 8_000, { herdr: promptNotTaken("text"), confirmGraceMs: 300 });
+        yield* reconciled("r1", "sent");
+
+        yield* fs.writeFileString(outputPath("r1"), `{"verdict":"clean","note":"typed by hand"}`);
+        const result = yield* releasedInto("r1");
+        expect(result._tag === "Success" && result.success.note).toBe("typed by hand");
+        expect(sent(yield* rig.calls(), "Your task for this step")).toBe(1);
       }),
     ),
   120_000,

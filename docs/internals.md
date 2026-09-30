@@ -204,6 +204,12 @@ it in the one direction that matters: Collie must accept everything herdr may se
 extra fields herdr sends are never a failure. `herdr.ts` exports the shapes it decodes as
 one `replySchemas` record, and the test asserts its table covers every key of it, so
 adding a decoded call without a row turns that test red rather than going unchecked.
+The one exception is `agent explain --json`, which herdr's schema gives only as `explain:
+true`, so there is nothing to check its struct against. `promptBox` reads one field of it,
+the `prompt_box_body` rule's `evidence.region_preview`; the pinned 0.8.2 and 0.9.1 both
+answer it (`herdr agent explain --file <screen> --agent claude --json` checks a binary
+without a server), and a reply without it reads as a box nobody can see, which asks a
+human rather than pressing Enter.
 
 The version Collie is verified against is `herdr-pin.json`, with the schema that version
 prints committed beside it as `herdr-api-schema.json`, and `min_herdr_version` in
@@ -296,7 +302,11 @@ the top for this, where herdr's few-hundred-byte view of the prompt box can see 
 region, read with `agent explain` — gets one Enter, recorded on the ledger so it is never
 pressed twice, and never the text again. A settled agent showing neither for fifteen
 seconds parks the step: nothing can prove sending it again is safe, so the Run waits for
-a human, naming the agent, its pane and the delivery. A wait parked that way is still a
+a human, naming the agent, its pane and the delivery. The human settles it with `run
+deliveries --reconcile <id> --as sent|not-sent`; after `not-sent` the resume sends the same
+words once more, from the `<operation>.step.md` or `.repair.md` beside the launch, as the
+next attempt. Only the delivery the wait is for is checked: the step's, or the repair's
+once one went out. A wait parked that way is still a
 pending Run, and reads as waiting on you rather than working. An agent `blocked` at a
 dialog is not settled, and is left to clear.
 

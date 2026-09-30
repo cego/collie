@@ -20,6 +20,7 @@ import {
   blocked,
   causalKey,
   deferralsOf,
+  isUnobserved,
   ledgerFiles,
   ledgerPath,
   newestById,
@@ -463,8 +464,6 @@ export const settleCollected = Effect.fn("Dispatcher.settleCollected")(function*
 const UNOBSERVED = "unobserved";
 const ENTER_PRESSED = "unobserved; enter pressed";
 
-const isUnobserved = (delivery: Delivery) => delivery.note?.startsWith(UNOBSERVED) === true;
-
 /** A submission nothing confirmed: neither taken nor still waiting to be sent. */
 export class Unconfirmed extends Data.TaggedError("Unconfirmed")<{
   agent: string;
@@ -502,8 +501,7 @@ export const confirmSubmitted = Effect.fn("Dispatcher.confirmSubmitted")(functio
   const file = yield* ledgerPath(deps.stateDir, terminalId);
   const pending = Effect.map(readLedger(file), (lines) =>
     [...newestById(lines).values()]
-      .filter((one) => keys.includes(one.causal_key) && one.state === "submitted")
-      .filter(isUnobserved)
+      .filter((one) => keys.includes(one.causal_key) && isUnobserved(one))
       .at(-1),
   );
   /** Re-read under the lock, so a settlement never lands on a delivery another writer moved. */
@@ -512,7 +510,7 @@ export const confirmSubmitted = Effect.fn("Dispatcher.confirmSubmitted")(functio
       file,
       Effect.gen(function* () {
         const now = newestById(yield* readLedger(file)).get(id);
-        if (now === undefined || now.state !== "submitted" || !isUnobserved(now)) return;
+        if (now === undefined || !isUnobserved(now)) return;
         yield* act;
         yield* appendLine(file, { ...now, at: yield* nowIso(), note });
       }),
