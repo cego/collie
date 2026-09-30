@@ -58,7 +58,8 @@ import { scopeFor, scopeKey } from "../registry";
 import { readTask, taskOfWorkspace, type TaskChoice } from "../task";
 import { runDeliveries } from "./steer";
 import { givenVerifications } from "../verify-spec";
-import { agentStartRefusal, insideCheckout } from "../agent-start";
+import { agentStartRefusal, CLI_CHECKOUT_FIX, insideCheckout } from "../agent-start";
+import { PROJECTS_ROOT_OPTION, projectsRoot } from "../projects";
 import { currentReports, readDrift } from "../drift";
 import { newest, readCards } from "../cards";
 import { metricsOf, readMetrics } from "../metrics";
@@ -325,15 +326,10 @@ const runStart = Command.make(
                 // What it declares and nobody gave, with what would fill each, so a caller
                 // can fill the gaps and retry under the same request id.
                 if ("inputs" in saved) {
-                  const checkoutNamed =
-                    (launch.options.workspace ?? "").trim() !== "" ||
-                    (yield* insideCheckout(resolved.env.cwd));
-                  const needed = yield* agentStartRefusal(
-                    resolved.env,
-                    saved,
-                    launch.input,
-                    checkoutNamed,
-                  );
+                  const needed = yield* agentStartRefusal(resolved.env, saved, launch.input, {
+                    named: yield* namedCheckout(resolved.env, launch.options.workspace ?? ""),
+                    fix: CLI_CHECKOUT_FIX,
+                  });
                   if (needed !== null) return needed;
                 }
                 const started = yield* startRun(resolved.env, {
@@ -436,6 +432,18 @@ const resolveCommandRun = Effect.fn("collie.resolveCommandRun")(function* (
 const childLines = Effect.fn("run.childLines")(function* (env: PluginEnv, runId: string) {
   const children = (yield* runViews(env, null)).runs.filter((view) => view.parent === runId);
   return children.map((view) => `  ${view.runId}\t${view.workflow}\t${statusOf(view)}`);
+});
+
+/**
+ * The directory a CLI start names as its checkout, or null for none: its `workspace`
+ * option, else the checkout the command was run in.
+ */
+const namedCheckout = Effect.fn("run.namedCheckout")(function* (env: PluginEnv, workspace: string) {
+  const given = workspace.trim();
+  if (given === PROJECTS_ROOT_OPTION) return (yield* projectsRoot(env)).path;
+  if (given.startsWith("/")) return given;
+  if (given !== "" || (yield* insideCheckout(env.cwd))) return env.cwd;
+  return null;
 });
 
 const runShow = Command.make(

@@ -409,6 +409,57 @@ test(
   60_000,
 );
 
+test(
+  "a missing diff target is told what inference would pick in the checkout named, not the shell's",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const tree = yield* projectsTree();
+        const named = join(tree.dir, "named");
+        yield* fs.makeDirectory(named, { recursive: true });
+        const git = (...args: string[]) =>
+          Bun.spawnSync(["git", "-c", "user.email=t@t", "-c", "user.name=t", ...args], {
+            cwd: named,
+          });
+        git("init", "-q", "-b", "main");
+        git("commit", "-q", "--allow-empty", "-m", "base");
+        git("checkout", "-q", "-b", "topic");
+        git("commit", "-q", "--allow-empty", "-m", "work");
+        const bin = join(tree.dir, "bin");
+        yield* fs.makeDirectory(bin, { recursive: true });
+        yield* fs.writeFileString(join(bin, "glab"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+
+        const refused = yield* cli(
+          [
+            "--json",
+            "run",
+            "start",
+            "review",
+            "--input",
+            `workspace=${named}`,
+            "--input",
+            "plan=",
+            "--input",
+            "proves=",
+          ],
+          { COLLIE_CWD: tree.elsewhere, PATH: `${bin}:/usr/bin:/bin` },
+        );
+        expect(yield* parseEnvelope(refused.stdout)).toMatchObject({
+          ok: false,
+          error: {
+            code: "needs_input",
+            details: {
+              inputs: [{ name: "target", facts: [expect.stringContaining("main...topic")] }],
+            },
+          },
+        });
+        yield* fs.remove(tree.dir, { recursive: true });
+      }),
+    ),
+  60_000,
+);
+
 /** Every `collie run start` a reader can paste as it is written: no placeholder, no continuation. */
 const documentedStarts = Effect.fn("test.documentedStarts")(function* () {
   const fs = yield* FileSystem.FileSystem;

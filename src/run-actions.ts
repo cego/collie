@@ -28,8 +28,8 @@ import {
   resumeRun,
   runViews,
 } from "./lifecycle";
-import { agentStartRefusal } from "./agent-start";
-import { PROJECTS_ROOT_OPTION } from "./projects";
+import { agentStartRefusal, CHAT_CHECKOUT_FIX } from "./agent-start";
+import { PROJECTS_ROOT_OPTION, projectsRoot } from "./projects";
 import { listTasks, removeTask } from "./task";
 import {
   clearOverride,
@@ -274,7 +274,10 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
       const input = { text: { ...action.inputs }, json: {} };
       const saved = yield* moduleFor(rooted, action.workflow);
       if (saved !== null && "inputs" in saved) {
-        const refused = yield* agentStartRefusal(rooted, saved, input, atRoot || where !== null);
+        const refused = yield* agentStartRefusal(rooted, saved, input, {
+          named: atRoot ? (yield* projectsRoot(env)).path : (where?.found.cwd ?? null),
+          fix: CHAT_CHECKOUT_FIX,
+        });
         if (refused !== null) return failed(refused.error.message);
       }
       const id = yield* newRequestId();

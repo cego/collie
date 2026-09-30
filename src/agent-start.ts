@@ -18,6 +18,12 @@ const PLANS_OFFERED = 5;
 
 const CHECKOUT_MEANING = `Which checkout the Run starts in: its absolute path, or \`${PROJECTS_ROOT_OPTION}\` for the Projects root`;
 
+/** How a CLI start names its checkout. */
+export const CLI_CHECKOUT_FIX = `Name the checkout with --input workspace=<absolute path> or workspace=${PROJECTS_ROOT_OPTION}.`;
+
+/** How a chat start names its checkout. */
+export const CHAT_CHECKOUT_FIX = `Name the checkout in the action's workspace: a workspace id, its label, an absolute path, or ${PROJECTS_ROOT_OPTION}.`;
+
 /** Whether a start from `cwd` has named its checkout by being in one. */
 export const insideCheckout = (cwd: string) =>
   repositoryName(shell, cwd).pipe(
@@ -27,15 +33,21 @@ export const insideCheckout = (cwd: string) =>
 
 /**
  * The refusal for an agent's start that leaves anything unsaid, or null where it names
- * everything. `checkoutNamed` is the front door's to say: a CLI start in a checkout has
- * named it, a chat start names one only through its `workspace`.
+ * everything. The checkout is the front door's to say — a CLI start in a checkout has
+ * named it, a chat start names one only through its `workspace` — and so is the sentence
+ * that tells its caller how to name one.
  */
 export const agentStartRefusal = Effect.fn("AgentStart.refusal")(function* (
   env: PluginEnv,
   entry: Found,
   given: Given,
-  checkoutNamed: boolean,
+  checkout: {
+    /** The directory the start names, or null where it names none. */
+    readonly named: string | null;
+    readonly fix: string;
+  },
 ) {
+  const checkoutNamed = checkout.named !== null;
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const missing: Array<{ name: string; meaning: string; facts: string[] }> = [];
@@ -52,9 +64,9 @@ export const agentStartRefusal = Effect.fn("AgentStart.refusal")(function* (
     if (given.text[field.name] !== undefined || given.json[field.name] !== undefined) continue;
     const facts: string[] = [];
     if (checkoutNamed && field.strategy === "diff-target") {
-      const inferred = yield* inferInput(field.name, "diff-target", { cwd: env.cwd }).pipe(
-        Effect.orElseSucceed(() => null),
-      );
+      const inferred = yield* inferInput(field.name, "diff-target", {
+        cwd: checkout.named ?? env.cwd,
+      }).pipe(Effect.orElseSucceed(() => null));
       if (inferred !== null && !inferred.needsAsking && inferred.value !== "")
         facts.push(`${inferred.value} (${inferred.source})`);
     }
@@ -72,9 +84,7 @@ export const agentStartRefusal = Effect.fn("AgentStart.refusal")(function* (
   }
   if (missing.length === 0) return null;
   const names = missing.map((one) => `"${one.name}"`).join(", ");
-  const checkoutFix = checkoutNamed
-    ? ""
-    : ` Name the checkout with --input workspace=<absolute path> or workspace=${PROJECTS_ROOT_OPTION}.`;
+  const checkoutFix = checkoutNamed ? "" : ` ${checkout.fix}`;
   const listed = missing.map(
     (one) =>
       `- ${one.name}: ${one.meaning || "no description"}${one.facts.length === 0 ? "" : `; could be ${one.facts.join(", ")}`}`,

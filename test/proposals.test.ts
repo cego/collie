@@ -486,6 +486,9 @@ test(
         expect(nowhere.ok).toBe(false);
         if (nowhere.ok) return;
         expect(nowhere.error.message).toContain('"workspace"');
+        // Told how chat names one, not the command line's flag.
+        expect(nowhere.error.message).toContain("the action's workspace");
+        expect(nowhere.error.message).not.toContain("--input");
       }),
     ),
   60_000,
