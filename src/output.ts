@@ -625,7 +625,11 @@ export function settleFinalFix(
   evidence: CheckEvidence,
 ): FinalFix {
   const fixed = new Set(fix.fixed.map(findingKey));
-  const disputed = new Set(fix.disputed.map(findingKey));
+  const disputed = new Map(fix.disputed.map((d) => [findingKey(d), d]));
+  const disputeLine = (f: Finding) => {
+    const reason = disputed.get(findingKey(f))?.reason;
+    return `disputed blocking finding: ${oneLine(f)}${reason ? `: ${reason}` : ""}`;
+  };
   const disputes: string[] = [];
   const unverified: string[] = [];
   if (fix.verdict !== "clean") unverified.push(`the fix reports verdict "findings"`);
@@ -649,7 +653,7 @@ export function settleFinalFix(
     } else if (fixed.has(key)) {
       continue;
     } else if (disputed.has(key)) {
-      disputes.push(`disputed blocking finding: ${oneLine(finding)}`);
+      disputes.push(disputeLine(finding));
     } else {
       unverified.push(`no disposition for ${oneLine(finding)}`);
     }
@@ -658,7 +662,7 @@ export function settleFinalFix(
   // were told to leave it to the human, and leaving it out is not the human deciding.
   const raised = new Set(live.map(findingKey));
   const standing = fix.disputed.filter((d) => isBlocking(d) && !raised.has(findingKey(d)));
-  for (const d of standing) disputes.push(`disputed blocking finding: ${oneLine(d)}`);
+  for (const d of standing) disputes.push(disputeLine(d));
   if (fix.checks.length === 0) unverified.push("no checks reported");
   for (const check of fix.checks) {
     const gap = checkGap(check.name, evidence);
