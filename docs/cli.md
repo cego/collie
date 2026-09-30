@@ -1125,8 +1125,9 @@ Every prerequisite in one pass, each with the command that fixes it: herdr prese
 least the `min_herdr_version` the plugin manifest declares; the plugin linked from this
 installation; the runner built and the `collie` shim on PATH (installed-but-not-on-PATH is
 its own reported state); a Node runtime for the skills CLI; every skill and every harness
-the loaded workflows and personas name; whether the checkout is behind its remote; and
-`glab` present and logged in.
+the loaded workflows and personas name; whether the checkout is behind its remote; the
+Projects root and its source — `projects.root`, `GITTE_CWD`, or the home directory, the last
+a `!` warning that never fails the run; and `glab` present and logged in.
 
 Two more are optional, and reported rather than required. **Helle**, where a loaded
 workflow waits on it (`renovate` does): the credentials file the Helle MCP wrapper sources,

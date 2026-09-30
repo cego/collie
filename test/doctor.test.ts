@@ -13,6 +13,7 @@ import { doctor } from "../src/doctor";
 import { claudeSettingsPath, installStatusLine } from "../src/statusline";
 import { shell } from "../src/mr";
 import type { OpResult } from "../src/operations";
+import { writeConfigValue } from "../src/config";
 
 let rig: Rig;
 let bin: FakeBin;
@@ -124,11 +125,37 @@ test("a healthy machine passes every check and says so", () =>
         "up to date",
         "workflows",
         "personas",
+        "projects root",
         "glab",
         "helle",
         "linear mcp",
       ]);
       expect(check(result, "workflows").detail).toBe("every workflow here is the one Collie ships");
+    }),
+  ));
+
+test("the Projects root is named with where it came from, and the home fallback is a warning", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* healthy();
+
+      const home = check(yield* report(), "projects root");
+      expect(home).toMatchObject({ ok: true, warn: true });
+      expect(home.detail).toContain(rig.root);
+      expect(home.detail).toContain("home");
+      expect(home.fix).toContain("projects.root");
+
+      const gitte = check(yield* report({ GITTE_CWD: "/work/gitte" }), "projects root");
+      expect(gitte).toMatchObject({ ok: true, fix: "" });
+      expect(gitte.warn).toBeUndefined();
+      expect(gitte.detail).toContain("/work/gitte");
+      expect(gitte.detail).toContain("GITTE_CWD");
+
+      yield* writeConfigValue(rig.userDir, "projects.root", "/work/mine");
+      const configured = check(yield* report({ GITTE_CWD: "/work/gitte" }), "projects root");
+      expect(configured).toMatchObject({ ok: true, fix: "" });
+      expect(configured.detail).toContain("/work/mine");
+      expect(configured.detail).toContain("projects.root");
     }),
   ));
 
