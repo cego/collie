@@ -4,7 +4,7 @@
 // human reads on a card — a form nobody has a case for is a form nobody can trust.
 
 import { expect, test } from "bun:test";
-import { Effect, FileSystem, Schema } from "effect";
+import { DateTime, Effect, FileSystem, Schema } from "effect";
 import {
   boardLines,
   buildBoard,
@@ -636,6 +636,81 @@ test("a check Collie is running outranks what an idle agent last said", () =>
       });
 
       expect(view!.sentence).toBe("Running the typecheck-spilnu check.");
+    }),
+  ));
+
+/** The steps the Driver launched agents for, oldest first, as it records them. */
+const launched = Effect.fn("board.launched")(function* (
+  stateDir: string,
+  runId: string,
+  operations: ReadonlyArray<string>,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  yield* fs.makeDirectory(`${stateDir}/agents/${runId}`, { recursive: true });
+  yield* fs.writeFileString(`${stateDir}/agents/${runId}/launches`, `${operations.join("\n")}\n`);
+});
+
+/** A file last written at this moment, which is what silence is measured from. */
+const writtenAt = Effect.fn("board.writtenAt")(function* (file: string, at: string) {
+  const fs = yield* FileSystem.FileSystem;
+  yield* fs.makeDirectory(file.slice(0, file.lastIndexOf("/")), { recursive: true });
+  yield* fs.writeFileString(file, "x");
+  const when = DateTime.toDateUtc(DateTime.makeUnsafe(at));
+  yield* fs.utimes(file, when, when);
+});
+
+test("a working card names the step the Run is on, with its round", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const fixing = yield* madeRun(dir, { id: "r-fix", task: "task-1" });
+      const reviewing = yield* madeRun(dir, { id: "r-review" });
+      const ticket = yield* madeRun(dir, { id: "r-ticket" });
+      yield* launched(dir, fixing.id, ["build", "review-1", "fix-1"]);
+      yield* launched(dir, reviewing.id, ["build", "review-1", "fix-1", "review-2-1"]);
+      yield* launched(dir, ticket.id, ["01-parse.md", "02-one-launch-input-per-module.md"]);
+
+      const views = yield* board(env, [fixing, reviewing, ticket]);
+      const said = (id: string) => views.find((view) => view.run === id)!.sentence;
+
+      expect(said(fixing.id)).toBe("Fixing the review findings, round 1.");
+      expect(said(reviewing.id)).toBe("Reviewing, round 2.");
+      expect(said(ticket.id)).toBe("Building ticket 02.");
+    }),
+  ));
+
+test("a Run is not quiet while its agent works, a check runs, or its agents write", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const fs = yield* FileSystem.FileSystem;
+      const old = "2026-09-14T09:00:00Z";
+      const working = yield* madeRun(dir, { id: "r-working", task: "task-1" });
+      const checking = yield* madeRun(dir, { id: "r-checking" });
+      const writing = yield* madeRun(dir, { id: "r-writing" });
+      const idle = yield* madeRun(dir, { id: "r-idle" });
+      for (const run of [working, checking, writing, idle]) {
+        yield* launched(dir, run.id, ["build"]);
+        yield* writtenAt(`${run.dir}/log`, old);
+        const then = DateTime.toDateUtc(DateTime.makeUnsafe(old));
+        yield* fs.utimes(`${dir}/agents/${run.id}/launches`, then, then);
+      }
+      yield* writtenAt(`${checking.dir}/verifying`, old);
+      yield* writtenAt(`${dir}/agents/${writing.id}/build.prompt.md`, "2026-09-14T10:04:00Z");
+
+      const views = yield* board(env, [working, checking, writing, idle], {
+        alive: [agent("impl-1", "working"), { ...agent("impl-2", "idle"), paneId: "p-2" }],
+        registered: [registered("impl-1", working.id), registered("impl-2", idle.id)],
+      });
+      const view = (id: string) => views.find((one) => one.run === id)!;
+
+      expect(view(working.id).state).toBe("active");
+      expect(view(working.id).sentence).toBe("Building.");
+      expect(view(checking.id).state).toBe("active");
+      expect(view(writing.id).state).toBe("active");
+      // An idle agent and nothing written for an hour is what quiet is.
+      expect(view(idle.id).state).toBe("quiet");
+      expect(view(idle.id).sentence).toBe("Building, but silent for 1 hour.");
     }),
   ));
 

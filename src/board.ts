@@ -204,7 +204,7 @@ export interface Sentence {
   state: TaskState;
   decision: Decision | null;
   /** The step the work is on, and which round of the loop it is in. */
-  step: { id: string; round: { at: number; of: number } | null } | null;
+  step: { id: string; round: { at: number; of: number | null } | null } | null;
   /** The step's own verb, where the definition gives one. */
   verb: string | null;
   /** How long it has written nothing, where it has gone quiet. */
@@ -248,6 +248,10 @@ const VERBS = new Map(
     tickets: "Cutting the plan into tickets",
     build: "Building",
     fix: "Fixing the review findings",
+    "gate-fix": "Fixing what the checks found",
+    "second-opinion": "Getting a second opinion on the plan",
+    revise: "Revising the plan",
+    refine: "Refining the plan",
     review: "Reviewing",
     synthesize: "Reconciling the reviews",
     post: "Posting the review",
@@ -271,13 +275,45 @@ function verbOf(facts: Sentence): string {
   if (facts.step === null) return "Starting";
   const id = facts.step.id;
   const kind = id.slice(id.lastIndexOf(".") + 1);
-  // Never the step id: a card says what is happening in words.
-  return VERBS.get(kind) ?? "Working on it";
+  // Never the step id: a card says what is happening in words. A named review seat,
+  // `review-correctness`, is a review.
+  return VERBS.get(kind) ?? VERBS.get(kind.split("-")[0]!) ?? "Working on it";
 }
 
 function roundOf(step: Sentence["step"]): string {
-  return step?.round ? `, round ${step.round.at} of ${step.round.of}` : "";
+  if (!step?.round) return "";
+  const { at, of } = step.round;
+  return of === null ? `, round ${at}` : `, round ${at} of ${of}`;
 }
+
+/**
+ * The step an operation is, as the shipped workflows name them: `fix-1` is round 1 of
+ * fixing, `review-2-1` the first seat of round 2's review, and `02-parse.md` a ticket.
+ */
+export function stepOfOperation(operation: string): Pick<Sentence, "step" | "verb"> {
+  const ticket = /^(\d+)-.*\.md$/.exec(operation);
+  if (ticket) return { step: { id: "build", round: null }, verb: `Building ticket ${ticket[1]}` };
+  const counted = /^(.+?)-(\d+)(?:-[^-]+)?$/.exec(operation);
+  if (counted === null) return { step: { id: operation, round: null }, verb: null };
+  return {
+    step: { id: counted[1]!, round: { at: Number(counted[2]), of: null } },
+    verb: null,
+  };
+}
+
+/** The operation the Driver last launched an agent for, as its launch order records it. */
+const lastLaunched = Effect.fn("Board.lastLaunched")(function* (stateDir: string, runId: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const order = yield* fs
+    .readFileString(`${stateDir}/agents/${runId}/launches`)
+    .pipe(Effect.catch(() => Effect.succeed("")));
+  return (
+    order
+      .split("\n")
+      .filter((line) => line !== "")
+      .at(-1) ?? null
+  );
+});
 
 /** `2 times` reads as a count; twice reads as a sentence. */
 function times(n: number): string {
@@ -583,11 +619,12 @@ const FINISHED_FOR_MS = 24 * 60 * 60 * 1000;
 export const WAIT_FOLD_MS = 7 * 24 * 60 * 60 * 1000;
 
 /**
- * When the Run last did anything, as `touchedDirAt` measures it but without the one file
- * Collie writes about a Run from outside: a disposition recorded by a human or by the
- * merge watch is bookkeeping, and must not make a dead Run look alive for another minute.
+ * When anything in this directory was last written, as `touchedDirAt` measures it but
+ * without the one file Collie writes about a Run from outside: a disposition recorded by
+ * a human or by the merge watch is bookkeeping, and must not make a dead Run look alive
+ * for another minute.
  */
-const lastActivityAt = Effect.fn("Board.lastActivityAt")(function* (dir: string) {
+const writtenIn = Effect.fn("Board.writtenIn")(function* (dir: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const at = (file: string) =>
@@ -610,6 +647,18 @@ const lastActivityAt = Effect.fn("Board.lastActivityAt")(function* (dir: string)
     }
   }
   return newest;
+});
+
+/** When the Run last did anything: its own directory, its agents' and its evidence. */
+const lastActivityAt = Effect.fn("Board.lastActivityAt")(function* (
+  stateDir: string,
+  run: RunFacts,
+) {
+  return Math.max(
+    yield* writtenIn(run.dir),
+    yield* writtenIn(`${stateDir}/agents/${run.id}`),
+    yield* writtenIn(run.evidence),
+  );
 });
 
 const isMrTarget = (target: string | null): target is string =>
@@ -719,7 +768,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
   for (const [id, runs] of groups) {
     const pending = runs.flatMap((run) => pendingFor(proposals, run.id, now));
     const touched = new Map<string, number>();
-    for (const run of runs) touched.set(run.id, yield* lastActivityAt(run.dir));
+    for (const run of runs) touched.set(run.id, yield* lastActivityAt(stateDir, run));
     // A Run records no end of its own: its last activity is when it ended, and a Run
     // that wrote nothing ended no later than it began.
     const endedAt = (run: RunFacts) =>
@@ -742,12 +791,19 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
 
     const status = leader.state;
     const at = touched.get(leader.id) ?? 0;
+    const agents = agentsOf(runs, registered, live);
+    const checking = yield* verifyingIn(leader.dir);
+    // An agent mid-turn or a check Collie is running is work, however little it writes.
+    const busy =
+      checking !== "" ||
+      agents.some((agent) => agent.run === leader.id && agent.status === "working");
     const going = !ended(leader);
-    const silentFor = going && at > 0 ? now - at : 0;
+    const silentFor = going && !busy && at > 0 ? now - at : 0;
     // Under a minute has no span to name, and is not silence worth a card saying.
     const span = silentFor > quietMs ? spanned(silentFor) : "";
     const silent = span === "" ? null : span;
-    const agents = agentsOf(runs, registered, live);
+    const operation = yield* lastLaunched(stateDir, leader.id);
+    const doing = operation === null ? null : stepOfOperation(operation);
     // Stopped for a human with no Decision to answer: herdr reports `blocked` for an agent
     // sitting at its harness's own dialog, and a Run parks where its pane will not take a
     // prompt. herdr's name for the pane first: it is the one a human has to go to.
@@ -809,10 +865,11 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
         abandoned: null,
         state,
         decision,
-        step: null,
+        step: doing?.step ?? null,
         verb:
-          checkingOf(yield* verifyingIn(leader.dir)) ??
+          checkingOf(checking) ??
           agents.find((agent) => agent.run === leader.id)?.now ??
+          doing?.verb ??
           null,
         silent,
         wave: null,
