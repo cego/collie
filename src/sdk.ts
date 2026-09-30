@@ -36,6 +36,7 @@ import {
   nothingApproved,
   refInside,
   type Outcome,
+  type SplitGaps,
 } from "./outcome";
 import type { Source } from "./offers";
 
@@ -261,10 +262,7 @@ export function evidenceGapsOf(options: GateAsk): ReadonlyArray<string> {
  * which a fix can earn, and `judged` an Output's claim or a reviewer's judgement, which no
  * fix after the review moves.
  */
-export function splitEvidenceGapsOf(options: GateAsk): {
-  readonly checks: ReadonlyArray<string>;
-  readonly judged: ReadonlyArray<string>;
-} {
+export function splitEvidenceGapsOf(options: GateAsk): SplitGaps {
   return gapsOf(options.kind, collectedOf(options));
 }
 

@@ -196,11 +196,16 @@ export function evidenceGaps(kind: Outcome, got: Collected): string[] {
   return [...checks, ...judged];
 }
 
+export interface SplitGaps {
+  readonly checks: ReadonlyArray<string>;
+  readonly judged: ReadonlyArray<string>;
+}
+
 /**
  * The same gaps, split by what closes them: `checks` a passing verification on this tree,
  * `judged` only an Output or a review, which no fix after the review changes.
  */
-export function gapsOf(kind: Outcome, got: Collected): { checks: string[]; judged: string[] } {
+export function gapsOf(kind: Outcome, got: Collected): SplitGaps {
   const checks: string[] = [];
   const gaps: string[] = [];
   if (needsApproved(kind)) checks.push(...approvedSetGaps(got));
