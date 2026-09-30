@@ -603,19 +603,21 @@ export function ackInstruction(
 export const DELIVERY_TOKEN = "collie-delivery:";
 
 /**
- * The text as it is typed: with its delivery's token on a line of its own, last, so a
- * slash command keeps its first line and the harness's submit hook can say which
- * delivery it took.
+ * The text as it is typed, with its delivery's token on a line of its own near the top:
+ * herdr's view of a prompt box is its first few hundred bytes, and a slash command has to
+ * keep its first line. The harness's submit hook reads the same token back.
  */
 export function marked(text: string, id: string): string {
   const token = `${DELIVERY_TOKEN}${id}`;
-  return text.split("\n").includes(token) ? text : `${text}\n${token}`;
+  if (text.split("\n").includes(token)) return text;
+  if (!text.startsWith("/")) return `${token}\n${text}`;
+  const [command, ...rest] = text.split("\n");
+  return [command, token, ...rest].join("\n");
 }
 
-/** The delivery a submitted prompt carried: its last token, which is the one `marked` adds. */
+/** The delivery a submitted prompt carried: its first token, which is the one `marked` adds. */
 export function carriedDelivery(prompt: string): string | null {
-  const tokens = [...prompt.matchAll(new RegExp(`${DELIVERY_TOKEN}(\\S+)`, "g"))];
-  return tokens.at(-1)?.[1] ?? null;
+  return new RegExp(`${DELIVERY_TOKEN}(\\S+)`).exec(prompt)?.[1] ?? null;
 }
 
 const AckSchema = Schema.Struct({

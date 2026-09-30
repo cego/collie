@@ -291,8 +291,8 @@ from one whose request may never have arrived.
 `unobserved` never stays silent, though. While a step's Output is awaited, the Dispatcher
 checks its unobserved prompt or repair (`confirmSubmitted`) until something says it was
 taken: a turn herdr saw start from a settled agent, or Claude's `UserPromptSubmit` hook
-recording that delivery's id — every prompt ends with its `collie-delivery:<id>` line for
-this. A settled agent whose prompt box still holds that line — herdr's `prompt_box_body`
+recording that delivery's id — every prompt carries its `collie-delivery:<id>` line near
+the top for this, where herdr's few-hundred-byte view of the prompt box can see it. A settled agent whose prompt box still holds that line — herdr's `prompt_box_body`
 region, read with `agent explain` — gets one Enter, recorded on the ledger so it is never
 pressed twice, and never the text again. A settled agent showing neither for fifteen
 seconds parks the step: nothing can prove sending it again is safe, so the Run waits for

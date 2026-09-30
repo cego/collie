@@ -1018,11 +1018,11 @@ const control = (name: string, runId: string, set: boolean) =>
   );
 
 /** What was typed into an agent's pane, in the order herdr was asked to type it. */
-/** What each prompt said, without the delivery token every prompt ends with. */
+/** What each prompt said, without the delivery token every prompt starts with. */
 const prompts = (calls: ReadonlyArray<Call>) =>
   calls
     .filter((call) => (call.argv ?? [])[0] === "agent" && (call.argv ?? [])[1] === "prompt")
-    .map((call) => ((call.argv ?? [])[3] ?? "").replace(/\ncollie-delivery:\S+$/, ""));
+    .map((call) => ((call.argv ?? [])[3] ?? "").replace(/^collie-delivery:\S+\n/, ""));
 
 /** One thing an operator says to the run's agent, through the host's own service. */
 const say = (runId: string, text: string, request: string, mode?: "boundary" | "now") =>
@@ -1800,7 +1800,7 @@ test("a step pointer the harness took is recorded as Collie's, with its delivery
       expect(events).toMatchObject([
         { kind: "submit", reason: "collie", delivery: step!.delivery.id },
       ]);
-      expect(pointer).toContain(`\ncollie-delivery:${step!.delivery.id}`);
+      expect(pointer?.split("\n")).toContain(`collie-delivery:${step!.delivery.id}`);
     }),
   ));
 

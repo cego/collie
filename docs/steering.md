@@ -90,8 +90,8 @@ none of it.
 
 If someone types into an agent's pane, Collie stops correcting that agent automatically.
 On Claude this is detected by a `UserPromptSubmit` hook. Every prompt Collie sends — a
-step's pointer, a repair, a hand-off, a steer, a compaction request — ends with a line of
-its own, `collie-delivery:<id>`, and the hook records that id with the submission, so a
+step's pointer, a repair, a hand-off, a steer, a compaction request — carries a line of
+its own, `collie-delivery:<id>`, first or straight after a slash command, and the hook records that id with the submission, so a
 prompt Collie sent is tied to its delivery. A submission without the token is somebody
 else's. Only `collie run clear-override <run> <agent>`
 lifts it — nothing times it back on, because a human who took the keyboard is assumed to
