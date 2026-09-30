@@ -25,6 +25,7 @@ import {
   type HostServices,
 } from "../src/engine";
 import { Store } from "../src/store";
+import { VerifySpecSchema } from "../src/verify-spec";
 import { readTask, writeTask, type TaskRecord } from "../src/task";
 import type { Call } from "./support/recorder";
 
@@ -629,7 +630,9 @@ const UNIT = { name: "unit", executable: "true", argv: [], cwd: "worktree" } as 
 const frozen = (runId: string) =>
   FileSystem.FileSystem.pipe(
     Effect.flatMap((fs) => fs.readFileString(`${evidenceDir(dir(), runId)}/approved.json`)),
-    Effect.map((text): unknown => JSON.parse(text)),
+    Effect.flatMap(
+      Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Array(VerifySpecSchema))),
+    ),
     Effect.orDie,
   );
 
@@ -640,7 +643,10 @@ test(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         yield* fs.makeDirectory(`${rig.projectDir}/.collie`, { recursive: true });
-        yield* fs.writeFileString(`${rig.projectDir}/.collie/verify.json`, JSON.stringify([UNIT]));
+        yield* fs.writeFileString(
+          `${rig.projectDir}/.collie/verify.json`,
+          '[{"name":"unit","executable":"true","argv":[],"cwd":"worktree"}]',
+        );
         const started = yield* hosted(
           Effect.gen(function* () {
             const registry = yield* Registry;
@@ -657,7 +663,8 @@ test(
           }),
         );
         expect(refusedWith(started)).toBe("");
-        if (started._tag === "Success") expect(yield* frozen(started.success.runId)).toEqual([UNIT]);
+        if (started._tag === "Success")
+          expect(yield* frozen(started.success.runId)).toEqual([UNIT]);
       }),
     ),
   120_000,
