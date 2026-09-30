@@ -342,8 +342,9 @@ A **session** is one herdr session and one workspace, taken together; a Run's ow
 does not move it out of the workspace it was started from.
 `registry.ts` records which long-lived agents a session still has, per workspace and repo:
 one entry per agent, whatever its Run or role, so a panel's seats and every Run started
-from the same place are all there. Registering an agent drops the entries of agents herdr
-no longer lists. A question or a hand-off looks only at the asking Run's lineage —
+from the same place are all there. Registering an agent drops the entries registered before
+its launch listed herdr's agents that the listing did not have; one registered since is kept,
+since it may be a seat that started alongside it. A question or a hand-off looks only at the asking Run's lineage —
 `Place.lineage`, the Run and the Runs it was started from — so `handoff.ts` gives one run's
 result to a live agent of the Run it came from rather than starting a second one, and
 never to an unrelated Run's agent in the same role.

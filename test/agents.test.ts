@@ -1070,33 +1070,27 @@ test("a question and a hand-off stay in the asking Run's lineage, whoever else r
     }),
   ));
 
-test("each seat of a panel stays registered, and a gone agent's entry leaves with the next registration", () =>
+test("seats launched together all stay registered, and a gone agent's entry leaves with the next registration", () =>
   runEffect(
     Effect.gen(function* () {
       const env = rig.pluginEnv();
       const file = yield* registryPath(env.stateDir, scopeFor(env, rig.projectDir));
-      const seat = (agent: string, runId: string) => ({
+      const seat = (agent: string, runId: string, at: string) => ({
         role: "reviewer",
         agent,
         paneId: `p-${agent}`,
         workspaceId: null,
         runId,
         workflow: "review",
-        at: "2026-09-30T10:00:00Z",
+        at,
         incarnation: { terminalId: `term-${agent}`, agentSession: null },
       });
-      const alive = (name: string) => ({
-        name,
-        paneId: `p-${name}`,
-        workspaceId: null,
-        status: "working" as const,
-        title: null,
-        terminalId: `term-${name}`,
-        agentSession: null,
-      });
-      yield* registerAgent(file, seat("old-review", "r-done"), []);
-      yield* registerAgent(file, seat("seat-1", "r-panel"), [alive("old-review")]);
-      yield* registerAgent(file, seat("seat-2", "r-panel"), [alive("seat-1")]);
+      yield* registerAgent(file, seat("old-review", "r-done", "2026-09-30T09:00:00.000Z"));
+      // Both seats listed herdr's agents before either had started, as a panel launched
+      // at once does: neither list has the other seat, and neither has the gone agent.
+      const listed = { agents: [], listedAt: "2026-09-30T10:00:00.000Z" };
+      yield* registerAgent(file, seat("seat-1", "r-panel", "2026-09-30T10:00:05.000Z"), listed);
+      yield* registerAgent(file, seat("seat-2", "r-panel", "2026-09-30T10:00:06.000Z"), listed);
       expect((yield* readRegistry(file)).map((entry) => entry.agent)).toEqual(["seat-1", "seat-2"]);
     }),
   ));

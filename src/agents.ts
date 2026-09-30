@@ -58,6 +58,7 @@ import {
 import { Herdr, herdrFailureReason, type AgentInfo, type HerdrError, type PaneInfo } from "./herdr";
 import { agentName, agentTabLabel, reason, shellQuote, unsafePathComponent } from "./naming";
 import { askRouteTo } from "./handoff";
+import { nowIso } from "./time";
 import { lineageAgent, registerAgent, registryPath, scopeFor, verifyIncarnation } from "./registry";
 import {
   jsonSchemaFor,
@@ -1059,7 +1060,7 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
   const start = Effect.fn("Agents.start")(function* (
     ask: AgentAsk,
     agent: string,
-    alive: ReadonlyArray<AgentInfo>,
+    alive: { readonly agents: ReadonlyArray<AgentInfo>; readonly listedAt: string },
   ) {
     const adapter = adapterFor(ask.harness ?? host.harness);
     const wanted = ask.permissions ?? undefined;
@@ -1133,6 +1134,7 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
         // Derived, not minted: this is the name a replay looks for rather than starting
         // a second agent, and a run id is already unique.
         const agent = agentName(ask.runId, ask.agent ?? ask.operation, null, 1);
+        const listedAt = yield* nowIso();
         const listing = yield* host.herdr.agentList().pipe(Effect.result);
         if (listing._tag === "Failure") {
           // Nothing is started on a question nobody answered: a second agent on the same
@@ -1151,7 +1153,7 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
           .pipe(Effect.orElseSucceed(() => false));
         const terminalId = alive
           ? (live.terminalId ?? undefined)
-          : yield* start(ask, agent, listing.success);
+          : yield* start(ask, agent, { agents: listing.success, listedAt });
         const landed: Launched = {
           agent,
           output: ask.output,

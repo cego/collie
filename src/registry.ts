@@ -131,16 +131,21 @@ const write = Effect.fn("writeRegistry")(function* (
 
 /**
  * One entry per agent: every Run started from the same place shares this file, and a
- * panel's seats share a Run and a role. Given what herdr has now, the entries of agents
- * it no longer has are dropped with it.
+ * panel's seats share a Run and a role. Given what herdr listed, an entry registered
+ * before that listing whose agent it did not have is dropped; one registered since may be
+ * an agent that started after it, as another seat launched at once does.
  */
 export const registerAgent = Effect.fn("registerAgent")(function* (
   file: string,
   entry: AgentEntry,
-  alive?: ReadonlyArray<AgentInfo>,
+  alive?: { readonly agents: ReadonlyArray<AgentInfo>; readonly listedAt: string },
 ) {
   const others = (yield* readRegistry(file)).filter((e) => e.agent !== entry.agent);
-  const kept = alive === undefined ? others : liveEntries(others, alive);
+  const live = new Set(alive === undefined ? others : liveEntries(others, alive.agents));
+  const kept =
+    alive === undefined
+      ? others
+      : others.filter((e) => live.has(e) || Date.parse(e.at) >= Date.parse(alive.listedAt));
   const entries = [...kept, entry];
   yield* write(file, entries);
   return entries;
