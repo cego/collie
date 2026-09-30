@@ -4202,6 +4202,8 @@ const makeRegistry: (
     yield* refuseAgent(generation, asked);
     const request = yield* checkoutRequest(generation, asked);
     const launch = launchOptions(generation, asked);
+    // An empty set given is none given, so the project's verify.json still applies.
+    const verify = options.verify?.length ? options.verify : undefined;
     // Settled before anything exists to clean up: an input the workflow's own schema
     // rejects names its field here, and no row, claim or execution is created.
     const settled = yield* settleInput(generation.fields, {
@@ -4221,7 +4223,8 @@ const makeRegistry: (
     )({ runId, input: settled.input }).pipe(
       Effect.mapError((cause) => new HostRefused({ reason: `${REFUSED_INPUT}: ${cause.message}` })),
     );
-    // A retry of a Run already admitted is not a new start, and keeps what it froze.
+    // A retry of a Run already admitted is not a new start: it keeps what it froze, or
+    // freezes what it carries.
     const approved =
       (yield* store.requested(options.request)) === null
         ? yield* refuseUnprovable({
@@ -4230,10 +4233,10 @@ const makeRegistry: (
             launch,
             from: request.kind === "existing" ? request.path : options.project,
             project: options.project,
-            verify: options.verify,
+            verify,
             userDir,
           })
-        : undefined;
+        : verify;
     const claimed = yield* claimAndPlace({
       request: options.request,
       run: runId,
@@ -4365,10 +4368,10 @@ const makeRegistry: (
       // caller's own values win: an offer names where a value comes from, and a caller
       // that has a better one for the same field is not overruled by a default.
       const filled = { ...inputsFor(offer, { runDir: where, facts, input }), ...options.input };
-      // The offer's own workflow settles what it was given, so arguments it will not
-      // take are refused here and nothing is started.
       // Held to what its parent was, grants included, where the parent had anything.
       const inherited = yield* approvedOf(dir, row.run);
+      // The offer's own workflow settles what it was given, so arguments it will not
+      // take are refused here and nothing is started.
       return yield* startWork({
         generation: starting,
         request: options.request,
@@ -4376,7 +4379,7 @@ const makeRegistry: (
         input: filled,
         task: row.task,
         parent: row.run,
-        verify: inherited.length > 0 ? inherited : undefined,
+        verify: inherited,
       });
     }),
 
