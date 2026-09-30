@@ -260,6 +260,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly task: string | null;
     /** A workspace of the Run's own, where it asked for one; null lives in its Task's. */
     readonly workspace: string | null;
+    /** This Run, then the Run it was started from, and so on: whose agents it may ask. */
+    readonly lineage: ReadonlyArray<string>;
   }
 
   /** What became of a note: whether it landed, and the sentence a human reads either way. */
@@ -581,20 +583,20 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     ) => Effect.Effect<ReadonlyMap<string, string>>;
     /**
      * What an agent is told about asking for a decision its work does not cover: the
-     * pane of whoever is live in that role, and otherwise to stop and ask the human.
+     * pane of whoever is live in that role in this lineage, and otherwise to decide.
      */
-    readonly askRoute: (role: string, cwd: string) => Effect.Effect<string>;
+    readonly askRoute: (role: string, lineage: ReadonlyArray<string>) => Effect.Effect<string>;
     readonly launch: (ask: AgentAsk) => Effect.Effect<Launched, AgentUncertain | AgentParked>;
     /** This work's agent started again with its prompt, where it is gone and wrote nothing. */
     readonly revive: (
       ask: AgentAsk,
       unless?: string | null,
     ) => Effect.Effect<void, AgentUncertain | AgentParked>;
-    /** A message to another Run's live agent in this role here; null where there is none. */
+    /** A message to the live agent in this role of a Run this one came from; null for none. */
     readonly handOff: (options: {
       readonly runId: string;
       readonly role: string;
-      readonly cwd: string;
+      readonly lineage: ReadonlyArray<string>;
       readonly text: string;
     }) => Effect.Effect<Steered | null, AgentParked>;
     /** Closes the panes of this run's live agents; \`left\` may still be running. */
@@ -672,12 +674,10 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly seat?: Seat;
   }
 
-  /** A message handed to another Run's live agent in this role: the agent, or null where none. */
+  /** A message handed to the live agent in this role of a Run this one came from, or null. */
   export function handOffWork(options: {
     readonly operation: string;
     readonly role: string;
-    /** Where the agent to hand to works; the Run's own checkout where it is left out. */
-    readonly cwd?: string;
     readonly text: string;
   }): Effect.Effect<
     string | null,
@@ -1839,47 +1839,61 @@ export const hostLayer = (options: {
                 );
               }),
             ).pipe(Effect.ignore);
+      // A parent the store has lost ends the walk, as a loop would.
+      const lineageOf = Effect.fn("Engine.lineageOf")(function* (runId: string) {
+        const lineage = [runId];
+        let row = yield* store.run(runId);
+        while (row?.parent != null && !lineage.includes(row.parent)) {
+          lineage.push(row.parent);
+          row = yield* store.run(row.parent);
+        }
+        return lineage;
+      });
       const host = Host.of({
         dir,
         place: (runId) =>
           under(
-            store.run(runId).pipe(
-              Effect.flatMap((row) =>
-                row === null
-                  ? Effect.succeed(null)
-                  : decodeStrings(row.options ?? "{}").pipe(
-                      Effect.orElseSucceed((): Record<string, string> => ({})),
-                      Effect.map((options) => ({
-                        options,
-                        task: row.task,
-                        placed: placedOf(row, options),
-                      })),
-                    ),
+            Effect.zipWith(
+              store.run(runId).pipe(
+                Effect.flatMap((row) =>
+                  row === null
+                    ? Effect.succeed(null)
+                    : decodeStrings(row.options ?? "{}").pipe(
+                        Effect.orElseSucceed((): Record<string, string> => ({})),
+                        Effect.map((options) => ({
+                          options,
+                          task: row.task,
+                          placed: placedOf(row, options),
+                        })),
+                      ),
+                ),
+                // A Run nobody has a row for works nowhere in particular; its own directory
+                // is still its own, so what it writes is not written into somebody else's.
+                // Made for a Run there is one, so a workflow writes what it produces into
+                // its own directory without first asking whether it is there — and asking
+                // about a run that was never started leaves nothing behind.
+                Effect.tap((admitted) =>
+                  admitted === null
+                    ? Effect.void
+                    : fs.makeDirectory(runDir(dir, runId), { recursive: true }),
+                ),
+                Effect.map((admitted) => ({
+                  cwd: admitted?.placed.cwd ?? dir,
+                  dir: runDir(dir, runId),
+                  options: admitted?.options ?? {},
+                  task: admitted?.task ?? null,
+                  workspace: admitted?.placed.workspace ?? null,
+                })),
+                Effect.orElseSucceed(() => ({
+                  cwd: dir,
+                  dir: runDir(dir, runId),
+                  options: {},
+                  task: null,
+                  workspace: null,
+                })),
               ),
-              // A Run nobody has a row for works nowhere in particular; its own directory
-              // is still its own, so what it writes is not written into somebody else's.
-              // Made for a Run there is one, so a workflow writes what it produces into
-              // its own directory without first asking whether it is there — and asking
-              // about a run that was never started leaves nothing behind.
-              Effect.tap((admitted) =>
-                admitted === null
-                  ? Effect.void
-                  : fs.makeDirectory(runDir(dir, runId), { recursive: true }),
-              ),
-              Effect.map((admitted) => ({
-                cwd: admitted?.placed.cwd ?? dir,
-                dir: runDir(dir, runId),
-                options: admitted?.options ?? {},
-                task: admitted?.task ?? null,
-                workspace: admitted?.placed.workspace ?? null,
-              })),
-              Effect.orElseSucceed(() => ({
-                cwd: dir,
-                dir: runDir(dir, runId),
-                options: {},
-                task: null,
-                workspace: null,
-              })),
+              lineageOf(runId),
+              (at, lineage) => ({ ...at, lineage }),
             ),
           ),
         held: (runId) => set(HOLD, runId),

@@ -582,6 +582,8 @@ export interface Place {
   readonly task: string | null;
   /** A workspace of the Run's own, where it asked for one; null lives in its Task's. */
   readonly workspace: string | null;
+  /** This Run, then the Run it was started from, and so on: whose agents it may ask. */
+  readonly lineage: ReadonlyArray<string>;
 }
 
 /** What opening a merge request from here needs, and what it would be filled in with. */

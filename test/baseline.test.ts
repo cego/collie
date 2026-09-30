@@ -189,6 +189,7 @@ const admit = (options: {
   readonly workflow: string;
   readonly input: Readonly<Record<string, Schema.Json>>;
   readonly options?: Readonly<Record<string, string>>;
+  readonly parent?: string;
 }) =>
   Store.pipe(
     Effect.flatMap((store) =>
@@ -203,7 +204,7 @@ const admit = (options: {
         generation: `${options.workflow}@${options.runId}`,
         execution: options.runId,
         task: null,
-        parent: null,
+        parent: options.parent ?? null,
       }),
     ),
     Effect.orDie,
@@ -217,6 +218,8 @@ const parked = (options: {
   /** The host's own launch options, as a front door settles them apart from the input. */
   readonly options?: Readonly<Record<string, string>>;
   readonly decision: string;
+  /** The Run this one was started from. */
+  readonly parent?: string;
 }) =>
   session(
     Effect.gen(function* () {
@@ -227,6 +230,7 @@ const parked = (options: {
         workflow: made.workflow.name,
         input: options.input,
         options: options.options,
+        parent: options.parent,
       });
       return yield* Effect.gen(function* () {
         yield* made.workflow.execute(
@@ -1185,7 +1189,7 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         yield* rig.queueOutputs([SYNTHESIS, SYNTHESIS]);
-        // Another Run's implementer, live in this checkout's workspace and registered as it.
+        // The implementer of the Run this review was started from, live and registered as it.
         yield* rig.addAgent("impl-live", "9-1");
         const env = hostOf().env;
         yield* registerAgent(yield* registryPath(env.stateDir, scopeFor(env, rig.projectDir)), {
@@ -1204,6 +1208,7 @@ scenario(
           runId: "r-review-live",
           input: { target },
           decision: "post-1",
+          parent: "r-building",
         });
         yield* answeredThen({
           entry: shipped("review"),
@@ -1227,6 +1232,7 @@ scenario(
           runId: "r-review-live",
           input: { target },
           decision: "post-2",
+          parent: "r-building",
         });
         expect(optionsOf(rows, "post-2")).toContain("Review again");
         expect(optionsOf(rows, "post-2")).not.toContain("Fix findings");

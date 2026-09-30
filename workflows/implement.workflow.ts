@@ -247,7 +247,7 @@ export default defineWorkflow({
       };
       // Where a question the plan does not cover goes: the planner's own pane while one
       // is live, and otherwise the human's.
-      const session = { ask: yield* agents.askRoute("planner", cwd) };
+      const session = { ask: yield* agents.askRoute("planner", place.lineage) };
 
       // The tickets as they stand at each boundary: one added, removed or reordered while
       // another is being built is the plan from then on, and what is built stays built by

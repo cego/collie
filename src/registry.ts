@@ -104,15 +104,18 @@ export const readRegistry = Effect.fn("readRegistry")(function* (file: string) {
   );
 });
 
-/** Every agent registered in this state directory, whichever Session registered it. */
-export const everyRegistered = Effect.fn("everyRegistered")(function* (stateDir: string) {
+const registryFiles = Effect.fn("registryFiles")(function* (stateDir: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const dir = path.join(stateDir, "agents");
   const names = yield* fs.readDirectory(dir).pipe(Effect.catch(() => Effect.succeed([])));
+  return names.filter((one) => one.endsWith(".json")).map((name) => path.join(dir, name));
+});
+
+/** Every agent registered in this state directory, whichever Session registered it. */
+export const everyRegistered = Effect.fn("everyRegistered")(function* (stateDir: string) {
   const entries: AgentEntry[] = [];
-  for (const name of names.filter((one) => one.endsWith(".json")))
-    entries.push(...(yield* readRegistry(path.join(dir, name))));
+  for (const file of yield* registryFiles(stateDir)) entries.push(...(yield* readRegistry(file)));
   return entries;
 });
 
@@ -130,8 +133,9 @@ export const registerAgent = Effect.fn("registerAgent")(function* (
   file: string,
   entry: AgentEntry,
 ) {
+  // One per role per Run: every Run started from the same place shares this file.
   const kept = (yield* readRegistry(file)).filter(
-    (e) => e.role !== entry.role && e.agent !== entry.agent,
+    (e) => !(e.role === entry.role && e.runId === entry.runId) && e.agent !== entry.agent,
   );
   const entries = [...kept, entry];
   yield* write(file, entries);
@@ -201,10 +205,22 @@ export const pruneRegistry = Effect.fn("pruneRegistry")(function* (
   return live;
 });
 
-export const liveAgent = Effect.fn("liveAgent")(function* (
-  file: string,
-  alive: AgentInfo[],
+/**
+ * The live agent in this role nearest the first of these Runs: that Run's own, then the
+ * Run it came from, and so on. Another Run's agent in the role is never the answer.
+ */
+export const lineageAgent = Effect.fn("lineageAgent")(function* (
+  stateDir: string,
+  alive: ReadonlyArray<AgentInfo>,
   role: string,
+  lineage: ReadonlyArray<string>,
 ) {
-  return (yield* pruneRegistry(file, alive)).find((e) => e.role === role) ?? null;
+  const live: AgentEntry[] = [];
+  for (const file of yield* registryFiles(stateDir))
+    live.push(...(yield* pruneRegistry(file, alive)));
+  for (const runId of lineage) {
+    const found = live.findLast((e) => e.role === role && e.runId === runId);
+    if (found !== undefined) return found;
+  }
+  return null;
 });

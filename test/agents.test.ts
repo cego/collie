@@ -968,7 +968,7 @@ const handedOff = Agents.pipe(
     agents.handOff({
       runId: "r-review",
       role: "implementer",
-      cwd: rig.projectDir,
+      lineage: ["r-review", "r-building"],
       text: "the review is ready",
     }),
   ),
@@ -1003,6 +1003,70 @@ test("a hand-off nobody can say arrived parks until a human says what became of 
         delivered: true,
       });
       expect(sent(yield* rig.calls(), "the review is ready")).toBe(0);
+    }),
+  ));
+
+/** An agent of some Run, live and registered here as herdr started it. */
+const liveIn = Effect.fn("test.liveIn")(function* (
+  runId: string,
+  role: string,
+  agent: string,
+  paneId: string,
+) {
+  yield* rig.addAgent(agent, paneId);
+  const env = rig.pluginEnv();
+  yield* registerAgent(yield* registryPath(env.stateDir, scopeFor(env, rig.projectDir)), {
+    role,
+    agent,
+    paneId,
+    workspaceId: null,
+    runId,
+    workflow: "plan",
+    at: "2026-09-30T10:00:00Z",
+    incarnation: { terminalId: `term-${agent}`, agentSession: null },
+  });
+});
+
+test("a question and a hand-off stay in the asking Run's lineage, whoever else registered the role here", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* liveIn("r-plan", "planner", "plan-grill", "9-1");
+      yield* liveIn("r-plan.implement", "implementer", "plan-build", "9-2");
+      // Started later from the same place, in the same roles.
+      yield* liveIn("r-other", "planner", "other-grill", "9-3");
+      yield* liveIn("r-other.implement", "implementer", "other-build", "9-4");
+      const env = rig.pluginEnv();
+      const kept = yield* readRegistry(
+        yield* registryPath(env.stateDir, scopeFor(env, rig.projectDir)),
+      );
+      expect(kept.map((entry) => entry.agent)).toEqual([
+        "plan-grill",
+        "plan-build",
+        "other-grill",
+        "other-build",
+      ]);
+
+      const asked = (lineage: ReadonlyArray<string>) =>
+        Agents.pipe(Effect.flatMap((agents) => agents.askRoute("planner", lineage)));
+      const route = yield* session(asked(["r-plan.implement", "r-plan"]));
+      expect(route).toContain("`plan-grill`");
+      expect(route).not.toContain("other-grill");
+      expect(yield* session(asked(["r-lonely"]))).toContain("There is no planner live");
+
+      const handed = (lineage: ReadonlyArray<string>) =>
+        Agents.pipe(
+          Effect.flatMap((agents) =>
+            agents.handOff({
+              runId: lineage[0]!,
+              role: "implementer",
+              lineage,
+              text: "the review is ready",
+            }),
+          ),
+        );
+      const to = yield* session(handed(["r-plan.implement.review", "r-plan.implement", "r-plan"]));
+      expect(to?.agent).toBe("plan-build");
+      expect(yield* session(handed(["r-lonely"]))).toBeNull();
     }),
   ));
 
