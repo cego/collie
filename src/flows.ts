@@ -11,12 +11,13 @@ import {
   Effect,
   FileSystem,
   Option,
-  Path,
   Schedule,
   Schema,
 } from "effect";
 import { currentReports, readDrift } from "./drift";
-import { diffTargetOf } from "./strategies";
+import { diffTargetOf, EXCLUSIVE_STRATEGIES, strategyMeaning } from "./strategies";
+import { PROJECTS_ROOT_OPTION, projectsRoot } from "./projects";
+import { insideCheckout } from "./agent-start";
 import { buildBoard, type MrState, type TaskView } from "./board";
 import { settleMerges } from "./merges";
 import { nowIso } from "./time";
@@ -56,7 +57,7 @@ import { isStale, layers, loadDefinitions, type Definitions, type Provenance } f
 import type { PluginEnv } from "./env";
 import { Herdr, type AgentInfo, type WorkspaceInfo } from "./herdr";
 import { inferInput, type InputPrompts, type PickItem } from "./inputs";
-import type { Declared, Found } from "./discovery";
+import type { Found } from "./discovery";
 import {
   answerRun,
   controlRun,
@@ -87,7 +88,6 @@ import {
   newRequestId,
   registerRunExecutors,
   steer,
-  workspaceCwdFromPanes,
 } from "./operations";
 import {
   answerFor,
@@ -241,150 +241,14 @@ export const boardFlow = Effect.fn("Flows.boardFlow")(function* (herdr: Herdr, e
   return 0;
 });
 
-/** A directory a Run could be rooted in, and what it would be picked from the list as. */
-interface Rooting {
-  id: string;
-  title: string;
-  subtitle: string;
-  cwd: string;
-  /** The herdr workspace this directory is already open in, where one is. */
-  workspaceId: string | null;
-  /** Why it will not do, or null when it will. */
-  why: string | null;
-}
-
-/** The row that reaches a checkout no workspace is open on and no Task has used. */
-const NEW_CHECKOUT = "new";
-
 /**
- * The environment a run is rooted in. The board is the Herd's one Home (ADR-0009), and
- * its own directory is Collie's namespace rather than a checkout — so a launch from
- * there asks which checkout the work is in, and roots the Run there. A launch from
- * anywhere else is already in one.
- *
- * What is picked is the checkout, not the Run's workspace: a fresh Task opens a
- * workspace of its own named after the intent (`taskFor`), whatever it was launched
- * from. So the list is not what herdr happens to have open — a checkout an earlier Task
- * used is offered too, and any path can be typed. Those leave `workspaceId` null, which
- * is the truth: that Task's workspace does not exist yet.
- *
- * `null` is the human backing out, or being told why a directory will not do.
- * `WorkspaceInfo` carries no directory of its own on every herdr, so it is resolved from
- * the workspace's worktree and then from its first pane's cwd — never invented.
+ * Whether this flow was opened from the Herd's Home (ADR-0009): Collie's own namespace
+ * directory, which is no checkout, so a Run started there is placed rather than asked.
  */
-const rootedWhere = Effect.fn("Flows.rootedWhere")(function* (
-  herdr: Herdr,
-  env: PluginEnv,
-  prompts: FlowPrompts,
-) {
+const fromHome = Effect.fn("Flows.fromHome")(function* (env: PluginEnv) {
   const key = yield* herdOf(env.socketPath).pipe(Effect.catch(() => Effect.succeed(null)));
   const home = key === null ? null : yield* readHome(yield* homePath(env.stateDir, key));
-  if (home === null || home === UNREADABLE || env.workspaceId !== home.workspaceId) return env;
-
-  const path = yield* Path.Path;
-  const namespaceDir = key === null ? "" : yield* herdDir(env.stateDir, key);
-  const workspaces = (yield* herdr
-    .workspaceList()
-    .pipe(Effect.catch(() => Effect.succeed([])))).filter(
-    (workspace) => workspace.workspaceId !== home.workspaceId,
-  );
-  const panes = yield* herdr.paneList().pipe(Effect.catch(() => Effect.succeed([])));
-  const candidates: Rooting[] = yield* Effect.forEach(workspaces, (workspace) =>
-    Effect.gen(function* () {
-      const cwd =
-        workspace.cwd !== "" ? workspace.cwd : workspaceCwdFromPanes(workspace.workspaceId, panes);
-      return {
-        id: `ws:${workspace.workspaceId}`,
-        title: workspace.label,
-        subtitle: cwd,
-        cwd,
-        workspaceId: workspace.workspaceId,
-        why: yield* whyNotRootable(cwd, namespaceDir),
-      };
-    }),
-  );
-  // Checkouts earlier Tasks were rooted in, for the repo nobody has a workspace open on
-  // — which is most of them once a Task's own workspace has been closed. The Task record
-  // already keeps the directory, so this needs no new state and no scan of the disk.
-  const seen = new Set(candidates.map((entry) => entry.cwd));
-  for (const task of yield* listTasks(env.stateDir)) {
-    if (task.cwd === "" || seen.has(task.cwd)) continue;
-    seen.add(task.cwd);
-    // Silently, unlike a workspace row: a workspace with a bad directory is something
-    // the human can see and close, and a checkout deleted last week is only a record.
-    if ((yield* whyNotRootable(task.cwd, namespaceDir)) !== null) continue;
-    candidates.push({
-      id: `dir:${task.cwd}`,
-      title: path.basename(task.cwd),
-      subtitle: task.cwd,
-      cwd: task.cwd,
-      workspaceId: null,
-      why: null,
-    });
-  }
-  const chosen = yield* prompts.menu(
-    [
-      // First, and there however little else is: the rest of the list is whatever is
-      // open or remembered, and this is the one row that reaches anything else. Without
-      // it a Home with no workspaces open could start nothing at all.
-      { id: NEW_CHECKOUT, title: "New checkout…", subtitle: "type the path to a project" },
-      ...candidates.map((entry) => ({
-        id: entry.id,
-        title: entry.title,
-        subtitle: entry.why ?? entry.subtitle,
-      })),
-    ],
-    {
-      header: "Which checkout?",
-      footer: "↑↓ move · type to filter · Enter choose · Esc cancel",
-    },
-  );
-  if (!chosen) return null;
-  const picked =
-    chosen.id === NEW_CHECKOUT
-      ? yield* typedCheckout(env, prompts, namespaceDir)
-      : (candidates.find((entry) => entry.id === chosen.id) ?? null);
-  if (picked === null) return null;
-  if (picked.why !== null) {
-    yield* bail(prompts, `${picked.title}: ${picked.why}`);
-    return null;
-  }
-  // Confirmed on screen before a single Input is asked for: the directory a Run is
-  // rooted in is the one thing nothing downstream can put right.
-  yield* Console.log(`Starting in ${picked.cwd}`);
-  return { ...env, workspaceId: picked.workspaceId, cwd: picked.cwd };
-});
-
-/** A checkout nothing has open and no Task has used: the path, as the human types it. */
-const typedCheckout = Effect.fn("Flows.typedCheckout")(function* (
-  env: PluginEnv,
-  prompts: FlowPrompts,
-  namespaceDir: string,
-) {
-  const answer = yield* prompts.ask("Which checkout? Type the path to the project.");
-  if (answer === null) return null;
-  const path = yield* Path.Path;
-  const typed = answer.trim();
-  if (typed === "") return null;
-  // `~` is what a human types and nothing expanded it on the way here. Anything else
-  // relative is refused rather than resolved: the process's directory is the Home's
-  // namespace, so resolving against it would silently root the Run in the one place
-  // that is never meant.
-  const cwd = typed === "~" || typed.startsWith("~/") ? path.join(env.home, typed.slice(1)) : typed;
-  const entry = { id: `dir:${cwd}`, title: cwd, subtitle: cwd, cwd, workspaceId: null };
-  if (!path.isAbsolute(cwd)) return { ...entry, why: "give the whole path, from / or ~" };
-  return { ...entry, why: yield* whyNotRootable(cwd, namespaceDir) };
-});
-
-/** Why a directory will not root a Run — open, remembered or typed — else null. */
-const whyNotRootable = Effect.fn("Flows.whyNotRootable")(function* (
-  cwd: string,
-  namespaceDir: string,
-) {
-  const fs = yield* FileSystem.FileSystem;
-  if (cwd === "") return "herdr names no directory for it";
-  if (namespaceDir !== "" && cwd === namespaceDir) return "that is Collie's own namespace";
-  return (yield* fs.exists(cwd)) ? null : "its directory is not on disk";
+  return home !== null && home !== UNREADABLE && env.workspaceId === home.workspaceId;
 });
 
 function banner(defs: Definitions): string | undefined {
@@ -500,17 +364,12 @@ const startChosen = Effect.fn("Flows.startChosen")(function* (
     task?: TaskChoice;
   },
 ) {
-  // A run starts in a checkout, and the Home has none: it is Collie's own namespace
-  // directory, so a Run rooted there would have nothing to work on. Asked once, before
-  // anything else, because every Input after it is resolved against the answer.
-  const at = yield* rootedWhere(herdr, env, prompts);
-  if (at === null) return null;
   const task = opts.task ?? { mode: "new" };
   // A workflow saved as a module is started through the host, with the same claim and
   // the same rows `collie run start` uses — the Run is the same either way.
-  const saved = yield* savedModules(at);
+  const saved = yield* savedModules(env);
   const module = saved.entries.find((entry) => entry.id === opts.workflow);
-  if (module) return yield* startModule(herdr, at, prompts, { ...opts, task }, module);
+  if (module) return yield* startModule(herdr, env, prompts, { ...opts, task }, module);
   const broken = saved.problems.find((problem) => problem.id === opts.workflow);
   if (broken) {
     yield* bail(prompts, `${broken.path}: ${broken.message}`);
@@ -525,9 +384,9 @@ const startChosen = Effect.fn("Flows.startChosen")(function* (
 });
 
 /**
- * A saved module from the name to a started Run: what it declares it takes is what the
- * human is asked for, and nothing else. Typed values and inference belong to the schema
- * and are not guessed at here.
+ * A saved module from the name to a started Run (ADR-0033): one question for its launch
+ * Input, everything else inferred, and what was inferred shown before the start. A start
+ * still missing a required Input is refused with the reason, never asked again.
  */
 const startModule = Effect.fn("Flows.startModule")(function* (
   herdr: Herdr,
@@ -541,33 +400,66 @@ const startModule = Effect.fn("Flows.startModule")(function* (
   },
   module: Found,
 ) {
-  const text = { ...opts.given };
-  for (const field of module.inputs) {
-    if (text[field.name] !== undefined) continue;
-    // A field the module attached a strategy to is worked out the way every other Run's
-    // is — from this checkout, its Task and what finished here — and only asked for when
-    // that comes up empty. The strategy is the module's; the field's name is its own.
-    const strategy = field.strategy;
-    const inferred = strategy === null ? null : yield* infer(env, opts, field.name, strategy);
-    if (inferred !== null) {
-      text[field.name] = inferred;
-      continue;
-    }
-    // What it will take decides how it is asked for: a closed set is a menu, so nobody
-    // types a value the schema is about to refuse.
-    const answer = yield* offer(prompts, module, field);
-    if (answer === null) return null;
-    if (answer === "" && field.required) {
-      yield* bail(prompts, `${module.id} needs an input for "${field.name}".`);
+  const launchInput = module.inputs.find((field) =>
+    EXCLUSIVE_STRATEGIES.includes(field.strategy ?? ""),
+  );
+  const home = yield* fromHome(env);
+  let at = env;
+  if (home) {
+    // ponytail: only a goal is placed from the Home until the words place the rest.
+    if (launchInput?.strategy !== "goal") {
+      yield* bail(prompts, `${module.id} needs a checkout: start it from one.`);
       return null;
     }
-    // Absent, not empty: an optional input nobody answered is one the module never sees.
-    if (answer !== "") text[field.name] = answer;
+    at = { ...env, cwd: (yield* projectsRoot(env)).path, workspaceId: null };
   }
-  const started = yield* startRun(env, {
+  const text = { ...opts.given };
+  const inferred = new Map<string, string>();
+  if (launchInput !== undefined && text[launchInput.name] === undefined) {
+    const answer = yield* prompts.ask(WHAT_DO_YOU_WANT);
+    if (answer === null) return null;
+    const words = answer.trim();
+    if (words !== "" && (yield* wordsAre(launchInput.strategy ?? "", words, at.cwd)))
+      text[launchInput.name] = words;
+    else if (launchInput.strategy === "gitlab-repository" && (yield* insideCheckout(at.cwd))) {
+      text[launchInput.name] = at.cwd;
+      inferred.set(launchInput.name, "the checkout you are in");
+    }
+  }
+  for (const field of module.inputs) {
+    if (text[field.name] !== undefined) continue;
+    const found =
+      field.strategy === null ? null : yield* infer(at, opts, field.name, field.strategy);
+    if (found !== null) {
+      text[field.name] = found.value;
+      inferred.set(field.name, found.source);
+      continue;
+    }
+    if (field.required) {
+      const meaning = field.strategy === null ? "" : strategyMeaning(field.strategy);
+      yield* bail(
+        prompts,
+        `${module.id} needs "${field.name}"${meaning === "" ? "" : ` (${meaning})`}, and nothing in ${at.cwd} gave one.`,
+      );
+      return null;
+    }
+  }
+  if (inferred.size > 0) {
+    const inputs = Object.entries(text).map(
+      ([name, value]) =>
+        `${name} = ${value} (${inferred.has(name) ? `inferred from ${inferred.get(name)}` : "given"})`,
+    );
+    const confirmed = yield* prompts.menu(
+      [{ id: "start", title: `Starting in ${at.cwd}`, subtitle: inputs.join(" · ") }],
+      { header: module.title, footer: "Enter start · Esc cancel" },
+    );
+    if (confirmed === null) return null;
+  }
+  const started = yield* startRun(at, {
     id: module.id,
     request: yield* newRequestId(),
-    input: { json: {}, text },
+    input: { json: {}, text, inferred: [...inferred.keys()] },
+    options: home ? { workspace: PROJECTS_ROOT_OPTION } : {},
     task: opts.task,
     parent: opts.parent?.id ?? null,
   });
@@ -578,6 +470,28 @@ const startModule = Effect.fn("Flows.startModule")(function* (
   if (opts.placement === "popup") yield* Effect.ignore(herdr.popupClose());
   const given = Object.entries(text).map(([name, value]) => `${name}=${value}`);
   return `${module.id}: ${given.join("  ")} → ${started.runId}`;
+});
+
+/** The one question a start asks: what the human wants, in their own words. */
+const WHAT_DO_YOU_WANT = "What do you want?";
+
+/**
+ * Whether a human's words are a value of the launch Input's kind, rather than words about
+ * where the work is: any words are a goal or a work source, a merge request URL, an iid or
+ * a ref here is a diff target, and a URL or an absolute path is a repository.
+ */
+const wordsAre = Effect.fn("Flows.wordsAre")(function* (
+  strategy: string,
+  words: string,
+  cwd: string,
+) {
+  if (strategy === "goal" || strategy === "work-source") return true;
+  if (strategy === "gitlab-repository") return /^(https?:\/\/|git@|\/)/.test(words);
+  if (strategy !== "diff-target") return false;
+  if (/\/-\/merge_requests\/\d+/.test(words) || /^!?\d+$/.test(words)) return true;
+  if (/\s/.test(words)) return false;
+  const ref = yield* shell("git", ["rev-parse", "--verify", "--quiet", `${words}^{commit}`], cwd);
+  return ref.code === 0;
 });
 
 /** What the strategy a module attached to this field works out, or null for nothing. */
@@ -593,41 +507,8 @@ const infer = Effect.fn("Flows.infer")(function* (
     task: opts.task.mode === "continue" ? opts.task.task.id : null,
   }).pipe(Effect.orElseSucceed(() => null));
   if (settled === null || settled.needsAsking || settled.value === "") return null;
-  return settled.value;
+  return settled;
 });
-
-/**
- * One Input, asked the way its own schema allows: a menu where the values are a closed
- * set, and the human's own words otherwise. Null is the human closing the picker; empty
- * is an answer they declined to give.
- */
-const offer = Effect.fn("Flows.offer")(function* (
-  prompts: FlowPrompts,
-  module: Found,
-  field: Declared,
-) {
-  const options = choicesOf(field);
-  if (options === null) {
-    const answer = yield* prompts.ask(`${module.title} — ${field.name}?`);
-    return answer === null ? null : answer.trim();
-  }
-  const picked = yield* prompts.menu(
-    options.map((value) => ({ id: value, title: value })),
-    { header: `${module.title} — ${field.name}` },
-  );
-  return picked === null ? null : picked.id;
-});
-
-/** The values a field will take where they are a closed set, and null where they are not. */
-function choicesOf(field: Declared): ReadonlyArray<string> | null {
-  const drawn = field.schema;
-  if (!isDrawing(drawn)) return null;
-  if (drawn.type === "boolean") return ["true", "false"];
-  const options = drawn.enum;
-  return Array.isArray(options) ? options.map((one) => String(one)) : null;
-}
-
-const isDrawing = Schema.is(Schema.Record(Schema.String, Schema.Json));
 
 export const forkFlow = Effect.fn("Flows.forkFlow")(function* (
   herdr: Herdr,

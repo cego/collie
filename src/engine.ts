@@ -78,6 +78,7 @@ import {
 import { FALLBACK_DEFAULTS, configValue, loadDefaults, readConfig } from "./config";
 import { foldPreferences, preferencesIn, resolveChoice } from "./harness";
 import { currentEnv } from "./env";
+import { PROJECTS_ROOT_OPTION, projectsRoot } from "./projects";
 import {
   HelleClaimSchema,
   HelleError,
@@ -2448,11 +2449,14 @@ const decodeStrings = Schema.decodeUnknownEffect(
 export interface Given {
   readonly json: Readonly<Record<string, Schema.Json>>;
   readonly text: Readonly<Record<string, string>>;
+  /** The names in `text` a front door worked out rather than was told. */
+  readonly inferred?: ReadonlyArray<string>;
 }
 
-/** Where a settled value came from: already typed, or as text a human wrote. */
+/** Where a settled value came from: already typed, as text a human wrote, or worked out. */
 export const GIVEN = "given";
 export const TYPED = "typed";
+export const INFERRED = "inferred";
 
 /**
  * The author's input, settled against the author's schemas before anything exists.
@@ -2493,7 +2497,7 @@ export const settleInput = (
       return refusedInput(`"${name}" is not ${describe(field)}: ${text}`);
     }
     input[name] = settled.value;
-    provenance[name] = TYPED;
+    provenance[name] = given.inferred?.includes(name) ? INFERRED : TYPED;
   }
   return Effect.succeed({ input, provenance });
 };
@@ -2592,17 +2596,21 @@ const checkoutRequest = Effect.fn("Engine.checkoutRequest")(function* (
     }
     return { kind: "separate" } satisfies CheckoutRequest;
   }
-  if (!given.startsWith("/")) {
+  const path =
+    given === PROJECTS_ROOT_OPTION
+      ? (yield* projectsRoot(yield* currentEnv.pipe(Effect.orDie)).pipe(Effect.orDie)).path
+      : given;
+  if (!path.startsWith("/")) {
     return yield* refusedInput(
-      `workspace: "${given}" is neither "new" nor the absolute path of a checkout`,
+      `workspace: "${given}" is neither "new", "${PROJECTS_ROOT_OPTION}" nor the absolute path of a checkout`,
     );
   }
   const fs = yield* FileSystem.FileSystem;
-  const found = yield* fs.stat(given).pipe(Effect.option);
+  const found = yield* fs.stat(path).pipe(Effect.option);
   if (Option.isNone(found) || found.value.type !== "Directory") {
-    return yield* refusedInput(`workspace: ${given} is not a directory`);
+    return yield* refusedInput(`workspace: ${path} is not a directory`);
   }
-  return { kind: "existing", path: given } satisfies CheckoutRequest;
+  return { kind: "existing", path } satisfies CheckoutRequest;
 });
 
 /** Where a Run works, as the host placed it before the Run existed. */
@@ -2654,7 +2662,7 @@ const unplaced = (row: RunRow) => row.checkout === null && row.placing !== null;
 /** Where a Run works: as the host placed it, or for a row from before that, as it started. */
 const placedOf = (row: RunRow, options: Readonly<Record<string, string>>): Placed =>
   Option.getOrElse(decodePlaced(row.checkout ?? ""), () => ({
-    cwd: options.workspace ?? row.project,
+    cwd: options.workspace?.startsWith("/") ? options.workspace : row.project,
     branch: null,
     workspace: null,
     worktree: null,
@@ -3021,6 +3029,7 @@ export interface RegistryApi {
     /** What the caller said, in the two halves a front door keeps apart. */
     readonly input: Readonly<Record<string, Schema.Json>>;
     readonly text?: Readonly<Record<string, string>>;
+    readonly inferred?: ReadonlyArray<string>;
     /** The host's own launch options, which never reach the author's payload. */
     readonly options?: Readonly<Record<string, string>>;
     /** What this work belongs to: a Task, and the run it came out of. */
@@ -4187,6 +4196,7 @@ const makeRegistry: (
     readonly runId?: string;
     readonly input: Readonly<Record<string, Schema.Json>>;
     readonly text?: Readonly<Record<string, string>>;
+    readonly inferred?: ReadonlyArray<string>;
     readonly options?: Readonly<Record<string, string>>;
     readonly task?: string | null;
     readonly taskLabel?: string | undefined;
@@ -4207,6 +4217,7 @@ const makeRegistry: (
     const settled = yield* settleInput(generation.fields, {
       json: options.input,
       text: options.text ?? {},
+      inferred: options.inferred ?? [],
     }).pipe(
       Effect.flatMap((given) =>
         settleTargets(

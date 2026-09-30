@@ -368,6 +368,38 @@ scenario(
   120_000,
 );
 
+/** What a planner or architect rooted at the Projects root is told about it. */
+const ROOTED = "it is not a repository: find the\nrepositories under it";
+
+scenario(
+  "architecture at the Projects root is told the root is not a repository, and elsewhere is not",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* rig.queueOutputs([REPORT, REPORT]);
+        yield* parked({
+          entry: shipped("architecture"),
+          runId: "r-arch-root",
+          input: { goal: "why are there two registries" },
+          options: { workspace: "projects-root" },
+          decision: "next",
+        });
+        yield* parked({
+          entry: shipped("architecture"),
+          runId: "r-arch-here",
+          input: { goal: "why are there two registries" },
+          decision: "next",
+        });
+
+        const rooted = yield* asked("r-arch-root", "architecture");
+        expect(rooted).toContain(ROOTED);
+        expect(rooted).toContain("Each ticket's `Repo:` is a path relative to\nit.");
+        expect(yield* asked("r-arch-here", "architecture")).not.toContain(ROOTED);
+      }),
+    ),
+  120_000,
+);
+
 scenario(
   "implement now builds the plan the architect wrote, named and classified by the report",
   () =>
@@ -439,6 +471,25 @@ const SPEC = { verdict: "clean", findings: [], spec: "plan/SPEC.md" };
 const TICKETS = { verdict: "clean", findings: [], issues_dir: "plan/issues", tickets: 3 };
 const GOAL = { goal: "make the registries one" };
 
+scenario("a plan at the Projects root is told the root is not a repository", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([GRILLED, SPEC, TICKETS]);
+      yield* parked({
+        entry: shipped("plan"),
+        runId: "r-plan-root",
+        input: GOAL,
+        options: { workspace: "projects-root" },
+        decision: "next-1",
+      });
+
+      const interview = yield* asked("r-plan-root", "grill");
+      expect(interview).toContain(ROOTED);
+      expect(interview).toContain("Each ticket's `Repo:` is a path relative to\nit.");
+    }),
+  ),
+);
+
 scenario(
   "plan interviews, writes the spec and cuts the tickets — one planner, its two skills started",
   () =>
@@ -464,6 +515,7 @@ scenario(
         expect(sent).toHaveLength(3);
         const interview = yield* asked("r-plan", "grill");
         expect(interview).toContain("make the registries one");
+        expect(interview).not.toContain(ROOTED);
         expect(interview).toContain(`collie run answer r-plan "Implement now"`);
         // The two skills that write the plan are started, not merely mentioned: both
         // refuse an agent that invokes them itself.

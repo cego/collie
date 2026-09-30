@@ -382,13 +382,19 @@ export function targetCandidates(
     const inRepo = (yield* run("git", ["rev-parse", "--git-dir"], ctx.cwd)).code === 0;
     const project = inRepo ? yield* projectHere(ctx.cwd, run) : null;
 
+    const branch = inRepo
+      ? (yield* run("git", ["rev-parse", "--abbrev-ref", "HEAD"], ctx.cwd)).stdout.trim()
+      : "";
     const view = yield* run("glab", ["mr", "view", "--output", "json"], ctx.cwd);
     const iid = view.code === 0 ? mrIid(view.stdout) : null;
     if (iid) {
       out.push({
         kind: "mr",
         value: mrTarget(project, iid),
-        source: `open merge request !${iid}`,
+        source:
+          branch === ""
+            ? `open merge request !${iid}`
+            : `branch ${branch}'s open merge request !${iid}`,
         label: `!${iid}`,
       });
     } else {
@@ -397,11 +403,6 @@ export function targetCandidates(
     }
 
     if (inRepo) {
-      const branch = (yield* run(
-        "git",
-        ["rev-parse", "--abbrev-ref", "HEAD"],
-        ctx.cwd,
-      )).stdout.trim();
       const baseRef = yield* defaultBase(run, ctx.cwd);
       if (branch && baseRef && branch !== baseRef) {
         out.push({

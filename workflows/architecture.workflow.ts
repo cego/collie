@@ -28,6 +28,7 @@ const content = contentOf(markdown);
 const attended = content.template("attended", {
   inputs: Schema.Struct({ goal: Schema.String }),
   run: Schema.Struct({ dir: Schema.String }),
+  rooting: Schema.String,
 });
 
 /** What the architect is held to: the report, what it applied, and what it left. */
@@ -80,7 +81,14 @@ export default defineWorkflow({
         role: "architect",
         skill: "improve-codebase-architecture",
         instructions: attended,
-        input: { inputs: { goal: asked.goal }, run: { dir: place.dir } },
+        input: {
+          inputs: { goal: asked.goal },
+          run: { dir: place.dir },
+          rooting:
+            place.options.workspace === "projects-root"
+              ? (content.sections.get("projects-root") ?? "")
+              : "",
+        },
         output: Report,
       });
       const next = yield* ask({ name: "next", prompt: "What next?", options: [IMPLEMENT, STOP] });

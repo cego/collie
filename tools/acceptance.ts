@@ -72,9 +72,36 @@ const RETRO = "collie-retro-fixes (this MR)";
 const NATIVE = "native-collie-control-panel (this MR)";
 const OPERATOR = "operator";
 const MODULES = "workflow modules (this MR)";
+const LAUNCH = "launch flow places human starts (this MR)";
 
 /** What the front door owes a person, and cannot be settled below the front door. */
 const FRONT_DOOR: readonly Check[] = [
+  {
+    id: "front-door/no-checkout-is-asked-for-from-the-home",
+    statement:
+      "Starting a Run from the Home asks which Workflow and what you want, and never which checkout: a goal starts at the Projects root with nothing typed about where.",
+    owner: LAUNCH,
+    needs: "ui",
+    proof: {
+      kind: "test",
+      layer: "ui",
+      file: "test/launch.test.ts",
+      name: "no checkout is asked for from the Home: a goal starts at the Projects root",
+    },
+  },
+  {
+    id: "front-door/what-was-inferred-is-shown-before-the-start",
+    statement:
+      "Where anything was inferred, one row says where the Run starts and each Input as given or inferred from what, before anything starts; Enter starts it and Esc starts nothing.",
+    owner: LAUNCH,
+    needs: "ui",
+    proof: {
+      kind: "test",
+      layer: "ui",
+      file: "test/launch.test.ts",
+      name: "what was inferred is shown before the start, and Esc starts nothing",
+    },
+  },
   {
     id: "front-door/native-chat-takes-what-is-typed",
     statement:

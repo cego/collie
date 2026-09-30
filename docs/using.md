@@ -168,17 +168,25 @@ runs from a shell inside herdr: `herdr plugin action invoke cego.collie.pick`.
 1. Focus a pane in the workspace of the repo you want to work on and press `prefix+f`.
 2. Pick a workflow in the popup (type to filter, Enter). See
    [Workflows](workflows.md) for what each one is for.
-3. Inputs are inferred from the branch, open MR and earlier runs; you are asked only for
-   what could not be inferred, and shown one confirm line. Two inputs offer a menu instead
-   of a guess: `implement`'s work source, and `review`'s target.
-4. The workspace's **Control Plane** tab opens, and it is always the workspace's first
+3. One question: **What do you want?** Your words fill the workflow's one launch Input
+   where they are a value of its kind — any words for `plan`'s goal or `implement`'s work
+   source (a plan directory, a Linear issue, or the words as text), a merge request URL,
+   an iid or a branch for `review`'s target, a URL or an absolute path for `renovate`'s
+   repository. Every other Input is inferred from the branch, open MR and earlier runs, or
+   left empty; nothing else is asked. A start still missing a required Input is refused
+   with the reason. A workflow that takes no Input starts from the menu alone.
+4. Where anything was inferred, one row says where the run starts and each Input as
+   `name = value (inferred from …)` or `(given)`: Enter starts it, Esc starts nothing. A
+   start with nothing inferred starts at once. The run records which Inputs were inferred,
+   and `collie run show` lists each with where it came from.
+5. The workspace's **Control Plane** tab opens, and it is always the workspace's first
    tab, so `prefix+1` lands on it.
-5. The run's own tabs hold agents and nothing else: one tab per agent it starts, labelled
+6. The run's own tabs hold agents and nothing else: one tab per agent it starts, labelled
    with the agent's role — `implementer`, `reviewer` — in the order they started, each
    `cd`-ed into the checkout the run works in. An operation that reuses an agent opens
    nothing. The label carries no state: the run's card on the board says what it is doing,
    and herdr's own agent-status column says what each agent is.
-6. `plan`, `architecture` and `review` end in a question — **What next?** — answered on the
+7. `plan`, `architecture` and `review` end in a question — **What next?** — answered on the
    run's card, with `collie run answer`, or in chat. Launching asks nothing about it: a
    question is asked when the run reaches it, so you decide with the work in front of you.
    `prefix+u` asks the host to pick a run that is still going back up.
@@ -397,11 +405,12 @@ collie home reconcile --forget   forget the record; the next launch decides agai
 collie home cleanup --confirm    close the legacy panes that are alone in their tab
 ```
 
-Because the Home has no checkout of its own, starting a run from it asks **which
-workspace** the work is in first, resolves that workspace's directory — its worktree, else
-its first pane's — and says on screen where the run will be rooted before asking for a
-single Input. A workspace whose directory is empty, missing or Collie's own namespace is
-listed with the reason it will not do.
+The Home has no checkout of its own, and a start from it never asks for one
+([ADR-0033](adr/0033-a-run-started-from-the-home-is-placed-not-asked.md)). A workflow
+whose launch Input is a goal — `plan`, `architecture` — starts at the
+[Projects root](../CONTEXT.md), and its agent is told the root is not a repository and
+that each ticket's `Repo:` is a path relative to it. Any other workflow started from the
+Home is refused as needing a checkout: start it from the checkout's own workspace.
 
 It is an application ([ADR-0005](adr/0005-collie-tab-is-an-application.md)), and it is a
 **board of Tasks, not a table of Runs**
@@ -900,7 +909,7 @@ every tick, whatever the board is showing.
 
 | Action               | What it does                                                            |
 | -------------------- | ----------------------------------------------------------------------- |
-| `cego.collie.pick`   | Popup picker of workflows; infers inputs, asks for the rest, then runs  |
+| `cego.collie.pick`   | Popup picker of workflows; asks what you want, infers the rest, runs    |
 | `cego.collie.resume` | Popup picker of runs still going; the host picks the chosen one back up |
 | `cego.collie.fork`   | Copy a persona into your layer or this project's                        |
 

@@ -108,6 +108,10 @@ client, a frontend. `plan` writes one plan directory for all of it, and every ti
 carries a `**Repo:**` line — the checkout it changes, relative to the plan run's root and
 as it is on disk, or `.` when the root is itself a repository.
 
+A `plan` or `architecture` started from the Home runs at the
+[Projects root](../CONTEXT.md) — `workspace=projects-root` — and its agent is told the root
+is not a repository: it finds the repositories under it, and each `Repo:` is relative to it.
+
 A plan is single-repository only when its tickets all say `.`, or carry no line at all. A
 plan whose tickets all name one repository _by path_ is not one of those: that repository
 is somewhere under the root, and its run has to be rooted there.

@@ -14,7 +14,8 @@ import type { BunServices } from "@effect/platform-bun/BunServices";
 import { Argument, Command, Flag } from "effect/unstable/cli";
 import { clearOverride, err, type Failure } from "../operations";
 import { withDirLock } from "../lock";
-import { runDir } from "../engine";
+import { GIVEN, runDir } from "../engine";
+import { textOf } from "../runs";
 import { Herdr } from "../herdr";
 import {
   describeWaiting,
@@ -464,6 +465,11 @@ const runShow = Command.make(
             },
             human: [
               `${view.runId}\t${statusLine(statusOf(view), disposition)}\t${view.workflow}`,
+              `  in ${view.cwd}`,
+              ...Object.entries(view.input).map(
+                ([name, value]) =>
+                  `  ${name} = ${textOf(value)} (${view.provenance[name] ?? GIVEN})`,
+              ),
               ...describeWaiting(view),
               ...(yield* childLines(resolved.env, runId)),
             ].join("\n"),

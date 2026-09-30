@@ -133,6 +133,8 @@ export const HostRpcs = RpcGroup.make(
       /** Values that already have a type, and values as a human typed them. */
       input: Schema.Record(Schema.String, Schema.Json),
       text: Schema.optional(Schema.Record(Schema.String, Schema.String)),
+      /** The names among those a front door worked out rather than was told. */
+      inferred: Schema.optional(Schema.Array(Schema.String)),
       /** The host's own launch options, which never reach the author's payload. */
       options: Schema.optional(Schema.Record(Schema.String, Schema.String)),
       // What this work belongs to, which is the caller's to know and the host's to keep.
@@ -289,6 +291,7 @@ const handlers = (dir: string) =>
           request,
           input,
           text,
+          inferred,
           options,
           task,
           taskLabel,
@@ -304,6 +307,7 @@ const handlers = (dir: string) =>
                 request,
                 input,
                 text,
+                inferred,
                 options,
                 task,
                 taskLabel,

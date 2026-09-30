@@ -36,6 +36,7 @@ const text = Schema.String;
 const planning = {
   inputs: Schema.Struct({ goal: text }),
   run: Schema.Struct({ dir: text, id: text }),
+  rooting: text,
 };
 
 const prompts = {
@@ -97,6 +98,10 @@ const Offloaded = Schema.Struct({
 const launch = (options: Record<string, string>): Record<string, string> =>
   Object.fromEntries(Object.entries(options).filter(([, value]) => value !== ""));
 
+/** What a planner rooted at the Projects root is told about it, and nothing elsewhere. */
+const rootingOf = (options: Readonly<Record<string, string>>) =>
+  options.workspace === "projects-root" ? (content.sections.get("projects-root") ?? "") : "";
+
 const IMPLEMENT = "Implement now";
 const ARCHITECTURE = "Architecture first";
 const OPINION = "Second opinion";
@@ -155,6 +160,7 @@ export default defineWorkflow({
       const input = {
         inputs: { goal: asked.goal },
         run: { dir: place.dir, id: run.id },
+        rooting: rootingOf(place.options),
       };
       const planDir = `${place.dir}/plan`;
       // Why the plan's tickets cannot be built, recorded so a replay is handed the same answer.
@@ -240,6 +246,7 @@ export default defineWorkflow({
             options: launch({
               task: building ? grilled.slug : "",
               outcome: building ? grilled.outcome : "",
+              workspace: !building && rootingOf(place.options) !== "" ? "projects-root" : "",
             }),
           });
           yield* children.result(child);

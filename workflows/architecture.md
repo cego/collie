@@ -5,6 +5,8 @@ The goal, in my words:
 Project root: {{cwd}}
 Report: {{run.dir}}/plan/ARCHITECTURE.md
 
+{{rooting}}
+
 ## attended
 
 You were started with {{skill:improve-codebase-architecture}}, over `{{cwd}}`, with the real
@@ -39,3 +41,9 @@ goes under `deferred` with its strength and what leaving it costs, because that 
 what the human reads at the end.
 
 Then write the Output JSON as your persona describes.
+
+## projects-root
+
+The project root above is the Projects root, and it is not a repository: find the
+repositories under it that the goal is about. Each ticket's `Repo:` is a path relative to
+it.

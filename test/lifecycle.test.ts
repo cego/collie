@@ -514,9 +514,9 @@ test(
         const env = yield* currentEnv;
         const { prompts, asked } = answering(["proof", "picked"]);
         expect(yield* pickFlow(new Herdr(env), env, prompts, "inline")).toBe(0);
-        // Offered by the picker, and asked for by the name the module declares.
+        // Offered by the picker, and the one question is what the human wants.
         expect(asked.some((question) => question.includes("Workflows"))).toBe(true);
-        expect(asked.at(-1)).toContain("note");
+        expect(asked.at(-1)).toBe("What do you want?");
 
         // The Run it started is the host's, with this project's and this module's marks
         // on it — the same row a `collie run start` would have made, read back through

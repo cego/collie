@@ -28,7 +28,6 @@ import type { RequestConflict } from "./store";
 import { renderApproved, type VerifySpec } from "./verify-spec";
 import { defaultsPath, readDefaults, type IntentSeed } from "./intent";
 import { scopeFor, scopeKey } from "./registry";
-import { PROJECTS_ROOT_OPTION, projectsRoot } from "./projects";
 
 export { savedModules } from "./discovery";
 
@@ -172,10 +171,6 @@ export const startRun = Effect.fn("Lifecycle.startRun")(function* (
     named: Object.values(options.input.text)[0] ?? "",
   });
   if (placed._tag === "Rejected") return placed.result;
-  const launch =
-    options.options?.workspace === PROJECTS_ROOT_OPTION
-      ? { ...options.options, workspace: (yield* projectsRoot(env)).path }
-      : options.options;
   return yield* asks(env, (client) =>
     client.start({
       project: env.cwd,
@@ -183,7 +178,8 @@ export const startRun = Effect.fn("Lifecycle.startRun")(function* (
       request: options.request,
       input: options.input.json,
       text: options.input.text,
-      options: launch,
+      inferred: options.input.inferred,
+      options: options.options,
       task: placed.task?.id,
       taskLabel: placed.label ?? undefined,
       parent: options.parent ?? undefined,
