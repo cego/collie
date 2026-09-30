@@ -294,11 +294,11 @@ function roundOf(step: Sentence["step"]): string {
 export function stepOfOperation(operation: string): Pick<Sentence, "step" | "verb"> {
   const ticket = /^(\d+)-.*\.md$/.exec(operation);
   if (ticket) return { step: { id: "build", round: null }, verb: `Building ticket ${ticket[1]}` };
-  // A seat's name is free text (`gpt-5`), so only a leading number after `review-` is a round.
-  if (operation.startsWith("review-")) {
-    const later = /^review-(\d+)-./.exec(operation);
+  // A review seat's name is free text (`gpt-5`): only a leading number is its round.
+  const seat = /^review-(?:(\d+)-.)?/.exec(operation);
+  if (seat) {
     return {
-      step: { id: "review", round: { at: later ? Number(later[1]) : 1, of: null } },
+      step: { id: "review", round: { at: seat[1] ? Number(seat[1]) : 1, of: null } },
       verb: null,
     };
   }
