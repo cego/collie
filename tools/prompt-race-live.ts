@@ -95,6 +95,16 @@ const live = Effect.fn("live.promptRace")(function* (
     }
   });
 
+  // Read before the probes close: what the pane shows is why an Output did or did not come.
+  const tails = Effect.gen(function* () {
+    const found = new Map<string, string>();
+    for (const agent of yield* herdr.agentList().pipe(Effect.orElseSucceed(() => []))) {
+      const tail = yield* herdr.paneRead(agent.paneId, 12).pipe(Effect.orElseSucceed(() => ""));
+      found.set(agent.name, tail.trim().split("\n").slice(-6).join(" ⏎ "));
+    }
+    return found;
+  });
+
   const rows = yield* Effect.forEach(
     asks,
     (ask) =>
@@ -109,6 +119,7 @@ const live = Effect.fn("live.promptRace")(function* (
       ),
     { concurrency: "unbounded" },
   ).pipe(
+    Effect.flatMap((done) => Effect.map(tails, (shown) => ({ done, shown }))),
     Effect.ensuring(keep ? Effect.void : closeProbes),
     Effect.provide(
       agentsLayer({
@@ -120,16 +131,18 @@ const live = Effect.fn("live.promptRace")(function* (
         permissions: "bypass",
         compactAtTokens: 150_000,
         pollMs: 1_000,
-        collectMs: 5 * 60_000,
+        collectMs: 2 * 60_000,
       }),
     ),
   );
 
   const deliveries = yield* deliveriesOf(stateDir, runId);
-  const lines = [`| agent | took its first prompt | delivery | ledger | hook recorded it |`];
-  lines.push(`|---|---|---|---|---|`);
+  const lines = [
+    `| agent | took its first prompt (hook) | delivery | ledger | wrote its Output | pane |`,
+  ];
+  lines.push(`|---|---|---|---|---|---|`);
   let took = 0;
-  for (const row of rows) {
+  for (const row of rows.done) {
     const step = deliveries.find(
       (one) => one.delivery.cause.kind === "step" && one.delivery.cause.ref === row.operation,
     )?.delivery;
@@ -137,11 +150,12 @@ const live = Effect.fn("live.promptRace")(function* (
     const events = yield* fs
       .readFileString(`${yield* controlDir(stateDir, agent)}/events.jsonl`)
       .pipe(Effect.orElseSucceed(() => ""));
+    // The submit hook recording this delivery's own id is the harness saying it took it.
     const hooked = step !== undefined && events.includes(`"delivery":"${step.id}"`);
-    const ok = row.written?.includes(`"took":${row.operation.slice("probe-".length)}`) === true;
-    if (ok) took += 1;
+    if (hooked) took += 1;
+    const wrote = row.written === null ? `no${row.error ? ` (${row.error})` : ""}` : "yes";
     lines.push(
-      `| ${agent} | ${ok ? "yes" : `no${row.error ? ` (${row.error})` : ""}`} | ${step?.id ?? "-"} | ${step ? `${step.state}${step.note ? ` (${step.note})` : ""}` : "-"} | ${hooked ? "yes" : "no"} |`,
+      `| ${agent} | ${hooked ? "yes" : "no"} | ${step?.id ?? "-"} | ${step ? `${step.state}${step.note ? ` (${step.note})` : ""}` : "-"} | ${wrote} | ${(rows.shown.get(agent) ?? "").replaceAll("|", "¦")} |`,
     );
   }
   lines.push(`\n${took} of ${count} agents took their first prompt. State: ${stateDir}`);
