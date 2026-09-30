@@ -751,7 +751,9 @@ a grant withdrawn meanwhile parks the Run there rather than failing it.
 sentence each, and empty where the evidence is there. It reads the journal, the approved
 list, the Outputs you hold and the tickets you built — and it will not take a reviewer's
 judgement from an implementer's Output, because the agent that wrote the change cannot
-vouch for its own scope.
+vouch for its own scope. Pass `preexisting` with the approved checks that already failed on
+the tree the Run started from, and one that still fails is left out of the gaps for your Run
+to report instead.
 
 ```ts
 const gaps = evidenceGapsOf({

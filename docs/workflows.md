@@ -92,7 +92,10 @@ documentation for a feature's evidence would ask for tickets that do not exist.
 **Ends:** with the merge request, or with the reason there is none. Nobody is asked along
 the way: the human verifies the work in the merge request, before it lands. The gate re-runs
 a failed check once, since a check that fails and then passes is a flake, and then hands
-what is unproved to the implementer for up to four fixes. A gate fix lands after the last
+what is unproved to the implementer for up to four fixes. The approved set also runs once
+before the build, on the tree the run starts from: a check that failed there and still
+fails is named in the merge request as failing before the run's changes, and is not handed
+to the implementer. A gate fix lands after the last
 review, so the merge request says it was not re-reviewed. What the Run could not settle —
 checks still unproved, blocking disputes the reviewers left unanswered, and the assumptions
 an implementer made where the spec was silent — goes into the description under **Not
