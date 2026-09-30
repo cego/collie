@@ -867,8 +867,9 @@ What kind of result a run has to prove, and so what evidence closes it:
 
 The gate runs before the merge request, which is where the claim is made. Collie runs the
 run's own approved set itself at the tree as it stands, then says what is missing. A check
-that failed runs once more; gaps left after that go to the implementer for up to four
-fixes, and whatever is still unproved is named in the merge request, which opens anyway: the
+that failed runs once more; gaps a check could still close go to the implementer for up to
+four fixes, a reviewer's judgement or an Output's claim goes straight to the merge request
+since no fix moves it, and whatever is still unproved is named in the merge request, which opens anyway: the
 human verifies before it lands. A run with nothing approved is told so rather than passed —
 an empty set would make the gate say yes to anything — and a run whose outcome needs the
 approved set is refused at `run start` when it has none (see [What Collie may run
