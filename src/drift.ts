@@ -326,12 +326,30 @@ export function newReports(
     const key = findingKey(report.constraint, report.evidence);
     const open = known.get(key);
     if (open !== undefined && open.intent_version >= report.intent_version) continue;
-    const next = open === undefined ? report : { ...open, intent_version: report.intent_version };
+    const next = open === undefined ? report : movedTo(open, report);
     known.set(key, next);
     fresh.push(next);
   }
   return fresh;
 }
+
+/** What was found again, under the id and correction state of the report on file. */
+function movedTo(open: DriftReport, found: DriftReport): DriftReport {
+  const moved = { ...found, id: open.id, resolution: open.resolution };
+  return open.correction === undefined ? moved : { ...moved, correction: open.correction };
+}
+
+/** Files one report unless the finding is already open at its version; true if it filed. */
+export const fileReport = Effect.fn("Drift.fileReport")(function* (
+  runDir: string,
+  report: DriftReport,
+) {
+  const before = yield* readDrift(runDir).pipe(Effect.orElseSucceed(() => []));
+  const [next] = newReports([report], before);
+  if (next === undefined) return false;
+  yield* appendDrift(runDir, next).pipe(Effect.ignore);
+  return true;
+});
 
 /** A judgement nobody could make, recorded so a card can say why it says nothing. */
 export const recordSkipped = Effect.fn("Drift.recordSkipped")(function* (

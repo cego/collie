@@ -23,6 +23,7 @@ import {
   evaluatedFor,
   flattenOutput,
   judge,
+  fileReport,
   newReports,
   openReports,
   pendingEvaluation,
@@ -610,9 +611,7 @@ const judgeCrossRun = Effect.fn("Oversight.judgeCrossRun")(function* (
     if (target.finished) {
       yield* appendPendingReport(at.stateDir, key, target.id, report).pipe(Effect.ignore);
     } else {
-      const before = yield* readDrift(target.dir).pipe(Effect.orElseSucceed(() => []));
-      if (newReports([report], before).length === 0) continue;
-      yield* appendDrift(target.dir, report).pipe(Effect.ignore);
+      if (!(yield* fileReport(target.dir, report))) continue;
     }
     filed += 1;
   }
