@@ -338,9 +338,9 @@ export default defineWorkflow({
       // this kind of result still has no evidence for. An Output saying the tests pass is
       // a claim; a record in the journal, bound to this tree, is not.
       const granted = yield* requireApproved(kind);
-      // Each pass is journaled, so a replay follows the results the human was shown rather
-      // than a fresh run of checks that may come out differently. What passed is not run
-      // again until a gate answer says to.
+      // Each pass is journaled, so a replay follows the results the merge request will
+      // cite rather than a fresh run of checks that may come out differently. What passed
+      // is not run again until a gate fix changes the tree.
       let passes = 0;
       let passed: ReadonlyArray<string> = [];
       const gapsNow = Effect.gen(function* () {
