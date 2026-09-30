@@ -206,7 +206,7 @@ per agent for every Run started there. One workspace, always: a mutating Run's c
 does not take it out of the Session it was started in.
 
 **Lineage** — A Run, the Run it was started from, that Run's own, and so on: a child's
-parent, or the plan an `implement-now` offer was started from. The only Runs whose agents
+parent, or the Run whose `runs/<id>/plan` an `implement` builds, however it was started. The only Runs whose agents
 a Run's agents are pointed at.
 
 **Hand-off** — What one Run's agent is told about a live agent of a Run in its **Lineage**:

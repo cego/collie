@@ -260,7 +260,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly task: string | null;
     /** A workspace of the Run's own, where it asked for one; null lives in its Task's. */
     readonly workspace: string | null;
-    /** This Run, then the Run it was started from, and so on: whose agents it may ask. */
+    /** This Run, then the Runs it was started from or builds a plan of, and so on: whose agents it may ask. */
     readonly lineage: ReadonlyArray<string>;
   }
 
@@ -1645,6 +1645,10 @@ export const evidenceDir = (dir: string, runId: string): string => `${dir}/evide
  */
 export const runDir = (dir: string, runId: string): string => `${dir}/runs/${runId}`;
 
+/** The Run whose own plan directory this Input value is, and null where it is none. */
+export const planRunOf = (value: string): string | null =>
+  /(?:^|\/)runs\/([^/]+)\/plan\/?$/.exec(value)?.[1] ?? null;
+
 /** Where a Run keeps the merge request it opened. */
 const mergeRequestPath = (dir: string, runId: string) => `${runDir(dir, runId)}/merge-request`;
 
@@ -1839,13 +1843,17 @@ export const hostLayer = (options: {
                 );
               }),
             ).pipe(Effect.ignore);
-      // Stops at a parent the store has no row for, and at a cycle.
+      // A Run came from its parent and from the Run whose plan it builds. Stops at a Run
+      // the store has no row for, and at a cycle.
       const lineageOf = Effect.fn("Engine.lineageOf")(function* (runId: string) {
         const lineage = [runId];
-        let row = yield* store.run(runId);
-        while (row?.parent != null && !lineage.includes(row.parent)) {
-          lineage.push(row.parent);
-          row = yield* store.run(row.parent);
+        for (let at = 0; at < lineage.length; at++) {
+          const row = yield* store.run(lineage[at]!);
+          if (row === null) continue;
+          const input = yield* decodeInput(row.input).pipe(Effect.orElseSucceed(() => ({})));
+          const plan = Object.values(input).filter(Schema.is(Schema.String)).map(planRunOf);
+          for (const from of [row.parent, ...plan])
+            if (from != null && !lineage.includes(from)) lineage.push(from);
         }
         return lineage;
       });

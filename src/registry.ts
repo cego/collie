@@ -142,7 +142,7 @@ export const registerAgent = Effect.fn("registerAgent")(function* (
   alive?: { readonly agents: ReadonlyArray<AgentInfo>; readonly listedAt: string },
 ) {
   yield* ensureLockDir(file);
-  // Every Run started from the same place writes this file: unlocked, one write loses another's.
+  // Unlocked, one write loses another's.
   return yield* withLock(
     `${file}.lock`,
     Effect.fail(new RegistryBusy({ file })),

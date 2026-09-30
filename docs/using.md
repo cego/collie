@@ -942,7 +942,8 @@ an older Collie recorded is not read at all; `collie run start` begins the same 
 ## Hand-offs between runs
 
 A Run knows about the long-lived agents of its **lineage** only: itself, the Run it was
-started from, and so on up. An `implement` started from a plan asks that plan's planner;
+started from or whose plan it builds, and so on up. An `implement` given a plan's
+`runs/<id>/plan`, however it was started, asks that plan's planner;
 another Run's planner or implementer, however recently it was started from the same place,
 is never the one asked or handed work.
 

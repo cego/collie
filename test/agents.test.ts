@@ -25,7 +25,15 @@ import {
 } from "../src/agents";
 import { Children, Run, jsonSchemaFor, withAgents } from "../src/sdk";
 import { asRun, enveloped } from "./support/enveloped";
-import { PARKED, controlPath, foundationLayer, loadEntry, pollStatus, runDir } from "../src/engine";
+import {
+  PARKED,
+  controlPath,
+  foundationLayer,
+  loadEntry,
+  planRunOf,
+  pollStatus,
+  runDir,
+} from "../src/engine";
 import { readCards } from "../src/cards";
 import { readDrift } from "../src/drift";
 import { seedIntent, writeIntent } from "../src/intent";
@@ -1025,6 +1033,13 @@ const liveIn = Effect.fn("test.liveIn")(function* (
     at: "2026-09-30T10:00:00Z",
     incarnation: { terminalId: `term-${agent}`, agentSession: null },
   });
+});
+
+test("a Run built from another Run's plan has that Run in its lineage, however it was started", () => {
+  expect(planRunOf("/state/runs/run-p/plan")).toBe("run-p");
+  expect(planRunOf("runs/run-p/plan/")).toBe("run-p");
+  expect(planRunOf("/somewhere/plans/next")).toBeNull();
+  expect(planRunOf("fix the runs/run-p/plan typo")).toBeNull();
 });
 
 test("a question and a hand-off stay in the asking Run's lineage, whoever else registered the role here", () =>
