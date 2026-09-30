@@ -71,7 +71,10 @@ The line is not "does it change a Run"; it is **who wanted it**.
   proposal over the same closed action set, the same `validate` and the same executors a
   typed steer and the CLI go through; the human confirms it on the board by its id and the
   hash of exactly those actions. Drift Collie noticed and corrections it wants to send are
-  this, and stay this.
+  this, and stay this. _Superseded for chat: `collie_propose` now carries out what it is
+  given in the same call, with no separate confirmation — `set_verification` included
+  (the 2026-09-29 amendment below, and [cli.md](../cli.md)). The evaluator's own proposals
+  still wait on the board._
 
 `test/chat-parity.test.ts` is where the line is kept honest: every operation the CLI offers
 carries a route, and `write` says a tool does it directly.
@@ -93,7 +96,9 @@ matters:
 - **Everything chat proposes of its own accord is `pending`**, whatever a Run granted its
   Driver: that grant was for the Driver's own drift checks, and a conversation is not a
   Driver. Reconciling and verifying stay the human's, because they are an account of what
-  somebody watched happen.
+  somebody watched happen. _Superseded for what `collie_propose` carries out, which is
+  applied at once, not left `pending` — `set_verification` too (2026-09-29, below).
+  Reconciling and recording evidence are still the human's._
 
 ## Amended 2026-09-29: chat may choose what proves a Run
 

@@ -136,7 +136,9 @@ herdr actions, and the `collie` CLI.
   [`docs/sdk.md`](docs/sdk.md#reviewing-and-fixing-until-it-converges), alongside
   `src/output.ts`, `src/outcome.ts`, `src/verify.ts` and `test/rally.test.ts`. The engine
   and a module make the same decision through `settleRound`; a check is a claim until the
-  verification journal has it on this revision, and the approved set is the human's.
+  verification journal has it on this revision. The approved set is the human's or chat's:
+  chat's `set_verification` is carried out with no yes, and Collie spawns what it names
+  ([ADR-0011](docs/adr/0011-the-conversation-is-a-native-harness.md#amended-2026-09-29-chat-may-choose-what-proves-a-run)).
 - **Changing how a list of work, a ticket slice or a repository fan-out recovers** →
   [ADR-0024](docs/adr/0024-a-list-of-work-is-known-by-its-names.md) and
   [`docs/sdk.md`](docs/sdk.md#a-list-of-work-one-item-at-a-time), alongside `src/slices.ts`,
