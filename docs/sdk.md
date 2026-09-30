@@ -736,8 +736,9 @@ tree.
 `host.verify({ runId, name, cwd })` runs one of the commands your Run was started under the
 authority of, in the directory the grant names, resolved from `cwd` — which has to be the
 Run's own checkout — and records what it did. The list is `.collie/verify.json`, read when the Run
-started, plus whatever a human has granted it since with `collie run intent verification` —
-a name nobody approved is refused, and a workflow cannot add to it. Anyone else
+started, plus whatever has been granted it since: by a human with `collie run intent
+verification`, or by chat with `set_verification`, which `collie_propose` carries out with no
+yes. A name not on it is refused, and a workflow cannot add to it. Anyone else
 collects the same way from outside: `collie verify --run <your run id> -- <command>`.
 
 `host.approved(runId)` is that list, for a prompt to name what the work will be held to
