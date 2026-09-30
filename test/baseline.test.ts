@@ -30,6 +30,7 @@ import {
   runDir,
 } from "../src/engine";
 import { VerifySpecSchema } from "../src/verify-spec";
+import { collect } from "../src/verify";
 import { inputsFor, offersFrom } from "../src/offers";
 import { Store } from "../src/store";
 import { registerAgent, registryPath, scopeFor } from "../src/registry";
@@ -1894,6 +1895,64 @@ scenario(
           "- disputed blocking finding: [blocker] the guard is on the wrong side (src/a.ts): the list is never empty here",
         );
         expect(opening).toContain("- assumed in build: callers never pass an empty list");
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a dispute left open by the last fix reaches the merge request, and so does that fix being unreviewed",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* bin.add("glab", `exit 0`);
+        yield* repository();
+        const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
+        yield* approve("r-final-dispute", ["unit"]);
+        yield* collect(evidenceDir(dir, "r-final-dispute"), {
+          run: "r-final-dispute",
+          name: "unit",
+          executable: "true",
+          argv: [],
+          cwd: rig.projectDir,
+          by: "agent",
+        }).pipe(Effect.orDie);
+        const blocker = (title: string) => ({
+          severity: "blocker",
+          title,
+          file: "src/a.ts",
+          detail: "it breaks",
+        });
+        const round = (title: string): Schema.Json[] => [
+          { ...CLEAN_SYNTHESIS, verdict: "findings", findings: [blocker(title)] },
+          { verdict: "clean", fixed: [{ title, file: "src/a.ts" }], checks: [{ name: "unit" }] },
+        ];
+        yield* rig.queueOutputs([
+          BUILT,
+          ...round("one"),
+          ...round("two"),
+          ...round("three"),
+          { ...CLEAN_SYNTHESIS, verdict: "findings", findings: [blocker("A"), blocker("B")] },
+          {
+            verdict: "clean",
+            fixed: [{ title: "A", file: "src/a.ts" }],
+            disputed: [{ ...blocker("B"), reason: "B is by design" }],
+            checks: [{ name: "unit" }],
+          },
+          OPENED,
+        ]);
+        const result = yield* ran({
+          entry: shipped("implement"),
+          runId: "r-final-dispute",
+          input: { plan },
+        });
+        yield* bin.restore();
+
+        expect(said(result)).toBe(OPENED.mr_url);
+        const opening = yield* asked("r-final-dispute", "mr");
+        expect(opening).toContain("implementer-reported, not re-reviewed");
+        expect(opening).toContain("- disputed blocking finding: [blocker] B (src/a.ts)");
       }),
     ),
   120_000,
