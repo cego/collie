@@ -1959,10 +1959,21 @@ scenario(
         ];
         yield* rig.queueOutputs([
           BUILT,
-          ...round("one"),
+          { ...CLEAN_SYNTHESIS, verdict: "findings", findings: [blocker("one"), blocker("B")] },
+          {
+            verdict: "clean",
+            fixed: [{ title: "one", file: "src/a.ts" }],
+            disputed: [{ ...blocker("B"), reason: "a reason the reviewer answers" }],
+            checks: [{ name: "unit" }],
+          },
           ...round("two"),
           ...round("three"),
-          { ...CLEAN_SYNTHESIS, verdict: "findings", findings: [blocker("A"), blocker("B")] },
+          // B again, answered: the dispute that follows is the one the human settles.
+          {
+            ...CLEAN_SYNTHESIS,
+            verdict: "findings",
+            findings: [blocker("A"), { ...blocker("B"), rebuttal: "it is not by design" }],
+          },
           {
             verdict: "clean",
             fixed: [{ title: "A", file: "src/a.ts" }],
@@ -1984,13 +1995,14 @@ scenario(
         expect(opening).toContain(
           "- disputed blocking finding: [blocker] B (src/a.ts): B is by design",
         );
+        expect(opening).not.toContain("a reason the reviewer answers");
       }),
     ),
   120_000,
 );
 
 scenario(
-  "the merge request lists the checks the gate ran, including one granted after the start",
+  "the merge request lists the commands the gate spawned, including one re-granted during the gate",
   () =>
     runEffect(
       Effect.gen(function* () {
@@ -1999,33 +2011,34 @@ scenario(
         yield* repository();
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
         yield* approve("r-late-grant", ["unit"]);
-        let asks = 0;
-        const regranted: HostOverride = Layer.effect(Host)(
-          Effect.gen(function* () {
-            const host = yield* Host;
-            return Host.of({
-              ...host,
-              approved: (runId) =>
-                (asks += 1) === 1
-                  ? host.approved(runId)
-                  : Effect.succeed([
-                      { name: "unit", executable: "true", argv: ["regranted"], cwd: "worktree" },
-                    ]),
-            });
-          }),
+        const fs = yield* FileSystem.FileSystem;
+        const approvedFile = `${evidenceDir(dir, "r-late-grant")}/approved.json`;
+        const regrant = `${rig.root}/regranted.json`;
+        yield* fs.writeFileString(
+          regrant,
+          asApproved([
+            { name: "unit", executable: "true", argv: ["regranted"], cwd: rig.projectDir },
+          ]),
+        );
+        // Its first run re-grants it, as a set_verification made meanwhile would, and fails.
+        yield* fs.writeFileString(
+          approvedFile,
+          asApproved([
+            {
+              name: "unit",
+              executable: "sh",
+              argv: ["-c", `cp ${regrant} ${approvedFile}; exit 1`],
+              cwd: rig.projectDir,
+            },
+          ]),
         );
         yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, OPENED]);
-        yield* ran({
-          entry: shipped("implement"),
-          runId: "r-late-grant",
-          input: { plan },
-          host: regranted,
-        });
+        yield* ran({ entry: shipped("implement"), runId: "r-late-grant", input: { plan } });
         yield* bin.restore();
 
-        expect(yield* asked("r-late-grant", "mr")).toContain(
-          "- unit: true regranted (in worktree)",
-        );
+        const opening = yield* asked("r-late-grant", "mr");
+        expect(opening).toContain("/true regranted (in ");
+        expect(opening).not.toContain("- unit: sh -c");
       }),
     ),
   120_000,
