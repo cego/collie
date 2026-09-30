@@ -265,6 +265,8 @@ export function evidenceGapsOf(options: {
     readonly file: string;
     readonly checks: ReadonlyArray<string>;
   }>;
+  /** Approved checks that already failed on the tree this Run started from. */
+  readonly preexisting?: ReadonlyArray<string>;
 }): ReadonlyArray<string> {
   return evidenceGaps(options.kind, {
     verifications: options.evidence.verifications,
@@ -274,6 +276,7 @@ export function evidenceGapsOf(options: {
     reviewed: new Set(options.reviewed),
     insideRun: (ref) => refInside(options.roots, ref),
     tickets: options.tickets,
+    preexisting: new Set(options.preexisting ?? []),
   });
 }
 

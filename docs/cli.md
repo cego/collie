@@ -864,7 +864,11 @@ The gate runs before the merge request, which is where the claim is made. Collie
 run's own approved set itself at the tree as it stands, then says what is missing. A check
 that failed runs once more; gaps left after that go to the implementer for up to four
 fixes, and whatever is still unproved is named in the merge request, which opens anyway: the
-human verifies before it lands. A run with nothing approved is told so rather than passed —
+human verifies before it lands. Only the latest of Collie's results on that tree counts, so a
+pass a later fail contradicts is not one. `implement` also runs the approved set once before
+the build, on the tree the run starts from. A check that failed there and still fails at the
+gate is named in the merge request as failing before the run's changes, and is not handed to
+the implementer. A run with nothing approved is told so rather than passed —
 an empty set would make the gate say yes to anything — and a run whose outcome needs the
 approved set is refused at `run start` when it has none (see [What Collie may run
 itself](#what-collie-may-run-itself)). A grant withdrawn while the run works parks it at its

@@ -74,29 +74,33 @@ export interface Collected {
     readonly file: string;
     readonly checks: ReadonlyArray<string>;
   }>;
+  /**
+   * Approved checks that failed on the tree this Run started from, before any of its work.
+   * One that still fails is not a gap the Run can close; the Run reports it instead.
+   */
+  readonly preexisting?: ReadonlySet<string>;
+}
+
+/** The latest result on the tree in front of us decides: a pass a later fail contradicts is not one. */
+function latestAtFinal(got: Collected, name: string, by?: Verification["by"]): boolean {
+  const atFinal = got.verifications.filter(
+    (v) =>
+      v.name === name &&
+      (by === undefined || v.by === by) &&
+      v.end.head_sha === got.final.head_sha &&
+      v.end.fingerprint === got.final.fingerprint,
+  );
+  return atFinal.at(-1)?.result === "pass";
 }
 
 /** A verification that passed on the tree in front of us, not on one that has moved. */
 function passedAtFinal(got: Collected, name: string): boolean {
-  return got.verifications.some(
-    (v) =>
-      v.name === name &&
-      v.result === "pass" &&
-      v.by === "collie" &&
-      v.end.head_sha === got.final.head_sha &&
-      v.end.fingerprint === got.final.fingerprint,
-  );
+  return latestAtFinal(got, name, "collie");
 }
 
 /** The same, for a verification an agent was allowed to collect (docs commands, checks). */
 function anyPassAtFinal(got: Collected, name: string): boolean {
-  return got.verifications.some(
-    (v) =>
-      v.name === name &&
-      v.result === "pass" &&
-      v.end.head_sha === got.final.head_sha &&
-      v.end.fingerprint === got.final.fingerprint,
-  );
+  return latestAtFinal(got, name);
 }
 
 /** Whether this kind of result is proved by Collie's own run of the approved set. */
@@ -134,6 +138,7 @@ function approvedSetGaps(got: Collected): string[] {
   const gaps: string[] = [];
   for (const spec of got.approved) {
     if (passedAtFinal(got, spec.name)) continue;
+    if (got.preexisting?.has(spec.name)) continue;
     const any = got.verifications.filter((v) => v.name === spec.name);
     if (any.length === 0) gaps.push(`${spec.name} was never run`);
     else if (any.some((v) => v.result === "fail")) gaps.push(`${spec.name} failed`);
@@ -207,10 +212,10 @@ export function evidenceGaps(kind: Outcome, got: Collected): string[] {
       // collected these itself; what matters is a pass on the tree in front of us.
       for (const ticket of got.tickets) {
         for (const name of ticket.checks) {
-          if (!anyPassAtFinal(got, name))
-            gaps.push(
-              `${ticket.file} promised check "${name}", which has no passing verification on this tree`,
-            );
+          if (anyPassAtFinal(got, name) || got.preexisting?.has(name)) continue;
+          gaps.push(
+            `${ticket.file} promised check "${name}", which has no passing verification on this tree`,
+          );
         }
       }
       break;

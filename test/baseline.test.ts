@@ -1763,13 +1763,24 @@ scenario(
         yield* bin.add("glab", `exit 0`);
         yield* repository();
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
-        // Approved, and it always fails: an Output that says the tests pass is a claim,
-        // and the journal is what the gate reads.
+        // Approved, passing before the build and failing after it: an Output that says the
+        // tests pass is a claim, and the journal is what the gate reads.
+        const count = `${rig.root}/runs`;
         yield* approve("r-impl-gate", ["unit"]);
         const fs = yield* FileSystem.FileSystem;
         yield* fs.writeFileString(
           `${evidenceDir(dir, "r-impl-gate")}/approved.json`,
-          asApproved([{ name: "unit", executable: "false", argv: [], cwd: rig.projectDir }]),
+          asApproved([
+            {
+              name: "unit",
+              executable: "sh",
+              argv: [
+                "-c",
+                `n=$(($(cat ${count} 2>/dev/null || echo 0) + 1)); echo $n > ${count}; [ $n -le 1 ]`,
+              ],
+              cwd: rig.projectDir,
+            },
+          ]),
         );
         const fix = {
           verdict: "clean",
@@ -1808,7 +1819,7 @@ scenario(
         yield* bin.add("glab", `exit 0`);
         yield* repository();
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
-        // Fails twice, then passes once the fix has run.
+        // Passes before the build, fails twice at the gate, then passes once the fix has run.
         const count = `${rig.root}/runs`;
         yield* approve("r-gate-fix", ["unit"]);
         const fs = yield* FileSystem.FileSystem;
@@ -1820,7 +1831,7 @@ scenario(
               executable: "sh",
               argv: [
                 "-c",
-                `n=$(($(cat ${count} 2>/dev/null || echo 0) + 1)); echo $n > ${count}; [ $n -ge 3 ]`,
+                `n=$(($(cat ${count} 2>/dev/null || echo 0) + 1)); echo $n > ${count}; [ $n -eq 1 ] || [ $n -ge 4 ]`,
               ],
               cwd: rig.projectDir,
             },
@@ -1846,6 +1857,43 @@ scenario(
         const opening = yield* asked("r-gate-fix", "mr");
         expect(opening).toContain("gate fix 1");
         expect(opening).not.toContain("- unproved after");
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a check red before the Run is reported in the merge request, and no gate fix is asked for it",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* bin.add("glab", `exit 0`);
+        yield* repository();
+        const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
+        yield* approve("r-impl-red-base", ["unit"]);
+        const fs = yield* FileSystem.FileSystem;
+        yield* fs.writeFileString(
+          `${evidenceDir(dir, "r-impl-red-base")}/approved.json`,
+          asApproved([{ name: "unit", executable: "false", argv: [], cwd: rig.projectDir }]),
+        );
+        yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, OPENED]);
+        const result = yield* ran({
+          entry: shipped("implement"),
+          runId: "r-impl-red-base",
+          input: { plan },
+          options: { outcome: "feature" },
+        });
+        yield* bin.restore();
+
+        expect(said(result)).toBe(OPENED.mr_url);
+        expect(yield* asked("r-impl-red-base", "build")).toContain(
+          "Already failing on the tree this Run started from",
+        );
+        expect(yield* asked("r-impl-red-base", "mr")).toContain(
+          "unit failed on the tree this Run started from",
+        );
+        expect(yield* fs.exists(`${dir}/agents/r-impl-red-base/gate-fix-1.prompt.md`)).toBe(false);
       }),
     ),
   120_000,

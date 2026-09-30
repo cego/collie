@@ -233,6 +233,23 @@ export default defineWorkflow({
       const unbuilt = (reason: string) =>
         share === "" ? Effect.succeed(reason) : Effect.fail(new WorkflowError({ reason }));
       const approved = yield* requireApproved(kind);
+      // What the approved checks did on the tree this Run started from, before any of its own
+      // work. A check that already failed there is not the implementer's to fix, and the merge
+      // request says so rather than spending gate fixes on it.
+      const baseline = yield* Activity.make({
+        name: "baseline",
+        success: Schema.Array(Schema.String),
+        execute: Effect.gen(function* () {
+          const failed: string[] = [];
+          for (const spec of approved) {
+            const ran = yield* host
+              .verify({ runId, name: spec.name, cwd })
+              .pipe(Effect.orElseSucceed(() => null));
+            if (ran?.result === "fail") failed.push(spec.name);
+          }
+          return failed;
+        }),
+      });
 
       const input: typeof Implementing.Type = {
         inputs: {
@@ -243,7 +260,10 @@ export default defineWorkflow({
           outcome: kind,
         },
         run: { dir: place.dir, id: runId },
-        verify: renderApproved(approved),
+        verify:
+          baseline.length === 0
+            ? renderApproved(approved)
+            : `${renderApproved(approved)}\n\nAlready failing on the tree this Run started from, before any change: ${baseline.join(", ")}. Not yours to fix unless the work source asks for it.`,
       };
       // Where a question the plan does not cover goes: the planner's own pane while one
       // is live, and otherwise the human's.
@@ -367,6 +387,7 @@ export default defineWorkflow({
               reviewed: ["synthesize"],
               roots: [place.dir, cwd],
               tickets: tickets.map((ticket) => ({ file: ticket.file, checks: ticket.checks })),
+              preexisting: baseline,
             });
             return { gaps, passed: now };
           }).pipe(Effect.orDie),
@@ -414,10 +435,16 @@ export default defineWorkflow({
           .filter((line) => line !== "")
           .join("\n");
       }
+      // Failed before this Run changed anything, and still fails: reported, never passed.
+      const preexisting = baseline.filter((name) => !passed.includes(name));
       const unsettled = [
         ...assumed,
         ...rallied.unsettled,
         ...gaps.map((gap) => `unproved after ${ROUNDS} gate fixes: ${gap}`),
+        ...preexisting.map(
+          (name) =>
+            `${name} failed on the tree this Run started from, before any of its changes, and still fails`,
+        ),
       ];
       if (unsettled.length > 0) yield* host.record(runId, `unsettled: ${unsettled.join("; ")}`);
 

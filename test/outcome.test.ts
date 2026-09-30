@@ -144,6 +144,48 @@ test("the approved set has to pass here, now, and by Collie", () => {
   ).toEqual(["tests last passed on a different tree"]);
 });
 
+test("the latest of Collie's results on this tree is the one that counts", () => {
+  const passThenFail = [record({ name: "tests" }), record({ name: "tests", result: "fail" })];
+  expect(evidenceGaps("unspecified", collected({ verifications: passThenFail }))).toEqual([
+    "tests failed",
+  ]);
+  expect(
+    evidenceGaps("unspecified", collected({ verifications: [...passThenFail].reverse() })),
+  ).toEqual([]);
+});
+
+test("a check that already failed before the Run is not a gap the Run can close", () => {
+  const failing = [record({ name: "tests", result: "fail" })];
+  expect(
+    evidenceGaps(
+      "unspecified",
+      collected({ verifications: failing, preexisting: new Set(["tests"]) }),
+    ),
+  ).toEqual([]);
+  expect(evidenceGaps("unspecified", collected({ verifications: failing }))).toEqual([
+    "tests failed",
+  ]);
+  expect(
+    evidenceGaps(
+      "unspecified",
+      collected({ verifications: [record({ name: "tests" })], preexisting: new Set(["tests"]) }),
+    ),
+  ).toEqual([]);
+  // A ticket's promise of the same check is the same statement, and is reported, not fixed.
+  const promised = {
+    verifications: failing,
+    tickets: [{ file: "01-picker.md", checks: ["tests"] }],
+  };
+  const built = { tickets_done: ["01"], scope_met: true };
+  expect(
+    evidenceGaps("feature", withOutput(built, { ...promised, preexisting: new Set(["tests"]) })),
+  ).toEqual([]);
+  expect(evidenceGaps("feature", withOutput(built, promised))).toEqual([
+    "tests failed",
+    '01-picker.md promised check "tests", which has no passing verification on this tree',
+  ]);
+});
+
 test("a feature names what it built and the review says the scope was met", () => {
   expect(evidenceGaps("feature", collected())).toEqual([
     "no ticket is reported built (tickets_done is empty)",

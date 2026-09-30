@@ -1130,6 +1130,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
       readonly file: string;
       readonly checks: ReadonlyArray<string>;
     }>;
+    /** Approved checks that already failed on the tree this Run started from. */
+    readonly preexisting?: ReadonlyArray<string>;
   }): ReadonlyArray<string>;
 
   /** Where the work to be done was described. */
