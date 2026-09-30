@@ -47,6 +47,7 @@ import {
   type Handed,
   type Slice,
   type SynthesisReport,
+  type VerifySpec,
 } from "collie";
 import { DateTime, Effect, FileSystem, Schema } from "effect";
 import type { WorkflowEngine, WorkflowInstance } from "effect/unstable/workflow/WorkflowEngine";
@@ -438,6 +439,7 @@ export default defineWorkflow({
         return `no merge request: ${gitlab.reason}`;
       }
 
+      const settledEvidence = yield* host.evidence(runId, cwd);
       const opened = yield* agentWork({
         operation: "mr",
         agent: BUILDER,
@@ -445,10 +447,9 @@ export default defineWorkflow({
         instructions: prompts.mr,
         input: {
           ...input,
-          // What the gate ran, grants made since the start included.
-          verify: renderApproved(granted),
+          verify: renderApproved(spawned(granted, settledEvidence.verifications)),
           // Read after the gate settled, so the merge request cites the passing runs.
-          evidence: renderEvidence(yield* host.evidence(runId, cwd)),
+          evidence: renderEvidence(settledEvidence),
           unreviewed,
           unsettled: unsettled.map((line) => `- ${line}`).join("\n"),
           mr: {
@@ -566,6 +567,27 @@ const asCheckpoint = Schema.encodeSync(
   ),
 );
 
+/**
+ * Each check as the gate last spawned it: a grant can change under a Run, and the command
+ * the human reads has to be the one that ran.
+ */
+const spawned = (
+  granted: ReadonlyArray<VerifySpec>,
+  verifications: ReadonlyArray<{
+    readonly name: string;
+    readonly by: string;
+    readonly executable: string;
+    readonly argv: ReadonlyArray<string>;
+    readonly cwd: string;
+  }>,
+): ReadonlyArray<VerifySpec> =>
+  granted.map((spec) => {
+    const ran = verifications.findLast((one) => one.name === spec.name && one.by === "collie");
+    return ran === undefined
+      ? spec
+      : { name: spec.name, executable: ran.executable, argv: ran.argv, cwd: ran.cwd };
+  });
+
 /** Each blocking dispute left standing, as the merge request lists it for the human. */
 const disputesOf = (findings: ReadonlyArray<Finding>): string[] =>
   findings
@@ -670,11 +692,10 @@ const rally = (ask: {
         output: FixOutputSchema,
       });
       // A dispute is carried, not re-argued: the next review either answers it with a
-      // rebuttal or it stops driving the loop.
-      const fixedNow = new Set(fixed.fixed.map(findingKey));
-      disputed = disputed.filter((one) => !fixedNow.has(findingKey(one)));
-      const known = new Set(disputed.map(findingKey));
-      disputed = [...disputed, ...fixed.disputed.filter((one) => !known.has(findingKey(one)))];
+      // rebuttal or it stops driving the loop. One renewed after a rebuttal carries its new
+      // reason, and one fixed since is gone.
+      const settledNow = new Set([...fixed.fixed, ...fixed.disputed].map(findingKey));
+      disputed = [...disputed.filter((one) => !settledNow.has(findingKey(one))), ...fixed.disputed];
 
       if (at === ROUNDS) {
         const settled = settleFinalFix(round.live, fixed, yield* host.evidence(runId, ask.cwd));
