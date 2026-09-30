@@ -234,6 +234,9 @@ export const SDK_DECLARATIONS = `declare module "collie" {
   /** A command Collie watched, bound to the tree it ran on. Never an Output's claim. */
   export interface Verification {
     readonly name: string;
+    /** As PATH resolved it when it ran, so the record says what ran. */
+    readonly executable: string;
+    readonly argv: ReadonlyArray<string>;
     readonly cwd: string;
     readonly start: Snapshot;
     readonly end: Snapshot;

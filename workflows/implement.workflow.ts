@@ -47,6 +47,7 @@ import {
   type Handed,
   type Slice,
   type SynthesisReport,
+  type Verification,
   type VerifySpec,
 } from "collie";
 import { DateTime, Effect, FileSystem, Schema } from "effect";
@@ -573,13 +574,7 @@ const asCheckpoint = Schema.encodeSync(
  */
 const spawned = (
   granted: ReadonlyArray<VerifySpec>,
-  verifications: ReadonlyArray<{
-    readonly name: string;
-    readonly by: string;
-    readonly executable: string;
-    readonly argv: ReadonlyArray<string>;
-    readonly cwd: string;
-  }>,
+  verifications: ReadonlyArray<Verification>,
 ): ReadonlyArray<VerifySpec> =>
   granted.map((spec) => {
     const ran = verifications.findLast((one) => one.name === spec.name && one.by === "collie");

@@ -148,9 +148,9 @@ const decodePropose = decodeStrict(ProposeInput);
 
 /**
  * What the human can ask for and have done: the board's own actions on a named Run, plus
- * starting one. A closed subset of the same union, because the line is who wanted it —
- * amending an Intent, forking a definition and changing what a workspace's Runs begin
- * with are Collie's to propose and the human's to confirm.
+ * starting one. A closed subset of the same union — amending an Intent, forking a
+ * definition and changing what a workspace's Runs begin with are collie_propose's, which
+ * carries them out in the same call.
  */
 const ASKED_KINDS = [
   "stop",
