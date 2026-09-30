@@ -180,10 +180,22 @@ export const TaskNameSchema = Schema.Struct({
 });
 export type TaskName = Schema.Schema.Type<typeof TaskNameSchema>;
 
+/**
+ * Which checkout under the Projects root a human's words are about: exactly one of the
+ * candidates it was shown, several it cannot choose between, or none. Paths it was shown
+ * and nothing else, so an answer can only point where a Run could already go.
+ */
+export const RouteSchema = Schema.Struct({
+  answer: Schema.Literals(["one", "several", "none"]),
+  checkouts: Schema.Array(Schema.String),
+});
+export type Route = Schema.Schema.Type<typeof RouteSchema>;
+
 const SCHEMAS = {
   judgement: JudgementSchema,
   proposal: ProposalSchema,
   naming: TaskNameSchema,
+  routing: RouteSchema,
 } as const;
 
 export type EvaluationKind = keyof typeof SCHEMAS;
@@ -454,7 +466,9 @@ export const evaluate = Effect.fn("Evaluator.evaluate")(function* (
       ? structuredFrom(ran.stdout, JudgementSchema)
       : kind === "naming"
         ? structuredFrom(ran.stdout, TaskNameSchema)
-        : structuredFrom(ran.stdout, ProposalSchema);
+        : kind === "routing"
+          ? structuredFrom(ran.stdout, RouteSchema)
+          : structuredFrom(ran.stdout, ProposalSchema);
   if ("error" in decoded)
     return { spent: ran, value: null, error: `evaluator_invalid_output: ${decoded.error}` };
   return { spent: ran, value: decoded, error: null };

@@ -18,6 +18,7 @@ import { currentReports, readDrift } from "./drift";
 import { diffTargetOf, EXCLUSIVE_STRATEGIES, strategyMeaning } from "./strategies";
 import { PROJECTS_ROOT_OPTION, projectsRoot } from "./projects";
 import { insideCheckout } from "./agent-start";
+import { placeableUnder, placedByUrl, routed, routerDeps } from "./route";
 import { buildBoard, type MrState, type TaskView } from "./board";
 import { settleMerges } from "./merges";
 import { nowIso } from "./time";
@@ -369,7 +370,23 @@ const startChosen = Effect.fn("Flows.startChosen")(function* (
   // the same rows `collie run start` uses — the Run is the same either way.
   const saved = yield* savedModules(env);
   const module = saved.entries.find((entry) => entry.id === opts.workflow);
-  if (module) return yield* startModule(herdr, env, prompts, { ...opts, task }, module);
+  if (module) {
+    const started = yield* startModule(herdr, env, prompts, { ...opts, task }, module);
+    if (started === null || "line" in started) return started?.line ?? null;
+    const plan = saved.entries.find((entry) => entry.id === PLAN_INSTEAD);
+    if (plan === undefined) {
+      yield* bail(prompts, `No workflow module is saved as "${PLAN_INSTEAD}" to plan it instead.`);
+      return null;
+    }
+    const planned = yield* startModule(
+      herdr,
+      env,
+      prompts,
+      { ...opts, task, given: {}, words: started.planInstead },
+      plan,
+    );
+    return planned !== null && "line" in planned ? planned.line : null;
+  }
   const broken = saved.problems.find((problem) => problem.id === opts.workflow);
   if (broken) {
     yield* bail(prompts, `${broken.path}: ${broken.message}`);
@@ -395,6 +412,8 @@ const startModule = Effect.fn("Flows.startModule")(function* (
   opts: {
     placement: Placement;
     given?: Record<string, string>;
+    /** The human's words, already said, for the launch Input. */
+    words?: string;
     parent?: RunFacts;
     task: TaskChoice;
   },
@@ -404,24 +423,59 @@ const startModule = Effect.fn("Flows.startModule")(function* (
     EXCLUSIVE_STRATEGIES.includes(field.strategy ?? ""),
   );
   const home = yield* fromHome(env);
+  const text = { ...opts.given };
+  const inferred = new Map<string, string>();
+  const strategy = launchInput?.strategy ?? "";
+  let words = opts.words ?? "";
+  if (
+    launchInput !== undefined &&
+    text[launchInput.name] === undefined &&
+    opts.words === undefined
+  ) {
+    const answer = yield* prompts.ask(WHAT_DO_YOU_WANT);
+    if (answer === null) return null;
+    words = answer.trim();
+  }
   let at = env;
+  let rooted = false;
   if (home) {
-    // ponytail: only a goal is placed from the Home until the words place the rest.
-    if (launchInput?.strategy !== "goal") {
+    if (launchInput === undefined) {
       yield* bail(prompts, `${module.id} needs a checkout: start it from one.`);
       return null;
     }
-    at = { ...env, cwd: (yield* projectsRoot(env)).path, workspaceId: null };
+    const root = (yield* projectsRoot(env)).path;
+    const candidates = strategy === "goal" ? [] : yield* placeableUnder(root);
+    const byUrl = placedByUrl(words, candidates);
+    // A repository URL no checkout here has is cloned by the Run, as it always was.
+    if (
+      strategy === "goal" ||
+      (byUrl === null && strategy === "gitlab-repository" && isUrl(words))
+    ) {
+      rooted = true;
+      at = { ...env, cwd: root, workspaceId: null };
+    } else {
+      const placed = byUrl ?? (yield* routed(yield* routerDeps(env), words, candidates));
+      if (placed === null) {
+        const chosen = yield* prompts.menu(
+          [{ id: PLAN_INSTEAD, title: "Plan it instead", subtitle: `a plan at ${root}` }],
+          {
+            header: "No one checkout under the Projects root is this",
+            footer: "Enter plan · Esc cancel",
+          },
+        );
+        return chosen === null ? null : { planInstead: words };
+      }
+      at = { ...env, cwd: placed.path, workspaceId: null };
+      inferred.set(WORKSPACE, byUrl === null ? "your words" : `its remote, ${placed.project}`);
+      if (strategy === "gitlab-repository" && byUrl !== null) {
+        text[launchInput.name] = placed.path;
+        inferred.set(launchInput.name, "the checkout its URL names");
+      }
+    }
   }
-  const text = { ...opts.given };
-  const inferred = new Map<string, string>();
   if (launchInput !== undefined && text[launchInput.name] === undefined) {
-    const answer = yield* prompts.ask(WHAT_DO_YOU_WANT);
-    if (answer === null) return null;
-    const words = answer.trim();
-    if (words !== "" && (yield* wordsAre(launchInput.strategy ?? "", words, at.cwd)))
-      text[launchInput.name] = words;
-    else if (launchInput.strategy === "gitlab-repository" && (yield* insideCheckout(at.cwd))) {
+    if (words !== "" && (yield* wordsAre(strategy, words, at.cwd))) text[launchInput.name] = words;
+    else if (strategy === "gitlab-repository" && (yield* insideCheckout(at.cwd))) {
       text[launchInput.name] = at.cwd;
       inferred.set(launchInput.name, "the checkout you are in");
     }
@@ -459,7 +513,11 @@ const startModule = Effect.fn("Flows.startModule")(function* (
     id: module.id,
     request: yield* newRequestId(),
     input: { json: {}, text, inferred: [...inferred.keys()] },
-    options: home ? { workspace: PROJECTS_ROOT_OPTION } : {},
+    options: rooted
+      ? { workspace: PROJECTS_ROOT_OPTION }
+      : inferred.has(WORKSPACE)
+        ? { workspace: at.cwd }
+        : {},
     task: opts.task,
     parent: opts.parent?.id ?? null,
   });
@@ -469,11 +527,19 @@ const startModule = Effect.fn("Flows.startModule")(function* (
   }
   if (opts.placement === "popup") yield* Effect.ignore(herdr.popupClose());
   const given = Object.entries(text).map(([name, value]) => `${name}=${value}`);
-  return `${module.id}: ${given.join("  ")} → ${started.runId}`;
+  return { line: `${module.id}: ${given.join("  ")} → ${started.runId}` };
 });
 
 /** The one question a start asks: what the human wants, in their own words. */
 const WHAT_DO_YOU_WANT = "What do you want?";
+
+/** What a start from the Home that no one checkout fits is offered instead. */
+const PLAN_INSTEAD = "plan";
+
+/** The host option a placed start names its checkout with, recorded as inferred. */
+const WORKSPACE = "workspace";
+
+const isUrl = (words: string) => /^(https?:\/\/|git@)/.test(words);
 
 /**
  * Whether a human's words are a value of the launch Input's kind, rather than words about

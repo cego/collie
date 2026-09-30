@@ -409,8 +409,19 @@ The Home has no checkout of its own, and a start from it never asks for one
 ([ADR-0033](adr/0033-a-run-started-from-the-home-is-placed-not-asked.md)). A workflow
 whose launch Input is a goal — `plan`, `architecture` — starts at the
 [Projects root](../CONTEXT.md), and its agent is told the root is not a repository and
-that each ticket's `Repo:` is a path relative to it. Any other workflow started from the
-Home is refused as needing a checkout: start it from the checkout's own workspace.
+that each ticket's `Repo:` is a path relative to it.
+
+Any other workflow is **placed from your words** in one of the checkouts under the
+Projects root. A merge request or repository URL is matched to the checkout whose `origin`
+or `upstream` remote is that project, with no model asked. Otherwise one small model call
+(`haiku`, low effort, recorded in the Herd's `budget.jsonl` like task naming) is shown the
+checkouts and your words and names one of them, several, or none. One checkout is shown as
+**Starting in** that path — Enter starts there, Esc cancels — and the run records its
+checkout as inferred. Several, none, or a model that could not answer offers **Plan it
+instead**: a `plan` at the Projects root with your words as its goal. Where the run lands,
+its Input follows: a repository Input is that checkout, a review target is inferred there
+(or refused with the reason), and a work source keeps your words. A `renovate` URL that
+matches a checkout runs there; one that matches none is cloned, as before.
 
 It is an application ([ADR-0005](adr/0005-collie-tab-is-an-application.md)), and it is a
 **board of Tasks, not a table of Runs**

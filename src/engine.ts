@@ -4251,7 +4251,13 @@ const makeRegistry: (
       workflow: generation.id,
       project: options.project,
       input: settled.input,
-      provenance: settled.provenance,
+      provenance: {
+        ...settled.provenance,
+        // A host option a front door worked out, such as the checkout it placed the Run in.
+        ...Object.fromEntries(
+          (options.inferred ?? []).filter((name) => name in asked).map((name) => [name, INFERRED]),
+        ),
+      },
       options: launch,
       placing: encodePlacing({
         from: request.kind === "existing" ? request.path : options.project,

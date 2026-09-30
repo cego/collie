@@ -11,11 +11,16 @@ import { Herdr } from "../src/herdr";
 import type { PickItem } from "../src/inputs";
 import { homePath, writeHome } from "../src/home";
 import { runViews } from "../src/lifecycle";
-import { herdOf } from "../src/steering";
+import { budgetPath, herdOf, readBudget } from "../src/steering";
 import { stopHost } from "./support/host";
 import { collie, proves, type World } from "./support/world";
 
-const MODULES = ["targeted.workflow.ts", "planned.workflow.ts", "sourced.workflow.ts"];
+const MODULES = [
+  "targeted.workflow.ts",
+  "planned.workflow.ts",
+  "sourced.workflow.ts",
+  "plan-stand-in.workflow.ts",
+];
 
 const QUESTION = "What do you want?";
 
@@ -183,7 +188,7 @@ test(
 );
 
 test(
-  "words that are no plan directory or issue are the work source as text, and the Home refuses it for want of a checkout",
+  "words that are no plan directory or issue are the work source as text",
   () =>
     launching("collie-launch-source-", (world) =>
       Effect.gen(function* () {
@@ -195,12 +200,6 @@ test(
           cwd: world.project,
           input: { plan: "make the board faster" },
         });
-
-        const home = yield* atHome(world);
-        const refused = answering(["sourced", "make the board faster"]);
-        expect(yield* pickFlow(new Herdr(home), home, refused.prompts, "inline")).toBe(0);
-        expect(refused.asked.at(-1)).toContain("needs a checkout");
-        expect((yield* runViews(env, null)).runs).toHaveLength(1);
       }),
     ),
   240_000,
@@ -227,3 +226,178 @@ test(
     ),
   240_000,
 );
+
+/** Two checkouts under the Projects root, each pushing to a project of its own. */
+const projectsTree = Effect.fn("test.projectsTree")(function* (world: World) {
+  const root = `${world.home}/projects`;
+  for (const name of ["app", "api"]) {
+    const dir = `${root}/team/${name}`;
+    Bun.spawnSync(["mkdir", "-p", dir]);
+    Bun.spawnSync(["git", "init", "-q"], { cwd: dir });
+    Bun.spawnSync(["git", "remote", "add", "origin", `git@gitlab.example.com:team/${name}.git`], {
+      cwd: dir,
+    });
+  }
+  yield* writeConfigValue(world.config, "projects.root", root);
+  // The router's frozen prompt, where an installation keeps it.
+  const fs = yield* FileSystem.FileSystem;
+  yield* fs.makeDirectory(`${world.install}/prompts`, { recursive: true });
+  yield* fs.copyFile(
+    new URL("../prompts/router.md", import.meta.url).pathname,
+    `${world.install}/prompts/router.md`,
+  );
+  return { root, app: `${root}/team/app`, api: `${root}/team/api` };
+});
+
+const FLAGS =
+  "--print --output-format --json-schema --tools --restricted --strict-mcp-config --setting-sources --no-session-persistence --append-system-prompt-file";
+
+/**
+ * A `claude` on PATH that records each call's pack and answers `route`, or fails where
+ * `route` is null — the evaluator the router asks, stood in at the process it runs.
+ */
+const withRouter = <A, E, R>(
+  world: World,
+  route: { answer: string; checkouts: ReadonlyArray<string> } | null,
+  effect: (
+    calls: Effect.Effect<ReadonlyArray<string>, never, FileSystem.FileSystem>,
+  ) => Effect.Effect<A, E, R>,
+) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const bin = `${world.home}/router-bin`;
+    const log = `${world.home}/router-calls`;
+    yield* fs.makeDirectory(log, { recursive: true });
+    const answer =
+      route === null
+        ? "exit 1"
+        : `printf '%s' '${Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))({ type: "result", structured_output: route })}'`;
+    yield* fs.makeDirectory(bin, { recursive: true });
+    yield* fs.writeFileString(
+      `${bin}/claude`,
+      `#!/bin/sh\nif [ "$1" = "--help" ]; then echo "${FLAGS}"; exit 0; fi\ncat > "${log}/call-$$"\n${answer}\n`,
+      { mode: 0o755 },
+    );
+    const calls = Effect.gen(function* () {
+      const names = yield* fs.readDirectory(log).pipe(Effect.orElseSucceed(() => []));
+      return yield* Effect.forEach(names, (name) =>
+        fs.readFileString(`${log}/${name}`).pipe(Effect.orElseSucceed(() => "")),
+      );
+    });
+    const path = Bun.env.PATH;
+    Bun.env.PATH = `${bin}:${path ?? ""}`;
+    return yield* effect(calls).pipe(
+      Effect.ensuring(
+        Effect.sync(() => {
+          Bun.env.PATH = path;
+        }),
+      ),
+    );
+  });
+
+test(
+  "from the Home, a merge request URL is placed in the checkout whose remote it names, with no model asked",
+  () =>
+    launching("collie-launch-url-", (world) =>
+      Effect.gen(function* () {
+        const tree = yield* projectsTree(world);
+        const home = yield* atHome(world);
+        yield* withRouter(world, { answer: "one", checkouts: [tree.api] }, (calls) =>
+          Effect.gen(function* () {
+            const url = "https://gitlab.example.com/team/app/-/merge_requests/42";
+            const { prompts, rows } = answering(["targeted", url, "start"]);
+            expect(yield* pickFlow(new Herdr(home), home, prompts, "inline")).toBe(0);
+            expect(rows.at(-1)?.title).toBe(`Starting in ${tree.app}`);
+            expect(yield* calls).toEqual([]);
+            const run = (yield* runViews(home, null)).runs[0];
+            expect(run).toMatchObject({
+              cwd: tree.app,
+              input: { target: expect.stringContaining("!42") },
+              provenance: { workspace: "inferred", target: "typed" },
+            });
+          }),
+        );
+      }),
+    ),
+  240_000,
+);
+
+test(
+  "a start from the Home is placed, never asked where: one routing call over every checkout, confirmed with Enter",
+  () =>
+    launching("collie-launch-routed-", (world) =>
+      Effect.gen(function* () {
+        const tree = yield* projectsTree(world);
+        const home = yield* atHome(world);
+        yield* withRouter(world, { answer: "one", checkouts: [tree.app] }, (calls) =>
+          Effect.gen(function* () {
+            const words = "make the app board faster";
+            const cancelled = answering(["sourced", words, ""]);
+            expect(yield* pickFlow(new Herdr(home), home, cancelled.prompts, "inline")).toBe(0);
+            expect((yield* runViews(home, null)).runs).toEqual([]);
+
+            const { prompts, asked, rows } = answering(["sourced", words, "start"]);
+            expect(yield* pickFlow(new Herdr(home), home, prompts, "inline")).toBe(0);
+            expect(asked.slice(1)).toEqual([QUESTION, "Build from a work source"]);
+            expect(rows.at(-1)?.title).toBe(`Starting in ${tree.app}`);
+
+            const packs = yield* calls;
+            expect(packs).toHaveLength(2);
+            for (const pack of packs) {
+              expect(pack).toContain(words);
+              expect(pack).toContain(tree.app);
+              expect(pack).toContain(tree.api);
+            }
+            const run = (yield* runViews(home, null)).runs[0];
+            expect(run).toMatchObject({
+              cwd: tree.app,
+              input: { plan: words },
+              provenance: { workspace: "inferred", plan: "typed" },
+            });
+
+            const budget = yield* readBudget(
+              yield* budgetPath(world.state, yield* herdOf(home.socketPath)),
+            );
+            const reserved = budget.filter((line) => line.kind === "reserve");
+            expect(reserved).toHaveLength(2);
+            for (const line of reserved)
+              expect(line).toMatchObject({ model: "haiku", effort: "low" });
+          }),
+        );
+      }),
+    ),
+  240_000,
+);
+
+for (const [what, route] of [
+  ["several", { answer: "several", checkouts: ["/a", "/b"] }],
+  ["none", { answer: "none", checkouts: [] }],
+  ["an unavailable evaluator", null],
+] as const) {
+  test(
+    `an answer of ${what} offers a plan at the Projects root instead`,
+    () =>
+      launching("collie-launch-instead-", (world) =>
+        Effect.gen(function* () {
+          const tree = yield* projectsTree(world);
+          const home = yield* atHome(world);
+          yield* withRouter(world, route, () =>
+            Effect.gen(function* () {
+              const words = "one registry for every service";
+              const { prompts, rows } = answering(["sourced", words, "plan"]);
+              expect(yield* pickFlow(new Herdr(home), home, prompts, "inline")).toBe(0);
+              expect(rows.at(-1)?.title).toBe("Plan it instead");
+              const run = (yield* runViews(home, null)).runs[0];
+              expect(run).toMatchObject({
+                workflow: "plan",
+                cwd: tree.root,
+                input: { goal: words },
+                options: { workspace: "projects-root" },
+              });
+            }),
+          );
+        }),
+      ),
+    240_000,
+  );
+}

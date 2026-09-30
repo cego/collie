@@ -90,6 +90,19 @@ const FRONT_DOOR: readonly Check[] = [
     },
   },
   {
+    id: "front-door/a-start-from-the-home-is-placed-never-asked-where",
+    statement:
+      "A start from the Home for a workflow that needs a checkout lands in the checkout under the Projects root your words are about — confirmed with Enter — or offers a plan instead, and never asks which checkout.",
+    owner: LAUNCH,
+    needs: "ui",
+    proof: {
+      kind: "test",
+      layer: "ui",
+      file: "test/launch.test.ts",
+      name: "a start from the Home is placed, never asked where: one routing call over every checkout, confirmed with Enter",
+    },
+  },
+  {
     id: "front-door/what-was-inferred-is-shown-before-the-start",
     statement:
       "Where anything was inferred, one row says where the Run starts and each Input as given or inferred from what, before anything starts; Enter starts it and Esc starts nothing.",

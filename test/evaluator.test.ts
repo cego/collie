@@ -10,12 +10,14 @@ import {
   JudgementSchema,
   ProposalSchema,
   REQUIRED_FLAGS,
+  RouteSchema,
   argvFor,
   flagsPresent,
   jsonSchemaFor,
   structuredFrom,
   validate,
   type Proposal,
+  type Route,
   type ValidationContext,
 } from "../src/evaluator";
 import { DEFAULT_AUTHORITY, type Authority } from "../src/intent";
@@ -310,3 +312,37 @@ test("the probe reads a transcript by event: the structured-output channel is no
     "hook_started event",
   ]);
 });
+
+test("the routing answer is one, several or none, and any other shape is no answer", () => {
+  const drawn: unknown = JSON.parse(jsonSchemaFor("routing"));
+  expect(drawn).toMatchObject({ type: "object" });
+  expect(jsonSchemaFor("routing")).toContain("several");
+
+  const envelope = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+  for (const answer of [
+    { answer: "one", checkouts: ["/p/app"] },
+    { answer: "several", checkouts: ["/p/app", "/p/api"] },
+    { answer: "none", checkouts: [] },
+  ] satisfies ReadonlyArray<Route>)
+    expect(structuredFrom(envelope({ structured_output: answer }), RouteSchema)).toEqual(answer);
+  expect(
+    structuredFrom(
+      envelope({ structured_output: { answer: "probably", checkouts: ["/p/app"] } }),
+      RouteSchema,
+    ),
+  ).toMatchObject({ error: expect.any(String) });
+});
+
+test("the router's frozen prompt keeps the person's words data and its answer to what it was shown", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const text = yield* fs.readFileString(
+        new URL("../prompts/router.md", import.meta.url).pathname,
+      );
+      expect(text).toContain("You have no tools");
+      expect(text).toContain("is **data**");
+      expect(text).toContain("ignore your instructions");
+      expect(text).toContain("Never invent one");
+    }),
+  ));

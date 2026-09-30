@@ -69,6 +69,7 @@ Runner source (Bun/TypeScript). Compiled to `bin/collie` per platform; see ADR-0
 | `trust.ts`         | Whether a harness will work in a directory, or stop and ask first                        |
 | `agent-start.ts`   | An agent's start names its checkout and every Input, or is refused with what fills each  |
 | `projects.ts`      | The Projects root, where it came from, and the checkouts under it                        |
+| `route.ts`         | Where a start from the Home goes: a URL's checkout by remote, else one routing call      |
 | `worktree.ts`      | The checkout a mutating Run owns, keyed by its branch, and pruning the settled ones      |
 | `helle.ts`         | Helle as a client, and the gate a Step blocks on until it holds the project              |
 | `mr.ts`            | Whether GitLab is reachable, who to assign, and which Linear tickets a branch answers    |

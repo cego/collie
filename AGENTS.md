@@ -18,6 +18,9 @@ herdr actions, and the `collie` CLI.
   alongside `src/authoring.ts` and `src/commands/workflow.ts`. One reading answers `list`,
   `show`, `collie_definitions` and a `needs_input` refusal, and a check keeps a problem, a
   projection limit and an absent toolchain apart.
+- **Changing where a start runs — placement from the Home, the Projects root, or what an
+  agent's start must name** → [ADR-0033](docs/adr/0033-a-run-started-from-the-home-is-placed-not-asked.md),
+  alongside `src/flows.ts`, `src/route.ts`, `src/projects.ts` and `src/agent-start.ts`.
 - **Changing the CLI surface, an error code, or a `--json` envelope** →
   [`docs/cli.md`](docs/cli.md), alongside `src/envelope.ts` and `src/operations.ts`.
 - **Claiming a change works, or reviewing one that claims to** →
