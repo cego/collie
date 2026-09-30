@@ -182,8 +182,8 @@ or an execution exists — so a value one of them refuses costs nothing to refus
 `collie verify --run <run-id> -- <command>` records against a module's Run as it does
 against any other: the same collector, the same binding to the tree the command ran on, and
 the same refusal for a directory that is not that Run's. A module can ask for one itself,
-but only for a command `.collie/verify.json` named when the Run started, or one a human has
-granted it since with `run intent verification`.
+but only for a command its approved set named when the Run started, or one granted it since
+with `run intent verification` or chat's `set_verification`.
 
 A module may be made of other modules. A child is a Run of its own — `run list` has it,
 `run show` says whose it is, and the Task it belongs to is its parent's — and it is started
@@ -690,7 +690,8 @@ proposal about the installation names no run, so the board draws it whichever ro
 selected.
 
 What is deliberately not in that set: confirming, declining, reconciling, verifying, and
-setting a Run's or the Herd's **authority**. There is no action kind that settles a
+setting a Run's or the Herd's **authority** — except the checks that prove a Run: a `start`
+carries the ones chat chose as `verify`, and `set_verification` asks to add or withdraw one. There is no action kind that settles a
 proposal, so a proposal can never contain its own yes. What a human says in chat is a
 different thing: `collie_do` relays it, against an id and a hash they were shown.
 Everything else a human can type — including forking a Workflow or a Persona, changing

@@ -49,7 +49,8 @@ Run never started.
 agent ran through the collector, with the tree fingerprinted before and after. A result on
 a tree that moved is `unstable` and never `pass`. `--expect fail` is how a bug is proved
 to exist. What _Collie itself_ may run is a Run's approved set, read from
-`.collie/verify.json` or the config directory when the Run starts and copied into
+`.collie/verify.json` or the config directory when the Run starts _(or given with the
+start, by the human or by chat; see [ADR-0011's 2026-09-29 amendment](0011-the-conversation-is-a-native-harness.md))_ and copied into
 `run.json`: a permission that moved under a Run is not a permission.
 
 **D3. An outcome decides what closes a Run.** One pure table (`src/outcome.ts`): a feature
