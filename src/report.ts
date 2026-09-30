@@ -1,9 +1,9 @@
 // Where Runs end, across all of them: the numbers a change to Collie is judged by.
 // Data only: nothing here is a threshold, and nothing refuses anything.
 
-import type { RunView } from "./engine";
+import { STOP, type RunView } from "./engine";
+import { resultText } from "./lifecycle";
 import type { Metrics } from "./metrics";
-import { isString } from "./schema";
 
 export interface WorkflowTally {
   readonly workflow: string;
@@ -82,10 +82,10 @@ export function reportOf(
       completed.push({
         runId,
         workflow,
-        value: isString(status.value) ? status.value : JSON.stringify(status.value),
+        value: resultText(status.value),
         mr: view.mr,
       });
-    if (view.controls.includes("stop")) {
+    if (view.controls.includes(STOP)) {
       tally.stopped++;
       stopped.push({ runId, workflow });
     }

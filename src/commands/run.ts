@@ -546,7 +546,7 @@ const runReport = Command.make(
                   `${report.total} Runs`,
                   ...report.workflows.map(
                     (t) =>
-                      `${t.workflow}  ${t.total}: ${t.complete} complete (${t.withMr} with a merge request), ${t.failed} failed, ${t.suspended} suspended, ${t.pending} pending; ${t.stopped} stopped; ${t.answered} decisions answered; rework ${t.rework}; verifications ${t.verifications.pass} pass, ${t.verifications.fail} fail, ${t.verifications.unstable} unstable`,
+                      `${t.workflow}  ${t.total}: ${t.complete} complete, ${t.failed} failed, ${t.suspended} suspended, ${t.pending} pending; ${t.withMr} recorded a merge request; ${t.stopped} stopped; ${t.answered} decisions answered; rework ${t.rework}; verifications ${t.verifications.pass} pass, ${t.verifications.fail} fail, ${t.verifications.unstable} unstable`,
                   ),
                   ...(report.failed.length === 0 ? [] : ["failed:"]),
                   ...capped(

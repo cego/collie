@@ -1,7 +1,7 @@
 // Where Runs end, counted across all of them. Data only: nothing here is a threshold.
 
 import { expect, test } from "bun:test";
-import type { RunView } from "../src/engine";
+import { HOLD, STOP, type RunView } from "../src/engine";
 import type { Metrics } from "../src/metrics";
 import { reportOf } from "../src/report";
 
@@ -64,8 +64,8 @@ test("each workflow is tallied by how its Runs ended, and only a recorded MR cou
 test("a Run carrying a stop control is counted and listed as stopped", () => {
   const report = reportOf(
     [
-      view({ runId: "a", controls: ["stop"], status: { status: "suspended" } }),
-      view({ runId: "b", controls: ["hold"] }),
+      view({ runId: "a", controls: [STOP], status: { status: "suspended" } }),
+      view({ runId: "b", controls: [HOLD] }),
     ],
     new Map(),
     null,
