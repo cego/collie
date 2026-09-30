@@ -208,7 +208,8 @@ was started in, which is what lets `implement` ask the live `plan` agent a quest
 
 **Hand-off** — What one Run's agent is told about another Run's live agent: the implementer's
 prompt names the planner's pane in the same Session and tells it to ask there rather than
-stop, and with no planner live, to stop and ask the human. Nothing is typed into another
+stop, and where nobody can answer, to decide and record the decision under `assumptions`
+in its Output. Nothing is typed into another
 Run's pane on its behalf.
 
 **Worktree** — The checkout a mutating Run owns: one per branch, because git allows
