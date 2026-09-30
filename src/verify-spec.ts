@@ -1,10 +1,13 @@
 // Which commands Collie may run itself for this Run, and where that list comes from.
 //
 // A verification Collie collects is the only kind a gate will accept, so the list of what
-// it may run is a permission — and a permission read from the repository would be one the
-// repository granted itself. It comes from a file a human wrote, in the project or in
-// their own config, and it is copied into the Run's evidence when the Run starts. Editing
-// the file afterwards changes the next Run, never a live one.
+// it may run is a permission. It comes from a file in the project or in the user's config,
+// or with the start (`--verify`, or chat's `verify`), and it is copied into the Run's
+// evidence when the Run starts; editing the file afterwards changes the next Run, never a
+// live one. A running Run's list changes by `run intent verification`, or by chat's
+// `set_verification`, which `collie_propose` carries out in the same call with no yes. So
+// chat, reading the repository, can grant the repository what Collie itself runs: the
+// human reads what ran in the merge request, before it lands (ADR-0011, 2026-09-29).
 
 import { Data, Effect, FileSystem, Path, Schema } from "effect";
 

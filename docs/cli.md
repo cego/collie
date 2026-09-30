@@ -676,11 +676,15 @@ are `collie_propose`'s.
 
 `collie_propose` takes the same closed action set a steer produces — `stop`, `resume`,
 `hold`, `release`, `answer`, `deliver`, `start`, `followup`, `update_intent`,
-`clear_override`, `navigate`, `update_defaults`, `fork_definition`, `home_cleanup`,
+`set_verification`, `clear_override`, `navigate`, `update_defaults`, `fork_definition`, `home_cleanup`,
 `upgrade` — through the same `validate`, the same proposals journal and
 the same executors. It executes the request immediately, with no separate confirmation.
 Supply `request_id` and reuse it on retries to return the original receipt rather than
-repeat the action. There is no arbitrary shell-command action.
+repeat the action. There is no arbitrary shell-command action for chat to run — but
+`set_verification`, carried out in the same call with no yes, names a command Collie
+spawns itself at the gate, outside any agent's permission rules, and it may be `sh -c`
+anything. The merge request lists each check with its command, and that is where the human
+reads it ([ADR-0011](adr/0011-the-conversation-is-a-native-harness.md#amended-2026-09-29-chat-may-choose-what-proves-a-run)).
 
 `update_defaults` names the workspace whose new runs it changes, for the reason `start`
 names one: defaults are filed per workspace, and the board carrying out a confirmation is
@@ -691,7 +695,7 @@ selected.
 
 What is deliberately not in that set: confirming, declining, reconciling, verifying, and
 setting a Run's or the Herd's **authority** — except the checks that prove a Run: a `start`
-carries the ones chat chose as `verify`, and `set_verification` asks to add or withdraw one. There is no action kind that settles a
+carries the ones chat chose as `verify`, and `set_verification` adds or withdraws one, at once. There is no action kind that settles a
 proposal, so a proposal can never contain its own yes. What a human says in chat is a
 different thing: `collie_do` relays it, against an id and a hash they were shown.
 Everything else a human can type — including forking a Workflow or a Persona, changing
