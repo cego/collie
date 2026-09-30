@@ -8,8 +8,8 @@
 // proposal; `validate` says which of a proposal's actions the target's own authority
 // already grants and which need a human. Running them is somebody else's module.
 
-import { Clock, Data, Effect, Path, Schema, Option, Struct } from "effect";
-import { herdOf } from "./steering";
+import { Clock, Crypto, Data, Effect, FileSystem, Path, Schema, Option, Struct } from "effect";
+import { budgetPath, herdOf, reserve, settle } from "./steering";
 import { isArray, isRecord, isString } from "./schema";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { Stream } from "effect";
@@ -593,4 +593,68 @@ export const evaluationDeps = Effect.fn("Evaluator.evaluationDeps")(function* (e
     },
     limits,
   };
+});
+
+/** A small call with a frozen prompt of its own, and where its usage is written down. */
+export interface BudgetedDeps {
+  readonly evaluator: EvaluatorDeps;
+  readonly budget: string;
+}
+
+/**
+ * What one small call takes, or null where it cannot be asked at all: no Herd to record
+ * it against, or no `prompts/<prompt>` in this build to ask with. The prompt is what keeps
+ * the data it is shown data, so its absence is a reason not to call.
+ */
+export const budgetedDeps = Effect.fn("Evaluator.budgetedDeps")(function* (
+  env: {
+    readonly socketPath: string | null;
+    readonly pluginRoot: string;
+    readonly stateDir: string;
+  },
+  prompt: string,
+  limits: Partial<CallLimits>,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const herd = yield* herdOf(env.socketPath).pipe(Effect.catch(() => Effect.succeed(null)));
+  if (herd === null) return null;
+  const systemPromptFile = path.join(env.pluginRoot, "prompts", prompt);
+  if (!(yield* fs.exists(systemPromptFile).pipe(Effect.orElseSucceed(() => false)))) return null;
+  const evaluation = yield* evaluationDeps(env);
+  return {
+    evaluator: {
+      ...evaluation.evaluator,
+      systemPromptFile,
+      limits: { ...evaluation.limits, ...limits },
+    },
+    budget: yield* budgetPath(env.stateDir, herd),
+  } satisfies BudgetedDeps;
+});
+
+/**
+ * One call, written down as usage before it is made and after, and its decoded answer —
+ * null for none that fits its schema, and never a failure: whoever asks has a stand-in.
+ */
+export const askOnce = Effect.fn("Evaluator.askOnce")(function* (
+  deps: BudgetedDeps,
+  kind: EvaluationKind,
+  pack: string,
+) {
+  const asked = yield* Effect.result(
+    Effect.gen(function* () {
+      const callId = yield* (yield* Crypto.Crypto).randomUUIDv4;
+      yield* reserve(deps.budget, { id: callId, run: null }, deps.evaluator.limits);
+      const answer = yield* evaluate(deps.evaluator, kind, pack);
+      yield* settle(deps.budget, callId, {
+        outcome:
+          answer.spent.outcome === "ok" && answer.error !== null ? "failed" : answer.spent.outcome,
+        usd: answer.spent.usd,
+        seconds: answer.spent.seconds,
+        bytes: answer.spent.bytes,
+      });
+      return answer.value;
+    }),
+  );
+  return asked._tag === "Failure" ? null : asked.success;
 });

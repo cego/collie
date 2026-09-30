@@ -25,7 +25,7 @@ import { shell, type Runner } from "./mr";
 import { everyRegistered, type AgentEntry } from "./registry";
 import { listRuns, type RunFacts } from "./runs";
 import { newTask, taskOfWorkspace, writeTask, type TaskChoice, type TaskRecord } from "./task";
-import { nameTask, type LiveNames, type NamingDeps } from "./tasknames";
+import { nameTask, type LiveNames } from "./tasknames";
 import { readIntent, type Authority, type Intent } from "./intent";
 import {
   appendLine,
@@ -39,8 +39,8 @@ import {
 } from "./steering";
 import { append, conversationPath, tail, type NewTurn } from "./conversation";
 import {
+  budgetedDeps,
   evaluate,
-  evaluationDeps,
   validate,
   type Action,
   type CallLimits as EvaluatorLimits,
@@ -338,29 +338,12 @@ const liveNames = Effect.fn("operations.liveNames")(function* (herdr: Herdr, eve
 });
 
 /**
- * What naming one Task may cost, or null where it cannot be asked at all: no Herd to
- * account the call against, or no frozen prompt in this build to ask with. The prompt is
- * the whole of what keeps the person's own labels data rather than instructions, so its
- * absence is a reason not to call rather than a reason to improvise one.
- *
- * A tighter clock than a steer's: somebody is waiting on this to see their workspace
+ * What naming one Task may cost, or null where it cannot be asked at all. A tighter clock
+ * than a steer's: somebody is waiting on this to see their workspace
  * open, and the stand-in name is already to hand.
  */
-const namingDeps = Effect.fn("operations.namingDeps")(function* (env: PluginEnv) {
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const herd = yield* herdOf(env.socketPath).pipe(Effect.catch(() => Effect.succeed(null)));
-  if (herd === null) return null;
-  const systemPromptFile = path.join(env.pluginRoot, "prompts", "namer.md");
-  if (!(yield* fs.exists(systemPromptFile).pipe(Effect.catch(() => Effect.succeed(false)))))
-    return null;
-  const evaluation = yield* evaluationDeps(env);
-  const limits = { ...evaluation.limits, maxSeconds: 30, maxOutputBytes: 4 * 1024 };
-  return {
-    evaluator: { ...evaluation.evaluator, systemPromptFile, limits },
-    budget: yield* budgetPath(env.stateDir, herd),
-  } satisfies NamingDeps;
-});
+const namingDeps = (env: PluginEnv) =>
+  budgetedDeps(env, "namer.md", { maxSeconds: 30, maxOutputBytes: 4 * 1024 });
 
 /**
  * The Task a start belongs to, and the herdr workspace its Runs and agents live in.
