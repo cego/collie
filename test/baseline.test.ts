@@ -1952,7 +1952,9 @@ scenario(
         expect(said(result)).toBe(OPENED.mr_url);
         const opening = yield* asked("r-final-dispute", "mr");
         expect(opening).toContain("implementer-reported, not re-reviewed");
-        expect(opening).toContain("- disputed blocking finding: [blocker] B (src/a.ts)");
+        expect(opening).toContain(
+          "- disputed blocking finding: [blocker] B (src/a.ts): B is by design",
+        );
       }),
     ),
   120_000,
