@@ -1151,11 +1151,11 @@ test(
   120_000,
 );
 
-/** An operator stopping the Run as its repair goes out. */
+/** An operator stopping the Run once its repair has gone out. */
 class StopsAtRepair extends FakeHerdr {
   override agentPrompt(target: string, text: string) {
     const stop = text.includes("not usable") ? control("stop", "r1", true) : Effect.void;
-    return stop.pipe(Effect.andThen(super.agentPrompt(target, text)));
+    return super.agentPrompt(target, text).pipe(Effect.tap(() => stop));
   }
 }
 
