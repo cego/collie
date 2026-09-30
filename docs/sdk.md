@@ -767,6 +767,11 @@ const gaps = evidenceGapsOf({
 });
 ```
 
+`checkGapsOf` takes the same question and answers only the gaps a verification on this
+tree could close: a check that failed, never ran, or passed on an earlier tree. Those are
+what a fix may be handed. A reviewer's judgement and an Output's claim are not moved by
+running anything, so a fix handed one spends a session and changes nothing.
+
 [ADR-0023](adr/0023-a-rally-is-a-loop-and-a-claim-is-not-proof.md) is why the rally is a
 loop and why a claim is not proof.
 
