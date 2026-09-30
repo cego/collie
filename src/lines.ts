@@ -159,6 +159,12 @@ function everyNewRunIn(workspace: string): string {
   return `what every new Run in workspace ${workspace} begins with`;
 }
 
+const commandLine = (command: {
+  readonly executable: string;
+  readonly argv: ReadonlyArray<string>;
+  readonly cwd: string;
+}) => `${[command.executable, ...command.argv].join(" ")} (in ${command.cwd})`;
+
 const named = (fields: Record<string, string>) =>
   Object.entries(fields).map(([name, value]) => `${name}=${value}`);
 
@@ -176,7 +182,7 @@ export function describeAction(action: Action): string {
     case "set_verification":
       return action.command === undefined
         ? `withdraw ${action.run}'s check ${action.name}`
-        : `let Collie run ${action.name} for ${action.run}: ${[action.command.executable, ...action.command.argv].join(" ")} (in ${action.command.cwd})`;
+        : `let Collie run ${action.name} for ${action.run}: ${commandLine(action.command)}`;
     // Which workspace, always: this writes the file that workspace's next Runs begin
     // with, and a line that left it out asked for a yes to a change nobody could see.
     case "update_defaults":
@@ -208,10 +214,12 @@ export function describeAction(action: Action): string {
       // alone is a yes to a plan nobody read.
       const on = named(action.inputs);
       const decided = named(action.decisions ?? {});
+      const checks = (action.verify ?? []).map((spec) => `${spec.name}: ${commandLine(spec)}`);
       return [
         `start ${action.workflow} in ${where}`,
         ...(on.length === 0 ? [] : [`on ${on.join(", ")}`]),
         ...(decided.length === 0 ? [] : [`with ${decided.join(", ")} already decided`]),
+        ...(checks.length === 0 ? [] : [`letting Collie run ${checks.join("; ")}`]),
       ].join(" ");
     }
     default:
