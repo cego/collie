@@ -669,23 +669,20 @@ const rally = (ask: {
       });
       // A dispute is carried, not re-argued: the next review either answers it with a
       // rebuttal or it stops driving the loop.
+      const fixedNow = new Set(fixed.fixed.map(findingKey));
+      disputed = disputed.filter((one) => !fixedNow.has(findingKey(one)));
       const known = new Set(disputed.map(findingKey));
       disputed = [...disputed, ...fixed.disputed.filter((one) => !known.has(findingKey(one)))];
 
       if (at === ROUNDS) {
         const settled = settleFinalFix(round.live, fixed, yield* host.evidence(runId, ask.cwd));
-        if (settled.ok)
+        // Every round's disputes, not only this fix's: earlier ones were split out of what
+        // this fix was shown, and are still the human's to settle.
+        if (settled.ok || settled.halt === "dispute_unresolved")
           return {
             halted: null,
             unreviewed: settled.attestation,
-            unsettled: [],
-            reviewed: synthesis,
-          };
-        if (settled.halt === "dispute_unresolved")
-          return {
-            halted: null,
-            unreviewed: settled.attestation,
-            unsettled: settled.reasons,
+            unsettled: disputesOf(disputed),
             reviewed: synthesis,
           };
         return {
