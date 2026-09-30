@@ -251,7 +251,9 @@ the thread Codex's TUI binds on its App Server as it starts; OpenCode's TUI, whi
 own server, answering for the session Collie made. An agent launched without controls —
 compaction off, or a harness Collie has no port for — has no such sign, and herdr's word
 is all there is. The wait is two minutes past herdr's own; running out parks the step,
-naming the agent and its pane, with nothing typed.
+naming the agent and its pane, with nothing typed. `tools/prompt-race-live.ts` checks this against a real
+herdr and Claude: at most four agents started at once in a scratch herdr session, each
+shown to have taken its first prompt by its submit hook's record of the delivery.
 
 So `agentPrompt` answers a `Submission` — what herdr could actually tell us — rather than
 nothing. It reads the agent's status first, because only a submission that started from a
