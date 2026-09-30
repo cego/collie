@@ -14,7 +14,7 @@ import type { BunServices } from "@effect/platform-bun/BunServices";
 import { Argument, Command, Flag } from "effect/unstable/cli";
 import { clearOverride, err, type Failure } from "../operations";
 import { withDirLock } from "../lock";
-import { runDir } from "../engine";
+import { evidenceDir, runDir } from "../engine";
 import { Herdr } from "../herdr";
 import {
   describeWaiting,
@@ -60,7 +60,8 @@ import { runDeliveries } from "./steer";
 import { givenVerifications } from "../verify-spec";
 import { currentReports, readDrift } from "../drift";
 import { newest, readCards } from "../cards";
-import { metricsOf, readMetrics } from "../metrics";
+import { metricsOf, readMetrics, type Metrics } from "../metrics";
+import { reportOf } from "../report";
 import { latest, readDispositions, recordDisposition, statusLine } from "../disposition";
 import { nowIso } from "../time";
 import type { PluginEnv } from "../env";
@@ -502,6 +503,71 @@ const runMetrics = Command.make(
 ).pipe(
   Command.withDescription(
     "What a Run actually did: evidence, slices, rework and context — not pane activity",
+  ),
+);
+
+const capped = (lines: ReadonlyArray<string>, cap = 20): string[] =>
+  lines.length > cap ? [...lines.slice(0, cap), `  …and ${lines.length - cap} more`] : [...lines];
+
+const runReport = Command.make(
+  "report",
+  {
+    since: Flag.String("since").pipe(
+      Flag.withDescription("Only Runs admitted at or after this ISO date"),
+      Flag.optional,
+    ),
+  },
+  ({ since }) =>
+    Effect.gen(function* () {
+      const global = yield* root;
+      yield* attempt(
+        Effect.gen(function* () {
+          const from = Option.getOrNull(since);
+          if (from !== null && Number.isNaN(Date.parse(from)))
+            return err("invalid_input", `--since is not a date: ${from}`);
+          const resolved = yield* context(global, false);
+          if (resolved._tag === "ContextFailure") return resolved.result;
+          const hosted = yield* runViews(resolved.env, null);
+          const metrics = new Map<string, Metrics>();
+          for (const view of hosted.runs)
+            metrics.set(
+              view.runId,
+              metricsOf(
+                yield* readMetrics(evidenceDir(resolved.env.stateDir, view.runId)),
+                view.created,
+              ),
+            );
+          const report = reportOf(hosted.runs, metrics, from);
+          const unreadable = hosted.unreadable === null ? [] : [`runs: ${hosted.unreadable}`];
+          const human =
+            report.total === 0
+              ? [...unreadable, "No runs found."].join("\n")
+              : [
+                  `${report.total} Runs`,
+                  ...report.workflows.map(
+                    (t) =>
+                      `${t.workflow}  ${t.total}: ${t.complete} complete (${t.withMr} with a merge request), ${t.failed} failed, ${t.suspended} suspended, ${t.pending} pending; ${t.stopped} stopped; ${t.answered} decisions answered; rework ${t.rework}; verifications ${t.verifications.pass} pass, ${t.verifications.fail} fail, ${t.verifications.unstable} unstable`,
+                  ),
+                  ...(report.failed.length === 0 ? [] : ["failed:"]),
+                  ...capped(
+                    report.failed.map(
+                      (r) => `  ${r.runId}  ${r.workflow}  ${r.reason.slice(0, 120)}`,
+                    ),
+                  ),
+                  ...(report.completed.length === 0 ? [] : ["complete:"]),
+                  ...capped(report.completed.map((r) => `  ${r.runId}  ${r.workflow}  ${r.value}`)),
+                  ...(report.stopped.length === 0 ? [] : ["stopped:"]),
+                  ...capped(report.stopped.map((r) => `  ${r.runId}  ${r.workflow}`)),
+                  ...unreadable,
+                ].join("\n");
+          return { ok: true, data: { ...report, unreadable: hosted.unreadable }, human };
+        }),
+        global.json,
+      );
+    }),
+).pipe(
+  Command.withDescription(
+    "Where Runs end, across every Run: per workflow, and each one that failed, finished or was stopped",
   ),
 );
 
@@ -1563,6 +1629,7 @@ export const run = Command.make("run").pipe(
     runDeliveries,
     runDisposition,
     runMetrics,
+    runReport,
     runDrift,
     runCards,
     runActions,
