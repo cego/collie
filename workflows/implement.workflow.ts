@@ -445,6 +445,8 @@ export default defineWorkflow({
         instructions: prompts.mr,
         input: {
           ...input,
+          // What the gate ran, grants made since the start included.
+          verify: renderApproved(granted),
           // Read after the gate settled, so the merge request cites the passing runs.
           evidence: renderEvidence(yield* host.evidence(runId, cwd)),
           unreviewed,
