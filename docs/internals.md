@@ -305,8 +305,8 @@ seconds parks the step: nothing can prove sending it again is safe, so the Run w
 a human, naming the agent, its pane and the delivery. The human settles it with `run
 deliveries --reconcile <id> --as sent|not-sent`; after `not-sent` the resume sends the same
 words once more, from the `<operation>.step.md` or `.repair.md` beside the launch, as the
-next attempt. Only the delivery the wait is for is checked: the step's, or the repair's
-once one went out. A wait parked that way is still a
+next attempt; one herdr refuses parks again, and the next resume tries again. Only the
+delivery the wait is for is checked: the step's, or the repair's once one went out. A wait parked that way is still a
 pending Run, and reads as waiting on you rather than working. An agent `blocked` at a
 dialog is not settled, and is left to clear.
 

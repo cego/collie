@@ -1212,7 +1212,7 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
         // A skill marked `disable-model-invocation` refuses an agent that invokes it
         // itself; this is the human's channel, so a slash command here runs.
         const started = ask.skill === null ? "" : `${adapter.skillCommand(ask.skill)} `;
-        const pointer = `${started}Your task for this step is in ${file} — read it and follow it.`;
+        const pointer = `${started}${stepPointer(file)}`;
         yield* write(sentPath(launched, "step"), pointer);
         const asked = yield* deliver(launched, pointer, { kind: "step", ref: ask.operation });
         if (asked.refused) {
@@ -1248,23 +1248,38 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
       const dir = yield* controlDir(host.env.stateDir, launched.agent);
       const kind = unless === null ? "step" : "repair";
       const key = causalKey(launched.runId, { kind, ref: launched.operation }, 0);
+      // Only this agent's own ledger: another incarnation's is listed in no time order.
       const last = (yield* deliveriesOf(host.env.stateDir, launched.runId))
-        .filter(({ delivery }) => delivery.causal_key === key)
+        .filter(
+          ({ delivery }) =>
+            delivery.causal_key === key &&
+            delivery.incarnation === found.entry?.incarnation?.terminalId,
+        )
         .at(-1)?.delivery;
-      if (last?.note?.startsWith("reconciled as not-sent") === true) {
+      // Settled as not sent, or refused by herdr on the last resend: not delivered either way.
+      const resend =
+        last?.note?.startsWith("reconciled as not-sent") === true ||
+        (last?.state === "failed" && last.attempt > 1);
+      if (last !== undefined && resend) {
         const fs = yield* FileSystem.FileSystem;
+        // Sent before its words were kept: the pointer without a skill command.
+        const unkept: Effect.Effect<string, null> =
+          kind === "step"
+            ? Effect.succeed(
+                stepPointer(`${dirFor(launched.runId)}/${launched.operation}.prompt.md`),
+              )
+            : Effect.fail(null);
         const again = yield* fs.readFileString(sentPath(launched, kind)).pipe(
+          Effect.catch(() => unkept),
           Effect.flatMap((text) =>
             deliver(launched, text, { kind, ref: launched.operation, attempt: last.attempt + 1 }),
           ),
           Effect.orElseSucceed(() => ({ sent: false, why: "what was sent is not on file" })),
         );
         if (!again.sent) {
-          return yield* new dispatch.Unconfirmed({
-            agent: launched.agent,
-            pane: found.entry.paneId,
-            delivery: last.id,
-            why: `sending it again failed (${again.why})`,
+          return yield* new AgentParked({
+            operation: launched.operation,
+            reason: `${launched.agent} in pane ${found.entry.paneId} could not be sent ${kind === "step" ? "its step's prompt" : "its repair"} again (${again.why}). \`collie run resume ${launched.runId}\` tries again.`,
           });
         }
       }
@@ -1286,7 +1301,7 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
       );
     }).pipe(
       Effect.catchIf(
-        (cause) => !(cause instanceof dispatch.Unconfirmed),
+        (cause) => !(cause instanceof dispatch.Unconfirmed) && !isParked(cause),
         (cause) =>
           log(
             launched.runId,
@@ -1645,6 +1660,8 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
 };
 
 const LAUNCH_SUFFIX = ".launch.json";
+const stepPointer = (file: string) =>
+  `Your task for this step is in ${file} — read it and follow it.`;
 const SENT_STATES: ReadonlySet<string> = new Set(["submitted", "acknowledged", "verified"]);
 const LaunchedJson = Schema.fromJsonString(Launched);
 const encodeLaunched = Schema.encodeSync(LaunchedJson);

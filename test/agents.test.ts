@@ -1878,6 +1878,37 @@ test(
 );
 
 test(
+  "a resend herdr refuses parks saying the next resume tries again, and it does",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* rig.queueOutputs([{ verdict: "clean", note: "never" }]);
+        yield* interrupted("r1", 8_000, { herdr: promptNotTaken("text"), confirmGraceMs: 300 });
+        yield* reconciled("r1", "not-sent");
+
+        // herdr answers `no agent` for every prompt from the second on: the resend.
+        const refusing = new FakeHerdr(rig.pluginEnv({ FAKE_HERDR_FAIL_PROMPT_FROM: "1" }));
+        yield* session(
+          Effect.gen(function* () {
+            const engine = yield* WorkflowEngine.WorkflowEngine;
+            const payload = { runId: "r1", input: { skip: false } };
+            yield* engine.resume(work, yield* work.executionId(payload));
+            yield* work.execute(payload, { discard: true });
+            yield* Effect.sleep(Duration.millis(3_000));
+          }),
+          { herdr: refusing, collectMs: 30_000 },
+        );
+        expect(yield* read(controlPath(dir, PARKED, "r1"))).toContain("collie run resume r1");
+
+        yield* rig.queueOutputs([{ verdict: "clean", note: "third time" }]);
+        const result = yield* releasedInto("r1");
+        expect(result._tag === "Success" && result.success.note).toBe("third time");
+      }),
+    ),
+  120_000,
+);
+
+test(
   "a vanished step pointer settled as sent is not sent again: the resume waits for its Output",
   () =>
     runEffect(
