@@ -26,7 +26,7 @@ Rules:
   do not, with a reason. Never drop one silently, and never both fix and dispute one. The
   reason is what settles a minor one: the reviewers are shown it, and the loop stops
   raising that finding. A disputed `blocker` or `major` the reviewers leave unanswered is
-  written into the merge request for the human.
+  the human's to settle.
 - A finding that answers one of your reasons has to be dealt with, not disputed again on
   the same ground.
 - Never `git stash`: the stash stack belongs to the whole repository, so every other
