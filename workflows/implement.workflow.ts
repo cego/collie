@@ -26,6 +26,7 @@ import {
   classifyWorkSource,
   contentOf,
   defineWorkflow,
+  checkGapsOf,
   evidenceGapsOf,
   findingKey,
   formatFindings,
@@ -348,6 +349,8 @@ export default defineWorkflow({
           name: `gate.${passes}`,
           success: Schema.Struct({
             gaps: Schema.Array(Schema.String),
+            // A pass journaled before gaps were told apart handed a fix every gap.
+            fixable: Schema.optionalKey(Schema.Array(Schema.String)),
             passed: Schema.Array(Schema.String),
           }),
           execute: Effect.gen(function* () {
@@ -357,8 +360,8 @@ export default defineWorkflow({
               const ran = yield* host.verify({ runId, name: spec.name, cwd });
               if (ran.result === "pass") now.push(spec.name);
             }
-            const gaps = evidenceGapsOf({
-              kind: isOutcome(kind) ? kind : "unspecified",
+            const asked = {
+              kind: isOutcome(kind) ? kind : ("unspecified" as const),
               evidence: yield* host.evidence(runId, cwd),
               approved: granted,
               outputs: { build: { ...build }, synthesize: { ...rallied.reviewed } },
@@ -367,24 +370,26 @@ export default defineWorkflow({
               reviewed: ["synthesize"],
               roots: [place.dir, cwd],
               tickets: tickets.map((ticket) => ({ file: ticket.file, checks: ticket.checks })),
-            });
-            return { gaps, passed: now };
+            };
+            return { gaps: evidenceGapsOf(asked), fixable: checkGapsOf(asked), passed: now };
           }).pipe(Effect.orDie),
         });
         passed = pass.passed;
-        return pass.gaps;
+        return { gaps: pass.gaps, fixable: pass.fixable ?? pass.gaps };
       });
       let gaps = yield* gapsNow;
       // Once more before a fix: a check that fails and then passes on the same tree is a
       // flake, and a Run that ends on one has proved nothing about the change.
-      if (gaps.length > 0) gaps = yield* gapsNow;
+      if (gaps.fixable.length > 0) gaps = yield* gapsNow;
       // A gate fix lands after the last review, so the merge request says it was not re-reviewed.
       let unreviewed = rallied.unreviewed;
-      // The implementer fixes what is unproved, bounded like the rally; the human reads
-      // what is left in the merge request, before it lands.
-      for (let at = 1; gaps.length > 0 && at <= ROUNDS; at++) {
+      // The implementer fixes what a check could still prove, bounded like the rally; the
+      // human reads what is left in the merge request, before it lands.
+      let fixes = 0;
+      for (; gaps.fixable.length > 0 && fixes < ROUNDS; fixes++) {
+        const at = fixes + 1;
         passed = [];
-        const findings = gaps.map((gap) => ({
+        const findings = gaps.fixable.map((gap) => ({
           severity: "blocker",
           title: gap,
           detail:
@@ -417,7 +422,11 @@ export default defineWorkflow({
       const unsettled = [
         ...assumed,
         ...rallied.unsettled,
-        ...gaps.map((gap) => `unproved after ${ROUNDS} gate fixes: ${gap}`),
+        ...gaps.gaps.map((gap) =>
+          gaps.fixable.includes(gap)
+            ? `unproved after ${fixes} gate fixes: ${gap}`
+            : `unproved, and no check can prove it: ${gap}`,
+        ),
       ];
       if (unsettled.length > 0) yield* host.record(runId, `unsettled: ${unsettled.join("; ")}`);
 

@@ -1138,6 +1138,13 @@ export const SDK_DECLARATIONS = `declare module "collie" {
       readonly checks: ReadonlyArray<string>;
     }>;
   }): ReadonlyArray<string>;
+  /**
+   * The gaps among those a verification on this tree could close: what a fix may be
+   * handed. A reviewer's judgement and an Output's claim are not moved by running anything.
+   */
+  export function checkGapsOf(
+    options: Parameters<typeof evidenceGapsOf>[0],
+  ): ReadonlyArray<string>;
 
   /** Where the work to be done was described. */
   export interface WorkSource {

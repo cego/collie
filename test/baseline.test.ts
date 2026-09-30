@@ -1801,6 +1801,35 @@ scenario(
 );
 
 scenario(
+  "a gap no check can close goes to the merge request without a gate fix chasing it",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* bin.add("glab", `exit 0`);
+        yield* repository();
+        const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
+        yield* approve("r-gate-judged", ["unit"]);
+        yield* rig.queueOutputs([BUILT, { ...CLEAN_SYNTHESIS, scope_met: false }, OPENED]);
+        const result = yield* ran({
+          entry: shipped("implement"),
+          runId: "r-gate-judged",
+          input: { plan },
+          options: { outcome: "feature" },
+        });
+        yield* bin.restore();
+
+        expect(said(result)).toBe(OPENED.mr_url);
+        expect(yield* prompts()).toHaveLength(3);
+        expect(yield* asked("r-gate-judged", "mr")).toContain(
+          "- unproved, and no check can prove it: the review did not report scope_met: true for the agreed scope",
+        );
+      }),
+    ),
+  120_000,
+);
+
+scenario(
   "a gate fix runs without asking, and reaches the merge request as not re-reviewed",
   () =>
     runEffect(
