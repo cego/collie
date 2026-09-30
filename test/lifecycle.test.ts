@@ -393,6 +393,35 @@ test(
 );
 
 test(
+  "projects-root is the root the starting front door resolved, whatever the running host's environment",
+  () =>
+    provesWith(
+      "collie-lifecycle-root-once-",
+      (world) =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          // The host is started by a shell with no GITTE_CWD, so its own fallback is HOME.
+          const first = yield* collie(world, ["run", "start", "planned", "--input", "goal=warm"]);
+          expect(first.exit).toBe(0);
+
+          const root = `${world.home}/gitte`;
+          yield* fs.makeDirectory(`${root}/app/.git`, { recursive: true });
+          const started = yield* collie(
+            world,
+            ["run", "start", "planned", "--input", "goal=x", "--input", "workspace=projects-root"],
+            { GITTE_CWD: root },
+          );
+          const runId = (yield* payloadOf(started.envelope)).runId ?? "";
+          const client = yield* connect(world.state).pipe(Effect.orDie);
+          expect((yield* client.run({ runId }).pipe(Effect.orDie))?.cwd).toBe(root);
+          yield* stopHost(world.state);
+        }),
+      ["planned.workflow.ts"],
+    ),
+  240_000,
+);
+
+test(
   "a resume answers with the Run as it is once its stop is cleared",
   () =>
     proves("collie-lifecycle-unstop-", (world) =>

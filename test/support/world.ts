@@ -40,6 +40,8 @@ const asEnvelope = Schema.decodeUnknownEffect(Envelope);
 export const collie = Effect.fn("World.collie")(function* (
   world: World,
   args: ReadonlyArray<string>,
+  /** More of the operator's environment, over this world's own. */
+  extra: Readonly<Record<string, string>> = {},
 ) {
   const binary = yield* Config.option(Config.String("COLLIE_TEST_BINARY"));
   const command = Option.isSome(binary) ? [binary.value] : [process.execPath, `${root}src/main.ts`];
@@ -56,6 +58,7 @@ export const collie = Effect.fn("World.collie")(function* (
       // The host a client starts is this same program, as an installation's would be.
       COLLIE_HOST: asCommand(command),
       COLLIE_HOST_WATCH_PID: watch,
+      ...extra,
     },
     stdout: "pipe",
     stderr: "pipe",

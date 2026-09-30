@@ -28,6 +28,7 @@ import type { RequestConflict } from "./store";
 import { renderApproved, type VerifySpec } from "./verify-spec";
 import { defaultsPath, readDefaults, type IntentSeed } from "./intent";
 import { scopeFor, scopeKey } from "./registry";
+import { PROJECTS_ROOT_OPTION, projectsRoot } from "./projects";
 
 export { savedModules } from "./discovery";
 
@@ -171,6 +172,11 @@ export const startRun = Effect.fn("Lifecycle.startRun")(function* (
     named: Object.values(options.input.text)[0] ?? "",
   });
   if (placed._tag === "Rejected") return placed.result;
+  // Resolved here, once: what this front door listed and offered is where the host roots it.
+  const root =
+    options.options?.workspace === PROJECTS_ROOT_OPTION
+      ? (yield* projectsRoot(env)).path
+      : undefined;
   return yield* asks(env, (client) =>
     client.start({
       project: env.cwd,
@@ -179,6 +185,7 @@ export const startRun = Effect.fn("Lifecycle.startRun")(function* (
       input: options.input.json,
       text: options.input.text,
       inferred: options.input.inferred,
+      root,
       options: options.options,
       task: placed.task?.id,
       taskLabel: placed.label ?? undefined,

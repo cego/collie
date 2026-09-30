@@ -78,7 +78,7 @@ import {
 import { FALLBACK_DEFAULTS, configValue, loadDefaults, readConfig } from "./config";
 import { foldPreferences, preferencesIn, resolveChoice } from "./harness";
 import { currentEnv } from "./env";
-import { PROJECTS_ROOT_OPTION, projectsRoot } from "./projects";
+import { PROJECTS_ROOT_OPTION } from "./projects";
 import {
   HelleClaimSchema,
   HelleError,
@@ -2585,6 +2585,8 @@ const isSeparate = Schema.is(Schema.Literal("new"));
 const checkoutRequest = Effect.fn("Engine.checkoutRequest")(function* (
   generation: Generation,
   asked: Readonly<Record<string, string>>,
+  /** The Projects root the front door resolved, which `projects-root` names; null for none. */
+  root: string | null,
 ) {
   const given = asked.workspace?.trim() ?? "";
   if (given === "") return { kind: "declared" } satisfies CheckoutRequest;
@@ -2596,10 +2598,12 @@ const checkoutRequest = Effect.fn("Engine.checkoutRequest")(function* (
     }
     return { kind: "separate" } satisfies CheckoutRequest;
   }
-  const path =
-    given === PROJECTS_ROOT_OPTION
-      ? (yield* projectsRoot(yield* currentEnv.pipe(Effect.orDie)).pipe(Effect.orDie)).path
-      : given;
+  if (given === PROJECTS_ROOT_OPTION && root === null) {
+    return yield* refusedInput(
+      `workspace: "${PROJECTS_ROOT_OPTION}" came without the Projects root it names`,
+    );
+  }
+  const path = given === PROJECTS_ROOT_OPTION ? (root ?? "") : given;
   if (!path.startsWith("/")) {
     return yield* refusedInput(
       `workspace: "${given}" is neither "new", "${PROJECTS_ROOT_OPTION}" nor the absolute path of a checkout`,
@@ -2648,6 +2652,8 @@ type Cut = typeof Cut.Type;
 const Placing = Schema.Struct({
   from: Schema.String,
   taskLabel: Schema.NullOr(Schema.String),
+  /** The Projects root the start was given, kept so a re-placement and a child name the same. */
+  root: Schema.optionalKey(Schema.NullOr(Schema.String)),
   workspace: Schema.optionalKey(Schema.NullOr(Schema.String)),
   checkout: Schema.optionalKey(Schema.NullOr(Cut)),
 });
@@ -3030,6 +3036,8 @@ export interface RegistryApi {
     readonly input: Readonly<Record<string, Schema.Json>>;
     readonly text?: Readonly<Record<string, string>>;
     readonly inferred?: ReadonlyArray<string>;
+    /** The Projects root the front door resolved, which `workspace=projects-root` names. */
+    readonly root?: string | undefined;
     /** The host's own launch options, which never reach the author's payload. */
     readonly options?: Readonly<Record<string, string>>;
     /** What this work belongs to: a Task, and the run it came out of. */
@@ -3573,7 +3581,7 @@ const makeRegistry: (
         generation,
         runId: row.run,
         from: placing.value.from,
-        request: yield* checkoutRequest(generation, options),
+        request: yield* checkoutRequest(generation, options, placing.value.root ?? null),
         input: yield* decodeInput(row.input).pipe(Effect.orElseSucceed(() => ({}))),
         provenance: yield* strings(row.provenance),
         options,
@@ -3660,7 +3668,11 @@ const makeRegistry: (
     yield* refuseAgent(generation, asked).pipe(
       Effect.mapError((failure) => refused(failure.reason)),
     );
-    const request = yield* checkoutRequest(generation, asked).pipe(
+    const root = Option.match(decodePlacing(parent.placing ?? ""), {
+      onNone: () => null,
+      onSome: (receipt) => receipt.root ?? null,
+    });
+    const request = yield* checkoutRequest(generation, asked, root).pipe(
       Effect.mapError((failure) => refused(failure.reason)),
     );
     // Where its parent works, unless it named a checkout of its own.
@@ -3684,7 +3696,7 @@ const makeRegistry: (
       input: settled.input,
       provenance: settled.provenance,
       options: launchOptions(generation, asked),
-      placing: encodePlacing({ from, taskLabel: null }),
+      placing: encodePlacing({ from, taskLabel: null, root }),
       generation: generation.name,
       execution: yield* generation.registration.workflow.executionId(payload),
       task: parent.task,
@@ -4197,6 +4209,7 @@ const makeRegistry: (
     readonly input: Readonly<Record<string, Schema.Json>>;
     readonly text?: Readonly<Record<string, string>>;
     readonly inferred?: ReadonlyArray<string>;
+    readonly root?: string | undefined;
     readonly options?: Readonly<Record<string, string>>;
     readonly task?: string | null;
     readonly taskLabel?: string | undefined;
@@ -4210,7 +4223,7 @@ const makeRegistry: (
     const asked = options.options ?? {};
     yield* refuseOptions(generation, asked);
     yield* refuseAgent(generation, asked);
-    const request = yield* checkoutRequest(generation, asked);
+    const request = yield* checkoutRequest(generation, asked, options.root ?? null);
     const launch = launchOptions(generation, asked);
     // Settled before anything exists to clean up: an input the workflow's own schema
     // rejects names its field here, and no row, claim or execution is created.
@@ -4262,6 +4275,7 @@ const makeRegistry: (
       placing: encodePlacing({
         from: request.kind === "existing" ? request.path : options.project,
         taskLabel: options.taskLabel ?? null,
+        root: options.root ?? null,
       }),
       generation: generation.name,
       execution: yield* generation.registration.workflow.executionId(payload),
