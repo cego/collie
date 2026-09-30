@@ -1839,7 +1839,7 @@ export const hostLayer = (options: {
                 );
               }),
             ).pipe(Effect.ignore);
-      // A parent the store has lost ends the walk, as a loop would.
+      // Stops at a parent the store has no row for, and at a cycle.
       const lineageOf = Effect.fn("Engine.lineageOf")(function* (runId: string) {
         const lineage = [runId];
         let row = yield* store.run(runId);
