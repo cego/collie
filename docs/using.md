@@ -941,15 +941,16 @@ an older Collie recorded is not read at all; `collie run start` begins the same 
 
 ## Hand-offs between runs
 
-Runs in the same **session** — one herdr session, one workspace — know about
-each other's long-lived agents. There is only ever one implementer and one planner per
-session.
+A Run knows about the long-lived agents of its **lineage** only: itself, the Run it was
+started from, and so on up. An `implement` started from a plan asks that plan's planner;
+another Run's planner or implementer, however recently it was started from the same place,
+is never the one asked or handed work.
 
 **A review, to whoever can act on it.** After the synthesis, `review` asks **What next?**:
 
-- **Fix findings** — the implementer already live in this workspace is handed them, where
-  there is one; otherwise an implementer on this review's own run applies them as a fix
-  round, `disputed` and all, and the fix is reviewed again at once. The rally goes on by
+- **Fix findings** — the live implementer of a Run this review was started from is handed
+  them, where there is one; otherwise an implementer on this review's own run applies them
+  as a fix round, `disputed` and all, and the fix is reviewed again at once. The rally goes on by
   itself until nothing blocking is left, it stops making progress, or four rounds have run,
   and then asks again. A hand-off offers **Review again** for when the implementer is done.
 - **Fix findings in a full implement run** — starts `implement` with the review itself as

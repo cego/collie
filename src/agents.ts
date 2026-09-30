@@ -55,7 +55,7 @@ import {
   type PermissionMode,
   type Preferences,
 } from "./harness";
-import { Herdr, herdrFailureReason, type HerdrError, type PaneInfo } from "./herdr";
+import { Herdr, herdrFailureReason, type AgentInfo, type HerdrError, type PaneInfo } from "./herdr";
 import { agentName, agentTabLabel, reason, shellQuote, unsafePathComponent } from "./naming";
 import { askRouteTo } from "./handoff";
 import { lineageAgent, registerAgent, registryPath, scopeFor, verifyIncarnation } from "./registry";
@@ -1056,7 +1056,11 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
     }).pipe(Effect.catch(() => Effect.succeed({ dispatch: true as const })));
 
   /** A pane, an agent in it, and the registry entry that makes it addressable. */
-  const start = Effect.fn("Agents.start")(function* (ask: AgentAsk, agent: string) {
+  const start = Effect.fn("Agents.start")(function* (
+    ask: AgentAsk,
+    agent: string,
+    alive: ReadonlyArray<AgentInfo>,
+  ) {
     const adapter = adapterFor(ask.harness ?? host.harness);
     const wanted = ask.permissions ?? undefined;
     const asked = isPermissionMode(wanted) ? wanted : host.permissions;
@@ -1116,6 +1120,7 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
         yield* registerAgent(
           yield* registryPath(host.env.stateDir, scopeFor(host.env, ask.cwd)),
           found.entry,
+          alive,
         );
         return found.entry.incarnation?.terminalId;
       }),
@@ -1144,7 +1149,9 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
         const replayed = yield* fs
           .exists(launchPath(ask.runId, ask.operation))
           .pipe(Effect.orElseSucceed(() => false));
-        const terminalId = alive ? (live.terminalId ?? undefined) : yield* start(ask, agent);
+        const terminalId = alive
+          ? (live.terminalId ?? undefined)
+          : yield* start(ask, agent, listing.success);
         const landed: Launched = {
           agent,
           output: ask.output,

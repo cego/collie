@@ -288,13 +288,18 @@ function roundOf(step: Sentence["step"]): string {
 
 /**
  * The step an operation is, as the shipped workflows name them: `fix-1` is round 1 of
- * fixing, `review-2-1` the first seat of round 2's review, and `02-parse.md` a ticket.
+ * fixing, `review-2-1` the first seat of round 2's review, `review-2` the second seat of
+ * round 1's (`reviewing.ts` numbers only later rounds), and `02-parse.md` a ticket.
  */
 export function stepOfOperation(operation: string): Pick<Sentence, "step" | "verb"> {
   const ticket = /^(\d+)-.*\.md$/.exec(operation);
   if (ticket) return { step: { id: "build", round: null }, verb: `Building ticket ${ticket[1]}` };
+  const seat = /^review-[^-]+$/.test(operation);
   const counted = /^(.+?)-(\d+)(?:-[^-]+)?$/.exec(operation);
-  if (counted === null) return { step: { id: operation, round: null }, verb: null };
+  if (seat || counted === null) {
+    const id = seat ? "review" : operation;
+    return { step: { id, round: seat ? { at: 1, of: null } : null }, verb: null };
+  }
   return {
     step: { id: counted[1]!, round: { at: Number(counted[2]), of: null } },
     verb: null,

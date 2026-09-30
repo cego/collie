@@ -1070,6 +1070,37 @@ test("a question and a hand-off stay in the asking Run's lineage, whoever else r
     }),
   ));
 
+test("each seat of a panel stays registered, and a gone agent's entry leaves with the next registration", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const env = rig.pluginEnv();
+      const file = yield* registryPath(env.stateDir, scopeFor(env, rig.projectDir));
+      const seat = (agent: string, runId: string) => ({
+        role: "reviewer",
+        agent,
+        paneId: `p-${agent}`,
+        workspaceId: null,
+        runId,
+        workflow: "review",
+        at: "2026-09-30T10:00:00Z",
+        incarnation: { terminalId: `term-${agent}`, agentSession: null },
+      });
+      const alive = (name: string) => ({
+        name,
+        paneId: `p-${name}`,
+        workspaceId: null,
+        status: "working" as const,
+        title: null,
+        terminalId: `term-${name}`,
+        agentSession: null,
+      });
+      yield* registerAgent(file, seat("old-review", "r-done"), []);
+      yield* registerAgent(file, seat("seat-1", "r-panel"), [alive("old-review")]);
+      yield* registerAgent(file, seat("seat-2", "r-panel"), [alive("seat-1")]);
+      expect((yield* readRegistry(file)).map((entry) => entry.agent)).toEqual(["seat-1", "seat-2"]);
+    }),
+  ));
+
 /** The controls an operator sets, as the host keeps them beside the run. */
 const control = (name: string, runId: string, set: boolean) =>
   FileSystem.FileSystem.pipe(

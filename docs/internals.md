@@ -340,10 +340,13 @@ lock, and the existing PID-lock recovery handles a process that crashes.
 
 A **session** is one herdr session and one workspace, taken together; a Run's own worktree
 does not move it out of the workspace it was started from.
-`registry.ts` records which long-lived agents a session still has, per workspace and repo,
-so `handoff.ts` can give one run's result to another run's live agent rather than starting
-a second one. There is only ever one agent per role in a session, and a session never sees
-another workspace's agents — even for the same repo.
+`registry.ts` records which long-lived agents a session still has, per workspace and repo:
+one entry per agent, whatever its Run or role, so a panel's seats and every Run started
+from the same place are all there. Registering an agent drops the entries of agents herdr
+no longer lists. A question or a hand-off looks only at the asking Run's lineage —
+`Place.lineage`, the Run and the Runs it was started from — so `handoff.ts` gives one run's
+result to a live agent of the Run it came from rather than starting a second one, and
+never to an unrelated Run's agent in the same role.
 
 Each entry also records an **incarnation**: herdr's own `terminal_id` for the process in
 the pane, and the harness session it is driving where herdr knows one. An agent name is

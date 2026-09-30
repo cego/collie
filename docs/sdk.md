@@ -482,6 +482,8 @@ const place = yield * host.place((yield * Run).id);
 //                   risks, previous, harness, model, effort
 // place.task      — the Task it belongs to, whose workspace its agents open in
 // place.workspace — a workspace of its own, where the Run asked for one; null otherwise
+// place.lineage   — this Run, then the Run it was started from, and so on: whose agents
+//                   `askRoute` and `handOffWork` may reach
 ```
 
 `place.cwd` is decided before your body runs, and your body never makes a checkout. A

@@ -674,13 +674,17 @@ test("a working card names the step the Run is on, with its round", () =>
       yield* launched(dir, fixing.id, ["build", "review-1", "fix-1"]);
       yield* launched(dir, reviewing.id, ["build", "review-1", "fix-1", "review-2-1"]);
       yield* launched(dir, ticket.id, ["01-parse.md", "02-one-launch-input-per-module.md"]);
+      // Round 1's seats carry no round: this is seat 3 of the first review.
+      const seated = yield* madeRun(dir, { id: "r-seat" });
+      yield* launched(dir, seated.id, ["build", "review-1", "review-2", "review-3"]);
 
-      const views = yield* board(env, [fixing, reviewing, ticket]);
+      const views = yield* board(env, [fixing, reviewing, ticket, seated]);
       const said = (id: string) => views.find((view) => view.run === id)!.sentence;
 
       expect(said(fixing.id)).toBe("Fixing the review findings, round 1.");
       expect(said(reviewing.id)).toBe("Reviewing, round 2.");
       expect(said(ticket.id)).toBe("Building ticket 02.");
+      expect(said(seated.id)).toBe("Reviewing, round 1.");
     }),
   ));
 

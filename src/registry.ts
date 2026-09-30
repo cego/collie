@@ -129,14 +129,18 @@ const write = Effect.fn("writeRegistry")(function* (
   yield* fs.writeFileString(file, `${encodeRegistry(entries)}\n`);
 });
 
+/**
+ * One entry per agent: every Run started from the same place shares this file, and a
+ * panel's seats share a Run and a role. Given what herdr has now, the entries of agents
+ * it no longer has are dropped with it.
+ */
 export const registerAgent = Effect.fn("registerAgent")(function* (
   file: string,
   entry: AgentEntry,
+  alive?: ReadonlyArray<AgentInfo>,
 ) {
-  // One per role per Run: every Run started from the same place shares this file.
-  const kept = (yield* readRegistry(file)).filter(
-    (e) => !(e.role === entry.role && e.runId === entry.runId) && e.agent !== entry.agent,
-  );
+  const others = (yield* readRegistry(file)).filter((e) => e.agent !== entry.agent);
+  const kept = alive === undefined ? others : liveEntries(others, alive);
   const entries = [...kept, entry];
   yield* write(file, entries);
   return entries;
