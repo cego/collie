@@ -1110,3 +1110,13 @@ export const externalSubmissions = Effect.fn("Compactors.externalSubmissions")(f
     (event) => event.kind === "submit" && event.reason === "external",
   ).length;
 });
+
+/** Whether the submit hook recorded this delivery's token: the harness took that prompt. */
+export const submittedDelivery = Effect.fn("Compactors.submittedDelivery")(function* (
+  dir: string,
+  delivery: string,
+) {
+  return (yield* readEvents(dir)).some(
+    (event) => event.kind === "submit" && event.delivery === delivery,
+  );
+});

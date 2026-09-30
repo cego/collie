@@ -1018,10 +1018,11 @@ const control = (name: string, runId: string, set: boolean) =>
   );
 
 /** What was typed into an agent's pane, in the order herdr was asked to type it. */
+/** What each prompt said, without the delivery token every prompt ends with. */
 const prompts = (calls: ReadonlyArray<Call>) =>
   calls
     .filter((call) => (call.argv ?? [])[0] === "agent" && (call.argv ?? [])[1] === "prompt")
-    .map((call) => (call.argv ?? [])[3] ?? "");
+    .map((call) => ((call.argv ?? [])[3] ?? "").replace(/\ncollie-delivery:\S+$/, ""));
 
 /** One thing an operator says to the run's agent, through the host's own service. */
 const say = (runId: string, text: string, request: string, mode?: "boundary" | "now") =>
@@ -1802,3 +1803,47 @@ test("a step pointer the harness took is recorded as Collie's, with its delivery
       expect(pointer).toContain(`\ncollie-delivery:${step!.delivery.id}`);
     }),
   ));
+
+/** A just-started agent: herdr sees it busy booting when the prompt goes out, then idle. */
+const promptNotTaken = (lost: "enter" | "text") =>
+  new FakeHerdr(
+    rig.pluginEnv({ FAKE_HERDR_PROMPT_LOST: lost, FAKE_HERDR_AGENT_STATUS: "working,idle" }),
+  );
+
+const enters = (calls: ReadonlyArray<Call>) =>
+  calls.filter((call) => call.cmd === "agent send-keys" && call.argv?.[3] === "enter").length;
+
+test(
+  "a step pointer whose Enter was lost is sent with one Enter, never the text again",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* rig.queueOutputs([{ verdict: "clean", note: "after the Enter" }]);
+        yield* interrupted("r1", 8_000, { herdr: promptNotTaken("enter"), confirmGraceMs: 300 });
+        expect(yield* read(outputPath("r1"))).toContain("after the Enter");
+        const calls = yield* rig.calls();
+        expect(sent(calls, "Your task for this step")).toBe(1);
+        expect(enters(calls)).toBe(1);
+      }),
+    ),
+  120_000,
+);
+
+test(
+  "a step pointer that vanished is not sent again: the step waits for you, naming the pane and the delivery",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* rig.queueOutputs([{ verdict: "clean", note: "never" }]);
+        yield* interrupted("r1", 8_000, { herdr: promptNotTaken("text"), confirmGraceMs: 300 });
+        const why = yield* read(controlPath(dir, PARKED, "r1"));
+        const [step] = yield* steps("r1");
+        expect(why).toContain(step!.delivery.id);
+        expect(why).toMatch(/pane 1-\d+/);
+        const calls = yield* rig.calls();
+        expect(sent(calls, "Your task for this step")).toBe(1);
+        expect(enters(calls)).toBe(0);
+      }),
+    ),
+  120_000,
+);

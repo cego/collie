@@ -286,8 +286,17 @@ against the variant, a boundary item composed into that prompt inherits the note
 the state, and a compaction request records it, so an unresolved compaction can be told
 from one whose request may never have arrived.
 
-Because the submission settles all of this, nothing waits again after it: the engine
-watches a prompted agent straight away rather than keeping a readiness wait of its own.
+`unobserved` never stays silent, though. While a step's Output is awaited, the Dispatcher
+checks its unobserved prompt or repair (`confirmSubmitted`) until something says it was
+taken: a turn herdr saw start from a settled agent, or Claude's `UserPromptSubmit` hook
+recording that delivery's id — every prompt ends with its `collie-delivery:<id>` line for
+this. A settled agent whose prompt box still holds that line — herdr's `prompt_box_body`
+region, read with `agent explain` — gets one Enter, recorded on the ledger so it is never
+pressed twice, and never the text again. A settled agent showing neither for fifteen
+seconds parks the step: nothing can prove sending it again is safe, so the Run waits for
+a human, naming the agent, its pane and the delivery. A wait parked that way is still a
+pending Run, and reads as waiting on you rather than working. An agent `blocked` at a
+dialog is not settled, and is left to clear.
 
 `env.ts` is the plugin environment herdr provides — state directory, socket path, plugin
 root — and the user's own layer, `<plugin root>/user`, which `COLLIE_USER_DIR` overrides

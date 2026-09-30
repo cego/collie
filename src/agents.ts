@@ -32,12 +32,13 @@ import {
   COMPACTION_WAIT_MS,
   atBoundary,
   awaitReady,
+  controlDir,
   installControls,
   withControlLock,
   type CompactionDeps,
   type CompactionPorts,
 } from "./compaction";
-import { COMPACTION_PORTS } from "./compactors";
+import { COMPACTION_PORTS, submittedDelivery } from "./compactors";
 import { kindForRole } from "./cards";
 import { Oversight } from "./oversight";
 import { FALLBACK_DEFAULTS, loadDefaults } from "./config";
@@ -73,7 +74,7 @@ import {
   type Projection,
   type Seat,
 } from "./sdk";
-import { deliveriesOf } from "./steering";
+import { causalKey, deliveriesOf } from "./steering";
 import { readTask, taskOfWorkspace, withTaskLock, writeTask } from "./task";
 import { malformedIn, renderTemplate, skillMention, skillsIn } from "./template";
 
@@ -212,7 +213,7 @@ export interface AgentsApi {
   readonly collect: (
     launched: Launched,
     unless?: string | null,
-  ) => Effect.Effect<string | null, AgentUncertain>;
+  ) => Effect.Effect<string | null, AgentUncertain | AgentParked>;
   /**
    * Hands one unusable Output back to the agent that wrote it. True where it was asked, or
    * where the Output is already something other than `unusable`; false where it could not
@@ -456,7 +457,8 @@ export const agentWork = <
     const watching = <A, E, R>(collecting: Effect.Effect<A, E, R>) => {
       if (Option.isNone(oversight)) return collecting;
       const look = oversight.value.checkpoints(work.runId, work.operation);
-      return Effect.race(
+      // First to finish, failure included: a collection raised to a human must not wait on a watch that never ends.
+      return Effect.raceFirst(
         collecting,
         look.pipe(
           Effect.repeat(Schedule.spaced(Duration.millis(agents.pollMs))),
@@ -550,8 +552,12 @@ export const agentWork = <
           execute: stoppable(
             // Null here is also the same unusable Output written again, which a repair
             // has had its one chance at, so it ends the work rather than parking it.
-            parkedWhenStuck(agents.revive(ask, first), host, work.runId).pipe(
-              Effect.andThen(watching(agents.collect(launched, first))),
+            parkedWhenStuck(
+              agents
+                .revive(ask, first)
+                .pipe(Effect.andThen(watching(agents.collect(launched, first)))),
+              host,
+              work.runId,
             ),
             host,
             work.runId,
@@ -796,6 +802,8 @@ export interface AgentHost {
   readonly collectMs?: number;
   /** How long a new agent's harness has to show it can take its first prompt. */
   readonly readyMs?: number;
+  /** How long a settled agent may show neither an unobserved prompt nor a turn from it. */
+  readonly confirmGraceMs?: number;
   /** How a step's own prompts wait out a pane that says it will clear by itself. */
   readonly patience?: dispatch.Patience;
   /** Each harness's compaction controls; the shipped ones where none are given. */
@@ -814,6 +822,9 @@ const START_TIMEOUT_MS = 180_000;
 
 /** Past herdr's own start, which has already waited for the harness to be ready. */
 const READY_TIMEOUT_MS = 120_000;
+
+/** Longer than herdr takes to see a taken prompt become a turn, even under load. */
+const CONFIRM_GRACE_MS = 15_000;
 
 /** herdr says this of a pane that exists but whose shell has not come up yet. */
 const paneNotReady = (error: HerdrError) =>
@@ -1224,12 +1235,61 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
       ),
     );
 
+  /**
+   * A step's prompt or repair herdr could not see taken, checked while its Output is
+   * awaited: taken, finished with one Enter, or raised to a human. Never silent.
+   */
+  const confirmed = (launched: Launched) =>
+    Effect.gen(function* () {
+      const found = yield* entryFor(launched, launched.agent, null);
+      if (found.entry === null) return;
+      const dir = yield* controlDir(host.env.stateDir, launched.agent);
+      const about = (kind: "step" | "repair") =>
+        causalKey(launched.runId, { kind, ref: launched.operation }, 0);
+      yield* dispatch.confirmSubmitted(
+        {
+          stateDir: host.env.stateDir,
+          herdr: host.herdr,
+          log: (line) => log(launched.runId, line),
+          taken: (delivery) =>
+            submittedDelivery(dir, delivery.id).pipe(
+              Effect.map((recorded) => (recorded ? "its submit hook recorded it" : null)),
+              Effect.orElseSucceed(() => null),
+            ),
+          pollMs: host.pollMs ?? DEFAULT_POLL_MS,
+          graceMs: host.confirmGraceMs ?? CONFIRM_GRACE_MS,
+        },
+        found.entry,
+        [about("step"), about("repair")],
+      );
+    }).pipe(
+      Effect.catchIf(
+        (cause) => !(cause instanceof dispatch.Unconfirmed),
+        (cause) =>
+          log(
+            launched.runId,
+            `${launched.agent}: could not check its prompt was taken (${reason(cause)})`,
+          ),
+      ),
+      Effect.catchTag("Unconfirmed", (unconfirmed) =>
+        Effect.fail(
+          new AgentParked({
+            operation: launched.operation,
+            reason: `${unconfirmed.agent} in pane ${unconfirmed.pane} was sent delivery ${unconfirmed.delivery}, and nothing shows it took it: ${unconfirmed.why}. Look at the pane. If the prompt is there, press Enter; if the agent has it, let it finish; otherwise settle it with \`collie run deliveries ${launched.runId} --reconcile ${unconfirmed.delivery} --as sent|not-sent\`. Then \`collie run resume ${launched.runId}\`.`,
+          }),
+        ),
+      ),
+    );
+
   const collect = (launched: Launched, unless?: string | null) =>
     under(
-      waitForOutput(launched.output, unless ?? null, {
-        pollMs: host.pollMs ?? DEFAULT_POLL_MS,
-        budgetMs: host.collectMs ?? DEFAULT_COLLECT_MS,
-      }),
+      Effect.raceFirst(
+        waitForOutput(launched.output, unless ?? null, {
+          pollMs: host.pollMs ?? DEFAULT_POLL_MS,
+          budgetMs: host.collectMs ?? DEFAULT_COLLECT_MS,
+        }),
+        confirmed(launched).pipe(Effect.andThen(Effect.never)),
+      ),
     );
 
   const repair = (launched: Launched, problem: string, unusable: string) =>

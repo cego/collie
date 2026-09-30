@@ -326,7 +326,22 @@ const SUBMIT_TIMEOUT_MS = 15_000;
 export type Submission = "observed" | "unobserved";
 
 /** Between turns, as herdr itself says so: anything else may be hiding a turn. */
-const isSettled = (status: AgentStatus) => status === "idle" || status === "done";
+export const isSettled = (status: AgentStatus) => status === "idle" || status === "done";
+
+/**
+ * As much of `agent explain --json` as Collie reads. herdr publishes no schema for it
+ * (`explain: true`), so everything is optional and a shape it cannot read is no answer.
+ */
+const ExplainReply = Schema.Struct({
+  evaluated_rules: Schema.Array(
+    Schema.Struct({
+      region: Schema.String,
+      evidence: Schema.optionalKey(
+        Schema.Struct({ region_preview: Schema.optionalKey(Schema.String) }),
+      ),
+    }),
+  ),
+});
 
 /** How long a submission that saw no turn waits for herdr to give its agent a status. */
 const STATUS_WAIT = { every: Duration.millis(500), times: 20 } as const;
@@ -908,7 +923,7 @@ export class Herdr {
       "--timeout",
       String(SUBMIT_TIMEOUT_MS),
     ]).pipe(Effect.asVoid);
-    const press = this.cli(["agent", "send-keys", target, "enter"]).pipe(Effect.asVoid);
+    const press = this.agentPressEnter(target);
     const startedATurn = this.agentWait(target, {
       until: ["working", "blocked"],
       timeoutMs: SUBMIT_TIMEOUT_MS,
@@ -943,6 +958,29 @@ export class Herdr {
         Effect.catch(() => Effect.succeed<Submission>("unobserved")),
       );
     });
+  }
+
+  /** One Enter, for text already in the agent's prompt box. */
+  agentPressEnter(target: string): HerdrEffect<void> {
+    return this.cli(["agent", "send-keys", target, "enter"]).pipe(Effect.asVoid);
+  }
+
+  /**
+   * The head of the agent's prompt box as herdr's detection manifest reads it — its
+   * `prompt_box_body` region, which herdr cuts off after a few hundred bytes. Null where
+   * the manifest has no such region, or herdr answered nothing Collie can read.
+   */
+  promptBox(target: string): HerdrEffect<string | null> {
+    return this.cli(["agent", "explain", target, "--json"]).pipe(
+      Effect.map((res) =>
+        Option.match(Schema.decodeUnknownOption(ExplainReply)(res), {
+          onNone: () => null,
+          onSome: (explained) =>
+            explained.evaluated_rules.find((rule) => rule.region === "prompt_box_body")?.evidence
+              ?.region_preview ?? null,
+        }),
+      ),
+    );
   }
 
   agentWait(
