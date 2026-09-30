@@ -384,12 +384,12 @@ for (const [what, route] of [
           yield* withRouter(world, route, () =>
             Effect.gen(function* () {
               const words = "one registry for every service";
-              const { prompts, rows } = answering(["sourced", words, "plan"]);
+              const { prompts, rows } = answering(["sourced", words, "plan-instead"]);
               expect(yield* pickFlow(new Herdr(home), home, prompts, "inline")).toBe(0);
               expect(rows.at(-1)?.title).toBe("Plan it instead");
               const run = (yield* runViews(home, null)).runs[0];
               expect(run).toMatchObject({
-                workflow: "plan",
+                workflow: "plans-it",
                 cwd: tree.root,
                 input: { goal: words },
                 options: { workspace: "projects-root" },

@@ -373,9 +373,12 @@ const startChosen = Effect.fn("Flows.startChosen")(function* (
   if (module) {
     const started = yield* startModule(herdr, env, prompts, { ...opts, task }, module);
     if (started === null || "line" in started) return started?.line ?? null;
-    const plan = saved.entries.find((entry) => entry.id === PLAN_INSTEAD);
+    const plan = saved.entries.find(plansAGoal);
     if (plan === undefined) {
-      yield* bail(prompts, `No workflow module is saved as "${PLAN_INSTEAD}" to plan it instead.`);
+      yield* bail(
+        prompts,
+        "No workflow module takes a goal and fixes its outcome as a plan, so nothing can plan it instead.",
+      );
       return null;
     }
     const planned = yield* startModule(
@@ -477,7 +480,10 @@ const startModule = Effect.fn("Flows.startModule")(function* (
     if (words !== "" && (yield* wordsAre(strategy, words, at.cwd))) text[launchInput.name] = words;
     else if (strategy === "gitlab-repository" && (yield* insideCheckout(at.cwd))) {
       text[launchInput.name] = at.cwd;
-      inferred.set(launchInput.name, "the checkout you are in");
+      inferred.set(
+        launchInput.name,
+        home ? "the checkout it was placed in" : "the checkout you are in",
+      );
     }
   }
   for (const field of module.inputs) {
@@ -533,8 +539,12 @@ const startModule = Effect.fn("Flows.startModule")(function* (
 /** The one question a start asks: what the human wants, in their own words. */
 const WHAT_DO_YOU_WANT = "What do you want?";
 
-/** What a start from the Home that no one checkout fits is offered instead. */
-const PLAN_INSTEAD = "plan";
+/** The row a start from the Home that no one checkout fits is offered instead. */
+const PLAN_INSTEAD = "plan-instead";
+
+/** A module that plans from a goal, by what it declares rather than what it is called. */
+const plansAGoal = (found: Found) =>
+  found.outcome === "plan" && found.inputs.some((field) => field.strategy === "goal");
 
 /** The host option a placed start names its checkout with, recorded as inferred. */
 const WORKSPACE = "workspace";

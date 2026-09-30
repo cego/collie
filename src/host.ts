@@ -135,6 +135,8 @@ export const HostRpcs = RpcGroup.make(
       text: Schema.optional(Schema.Record(Schema.String, Schema.String)),
       /** The names among those a front door worked out rather than was told. */
       inferred: Schema.optional(Schema.Array(Schema.String)),
+      /** The Projects root the front door resolved, which `workspace=projects-root` names. */
+      root: Schema.optional(Schema.String),
       /** The host's own launch options, which never reach the author's payload. */
       options: Schema.optional(Schema.Record(Schema.String, Schema.String)),
       // What this work belongs to, which is the caller's to know and the host's to keep.
@@ -274,14 +276,17 @@ const handlers = (dir: string) =>
           catalogue(project).pipe(
             Effect.map((found) => ({
               // Without the revision: that is how this host decides a reload, not a caller.
-              entries: found.entries.map(({ id, title, description, layer, path, inputs }) => ({
-                id,
-                title,
-                description,
-                layer,
-                path,
-                inputs,
-              })),
+              entries: found.entries.map(
+                ({ id, title, description, layer, path, inputs, outcome }) => ({
+                  id,
+                  title,
+                  description,
+                  layer,
+                  path,
+                  inputs,
+                  outcome,
+                }),
+              ),
               problems: found.problems,
             })),
           ),
@@ -292,6 +297,7 @@ const handlers = (dir: string) =>
           input,
           text,
           inferred,
+          root,
           options,
           task,
           taskLabel,
@@ -308,6 +314,7 @@ const handlers = (dir: string) =>
                 input,
                 text,
                 inferred,
+                root,
                 options,
                 task,
                 taskLabel,

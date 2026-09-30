@@ -131,6 +131,7 @@ test(
                 limits: [],
               },
             ],
+            outcome: null,
           },
         ]);
 

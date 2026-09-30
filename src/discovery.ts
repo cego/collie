@@ -76,6 +76,8 @@ export const Resolved = Schema.Struct({
   path: Schema.String,
   /** What the module declares it takes, so a front door can ask for it. */
   inputs: Schema.Array(Declared),
+  /** The outcome the module fixes, or null where it fixes none. */
+  outcome: Schema.NullOr(Schema.String),
 });
 
 /** An id nothing can be run under, and the file that is why. */
@@ -163,6 +165,7 @@ const claimsIn = Effect.fn("Discovery.claimsIn")(function* (root: Root) {
               layer: root.layer,
               path,
               inputs: declaredBy(read.success),
+              outcome: read.success.metadata?.outcome?.fixed ?? null,
               revision,
             },
           },
