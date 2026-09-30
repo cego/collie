@@ -715,7 +715,9 @@ rally converges, stands on a dispute and runs out of rounds where these three de
   the previous round's `keys`; without it nothing can notice a rally going round.
 - **`settleFinalFix(live, fix, evidence)`** — the last round has no review after it, so the
   fix's own account is what is left. Every blocking finding needs a disposition, and every
-  check it names needs a passing verification on the tree as it stands.
+  check it names needs a passing verification on the tree as it stands. A fix that holds
+  up but for a blocking dispute halts with `dispute_unresolved`, and still carries the
+  `attestation` a merge request needs to say the fix was not re-reviewed.
 
 `ReviewOutputSchema`, `FixOutputSchema` and `SynthesisSchema` are the shapes those steps
 write. Hand one to `agentWork` and what comes back is its own type — the same contract the

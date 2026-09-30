@@ -30,6 +30,7 @@ import {
   runDir,
 } from "../src/engine";
 import { VerifySpecSchema } from "../src/verify-spec";
+import { collect } from "../src/verify";
 import { inputsFor, offersFrom } from "../src/offers";
 import { Store } from "../src/store";
 import { registerAgent, registryPath, scopeFor } from "../src/registry";
@@ -1894,6 +1895,69 @@ scenario(
           "- disputed blocking finding: [blocker] the guard is on the wrong side (src/a.ts): the list is never empty here",
         );
         expect(opening).toContain("- assumed in build: callers never pass an empty list");
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a dispute left at the last fix still says that fix was not re-reviewed, with its reason",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* bin.add("glab", `exit 0`);
+        yield* repository();
+        const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
+        const runId = "r-last-dispute";
+        yield* approve(runId, ["unit"]);
+        yield* collect(evidenceDir(dir, runId), {
+          run: runId,
+          name: "unit",
+          executable: "true",
+          argv: [],
+          cwd: rig.projectDir,
+          by: "agent",
+        }).pipe(Effect.orDie);
+        const blocker = (title: string) => ({ severity: "blocker", title, file: "src/a.ts" });
+        const review = (...titles: string[]) => ({
+          ...CLEAN_SYNTHESIS,
+          verdict: "findings",
+          findings: titles.map(blocker),
+        });
+        const fix = (fixed: string[], disputed: Array<Record<string, string>> = []) => ({
+          verdict: "clean",
+          findings: [],
+          fixed: fixed.map((title) => ({ title, file: "src/a.ts" })),
+          disputed,
+          checks: [{ name: "unit" }],
+        });
+        yield* rig.queueOutputs([
+          BUILT,
+          review("one"),
+          fix(["one"]),
+          review("two"),
+          fix(["two"]),
+          review("three"),
+          fix(["three"]),
+          review("fixed last", "argued last"),
+          fix(["fixed last"], [{ ...blocker("argued last"), reason: "the caller guards it" }]),
+          OPENED,
+        ]);
+        const result = yield* ran({
+          entry: shipped("implement"),
+          runId,
+          input: { plan },
+          options: { outcome: "feature" },
+        });
+        yield* bin.restore();
+
+        expect(said(result)).toBe(OPENED.mr_url);
+        const opening = yield* asked(runId, "mr");
+        expect(opening).toContain("implementer-reported, not re-reviewed");
+        expect(opening).toContain(
+          "- disputed blocking finding: [blocker] argued last (src/a.ts): the caller guards it",
+        );
       }),
     ),
   120_000,
