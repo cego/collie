@@ -20,7 +20,7 @@
 
 **Model** — The model a Harness is asked to use, decided with its Harness. One the Harness does not take is refused before any Tab opens; left open, it is the Harness's own default.
 
-**Input** — A value a Workflow needs (plan directory, diff target, goal). Inferred from context (branch, cwd, earlier plan Runs, glab); the human is asked only when inference fails.
+**Input** — A value a Workflow needs (plan directory, diff target, goal). Only the **Launch flow** infers one, for a human, from context (branch, cwd, earlier plan Runs, glab), and a Run records which of its Inputs were inferred and which were given. An agent's start — chat's Collie tools or `collie run start` — gives every Input explicitly, an optional one as an explicit empty, and a start missing one is refused with what would fill it.
 
 **Output** — A structured JSON file an agent writes to the Run directory for one operation (e.g. a review verdict + findings). It is decoded against the Workflow's schema before anything believes it, and one that does not decode buys one repair. Workflows read Outputs, never terminal text.
 
@@ -304,6 +304,8 @@ What each is for, what it needs, and how they chain: `docs/workflows.md`.
 
 **Plan directory** — The `plan/` folder inside a Run: SPEC.md and the ticket files. It is the hand-off from `plan` to `implement` and never lives in the repository. Every ticket names the repository it changes with a `Repo:` line: a path under the Run's root, `.` for the root itself, never absolute and never containing `..`.
 
+**Projects root** — The one directory every checkout a human works in lives under: the gitte folder by default, else a configured one. A Run started from the Home is rooted there, because the Home has no checkout of its own and the human names none; a plan's `Repo:` lines are then paths under it.
+
 **Repo run** — One child Run of a fan-out, owning one repository's branch and merge request and building only the tickets whose `Repo:` names that repository. Every Repo run of one plan uses the same branch name.
 
 **Wave** — The Repo runs a fan-out starts together: those whose tickets are blocked by no ticket of a Repo run still going. Ticket order inside a repository is the Repo run's; cross-repository order is the wave's. A plan whose repositories block each other in a cycle has no wave order and is refused, as is one whose "Blocked by" line names something that is not a ticket of the plan, or which numbers two tickets the same so that such a line cannot say which it means.
@@ -322,8 +324,16 @@ from once the original Run is gone. **Workflows** is every Workflow and Persona 
 layer, Inputs, decisions and whatever validation says is wrong with it. **Settings** is the
 defaults and remembered values in `config.json`, and whether the harness is trusted here.
 
-**Launch flow** — The questions between "run a workflow" and a Run: which Workflow, its
-Inputs, and the candidates for the ones that have them. Nothing about its questions — those
+**Launch flow** — The two questions between "run a workflow" and a Run: which Workflow, and
+what the human wants, in their own words. The words fill the Workflow's launch Input — the
+one field it hints with `goal`, `work-source`, `diff-target` or `gitlab-repository` — where
+they are a value of its kind, and otherwise say where the work is; every other Input is
+inferred or left empty, and a start that still lacks one is
+refused with the reason rather than asked again. Where the work happens is never asked:
+outside the Home it is the checkout the human is in, and from the Home it is the
+**Projects root** or the checkout the words point at. What it inferred is shown in one line
+before the Run starts. It is the human's front door only: an agent's start is given
+everything explicitly (see **Input**). Nothing about the Run's questions — those
 are asked when the Run reaches them, with the work they decide about in front of the
 human. One set of components, two placements — a popup pane for the herdr action, and inline in the
 Collie tab for `＋ New run` — because a question a human answers is a component. A
