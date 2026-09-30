@@ -81,8 +81,11 @@ export interface Collected {
   readonly preexisting?: ReadonlySet<string>;
 }
 
-/** The latest result on the tree in front of us decides: a pass a later fail contradicts is not one. */
-function latestAtFinal(got: Collected, name: string, by?: Verification["by"]): boolean {
+/**
+ * Whether the latest result for this check, on the tree in front of us, passed: a pass a
+ * later fail contradicts is not one. `by` narrows it to one collector, Collie or an agent.
+ */
+function lastPassedAtFinal(got: Collected, name: string, by?: Verification["by"]): boolean {
   const atFinal = got.verifications.filter(
     (v) =>
       v.name === name &&
@@ -91,16 +94,6 @@ function latestAtFinal(got: Collected, name: string, by?: Verification["by"]): b
       v.end.fingerprint === got.final.fingerprint,
   );
   return atFinal.at(-1)?.result === "pass";
-}
-
-/** A verification that passed on the tree in front of us, not on one that has moved. */
-function passedAtFinal(got: Collected, name: string): boolean {
-  return latestAtFinal(got, name, "collie");
-}
-
-/** The same, for a verification an agent was allowed to collect (docs commands, checks). */
-function anyPassAtFinal(got: Collected, name: string): boolean {
-  return latestAtFinal(got, name);
 }
 
 /** Whether this kind of result is proved by Collie's own run of the approved set. */
@@ -137,7 +130,7 @@ function approvedSetGaps(got: Collected): string[] {
   if (got.approved.length === 0) return [nothingApproved()];
   const gaps: string[] = [];
   for (const spec of got.approved) {
-    if (passedAtFinal(got, spec.name)) continue;
+    if (lastPassedAtFinal(got, spec.name, "collie")) continue;
     if (got.preexisting?.has(spec.name)) continue;
     const any = got.verifications.filter((v) => v.name === spec.name);
     if (any.length === 0) gaps.push(`${spec.name} was never run`);
@@ -212,7 +205,7 @@ export function evidenceGaps(kind: Outcome, got: Collected): string[] {
       // collected these itself; what matters is a pass on the tree in front of us.
       for (const ticket of got.tickets) {
         for (const name of ticket.checks) {
-          if (anyPassAtFinal(got, name) || got.preexisting?.has(name)) continue;
+          if (lastPassedAtFinal(got, name) || got.preexisting?.has(name)) continue;
           gaps.push(
             `${ticket.file} promised check "${name}", which has no passing verification on this tree`,
           );
@@ -233,7 +226,7 @@ export function evidenceGaps(kind: Outcome, got: Collected): string[] {
         gaps.push(
           "the bug was only reproduced on the tree the fix is already on, so nothing shows it failing before the fix",
         );
-      if (!anyPassAtFinal(got, "regression"))
+      if (!lastPassedAtFinal(got, "regression"))
         gaps.push("regression does not pass on the current tree, so the fix is not proven");
       const named = anyField(got, "reproduced");
       if (!isString(named) || named.trim() === "")
@@ -264,7 +257,7 @@ export function evidenceGaps(kind: Outcome, got: Collected): string[] {
       if (documented.length === 0)
         gaps.push("no documented command is named, so the instructions were never run");
       for (const name of documented) {
-        if (!anyPassAtFinal(got, name))
+        if (!lastPassedAtFinal(got, name))
           gaps.push(`documented command "${name}" has no passing verification on this tree`);
       }
       if (!reviewerSays(got, "accurate"))
@@ -273,10 +266,10 @@ export function evidenceGaps(kind: Outcome, got: Collected): string[] {
     }
     case "migration": {
       for (const name of ["migrate-up", "migrate-down"]) {
-        if (anyPassAtFinal(got, name)) continue;
+        if (lastPassedAtFinal(got, name)) continue;
         // `rollback` is the same thing under another name, and a project that calls it
         // that has still proved it can go back.
-        if (name === "migrate-down" && anyPassAtFinal(got, "rollback")) continue;
+        if (name === "migrate-down" && lastPassedAtFinal(got, "rollback")) continue;
         gaps.push(`${name} has no passing verification on this tree`);
       }
       if (!reviewerSays(got, "compatible")) gaps.push("the review did not report compatible: true");

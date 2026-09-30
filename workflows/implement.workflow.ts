@@ -42,6 +42,7 @@ import {
   settleFinalFix,
   settleRound,
   splitDisputed,
+  type CheckEvidence,
   type Finding,
   type Handed,
   type Slice,
@@ -144,6 +145,21 @@ const Opened = Schema.Struct({
  */
 const ROUNDS = 4;
 
+/** The checks whose latest run by Collie, on the tree in front of it, failed. */
+const failingNow = (evidence: CheckEvidence, names: ReadonlyArray<string>) =>
+  names.filter(
+    (name) =>
+      evidence.verifications
+        .filter(
+          (v) =>
+            v.name === name &&
+            v.by === "collie" &&
+            v.end.head_sha === evidence.final.head_sha &&
+            v.end.fingerprint === evidence.final.fingerprint,
+        )
+        .at(-1)?.result === "fail",
+  );
+
 /** One agent for the whole Run, so its model is named once and the fixes know the build. */
 const BUILDER = "build";
 
@@ -233,23 +249,6 @@ export default defineWorkflow({
       const unbuilt = (reason: string) =>
         share === "" ? Effect.succeed(reason) : Effect.fail(new WorkflowError({ reason }));
       const approved = yield* requireApproved(kind);
-      // What the approved checks did on the tree this Run started from, before any of its own
-      // work. A check that already failed there is not the implementer's to fix, and the merge
-      // request says so rather than spending gate fixes on it.
-      const baseline = yield* Activity.make({
-        name: "baseline",
-        success: Schema.Array(Schema.String),
-        execute: Effect.gen(function* () {
-          const failed: string[] = [];
-          for (const spec of approved) {
-            const ran = yield* host
-              .verify({ runId, name: spec.name, cwd })
-              .pipe(Effect.orElseSucceed(() => null));
-            if (ran?.result === "fail") failed.push(spec.name);
-          }
-          return failed;
-        }),
-      });
 
       const input: typeof Implementing.Type = {
         inputs: {
@@ -260,10 +259,7 @@ export default defineWorkflow({
           outcome: kind,
         },
         run: { dir: place.dir, id: runId },
-        verify:
-          baseline.length === 0
-            ? renderApproved(approved)
-            : `${renderApproved(approved)}\n\nAlready failing on the tree this Run started from, before any change: ${baseline.join(", ")}. Not yours to fix unless the work source asks for it.`,
+        verify: renderApproved(approved),
       };
       // Where a question the plan does not cover goes: the planner's own pane while one
       // is live, and otherwise the human's.
@@ -362,6 +358,7 @@ export default defineWorkflow({
       // again until a gate answer says to.
       let passes = 0;
       let passed: ReadonlyArray<string> = [];
+      let baseline: ReadonlyArray<{ readonly name: string; readonly at: string }> = [];
       const gapsNow = Effect.gen(function* () {
         passes += 1;
         const pass = yield* Activity.make({
@@ -387,7 +384,7 @@ export default defineWorkflow({
               reviewed: ["synthesize"],
               roots: [place.dir, cwd],
               tickets: tickets.map((ticket) => ({ file: ticket.file, checks: ticket.checks })),
-              preexisting: baseline,
+              preexisting: baseline.map((one) => one.name),
             });
             return { gaps, passed: now };
           }).pipe(Effect.orDie),
@@ -396,9 +393,31 @@ export default defineWorkflow({
         return pass.gaps;
       });
       let gaps = yield* gapsNow;
-      // Once more before a fix: a check that fails and then passes on the same tree is a
-      // flake, and a Run that ends on one has proved nothing about the change.
-      if (gaps.length > 0) gaps = yield* gapsNow;
+      if (gaps.length > 0) {
+        // A check that failed is run once where this branch left the default branch. One
+        // that fails there too was never this Run's to fix, and the merge request says so.
+        baseline = yield* Activity.make({
+          name: "baseline",
+          success: Schema.Array(Schema.Struct({ name: Schema.String, at: Schema.String })),
+          execute: Effect.gen(function* () {
+            const failing = failingNow(
+              yield* host.evidence(runId, cwd),
+              granted.map((spec) => spec.name),
+            );
+            const failed: Array<{ name: string; at: string }> = [];
+            for (const name of failing) {
+              const ran = yield* host
+                .verify({ runId, name, cwd, at: "default-base" })
+                .pipe(Effect.orElseSucceed(() => null));
+              if (ran?.result === "fail") failed.push({ name, at: ran.start.head_sha });
+            }
+            return failed;
+          }),
+        });
+        // Once more before a fix: a check that fails and then passes on the same tree is a
+        // flake, and a Run that ends on one has proved nothing about the change.
+        gaps = yield* gapsNow;
+      }
       // A gate fix lands after the last review, so the merge request says it was not re-reviewed.
       let unreviewed = rallied.unreviewed;
       // The implementer fixes what is unproved, bounded like the rally; the human reads
@@ -436,14 +455,18 @@ export default defineWorkflow({
           .join("\n");
       }
       // Failed before this Run changed anything, and still fails: reported, never passed.
-      const preexisting = baseline.filter((name) => !passed.includes(name));
+      const failing = failingNow(
+        yield* host.evidence(runId, cwd),
+        granted.map((spec) => spec.name),
+      );
+      const preexisting = baseline.filter((one) => failing.includes(one.name));
       const unsettled = [
         ...assumed,
         ...rallied.unsettled,
         ...gaps.map((gap) => `unproved after ${ROUNDS} gate fixes: ${gap}`),
         ...preexisting.map(
-          (name) =>
-            `${name} failed on the tree this Run started from, before any of its changes, and still fails`,
+          ({ name, at }) =>
+            `${name} also fails at ${at.slice(0, 12)}, where this branch leaves the default branch, so it failed before this Run's changes and still fails (by exit code only: a dependency this branch changed can make that comparison wrong)`,
         ),
       ];
       if (unsettled.length > 0) yield* host.record(runId, `unsettled: ${unsettled.join("; ")}`);

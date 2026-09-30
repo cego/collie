@@ -294,7 +294,7 @@ What each is for, what it needs, and how they chain: `docs/workflows.md`.
 
 **Evidence** — A Verification collected at a revision. An Output field saying the tests pass is a claim, and is shown as one. The gate before a merge request reads evidence, never claims.
 
-**Baseline** — The approved set, run once by Collie on the tree a Run starts from, before any of its work. A check that failed there and still fails is reported as failing before the Run's changes: never a pass, and never handed to the implementer to fix.
+**Baseline** — A check that failed at the gate, run once by Collie where the Run's branch leaves the default branch, in the Run's own checkout. One that fails there too, and still fails, is reported as failing before the Run's changes: never a pass, and never handed to the implementer to fix.
 
 **Obstacle** — What is identifiably in a Run's way, in one sentence: a command failing several times in a row the same way. It is shown to the human and given to the next prompt so the approach can change. It stops nothing.
 

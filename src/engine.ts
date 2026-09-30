@@ -137,7 +137,7 @@ import { Herdr, herdrFailureReason } from "./herdr";
 import type { PluginEnv } from "./env";
 import { WorktreeRecordSchema } from "./run";
 import { listTasks, newTask, taskOfWorkspace, writeTask } from "./task";
-import { classifyGivenTarget, classifyWorkSource } from "./inputs";
+import { classifyGivenTarget, classifyWorkSource, defaultBase } from "./inputs";
 import type { BunServices } from "@effect/platform-bun/BunServices";
 import { approvedFrom, VerifySpecSchema, type VerifySpec } from "./verify-spec";
 import {
@@ -307,6 +307,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
       readonly name: string;
       readonly cwd: string;
       readonly expect?: "pass" | "fail";
+      /** Run it where this checkout left the default branch, then put the checkout back. */
+      readonly at?: "default-base";
     }) => Effect.Effect<Verification, WorkflowError>;
     /**
      * Puts a file on the merge request a Run was pointed at, as one note Collie sends.
@@ -1785,6 +1787,50 @@ export const handOverClaim = Effect.fn("Engine.handOverClaim")(function* (option
   return handed;
 });
 
+/** Where a checkout was before a comparison at the default branch moved it. */
+const AWAY_FILE = "away-from";
+
+/** A comparison a crash interrupted leaves the checkout at the base; this puts it back. */
+const restoreCheckout = (cwd: string, away: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const back = yield* fs.readFileString(away).pipe(Effect.orElseSucceed(() => ""));
+    if (back === "") return;
+    if ((yield* runShell("git", ["checkout", "-q", back], cwd)).code !== 0) {
+      return yield* new WorkflowError({ reason: `the checkout could not be put back on ${back}` });
+    }
+    yield* fs.remove(away).pipe(Effect.ignore);
+  });
+
+/**
+ * Runs `body` with the checkout at its merge-base with the default branch, then puts it
+ * back. A checkout with changes of its own is refused: they would travel to the base.
+ */
+const atDefaultBase = <A, R>(cwd: string, away: string, body: Effect.Effect<A, WorkflowError, R>) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const git = (...args: string[]) => runShell("git", args, cwd);
+    const refuse = (why: string) =>
+      new WorkflowError({ reason: `not compared at the default branch: ${why}` });
+    if ((yield* git("status", "--porcelain")).stdout.trim() !== "") {
+      return yield* refuse("the checkout has changes of its own");
+    }
+    const branch = yield* defaultBase(runShell, cwd);
+    if (branch === null) return yield* refuse("no default branch");
+    const remote = yield* git("merge-base", "HEAD", `origin/${branch}`);
+    const merged = remote.code === 0 ? remote : yield* git("merge-base", "HEAD", branch);
+    if (merged.code !== 0) return yield* refuse(`no merge-base with ${branch}`);
+    const head = (yield* git("rev-parse", "HEAD")).stdout.trim();
+    const named = yield* git("symbolic-ref", "-q", "--short", "HEAD");
+    const back = named.code === 0 ? named.stdout.trim() : head;
+    yield* fs.writeFileString(away, back).pipe(Effect.orDie);
+    if ((yield* git("checkout", "-q", "--detach", merged.stdout.trim())).code !== 0) {
+      yield* fs.remove(away).pipe(Effect.ignore);
+      return yield* refuse(`${merged.stdout.trim()} could not be checked out`);
+    }
+    return yield* body.pipe(Effect.ensuring(restoreCheckout(cwd, away).pipe(Effect.orDie)));
+  });
+
 export const hostLayer = (options: {
   readonly dir: string;
   /** Where a user's own `verify.json` is, for a project that wrote none. */
@@ -1958,8 +2004,10 @@ export const hostLayer = (options: {
               }
               const journal = evidenceDir(dir, asked.runId);
               const marker = `${runDir(dir, asked.runId)}/${VERIFYING_FILE}`;
+              const away = `${runDir(dir, asked.runId)}/${AWAY_FILE}`;
+              yield* restoreCheckout(asked.cwd, away);
               yield* fs.writeFileString(marker, spec.name).pipe(Effect.ignore);
-              return yield* runApproved(
+              const verified = runApproved(
                 journal,
                 { ...own, cwd: asked.cwd },
                 approved,
@@ -1968,8 +2016,10 @@ export const hostLayer = (options: {
               ).pipe(
                 Effect.tap((record) => noteVerification(journal, record)),
                 Effect.mapError((refused) => new WorkflowError({ reason: refused.why })),
-                Effect.ensuring(fs.remove(marker).pipe(Effect.ignore)),
               );
+              return yield* (
+                asked.at === "default-base" ? atDefaultBase(asked.cwd, away, verified) : verified
+              ).pipe(Effect.ensuring(fs.remove(marker).pipe(Effect.ignore)));
             }),
           ),
         approved: (runId) => under(approvedOf(dir, runId)),

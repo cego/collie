@@ -735,6 +735,9 @@ Run's own checkout — and records what it did. The list is `.collie/verify.json
 started, plus whatever a human has granted it since with `collie run intent verification` —
 a name nobody approved is refused, and a workflow cannot add to it. Anyone else
 collects the same way from outside: `collie verify --run <your run id> -- <command>`.
+With `at: "default-base"` it runs at the merge-base of the checkout and its default branch,
+in that same checkout so what the build installed is there, and then puts the checkout back;
+a checkout with changes of its own, or no default branch to compare with, is refused.
 
 `host.approved(runId)` is that list, for a prompt to name what the work will be held to
 before it starts — `renderApproved` writes it out — and `renderEvidence(host.evidence(...))`
@@ -751,8 +754,9 @@ a grant withdrawn meanwhile parks the Run there rather than failing it.
 sentence each, and empty where the evidence is there. It reads the journal, the approved
 list, the Outputs you hold and the tickets you built — and it will not take a reviewer's
 judgement from an implementer's Output, because the agent that wrote the change cannot
-vouch for its own scope. Pass `preexisting` with the approved checks that already failed on
-the tree the Run started from, and one that still fails is left out of the gaps for your Run
+vouch for its own scope. Only the latest result for a check on the tree in front of it
+counts, so a pass a later fail on the same tree contradicts is not one. Pass `preexisting` with the approved checks that also failed where
+the branch leaves the default branch, and one that still fails is left out of the gaps for your Run
 to report instead.
 
 ```ts

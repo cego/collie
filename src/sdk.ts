@@ -507,6 +507,11 @@ export interface HostApi {
     readonly cwd: string;
     /** What a pass looks like; `fail` is how a reproduction is proved to reproduce. */
     readonly expect?: "pass" | "fail";
+    /**
+     * Run it at the merge-base of this checkout and the default branch, in the same
+     * checkout, then put it back. Refused on a checkout with changes of its own.
+     */
+    readonly at?: "default-base";
   }) => Effect.Effect<Verification, WorkflowError>;
   /**
    * What this Run may have Collie run for it. A prompt names them so an agent knows what
