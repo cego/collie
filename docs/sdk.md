@@ -767,6 +767,11 @@ const gaps = evidenceGapsOf({
 });
 ```
 
+`splitEvidenceGapsOf` takes the same options and returns the same gaps as `checks`, which a
+passing verification on this tree closes, and `judged`, an Output's claim or a reviewer's
+judgement. A fix after the review can only earn the first; implement's gate hands its fixer
+those and sends the rest straight to the merge request.
+
 [ADR-0023](adr/0023-a-rally-is-a-loop-and-a-claim-is-not-proof.md) is why the rally is a
 loop and why a claim is not proof.
 

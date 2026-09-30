@@ -1139,6 +1139,13 @@ export const SDK_DECLARATIONS = `declare module "collie" {
       readonly checks: ReadonlyArray<string>;
     }>;
   }): ReadonlyArray<string>;
+  /**
+   * The same gaps, split by what closes them: \`checks\` a passing verification on this
+   * tree, and \`judged\` an Output's claim or a reviewer's judgement, which no later fix moves.
+   */
+  export function splitEvidenceGapsOf(
+    options: Parameters<typeof evidenceGapsOf>[0],
+  ): { readonly checks: ReadonlyArray<string>; readonly judged: ReadonlyArray<string> };
 
   /** Where the work to be done was described. */
   export interface WorkSource {

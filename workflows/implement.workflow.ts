@@ -26,7 +26,7 @@ import {
   classifyWorkSource,
   contentOf,
   defineWorkflow,
-  evidenceGapsOf,
+  splitEvidenceGapsOf,
   findingKey,
   formatFindings,
   identityProblem,
@@ -337,17 +337,21 @@ export default defineWorkflow({
       // this kind of result still has no evidence for. An Output saying the tests pass is
       // a claim; a record in the journal, bound to this tree, is not.
       const granted = yield* requireApproved(kind);
-      // Each pass is journaled, so a replay follows the results the human was shown rather
+      // Each pass is journaled, so a replay follows the results the Run acted on rather
       // than a fresh run of checks that may come out differently. What passed is not run
-      // again until a gate answer says to.
+      // again until a gate fix has changed the tree.
       let passes = 0;
       let passed: ReadonlyArray<string> = [];
+      // What only an Output or a review could have said: no gate fix moves it, so it goes
+      // straight to the merge request.
+      let judged: ReadonlyArray<string> = [];
       const gapsNow = Effect.gen(function* () {
         passes += 1;
         const pass = yield* Activity.make({
           name: `gate.${passes}`,
           success: Schema.Struct({
             gaps: Schema.Array(Schema.String),
+            judged: Schema.Array(Schema.String),
             passed: Schema.Array(Schema.String),
           }),
           execute: Effect.gen(function* () {
@@ -357,7 +361,7 @@ export default defineWorkflow({
               const ran = yield* host.verify({ runId, name: spec.name, cwd });
               if (ran.result === "pass") now.push(spec.name);
             }
-            const gaps = evidenceGapsOf({
+            const split = splitEvidenceGapsOf({
               kind: isOutcome(kind) ? kind : "unspecified",
               evidence: yield* host.evidence(runId, cwd),
               approved: granted,
@@ -368,10 +372,11 @@ export default defineWorkflow({
               roots: [place.dir, cwd],
               tickets: tickets.map((ticket) => ({ file: ticket.file, checks: ticket.checks })),
             });
-            return { gaps, passed: now };
+            return { gaps: split.checks, judged: split.judged, passed: now };
           }).pipe(Effect.orDie),
         });
         passed = pass.passed;
+        judged = pass.judged;
         return pass.gaps;
       });
       let gaps = yield* gapsNow;
@@ -418,6 +423,7 @@ export default defineWorkflow({
         ...assumed,
         ...rallied.unsettled,
         ...gaps.map((gap) => `unproved after ${ROUNDS} gate fixes: ${gap}`),
+        ...judged.map((gap) => `not proved: ${gap}`),
       ];
       if (unsettled.length > 0) yield* host.record(runId, `unsettled: ${unsettled.join("; ")}`);
 

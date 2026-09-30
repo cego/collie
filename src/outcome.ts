@@ -192,8 +192,18 @@ export function refInside(roots: ReadonlyArray<string>, ref: string): boolean {
  * there; every entry is one sentence a human can act on.
  */
 export function evidenceGaps(kind: Outcome, got: Collected): string[] {
+  const { checks, judged } = gapsOf(kind, got);
+  return [...checks, ...judged];
+}
+
+/**
+ * The same gaps, split by what closes them: `checks` a passing verification on this tree,
+ * `judged` only an Output or a review, which no fix after the review changes.
+ */
+export function gapsOf(kind: Outcome, got: Collected): { checks: string[]; judged: string[] } {
+  const checks: string[] = [];
   const gaps: string[] = [];
-  if (needsApproved(kind)) gaps.push(...approvedSetGaps(got));
+  if (needsApproved(kind)) checks.push(...approvedSetGaps(got));
 
   switch (kind) {
     case "unspecified":
@@ -208,7 +218,7 @@ export function evidenceGaps(kind: Outcome, got: Collected): string[] {
       for (const ticket of got.tickets) {
         for (const name of ticket.checks) {
           if (!anyPassAtFinal(got, name))
-            gaps.push(
+            checks.push(
               `${ticket.file} promised check "${name}", which has no passing verification on this tree`,
             );
         }
@@ -221,15 +231,15 @@ export function evidenceGaps(kind: Outcome, got: Collected): string[] {
       const regression = got.verifications.filter((v) => v.name === "regression");
       const reproduced = regression.filter((v) => v.expect === "fail" && v.result === "pass");
       if (reproduced.length === 0)
-        gaps.push(
+        checks.push(
           "no regression verification recorded with --expect fail, so the bug was never reproduced",
         );
       else if (!reproduced.some((v) => earlierTree(v, got.final)))
-        gaps.push(
+        checks.push(
           "the bug was only reproduced on the tree the fix is already on, so nothing shows it failing before the fix",
         );
       if (!anyPassAtFinal(got, "regression"))
-        gaps.push("regression does not pass on the current tree, so the fix is not proven");
+        checks.push("regression does not pass on the current tree, so the fix is not proven");
       const named = anyField(got, "reproduced");
       if (!isString(named) || named.trim() === "")
         gaps.push("the Output does not name the verification that reproduced the bug");
@@ -260,7 +270,7 @@ export function evidenceGaps(kind: Outcome, got: Collected): string[] {
         gaps.push("no documented command is named, so the instructions were never run");
       for (const name of documented) {
         if (!anyPassAtFinal(got, name))
-          gaps.push(`documented command "${name}" has no passing verification on this tree`);
+          checks.push(`documented command "${name}" has no passing verification on this tree`);
       }
       if (!reviewerSays(got, "accurate"))
         gaps.push("the review did not report accurate: true for the instructions");
@@ -272,7 +282,7 @@ export function evidenceGaps(kind: Outcome, got: Collected): string[] {
         // `rollback` is the same thing under another name, and a project that calls it
         // that has still proved it can go back.
         if (name === "migrate-down" && anyPassAtFinal(got, "rollback")) continue;
-        gaps.push(`${name} has no passing verification on this tree`);
+        checks.push(`${name} has no passing verification on this tree`);
       }
       if (!reviewerSays(got, "compatible")) gaps.push("the review did not report compatible: true");
       break;
@@ -289,7 +299,7 @@ export function evidenceGaps(kind: Outcome, got: Collected): string[] {
       break;
     }
   }
-  return gaps;
+  return { checks, judged: gaps };
 }
 
 /**

@@ -1901,6 +1901,37 @@ scenario(
 );
 
 scenario(
+  "a gap only a reviewer could close goes to the merge request without a gate fix",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* bin.add("glab", `exit 0`);
+        yield* repository();
+        const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
+        const runId = "r-judged-gap";
+        yield* approve(runId, ["unit"]);
+        yield* rig.queueOutputs([BUILT, { ...CLEAN_SYNTHESIS, scope_met: false }, OPENED]);
+        const result = yield* ran({
+          entry: shipped("implement"),
+          runId,
+          input: { plan },
+          options: { outcome: "feature" },
+        });
+        yield* bin.restore();
+
+        expect(said(result)).toBe(OPENED.mr_url);
+        const fs = yield* FileSystem.FileSystem;
+        expect(yield* fs.exists(`${dir}/agents/${runId}/gate-fix-1.prompt.md`)).toBe(false);
+        expect(yield* asked(runId, "mr")).toContain(
+          "- not proved: the review did not report scope_met: true for the agreed scope",
+        );
+      }),
+    ),
+  120_000,
+);
+
+scenario(
   "a dispute left at the last fix still says that fix was not re-reviewed, with its reason",
   () =>
     runEffect(

@@ -30,6 +30,7 @@ import {
   KINDS,
   REQUESTABLE,
   evidenceGaps,
+  gapsOf,
   isOutcome,
   needsApproved,
   nothingApproved,
@@ -251,7 +252,23 @@ const FRONT_MATTER = /^---\r?\n[\s\S]*?\r?\n---\r?\n?/;
  * an Output is only ever a claim — what decides a check is the journal, bound to the
  * tree in front of it.
  */
-export function evidenceGapsOf(options: {
+export function evidenceGapsOf(options: GateAsk): ReadonlyArray<string> {
+  return evidenceGaps(options.kind, collectedOf(options));
+}
+
+/**
+ * The same gaps, split by what closes them: `checks` a passing verification on this tree,
+ * which a fix can earn, and `judged` an Output's claim or a reviewer's judgement, which no
+ * fix after the review moves.
+ */
+export function splitEvidenceGapsOf(options: GateAsk): {
+  readonly checks: ReadonlyArray<string>;
+  readonly judged: ReadonlyArray<string>;
+} {
+  return gapsOf(options.kind, collectedOf(options));
+}
+
+type GateAsk = {
   readonly kind: Outcome;
   readonly evidence: CheckEvidence;
   readonly approved: ReadonlyArray<VerifySpec>;
@@ -265,17 +282,17 @@ export function evidenceGapsOf(options: {
     readonly file: string;
     readonly checks: ReadonlyArray<string>;
   }>;
-}): ReadonlyArray<string> {
-  return evidenceGaps(options.kind, {
-    verifications: options.evidence.verifications,
-    final: options.evidence.final,
-    approved: options.approved,
-    outputs: new Map(Object.entries(options.outputs)),
-    reviewed: new Set(options.reviewed),
-    insideRun: (ref) => refInside(options.roots, ref),
-    tickets: options.tickets,
-  });
-}
+};
+
+const collectedOf = (options: GateAsk) => ({
+  verifications: options.evidence.verifications,
+  final: options.evidence.final,
+  approved: options.approved,
+  outputs: new Map(Object.entries(options.outputs)),
+  reviewed: new Set(options.reviewed),
+  insideRun: (ref: string) => refInside(options.roots, ref),
+  tickets: options.tickets,
+});
 
 /**
  * A workflow's failure, as every workflow reports one. One shape rather than an
