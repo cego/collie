@@ -673,7 +673,12 @@ const rally = (ask: {
             reviewed: synthesis,
           };
         if (settled.halt === "dispute_unresolved")
-          return { halted: null, unreviewed: "", unsettled: settled.reasons, reviewed: synthesis };
+          return {
+            halted: null,
+            unreviewed: settled.attestation,
+            unsettled: settled.reasons,
+            reviewed: synthesis,
+          };
         return {
           halted: `${settled.halt}: ${settled.reasons.join("; ")}`,
           unreviewed: "",

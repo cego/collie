@@ -569,7 +569,14 @@ export function settleRound(round: {
 
 export type FinalFix =
   | { ok: true; attestation: string; outstanding: Finding[] }
-  | { ok: false; halt: Halt; reasons: string[]; outstanding: Finding[] };
+  | {
+      ok: false;
+      halt: "dispute_unresolved";
+      attestation: string;
+      reasons: string[];
+      outstanding: Finding[];
+    }
+  | { ok: false; halt: "fix_unverified"; reasons: string[]; outstanding: Finding[] };
 
 /**
  * A fix report as a reader takes one. The lists are not the reader's to change, so a
@@ -668,16 +675,19 @@ export function settleFinalFix(
       outstanding: unresolved,
     };
   }
+  const reportedFixed = live.filter((f) => isBlocking(f) && fixed.has(findingKey(f))).length;
+  const disputedToo = disputes.length > 0 ? `, ${disputes.length} disputed` : "";
+  const attestation = `last fix: ${reportedFixed} blocking finding(s) reported fixed${disputedToo}, ${fix.checks.length} check(s) verified on this tree — implementer-reported, not re-reviewed`;
   if (disputes.length > 0) {
-    return { ok: false, halt: "dispute_unresolved", reasons: disputes, outstanding: unresolved };
+    return {
+      ok: false,
+      halt: "dispute_unresolved",
+      attestation,
+      reasons: disputes,
+      outstanding: unresolved,
+    };
   }
-  const outstanding = live.filter((f) => !fixed.has(findingKey(f)));
-  const blocking = live.filter(isBlocking).length;
-  return {
-    ok: true,
-    attestation: `last fix: ${blocking} blocking finding(s) reported fixed, ${fix.checks.length} check(s) verified on this tree — implementer-reported, not re-reviewed`,
-    outstanding,
-  };
+  return { ok: true, attestation, outstanding: live.filter((f) => !fixed.has(findingKey(f))) };
 }
 
 const oneLine = (f: Finding) => `[${f.severity}] ${f.title}${f.file ? ` (${f.file})` : ""}`;

@@ -871,7 +871,14 @@ export const SDK_DECLARATIONS = `declare module "collie" {
 
   export type FinalFix =
     | { ok: true; attestation: string; outstanding: Finding[] }
-    | { ok: false; halt: Halt; reasons: string[]; outstanding: Finding[] };
+    | {
+        ok: false;
+        halt: "dispute_unresolved";
+        attestation: string;
+        reasons: string[];
+        outstanding: Finding[];
+      }
+    | { ok: false; halt: "fix_unverified"; reasons: string[]; outstanding: Finding[] };
 
   /** Minor is the one severity not worth blocking on; anything else fails closed. */
   export function isBlocking(finding: Finding): boolean;
