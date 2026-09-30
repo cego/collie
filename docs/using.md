@@ -805,9 +805,10 @@ Which of two things it does with one depends on **who wanted it**
 What it cannot ask for of its own accord: reconciling a delivery nobody can account for,
 recording evidence, and setting what a Run — or every Run — may do without asking. Those
 are yours. The one exception is what proves a Run: a start you ask chat for carries the
-checks chat chose (`start` with `verify`), without asking you which, and chat may ask to
-add or withdraw a running Run's (`set_verification`). You verify the work in the merge
-request before it lands.
+checks chat chose (`start` with `verify`), without asking you which, and chat adds or
+withdraws a running Run's (`set_verification`) at once, with no yes. Collie runs those
+commands itself, outside any agent's permission rules; the merge request lists each one
+with its command, and you verify the work there before it lands.
 That the rest is really there is a gate: `test/chat-parity.test.ts` walks the CLI's own
 command tree and fails on a command with no conversational route, so the list cannot
 quietly fall behind the CLI.

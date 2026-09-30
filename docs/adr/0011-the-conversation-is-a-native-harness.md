@@ -106,10 +106,23 @@ So the approved set is the one piece of authority chat sets on its own judgment:
   repository. The start is still the human's instruction; the checks it carries are
   chat's choice.
 - `set_verification` adds or withdraws a running Run's check, through the same host grant
-  and Intent amendment as `run intent verification`. It goes through `collie_propose`.
+  and Intent amendment as `run intent verification`. `collie_propose` carries it out in
+  the same call, with no yes: nobody confirms it.
+
+This is a reach, and it is kept on purpose. A check is an executable and its arguments,
+never a shell string, but the executable may be `sh` and its argument anything, and
+Collie spawns it itself at the gate — outside the agents' permission rules, including
+any managed-settings deny rules. Chat reads the repository to choose it, so what the
+repository says can decide what Collie runs. Bounding it — a board yes, or only
+executables a verify.json already names — would put the human back in the loop before the
+merge request, which is the line the human drew. What bounds it instead is the merge
+request: it lists each check the Run was held to with its command, and the human reads that
+before anything lands. The same holds for a `start`'s `verify`, which `collie_do` carries
+out as the start it is part of.
 
 Recording evidence stays out of reach: there is still no `verify` action kind, so chat can
-choose a command but never say it passed.
+choose a command but never say it passed. And chat itself still has no shell: the
+commands it chooses run at the gate, not in the conversation.
 
 **The built-in tools are off** in both launches — `--tools ""` and `--no-builtin-tools`.
 Collie's reads are the agent's entire reach, so there is no shell beside the admission
