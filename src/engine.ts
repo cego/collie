@@ -1646,7 +1646,7 @@ export const evidenceDir = (dir: string, runId: string): string => `${dir}/evide
 export const runDir = (dir: string, runId: string): string => `${dir}/runs/${runId}`;
 
 /** The Run whose own plan directory this Input value is, and null where it is none. */
-export const planRunOf = (value: string): string | null =>
+const planRunOf = (value: string): string | null =>
   /(?:^|\/)runs\/([^/]+)\/plan\/?$/.exec(value)?.[1] ?? null;
 
 /** Where a Run keeps the merge request it opened. */

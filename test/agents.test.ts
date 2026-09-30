@@ -23,17 +23,9 @@ import {
   promptFor,
   type AgentHost,
 } from "../src/agents";
-import { Children, Run, jsonSchemaFor, withAgents } from "../src/sdk";
+import { Children, Host, Run, jsonSchemaFor, withAgents } from "../src/sdk";
 import { asRun, enveloped } from "./support/enveloped";
-import {
-  PARKED,
-  controlPath,
-  foundationLayer,
-  loadEntry,
-  planRunOf,
-  pollStatus,
-  runDir,
-} from "../src/engine";
+import { PARKED, controlPath, foundationLayer, loadEntry, pollStatus, runDir } from "../src/engine";
 import { readCards } from "../src/cards";
 import { readDrift } from "../src/drift";
 import { seedIntent, writeIntent } from "../src/intent";
@@ -1035,12 +1027,34 @@ const liveIn = Effect.fn("test.liveIn")(function* (
   });
 });
 
-test("a Run built from another Run's plan has that Run in its lineage, however it was started", () => {
-  expect(planRunOf("/state/runs/run-p/plan")).toBe("run-p");
-  expect(planRunOf("runs/run-p/plan/")).toBe("run-p");
-  expect(planRunOf("/somewhere/plans/next")).toBeNull();
-  expect(planRunOf("fix the runs/run-p/plan typo")).toBeNull();
-});
+test("a Run built from another Run's plan has that Run in its lineage, however it was started", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const store = yield* Store;
+      const admit = (run: string, input: Record<string, string>, parent: string | null = null) =>
+        store.admit({
+          request: `req-${run}`,
+          run,
+          workflow: "w",
+          project: dir,
+          input,
+          provenance: {},
+          options: {},
+          generation: "g",
+          execution: `exec-${run}`,
+          task: null,
+          parent,
+        });
+      yield* admit("run-p", { work: "Plan it" });
+      // Started on its own: the plan it was given is its only link to run-p.
+      yield* admit("run-i", { plan: `${dir}/runs/run-p/plan` });
+      yield* admit("run-c", { work: "A child" }, "run-i");
+      yield* admit("run-o", { plan: "/somewhere/plans/next", note: "fix runs/run-p/plan typo" });
+      const host = yield* Host;
+      expect((yield* host.place("run-c")).lineage).toEqual(["run-c", "run-i", "run-p"]);
+      expect((yield* host.place("run-o")).lineage).toEqual(["run-o"]);
+    }).pipe(Effect.provide(foundationLayer({ dir })), Effect.scoped, Effect.orDie),
+  ));
 
 test("a question and a hand-off stay in the asking Run's lineage, whoever else registered the role here", () =>
   runEffect(

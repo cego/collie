@@ -324,7 +324,7 @@ opens, no agent starts and no Output is fabricated. Say why in what you return.
 
 `agents.askRoute(role, place.lineage)` is what an agent is told about asking for a decision
 its work does not cover: the pane of whoever is live in that role in this Run's lineage —
-the Run itself, then the Run it was started from, and so on — and otherwise to decide and
+the Run itself, then the Runs it was started from or builds a plan of, and so on — and otherwise to decide and
 record the decision. Another Run's agent in the same role is never the answer, however
 recently it was started from the same place. You name the role — who may be asked is your
 workflow's declaration, not an assumption Collie makes about it.
@@ -482,8 +482,8 @@ const place = yield * host.place((yield * Run).id);
 //                   risks, previous, harness, model, effort
 // place.task      — the Task it belongs to, whose workspace its agents open in
 // place.workspace — a workspace of its own, where the Run asked for one; null otherwise
-// place.lineage   — this Run, then the Run it was started from, and so on: whose agents
-//                   `askRoute` and `handOffWork` may reach
+// place.lineage   — this Run, then the Runs it was started from or builds a plan of, and
+//                   so on: whose agents `askRoute` and `handOffWork` may reach
 ```
 
 `place.cwd` is decided before your body runs, and your body never makes a checkout. A
