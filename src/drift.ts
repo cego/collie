@@ -311,21 +311,24 @@ export function splitDiff(diff: string): EvidenceBlock[] {
 /**
  * The reports this check found that are not already open. Deduped by finding rather than
  * by id alone: the same constraint breached in the same place is the same finding however
- * many times it is looked at.
+ * many times it is looked at. One found again at a newer Intent version is the open
+ * report moved to it, so a correction can still follow it.
  */
 export function newReports(
   found: ReadonlyArray<DriftReport>,
   existing: ReadonlyArray<DriftLine>,
 ): DriftReport[] {
-  const known = new Set(
-    openReports(existing).map((report) => findingKey(report.constraint, report.evidence)),
+  const known = new Map(
+    openReports(existing).map((report) => [findingKey(report.constraint, report.evidence), report]),
   );
   const fresh: DriftReport[] = [];
   for (const report of found) {
     const key = findingKey(report.constraint, report.evidence);
-    if (known.has(key)) continue;
-    known.add(key);
-    fresh.push(report);
+    const open = known.get(key);
+    if (open !== undefined && open.intent_version >= report.intent_version) continue;
+    const next = open === undefined ? report : { ...open, intent_version: report.intent_version };
+    known.set(key, next);
+    fresh.push(next);
   }
   return fresh;
 }

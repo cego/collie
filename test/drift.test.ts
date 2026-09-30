@@ -186,6 +186,22 @@ test("the same finding in the same place is not a second finding", () => {
   expect(newReports(found, settled)).toHaveLength(1);
 });
 
+test("a finding still there after the Intent moves is the same report, at the new version", () => {
+  const intent = intentWith({ kind: "protected_paths", globs: ["src/**"] });
+  const onFile = checkRules(intent, facts({ changedFiles: ["docs/using.md"] }), "t").map(
+    (report) => ({ ...report, resolution: "correction_submitted" as const }),
+  );
+  const moved = { ...intent, version: 2 };
+  const again = checkRules(moved, facts({ changedFiles: ["docs/using.md"] }), "t2");
+
+  const refiled = newReports(again, onFile);
+  expect(refiled.map((r) => [r.id, r.intent_version, r.resolution])).toEqual([
+    [onFile[0]!.id, 2, "correction_submitted"],
+  ]);
+  expect(openReports([...onFile, ...refiled]).map((r) => r.intent_version)).toEqual([2]);
+  expect(newReports(again, [...onFile, ...refiled])).toEqual([]);
+});
+
 test("an amended Intent supersedes what it moved past, and nothing else", () => {
   const intent = seedIntent("r1", {
     constraints: [
