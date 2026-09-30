@@ -508,6 +508,46 @@ test(
   60_000,
 );
 
+test(
+  "a grant whose Intent cannot be amended still holds, and says intent show will not list it",
+  () =>
+    inHerd(({ world, env, herdFile }) =>
+      Effect.gen(function* () {
+        const run = yield* hostedRun(world, "a picker");
+        const version = (yield* readIntent(run.dir))?.version ?? 1;
+        const fs = yield* FileSystem.FileSystem;
+        // The grant is the host's, kept elsewhere; only the Intent beside the Run is refused.
+        yield* fs.chmod(run.dir, 0o555);
+        const proposal = yield* record(herdFile, {
+          interpretation: "change what proves it",
+          targets: [{ run: run.id }],
+          actions: [
+            {
+              kind: "set_verification",
+              run: run.id,
+              name: "unit",
+              command: { executable: "true", argv: [], cwd: "worktree" },
+            },
+          ],
+          allowedNow: [],
+          intentVersions: { [run.id]: version },
+          by: "evaluator:call-1",
+        });
+        const granted = yield* carryOutProposal(env, proposal.id, proposal.content_hash, board);
+        yield* fs.chmod(run.dir, 0o755);
+        expect(granted).toMatchObject({
+          ok: true,
+          data: {
+            results: [
+              { state: "applied", note: expect.stringContaining("intent show will not list it") },
+            ],
+          },
+        });
+      }),
+    ),
+  60_000,
+);
+
 test("a proposal is pending until it is answered or it expires", () => {
   const now = Date.parse("2026-09-09T10:00:00Z");
   const proposal: ProposalLine = {

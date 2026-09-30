@@ -211,6 +211,23 @@ function applied(intent: Intent, change: Change, version: number): Intent | null
   }
 }
 
+/** The change that grants one check by name, replacing any of that name, or withdraws it. */
+export function verificationChange(
+  intent: Intent,
+  name: string,
+  command: {
+    readonly executable: string;
+    readonly argv: ReadonlyArray<string>;
+    readonly cwd: string;
+  } | null,
+): Change {
+  const kept = intent.authority.run_verification.filter((spec) => spec.name !== name);
+  return {
+    kind: "authority",
+    patch: { run_verification: command === null ? kept : [...kept, { name, ...command }] },
+  };
+}
+
 /**
  * The amended Intent, one version on, or the same one where the change is a no-op — a
  * version bump that changed nothing is a history entry nobody can act on, and every

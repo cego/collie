@@ -53,6 +53,7 @@ import {
   type Constraint,
   type Defaults,
   type Intent,
+  verificationChange,
 } from "../intent";
 import { scopeFor, scopeKey } from "../registry";
 import { readTask, taskOfWorkspace, type TaskChoice } from "../task";
@@ -1421,15 +1422,8 @@ const intentVerification = Command.make(
       "run-intent-verification",
       runId,
       requestId,
-      (intent) => {
-        const approved = intent.authority.run_verification.filter((spec) => spec.name !== name);
-        if (remove) return { kind: "authority", patch: { run_verification: approved } };
-        if (granted === null) return missing;
-        return {
-          kind: "authority",
-          patch: { run_verification: [...approved, { name, ...granted }] },
-        };
-      },
+      (intent) =>
+        !remove && granted === null ? missing : verificationChange(intent, name, granted),
       {
         propagate: wants,
         hosted: (env) =>

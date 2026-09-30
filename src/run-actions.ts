@@ -49,6 +49,7 @@ import {
   readDefaults,
   readIntent,
   writeDefaults,
+  verificationChange,
   writeIntentHeld,
   type Intent,
 } from "./intent";
@@ -206,32 +207,30 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
       const granted = yield* grantRun(env, { runId: action.run, name: action.name, command });
       if (!granted.ok) return failed(granted.error.message);
       const dir = runDir(env.stateDir, action.run);
-      yield* withDirLock(
+      const note = command === null ? `${action.name} withdrawn` : `${action.name} granted`;
+      const unlisted = yield* withDirLock(
         dir,
         Effect.gen(function* () {
-          const intent: Intent | null = yield* readIntent(dir).pipe(
-            Effect.catch(() => Effect.succeed(null)),
-          );
+          const intent = yield* readIntent(dir);
           if (intent === null) return;
-          const kept = intent.authority.run_verification.filter(
-            (spec) => spec.name !== action.name,
-          );
-          const run_verification =
-            command === null ? kept : [...kept, { name: action.name, ...command }];
           yield* writeIntentHeld(
             dir,
             amendIntent(
               intent,
-              { kind: "authority", patch: { run_verification } },
+              verificationChange(intent, action.name, command),
               by,
               yield* nowIso(),
             ),
           );
         }),
+      ).pipe(
+        Effect.as(""),
+        Effect.catch((cause) => Effect.succeed(String(cause))),
       );
+      // The grant is the host's and already holds, as `run intent verification` reports it.
       return {
         state: "applied" as const,
-        note: command === null ? `${action.name} withdrawn` : `${action.name} granted`,
+        note: unlisted === "" ? note : `${note}; intent show will not list it: ${unlisted}`,
       };
     }).pipe(Effect.catch((cause) => Effect.succeed(failed(String(cause))))),
   );
