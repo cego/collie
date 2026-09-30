@@ -155,7 +155,9 @@ test("a continuation recovers a lost name using its recorded incarnation", () =>
         channel.submit("continue with the spec", draft),
       );
       expect(outcome.ok).toBe(true);
-      expect(h.calls).toContain("agentPrompt impl-1 continue with the spec");
+      expect(h.calls).toContain(
+        "agentPrompt impl-1 continue with the spec\ncollie-delivery:req-1-1",
+      );
     }),
   ));
 

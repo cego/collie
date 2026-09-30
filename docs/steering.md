@@ -89,8 +89,11 @@ none of it.
 ## Manual override
 
 If someone types into an agent's pane, Collie stops correcting that agent automatically.
-On Claude this is detected by a `UserPromptSubmit` hook: a submission without Collie's
-`collie-delivery:` token is somebody else's. Only `collie run clear-override <run> <agent>`
+On Claude this is detected by a `UserPromptSubmit` hook. Every prompt Collie sends — a
+step's pointer, a repair, a hand-off, a steer, a compaction request — ends with a line of
+its own, `collie-delivery:<id>`, and the hook records that id with the submission, so a
+prompt Collie sent is tied to its delivery. A submission without the token is somebody
+else's. Only `collie run clear-override <run> <agent>`
 lifts it — nothing times it back on, because a human who took the keyboard is assumed to
 still have it until they say otherwise.
 

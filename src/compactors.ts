@@ -36,7 +36,7 @@ import {
   type ReadyContext,
 } from "./compaction";
 import { withLock } from "./lock";
-import { DELIVERY_TOKEN } from "./dispatcher";
+import { carriedDelivery } from "./dispatcher";
 
 /**
  * A compaction request, through the Dispatcher's channel. `Unsubmitted` is reserved for
@@ -114,6 +114,8 @@ const EventSchema = Schema.Struct({
   tokens: Schema.optionalKey(Schema.NullOr(Schema.Number)),
   /** Collie's own request id, which is what correlates an outcome to an attempt. */
   request: Schema.optionalKey(Schema.String),
+  /** On a `submit`: the delivery whose token the prompt carried. */
+  delivery: Schema.optionalKey(Schema.String),
   message: Schema.optionalKey(Schema.String),
   reason: Schema.optionalKey(Schema.String),
   /**
@@ -480,7 +482,8 @@ export default function (pi) {
   pi.registerCommand("collie-compact", {
     description: "Collie: compact this session and report the outcome",
     handler: async (args, ctx) => {
-      const request = String(args ?? "").trim();
+      // The first word: the prompt also carries its delivery token, on a line of its own.
+      const request = String(args ?? "").trim().split(/\\s+/)[0] ?? "";
       if (request === "") return;
       bind(ctx);
       write({ kind: "start", request });
@@ -618,13 +621,15 @@ export const recordClaudeEvent = Effect.fn("Compactors.recordClaudeEvent")(funct
   const event = payload.hook_event_name;
   if (event === "UserPromptSubmit") {
     // Recorded whole? No: the prompt is the human's own text, and a transcript is not
-    // Collie's to keep (SPEC §2). Only whether it carried Collie's delivery token, which
-    // is the whole question attribution asks.
-    yield* writeEvent(dir, {
-      session,
-      kind: "submit",
-      reason: (payload.prompt ?? "").includes(DELIVERY_TOKEN) ? "collie" : "external",
-    });
+    // Collie's to keep (SPEC §2). Only which Collie delivery it carried, if any, which is
+    // the whole question attribution asks.
+    const delivery = carriedDelivery(payload.prompt ?? "");
+    yield* writeEvent(
+      dir,
+      delivery === null
+        ? { session, kind: "submit", reason: "external" }
+        : { session, kind: "submit", reason: "collie", delivery },
+    );
     return "";
   }
   if (event === "PreCompact" || event === "PostCompact") {

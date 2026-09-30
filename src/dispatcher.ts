@@ -348,7 +348,7 @@ const send = Effect.fn("Dispatcher.send")(function* (
   const reserved: Delivery = draft.note === undefined ? line : { ...line, note: draft.note };
   yield* appendLine(file, reserved);
 
-  const sent = yield* deps.herdr.agentPrompt(entry.agent, text).pipe(Effect.result);
+  const sent = yield* deps.herdr.agentPrompt(entry.agent, marked(text, id)).pipe(Effect.result);
   const settledAt = yield* nowIso();
   if (Result.isSuccess(sent)) {
     // `submitted` either way: the text and the Enter were written. What herdr could not
@@ -491,6 +491,22 @@ export function ackInstruction(
 
 /** What marks a prompt as Collie's own. Its absence is what attribution is looking for. */
 export const DELIVERY_TOKEN = "collie-delivery:";
+
+/**
+ * The text as it is typed: with its delivery's token on a line of its own, last, so a
+ * slash command keeps its first line and the harness's submit hook can say which
+ * delivery it took.
+ */
+export function marked(text: string, id: string): string {
+  const token = `${DELIVERY_TOKEN}${id}`;
+  return text.split("\n").includes(token) ? text : `${text}\n${token}`;
+}
+
+/** The delivery a submitted prompt carried: its last token, which is the one `marked` adds. */
+export function carriedDelivery(prompt: string): string | null {
+  const tokens = [...prompt.matchAll(new RegExp(`${DELIVERY_TOKEN}(\\S+)`, "g"))];
+  return tokens.at(-1)?.[1] ?? null;
+}
 
 const AckSchema = Schema.Struct({
   delivery: Schema.String,

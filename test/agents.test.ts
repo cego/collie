@@ -1708,6 +1708,7 @@ test("a start kept here is the workspace it was started from: its Task, or a new
   ));
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const decodeJson = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 
 /** Claude's own controls, without asking this machine which Claude it has installed. */
 const claudeControls = (): CompactionPorts => ({
@@ -1775,3 +1776,29 @@ test(
     ),
   120_000,
 );
+
+test("a step pointer the harness took is recorded as Collie's, with its delivery id", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+      yield* session(started("r1"));
+      const pointer = (yield* rig.calls()).find(
+        (call) => call.cmd === "agent prompt" && (call.argv?.[3] ?? "").includes("Your task"),
+      )?.argv?.[3];
+      const [step] = yield* steps("r1");
+      // What Claude's UserPromptSubmit hook is given: the prompt exactly as it was typed.
+      const dir = yield* controlDir(hostOf().env.stateDir, agentFor("r1"));
+      yield* recordClaudeEvent(
+        dir,
+        encodeJson({ session_id: "s1", hook_event_name: "UserPromptSubmit", prompt: pointer }),
+      );
+      const events = (yield* read(`${dir}/events.jsonl`))
+        .split("\n")
+        .filter((line) => line.includes('"submit"'))
+        .map((line) => decodeJson(line));
+      expect(events).toMatchObject([
+        { kind: "submit", reason: "collie", delivery: step!.delivery.id },
+      ]);
+      expect(pointer).toContain(`\ncollie-delivery:${step!.delivery.id}`);
+    }),
+  ));
