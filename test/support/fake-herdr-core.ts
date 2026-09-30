@@ -1,7 +1,7 @@
 // Fake herdr. Records every invocation and answers with canned ids so a whole
 // run can be driven without a herdr server.
 
-import { Cause, Config, Effect, FileSystem, Option, Path, Schema, Semaphore } from "effect";
+import { Cause, Clock, Config, Effect, FileSystem, Option, Path, Schema, Semaphore } from "effect";
 
 interface FakeTab {
   tab_id: string;
@@ -593,6 +593,16 @@ function handle(
       }
       case "agent start": {
         const pane = flag("--pane") ?? "";
+        // The harness coming up: Claude's first status-line call into the control dir
+        // its `--settings` names. `FAKE_HERDR_HARNESS_SILENT` is a harness not up yet.
+        const settings = flag("--settings");
+        if (settings !== undefined && (yield* envString("FAKE_HERDR_HARNESS_SILENT")) === "") {
+          yield* fs.writeFileString(
+            path.join(path.dirname(settings), "events.jsonl"),
+            `${encodeJson({ at: yield* Clock.currentTimeMillis, session: "fake", kind: "session" })}\n`,
+            { flag: "a" },
+          );
+        }
         // A process of its own, so the same name started again is a new incarnation.
         state.agents.push({
           name: argv[2]!,

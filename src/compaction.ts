@@ -129,6 +129,11 @@ export interface Installed {
   command?: string;
 }
 
+/** What a port reads to say its harness is up: the controls a launch installed. */
+export interface ReadyContext extends LaunchContext {
+  endpoint: string | null;
+}
+
 export interface CompactionPort {
   /**
    * Refuses when the installed harness cannot be managed through the interface Collie
@@ -150,6 +155,11 @@ export interface CompactionPort {
     ctx: AgentContext,
     requestId: string,
   ): Effect.Effect<Submission | null, PortError, PortServices>;
+  /**
+   * Whether the harness has shown, through these controls, that it can take a prompt.
+   * Absent where its controls give no such sign before the first prompt.
+   */
+  ready?(ctx: ReadyContext): Effect.Effect<boolean, never, PortServices>;
   /** What this request has established, or `null` while it is still unresolved. */
   poll(
     ctx: AgentContext,
@@ -364,6 +374,32 @@ export const installControls = Effect.fn("Compaction.installControls")(function*
   });
   yield* deps.log(`${agent.agent}: compaction controls installed in ${dir}`);
   return installed.args;
+});
+
+/**
+ * Waits for a new agent's harness to show, through its own controls, that it can take a
+ * prompt: herdr answers `agent start` before a harness has drawn the prompt a typed
+ * pointer lands in, and text typed earlier sits unsent or is lost. Null once it has, or
+ * where nothing can show it; otherwise why it did not.
+ */
+export const awaitReady = Effect.fn("Compaction.awaitReady")(function* (
+  deps: Pick<CompactionDeps, "ports" | "stateDir" | "log" | "pollMs">,
+  agent: string,
+  budgetMs: number,
+) {
+  const record = yield* readControl(deps.stateDir, agent);
+  const ready = record === null ? undefined : deps.ports[record.harness]?.ready;
+  if (record === null || ready === undefined) {
+    yield* deps.log(`${agent}: nothing of Collie's can say its harness is up; herdr's word stands`);
+    return null;
+  }
+  const deadline = (yield* Clock.currentTimeMillis) + budgetMs;
+  while (!(yield* ready(record))) {
+    if ((yield* Clock.currentTimeMillis) >= deadline)
+      return `${record.harness} gave no sign it was up within ${Math.round(budgetMs / 1000)}s`;
+    yield* Effect.sleep(deps.pollMs);
+  }
+  return null;
 });
 
 /**

@@ -36,7 +36,8 @@ import { taskFor } from "../src/operations";
 import { readRegistry, registerAgent, registryPath, scopeFor } from "../src/registry";
 import { HerdrError } from "../src/herdr";
 import { agentName, shellQuote } from "../src/naming";
-import type { CompactionPorts } from "../src/compaction";
+import { controlDir, type CompactionPorts } from "../src/compaction";
+import { COMPACTION_PORTS, recordClaudeEvent } from "../src/compactors";
 
 let rig: Rig;
 let dir: string;
@@ -1705,3 +1706,72 @@ test("a start kept here is the workspace it was started from: its Task, or a new
       ).toBe("workspace_required");
     }),
   ));
+
+const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+
+/** Claude's own controls, without asking this machine which Claude it has installed. */
+const claudeControls = (): CompactionPorts => ({
+  claude: { ...COMPACTION_PORTS.claude!, gate: () => Effect.void },
+});
+
+/** Claude drawing its status line: the first call into the agent's control dir. */
+const statusLineCall = (agent: string) =>
+  Effect.gen(function* () {
+    const dir = yield* controlDir(hostOf().env.stateDir, agent);
+    yield* recordClaudeEvent(dir, encodeJson({ session_id: "s1", context_window: null }));
+  });
+
+const untilStarted = Effect.gen(function* () {
+  while (!(yield* rig.cmds()).includes("agent start")) yield* Effect.sleep(Duration.millis(10));
+});
+
+test("the first prompt to a new agent waits for the harness to say it is up, not only herdr", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([{ verdict: "clean", note: "after the status line" }]);
+      let typedBeforeReady = -1;
+      // herdr has said the agent started; Claude has not drawn its REPL yet.
+      const claudeComesUp = Effect.gen(function* () {
+        yield* untilStarted;
+        yield* Effect.sleep(Duration.millis(300));
+        typedBeforeReady = sent(yield* rig.calls(), "Your task for this step");
+        yield* statusLineCall(agentFor("r1"));
+      });
+      const [result] = yield* Effect.all(
+        [
+          session(started("r1"), {
+            compactAtTokens: 1000,
+            ports: claudeControls(),
+            herdr: new FakeHerdr(rig.pluginEnv({ FAKE_HERDR_HARNESS_SILENT: "1" })),
+          }),
+          claudeComesUp,
+        ],
+        { concurrency: 2 },
+      );
+      expect(result._tag === "Success" && result.success.note).toBe("after the status line");
+      expect(typedBeforeReady).toBe(0);
+      expect(sent(yield* rig.calls(), "Your task for this step")).toBe(1);
+    }),
+  ));
+
+test(
+  "a harness that never says it is up parks the step naming its pane, and types nothing",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* rig.queueOutputs([{ verdict: "clean", note: "never" }]);
+        yield* interrupted("r1", 1_500, {
+          compactAtTokens: 1000,
+          ports: claudeControls(),
+          herdr: new FakeHerdr(rig.pluginEnv({ FAKE_HERDR_HARNESS_SILENT: "1" })),
+          readyMs: 300,
+        });
+        expect(yield* statusNow("r1")).toBe("suspended");
+        const why = yield* read(controlPath(dir, PARKED, "r1"));
+        expect(why).toContain(agentFor("r1"));
+        expect(why).toMatch(/pane 1-\d+/);
+        expect(sent(yield* rig.calls(), "Your task for this step")).toBe(0);
+      }),
+    ),
+  120_000,
+);

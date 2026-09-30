@@ -33,6 +33,7 @@ import {
   type CompactionPorts,
   type AgentContext,
   type LaunchContext,
+  type ReadyContext,
 } from "./compaction";
 import { withLock } from "./lock";
 import { DELIVERY_TOKEN } from "./dispatcher";
@@ -282,6 +283,13 @@ function boundSession(lines: ReadonlyArray<string>): string | null | undefined {
   return undefined;
 }
 
+/** Anything the harness's own controls wrote, which a launch's fresh directory starts without. */
+const reported = (ctx: ReadyContext) =>
+  readEvents(ctx.dir).pipe(
+    Effect.map((events) => events.length > 0),
+    Effect.orElseSucceed(() => false),
+  );
+
 /** The harness's own latest current-context total, or null where it has none. */
 const latestUsage = Effect.fn("Compactors.latestUsage")(function* (dir: string) {
   const events = yield* readEvents(dir);
@@ -504,6 +512,8 @@ const pi: CompactionPort = {
       return { args: ["-e", extension] };
     }),
   usage: (ctx) => latestUsage(ctx.dir),
+  // The extension's `session_start` sample.
+  ready: reported,
   // Through the human's channel, which is what a slash command is: the extension's
   // command carries the request id, so the outcome that comes back is this request's.
   // The human's channel, so a refusal from herdr is a request that never left.
@@ -712,6 +722,8 @@ const claude: CompactionPort = {
       return { args: ["--settings", settings] };
     }),
   usage: (ctx) => latestUsage(ctx.dir),
+  // The status line is drawn with the REPL, so its first call is the prompt being there.
+  ready: reported,
   // The documented native command, through the human's channel. Its instructions are
   // real instructions with the correlation token appended: Claude has no request id
   // for a compaction, and this field is the only one both hooks give back.
@@ -831,6 +843,14 @@ const codexAt = (ctx: AgentContext) =>
 
 const codex: CompactionPort = {
   gate: () => gateVersion("codex"),
+  // The TUI binds a thread on the App Server as it starts, before any prompt.
+  ready: (ctx) =>
+    ctx.endpoint === null
+      ? Effect.succeed(false)
+      : withCodex(ctx.endpoint, (client) => boundThread(client, ctx.cwd)).pipe(
+          Effect.map((thread) => thread !== null),
+          Effect.orElseSucceed(() => false),
+        ),
   install: (ctx) =>
     codexEndpoint(ctx).pipe(
       Effect.map(({ endpoint, pid, command }) => ({
@@ -998,6 +1018,18 @@ const opencodeLaunch = Effect.fn("Compactors.opencodeLaunch")(function* (ctx: La
 const opencode: CompactionPort = {
   gate: () => gateVersion("opencode"),
   install: opencodeLaunch,
+  // The TUI is the server, so its answering for Collie's session is the TUI being up.
+  ready: (ctx) =>
+    ctx.endpoint === null
+      ? Effect.succeed(false)
+      : readEvents(ctx.dir).pipe(
+          Effect.flatMap((events) => {
+            const session = events.filter((event) => event.kind === "session").at(-1)?.session;
+            return session ? sessionIsHere(ctx.endpoint!, session, ctx.cwd) : Effect.fail(null);
+          }),
+          Effect.as(true),
+          Effect.orElseSucceed(() => false),
+        ),
   usage: (ctx) =>
     Effect.gen(function* () {
       const base = yield* opencodeAt(ctx);

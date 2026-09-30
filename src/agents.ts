@@ -31,6 +31,7 @@ import * as WorkflowEngine from "effect/unstable/workflow/WorkflowEngine";
 import {
   COMPACTION_WAIT_MS,
   atBoundary,
+  awaitReady,
   installControls,
   withControlLock,
   type CompactionDeps,
@@ -793,6 +794,8 @@ export interface AgentHost {
   readonly pollMs?: number;
   /** How long an Output may take. Past it the work is uncertain, never finished. */
   readonly collectMs?: number;
+  /** How long a new agent's harness has to show it can take its first prompt. */
+  readonly readyMs?: number;
   /** How a step's own prompts wait out a pane that says it will clear by itself. */
   readonly patience?: dispatch.Patience;
   /** Each harness's compaction controls; the shipped ones where none are given. */
@@ -808,6 +811,9 @@ const DEFAULT_POLL_MS = 2000;
  * trust, loads plugins and starts MCP servers, which outlasts herdr's own 30s.
  */
 const START_TIMEOUT_MS = 180_000;
+
+/** Past herdr's own start, which has already waited for the harness to be ready. */
+const READY_TIMEOUT_MS = 120_000;
 
 /** herdr says this of a pane that exists but whose shell has not come up yet. */
 const paneNotReady = (error: HerdrError) =>
@@ -1163,6 +1169,20 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
         // Written before it goes out and never rewritten: what a human reads to see what
         // was actually asked, rather than what a prompt would be built as now.
         yield* write(file, prefix === "" ? ask.prompt : `${prefix}\n\n${ask.prompt}`);
+        if (!alive || !replayed) {
+          const late = yield* awaitReady(
+            compactionDeps(host, ask.runId),
+            agent,
+            host.readyMs ?? READY_TIMEOUT_MS,
+          );
+          if (late !== null) {
+            const pane = (yield* entryFor(ask, agent, null)).entry?.paneId ?? "unknown";
+            return yield* new AgentParked({
+              operation: ask.operation,
+              reason: `${agent} in pane ${pane} was started, but ${late}, so nothing was typed into it. Look at the pane; once it shows its prompt, \`collie run resume ${ask.runId}\`.`,
+            });
+          }
+        }
         if (alive && !replayed) {
           const due = yield* boundary(launched);
           if (!due.dispatch) {
