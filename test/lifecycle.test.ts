@@ -413,6 +413,22 @@ test(
             status: "complete",
             value: "unit,lint",
           });
+
+          // Granted after it finished, so nothing races the gate.
+          const grant = (...args: ReadonlyArray<string>) =>
+            collie(world, ["run", "intent", "verification", runId, ...args]);
+          expect((yield* grant("--name", "e2e", "--", "true")).envelope.ok).toBe(true);
+          // Withdrawn by name, as a human who granted the wrong thing would.
+          const withdrawn = yield* grant("--name", "lint", "--remove");
+          expect(withdrawn.envelope.data).toMatchObject({
+            approved: [{ name: "unit" }, { name: "e2e" }],
+          });
+          // The Intent says what the host holds: an empty list here once read as nothing
+          // granted, while the host held the grant.
+          const regranted = yield* collie(world, ["run", "intent", "show", runId]);
+          expect(regranted.envelope.data).toMatchObject({
+            intent: { authority: { run_verification: [{ name: "unit" }, { name: "e2e" }] } },
+          });
           yield* stopHost(world.state);
         }),
       ["proved.workflow.ts"],
