@@ -3,7 +3,8 @@
 **Status: accepted**, amended by the Control Plane redesign. Built for the Home's first
 slice: the two-pane Home, the harness preference, the bounded read contract, and the two
 transport adapters. The amendment is "Chat may do what the human could do on the board"
-below, which replaces this ADR's original rule that chat's write tools carry nothing out.
+below, which replaces this ADR's original rule that chat's write tools carry nothing out,
+and "Amended 2026-09-29: chat may choose what proves a Run".
 
 The Herd's conversation is an ordinary Claude Code or Pi session running in the Home's
 right-hand pane. Collie does not implement a chat.
@@ -93,6 +94,22 @@ matters:
   Driver: that grant was for the Driver's own drift checks, and a conversation is not a
   Driver. Reconciling and verifying stay the human's, because they are an account of what
   somebody watched happen.
+
+## Amended 2026-09-29: chat may choose what proves a Run
+
+A Run that verifies is now refused at start when nothing is approved to prove it, and the
+human put the line here: "the model may decide what counts as proof". The human verifies
+the work in the merge request before it lands, and is not needed in the loop before then.
+So the approved set is the one piece of authority chat sets on its own judgment:
+
+- A `start` through `collie_do` may carry `verify`, the checks chat chose, read from the
+  repository. The start is still the human's instruction; the checks it carries are
+  chat's choice.
+- `set_verification` adds or withdraws a running Run's check, through the same host grant
+  and Intent amendment as `run intent verification`. It goes through `collie_propose`.
+
+Recording evidence stays out of reach: there is still no `verify` action kind, so chat can
+choose a command but never say it passed.
 
 **The built-in tools are off** in both launches — `--tools ""` and `--no-builtin-tools`.
 Collie's reads are the agent's entire reach, so there is no shell beside the admission
