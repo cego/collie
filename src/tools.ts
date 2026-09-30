@@ -497,7 +497,7 @@ const carryOut = Effect.fn("Tools.carryOut")(function* (env: PluginEnv, input: J
   const asked: ReadonlyArray<string> = [...ASKED_KINDS, ...SETTLE_KINDS];
   const wrong = actions.filter((action) => !asked.includes(action.kind));
   if (wrong.length > 0)
-    return `collie_do does not carry out ${[...new Set(wrong.map((a) => a.kind))].join(", ")}: that is collie_propose's, and the human confirms it on the board.`;
+    return `collie_do does not carry out ${[...new Set(wrong.map((a) => a.kind))].join(", ")}: that is collie_propose's, which carries it out in the same call.`;
   const requestId = yield* (yield* Crypto.Crypto).randomUUIDv4;
   const actor: Actor = { origin: "chat", requestId };
   const said: string[] =
