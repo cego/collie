@@ -39,20 +39,30 @@ Done when you can name the workflow and every input it declares.
 
 ## Start a Run
 
-First settle where the Run roots, because it decides which repository the work happens in:
-the current directory by default, `COLLIE_CWD=<path>` for another one, or
-`--workspace <id>` to scope to a herdr workspace and root the Run at its directory.
-Collie Home is a state directory, not a project: choose the project workspace or checkout.
-An older Run rooted in Home needs a fresh start against the project, not a resume.
+Nothing is inferred for an agent's start
+([ADR-0033](../../docs/adr/0033-a-run-started-from-the-home-is-placed-not-asked.md)): name
+the checkout the Run starts in and every Input the workflow declares, or it is refused.
+
+The checkout: run the command inside that checkout, or name it with
+`--input workspace=<absolute path>`, or `--input workspace=projects-root` for the Projects
+root — where a plan spanning repositories belongs. Collie Home is a state directory, not a
+checkout: a start from there names one. An older Run rooted in Home needs a fresh start
+against the project, not a resume.
+
+Every Input: pass each one `workflow show` lists. An optional Input you mean to leave out
+is an explicit empty string, `--input plan=`, which the Run's prompt then says was not
+given.
 
 ```sh
-collie --json --workspace <id> run start <workflow> \
-  --input <name>=<value> --request-id "$(uuidgen)"
+collie --json run start review \
+  --input target=worktree --input plan= --input proves= --request-id "$(uuidgen)"
 ```
 
-Inputs Collie can infer it will infer. What it cannot comes back as `needs_input`, with
-`details.inputs` naming each missing input and its question — ask the user those questions,
-then retry with the same `--request-id`.
+A start that leaves anything out comes back as `needs_input`, with `details.inputs` naming
+each missing field, what it means, and `facts` that would fill it — the checkouts under the
+Projects root for the checkout, the target inference would pick in the named checkout, the
+plan directories of finished Runs. Pick from those or ask the user what they meant, then
+retry with the same `--request-id`.
 
 `branch` is one of the names the host settles rather than one a workflow declares —
 `workflow show` lists them under `options`, with what each means. It names the branch the

@@ -262,6 +262,19 @@ const FRONT_DOOR: readonly Check[] = [
 /** Facts about the code beneath the front door. True, useful, and not front-door proof. */
 const BACKEND: readonly Check[] = [
   {
+    id: "backend/an-agent-start-names-everything-or-is-refused",
+    statement:
+      "An agent starting a Run through chat's start action is refused unless it names the checkout (or projects-root) and every Input, an optional one as an explicit empty string; the refusal names each field it left out, and nothing is inferred for it.",
+    owner: LAUNCH,
+    needs: "backend",
+    proof: {
+      kind: "test",
+      layer: "backend",
+      file: "test/proposals.test.ts",
+      name: "chat's start names projects-root and every Input, or is told each one it left out",
+    },
+  },
+  {
     id: "backend/every-operation-has-a-conversational-route",
     statement:
       "Every operation a human has through the CLI or the board either has a conversational route that is called in the test, or is named as the human's with the reason — no capability is quietly missing, and none is reduced to advice or to an action this build cannot carry out.",

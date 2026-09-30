@@ -3,7 +3,9 @@
 // every refusal is one small case.
 
 import { expect, test } from "bun:test";
-import { checksIn, isSingleRepo, orderedTickets, readPlanRepos } from "../src/plan";
+import { Effect, FileSystem } from "effect";
+import { checksIn, isSingleRepo, orderedTickets, planReposOf, readPlanRepos } from "../src/plan";
+import { runEffect } from "./support/effect";
 
 function ticket(file: string, opts: { repo?: string; blockedBy?: string } = {}) {
   const repo = opts.repo === undefined ? "" : `**Repo:** ${opts.repo}\n\n`;
@@ -380,3 +382,33 @@ test("a ticket's Checks line names the verifications that will prove it", () => 
   ]);
   expect(slice!.checks).toEqual(["tests"]);
 });
+
+test("under a Projects root that is no repository, a checkout five levels down is a Repo: of its own", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "collie-plan-root-" });
+      for (const checkout of ["api", "team/platform/services/billing/ledger"])
+        yield* fs.makeDirectory(`${root}/${checkout}/.git`, { recursive: true });
+      const plan = `${root}/.plan`;
+      yield* fs.makeDirectory(`${plan}/issues`, { recursive: true });
+      for (const one of [
+        ticket("01-api", { repo: "api" }),
+        ticket("02-ledger", { repo: "team/platform/services/billing/ledger", blockedBy: "01" }),
+      ])
+        yield* fs.writeFileString(`${plan}/issues/${one.file}.md`, one.text);
+
+      const read = yield* planReposOf(plan, root);
+      expect(read.refusal).toBeNull();
+      expect(read.waves).toEqual([["api"], ["team/platform/services/billing/ledger"]]);
+
+      // A directory on the way down is not a checkout, however deep the one below it is.
+      yield* fs.writeFileString(
+        `${plan}/issues/03-billing.md`,
+        ticket("03-billing", { repo: "team/platform/services/billing" }).text,
+      );
+      const refused = yield* planReposOf(plan, root);
+      expect(refused.refusal?.kind).toBe("missing-checkout");
+      expect(refused.refusal?.message).toContain("team/platform/services/billing");
+    }).pipe(Effect.scoped),
+  ));
