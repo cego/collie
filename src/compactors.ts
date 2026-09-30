@@ -971,7 +971,7 @@ const opencodeAt = (ctx: AgentContext) =>
  * cannot say which of a project's sessions is this agent's.
  */
 const opencodeBound = Effect.fn("Compactors.opencodeBound")(function* (
-  ctx: AgentContext,
+  ctx: LaunchContext,
   base: string,
 ) {
   const bound = (yield* readEvents(ctx.dir))
@@ -1027,11 +1027,7 @@ const opencode: CompactionPort = {
   ready: (ctx) =>
     ctx.endpoint === null
       ? Effect.succeed(false)
-      : readEvents(ctx.dir).pipe(
-          Effect.flatMap((events) => {
-            const session = events.filter((event) => event.kind === "session").at(-1)?.session;
-            return session ? sessionIsHere(ctx.endpoint!, session, ctx.cwd) : Effect.fail(null);
-          }),
+      : opencodeBound(ctx, ctx.endpoint).pipe(
           Effect.as(true),
           Effect.orElseSucceed(() => false),
         ),

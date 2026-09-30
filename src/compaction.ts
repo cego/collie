@@ -159,7 +159,7 @@ export interface CompactionPort {
    * Whether the harness has shown, through these controls, that it can take a prompt.
    * Absent where its controls give no such sign before the first prompt.
    */
-  ready?(ctx: ReadyContext): Effect.Effect<boolean, never, PortServices>;
+  readonly ready?: (ctx: ReadyContext) => Effect.Effect<boolean, never, PortServices>;
   /** What this request has established, or `null` while it is still unresolved. */
   poll(
     ctx: AgentContext,
