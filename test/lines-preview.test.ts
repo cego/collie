@@ -64,3 +64,18 @@ test("a removal says the text is an id, because prose there removes nothing", ()
     }),
   ).toBe("remove the constraint 3f2a91bc from what every new Run in workspace w1 begins with");
 });
+
+test("a launch that carries its own checks names each command Collie will run", () => {
+  // Collie spawns these itself at the gate, so a yes that did not show them was a yes to
+  // commands nobody saw.
+  const said = describeAction({
+    kind: "start",
+    workflow: "implement",
+    workspace: "w1",
+    inputs: {},
+    verify: [{ name: "unit", executable: "bun", argv: ["test"], cwd: "/work/app" }],
+  });
+  expect(said).toBe(
+    "start implement in workspace w1 letting Collie run unit: bun test (in /work/app)",
+  );
+});
