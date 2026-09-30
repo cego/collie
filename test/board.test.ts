@@ -605,20 +605,25 @@ test("an agent herdr reports blocked names its pane, with nothing recorded to sa
     }),
   ));
 
-test("a working agent leaves the Task working, and says what it is doing", () =>
+test("a working agent leaves the Task working, and its pane title is not the card's text", () =>
   runEffect(
     Effect.gen(function* () {
       const { dir, env } = yield* scratch();
       const run = yield* madeRun(dir, { task: "task-1" });
+      const fs = yield* FileSystem.FileSystem;
+      yield* fs.makeDirectory(`${dir}/agents/${run.id}`, { recursive: true });
+      yield* fs.writeFileString(`${dir}/agents/${run.id}/launches`, "build\nreview-1\n");
 
-      const [view] = yield* board(env, [run], {
-        alive: [agent("impl-1", "working", "Writing the failing test")],
-        registered: [registered("impl-1", run.id)],
-      });
+      for (const title of ["Claude Code", "Review-1.prompt.md", "cego.collie agent review"]) {
+        const [view] = yield* board(env, [run], {
+          alive: [agent("impl-1", "working", title)],
+          registered: [registered("impl-1", run.id)],
+        });
 
-      expect(sectionOf(view!)).toBe("working");
-      expect(view!.agents.map((one) => one.name)).toEqual(["impl-1"]);
-      expect(view!.sentence).toBe("Writing the failing test.");
+        expect(sectionOf(view!)).toBe("working");
+        expect(view!.agents.map((one) => one.name)).toEqual(["impl-1"]);
+        expect(view!.sentence).toBe("Reviewing, round 1.");
+      }
     }),
   ));
 

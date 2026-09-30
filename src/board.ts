@@ -129,7 +129,7 @@ export interface BoardAgent {
   /** herdr's own name for it, which carries the role it was started as. */
   name: string;
   status: string;
-  /** What it says it is doing, from its pane's title, or null where it publishes none. */
+  /** Its pane's terminal title, or null for none: what the harness shows, not the step. */
   now: string | null;
   run: string;
 }
@@ -866,11 +866,8 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
         state,
         decision,
         step: doing?.step ?? null,
-        verb:
-          checkingOf(checking) ??
-          agents.find((agent) => agent.run === leader.id)?.now ??
-          doing?.verb ??
-          null,
+        // Never the pane's title: a terminal names its harness or file, not the work.
+        verb: checkingOf(checking) ?? doing?.verb ?? null,
         silent,
         wave: null,
         failure,
