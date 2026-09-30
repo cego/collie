@@ -49,14 +49,18 @@ export default defineWorkflow({
     "You pick the target — an MR, a branch diff or the working tree — one complete review comes out, and what happens next is your call: fix the findings here, hand them to a live implementer, run a full implement, or post the review to somebody else's merge request.",
   input: Schema.Struct({
     target: Schema.String,
-    /** Empty unless a workflow embedding this one has a spec to hold the change to. */
-    plan: Schema.optionalKey(Schema.String),
-    /**
-     * What kind of result the change under review has to prove, which decides the one
-     * judgement field the reviewer is asked for. Not `outcome`: that is what this Run
-     * proves, and a review always proves a review.
-     */
-    proves: Schema.optionalKey(Schema.String),
+    plan: Schema.optionalKey(
+      Schema.String.annotate({
+        description: "The spec the change is held to; empty where there is none",
+      }),
+    ),
+    // Not `outcome`: that is what this Run proves, and a review always proves a review.
+    proves: Schema.optionalKey(
+      Schema.String.annotate({
+        description:
+          "What kind of result the change has to prove (feature, bug, refactor, investigation, docs, migration), which decides the judgement the reviewer gives; empty for unclassified",
+      }),
+    ),
   }),
   output: Schema.String,
   agents: { roles: { implementer: IMPLEMENTER, reviewer: REVIEWER } },

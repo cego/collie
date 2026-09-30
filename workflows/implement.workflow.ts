@@ -153,8 +153,10 @@ export default defineWorkflow({
   description:
     "Builds from a plan dir, a Linear issue or a description, gets one complete review, fixes what blocks until a review finds nothing blocking, then opens the merge request.",
   input: Schema.Struct({
-    /** Where the work is written down: a plan, a review, an issue, a follow-up, or words. */
-    plan: Schema.String,
+    plan: Schema.String.annotate({
+      description:
+        "Where the work is written down: a plan, a review, an issue, a follow-up, or words",
+    }),
   }),
   output: Schema.String,
   agents: { roles: { implementer: IMPLEMENTER, reviewer: REVIEWER } },

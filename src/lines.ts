@@ -198,11 +198,10 @@ export function describeAction(action: Action): string {
     case "none":
       return `do nothing: ${action.why}`;
     case "start": {
-      // A launch that named none roots wherever the confirmation is carried out, which
-      // from the board is the Home and nobody's repository. Said rather than left silent.
+      // A launch that names none is refused when it is carried out; said before the yes.
       const where =
         action.workspace === undefined
-          ? "no workspace named — wherever this is confirmed"
+          ? "no workspace named, so it will be refused"
           : `workspace ${action.workspace}`;
       // And the inputs, because they are what the Run does: a yes to a workflow name
       // alone is a yes to a plan nobody read.

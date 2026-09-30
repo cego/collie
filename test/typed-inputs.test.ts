@@ -88,6 +88,8 @@ const proves = <A, E>(
       for (const made of [world.user, `${world.install}/workflows`, world.state, world.project]) {
         yield* fs.makeDirectory(made, { recursive: true }).pipe(Effect.orDie);
       }
+      // A project is a checkout, which is what an agent's start from inside it names.
+      Bun.spawnSync(["git", "init", "-q"], { cwd: world.project });
       for (const name of MODULE) {
         yield* fs.copyFile(`${fixtures}/${name}`, `${world.user}/${name}`).pipe(Effect.orDie);
       }
@@ -445,6 +447,7 @@ test(
             ticket: "ENG-1",
             mode: "fast",
             ref: "a",
+            spec: "",
           }),
         ]);
         expect(bad.exit).toBe(2);
@@ -466,6 +469,7 @@ test(
             ticket: "ENG-1",
             mode: "fast",
             ref: "7",
+            spec: "",
           }),
         ]);
         expect(started.exit).toBe(0);

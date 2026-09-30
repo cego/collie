@@ -305,6 +305,180 @@ test(
   60_000,
 );
 
+/** A Projects root holding two checkouts, and a directory that is none of them. */
+const projectsTree = Effect.fn("test.projectsTree")(function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const dir = yield* fs.makeTempDirectory({ prefix: "collie-projects-" });
+  for (const checkout of ["app/.git", "group/lib/.git"])
+    yield* fs.makeDirectory(join(dir, "root", checkout), { recursive: true });
+  yield* fs.makeDirectory(join(dir, "elsewhere"), { recursive: true });
+  return { root: join(dir, "root"), elsewhere: join(dir, "elsewhere"), dir };
+});
+
+test(
+  "a start outside any checkout names one, or is refused with the checkouts to choose from",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const tree = yield* projectsTree();
+        const refused = yield* cli(
+          [
+            "--json",
+            "run",
+            "start",
+            "review",
+            "--input",
+            "target=worktree",
+            "--input",
+            "plan=",
+            "--input",
+            "proves=",
+          ],
+          { COLLIE_CWD: tree.elsewhere, GITTE_CWD: tree.root },
+        );
+        const envelope = yield* parseEnvelope(refused.stdout);
+        expect(envelope).toMatchObject({
+          ok: false,
+          error: {
+            code: "needs_input",
+            message: expect.stringContaining("workspace="),
+            details: {
+              inputs: [
+                {
+                  name: "workspace",
+                  facts: [join(tree.root, "app"), join(tree.root, "group/lib"), "projects-root"],
+                },
+              ],
+            },
+          },
+        });
+        const fs = yield* FileSystem.FileSystem;
+        yield* fs.remove(tree.dir, { recursive: true });
+      }),
+    ),
+  60_000,
+);
+
+test(
+  "an agent's start names every Input, an optional one as empty, and is told what each means",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const bare = yield* cli(["--json", "run", "start", "review", "--input", "target=worktree"]);
+        const envelope = yield* parseEnvelope(bare.stdout);
+        expect(envelope).toMatchObject({
+          ok: false,
+          error: { code: "needs_input", message: expect.stringContaining('""') },
+        });
+        const missing = Schema.decodeUnknownSync(
+          Schema.Array(Schema.Struct({ name: Schema.String, meaning: Schema.String })),
+        )(envelope.error?.details["inputs"]);
+        expect(missing.map((one) => one.name)).toEqual(["plan", "proves"]);
+        for (const one of missing) expect(one.meaning).not.toBe("");
+      }),
+    ),
+  60_000,
+);
+
+test(
+  "a missing diff target is told the target inference would pick in the checkout",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const bin = yield* fs.makeTempDirectory({ prefix: "collie-bin-" });
+        yield* fs.writeFileString(
+          join(bin, "glab"),
+          `#!/bin/sh\necho '{"iid": 42, "state": "opened", "title": "t"}'\n`,
+          { mode: 0o755 },
+        );
+        const bare = yield* cli(
+          ["--json", "run", "start", "review", "--input", "plan=", "--input", "proves="],
+          { PATH: `${bin}:/usr/bin:/bin` },
+        );
+        expect(yield* parseEnvelope(bare.stdout)).toMatchObject({
+          ok: false,
+          error: {
+            code: "needs_input",
+            details: { inputs: [{ name: "target", facts: [expect.stringContaining("!42")] }] },
+          },
+        });
+        yield* fs.remove(bin, { recursive: true });
+      }),
+    ),
+  60_000,
+);
+
+/** Every `collie run start` a reader can paste as it is written: no placeholder, no continuation. */
+const documentedStarts = Effect.fn("test.documentedStarts")(function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const lines: string[] = [];
+  for (const file of ["README.md", "docs/cli.md"]) {
+    const text = yield* fs.readFileString(join(root, file));
+    for (const line of text.split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith("collie run start ")) continue;
+      if (/[<…]|\\$/.test(trimmed)) continue;
+      lines.push(trimmed);
+    }
+  }
+  return lines;
+});
+
+/** A command line's words, with a double-quoted value kept whole. */
+const words = (line: string) =>
+  [...line.matchAll(/(?:[^\s"]+|"[^"]*")+/g)].map(([word]) => word.replaceAll('"', ""));
+
+test(
+  "every documented start, run inside a checkout, is admitted as written",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const tree = yield* projectsTree();
+        const checkout = join(tree.root, "app");
+        yield* fs.makeDirectory(join(checkout, ".collie"), { recursive: true });
+        yield* fs.writeFileString(
+          join(checkout, ".collie/verify.json"),
+          `[{"name":"unit","executable":"true","argv":[],"cwd":"worktree"}]`,
+        );
+        for (const args of [
+          ["init", "-q", "-b", "main"],
+          [
+            "-c",
+            "user.email=t@example.com",
+            "-c",
+            "user.name=t",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "first",
+          ],
+        ])
+          Bun.spawnSync(["git", ...args], { cwd: checkout });
+        const starts = yield* documentedStarts();
+        expect(starts.length).toBeGreaterThan(2);
+        for (const line of starts) {
+          const started = yield* cli(["--json", ...words(line).slice(1)], {
+            COLLIE_CWD: checkout,
+            GITTE_CWD: tree.root,
+            GITLAB_USER_LOGIN: "tester",
+            PATH: "/usr/bin:/bin",
+          });
+          const envelope = yield* parseEnvelope(started.stdout);
+          expect({ line, ok: envelope.ok, error: envelope.error?.message }).toEqual({
+            line,
+            ok: true,
+            error: undefined,
+          });
+        }
+        yield* fs.remove(tree.dir, { recursive: true });
+      }),
+    ),
+  240_000,
+);
+
 test("the names the host settles are published beside the ones a module declares", () =>
   runEffect(
     Effect.gen(function* () {

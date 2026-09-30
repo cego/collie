@@ -48,10 +48,9 @@ test("a launch says what it would run on, not only where", () => {
 });
 
 test("a launch that names no workspace says so, rather than reading as though it did", () => {
-  // It roots wherever the confirmation is carried out, which from the board is the Home
-  // and nobody's repository. Silence there reads as "the obvious one".
+  // An agent's start is refused without one, which a yes should know before it is given.
   const said = describeAction({ kind: "start", workflow: "implement", inputs: {} });
-  expect(said).toBe("start implement in no workspace named — wherever this is confirmed");
+  expect(said).toBe("start implement in no workspace named, so it will be refused");
 });
 
 test("a removal says the text is an id, because prose there removes nothing", () => {

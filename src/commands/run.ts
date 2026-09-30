@@ -26,7 +26,6 @@ import {
   showOffers,
   steerRun,
   moduleFor,
-  neededInputs,
   runViews,
   isSettled,
   resumeRun,
@@ -58,6 +57,7 @@ import { scopeFor, scopeKey } from "../registry";
 import { readTask, taskOfWorkspace, type TaskChoice } from "../task";
 import { runDeliveries } from "./steer";
 import { givenVerifications } from "../verify-spec";
+import { agentStartRefusal, insideCheckout } from "../agent-start";
 import { currentReports, readDrift } from "../drift";
 import { newest, readCards } from "../cards";
 import { metricsOf, readMetrics } from "../metrics";
@@ -321,10 +321,20 @@ const runStart = Command.make(
                 const agent = Object.entries({ harness, model, effort }).flatMap(([name, value]) =>
                   Option.isSome(value) ? [[name, value.value] as const] : [],
                 );
-                // What it declares and nobody gave, with the schemas to answer it by, so
-                // a caller can fill the gaps and retry under the same request id.
-                const needed = "inputs" in saved ? neededInputs(saved, launch.input) : null;
-                if (needed !== null) return needed;
+                // What it declares and nobody gave, with what would fill each, so a caller
+                // can fill the gaps and retry under the same request id.
+                if ("inputs" in saved) {
+                  const checkoutNamed =
+                    (launch.options.workspace ?? "").trim() !== "" ||
+                    (yield* insideCheckout(resolved.env.cwd));
+                  const needed = yield* agentStartRefusal(
+                    resolved.env,
+                    saved,
+                    launch.input,
+                    checkoutNamed,
+                  );
+                  if (needed !== null) return needed;
+                }
                 const started = yield* startRun(resolved.env, {
                   id: workflow,
                   request: requestId,
@@ -366,8 +376,9 @@ const runStart = Command.make(
   Command.withExamples([
     {
       command:
-        "collie run start review --input target=https://gitlab.example.com/acme/app/-/merge_requests/2",
-      description: "Review a merge request, by URL or by bare iid",
+        "collie run start review --input target=https://gitlab.example.com/acme/app/-/merge_requests/2 --input plan= --input proves=",
+      description:
+        "Review a merge request, by URL or by bare iid, giving the optional Inputs as empty",
     },
     {
       command: "collie run start implement --input plan=ENG-123",

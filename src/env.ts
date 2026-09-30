@@ -184,6 +184,8 @@ const environmentKeys = [
   "HERDR_PANE_ID",
   "HERDR_ACTIVE_PANE_ID",
   "GITLAB_USER_LOGIN",
+  // gitte's folder, which is the Projects root where `projects.root` names none.
+  "GITTE_CWD",
 ] as const;
 
 export const currentEnv = Effect.gen(function* () {

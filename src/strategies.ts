@@ -143,6 +143,26 @@ export function exclusiveClashes(
   });
 }
 
+/** What an Input of each strategy is, for a refusal to tell a caller that never saw the module. */
+const STRATEGY_MEANINGS = new Map<InputStrategy, string>([
+  ["goal", "What the Run is for, in the human's own words"],
+  [
+    "work-source",
+    "Where the work is written down: a plan directory, a Linear issue id or URL, or a description",
+  ],
+  ["plan-dir", "A plan directory, holding SPEC.md and issues/"],
+  [
+    "diff-target",
+    "The change to review: mr:<iid>, mr:<group/project>!<iid>, branch:<base>...<head>, or worktree",
+  ],
+  ["gitlab-repository", "A GitLab repository URL, or the absolute path of a local checkout"],
+  ["flag", "true or false"],
+  ["optional", "Anything, or empty"],
+]);
+
+export const strategyMeaning = (strategy: InputStrategy): string =>
+  STRATEGY_MEANINGS.get(strategy) ?? "";
+
 /** A Run record's Inputs, as every reader above takes them. */
 export const recorded = (record: {
   readonly inputs: Readonly<Record<string, string>>;

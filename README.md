@@ -66,7 +66,7 @@ your own layer with `prefix+shift+f`, changing only the keys you disagree with.
 Every action is also a command, so an agent can drive Collie:
 
 ```sh
-collie run start review --input target=worktree
+collie run start review --input target=worktree --input plan= --input proves=
 ```
 
 ## Documentation

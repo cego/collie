@@ -8,6 +8,9 @@ import { isString } from "./schema";
 
 export type ProjectsRootSource = "config" | "gitte" | "home";
 
+/** The `workspace` option that roots a Run at the Projects root. */
+export const PROJECTS_ROOT_OPTION = "projects-root";
+
 export interface ProjectsRoot {
   path: string;
   source: ProjectsRootSource;

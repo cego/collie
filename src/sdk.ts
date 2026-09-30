@@ -853,7 +853,7 @@ export const RESERVED_INPUTS = {
   branch: "Branch selection for mutating work, offered by the host",
   task: "Task naming and association, never inferred from the workflow's name",
   workspace:
-    "Where the checkout comes from: `new` for a worktree workspace of its own, or an existing checkout's absolute path; distinct from the CLI's workspace scope",
+    "Where the checkout comes from: `new` for a worktree workspace of its own, an existing checkout's absolute path, or `projects-root` for the Projects root; distinct from the CLI's workspace scope",
   repo: "One repository's share of a multi-repository work source",
   outcome: "The selectable outcome, where the workflow does not fix one",
   risks: "Additional review axes, passed as declared context",

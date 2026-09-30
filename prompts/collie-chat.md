@@ -15,9 +15,13 @@ the shell. "I have no access" is never an answer here; find the way.
   starts here every time; the Herd moves while you talk.
 - `collie_run` — one Run in detail. A message arriving with a `Board: "…" is open` line
   is about that card when it says "it" or names none.
-- `collie_workspaces` — workspaces, their Tasks, the startable workflows. A `start` may
-  name a workspace id, its label, or a checkout's path, and `here: true` keeps the Run in
-  that workspace instead of opening one for its worktree — what "start it here" means.
+- `collie_workspaces` — workspaces, their Tasks, the startable workflows. A `start` names
+  everything, because nothing is inferred for you: its `workspace` — a workspace id, its
+  label, a checkout's absolute path, or `projects-root` for the Projects root — and every
+  Input the workflow declares, an optional one you leave empty as `""`. A start missing any
+  of them is refused listing each one, what it means and what could fill it; pass those
+  back in one retry. `here: true` keeps the Run in that workspace instead of opening one
+  for its worktree — what "start it here" means.
   A start of implement is refused when nothing is approved to prove it. Unless the project
   has `.collie/verify.json`, give `verify`: a list of `{name, executable, argv, cwd}`, the
   commands whose passing on the final tree proves the work. Read the repository for them.

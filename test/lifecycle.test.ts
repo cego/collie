@@ -11,6 +11,7 @@
 import { expect, test } from "bun:test";
 import { Deferred, Effect, Fiber, FileSystem, Option, Schema, Scope, Stream } from "effect";
 import type { BunServices } from "@effect/platform-bun/BunServices";
+import { writeConfigValue } from "../src/config";
 import { currentEnv } from "../src/env";
 import { pickFlow, type FlowPrompts } from "../src/flows";
 import { Herdr } from "../src/herdr";
@@ -340,6 +341,53 @@ test(
         });
         yield* stopHost(world.state);
       }),
+    ),
+  240_000,
+);
+
+test(
+  "workspace=projects-root roots a Run at the Projects root, and a worktree cannot be cut there",
+  () =>
+    provesWith(
+      "collie-lifecycle-root-",
+      (world) =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const root = `${world.home}/projects`;
+          yield* fs.makeDirectory(`${root}/app/.git`, { recursive: true });
+          yield* writeConfigValue(world.config, "projects.root", root);
+
+          const started = yield* collie(world, [
+            "run",
+            "start",
+            "planned",
+            "--input",
+            "goal=one registry",
+            "--input",
+            "workspace=projects-root",
+          ]);
+          const runId = (yield* payloadOf(started.envelope)).runId ?? "";
+          expect(runId).not.toBe("");
+          const client = yield* connect(world.state).pipe(Effect.orDie);
+          const view = yield* client.run({ runId }).pipe(Effect.orDie);
+          expect(view?.cwd).toBe(root);
+
+          const refused = yield* collie(world, [
+            "run",
+            "start",
+            "builds",
+            "--input",
+            "work=one registry",
+            "--input",
+            "workspace=projects-root",
+          ]);
+          expect(refused.envelope.ok).toBe(false);
+          expect(refused.envelope.error?.message).toContain(
+            "is not a git checkout to cut one from",
+          );
+          yield* stopHost(world.state);
+        }),
+      ["planned.workflow.ts", "builds.workflow.ts"],
     ),
   240_000,
 );

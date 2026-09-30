@@ -110,6 +110,8 @@ export const proves = <A, E>(
       ]) {
         yield* fs.makeDirectory(made, { recursive: true }).pipe(Effect.orDie);
       }
+      // A project is a checkout, which is what an agent's start from inside it names.
+      Bun.spawnSync(["git", "init", "-q"], { cwd: world.project });
       yield* save(world.user, modules);
       const binary = yield* Config.option(Config.String("COLLIE_TEST_BINARY"));
       const command = Option.isSome(binary)

@@ -22,11 +22,14 @@ import {
   grantRun,
   invokeOffer,
   offersOf,
+  moduleFor,
   startRun,
   steerRun,
   resumeRun,
   runViews,
 } from "./lifecycle";
+import { agentStartRefusal } from "./agent-start";
+import { PROJECTS_ROOT_OPTION } from "./projects";
 import { listTasks, removeTask } from "./task";
 import {
   clearOverride,
@@ -257,27 +260,31 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
     }).pipe(Effect.catch((cause) => Effect.succeed(failed(String(cause))))),
   );
   // Through the same door `run start` takes, so a confirmed proposal and a typed command
-  // settle Inputs the same way. An Input the action did not name is refused rather than
-  // guessed: nobody is here to be asked, and a Run started on an inferred work source is
-  // a Run about something the human never said.
+  // settle Inputs the same way. Nothing is inferred: the action names its checkout and
+  // every Input, and a gap is refused with what would fill it (ADR-0033).
   registerExecutor("start", (action) =>
     Effect.gen(function* () {
-      // Where the work is. A launch that named a workspace roots in that workspace's
-      // checkout; one that named none roots where the caller is, as `run start` does.
-      const where = yield* workspaceNamed(env, action.workspace);
+      const atRoot = action.workspace?.trim() === PROJECTS_ROOT_OPTION;
+      const where = atRoot ? null : yield* workspaceNamed(env, action.workspace);
       if (where !== null && "error" in where) return failed(where.error);
       const rooted =
         where === null
           ? env
           : { ...env, cwd: where.found.cwd, workspaceId: where.found.workspaceId };
+      const input = { text: { ...action.inputs }, json: {} };
+      const saved = yield* moduleFor(rooted, action.workflow);
+      if (saved !== null && "inputs" in saved) {
+        const refused = yield* agentStartRefusal(rooted, saved, input, atRoot || where !== null);
+        if (refused !== null) return failed(refused.error.message);
+      }
       const id = yield* newRequestId();
       const started = yield* startRun(rooted, {
         id: action.workflow,
         request: id,
         // Text, as the action carries it: the module's own schema is what turns it into
         // the value it takes, exactly as a typed `run start` does.
-        input: { text: { ...action.inputs }, json: {} },
-        options: {},
+        input,
+        options: atRoot ? { workspace: PROJECTS_ROOT_OPTION } : {},
         task: action.here === true ? { mode: "here" } : { mode: "new" },
         verify: action.verify,
       });

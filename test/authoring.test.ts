@@ -400,7 +400,10 @@ test(
             inputs: [
               {
                 name: "note",
+                meaning: "What the Run is for, in the human's own words",
+                facts: [],
                 question: `${wanted.title} — note?`,
+                required: true,
                 schema: wanted.inputs[0]!.schema,
                 limits: [],
               },
