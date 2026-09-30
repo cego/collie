@@ -1,6 +1,7 @@
 // A Run's Intent: what the human wants, what bounds it, and what Collie may do about
 // it. Everything downstream — drift, corrections, cards — compares work against this,
-// so it is versioned, seeded once at the start, and amended only by a human act.
+// so it is versioned, seeded once at the start, and amended by a human or by the Run's own
+// plan as its constraints change.
 //
 // Authority is never read from text. Plan bullets and repository files are evidence:
 // `extractRequirements` returns constraints and a goal and has no way to return a grant.
@@ -227,6 +228,40 @@ export function amend(intent: Intent, change: Change, by: string, at: string): I
   };
 }
 
+/** Who an amendment from the Run's own plan is by: never a human, so never a human's removal. */
+export const PLAN_AUTHOR = "plan:plan/SPEC.md";
+
+/**
+ * The Intent with the Run's own plan's constraints as the plan now says them: new ones
+ * added, ones the plan dropped removed. A constraint a human removed is never put back,
+ * and nothing from anyone else is touched.
+ */
+export function followPlan(
+  intent: Intent,
+  found: ReadonlyArray<Omit<Constraint, "since">>,
+  at: string,
+): Intent {
+  const removedByHuman = new Set(
+    intent.history.filter((entry) => entry.by !== PLAN_AUTHOR).map((entry) => entry.change),
+  );
+  const held = new Set(intent.constraints.map((c) => c.id));
+  const wanted = new Set(found.map((c) => c.id));
+  const added = found
+    .filter((c) => !held.has(c.id) && !removedByHuman.has(`constraint ${c.id} removed`))
+    .reduce(
+      (next, constraint) => amend(next, { kind: "add-constraint", constraint }, PLAN_AUTHOR, at),
+      intent,
+    );
+  return intent.constraints
+    .filter(
+      (c) => c.source === "plan" && c.provenance?.file === "plan/SPEC.md" && !wanted.has(c.id),
+    )
+    .reduce(
+      (next, c) => amend(next, { kind: "remove-constraint", id: c.id }, PLAN_AUTHOR, at),
+      added,
+    );
+}
+
 export interface SeedOptions {
   readonly defaults?: Defaults | null;
   readonly goal?: string | null;
@@ -299,8 +334,9 @@ export function propagate(parent: Intent, child: Intent) {
 
 // `## 1. Objective` is a heading: a numbered plan is not one with no goal.
 const NUMBER = String.raw`(?:\d+(?:\.\d+)*[.)]?\s+)?`;
+// `Out of scope` and `Done when` are what Collie's own planners write.
 const REQUIREMENT_HEADING = new RegExp(
-  String.raw`^#+\s*${NUMBER}(Requirements|Success criteria|Boundaries|Constraints)\b`,
+  String.raw`^#+\s*${NUMBER}(Requirements|Success criteria|Boundaries|Constraints|Out of scope|Done when)\b`,
   "i",
 );
 const OBJECTIVE_HEADING = new RegExp(String.raw`^#+\s*${NUMBER}Objective\b`, "i");
@@ -338,10 +374,11 @@ export function extractRequirements(text: string, file: string) {
     const bullet = BULLET.exec(line);
     if (!bullet) continue;
     const body = bullet[1]!;
+    const text = /^out of scope$/i.test(heading) ? `Out of scope: ${body}` : body;
     constraints.push({
-      id: constraintId(body),
+      id: constraintId(text),
       kind: "semantic",
-      text: body,
+      text,
       severity: "warn",
       source: "plan",
       provenance: { file, heading, line: index + 1 },

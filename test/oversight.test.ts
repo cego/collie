@@ -23,7 +23,13 @@ import { proposalsPath, read as readProposals } from "../src/proposals";
 import { herdOf } from "../src/steering";
 import { readVerifications } from "../src/verify";
 import { VerifySpecSchema } from "../src/verify-spec";
-import { seedIntent, writeIntent, type Authority, type Constraint } from "../src/intent";
+import {
+  readIntent,
+  seedIntent,
+  writeIntent,
+  type Authority,
+  type Constraint,
+} from "../src/intent";
 import type { Store } from "../src/store";
 import { fixtures } from "./support/host";
 
@@ -327,6 +333,26 @@ test("drift the Intent lets Collie correct goes to the agent, and is submitted, 
       const [report] = currentReports(yield* readDrift(runDir(dir, "r1")));
       expect(report!.resolution).toBe("correction_submitted");
       expect(report!.correction).toBe("r1-correction-src-only-1");
+    }),
+  ));
+
+test("a Run's own SPEC reaches its Intent at the next drift check", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* intended("r1", []);
+      const before = yield* readIntent(runDir(dir, "r1"));
+      yield* fs.makeDirectory(`${runDir(dir, "r1")}/plan`, { recursive: true });
+      yield* fs.writeFileString(
+        `${runDir(dir, "r1")}/plan/SPEC.md`,
+        "# Spec\n\n## Out of scope\n\n- Rewriting the scheduler\n",
+      );
+      yield* checkDrift(watchedAt("r1"), "build collected", "none", null, null);
+      const after = yield* readIntent(runDir(dir, "r1"));
+      expect(after!.constraints).toHaveLength(1);
+      expect(after!.constraints[0]!.source).toBe("plan");
+      expect(after!.constraints[0]!.provenance?.file).toBe("plan/SPEC.md");
+      expect(after!.authority).toEqual(before!.authority);
     }),
   ));
 

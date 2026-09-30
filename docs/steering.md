@@ -189,7 +189,9 @@ checks below run for it: rules after each piece of agent work is collected and b
 next starts, and a judgement before each piece of work and at the finish. What they find is
 [corrected](#correcting-drift) through the agent that did the work last, a Run
 [finishes](#finishing) the same way whatever its workflow, and related Runs are
-[checked against each other](#cross-run-checks). Two kinds, kept apart on purpose.
+[checked against each other](#cross-run-checks). Before each check, the constraints in the
+Run's own `plan/SPEC.md` are brought into its Intent, and one a human removed stays removed
+([ADR-0036](adr/0036-a-runs-own-plan-bounds-it.md)). Two kinds, kept apart on purpose.
 
 A **rule** constraint is a fact Collie can establish by itself: which files changed,
 which branch it is on, what a step's Output field says, what a named verification exited

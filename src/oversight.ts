@@ -35,10 +35,16 @@ import {
   type JudgementDeps,
   type RuleFacts,
 } from "./drift";
-import { readIntent, type Intent } from "./intent";
+import {
+  extractRequirements,
+  followPlan,
+  readIntent,
+  writeIntentHeld,
+  type Intent,
+} from "./intent";
 import { reason } from "./naming";
 import { appendPendingReport } from "./live";
-import { withLock } from "./lock";
+import { withDirLock, withLock } from "./lock";
 import { shell } from "./mr";
 import {
   pendingFor,
@@ -463,6 +469,29 @@ const correctDrift = Effect.fn("Oversight.correctDrift")(function* (
 /** Delivery states nothing follows, so a correction in one is not in flight. */
 const SETTLED: ReadonlySet<string> = new Set(["verified", "failed", "superseded", "expired"]);
 
+/** The Run's own SPEC, read into its Intent before anything is judged against it. */
+const followRunPlan = Effect.fn("Oversight.followRunPlan")(
+  function* (at: Watched) {
+    const fs = yield* FileSystem.FileSystem;
+    const text = yield* fs.readFileString(`${at.runDir}/plan/SPEC.md`);
+    const found = extractRequirements(text, "plan/SPEC.md").constraints;
+    const followed = yield* withDirLock(
+      at.runDir,
+      Effect.gen(function* () {
+        const intent = yield* readIntent(at.runDir);
+        if (intent === null) return null;
+        const next = followPlan(intent, found, yield* nowIso());
+        if (next === intent) return null;
+        yield* writeIntentHeld(at.runDir, next);
+        return next;
+      }),
+    );
+    if (followed !== null)
+      yield* said(at, `plan/SPEC.md: ${found.length} constraints followed (v${followed.version})`);
+  },
+  (effect) => Effect.ignore(effect),
+);
+
 /**
  * Where this Run's work stands against its Intent, at one moment: after a piece of work
  * is collected (the rules only, which cost nothing), before the next one starts, and at
@@ -476,6 +505,7 @@ export const checkDrift = Effect.fn("Oversight.checkDrift")(function* (
   deps: JudgementDeps | null,
   to: Correcting | null,
 ): Effect.fn.Return<Corrected, never, BunServices> {
+  yield* followRunPlan(at);
   const intent = yield* readIntent(at.runDir).pipe(Effect.orElseSucceed(() => null));
   if (intent === null) return NOTHING_CORRECTED;
   if (judging !== "none") yield* judgeDrift(at, intent, where, judging === "finish", deps);
