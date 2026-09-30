@@ -966,7 +966,8 @@ restart follows the lists that were read rather than reading them again.
 
 **A decision the plan does not cover.** The implementer's prompt names the live planner's
 agent and pane and tells it to ask there rather than stopping. With no planner live, the
-same prompt tells it to stop and ask you. It asks for one authority: an answer in the
+same prompt tells it to decide and say what it decided and why in its Output; `implement`
+carries those into the merge request, where you read them. It asks for one authority: an answer in the
 pane, or the answer written into the ticket and the pane saying only that — because an
 implementer that builds a pane answer while the file says something wider believes it is
 done.

@@ -323,8 +323,9 @@ Skipped work is work you do not ask for: return without calling `agentWork` and 
 opens, no agent starts and no Output is fabricated. Say why in what you return.
 
 `agents.askRoute(role, cwd)` is what an agent is told about asking for a decision its work
-does not cover: the pane of whoever is live in that role, and otherwise to stop and ask the
-human. You name the role — who may be asked is your workflow's declaration, not an
+does not cover: the pane of whoever is live in that role, and otherwise to decide and say what it decided
+and why in its Output — give your Output schema a field for it, as `implement`'s
+`assumptions` is. You name the role — who may be asked is your workflow's declaration, not an
 assumption Collie makes about it.
 
 The work itself is written to `<state>/agents/<run>/<operation>.prompt.md` and the message

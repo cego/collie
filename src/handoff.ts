@@ -10,7 +10,7 @@ export function askRouteTo(
   if (!planner) {
     return [
       "There is no planner live for this work. If you need a decision the plan does not",
-      "cover, make it, and record it and why under `assumptions` in your Output.",
+      "cover, make it, and say in your Output what you decided and why.",
     ].join(" ");
   }
   return [
@@ -18,7 +18,7 @@ export function askRouteTo(
     `\`${planner.paneId}\`. If you need a decision the plan does not cover, ask it rather than`,
     `stopping: \`herdr agent prompt ${planner.agent} "<your question>"\`, then read the answer`,
     `with \`herdr agent read ${planner.agent} --lines 40\`. If it cannot answer, decide, and`,
-    "record it under `assumptions` in your Output. Ask it for one authority: an answer in the pane with the tickets left alone, or",
+    "say in your Output what you decided and why. Ask it for one authority: an answer in the pane with the tickets left alone, or",
     "the answer written into the ticket and the pane saying only that it amended it. Its",
     "pane answer may be narrower than what it wrote, so where it says it changed a ticket,",
     "re-read that ticket and build from it.",
