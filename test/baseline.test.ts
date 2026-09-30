@@ -1990,6 +1990,48 @@ scenario(
 );
 
 scenario(
+  "the merge request lists the checks the gate ran, including one granted after the start",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* bin.add("glab", `exit 0`);
+        yield* repository();
+        const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
+        yield* approve("r-late-grant", ["unit"]);
+        let asks = 0;
+        const regranted: HostOverride = Layer.effect(Host)(
+          Effect.gen(function* () {
+            const host = yield* Host;
+            return Host.of({
+              ...host,
+              approved: (runId) =>
+                (asks += 1) === 1
+                  ? host.approved(runId)
+                  : Effect.succeed([
+                      { name: "unit", executable: "true", argv: ["regranted"], cwd: "worktree" },
+                    ]),
+            });
+          }),
+        );
+        yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, OPENED]);
+        yield* ran({
+          entry: shipped("implement"),
+          runId: "r-late-grant",
+          input: { plan },
+          host: regranted,
+        });
+        yield* bin.restore();
+
+        expect(yield* asked("r-late-grant", "mr")).toContain(
+          "- unit: true regranted (in worktree)",
+        );
+      }),
+    ),
+  120_000,
+);
+
+scenario(
   "a dispute from an early round still reaches the merge request when the last fix holds",
   () =>
     runEffect(
