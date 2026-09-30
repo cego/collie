@@ -275,8 +275,7 @@ function verbOf(facts: Sentence): string {
   if (facts.step === null) return "Starting";
   const id = facts.step.id;
   const kind = id.slice(id.lastIndexOf(".") + 1);
-  // Never the step id: a card says what is happening in words. A named review seat,
-  // `review-correctness`, is a review.
+  // Never the step id: a card says what is happening in words.
   return VERBS.get(kind) ?? VERBS.get(kind.split("-")[0]!) ?? "Working on it";
 }
 
