@@ -33,7 +33,7 @@ import { appendLine, deliveriesOf, readLedger, reconcile } from "../src/steering
 import { Store } from "../src/store";
 import { readTask, writeTask } from "../src/task";
 import { taskFor } from "../src/operations";
-import { readRegistry, registerAgent, registryPath, scopeFor } from "../src/registry";
+import { lineageAgent, readRegistry, registerAgent, registryPath, scopeFor } from "../src/registry";
 import { HerdrError } from "../src/herdr";
 import { agentName, shellQuote } from "../src/naming";
 import type { CompactionPorts } from "../src/compaction";
@@ -1092,6 +1092,38 @@ test("seats launched together all stay registered, and a gone agent's entry leav
       yield* registerAgent(file, seat("seat-1", "r-panel", "2026-09-30T10:00:05.000Z"), listed);
       yield* registerAgent(file, seat("seat-2", "r-panel", "2026-09-30T10:00:06.000Z"), listed);
       expect((yield* readRegistry(file)).map((entry) => entry.agent)).toEqual(["seat-1", "seat-2"]);
+    }),
+  ));
+
+test("a lineage lookup leaves every register as it found it, and registrations at once all land", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const env = rig.pluginEnv();
+      const file = yield* registryPath(env.stateDir, scopeFor(env, rig.projectDir));
+      const elsewhere = `${env.stateDir}/agents/other-herd-0123456789ab.json`;
+      const seat = (agent: string) => ({
+        role: "reviewer",
+        agent,
+        paneId: `p-${agent}`,
+        workspaceId: null,
+        runId: "r-panel",
+        workflow: "review",
+        at: "2026-09-30T10:00:00.000Z",
+        incarnation: { terminalId: `term-${agent}`, agentSession: null },
+      });
+      // Ten seats registering at the same moment, each reading and rewriting one file.
+      const seats = Array.from({ length: 10 }, (_, at) => `seat-${at}`);
+      yield* Effect.all(
+        seats.map((agent) => registerAgent(file, seat(agent))),
+        { concurrency: "unbounded" },
+      );
+      yield* registerAgent(elsewhere, seat("another-herds"));
+      expect((yield* readRegistry(file)).map((entry) => entry.agent).sort()).toEqual(seats);
+
+      // A list taken before any of them started, as an ask's is, knows none of them.
+      expect(yield* lineageAgent(env.stateDir, [], "reviewer", ["r-panel"])).toBeNull();
+      expect(yield* readRegistry(file)).toHaveLength(10);
+      expect(yield* readRegistry(elsewhere)).toHaveLength(1);
     }),
   ));
 

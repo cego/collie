@@ -1,5 +1,6 @@
-import { Schema, Effect, FileSystem, Path } from "effect";
+import { Data, Schema, Effect, FileSystem, Path } from "effect";
 import type { AgentInfo } from "./herdr";
+import { withLock } from "./lock";
 
 /**
  * herdr's own identity for one live agent process, recorded when it is registered and
@@ -140,16 +141,32 @@ export const registerAgent = Effect.fn("registerAgent")(function* (
   entry: AgentEntry,
   alive?: { readonly agents: ReadonlyArray<AgentInfo>; readonly listedAt: string },
 ) {
-  const others = (yield* readRegistry(file)).filter((e) => e.agent !== entry.agent);
-  const live = new Set(alive === undefined ? others : liveEntries(others, alive.agents));
-  const kept =
-    alive === undefined
-      ? others
-      : others.filter((e) => live.has(e) || Date.parse(e.at) >= Date.parse(alive.listedAt));
-  const entries = [...kept, entry];
-  yield* write(file, entries);
-  return entries;
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  yield* fs.makeDirectory(path.dirname(file), { recursive: true });
+  // Every Run started from the same place writes this file: unlocked, one write loses another's.
+  return yield* withLock(
+    `${file}.lock`,
+    Effect.fail(new RegistryBusy({ file })),
+    Effect.gen(function* () {
+      const others = (yield* readRegistry(file)).filter((e) => e.agent !== entry.agent);
+      const live = new Set(alive === undefined ? others : liveEntries(others, alive.agents));
+      const kept =
+        alive === undefined
+          ? others
+          : others.filter((e) => live.has(e) || Date.parse(e.at) >= Date.parse(alive.listedAt));
+      const entries = [...kept, entry];
+      yield* write(file, entries);
+      return entries;
+    }),
+    REGISTER_CLAIMS,
+  );
 });
+
+/** Ten seconds of claims: a registration holds the lock only for one read and one write. */
+const REGISTER_CLAIMS = 400;
+
+export class RegistryBusy extends Data.TaggedError("RegistryBusy")<{ file: string }> {}
 
 /**
  * Whether anything may be sent to this entry at all. A register is a cache of what herdr
@@ -204,19 +221,10 @@ export function liveEntries(
   return entries.filter((e) => matching(e, alive).length > 0);
 }
 
-export const pruneRegistry = Effect.fn("pruneRegistry")(function* (
-  file: string,
-  alive: ReadonlyArray<AgentInfo>,
-) {
-  const entries = yield* readRegistry(file);
-  const live = liveEntries(entries, alive);
-  if (live.length !== entries.length) yield* write(file, live);
-  return live;
-});
-
 /**
  * The live agent in this role nearest the first of these Runs: that Run's own, then the
- * Run it came from, and so on. Another Run's agent in the role is never the answer.
+ * Run it came from, and so on. Another Run's agent in the role is never the answer. Only
+ * read: `alive` may predate an agent registered since, and other Herds share these files.
  */
 export const lineageAgent = Effect.fn("lineageAgent")(function* (
   stateDir: string,
@@ -226,7 +234,7 @@ export const lineageAgent = Effect.fn("lineageAgent")(function* (
 ) {
   const live: AgentEntry[] = [];
   for (const file of yield* registryFiles(stateDir))
-    live.push(...(yield* pruneRegistry(file, alive)));
+    live.push(...liveEntries(yield* readRegistry(file), alive));
   for (const runId of lineage) {
     const found = live.findLast((e) => e.role === role && e.runId === runId);
     if (found !== undefined) return found;

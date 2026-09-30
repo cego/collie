@@ -362,8 +362,8 @@ driven, still checked and still corrected.
 
 **Scope** — `local`, this Session's own workspace, or `all`, every workspace of this herdr
 session that Collie has a Run, an agent or a history in. It is what a Run lookup searches
-and never what a Session is: hand-offs, the register and starting a Workflow stay this
-Session's. The board no longer has one — it is the whole Herd's, one card per Task
+and never what a Session is: the register a Run's agents are written to and starting a
+Workflow stay this Session's, and a hand-off stays in the Run's **Lineage**. The board no longer has one — it is the whole Herd's, one card per Task
 ([ADR-0013](docs/adr/0013-the-board-is-cards-of-tasks.md)) — so the `scope` default in
 `config.json` is read at launch and narrows nothing a human sees.
 
