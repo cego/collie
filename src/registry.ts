@@ -1,6 +1,6 @@
 import { Data, Schema, Effect, FileSystem, Path } from "effect";
 import type { AgentInfo } from "./herdr";
-import { withLock } from "./lock";
+import { ensureLockDir, withLock } from "./lock";
 
 /**
  * herdr's own identity for one live agent process, recorded when it is registered and
@@ -141,9 +141,7 @@ export const registerAgent = Effect.fn("registerAgent")(function* (
   entry: AgentEntry,
   alive?: { readonly agents: ReadonlyArray<AgentInfo>; readonly listedAt: string },
 ) {
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  yield* fs.makeDirectory(path.dirname(file), { recursive: true });
+  yield* ensureLockDir(file);
   // Every Run started from the same place writes this file: unlocked, one write loses another's.
   return yield* withLock(
     `${file}.lock`,
