@@ -48,6 +48,7 @@ import {
   parseConstraint,
   readDefaults,
   readIntent,
+  verificationGrant,
   writeDefaults,
   writeIntentHeld,
   type Intent,
@@ -206,32 +207,29 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
       const granted = yield* grantRun(env, { runId: action.run, name: action.name, command });
       if (!granted.ok) return failed(granted.error.message);
       const dir = runDir(env.stateDir, action.run);
-      yield* withDirLock(
+      // The grant is what the gate runs; an Intent that failed to follow it is reported,
+      // not taken for the grant failing.
+      const unlisted = yield* withDirLock(
         dir,
         Effect.gen(function* () {
           const intent: Intent | null = yield* readIntent(dir).pipe(
             Effect.catch(() => Effect.succeed(null)),
           );
           if (intent === null) return;
-          const kept = intent.authority.run_verification.filter(
-            (spec) => spec.name !== action.name,
-          );
-          const run_verification =
-            command === null ? kept : [...kept, { name: action.name, ...command }];
-          yield* writeIntentHeld(
-            dir,
-            amendIntent(
-              intent,
-              { kind: "authority", patch: { run_verification } },
-              by,
-              yield* nowIso(),
-            ),
-          );
+          const change = verificationGrant(intent, action.name, command);
+          yield* writeIntentHeld(dir, amendIntent(intent, change, by, yield* nowIso()));
         }),
+      ).pipe(
+        Effect.as(""),
+        Effect.catch((cause) => Effect.succeed(String(cause))),
       );
+      const done = command === null ? `${action.name} withdrawn` : `${action.name} granted`;
       return {
         state: "applied" as const,
-        note: command === null ? `${action.name} withdrawn` : `${action.name} granted`,
+        note:
+          unlisted === ""
+            ? done
+            : `${done}; the grant holds, but intent show will not list it: ${unlisted}`,
       };
     }).pipe(Effect.catch((cause) => Effect.succeed(failed(String(cause))))),
   );
