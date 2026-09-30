@@ -80,7 +80,8 @@ the work itself. Nobody is asked for one ([the full order](cli.md#start-a-run)).
 built with the same pass `review` runs — one complete review — and loops on the findings for
 at most four review and fix rounds. Every commit is pushed, so the reviewers read the change
 rather than the state before it. The merge request is opened or updated last, and not at
-all where there is no GitLab to open one on or the evidence is not there.
+all where there is no GitLab to open one on. Missing evidence does not stop it: it is listed
+in the description (see **Ends:** below), so an open merge request is not a passed gate.
 
 **Outcome.** `--input outcome=bug|refactor|investigation|docs|migration|feature` says what
 kind of result this run has to prove, and so what evidence closes it — see

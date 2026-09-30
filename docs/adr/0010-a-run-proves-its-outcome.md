@@ -2,8 +2,9 @@
 
 **Status: accepted.** Built: definitions are frozen per Run, verifications are collected
 against a revision, `implement` is `build → review → fix → mr`, plans build in slices, and
-a gate reads evidence before a merge request is opened. What remains outstanding is live
-evidence rather than design — see Consequences.
+a gate reads evidence before a merge request is opened. Amended when `implement` stopped asking the human: its gate
+no longer halts; what it cannot prove goes into the merge request (D3). What remains
+outstanding is live evidence rather than design — see Consequences.
 
 A Run has an **outcome** it must prove, and the proof is a collected **Verification**
 bound to the tree it ran on. An agent writing `"verdict": "clean"` is a claim, and Collie
@@ -57,8 +58,10 @@ names what it built and the review says the scope was met; a bug records a regre
 failed before the fix and passes after, on two different trees; a refactor preserves
 behaviour; an investigation reaches a supported conclusion and may legitimately have no
 patch; docs prove the documented commands by running them; a migration proves it can go
-back. A gate before the `mr` step runs the approved set and halts with `evidence_missing`
-listing what is not there.
+back. A gate before the `mr` step runs the approved set and lists what is not there. It first
+hands the checks still failing to the implementer for up to four fixes, and then opens the
+merge request anyway, with every remaining gap under **Not settled by the run**: the human
+verifies the work there, before it lands, so nothing before it waits on them.
 
 **The default outcome is `unspecified`, not `feature`.** A Run nobody classified proves
 its approved set and nothing else. Documentation, an investigation and a bug fix are not
