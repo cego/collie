@@ -14,7 +14,11 @@ conversation themselves. Only a Collie on the same computer could do any of them
 **D1. They are host operations.** `confirm` and `decline` take a proposal's id and its
 content hash. `dispose` records a disposition, `steerAbout` has the
 evaluator turn free words about one Run into actions and carries them out, and `followUp`
-starts the follow-up a finished Run's Workflow declares. All are on `FrontDoorRpcs`
+starts the follow-up a finished Run's Workflow declares. `propose` records and carries out
+what chat's `collie_propose` was asked for, `act` carries out `collie_do`'s and
+`collie_hold`'s board actions, and `reconcile` and `settleDelivery` settle a proposal step or
+a delivery nobody can account for. Actions travel as JSON and the host decodes them, so the
+group keeps no schema a browser bundle cannot import. All are on `FrontDoorRpcs`
 ([ADR-0038](0038-the-host-builds-and-serves-the-board.md)) and take a request id.
 
 **D2. Each records its Actor.** A yes or a no is a line in its Herd's proposals journal,
@@ -31,5 +35,5 @@ own. A front door names no Herd.
 - A front door on another computer can do everything the TUI board can.
 - The host runs a confirmed proposal's actions, so a `navigate` reaches no screen there:
   the board puts the target on screen itself once the host says it applied.
-- What chat's `collie_do` and `collie_propose` carry out directly, and the CLI's own
-  receipts, are still written by the front door.
+- The CLI's own receipts are still written by the CLI: they are its record of a command,
+  not the Machine's state.

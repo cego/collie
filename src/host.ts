@@ -84,14 +84,23 @@ import {
 } from "./board-model";
 import { boardMessages } from "./board-stream";
 import { recordDisposition } from "./disposition";
-import { evaluationDeps } from "./evaluator";
-import { steer } from "./operations";
+import { ActionSchema, evaluationDeps } from "./evaluator";
+import { err, request, steer, type OpResult } from "./operations";
+import { mutation } from "./envelope";
+import {
+  appendLine,
+  deliveriesOf,
+  herdOf,
+  readLedger,
+  reconcile as reconcileDelivery,
+} from "./steering";
 import {
   actorName,
   answeredBy,
   decline,
   journalOf,
   read as readProposals,
+  reconcileStep,
   stepResults,
   type ProposalLine,
   type Actor,
@@ -306,6 +315,17 @@ const handlers = (dir: string, installation: string) =>
 class SteerUnanswered extends Schema.TaggedError<SteerUnanswered>()("SteerUnanswered", {
   outcome: SteerOutcome,
 }) {}
+
+/** An operation's result as the front doors print it: a failure carries its code. */
+const outcomeOf = (result: OpResult): SteerOutcome =>
+  result.ok
+    ? { ok: true, code: null, human: result.human, data: fromText(toText(result.data)) }
+    : {
+        ok: false,
+        code: result.error.code,
+        human: result.error.message,
+        data: fromText(toText(result.error.details ?? {})),
+      };
 
 /** Through JSON text, so a field left undefined is dropped rather than refused. */
 const toText = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
@@ -637,6 +657,82 @@ const frontDoorHandlers = (dir: string, installation: string, panels: MrPanels) 
                   ),
                 )
               : Effect.succeed({ proposal }),
+          ),
+        propose: ({ herd, interpretation, actions, request: requestId }, { client }) =>
+          Effect.gen(function* () {
+            const decoded = Schema.decodeUnknownOption(Schema.Array(ActionSchema))(actions);
+            if (Option.isNone(decoded))
+              return outcomeOf(
+                err("invalid_input", "An action is not one of the kinds Collie takes."),
+              );
+            const key =
+              herd ??
+              (yield* herdOf(env.socketPath).pipe(Effect.catch(() => Effect.succeed(null))));
+            if (key === null)
+              return outcomeOf(err("invalid_state", "No Herd to keep the request in."));
+            return outcomeOf(
+              yield* mutation(env, "chat-request", Option.some(requestId), (id) =>
+                request(env, key, {
+                  interpretation,
+                  actions: decoded.value,
+                  actor: { origin: doorOf(client), requestId: id },
+                }),
+              ),
+            );
+          }).pipe(
+            Effect.catch((cause) =>
+              Effect.succeed(
+                outcomeOf(err("operation_failed", `Collie could not do it: ${reason(cause)}.`)),
+              ),
+            ),
+            Effect.provideContext(bun),
+            Effect.provideContext(hosted),
+          ),
+        act: ({ actions, request }, { client }) =>
+          plainly(
+            Schema.decodeUnknownEffect(Schema.Array(ActionSchema))(actions).pipe(
+              Effect.mapError(
+                () => new HostRefused({ reason: "an action is not one of the kinds Collie takes" }),
+              ),
+              Effect.flatMap((decoded) =>
+                carryOutAsked(env, decoded, { origin: doorOf(client), requestId: request }),
+              ),
+            ),
+          ),
+        reconcile: ({ proposal, index, as, request }, { client }) =>
+          plainly(
+            Effect.gen(function* () {
+              const file = yield* journalOf(env.stateDir, proposal);
+              if (file === null)
+                return yield* new HostRefused({ reason: `no proposal "${proposal}"` });
+              const done = yield* reconcileStep(file, proposal, index, as, {
+                origin: doorOf(client),
+                requestId: request,
+              });
+              if (done.refused !== null)
+                return yield* new ProposalRefused({ refused: done.refused, detail: done.detail });
+              return { proposal };
+            }),
+          ),
+        settleDelivery: ({ runId, delivery, as, request }, { client }) =>
+          plainly(
+            Effect.gen(function* () {
+              const found = (yield* deliveriesOf(env.stateDir, runId)).find(
+                (entry) => entry.delivery.id === delivery,
+              );
+              if (!found)
+                return yield* new HostRefused({ reason: `no delivery "${delivery}" for this Run` });
+              const settled = reconcileDelivery(
+                yield* readLedger(found.file),
+                delivery,
+                as,
+                actorName({ origin: doorOf(client), requestId: request }),
+                yield* nowIso(),
+              );
+              if ("error" in settled) return yield* new HostRefused({ reason: settled.error });
+              yield* appendLine(found.file, settled);
+              return fromText(toText(settled));
+            }),
           ),
         dispose: ({ runId, kind, ref, note, request }, { client }) =>
           known(runId).pipe(

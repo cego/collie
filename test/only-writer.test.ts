@@ -74,6 +74,53 @@ test(
 );
 
 test(
+  "what chat asks for is recorded and carried out by the host, once per request",
+  () =>
+    proves(
+      "collie-writer-propose-",
+      (world) =>
+        Effect.gen(function* () {
+          const file = yield* proposalsPath(world.state, "some-herd");
+          const client = yield* connect(world.state);
+          yield* client.declare({ frontDoor: "chat" });
+          const asked = {
+            herd: "some-herd",
+            interpretation: "nothing, on purpose",
+            actions: [{ kind: "none", why: "nothing to do" }],
+            request: "q-1",
+          };
+
+          const said = yield* client.propose(asked);
+          expect(said.ok).toBe(true);
+          expect(yield* client.propose(asked)).toEqual(said);
+          const lines = yield* readProposals(file);
+          expect(lines.filter((line) => line.kind === "proposal")).toMatchObject([
+            { by: "chat:q-1" },
+          ]);
+          expect(answers(lines)).toMatchObject([{ kind: "confirmed", by: "chat:q-1" }]);
+
+          const unknown = yield* client.propose({
+            ...asked,
+            actions: [{ kind: "rm-rf" }],
+            request: "q-2",
+          });
+          expect(unknown).toMatchObject({ ok: false, code: "invalid_input" });
+          const acted = yield* client
+            .act({ actions: [{ kind: "rm-rf" }], request: "q-3" })
+            .pipe(Effect.flip);
+          expect(acted._tag).toBe("HostRefused");
+          const nobody = yield* client
+            .reconcile({ proposal: "p-none", index: 0, as: "applied", request: "q-4" })
+            .pipe(Effect.flip);
+          expect(nobody._tag).toBe("HostRefused");
+          yield* stopHost(world.state);
+        }).pipe(Effect.orDie),
+      [],
+    ),
+  120_000,
+);
+
+test(
   "what became of a Run and its follow-up are the host's to write, stamped with who asked",
   () =>
     proves(

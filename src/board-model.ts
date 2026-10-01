@@ -569,6 +569,14 @@ export const SteerOutcome = Schema.Struct({
 });
 export type SteerOutcome = typeof SteerOutcome.Type;
 
+/** What one action the human asked for came to. */
+export const ActionResult = Schema.Struct({
+  kind: Schema.String,
+  state: Schema.String,
+  note: Schema.String,
+});
+export type ActionResult = typeof ActionResult.Type;
+
 /** Which front door is acting: what a channel declares, and what its operations are stamped with. */
 export const FrontDoor = Schema.Literals([
   "cli",
@@ -674,6 +682,48 @@ export const FrontDoorRpcs = RpcGroup.make(
     payload: { proposal: Schema.String, hash: Schema.String, request: Schema.String },
     success: ProposalCarried,
     error: Schema.Union([HostRefused, ProposalRefused, RequestConflict]),
+  }),
+  /**
+   * Actions chat was asked to carry out, recorded as a proposal and carried out at once.
+   * The actions are JSON here because the host alone holds their schema.
+   */
+  Rpc.make("propose", {
+    payload: {
+      /** The Herd whose journal keeps it; the host's own where null. */
+      herd: Schema.NullOr(Schema.String),
+      interpretation: Schema.String,
+      actions: Schema.Array(Schema.Json),
+      request: Schema.String,
+    },
+    success: SteerOutcome,
+  }),
+  /** The board's own actions the human asked for by name, carried out with no proposal. */
+  Rpc.make("act", {
+    payload: { actions: Schema.Array(Schema.Json), request: Schema.String },
+    success: Schema.Array(ActionResult),
+    error: HostRefused,
+  }),
+  /** A proposal step nobody can account for, settled by the person who knows. */
+  Rpc.make("reconcile", {
+    payload: {
+      proposal: Schema.String,
+      index: Schema.Int,
+      as: Schema.Literals(["applied", "not-applied"]),
+      request: Schema.String,
+    },
+    success: Schema.Struct({ proposal: Schema.String }),
+    error: Schema.Union([HostRefused, ProposalRefused]),
+  }),
+  /** A message nobody knows reached its agent, settled by the person who knows. */
+  Rpc.make("settleDelivery", {
+    payload: {
+      runId: Schema.String,
+      delivery: Schema.String,
+      as: Schema.Literals(["sent", "not-sent"]),
+      request: Schema.String,
+    },
+    success: Schema.Json,
+    error: HostRefused,
   }),
   Rpc.make("decline", {
     payload: { proposal: Schema.String, hash: Schema.String, request: Schema.String },

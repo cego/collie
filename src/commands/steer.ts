@@ -9,33 +9,18 @@
 import { Effect, Option } from "effect";
 import { Argument, Command, Flag } from "effect/unstable/cli";
 import { err } from "../operations";
-import { confirmProposed, declineProposed, steerAbout } from "../lifecycle";
+import {
+  confirmProposed,
+  declineProposed,
+  reconcileDelivered,
+  reconcileProposed,
+  steerAbout,
+} from "../lifecycle";
 import { findRun } from "../runs";
-import {
-  journalOf,
-  proposalsPath,
-  read as readProposals,
-  reconcileStep,
-  type ProposalRecord,
-} from "../proposals";
-import {
-  deliveriesOf,
-  herdOf,
-  readLedger,
-  reconcile as reconcileDelivery,
-  appendLine,
-} from "../steering";
+import { journalOf, read as readProposals, type ProposalRecord } from "../proposals";
+import { deliveriesOf } from "../steering";
 import { mutation } from "../envelope";
-import {
-  actorName,
-  actorNow,
-  answering,
-  cliDoor,
-  mutating,
-  runIdArg,
-  requestIdFlag,
-} from "./shared";
-import { nowIso } from "../time";
+import { answering, cliDoor, mutating, runIdArg, requestIdFlag } from "./shared";
 
 export const steer = Command.make(
   "steer",
@@ -176,27 +161,11 @@ export const runDeliveries = Command.make(
         const how = Option.getOrNull(as);
         if (how !== "sent" && how !== "not-sent")
           return err("invalid_input", "--as is `sent` or `not-sent`.");
-        const found = mine.find((entry) => entry.delivery.id === settleId);
-        if (!found) return err("invalid_input", `No delivery "${settleId}" for this Run.`);
+        if (!mine.some((entry) => entry.delivery.id === settleId))
+          return err("invalid_input", `No delivery "${settleId}" for this Run.`);
+        const door = yield* cliDoor(env);
         return yield* mutation(env, "run-deliveries-reconcile", requestId, (id) =>
-          Effect.gen(function* () {
-            const lines = yield* readLedger(found.file);
-            // Keep the actual caller in the delivery's audit trail.
-            const settled = reconcileDelivery(
-              lines,
-              settleId,
-              how,
-              actorName(yield* actorNow(env, id)),
-              yield* nowIso(),
-            );
-            if ("error" in settled) return err("invalid_input", settled.error);
-            yield* appendLine(found.file, settled);
-            return {
-              ok: true as const,
-              data: { delivery: settled },
-              human: `Reconciled ${settleId} as ${how}.`,
-            };
-          }),
+          reconcileDelivered(env, { door, runId, delivery: settleId, as: how, request: id }),
         );
       }),
     ),
@@ -226,24 +195,9 @@ export const proposal = Command.make("proposal").pipe(
               return err("invalid_input", "The index is a whole number.");
             if (as !== "applied" && as !== "not-applied")
               return err("invalid_input", "--as is `applied` or `not-applied`.");
+            const door = yield* cliDoor(env);
             return yield* mutation(env, "proposal-reconcile", requestId, (id) =>
-              Effect.gen(function* () {
-                const file = yield* proposalsPath(env.stateDir, yield* herdOf(env.socketPath));
-                const done = yield* reconcileStep(
-                  file,
-                  proposalId,
-                  at,
-                  as,
-                  yield* actorNow(env, id),
-                );
-                return done.refused === null
-                  ? {
-                      ok: true as const,
-                      data: { proposal: proposalId, index: at, as },
-                      human: `Settled action ${at} as ${as}.`,
-                    }
-                  : err("invalid_input", done.detail, { reason: done.refused });
-              }),
+              reconcileProposed(env, { door, proposal: proposalId, index: at, as, request: id }),
             );
           }),
         ),

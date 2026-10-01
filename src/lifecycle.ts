@@ -43,8 +43,11 @@ import {
   type ProposalCarried,
   type ProposalRefused,
   type RequestConflict,
+  type ActionResult,
+  type SteerOutcome,
   type TaskView,
 } from "./board-model";
+import type { Action } from "./evaluator";
 import { REFUSED_INPUT, runDir, type Given, type OfferView, type RunView } from "./engine";
 import { err, ExpectedError, taskFor, type Failure, type OpResult } from "./operations";
 import type { TaskChoice } from "./task";
@@ -936,25 +939,138 @@ export const steerAbout = (
         request: options.request,
       }),
     options.door,
+  ).pipe(Effect.map((answered) => (answered.ok ? opResultOf(answered.value) : answered)));
+
+/** An outcome the host sent back, as the result every front door prints. */
+const opResultOf = (said: SteerOutcome): OpResult => {
+  if (said.ok)
+    return {
+      ok: true,
+      data: Predicate.isObject(said.data) ? said.data : { said: said.data },
+      human: said.human,
+    };
+  const failed = Schema.decodeUnknownOption(ExpectedError)({
+    code: said.code,
+    message: said.human,
+    details: said.data,
+  });
+  return failed._tag === "Some"
+    ? { ok: false, error: failed.value }
+    : err("operation_failed", said.human);
+};
+
+/** Actions chat was asked for, which the host records as a proposal and carries out. */
+export const proposeActions = (
+  env: PluginEnv,
+  options: {
+    readonly door: FrontDoor;
+    readonly herd: string | null;
+    readonly interpretation: string;
+    readonly actions: ReadonlyArray<Action>;
+    readonly request: string;
+  },
+): Effect.Effect<OpResult, never, Client> =>
+  asks(
+    env,
+    (client) =>
+      client.propose({
+        herd: options.herd,
+        interpretation: options.interpretation,
+        actions: options.actions,
+        request: options.request,
+      }),
+    options.door,
+  ).pipe(Effect.map((answered) => (answered.ok ? opResultOf(answered.value) : answered)));
+
+/** The board's own actions, asked for by name and carried out by the host. */
+export const actAsked = (
+  env: PluginEnv,
+  options: {
+    readonly door: FrontDoor;
+    readonly actions: ReadonlyArray<Action>;
+    readonly request: string;
+  },
+): Effect.Effect<ReadonlyArray<ActionResult>, never, Client> =>
+  asks(
+    env,
+    (client) => client.act({ actions: options.actions, request: options.request }),
+    options.door,
   ).pipe(
-    Effect.map((answered): OpResult => {
-      if (!answered.ok) return answered;
-      const said = answered.value;
-      if (said.ok)
-        return {
-          ok: true,
-          data: Predicate.isObject(said.data) ? said.data : { said: said.data },
-          human: said.human,
-        };
-      const failed = Schema.decodeUnknownOption(ExpectedError)({
-        code: said.code,
-        message: said.human,
-        details: said.data,
-      });
-      return failed._tag === "Some"
-        ? { ok: false, error: failed.value }
-        : err("operation_failed", said.human);
-    }),
+    Effect.map((answered) =>
+      answered.ok
+        ? answered.value
+        : options.actions.slice(0, 1).map((action) => ({
+            kind: action.kind,
+            state: "failed",
+            note: answered.error.message,
+          })),
+    ),
+  );
+
+/** A proposal step nobody can account for, settled as what actually happened. */
+export const reconcileProposed = (
+  env: PluginEnv,
+  options: {
+    readonly door: FrontDoor;
+    readonly proposal: string;
+    readonly index: number;
+    readonly as: "applied" | "not-applied";
+    readonly request: string;
+  },
+): Effect.Effect<OpResult, never, Client> =>
+  asks(
+    env,
+    (client) =>
+      client.reconcile({
+        proposal: options.proposal,
+        index: options.index,
+        as: options.as,
+        request: options.request,
+      }),
+    options.door,
+  ).pipe(
+    Effect.map((answered): OpResult =>
+      answered.ok
+        ? {
+            ok: true,
+            data: { proposal: options.proposal, index: options.index, as: options.as },
+            human: `Settled action ${options.index} as ${options.as}.`,
+          }
+        : answered,
+    ),
+  );
+
+/** A message nobody knows reached its agent, settled as what actually happened. */
+export const reconcileDelivered = (
+  env: PluginEnv,
+  options: {
+    readonly door: FrontDoor;
+    readonly runId: string;
+    readonly delivery: string;
+    readonly as: "sent" | "not-sent";
+    readonly request: string;
+  },
+): Effect.Effect<OpResult, never, Client> =>
+  asks(
+    env,
+    (client) =>
+      client.settleDelivery({
+        runId: options.runId,
+        delivery: options.delivery,
+        as: options.as,
+        request: options.request,
+      }),
+    options.door,
+  ).pipe(
+    Effect.map((answered): OpResult =>
+      answered.ok
+        ? {
+            ok: true,
+            data: { delivery: answered.value },
+            human: `Reconciled ${options.delivery} as ${options.as}.`,
+          }
+        : answered,
+    ),
   );
 
 /** A child Run on a finished one, carrying on with what is left in these words. */
