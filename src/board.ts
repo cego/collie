@@ -17,11 +17,10 @@ import { latest, readDispositions } from "./disposition";
 import { runTitle } from "./naming";
 import { planIssuesIn, planReposOf } from "./plan";
 import { diffTargetOf } from "./strategies";
-import { pendingFor, proposalsPath, read as readProposals, type ProposalLine } from "./proposals";
+import { everyJournal, pendingFor, type ProposalLine } from "./proposals";
 import { everyRegistered, type AgentEntry } from "./registry";
 import { listRuns, newestFirst, settled as ended, type RunFacts, type RunState } from "./runs";
 import type { PluginEnv } from "./env";
-import { herdOf } from "./steering";
 import { listTasks, type TaskRecord } from "./task";
 import { ago, agoMs, agoShort, spanned } from "./time";
 import { readVerifications, verifyingIn, type Verification } from "./verify";
@@ -643,15 +642,9 @@ function asProposal(line: Extract<ProposalLine, { kind: "proposal" }>): Proposal
   };
 }
 
-/** The Herd's proposals journal, or none where there is no herdr to name the Herd. */
-const proposalsOf = Effect.fn("Board.proposalsOf")(function* (
-  stateDir: string,
-  socketPath: string | null,
-) {
-  const key = yield* herdOf(socketPath).pipe(Effect.catch(() => Effect.succeed(null)));
-  if (key === null) return [];
-  return yield* readProposals(yield* proposalsPath(stateDir, key));
-});
+/** Every Herd's proposals: the host serves every Herd on its Machine, not the one it came from. */
+const proposalsOf = (stateDir: string) =>
+  everyJournal(stateDir).pipe(Effect.map((journals) => journals.flatMap(({ lines }) => lines)));
 
 /** How long a Run has been going by default before silence is worth saying. */
 const DEFAULT_QUIET_MS = 5 * 60_000;
@@ -679,7 +672,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
   /** What a Run offers now; the host is asked where this is not given. */
   offers?: (runId: string) => Effect.Effect<ReadonlyArray<OfferView>>;
 }) {
-  const { stateDir, socketPath } = opts.env;
+  const { stateDir } = opts.env;
   const now = opts.now ?? (yield* Clock.currentTimeMillis);
   const quietMs = opts.quietMs ?? DEFAULT_QUIET_MS;
   const all = newestFirst(opts.runs ?? (yield* listRuns(opts.env)));
@@ -687,7 +680,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
     (opts.tasks ?? (yield* listTasks(stateDir))).map((task) => [task.id, task]),
   );
   const registered = opts.registered ?? (yield* everyRegistered(stateDir));
-  const proposals = opts.proposals ?? (yield* proposalsOf(stateDir, socketPath));
+  const proposals = opts.proposals ?? (yield* proposalsOf(stateDir));
   const mrStates = opts.mrStates ?? (yield* readMrStates(stateDir));
   const live = new Map((opts.alive ?? []).map((agent) => [agent.name, agent]));
   const offersOfRun =

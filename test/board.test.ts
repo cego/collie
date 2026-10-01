@@ -31,7 +31,7 @@ import { recordDisposition } from "../src/disposition";
 import { nothingApproved } from "../src/outcome";
 import { readEnv } from "../src/env";
 import type { AgentInfo } from "../src/herdr";
-import type { ProposalLine } from "../src/proposals";
+import { append as appendProposal, type ProposalLine } from "../src/proposals";
 import type { AgentEntry } from "../src/registry";
 import type { RunFacts } from "../src/runs";
 import type { TaskRecord } from "../src/task";
@@ -948,6 +948,33 @@ test("a child Run's proposal is its Task's own decision", () =>
       expect(views).toHaveLength(1);
       expect(sectionOf(views[0]!)).toBe("needs-you");
       expect(views[0]!.decision).toMatchObject({ kind: "proposal", id: "p-child" });
+    }),
+  ));
+
+test("the board reads every Herd's proposals, not only the one its host came from", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const run = yield* madeRun(dir, { id: "r1", task: "task-1" });
+      const proposal = (id: string): ProposalLine => ({
+        kind: "proposal",
+        id,
+        created_at: "2026-09-14T09:00:00Z",
+        expires_at: "2026-09-14T11:00:00Z",
+        interpretation: "follow up on the review",
+        targets: [{ run: run.id }],
+        actions: [{ kind: "stop", run: run.id }],
+        allowed_now: [],
+        intent_versions: {},
+        content_hash: "abc",
+        by: "evaluator:call-1",
+        state: "pending",
+      });
+      yield* appendProposal(`${dir}/herd/other-session/proposals.jsonl`, proposal("p-other"));
+
+      const views = yield* board(env, [run], { proposals: undefined });
+
+      expect(views[0]!.decision).toMatchObject({ kind: "proposal", id: "p-other" });
     }),
   ));
 

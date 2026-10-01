@@ -104,17 +104,26 @@ export const proposalsPath = Effect.fn("Proposals.path")(function* (
   return path.join(yield* herdDir(stateDir, herdKey), "proposals.jsonl");
 });
 
-/** The Herd journal this proposal was written to, or null where no Herd has one by that id. */
-export const journalOf = Effect.fn("Proposals.journalOf")(function* (stateDir: string, id: string) {
+/** Every Herd's proposals journal, with what it holds. */
+export const everyJournal = Effect.fn("Proposals.everyJournal")(function* (stateDir: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const herds = path.join(stateDir, "herd");
+  const journals: Array<{ file: string; lines: ReadonlyArray<ProposalLine> }> = [];
   for (const herd of yield* fs.readDirectory(herds).pipe(Effect.orElseSucceed(() => []))) {
     const file = path.join(herds, herd, "proposals.jsonl");
-    const lines = yield* read(file).pipe(Effect.orElseSucceed(() => []));
-    if (lines.some((line) => line.kind === "proposal" && line.id === id)) return file;
+    journals.push({ file, lines: yield* read(file).pipe(Effect.orElseSucceed(() => [])) });
   }
-  return null;
+  return journals;
+});
+
+/** The Herd journal this proposal was written to, or null where no Herd has one by that id. */
+export const journalOf = Effect.fn("Proposals.journalOf")(function* (stateDir: string, id: string) {
+  const journals = yield* everyJournal(stateDir);
+  const found = journals.find(({ lines }) =>
+    lines.some((line) => line.kind === "proposal" && line.id === id),
+  );
+  return found?.file ?? null;
 });
 
 export const append = (file: string, line: ProposalLine) => appendJournal(file, LineJson, line);
