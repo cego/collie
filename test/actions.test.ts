@@ -226,7 +226,7 @@ test("the board's follow-up words go to the one input a follow-up still needs", 
 });
 
 test(
-  "a follow-up of a Run that is still going starts nothing",
+  "a follow-up of a Run still going is not offered and starts nothing, and a stop ends the Run for it",
   () =>
     proves(
       "collie-actions-going-",
@@ -242,12 +242,22 @@ test(
             (view) => view?.status.status === "suspended",
           ).pipe(Effect.orDie);
 
+          const listed = yield* client.offers({ runId }).pipe(Effect.orDie);
+          expect(listed[0]?.unavailable).toContain("is still going");
           const refused = yield* client
             .invoke({ runId, offer: "carry-on", input: {}, request: "act-1" })
             .pipe(Effect.flip, Effect.orDie);
           expect(refused.reason).toContain("is still going");
           const runs = yield* client.runs({ task: null }).pipe(Effect.orDie);
           expect(runs.map((row) => row.runId)).toEqual([runId]);
+
+          yield* client.control({ runId, control: "stop", set: true }).pipe(Effect.orDie);
+          expect((yield* client.offers({ runId }).pipe(Effect.orDie))[0]?.unavailable).toBeNull();
+          const carried = yield* client
+            .invoke({ runId, offer: "carry-on", input: {}, request: "act-2" })
+            .pipe(Effect.orDie);
+          const child = yield* client.run({ runId: carried.runId }).pipe(Effect.orDie);
+          expect(child?.parent).toBe(runId);
           yield* stopHost(world.state);
         }),
       [],

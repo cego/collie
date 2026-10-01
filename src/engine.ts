@@ -4290,8 +4290,21 @@ const makeRegistry: (
         );
       }
     }
-    const finished = state.status === "complete" || state.status === "failed";
-    return { row, generation, facts, where, refused, input, finished };
+    // A follow-up of a Run still going would share its live checkout. A stop ends one.
+    const finished =
+      state.status === "complete" ||
+      state.status === "failed" ||
+      (yield* controlsOf(runId)).includes(STOP);
+    if (!finished) {
+      for (const offer of generation.offers) {
+        if (offer.kind === "follow-up")
+          refused.set(
+            offer.id,
+            "a follow-up is a child of a finished run, and this one is still going",
+          );
+      }
+    }
+    return { row, generation, facts, where, refused, input };
   });
 
   const startWork = Effect.fn("Engine.Registry.start")(function* (options: {
@@ -4473,9 +4486,7 @@ const makeRegistry: (
       readonly input: Readonly<Record<string, Schema.Json>>;
       readonly request: string;
     }) {
-      const { row, generation, facts, where, refused, input, finished } = yield* offeredBy(
-        options.runId,
-      );
+      const { row, generation, facts, where, refused, input } = yield* offeredBy(options.runId);
       // Asked again here, of the module as it is now: the card this was read from may
       // have been drawn before the file was edited, and a card is not authority.
       const offer = offersFrom(generation.offers, facts, {
@@ -4487,12 +4498,6 @@ const makeRegistry: (
         const why = offer?.unavailable ? `: ${offer.unavailable}` : " now";
         return yield* new HostRefused({
           reason: `run "${options.runId}" does not offer "${options.offer}"${why}`,
-        });
-      }
-      // It would be placed in the parent's live checkout, and two Runs must not share one.
-      if (offer.kind === "follow-up" && !finished) {
-        return yield* new HostRefused({
-          reason: `a follow-up is a child of a finished run, and "${options.runId}" is still going`,
         });
       }
       const starting = yield* resolve({ project: row.project, id: offer.workflow });
