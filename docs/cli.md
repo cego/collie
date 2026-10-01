@@ -750,8 +750,10 @@ collie --json run deliveries <run-id>
 collie --json run deliveries <run-id> --reconcile <delivery-id> --as sent|not-sent
 ```
 
-What has been sent to a run's agents. Explicitly settle an unknown delivery once you have
-checked whether it arrived; a timeout alone never authorizes a resend — see
+What has been sent to a run's agents. Explicitly settle an unknown delivery, or an
+`unobserved` one a Run parked on, once you have checked whether it arrived; a timeout
+alone never authorizes a resend. A parked step's prompt settled `not-sent` is sent once
+more by `run resume` — see
 [Delivery](steering.md#delivery).
 
 ## Carry on from a finished run

@@ -37,7 +37,8 @@ import { taskFor } from "../src/operations";
 import { readRegistry, registerAgent, registryPath, scopeFor } from "../src/registry";
 import { HerdrError } from "../src/herdr";
 import { agentName, shellQuote } from "../src/naming";
-import type { CompactionPorts } from "../src/compaction";
+import { controlDir, type CompactionPorts } from "../src/compaction";
+import { COMPACTION_PORTS, recordClaudeEvent } from "../src/compactors";
 
 let rig: Rig;
 let dir: string;
@@ -1034,11 +1035,11 @@ const control = (name: string, runId: string, set: boolean) =>
     Effect.orDie,
   );
 
-/** What was typed into an agent's pane, in the order herdr was asked to type it. */
+/** What was typed into an agent's pane, in order, without a leading delivery token. */
 const prompts = (calls: ReadonlyArray<Call>) =>
   calls
     .filter((call) => (call.argv ?? [])[0] === "agent" && (call.argv ?? [])[1] === "prompt")
-    .map((call) => (call.argv ?? [])[3] ?? "");
+    .map((call) => ((call.argv ?? [])[3] ?? "").replace(/^collie-delivery:\S+\n/, ""));
 
 /** One thing an operator says to the run's agent, through the host's own service. */
 const say = (runId: string, text: string, request: string, mode?: "boundary" | "now") =>
@@ -1168,11 +1169,11 @@ test(
   120_000,
 );
 
-/** An operator stopping the Run as its repair goes out. */
+/** An operator stopping the Run once its repair has gone out. */
 class StopsAtRepair extends FakeHerdr {
   override agentPrompt(target: string, text: string) {
     const stop = text.includes("not usable") ? control("stop", "r1", true) : Effect.void;
-    return stop.pipe(Effect.andThen(super.agentPrompt(target, text)));
+    return super.agentPrompt(target, text).pipe(Effect.tap(() => stop));
   }
 }
 
@@ -1723,3 +1724,223 @@ test("a start kept here is the workspace it was started from: its Task, or a new
       ).toBe("workspace_required");
     }),
   ));
+
+const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const decodeJson = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
+
+/** Claude's own controls, without asking this machine which Claude it has installed. */
+const claudeControls = (): CompactionPorts => ({
+  claude: { ...COMPACTION_PORTS.claude!, gate: () => Effect.void },
+});
+
+/** Claude drawing its status line: the first call into the agent's control dir. */
+const statusLineCall = (agent: string) =>
+  Effect.gen(function* () {
+    const dir = yield* controlDir(hostOf().env.stateDir, agent);
+    yield* recordClaudeEvent(dir, encodeJson({ session_id: "s1", context_window: null }));
+  });
+
+const untilStarted = Effect.gen(function* () {
+  while (!(yield* rig.cmds()).includes("agent start")) yield* Effect.sleep(Duration.millis(10));
+});
+
+test("the first prompt to a new agent waits for the harness to say it is up, not only herdr", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([{ verdict: "clean", note: "after the status line" }]);
+      let typedBeforeReady = -1;
+      // herdr has said the agent started; Claude has not drawn its REPL yet.
+      const claudeComesUp = Effect.gen(function* () {
+        yield* untilStarted;
+        yield* Effect.sleep(Duration.millis(300));
+        typedBeforeReady = sent(yield* rig.calls(), "Your task for this step");
+        yield* statusLineCall(agentFor("r1"));
+      });
+      const [result] = yield* Effect.all(
+        [
+          session(started("r1"), {
+            compactAtTokens: 1000,
+            ports: claudeControls(),
+            herdr: new FakeHerdr(rig.pluginEnv({ FAKE_HERDR_HARNESS_SILENT: "1" })),
+          }),
+          claudeComesUp,
+        ],
+        { concurrency: 2 },
+      );
+      expect(result._tag === "Success" && result.success.note).toBe("after the status line");
+      expect(typedBeforeReady).toBe(0);
+      expect(sent(yield* rig.calls(), "Your task for this step")).toBe(1);
+    }),
+  ));
+
+test(
+  "a harness that never says it is up parks the step naming its pane, and types nothing",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* rig.queueOutputs([{ verdict: "clean", note: "never" }]);
+        yield* interrupted("r1", 1_500, {
+          compactAtTokens: 1000,
+          ports: claudeControls(),
+          herdr: new FakeHerdr(rig.pluginEnv({ FAKE_HERDR_HARNESS_SILENT: "1" })),
+          readyMs: 300,
+        });
+        expect(yield* statusNow("r1")).toBe("suspended");
+        const why = yield* read(controlPath(dir, PARKED, "r1"));
+        expect(why).toContain(agentFor("r1"));
+        expect(why).toMatch(/pane 1-\d+/);
+        expect(sent(yield* rig.calls(), "Your task for this step")).toBe(0);
+      }),
+    ),
+  120_000,
+);
+
+test("a step pointer the harness took is recorded as Collie's, with its delivery id", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+      yield* session(started("r1"));
+      const pointer = (yield* rig.calls()).find(
+        (call) => call.cmd === "agent prompt" && (call.argv?.[3] ?? "").includes("Your task"),
+      )?.argv?.[3];
+      const [step] = yield* steps("r1");
+      // What Claude's UserPromptSubmit hook is given: the prompt exactly as it was typed.
+      const dir = yield* controlDir(hostOf().env.stateDir, agentFor("r1"));
+      yield* recordClaudeEvent(
+        dir,
+        encodeJson({ session_id: "s1", hook_event_name: "UserPromptSubmit", prompt: pointer }),
+      );
+      const events = (yield* read(`${dir}/events.jsonl`))
+        .split("\n")
+        .filter((line) => line.includes('"submit"'))
+        .map((line) => decodeJson(line));
+      expect(events).toMatchObject([
+        { kind: "submit", reason: "collie", delivery: step!.delivery.id },
+      ]);
+      expect(pointer?.split("\n")).toContain(`collie-delivery:${step!.delivery.id}`);
+    }),
+  ));
+
+/** A just-started agent: herdr sees it busy booting when the prompt goes out, then idle. */
+const promptNotTaken = (lost: "enter" | "text") =>
+  new FakeHerdr(
+    rig.pluginEnv({ FAKE_HERDR_PROMPT_LOST: lost, FAKE_HERDR_AGENT_STATUS: "working,idle" }),
+  );
+
+const enters = (calls: ReadonlyArray<Call>) =>
+  calls.filter((call) => call.cmd === "agent send-keys" && call.argv?.[3] === "enter").length;
+
+test(
+  "a step pointer whose Enter was lost is sent with one Enter, never the text again",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* rig.queueOutputs([{ verdict: "clean", note: "after the Enter" }]);
+        yield* interrupted("r1", 8_000, { herdr: promptNotTaken("enter"), confirmGraceMs: 300 });
+        expect(yield* read(outputPath("r1"))).toContain("after the Enter");
+        const calls = yield* rig.calls();
+        expect(sent(calls, "Your task for this step")).toBe(1);
+        expect(enters(calls)).toBe(1);
+      }),
+    ),
+  120_000,
+);
+
+test(
+  "a step pointer that vanished is not sent again: the step waits for you, naming the pane and the delivery",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* rig.queueOutputs([{ verdict: "clean", note: "never" }]);
+        yield* interrupted("r1", 8_000, { herdr: promptNotTaken("text"), confirmGraceMs: 300 });
+        const why = yield* read(controlPath(dir, PARKED, "r1"));
+        const [step] = yield* steps("r1");
+        expect(why).toContain(step!.delivery.id);
+        expect(why).toMatch(/pane 1-\d+/);
+        const calls = yield* rig.calls();
+        expect(sent(calls, "Your task for this step")).toBe(1);
+        expect(enters(calls)).toBe(0);
+      }),
+    ),
+  120_000,
+);
+
+/** What the park's own instructions say to run, done as the command does it. */
+const reconciled = (runId: string, as: "sent" | "not-sent") =>
+  Effect.gen(function* () {
+    const why = yield* read(controlPath(dir, PARKED, runId));
+    const [step] = yield* steps(runId);
+    expect(why).toContain(`--reconcile ${step!.delivery.id} --as sent|not-sent`);
+    const settled = reconcile(yield* readLedger(step!.file), step!.delivery.id, as, "tester", "t");
+    if ("error" in settled) throw new Error(settled.error);
+    yield* appendLine(step!.file, settled);
+  });
+
+test(
+  "a vanished step pointer settled as not sent goes out once more on resume, under a new delivery",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* rig.queueOutputs([{ verdict: "clean", note: "never" }]);
+        yield* interrupted("r1", 8_000, { herdr: promptNotTaken("text"), confirmGraceMs: 300 });
+        yield* reconciled("r1", "not-sent");
+
+        yield* rig.queueOutputs([{ verdict: "clean", note: "sent again" }]);
+        const result = yield* releasedInto("r1");
+        expect(result._tag === "Success" && result.success.note).toBe("sent again");
+        expect(sent(yield* rig.calls(), "Your task for this step")).toBe(2);
+        expect(new Set((yield* steps("r1")).map((one) => one.delivery.id)).size).toBe(2);
+      }),
+    ),
+  120_000,
+);
+
+test(
+  "a resend herdr refuses parks saying the next resume tries again, and it does",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* rig.queueOutputs([{ verdict: "clean", note: "never" }]);
+        yield* interrupted("r1", 8_000, { herdr: promptNotTaken("text"), confirmGraceMs: 300 });
+        yield* reconciled("r1", "not-sent");
+
+        // herdr answers `no agent` for every prompt from the second on: the resend.
+        const refusing = new FakeHerdr(rig.pluginEnv({ FAKE_HERDR_FAIL_PROMPT_FROM: "1" }));
+        yield* session(
+          Effect.gen(function* () {
+            const engine = yield* WorkflowEngine.WorkflowEngine;
+            const payload = { runId: "r1", input: { skip: false } };
+            yield* engine.resume(work, yield* work.executionId(payload));
+            yield* work.execute(payload, { discard: true });
+            yield* Effect.sleep(Duration.millis(3_000));
+          }),
+          { herdr: refusing, collectMs: 30_000 },
+        );
+        expect(yield* read(controlPath(dir, PARKED, "r1"))).toContain("collie run resume r1");
+
+        yield* rig.queueOutputs([{ verdict: "clean", note: "third time" }]);
+        const result = yield* releasedInto("r1");
+        expect(result._tag === "Success" && result.success.note).toBe("third time");
+      }),
+    ),
+  120_000,
+);
+
+test(
+  "a vanished step pointer settled as sent is not sent again: the resume waits for its Output",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        yield* rig.queueOutputs([{ verdict: "clean", note: "never" }]);
+        yield* interrupted("r1", 8_000, { herdr: promptNotTaken("text"), confirmGraceMs: 300 });
+        yield* reconciled("r1", "sent");
+
+        yield* fs.writeFileString(outputPath("r1"), `{"verdict":"clean","note":"typed by hand"}`);
+        const result = yield* releasedInto("r1");
+        expect(result._tag === "Success" && result.success.note).toBe("typed by hand");
+        expect(sent(yield* rig.calls(), "Your task for this step")).toBe(1);
+      }),
+    ),
+  120_000,
+);

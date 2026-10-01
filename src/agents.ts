@@ -31,12 +31,14 @@ import * as WorkflowEngine from "effect/unstable/workflow/WorkflowEngine";
 import {
   COMPACTION_WAIT_MS,
   atBoundary,
+  awaitReady,
+  controlDir,
   installControls,
   withControlLock,
   type CompactionDeps,
   type CompactionPorts,
 } from "./compaction";
-import { COMPACTION_PORTS } from "./compactors";
+import { COMPACTION_PORTS, submittedDelivery } from "./compactors";
 import { kindForRole } from "./cards";
 import { Oversight } from "./oversight";
 import { FALLBACK_DEFAULTS, loadDefaults } from "./config";
@@ -72,7 +74,7 @@ import {
   type Projection,
   type Seat,
 } from "./sdk";
-import { deliveriesOf } from "./steering";
+import { causalKey, deliveriesOf } from "./steering";
 import { readTask, taskOfWorkspace, withTaskLock, writeTask } from "./task";
 import { malformedIn, renderTemplate, skillMention, skillsIn } from "./template";
 
@@ -211,7 +213,7 @@ export interface AgentsApi {
   readonly collect: (
     launched: Launched,
     unless?: string | null,
-  ) => Effect.Effect<string | null, AgentUncertain>;
+  ) => Effect.Effect<string | null, AgentUncertain | AgentParked>;
   /**
    * Hands one unusable Output back to the agent that wrote it. True where it was asked, or
    * where the Output is already something other than `unusable`; false where it could not
@@ -455,7 +457,8 @@ export const agentWork = <
     const watching = <A, E, R>(collecting: Effect.Effect<A, E, R>) => {
       if (Option.isNone(oversight)) return collecting;
       const look = oversight.value.checkpoints(work.runId, work.operation);
-      return Effect.race(
+      // First to finish, failure included: a collection raised to a human must not wait on a watch that never ends.
+      return Effect.raceFirst(
         collecting,
         look.pipe(
           Effect.repeat(Schedule.spaced(Duration.millis(agents.pollMs))),
@@ -549,8 +552,12 @@ export const agentWork = <
           execute: stoppable(
             // Null here is also the same unusable Output written again, which a repair
             // has had its one chance at, so it ends the work rather than parking it.
-            parkedWhenStuck(agents.revive(ask, first), host, work.runId).pipe(
-              Effect.andThen(watching(agents.collect(launched, first))),
+            parkedWhenStuck(
+              agents
+                .revive(ask, first)
+                .pipe(Effect.andThen(watching(agents.collect(launched, first)))),
+              host,
+              work.runId,
             ),
             host,
             work.runId,
@@ -793,6 +800,10 @@ export interface AgentHost {
   readonly pollMs?: number;
   /** How long an Output may take. Past it the work is uncertain, never finished. */
   readonly collectMs?: number;
+  /** How long a new agent's harness has to show it can take its first prompt. */
+  readonly readyMs?: number;
+  /** How long a settled agent may show neither an unobserved prompt nor a turn from it. */
+  readonly confirmGraceMs?: number;
   /** How a step's own prompts wait out a pane that says it will clear by itself. */
   readonly patience?: dispatch.Patience;
   /** Each harness's compaction controls; the shipped ones where none are given. */
@@ -808,6 +819,12 @@ const DEFAULT_POLL_MS = 2000;
  * trust, loads plugins and starts MCP servers, which outlasts herdr's own 30s.
  */
 const START_TIMEOUT_MS = 180_000;
+
+/** Past herdr's own start, which has already waited for the harness to be ready. */
+const READY_TIMEOUT_MS = 120_000;
+
+/** Longer than herdr takes to see a taken prompt become a turn, even under load. */
+const CONFIRM_GRACE_MS = 15_000;
 
 /** herdr says this of a pane that exists but whose shell has not come up yet. */
 const paneNotReady = (error: HerdrError) =>
@@ -842,6 +859,9 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
     `${dirFor(runId)}/${operation}${LAUNCH_SUFFIX}`;
   const outputFor = (runId: string, operation: string) => `${dirFor(runId)}/${operation}.json`;
   const launchOrder = (runId: string) => `${dirFor(runId)}/launches`;
+  /** What went out as a step's prompt or its repair, kept so a resend is the same words. */
+  const sentPath = (about: Launched, kind: "step" | "repair") =>
+    `${dirFor(about.runId)}/${about.operation}.${kind}.md`;
   const log = (runId: string, line: string) => append(`${dirFor(runId)}/agents.log`, line);
 
   /**
@@ -1163,6 +1183,20 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
         // Written before it goes out and never rewritten: what a human reads to see what
         // was actually asked, rather than what a prompt would be built as now.
         yield* write(file, prefix === "" ? ask.prompt : `${prefix}\n\n${ask.prompt}`);
+        if (!alive || !replayed) {
+          const late = yield* awaitReady(
+            compactionDeps(host, ask.runId),
+            agent,
+            host.readyMs ?? READY_TIMEOUT_MS,
+          );
+          if (late !== null) {
+            const pane = (yield* entryFor(ask, agent, null)).entry?.paneId ?? "unknown";
+            return yield* new AgentParked({
+              operation: ask.operation,
+              reason: `${agent} in pane ${pane} was started, but ${late}, so nothing was typed into it. Look at the pane; once it shows its prompt, \`collie run resume ${ask.runId}\`.`,
+            });
+          }
+        }
         if (alive && !replayed) {
           const due = yield* boundary(launched);
           if (!due.dispatch) {
@@ -1178,11 +1212,9 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
         // A skill marked `disable-model-invocation` refuses an agent that invokes it
         // itself; this is the human's channel, so a slash command here runs.
         const started = ask.skill === null ? "" : `${adapter.skillCommand(ask.skill)} `;
-        const asked = yield* deliver(
-          launched,
-          `${started}Your task for this step is in ${file} — read it and follow it.`,
-          { kind: "step", ref: ask.operation },
-        );
+        const pointer = `${started}${stepPointer(file)}`;
+        yield* write(sentPath(launched, "step"), pointer);
+        const asked = yield* deliver(launched, pointer, { kind: "step", ref: ask.operation });
         if (asked.refused) {
           return yield* refusedWith(ask, `${agent} was not given its work (${asked.why})`, file);
         }
@@ -1204,12 +1236,97 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
       ),
     );
 
+  /**
+   * The step's prompt, or the repair when `unless` is set, that herdr could not see taken,
+   * checked while its Output is awaited: taken, finished with one Enter, or raised to a
+   * human. Never silent. One a human settled as not sent goes out once more first.
+   */
+  const confirmed = (launched: Launched, unless: string | null) =>
+    Effect.gen(function* () {
+      const found = yield* entryFor(launched, launched.agent, null);
+      if (found.entry === null) return;
+      const dir = yield* controlDir(host.env.stateDir, launched.agent);
+      const kind = unless === null ? "step" : "repair";
+      const key = causalKey(launched.runId, { kind, ref: launched.operation }, 0);
+      // Only this agent's own ledger: another incarnation's is listed in no time order.
+      const last = (yield* deliveriesOf(host.env.stateDir, launched.runId))
+        .filter(
+          ({ delivery }) =>
+            delivery.causal_key === key &&
+            delivery.incarnation === found.entry?.incarnation?.terminalId,
+        )
+        .at(-1)?.delivery;
+      // Settled as not sent, or refused by herdr on the last resend: not delivered either way.
+      const resend =
+        last?.note?.startsWith("reconciled as not-sent") === true ||
+        (last?.state === "failed" && last.attempt > 1);
+      if (last !== undefined && resend) {
+        const fs = yield* FileSystem.FileSystem;
+        // Sent before its words were kept: the pointer without a skill command.
+        const unkept: Effect.Effect<string, null> =
+          kind === "step"
+            ? Effect.succeed(
+                stepPointer(`${dirFor(launched.runId)}/${launched.operation}.prompt.md`),
+              )
+            : Effect.fail(null);
+        const again = yield* fs.readFileString(sentPath(launched, kind)).pipe(
+          Effect.catch(() => unkept),
+          Effect.flatMap((text) =>
+            deliver(launched, text, { kind, ref: launched.operation, attempt: last.attempt + 1 }),
+          ),
+          Effect.orElseSucceed(() => ({ sent: false, why: "what was sent is not on file" })),
+        );
+        if (!again.sent) {
+          return yield* new AgentParked({
+            operation: launched.operation,
+            reason: `${launched.agent} in pane ${found.entry.paneId} could not be sent ${kind === "step" ? "its step's prompt" : "its repair"} again (${again.why}). \`collie run resume ${launched.runId}\` tries again.`,
+          });
+        }
+      }
+      yield* dispatch.confirmSubmitted(
+        {
+          stateDir: host.env.stateDir,
+          herdr: host.herdr,
+          log: (line) => log(launched.runId, line),
+          taken: (delivery) =>
+            submittedDelivery(dir, delivery.id).pipe(
+              Effect.map((recorded) => (recorded ? "its submit hook recorded it" : null)),
+              Effect.orElseSucceed(() => null),
+            ),
+          pollMs: host.pollMs ?? DEFAULT_POLL_MS,
+          graceMs: host.confirmGraceMs ?? CONFIRM_GRACE_MS,
+        },
+        found.entry,
+        [key],
+      );
+    }).pipe(
+      Effect.catchIf(
+        (cause) => !(cause instanceof dispatch.Unconfirmed) && !isParked(cause),
+        (cause) =>
+          log(
+            launched.runId,
+            `${launched.agent}: could not check its prompt was taken (${reason(cause)})`,
+          ),
+      ),
+      Effect.catchTag("Unconfirmed", (unconfirmed) =>
+        Effect.fail(
+          new AgentParked({
+            operation: launched.operation,
+            reason: `${unconfirmed.agent} in pane ${unconfirmed.pane} was sent delivery ${unconfirmed.delivery}, and nothing shows it took it: ${unconfirmed.why}. Look at the pane, then settle it with \`collie run deliveries ${launched.runId} --reconcile ${unconfirmed.delivery} --as sent|not-sent\`: \`sent\` once the agent has it (press Enter if the prompt is still in its box), \`not-sent\` to have the resume send it once more. Then \`collie run resume ${launched.runId}\`.`,
+          }),
+        ),
+      ),
+    );
+
   const collect = (launched: Launched, unless?: string | null) =>
     under(
-      waitForOutput(launched.output, unless ?? null, {
-        pollMs: host.pollMs ?? DEFAULT_POLL_MS,
-        budgetMs: host.collectMs ?? DEFAULT_COLLECT_MS,
-      }),
+      Effect.raceFirst(
+        waitForOutput(launched.output, unless ?? null, {
+          pollMs: host.pollMs ?? DEFAULT_POLL_MS,
+          budgetMs: host.collectMs ?? DEFAULT_COLLECT_MS,
+        }),
+        confirmed(launched, unless ?? null).pipe(Effect.andThen(Effect.never)),
+      ),
     );
 
   const repair = (launched: Launched, problem: string, unusable: string) =>
@@ -1220,7 +1337,7 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
         // Rewritten while nobody was asking, as across a stop: that Output is the one to read.
         if (now.trim() !== "" && now !== unusable) return true;
         const text = repairText(launched.output, problem);
-        const file = `${dirFor(launched.runId)}/${launched.operation}.repair.md`;
+        const file = sentPath(launched, "repair");
         yield* write(file, text);
         const sent = yield* deliver(launched, text, {
           kind: "repair",
@@ -1543,6 +1660,8 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
 };
 
 const LAUNCH_SUFFIX = ".launch.json";
+const stepPointer = (file: string) =>
+  `Your task for this step is in ${file} — read it and follow it.`;
 const SENT_STATES: ReadonlySet<string> = new Set(["submitted", "acknowledged", "verified"]);
 const LaunchedJson = Schema.fromJsonString(Launched);
 const encodeLaunched = Schema.encodeSync(LaunchedJson);

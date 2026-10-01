@@ -280,9 +280,13 @@ export function overrideActive(lines: ReadonlyArray<LedgerLine>): boolean {
   return active;
 }
 
+/** Sent, with nothing to show the harness took it. */
+export const isUnobserved = (delivery: Delivery) =>
+  delivery.state === "submitted" && delivery.note?.startsWith("unobserved") === true;
+
 /**
- * An explicit account of an unknown delivery. Callers establish whether it was sent;
- * a timeout alone never supplies an answer or authorizes a resend.
+ * An explicit account of an unknown or unobserved delivery. Callers establish whether it
+ * was sent; a timeout alone never supplies an answer or authorizes a resend.
  */
 export function reconcile(
   lines: ReadonlyArray<LedgerLine>,
@@ -293,7 +297,8 @@ export function reconcile(
 ): Delivery | { readonly error: string } {
   const delivery = newestById(lines).get(id);
   if (!delivery) return { error: `no delivery "${id}" in this ledger` };
-  if (delivery.state !== "unknown") return { error: `delivery "${id}" is ${delivery.state}` };
+  if (delivery.state !== "unknown" && !isUnobserved(delivery))
+    return { error: `delivery "${id}" is ${delivery.state}` };
   return {
     ...delivery,
     at,
