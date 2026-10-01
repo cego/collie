@@ -18,7 +18,7 @@ import { EXCLUSIVE_STRATEGIES, strategyMeaning } from "./strategies";
 import { PROJECTS_ROOT_OPTION, projectsRoot } from "./projects";
 import { insideCheckout } from "./agent-start";
 import { placeableUnder, placedByUrl, routed, routerDeps } from "./route";
-import type { RunDetail } from "./board-model";
+import { StepResult, type RunDetail } from "./board-model";
 import {
   DENSITIES,
   isDensity,
@@ -80,7 +80,6 @@ import type { CompactionSettings } from "./compaction";
 import { statusLine } from "./disposition";
 import { selectionPath, writeSelection } from "./selection";
 import { everyViewerPaints } from "./outer";
-import { journalOf, read as readProposals, stepResults } from "./proposals";
 import { listTasks, taskOfWorkspace, type TaskChoice, type TaskRecord } from "./task";
 import { newRequestId } from "./operations";
 import {
@@ -107,6 +106,9 @@ import {
   type RunRow,
   type WorkspaceView,
 } from "./workspace";
+
+/** The steps a confirm carried out, as the host answered them. */
+const CarriedSteps = Schema.Struct({ results: Schema.Array(StepResult) });
 
 /**
  * What a board is looking at: which workspace and repository, where the state is, and
@@ -1249,11 +1251,12 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
       });
       // A confirmed `navigate` puts its target on screen here: the host has no screen.
       // Even where a later action failed: an applied one did happen.
-      const file = yield* journalOf(env.stateDir, command.id);
-      if (file !== null)
-        for (const step of stepResults(yield* readProposals(file), command.id))
-          if (step.kind === "navigate" && step.state === "applied" && step.run !== null)
-            navigate(step.run);
+      const carried = Schema.decodeUnknownOption(CarriedSteps)(
+        done.ok ? done.data : done.error.details,
+      );
+      for (const step of Option.getOrElse(carried, () => ({ results: [] })).results)
+        if (step.kind === "navigate" && step.state === "applied" && step.run !== null)
+          navigate(step.run);
       return done.ok ? done.human : done.error.message;
     }
 
