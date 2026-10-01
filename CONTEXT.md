@@ -79,15 +79,13 @@ is required. Questions about the flock are Native chat's.
 **Proposal** — A durable, hash-bound set of actions. Explicit requests execute through
 this record immediately. Unsolicited background suggestions remain pending.
 
-**Confirmation** — A human command naming a Proposal's id **and** its content hash. A yes
-to a summary is not consent to a payload nobody read. Who is human is derived by the front
-door — a controlling terminal or the board — never claimed by a caller. Native chat's
-bridge is `chat`, stamped by the entrypoint that serves Collie tools rather than derived:
-it runs inside a harness's pane and so has a controlling terminal, which the CLI would
-otherwise read as a person. It is not human, and it settles nothing on its own judgement:
-the one path that may is `collie_do`, which carries the yes the human said in that turn and
-records it as `chat:`. No action kind confirms anything, so a Proposal can never contain
-its own.
+**Confirmation** — A command naming a Proposal's id **and** its content hash. A yes to a
+summary is not consent to a payload nobody read. Anyone may give one — a human at a
+terminal or on the board, or chat through `collie_do` — and who did is recorded: a human
+is derived by the front door, never claimed by a caller; native chat's bridge is `chat`,
+stamped by the entrypoint that serves Collie tools, because it runs inside a harness's pane
+and the CLI would otherwise read its terminal as a person. Attribution is audit, never a
+gate. No action kind confirms anything, so a Proposal can never contain its own.
 
 **Delivery** — One message to one live agent incarnation, with states `queued` (a boundary
 delivery an older Collie held for the agent's next prompt), `reserved`, `deferred` (herdr answered that the

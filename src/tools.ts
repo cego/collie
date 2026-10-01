@@ -12,8 +12,9 @@
 // `collie_hold` holds; `collie_do` takes the board's own actions and decisions, with the
 // open card standing in for a Run nobody named; `collie_propose` takes the whole closed
 // action set — Intent amendments, forks, defaults, upgrades — with a request id that makes
-// a retry return the first receipt. What Collie wants of its own accord is not here at
-// all: the evaluator's proposals wait on the board, and chat asks the human in words.
+// a retry return the first receipt. The evaluator's proposals wait on the board for
+// whoever settles them, and what no tool here does, chat runs through the CLI as the
+// human would (AGENTS.md, invariant 1).
 //
 // The bridge's actor is stamped by this entrypoint rather than worked out from the process
 // — a model inside a harness's pane inherits that pane's terminal, and the CLI's "a TTY
@@ -164,8 +165,7 @@ const ASKED_KINDS = [
 
 /**
  * The board's decisions, which are not actions on a Run: a yes to a proposal, a no, and
- * what became of finished work. Here because the human said it, which is the whole of
- * what lets a confirmation through (ADR-0011).
+ * what became of finished work. Chat takes them as the human takes them on the board.
  */
 const SettleSchema = Schema.Union([
   Schema.Struct({
@@ -408,14 +408,14 @@ export const TOOLS: ReadonlyArray<Tool> = [
   {
     name: "collie_do",
     readOnly: false,
-    title: "Do what the human asked for",
+    title: "Do what the board does",
     description:
-      "Carry out, at once, something the human asked you to do: the board's own actions " +
+      "Carry out, at once, anything the board does: its own actions " +
       `on a named Run (${ASKED_KINDS.join(", ")}), and its decisions — ` +
       "`confirm` a waiting proposal by its id and the hash `collie_receipts` lists beside " +
       "it, `decline` one, and `disposition` to record what became of a finished Run's " +
-      "work. This is not a proposal: they said it, so it is done, and the board shows the " +
-      "result. Do not send them to the board for one of these. Name a Run by the id " +
+      "work. This is not a proposal: it is done, and the board shows the result. Do not " +
+      "send the human to the board for one of these. Name a Run by the id " +
       "`collie_herd` lists, or leave `run` out to act on the card the board has open, " +
       "which the answer then names. What is not here is what you would be asking for yourself — " +
       "amending an Intent, forking a definition, changing the defaults, upgrading, " +
@@ -658,9 +658,7 @@ const onSelectedRun = Effect.fn("Tools.onSelectedRun")(function* (
 });
 
 /**
- * A hold the human asked for, carried out. The actor is `chat` all the same: what is
- * relaxed is that chat may act, never that chat is a person — nothing here confirms a
- * proposal, and a hold is reversible by the same two ways it was asked for.
+ * A hold, carried out. The actor is `chat` all the same: attribution, never a gate.
  */
 const hold = Effect.fn("Tools.hold")(function* (env: PluginEnv, input: JsonObject) {
   const decoded = decodeHold(input);

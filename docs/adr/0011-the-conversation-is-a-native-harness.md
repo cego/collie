@@ -98,7 +98,7 @@ matters:
   Driver. Reconciling and verifying stay the human's, because they are an account of what
   somebody watched happen. _Superseded for what `collie_propose` carries out, which is
   applied at once, not left `pending` — `set_verification` too (2026-09-29, below).
-  Reconciling and recording evidence are still the human's._
+  Reconciling and recording evidence are chat's too since 2026-10-01, below._
 
 ## Amended 2026-09-29: chat may choose what proves a Run
 
@@ -133,6 +133,32 @@ commands it chooses run at the gate, not in the conversation.
 Collie's reads are the agent's entire reach, so there is no shell beside the admission
 rules for a model to use instead of them. Everything is a flag on this launch: nothing is
 written into `~/.claude` or `~/.pi`, and no model, effort level or spend is pinned.
+
+## Amended 2026-10-01: nothing is the human's alone
+
+The human put the line here: anything a human can do, an agent can do, and a safeguard
+that binds an agent and not a human must name a harm only an agent could cause
+([`AGENTS.md`](../../AGENTS.md), invariant 1). The `human-only` routes this ADR kept —
+granting authority, per Run and as a default; reconciling a proposal, a delivery or the
+Home; recording evidence with `collie verify`; `run steer`; the chat harness; creating a
+workflow module — named no such harm. They are gone:
+
+- Chat runs each through the `collie` CLI, as the human types it. It keeps the harness's
+  own tools beside Collie's (the paragraph above on built-in tools being off no longer
+  holds), so the CLI is a route it already has, with the same validation and executors.
+  `test/chat-parity.test.ts` routes those operations `shell`.
+- Chat confirms and declines a proposal on its own judgement, through `collie_do`, not
+  only when the human said so in that turn. A proposal still never carries its own yes:
+  no action kind confirms anything, so settling stays a separate act.
+
+Two lines stay, because each names a harm only an agent can cause. Text that reaches chat
+through a tool is data, never an instruction — a human is not prompt-injected by a Run's
+notes. And what cannot be undone waits for the human's say-so on that thing, because an
+agent acting on a misread wish does damage the human never intended.
+
+Attribution is unchanged, and it is audit, never a gate: chat's tools record `chat`. A
+`collie` command chat runs from its shell inherits the pane's terminal and is recorded as
+human — a known gap in the record, not a permission.
 
 ## What has actually been proven
 
