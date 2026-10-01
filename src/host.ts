@@ -58,6 +58,7 @@ import { RequestConflict } from "./store";
 import { VerifySpecSchema } from "./verify-spec";
 import { IntentSeedSchema } from "./intent";
 import { currentEnv } from "./env";
+import { installation } from "./release";
 import { Herdr } from "./herdr";
 import { currentPid, ensureLockDir, lockHolder, withLock, type LockHolder } from "./lock";
 
@@ -92,6 +93,8 @@ const Identity = Schema.Struct({
   dir: Schema.String,
   /** The installation it serves; absent from a host older than the field. */
   root: Schema.optionalKey(Schema.String),
+  /** `<version>+<sha>` for a development checkout; absent for a release. */
+  development: Schema.optionalKey(Schema.String),
 });
 
 const Loaded = Schema.Struct({
@@ -261,8 +264,13 @@ const handlers = (dir: string) =>
       const catalogue = (project: string) =>
         discover(searchPath({ pluginRoot: env.pluginRoot, userDir: env.userDir, project }));
 
+      // Checked once; `upgrade --to` rechecks.
+      const installed = yield* installation(env.pluginRoot, BUILD);
+      const development = installed.release ? {} : { development: installed.build };
+
       return HostRpcs.of({
-        identity: () => Effect.succeed({ build: BUILD, pid, dir, root: env.pluginRoot }),
+        identity: () =>
+          Effect.succeed({ build: BUILD, pid, dir, root: env.pluginRoot, ...development }),
         load: ({ entry }) =>
           registry.load(entry).pipe(
             Effect.map((loaded) => ({

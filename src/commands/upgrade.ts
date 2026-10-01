@@ -1,10 +1,15 @@
-import { Effect } from "effect";
-import { Command } from "effect/unstable/cli";
+import { Effect, Option } from "effect";
+import { Command, Flag } from "effect/unstable/cli";
 import { upgrade as upgradeInstallation } from "../operations";
 import { attempt } from "../envelope";
 import { context, root } from "./shared";
 
-export const upgrade = Command.make("upgrade", {}, () =>
+const toFlag = Flag.String("to").pipe(
+  Flag.withDescription("Move a released install to exactly this version"),
+  Flag.optional,
+);
+
+export const upgrade = Command.make("upgrade", { to: toFlag }, ({ to }) =>
   Effect.gen(function* () {
     const global = yield* root;
     yield* attempt(
@@ -13,7 +18,7 @@ export const upgrade = Command.make("upgrade", {}, () =>
         // has to work from a plain shell as much as from inside herdr.
         const resolved = yield* context(global, false);
         if (resolved._tag === "ContextFailure") return resolved.result;
-        return yield* upgradeInstallation(resolved.env);
+        return yield* upgradeInstallation(resolved.env, { to: Option.getOrUndefined(to) });
       }),
       global.json,
     );
@@ -24,6 +29,10 @@ export const upgrade = Command.make("upgrade", {}, () =>
     {
       command: "collie upgrade",
       description: "Pull if this is a checkout, then bring every prerequisite up to date",
+    },
+    {
+      command: "collie upgrade --to 0.27.0",
+      description: "Move a released install to 0.27.0; a development checkout is never moved",
     },
   ]),
 );

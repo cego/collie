@@ -1108,20 +1108,20 @@ human line and a failure prints `error.message`.
 
 ### Error codes
 
-| Code                  | When                                                                                                  |
-| --------------------- | ----------------------------------------------------------------------------------------------------- |
-| `workspace_required`  | The command needs a workspace and none could be determined.                                           |
-| `workspace_not_found` | The `--workspace` id is not a workspace herdr has.                                                    |
-| `workflow_not_found`  | No layer defines that workflow.                                                                       |
-| `persona_not_found`   | No layer defines that persona.                                                                        |
-| `run_not_found`       | No run with that id, or none by that id in the Task this command is scoped to.                        |
-| `task_not_found`      | `--task` named a Task that does not exist.                                                            |
-| `target_exists`       | A fork would overwrite a file that is already there.                                                  |
-| `needs_input`         | Inputs are missing; `details.inputs` says which, with their questions.                                |
-| `timeout`             | `run wait --timeout` gave up.                                                                         |
-| `invalid_state`       | The run is not in a state where that makes sense — resuming one that already succeeded, for instance. |
-| `invalid_input`       | A flag or argument was wrong.                                                                         |
-| `operation_failed`    | Anything else, including a caught defect.                                                             |
+| Code                  | When                                                                                                                                                       |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `workspace_required`  | The command needs a workspace and none could be determined.                                                                                                |
+| `workspace_not_found` | The `--workspace` id is not a workspace herdr has.                                                                                                         |
+| `workflow_not_found`  | No layer defines that workflow.                                                                                                                            |
+| `persona_not_found`   | No layer defines that persona.                                                                                                                             |
+| `run_not_found`       | No run with that id, or none by that id in the Task this command is scoped to.                                                                             |
+| `task_not_found`      | `--task` named a Task that does not exist.                                                                                                                 |
+| `target_exists`       | A fork would overwrite a file that is already there.                                                                                                       |
+| `needs_input`         | Inputs are missing; `details.inputs` says which, with their questions.                                                                                     |
+| `timeout`             | `run wait --timeout` gave up.                                                                                                                              |
+| `invalid_state`       | The run, or the installation, is not in a state where that makes sense — resuming one that already succeeded, or `upgrade --to` on a development checkout. |
+| `invalid_input`       | A flag or argument was wrong.                                                                                                                              |
+| `operation_failed`    | Anything else, including a caught defect.                                                                                                                  |
 
 ## Retrying safely
 
@@ -1169,6 +1169,16 @@ per preparation step saying whether it was done, was already in place, or was sk
 so "nothing to do" reads differently from "the runner updated but the skills step could
 not run". A skipped step is not a failure: `upgrade` still succeeds. Under `--json` the
 same steps are in `data.steps`.
+
+```sh
+collie upgrade --to 0.27.0
+```
+
+Moves a released install to exactly that version (fetching tags, then resetting to the
+tag), and reports the same way, with `data.version`. A development checkout — on a branch
+other than `master`, detached on a commit that is not a release, with uncommitted changes,
+or ahead of its remote — is refused as `invalid_state` with the reason, and its checkout is left as it was.
+A host's `identity` names such a checkout's build as `development: "<version>+<sha>"`.
 
 ## Checking an installation
 
@@ -1267,7 +1277,8 @@ It says which build it is, and which installation it serves. A client newer than
 from the same installation (after `collie upgrade`), stops it and starts itself in its
 place. Any other client of another build is told which build is running and which pid to
 stop, and sends nothing else. That includes a checkout under development, which is pointed
-at a state directory of its own rather than replacing the installed host.
+at a state directory of its own rather than replacing the installed host. Such a
+checkout's host also says `development: "<version>+<sha>"`; a release's does not.
 A host that cannot be started at all is `HostUnavailable`, with whether anything owns the
 directory. [ADR-0015](adr/0015-one-local-host-owns-a-state-directory.md) is why each of
 those is the way it is.
