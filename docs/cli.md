@@ -909,6 +909,21 @@ the agent can change approach rather than repeat itself. It is a sentence, not a
 counter reaching a number is not evidence that work cannot be done, and what prevents a
 false claim of success is the evidence gate reading collected results.
 
+## Report
+
+```sh
+collie --json run report [--since <iso-date>]
+```
+
+Where Runs end, across every Run the host knows, whatever workspace is selected. For each
+workflow: how many Runs completed, failed, are suspended or pending, how many recorded a
+merge request, how many a human stopped, how many decisions were answered or are still
+open, and the rework and verifications summed from each Run's metrics. Then each Run that
+failed, with its reason, each that completed, with its result, and each that was stopped.
+`--since` keeps only Runs admitted at or after that date.
+
+Like metrics, the report is data: no number in it is a threshold, and it refuses nothing.
+
 ## Verify
 
 ```sh
