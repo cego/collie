@@ -89,9 +89,11 @@ const every = <E, R>(spaced: Duration.Input, round: Effect.Effect<unknown, E, R>
     Effect.asVoid,
   );
 
-/** How often News and the merge watch look again; a merge request is asked every 5 minutes. */
-// ponytail: each look builds the board and lists the sessions again; share the board stream's build if that costs.
+/** How often News looks again, and the diffs of Runs that just ended are kept. */
 const LOOK_EVERY = "5 seconds";
+/** How often the merge watch looks: it builds a whole board, and asks GitLab every 5 minutes. */
+// ponytail: builds its own board; share the board stream's build if that costs.
+const MERGES_EVERY = "30 seconds";
 /** How often checkouts are swept: a sweep walks each one with git and glab. */
 const PRUNE_EVERY = "3 minutes";
 
@@ -110,7 +112,7 @@ export const sideJobs = <E, R>(opts: {
   return Effect.all(
     [
       every(
-        LOOK_EVERY,
+        MERGES_EVERY,
         Effect.gen(function* () {
           yield* settleMerges({
             stateDir: env.stateDir,
@@ -130,12 +132,12 @@ export const sideJobs = <E, R>(opts: {
           Effect.andThen(news(env, herdr, runs), keepDiffs(runs, kept)),
         ),
       ),
-      // ponytail: swept through the host's own session, so a pane in another is unseen; git's refusal still guards.
       every(
         PRUNE_EVERY,
         Effect.gen(function* () {
           yield* pruneWorktrees({
             herdr,
+            sessions: (yield* liveHerds(herdr, env)).map((session) => session.herdr),
             stateDir: env.stateDir,
             runs: yield* opts.runs,
             registered: yield* everyRegistered(env.stateDir),

@@ -1043,6 +1043,8 @@ interface InUse {
  */
 const inUse = Effect.fn("worktree.inUse")(function* (
   herdr: Herdr,
+  /** The Machine's other sessions, whose agents may work in a checkout too. */
+  sessions: ReadonlyArray<Herdr>,
   opts: {
     paths: ReadonlyMap<string, string>;
     keep?: string | undefined;
@@ -1052,9 +1054,15 @@ const inUse = Effect.fn("worktree.inUse")(function* (
 ) {
   const panes = yield* Effect.result(herdr.paneList());
   if (panes._tag === "Failure") return null;
+  const elsewhere: PaneInfo[] = [];
+  for (const session of sessions) {
+    const theirs = yield* Effect.result(session.paneList());
+    if (theirs._tag === "Failure") return null;
+    elsewhere.push(...theirs.success);
+  }
   const paths = new Map(opts.paths);
   const workspaces = new Map<string, string>();
-  for (const pane of panes.success) {
+  for (const pane of [...panes.success, ...elsewhere]) {
     if (!pane.agent) continue;
     // A Run's own agent, idle in the tab it left behind, is what the removal closes —
     // counting it as work in progress kept every finished Run's checkout forever.
@@ -1239,6 +1247,8 @@ function fromRuns(runs: ReadonlyArray<RunFacts>, registered: ReadonlyArray<Agent
  */
 interface PruneOptions {
   herdr: Herdr;
+  /** The Machine's other herdr sessions, whose agents may work in a checkout too. */
+  sessions?: ReadonlyArray<Herdr>;
   stateDir: string;
   /** Every Run there is, which says which checkouts Collie made and which are in use. */
   runs: ReadonlyArray<RunFacts>;
@@ -1324,7 +1334,11 @@ const prune = Effect.fn("worktree.prune")(function* (
   // candidate being held, and nothing is written down: an unverified round is not a
   // verdict, so the next refresh asks again rather than waiting out the debounce.
   const leftovers = new Set([...panes.values()].flatMap((left) => [...left]));
-  const use = yield* inUse(opts.herdr, { paths, keep: opts.keep, leftovers });
+  const use = yield* inUse(opts.herdr, opts.sessions ?? [], {
+    paths,
+    keep: opts.keep,
+    leftovers,
+  });
   if (!use) {
     const standing = yield* conclude(round);
     return [
