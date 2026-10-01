@@ -33,9 +33,10 @@ import {
   type CompactionPorts,
   type AgentContext,
   type LaunchContext,
+  type ReadyContext,
 } from "./compaction";
 import { withLock } from "./lock";
-import { DELIVERY_TOKEN } from "./dispatcher";
+import { carriedDelivery } from "./dispatcher";
 
 /**
  * A compaction request, through the Dispatcher's channel. `Unsubmitted` is reserved for
@@ -113,6 +114,8 @@ const EventSchema = Schema.Struct({
   tokens: Schema.optionalKey(Schema.NullOr(Schema.Number)),
   /** Collie's own request id, which is what correlates an outcome to an attempt. */
   request: Schema.optionalKey(Schema.String),
+  /** On a `submit`: the delivery whose token the prompt carried. */
+  delivery: Schema.optionalKey(Schema.String),
   message: Schema.optionalKey(Schema.String),
   reason: Schema.optionalKey(Schema.String),
   /**
@@ -281,6 +284,13 @@ function boundSession(lines: ReadonlyArray<string>): string | null | undefined {
   }
   return undefined;
 }
+
+/** Anything the harness's own controls wrote, which a launch's fresh directory starts without. */
+const reported = (ctx: ReadyContext) =>
+  readEvents(ctx.dir).pipe(
+    Effect.map((events) => events.length > 0),
+    Effect.orElseSucceed(() => false),
+  );
 
 /** The harness's own latest current-context total, or null where it has none. */
 const latestUsage = Effect.fn("Compactors.latestUsage")(function* (dir: string) {
@@ -472,7 +482,8 @@ export default function (pi) {
   pi.registerCommand("collie-compact", {
     description: "Collie: compact this session and report the outcome",
     handler: async (args, ctx) => {
-      const request = String(args ?? "").trim();
+      // The first word: the prompt also carries its delivery token, on a line of its own.
+      const request = String(args ?? "").trim().split(/\\s+/)[0] ?? "";
       if (request === "") return;
       bind(ctx);
       write({ kind: "start", request });
@@ -504,6 +515,8 @@ const pi: CompactionPort = {
       return { args: ["-e", extension] };
     }),
   usage: (ctx) => latestUsage(ctx.dir),
+  // The extension's `session_start` sample.
+  ready: reported,
   // Through the human's channel, which is what a slash command is: the extension's
   // command carries the request id, so the outcome that comes back is this request's.
   // The human's channel, so a refusal from herdr is a request that never left.
@@ -608,13 +621,15 @@ export const recordClaudeEvent = Effect.fn("Compactors.recordClaudeEvent")(funct
   const event = payload.hook_event_name;
   if (event === "UserPromptSubmit") {
     // Recorded whole? No: the prompt is the human's own text, and a transcript is not
-    // Collie's to keep (SPEC §2). Only whether it carried Collie's delivery token, which
-    // is the whole question attribution asks.
-    yield* writeEvent(dir, {
-      session,
-      kind: "submit",
-      reason: (payload.prompt ?? "").includes(DELIVERY_TOKEN) ? "collie" : "external",
-    });
+    // Collie's to keep (SPEC §2). Only which Collie delivery it carried, if any, which is
+    // the whole question attribution asks.
+    const delivery = carriedDelivery(payload.prompt ?? "");
+    yield* writeEvent(
+      dir,
+      delivery === null
+        ? { session, kind: "submit", reason: "external" }
+        : { session, kind: "submit", reason: "collie", delivery },
+    );
     return "";
   }
   if (event === "PreCompact" || event === "PostCompact") {
@@ -712,6 +727,8 @@ const claude: CompactionPort = {
       return { args: ["--settings", settings] };
     }),
   usage: (ctx) => latestUsage(ctx.dir),
+  // The status line is drawn with the REPL, so its first call is the prompt being there.
+  ready: reported,
   // The documented native command, through the human's channel. Its instructions are
   // real instructions with the correlation token appended: Claude has no request id
   // for a compaction, and this field is the only one both hooks give back.
@@ -831,6 +848,14 @@ const codexAt = (ctx: AgentContext) =>
 
 const codex: CompactionPort = {
   gate: () => gateVersion("codex"),
+  // The TUI binds a thread on the App Server as it starts, before any prompt.
+  ready: (ctx) =>
+    ctx.endpoint === null
+      ? Effect.succeed(false)
+      : withCodex(ctx.endpoint, (client) => boundThread(client, ctx.cwd)).pipe(
+          Effect.map((thread) => thread !== null),
+          Effect.orElseSucceed(() => false),
+        ),
   install: (ctx) =>
     codexEndpoint(ctx).pipe(
       Effect.map(({ endpoint, pid, command }) => ({
@@ -946,7 +971,7 @@ const opencodeAt = (ctx: AgentContext) =>
  * cannot say which of a project's sessions is this agent's.
  */
 const opencodeBound = Effect.fn("Compactors.opencodeBound")(function* (
-  ctx: AgentContext,
+  ctx: LaunchContext,
   base: string,
 ) {
   const bound = (yield* readEvents(ctx.dir))
@@ -998,6 +1023,14 @@ const opencodeLaunch = Effect.fn("Compactors.opencodeLaunch")(function* (ctx: La
 const opencode: CompactionPort = {
   gate: () => gateVersion("opencode"),
   install: opencodeLaunch,
+  // The TUI is the server, so its answering for Collie's session is the TUI being up.
+  ready: (ctx) =>
+    ctx.endpoint === null
+      ? Effect.succeed(false)
+      : opencodeBound(ctx, ctx.endpoint).pipe(
+          Effect.as(true),
+          Effect.orElseSucceed(() => false),
+        ),
   usage: (ctx) =>
     Effect.gen(function* () {
       const base = yield* opencodeAt(ctx);
@@ -1072,4 +1105,14 @@ export const externalSubmissions = Effect.fn("Compactors.externalSubmissions")(f
   return (yield* readEvents(dir)).filter(
     (event) => event.kind === "submit" && event.reason === "external",
   ).length;
+});
+
+/** Whether the submit hook recorded this delivery's token: the harness took that prompt. */
+export const submittedDelivery = Effect.fn("Compactors.submittedDelivery")(function* (
+  dir: string,
+  delivery: string,
+) {
+  return (yield* readEvents(dir)).some(
+    (event) => event.kind === "submit" && event.delivery === delivery,
+  );
 });

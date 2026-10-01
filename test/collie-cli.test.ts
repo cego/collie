@@ -811,3 +811,34 @@ test(
     ),
   60_000,
 );
+
+test(
+  "run report counts every Run by where it ended, and refuses a --since that is not a date",
+  () =>
+    hosted("collie-report-", ({ world }) =>
+      Effect.gen(function* () {
+        const env = { HERDR_PLUGIN_STATE_DIR: world.state };
+        yield* settledRun(world, "hello");
+
+        const all = yield* cli(["--json", "run", "report"], env);
+        expect(all.exit).toBe(0);
+        const report = yield* parseEnvelope(all.stdout);
+        expect(report.ok).toBe(true);
+        // SAFETY: the envelope decoded `ok: true` above, and `run report`'s `data` is the
+        // Report — these two fields are asserted immediately below.
+        const data = report.data as { total: number; workflows: Array<{ total: number }> };
+        expect(data.total).toBe(1);
+        expect(data.workflows[0]!.total).toBe(1);
+
+        const later = yield* cli(["--json", "run", "report", "--since", "2999-01-01"], env);
+        expect(later.exit).toBe(0);
+        // SAFETY: as above; only `total` is read.
+        expect(((yield* parseEnvelope(later.stdout)).data as { total: number }).total).toBe(0);
+
+        const bad = yield* cli(["--json", "run", "report", "--since", "nope"], env);
+        expect(bad.exit).not.toBe(0);
+        expect((yield* parseEnvelope(bad.stdout)).ok).toBe(false);
+      }),
+    ),
+  60_000,
+);

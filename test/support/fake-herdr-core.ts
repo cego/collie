@@ -1,7 +1,7 @@
 // Fake herdr. Records every invocation and answers with canned ids so a whole
 // run can be driven without a herdr server.
 
-import { Cause, Config, Effect, FileSystem, Option, Path, Schema, Semaphore } from "effect";
+import { Cause, Clock, Config, Effect, FileSystem, Option, Path, Schema, Semaphore } from "effect";
 
 interface FakeTab {
   tab_id: string;
@@ -56,6 +56,8 @@ interface State {
   prompts: number;
   echoed: number;
   blocked: number;
+  /** Text typed into the prompt box and never submitted: `FAKE_HERDR_PROMPT_LOST=enter`. */
+  typed: string | undefined;
   tabList: FakeTab[];
   paneList: FakePane[];
   agents: FakeAgent[];
@@ -130,6 +132,7 @@ const StateJson = Schema.fromJsonString(
     prompts: Schema.optionalKey(Schema.Number),
     echoed: Schema.optionalKey(Schema.Number),
     blocked: Schema.optionalKey(Schema.Number),
+    typed: Schema.optionalKey(Schema.String),
     tabList: Schema.optionalKey(Schema.Array(FakeTabSchema)),
     paneList: Schema.optionalKey(Schema.Array(FakePaneSchema)),
     agents: Schema.optionalKey(Schema.Array(FakeAgentSchema)),
@@ -156,6 +159,7 @@ const emptyState = (): State => ({
   prompts: 0,
   echoed: 0,
   blocked: 0,
+  typed: undefined,
   tabList: [],
   paneList: [],
   agents: [],
@@ -176,6 +180,7 @@ function mutableState(state: State | Schema.Schema.Type<typeof StateJson>): Stat
     prompts: state.prompts ?? 0,
     echoed: state.echoed ?? 0,
     blocked: state.blocked ?? 0,
+    typed: state.typed,
     tabList: (state.tabList ?? []).map((tab) => ({ tab_id: tab.tab_id, label: tab.label })),
     paneList: (state.paneList ?? []).map((pane) => ({
       pane_id: pane.pane_id,
@@ -308,6 +313,29 @@ function handle(
       state.paneList.push(pane);
       return pane;
     }
+
+    /** The harness taking a prompt: the Output its contract names, from the queue. */
+    const answer = Effect.fn("fake.answer")(function* (line: string) {
+      const ref = /is in (\S+\.md) /.exec(line);
+      const text =
+        ref && (yield* fs.exists(ref[1]!)) ? yield* fs.readFileString(ref[1]!, "utf8") : line;
+      const match = /^OUTPUT_PATH: (.+)$/m.exec(text);
+      const queuePath = yield* envString("FAKE_HERDR_OUTPUTS");
+      if (match && queuePath !== "" && (yield* fs.exists(queuePath))) {
+        const queue = yield* readQueue(queuePath);
+        const next = queue[state.outputs];
+        state.outputs += 1;
+        if (next !== undefined && next !== null) {
+          const outputPath = match[1]!.trim();
+          yield* fs.makeDirectory(path.dirname(outputPath), { recursive: true });
+          const plain = Schema.decodeUnknownOption(Schema.String)(next);
+          yield* fs.writeFileString(
+            outputPath,
+            Option.isSome(plain) ? plain.value : encodeJson(next),
+          );
+        }
+      }
+    });
 
     const tabOf = (paneId: string) =>
       state.paneList.find((p) => p.pane_id === paneId)?.tab_id ?? "1:0";
@@ -456,27 +484,47 @@ function handle(
       // Enter were written, and the agent works on it whether or not herdr saw the turn
       // start. So the Output is still produced, and then the wait's answer is given.
       if (code !== "" && code !== "timeout") return answered;
-      const line = argv[3] ?? "";
-      const ref = /is in (\S+\.md) /.exec(line);
-      const text =
-        ref && (yield* fs.exists(ref[1]!)) ? yield* fs.readFileString(ref[1]!, "utf8") : line;
-      const match = /^OUTPUT_PATH: (.+)$/m.exec(text);
-      const queuePath = yield* envString("FAKE_HERDR_OUTPUTS");
-      if (match && queuePath !== "" && (yield* fs.exists(queuePath))) {
-        const queue = yield* readQueue(queuePath);
-        const next = queue[state.outputs];
-        state.outputs += 1;
-        if (next !== undefined && next !== null) {
-          const outputPath = match[1]!.trim();
-          yield* fs.makeDirectory(path.dirname(outputPath), { recursive: true });
-          const plain = Schema.decodeUnknownOption(Schema.String)(next);
-          yield* fs.writeFileString(
-            outputPath,
-            Option.isSome(plain) ? plain.value : encodeJson(next),
-          );
-        }
+      // The text reached the pane and the harness never took it: `enter` leaves it in the
+      // prompt box for an Enter to send, `text` loses it outright.
+      const lost = yield* envString("FAKE_HERDR_PROMPT_LOST");
+      if (lost !== "") {
+        if (lost === "enter") state.typed = argv[3] ?? "";
+        yield* writeJson(statePath, state);
+        return {
+          code: 0,
+          stdout: `${encodeJson({ id: "fake", result: { type: "ok" } })}\n`,
+          stderr: "",
+        };
       }
+      yield* answer(argv[3] ?? "");
       if (code === "timeout") return answered;
+    }
+
+    if (cmd === "agent send-keys" && argv[3] === "enter" && state.typed !== undefined) {
+      const typed = state.typed;
+      state.typed = undefined;
+      yield* answer(typed);
+    }
+
+    // herdr's diagnostic, bare rather than enveloped: its prompt box region, cut off the
+    // way herdr cuts a preview.
+    if (cmd === "agent explain") {
+      const body = `\u276f\u00a0${state.typed ?? 'Try "how does <filepath> work?"'}\n`;
+      const preview = body.length > 240 ? `${body.slice(0, 240)}...` : body;
+      return {
+        code: 0,
+        stdout: `${encodeJson({
+          agent: "claude",
+          evaluated_rules: [
+            {
+              id: "live_prompt_box",
+              region: "prompt_box_body",
+              evidence: { region_bytes: body.length, region_preview: preview },
+            },
+          ],
+        })}\n`,
+        stderr: "",
+      };
     }
 
     let result = {};
@@ -593,6 +641,16 @@ function handle(
       }
       case "agent start": {
         const pane = flag("--pane") ?? "";
+        // The harness coming up: Claude's first status-line call into the control dir
+        // its `--settings` names. `FAKE_HERDR_HARNESS_SILENT` is a harness not up yet.
+        const settings = flag("--settings");
+        if (settings !== undefined && (yield* envString("FAKE_HERDR_HARNESS_SILENT")) === "") {
+          yield* fs.writeFileString(
+            path.join(path.dirname(settings), "events.jsonl"),
+            `${encodeJson({ at: yield* Clock.currentTimeMillis, session: "fake", kind: "session" })}\n`,
+            { flag: "a" },
+          );
+        }
         // A process of its own, so the same name started again is a new incarnation.
         state.agents.push({
           name: argv[2]!,

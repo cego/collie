@@ -218,6 +218,10 @@ test("an explicit reconciliation works from automation and stops an unknown bloc
   expect(reconcile([delivery({ state: "submitted" })], "d1", "sent", "human:req-2", "t")).toEqual({
     error: 'delivery "d1" is submitted',
   });
+  // One sent that nothing showed was taken is a human's to account for too.
+  expect(
+    reconcile([delivery({ state: "submitted", note: "unobserved" })], "d1", "not-sent", "h", "t"),
+  ).toMatchObject({ state: "superseded", note: "reconciled as not-sent by h" });
 
   const settled = reconcile([unknown], "d1", "not-sent", "human:req-2", "t");
   expect(settled).toMatchObject({

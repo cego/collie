@@ -9,6 +9,8 @@ import {
   IntentUnreadable,
   amend,
   extractRequirements,
+  followPlan,
+  PLAN_AUTHOR,
   parseConstraint,
   propagate,
   readIntent,
@@ -216,6 +218,80 @@ test("a numbered plan has a goal and constraints like any other", () => {
     "the suite is green",
   ]);
   expect(found.constraints[0]?.provenance?.heading).toBe("Requirements");
+});
+
+test("a plan's out-of-scope and done-when bullets are constraints, and out of scope says so", () => {
+  const spec = [
+    "# Spec: a thing",
+    "",
+    "## Out of Scope",
+    "",
+    "- Rewriting the scheduler",
+    "",
+    "## Done when",
+    "",
+    "- the suite is green",
+  ].join("\n");
+  const found = extractRequirements(spec, "SPEC.md");
+  expect(found.constraints.map((c) => c.text)).toEqual([
+    "Out of scope: Rewriting the scheduler",
+    "the suite is green",
+  ]);
+  for (const constraint of found.constraints) {
+    expect(constraint.kind).toBe("semantic");
+    expect(constraint.severity).toBe("warn");
+  }
+  expect(found.constraints.map((c) => c.provenance?.heading)).toEqual([
+    "Out of Scope",
+    "Done when",
+  ]);
+});
+
+/** A constraint the Run's own planner wrote into `plan/SPEC.md`. */
+const fromOwnPlan = (text: string) => ({
+  id: text,
+  kind: "semantic" as const,
+  text,
+  severity: "warn" as const,
+  source: "plan" as const,
+  provenance: { file: "plan/SPEC.md", heading: "Done when", line: 3 },
+});
+
+test("following the plan adds and removes only its own constraints", () => {
+  const human = { ...fromOwnPlan("h"), source: "human" as const, provenance: undefined };
+  const planDir = {
+    ...fromOwnPlan("d"),
+    provenance: { file: "SPEC.md", heading: "Done when", line: 3 },
+  };
+  const intent = seedIntent("r1", { constraints: [human, planDir, fromOwnPlan("A")] });
+  const next = followPlan(intent, [fromOwnPlan("B")], "2026-09-30T00:00:00Z");
+  expect(next.constraints.map((c) => c.id).toSorted()).toEqual(["B", "d", "h"]);
+  expect(next.version).toBe(intent.version + 2);
+  expect(next.history.slice(-2).map((entry) => entry.by)).toEqual([PLAN_AUTHOR, PLAN_AUTHOR]);
+  expect(next.authority).toEqual(intent.authority);
+});
+
+test("a constraint a human removed is never brought back by the plan", () => {
+  const seeded = seedIntent("r1", { constraints: [fromOwnPlan("A")] });
+  const intent = amend(
+    seeded,
+    { kind: "remove-constraint", id: "A" },
+    "cli:x",
+    "2026-09-30T00:00:00Z",
+  );
+  expect(followPlan(intent, [fromOwnPlan("A")], "2026-09-30T00:01:00Z")).toBe(intent);
+});
+
+test("a bullet the plan repeats is one amendment", () => {
+  const intent = seedIntent("r1", {});
+  const next = followPlan(intent, [fromOwnPlan("A"), fromOwnPlan("A")], "2026-09-30T00:00:00Z");
+  expect(next.version).toBe(intent.version + 1);
+});
+
+test("following an unchanged plan changes nothing", () => {
+  const found = [fromOwnPlan("A"), fromOwnPlan("B")];
+  const once = followPlan(seedIntent("r1", {}), found, "2026-09-30T00:00:00Z");
+  expect(followPlan(once, found, "2026-09-30T00:01:00Z")).toBe(once);
 });
 
 test("what the human typed beats a workspace default, and defaults never grant authority", () => {

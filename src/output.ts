@@ -10,6 +10,7 @@ import { isYamlMap, YamlValueJsonSchema, type YamlValue } from "./yaml";
 const said = (field: string) =>
   Schema.refine<Schema.String, string>((value): value is string => value.trim() !== "", {
     title: `${field} is required`,
+    message: `${field} is required, and must not be blank`,
   });
 
 /**
@@ -33,7 +34,11 @@ const listed = <
 >() =>
   Schema.refine<S, S["Type"]>(
     (value): value is S["Type"] => value.verdict !== "findings" || value.findings.length > 0,
-    { title: 'verdict "findings" with an empty findings list' },
+    {
+      title: 'verdict "findings" with an empty findings list',
+      message:
+        'verdict "findings" needs at least one entry in findings; with nothing to report, write verdict "clean"',
+    },
   );
 
 /**
@@ -144,7 +149,10 @@ export const FixedSchema = Schema.Struct({
 const DroppedSchema = FindingSchema.pipe(
   Schema.refine<typeof FindingSchema, typeof FindingSchema.Type>(
     (value): value is typeof FindingSchema.Type => (value.reason ?? "").trim() !== "",
-    { title: "reason is required" },
+    {
+      title: "reason is required",
+      message: "a dropped finding needs a reason saying why it was dropped",
+    },
   ),
 );
 

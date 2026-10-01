@@ -243,8 +243,9 @@ export default defineWorkflow({
           continue;
         }
 
-        // An implementer already live here is building this work, so it is the one to
-        // fix it: a second agent on the same checkout would be two hands on one index.
+        // The live implementer of the Run this review came from is building this work, so
+        // it is the one to fix it: a second agent on the same checkout would be two hands
+        // on one index.
         // Recorded, so a replay takes the same road rather than asking again.
         fixes += 1;
         rallied += 1;

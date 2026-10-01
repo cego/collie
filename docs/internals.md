@@ -204,6 +204,12 @@ it in the one direction that matters: Collie must accept everything herdr may se
 extra fields herdr sends are never a failure. `herdr.ts` exports the shapes it decodes as
 one `replySchemas` record, and the test asserts its table covers every key of it, so
 adding a decoded call without a row turns that test red rather than going unchecked.
+The one exception is `agent explain --json`, which herdr's schema gives only as `explain:
+true`, so there is nothing to check its struct against. `promptBox` reads one field of it,
+the `prompt_box_body` rule's `evidence.region_preview`; the pinned 0.8.2 and 0.9.1 both
+answer it (`herdr agent explain --file <screen> --agent claude --json` checks a binary
+without a server), and a reply without it reads as a box nobody can see, which asks a
+human rather than pressing Enter.
 
 The version Collie is verified against is `herdr-pin.json`, with the schema that version
 prints committed beside it as `herdr-api-schema.json`, and `min_herdr_version` in
@@ -241,6 +247,20 @@ keeps the text in its editor, unsent: probed against pi 0.85.1 under herdr 0.9.0
 about one launch in three lost the Enter that way and the step then sat silent until its
 quiet clock ran out.
 
+The same race happens earlier, at start. `herdr agent start` returns once herdr calls the
+agent ready for input, but under load Claude's REPL has been seen to come up two seconds
+after that, with the pointer already typed into a pane that was not yet its prompt. So the
+first prompt to a newly started agent waits for the harness's own sign, through the
+controls Collie installed (`ready` on its port in `compactors.ts`): Claude's first
+status-line call and Pi's `session_start` sample, both in the agent's control directory;
+the thread Codex's TUI binds on its App Server as it starts; OpenCode's TUI, which is its
+own server, answering for the session Collie made. An agent launched without controls —
+compaction off, or a harness Collie has no port for — has no such sign, and herdr's word
+is all there is. The wait is two minutes past herdr's own; running out parks the step,
+naming the agent and its pane, with nothing typed. `tools/prompt-race-live.ts` checks this against a real
+herdr and Claude: at most four agents started at once in a scratch herdr session, each
+shown to have taken its first prompt by its submit hook's record of the delivery.
+
 So `agentPrompt` answers a `Submission` — what herdr could actually tell us — rather than
 nothing. It reads the agent's status first, because only a submission that started from a
 settled agent can be told apart from a turn that was already running; then it submits with
@@ -274,8 +294,21 @@ against the variant, a boundary item composed into that prompt inherits the note
 the state, and a compaction request records it, so an unresolved compaction can be told
 from one whose request may never have arrived.
 
-Because the submission settles all of this, nothing waits again after it: the engine
-watches a prompted agent straight away rather than keeping a readiness wait of its own.
+`unobserved` never stays silent, though. While a step's Output is awaited, the Dispatcher
+checks its unobserved prompt or repair (`confirmSubmitted`) until something says it was
+taken: a turn herdr saw start from a settled agent, or Claude's `UserPromptSubmit` hook
+recording that delivery's id — every prompt carries its `collie-delivery:<id>` line near
+the top for this, where herdr's few-hundred-byte view of the prompt box can see it. A settled agent whose prompt box still holds that line — herdr's `prompt_box_body`
+region, read with `agent explain` — gets one Enter, recorded on the ledger so it is never
+pressed twice, and never the text again. A settled agent showing neither for fifteen
+seconds parks the step: nothing can prove sending it again is safe, so the Run waits for
+a human, naming the agent, its pane and the delivery. The human settles it with `run
+deliveries --reconcile <id> --as sent|not-sent`; after `not-sent` the resume sends the same
+words once more, from the `<operation>.step.md` or `.repair.md` beside the launch, as the
+next attempt; one herdr refuses parks again, and the next resume tries again. Only the
+delivery the wait is for is checked: the step's, or the repair's once one went out. A wait parked that way is still a
+pending Run, and reads as waiting on you rather than working. An agent `blocked` at a
+dialog is not settled, and is left to clear.
 
 `env.ts` is the plugin environment herdr provides — state directory, socket path, plugin
 root — and the user's own layer, `<plugin root>/user`, which `COLLIE_USER_DIR` overrides
@@ -340,10 +373,14 @@ lock, and the existing PID-lock recovery handles a process that crashes.
 
 A **session** is one herdr session and one workspace, taken together; a Run's own worktree
 does not move it out of the workspace it was started from.
-`registry.ts` records which long-lived agents a session still has, per workspace and repo,
-so `handoff.ts` can give one run's result to another run's live agent rather than starting
-a second one. There is only ever one agent per role in a session, and a session never sees
-another workspace's agents — even for the same repo.
+`registry.ts` records which long-lived agents a session still has, per workspace and repo:
+one entry per agent, whatever its Run or role, so a panel's seats and every Run started
+from the same place are all there. Registering an agent drops the entries registered before
+its launch listed herdr's agents that the listing did not have; one registered since is kept,
+since it may be a seat that started alongside it. A question or a hand-off looks only at the asking Run's lineage —
+`Place.lineage`, the Run and the Runs it was started from or whose `runs/<id>/plan` it builds — so `handoff.ts` gives one run's
+result to a live agent of the Run it came from rather than starting a second one, and
+never to an unrelated Run's agent in the same role.
 
 Each entry also records an **incarnation**: herdr's own `terminal_id` for the process in
 the pane, and the harness session it is driving where herdr knows one. An agent name is

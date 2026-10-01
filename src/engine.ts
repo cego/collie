@@ -138,7 +138,7 @@ import { Herdr, herdrFailureReason } from "./herdr";
 import type { PluginEnv } from "./env";
 import { WorktreeRecordSchema } from "./run";
 import { listTasks, newTask, taskOfWorkspace, writeTask } from "./task";
-import { classifyGivenTarget, classifyWorkSource } from "./inputs";
+import { classifyGivenTarget, classifyWorkSource, defaultBase } from "./inputs";
 import type { BunServices } from "@effect/platform-bun/BunServices";
 import { approvedFrom, VerifySpecSchema, type VerifySpec } from "./verify-spec";
 import {
@@ -261,6 +261,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly task: string | null;
     /** A workspace of the Run's own, where it asked for one; null lives in its Task's. */
     readonly workspace: string | null;
+    /** This Run, then the Runs it was started from or builds a plan of, and so on: whose agents it may ask. */
+    readonly lineage: ReadonlyArray<string>;
   }
 
   /** What became of a note: whether it landed, and the sentence a human reads either way. */
@@ -308,6 +310,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
       readonly name: string;
       readonly cwd: string;
       readonly expect?: "pass" | "fail";
+      /** Run it where this checkout left the default branch, then put the checkout back. */
+      readonly at?: "default-base";
     }) => Effect.Effect<Verification, WorkflowError>;
     /**
      * Puts a file on the merge request a Run was pointed at, as one note Collie sends.
@@ -582,20 +586,20 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     ) => Effect.Effect<ReadonlyMap<string, string>>;
     /**
      * What an agent is told about asking for a decision its work does not cover: the
-     * pane of whoever is live in that role, and otherwise to stop and ask the human.
+     * pane of whoever is live in that role in this lineage, and otherwise to decide.
      */
-    readonly askRoute: (role: string, cwd: string) => Effect.Effect<string>;
+    readonly askRoute: (role: string, lineage: ReadonlyArray<string>) => Effect.Effect<string>;
     readonly launch: (ask: AgentAsk) => Effect.Effect<Launched, AgentUncertain | AgentParked>;
     /** This work's agent started again with its prompt, where it is gone and wrote nothing. */
     readonly revive: (
       ask: AgentAsk,
       unless?: string | null,
     ) => Effect.Effect<void, AgentUncertain | AgentParked>;
-    /** A message to another Run's live agent in this role here; null where there is none. */
+    /** A message to the live agent in this role of a Run this one came from; null for none. */
     readonly handOff: (options: {
       readonly runId: string;
       readonly role: string;
-      readonly cwd: string;
+      readonly lineage: ReadonlyArray<string>;
       readonly text: string;
     }) => Effect.Effect<Steered | null, AgentParked>;
     /** Closes the panes of this run's live agents; \`left\` may still be running. */
@@ -673,12 +677,10 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly seat?: Seat;
   }
 
-  /** A message handed to another Run's live agent in this role: the agent, or null where none. */
+  /** A message handed to the live agent in this role of a Run this one came from, or null. */
   export function handOffWork(options: {
     readonly operation: string;
     readonly role: string;
-    /** Where the agent to hand to works; the Run's own checkout where it is left out. */
-    readonly cwd?: string;
     readonly text: string;
   }): Effect.Effect<
     string | null,
@@ -1131,6 +1133,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
       readonly file: string;
       readonly checks: ReadonlyArray<string>;
     }>;
+    /** Approved checks that also failed where the branch leaves the default branch. */
+    readonly preexisting?: ReadonlyArray<string>;
   }): ReadonlyArray<string>;
 
   /** Where the work to be done was described. */
@@ -1646,6 +1650,10 @@ export const evidenceDir = (dir: string, runId: string): string => `${dir}/evide
  */
 export const runDir = (dir: string, runId: string): string => `${dir}/runs/${runId}`;
 
+/** The Run whose own plan directory this Input value is, and null where it is none. */
+const planRunOf = (value: string): string | null =>
+  /(?:^|\/)runs\/([^/]+)\/plan\/?$/.exec(value)?.[1] ?? null;
+
 /** Where a Run keeps the merge request it opened. */
 const mergeRequestPath = (dir: string, runId: string) => `${runDir(dir, runId)}/merge-request`;
 
@@ -1784,6 +1792,50 @@ export const handOverClaim = Effect.fn("Engine.handOverClaim")(function* (option
   return handed;
 });
 
+/** Where a checkout was before a comparison at the default branch moved it. */
+const AWAY_FILE = "away-from";
+
+/** A comparison a crash interrupted leaves the checkout at the base; this puts it back. */
+const restoreCheckout = (cwd: string, away: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const back = yield* fs.readFileString(away).pipe(Effect.orElseSucceed(() => ""));
+    if (back === "") return;
+    if ((yield* runShell("git", ["checkout", "-q", back], cwd)).code !== 0) {
+      return yield* new WorkflowError({ reason: `the checkout could not be put back on ${back}` });
+    }
+    yield* fs.remove(away).pipe(Effect.ignore);
+  });
+
+/**
+ * Runs `body` with the checkout at its merge-base with the default branch, then puts it
+ * back. A checkout with changes of its own is refused: they would travel to the base.
+ */
+const atDefaultBase = <A, R>(cwd: string, away: string, body: Effect.Effect<A, WorkflowError, R>) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const git = (...args: string[]) => runShell("git", args, cwd);
+    const refuse = (why: string) =>
+      new WorkflowError({ reason: `not compared at the default branch: ${why}` });
+    if ((yield* git("status", "--porcelain")).stdout.trim() !== "") {
+      return yield* refuse("the checkout has changes of its own");
+    }
+    const branch = yield* defaultBase(runShell, cwd);
+    if (branch === null) return yield* refuse("no default branch");
+    const remote = yield* git("merge-base", "HEAD", `origin/${branch}`);
+    const merged = remote.code === 0 ? remote : yield* git("merge-base", "HEAD", branch);
+    if (merged.code !== 0) return yield* refuse(`no merge-base with ${branch}`);
+    const head = (yield* git("rev-parse", "HEAD")).stdout.trim();
+    const named = yield* git("symbolic-ref", "-q", "--short", "HEAD");
+    const back = named.code === 0 ? named.stdout.trim() : head;
+    yield* fs.writeFileString(away, back).pipe(Effect.orDie);
+    if ((yield* git("checkout", "-q", "--detach", merged.stdout.trim())).code !== 0) {
+      yield* fs.remove(away).pipe(Effect.ignore);
+      return yield* refuse(`${merged.stdout.trim()} could not be checked out`);
+    }
+    return yield* body.pipe(Effect.ensuring(restoreCheckout(cwd, away).pipe(Effect.orDie)));
+  });
+
 export const hostLayer = (options: {
   readonly dir: string;
   /** Where a user's own `verify.json` is, for a project that wrote none. */
@@ -1840,47 +1892,65 @@ export const hostLayer = (options: {
                 );
               }),
             ).pipe(Effect.ignore);
+      // A Run came from its parent and from the Run whose plan it builds. Stops at a Run
+      // the store has no row for, and at a cycle.
+      const lineageOf = Effect.fn("Engine.lineageOf")(function* (runId: string) {
+        const lineage = [runId];
+        for (let at = 0; at < lineage.length; at++) {
+          const row = yield* store.run(lineage[at]!);
+          if (row === null) continue;
+          const input = yield* decodeInput(row.input).pipe(Effect.orElseSucceed(() => ({})));
+          const plan = Object.values(input).filter(Schema.is(Schema.String)).map(planRunOf);
+          for (const from of [row.parent, ...plan])
+            if (from != null && !lineage.includes(from)) lineage.push(from);
+        }
+        return lineage;
+      });
       const host = Host.of({
         dir,
         place: (runId) =>
           under(
-            store.run(runId).pipe(
-              Effect.flatMap((row) =>
-                row === null
-                  ? Effect.succeed(null)
-                  : decodeStrings(row.options ?? "{}").pipe(
-                      Effect.orElseSucceed((): Record<string, string> => ({})),
-                      Effect.map((options) => ({
-                        options,
-                        task: row.task,
-                        placed: placedOf(row, options),
-                      })),
-                    ),
+            Effect.zipWith(
+              store.run(runId).pipe(
+                Effect.flatMap((row) =>
+                  row === null
+                    ? Effect.succeed(null)
+                    : decodeStrings(row.options ?? "{}").pipe(
+                        Effect.orElseSucceed((): Record<string, string> => ({})),
+                        Effect.map((options) => ({
+                          options,
+                          task: row.task,
+                          placed: placedOf(row, options),
+                        })),
+                      ),
+                ),
+                // A Run nobody has a row for works nowhere in particular; its own directory
+                // is still its own, so what it writes is not written into somebody else's.
+                // Made for a Run there is one, so a workflow writes what it produces into
+                // its own directory without first asking whether it is there — and asking
+                // about a run that was never started leaves nothing behind.
+                Effect.tap((admitted) =>
+                  admitted === null
+                    ? Effect.void
+                    : fs.makeDirectory(runDir(dir, runId), { recursive: true }),
+                ),
+                Effect.map((admitted) => ({
+                  cwd: admitted?.placed.cwd ?? dir,
+                  dir: runDir(dir, runId),
+                  options: admitted?.options ?? {},
+                  task: admitted?.task ?? null,
+                  workspace: admitted?.placed.workspace ?? null,
+                })),
+                Effect.orElseSucceed(() => ({
+                  cwd: dir,
+                  dir: runDir(dir, runId),
+                  options: {},
+                  task: null,
+                  workspace: null,
+                })),
               ),
-              // A Run nobody has a row for works nowhere in particular; its own directory
-              // is still its own, so what it writes is not written into somebody else's.
-              // Made for a Run there is one, so a workflow writes what it produces into
-              // its own directory without first asking whether it is there — and asking
-              // about a run that was never started leaves nothing behind.
-              Effect.tap((admitted) =>
-                admitted === null
-                  ? Effect.void
-                  : fs.makeDirectory(runDir(dir, runId), { recursive: true }),
-              ),
-              Effect.map((admitted) => ({
-                cwd: admitted?.placed.cwd ?? dir,
-                dir: runDir(dir, runId),
-                options: admitted?.options ?? {},
-                task: admitted?.task ?? null,
-                workspace: admitted?.placed.workspace ?? null,
-              })),
-              Effect.orElseSucceed(() => ({
-                cwd: dir,
-                dir: runDir(dir, runId),
-                options: {},
-                task: null,
-                workspace: null,
-              })),
+              lineageOf(runId),
+              (at, lineage) => ({ ...at, lineage }),
             ),
           ),
         held: (runId) => set(HOLD, runId),
@@ -1957,8 +2027,10 @@ export const hostLayer = (options: {
               }
               const journal = evidenceDir(dir, asked.runId);
               const marker = `${runDir(dir, asked.runId)}/${VERIFYING_FILE}`;
+              const away = `${runDir(dir, asked.runId)}/${AWAY_FILE}`;
+              yield* restoreCheckout(asked.cwd, away);
               yield* fs.writeFileString(marker, spec.name).pipe(Effect.ignore);
-              return yield* runApproved(
+              const verified = runApproved(
                 journal,
                 { ...own, cwd: asked.cwd },
                 approved,
@@ -1967,8 +2039,10 @@ export const hostLayer = (options: {
               ).pipe(
                 Effect.tap((record) => noteVerification(journal, record)),
                 Effect.mapError((refused) => new WorkflowError({ reason: refused.why })),
-                Effect.ensuring(fs.remove(marker).pipe(Effect.ignore)),
               );
+              return yield* (
+                asked.at === "default-base" ? atDefaultBase(asked.cwd, away, verified) : verified
+              ).pipe(Effect.ensuring(fs.remove(marker).pipe(Effect.ignore)));
             }),
           ),
         approved: (runId) => under(approvedOf(dir, runId)),

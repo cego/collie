@@ -39,6 +39,7 @@ Runner source (Bun/TypeScript). Compiled to `bin/collie` per platform; see ADR-0
 | `verify-spec.ts`   | Which commands Collie may run itself for a Run, and where that permission came from      |
 | `outcome.ts`       | What a Run must prove to close, per kind, and what is still missing                      |
 | `metrics.ts`       | What a Run produced and when: evidence, slices, rework, context — never pane activity    |
+| `report.ts`        | Where Runs end across every Run: per workflow, and each that failed, finished or stopped |
 | `cards.ts`         | One slice of work as a human wants it handed over, with its readiness and significance   |
 | `disposition.ts`   | What became of a Run's work, recorded beside its status and never over it                |
 | `conversation.ts`  | What the human and Collie have said about this Herd, redacted and reference-checked      |

@@ -322,10 +322,12 @@ const verdict =
 Skipped work is work you do not ask for: return without calling `agentWork` and no tab
 opens, no agent starts and no Output is fabricated. Say why in what you return.
 
-`agents.askRoute(role, cwd)` is what an agent is told about asking for a decision its work
-does not cover: the pane of whoever is live in that role, and otherwise to stop and ask the
-human. You name the role — who may be asked is your workflow's declaration, not an
-assumption Collie makes about it.
+`agents.askRoute(role, place.lineage)` is what an agent is told about asking for a decision
+its work does not cover: the pane of whoever is live in that role in this Run's lineage —
+the Run itself, then the Runs it was started from or builds a plan of, and so on — and otherwise to decide and
+record the decision. Another Run's agent in the same role is never the answer, however
+recently it was started from the same place. You name the role — who may be asked is your
+workflow's declaration, not an assumption Collie makes about it.
 
 The work itself is written to `<state>/agents/<run>/<operation>.prompt.md` and the message
 names that file. One send is one message and not a transcript: a step's prompt carries a
@@ -480,6 +482,8 @@ const place = yield * host.place((yield * Run).id);
 //                   risks, previous, harness, model, effort
 // place.task      — the Task it belongs to, whose workspace its agents open in
 // place.workspace — a workspace of its own, where the Run asked for one; null otherwise
+// place.lineage   — this Run, then the Runs it was started from or builds a plan of, and
+//                   so on: whose agents `askRoute` and `handOffWork` may reach
 ```
 
 `place.cwd` is decided before your body runs, and your body never makes a checkout. A
@@ -738,6 +742,9 @@ Run's own checkout — and records what it did. The list is `.collie/verify.json
 started, plus whatever a human has granted it since with `collie run intent verification` —
 a name nobody approved is refused, and a workflow cannot add to it. Anyone else
 collects the same way from outside: `collie verify --run <your run id> -- <command>`.
+With `at: "default-base"` it runs at the merge-base of the checkout and its default branch,
+in that same checkout so what the build installed is there, and then puts the checkout back;
+a checkout with changes of its own, or no default branch to compare with, is refused.
 
 `host.approved(runId)` is that list, for a prompt to name what the work will be held to
 before it starts — `renderApproved` writes it out — and `renderEvidence(host.evidence(...))`
@@ -754,7 +761,10 @@ a grant withdrawn meanwhile parks the Run there rather than failing it.
 sentence each, and empty where the evidence is there. It reads the journal, the approved
 list, the Outputs you hold and the tickets you built — and it will not take a reviewer's
 judgement from an implementer's Output, because the agent that wrote the change cannot
-vouch for its own scope.
+vouch for its own scope. Only the latest result for a check on the tree in front of it
+counts, so a pass a later fail on the same tree contradicts is not one. Pass `preexisting` with the approved checks that also failed where
+the branch leaves the default branch, and one that still fails is left out of the gaps for your Run
+to report instead.
 
 ```ts
 const gaps = evidenceGapsOf({
@@ -789,8 +799,9 @@ None of it is yours to implement, but it decides where your workflow can be inte
   keeps its own tab. When the Run resumes, work whose agent has gone and whose Output never
   came is given to a new one with the same prompt. Steering — `run steer` — says something
   to a live agent through the one sender, and says whether it was delivered;
-  `handOffWork` does the same from a workflow to another Run's live agent in a role, as
-  review hands its findings to an implementer already building the work. It answers with
+  `handOffWork` does the same from a workflow to the live agent in a role of a Run this one
+  was started from, as review hands its findings to an implementer already building the
+  work. It answers with
   the agent it reached, or null where none is live; a hand-off nobody can say arrived parks
   the Run until `run deliveries --reconcile` settles it, rather than starting a second agent.
 

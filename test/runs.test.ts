@@ -41,3 +41,8 @@ test("the merge request a Run opened is one of its facts", () => {
   const opened = view({ mr: "https://gitlab.example.com/group/app/-/merge_requests/7" });
   expect(factsOfView("/state", opened).mr).toBe(opened.mr);
 });
+
+test("a Run parked inside a wait, still pending, is waiting on you rather than working", () => {
+  const parked = view({ parked: "r1-review-r1 in pane 1-1 was sent delivery r1-review-step-1…" });
+  expect(factsOfView("/state", parked).state).toBe("waiting");
+});

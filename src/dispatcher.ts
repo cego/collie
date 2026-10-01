@@ -7,13 +7,20 @@
 import type { BunServices } from "@effect/platform-bun/BunServices";
 import { Clock, Data, Duration, Effect, FileSystem, Path, Result, Schema } from "effect";
 import { ensureLockDir } from "./lock";
-import { herdrFailureReason, type AgentInfo, type Herdr, type Submission } from "./herdr";
+import {
+  herdrFailureReason,
+  isSettled,
+  type AgentInfo,
+  type Herdr,
+  type Submission,
+} from "./herdr";
 import { verifyIncarnation, type AgentEntry } from "./registry";
 import {
   appendLine,
   blocked,
   causalKey,
   deferralsOf,
+  isUnobserved,
   ledgerFiles,
   ledgerPath,
   newestById,
@@ -348,13 +355,13 @@ const send = Effect.fn("Dispatcher.send")(function* (
   const reserved: Delivery = draft.note === undefined ? line : { ...line, note: draft.note };
   yield* appendLine(file, reserved);
 
-  const sent = yield* deps.herdr.agentPrompt(entry.agent, text).pipe(Effect.result);
+  const sent = yield* deps.herdr.agentPrompt(entry.agent, marked(text, id)).pipe(Effect.result);
   const settledAt = yield* nowIso();
   if (Result.isSuccess(sent)) {
     // `submitted` either way: the text and the Enter were written. What herdr could not
     // vouch for is kept as the note, never rounded up to a delivery it saw taken.
     const line = { ...reserved, at: settledAt, state: "submitted" as const };
-    yield* appendLine(file, sent.success === "unobserved" ? { ...line, note: "unobserved" } : line);
+    yield* appendLine(file, sent.success === "unobserved" ? { ...line, note: UNOBSERVED } : line);
     return { ok: true as const, id, submission: sent.success };
   }
   // A refusal herdr answered with is a fact; a transport that never answered is not.
@@ -446,12 +453,113 @@ export const settleCollected = Effect.fn("Dispatcher.settleCollected")(function*
         if (delivery.causal_key !== causal_key) continue;
         const known =
           delivery.state === "acknowledged" ||
-          (delivery.state === "submitted" && delivery.note !== "unobserved");
+          (delivery.state === "submitted" && !isUnobserved(delivery));
         if (!known) continue;
         yield* appendLine(file, { ...delivery, at, state: "superseded", note: "work_collected" });
       }
     }),
   );
+});
+
+const UNOBSERVED = "unobserved";
+const ENTER_PRESSED = "unobserved; enter pressed";
+
+/** A submission nothing confirmed: neither taken nor still waiting to be sent. */
+export class Unconfirmed extends Data.TaggedError("Unconfirmed")<{
+  agent: string;
+  pane: string;
+  delivery: string;
+  why: string;
+}> {}
+
+export interface ConfirmDeps<R> {
+  readonly stateDir: string;
+  readonly herdr: Pick<Herdr, "agentStatus" | "promptBox" | "agentPressEnter">;
+  readonly log: DispatcherDeps["log"];
+  /** Whatever else says the agent took this delivery, as a phrase; null for nothing. */
+  readonly taken: (delivery: Delivery) => Effect.Effect<string | null, never, R>;
+  readonly pollMs: number;
+  /** How long a settled agent may show neither the prompt nor a turn before a human is asked. */
+  readonly graceMs: number;
+}
+
+/**
+ * A `submitted (unobserved)` delivery about one of these causal keys, checked until it is
+ * known either way. Taken is a turn herdr saw start from a settled agent, or whatever
+ * `taken` finds. A settled agent whose prompt box still holds the delivery's token gets
+ * one Enter — never the text again, which would be the work twice. A settled agent that
+ * shows neither, for the whole grace, fails `Unconfirmed`: nothing can prove sending it
+ * again is safe, so a human is asked. Returns once nothing is left unobserved.
+ */
+export const confirmSubmitted = Effect.fn("Dispatcher.confirmSubmitted")(function* <R>(
+  deps: ConfirmDeps<R>,
+  entry: AgentEntry,
+  keys: ReadonlyArray<string>,
+) {
+  const terminalId = entry.incarnation?.terminalId;
+  if (terminalId === undefined) return;
+  const file = yield* ledgerPath(deps.stateDir, terminalId);
+  const pending = Effect.map(readLedger(file), (lines) =>
+    [...newestById(lines).values()]
+      .filter((one) => keys.includes(one.causal_key) && isUnobserved(one))
+      .at(-1),
+  );
+  /** Re-read under the lock, so a settlement never lands on a delivery another writer moved. */
+  const settle = (id: string, act: Effect.Effect<void, never, BunServices>, note: string) =>
+    withLedgerLock(
+      file,
+      Effect.gen(function* () {
+        const now = newestById(yield* readLedger(file)).get(id);
+        if (now === undefined || !isUnobserved(now)) return;
+        yield* act;
+        yield* appendLine(file, { ...now, at: yield* nowIso(), note });
+      }),
+    );
+  let sawSettled = false;
+  let quietSince: number | null = null;
+  for (;;) {
+    const open = yield* pending;
+    if (open === undefined) return;
+    const status = yield* deps.herdr
+      .agentStatus(entry.agent)
+      .pipe(Effect.orElseSucceed(() => "unknown" as const));
+    const turn = sawSettled && (status === "working" || status === "blocked");
+    const taken = turn ? "a turn started" : yield* deps.taken(open);
+    if (taken !== null) {
+      yield* settle(open.id, Effect.void, `taken: ${taken}`);
+      yield* deps.log(`${entry.agent} took ${open.id}: ${taken}`);
+      return;
+    }
+    if (!isSettled(status)) {
+      quietSince = null;
+    } else {
+      sawSettled = true;
+      const box = yield* deps.herdr.promptBox(entry.agent).pipe(Effect.orElseSucceed(() => null));
+      const waiting = box?.includes(`${DELIVERY_TOKEN}${open.id}`) === true;
+      if (waiting && open.note === UNOBSERVED) {
+        const press = deps.herdr.agentPressEnter(entry.agent).pipe(Effect.ignore);
+        yield* settle(open.id, press, ENTER_PRESSED);
+        yield* deps.log(`${entry.agent}: ${open.id} was still in its prompt box; pressed Enter`);
+        quietSince = null;
+      } else {
+        const now = yield* Clock.currentTimeMillis;
+        quietSince ??= now;
+        if (now - quietSince >= deps.graceMs) {
+          return yield* new Unconfirmed({
+            agent: entry.agent,
+            pane: entry.paneId,
+            delivery: open.id,
+            why: waiting
+              ? "its prompt box still holds it after one Enter"
+              : box === null
+                ? "its prompt box cannot be read"
+                : "its prompt box does not hold it",
+          });
+        }
+      }
+    }
+    yield* Effect.sleep(Duration.millis(deps.pollMs));
+  }
 });
 
 /**
@@ -491,6 +599,24 @@ export function ackInstruction(
 
 /** What marks a prompt as Collie's own. Its absence is what attribution is looking for. */
 export const DELIVERY_TOKEN = "collie-delivery:";
+
+/**
+ * The text as it is typed, with its delivery's token on a line of its own near the top:
+ * herdr's view of a prompt box is its first few hundred bytes, and a slash command has to
+ * keep its first line. The harness's submit hook reads the same token back.
+ */
+export function marked(text: string, id: string): string {
+  const token = `${DELIVERY_TOKEN}${id}`;
+  if (text.split("\n").includes(token)) return text;
+  if (!text.startsWith("/")) return `${token}\n${text}`;
+  const [command, ...rest] = text.split("\n");
+  return [command, token, ...rest].join("\n");
+}
+
+/** The delivery a submitted prompt carried: its first token, which is the one `marked` adds. */
+export function carriedDelivery(prompt: string): string | null {
+  return new RegExp(`${DELIVERY_TOKEN}(\\S+)`).exec(prompt)?.[1] ?? null;
+}
 
 const AckSchema = Schema.Struct({
   delivery: Schema.String,
