@@ -149,8 +149,11 @@ content of every untracked file git is not ignoring — and a result whose two s
 differ is `unstable`, never `pass`. So is one where either snapshot says the tree was too
 large to look at: two unmeasured trees are not one tree.
 
-Collie will also run a verification itself, but only one the human wrote into the run's
-`authority.run_verification` with `run intent verification`, matched argument for argument.
+Collie will also run a verification itself, but only one in the run's approved set,
+matched argument for argument. A human grants one with `run intent verification`; so does
+chat, with `set_verification`, which `collie_propose` carries out in the same call with no
+yes ([ADR-0011](adr/0011-the-conversation-is-a-native-harness.md#amended-2026-09-29-chat-may-choose-what-proves-a-run)).
+Collie spawns it itself, outside any agent's permission rules.
 The wrapper is part of what was approved — `bun test` and `bun test --bail` are not the
 same permission. It runs at the run's finish, and only where a `command_exit` rule names
 it and nothing has verified that name yet.

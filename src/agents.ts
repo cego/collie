@@ -174,7 +174,7 @@ export interface AgentsApi {
   /**
    * What an agent is told about asking for a decision its work does not cover: the pane
    * of whoever is live in that role in this Run's lineage — `Place.lineage` — and
-   * otherwise to decide and say so. A role, not a bare route: who may be asked is the
+   * otherwise to decide and record it under `assumptions` in its Output. A role, not a bare route: who may be asked is the
    * workflow's own declaration.
    */
   readonly askRoute: (role: string, lineage: ReadonlyArray<string>) => Effect.Effect<string>;

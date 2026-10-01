@@ -25,6 +25,7 @@ import {
   type HostServices,
 } from "../src/engine";
 import { Store } from "../src/store";
+import { VerifySpecSchema } from "../src/verify-spec";
 import { readTask, writeTask, type TaskRecord } from "../src/task";
 import type { Call } from "./support/recorder";
 
@@ -618,6 +619,97 @@ test(
         );
         expect(refusedWith(outcome.started)).toContain("nothing is approved in web");
         expect(outcome.rows).toEqual([]);
+      }),
+    ),
+  120_000,
+);
+
+const UNIT = { name: "unit", executable: "true", argv: [], cwd: "worktree" } as const;
+
+/** What a Run was frozen with at admission. */
+const frozen = (runId: string) =>
+  FileSystem.FileSystem.pipe(
+    Effect.flatMap((fs) => fs.readFileString(`${evidenceDir(dir(), runId)}/approved.json`)),
+    Effect.flatMap(
+      Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Array(VerifySpecSchema))),
+    ),
+    Effect.orDie,
+  );
+
+test(
+  "an empty set given with a start is none given, and the project's verify.json proves it",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        yield* fs.makeDirectory(`${rig.projectDir}/.collie`, { recursive: true });
+        yield* fs.writeFileString(
+          `${rig.projectDir}/.collie/verify.json`,
+          '[{"name":"unit","executable":"true","argv":[],"cwd":"worktree"}]',
+        );
+        const started = yield* hosted(
+          Effect.gen(function* () {
+            const registry = yield* Registry;
+            const [proved] = yield* loaded(registry, [`${fixtures}/proved.workflow.ts`]);
+            return yield* registry
+              .start({
+                generation: proved!,
+                request: "r1",
+                project: rig.projectDir,
+                input: { note: "x" },
+                verify: [],
+              })
+              .pipe(Effect.result);
+          }),
+        );
+        expect(refusedWith(started)).toBe("");
+        if (started._tag === "Success")
+          expect(yield* frozen(started.success.runId)).toEqual([UNIT]);
+      }),
+    ),
+  120_000,
+);
+
+test(
+  "a retried start admitted before its set was frozen is frozen with the set it carries",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = yield* hosted(
+          Effect.gen(function* () {
+            const registry = yield* Registry;
+            const [proved] = yield* loaded(registry, [`${fixtures}/proved.workflow.ts`]);
+            const input = { note: "x" };
+            // The host died between admitting the Run and freezing what proves it.
+            yield* (yield* Store).admit({
+              request: "r1",
+              run: "run-cut",
+              workflow: "proved",
+              project: rig.projectDir,
+              input,
+              provenance: { note: "given" },
+              options: {},
+              placing: asPlacing({ from: rig.projectDir, taskLabel: "Project | P" }),
+              generation: proved!.name,
+              execution: yield* proved!.registration.workflow.executionId({
+                runId: "run-cut",
+                input,
+              }),
+              task: null,
+              parent: null,
+            });
+            const retried = yield* registry.start({
+              generation: proved!,
+              request: "r1",
+              project: rig.projectDir,
+              input,
+              verify: [UNIT],
+            });
+            return retried.runId;
+          }),
+        );
+        expect(runId).toBe("run-cut");
+        expect(yield* frozen(runId)).toEqual([UNIT]);
       }),
     ),
   120_000,

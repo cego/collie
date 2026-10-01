@@ -52,8 +52,11 @@ export type Judgement = Schema.Schema.Type<typeof JudgementSchema>;
 
 /**
  * Everything the model may propose, and nothing else. A closed union is the security
- * boundary: there is no action here that is "run this string", so a model that decided to
- * be creative has nowhere to put it.
+ * boundary, with one deliberate hole: `set_verification.command` and `start.verify` are an
+ * executable and its arguments that Collie spawns itself at the gate, outside any agent's
+ * permission rules. Chat's `collie_propose` carries `set_verification` out in the same call,
+ * with no yes, so what chat read in the repository decides what Collie runs. The human
+ * reads what ran in the merge request, before it lands (ADR-0011, 2026-09-29).
  */
 export const ActionSchema = Schema.Union([
   Schema.Struct({

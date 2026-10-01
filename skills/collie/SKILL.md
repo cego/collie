@@ -64,6 +64,12 @@ Projects root for the checkout, the target inference would pick in the named che
 plan directories of finished Runs. Pick from those or ask the user what they meant, then
 retry with the same `--request-id`.
 
+A workflow that verifies (implement does) is refused as `invalid_input` when nothing is
+approved to prove it, and nothing is started. Unless the project has `.collie/verify.json`,
+give the checks with the start: `--verify '{"name":"unit","executable":"bun","argv":["test"],"cwd":"worktree"}'`,
+once per command whose passing on the final tree proves the work. Read the repository for
+them, then retry with the same `--request-id`.
+
 `branch` is one of the names the host settles rather than one a workflow declares —
 `workflow show` lists them under `options`, with what each means. It names the branch the
 Run works on, is derived from the target or the plan directory when you leave it out, and

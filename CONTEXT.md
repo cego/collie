@@ -212,9 +212,9 @@ a Run's agents are pointed at.
 **Hand-off** — What one Run's agent is told about a live agent of a Run in its **Lineage**:
 the implementer's prompt names the pane of the planner of the plan it was started from and
 tells it to ask there rather than stop, and with no planner live in its lineage, to decide
-and record the decision. Another Run's agent in the same role is never named, however
-recently it was started from the same place. Nothing is typed into another Run's pane on
-its behalf.
+and record the decision under `assumptions` in its Output. Another Run's agent in the same
+role is never named, however recently it was started from the same place. Nothing is typed
+into another Run's pane on its behalf.
 
 **Worktree** — The checkout a mutating Run owns: one per branch, because git allows
 exactly one worktree per checked-out branch. The branch names the work rather than the path
@@ -295,7 +295,7 @@ What each is for, what it needs, and how they chain: `docs/workflows.md`.
 
 **Outcome** — The kind of result a Run has to prove, and the evidence that closes it: a feature names what it built, a bug reproduces before it is fixed, a refactor preserves behaviour, an investigation reaches a supported conclusion and may have no patch, docs run what they document, a migration proves it can go back. A Run nobody classified is `unspecified` and proves only its approved verifications — never a feature by default.
 
-**Approved set** — The verifications Collie may run itself for one Run, each bound argument for argument: `.collie/verify.json` in the project, else `~/.collie/user/verify.json`, read at start and kept with the Run as its grant — its Intent's `run_verification`, or the host's record for a workflow module's Run. From then on that grant is the set, amended only by `run intent verification`, and a Run whose outcome needs it with nothing granted stops before its first agent. An agent may `collie verify` anything; only the approved set is what Collie runs at the gate.
+**Approved set** — The verifications Collie may run itself for one Run, each bound argument for argument: the ones given with the start (`run start --verify`, or chat's `start` with `verify`), else `.collie/verify.json` in the project, else `~/.collie/user/verify.json`, settled at start and kept with the Run as its grant — its Intent's `run_verification`, or the host's record for a workflow module's Run. A plan spanning repositories is held to each repository's own `.collie/verify.json`. A start of a workflow that declares `verifies`, whose outcome needs the set, is refused as `invalid_input` when nothing is approved, before any Run exists. From then on that grant is the set, amended only by `run intent verification` (chat's `set_verification`), and a Run whose grant is withdrawn to nothing stops where it asks for the set. An agent may `collie verify` anything; only the approved set is what Collie runs at the gate.
 
 **Evidence** — A Verification collected at a revision. An Output field saying the tests pass is a claim, and is shown as one. The gate before a merge request reads evidence, never claims.
 

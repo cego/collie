@@ -286,9 +286,12 @@ export const collect = Effect.fn("Verify.collect")(function* (
 });
 
 /**
- * A verification Collie runs itself, which it may do only for a command the human wrote
- * into the Run's authority — exactly, argument by argument. The wrapper is part of what
- * was approved: `npm test` and `npm test -- --bail` are not the same permission.
+ * A verification Collie runs itself, which it may do only for a command in the Run's
+ * approved set — exactly, argument by argument. The wrapper is part of what was approved:
+ * `npm test` and `npm test -- --bail` are not the same permission. A human writes that set
+ * (verify.json, `--verify`, `run intent verification`), or chat does: a start's `verify`,
+ * or `set_verification`, which `collie_propose` carries out with no yes (ADR-0011,
+ * 2026-09-29). It runs here, outside any agent's permission rules.
  */
 export const runApproved = Effect.fn("Verify.runApproved")(function* (
   runDir: string,
