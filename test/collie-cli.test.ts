@@ -6,6 +6,8 @@ import { readIntent, seedIntent, writeIntent } from "../src/intent";
 import { appendMetric } from "../src/metrics";
 import { hosted, settledRun } from "./support/hosted";
 import { evidenceDir } from "../src/engine";
+import { connect } from "../src/host";
+import { VerifySpecSchema } from "../src/verify-spec";
 
 const root = new URL("../", import.meta.url).pathname;
 const join = (...parts: string[]) => parts.join("/").replace(/\/+/g, "/");
@@ -55,6 +57,9 @@ const cli = Effect.fn("test.cli")(function* (
 });
 
 const parseEnvelope = Schema.decodeUnknownEffect(CliEnvelope);
+const decodeRemembered = Schema.decodeUnknownSync(
+  Schema.fromJsonString(Schema.Array(VerifySpecSchema)),
+);
 
 /** `workflow show` for a module: what a caller may give it, and what it gives back. */
 const ShownModule = Schema.fromJsonString(
@@ -807,6 +812,54 @@ test(
         expect(shown.stdout).toContain("time to first evidence: 0s");
         expect(shown.stdout).toContain("1 pass, 0 fail, 0 unstable (1 by collie)");
         expect(shown.stdout).toContain("rework: 0");
+      }),
+    ),
+  60_000,
+);
+
+test(
+  "run intent remember keeps a Run's checks for its repository, and overwrites only when told",
+  () =>
+    hosted("collie-remember-", ({ world }) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const env = { HERDR_PLUGIN_STATE_DIR: world.state, COLLIE_USER_DIR: world.config };
+        // A checkout of its own, as a worktree is, and gone once the Run has settled.
+        const worktree = join(world.home, "worktree");
+        yield* fs.makeDirectory(worktree, { recursive: true });
+        Bun.spawnSync(["git", "init", "-q"], { cwd: worktree });
+        for (const cwd of [world.project, worktree])
+          Bun.spawnSync(["git", "remote", "add", "origin", "git@example.test:team/app.git"], {
+            cwd,
+          });
+        const run = yield* settledRun(world, "hello", { workspace: worktree });
+        const client = yield* connect(world.state).pipe(Effect.orDie);
+        expect((yield* client.run({ runId: run.id }).pipe(Effect.orDie))?.cwd).toBe(worktree);
+        yield* writeIntent(run.dir, seedIntent(run.id, { goal: "ship it" }));
+
+        const granted = yield* cli(
+          ["--json", "run", "intent", "verification", run.id, "--name", "unit", "--", "true"],
+          env,
+        );
+        expect(granted.exit).toBe(0);
+
+        const remember = ["--json", "run", "intent", "remember", run.id];
+        const first = yield* cli(remember, env);
+        expect(first.exit).toBe(0);
+        expect(yield* parseEnvelope(first.stdout)).toMatchObject({ ok: true });
+        const file = join(world.config, "verify/example.test/team/app.json");
+        expect(decodeRemembered(yield* fs.readFileString(file))).toEqual([
+          { name: "unit", executable: "true", argv: [], cwd: "worktree" },
+        ]);
+
+        // The checkout it was started for still names the repository.
+        yield* fs.remove(worktree, { recursive: true });
+        const again = yield* cli(remember, env);
+        expect(again.exit).not.toBe(0);
+        expect(yield* parseEnvelope(again.stdout)).toMatchObject({ ok: false });
+
+        const replaced = yield* cli([...remember, "--replace"], env);
+        expect(replaced.exit).toBe(0);
       }),
     ),
   60_000,

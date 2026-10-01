@@ -183,6 +183,8 @@ export function describeAction(action: Action): string {
       return action.command === undefined
         ? `withdraw ${action.run}'s check ${action.name}`
         : `let Collie run ${action.name} for ${action.run}: ${commandLine(action.command)}`;
+    case "remember_verification":
+      return `keep ${action.run}'s checks for every later Run in its repository${action.replace === true ? ", replacing what is kept there" : ""}`;
     // Which workspace, always: this writes the file that workspace's next Runs begin
     // with, and a line that left it out asked for a yes to a change nobody could see.
     case "update_defaults":

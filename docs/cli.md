@@ -700,12 +700,12 @@ board's decisions, which are not actions on a run: `confirm` a waiting proposal 
 and the hash `collie_receipts` lists beside it, `decline` one, and `disposition` to record
 what became of a finished run's work. It answers a line per action saying what each one
 came to. A kind outside that set is refused with the name of the tool that does take it:
-amending an Intent, forking a definition, changing the defaults, a cleanup and an upgrade
-are `collie_propose`'s.
+amending an Intent, forking a definition, changing the defaults, keeping a run's checks for
+its repository, a cleanup and an upgrade are `collie_propose`'s.
 
 `collie_propose` takes the same closed action set a steer produces — `stop`, `resume`,
 `hold`, `release`, `answer`, `deliver`, `start`, `followup`, `update_intent`,
-`set_verification`, `clear_override`, `navigate`, `update_defaults`, `fork_definition`, `home_cleanup`,
+`set_verification`, `remember_verification`, `clear_override`, `navigate`, `update_defaults`, `fork_definition`, `home_cleanup`,
 `upgrade` — through the same `validate`, the same proposals journal and
 the same executors. It executes the request immediately, with no separate confirmation.
 Supply `request_id` and reuse it on retries to return the original receipt rather than
@@ -725,7 +725,10 @@ selected.
 Settling is not in that set: there is no action kind that confirms, declines or
 reconciles, so a proposal can never contain its own yes. Settling is a separate act, and
 chat takes it as the human does — `collie_do` confirms against an id and hash, or
-declines. Everything else a human can type, chat does too: what no tool covers — setting a
+declines. Everything else a human can type, chat does too. The checks that prove a Run have tools of
+their own: a `start` carries the ones chat chose as `verify`, `set_verification` adds or
+withdraws one, and `remember_verification` keeps a Run's set for its repository's later
+Runs. What no tool covers — setting a
 Run's or the Herd's **authority**, reconciling, `collie verify`, `chat harness` — it runs
 with the `collie` CLI, through the same validation and executors
 ([`AGENTS.md`](../AGENTS.md), invariant 1). `test/chat-parity.test.ts` walks the command
@@ -1001,8 +1004,9 @@ collie verify --run <run-id> --name regression --expect fail -- bun test test/bu
 
 An agent may `collie verify` anything; Collie runs only this run's
 [approved set](../CONTEXT.md), matched argument for argument. The set is settled when the run starts — the `--verify`
-entries given with it, else `.collie/verify.json` in the project, else
-`~/.collie/user/verify.json`, whichever is found first and taken whole — and copied into the run's Intent as its `run_verification` grant. Editing the file afterwards changes the next run and never a
+entries given with it, else `.collie/verify.json` in the project, else the checks remembered
+for the checkout's remote (`~/.collie/user/verify/<host>/<path>.json`, by `origin`, then
+`upstream`), else `~/.collie/user/verify.json`, whichever is found first and taken whole — and copied into the run's Intent as its `run_verification` grant. Editing the file afterwards changes the next run and never a
 running one. From then on the Intent is the set: `run intent verification` adds to it or
 removes from it, and an Intent whose list has been emptied is a run Collie may run nothing
 for — the seed is not put back behind the human who removed it. A Run of a workflow module
@@ -1029,6 +1033,18 @@ through, so anything wrapping `collie verify -- bun test` behaves as it would ar
 
 Results go to the run's `steering/verifications.jsonl`. An agent's Output saying the tests
 passed is a **claim** and is shown as one; only a collected result is a verification.
+
+A repository's checks are remembered from a Run that already has them:
+
+```sh
+collie run intent remember <run-id> [--replace] [--request-id <id>]
+```
+
+It writes the Run's current set, whole, to the file for its checkout's remote, and every
+Run started in that repository later begins with it. It refuses a file that is already
+there unless `--replace` is given. Chat does the same with `remember_verification`
+([ADR-0035](adr/0035-a-repositorys-checks-are-remembered-by-its-remote.md)). Edit the file
+to change the set, or delete it to withdraw it.
 
 ## Hold and release
 

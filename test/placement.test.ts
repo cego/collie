@@ -671,6 +671,46 @@ test(
 );
 
 test(
+  "a Run started in a checkout with a remote begins with the checks remembered for it, over the user's",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        Bun.spawnSync(["git", "remote", "add", "origin", "git@example.test:team/app.git"], {
+          cwd: rig.projectDir,
+        });
+        yield* fs.writeFileString(
+          `${rig.userDir}/verify.json`,
+          '[{"name":"lint","executable":"false","argv":[],"cwd":"worktree"}]',
+        );
+        yield* fs.makeDirectory(`${rig.userDir}/verify/example.test/team`, { recursive: true });
+        yield* fs.writeFileString(
+          `${rig.userDir}/verify/example.test/team/app.json`,
+          '[{"name":"unit","executable":"true","argv":[],"cwd":"worktree"}]',
+        );
+        const started = yield* hosted(
+          Effect.gen(function* () {
+            const registry = yield* Registry;
+            const [proved] = yield* loaded(registry, [`${fixtures}/proved.workflow.ts`]);
+            return yield* registry
+              .start({
+                generation: proved!,
+                request: "r1",
+                project: rig.projectDir,
+                input: { note: "x" },
+              })
+              .pipe(Effect.result);
+          }),
+        );
+        expect(refusedWith(started)).toBe("");
+        if (started._tag === "Success")
+          expect(yield* frozen(started.success.runId)).toEqual([UNIT]);
+      }),
+    ),
+  120_000,
+);
+
+test(
   "a retried start admitted before its set was frozen is frozen with the set it carries",
   () =>
     runEffect(
