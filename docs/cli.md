@@ -1391,9 +1391,15 @@ channel that declares nothing is `cli`.
 So are the ones that write anything else: `confirm` (a proposal's id and content hash) and
 `decline` (its id and content hash too), recorded in its Herd's proposals journal under the Actor; `dispose`,
 what became of a Run's work; `steerAbout`, which has the evaluator turn free words about a
-Run into actions and carries them out; and `followUp`, which starts the follow-up the Run's
-Workflow declares. `collie confirm`, `decline`, `steer` and `run disposition`, the board and
-chat's tools all go through these, so the host is the only writer of what they record
+Run into actions and carries them out; `followUp`, which starts the follow-up the Run's
+Workflow declares; `propose`, which records what chat was asked for as a proposal and
+carries it out; `act`, which carries out the board's own actions on a Run (`stop`, `resume`,
+`release`, `hold`, `answer`, `deliver`, `followup`, `start`) with no proposal, anything else
+being refused as `propose`'s; `reconcile`, which settles a proposal step nobody can account
+for; and `settleDelivery`, which does the same for a message to an agent. Actions travel as
+JSON and the host decodes them. `collie confirm`, `decline`, `steer`, `run disposition`,
+`proposal reconcile` and `run deliveries --reconcile`, the board and chat's tools all go
+through these, so the host is the only writer of what they record
 ([ADR-0040](adr/0040-the-host-is-the-only-writer.md)).
 
 `runDetail` streams one Run's details while a drawer is open — intent, plan, review,
@@ -1410,7 +1416,8 @@ when `refreshMr` is set. Large items are fetched by reference with `runFile`: `l
 `diff:<path>`, `evidence:<name>`, `verification:<id>`, `plan:<file>` and `file:<path>` (read
 only, from the Run's checkout), text as it is and anything else as base64. Each answer is
 at most 4 MiB from `offset` (or `length` bytes where asked) and says the item's whole
-`size`, so a long log or a video is read in parts. A reference is refused where it leaves
+`size`, so a long log or a video is read in parts. A part of an item is base64 whatever it
+is, so a character split across two parts is whole once they are joined. A reference is refused where it leaves
 the directory it belongs to, links followed, or where it is not a regular file.
 
 `protocol` is an integer, also in `identity`. An optional field, a new operation or a new

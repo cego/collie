@@ -11,7 +11,7 @@ import { Herdr } from "../src/herdr";
 import { frontDoor } from "../src/host";
 import { followRunDetail } from "../src/lifecycle";
 import { scopeFor } from "../src/registry";
-import { diffOf, fetchRef, runDiff } from "../src/run-detail";
+import { diffOf, fetchRef, keepDiffs, runDiff } from "../src/run-detail";
 import { madeRun } from "./support/records";
 import { runRowId } from "../src/ui/state";
 import { runEffect } from "./support/effect";
@@ -275,6 +275,33 @@ test("a kept diff is taken again once its branch has moved on", () =>
     ),
   ));
 
+test("the host keeps a Run's diff each time it ends, with no drawer opened", () =>
+  runEffect(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const { repo, git } = yield* branched;
+        const state = yield* fs.makeTempDirectoryScoped({ prefix: "collie-diff-state-" });
+        const stopped = yield* madeRun(state, { cwd: repo, branch: "feature", state: "stopped" });
+        const keptNames = fs
+          .readFileString(`${stopped.dir}/diff.json`)
+          .pipe(Effect.orElseSucceed(() => ""));
+        const kept = new Set<string>();
+
+        yield* keepDiffs([stopped], kept);
+        expect(yield* keptNames).toContain("new.txt");
+
+        // Resumed: going again, then ended with more committed.
+        yield* keepDiffs([{ ...stopped, state: "running" }], kept);
+        yield* fs.writeFileString(`${repo}/more.txt`, "more\n");
+        yield* git("add", "-A");
+        yield* git("commit", "-qm", "more");
+        yield* keepDiffs([{ ...stopped, state: "succeeded" }], kept);
+        expect(yield* keptNames).toContain("more.txt");
+      }),
+    ),
+  ));
+
 test("a live diff never reads through a link or into a device or FIFO", () =>
   runEffect(
     Effect.scoped(
@@ -319,6 +346,15 @@ test("a reference never follows a link out of the directory it belongs to", () =
           "HostRefused",
         );
         expect((yield* fetchRef(run, "plan:issues/01-a.md")).content).toBe("# A\n");
+
+        // Read in parts, a text comes back as bytes, so joined it is the file again.
+        yield* fs.writeFileString(`${run.dir}/plan/issues/02-b.md`, "a—b");
+        const parts = [];
+        for (const offset of [0, 2, 4])
+          parts.push(yield* fetchRef(run, "plan:issues/02-b.md", { offset, length: 2 }));
+        expect(parts.every((part) => part.encoding === "base64")).toBe(true);
+        const joined = parts.flatMap((part) => [...Buffer.from(part.content, "base64")]);
+        expect(new TextDecoder().decode(new Uint8Array(joined))).toBe("a—b");
       }),
     ),
   ));

@@ -91,8 +91,10 @@ const every = <E, R>(spaced: Duration.Input, round: Effect.Effect<unknown, E, R>
 
 /** How often News looks again, and the diffs of Runs that just ended are kept. */
 const LOOK_EVERY = "5 seconds";
-/** How often the merge watch looks: it builds a whole board, and asks GitLab every 5 minutes. */
-// ponytail: builds its own board; share the board stream's build if that costs.
+/**
+ * How often the merge watch looks. Its board asks herdr nothing, only the Runs' own files,
+ * and GitLab is asked about a merge request every 5 minutes whatever this is.
+ */
 const MERGES_EVERY = "10 seconds";
 /** How often checkouts are swept: a sweep walks each one with git and glab. */
 const PRUNE_EVERY = "3 minutes";

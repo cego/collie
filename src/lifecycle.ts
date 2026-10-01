@@ -622,8 +622,7 @@ export const grantRun = (
     readonly name: string;
     readonly command: Omit<VerifySpec, "name"> | null;
     readonly request: string;
-    /** Who asked, where it is not the command line. */
-    readonly door?: FrontDoor;
+    readonly door: FrontDoor;
   },
 ): Effect.Effect<OpResult, never, Client> =>
   asks(
@@ -708,8 +707,7 @@ export const steerRun = (
     readonly operation?: string;
     readonly agent?: string;
     readonly mode?: "boundary" | "now" | "interrupt";
-    /** Who asked, where it is not the command line. */
-    readonly door?: FrontDoor;
+    readonly door: FrontDoor;
   },
 ): Effect.Effect<OpResult, never, Client> =>
   asks(

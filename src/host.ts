@@ -62,7 +62,7 @@ import { sideJobs } from "./side-jobs";
 import { once, recordAudit } from "./audit";
 import { currentEnv } from "./env";
 import { installation as installedRelease } from "./release";
-import { Herdr } from "./herdr";
+import { Herdr, type AgentInfo } from "./herdr";
 import { buildBoard, mrOf } from "./board";
 import { watchedMr, type MrPanels } from "./merges";
 import { shell } from "./mr";
@@ -391,30 +391,36 @@ const hostBoard = (dir: string) =>
     const runs = registry
       .views(null)
       .pipe(Effect.map((views) => views.map((view) => factsOfView(env.stateDir, view))));
-    const build = Effect.gen(function* () {
-      const alive = yield* aliveIn(yield* liveHerds(herdr, env));
-      return yield* buildBoard({
-        env,
-        runs: yield* runs,
-        alive,
-        quietMs: (yield* loadDefaults(env.userDir)).boardQuietMs,
-        offers: (runId) =>
-          registry.offers(runId).pipe(
-            Effect.provideContext(hosted),
-            Effect.orElseSucceed(() => []),
-          ),
-      });
-    }).pipe(Effect.provideContext(bun));
-    return { env, herdr, bun, runs, build };
+    const boardOf = (alive: ReadonlyArray<AgentInfo>) =>
+      Effect.gen(function* () {
+        return yield* buildBoard({
+          env,
+          runs: yield* runs,
+          alive,
+          quietMs: (yield* loadDefaults(env.userDir)).boardQuietMs,
+          offers: (runId) =>
+            registry.offers(runId).pipe(
+              Effect.provideContext(hosted),
+              Effect.orElseSucceed(() => []),
+            ),
+        });
+      }).pipe(Effect.provideContext(bun));
+    const build = Effect.flatMap(
+      Effect.flatMap(liveHerds(herdr, env), aliveIn).pipe(Effect.provideContext(bun)),
+      boardOf,
+    );
+    // What ended and what it opened needs no herdr: the merge watch asks nobody's panes.
+    const unattended = boardOf([]);
+    return { env, herdr, bun, runs, build, unattended };
   });
 
 /** The merge watch, News and pruning, for as long as this host runs. */
 const sideJobsLayer = (dir: string, panels: MrPanels) =>
   Layer.effectDiscard(
     Effect.gen(function* () {
-      const { env, herdr, bun, runs, build } = yield* hostBoard(dir);
+      const { env, herdr, bun, runs, unattended } = yield* hostBoard(dir);
       yield* Effect.forkScoped(
-        sideJobs({ env, herdr, runs, board: build, panels }).pipe(Effect.provideContext(bun)),
+        sideJobs({ env, herdr, runs, board: unattended, panels }).pipe(Effect.provideContext(bun)),
       );
     }),
   );

@@ -242,8 +242,9 @@ export const fetchRef = Effect.fn("RunDetail.fetchRef")(function* (
   FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
 > {
   const fs = yield* FileSystem.FileSystem;
+  // A part of a text is bytes too: a character across the seam is whole once the parts are joined.
   const asked = (bytes: Uint8Array, size: number, file: string | null): RunFile =>
-    file === null || TEXT.test(file)
+    bytes.length === size && (file === null || TEXT.test(file))
       ? { ref, encoding: "utf8", content: new TextDecoder().decode(bytes), size }
       : { ref, encoding: "base64", content: Encoding.encodeBase64(bytes), size };
   const text = (content: string): RunFile => {
