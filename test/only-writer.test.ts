@@ -112,7 +112,15 @@ test(
           const nobody = yield* client
             .reconcile({ proposal: "p-none", index: 0, as: "applied", request: "q-4" })
             .pipe(Effect.flip);
-          expect(nobody._tag).toBe("HostRefused");
+          expect(nobody).toMatchObject({ _tag: "ProposalRefused", refused: "not_found" });
+          // The same request asking for something else is refused, not answered with the first.
+          const other = yield* client.propose({ ...asked, interpretation: "something else" });
+          expect(other).toMatchObject({ ok: false, code: "invalid_input" });
+          // What Collie would want of its own accord is a proposal, never an act.
+          const unasked = yield* client
+            .act({ actions: [{ kind: "home_cleanup" }], request: "q-5" })
+            .pipe(Effect.flip);
+          expect(unasked._tag).toBe("HostRefused");
           yield* stopHost(world.state);
         }).pipe(Effect.orDie),
       [],
@@ -141,6 +149,18 @@ test(
             (view) => view?.status.status === "complete",
           );
 
+          // A retried act is one operation per step: one follow-up, however often it is sent.
+          const followUp = {
+            actions: [{ kind: "followup", run: runId, text: "more" }],
+            request: "a-1",
+          };
+          const acted = yield* client.act(followUp);
+          expect(yield* client.act(followUp)).toEqual(acted);
+          const children = (yield* client.runs({ task: null })).filter(
+            (one) => one.parent === runId,
+          );
+          expect(children).toHaveLength(1);
+
           const child = yield* client.followUp({ runId, text: "what is left", request: "f-1" });
           expect((yield* client.run({ runId: child.runId }))?.parent).toBe(runId);
           expect(
@@ -166,6 +186,7 @@ test(
             (yield* readAudit(dir)).map((one) => [one.operation, one.actor.origin, one.request]),
           ).toEqual([
             ["start", "board", "s-1"],
+            ["followup", "board", "a-1:0"],
             ["followup", "board", "f-1"],
             ["disposition", "board", "d-1"],
             ["grant", "board", "g-1"],

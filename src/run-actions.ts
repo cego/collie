@@ -32,14 +32,7 @@ import {
 import { agentStartRefusal, CHAT_CHECKOUT_FIX } from "./agent-start";
 import { PROJECTS_ROOT_OPTION, projectsRoot } from "./projects";
 import { listTasks, removeTask } from "./task";
-import {
-  clearOverride,
-  err,
-  newRequestId,
-  workspaceNamed,
-  type Failure,
-  type OpResult,
-} from "./operations";
+import { clearOverride, err, workspaceNamed, type Failure, type OpResult } from "./operations";
 import { Herdr } from "./herdr";
 import { runDir } from "./engine";
 import { withDirLock } from "./lock";
@@ -127,22 +120,22 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
     reason?: string,
   ) =>
     carry(
-      Effect.flatMap(newRequestId(), (request) =>
-        controlRun(env, { door: by.origin, runId, control: which, set, request, reason }),
-      ),
+      controlRun(env, {
+        door: by.origin,
+        runId,
+        control: which,
+        set,
+        request: by.requestId,
+        reason,
+      }),
     );
   registerExecutor("stop", (action, by) => control(by, action.run, "stop", true));
   registerExecutor("resume", (action, by) =>
-    carry(
-      Effect.flatMap(newRequestId(), (request) =>
-        resumeRun(env, { door: by.origin, runId: action.run, request }),
-      ),
-    ),
+    carry(resumeRun(env, { door: by.origin, runId: action.run, request: by.requestId })),
   );
   registerExecutor("answer", (action, by) =>
     carry(
       Effect.gen(function* () {
-        const id = yield* newRequestId();
         return yield* answerRun(env, {
           door: by.origin,
           runId: action.run,
@@ -150,7 +143,7 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
           // replaced lands on the one it was given rather than on whatever is open now.
           decision: action.choiceId === "" ? null : action.choiceId,
           value: action.answer,
-          request: id,
+          request: by.requestId,
         });
       }),
     ),
@@ -163,12 +156,11 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
   registerExecutor("deliver", (action, by) =>
     carry(
       Effect.gen(function* () {
-        const id = yield* newRequestId();
         return yield* steerRun(env, {
           runId: action.run,
           agent: action.agent,
           text: action.text,
-          request: id,
+          request: by.requestId,
           mode: action.mode,
           door: by.origin,
         });
@@ -240,7 +232,7 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
         runId: action.run,
         name: action.name,
         command,
-        request: yield* newRequestId(),
+        request: by.requestId,
         door: by.origin,
       });
       if (!granted.ok) return failed(granted.error.message);
@@ -288,9 +280,12 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
   );
   registerExecutor("followup", (action, by) =>
     carry(
-      Effect.flatMap(newRequestId(), (request) =>
-        followUpRun(env, { door: by.origin, runId: action.run, text: action.text, request }),
-      ),
+      followUpRun(env, {
+        door: by.origin,
+        runId: action.run,
+        text: action.text,
+        request: by.requestId,
+      }),
     ),
   );
   // Through the same door `run start` takes, so a confirmed proposal and a typed command
@@ -314,11 +309,10 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
         });
         if (refused !== null) return failed(refused.error.message);
       }
-      const id = yield* newRequestId();
       const started = yield* startRun(rooted, {
         door: by.origin,
         id: action.workflow,
-        request: id,
+        request: by.requestId,
         // Text, as the action carries it: the module's own schema is what turns it into
         // the value it takes, exactly as a typed `run start` does.
         input,
@@ -537,7 +531,7 @@ export const carryOut = Effect.fn("runActions.carryOut")(function* (
       break;
     }
     yield* stepStarted(file, proposalId, index);
-    const outcome = yield* executor(action, actor);
+    const outcome = yield* executor(action, stepOf(actor, `${proposalId}:${index}`));
     yield* settle(index, outcome.state, outcome.note);
     if (outcome.state === "failed" && "run" in action) failedRuns.add(action.run);
     if (outcome.state !== "failed" && action.kind === "update_intent")
@@ -560,6 +554,12 @@ export const carryOutProposal = (
     ),
   );
 
+/** One step's own request, so carrying the same request out again is one operation per step. */
+const stepOf = (actor: Actor, step: string | number): Actor => ({
+  ...actor,
+  requestId: `${actor.requestId}:${step}`,
+});
+
 /**
  * One action the human asked for in chat, carried out now. The same closed union, the
  * same last-moment admission check and the same executors a confirmation runs; what it
@@ -573,7 +573,7 @@ export const carryOutAsked = Effect.fn("runActions.carryOutAsked")(function* (
 ) {
   yield* registerRunExecutors(env);
   const results: Array<{ kind: string; state: string; note: string }> = [];
-  for (const action of actions) {
+  for (const [index, action] of actions.entries()) {
     const executor = executorFor(action.kind);
     if (!executor) {
       results.push({ kind: action.kind, state: "skipped", note: "executor_missing" });
@@ -584,7 +584,7 @@ export const carryOutAsked = Effect.fn("runActions.carryOutAsked")(function* (
       results.push({ kind: action.kind, state: "skipped", note: refusal });
       continue;
     }
-    const outcome = yield* executor(action, actor);
+    const outcome = yield* executor(action, stepOf(actor, index));
     results.push({ kind: action.kind, state: outcome.state, note: outcome.note ?? "" });
     // What follows a failure was asked for on the assumption that it did not happen.
     if (outcome.state === "failed") break;

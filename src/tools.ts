@@ -41,7 +41,7 @@ import { pendingFor, proposalsPath, read as readProposals } from "./proposals";
 import { statusLine } from "./disposition";
 import { Herdr } from "./herdr";
 import { mrLabel } from "./board";
-import { headerSentence, sectionOf, type Section, type TaskView } from "./board-model";
+import { ASKED_KINDS, headerSentence, sectionOf, type Section, type TaskView } from "./board-model";
 import {
   asText as newsText,
   newsPath,
@@ -132,22 +132,6 @@ const ProposeInput = Schema.Struct({
   request_id: Schema.optionalKey(Schema.String),
 });
 const decodePropose = decodeStrict(ProposeInput);
-
-/**
- * What the human can ask for and have done: the board's own actions on a named Run, plus
- * starting one. A closed subset of the same union — amending an Intent, forking a
- * definition and changing what a workspace's Runs begin with are collie_propose's, which
- * carries them out in the same call.
- */
-const ASKED_KINDS = [
-  "stop",
-  "resume",
-  "release",
-  "answer",
-  "deliver",
-  "followup",
-  "start",
-] as const;
 
 /**
  * The board's decisions, which are not actions on a Run: a yes to a proposal, a no, and

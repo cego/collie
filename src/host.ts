@@ -26,6 +26,7 @@ import {
   FileSystem,
   Layer,
   Option,
+  Path,
   Schedule,
   Schema,
   Scope,
@@ -69,6 +70,7 @@ import { fetchRef, followDetail } from "./run-detail";
 import { buildRunDetail } from "./views";
 import {
   Answered,
+  ASKED_KINDS,
   Controlled,
   Disposition,
   EVIDENCE_GATE,
@@ -87,10 +89,11 @@ import { boardMessages } from "./board-stream";
 import { recordDisposition } from "./disposition";
 import { ActionSchema, evaluationDeps } from "./evaluator";
 import { err, request, steer, type OpResult } from "./operations";
-import { mutation } from "./envelope";
+import { REJECTED } from "./envelope";
 import {
   appendLine,
   deliveriesOf,
+  herdDir,
   herdOf,
   readLedger,
   reconcile as reconcileDelivery,
@@ -348,6 +351,9 @@ const handlers = (dir: string, installation: string, declared: Declared) =>
 class SteerUnanswered extends Schema.TaggedError<SteerUnanswered>()("SteerUnanswered", {
   outcome: SteerOutcome,
 }) {}
+
+/** What `act` carries out with no proposal: what the human asks for by name, and chat's hold. */
+const ACTED_KINDS = new Set<string>([...ASKED_KINDS, "hold"]);
 
 /** An operation's result as the front doors print it: a failure carries its code. */
 const outcomeOf = (result: OpResult): SteerOutcome =>
@@ -721,19 +727,35 @@ const frontDoorHandlers = (
               (yield* herdOf(env.socketPath).pipe(Effect.catch(() => Effect.succeed(null))));
             if (key === null)
               return outcomeOf(err("invalid_state", "No Herd to keep the request in."));
-            return outcomeOf(
-              yield* mutation(env, "chat-request", Option.some(requestId), (id) =>
-                request(env, key, {
-                  interpretation,
-                  actions: decoded.value,
-                  actor: { origin: doorOf(client), requestId: id },
-                }),
+            const actor = { origin: doorOf(client), requestId };
+            return yield* once(
+              yield* herdDir(env.stateDir, key),
+              {
+                operation: "propose",
+                request: requestId,
+                origin: actor.origin,
+                asked: { interpretation, actions },
+                result: SteerOutcome,
+              },
+              // A refusal is not kept against its request, so it can be asked again corrected.
+              request(env, key, { interpretation, actions: decoded.value, actor }).pipe(
+                Effect.flatMap((result) =>
+                  !result.ok && REJECTED.includes(result.error.code)
+                    ? Effect.fail(new SteerUnanswered({ outcome: outcomeOf(result) }))
+                    : Effect.succeed(outcomeOf(result)),
+                ),
               ),
             );
           }).pipe(
             Effect.catch((cause) =>
               Effect.succeed(
-                outcomeOf(err("operation_failed", `Collie could not do it: ${reason(cause)}.`)),
+                Schema.is(SteerUnanswered)(cause)
+                  ? cause.outcome
+                  : Schema.is(RequestConflict)(cause)
+                    ? outcomeOf(err("invalid_input", cause.reason))
+                    : outcomeOf(
+                        err("operation_failed", `Collie could not do it: ${reason(cause)}.`),
+                      ),
               ),
             ),
             Effect.provideContext(bun),
@@ -743,11 +765,21 @@ const frontDoorHandlers = (
           plainly(
             Schema.decodeUnknownEffect(Schema.Array(ActionSchema))(actions).pipe(
               Effect.mapError(
-                () => new HostRefused({ reason: "an action is not one of the kinds Collie takes" }),
+                () =>
+                  new HostRefused({
+                    reason: `${REFUSED_INPUT}: an action is not one of the kinds Collie takes`,
+                  }),
               ),
-              Effect.flatMap((decoded) =>
-                carryOutAsked(env, decoded, { origin: doorOf(client), requestId: request }),
-              ),
+              Effect.flatMap((decoded) => {
+                const proposed = decoded.filter((action) => !ACTED_KINDS.has(action.kind));
+                return proposed.length > 0
+                  ? Effect.fail(
+                      new HostRefused({
+                        reason: `${REFUSED_INPUT}: ${[...new Set(proposed.map((a) => a.kind))].join(", ")} is carried out through propose, so it is on the record as asked for`,
+                      }),
+                    )
+                  : carryOutAsked(env, decoded, { origin: doorOf(client), requestId: request });
+              }),
             ),
           ),
         reconcile: ({ proposal, index, as, request }, { client }) =>
@@ -755,35 +787,67 @@ const frontDoorHandlers = (
             Effect.gen(function* () {
               const file = yield* journalOf(env.stateDir, proposal);
               if (file === null)
-                return yield* new HostRefused({ reason: `no proposal "${proposal}"` });
-              const done = yield* reconcileStep(file, proposal, index, as, {
-                origin: doorOf(client),
-                requestId: request,
-              });
-              if (done.refused !== null)
-                return yield* new ProposalRefused({ refused: done.refused, detail: done.detail });
-              return { proposal };
+                return yield* new ProposalRefused({
+                  refused: "not_found",
+                  detail: `no proposal "${proposal}"`,
+                });
+              const path = yield* Path.Path;
+              return yield* once(
+                path.dirname(file),
+                {
+                  operation: "reconcile",
+                  request,
+                  origin: doorOf(client),
+                  asked: { proposal, index, as },
+                  result: Schema.Struct({ proposal: Schema.String }),
+                },
+                Effect.gen(function* () {
+                  const done = yield* reconcileStep(file, proposal, index, as, {
+                    origin: doorOf(client),
+                    requestId: request,
+                  });
+                  if (done.refused !== null)
+                    return yield* new ProposalRefused({
+                      refused: done.refused,
+                      detail: done.detail,
+                    });
+                  return { proposal };
+                }),
+              );
             }),
           ),
         settleDelivery: ({ runId, delivery, as, request }, { client }) =>
           plainly(
-            Effect.gen(function* () {
-              const found = (yield* deliveriesOf(env.stateDir, runId)).find(
-                (entry) => entry.delivery.id === delivery,
-              );
-              if (!found)
-                return yield* new HostRefused({ reason: `no delivery "${delivery}" for this Run` });
-              const settled = reconcileDelivery(
-                yield* readLedger(found.file),
-                delivery,
-                as,
-                actorName({ origin: doorOf(client), requestId: request }),
-                yield* nowIso(),
-              );
-              if ("error" in settled) return yield* new HostRefused({ reason: settled.error });
-              yield* appendLine(found.file, settled);
-              return fromText(toText(settled));
-            }),
+            once(
+              trail(runId),
+              {
+                operation: "settle-delivery",
+                request,
+                origin: doorOf(client),
+                asked: { delivery, as },
+                result: Schema.Json,
+              },
+              Effect.gen(function* () {
+                const found = (yield* deliveriesOf(env.stateDir, runId)).find(
+                  (entry) => entry.delivery.id === delivery,
+                );
+                if (!found)
+                  return yield* new HostRefused({
+                    reason: `${REFUSED_INPUT}: no delivery "${delivery}" for this Run`,
+                  });
+                const settled = reconcileDelivery(
+                  yield* readLedger(found.file),
+                  delivery,
+                  as,
+                  actorName({ origin: doorOf(client), requestId: request }),
+                  yield* nowIso(),
+                );
+                if ("error" in settled)
+                  return yield* new HostRefused({ reason: `${REFUSED_INPUT}: ${settled.error}` });
+                yield* appendLine(found.file, settled);
+                return fromText(toText(settled));
+              }),
+            ),
           ),
         dispose: ({ runId, kind, ref, note, request }, { client }) =>
           known(runId).pipe(

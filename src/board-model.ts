@@ -574,6 +574,22 @@ export const SteerOutcome = Schema.Struct({
 });
 export type SteerOutcome = typeof SteerOutcome.Type;
 
+/**
+ * What the human can ask for and have done: the board's own actions on a named Run, plus
+ * starting one. A closed subset of the same union — amending an Intent, forking a
+ * definition and changing what a workspace's Runs begin with are collie_propose's, which
+ * carries them out in the same call.
+ */
+export const ASKED_KINDS = [
+  "stop",
+  "resume",
+  "release",
+  "answer",
+  "deliver",
+  "followup",
+  "start",
+] as const;
+
 /** What one action the human asked for came to. */
 export const ActionResult = Schema.Struct({
   kind: Schema.String,
@@ -724,7 +740,7 @@ export const FrontDoorRpcs = RpcGroup.make(
       request: Schema.String,
     },
     success: Schema.Struct({ proposal: Schema.String }),
-    error: Schema.Union([HostRefused, ProposalRefused]),
+    error: Schema.Union([HostRefused, ProposalRefused, RequestConflict]),
   }),
   /** A message nobody knows reached its agent, settled by the person who knows. */
   Rpc.make("settleDelivery", {
@@ -735,7 +751,7 @@ export const FrontDoorRpcs = RpcGroup.make(
       request: Schema.String,
     },
     success: Schema.Json,
-    error: HostRefused,
+    error: Schema.Union([HostRefused, RequestConflict]),
   }),
   Rpc.make("decline", {
     payload: { proposal: Schema.String, hash: Schema.String, request: Schema.String },

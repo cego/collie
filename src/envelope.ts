@@ -33,7 +33,7 @@ type CollieServices = BunServices;
  * exit 2, and no receipt, because nothing happened for a retry to replay. A caller
  * given `needs_input` is meant to fill the gaps and retry with the same request id.
  */
-const REJECTED: ReadonlyArray<ExpectedError["code"]> = [
+export const REJECTED: ReadonlyArray<ExpectedError["code"]> = [
   "invalid_input",
   "needs_input",
   "workspace_required",
