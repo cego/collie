@@ -7,6 +7,7 @@ import { Effect, FileSystem } from "effect";
 import { runEffect } from "./support/effect";
 import { FakeBin } from "./support/bin";
 import { readEnv } from "../src/env";
+import { eventText } from "../src/commands/onboard";
 import { onboard, type OnboardEvent, type OnboardOptions } from "../src/onboard";
 import { err, type OpResult } from "../src/operations";
 
@@ -51,12 +52,30 @@ const read = (file: string) =>
   );
 
 /** An installer that leaves an executable named `name` in ~/.local/bin, as the real ones do. */
-const installer = (name: string) =>
-  `mkdir -p "$HOME/.local/bin"; printf '#!/bin/sh\\n' > "$HOME/.local/bin/${name}"; chmod +x "$HOME/.local/bin/${name}"`;
+const installer = (name: string, says = "") =>
+  `mkdir -p "$HOME/.local/bin"
+cat > "$HOME/.local/bin/${name}" <<'END'
+#!/bin/sh
+${says}
+END
+chmod +x "$HOME/.local/bin/${name}"`;
+
+/** A Claude Code that is logged in. */
+const LOGGED_IN = `echo '{"loggedIn": true}'`;
 
 const READY: OpResult = { ok: true, data: { ready: true, checks: [] }, human: "ready" };
 
 let doctorRan = 0;
+
+/** A Claude Code where its installer puts it, ahead of the stubs on PATH. */
+const claudeAt = (script: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    yield* fs.makeDirectory(`${home}/.local/bin`, { recursive: true });
+    yield* fs.writeFileString(`${home}/.local/bin/claude`, `#!/bin/sh\n${script}\n`, {
+      mode: 0o755,
+    });
+  });
 
 const GITLAB = "gitlab.cego.dk";
 
@@ -111,7 +130,7 @@ beforeEach(() =>
       release("0.2.0");
       bin = yield* FakeBin.make(`${home}/stubs`);
       yield* fs.writeFileString(`${home}/herdr-installer`, installer("herdr"));
-      yield* fs.writeFileString(`${home}/claude-installer`, installer("claude"));
+      yield* fs.writeFileString(`${home}/claude-installer`, installer("claude", LOGGED_IN));
       yield* bin.add(
         "curl",
         `echo "$*" >> "${home}/curl-calls"
@@ -157,6 +176,7 @@ test("a bare Machine gets herdr, Claude Code, Collie at the tag, the plugin and 
         "claude",
         "path",
         "plugin",
+        "claude-login",
         "gitlab",
         "push",
         "helle",
@@ -172,7 +192,7 @@ test("a bare Machine gets herdr, Claude Code, Collie at the tag, the plugin and 
       for (const step of ["collie", "herdr", "claude", "path", "plugin", "doctor"]) {
         expect(statusOf(events, step)).toBe("done");
       }
-      for (const step of ["system", "gitlab", "push"])
+      for (const step of ["system", "claude-login", "gitlab", "push"])
         expect(statusOf(events, step)).toBe("in_place");
       for (const step of ["helle", "linear"]) expect(statusOf(events, step)).toBe("skipped");
       expect(git(root, "describe", "--exact-match", "--tags", "HEAD")).toBe("0.2.0");
@@ -245,6 +265,7 @@ test("a development checkout gets the checks, and nothing installed or moved", (
       git(home, "clone", "--quiet", origin, root);
       git(root, "checkout", "--quiet", "-b", "feature");
       const head = git(root, "rev-parse", "HEAD");
+      yield* claudeAt(`case "$*" in "auth status --json") ${LOGGED_IN} ;; esac`);
 
       const { result, events } = yield* onboarded({ HERDR_PLUGIN_ROOT: root });
 
@@ -253,6 +274,7 @@ test("a development checkout gets the checks, and nothing installed or moved", (
       expect(results(events).map((event) => event.step)).toEqual([
         "system",
         "collie",
+        "claude-login",
         "gitlab",
         "push",
         "helle",
@@ -395,18 +417,13 @@ test("the Linear MCP is added at user scope, and its login streams its URL", () 
   runEffect(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      // Where Claude Code's installer puts it, ahead of the stubs on PATH.
-      yield* fs.makeDirectory(`${home}/.local/bin`, { recursive: true });
-      yield* fs.writeFileString(
-        `${home}/.local/bin/claude`,
-        `#!/bin/sh
-echo "$*" >> "${home}/claude-calls"
+      yield* claudeAt(
+        `echo "$*" >> "${home}/claude-calls"
 case "$*" in
+  "auth status --json") ${LOGGED_IN} ;;
   "mcp add"*) echo '{"mcpServers":{"linear-server":{"url":"https://mcp.linear.app/mcp"}}}' > "$HOME/.claude.json" ;;
   "mcp get linear-server") if [ -f "${home}/authorized" ]; then echo "  Status: ✔ Connected"; else echo "  Status: ! Needs authentication"; fi ;;
-esac
-`,
-        { mode: 0o755 },
+esac`,
       );
       const url =
         "https://mcp.linear.app/authorize?redirect_uri=http%3A%2F%2Flocalhost%3A62074%2Fcallback&state=s";
@@ -428,3 +445,47 @@ esac
       expect(statusOf(events, "linear")).toBe("done");
     }),
   ));
+
+test("unattended, a login is left as a step for the human rather than started", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* claudeAt(
+        `echo "$*" >> "${home}/claude-calls"
+case "$*" in
+  "mcp add"*) echo '{"mcpServers":{"linear-server":{"url":"https://mcp.linear.app/mcp"}}}' > "$HOME/.claude.json" ;;
+esac`,
+      );
+      yield* bin.add("script", `echo "$*" >> "${home}/script-calls"`);
+
+      const { result, events } = yield* onboarded({}, { skip: ["helle"], attended: false });
+
+      expect(results(events).find((e) => e.step === "claude-login")).toMatchObject({
+        status: "needs_human",
+        command: "claude auth login",
+      });
+      expect(results(events).find((e) => e.step === "linear")).toMatchObject({
+        status: "needs_human",
+        command: "claude mcp login linear-server",
+      });
+      expect(yield* read(`${home}/script-calls`)).toBe("");
+      expect(result).toMatchObject({ ok: false });
+    }),
+  ));
+
+test("a terminal shows each step as text", () => {
+  expect(eventText({ event: "start", step: "system", title: "Checking for git and curl" })).toBe(
+    "→ Checking for git and curl",
+  );
+  expect(
+    eventText({
+      event: "result",
+      step: "system",
+      status: "needs_root",
+      detail: "git must be installed as root",
+      command: "sudo apt-get install -y git",
+    }),
+  ).toBe("  ✗ git must be installed as root\n    run: sudo apt-get install -y git");
+  expect(
+    eventText({ event: "human", step: "linear", detail: "open this", url: "https://x.example" }),
+  ).toBe("  … open this\n    open: https://x.example");
+});

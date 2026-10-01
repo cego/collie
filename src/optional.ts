@@ -66,8 +66,17 @@ export const probeHelle = Effect.fn("Optional.probeHelle")(function* (env: Plugi
  * A server is Linear's when its name or URL says so; Collie has no other way to know.
  * Only the keys this question needs are read; everything else in those files is theirs.
  */
-export const LINEAR_MCP_FIX =
-  "claude mcp add --transport http --scope user linear-server https://mcp.linear.app/mcp";
+export const LINEAR_MCP_ADD = [
+  "mcp",
+  "add",
+  "--transport",
+  "http",
+  "--scope",
+  "user",
+  "linear-server",
+  "https://mcp.linear.app/mcp",
+];
+export const LINEAR_MCP_FIX = `claude ${LINEAR_MCP_ADD.join(" ")}`;
 
 const Servers = Schema.Record(
   Schema.String,

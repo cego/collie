@@ -264,7 +264,7 @@ const handlers = (dir: string) =>
       const catalogue = (project: string) =>
         discover(searchPath({ pluginRoot: env.pluginRoot, userDir: env.userDir, project }));
 
-      // Checked once; `upgrade --to` rechecks.
+      // Checked when the host starts.
       const installed = yield* installation(env.pluginRoot, BUILD);
       const development = installed.release ? {} : { development: installed.build };
 

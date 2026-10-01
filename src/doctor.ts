@@ -103,14 +103,17 @@ function older(version: string, than: string): boolean {
   return false;
 }
 
-/** What the plugin manifest says it needs of herdr — declared since the start, and never checked until now. */
-const minHerdrVersion = Effect.fn("Doctor.minHerdrVersion")(function* (root: string) {
+/** One string field of the plugin manifest at `root`, or "" where there is none. */
+export const manifestField = Effect.fn("Doctor.manifestField")(function* (
+  root: string,
+  key: string,
+) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const manifest = path.join(root, "herdr-plugin.toml");
   if (!(yield* fs.exists(manifest))) return "";
   const text = yield* fs.readFileString(manifest);
-  return /^min_herdr_version\s*=\s*"([^"]+)"/m.exec(text)?.[1] ?? "";
+  return new RegExp(`^${key}\\s*=\\s*"([^"]+)"`, "m").exec(text)?.[1] ?? "";
 });
 
 /**
@@ -396,7 +399,8 @@ export const doctor = Effect.fn("Doctor.doctor")(function* (
   const search = env.raw["PATH"] ?? "";
   const checks: Check[] = [];
 
-  const min = yield* minHerdrVersion(root);
+  // What the plugin manifest says it needs of herdr.
+  const min = yield* manifestField(root, "min_herdr_version");
   const herdrBin = yield* located(search, env.binPath);
   // `cli` parses JSON where herdr answers with it; these two answer in plain text,
   // and anything else is as good as no answer.

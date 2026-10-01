@@ -1,5 +1,5 @@
-// Release signatures: CI signs each runner binary with the release key, and anything that
-// installs one checks it here first. The private key is only ever a CI secret.
+// Release signatures: CI signs each runner binary with the release key, and Desktop checks
+// one here before installing it. The private key is only ever a CI secret.
 
 import { createPrivateKey, createPublicKey, sign, verify } from "node:crypto";
 

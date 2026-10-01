@@ -73,7 +73,7 @@ to.
 `collie onboard` installs everything instead, herdr and Claude Code included, from a runner
 alone: it clones Collie at the runner's own release (or `--to`) over HTTPS, prepares it the
 way `setup.sh` does, puts `~/.local/bin` on PATH in your shell profile. It never runs sudo: a missing `git` or `curl` stops it with the command to run.
-It then sets up what a Machine needs to work unattended: glab logged in with a GitLab
+It then sets up what a Machine needs to work unattended: Claude Code logged in, glab logged in with a GitLab
 token, a key of the Machine's own for pushing unless it can already push, Helle's
 credentials and the Linear MCP — the last two unless `--skip` names them. Secrets come on
 stdin (`collie onboard --secrets-stdin < secrets.env`), never as arguments. It ends in

@@ -196,7 +196,7 @@ export function describeAction(action: Action): string {
     case "upgrade":
       return "upgrade this installation of Collie";
     case "onboard":
-      return "onboard this Machine: install or repair what Collie needs here";
+      return `onboard this Machine: install or repair what Collie needs here${action.skip?.length ? `, without ${action.skip.join(" and ")}` : ""}`;
     case "hold":
       return action.until === undefined
         ? `hold ${action.run}`

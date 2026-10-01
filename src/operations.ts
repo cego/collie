@@ -245,7 +245,7 @@ export const moveToRelease = Effect.fn("operations.moveToRelease")(function* (
     });
   }
   // After the fetch, so "ahead of its remote" is judged against the remote as it is now.
-  const current = yield* installation(root, manifest.version);
+  const current = yield* installation(root, manifest.version, run);
   if (!current.release) {
     return err(
       "invalid_state",

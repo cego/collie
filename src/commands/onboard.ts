@@ -26,7 +26,7 @@ const secretLines = (text: string) =>
   );
 
 /** One event as a terminal shows it. */
-function eventText(event: OnboardEvent): string {
+export function eventText(event: OnboardEvent): string {
   if (event.event === "start") return `→ ${event.title}`;
   if (event.event === "human") return `  … ${event.detail}\n    open: ${event.url}`;
   return [

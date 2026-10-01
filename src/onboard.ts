@@ -8,10 +8,10 @@ import { Effect, FileSystem, Option, Schema, Stream } from "effect";
 import type { PlatformError } from "effect/PlatformError";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { hostname } from "node:os";
-import { doctor, glabHosts, onPath, pushCheck, tokenPage } from "./doctor";
+import { doctor, glabHosts, manifestField, onPath, pushCheck, tokenPage } from "./doctor";
 import type { PluginEnv } from "./env";
 import { err, moveToRelease, prepareSteps, type OpResult } from "./operations";
-import { helleEnvPath, LINEAR_MCP_FIX, probeLinearMcp } from "./optional";
+import { helleEnvPath, LINEAR_MCP_ADD, LINEAR_MCP_FIX, probeLinearMcp } from "./optional";
 import { installation, RELEASE_TAG } from "./release";
 
 export type StepStatus = "done" | "in_place" | "skipped" | "needs_root" | "needs_human" | "failed";
@@ -47,6 +47,8 @@ export interface OnboardOptions {
   readonly secrets?: Readonly<Record<string, string>>;
   /** stdin is a terminal the human can paste into. */
   readonly terminal?: boolean;
+  /** Someone sees the stream, so a login that needs the human may be started. Default true. */
+  readonly attended?: boolean;
 }
 
 const HERDR_INSTALL = "curl -fsSL https://herdr.dev/install.sh | sh";
@@ -55,7 +57,11 @@ const COLLIE_REPO = "https://github.com/cego/collie.git";
 const PROFILE_MARKER = "# added by collie onboard";
 const GITLAB_HOST = "gitlab.cego.dk";
 const LINEAR_LOGIN = "claude mcp login linear-server";
+const CLAUDE_LOGIN = "claude auth login";
 const LOGIN_LIMIT = "10 minutes";
+/** Long enough for an installer or a clone; a network that never answers still ends. */
+const COMMAND_LIMIT = "15 minutes";
+const SETTLED: ReadonlyArray<StepStatus> = ["done", "in_place", "skipped"];
 /** A URL's own characters (RFC 3986), so the terminal escapes around it are not part of it. */
 const URL_IN = /https:\/\/[\w\-.~:/?#[\]@!$&'()*+,;=%]+/;
 
@@ -87,6 +93,18 @@ const rootCommand = Effect.fn("Onboard.rootCommand")(function* (
   return `install ${packages.join(" ")} with your package manager`;
 });
 
+const needsRoot = Effect.fn("Onboard.needsRoot")(function* (
+  search: string,
+  tools: ReadonlyArray<string>,
+  packages: ReadonlyArray<string> = tools,
+) {
+  return {
+    status: "needs_root",
+    detail: `${tools.join(" and ")} must be installed as root; run the command, then onboard again`,
+    command: yield* rootCommand(search, packages),
+  } satisfies Outcome;
+});
+
 const profileOf = (env: PluginEnv) => {
   const shell = env.raw["SHELL"] ?? "";
   if (shell.endsWith("/zsh")) return `${env.home}/.zshrc`;
@@ -99,14 +117,6 @@ const decodeChecks = Schema.decodeUnknownOption(
     checks: Schema.Array(Schema.Struct({ name: Schema.String, ok: Schema.Boolean })),
   }),
 );
-
-const versionOf = Effect.fn("Onboard.versionOf")(function* (root: string) {
-  const fs = yield* FileSystem.FileSystem;
-  const text = yield* fs
-    .readFileString(`${root}/herdr-plugin.toml`)
-    .pipe(Effect.catch(() => Effect.succeed("")));
-  return /^version\s*=\s*"([^"]+)"/m.exec(text)?.[1] ?? "";
-});
 
 export const onboard = Effect.fn("Onboard.onboard")(function* (
   env: PluginEnv,
@@ -166,6 +176,10 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
       return { code: Number(code), stdout: stdout + stderr };
     }).pipe(
       Effect.scoped,
+      Effect.timeoutOption(COMMAND_LIMIT),
+      Effect.map(
+        Option.getOrElse(() => ({ code: 124, stdout: `timed out after ${COMMAND_LIMIT}` })),
+      ),
       Effect.catch(() => Effect.succeed({ code: 127, stdout: "" })),
     );
   const exec = (cmd: string, args: ReadonlyArray<string>, cwd: string) => piped(cmd, args, cwd);
@@ -185,14 +199,12 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
   });
 
   const finish = (development: boolean) => {
-    const ready = outcomes.every((outcome) =>
-      ["done", "in_place", "skipped"].includes(outcome.status),
-    );
+    const ready = outcomes.every((outcome) => SETTLED.includes(outcome.status));
     const data = { root, version: to, development, ready, steps: outcomes.map((o) => ({ ...o })) };
     if (ready) {
       return { ok: true as const, data, human: "Onboarded: collie doctor is ready." };
     }
-    const left = outcomes.filter((o) => !["done", "in_place", "skipped"].includes(o.status));
+    const left = outcomes.filter((o) => !SETTLED.includes(o.status));
     return err(
       "operation_failed",
       [
@@ -212,11 +224,7 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
         if ((yield* onPath(search, tool)) === null) missing.push(tool);
       }
       if (missing.length === 0) return inPlace("git and curl are installed");
-      return {
-        status: "needs_root",
-        detail: `${missing.join(" and ")} must be installed as root; run the command, then onboard again`,
-        command: yield* rootCommand(search, missing),
-      } satisfies Outcome;
+      return yield* needsRoot(search, missing);
     }),
   );
   if (system.status !== "in_place") return finish(false);
@@ -240,12 +248,12 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
       if (!(yield* fs.exists(`${root}/.git`))) {
         return failed(`${root} is there and is not a checkout of Collie`);
       }
-      const current = yield* installation(root, yield* versionOf(root), exec);
+      const current = yield* installation(root, yield* manifestField(root, "version"), exec);
       if (!current.release) {
         development = true;
         return {
           status: "skipped",
-          detail: `development build ${current.build} (${current.reason}): checks only, nothing installed or moved`,
+          detail: `development build ${current.build} (${current.reason}): checks and logins only, nothing installed or moved`,
         } satisfies Outcome;
       }
       const tags = yield* exec("git", ["tag", "--points-at", "HEAD"], root);
@@ -316,19 +324,52 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
     raw: childEnv,
   };
   const secrets = options.secrets ?? {};
+  const attended = options.attended ?? true;
   const host = env.raw["GITLAB_HOST"] ?? GITLAB_HOST;
+
+  yield* step(
+    "claude-login",
+    "Claude Code logged in",
+    Effect.gen(function* () {
+      if ((yield* onPath(search, "claude")) === null) {
+        return failed("Claude Code is not installed", CLAUDE_INSTALL);
+      }
+      const loggedIn = exec("claude", ["auth", "status", "--json"], env.home).pipe(
+        Effect.map((answer) => /"loggedIn":\s*true/.test(answer.stdout)),
+      );
+      if (yield* loggedIn) return inPlace("logged in");
+      if (!(attended && options.terminal)) {
+        return {
+          status: "needs_human",
+          detail: "log in to Claude Code on this Machine",
+          command: CLAUDE_LOGIN,
+        } satisfies Outcome;
+      }
+      yield* Effect.scoped(
+        Effect.flatMap(
+          spawner.spawn(
+            ChildProcess.make("claude", ["auth", "login"], {
+              cwd: env.home,
+              env: childEnv,
+              stdin: "inherit",
+              stdout: "inherit",
+              stderr: "inherit",
+            }),
+          ),
+          (handle) => handle.exitCode,
+        ),
+      ).pipe(Effect.timeoutOption(LOGIN_LIMIT), Effect.ignore);
+      return (yield* loggedIn)
+        ? done("logged in")
+        : failed("the login did not finish", CLAUDE_LOGIN);
+    }),
+  );
 
   yield* step(
     "gitlab",
     `Logged in to ${host}`,
     Effect.gen(function* () {
-      if ((yield* onPath(search, "glab")) === null) {
-        return {
-          status: "needs_root",
-          detail: "glab must be installed as root; run the command, then onboard again",
-          command: yield* rootCommand(search, ["glab"]),
-        } satisfies Outcome;
-      }
+      if ((yield* onPath(search, "glab")) === null) return yield* needsRoot(search, ["glab"]);
       const status = yield* exec("glab", ["auth", "status", "--hostname", host], root);
       if (status.code === 0) return inPlace(`glab is logged in to ${host}`);
       const token = secrets["GITLAB_TOKEN"];
@@ -368,11 +409,7 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
         return failed(`${before.detail}, and glab is not logged in to register a key`);
       }
       if ((yield* onPath(search, "ssh-keygen")) === null) {
-        return {
-          status: "needs_root",
-          detail: "ssh-keygen must be installed as root; run the command, then onboard again",
-          command: yield* rootCommand(search, ["openssh-client"]),
-        } satisfies Outcome;
+        return yield* needsRoot(search, ["ssh-keygen"], ["openssh-client"]);
       }
       const key = `${env.home}/.ssh/id_ed25519`;
       const name = hostname();
@@ -480,8 +517,7 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
       }
       let changed = false;
       if ((yield* probeLinearMcp(here)).state !== "ok") {
-        const [cmd, ...args] = LINEAR_MCP_FIX.split(" ");
-        const added = yield* exec(cmd!, args, env.home);
+        const added = yield* exec("claude", LINEAR_MCP_ADD, env.home);
         if (added.code !== 0) {
           return failed(`could not add the Linear MCP: ${lastWords(added.stdout)}`, LINEAR_MCP_FIX);
         }
@@ -492,6 +528,13 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
       );
       if (yield* connected) {
         return changed ? done("added, and connected") : inPlace("connected");
+      }
+      if (!attended) {
+        return {
+          status: "needs_human",
+          detail: "added; log in to Linear",
+          command: LINEAR_LOGIN,
+        } satisfies Outcome;
       }
       if ((yield* onPath(search, "script")) === null) {
         return failed("no `script` to give the login a terminal", LINEAR_LOGIN);

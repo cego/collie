@@ -391,8 +391,17 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
       Effect.catch((cause) => Effect.succeed(failed(String(cause)))),
     ),
   );
-  registerExecutor("onboard", () =>
-    onboard(env, { to: manifest.version }, () => Effect.void).pipe(
+  // Unattended: nobody sees a login's URL from here, so a login is left as a step to do.
+  registerExecutor("onboard", (action) =>
+    onboard(
+      env,
+      {
+        to: manifest.version,
+        skip: action.skip ?? [],
+        attended: false,
+      },
+      () => Effect.void,
+    ).pipe(
       Effect.map(settled),
       Effect.catch((cause) => Effect.succeed(failed(reason(cause)))),
     ),
