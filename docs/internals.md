@@ -536,6 +536,14 @@ borrows the token `glab` or `gh` already holds for the release host — see
 with a sign-in page and HTTP 200, so the install checks the first bytes for an ELF or
 Mach-O header instead of trusting `curl -f`.
 
+Each runner binary is published with a detached ed25519 signature beside it, `<asset>.sig`.
+The release job signs with `tools/sign.ts`, which reads the private key from the
+`COLLIE_SIGNING_KEY` secret (PKCS#8 PEM). It refuses to run without that key, and refuses a
+key that does not match the public key built into `src/signing.ts`. `verifyRelease` is the one check
+Desktop and onboarding run before installing a runner: one that is unsigned or does not
+match is refused. Rotating the key means changing both the secret and `RELEASE_PUBLIC_KEY`, and
+releases signed with the old key stop verifying.
+
 `bun run build` compiles beside the binary and renames over it, because replacing a running
 runner's own file kills the process executing it. In a git checkout `install.sh` builds from
 source rather than fetching a release, because that machine's own source is what a release
