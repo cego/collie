@@ -4290,18 +4290,20 @@ const makeRegistry: (
         );
       }
     }
-    // A follow-up of a Run still going would share its live checkout. A stop ends one.
-    const finished =
-      state.status === "complete" ||
-      state.status === "failed" ||
-      (yield* controlsOf(runId)).includes(STOP);
-    if (!finished) {
+    // A follow-up works in its parent's checkout, which a Run still going, or a stopped one
+    // that can be resumed, would be working in too.
+    const ended = state.status === "complete" || state.status === "failed";
+    const stopped = (yield* controlsOf(runId)).includes(STOP);
+    const notYet = ended
+      ? null
+      : !stopped
+        ? "a follow-up is a child of a finished run, and this one is still going"
+        : facts.branch !== null
+          ? "this run is stopped, and could be resumed in the checkout a follow-up would share"
+          : null;
+    if (notYet !== null) {
       for (const offer of generation.offers) {
-        if (offer.kind === "follow-up")
-          refused.set(
-            offer.id,
-            "a follow-up is a child of a finished run, and this one is still going",
-          );
+        if (offer.kind === "follow-up") refused.set(offer.id, notYet);
       }
     }
     return { row, generation, facts, where, refused, input };
