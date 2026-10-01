@@ -221,6 +221,15 @@ test(
             }),
           );
           yield* stopHost(world.state);
+          // A host spawned from the first session reads the second, which it did not inherit.
+          const desk = yield* collie(world, ["--json", "board"], {
+            ...herdr,
+            HERDR_SOCKET_PATH: first,
+          });
+          expect(desk.envelope.ok).toBe(true);
+          const fromDesk = yield* firstSnapshot(world.state);
+          yield* stopHost(world.state);
+          expect(fromDesk?.tasks[0]?.state).toBe("blocked");
           expect(snapshot?.herds.map((herd) => herd.name)).toEqual(["desk", "builds"]);
           const builds = snapshot?.herds.find((herd) => herd.name === "builds");
           expect(snapshot?.tasks[0]?.herd).toBe(builds!.id);
