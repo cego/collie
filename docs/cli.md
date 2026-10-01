@@ -1180,6 +1180,44 @@ other than `master`, detached on a commit that is not a release, with uncommitte
 or ahead of its remote — is refused as `invalid_state` with the reason, and its checkout is left as it was.
 A host's `identity` names such a checkout's build as `development: "<version>+<sha>"`.
 
+## Onboarding a Machine
+
+```sh
+collie onboard [--to 0.27.0]
+```
+
+Takes a Machine from bare to a working Collie host, and repairs a half-onboarded one: every
+step looks before it acts, so running it again does only what is missing. `--to` is the
+release to install, this runner's own version when it is not given. Nothing runs sudo.
+
+| Step     | What it does                                                                                                                                                            |
+| -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `system` | Checks for `git` and `curl`. Either missing stops here with `needs_root` and the exact command                                                                          |
+| `collie` | Clones `https://github.com/cego/collie.git` (or `COLLIE_REPO`) at the tag into `~/.collie` (or `COLLIE_DIR`), or moves a released checkout to it as `upgrade --to` does |
+| `herdr`  | `curl -fsSL https://herdr.dev/install.sh \| sh`, if there is no `herdr`                                                                                                 |
+| `claude` | Anthropic's user-level installer, `curl -fsSL https://claude.ai/install.sh \| bash`, if there is no `claude`                                                            |
+| `path`   | Adds `~/.local/bin` (and `COLLIE_BIN_DIR`) to PATH in the shell's profile (`~/.bashrc`, `~/.zshrc` or `~/.profile`)                                                     |
+| `plugin` | `prepare.sh`: the plugin link, the runner and shim, the operator skill and the skills                                                                                   |
+| `doctor` | [`collie doctor`](#checking-an-installation); onboarded means it is ready                                                                                               |
+
+A development checkout — the one this runner belongs to when that is a checkout, or
+`COLLIE_DIR` — is judged as [`upgrade --to`](#upgrading) judges one, and gets the checks
+only: nothing is installed and its checkout is not moved.
+
+Each step prints a line when it starts and one when it ends. Under `--json` each is a JSON
+line, then the envelope:
+
+```json
+{"event":"start","step":"system","title":"Checking for git and curl"}
+{"event":"result","step":"system","status":"needs_root","detail":"git must be installed as root; run the command, then onboard again","command":"sudo apt-get install -y git"}
+```
+
+`status` is `done`, `in_place`, `skipped`, `needs_root`, `needs_human` or `failed`; a
+result may carry the `command` to run by hand and the `url` to open. The envelope's
+`data.ready` is true only when every step ended `done`, `in_place` or `skipped`, and
+`data.steps` repeats every result; otherwise it is an `operation_failed` that lists what is
+left, and the exit status is 1. Re-running is the retry.
+
 ## Checking an installation
 
 ```sh
@@ -1190,7 +1228,7 @@ collie doctor --json
 Every prerequisite in one pass, each with the command that fixes it: herdr present and at
 least the `min_herdr_version` the plugin manifest declares; the plugin linked from this
 installation; the runner built and the `collie` shim on PATH (installed-but-not-on-PATH is
-its own reported state); a Node runtime for the skills CLI; every skill and every harness
+its own reported state); every skill and every harness
 the loaded workflows and personas name; whether the checkout is behind its remote; the
 Projects root and its source — `projects.root`, `GITTE_CWD`, or the home directory, the last
 a `!` warning that never fails the run; `glab` present and logged in; Claude Code logged

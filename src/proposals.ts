@@ -471,6 +471,7 @@ const NOT_ABOUT_A_RUN: ReadonlySet<ActionKind> = new Set([
   "fork_definition",
   "home_cleanup",
   "upgrade",
+  "onboard",
 ]);
 
 /**

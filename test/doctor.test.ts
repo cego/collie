@@ -53,7 +53,6 @@ const healthy = Effect.fn("doctorTest.healthy")(function* () {
     "claude",
     `case "$*" in "auth status --json") printf '{\\n  "loggedIn": true\\n}\\n' ;; *) exit 0 ;; esac`,
   );
-  yield* bin.add("npx", `exit 0`);
   yield* installFakeSkills(rig.root);
 });
 
@@ -137,7 +136,6 @@ test("a healthy machine passes every check and says so", () =>
         "plugin",
         "runner",
         "collie on PATH",
-        "node",
         "skills",
         "harnesses",
         "claude login",

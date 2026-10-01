@@ -78,7 +78,7 @@ const located = Effect.fn("Doctor.located")(function* (search: string, bin: stri
  * is there but not executable fails with permission denied at the point of use,
  * which is exactly the confusion `doctor` exists to end.
  */
-const onPath = Effect.fn("Doctor.onPath")(function* (search: string, name: string) {
+export const onPath = Effect.fn("Doctor.onPath")(function* (search: string, name: string) {
   const path = yield* Path.Path;
   for (const dir of search.split(":").filter((d) => d !== "")) {
     if (yield* runnable(path.join(dir, name))) return dir;
@@ -458,17 +458,6 @@ export const doctor = Effect.fn("Doctor.doctor")(function* (
             `add ${binDir} to your PATH`,
           )
         : failed("not installed", `sh ${root}/prepare.sh`)),
-  });
-
-  const npx = yield* onPath(search, "npx");
-  checks.push({
-    name: "node",
-    ...(npx
-      ? passed(`npx in ${npx}`)
-      : failed(
-          "no npx on PATH; the skills cannot be installed or updated",
-          "install Node — https://nodejs.org — then run `collie upgrade`",
-        )),
   });
 
   const needs = yield* asked(env);

@@ -158,6 +158,7 @@ export const ActionSchema = Schema.Union([
   }),
   Schema.Struct({ kind: Schema.Literal("home_cleanup") }),
   Schema.Struct({ kind: Schema.Literal("upgrade") }),
+  Schema.Struct({ kind: Schema.Literal("onboard") }),
   Schema.Struct({ kind: Schema.Literal("ask_human"), question: Schema.String }),
   Schema.Struct({ kind: Schema.Literal("none"), why: Schema.String }),
 ]);

@@ -9,7 +9,7 @@ vocabulary — Run, operation, host, Choice, Hand-off — see [`CONTEXT.md`](../
 One command, safe to re-run:
 
 ```sh
-git clone git@github.com:cego/collie.git ~/.collie && ~/.collie/setup.sh
+git clone https://github.com/cego/collie.git ~/.collie && ~/.collie/setup.sh
 ```
 
 `setup.sh` does its own work — clone the checkout or pull it, add the four keybindings
@@ -35,11 +35,11 @@ plugin rebuild may do as a side effect, so `setup.sh` alone adds them.
 its status, so an install's last word is either that everything is ready or what is missing
 with the fix for each.
 
-Collie is internal, so downloading a release asset needs a token. An unauthenticated
-request gets a sign-in page rather than a binary — with HTTP 200, which is why the install
+Collie's releases are public, so the install needs no token. A project that is not public — a
+fork, or a mirror — answers an unauthenticated download with a sign-in page rather than a binary — with HTTP 200, which is why the install
 checks that what arrived is a program rather than trusting the status code.
 
-The install finds a token in this order:
+For one of those, the install finds a token in this order:
 
 1. `COLLIE_TOKEN`, if you set it — a token that can read the repository:
 
@@ -67,6 +67,16 @@ checkout (`--ff-only`, so it never quietly merges local work), then runs the sam
 rather than installed over. The Control Plane says when this installation is behind its
 remote, so you upgrade because you know you are stale rather than because you remembered
 to.
+
+### Onboarding a Machine
+
+`collie onboard` installs everything instead, herdr and Claude Code included, from a runner
+alone: it clones Collie at the runner's own release (or `--to`) over HTTPS, prepares it the
+way `setup.sh` does, puts `~/.local/bin` on PATH in your shell profile and ends in `collie
+doctor`. It never runs sudo: a missing `git` or `curl` stops it with the command to run.
+Re-running it repairs only what is missing, and a development checkout gets the checks
+alone. It adds no keybindings; the steps and their `--json` stream are in
+[the CLI reference](cli.md#onboarding-a-machine).
 
 ### The skills
 
@@ -104,9 +114,10 @@ skill writes can break a workflow with no change on our side. The symptom is a s
 output cannot be read, and upstream is the first place to look. The reasoning is
 [ADR 0005](adr/0005-skills-float-and-are-not-pinned.md).
 
-The step needs the network and a Node runtime, and neither is a reason to leave you without
-a runner. If either is missing the step says so in one line, the rest of the install
-completes, and `collie upgrade` picks it up next time.
+The CLI runs on the runner's own Bun (`BUN_BE_BUN=1 bin/collie x skills@…`), so no Node is
+needed. The step needs the network, which is no reason to leave you without a runner: if it
+cannot reach a source it says so in one line, the rest of the install completes, and
+`collie upgrade` picks it up next time.
 
 ### Optional integrations
 
@@ -1287,7 +1298,7 @@ the new build added or renamed needs the chat's `/mcp` to reconnect before it sh
 
 **Something is missing and you would rather not find out mid-run.** `collie doctor` checks
 every prerequisite at once — herdr and its minimum version, the plugin link, the runner and
-the shim's directory on PATH, a Node runtime, the skills and harnesses your workflows name,
+the shim's directory on PATH, the skills and harnesses your workflows name,
 whether this checkout is behind its remote, which Projects root a Run started from the Home
 is rooted at and where that came from (`projects.root` in `config.json`, else `GITTE_CWD`,
 else your home directory, which is shown as `!` with the fix of setting `projects.root`),

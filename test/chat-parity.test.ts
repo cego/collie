@@ -290,6 +290,7 @@ const INVENTORY: ReadonlyArray<readonly [string, Route]> = [
     },
   ],
   ["upgrade", { route: "propose", kind: "upgrade", action: { kind: "upgrade" } }],
+  ["onboard", { route: "propose", kind: "onboard", action: { kind: "onboard" } }],
   ["doctor", { route: "read", tool: "collie_installation" }],
   // Not commands: the board's own operations, and the flags that change what a command
   // does rather than what it is about.
