@@ -86,6 +86,20 @@ const takesFields = Schema.decodeUnknownOption(
 );
 
 /**
+ * The input a follow-up's words go to, whatever it is called: its one required argument,
+ * or its one argument where none is required. Otherwise why there is none.
+ */
+export function followUpField(drawn: Schema.Json | null): { field: string } | { refused: string } {
+  const takes = Option.getOrUndefined(takesFields(drawn));
+  const open = Object.keys(takes?.properties ?? {});
+  const required = takes?.required ?? [];
+  const field = required.length === 1 ? required[0] : open.length === 1 ? open[0] : undefined;
+  return field === undefined
+    ? { refused: `takes ${open.join(", ") || "nothing"} rather than one piece of text` }
+    : { field };
+}
+
+/**
  * Every action kind this build can carry out, against the host that owns the work.
  * Called once per process by whichever front door is about to look an executor up.
  */
@@ -253,21 +267,15 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
       const offered = offers.find((one) => one.kind === "follow-up");
       if (offered === undefined)
         return failed(`${action.run} declares no follow-up, so there is nothing to carry on with`);
-      // The words go to the one input the offer leaves for the caller, whatever it is called.
-      const takes = Option.getOrUndefined(takesFields(offered.arguments));
-      const open = Object.keys(takes?.properties ?? {});
-      const required = takes?.required ?? [];
-      const field = required.length === 1 ? required[0] : open.length === 1 ? open[0] : undefined;
-      if (field === undefined)
-        return failed(
-          `${action.run}'s follow-up "${offered.id}" takes ${open.join(", ") || "nothing"} rather than one piece of text`,
-        );
+      const into = followUpField(offered.arguments);
+      if ("refused" in into)
+        return failed(`${action.run}'s follow-up "${offered.id}" ${into.refused}`);
       const id = yield* newRequestId();
       return settled(
         yield* invokeOffer(env, {
           runId: action.run,
           offer: offered.id,
-          input: { [field]: action.text },
+          input: { [into.field]: action.text },
           request: id,
         }),
       );
