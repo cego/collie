@@ -134,6 +134,7 @@ const INVENTORY: ReadonlyArray<readonly [string, Route]> = [
   ["run deliveries", { route: "read", tool: "collie_receipts", input: { run: RUN } }],
   ["run disposition", { route: "write", tool: "collie_do" }],
   ["run metrics", { route: "read", tool: "collie_run", input: { run: RUN } }],
+  ["run report", { route: "read", tool: "collie_herd" }],
   ["run drift", { route: "read", tool: "collie_run", input: { run: RUN } }],
   ["run cards", { route: "read", tool: "collie_run", input: { run: RUN } }],
   ["run actions", { route: "read", tool: "collie_run", input: { run: RUN } }],

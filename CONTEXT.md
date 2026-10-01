@@ -134,7 +134,7 @@ never a worker transcript.
 **Follow-up Run** — A child Run started from a finished one to act on its outcome, reusing
 its worktree under guards. A finished Run is immutable; there is no mode that reopens one.
 
-**Intent** — A Run's goal, the Constraints its work must respect, and the Authority delegated to Collie over it. Versioned; v1 is written at start from the workspace's defaults, the work source's own text and what was named at launch, and amended by an explicit request. Everything Collie says about drift is a comparison against it. A Run of a Workflow module carries none yet — `run start` refuses `--goal` and `--constraint` for one — so nothing checks it for drift; what imported Runs recorded stays readable.
+**Intent** — A Run's goal, the Constraints its work must respect, and the Authority delegated to Collie over it. Versioned; v1 is written at start from the workspace's defaults, the work source's own text and what was named at launch, and amended by an explicit request, and, in a Run on a worktree of its own, by its own `plan/SPEC.md` as its constraints change (ADR-0036). Everything Collie says about drift is a comparison against it; what imported Runs recorded stays readable.
 
 **Constraint** — One thing a Run's work must respect. `kind: rule` is checked by Collie itself; `kind: semantic` is judged. `severity: block | warn`. Its `source` says where it came from — `human`, `workspace-default`, `parent` or `plan` — and a `plan` entry carries the file, heading and line it was read from. Text is evidence: no Constraint, wherever it came from, grants Authority.
 
@@ -201,16 +201,20 @@ is **Finished**, the board's last section.
 and lifted by a human.
 
 **Session** — One herdr session and one workspace, taken together. It is the
-scope of a Control Plane tab and of the register of live agents, so only Runs in the same
-Session can hand work to each other. There is only ever one agent per role in a Session.
-One workspace, always: a mutating Run's checkout does not take it out of the Session it
-was started in, which is what lets `implement` ask the live `plan` agent a question.
+scope of a Control Plane tab and of a register file of live agents, which holds one entry
+per agent for every Run started there. One workspace, always: a mutating Run's checkout
+does not take it out of the Session it was started in.
 
-**Hand-off** — What one Run's agent is told about another Run's live agent: the implementer's
-prompt names the planner's pane in the same Session and tells it to ask there rather than
-stop, and where nobody can answer, to decide and record the decision under `assumptions`
-in its Output. Nothing is typed into another
-Run's pane on its behalf.
+**Lineage** — A Run, the Run it was started from, that Run's own, and so on: a child's
+parent, or the Run whose `runs/<id>/plan` an `implement` builds, however it was started. The only Runs whose agents
+a Run's agents are pointed at.
+
+**Hand-off** — What one Run's agent is told about a live agent of a Run in its **Lineage**:
+the implementer's prompt names the pane of the planner of the plan it was started from and
+tells it to ask there rather than stop, and with no planner live in its lineage, to decide
+and record the decision under `assumptions` in its Output. Another Run's agent in the same
+role is never named, however recently it was started from the same place. Nothing is typed
+into another Run's pane on its behalf.
 
 **Worktree** — The checkout a mutating Run owns: one per branch, because git allows
 exactly one worktree per checked-out branch. The branch names the work rather than the path
@@ -295,6 +299,8 @@ What each is for, what it needs, and how they chain: `docs/workflows.md`.
 
 **Evidence** — A Verification collected at a revision. An Output field saying the tests pass is a claim, and is shown as one. The gate before a merge request reads evidence, never claims.
 
+**Baseline** — A check that failed at the gate, run once by Collie where the Run's branch leaves the default branch, in the Run's own checkout. One that fails there too, and still fails, is reported as failing before the Run's changes: never a pass, and never handed to the implementer to fix.
+
 **Obstacle** — What is identifiably in a Run's way, in one sentence: a command failing several times in a row the same way. It is shown to the human and given to the next prompt so the approach can change. It stops nothing.
 
 **Slice** — One item of a list of work — a ticket's build — known by its name, never by where it sits. It has its own prompt and its own Output, runs on the list's one agent, and is handed only its ticket and a few lines of fact about the items before it — their commits and what they verified, never their transcripts. A replayed or resumed Run reuses the items already done and does only what is left.
@@ -358,8 +364,8 @@ driven, still checked and still corrected.
 
 **Scope** — `local`, this Session's own workspace, or `all`, every workspace of this herdr
 session that Collie has a Run, an agent or a history in. It is what a Run lookup searches
-and never what a Session is: hand-offs, the register and starting a Workflow stay this
-Session's. The board no longer has one — it is the whole Herd's, one card per Task
+and never what a Session is: the register a Run's agents are written to and starting a
+Workflow stay this Session's, and a hand-off stays in the Run's **Lineage**. The board no longer has one — it is the whole Herd's, one card per Task
 ([ADR-0013](docs/adr/0013-the-board-is-cards-of-tasks.md)) — so the `scope` default in
 `config.json` is read at launch and narrows nothing a human sees.
 

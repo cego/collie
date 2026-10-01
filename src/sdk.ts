@@ -278,6 +278,8 @@ export interface EvidenceAsk {
     readonly file: string;
     readonly checks: ReadonlyArray<string>;
   }>;
+  /** Approved checks that also failed where the branch leaves the default branch. */
+  readonly preexisting?: ReadonlyArray<string>;
 }
 
 const collectedOf = (options: EvidenceAsk) => ({
@@ -288,6 +290,7 @@ const collectedOf = (options: EvidenceAsk) => ({
   reviewed: new Set(options.reviewed),
   insideRun: (ref: string) => refInside(options.roots, ref),
   tickets: options.tickets,
+  preexisting: new Set(options.preexisting ?? []),
 });
 
 /**
@@ -517,6 +520,11 @@ export interface HostApi {
     readonly cwd: string;
     /** What a pass looks like; `fail` is how a reproduction is proved to reproduce. */
     readonly expect?: "pass" | "fail";
+    /**
+     * Run it at the merge-base of this checkout and the default branch, in the same
+     * checkout, then put it back. Refused on a checkout with changes of its own.
+     */
+    readonly at?: "default-base";
   }) => Effect.Effect<Verification, WorkflowError>;
   /**
    * What this Run may have Collie run for it. A prompt names them so an agent knows what
@@ -595,6 +603,8 @@ export interface Place {
   readonly task: string | null;
   /** A workspace of the Run's own, where it asked for one; null lives in its Task's. */
   readonly workspace: string | null;
+  /** This Run, then the Runs it was started from or builds a plan of, and so on: whose agents it may ask. */
+  readonly lineage: ReadonlyArray<string>;
 }
 
 /** What opening a merge request from here needs, and what it would be filled in with. */

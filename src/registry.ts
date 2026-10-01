@@ -1,5 +1,6 @@
-import { Schema, Effect, FileSystem, Path } from "effect";
+import { Data, Schema, Effect, FileSystem, Path } from "effect";
 import type { AgentInfo } from "./herdr";
+import { ensureLockDir, withLock } from "./lock";
 
 /**
  * herdr's own identity for one live agent process, recorded when it is registered and
@@ -104,15 +105,18 @@ export const readRegistry = Effect.fn("readRegistry")(function* (file: string) {
   );
 });
 
-/** Every agent registered in this state directory, whichever Session registered it. */
-export const everyRegistered = Effect.fn("everyRegistered")(function* (stateDir: string) {
+const registryFiles = Effect.fn("registryFiles")(function* (stateDir: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const dir = path.join(stateDir, "agents");
   const names = yield* fs.readDirectory(dir).pipe(Effect.catch(() => Effect.succeed([])));
+  return names.filter((one) => one.endsWith(".json")).map((name) => path.join(dir, name));
+});
+
+/** Every agent registered in this state directory, whichever Session registered it. */
+export const everyRegistered = Effect.fn("everyRegistered")(function* (stateDir: string) {
   const entries: AgentEntry[] = [];
-  for (const name of names.filter((one) => one.endsWith(".json")))
-    entries.push(...(yield* readRegistry(path.join(dir, name))));
+  for (const file of yield* registryFiles(stateDir)) entries.push(...(yield* readRegistry(file)));
   return entries;
 });
 
@@ -126,17 +130,41 @@ const write = Effect.fn("writeRegistry")(function* (
   yield* fs.writeFileString(file, `${encodeRegistry(entries)}\n`);
 });
 
+/**
+ * One entry per agent: every Run started from the same place shares this file, and a
+ * panel's seats share a Run and a role. Given what herdr listed, an entry registered
+ * before that listing whose agent it did not have is dropped; one registered since may be
+ * an agent that started after it, as another seat launched at once does.
+ */
 export const registerAgent = Effect.fn("registerAgent")(function* (
   file: string,
   entry: AgentEntry,
+  alive?: { readonly agents: ReadonlyArray<AgentInfo>; readonly listedAt: string },
 ) {
-  const kept = (yield* readRegistry(file)).filter(
-    (e) => e.role !== entry.role && e.agent !== entry.agent,
+  yield* ensureLockDir(file);
+  // Unlocked, one write loses another's.
+  return yield* withLock(
+    `${file}.lock`,
+    Effect.fail(new RegistryBusy({ file })),
+    Effect.gen(function* () {
+      const others = (yield* readRegistry(file)).filter((e) => e.agent !== entry.agent);
+      const live = new Set(alive === undefined ? others : liveEntries(others, alive.agents));
+      const kept =
+        alive === undefined
+          ? others
+          : others.filter((e) => live.has(e) || Date.parse(e.at) >= Date.parse(alive.listedAt));
+      const entries = [...kept, entry];
+      yield* write(file, entries);
+      return entries;
+    }),
+    REGISTER_CLAIMS,
   );
-  const entries = [...kept, entry];
-  yield* write(file, entries);
-  return entries;
 });
+
+/** Ten seconds of claims: a registration holds the lock only for one read and one write. */
+const REGISTER_CLAIMS = 400;
+
+export class RegistryBusy extends Data.TaggedError("RegistryBusy")<{ file: string }> {}
 
 /**
  * Whether anything may be sent to this entry at all. A register is a cache of what herdr
@@ -191,20 +219,23 @@ export function liveEntries(
   return entries.filter((e) => matching(e, alive).length > 0);
 }
 
-export const pruneRegistry = Effect.fn("pruneRegistry")(function* (
-  file: string,
+/**
+ * The live agent in this role nearest the first of these Runs: that Run's own, then the
+ * Run it came from, and so on. Another Run's agent in the role is never the answer. Only
+ * read: `alive` may predate an agent registered since, and other Herds share these files.
+ */
+export const lineageAgent = Effect.fn("lineageAgent")(function* (
+  stateDir: string,
   alive: ReadonlyArray<AgentInfo>,
-) {
-  const entries = yield* readRegistry(file);
-  const live = liveEntries(entries, alive);
-  if (live.length !== entries.length) yield* write(file, live);
-  return live;
-});
-
-export const liveAgent = Effect.fn("liveAgent")(function* (
-  file: string,
-  alive: AgentInfo[],
   role: string,
+  lineage: ReadonlyArray<string>,
 ) {
-  return (yield* pruneRegistry(file, alive)).find((e) => e.role === role) ?? null;
+  const live: AgentEntry[] = [];
+  for (const file of yield* registryFiles(stateDir))
+    live.push(...liveEntries(yield* readRegistry(file), alive));
+  for (const runId of lineage) {
+    const found = live.findLast((e) => e.role === role && e.runId === runId);
+    if (found !== undefined) return found;
+  }
+  return null;
 });

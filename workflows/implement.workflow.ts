@@ -43,6 +43,7 @@ import {
   settleFinalFix,
   settleRound,
   splitDisputed,
+  type CheckEvidence,
   type Finding,
   type Handed,
   type Slice,
@@ -147,6 +148,21 @@ const Opened = Schema.Struct({
  */
 const ROUNDS = 4;
 
+/** The checks whose latest run by Collie, on the tree in front of it, failed. */
+const failingNow = (evidence: CheckEvidence, names: ReadonlyArray<string>) =>
+  names.filter(
+    (name) =>
+      evidence.verifications
+        .filter(
+          (v) =>
+            v.name === name &&
+            v.by === "collie" &&
+            v.end.head_sha === evidence.final.head_sha &&
+            v.end.fingerprint === evidence.final.fingerprint,
+        )
+        .at(-1)?.result === "fail",
+  );
+
 /** One agent for the whole Run, so its model is named once and the fixes know the build. */
 const BUILDER = "build";
 
@@ -250,7 +266,7 @@ export default defineWorkflow({
       };
       // Where a question the plan does not cover goes: the planner's own pane while one
       // is live, and otherwise the human's.
-      const session = { ask: yield* agents.askRoute("planner", cwd) };
+      const session = { ask: yield* agents.askRoute("planner", place.lineage) };
 
       // The tickets as they stand at each boundary: one added, removed or reordered while
       // another is being built is the plan from then on, and what is built stays built by
@@ -345,6 +361,7 @@ export default defineWorkflow({
       // is not run again until a gate fix changes the tree.
       let passes = 0;
       let passed: ReadonlyArray<string> = [];
+      let baseline: ReadonlyArray<{ readonly name: string; readonly at: string }> = [];
       const gapsNow = Effect.gen(function* () {
         passes += 1;
         const pass = yield* Activity.make({
@@ -372,6 +389,7 @@ export default defineWorkflow({
               reviewed: ["synthesize"],
               roots: [place.dir, cwd],
               tickets: tickets.map((ticket) => ({ file: ticket.file, checks: ticket.checks })),
+              preexisting: baseline.map((one) => one.name),
             };
             return { gaps: evidenceGapsOf(asked), fixable: checkGapsOf(asked), passed: now };
           }).pipe(Effect.orDie),
@@ -380,9 +398,31 @@ export default defineWorkflow({
         return { gaps: pass.gaps, fixable: pass.fixable ?? pass.gaps };
       });
       let gaps = yield* gapsNow;
-      // Once more before a fix: a check that fails and then passes on the same tree is a
-      // flake, and a Run that ends on one has proved nothing about the change.
-      if (gaps.fixable.length > 0) gaps = yield* gapsNow;
+      if (gaps.fixable.length > 0) {
+        // A check that failed is run once where this branch left the default branch. One
+        // that fails there too was never this Run's to fix, and the merge request says so.
+        baseline = yield* Activity.make({
+          name: "baseline",
+          success: Schema.Array(Schema.Struct({ name: Schema.String, at: Schema.String })),
+          execute: Effect.gen(function* () {
+            const failing = failingNow(
+              yield* host.evidence(runId, cwd),
+              granted.map((spec) => spec.name),
+            );
+            const failed: Array<{ name: string; at: string }> = [];
+            for (const name of failing) {
+              const ran = yield* host
+                .verify({ runId, name, cwd, at: "default-base" })
+                .pipe(Effect.orElseSucceed(() => null));
+              if (ran?.result === "fail") failed.push({ name, at: ran.start.head_sha });
+            }
+            return failed;
+          }),
+        });
+        // Once more before a fix: a check that fails and then passes on the same tree is a
+        // flake, and a Run that ends on one has proved nothing about the change.
+        gaps = yield* gapsNow;
+      }
       // A gate fix lands after the last review, so the merge request says it was not re-reviewed.
       let unreviewed = rallied.unreviewed;
       // The implementer fixes what a check could still prove, bounded like the rally; the
@@ -421,6 +461,12 @@ export default defineWorkflow({
           .filter((line) => line !== "")
           .join("\n");
       }
+      // Failed before this Run changed anything, and still fails: reported, never passed.
+      const failing = failingNow(
+        yield* host.evidence(runId, cwd),
+        granted.map((spec) => spec.name),
+      );
+      const preexisting = baseline.filter((one) => failing.includes(one.name));
       const unsettled = [
         ...assumed,
         ...rallied.unsettled,
@@ -428,6 +474,10 @@ export default defineWorkflow({
           gaps.fixable.includes(gap)
             ? `unproved after ${fixes} gate fixes: ${gap}`
             : `unproved, and no check can prove it: ${gap}`,
+        ),
+        ...preexisting.map(
+          ({ name, at }) =>
+            `${name} also fails at ${at.slice(0, 12)}, where this branch leaves the default branch, so it failed before this Run's changes and still fails (by exit code only: a dependency this branch changed can make that comparison wrong)`,
         ),
       ];
       if (unsettled.length > 0) yield* host.record(runId, `unsettled: ${unsettled.join("; ")}`);

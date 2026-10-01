@@ -74,29 +74,40 @@ export interface Collected {
     readonly file: string;
     readonly checks: ReadonlyArray<string>;
   }>;
+  /**
+   * Approved checks that also failed where the branch leaves the default branch. One whose
+   * latest run here failed is not a gap the Run can close; the Run reports it instead.
+   */
+  readonly preexisting?: ReadonlySet<string>;
 }
 
-/** A verification that passed on the tree in front of us, not on one that has moved. */
-function passedAtFinal(got: Collected, name: string): boolean {
-  return got.verifications.some(
-    (v) =>
-      v.name === name &&
-      v.result === "pass" &&
-      v.by === "collie" &&
-      v.end.head_sha === got.final.head_sha &&
-      v.end.fingerprint === got.final.fingerprint,
-  );
+/**
+ * Whether the latest result for this check, on the tree in front of us, passed: a pass a
+ * later fail contradicts is not one. `by` narrows it to one collector, Collie or an agent.
+ */
+function lastPassedAtFinal(got: Collected, name: string, by?: Verification["by"]): boolean {
+  return lastAtFinal(got, name, by) === "pass";
 }
 
-/** The same, for a verification an agent was allowed to collect (docs commands, checks). */
-function anyPassAtFinal(got: Collected, name: string): boolean {
-  return got.verifications.some(
-    (v) =>
-      v.name === name &&
-      v.result === "pass" &&
-      v.end.head_sha === got.final.head_sha &&
-      v.end.fingerprint === got.final.fingerprint,
-  );
+function lastAtFinal(
+  got: Collected,
+  name: string,
+  by?: Verification["by"],
+): Verification["result"] | undefined {
+  return got.verifications
+    .filter(
+      (v) =>
+        v.name === name &&
+        (by === undefined || v.by === by) &&
+        v.end.head_sha === got.final.head_sha &&
+        v.end.fingerprint === got.final.fingerprint,
+    )
+    .at(-1)?.result;
+}
+
+/** Failed where the branch leaves the default branch, and Collie's latest run here failed too. */
+function stillPreexisting(got: Collected, name: string): boolean {
+  return got.preexisting?.has(name) === true && lastAtFinal(got, name, "collie") === "fail";
 }
 
 /** Whether this kind of result is proved by Collie's own run of the approved set. */
@@ -133,7 +144,8 @@ function approvedSetGaps(got: Collected): string[] {
   if (got.approved.length === 0) return [nothingApproved()];
   const gaps: string[] = [];
   for (const spec of got.approved) {
-    if (passedAtFinal(got, spec.name)) continue;
+    if (lastPassedAtFinal(got, spec.name, "collie")) continue;
+    if (stillPreexisting(got, spec.name)) continue;
     const any = got.verifications.filter((v) => v.name === spec.name);
     if (any.length === 0) gaps.push(`${spec.name} was never run`);
     else if (any.some((v) => v.result === "fail")) gaps.push(`${spec.name} failed`);
@@ -225,10 +237,10 @@ function gapsOf(kind: Outcome, got: Collected): Array<{ text: string; check: boo
       // collected these itself; what matters is a pass on the tree in front of us.
       for (const ticket of got.tickets) {
         for (const name of ticket.checks) {
-          if (!anyPassAtFinal(got, name))
-            check(
-              `${ticket.file} promised check "${name}", which has no passing verification on this tree`,
-            );
+          if (lastPassedAtFinal(got, name) || stillPreexisting(got, name)) continue;
+          check(
+            `${ticket.file} promised check "${name}", which has no passing verification on this tree`,
+          );
         }
       }
       break;
@@ -246,7 +258,7 @@ function gapsOf(kind: Outcome, got: Collected): Array<{ text: string; check: boo
         check(
           "the bug was only reproduced on the tree the fix is already on, so nothing shows it failing before the fix",
         );
-      if (!anyPassAtFinal(got, "regression"))
+      if (!lastPassedAtFinal(got, "regression"))
         check("regression does not pass on the current tree, so the fix is not proven");
       const named = anyField(got, "reproduced");
       if (!isString(named) || named.trim() === "")
@@ -277,7 +289,7 @@ function gapsOf(kind: Outcome, got: Collected): Array<{ text: string; check: boo
       if (documented.length === 0)
         claim("no documented command is named, so the instructions were never run");
       for (const name of documented) {
-        if (!anyPassAtFinal(got, name))
+        if (!lastPassedAtFinal(got, name))
           check(`documented command "${name}" has no passing verification on this tree`);
       }
       if (!reviewerSays(got, "accurate"))
@@ -286,10 +298,10 @@ function gapsOf(kind: Outcome, got: Collected): Array<{ text: string; check: boo
     }
     case "migration": {
       for (const name of ["migrate-up", "migrate-down"]) {
-        if (anyPassAtFinal(got, name)) continue;
+        if (lastPassedAtFinal(got, name)) continue;
         // `rollback` is the same thing under another name, and a project that calls it
         // that has still proved it can go back.
-        if (name === "migrate-down" && anyPassAtFinal(got, "rollback")) continue;
+        if (name === "migrate-down" && lastPassedAtFinal(got, "rollback")) continue;
         check(`${name} has no passing verification on this tree`);
       }
       if (!reviewerSays(got, "compatible")) claim("the review did not report compatible: true");
