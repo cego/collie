@@ -865,9 +865,10 @@ export default defineWorkflow({
   outcome needs that set (anything but `investigation`, `plan` and `review`) and has nothing
   approved is refused as `invalid_input`, with the repair, before any Run, worktree or Task
   exists. The set comes from `--verify`, else the project's `.collie/verify.json`, else the
-  user's `verify.json`. A follow-up started from a card is held to its parent's set. A plan
-  spanning repositories is checked in each repository it names, against that one's own
-  `.collie/verify.json`, and `--verify` is refused for it.
+  checks remembered for its repository's remote, else the user's `verify.json`. A follow-up
+  started from a card is held to its parent's set. A plan spanning repositories is checked
+  in each repository it names, against that one's own `.collie/verify.json` or remembered
+  checks, and `--verify` is refused for it.
 - **`followUps` and `actions`** carry an `id` that is stable and a `title` a human reads.
   Two fields, because a retitled action is the same action and a card matching on the
   title would start a different one. `workflow` is a public id or `"self"` for the one

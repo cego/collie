@@ -2841,7 +2841,7 @@ const refuseUnprovable = Effect.fn("Engine.refuseUnprovable")(function* (o: {
   if (fanOut.refusal !== null) return approved;
   if (o.verify !== undefined)
     return yield* refusedInput(
-      "--verify gives one repository's checks, and this plan spans repositories: each is held to its own .collie/verify.json",
+      "--verify gives one repository's checks, and this plan spans repositories: each is held to its own .collie/verify.json or remembered checks",
     );
   const path = yield* Path.Path;
   const bare: string[] = [];

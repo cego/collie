@@ -57,6 +57,9 @@ export class ApprovedUnreadable extends Data.TaggedError("ApprovedUnreadable")<{
 
 /** What a layer's file holds: the specs, whole. A file is taken or refused, never merged. */
 const ApprovedJson = Schema.fromJsonString(Schema.Array(VerifySpecSchema));
+export const encodeApprovedFile = Schema.encodeSync(
+  Schema.fromJsonString(Schema.Array(VerifySpecSchema), { space: 2 }),
+);
 
 /** The project's own list, and then the user's. Relative to the Run's root. */
 export const PROJECT_FILE = ".collie/verify.json";

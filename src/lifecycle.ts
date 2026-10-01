@@ -17,6 +17,7 @@ import { savedModules, type Fault, type Found } from "./discovery";
 import { connect, type HostClient, type HostUnavailable, type HostVersionMismatch } from "./host";
 import {
   REFUSED_INPUT,
+  runDir,
   type Given,
   type HostRefused,
   type OfferView,
@@ -25,8 +26,9 @@ import {
 import { err, taskFor, type Failure, type OpResult } from "./operations";
 import type { TaskChoice } from "./task";
 import type { RequestConflict } from "./store";
-import { renderApproved, type VerifySpec } from "./verify-spec";
-import { defaultsPath, readDefaults, type IntentSeed } from "./intent";
+import { encodeApprovedFile, rememberedFile, renderApproved, type VerifySpec } from "./verify-spec";
+import { projectHere, shell } from "./mr";
+import { defaultsPath, readDefaults, readIntent, type IntentSeed } from "./intent";
 import { scopeFor, scopeKey } from "./registry";
 import { PROJECTS_ROOT_OPTION, projectsRoot } from "./projects";
 
@@ -416,6 +418,54 @@ export const grantRun = (
         : answered,
     ),
   );
+
+/**
+ * Saves a Run's approved checks as its repository's own, by its checkout's remote, so
+ * every Run started there later begins with them. The CLI and chat both come here.
+ */
+export const rememberChecks = Effect.fn("lifecycle.rememberChecks")(function* (
+  env: PluginEnv,
+  options: {
+    readonly runId: string;
+    /** Its worktree, then the checkout it was started for: a settled Run's worktree is gone. */
+    readonly checkouts: ReadonlyArray<string>;
+    readonly replace: boolean;
+  },
+) {
+  const { runId } = options;
+  const intent = yield* readIntent(runDir(env.stateDir, runId));
+  if (intent === null) return err("invalid_state", `Run ${runId} has no Intent`);
+  const fs = yield* FileSystem.FileSystem;
+  const present: string[] = [];
+  for (const dir of options.checkouts)
+    if (yield* fs.exists(dir).pipe(Effect.orElseSucceed(() => false))) present.push(dir);
+  if (present.length === 0)
+    return err("invalid_state", `Run ${runId}'s checkout is gone, so its remote cannot be read`);
+  const project = yield* projectHere(present[0]!, shell);
+  if (project === null)
+    return err("invalid_state", `Run ${runId}'s checkout has no remote to remember its checks by`);
+  const specs = intent.authority.run_verification;
+  if (specs.length === 0)
+    return err("invalid_state", `Run ${runId} has no approved checks to remember`);
+  const file = rememberedFile(env.userDir, project);
+  if (file === null)
+    return err("invalid_state", `${project} is not a remote a file can be named by`);
+  if (!options.replace && (yield* fs.exists(file)))
+    return err(
+      "invalid_state",
+      `${file} already holds this repository's checks; overwrite it with replace (--replace)`,
+    );
+  yield* fs.makeDirectory(file.slice(0, file.lastIndexOf("/")), { recursive: true });
+  yield* fs.writeFileString(file, `${encodeApprovedFile(specs)}\n`);
+  const result: OpResult = {
+    ok: true,
+    data: { file, project, remembered: specs },
+    human: [`Runs started in ${project} will begin with:`, renderApproved(specs), `(${file})`].join(
+      "\n",
+    ),
+  };
+  return result;
+});
 
 /** Says something of a human's to the agent a Run has, through the host. */
 export const steerRun = (

@@ -21,6 +21,7 @@ import {
   describeWaiting,
   answerRun,
   grantRun,
+  rememberChecks,
   anyRuns,
   controlRun,
   invokeOffer,
@@ -58,8 +59,7 @@ import {
 import { scopeFor, scopeKey } from "../registry";
 import { readTask, taskOfWorkspace, type TaskChoice } from "../task";
 import { runDeliveries } from "./steer";
-import { givenVerifications, rememberedFile, renderApproved } from "../verify-spec";
-import { projectHere, shell } from "../mr";
+import { givenVerifications } from "../verify-spec";
 import { agentStartRefusal, CLI_CHECKOUT_FIX, insideCheckout } from "../agent-start";
 import { PROJECTS_ROOT_OPTION, projectsRoot } from "../projects";
 import { currentReports, readDrift } from "../drift";
@@ -1535,46 +1535,22 @@ const intentRemember = Command.make(
       Flag.withDescription("Overwrite this repository's remembered checks"),
       Flag.withDefault(false),
     ),
+    requestId: requestIdFlag,
   },
-  ({ runId, replace }) =>
+  ({ runId, replace, requestId }) =>
     Effect.gen(function* () {
       const global = yield* root;
       yield* attempt(
         Effect.gen(function* () {
           const resolved = yield* resolveCommandRun(global, runId);
           if (resolved._tag === "RunFailure") return resolved.result;
-          const intent = yield* readIntent(resolved.dir);
-          if (intent === null) return err("invalid_state", `Run "${runId}" has no Intent.`);
-          const project = yield* projectHere(resolved.view.cwd, shell);
-          if (project === null)
-            return err(
-              "invalid_state",
-              `Run ${runId}'s checkout has no remote to remember its checks by`,
-            );
-          const specs = intent.authority.run_verification;
-          if (specs.length === 0)
-            return err("invalid_state", `Run ${runId} has no approved checks to remember`);
-          const file = rememberedFile(resolved.env.userDir, project);
-          if (file === null)
-            return err("invalid_state", `${project} is not a remote a file can be named by`);
-          const fs = yield* FileSystem.FileSystem;
-          const path = yield* Path.Path;
-          if (!replace && (yield* fs.exists(file)))
-            return err(
-              "invalid_state",
-              `${file} already holds this repository's checks; pass --replace to overwrite it`,
-            );
-          yield* fs.makeDirectory(path.dirname(file), { recursive: true });
-          yield* fs.writeFileString(file, `${Schema.encodeSync(PrettyUnknownJson)(specs)}\n`);
-          return {
-            ok: true,
-            data: { file, project, remembered: specs },
-            human: [
-              `Runs started in ${project} will begin with:`,
-              renderApproved(specs),
-              `(${file})`,
-            ].join("\n"),
-          };
+          return yield* mutation(resolved.env, "run-intent-remember", requestId, () =>
+            rememberChecks(resolved.env, {
+              runId,
+              checkouts: [resolved.view.cwd, resolved.view.project],
+              replace,
+            }),
+          );
         }),
         global.json,
       );
