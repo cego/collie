@@ -3,7 +3,7 @@ import { Command, Flag } from "effect/unstable/cli";
 import manifest from "../../herdr-plugin.toml";
 import { attempt, say } from "../envelope";
 import { onboard as onboardMachine, type OnboardEvent, type StepStatus } from "../onboard";
-import { context, root } from "./shared";
+import { context, root, stdinText } from "./shared";
 
 const EventJson = Schema.fromJsonString(Schema.Unknown);
 
@@ -16,9 +16,19 @@ const MARK = {
   failed: "✗",
 } satisfies Record<StepStatus, string>;
 
+/** `KEY=value` lines; anything else is ignored. */
+const secretLines = (text: string) =>
+  Object.fromEntries(
+    text.split("\n").flatMap((line) => {
+      const entry = /^\s*([A-Z_][A-Z0-9_]*)=(.*?)\s*$/.exec(line);
+      return entry ? [[entry[1]!, entry[2]!] as const] : [];
+    }),
+  );
+
 /** One event as a terminal shows it. */
 function eventText(event: OnboardEvent): string {
   if (event.event === "start") return `→ ${event.title}`;
+  if (event.event === "human") return `  … ${event.detail}\n    open: ${event.url}`;
   return [
     `  ${MARK[event.status]} ${event.detail}`,
     ...(event.url ? [`    open: ${event.url}`] : []),
@@ -33,17 +43,33 @@ export const onboard = Command.make(
       Flag.withDescription("The Collie release to install; this runner's own version if not given"),
       Flag.optional,
     ),
+    skip: Flag.Literals("skip", ["helle", "linear"]).pipe(
+      Flag.withDescription("A default step this Machine goes without, repeatable"),
+      Flag.atLeast(0),
+    ),
+    secretsStdin: Flag.Boolean("secrets-stdin").pipe(
+      Flag.withDescription(
+        "Read GITLAB_TOKEN=, HELLE_API_URL= and HELLE_API_TOKEN= lines from stdin",
+      ),
+      Flag.withDefault(false),
+    ),
   },
-  ({ to }) =>
+  ({ to, skip, secretsStdin }) =>
     Effect.gen(function* () {
       const global = yield* root;
       yield* attempt(
         Effect.gen(function* () {
           const resolved = yield* context(global, false);
           if (resolved._tag === "ContextFailure") return resolved.result;
+          const secrets = secretsStdin ? secretLines(yield* stdinText) : {};
           return yield* onboardMachine(
             resolved.env,
-            { to: Option.getOrElse(to, () => manifest.version) },
+            {
+              to: Option.getOrElse(to, () => manifest.version),
+              skip,
+              secrets,
+              terminal: !global.json && !secretsStdin && process.stdin.isTTY,
+            },
             (event) =>
               say(global.json ? Schema.encodeSync(EventJson)(event) : eventText(event)).pipe(
                 Effect.orDie,
@@ -61,6 +87,10 @@ export const onboard = Command.make(
     {
       command: "collie onboard",
       description: "Install or repair everything; a re-run does only what is missing",
+    },
+    {
+      command: "collie onboard --secrets-stdin --skip helle < secrets.env",
+      description: "Log in to GitLab with the token in secrets.env, and go without Helle",
     },
     {
       command: "collie --json onboard --to 0.27.0",

@@ -308,7 +308,7 @@ const DAY_MS = 86_400_000;
  * over HTTPS. Read whatever the exit code: one host with a bad token fails the command
  * for all of them.
  */
-const glabHosts = (status: string) =>
+export const glabHosts = (status: string) =>
   status
     .split("\n")
     .filter((line) => /^[a-z0-9.-]+(:\d+)?$/i.test(line))
@@ -325,7 +325,7 @@ const jsonIn = (text: string) => {
   return json.slice(0, json.lastIndexOf("}") + 1);
 };
 
-const tokenPage = (host: string) =>
+export const tokenPage = (host: string) =>
   `https://${host}/-/user_settings/personal_access_tokens?name=collie&scopes=api,write_repository`;
 
 const tokenExpiry = Effect.fn("Doctor.tokenExpiry")(function* (
@@ -353,7 +353,7 @@ const tokenExpiry = Effect.fn("Doctor.tokenExpiry")(function* (
 const FORWARDED_AGENT = /^\/tmp\/ssh-[^/]+\/agent\.\d+$/;
 
 /** Whether this Machine's own keys reach `host` over SSH, or glab's token over HTTPS. */
-const pushCheck = Effect.fn("Doctor.pushCheck")(function* (
+export const pushCheck = Effect.fn("Doctor.pushCheck")(function* (
   host: { host: string; https: boolean },
   env: PluginEnv,
   ssh: boolean,

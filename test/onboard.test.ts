@@ -7,7 +7,7 @@ import { Effect, FileSystem } from "effect";
 import { runEffect } from "./support/effect";
 import { FakeBin } from "./support/bin";
 import { readEnv } from "../src/env";
-import { onboard, type OnboardEvent } from "../src/onboard";
+import { onboard, type OnboardEvent, type OnboardOptions } from "../src/onboard";
 import { err, type OpResult } from "../src/operations";
 
 let home: string;
@@ -58,8 +58,20 @@ const READY: OpResult = { ok: true, data: { ready: true, checks: [] }, human: "r
 
 let doctorRan = 0;
 
+const GITLAB = "gitlab.cego.dk";
+
+/** A glab whose `auth status` runs `status`, and that records everything else it is asked. */
+const glab = (status: string, rest = "") =>
+  bin.add(
+    "glab",
+    `case "$*" in
+      "auth status"*) ${status} ;;
+      *) echo "GITLAB_HOST=$GITLAB_HOST $*" >> "${home}/glab-calls"; ${rest || ":"} ;;
+    esac`,
+  );
+
 /** onboard against this Machine, collecting what it streamed. */
-const onboarded = (overrides: Record<string, string> = {}, to = "0.2.0") =>
+const onboarded = (overrides: Record<string, string> = {}, options: Partial<OnboardOptions> = {}) =>
   Effect.gen(function* () {
     const events: OnboardEvent[] = [];
     const env = readEnv({
@@ -72,7 +84,7 @@ const onboarded = (overrides: Record<string, string> = {}, to = "0.2.0") =>
     });
     const result = yield* onboard(
       env,
-      { to },
+      { to: "0.2.0", skip: ["helle", "linear"], ...options },
       (event) => Effect.sync(() => events.push(event)),
       () => Effect.sync(() => (doctorRan++, READY)),
     );
@@ -109,6 +121,12 @@ beforeEach(() =>
           *) exit 22 ;;
         esac`,
       );
+      // No test reaches a real GitLab over SSH.
+      yield* bin.add("ssh", `echo "Permission denied (publickey)."; exit 255`);
+      // Logged in to GitLab, and pushing over HTTPS with that login.
+      yield* glab(
+        `echo "${GITLAB}"; echo "  ✓ Git operations for ${GITLAB} configured to use https protocol."`,
+      );
     }),
   ),
 );
@@ -132,19 +150,31 @@ test("a bare Machine gets herdr, Claude Code, Collie at the tag, the plugin and 
       expect(result).toMatchObject({ ok: true, data: { ready: true } });
       // Every step streams a start and then its result.
       const steps = results(events).map((event) => event.step);
-      expect(steps).toEqual(["system", "collie", "herdr", "claude", "path", "plugin", "doctor"]);
+      expect(steps).toEqual([
+        "system",
+        "collie",
+        "herdr",
+        "claude",
+        "path",
+        "plugin",
+        "gitlab",
+        "push",
+        "helle",
+        "linear",
+        "doctor",
+      ]);
       for (const step of steps) {
         const start = events.findIndex((e) => e.event === "start" && e.step === step);
         const end = events.findIndex((e) => e.event === "result" && e.step === step);
         expect(start).toBeGreaterThanOrEqual(0);
         expect(start).toBeLessThan(end);
       }
-      expect(statusOf(events, "system")).toBe("in_place");
-      expect(
-        results(events)
-          .filter((event) => event.step !== "system")
-          .every((event) => event.status === "done"),
-      ).toBe(true);
+      for (const step of ["collie", "herdr", "claude", "path", "plugin", "doctor"]) {
+        expect(statusOf(events, step)).toBe("done");
+      }
+      for (const step of ["system", "gitlab", "push"])
+        expect(statusOf(events, step)).toBe("in_place");
+      for (const step of ["helle", "linear"]) expect(statusOf(events, step)).toBe("skipped");
       expect(git(root, "describe", "--exact-match", "--tags", "HEAD")).toBe("0.2.0");
       expect(yield* read(`${home}/curl-calls`)).toContain("https://herdr.dev/install.sh");
       expect(yield* read(`${home}/curl-calls`)).toContain("https://claude.ai/install.sh");
@@ -220,7 +250,15 @@ test("a development checkout gets the checks, and nothing installed or moved", (
 
       expect(result).toMatchObject({ ok: true, data: { ready: true, development: true } });
       expect(statusOf(events, "collie")).toBe("skipped");
-      expect(results(events).map((event) => event.step)).toEqual(["system", "collie", "doctor"]);
+      expect(results(events).map((event) => event.step)).toEqual([
+        "system",
+        "collie",
+        "gitlab",
+        "push",
+        "helle",
+        "linear",
+        "doctor",
+      ]);
       expect(git(root, "rev-parse", "HEAD")).toBe(head);
       expect(git(root, "symbolic-ref", "--short", "HEAD")).toBe("feature");
       expect(yield* read(`${home}/curl-calls`)).toBe("");
@@ -246,7 +284,7 @@ test("onboarded means doctor is ready", () =>
 
       const result = yield* onboard(
         env,
-        { to: "0.2.0" },
+        { to: "0.2.0", skip: ["helle", "linear"] },
         (event) => Effect.sync(() => events.push(event)),
         () => Effect.succeed(notReady),
       );
@@ -254,5 +292,139 @@ test("onboarded means doctor is ready", () =>
       expect(result).toMatchObject({ ok: false, error: { details: { ready: false } } });
       expect(results(events).at(-1)).toMatchObject({ step: "doctor", status: "failed" });
       expect(results(events).at(-1)?.detail).toContain("glab");
+    }),
+  ));
+
+test("the GitLab token goes to glab on stdin, never on its command line", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* glab(
+        `[ -f "${home}/logged-in" ] && echo "${GITLAB}" && echo "  ✓ Git operations for ${GITLAB} configured to use https protocol."`,
+        `cat > "${home}/glab-stdin"; touch "${home}/logged-in"`,
+      );
+
+      const { events } = yield* onboarded({}, { secrets: { GITLAB_TOKEN: "glpat-secret" } });
+
+      expect(statusOf(events, "gitlab")).toBe("done");
+      const calls = yield* read(`${home}/glab-calls`);
+      expect(calls).toContain(`auth login --hostname ${GITLAB} --stdin`);
+      expect(calls).not.toContain("glpat-secret");
+      expect(yield* read(`${home}/glab-stdin`)).toBe("glpat-secret\n");
+    }),
+  ));
+
+test("without a token, the GitLab step sends the human to the token page", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* glab("exit 1");
+
+      const { result, events } = yield* onboarded();
+
+      const gitlab = results(events).find((event) => event.step === "gitlab");
+      expect(gitlab?.status).toBe("needs_human");
+      expect(gitlab?.url).toContain(`https://${GITLAB}/-/user_settings/personal_access_tokens`);
+      expect(gitlab?.url).toContain("scopes=api,write_repository");
+      expect(result).toMatchObject({ ok: false, error: { details: { ready: false } } });
+    }),
+  ));
+
+test("a Machine that cannot push gets a key of its own, registered with glab", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* glab(`echo "${GITLAB}"`, `touch "${home}/registered"`);
+      yield* bin.add(
+        "ssh",
+        `[ -f "${home}/registered" ] && exit 0; echo "Permission denied (publickey)."; exit 255`,
+      );
+
+      const { events } = yield* onboarded();
+
+      expect(statusOf(events, "push")).toBe("done");
+      const fs = yield* FileSystem.FileSystem;
+      expect(yield* fs.exists(`${home}/.ssh/id_ed25519.pub`)).toBe(true);
+      expect(yield* read(`${home}/glab-calls`)).toContain(
+        `GITLAB_HOST=${GITLAB} ssh-key add ${home}/.ssh/id_ed25519.pub --title`,
+      );
+    }),
+  ));
+
+test("a Machine that can already push gets no key", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { events } = yield* onboarded();
+
+      expect(statusOf(events, "push")).toBe("in_place");
+      expect(yield* read(`${home}/glab-calls`)).not.toContain("ssh-key add");
+    }),
+  ));
+
+test("Helle's credentials file is written owner-only", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+
+      const { events } = yield* onboarded(
+        {},
+        {
+          skip: ["linear"],
+          secrets: { HELLE_API_URL: "https://helle.example", HELLE_API_TOKEN: "helle-secret" },
+        },
+      );
+
+      expect(statusOf(events, "helle")).toBe("done");
+      const file = `${home}/.config/helle/env`;
+      expect(yield* read(file)).toContain("HELLE_API_TOKEN=helle-secret");
+      expect((yield* fs.stat(file)).mode & 0o777).toBe(0o600);
+    }),
+  ));
+
+test("Helle without credentials is not onboarded unless it is skipped", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const asked = yield* onboarded({}, { skip: ["linear"] });
+      const skipped = yield* onboarded();
+
+      expect(statusOf(asked.events, "helle")).toBe("needs_human");
+      expect(asked.result).toMatchObject({ ok: false });
+      expect(statusOf(skipped.events, "helle")).toBe("skipped");
+      expect(skipped.result).toMatchObject({ ok: true, data: { ready: true } });
+    }),
+  ));
+
+test("the Linear MCP is added at user scope, and its login streams its URL", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      // Where Claude Code's installer puts it, ahead of the stubs on PATH.
+      yield* fs.makeDirectory(`${home}/.local/bin`, { recursive: true });
+      yield* fs.writeFileString(
+        `${home}/.local/bin/claude`,
+        `#!/bin/sh
+echo "$*" >> "${home}/claude-calls"
+case "$*" in
+  "mcp add"*) echo '{"mcpServers":{"linear-server":{"url":"https://mcp.linear.app/mcp"}}}' > "$HOME/.claude.json" ;;
+  "mcp get linear-server") if [ -f "${home}/authorized" ]; then echo "  Status: ✔ Connected"; else echo "  Status: ! Needs authentication"; fi ;;
+esac
+`,
+        { mode: 0o755 },
+      );
+      const url =
+        "https://mcp.linear.app/authorize?redirect_uri=http%3A%2F%2Flocalhost%3A62074%2Fcallback&state=s";
+      yield* bin.add(
+        "script",
+        `echo "$*" >> "${home}/script-calls"; echo "If the browser didn't open, visit:"; echo "  ${url}"; sleep 0.2; touch "${home}/authorized"`,
+      );
+
+      const { events } = yield* onboarded({}, { skip: ["helle"] });
+
+      expect(yield* read(`${home}/claude-calls`)).toContain(
+        "mcp add --transport http --scope user linear-server https://mcp.linear.app/mcp",
+      );
+      expect(yield* read(`${home}/script-calls`)).toContain("claude mcp login linear-server");
+      const human = events.findIndex((event) => event.event === "human" && event.step === "linear");
+      const end = events.findIndex((event) => event.event === "result" && event.step === "linear");
+      expect(events[human]).toMatchObject({ url, port: 62074 });
+      expect(human).toBeLessThan(end);
+      expect(statusOf(events, "linear")).toBe("done");
     }),
   ));

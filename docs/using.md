@@ -72,9 +72,13 @@ to.
 
 `collie onboard` installs everything instead, herdr and Claude Code included, from a runner
 alone: it clones Collie at the runner's own release (or `--to`) over HTTPS, prepares it the
-way `setup.sh` does, puts `~/.local/bin` on PATH in your shell profile and ends in `collie
-doctor`. It never runs sudo: a missing `git` or `curl` stops it with the command to run.
-Re-running it repairs only what is missing, and a development checkout gets the checks
+way `setup.sh` does, puts `~/.local/bin` on PATH in your shell profile. It never runs sudo: a missing `git` or `curl` stops it with the command to run.
+It then sets up what a Machine needs to work unattended: glab logged in with a GitLab
+token, a key of the Machine's own for pushing unless it can already push, Helle's
+credentials and the Linear MCP — the last two unless `--skip` names them. Secrets come on
+stdin (`collie onboard --secrets-stdin < secrets.env`), never as arguments. It ends in
+`collie doctor`, and onboarded means doctor is ready. Re-running it
+repairs only what is missing, and a development checkout gets the checks and the logins
 alone. It adds no keybindings; the steps and their `--json` stream are in
 [the CLI reference](cli.md#onboarding-a-machine).
 

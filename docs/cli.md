@@ -1183,26 +1183,35 @@ A host's `identity` names such a checkout's build as `development: "<version>+<s
 ## Onboarding a Machine
 
 ```sh
-collie onboard [--to 0.27.0]
+collie onboard [--to 0.27.0] [--secrets-stdin] [--skip helle] [--skip linear]
 ```
 
 Takes a Machine from bare to a working Collie host, and repairs a half-onboarded one: every
 step looks before it acts, so running it again does only what is missing. `--to` is the
 release to install, this runner's own version when it is not given. Nothing runs sudo.
 
-| Step     | What it does                                                                                                                                                            |
-| -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `system` | Checks for `git` and `curl`. Either missing stops here with `needs_root` and the exact command                                                                          |
-| `collie` | Clones `https://github.com/cego/collie.git` (or `COLLIE_REPO`) at the tag into `~/.collie` (or `COLLIE_DIR`), or moves a released checkout to it as `upgrade --to` does |
-| `herdr`  | `curl -fsSL https://herdr.dev/install.sh \| sh`, if there is no `herdr`                                                                                                 |
-| `claude` | Anthropic's user-level installer, `curl -fsSL https://claude.ai/install.sh \| bash`, if there is no `claude`                                                            |
-| `path`   | Adds `~/.local/bin` (and `COLLIE_BIN_DIR`) to PATH in the shell's profile (`~/.bashrc`, `~/.zshrc` or `~/.profile`)                                                     |
-| `plugin` | `prepare.sh`: the plugin link, the runner and shim, the operator skill and the skills                                                                                   |
-| `doctor` | [`collie doctor`](#checking-an-installation); onboarded means it is ready                                                                                               |
+| Step     | What it does                                                                                                                                                                                                                                 |
+| -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `system` | Checks for `git` and `curl`. Either missing stops here with `needs_root` and the exact command                                                                                                                                               |
+| `collie` | Clones `https://github.com/cego/collie.git` (or `COLLIE_REPO`) at the tag into `~/.collie` (or `COLLIE_DIR`), or moves a released checkout to it as `upgrade --to` does                                                                      |
+| `herdr`  | `curl -fsSL https://herdr.dev/install.sh \| sh`, if there is no `herdr`                                                                                                                                                                      |
+| `claude` | Anthropic's user-level installer, `curl -fsSL https://claude.ai/install.sh \| bash`, if there is no `claude`                                                                                                                                 |
+| `path`   | Adds `~/.local/bin` (and `COLLIE_BIN_DIR`) to PATH in the shell's profile (`~/.bashrc`, `~/.zshrc` or `~/.profile`)                                                                                                                          |
+| `plugin` | `prepare.sh`: the plugin link, the runner and shim, the operator skill and the skills                                                                                                                                                        |
+| `gitlab` | `glab auth login --hostname gitlab.cego.dk --stdin` (or `GITLAB_HOST`) with `GITLAB_TOKEN`, if glab is not already logged in there. Without a token: `needs_human`, with the token page and its `api` and `write_repository` scopes as `url` |
+| `push`   | Generates `~/.ssh/id_ed25519` if there is none and registers it with `glab ssh-key add`, unless the Machine can already push (over HTTPS with glab's login, or with its own key)                                                             |
+| `helle`  | Writes `HELLE_API_URL` and `HELLE_API_TOKEN` to Helle's credentials file, owner-only; with neither given and no file, `needs_human`                                                                                                          |
+| `linear` | `claude mcp add --transport http --scope user linear-server https://mcp.linear.app/mcp`, then `claude mcp login linear-server` in a terminal of its own, whose URL is streamed                                                               |
+| `doctor` | [`collie doctor`](#checking-an-installation); onboarded means it is ready                                                                                                                                                                    |
 
 A development checkout — the one this runner belongs to when that is a checkout, or
 `COLLIE_DIR` — is judged as [`upgrade --to`](#upgrading) judges one, and gets the checks
-only: nothing is installed and its checkout is not moved.
+only and the logins: nothing is installed and its checkout is not moved.
+
+Secrets are never arguments. `--secrets-stdin` reads `KEY=value` lines from stdin —
+`GITLAB_TOKEN`, `HELLE_API_URL` and `HELLE_API_TOKEN` — and the token reaches glab on its
+stdin too. Helle and Linear count toward onboarded unless `--skip` names them; a skipped
+step reports `skipped`. Doctor's own checks for them stay optional.
 
 Each step prints a line when it starts and one when it ends. Under `--json` each is a JSON
 line, then the envelope:
@@ -1211,6 +1220,21 @@ line, then the envelope:
 {"event":"start","step":"system","title":"Checking for git and curl"}
 {"event":"result","step":"system","status":"needs_root","detail":"git must be installed as root; run the command, then onboard again","command":"sudo apt-get install -y git"}
 ```
+
+A step that needs the human in the middle of it streams a `human` line first, as the Linear
+login does with its URL and the local port its redirect comes back to:
+
+```json
+{
+  "event": "human",
+  "step": "linear",
+  "detail": "open this to let Claude Code reach Linear",
+  "url": "https://mcp.linear.app/authorize?…",
+  "port": 62074
+}
+```
+
+In a terminal the login also takes a pasted redirect URL.
 
 `status` is `done`, `in_place`, `skipped`, `needs_root`, `needs_human` or `failed`; a
 result may carry the `command` to run by hand and the `url` to open. The envelope's

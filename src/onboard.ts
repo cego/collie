@@ -7,9 +7,11 @@ import type { BunServices } from "@effect/platform-bun/BunServices";
 import { Effect, FileSystem, Option, Schema, Stream } from "effect";
 import type { PlatformError } from "effect/PlatformError";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
-import { doctor, onPath } from "./doctor";
+import { hostname } from "node:os";
+import { doctor, glabHosts, onPath, pushCheck, tokenPage } from "./doctor";
 import type { PluginEnv } from "./env";
 import { err, moveToRelease, prepareSteps, type OpResult } from "./operations";
+import { helleEnvPath, LINEAR_MCP_FIX, probeLinearMcp } from "./optional";
 import { installation, RELEASE_TAG } from "./release";
 
 export type StepStatus = "done" | "in_place" | "skipped" | "needs_root" | "needs_human" | "failed";
@@ -25,16 +27,37 @@ export interface Outcome {
 
 export type OnboardEvent =
   | { readonly event: "start"; readonly step: string; readonly title: string }
+  /** Mid-step: where the human has to go, and the local port its redirect comes back to. */
+  | {
+      readonly event: "human";
+      readonly step: string;
+      readonly detail: string;
+      readonly url: string;
+      readonly port?: number;
+    }
   | ({ readonly event: "result"; readonly step: string } & Outcome);
+
+/** The steps a Machine may go without and still be onboarded. */
+export type Skippable = "helle" | "linear";
 
 export interface OnboardOptions {
   readonly to: string;
+  readonly skip?: ReadonlyArray<Skippable>;
+  /** `GITLAB_TOKEN`, `HELLE_API_URL` and `HELLE_API_TOKEN`, from stdin: never an argument. */
+  readonly secrets?: Readonly<Record<string, string>>;
+  /** stdin is a terminal the human can paste into. */
+  readonly terminal?: boolean;
 }
 
 const HERDR_INSTALL = "curl -fsSL https://herdr.dev/install.sh | sh";
 const CLAUDE_INSTALL = "curl -fsSL https://claude.ai/install.sh | bash";
 const COLLIE_REPO = "https://github.com/cego/collie.git";
 const PROFILE_MARKER = "# added by collie onboard";
+const GITLAB_HOST = "gitlab.cego.dk";
+const LINEAR_LOGIN = "claude mcp login linear-server";
+const LOGIN_LIMIT = "10 minutes";
+/** A URL's own characters (RFC 3986), so the terminal escapes around it are not part of it. */
+const URL_IN = /https:\/\/[\w\-.~:/?#[\]@!$&'()*+,;=%]+/;
 
 const done = (detail: string): Outcome => ({ status: "done", detail });
 const inPlace = (detail: string): Outcome => ({ status: "in_place", detail });
@@ -64,7 +87,6 @@ const rootCommand = Effect.fn("Onboard.rootCommand")(function* (
   return `install ${packages.join(" ")} with your package manager`;
 });
 
-/** The shell profile an interactive shell of this user's reads. */
 const profileOf = (env: PluginEnv) => {
   const shell = env.raw["SHELL"] ?? "";
   if (shell.endsWith("/zsh")) return `${env.home}/.zshrc`;
@@ -110,14 +132,21 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
       ? env.pluginRoot
       : `${env.home}/.collie`);
 
+  const childEnv = { ...env.raw, PATH: search };
   /** Runs a command with this Machine's PATH, answering with its exit and all it said. */
-  const exec = (cmd: string, args: ReadonlyArray<string>, cwd: string) =>
+  const piped = (
+    cmd: string,
+    args: ReadonlyArray<string>,
+    cwd: string,
+    input: string | null = null,
+    extra: Record<string, string> = {},
+  ) =>
     Effect.gen(function* () {
       const handle = yield* spawner.spawn(
         ChildProcess.make(cmd, [...args], {
           cwd,
-          env: { ...env.raw, PATH: search },
-          stdin: "ignore",
+          env: { ...childEnv, ...extra },
+          stdin: input === null ? "ignore" : Stream.make(new TextEncoder().encode(input)),
           stdout: "pipe",
           stderr: "pipe",
         }),
@@ -139,6 +168,7 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
       Effect.scoped,
       Effect.catch(() => Effect.succeed({ code: 127, stdout: "" })),
     );
+  const exec = (cmd: string, args: ReadonlyArray<string>, cwd: string) => piped(cmd, args, cwd);
   const lastWords = (output: string) => output.trim().split("\n").slice(-3).join(" ");
 
   const outcomes: Array<{ step: string } & Outcome> = [];
@@ -279,17 +309,205 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
     );
   }
 
+  const here: PluginEnv = {
+    ...env,
+    pluginRoot: root,
+    userDir: env.raw["COLLIE_USER_DIR"] ?? `${root}/user`,
+    raw: childEnv,
+  };
+  const secrets = options.secrets ?? {};
+  const host = env.raw["GITLAB_HOST"] ?? GITLAB_HOST;
+
+  yield* step(
+    "gitlab",
+    `Logged in to ${host}`,
+    Effect.gen(function* () {
+      if ((yield* onPath(search, "glab")) === null) {
+        return {
+          status: "needs_root",
+          detail: "glab must be installed as root; run the command, then onboard again",
+          command: yield* rootCommand(search, ["glab"]),
+        } satisfies Outcome;
+      }
+      const status = yield* exec("glab", ["auth", "status", "--hostname", host], root);
+      if (status.code === 0) return inPlace(`glab is logged in to ${host}`);
+      const token = secrets["GITLAB_TOKEN"];
+      if (token === undefined) {
+        return {
+          status: "needs_human",
+          detail: `make a token with the api and write_repository scopes, then give it on stdin as GITLAB_TOKEN=…`,
+          url: tokenPage(host),
+          command: "collie onboard --secrets-stdin",
+        } satisfies Outcome;
+      }
+      const login = yield* piped(
+        "glab",
+        ["auth", "login", "--hostname", host, "--stdin"],
+        root,
+        `${token}\n`,
+      );
+      return login.code === 0
+        ? done(`glab is logged in to ${host}`)
+        : failed(`glab would not log in to ${host}: ${lastWords(login.stdout)}`);
+    }),
+  );
+
+  yield* step(
+    "push",
+    `git push to ${host} on this Machine's own credentials`,
+    Effect.gen(function* () {
+      const ssh = (yield* onPath(search, "ssh")) !== null;
+      const status = yield* exec("glab", ["auth", "status", "--hostname", host], root);
+      const known = glabHosts(status.stdout).find((one) => one.host === host) ?? {
+        host,
+        https: false,
+      };
+      const before = yield* pushCheck(known, here, ssh, exec);
+      if (before.ok) return inPlace(before.detail);
+      if (status.code !== 0) {
+        return failed(`${before.detail}, and glab is not logged in to register a key`);
+      }
+      if ((yield* onPath(search, "ssh-keygen")) === null) {
+        return {
+          status: "needs_root",
+          detail: "ssh-keygen must be installed as root; run the command, then onboard again",
+          command: yield* rootCommand(search, ["openssh-client"]),
+        } satisfies Outcome;
+      }
+      const key = `${env.home}/.ssh/id_ed25519`;
+      const name = hostname();
+      if (!(yield* fs.exists(key))) {
+        yield* fs.makeDirectory(`${env.home}/.ssh`, { recursive: true, mode: 0o700 });
+        const made = yield* exec(
+          "ssh-keygen",
+          ["-q", "-t", "ed25519", "-N", "", "-C", `collie@${name}`, "-f", key],
+          env.home,
+        );
+        if (made.code !== 0) return failed(`could not make ${key}: ${lastWords(made.stdout)}`);
+      }
+      const added = yield* piped(
+        "glab",
+        ["ssh-key", "add", `${key}.pub`, "--title", `collie ${name}`],
+        root,
+        null,
+        { GITLAB_HOST: host },
+      );
+      if (added.code !== 0) {
+        return failed(`glab would not register ${key}.pub: ${lastWords(added.stdout)}`);
+      }
+      const after = yield* pushCheck(known, here, ssh, exec);
+      return after.ok
+        ? done(`registered ${key}.pub with ${host}`)
+        : failed(after.detail, after.fix || undefined);
+    }),
+  );
+
+  const skipped = (name: Skippable) =>
+    (options.skip ?? []).includes(name)
+      ? ({ status: "skipped", detail: "skipped for this Machine" } satisfies Outcome)
+      : null;
+
+  yield* step(
+    "helle",
+    "Helle's credentials",
+    Effect.gen(function* () {
+      const skip = skipped("helle");
+      if (skip) return skip;
+      const file = helleEnvPath(here);
+      const url = secrets["HELLE_API_URL"];
+      const token = secrets["HELLE_API_TOKEN"];
+      const there = yield* fs.exists(file);
+      if (url === undefined || token === undefined) {
+        return there
+          ? inPlace(`credentials at ${file}`)
+          : ({
+              status: "needs_human",
+              detail: "give HELLE_API_URL=… and HELLE_API_TOKEN=… on stdin, or skip helle",
+              command: "collie onboard --secrets-stdin",
+            } satisfies Outcome);
+      }
+      const text = `HELLE_API_URL=${url}\nHELLE_API_TOKEN=${token}\n`;
+      const current = there ? yield* fs.readFileString(file) : "";
+      yield* fs.makeDirectory(file.slice(0, file.lastIndexOf("/")), { recursive: true });
+      if (current !== text) yield* fs.writeFileString(file, text, { mode: 0o600 });
+      // A file written before this one may have been readable by others.
+      yield* fs.chmod(file, 0o600);
+      return current === text ? inPlace(`credentials at ${file}`) : done(`wrote ${file}`);
+    }),
+  );
+
+  /** `claude mcp login` under a terminal of its own, streaming its URL as it is printed. */
+  const linearLogin = Effect.gen(function* () {
+    let shown = false;
+    const handle = yield* spawner.spawn(
+      ChildProcess.make("script", ["-qefc", LINEAR_LOGIN, "/dev/null"], {
+        cwd: env.home,
+        env: childEnv,
+        // It waits on stdin for a pasted redirect, and gives up when stdin ends.
+        stdin: options.terminal ? "inherit" : { stream: Stream.never, endOnDone: false },
+        stdout: "pipe",
+        stderr: "pipe",
+      }),
+    );
+    const said = Stream.merge(handle.stdout, handle.stderr).pipe(
+      Stream.decodeText(),
+      Stream.splitLines,
+      Stream.runForEach((line) => {
+        const url = URL_IN.exec(line)?.[0];
+        if (url === undefined || shown) return Effect.void;
+        shown = true;
+        const port = /localhost:(\d+)/.exec(decodeURIComponent(url))?.[1];
+        return emit({
+          event: "human",
+          step: "linear",
+          detail: "open this to let Claude Code reach Linear",
+          url,
+          ...(port && { port: Number(port) }),
+        });
+      }),
+    );
+    yield* Effect.all([said, handle.exitCode], { concurrency: "unbounded" });
+  }).pipe(Effect.scoped, Effect.timeoutOption(LOGIN_LIMIT), Effect.ignore);
+
+  yield* step(
+    "linear",
+    "The Linear MCP in Claude Code",
+    Effect.gen(function* () {
+      const skip = skipped("linear");
+      if (skip) return skip;
+      if ((yield* onPath(search, "claude")) === null) {
+        return failed("Claude Code is not installed, so it has no MCP servers", CLAUDE_INSTALL);
+      }
+      let changed = false;
+      if ((yield* probeLinearMcp(here)).state !== "ok") {
+        const [cmd, ...args] = LINEAR_MCP_FIX.split(" ");
+        const added = yield* exec(cmd!, args, env.home);
+        if (added.code !== 0) {
+          return failed(`could not add the Linear MCP: ${lastWords(added.stdout)}`, LINEAR_MCP_FIX);
+        }
+        changed = true;
+      }
+      const connected = exec("claude", ["mcp", "get", "linear-server"], env.home).pipe(
+        Effect.map((answer) => answer.stdout.includes("Connected")),
+      );
+      if (yield* connected) {
+        return changed ? done("added, and connected") : inPlace("connected");
+      }
+      if ((yield* onPath(search, "script")) === null) {
+        return failed("no `script` to give the login a terminal", LINEAR_LOGIN);
+      }
+      yield* linearLogin;
+      return (yield* connected)
+        ? done("logged in to Linear")
+        : failed("the Linear login did not finish", LINEAR_LOGIN);
+    }),
+  );
+
   yield* step(
     "doctor",
     "collie doctor",
     Effect.gen(function* () {
-      const userDir = env.raw["COLLIE_USER_DIR"] ?? `${root}/user`;
-      const report = yield* check({
-        ...env,
-        pluginRoot: root,
-        userDir,
-        raw: { ...env.raw, PATH: search },
-      });
+      const report = yield* check(here);
       if (report.ok) return done("ready");
       const failing = Option.match(decodeChecks(report.error.details), {
         onNone: () => [],
