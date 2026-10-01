@@ -573,11 +573,12 @@ each test file a temporary root of its own and tells every host started under it
 still holding a directory under that root is killed and fails the test that left it.
 
 The same preload keeps the suite out of the operator's herd. Before any test file loads it
-drops every `HERDR_*` variable, `COLLIE_USER_DIR` and `COLLIE_CWD`, and sets `HOME` to a
-directory under that root, so a suite run from a herdr pane neither reaches the live
-session's socket nor resolves the default state directory under the real home. A host a
-test starts inherits that environment. A test that needs herdr sets up the fake under
-`test/support/`; `test/isolation.test.ts` fails if the live socket or home gets through.
+drops `COLLIE_USER_DIR`, `COLLIE_CWD` and every `HERDR_*` variable but `HERDR_API_SCHEMA`,
+which the contract check is given on purpose, and sets `HOME` to a directory under that
+root. So a suite run from a herdr pane neither reaches the live session's socket nor
+resolves the default state directory under the real home. A host a test starts inherits
+that environment. A test that needs herdr sets up the fake under `test/support/`;
+`test/isolation.test.ts` fails if the live socket or home gets through.
 
 `bun run test` uses [Bun's process-parallel runner](https://bun.com/docs/test/parallel)
 with four workers and a fresh global per file. Tests within each file stay sequential:

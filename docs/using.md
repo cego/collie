@@ -1229,8 +1229,8 @@ no reader ever sees it half-written. It is still a read-modify-write of a file c
 if a claude session saves in the same instant, that save is the one that loses. It happens
 once per directory, so the window is opened once.
 
-Each check is a `trust claude:` line in the Run's `agents.log`. A `~/.claude.json` Collie
-cannot read is left alone, and a grant that fails never stops the launch: claude asks in
+A grant, or the reason nothing was granted, is a `trust claude:` line in the Run's
+`agents.log`. A `~/.claude.json` Collie cannot read is left alone, and a grant that fails never stops the launch: claude asks in
 its own pane instead.
 
 `trust` defaults to `auto`. `never` leaves trust to Claude's own dialog. The old `ask`
