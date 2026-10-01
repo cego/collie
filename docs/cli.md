@@ -301,7 +301,8 @@ branch. A task workspace groups the work; it does not isolate files or branches.
 `--input branch=<name>` is the one input no workflow declares, and `workflow show` lists it
 beside every module's own inputs as one of the names the host settles. It names the branch the run works on, and so which worktree it gets. Nobody is ever asked for one: a branch nobody named is resolved in this order:
 
-1. `--input branch=<name>`, which wins over everything below.
+1. `--input branch=<name>`, which wins over everything below. A follow-up is given its
+   parent's branch this way.
 2. The branch the reviewed work is already on, for a run fixing a review.
 3. The `<name>` of a `branch:<base>...<name>` target **you gave** (`--input target=` takes a
    bare ref too, and turns it into one) — so the checkout and the review target agree. A
@@ -796,8 +797,14 @@ is its own declaration, so carrying on is one of its offers:
 
 ```sh
 collie --json run actions <run-id>
-collie --json run action <run-id> follow-up --input text="the docs change is still outside src/"
+collie --json run action <run-id> follow-up --input plan="the docs change is still outside src/"
 ```
+
+A follow-up carries on its parent's work, so it runs on the parent's branch — in the
+worktree that branch already has — and updates the parent's merge request rather than
+opening another. `--input` is only what is left to say, under whatever name the follow-up's
+workflow gives it (`plan` for implement); the board's **Follow up** asks for those words and
+sends them there.
 
 ## What became of the work
 

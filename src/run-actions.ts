@@ -10,7 +10,7 @@
 // from `operations.ts`. One direction each way is a cycle; one module downstream of both
 // is not.
 
-import { Effect } from "effect";
+import { Effect, Option, Schema } from "effect";
 import type { PlatformError } from "effect/PlatformError";
 import { reason } from "./naming";
 import type { BunServices } from "@effect/platform-bun/BunServices";
@@ -77,6 +77,10 @@ import type { Action } from "./evaluator";
 import { herdOf } from "./steering";
 import { fingerprint } from "./verify";
 import { findRun, settled } from "./runs";
+
+const takesFields = Schema.decodeUnknownOption(
+  Schema.Struct({ properties: Schema.optional(Schema.Record(Schema.String, Schema.Json)) }),
+);
 
 /**
  * Every action kind this build can carry out, against the host that owns the work.
@@ -246,12 +250,19 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
       const offered = offers.find((one) => one.kind === "follow-up");
       if (offered === undefined)
         return failed(`${action.run} declares no follow-up, so there is nothing to carry on with`);
+      // The words go to the one input the offer leaves for the caller, whatever it is called.
+      const open = Option.getOrUndefined(takesFields(offered.arguments))?.properties ?? {};
+      const [field, ...more] = Object.keys(open);
+      if (field === undefined || more.length > 0)
+        return failed(
+          `${action.run}'s follow-up "${offered.id}" takes ${Object.keys(open).join(", ") || "nothing"} rather than one piece of text`,
+        );
       const id = yield* newRequestId();
       return settled(
         yield* invokeOffer(env, {
           runId: action.run,
           offer: offered.id,
-          input: { text: action.text },
+          input: { [field]: action.text },
           request: id,
         }),
       );

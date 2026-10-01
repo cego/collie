@@ -4503,6 +4503,9 @@ const makeRegistry: (
         task: row.task,
         parent: row.run,
         verify: inherited,
+        // A follow-up carries on the parent's work, so it is on the parent's branch.
+        options:
+          offer.kind === "follow-up" && facts.branch !== null ? { branch: facts.branch } : {},
       });
     }),
 

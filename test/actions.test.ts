@@ -11,6 +11,7 @@ import { Effect, FileSystem, Schema } from "effect";
 import { recordDisposition } from "../src/disposition";
 import { currentEnv } from "../src/env";
 import { makeOffer, type FlowPrompts } from "../src/flows";
+import { carryOutAsked } from "../src/run-actions";
 import { connect, type HostClient } from "../src/host";
 import { factsOfView } from "../src/runs";
 import { stopHost, until } from "./support/host";
@@ -121,6 +122,38 @@ test(
           const again = yield* makeOffer(yield* currentEnv, prompts, runId, "look-again");
           expect(asked).toEqual(["note?"]);
           expect(again).toStartWith("Started run ");
+          yield* stopHost(world.state);
+        }),
+      [],
+    ),
+  300_000,
+);
+
+test(
+  "the board's follow-up words reach the follow-up's own input, whatever it is called",
+  () =>
+    proves(
+      "collie-actions-followup-",
+      (world) =>
+        Effect.gen(function* () {
+          const project = yield* projectOf(world);
+          const client = yield* connect(world.state).pipe(Effect.orDie);
+          const runId = yield* finished(client, project).pipe(Effect.orDie);
+
+          const [done] = yield* carryOutAsked(
+            yield* currentEnv,
+            [{ kind: "followup", run: runId, text: "the other half" }],
+            { origin: "board", requestId: "board-1" },
+          );
+          expect(done).toMatchObject({ state: "applied" });
+          const child = yield* until(
+            () => client.runs({ task: null }).pipe(Effect.orDie),
+            (rows) => rows.some((row) => row.parent === runId),
+          );
+          expect(child.find((row) => row.parent === runId)?.workflow).toBe("offered");
+          expect(child.find((row) => row.parent === runId)?.input).toEqual({
+            note: "the other half",
+          });
           yield* stopHost(world.state);
         }),
       [],

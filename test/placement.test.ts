@@ -358,6 +358,49 @@ test(
 );
 
 test(
+  "a follow-up builds on its parent's branch, in its parent's worktree",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* rig.queueOutputs([{ verdict: "clean" }, { verdict: "clean" }]);
+        const seen = yield* hosted(
+          Effect.gen(function* () {
+            const registry = yield* Registry;
+            const [builds] = yield* loaded(registry, [`${fixtures}/builds.workflow.ts`]);
+            const started = yield* start(builds!, {
+              request: "r1",
+              text: { work: "Add a picker" },
+              taskLabel: "Project | Picker",
+            });
+            if (started._tag === "Failure") return yield* Effect.die(started.failure);
+            const parent = yield* finished(started.success.runId);
+            const child = yield* registry
+              .invoke({
+                runId: started.success.runId,
+                offer: "keep-going",
+                input: { work: "Also sort it" },
+                request: "r2",
+              })
+              .pipe(Effect.orDie);
+            return { parent, child: yield* finished(child.runId) };
+          }),
+        );
+
+        expect(seen.parent).toMatchObject({
+          branch: `${LOGIN}/add-a-picker`,
+          cwd: worktreeOf("add-a-picker"),
+        });
+        expect(seen.child).toMatchObject({
+          branch: seen.parent?.branch,
+          cwd: seen.parent?.cwd,
+          task: seen.parent?.task,
+        });
+      }),
+    ),
+  120_000,
+);
+
+test(
   "a fresh Task's workspace is rooted at the checkout its first Run was given",
   () =>
     runEffect(
