@@ -551,6 +551,32 @@ test("the pipeline is the Task's Runs in the order they started, each as it stan
     }),
   ));
 
+test("a Task's card speaks for its newest Run, in whatever order the Runs arrive", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const plan = yield* madeRun(dir, {
+        id: "r-plan",
+        workflow: "plan",
+        task: "task-1",
+        state: "succeeded",
+        created: "2026-09-14T09:00:00Z",
+      });
+      const build = yield* madeRun(dir, {
+        id: "r-impl",
+        task: "task-1",
+        state: "failed",
+        created: "2026-09-14T10:00:00Z",
+      });
+
+      // The host's registry lists Runs in the order they were admitted.
+      const [view] = yield* board(env, [plan, build]);
+
+      expect(view!.run).toBe("r-impl");
+      expect(view!.state).toBe("failed");
+    }),
+  ));
+
 test("a question the host holds is the card's Decision, and it is Needs you", () =>
   runEffect(
     Effect.gen(function* () {

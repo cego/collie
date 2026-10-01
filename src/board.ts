@@ -19,7 +19,7 @@ import { planIssuesIn, planReposOf } from "./plan";
 import { diffTargetOf } from "./strategies";
 import { pendingFor, proposalsPath, read as readProposals, type ProposalLine } from "./proposals";
 import { everyRegistered, type AgentEntry } from "./registry";
-import { listRuns, settled as ended, type RunFacts, type RunState } from "./runs";
+import { listRuns, newestFirst, settled as ended, type RunFacts, type RunState } from "./runs";
 import type { PluginEnv } from "./env";
 import { herdOf } from "./steering";
 import { listTasks, type TaskRecord } from "./task";
@@ -682,7 +682,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
   const { stateDir, socketPath } = opts.env;
   const now = opts.now ?? (yield* Clock.currentTimeMillis);
   const quietMs = opts.quietMs ?? DEFAULT_QUIET_MS;
-  const all = opts.runs ?? (yield* listRuns(opts.env));
+  const all = newestFirst(opts.runs ?? (yield* listRuns(opts.env)));
   const tasks = new Map(
     (opts.tasks ?? (yield* listTasks(stateDir))).map((task) => [task.id, task]),
   );

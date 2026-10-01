@@ -130,10 +130,11 @@ type Client = FileSystem.FileSystem | ChildProcessSpawner.ChildProcessSpawner;
  */
 export const listRuns = Effect.fn("Runs.list")(function* (env: PluginEnv) {
   const live = yield* runViews(env, null);
-  return live.runs
-    .map((view) => factsOfView(env.stateDir, view))
-    .sort((a, b) => b.created.localeCompare(a.created));
+  return newestFirst(live.runs.map((view) => factsOfView(env.stateDir, view)));
 });
+
+export const newestFirst = (runs: ReadonlyArray<RunFacts>): RunFacts[] =>
+  [...runs].sort((a, b) => b.created.localeCompare(a.created));
 
 /** One Run by id, or null where there is none. */
 export const findRun = (
