@@ -18,11 +18,11 @@ import { executorFor, registerExecutor, registeredKinds, type ExecutionResult } 
 import type { PluginEnv } from "./env";
 import {
   answerRun,
+  carriedResult,
   controlRun,
+  followUpRun,
   grantRun,
   rememberChecks,
-  invokeOffer,
-  offersOf,
   moduleFor,
   startRun,
   steerRun,
@@ -69,7 +69,7 @@ import {
   actorName,
   admit,
   confirm as confirmProposal,
-  proposalsPath,
+  journalOf,
   read as readProposals,
   stepSettled,
   stepStarted,
@@ -77,7 +77,7 @@ import {
   type ProposalRecord,
 } from "./proposals";
 import type { Action } from "./evaluator";
-import { herdOf } from "./steering";
+import { ProposalRefused, type ProposalCarried, type StepResult } from "./board-model";
 import { fingerprint } from "./verify";
 import { findRun, settled } from "./runs";
 
@@ -106,15 +106,7 @@ export function followUpField(drawn: Schema.Json | null): { field: string } | { 
  * Every action kind this build can carry out, against the host that owns the work.
  * Called once per process by whichever front door is about to look an executor up.
  */
-export const registerRunExecutors = Effect.fn("runActions.register")(function* (
-  env: PluginEnv,
-  /**
-   * What a board does about a `navigate`: put the target on screen. Supplied by the
-   * Control Plane and by nothing else, because `navigate` is a Selection change and a
-   * CLI has no Selection — a `confirm` there names the target and stops.
-   */
-  opts: { readonly navigate?: (target: { run: string; agent?: string }) => void } = {},
-) {
+export const registerRunExecutors = Effect.fn("runActions.register")(function* (env: PluginEnv) {
   // Once per process. A front door calls this before it looks an executor up, and two
   // calls in one process would be the same module claiming an action kind twice.
   if (registeredKinds().length > 0) return;
@@ -178,7 +170,6 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
   );
   registerExecutor("navigate", (action) =>
     Effect.sync(() => {
-      opts.navigate?.({ run: action.run, agent: action.agent });
       const where = [action.run, action.agent].filter((part) => part !== undefined).join(" · ");
       return { state: "applied" as const, note: where };
     }),
@@ -282,30 +273,12 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
         : failed(remembered.error.message);
     }).pipe(Effect.catch((cause) => Effect.succeed(failed(String(cause))))),
   );
-  // Which Workflow carries a follow-up is the Workflow's own declaration — the offer it
-  // marks `follow-up` — never a name known here. One that declares none has nothing to
-  // carry on with, and says so rather than starting something nobody asked for.
   registerExecutor("followup", (action, by) =>
-    Effect.gen(function* () {
-      const offers = yield* offersOf(env, action.run);
-      if ("ok" in offers) return failed(offers.error.message);
-      const offered = offers.find((one) => one.kind === "follow-up");
-      if (offered === undefined)
-        return failed(`${action.run} declares no follow-up, so there is nothing to carry on with`);
-      const into = followUpField(offered.arguments);
-      if ("refused" in into)
-        return failed(`${action.run}'s follow-up "${offered.id}" ${into.refused}`);
-      const id = yield* newRequestId();
-      return settled(
-        yield* invokeOffer(env, {
-          door: by.origin,
-          runId: action.run,
-          offer: offered.id,
-          input: { [into.field]: action.text },
-          request: id,
-        }),
-      );
-    }).pipe(Effect.catch((cause) => Effect.succeed(failed(String(cause))))),
+    carry(
+      Effect.flatMap(newRequestId(), (request) =>
+        followUpRun(env, { door: by.origin, runId: action.run, text: action.text, request }),
+      ),
+    ),
   );
   // Through the same door `run start` takes, so a confirmed proposal and a typed command
   // settle Inputs the same way. Nothing is inferred: the action names its checkout and
@@ -458,7 +431,8 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
   yield* Effect.void;
 });
 
-export const carryOutProposal = Effect.fn("runActions.carryOutProposal")(function* (
+/** A proposal confirmed and carried out, as the host does for every front door. */
+export const carryOut = Effect.fn("runActions.carryOut")(function* (
   env: PluginEnv,
   proposalId: string,
   hash: string | undefined,
@@ -468,7 +442,12 @@ export const carryOutProposal = Effect.fn("runActions.carryOutProposal")(functio
   // and every action is refused as `executor_missing`, which would be a lie about this
   // build rather than a fact about it.
   yield* registerRunExecutors(env);
-  const file = yield* proposalsPath(env.stateDir, yield* herdOf(env.socketPath));
+  const file = yield* journalOf(env.stateDir, proposalId);
+  if (file === null)
+    return yield* new ProposalRefused({
+      refused: "not_found",
+      detail: `no proposal "${proposalId}"`,
+    });
   const proposal = (yield* readProposals(file)).find(
     (line): line is ProposalRecord => line.kind === "proposal" && line.id === proposalId,
   );
@@ -487,19 +466,34 @@ export const carryOutProposal = Effect.fn("runActions.carryOutProposal")(functio
     actor,
     versions,
   );
-  if ("refused" in judged) return err("invalid_input", judged.detail, { reason: judged.refused });
+  if ("refused" in judged)
+    return yield* new ProposalRefused({ refused: judged.refused, detail: judged.detail });
 
-  const results: Array<{ index: number; kind: string; state: string; note: string }> = [];
+  const results: StepResult[] = [];
   const expectedVersions = { ...judged.proposal.intent_versions };
   // Runs an earlier action failed on: what was asked about them next was asked assuming
   // the failure did not happen. Everything else in the request is independent of it —
   // six launches asked for in one breath are six requests, and the first path that does
   // not exist is no reason to leave the other five unattempted.
   const failedRuns = new Set<string>();
+  const settle = Effect.fnUntraced(function* (
+    index: number,
+    state: "applied" | "failed" | "skipped" | "unknown",
+    note: string | undefined,
+  ) {
+    yield* stepSettled(file, proposalId, index, state, note);
+    const action = judged.actions[index]!;
+    results.push({
+      index,
+      kind: action.kind,
+      state,
+      note: note ?? "",
+      run: "run" in action ? action.run : null,
+    });
+  });
   for (const [index, proposed] of judged.actions.entries()) {
     if ("run" in proposed && failedRuns.has(proposed.run)) {
-      yield* stepSettled(file, proposalId, index, "skipped", "after_failure");
-      results.push({ index, kind: proposed.kind, state: "skipped", note: "after_failure" });
+      yield* settle(index, "skipped", "after_failure");
       continue;
     }
     // All edits in a request name the snapshot it was checked against. Advance only
@@ -512,15 +506,13 @@ export const carryOutProposal = Effect.fn("runActions.carryOutProposal")(functio
     if (action.kind === "none" || action.kind === "ask_human") {
       const state = action.kind === "none" ? "applied" : "failed";
       const note = action.kind === "none" ? action.why : action.question;
-      yield* stepSettled(file, proposalId, index, state, note);
-      results.push({ index, kind: action.kind, state, note });
+      yield* settle(index, state, note);
       if (action.kind === "ask_human") break;
       continue;
     }
     const executor = executorFor(action.kind);
     if (!executor) {
-      yield* stepSettled(file, proposalId, index, "skipped", "executor_missing");
-      results.push({ index, kind: action.kind, state: "skipped", note: "executor_missing" });
+      yield* settle(index, "skipped", "executor_missing");
       break;
     }
     const refusal = yield* admissionFor(env, action, {
@@ -528,42 +520,32 @@ export const carryOutProposal = Effect.fn("runActions.carryOutProposal")(functio
       intent_versions: expectedVersions,
     });
     if (refusal !== null) {
-      yield* stepSettled(file, proposalId, index, "skipped", refusal);
-      results.push({ index, kind: action.kind, state: "skipped", note: refusal });
+      yield* settle(index, "skipped", refusal);
       break;
     }
     yield* stepStarted(file, proposalId, index);
     const outcome = yield* executor(action, actor);
-    yield* stepSettled(file, proposalId, index, outcome.state, outcome.note);
-    results.push({
-      index,
-      kind: action.kind,
-      state: outcome.state,
-      note: outcome.note ?? "",
-    });
+    yield* settle(index, outcome.state, outcome.note);
     if (outcome.state === "failed" && "run" in action) failedRuns.add(action.run);
     if (outcome.state !== "failed" && action.kind === "update_intent")
       expectedVersions[action.run] = action.base_version + 1;
   }
-  const message = results
-    .map((r) => `${r.index} ${r.kind}: ${r.state}${r.note ? ` — ${r.note}` : ""}`)
-    .join("\n");
-  if (results.some((r) => r.state === "failed" || r.state === "skipped")) {
-    const changed = results.some((r) => r.state === "applied" && r.kind !== "none");
-    // needs_input is retryable without a receipt only when nothing has happened yet.
-    const code =
-      results.at(-1)?.kind === "ask_human" && !changed ? "needs_input" : "operation_failed";
-    return err(code, message, {
-      proposal: proposalId,
-      results,
-    });
-  }
-  return {
-    ok: true as const,
-    data: { proposal: proposalId, results },
-    human: message,
-  };
+  return { proposal: proposalId, results } satisfies ProposalCarried;
 });
+
+/** `carryOut` as a front door prints it. */
+export const carryOutProposal = (
+  env: PluginEnv,
+  proposalId: string,
+  hash: string | undefined,
+  actor: Actor,
+) =>
+  carryOut(env, proposalId, hash, actor).pipe(
+    Effect.map(carriedResult),
+    Effect.catchTag("ProposalRefused", (refused) =>
+      Effect.succeed(err("invalid_input", refused.detail, { reason: refused.refused })),
+    ),
+  );
 
 /**
  * One action the human asked for in chat, carried out now. The same closed union, the

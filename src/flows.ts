@@ -19,7 +19,6 @@ import { PROJECTS_ROOT_OPTION, projectsRoot } from "./projects";
 import { insideCheckout } from "./agent-start";
 import { placeableUnder, placedByUrl, routed, routerDeps } from "./route";
 import type { RunDetail } from "./board-model";
-import { nowIso } from "./time";
 import {
   DENSITIES,
   isDensity,
@@ -30,11 +29,8 @@ import {
   SCOPES,
   writeConfigValue,
 } from "./config";
-import type { BunServices } from "@effect/platform-bun/BunServices";
-import type { PlatformError } from "effect/PlatformError";
-import type { SchemaError } from "effect/Schema";
 import { COMPACTION_OFF, validThreshold } from "./compaction";
-import { herdOf, HerdrUnreachable } from "./steering";
+import { herdOf } from "./steering";
 import { chatHarnessOf, ensureChatFor } from "./chat";
 import {
   ensureHomeFor,
@@ -48,8 +44,6 @@ import {
   UNREADABLE,
 } from "./home";
 import { liveFor, markedOf, type Live } from "./live";
-import type { IntentUnreadable } from "./intent";
-import { ProposalsBusy, type Actor } from "./proposals";
 import { isStale, layers, loadDefinitions, type Definitions, type Provenance } from "./definitions";
 import type { PluginEnv } from "./env";
 import { Herdr, type AgentInfo, type WorkspaceInfo } from "./herdr";
@@ -58,8 +52,12 @@ import type { Found } from "./discovery";
 import {
   answerRun,
   boardSnapshot,
+  confirmProposed,
   controlRun,
+  declineProposed,
+  disposeRun,
   followBoard,
+  followUpRun,
   followRunDetail,
   runDetailNow,
   type DetailKey,
@@ -69,6 +67,7 @@ import {
   resumeRun,
   savedModules,
   startRun,
+  steerAbout,
 } from "./lifecycle";
 import { releaseKeyboard, startKeyboard, takeKey } from "./keys";
 import { forkResolvedDefinition, type DefinitionKind } from "./fork";
@@ -78,20 +77,12 @@ import { everyRegistered, type AgentEntry } from "./registry";
 import { reportedWorktrees } from "./worktree";
 import { scopeFor, type RegistryScope } from "./registry";
 import type { CompactionSettings } from "./compaction";
-import { recordDisposition, statusLine } from "./disposition";
+import { statusLine } from "./disposition";
 import { selectionPath, writeSelection } from "./selection";
 import { everyViewerPaints } from "./outer";
-import { actorName } from "./proposals";
-import { evaluationDeps } from "./evaluator";
+import { journalOf, read as readProposals, stepResults } from "./proposals";
 import { listTasks, taskOfWorkspace, type TaskChoice, type TaskRecord } from "./task";
-import {
-  carryOutAsked,
-  carryOutProposal,
-  declineProposal,
-  newRequestId,
-  registerRunExecutors,
-  steer,
-} from "./operations";
+import { newRequestId } from "./operations";
 import {
   answerFor,
   openingFilter,
@@ -872,10 +863,8 @@ export const workspaceFlow = Effect.fn("Flows.workspaceFlow")(function* (
        * herdr focus method to show a human something (ADR-0008).
        */
       let dispatch: ((command: Command) => void) | null = null;
-      yield* registerRunExecutors(env, {
-        navigate: (target) =>
-          dispatch?.({ _tag: "SetFilter", filter: { kind: "run", id: target.run } }),
-      });
+      const navigate = (run: string) =>
+        dispatch?.({ _tag: "SetFilter", filter: { kind: "run", id: run } });
       yield* runApp({
         onReady: (own) => {
           dispatch = own;
@@ -886,7 +875,7 @@ export const workspaceFlow = Effect.fn("Flows.workspaceFlow")(function* (
         filter: opening,
         origin,
         load: (focus) => app.load(focus),
-        act: (command, prompts) => runCommand(session, env, command, prompts),
+        act: (command, prompts) => runCommand(session, env, command, prompts, navigate),
         // A picture only where every human attached can see one; otherwise no mark.
         logo: (yield* everyViewerPaints())
           ? `${env.pluginRoot}/assets/brand/logos/collie-horizontal-light-512.png`
@@ -1136,6 +1125,8 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
   env: PluginEnv,
   command: Command,
   prompts: FlowPrompts,
+  /** Puts a Run on the board's screen, for a confirmed `navigate`. */
+  navigate: (runId: string) => void = () => {},
 ) {
   const runOf = (runId: string) =>
     (session.runsOf ?? listRuns)(env).pipe(
@@ -1249,19 +1240,32 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
       // on the Run's behalf.
       return "a review is posted by the Run that wrote it";
 
-    case "ConfirmProposal":
-      return yield* fromBoard(env, (actor) =>
-        carryOutProposal(env, command.id, command.hash, actor).pipe(
-          Effect.map((done) => (done.ok ? done.human : done.error.message)),
-        ),
-      );
+    case "ConfirmProposal": {
+      const done = yield* confirmProposed(env, {
+        door: "board",
+        proposal: command.id,
+        hash: command.hash,
+        request: yield* newRequestId(),
+      });
+      // A confirmed `navigate` puts its target on screen here: the host has no screen.
+      // Even where a later action failed: an applied one did happen.
+      const file = yield* journalOf(env.stateDir, command.id);
+      if (file !== null)
+        for (const step of stepResults(yield* readProposals(file), command.id))
+          if (step.kind === "navigate" && step.state === "applied" && step.run !== null)
+            navigate(step.run);
+      return done.ok ? done.human : done.error.message;
+    }
 
-    case "DeclineProposal":
-      return yield* fromBoard(env, (actor) =>
-        declineProposal(env, command.id, actor).pipe(
-          Effect.map((done) => (done.ok ? done.human : done.error.message)),
-        ),
-      );
+    case "DeclineProposal": {
+      const done = yield* declineProposed(env, {
+        door: "board",
+        proposal: command.id,
+        hash: command.hash,
+        request: yield* newRequestId(),
+      });
+      return done.ok ? done.human : done.error.message;
+    }
 
     case "OpenMr": {
       const ref = parseMrTarget(command.target);
@@ -1361,12 +1365,13 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
     case "FollowUp": {
       const text = yield* prompts.ask(`What still needs doing on ${command.runId}?`);
       if (text === null || text.trim() === "") return null;
-      const done = yield* carryOutAsked(
-        env,
-        [{ kind: "followup", run: command.runId, text: text.trim() }],
-        { origin: "board", requestId: yield* newRequestId() },
-      );
-      return done.map((one) => `${one.state}: ${one.note}`).join("\n");
+      const done = yield* followUpRun(env, {
+        door: "board",
+        runId: command.runId,
+        text: text.trim(),
+        request: yield* newRequestId(),
+      });
+      return done.ok ? done.human : done.error.message;
     }
 
     /**
@@ -1376,10 +1381,13 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
     case "Steer": {
       const run = yield* runOf(command.runId);
       if (!run) return `${command.runId} has gone`;
-      const said = yield* steer(env, yield* evaluationDeps(env), {
+      const said = yield* steerAbout(env, {
+        door: "board",
+        runId: run.id,
         text: command.text,
-        target: run.id,
-        requestId: yield* newRequestId(),
+        from: null,
+        dryRun: false,
+        request: yield* newRequestId(),
       });
       return said.ok ? said.human : said.error.message;
     }
@@ -1391,19 +1399,15 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
     case "RecordDisposition": {
       const run = yield* runOf(command.runId);
       if (!run) return `${command.runId} has gone`;
-      return yield* fromBoard(env, (actor) =>
-        Effect.gen(function* () {
-          const line = {
-            at: yield* nowIso(),
-            by: actorName(actor),
-            kind: command.kind,
-            ref: command.ref,
-            note: null,
-          };
-          yield* recordDisposition(run.dir, line);
-          return statusLine(run.state, line);
-        }),
-      );
+      const done = yield* disposeRun(env, {
+        door: "board",
+        runId: run.id,
+        kind: command.kind,
+        ref: command.ref,
+        note: null,
+        request: yield* newRequestId(),
+      });
+      return done.ok ? statusLine(run.state, done.value) : done.error.message;
     }
 
     case "EditSetting":
@@ -1817,23 +1821,4 @@ const notice = Effect.fn("Flows.notice")(function* (
     footer: "Enter or Esc closes this",
   });
   return code;
-});
-
-/**
- * The board's own front door. A keypress on it is a person acting, so it stamps `board`
- * — the one origin besides a controlling terminal that counts as human, and the reason
- * `confirm` from here is allowed at all.
- */
-const fromBoard = Effect.fn("Flows.fromBoard")(function* (
-  env: PluginEnv,
-  what: (
-    actor: Actor,
-  ) => Effect.Effect<
-    string,
-    HerdrUnreachable | IntentUnreadable | PlatformError | ProposalsBusy | SchemaError,
-    BunServices
-  >,
-) {
-  const actor: Actor = { origin: "board", requestId: yield* newRequestId() };
-  return yield* what(actor).pipe(Effect.catch((cause) => Effect.succeed(reason(cause))));
 });

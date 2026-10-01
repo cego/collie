@@ -24,6 +24,7 @@ import {
   rememberChecks,
   anyRuns,
   controlRun,
+  disposeRun,
   invokeOffer,
   showOffers,
   steerRun,
@@ -67,7 +68,7 @@ import { newest, readCards } from "../cards";
 import { metricsOf, readMetrics } from "../metrics";
 import type { Metrics } from "../board-model";
 import { reportOf } from "../report";
-import { latest, readDispositions, recordDisposition, statusLine } from "../disposition";
+import { latest, readDispositions, statusLine } from "../disposition";
 import { nowIso } from "../time";
 import type { PluginEnv } from "../env";
 import {
@@ -1100,18 +1101,19 @@ const runDisposition = Command.make(
           }
           return yield* mutation(resolved.env, "run-disposition", requestId, (id) =>
             Effect.gen(function* () {
-              const line = {
-                at: yield* nowIso(),
-                by: actorName(yield* actorNow(resolved.env, id)),
+              const done = yield* disposeRun(resolved.env, {
+                door: yield* cliDoor(resolved.env),
+                runId: facts.id,
                 kind,
                 ref,
                 note: Option.getOrNull(note),
-              };
-              yield* recordDisposition(resolved.dir, line);
+                request: id,
+              });
+              if (!done.ok) return done;
               return {
                 ok: true,
-                data: { run: facts.id, status, disposition: line },
-                human: statusLine(status, line),
+                data: { run: facts.id, status, disposition: done.value },
+                human: statusLine(status, done.value),
               };
             }),
           );

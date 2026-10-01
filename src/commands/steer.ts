@@ -8,10 +8,16 @@
 
 import { Effect, Option } from "effect";
 import { Argument, Command, Flag } from "effect/unstable/cli";
-import { carryOutProposal, declineProposal, err, steer as steerRun } from "../operations";
-import { evaluationDeps } from "../evaluator";
+import { err } from "../operations";
+import { confirmProposed, declineProposed, steerAbout } from "../lifecycle";
 import { findRun } from "../runs";
-import { proposalsPath, reconcileStep } from "../proposals";
+import {
+  journalOf,
+  proposalsPath,
+  read as readProposals,
+  reconcileStep,
+  type ProposalRecord,
+} from "../proposals";
 import {
   deliveriesOf,
   herdOf,
@@ -20,7 +26,15 @@ import {
   appendLine,
 } from "../steering";
 import { mutation } from "../envelope";
-import { actorName, actorNow, answering, mutating, runIdArg, requestIdFlag } from "./shared";
+import {
+  actorName,
+  actorNow,
+  answering,
+  cliDoor,
+  mutating,
+  runIdArg,
+  requestIdFlag,
+} from "./shared";
 import { nowIso } from "../time";
 
 export const steer = Command.make(
@@ -46,16 +60,16 @@ export const steer = Command.make(
         const run = target.replace(/^run:/, "");
         if (run === "") return err("invalid_input", "--target is `run:<id>`.");
         return yield* mutation(env, "steer", requestId, (id) =>
-          Effect.gen(function* () {
-            const deps = yield* evaluationDeps(env);
-            return yield* steerRun(env, deps, {
+          Effect.flatMap(cliDoor(env), (door) =>
+            steerAbout(env, {
+              door,
+              runId: run,
               text,
-              target: run,
               from: Option.getOrNull(from),
               dryRun,
-              requestId: id,
-            });
-          }),
+              request: id,
+            }),
+          ),
         );
       }),
     ),
@@ -70,6 +84,16 @@ const proposalIdArg = Argument.String("proposal-id").pipe(
   Argument.withDescription("The proposal, as `steer` printed it"),
 );
 
+/** The proposal's own hash, for a yes that names only its id: the host still checks one. */
+const hashOf = Effect.fn("Steer.hashOf")(function* (stateDir: string, id: string) {
+  const file = yield* journalOf(stateDir, id);
+  const found = file === null ? [] : yield* readProposals(file);
+  return (
+    found.find((line): line is ProposalRecord => line.kind === "proposal" && line.id === id)
+      ?.content_hash ?? ""
+  );
+});
+
 /**
  * Carry out a confirmed proposal, action by action, in order. Each one is admitted again
  * immediately before it runs and journalled on both sides of running, so a crash leaves a
@@ -81,18 +105,30 @@ export const confirm = Command.make(
   { proposalId: proposalIdArg, hash: hashFlag, requestId: requestIdFlag },
   ({ proposalId, hash, requestId }) =>
     mutating("confirm", requestId, (env, id) =>
-      Effect.flatMap(actorNow(env, id), (actor) =>
-        carryOutProposal(env, proposalId, Option.getOrUndefined(hash), actor),
-      ),
+      Effect.gen(function* () {
+        return yield* confirmProposed(env, {
+          door: yield* cliDoor(env),
+          proposal: proposalId,
+          hash: Option.isSome(hash) ? hash.value : yield* hashOf(env.stateDir, proposalId),
+          request: id,
+        });
+      }),
     ),
 ).pipe(Command.withDescription("Carry out a proposal, naming it and its exact contents"));
 
 export const decline = Command.make(
   "decline",
-  { proposalId: proposalIdArg, requestId: requestIdFlag },
-  ({ proposalId, requestId }) =>
+  { proposalId: proposalIdArg, hash: hashFlag, requestId: requestIdFlag },
+  ({ proposalId, hash, requestId }) =>
     mutating("decline", requestId, (env, id) =>
-      Effect.flatMap(actorNow(env, id), (actor) => declineProposal(env, proposalId, actor)),
+      Effect.gen(function* () {
+        return yield* declineProposed(env, {
+          door: yield* cliDoor(env),
+          proposal: proposalId,
+          hash: Option.isSome(hash) ? hash.value : yield* hashOf(env.stateDir, proposalId),
+          request: id,
+        });
+      }),
     ),
 ).pipe(Command.withDescription("Say no to a proposal, so it stops being pending"));
 

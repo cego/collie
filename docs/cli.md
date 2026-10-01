@@ -703,7 +703,7 @@ comes through these: the evaluator's proposals wait on the board, and chat asks 
 `answer`, `deliver`, `followup` and `start` — through the same closed union, the same
 last-moment admission check and the same executors a confirmation runs. It also takes the
 board's decisions, which are not actions on a run: `confirm` a waiting proposal by its id
-and the hash `collie_receipts` lists beside it, `decline` one, and `disposition` to record
+and the hash `collie_receipts` lists beside it, `decline` one by the same two, and `disposition` to record
 what became of a finished run's work. It answers a line per action saying what each one
 came to. A kind outside that set is refused with the name of the tool that does take it:
 amending an Intent, forking a definition, changing the defaults, keeping a run's checks for
@@ -774,8 +774,8 @@ collie --json decline <proposal-id>
 collie --json proposal reconcile <proposal-id> <index> --as applied|not-applied
 ```
 
-`confirm` executes an existing proposal. Optional `--hash <content-hash>` checks that you
-are addressing those exact contents. Expired or stale-target proposals are still rejected.
+`confirm` executes an existing proposal and `decline` refuses one. Optional
+`--hash <content-hash>` checks that you are addressing those exact contents. Expired or stale-target proposals are still rejected.
 Ordinary chat requests and steers do not need this command.
 
 Actions run in order, each one re-checked immediately before it runs and journalled on
@@ -1376,6 +1376,14 @@ channel first sends `declare` with its front door, and the host stamps every ope
 it with that, as a line in the Run's `operations.jsonl`: the operation, the request, the
 Actor and what came of it ([ADR-0039](adr/0039-every-operation-records-who-asked.md)). A
 channel that declares nothing is `cli`.
+
+So are the ones that write anything else: `confirm` (a proposal's id and content hash) and
+`decline` (its id and content hash too), recorded in its Herd's proposals journal under the Actor; `dispose`,
+what became of a Run's work; `steerAbout`, which has the evaluator turn free words about a
+Run into actions and carries them out; and `followUp`, which starts the follow-up the Run's
+Workflow declares. `collie confirm`, `decline`, `steer` and `run disposition`, the board and
+chat's tools all go through these, so the host is the only writer of what they record
+([ADR-0040](adr/0040-the-host-is-the-only-writer.md)).
 
 `runDetail` streams one Run's details while a drawer is open — intent, plan, review,
 log tail, verifications, metrics, steering cards, the files it kept as evidence, its diff

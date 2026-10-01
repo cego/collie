@@ -27,24 +27,23 @@ import type { PluginEnv } from "./env";
 import { mutation } from "./envelope";
 import {
   carryOutAsked,
-  carryOutProposal,
-  declineProposal,
   newRequestId,
   request,
   runFacts,
   workspaceCwdFromPanes,
 } from "./operations";
 import { ActionSchema, type Action } from "./evaluator";
-import { boardSnapshot, runViews, isSettled } from "./lifecycle";
-import { taskOfWorkspace } from "./task";
 import {
-  actorName,
-  pendingFor,
-  proposalsPath,
-  read as readProposals,
-  type Actor,
-} from "./proposals";
-import { recordDisposition, statusLine } from "./disposition";
+  boardSnapshot,
+  confirmProposed,
+  declineProposed,
+  disposeRun,
+  runViews,
+  isSettled,
+} from "./lifecycle";
+import { taskOfWorkspace } from "./task";
+import { pendingFor, proposalsPath, read as readProposals, type Actor } from "./proposals";
+import { statusLine } from "./disposition";
 import { Herdr } from "./herdr";
 import { mrLabel } from "./board";
 import { headerSentence, sectionOf, type Section, type TaskView } from "./board-model";
@@ -56,7 +55,6 @@ import {
   settle as settleNews,
 } from "./news";
 import { findRun, type RunFacts } from "./runs";
-import { nowIso } from "./time";
 import { deliveriesOf, herdOf } from "./steering";
 import { loadDefinitions, layers } from "./definitions";
 import { chatHarnessOf, chatPath, pushable, readChat, whyUnavailable } from "./chat";
@@ -167,7 +165,7 @@ const SettleSchema = Schema.Union([
     /** The hash of exactly those actions, as `collie_receipts` lists it beside the id. */
     hash: Schema.String,
   }),
-  Schema.Struct({ kind: Schema.Literal("decline"), proposal: Schema.String }),
+  Schema.Struct({ kind: Schema.Literal("decline"), proposal: Schema.String, hash: Schema.String }),
   Schema.Struct({
     kind: Schema.Literal("disposition"),
     run: Schema.String,
@@ -498,9 +496,9 @@ const carryOut = Effect.fn("Tools.carryOut")(function* (env: PluginEnv, input: J
     selected.on === null
       ? []
       : [`On the board's selection, "${selected.on.name}" (${selected.on.run}):`];
-  for (const action of actions) {
+  for (const [index, action] of actions.entries()) {
     const done = yield* isSettle(action)
-      ? settle(env, action, actor)
+      ? settle(env, action, `${requestId}-${index}`)
       : carryOutAsked(env, [action], actor).pipe(Effect.map((results) => results[0]!));
     said.push(`${done.kind}: ${done.state}${done.note ? ` — ${done.note}` : ""}`);
     // What follows a failure was asked for on the assumption that it did not happen.
@@ -509,33 +507,45 @@ const carryOut = Effect.fn("Tools.carryOut")(function* (env: PluginEnv, input: J
   return said.join("\n");
 });
 
-/** A decision of the board's, taken where the human said it. */
-const settle = Effect.fn("Tools.settle")(function* (env: PluginEnv, action: Settle, actor: Actor) {
+/** A decision of the board's, taken where the human said it, by the host. */
+const settle = Effect.fn("Tools.settle")(function* (
+  env: PluginEnv,
+  action: Settle,
+  request: string,
+) {
   if (action.kind === "disposition") {
     const run = yield* findRun(env, action.run);
     if (run === null) return { kind: action.kind, state: "failed", note: `no Run "${action.run}"` };
-    const line = {
-      at: yield* nowIso(),
-      by: actorName(actor),
+    const done = yield* disposeRun(env, {
+      door: "chat",
+      runId: run.id,
       kind: action.became,
       ref: action.ref ?? "",
       note: null,
-    };
-    yield* recordDisposition(run.dir, line);
-    return { kind: action.kind, state: "applied", note: statusLine(run.state, line) };
+      request,
+    });
+    return done.ok
+      ? { kind: action.kind, state: "applied", note: statusLine(run.state, done.value) }
+      : { kind: action.kind, state: "failed", note: done.error.message };
   }
   const done =
     action.kind === "confirm"
-      ? yield* carryOutProposal(env, action.proposal, action.hash, actor)
-      : yield* declineProposal(env, action.proposal, actor);
-  if (!done.ok) return { kind: action.kind, state: "failed", note: done.error.message };
-  // A settled proposal is not a proposal that ran: whether its actions did is in their
-  // own results, and what was asked for after this assumed they had.
-  const ran =
-    "results" in done.data && done.data.results.some((result) => result.state === "failed")
-      ? "failed"
-      : "applied";
-  return { kind: action.kind, state: ran, note: done.human };
+      ? yield* confirmProposed(env, {
+          door: "chat",
+          proposal: action.proposal,
+          hash: action.hash,
+          request,
+        })
+      : yield* declineProposed(env, {
+          door: "chat",
+          proposal: action.proposal,
+          hash: action.hash,
+          request,
+        });
+  // A confirmation whose actions did not all apply is a failure, with each one's result in it.
+  return done.ok
+    ? { kind: action.kind, state: "applied", note: done.human }
+    : { kind: action.kind, state: "failed", note: done.error.message };
 });
 
 /** Cards per answer. Sections come in the board's order, so Finished is what gets cut. */

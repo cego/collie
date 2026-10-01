@@ -591,6 +591,8 @@ function refusalFor(action: Action, ctx: ValidationContext): string | null {
 export const evaluationDeps = Effect.fn("Evaluator.evaluationDeps")(function* (env: {
   readonly socketPath: string | null;
   readonly pluginRoot: string;
+  /** The Herd to record against, where it is not the one this process's socket names. */
+  readonly herdKey?: string | undefined;
 }) {
   const path = yield* Path.Path;
   const limits = {
@@ -600,7 +602,7 @@ export const evaluationDeps = Effect.fn("Evaluator.evaluationDeps")(function* (e
     effort: "medium",
   };
   return {
-    herdKey: yield* herdOf(env.socketPath),
+    herdKey: env.herdKey ?? (yield* herdOf(env.socketPath)),
     evaluator: {
       help: Effect.promise(() => Bun.$`claude --help`.text().catch(() => "")),
       systemPromptFile: path.join(env.pluginRoot, "prompts", "steward.md"),

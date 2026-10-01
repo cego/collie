@@ -1,0 +1,192 @@
+// The host is the only writer of its state directory: a yes or a no to a proposal, what
+// became of a Run's work, a steer and a follow-up are each its operations, under the front
+// door that asked, and the same request twice is one operation.
+
+import { expect, test } from "bun:test";
+import { Effect, FileSystem, Schema } from "effect";
+import { readAudit } from "../src/audit";
+import { readDispositions } from "../src/disposition";
+import { runDir } from "../src/engine";
+import { connect } from "../src/host";
+import { proposalsPath, read as readProposals, record as recordProposal } from "../src/proposals";
+import { stopHost, until } from "./support/host";
+import { collie, proves } from "./support/world";
+
+const answers = (lines: ReadonlyArray<{ readonly kind: string }>) =>
+  lines.filter((line) => line.kind === "confirmed" || line.kind === "declined");
+
+test(
+  "a proposal is confirmed or declined by the host, by its id and hash, once per request",
+  () =>
+    proves(
+      "collie-writer-proposal-",
+      (world) =>
+        Effect.gen(function* () {
+          const file = yield* proposalsPath(world.state, "some-herd");
+          const proposed = (why: string) =>
+            recordProposal(file, {
+              interpretation: why,
+              targets: [],
+              actions: [{ kind: "none", why }],
+              allowedNow: [],
+              intentVersions: {},
+              by: "evaluator:e-1",
+            });
+          const first = yield* proposed("nothing to do");
+          const second = yield* proposed("still nothing");
+          const client = yield* connect(world.state);
+          yield* client.declare({ frontDoor: "chat" });
+
+          const wrong = yield* client
+            .confirm({ proposal: first.id, hash: "not-it", request: "r-0" })
+            .pipe(Effect.flip);
+          expect(wrong).toMatchObject({ _tag: "ProposalRefused", refused: "hash_mismatch" });
+
+          const yes = { proposal: first.id, hash: first.content_hash, request: "r-1" };
+          const done = yield* client.confirm(yes);
+          const changed = yield* client.confirm({ ...yes, hash: "other" }).pipe(Effect.flip);
+          expect(changed).toMatchObject({ _tag: "ProposalRefused", refused: "hash_mismatch" });
+          expect(done.results).toEqual([
+            { index: 0, kind: "none", state: "applied", note: "nothing to do", run: null },
+          ]);
+          expect(yield* client.confirm(yes)).toEqual(done);
+          const conflict = yield* client
+            .decline({ proposal: second.id, hash: second.content_hash, request: "r-1" })
+            .pipe(Effect.flip);
+          expect(conflict._tag).toBe("RequestConflict");
+
+          yield* client.decline({ proposal: second.id, hash: second.content_hash, request: "r-2" });
+          expect(answers(yield* readProposals(file))).toMatchObject([
+            { kind: "confirmed", id: first.id, by: "chat:r-1" },
+            { kind: "declined", id: second.id, by: "chat:r-2" },
+          ]);
+          const missing = yield* client
+            .decline({ proposal: "p-none", hash: "x", request: "r-3" })
+            .pipe(Effect.flip);
+          expect(missing).toMatchObject({ _tag: "ProposalRefused", refused: "not_found" });
+          yield* stopHost(world.state);
+        }).pipe(Effect.orDie),
+      [],
+    ),
+  120_000,
+);
+
+test(
+  "what became of a Run and its follow-up are the host's to write, stamped with who asked",
+  () =>
+    proves(
+      "collie-writer-run-",
+      (world) =>
+        Effect.gen(function* () {
+          const client = yield* connect(world.state);
+          yield* client.declare({ frontDoor: "board" });
+          const started = yield* client.start({
+            project: world.project,
+            id: "followed",
+            request: "s-1",
+            input: { text: "first" },
+          });
+          const runId = started.runId;
+          yield* until(
+            () => client.run({ runId }),
+            (view) => view?.status.status === "complete",
+          );
+
+          const child = yield* client.followUp({ runId, text: "what is left", request: "f-1" });
+          expect((yield* client.run({ runId: child.runId }))?.parent).toBe(runId);
+          expect(
+            (yield* client.followUp({ runId, text: "what is left", request: "f-1" })).runId,
+          ).toBe(child.runId);
+          const unknown = yield* client
+            .followUp({ runId: "run-none", text: "x", request: "f-2" })
+            .pipe(Effect.flip);
+          expect(unknown._tag).toBe("HostRefused");
+
+          const asked = { runId, kind: "merged", ref: "mr!7", note: null, request: "d-1" } as const;
+          const line = yield* client.dispose(asked);
+          expect(line).toMatchObject({ kind: "merged", ref: "mr!7", by: "human:d-1" });
+          expect(yield* client.dispose(asked)).toEqual(line);
+          const dir = runDir(world.state, runId);
+          expect(yield* readDispositions(dir)).toEqual([line]);
+          expect(
+            (yield* readAudit(dir)).map((one) => [one.operation, one.actor.origin, one.request]),
+          ).toEqual([
+            ["start", "board", "s-1"],
+            ["followup", "board", "f-1"],
+            ["disposition", "board", "d-1"],
+          ]);
+          yield* stopHost(world.state);
+        }).pipe(Effect.orDie),
+      ["followed.workflow.ts"],
+    ),
+  120_000,
+);
+
+const CLAUDE_HELP = [
+  "--print",
+  "--output-format",
+  "--json-schema",
+  "--tools",
+  "--restricted",
+  "--strict-mcp-config",
+  "--setting-sources",
+  "--no-session-persistence",
+  "--append-system-prompt-file",
+].join(" ");
+
+test(
+  "a steer from the command line is the host's: it asks, records and carries out",
+  () =>
+    proves(
+      "collie-writer-steer-",
+      (world) =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const bin = `${world.home}/bin`;
+          yield* fs.makeDirectory(bin, { recursive: true });
+          const env = {
+            PATH: `${bin}:/usr/bin:/bin`,
+            HERDR_SOCKET_PATH: `${world.state}/herd.sock`,
+          };
+          const started = yield* collie(
+            world,
+            ["run", "start", "plain", "--input", "note=hi"],
+            env,
+          );
+          const { runId } = yield* Schema.decodeUnknownEffect(
+            Schema.Struct({ runId: Schema.String }),
+          )(started.envelope.data);
+          const answer = `{"interpretation":"nothing needs doing","targets":[{"run":"${runId}"}],"actions":[{"kind":"none","why":"it is fine"}],"confidence":1}`;
+          yield* fs.writeFileString(
+            `${bin}/claude`,
+            `#!/bin/sh\n[ "$1" = --help ] && echo '${CLAUDE_HELP}' && exit 0\ncat >/dev/null\necho '${answer}'\n`,
+            { mode: 0o755 },
+          );
+
+          const said = yield* collie(
+            world,
+            ["steer", "is it all right?", "--target", `run:${runId}`],
+            env,
+          );
+          expect(said.envelope).toMatchObject({ ok: true });
+          const audit = yield* readAudit(runDir(world.state, runId));
+          expect(audit.map((one) => [one.operation, one.actor.origin])).toContainEqual([
+            "steer",
+            "cli",
+          ]);
+          // The same request again is the same steer: nobody is asked twice.
+          const client = yield* connect(world.state);
+          const again = { runId, text: "and now?", from: null, dryRun: false, request: "st-1" };
+          const first = yield* client.steerAbout(again);
+          expect(first.ok).toBe(true);
+          yield* fs.writeFileString(`${bin}/claude`, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+          expect(yield* client.steerAbout(again)).toEqual(first);
+          const herds = yield* fs.readDirectory(`${world.state}/herd`);
+          const journal = yield* readProposals(`${world.state}/herd/${herds[0]}/proposals.jsonl`);
+          expect(answers(journal)).toMatchObject([{ kind: "confirmed" }, { kind: "confirmed" }]);
+          yield* stopHost(world.state);
+        }).pipe(Effect.orDie),
+      ["plain.workflow.ts"],
+    ),
+  120_000,
+);

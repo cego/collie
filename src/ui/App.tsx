@@ -272,7 +272,8 @@ export function App(props: AppProps) {
     },
     confirm: (proposal) =>
       props.dispatch({ _tag: "ConfirmProposal", id: proposal.id, hash: proposal.hash }),
-    decline: (proposal) => props.dispatch({ _tag: "DeclineProposal", id: proposal.id }),
+    decline: (proposal) =>
+      props.dispatch({ _tag: "DeclineProposal", id: proposal.id, hash: proposal.hash }),
     approve: (gate, verifications) => {
       setCutting(null);
       props.dispatch({
@@ -434,7 +435,11 @@ export function App(props: AppProps) {
         });
       }
       if (key.name === "escape")
-        return props.dispatch({ _tag: "DeclineProposal", id: proposal.id });
+        return props.dispatch({
+          _tag: "DeclineProposal",
+          id: proposal.id,
+          hash: proposal.content_hash,
+        });
       return;
     }
     // A menu is a question about what to do next: the keys beside its items are the

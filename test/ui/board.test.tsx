@@ -590,7 +590,7 @@ test("declining a proposal declines it, and the card leaves Needs you", () =>
       );
 
       yield* app.clickOn("Decline");
-      expect(app.acted()).toEqual([{ _tag: "DeclineProposal", id: "p1" }]);
+      expect(app.acted()).toEqual([{ _tag: "DeclineProposal", id: "p1", hash: "deadbeef" }]);
 
       yield* app.setState(appState({ tasks: [task({ id: "tp", name: "Slow down" })] }));
       const after = app.said();

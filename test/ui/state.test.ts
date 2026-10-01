@@ -1525,7 +1525,7 @@ test("a proposal on screen takes Enter and Esc, and nothing else", () => {
   });
   expect(keyIntent(previewing, press("\x1b", { name: "escape" }))).toEqual({
     _tag: "Do",
-    command: { _tag: "DeclineProposal", id: "p1" },
+    command: { _tag: "DeclineProposal", id: "p1", hash: "deadbeef" },
   });
   expect(keyIntent(previewing, press("k"))).toBeNull();
 });

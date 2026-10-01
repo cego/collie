@@ -127,13 +127,19 @@ import {
   writeIntent,
   type IntentSeed,
 } from "./intent";
-import { latest, readDispositions, type Disposition } from "./disposition";
+import { latest, readDispositions } from "./disposition";
 import { openFindingsIn } from "./output";
 import { isSingleRepo, planIssuesIn, planReposOf } from "./plan";
 import { SELF, inputsFor, offersFrom, type Declared, type Offer } from "./offers";
 import { isOutcome, needsApproved, nothingApprovedToStart } from "./outcome";
 import { Store, storeLayer, type Admission, type RunRow } from "./store";
-import { Answered, Controlled, HostRefused, RequestConflict } from "./board-model";
+import {
+  Answered,
+  Controlled,
+  HostRefused,
+  RequestConflict,
+  type Disposition,
+} from "./board-model";
 import { TASK_INPUT, checkoutFor, repositoryName, workOf } from "./worktree";
 import { Herdr, herdrFailureReason } from "./herdr";
 import type { PluginEnv } from "./env";

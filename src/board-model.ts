@@ -520,6 +520,52 @@ export const Started = Schema.Struct({
   fresh: Schema.Boolean,
 });
 
+/**
+ * What became of a Run's work: `merged` by some other route, `abandoned` on purpose, or
+ * `superseded` by the Run that carried it instead. Never a value that edits its status.
+ */
+export const Disposition = Schema.Struct({
+  at: Schema.String,
+  by: Schema.String,
+  kind: Schema.Literals(["merged", "abandoned", "superseded"]),
+  /** What backs it up: a merge request, a commit, or the Run that took the work over. */
+  ref: Schema.String,
+  note: Schema.NullOr(Schema.String),
+});
+export type Disposition = typeof Disposition.Type;
+
+/** One action of a confirmed proposal, and what came of it. */
+export const StepResult = Schema.Struct({
+  index: Schema.Int,
+  kind: Schema.String,
+  state: Schema.String,
+  note: Schema.String,
+  /** The Run it acted on, where it names one, so a board can show a `navigate`'s target. */
+  run: Schema.NullOr(Schema.String),
+});
+export type StepResult = typeof StepResult.Type;
+
+export const ProposalCarried = Schema.Struct({
+  proposal: Schema.String,
+  results: Schema.Array(StepResult),
+});
+export type ProposalCarried = typeof ProposalCarried.Type;
+
+/** A yes or a no the proposals journal would not take, and which rule it broke. */
+export class ProposalRefused extends Schema.TaggedError<ProposalRefused>()("ProposalRefused", {
+  refused: Schema.String,
+  detail: Schema.String,
+}) {}
+
+/** What a steer came to, as the front doors print it: a failure carries its code. */
+export const SteerOutcome = Schema.Struct({
+  ok: Schema.Boolean,
+  code: Schema.NullOr(Schema.String),
+  human: Schema.String,
+  data: Schema.Json,
+});
+export type SteerOutcome = typeof SteerOutcome.Type;
+
 /** Which front door is acting: what a channel declares, and what its operations are stamped with. */
 export const FrontDoor = Schema.Literals([
   "cli",
@@ -617,6 +663,48 @@ export const FrontDoorRpcs = RpcGroup.make(
     payload: { runId: Schema.String, ref: Schema.String },
     success: RunFile,
     error: HostRefused,
+  }),
+  /** A yes or a no to a proposal, by its id and the hash of exactly what it would do. */
+  Rpc.make("confirm", {
+    payload: { proposal: Schema.String, hash: Schema.String, request: Schema.String },
+    success: ProposalCarried,
+    error: Schema.Union([HostRefused, ProposalRefused, RequestConflict]),
+  }),
+  Rpc.make("decline", {
+    payload: { proposal: Schema.String, hash: Schema.String, request: Schema.String },
+    success: Schema.Struct({ proposal: Schema.String }),
+    error: Schema.Union([HostRefused, ProposalRefused, RequestConflict]),
+  }),
+  /** What became of a Run's work, recorded beside its status and never over it. */
+  Rpc.make("dispose", {
+    payload: {
+      runId: Schema.String,
+      kind: Disposition.fields.kind,
+      ref: Schema.String,
+      note: Schema.NullOr(Schema.String),
+      request: Schema.String,
+    },
+    success: Disposition,
+    error: Schema.Union([HostRefused, RequestConflict]),
+  }),
+  /** Free words about one Run, which the evaluator turns into actions carried out now. */
+  Rpc.make("steerAbout", {
+    payload: {
+      runId: Schema.String,
+      text: Schema.String,
+      /** The card this is about, so the proposal is bound to its revision. */
+      from: Schema.NullOr(Schema.String),
+      dryRun: Schema.Boolean,
+      request: Schema.String,
+    },
+    success: SteerOutcome,
+    error: RequestConflict,
+  }),
+  /** A child Run on a finished one, through the follow-up its Workflow declares. */
+  Rpc.make("followUp", {
+    payload: { runId: Schema.String, text: Schema.String, request: Schema.String },
+    success: Started,
+    error: Schema.Union([HostRefused, RequestConflict]),
   }),
   /** Carries out what a finished Run offers, as a Run of its own. */
   Rpc.make("invoke", {

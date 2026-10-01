@@ -800,7 +800,9 @@ test("collie_do settles a proposal the human said yes to in chat", () =>
       const second = (yield* readProposals(yield* proposalsPath(stateDir, KEY)))
         .filter((line): line is ProposalRecord => line.kind === "proposal")
         .find((line) => line.id !== proposal.id)!;
-      yield* call("collie_do", { actions: [{ kind: "decline", proposal: second.id }] });
+      yield* call("collie_do", {
+        actions: [{ kind: "decline", proposal: second.id, hash: second.content_hash }],
+      });
       expect(
         (yield* readProposals(yield* proposalsPath(stateDir, KEY))).some(
           (line) => line.kind === "declined" && line.id === second.id,

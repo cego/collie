@@ -8,7 +8,17 @@
 // What a Run is and what became of it stays Collie's; what a workflow has done stays
 // Effect's. Nothing here copies the second into the first.
 
-import { Deferred, Effect, Fiber, FileSystem, Option, Schedule, Schema, Stream } from "effect";
+import {
+  Deferred,
+  Effect,
+  Fiber,
+  FileSystem,
+  Option,
+  Predicate,
+  Schedule,
+  Schema,
+  Stream,
+} from "effect";
 import type { Scope } from "effect";
 import type { ChildProcessSpawner } from "effect/unstable/process";
 import type * as RpcClientError from "effect/unstable/rpc/RpcClientError";
@@ -29,11 +39,14 @@ import {
   type Controlled,
   type FrontDoor,
   type HostRefused,
+  type Disposition,
+  type ProposalCarried,
+  type ProposalRefused,
   type RequestConflict,
   type TaskView,
 } from "./board-model";
 import { REFUSED_INPUT, runDir, type Given, type OfferView, type RunView } from "./engine";
-import { err, taskFor, type Failure, type OpResult } from "./operations";
+import { err, ExpectedError, taskFor, type Failure, type OpResult } from "./operations";
 import type { TaskChoice } from "./task";
 import { encodeApprovedFile, rememberedFile, renderApproved, type VerifySpec } from "./verify-spec";
 import { projectHere, shell } from "./mr";
@@ -109,6 +122,7 @@ export const anyRuns = (env: PluginEnv): Effect.Effect<boolean, never, FileSyste
 
 type HostFailure =
   | HostRefused
+  | ProposalRefused
   | RequestConflict
   | HostUnavailable
   | HostVersionMismatch
@@ -124,6 +138,8 @@ const refusal = (cause: HostFailure): Failure => {
       return cause.reason.startsWith(`${REFUSED_INPUT}:`)
         ? err("invalid_input", cause.reason.slice(REFUSED_INPUT.length + 1).trim())
         : err("operation_failed", cause.reason);
+    case "ProposalRefused":
+      return err("invalid_input", cause.detail, { reason: cause.refused });
     case "RequestConflict":
       return err("invalid_input", cause.reason, { request: cause.request });
     case "HostVersionMismatch":
@@ -692,6 +708,21 @@ export const steerRun = (
     }),
   );
 
+/** A carried-out proposal as a front door prints it: one line per action, failing on the first that did not apply. */
+export const carriedResult = ({ proposal, results }: ProposalCarried): OpResult => {
+  const message = results
+    .map((r) => `${r.index} ${r.kind}: ${r.state}${r.note ? ` — ${r.note}` : ""}`)
+    .join("\n");
+  if (results.some((r) => r.state === "failed" || r.state === "skipped")) {
+    const changed = results.some((r) => r.state === "applied" && r.kind !== "none");
+    // needs_input is retryable without a receipt only when nothing has happened yet.
+    const code =
+      results.at(-1)?.kind === "ask_human" && !changed ? "needs_input" : "operation_failed";
+    return err(code, message, { proposal, results: results.map((r) => ({ ...r })) });
+  }
+  return { ok: true as const, data: { proposal, results }, human: message };
+};
+
 const capitalised = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
 
 /** A Run as a human reads one: what it is, where its module is, and what is wrong. */
@@ -803,6 +834,149 @@ export const invokeOffer = (
             ok: true as const,
             data: { run: answered.value.runId, from: options.runId, offer: options.offer },
             human: `Started run ${answered.value.runId} from ${options.runId}'s "${options.offer}".`,
+          }
+        : answered,
+    ),
+  );
+
+/** A yes to a proposal, carried out by the host under the front door asking. */
+export const confirmProposed = (
+  env: PluginEnv,
+  options: {
+    readonly door: FrontDoor;
+    readonly proposal: string;
+    readonly hash: string;
+    readonly request: string;
+  },
+): Effect.Effect<OpResult, never, Client> =>
+  asks(
+    env,
+    (client) =>
+      client.confirm({
+        proposal: options.proposal,
+        hash: options.hash,
+        request: options.request,
+      }),
+    options.door,
+  ).pipe(Effect.map((answered) => (answered.ok ? carriedResult(answered.value) : answered)));
+
+export const declineProposed = (
+  env: PluginEnv,
+  options: {
+    readonly door: FrontDoor;
+    readonly proposal: string;
+    readonly hash: string;
+    readonly request: string;
+  },
+): Effect.Effect<OpResult, never, Client> =>
+  asks(
+    env,
+    (client) =>
+      client.decline({ proposal: options.proposal, hash: options.hash, request: options.request }),
+    options.door,
+  ).pipe(
+    Effect.map((answered) =>
+      answered.ok
+        ? {
+            ok: true as const,
+            data: { declined: options.proposal },
+            human: `Declined ${options.proposal}.`,
+          }
+        : answered,
+    ),
+  );
+
+/** What became of a Run's work, written by the host; the line it wrote, or why not. */
+export const disposeRun = (
+  env: PluginEnv,
+  options: {
+    readonly door: FrontDoor;
+    readonly runId: string;
+    readonly kind: Disposition["kind"];
+    readonly ref: string;
+    readonly note: string | null;
+    readonly request: string;
+  },
+): Effect.Effect<{ readonly ok: true; readonly value: Disposition } | Failure, never, Client> =>
+  asks(
+    env,
+    (client) =>
+      client.dispose({
+        runId: options.runId,
+        kind: options.kind,
+        ref: options.ref,
+        note: options.note,
+        request: options.request,
+      }),
+    options.door,
+  );
+
+/** Free words about one Run, which the host has the evaluator turn into what to do. */
+export const steerAbout = (
+  env: PluginEnv,
+  options: {
+    readonly door: FrontDoor;
+    readonly runId: string;
+    readonly text: string;
+    readonly from: string | null;
+    readonly dryRun: boolean;
+    readonly request: string;
+  },
+): Effect.Effect<OpResult, never, Client> =>
+  asks(
+    env,
+    (client) =>
+      client.steerAbout({
+        runId: options.runId,
+        text: options.text,
+        from: options.from,
+        dryRun: options.dryRun,
+        request: options.request,
+      }),
+    options.door,
+  ).pipe(
+    Effect.map((answered): OpResult => {
+      if (!answered.ok) return answered;
+      const said = answered.value;
+      if (said.ok)
+        return {
+          ok: true,
+          data: Predicate.isObject(said.data) ? said.data : { said: said.data },
+          human: said.human,
+        };
+      const failed = Schema.decodeUnknownOption(ExpectedError)({
+        code: said.code,
+        message: said.human,
+        details: said.data,
+      });
+      return failed._tag === "Some"
+        ? { ok: false, error: failed.value }
+        : err("operation_failed", said.human);
+    }),
+  );
+
+/** A child Run on a finished one, carrying on with what is left in these words. */
+export const followUpRun = (
+  env: PluginEnv,
+  options: {
+    readonly door: FrontDoor;
+    readonly runId: string;
+    readonly text: string;
+    readonly request: string;
+  },
+): Effect.Effect<OpResult, never, Client> =>
+  asks(
+    env,
+    (client) =>
+      client.followUp({ runId: options.runId, text: options.text, request: options.request }),
+    options.door,
+  ).pipe(
+    Effect.map((answered) =>
+      answered.ok
+        ? {
+            ok: true as const,
+            data: { run: answered.value.runId, from: options.runId },
+            human: `Started run ${answered.value.runId} to follow up ${options.runId}.`,
           }
         : answered,
     ),

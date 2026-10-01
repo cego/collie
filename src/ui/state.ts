@@ -265,7 +265,7 @@ export type Command =
    * it drew.
    */
   | { _tag: "ConfirmProposal"; id: string; hash: string }
-  | { _tag: "DeclineProposal"; id: string }
+  | { _tag: "DeclineProposal"; id: string; hash: string }
   /**
    * Ask for a value, rather than write one. The app answers this itself by opening its
    * editor: an empty `SetDefault` used to stand in for "ask me first", which the
@@ -1460,7 +1460,7 @@ export function keyIntent(at: KeyContext, key: Keypress): KeyIntent | null {
   if (at.on._tag === "Proposal") {
     const { id, hash } = at.on.proposal;
     if (key.name === "return") return doing({ _tag: "ConfirmProposal", id, hash });
-    if (key.name === "escape") return doing({ _tag: "DeclineProposal", id });
+    if (key.name === "escape") return doing({ _tag: "DeclineProposal", id, hash });
     return null;
   }
   // Before whoever has the keyboard, but only where that is not a field taking text:

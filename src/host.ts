@@ -70,16 +70,37 @@ import { buildRunDetail } from "./views";
 import {
   Answered,
   Controlled,
+  Disposition,
   FrontDoorRpcs,
   HostRefused,
   PROTOCOL,
+  ProposalRefused,
+  RequestConflict,
   Started,
+  SteerOutcome,
   type FrontDoor,
   type PlanPanel,
 } from "./board-model";
 import { boardMessages } from "./board-stream";
+import { recordDisposition } from "./disposition";
+import { evaluationDeps } from "./evaluator";
+import { steer } from "./operations";
+import {
+  actorName,
+  answeredBy,
+  decline,
+  journalOf,
+  read as readProposals,
+  stepResults,
+  type ProposalLine,
+  type ProposalRecord,
+} from "./proposals";
+import { carryOut, followUpField } from "./run-actions";
+import { readTask } from "./task";
+import { nowIso } from "./time";
+import { reason } from "./naming";
 import { loadDefaults } from "./config";
-import { factsOfView } from "./runs";
+import { factsOfView, settled } from "./runs";
 import { aliveIn, herdChanges, liveHerds } from "./herds";
 import { currentPid, ensureLockDir, lockHolder, withLock, type LockHolder } from "./lock";
 
@@ -277,6 +298,15 @@ const handlers = (dir: string, installation: string) =>
     }),
   );
 
+/** A steer that came to nothing, which is told to the caller but not kept as its request's answer. */
+class SteerUnanswered extends Schema.TaggedError<SteerUnanswered>()("SteerUnanswered", {
+  outcome: SteerOutcome,
+}) {}
+
+/** Through JSON text, so a field left undefined is dropped rather than refused. */
+const toText = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const fromText = Schema.decodeSync(Schema.fromJsonString(Schema.Json));
+
 /** How often a board is built again with nothing written, so "silent for" stays true. */
 const BOARD_TICK = "5 seconds";
 
@@ -370,6 +400,68 @@ const frontDoorHandlers = (dir: string, installation: string, panels: MrPanels) 
           once(trail(runId), { operation, request, origin, result: Controlled }, act).pipe(
             Effect.provideContext(hosted),
           );
+      const known = (runId: string) =>
+        registry
+          .view(runId)
+          .pipe(
+            Effect.flatMap((view) =>
+              view === null
+                ? Effect.fail(new HostRefused({ reason: `no Run ${runId}` }))
+                : Effect.succeed(view),
+            ),
+          );
+      /** Only the refusals a front door can act on keep their shape; anything else is said in a sentence. */
+      const plainly = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+        effect.pipe(
+          Effect.mapError((cause) =>
+            Schema.is(ProposalRefused)(cause) ||
+            Schema.is(RequestConflict)(cause) ||
+            Schema.is(HostRefused)(cause)
+              ? cause
+              : new HostRefused({ reason: reason(cause) }),
+          ),
+          Effect.provideContext(bun),
+          Effect.provideContext(hosted),
+        );
+      /**
+       * A yes or a no, given once per request. The journal records who gave it; a request it
+       * already holds gets back what it did then, handed the journal's lines rather than null.
+       */
+      const answeredOnce = <A, E, R>(
+        proposal: string,
+        hash: string,
+        request: string,
+        kind: "confirmed" | "declined",
+        act: (
+          file: string,
+          lines: ReadonlyArray<ProposalLine> | null,
+        ) => Effect.Effect<A, E | ProposalRefused | RequestConflict, R>,
+      ) =>
+        Effect.gen(function* () {
+          const file = yield* journalOf(env.stateDir, proposal);
+          if (file === null)
+            return yield* new ProposalRefused({
+              refused: "not_found",
+              detail: `no proposal "${proposal}"`,
+            });
+          const lines = yield* readProposals(file);
+          const found = lines.find(
+            (line): line is ProposalRecord => line.kind === "proposal" && line.id === proposal,
+          );
+          if (found?.content_hash !== hash)
+            return yield* new ProposalRefused({
+              refused: "hash_mismatch",
+              detail: `"${proposal}" is ${found?.content_hash}, not ${hash}`,
+            });
+          const prior = answeredBy(lines, request);
+          if (prior === undefined) return yield* act(file, null);
+          if (prior.kind !== kind || prior.id !== proposal)
+            return yield* new RequestConflict({
+              request,
+              reason: `request "${request}" already ${prior.kind} ${prior.id}`,
+            });
+          return yield* act(file, lines);
+        }).pipe(plainly);
       // Debounced apart from the tick, so a burst of writes cannot hold the tick back.
       const changed = Stream.mergeAll(
         [
@@ -466,6 +558,131 @@ const frontDoorHandlers = (dir: string, installation: string, panels: MrPanels) 
             () => runId,
             { operation: "invoke", request, origin: doorOf(client), result: Started },
             registry.invoke({ runId, offer, input, request }),
+          ),
+        confirm: ({ proposal, hash, request }, { client }) =>
+          answeredOnce(proposal, hash, request, "confirmed", (file, lines) =>
+            lines === null
+              ? carryOut(env, proposal, hash, { origin: doorOf(client), requestId: request })
+              : Effect.succeed({ proposal, results: stepResults(lines, proposal) }),
+          ),
+        decline: ({ proposal, hash, request }, { client }) =>
+          answeredOnce(proposal, hash, request, "declined", (file, lines) =>
+            lines === null
+              ? decline(file, proposal, { origin: doorOf(client), requestId: request }).pipe(
+                  Effect.flatMap((done) =>
+                    done.refused === null
+                      ? Effect.succeed({ proposal })
+                      : Effect.fail(
+                          new ProposalRefused({ refused: done.refused, detail: done.detail }),
+                        ),
+                  ),
+                )
+              : Effect.succeed({ proposal }),
+          ),
+        dispose: ({ runId, kind, ref, note, request }, { client }) =>
+          known(runId).pipe(
+            Effect.andThen(
+              once(
+                trail(runId),
+                { operation: "disposition", request, origin: doorOf(client), result: Disposition },
+                Effect.gen(function* () {
+                  const line = {
+                    at: yield* nowIso(),
+                    by: actorName({ origin: doorOf(client), requestId: request }),
+                    kind,
+                    ref,
+                    note,
+                  };
+                  yield* recordDisposition(trail(runId), line);
+                  return line;
+                }),
+              ),
+            ),
+            plainly,
+          ),
+        steerAbout: ({ runId, text, from, dryRun, request }, { client }) =>
+          Effect.gen(function* () {
+            const view = yield* registry.view(runId);
+            if (view === null)
+              return { ok: false, code: "run_not_found", human: `No Run "${runId}".`, data: {} };
+            const task = view.task === null ? null : yield* readTask(env.stateDir, view.task);
+            // Only an answer is kept against its request: a failure is retried under the same one.
+            return yield* once(
+              trail(runId),
+              { operation: "steer", request, origin: doorOf(client), result: SteerOutcome },
+              Effect.gen(function* () {
+                const deps = yield* evaluationDeps({ ...env, herdKey: task?.herd ?? undefined });
+                const said = yield* steer(env, deps, {
+                  text,
+                  target: runId,
+                  from,
+                  dryRun,
+                  requestId: request,
+                  origin: doorOf(client),
+                });
+                if (!said.ok)
+                  return yield* new SteerUnanswered({
+                    outcome: {
+                      ok: false,
+                      code: said.error.code,
+                      human: said.error.message,
+                      data: fromText(toText(said.error.details)),
+                    },
+                  });
+                return {
+                  ok: true,
+                  code: null,
+                  human: said.human,
+                  data: fromText(toText(said.data)),
+                };
+              }),
+            );
+          }).pipe(
+            Effect.catch((cause) =>
+              Effect.succeed(
+                Schema.is(SteerUnanswered)(cause)
+                  ? cause.outcome
+                  : Schema.is(RequestConflict)(cause)
+                    ? { ok: false, code: "invalid_input", human: cause.reason, data: {} }
+                    : {
+                        ok: false,
+                        code: "operation_failed",
+                        human: `Collie could not answer: ${reason(cause)}.`,
+                        data: {},
+                      },
+              ),
+            ),
+            Effect.provideContext(bun),
+          ),
+        followUp: ({ runId, text, request }, { client }) =>
+          fresh(
+            () => runId,
+            { operation: "followup", request, origin: doorOf(client), result: Started },
+            Effect.gen(function* () {
+              const view = yield* known(runId);
+              if (!settled(factsOfView(env.stateDir, view)))
+                return yield* new HostRefused({
+                  reason: "a follow-up is a child of a finished run, and this one is still going",
+                });
+              const offered = (yield* registry.offers(runId)).find(
+                (one) => one.kind === "follow-up",
+              );
+              if (offered === undefined)
+                return yield* new HostRefused({
+                  reason: `${runId} declares no follow-up, so there is nothing to carry on with`,
+                });
+              const into = followUpField(offered.arguments);
+              if ("refused" in into)
+                return yield* new HostRefused({
+                  reason: `${runId}'s follow-up "${offered.id}" ${into.refused}`,
+                });
+              return yield* registry.invoke({
+                runId,
+                offer: offered.id,
+                input: { [into.field]: text },
+                request,
+              });
+            }),
           ),
         runDetail: ({ runId, tail, pages, refreshMr }) => {
           let fresh = refreshMr;

@@ -9,6 +9,7 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 import { nowIso } from "./time";
 import { attentionFor } from "./attention";
 import type { PluginEnv } from "./env";
+import type { FrontDoor } from "./board-model";
 import {
   Herdr,
   herdrFailureReason,
@@ -51,7 +52,6 @@ import {
 } from "./evaluator";
 import {
   actorName,
-  decline,
   proposalsPath,
   record as recordProposal,
   type Recorded,
@@ -527,19 +527,6 @@ export const clearOverride = Effect.fn("operations.clearOverride")(function* (
   return ok({ runId, agent }, `Cleared the manual override on ${agent}.`);
 });
 
-/** Saying no. The other half of a Confirmation, and filed in the same place. */
-export const declineProposal = Effect.fn("operations.declineProposal")(function* (
-  env: PluginEnv,
-  proposalId: string,
-  actor: Actor,
-) {
-  const file = yield* proposalsPath(env.stateDir, yield* herdOf(env.socketPath));
-  const done = yield* decline(file, proposalId, actor);
-  return done.refused === null
-    ? { ok: true as const, data: { declined: proposalId }, human: `Declined ${proposalId}.` }
-    : err("invalid_input", done.detail, { reason: done.refused });
-});
-
 /**
  * Carrying out a Confirmation: the one place a proposal's actions run, whichever front
  * door said yes. The front door derives who is asking and renders what came back; it does
@@ -690,6 +677,8 @@ export const steer = Effect.fn("operations.steer")(function* (
     readonly from?: string | null;
     readonly dryRun?: boolean;
     readonly requestId: string;
+    /** The front door that asked, which the proposal is carried out as. */
+    readonly origin?: FrontDoor;
     /**
      * Who is asking. `event` is the board speaking first about something that changed;
      * the question is journaled as that, never as the human's words. It changes what the
@@ -799,7 +788,7 @@ export const steer = Effect.fn("operations.steer")(function* (
 
   if (options.asked !== "event")
     return yield* carryOutProposal(env, recorded.id, recorded.content_hash, {
-      origin: "cli",
+      origin: options.origin ?? "cli",
       requestId: options.requestId,
     });
 
