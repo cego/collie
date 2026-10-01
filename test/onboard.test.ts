@@ -262,19 +262,32 @@ test("missing git stops with the exact command to run as root, and changes nothi
     }),
   ));
 
-test("an openssl that cannot check a signature stops with the command for OpenSSL 3", () =>
+/** A Machine whose only openssl is LibreSSL, with `manager` as its package manager. */
+const withLibreSsl = Effect.fn("onboardTest.withLibreSsl")(function* (manager: string) {
+  yield* bin.add("openssl", `echo "LibreSSL 3.3.6"`);
+  for (const tool of ["git", "curl", manager]) yield* bin.add(tool, "exit 0");
+  const { events } = yield* onboarded({ PATH: `${home}/stubs`, COLLIE_OPENSSL: "openssl" });
+  expect(results(events).map((event) => event.step)).toEqual(["system"]);
+  return results(events).find((event) => event.step === "system");
+});
+
+test("an openssl that cannot check a signature stops with what gives OpenSSL 3 here", () =>
   runEffect(
     Effect.gen(function* () {
-      yield* bin.add("openssl", `echo "LibreSSL 3.3.6"`);
-
-      const { events } = yield* onboarded({ PATH: `${home}/stubs:/usr/bin:/bin` });
-
-      expect(results(events).find((event) => event.step === "system")).toMatchObject({
+      expect(yield* withLibreSsl("dnf")).toMatchObject({
         status: "needs_root",
         detail: expect.stringContaining("LibreSSL"),
-        command: expect.stringMatching(/install( -y)? openssl$/),
+        command: "sudo dnf install -y epel-release && sudo dnf install -y openssl3",
       });
-      expect(results(events).map((event) => event.step)).toEqual(["system"]);
+    }),
+  ));
+
+test("where no package gives OpenSSL 3, the step names none to run", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const system = yield* withLibreSsl("apt-get");
+      expect(system).toMatchObject({ status: "needs_root" });
+      expect(system).not.toHaveProperty("command");
     }),
   ));
 
@@ -455,7 +468,6 @@ test("Helle without credentials is not onboarded unless it is skipped", () =>
 test("the Linear MCP is added at user scope, and its login streams its URL", () =>
   runEffect(
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
       yield* claudeAt(
         `echo "$*" >> "${home}/claude-calls"
 case "$*" in

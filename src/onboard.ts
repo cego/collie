@@ -61,7 +61,7 @@ const CLAUDE_LOGIN = "claude auth login";
 const LOGIN_LIMIT = "10 minutes";
 /** Long enough for an installer or a clone; a network that never answers still ends. */
 const COMMAND_LIMIT = "15 minutes";
-/** Where install.sh looks for an OpenSSL that can check a signature, in its order. */
+/** Where install.sh looks for an OpenSSL that can check a signature, unless COLLIE_OPENSSL names one. */
 const OPENSSL_CANDIDATES = [
   "openssl",
   "openssl3",
@@ -99,6 +99,12 @@ const rootCommand = Effect.fn("Onboard.rootCommand")(function* (
   }
   return `install ${packages.join(" ")} with your package manager`;
 });
+
+/** What gives OpenSSL 3 where the system one is older; apt's releases with 1.1 have no package for it. */
+const OPENSSL3_INSTALL = new Map([
+  ["dnf", "sudo dnf install -y epel-release && sudo dnf install -y openssl3"],
+  ["brew", "brew install openssl"],
+]);
 
 const needsRoot = Effect.fn("Onboard.needsRoot")(function* (
   search: string,
@@ -231,17 +237,26 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
         if ((yield* onPath(search, tool)) === null) missing.push(tool);
       }
       if (missing.length > 0) return yield* needsRoot(search, missing);
-      for (const candidate of OPENSSL_CANDIDATES) {
+      const openssl = env.raw["COLLIE_OPENSSL"];
+      for (const candidate of openssl ? [openssl] : OPENSSL_CANDIDATES) {
         if (
           /^OpenSSL ([3-9]|[1-9]\d)/.test((yield* exec(candidate, ["version"], env.home)).stdout)
         ) {
           return inPlace("git, curl and openssl are installed");
         }
       }
+      let command: string | undefined;
+      for (const [manager] of PACKAGE_MANAGERS) {
+        if ((yield* onPath(search, manager)) !== null) {
+          command = OPENSSL3_INSTALL.get(manager);
+          break;
+        }
+      }
       return {
-        ...(yield* needsRoot(search, ["openssl"])),
+        status: "needs_root",
         detail:
-          "openssl is older than 3.0 or is LibreSSL, so it cannot check a runner's Ed25519 signature; install OpenSSL 3, then onboard again",
+          "openssl is older than 3.0 or is LibreSSL, so it cannot check a runner's Ed25519 signature; install OpenSSL 3 (or bun, to build from source), then onboard again",
+        ...(command && { command }),
       } satisfies Outcome;
     }),
   );

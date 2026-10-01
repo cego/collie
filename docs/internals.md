@@ -545,7 +545,7 @@ key that does not match the public key built into `src/signing.ts`. The public k
 fetching `<asset>.sig` with the same token as the asset, before it replaces `bin/collie`. A
 download that is unsigned, does not match, or whose signature cannot be fetched is never
 installed or run, and the runner already there stays. Checking needs OpenSSL 3.0 or later,
-found on PATH as `openssl` or `openssl3`, or in Homebrew's `openssl@3`; without one, or with
+found on PATH as `openssl` or `openssl3`, or in Homebrew's `openssl@3` (`COLLIE_OPENSSL` names the only one to try); without one, or with
 an OpenSSL that cannot do it, the download is refused as unchecked rather than mismatched.
 So a Machine without bun can install a release only once it is signed. The check is the
 target release's own `install.sh`, so `upgrade --to` or `onboard --to` a release from before

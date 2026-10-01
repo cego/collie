@@ -103,8 +103,9 @@ release_token() {
 
 # An OpenSSL that can check an Ed25519 signature: 3.0 or later. LibreSSL (macOS's
 # /usr/bin/openssl) and OpenSSL 1.1.1 cannot, and Homebrew's and EPEL's sit beside them.
+# COLLIE_OPENSSL names the only one to try.
 verifier() {
-  for candidate in openssl openssl3 /opt/homebrew/opt/openssl@3/bin/openssl /usr/local/opt/openssl@3/bin/openssl; do
+  for candidate in ${COLLIE_OPENSSL:-openssl openssl3 /opt/homebrew/opt/openssl@3/bin/openssl /usr/local/opt/openssl@3/bin/openssl}; do
     case "$("$candidate" version 2>/dev/null)" in
       "OpenSSL "[3-9]* | "OpenSSL "[1-9][0-9]*) echo "$candidate"; return 0 ;;
     esac

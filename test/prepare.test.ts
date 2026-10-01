@@ -519,6 +519,8 @@ const downloadable = Effect.fn("prepareTest.downloadable")(function* () {
     run("install.sh", undefined, {
       COLLIE_RELEASE_BASE: `file://${home}/release`,
       COLLIE_PREPARING: "1",
+      // Only PATH's, so a Machine's own Homebrew or EPEL OpenSSL 3 cannot stand in for a stub.
+      COLLIE_OPENSSL: "openssl",
     });
   return { runner, signature, install };
 });
