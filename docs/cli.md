@@ -1400,8 +1400,11 @@ chat's tools all go through these, so the host is the only writer of what they r
 log tail, verifications, metrics, steering cards, the files it kept as evidence, its diff
 and its merge request — current first, then again whenever they change. The diff is the
 Run's branch against its merge base with the default branch, per file: the checkout as it
-is while the Run works, the branch's commits once it has ended, kept in the Run's directory
-then so a merged branch or a pruned checkout does not lose it. The review's findings come as
+is while the Run works, the branch's commits once it has ended. The host keeps that in the
+Run's directory as soon as the Run ends, with the branch head it was taken at, so a merged
+branch or a pruned checkout does not lose it and a resumed Run that committed more is read
+again. An untracked file reached through a link, or that is not a regular file, is listed
+without being read. The review's findings come as
 a list. The merge request is what the merge watch last read, asked again after 5 minutes or
 when `refreshMr` is set. Large items are fetched by reference with `runFile`: `log`,
 `diff:<path>`, `evidence:<name>`, `verification:<id>`, `plan:<file>` and `file:<path>` (read

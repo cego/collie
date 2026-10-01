@@ -18,6 +18,7 @@ import { herdDir, herdOf } from "./steering";
 import { listTasks } from "./task";
 import { nowIso } from "./time";
 import { pruneWorktrees } from "./worktree";
+import { keepDiffs } from "./run-detail";
 
 /** The Runs still going whose drift was escalated to the human, by constraint. */
 const escalatedDrift = Effect.fn("SideJobs.escalatedDrift")(function* (
@@ -104,6 +105,7 @@ export const sideJobs = <E, R>(opts: {
 }) => {
   const { env, herdr } = opts;
   const checked = new Map<string, number>();
+  const kept = new Set<string>();
   const states = new Map<string, MrState>();
   return Effect.all(
     [
@@ -124,7 +126,9 @@ export const sideJobs = <E, R>(opts: {
       ),
       every(
         LOOK_EVERY,
-        Effect.flatMap(opts.runs, (runs) => news(env, herdr, runs)),
+        Effect.flatMap(opts.runs, (runs) =>
+          Effect.andThen(news(env, herdr, runs), keepDiffs(runs, kept)),
+        ),
       ),
       // ponytail: swept through the host's own session, so a pane in another is unseen; git's refusal still guards.
       every(

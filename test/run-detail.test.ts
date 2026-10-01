@@ -241,6 +241,51 @@ test("an ended Run keeps its diff once its checkout has gone, file by file", () 
     ),
   ));
 
+test("a kept diff is taken again once its branch has moved on", () =>
+  runEffect(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const { repo, git } = yield* branched;
+        const state = yield* fs.makeTempDirectoryScoped({ prefix: "collie-diff-state-" });
+        const stopped = yield* madeRun(state, { cwd: repo, branch: "feature", state: "stopped" });
+        expect((yield* diffOf(stopped))?.files.map((file) => file.path)).not.toContain("more.txt");
+
+        // Resumed, it committed more and succeeded.
+        yield* fs.writeFileString(`${repo}/more.txt`, "more\n");
+        yield* git("add", "-A");
+        yield* git("commit", "-qm", "more");
+        const done = { ...stopped, state: "succeeded" as const };
+        expect((yield* diffOf(done))?.files.map((file) => file.path)).toContain("more.txt");
+      }),
+    ),
+  ));
+
+test("a live diff never reads through a link or into a device or FIFO", () =>
+  runEffect(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const { repo } = yield* branched;
+        yield* fs.symlink("/dev/zero", `${repo}/zero`);
+        const fifo = `${yield* fs.makeTempDirectoryScoped({ prefix: "collie-fifo-" })}/pipe`;
+        Bun.spawnSync(["mkfifo", fifo]);
+        yield* fs.symlink(fifo, `${repo}/pipe`);
+
+        const live = yield* runDiff({ cwd: repo, branch: "feature", live: true }).pipe(
+          Effect.timeout("10 seconds"),
+        );
+        const untracked = live?.files.filter(
+          (file) => file.path === "zero" || file.path === "pipe",
+        );
+        expect(untracked).toEqual([
+          { path: "pipe", status: "added", added: null, removed: null },
+          { path: "zero", status: "added", added: null, removed: null },
+        ]);
+      }),
+    ),
+  ));
+
 test("a reference never follows a link out of the directory it belongs to", () =>
   runEffect(
     Effect.scoped(

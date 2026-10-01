@@ -96,14 +96,22 @@ export const runDiff = Effect.fn("RunDetail.runDiff")(function* (at: {
     for (const path of fields(
       (yield* git(root, ["ls-files", "-z", "--others", "--exclude-standard"])).stdout,
     )) {
-      const size = yield* fs.stat(`${root}/${path}`).pipe(
-        Effect.map((info) => Number(info.size)),
-        Effect.orElseSucceed(() => COUNTED_BYTES),
+      const file = `${root}/${path}`;
+      // Never through a link or into a device or FIFO: an agent's checkout is untrusted.
+      const linked = yield* fs.readLink(file).pipe(
+        Effect.as(true),
+        Effect.orElseSucceed(() => false),
       );
+      const size = linked
+        ? COUNTED_BYTES
+        : yield* fs.stat(file).pipe(
+            Effect.map((info) => (info.type === "File" ? Number(info.size) : COUNTED_BYTES)),
+            Effect.orElseSucceed(() => COUNTED_BYTES),
+          );
       const text =
         size >= COUNTED_BYTES
           ? null
-          : yield* fs.readFileString(`${root}/${path}`).pipe(Effect.orElseSucceed(() => ""));
+          : yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => ""));
       files.push({
         path,
         status: "added",
@@ -119,34 +127,59 @@ export const runDiff = Effect.fn("RunDetail.runDiff")(function* (at: {
   } satisfies RunDiff;
 });
 
-const DiffJson = Schema.fromJsonString(RunDiff);
+/** A settled Run's diff, with the branch head it was taken at. */
+const KeptJson = Schema.fromJsonString(Schema.Struct({ head: Schema.String, diff: RunDiff }));
 const FINAL_DIFF = "diff.json";
 const FINAL_PATCH = "diff.patch";
 
+const headOf = Effect.fn("RunDetail.headOf")(function* (cwd: string, branch: string) {
+  const root = yield* rootOf(cwd);
+  if (root === null || branch.startsWith("-")) return null;
+  const head = yield* git(root, ["rev-parse", "--verify", `${branch}^{commit}`]);
+  return head.code === 0 ? head.stdout.trim() : null;
+});
+
 /**
- * The Run's own diff, where it has a branch to compare. Once the Run has ended the first
- * one read is kept in its directory, so a merged branch or a pruned checkout keeps it.
+ * The Run's own diff, where it has a branch to compare. A settled Run's is kept in its
+ * directory with the head it was taken at, so a merged branch or a pruned checkout keeps
+ * it, and a resumed Run that committed more is read again.
  */
 export const diffOf = Effect.fn("RunDetail.diffOf")(function* (run: RunFacts) {
   const fs = yield* FileSystem.FileSystem;
   const final = settled(run);
+  if (run.branch === null) return null;
+  const head = final ? yield* headOf(run.cwd, run.branch) : null;
   if (final) {
     const kept = yield* fs
       .readFileString(`${run.dir}/${FINAL_DIFF}`)
-      .pipe(Effect.flatMap(Schema.decodeUnknownEffect(DiffJson)), Effect.option);
-    if (kept._tag === "Some") return kept.value;
+      .pipe(Effect.flatMap(Schema.decodeUnknownEffect(KeptJson)), Effect.option);
+    if (kept._tag === "Some" && (head === null || kept.value.head === head)) return kept.value.diff;
   }
-  if (run.branch === null) return null;
   const diff = yield* runDiff({ cwd: run.cwd, branch: run.branch, live: !final });
-  if (final && diff !== null) {
+  if (head !== null && diff !== null) {
     const root = (yield* rootOf(run.cwd)) ?? run.cwd;
     const patch = yield* git(root, ["diff", "--no-renames", diff.base, run.branch]);
     yield* fs.writeFileString(`${run.dir}/${FINAL_PATCH}`, patch.stdout).pipe(Effect.ignore);
     yield* fs
-      .writeFileString(`${run.dir}/${FINAL_DIFF}`, Schema.encodeSync(DiffJson)(diff))
+      .writeFileString(`${run.dir}/${FINAL_DIFF}`, Schema.encodeSync(KeptJson)({ head, diff }))
       .pipe(Effect.ignore);
   }
   return diff;
+});
+
+/** Each Run's diff, kept once each time it settles, while its branch is still there to read. */
+export const keepDiffs = Effect.fn("RunDetail.keepDiffs")(function* (
+  runs: ReadonlyArray<RunFacts>,
+  kept: Set<string>,
+) {
+  for (const run of runs) {
+    // Going again after a resume: what it settles with next is kept afresh.
+    if (!settled(run)) kept.delete(run.id);
+    else if (run.branch !== null && !kept.has(run.id)) {
+      yield* diffOf(run);
+      kept.add(run.id);
+    }
+  }
 });
 
 /** One file's part of a whole patch, from its own `diff --git` header to the next. */
