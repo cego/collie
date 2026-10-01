@@ -51,6 +51,7 @@ Runner source (Bun/TypeScript). Compiled to `bin/collie` per platform; see ADR-0
 | `mcp.ts`           | Those same reads over MCP on stdio, which is how Claude Code reaches them                |
 | `engine.ts`        | Effect's workflow engine, the SDK the binary serves a module, and where generations live |
 | `host.ts`          | The one local host per state directory: who owns it, how a client reaches it             |
+| `side-jobs.ts`     | What the host does with no pane open: the merge watch, each Herd's News and pruning      |
 | `discovery.ts`     | Where a workflow module is looked for, which layer wins, and what counts as an edit      |
 | `authoring.ts`     | What a module says about itself, how it is checked, and the file an author starts from   |
 | `store.ts`         | Rows beside Effect's: request claims, run identity, generations, questions               |

@@ -353,10 +353,9 @@ look at what it built. It is removed only once **settled** — the tree is clean
 no commit that is not on the remote already, nothing is working in it or could be resumed
 in it, and its merge request is merged or closed (or its remote branch is gone). A
 `renovate` checkout has no branch to ask either question about, so a clean one nothing is
-working in is settled, and there is no branch to delete with it. Pruning happens when Collie is already awake: at every run start —
-which never touches the checkout that run is about to work in — and every few minutes
-while a Control Plane is open, including for the worktree whose own board you are looking
-at, which closes with it. The board says both what went and what is being held on to, with
+working in is settled, and there is no branch to delete with it. Pruning happens at every run start —
+which never touches the checkout that run is about to work in — and every 3 minutes in the
+host, whether or not a pane is open. The board says both what went and what is being held on to, with
 the reason:
 
 ```
@@ -482,8 +481,8 @@ land, such as a review, or it ended with nothing to file — as one line, `3 fin
 1 failed`, until you click it open; anything older than a day is behind `older…`, which
 reads it from this checkout's history rather than carding every Run Collie has ever kept.
 
-Collie learns a merge by itself. In the background, every few minutes and never on a
-redraw, it asks GitLab about each merge request in Waiting on you; one that merged gets its
+Collie learns a merge by itself, whether or not a pane is open: the host asks GitLab
+about each merge request in Waiting on you every 5 minutes; one that merged gets its
 `merged` disposition recorded as GitLab's word and its card moves to Finished. One that was
 closed without merging only changes its card's sentence: closing can mean superseded as
 easily as abandoned, and only you know which.
@@ -889,9 +888,10 @@ its Intent past what Collie may correct, starts repeating itself, or claims to b
 without being able to show it, Collie writes that down as news. Turn it off with
 `"proactive": false` in `config.json`.
 
-What it does **not** do is call a model to find that out. The board already recomputes
-this to draw it, and a transition in it is the whole trigger; noticing nothing writes
-nothing, so a board redrawing over unchanged state costs exactly nothing. Output arriving,
+What it does **not** do is call a model to find that out. The host looks at each Herd's
+Runs every few seconds, whether or not a pane is open, and writes each Run's news to the
+Herd its Task is in, or to the host's own Herd for a Task from before Herds were recorded; noticing nothing writes nothing, so an unchanged Herd costs exactly
+nothing. Output arriving,
 a commit, a step starting, a pane changing and time passing are not on the list, and never
 were — a changing pane is not progress.
 

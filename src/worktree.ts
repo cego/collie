@@ -1383,13 +1383,15 @@ const conclude = Effect.fn("worktree.conclude")(function* (opts: {
 });
 
 /**
- * What is worth putting on this repository's board: everything it is holding, and a
- * removal while it is still news. Another repository's verdicts are on its own board.
+ * What is worth putting on a board: everything held, and a removal while it is still
+ * news. Only `repo`'s, where one is named.
  */
-function reported(state: PruneState, now: number, repo: string): string[] {
+function reported(state: PruneState, now: number, repo?: string): string[] {
   return Object.values(state)
     .filter(
-      (entry) => entry.repo === repo && (!entry.removed || now - entry.checked_at <= REPORT_MS),
+      (entry) =>
+        (repo === undefined || entry.repo === repo) &&
+        (!entry.removed || now - entry.checked_at <= REPORT_MS),
     )
     .map((entry) => entry.line);
 }
@@ -1495,6 +1497,20 @@ export const pruneWorktrees = (opts: PruneOptions) =>
     const lock = path.join(opts.stateDir, `${PRUNE_FILE}.lock`);
     return yield* withLock(lock, Effect.succeed<string[]>([]), sweep(opts));
   }).pipe(Effect.catch(() => Effect.succeed<string[]>([])));
+
+/** What the host's sweeps last said, for a board to show without sweeping itself. */
+export const reportedWorktrees = Effect.fn("worktree.reportedWorktrees")(function* (
+  stateDir: string,
+) {
+  const path = yield* Path.Path;
+  const state = yield* (yield* FileSystem.FileSystem)
+    .readFileString(path.join(stateDir, PRUNE_FILE))
+    .pipe(
+      Effect.flatMap(Schema.decodeUnknownEffect(PruneStateJson)),
+      Effect.orElseSucceed((): PruneState => ({})),
+    );
+  return reported(state, yield* Clock.currentTimeMillis);
+});
 
 /**
  * Every repository the recorded checkouts belong to, each asked from one of its own

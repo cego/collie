@@ -1365,6 +1365,10 @@ when herdr pushes an event from any of its sessions (a pane opening or closing, 
 agent's status changing), and every five seconds. The installation id is written once, by
 the first host to own the directory, and survives restarts and upgrades.
 
+The host also runs what nobody has to have a pane open for: the merge watch, which asks
+GitLab about each waiting merge request every 5 minutes and records a merge; each Herd's
+News; and worktree pruning, every 3 minutes.
+
 `protocol` is an integer, also in `identity`. An optional field, a new operation or a new
 kind of message does not change it, and a client reads a kind it does not know as
 `Unknown` and skips it. A removal or a change of meaning bumps it, and from then on the

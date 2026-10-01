@@ -57,6 +57,7 @@ import {
 } from "./engine";
 import { configuredAgents } from "./agents";
 import { Catalogue, discover, searchPath } from "./discovery";
+import { sideJobs } from "./side-jobs";
 import { RequestConflict } from "./store";
 import { VerifySpecSchema } from "./verify-spec";
 import { IntentSeedSchema } from "./intent";
@@ -374,6 +375,43 @@ const handlers = (dir: string, installation: string) =>
 /** How often a board is built again with nothing written, so "silent for" stays true. */
 const BOARD_TICK = "5 seconds";
 
+/** Every Run the host knows, and the board built from them, for this host's own env. */
+const hostBoard = Effect.gen(function* () {
+  const registry = yield* Registry;
+  const bun = yield* Effect.context<BunServices>();
+  const hosted = yield* Effect.context<HostServices>();
+  const env = yield* currentEnv.pipe(Effect.orDie);
+  const herdr = new Herdr(env);
+  const runs = registry
+    .views(null)
+    .pipe(Effect.map((views) => views.map((view) => factsOfView(env.stateDir, view))));
+  const build = Effect.gen(function* () {
+    const alive = yield* aliveIn(yield* liveHerds(herdr, env));
+    return yield* buildBoard({
+      env,
+      runs: yield* runs,
+      alive,
+      quietMs: (yield* loadDefaults(env.userDir)).boardQuietMs,
+      offers: (runId) =>
+        registry.offers(runId).pipe(
+          Effect.provideContext(hosted),
+          Effect.orElseSucceed(() => []),
+        ),
+    });
+  }).pipe(Effect.provideContext(bun));
+  return { env, herdr, bun, runs, build };
+});
+
+/** The merge watch, News and pruning, for as long as this host runs. */
+const sideJobsLayer = Layer.effectDiscard(
+  Effect.gen(function* () {
+    const { env, herdr, bun, runs, build } = yield* hostBoard;
+    yield* Effect.forkScoped(
+      sideJobs({ env, herdr, runs, board: build }).pipe(Effect.provideContext(bun)),
+    );
+  }),
+);
+
 /**
  * The board, built here for every front door. Anything written under the state
  * directory, by this host or anyone else, is a reason to look again.
@@ -381,27 +419,8 @@ const BOARD_TICK = "5 seconds";
 const frontDoorHandlers = (dir: string, installation: string) =>
   FrontDoorRpcs.toLayer(
     Effect.gen(function* () {
-      const registry = yield* Registry;
       const fs = yield* FileSystem.FileSystem;
-      const bun = yield* Effect.context<BunServices>();
-      const hosted = yield* Effect.context<HostServices>();
-      const env = yield* currentEnv.pipe(Effect.orDie);
-      const herdr = new Herdr(env);
-      const build = Effect.gen(function* () {
-        const runs = (yield* registry.views(null)).map((view) => factsOfView(env.stateDir, view));
-        const alive = yield* aliveIn(yield* liveHerds(herdr, env));
-        return yield* buildBoard({
-          env,
-          runs,
-          alive,
-          quietMs: (yield* loadDefaults(env.userDir)).boardQuietMs,
-          offers: (runId) =>
-            registry.offers(runId).pipe(
-              Effect.provideContext(hosted),
-              Effect.orElseSucceed(() => []),
-            ),
-        });
-      }).pipe(Effect.provideContext(bun));
+      const { env, herdr, bun, build } = yield* hostBoard;
       // Debounced apart from the tick, so a burst of writes cannot hold the tick back.
       const changed = Stream.mergeAll(
         [
@@ -553,7 +572,11 @@ const own = (dir: string) =>
     return yield* Layer.launch(
       RpcServer.layer(HostRpcs.merge(FrontDoorRpcs)).pipe(
         Layer.provide(
-          Layer.mergeAll(handlers(dir, installation), frontDoorHandlers(dir, installation)).pipe(
+          Layer.mergeAll(
+            handlers(dir, installation),
+            frontDoorHandlers(dir, installation),
+            sideJobsLayer,
+          ).pipe(
             Layer.provide(
               registryLayer(dir, {
                 locate: locateIn(env),

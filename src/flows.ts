@@ -14,13 +14,11 @@ import {
   Schedule,
   Schema,
 } from "effect";
-import { currentReports, readDrift } from "./drift";
 import { diffTargetOf, EXCLUSIVE_STRATEGIES, strategyMeaning } from "./strategies";
 import { PROJECTS_ROOT_OPTION, projectsRoot } from "./projects";
 import { insideCheckout } from "./agent-start";
 import { placeableUnder, placedByUrl, routed, routerDeps } from "./route";
-import type { MrPanel, MrState, PlanPanel, TaskView } from "./board-model";
-import { settleMerges } from "./merges";
+import type { MrPanel, PlanPanel } from "./board-model";
 import { nowIso } from "./time";
 import {
   DENSITIES,
@@ -36,10 +34,8 @@ import type { BunServices } from "@effect/platform-bun/BunServices";
 import type { PlatformError } from "effect/PlatformError";
 import type { SchemaError } from "effect/Schema";
 import { COMPACTION_OFF, validThreshold } from "./compaction";
-import { herdDir, herdOf, HerdrUnreachable } from "./steering";
+import { herdOf, HerdrUnreachable } from "./steering";
 import { chatHarnessOf, ensureChatFor } from "./chat";
-import { append as appendNews, newsPath } from "./news";
-import { eventsIn, readSaid, remember } from "./proactive";
 import {
   ensureHomeFor,
   homePath,
@@ -76,7 +72,7 @@ import { forkResolvedDefinition, type DefinitionKind } from "./fork";
 import { COLLIE_TAB, reason, runTitle } from "./naming";
 import { listRuns, settled, type RunFacts } from "./runs";
 import { everyRegistered, type AgentEntry } from "./registry";
-import { pruneWorktrees } from "./worktree";
+import { reportedWorktrees } from "./worktree";
 import { scopeFor, type RegistryScope } from "./registry";
 import type { CompactionSettings } from "./compaction";
 import { recordDisposition, statusLine } from "./disposition";
@@ -148,12 +144,6 @@ export interface ControlSession extends BoardSession {
   tasksOf?: () => Effect.Effect<BoardRead>;
   /** Where the defaults live. */
   userDir: string;
-  /**
-   * What the last worktree sweep said, and whether one is out working right now. A
-   * caller that keeps none — a test drawing one board, a view built to be rendered
-   * once — sweeps nothing and shows nothing about worktrees.
-   */
-  pruned?: Pruned;
 }
 
 export type Mode = "pick" | "continue" | "resume" | "fork";
@@ -829,7 +819,6 @@ export const workspaceFlow = Effect.fn("Flows.workspaceFlow")(function* (
     // asks, and reports that the compaction is in the air; the human presses the key
     // again when the pane says it has finished. No work is sent either way.
     compaction: { waitMs: 0 },
-    pruned: { at: 0, lines: [], running: false },
     tasksOf: yield* followBoard(env),
   };
   const key = yield* herdOf(env.socketPath).pipe(Effect.catch(() => Effect.succeed(null)));
@@ -965,71 +954,6 @@ const redirectBoard = Effect.fn("Flows.redirectBoard")(function* (herdr: Herdr, 
 /** How long a merge request read stays good for. Re-selecting inside it costs nothing. */
 const MR_TTL_MS = 60_000;
 
-/**
- * Everything the app draws, for whatever it is looking at. One closure, because the
- * merge-request cache belongs with the reads it saves: a History of 40 merge-request
- * Runs must make no `glab` call to draw, one selection makes exactly one, and
- * re-selecting the same Run inside the TTL makes none.
- */
-/**
- * The next meaningful thing that happened, asked about once. One turn per tick at most,
- * and one per event ever: several Runs ending together is one thing that happened, and a
- * board that fired five turns at once would be the notification storm this replaces.
- *
- * Read-only where it can be: the turn is a question about a Run, and what may then be
- * *done* about it goes through the same `validate` path a typed message does. Who started
- * the turn is not an input to what is permitted.
- */
-/**
- * The Runs still going whose drift was escalated to the human, by constraint. Only the
- * unfinished ones are read: a finished Run's drift is history, and its ending is the event.
- */
-const escalatedDrift = Effect.fn("Flows.escalatedDrift")(function* (runs: ReadonlyArray<RunFacts>) {
-  const drifting = new Map<string, string>();
-  for (const run of runs) {
-    if (settled(run)) continue;
-    const lines = yield* readDrift(run.dir).pipe(Effect.catch(() => Effect.succeed([])));
-    const stuck = currentReports(lines).find((report) => report.resolution === "escalated");
-    if (stuck) drifting.set(run.id, stuck.constraint);
-  }
-  return drifting;
-});
-
-/**
- * What the board noticed, written down for the conversation to pick up.
- *
- * No model is called here, and that is the whole change: a meaningful transition becomes
- * a **fact** in this Herd's news, built from the Run's own record. An unchanged Herd
- * produces no events, so nothing is appended and nothing wakes anything — the board
- * redrawing every three seconds costs nothing at all.
- *
- * Every event the board finds is written, not just the first: a burst becomes a batch the
- * conversation is given together, rather than one turn per Run ending.
- */
-const sayWhatHappened = Effect.fn("Flows.sayWhatHappened")(function* (
-  env: PluginEnv,
-  runs: ReadonlyArray<RunFacts>,
-) {
-  if (!(yield* loadDefaults(env.userDir)).proactive) return;
-  const key = yield* herdOf(env.socketPath).pipe(Effect.catch(() => Effect.succeed(null)));
-  if (key === null) return;
-  const dir = yield* herdDir(env.stateDir, key);
-  const said = yield* readSaid(dir);
-  const file = yield* newsPath(env.stateDir, key);
-  for (const event of eventsIn(runs, yield* escalatedDrift(runs))) {
-    if (said.has(event.key)) continue;
-    // Remembered only once it is in the journal. The journal deduplicates by unread key,
-    // so a failed write costs a retry on the next tick — where remembering first would
-    // cost the news itself, and nobody would be told that Run halted.
-    const queued = yield* appendNews(file, {
-      key: event.key,
-      run: event.run,
-      text: event.text,
-    }).pipe(Effect.catchCause(() => Effect.succeed(null)));
-    if (queued !== null) yield* remember(dir, event.key, yield* nowIso());
-  }
-});
-
 /** The host's board, as this session reads it. */
 const boardRead = (session: ControlSession, env: PluginEnv) =>
   session.tasksOf?.() ??
@@ -1041,6 +965,12 @@ const boardRead = (session: ControlSession, env: PluginEnv) =>
     ),
   );
 
+/**
+ * Everything the app draws, for whatever it is looking at. One closure, because the
+ * merge-request cache belongs with the reads it saves: a History of 40 merge-request
+ * Runs must make no `glab` call to draw, one selection makes exactly one, and
+ * re-selecting the same Run inside the TTL makes none.
+ */
 export function appState(
   session: ControlSession,
   env: PluginEnv,
@@ -1070,38 +1000,6 @@ export function appState(
    * read, so `R` re-reads a plan the same way it re-reads the merge request.
    */
   const planCache = new Map<string, PlanPanel | null>();
-  /**
-   * What GitLab last said about each merge request the board waits on, and when it was
-   * asked. Asked in the background after a load, never on the load's own path: ten open
-   * merge requests must not cost ten `glab` calls per redraw.
-   */
-  const mrStates = new Map<string, MrState>();
-  const mrChecked = new Map<string, number>();
-  let settling = false;
-  const settleInBackground = (views: ReadonlyArray<TaskView>, now: number) =>
-    Effect.gen(function* () {
-      if (settling) return;
-      settling = true;
-      yield* Effect.forkDetach(
-        settleMerges({
-          stateDir: env.stateDir,
-          cwd: env.cwd,
-          run,
-          views,
-          now,
-          checked: mrChecked,
-          states: mrStates,
-        }).pipe(
-          Effect.ensuring(
-            Effect.sync(() => {
-              settling = false;
-            }),
-          ),
-          Effect.ignore,
-        ),
-      );
-    });
-
   const merge = Effect.fn("Flows.mergeRequestFor")(function* (
     target: string | null,
     cwd: string,
@@ -1120,13 +1018,6 @@ export function appState(
 
   /** The board from the last read, for whatever `rereads` says may be taken from it. */
   let last: { focus: Focus; state: AppState } | null = null;
-  /**
-   * Whether a turn Collie started is still being answered. At most one in flight: the
-   * next tick does not start a second while the evaluator is still thinking about the
-   * first, and — the reason it is a flag and not an await — the board never waits for it.
-   */
-  let speaking = false;
-
   /** One row per Run: a Run on the local board is on the wide one too. */
   const dedupe = (rows: ReadonlyArray<{ id: string; dir: string }>) => [
     ...new Map(rows.map((row) => [row.id, { id: row.id, dir: row.dir }])).values(),
@@ -1142,24 +1033,6 @@ export function appState(
     // One read of the register and the workspace list for both boards: a wide tick
     // costs the local board's calls plus nothing, and the two boards cannot reconcile
     // a tab label from two different answers about the same agent.
-    // A meaningful change in what this read already looked at, said out loud. Never a
-    // second scan and never a timer: the board recomputes this to draw it, and a
-    // transition in it is the whole trigger. Best effort — a Herd nobody can talk to
-    // still has a board. No model is called: what this does is write a fact down, so a
-    // board that redraws over unchanged state finds no events and does nothing at all.
-    if (runs !== undefined && !speaking) {
-      speaking = true;
-      yield* Effect.forkDetach(
-        sayWhatHappened(env, runs).pipe(
-          Effect.ignore,
-          Effect.ensuring(
-            Effect.sync(() => {
-              speaking = false;
-            }),
-          ),
-        ),
-      );
-    }
     const live = reuse ? undefined : yield* liveOf(session);
     const board = reuse ? reuse.state.board : yield* boardOf(session, scanned!, live);
     // Read only while the Runs view is showing it: a local board, and every other View,
@@ -1251,7 +1124,6 @@ export function appState(
     const defaults = yield* loadDefaults(env.userDir);
     const read = reuse ? null : yield* boardRead(session, env);
     const tasksBuilt = read === null ? reuse!.state.tasks : read.tasks;
-    if (!reuse) yield* settleInBackground(tasksBuilt, yield* Clock.currentTimeMillis);
     const state = {
       view: focus.view,
       filter: focus.filter,
@@ -1869,49 +1741,6 @@ const liveOf = Effect.fn("Flows.liveOf")(function* (session: ControlSession) {
 });
 
 /**
- * How often the board prunes. Loading the board happens on every keypress and every
- * 1.5-second refresh; pruning lists runs, asks herdr and writes its own state, so
- * doing it per redraw put a subprocess and a disk write behind every keystroke. The
- * lines it last answered with are what the board shows in between.
- */
-const PRUNE_MS = 3 * 60_000;
-
-/** The last sweep's lines, and whether one is out working right now. */
-interface Pruned {
-  at: number;
-  lines: string[];
-  running: boolean;
-}
-
-/**
- * Prunes in the background, never in the way. A sweep walks every due checkout with
- * git and glab, and the board is a screen that has to redraw on a keypress — so the
- * sweep is forked and the frame goes out with whatever the last one said. One at a
- * time, and the clock starts when it finishes, so a slow sweep does not queue more.
- */
-const sweep = Effect.fn("Flows.sweep")(function* (session: ControlSession, scanned: Scanned) {
-  const pruned = session.pruned;
-  if (!pruned || pruned.running) return;
-  const now = yield* Clock.currentTimeMillis;
-  if (pruned.at !== 0 && now - pruned.at < PRUNE_MS) return;
-  pruned.running = true;
-  yield* Effect.forkDetach(
-    Effect.gen(function* () {
-      const lines = yield* pruneWorktrees({
-        herdr: session.herdr,
-        stateDir: session.stateDir,
-        runs: scanned.runs,
-        registered: scanned.registered,
-        cwd: session.cwd,
-      });
-      pruned.lines = lines;
-      pruned.at = yield* Clock.currentTimeMillis;
-      pruned.running = false;
-    }),
-  );
-});
-
-/**
  * How long the board's own quiet threshold stands before `config.json` is read again.
  * The board redraws every three seconds and on every filesystem event, and this value
  * changes only when a human writes it in Settings — so re-parsing the file per redraw
@@ -1959,7 +1788,6 @@ const boardOf = Effect.fn("Flows.boardOf")(function* (
   scanned: Scanned,
   seen?: SessionNow,
 ) {
-  yield* sweep(session, scanned);
   const live = seen ?? (yield* liveOf(session));
   const view = yield* buildView({
     ...session,
@@ -1969,7 +1797,7 @@ const boardOf = Effect.fn("Flows.boardOf")(function* (
     workspaceLabel:
       live.workspaces.find((w) => w.workspaceId === session.workspaceId)?.label ?? null,
     alive: live.alive,
-    worktrees: session.pruned?.lines ?? [],
+    worktrees: yield* reportedWorktrees(session.stateDir),
     pluginRoot: session.pluginRoot,
     quietMs: yield* boardQuietMs(session.userDir),
     ...scanned,

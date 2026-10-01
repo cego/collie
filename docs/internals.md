@@ -165,11 +165,10 @@ manager removes it: git's refusals are the last guard, so a wrong judgement here
 fail to clean, never delete work. Only paths some run recorded with `created_by_collie`
 are candidates.
 
-There is no daemon and no cron: pruning runs at `run start` and, at most every few
-minutes, on the Control Plane's refresh — forked, never awaited, because the board redraws
-on every keypress and a sweep walks every due checkout with git and glab. The frame goes
-out with what the last sweep said; one sweep runs at a time, and its clock starts when it
-finishes. Each
+Pruning runs at `run start` and every 3 minutes in the host, beside its merge watch and
+News, so it happens with no pane open. A board shows what the last sweep said, read from
+`worktrees.json`, and never sweeps itself. One sweep runs at a time, and its clock starts
+when it finishes. Each
 worktree's verdict is also kept for a few minutes in `worktrees.json` in the state
 directory, so a due check is the only thing that shells out to git and glab, and the state
 file is rewritten only when something moved.
