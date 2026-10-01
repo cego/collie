@@ -3,7 +3,7 @@
 // fake-PATH rig — the same seam the `upgrade` tests use.
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { Effect, FileSystem, Schema } from "effect";
+import { DateTime, Effect, FileSystem, Schema } from "effect";
 import { runEffect } from "./support/effect";
 import { FakeHerdr, Rig } from "./support/recorder";
 import { installBaseline } from "./support/engine";
@@ -44,14 +44,33 @@ const healthy = Effect.fn("doctorTest.healthy")(function* () {
   yield* fs.makeDirectory(`${rig.baselineDir}/bin`, { recursive: true });
   yield* fs.writeFileString(`${rig.baselineDir}/bin/collie`, "", { mode: 0o755 });
   yield* bin.add("collie", "exit 0");
-  yield* bin.add("glab", `exit 0`);
+  yield* gitlab({ expires: "2099-01-01" });
+  yield* bin.add("ssh", `echo "Welcome to GitLab, @t!"; exit 0`);
   // A checkout that is level with its remote. `$*`, because the fetch arrives
   // behind the settings that stop it prompting.
   yield* bin.add("git", `case "$*" in *rev-list*) echo 0 ;; *) exit 0 ;; esac`);
-  yield* bin.add("claude", `exit 0`);
+  yield* bin.add(
+    "claude",
+    `case "$*" in "auth status --json") printf '{\\n  "loggedIn": true\\n}\\n' ;; *) exit 0 ;; esac`,
+  );
   yield* bin.add("npx", `exit 0`);
   yield* installFakeSkills(rig.root);
 });
+
+/** A glab logged in to one GitLab host, whose token expires on `expires` (or never). */
+const gitlab = (opts: { expires: string | null }) =>
+  bin.add(
+    "glab",
+    `case "$*" in
+      "auth status") echo "gitlab.example"; echo "  ✓ Logged in to gitlab.example as t (config.yml)" ;;
+      *personal_access_tokens/self*) echo '{"name":"collie","expires_at":${opts.expires === null ? "null" : `"${opts.expires}"`}}' ;;
+      *) exit 0 ;;
+    esac`,
+  );
+
+/** A date `days` from today, as GitLab writes one. */
+const inDays = (days: number) =>
+  DateTime.now.pipe(Effect.map((now) => DateTime.formatIsoDateUtc(DateTime.add(now, { days }))));
 
 /** Take one prerequisite away from the machine, to see what doctor says about it. */
 const remove = (target: string) =>
@@ -121,12 +140,15 @@ test("a healthy machine passes every check and says so", () =>
         "node",
         "skills",
         "harnesses",
+        "claude login",
         "status line",
         "up to date",
         "workflows",
         "personas",
         "projects root",
         "glab",
+        "gitlab token",
+        "git push",
         "helle",
         "linear mcp",
       ]);
@@ -534,5 +556,93 @@ test("a Linear MCP in Claude Code is looked for, and the add command is the fix"
       expect(broken.ok).toBe(true);
       expect(broken.warn).toBe(true);
       expect(broken.fix).toContain(".claude.json");
+    }),
+  ));
+
+test("a Claude Code that is not logged in fails, with the login as its fix", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* healthy();
+      yield* bin.add("claude", `printf '{\\n  "loggedIn": false\\n}\\n'; exit 1`);
+
+      const result = yield* report();
+
+      expect(check(result, "claude login")).toMatchObject({ ok: false, fix: "claude auth login" });
+    }),
+  ));
+
+test("a Machine that cannot push to its GitLab fails, with the key to make and register", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* healthy();
+      yield* bin.add("ssh", `echo "Permission denied (publickey)." >&2; exit 255`);
+
+      const result = yield* report();
+
+      const push = check(result, "git push");
+      expect(push.ok).toBe(false);
+      expect(push.detail).toContain("gitlab.example");
+      expect(push.fix).toContain("glab ssh-key add");
+    }),
+  ));
+
+test("a push that works only through a forwarded agent is not a Machine that can push", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* healthy();
+      // Pushes only while an agent is offered, which a forwarded one would be.
+      yield* bin.add(
+        "ssh",
+        `case "$*" in *IdentityAgent=none*) exit 255 ;; *) echo "Welcome to GitLab, @t!" ;; esac`,
+      );
+
+      const local = yield* report();
+      expect(check(local, "git push").ok).toBe(true);
+
+      const remote = yield* report({ SSH_AUTH_SOCK: "/tmp/ssh-XXXXabcd/agent.4242" });
+      expect(check(remote, "git push")).toMatchObject({ ok: false });
+      expect(check(remote, "git push").detail).toContain("forwarded");
+    }),
+  ));
+
+test("the GitLab token warns within 14 days of expiring and fails once it has", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* healthy();
+      const far = check(yield* report(), "gitlab token");
+      expect(far).toMatchObject({ ok: true, fix: "" });
+      expect(far.warn).toBeUndefined();
+
+      yield* gitlab({ expires: yield* inDays(5) });
+      const soon = check(yield* report(), "gitlab token");
+      expect(soon).toMatchObject({ ok: true, warn: true });
+      expect(soon.fix).toContain("personal_access_tokens");
+
+      yield* gitlab({ expires: yield* inDays(20) });
+      expect(check(yield* report(), "gitlab token").warn).toBeUndefined();
+
+      yield* gitlab({ expires: yield* inDays(-1) });
+      expect(check(yield* report(), "gitlab token").ok).toBe(false);
+
+      yield* gitlab({ expires: null });
+      expect(check(yield* report(), "gitlab token")).toMatchObject({ ok: true });
+    }),
+  ));
+
+test("a host git reaches over HTTPS pushes with glab's token, and no key is asked for", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* healthy();
+      yield* bin.add(
+        "glab",
+        `case "$*" in
+          "auth status") echo "gitlab.example"; echo "  ✓ Git operations for gitlab.example configured to use https protocol." ;;
+          *personal_access_tokens/self*) echo '{"expires_at":null}' ;;
+          *) exit 0 ;;
+        esac`,
+      );
+      yield* bin.add("ssh", `exit 255`);
+
+      expect(check(yield* report(), "git push").ok).toBe(true);
     }),
   ));

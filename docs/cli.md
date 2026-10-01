@@ -1193,7 +1193,13 @@ installation; the runner built and the `collie` shim on PATH (installed-but-not-
 its own reported state); a Node runtime for the skills CLI; every skill and every harness
 the loaded workflows and personas name; whether the checkout is behind its remote; the
 Projects root and its source — `projects.root`, `GITTE_CWD`, or the home directory, the last
-a `!` warning that never fails the run; and `glab` present and logged in.
+a `!` warning that never fails the run; `glab` present and logged in; Claude Code logged
+in, from `claude auth status --json`, where `claude` is on PATH; for each GitLab host glab
+is logged in to, its token's expiry, a `!` warning within 14 days of it and a failure once
+it has passed; and whether this Machine can push to each of those hosts — over SSH with its
+own key, or over HTTPS where glab configured git to use it. An agent sshd forwarded into the
+session does not count, since it goes when the computer it came from sleeps. With more than
+one host, each of those two checks is named with its host.
 
 Two more are optional, and reported rather than required. **Helle**, where a loaded
 workflow waits on it (`renovate` does): the credentials file the Helle MCP wrapper sources,

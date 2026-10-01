@@ -154,10 +154,9 @@ const fetchRemote = (root: string, run: Runner<ChildProcessSpawner.ChildProcessS
   Effect.timeoutOption(run("env", FETCH, root), FETCH_LIMIT);
 
 /**
- * A command that answers or is taken to have said nothing. `doctor` asks two things
- * that can reach a network — the fetch above, and whether `glab` is logged in — and
- * an install ends by running all of this, so neither may wait on an unreachable host
- * for as long as it likes.
+ * A command that answers or is taken to have said nothing. An install ends by running
+ * `doctor`, so nothing it asks over a network may wait on an unreachable host for as
+ * long as it likes.
  */
 const answered = (
   command: Effect.Effect<
@@ -297,6 +296,90 @@ const projects = Effect.fn("Doctor.projects")(function* (env: PluginEnv) {
   );
 });
 
+const ClaudeStatus = Schema.fromJsonString(Schema.Struct({ loggedIn: Schema.Boolean }));
+const TokenSelf = Schema.fromJsonString(
+  Schema.Struct({ expires_at: Schema.NullOr(Schema.String) }),
+);
+const RENEW_WITHIN_DAYS = 14;
+const DAY_MS = 86_400_000;
+
+/**
+ * Each host `glab auth status` names (its unindented lines), and whether git reaches it
+ * over HTTPS. Read whatever the exit code: one host with a bad token fails the command
+ * for all of them.
+ */
+const glabHosts = (status: string) =>
+  status
+    .split("\n")
+    .filter((line) => /^[a-z0-9.-]+(:\d+)?$/i.test(line))
+    .map((host) => ({
+      host,
+      https: status.includes(`Git operations for ${host} configured to use https protocol`),
+    }));
+
+/** The JSON object in a command's output, from the line it starts on: `say` folds stderr in. */
+const jsonIn = (text: string) => {
+  const lines = text.split("\n");
+  const from = lines.findIndex((line) => line.trimStart().startsWith("{"));
+  const json = from === -1 ? "" : lines.slice(from).join("\n");
+  return json.slice(0, json.lastIndexOf("}") + 1);
+};
+
+const tokenPage = (host: string) =>
+  `https://${host}/-/user_settings/personal_access_tokens?name=collie&scopes=api,write_repository`;
+
+const tokenExpiry = Effect.fn("Doctor.tokenExpiry")(function* (
+  host: string,
+  root: string,
+  run: Runner<ChildProcessSpawner.ChildProcessSpawner>,
+) {
+  const renew = `make a token at ${tokenPage(host)}, then glab auth login --hostname ${host} --stdin`;
+  const answer = yield* answered(
+    run("glab", ["api", "--hostname", host, "personal_access_tokens/self"], root),
+  );
+  const token = Schema.decodeUnknownOption(TokenSelf)(jsonIn(answer.stdout));
+  if (answer.code !== 0 || Option.isNone(token)) {
+    return warned(`${host} would not say when its token expires`, renew);
+  }
+  const expires = token.value.expires_at;
+  if (expires === null) return passed(`${host}: the token never expires`);
+  const days = Math.floor((Date.parse(expires) - (yield* Clock.currentTimeMillis)) / DAY_MS);
+  if (days < 0) return failed(`${host}: the token expired on ${expires}`, renew);
+  if (days < RENEW_WITHIN_DAYS) return warned(`${host}: the token expires on ${expires}`, renew);
+  return passed(`${host}: the token expires on ${expires}`);
+});
+
+/** An agent sshd forwarded into this session, which goes when the computer it came from sleeps. */
+const FORWARDED_AGENT = /^\/tmp\/ssh-[^/]+\/agent\.\d+$/;
+
+/** Whether this Machine's own keys reach `host` over SSH, or glab's token over HTTPS. */
+const pushCheck = Effect.fn("Doctor.pushCheck")(function* (
+  host: { host: string; https: boolean },
+  env: PluginEnv,
+  ssh: boolean,
+  run: Runner<ChildProcessSpawner.ChildProcessSpawner>,
+) {
+  if (host.https) return passed(`pushes to ${host.host} over HTTPS with glab's token`);
+  if (!ssh) return failed("no ssh on PATH", "install the OpenSSH client");
+  const forwarded = FORWARDED_AGENT.test(env.raw["SSH_AUTH_SOCK"] ?? "");
+  const args = ["-oBatchMode=yes", "-oConnectTimeout=5", "-T"];
+  if (forwarded) args.push("-oIdentityAgent=none");
+  const answer = yield* answered(run("ssh", [...args, `git@${host.host}`], env.pluginRoot));
+  if (answer.code === 0) return passed(`pushes to ${host.host} with this Machine's own key`);
+  if (answer.code === 124)
+    return failed(`${host.host} did not answer within ${FETCH_LIMIT}`, `ssh -T git@${host.host}`);
+  if (answer.stdout.includes("Host key verification failed")) {
+    return failed(
+      `${host.host}'s host key is not known here`,
+      `ssh-keyscan ${host.host} >> ~/.ssh/known_hosts`,
+    );
+  }
+  return failed(
+    `cannot push to ${host.host}${forwarded ? " without the forwarded SSH agent" : ""}`,
+    `[ -f ~/.ssh/id_ed25519 ] || ssh-keygen -t ed25519 -N "" -f ~/.ssh/id_ed25519; GITLAB_HOST=${host.host} glab ssh-key add ~/.ssh/id_ed25519.pub --title "$(hostname)"`,
+  );
+});
+
 /**
  * Every check, in one pass, whatever the state of the machine: a prerequisite that
  * is missing must not stop the ones after it from being reported, or `doctor` is one
@@ -416,6 +499,19 @@ export const doctor = Effect.fn("Doctor.doctor")(function* (
         )),
   });
 
+  if ((yield* onPath(search, "claude")) !== null) {
+    const status = yield* answered(run("claude", ["auth", "status", "--json"], root));
+    const login = Schema.decodeUnknownOption(ClaudeStatus)(jsonIn(status.stdout));
+    checks.push({
+      name: "claude login",
+      ...(Option.isSome(login) && login.value.loggedIn
+        ? passed("Claude Code is logged in")
+        : status.code === 124
+          ? failed(`did not answer within ${FETCH_LIMIT}`, "claude auth status")
+          : failed("Claude Code is not logged in", "claude auth login")),
+    });
+  }
+
   // Reported, never failed: the board and every Run work without it, and a machine that
   // is otherwise ready must not exit non-zero over a line under a prompt.
   const line = yield* readStatusLine(env);
@@ -468,6 +564,15 @@ export const doctor = Effect.fn("Doctor.doctor")(function* (
           ? failed(`installed, but did not answer within ${FETCH_LIMIT}`, "glab auth status")
           : failed("installed, but not logged in", "glab auth login")),
   });
+
+  // No host is the `glab` check's failure, not two more.
+  const hosts = auth ? glabHosts(auth.stdout) : [];
+  const ssh = (yield* onPath(search, "ssh")) !== null;
+  for (const host of hosts) {
+    const of = hosts.length > 1 ? ` ${host.host}` : "";
+    checks.push({ name: `gitlab token${of}`, ...(yield* tokenExpiry(host.host, root, run)) });
+    checks.push({ name: `git push${of}`, ...(yield* pushCheck(host, env, ssh, run)) });
+  }
 
   // Optional, and only where work could reach for them: Helle for a module that waits
   // on it, Linear for an agent Claude Code runs. Absent is a note; set up and broken is
