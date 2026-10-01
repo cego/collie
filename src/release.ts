@@ -1,7 +1,6 @@
 import { Effect, FileSystem, Path } from "effect";
 import type { ChildProcessSpawner } from "effect/unstable/process";
 import { shell, type Runner } from "./mr";
-import { RELEASE_PUBLIC_KEY, SIGNATURE_SUFFIX, verifyRelease } from "./signing";
 
 // ponytail: the one branch releases are cut from; read origin/HEAD if that ever varies.
 const RELEASE_BRANCH = "master";
@@ -48,7 +47,7 @@ export const installation = Effect.fn("release.installation")(function* (
 });
 
 /** One string field of the plugin manifest at `root`, or "" where there is none. */
-export const manifestField = Effect.fn("Doctor.manifestField")(function* (
+export const manifestField = Effect.fn("release.manifestField")(function* (
   root: string,
   key: string,
 ) {
@@ -58,39 +57,4 @@ export const manifestField = Effect.fn("Doctor.manifestField")(function* (
   if (!(yield* fs.exists(manifest))) return "";
   const text = yield* fs.readFileString(manifest);
   return new RegExp(`^${key}\\s*=\\s*"([^"]+)"`, "m").exec(text)?.[1] ?? "";
-});
-
-/** Where `install.sh` downloads a release's runner from. */
-export const releaseBase = (raw: Readonly<Record<string, string>>, version: string) =>
-  raw["COLLIE_RELEASE_BASE"] ?? `https://github.com/cego/collie/releases/download/${version}`;
-
-/**
- * Why the runner `install.sh` left in `root` is refused, or null. A checkout with bun built
- * its own, as `install.sh` decides; any other was downloaded and must carry the release
- * key's signature. A refused runner is removed, so nothing runs it.
- */
-export const refusedRunner = Effect.fn("release.refusedRunner")(function* (
-  root: string,
-  base: string,
-  run: Runner<ChildProcessSpawner.ChildProcessSpawner>,
-  releaseKey: string = RELEASE_PUBLIC_KEY,
-) {
-  const fs = yield* FileSystem.FileSystem;
-  const bun = yield* run("sh", ["-c", "command -v bun"], root);
-  if ((yield* fs.exists(`${root}/.git`)) && bun.code === 0) return null;
-  const os = process.platform === "darwin" ? "darwin" : "linux";
-  const arch = process.arch === "arm64" ? "arm64" : "x64";
-  const signature = yield* run(
-    "curl",
-    ["-fsSL", `${base}/collie-${os}-${arch}${SIGNATURE_SUFFIX}`],
-    root,
-  );
-  const runner = `${root}/bin/collie`;
-  const bytes = yield* fs
-    .readFile(runner)
-    .pipe(Effect.catch(() => Effect.succeed(new Uint8Array())));
-  const verdict = verifyRelease(bytes, signature.code === 0 ? signature.stdout : null, releaseKey);
-  if (verdict.ok) return null;
-  yield* fs.remove(runner, { force: true });
-  return `${runner}: ${verdict.reason}`;
 });

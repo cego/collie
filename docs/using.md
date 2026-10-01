@@ -37,7 +37,9 @@ with the fix for each.
 
 Collie's releases are public, so the install needs no token. A project that is not public — a
 fork, or a mirror — answers an unauthenticated download with a sign-in page rather than a binary — with HTTP 200, which is why the install
-checks that what arrived is a program rather than trusting the status code.
+checks that what arrived is a program rather than trusting the status code. A downloaded
+runner is installed only once its signature from Collie's release key checks out, which
+needs `openssl`.
 
 For one of those, the install finds a token in this order:
 
@@ -72,7 +74,7 @@ to.
 
 `collie onboard` installs everything instead, herdr and Claude Code included, from a runner
 alone: it clones Collie at the runner's own release (or `--to`) over HTTPS, prepares it the
-way `setup.sh` does, puts `~/.local/bin` on PATH in your shell profile. It never runs sudo: a missing `git` or `curl` stops it with the command to run.
+way `setup.sh` does, puts `~/.local/bin` on PATH in your shell profile. It never runs sudo: a missing `git`, `curl` or `openssl` stops it with the command to run.
 It then sets up what a Machine needs to work unattended: Claude Code logged in, glab logged in with a GitLab
 token, a key of the Machine's own for pushing unless it can already push, Helle's
 credentials and the Linear MCP — the last two unless `--skip` names them. Secrets come on

@@ -8,8 +8,6 @@ import { runEffect } from "./support/effect";
 import { FakeBin } from "./support/bin";
 import { readEnv } from "../src/env";
 import { eventText } from "../src/commands/onboard";
-import { generateKeyPairSync } from "node:crypto";
-import { signRelease } from "../src/signing";
 import { onboard, type OnboardEvent, type OnboardOptions } from "../src/onboard";
 import { err, type OpResult } from "../src/operations";
 
@@ -39,7 +37,7 @@ const release = (version: string) => {
     [
       "sh",
       "-c",
-      `printf 'echo ran >> "$HOME/prepared"\\nmkdir -p bin; echo a runner > bin/collie\\necho "prepare: runner: done"\\necho "prepare: skills: done"\\n' > prepare.sh; echo 'version = "${version}"' > herdr-plugin.toml; echo bin/ > .gitignore`,
+      `printf 'echo ran >> "$HOME/prepared"\\necho "prepare: runner: done"\\necho "prepare: skills: done"\\n' > prepare.sh; echo 'version = "${version}"' > herdr-plugin.toml`,
     ],
     { cwd: origin },
   );
@@ -139,12 +137,9 @@ beforeEach(() =>
         case "$*" in
           *herdr.dev/install.sh*) cat "${home}/herdr-installer" ;;
           *claude.ai/install.sh*) cat "${home}/claude-installer" ;;
-          *.sig) cat "${home}/published.sig" 2>/dev/null || exit 22 ;;
           *) exit 22 ;;
         esac`,
       );
-      // install.sh builds a checkout's runner from source where there is a bun.
-      yield* bin.add("bun", "exit 0");
       // No test reaches a real GitLab over SSH.
       yield* bin.add("ssh", `echo "Permission denied (publickey)."; exit 255`);
       // Logged in to GitLab, and pushing over HTTPS with that login.
@@ -250,6 +245,7 @@ test("missing git stops with the exact command to run as root, and changes nothi
       for (const name of ["sh", "bash", "env", "cat", "mkdir", "chmod", "printf"]) {
         yield* Effect.ignore(fs.symlink(`/bin/${name}`, `${tools}/${name}`));
       }
+      yield* fs.symlink("/usr/bin/openssl", `${tools}/openssl`);
       yield* bin.add("apt-get", "exit 0");
 
       const { result, events } = yield* onboarded({ PATH: `${home}/stubs:${tools}` });
@@ -516,54 +512,6 @@ test("a terminal shows each step as text", () => {
     eventText({ event: "human", step: "linear", detail: "open this", url: "https://x.example" }),
   ).toBe("  … open this\n    open: https://x.example");
 });
-
-/** Publishes a signature for the runner every release's prepare.sh writes, under a key of the test's own. */
-const publishSignature = Effect.fn("onboardTest.publishSignature")(function* () {
-  const fs = yield* FileSystem.FileSystem;
-  const { publicKey, privateKey } = generateKeyPairSync("ed25519");
-  yield* fs.writeFileString(
-    `${home}/published.sig`,
-    signRelease(
-      new TextEncoder().encode("a runner\n"),
-      privateKey.export({ type: "pkcs8", format: "pem" }).toString(),
-    ),
-  );
-  return publicKey.export({ type: "spki", format: "pem" }).toString();
-});
-
-test("a downloaded runner signed by the release key is kept", () =>
-  runEffect(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      yield* fs.remove(`${home}/stubs/bun`);
-      const releaseKey = yield* publishSignature();
-
-      const { events } = yield* onboarded({}, { releaseKey });
-
-      expect(statusOf(events, "plugin")).toBe("done");
-      expect(yield* read(`${home}/curl-calls`)).toContain(".sig");
-      expect(yield* fs.exists(`${root}/bin/collie`)).toBe(true);
-    }),
-  ));
-
-test("a downloaded runner without the release key's signature is refused and removed", () =>
-  runEffect(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      yield* fs.remove(`${home}/stubs/bun`);
-
-      const { result, events } = yield* onboarded();
-
-      expect(results(events).find((event) => event.step === "plugin")).toMatchObject({
-        status: "failed",
-      });
-      expect(results(events).find((event) => event.step === "plugin")?.detail).toContain(
-        "unsigned",
-      );
-      expect(yield* fs.exists(`${root}/bin/collie`)).toBe(false);
-      expect(result).toMatchObject({ ok: false });
-    }),
-  ));
 
 test("a fresh Machine with an unknown host key and no registered key gets one in one pass", () =>
   runEffect(

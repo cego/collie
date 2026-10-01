@@ -101,6 +101,24 @@ release_token() {
   esac
 }
 
+# Whether Collie's release key signed the download, by `release.pub`: the key the runner
+# itself verifies with. Before the download replaces anything, so a refused one never runs.
+signed() { # file, curl config
+  if ! printf '%s\n' "$2" | curl -fsSL --config - "${BASE}/${ASSET}.sig" -o "$1.sig" 2>/dev/null; then
+    echo "could not fetch ${BASE}/${ASSET}.sig to check the download" >&2
+    return 1
+  fi
+  if ! command -v openssl >/dev/null 2>&1; then
+    echo "no openssl to check ${ASSET}'s signature" >&2
+    return 1
+  fi
+  if ! openssl base64 -d -A -in "$1.sig" -out "$1.sig.bin" 2>/dev/null ||
+    ! openssl pkeyutl -verify -pubin -inkey "$ROOT/release.pub" -rawin -in "$1" -sigfile "$1.sig.bin" >/dev/null 2>&1; then
+    echo "${BASE}/${ASSET} does not match its signature from Collie's release key, so it was refused" >&2
+    return 1
+  fi
+}
+
 fetch_release() {
   # A project that is not public answers an unauthenticated download with the login page
   # above, so send a token wherever one can be had.
@@ -130,6 +148,11 @@ fetch_release() {
     fi
     return 1
   fi
+  if ! signed bin/collie.new "$config"; then
+    rm -f bin/collie.new bin/collie.new.sig bin/collie.new.sig.bin
+    return 1
+  fi
+  rm -f bin/collie.new.sig bin/collie.new.sig.bin
   mv bin/collie.new bin/collie
   chmod +x bin/collie
 }

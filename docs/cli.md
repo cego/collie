@@ -1164,8 +1164,9 @@ Pulls first where the installation is a checkout (`--ff-only`), then runs `prepa
 the one routine every entry point ends in, so this brings the plugin link, the runner and
 shim, the operator skill and the skills up to date together rather than replacing the
 runner alone. A pull it cannot do is reported rather than installed over. A runner
-`install.sh` downloaded rather than built (anything but a checkout with bun) must carry the
-release key's signature; one that does not is removed and the upgrade fails.
+`install.sh` downloads replaces the one there only once its signature checks out
+([Build and release](internals.md)); otherwise the runner already there stays and the
+`runner` step fails.
 
 The report names what moved: the commit range where the checkout advanced, and one line
 per preparation step saying whether it was done, was already in place, or was skipped —
@@ -1195,12 +1196,12 @@ release to install, this runner's own version when it is not given. Nothing runs
 
 | Step           | What it does                                                                                                                                                                                                                                                                   |
 | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `system`       | Checks for `git` and `curl`. Either missing stops here with `needs_root` and the exact command                                                                                                                                                                                 |
+| `system`       | Checks for `git`, `curl` and `openssl` (which checks a downloaded runner's signature). Any missing stops here with `needs_root` and the exact command                                                                                                                          |
 | `collie`       | Clones `https://github.com/cego/collie.git` (or `COLLIE_REPO`) into `~/.collie` (or `COLLIE_DIR`) and resets `master` to the tag, so a plain `collie upgrade` can still pull; or moves a released checkout to the tag as `upgrade --to` does                                   |
 | `herdr`        | `curl -fsSL https://herdr.dev/install.sh \| sh`, if there is no `herdr`                                                                                                                                                                                                        |
 | `claude`       | Anthropic's user-level installer, `curl -fsSL https://claude.ai/install.sh \| bash`, if there is no `claude`                                                                                                                                                                   |
 | `path`         | Adds `~/.local/bin` (and `COLLIE_BIN_DIR`) to PATH in the shell's profile (`~/.bashrc`, `~/.zshrc` or `~/.profile`)                                                                                                                                                            |
-| `plugin`       | `prepare.sh`: the plugin link, the runner and shim, the operator skill and the skills. A runner it downloaded rather than built must carry the release key's signature (`<asset>.sig`); one that does not is removed and the step fails                                        |
+| `plugin`       | `prepare.sh`: the plugin link, the runner and shim, the operator skill and the skills. A runner `install.sh` downloads is installed only once the release key's signature (`<asset>.sig`) checks out                                                                           |
 | `claude-login` | `claude auth login` in this terminal, if `claude auth status --json` says Claude Code is not logged in; without a terminal, `needs_human` with that command                                                                                                                    |
 | `gitlab`       | `glab auth login --hostname gitlab.cego.dk --stdin` (or `GITLAB_HOST`) with `GITLAB_TOKEN`, if glab is not already logged in there. Without a token: `needs_human`, with the token page and its `api` and `write_repository` scopes as `url`                                   |
 | `push`         | Generates `~/.ssh/id_ed25519` if there is none and registers it with `glab ssh-key add`, unless the Machine can already push (over HTTPS with glab's login, or with its own key). GitLab's host key is trusted on first use, and a key GitLab already has counts as registered |
@@ -1221,7 +1222,7 @@ Each step prints a line when it starts and one when it ends. Under `--json` each
 line, then the envelope:
 
 ```json
-{"event":"start","step":"system","title":"Checking for git and curl"}
+{"event":"start","step":"system","title":"Checking for git, curl and openssl"}
 {"event":"result","step":"system","status":"needs_root","detail":"git must be installed as root; run the command, then onboard again","command":"sudo apt-get install -y git"}
 ```
 

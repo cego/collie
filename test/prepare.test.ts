@@ -7,7 +7,9 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, FileSystem, Path } from "effect";
 import { runEffect } from "./support/effect";
 import { FakeBin } from "./support/bin";
+import { generateKeyPairSync } from "node:crypto";
 import { prepareSteps } from "../src/operations";
+import { signRelease } from "../src/signing";
 
 let home: string;
 let root: string;
@@ -19,12 +21,16 @@ const repoRoot = Effect.gen(function* () {
 });
 
 /** One of the install scripts, against the temporary HOME with only the stubs on PATH. */
-function run(script: string, path = `${home}/stubs:/usr/bin:/bin`) {
+function run(
+  script: string,
+  path = `${home}/stubs:/usr/bin:/bin`,
+  extra: Record<string, string> = {},
+) {
   const result = Bun.spawnSync({
     cmd: ["sh", `${root}/${script}`],
     // Only the stubs and the system tools the scripts use: a real `herdr` on the
     // developer's own PATH would answer for one a test has deliberately removed.
-    env: { HOME: home, PATH: path, HERDR_CONFIG: `${home}/.config/herdr/config.toml` },
+    env: { HOME: home, PATH: path, HERDR_CONFIG: `${home}/.config/herdr/config.toml`, ...extra },
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -75,7 +81,13 @@ beforeEach(() =>
       // A checkout, so install.sh builds from source rather than reaching the network.
       yield* fs.makeDirectory(`${root}/.git`, { recursive: true });
       const repo = yield* repoRoot;
-      for (const file of ["prepare.sh", "install.sh", "setup.sh", "herdr-plugin.toml"]) {
+      for (const file of [
+        "prepare.sh",
+        "install.sh",
+        "setup.sh",
+        "herdr-plugin.toml",
+        "release.pub",
+      ]) {
         yield* fs.copyFile(`${repo}/${file}`, `${root}/${file}`);
       }
       // A source tree, because whether there is anything to build is answered by
@@ -476,5 +488,79 @@ test("setup configures Claude Code's status line; prepare never touches it", () 
       setup();
 
       expect(yield* read(`${home}/collie-calls`)).toContain("chat status-line --install");
+    }),
+  ));
+
+/**
+ * A release to download from, as `install.sh` names its asset, and the runner already in
+ * place. Not a checkout and no bun, so `install.sh` has nothing to build from.
+ */
+const downloadable = Effect.fn("prepareTest.downloadable")(function* () {
+  const fs = yield* FileSystem.FileSystem;
+  yield* remove(`${root}/.git`);
+  yield* remove(`${home}/stubs/bun`);
+  const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+  yield* fs.writeFileString(
+    `${root}/release.pub`,
+    publicKey.export({ type: "spki", format: "pem" }).toString(),
+  );
+  const asset = `${home}/release/collie-linux-${process.arch === "arm64" ? "arm64" : "x64"}`;
+  const runner = new Uint8Array([0x7f, 0x45, 0x4c, 0x46, ...new TextEncoder().encode(" new")]);
+  yield* fs.makeDirectory(`${home}/release`, { recursive: true });
+  yield* fs.writeFile(asset, runner);
+  yield* fs.makeDirectory(`${root}/bin`, { recursive: true });
+  yield* fs.writeFileString(`${root}/bin/collie`, "the runner already here");
+  const signature = (key = privateKey) =>
+    fs.writeFileString(
+      `${asset}.sig`,
+      signRelease(runner, key.export({ type: "pkcs8", format: "pem" }).toString()),
+    );
+  const install = () =>
+    run("install.sh", undefined, {
+      COLLIE_RELEASE_BASE: `file://${home}/release`,
+      COLLIE_PREPARING: "1",
+    });
+  return { runner, signature, install };
+});
+
+test("a downloaded runner signed by the release key is installed", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const release = yield* downloadable();
+      yield* release.signature();
+
+      const done = release.install();
+
+      expect(done.code).toBe(0);
+      expect(yield* fs.readFile(`${root}/bin/collie`)).toEqual(release.runner);
+    }),
+  ));
+
+test("a download another key signed is refused before it replaces the runner", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const release = yield* downloadable();
+      yield* release.signature(generateKeyPairSync("ed25519").privateKey);
+
+      const done = release.install();
+
+      expect(done.out).toContain("does not match its signature");
+      expect(done.code).not.toBe(0);
+      expect(yield* read(`${root}/bin/collie`)).toBe("the runner already here");
+      expect(yield* exists(`${root}/bin/collie.new`)).toBe(false);
+    }),
+  ));
+
+test("a signature that cannot be fetched leaves the runner already there", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const release = yield* downloadable();
+
+      const done = release.install();
+
+      expect(done.out).toContain("could not fetch");
+      expect(done.code).not.toBe(0);
+      expect(yield* read(`${root}/bin/collie`)).toBe("the runner already here");
     }),
   ));

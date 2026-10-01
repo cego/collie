@@ -1,12 +1,11 @@
 // Release signatures: CI signs each runner binary with the release key, and every downloaded
-// runner is checked here before it is used. The private key is only ever a CI secret.
+// runner is checked against it before it is installed. The private key is only ever a CI secret.
 
 import { createPrivateKey, createPublicKey, sign, verify } from "node:crypto";
+import releaseKey from "../release.pub" with { type: "text" };
 
-export const RELEASE_PUBLIC_KEY = `-----BEGIN PUBLIC KEY-----
-MCowBQYDK2VwAyEAlSUFdwz8026yxgOEch+qYQSblnjqUa3wMU2Yk0edBRY=
------END PUBLIC KEY-----
-`;
+// `release.pub`, which `install.sh` also checks a downloaded runner with.
+export const RELEASE_PUBLIC_KEY: string = releaseKey;
 
 /** The suffix a release asset's signature is published under, beside the asset. */
 export const SIGNATURE_SUFFIX = ".sig";

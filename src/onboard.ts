@@ -12,7 +12,7 @@ import { doctor, glabHosts, onPath, pushCheck, tokenPage } from "./doctor";
 import type { PluginEnv } from "./env";
 import { err, moveToRelease, prepareSteps, type OpResult } from "./operations";
 import { helleEnvPath, LINEAR_MCP_ADD, LINEAR_MCP_FIX, probeLinearMcp } from "./optional";
-import { installation, manifestField, RELEASE_TAG, refusedRunner, releaseBase } from "./release";
+import { installation, manifestField, RELEASE_TAG } from "./release";
 
 export type StepStatus = "done" | "in_place" | "skipped" | "needs_root" | "needs_human" | "failed";
 
@@ -49,8 +49,6 @@ export interface OnboardOptions {
   readonly terminal?: boolean;
   /** Someone sees the stream, so a login that needs the human may be started. Default true. */
   readonly attended?: boolean;
-  /** The key a downloaded runner must be signed with: Collie's release key unless a test supplies one. */
-  readonly releaseKey?: string;
 }
 
 const HERDR_INSTALL = "curl -fsSL https://herdr.dev/install.sh | sh";
@@ -219,13 +217,13 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
 
   const system = yield* step(
     "system",
-    "Checking for git and curl",
+    "Checking for git, curl and openssl",
     Effect.gen(function* () {
       const missing: string[] = [];
-      for (const tool of ["git", "curl"]) {
+      for (const tool of ["git", "curl", "openssl"]) {
         if ((yield* onPath(search, tool)) === null) missing.push(tool);
       }
-      if (missing.length === 0) return inPlace("git and curl are installed");
+      if (missing.length === 0) return inPlace("git, curl and openssl are installed");
       return yield* needsRoot(search, missing);
     }),
   );
@@ -315,9 +313,6 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
             `sh ${root}/prepare.sh`,
           );
         }
-        const base = releaseBase(env.raw, yield* manifestField(root, "version"));
-        const refused = yield* refusedRunner(root, base, exec, options.releaseKey);
-        if (refused) return failed(refused, `sh ${root}/prepare.sh`);
         return steps.some((one) => one.state === "done") ? done(said) : inPlace(said);
       }),
     );

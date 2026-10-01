@@ -539,10 +539,14 @@ Mach-O header instead of trusting `curl -f`.
 Each runner binary is published with a detached ed25519 signature beside it, `<asset>.sig`.
 The release job signs with `tools/sign.ts`, which reads the private key from the
 `COLLIE_SIGNING_KEY` secret (PKCS#8 PEM). It refuses to run without that key, and refuses a
-key that does not match the public key built into `src/signing.ts`. `verifyRelease` is the one check
-every downloaded runner passes: Desktop runs it before installing one, and `collie onboard`
-and `collie upgrade` run it on whatever `install.sh` downloaded (`refusedRunner` in
-`src/release.ts`). One that is unsigned or does not match is refused and removed. Rotating the key means changing both the secret and `RELEASE_PUBLIC_KEY`, and
+key that does not match the public key built into `src/signing.ts`. The public key is
+`release.pub`, which `src/signing.ts` imports. Desktop checks a runner it downloads with
+`verifyRelease`, and `install.sh` checks one with `openssl pkeyutl` against the same file,
+fetching `<asset>.sig` with the same token as the asset, before it replaces `bin/collie`. A
+download that is unsigned, does not match, or whose signature cannot be fetched is never
+installed or run, and the runner already there stays. So a Machine without bun can install
+a release only once it is signed. Rotating the key means changing both the secret and
+`release.pub`, and
 releases signed with the old key stop verifying.
 
 `bun run build` compiles beside the binary and renames over it, because replacing a running

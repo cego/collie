@@ -22,7 +22,7 @@ import { carryOutProposal } from "./run-actions";
 // here so a front door still has one import for "what a human asked Collie to do".
 export { carryOutAsked, carryOutProposal, registerRunExecutors } from "./run-actions";
 import { shell, type Runner } from "./mr";
-import { installation, manifestField, RELEASE_TAG, refusedRunner, releaseBase } from "./release";
+import { installation, RELEASE_TAG } from "./release";
 import manifest from "../herdr-plugin.toml";
 import { everyRegistered, type AgentEntry } from "./registry";
 import { listRuns, type RunFacts } from "./runs";
@@ -277,11 +277,7 @@ export const moveToRelease = Effect.fn("operations.moveToRelease")(function* (
  */
 export const upgrade = Effect.fn("operations.upgrade")(function* (
   env: PluginEnv,
-  options: {
-    readonly to?: string;
-    /** The key a downloaded runner must be signed with: Collie's release key unless a test supplies one. */
-    readonly releaseKey?: string;
-  } = {},
+  options: { readonly to?: string } = {},
   run: Runner<ChildProcessSpawner.ChildProcessSpawner> = (cmd, args, cwd) =>
     shell(cmd, args, cwd, "say"),
 ) {
@@ -326,10 +322,6 @@ export const upgrade = Effect.fn("operations.upgrade")(function* (
       output: installed.stdout.trim(),
     });
   }
-
-  const base = releaseBase(env.raw, yield* manifestField(root, "version"));
-  const refused = yield* refusedRunner(root, base, run, options.releaseKey);
-  if (refused) return err("operation_failed", `Refused the runner: ${refused}.`, { root });
 
   const moved = checkout && before !== after;
   const steps = prepareSteps(installed.stdout);
