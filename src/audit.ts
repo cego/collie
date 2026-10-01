@@ -13,11 +13,14 @@ export const AuditLine = Schema.Struct({
   actor: Schema.Struct({ origin: FrontDoor, requestId: Schema.String }),
   /** Why, in the asker's own words, where they gave one. */
   reason: Schema.optionalKey(Schema.String),
+  /** What the request asked for, which the same request asking again has to match. */
+  asked: Schema.optionalKey(Schema.Json),
   result: Schema.Json,
 });
 export type AuditLine = typeof AuditLine.Type;
 
 const AuditJson = Schema.fromJsonString(AuditLine);
+const sameJson = Schema.toEquivalence(Schema.Json);
 const fileOf = (runDir: string) => `${runDir}/operations.jsonl`;
 
 export const readAudit = (runDir: string) => readJournal(fileOf(runDir), AuditJson);
@@ -30,6 +33,7 @@ export const recordAudit = Effect.fn("Audit.record")(function* <A, I extends Sch
     readonly request: string;
     readonly origin: FrontDoor;
     readonly reason?: string | undefined;
+    readonly asked?: Schema.Json | undefined;
     readonly result: Schema.Codec<A, I>;
     readonly value: A;
   },
@@ -41,11 +45,10 @@ export const recordAudit = Effect.fn("Audit.record")(function* <A, I extends Sch
     actor: { origin: line.origin, requestId: line.request },
     result: Schema.encodeSync(line.result)(line.value),
   };
-  yield* appendJournal(
-    fileOf(runDir),
-    AuditJson,
-    line.reason === undefined ? written : { ...written, reason: line.reason },
-  );
+  let full = written;
+  if (line.reason !== undefined) full = { ...full, reason: line.reason };
+  if (line.asked !== undefined) full = { ...full, asked: line.asked };
+  yield* appendJournal(fileOf(runDir), AuditJson, full);
 });
 
 /**
@@ -60,6 +63,7 @@ export const once = Effect.fn("Audit.once")(function* <A, I extends Schema.Json,
     readonly request: string;
     readonly origin: FrontDoor;
     readonly reason?: string | undefined;
+    readonly asked?: Schema.Json | undefined;
     readonly result: Schema.Codec<A, I>;
   },
   act: Effect.Effect<A, E, R>,
@@ -70,6 +74,12 @@ export const once = Effect.fn("Audit.once")(function* <A, I extends Schema.Json,
       return yield* new RequestConflict({
         request: line.request,
         reason: `request "${line.request}" was already ${prior.operation}, not ${line.operation}`,
+      });
+    }
+    if (prior.asked !== undefined && !sameJson(prior.asked, line.asked ?? null)) {
+      return yield* new RequestConflict({
+        request: line.request,
+        reason: `request "${line.request}" already asked ${line.operation} for something else`,
       });
     }
     return yield* Schema.decodeUnknownEffect(line.result)(prior.result).pipe(Effect.orDie);

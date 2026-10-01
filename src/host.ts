@@ -421,9 +421,18 @@ const frontDoorHandlers = (dir: string, installation: string, panels: MrPanels) 
       const auditedControl =
         (runId: string, operation: string, request: string, origin: FrontDoor, reason?: string) =>
         <E>(act: Effect.Effect<typeof Controlled.Type, E, HostServices>) =>
-          once(trail(runId), { operation, request, origin, reason, result: Controlled }, act).pipe(
-            Effect.provideContext(hosted),
-          );
+          once(
+            trail(runId),
+            {
+              operation,
+              request,
+              origin,
+              reason,
+              asked: { reason: reason ?? null },
+              result: Controlled,
+            },
+            act,
+          ).pipe(Effect.provideContext(hosted));
       const known = (runId: string) =>
         registry
           .view(runId)
@@ -614,7 +623,13 @@ const frontDoorHandlers = (dir: string, installation: string, panels: MrPanels) 
           decision === EVIDENCE_GATE
             ? once(
                 trail(runId),
-                { operation: "answer", request, origin: doorOf(client), result: Answered },
+                {
+                  operation: "answer",
+                  request,
+                  origin: doorOf(client),
+                  asked: { value },
+                  result: Answered,
+                },
                 passGate(runId, value, { origin: doorOf(client), requestId: request }),
               ).pipe(plainly)
             : fresh(
@@ -739,7 +754,13 @@ const frontDoorHandlers = (dir: string, installation: string, panels: MrPanels) 
             Effect.andThen(
               once(
                 trail(runId),
-                { operation: "disposition", request, origin: doorOf(client), result: Disposition },
+                {
+                  operation: "disposition",
+                  request,
+                  origin: doorOf(client),
+                  asked: { kind, ref, note },
+                  result: Disposition,
+                },
                 Effect.gen(function* () {
                   const line = {
                     at: yield* nowIso(),
@@ -764,7 +785,13 @@ const frontDoorHandlers = (dir: string, installation: string, panels: MrPanels) 
             // Only an answer is kept against its request: a failure is retried under the same one.
             return yield* once(
               trail(runId),
-              { operation: "steer", request, origin: doorOf(client), result: SteerOutcome },
+              {
+                operation: "steer",
+                request,
+                origin: doorOf(client),
+                asked: { text, from, dryRun },
+                result: SteerOutcome,
+              },
               Effect.gen(function* () {
                 const deps = yield* evaluationDeps({ ...env, herdKey: task?.herd ?? undefined });
                 const said = yield* steer(env, deps, {

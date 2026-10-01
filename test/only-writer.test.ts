@@ -155,6 +155,10 @@ test(
           const line = yield* client.dispose(asked);
           expect(line).toMatchObject({ kind: "merged", ref: "mr!7", by: "human:d-1" });
           expect(yield* client.dispose(asked)).toEqual(line);
+          const otherwise = yield* client
+            .dispose({ ...asked, kind: "abandoned" })
+            .pipe(Effect.flip);
+          expect(otherwise._tag).toBe("RequestConflict");
           const dir = runDir(world.state, runId);
           expect(yield* readDispositions(dir)).toEqual([line]);
           expect(
