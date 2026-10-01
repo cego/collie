@@ -60,6 +60,9 @@ export const Proposal = Schema.Struct({
 });
 export type Proposal = typeof Proposal.Type;
 
+/** The decision id a gate is answered by: `approve`, or `approve:<name>,<name>` for part of the list. */
+export const EVIDENCE_GATE = "evidence-gate";
+
 /** An evidence gate a Run is holding at until the verification list is approved. */
 export const Gate = Schema.Struct({
   kind: Schema.Literal("gate"),
@@ -631,6 +634,8 @@ export const FrontDoorRpcs = RpcGroup.make(
       control: Schema.Literals(["hold", "stop"]),
       set: Schema.Boolean,
       request: Schema.String,
+      /** Why, in the asker's own words: what a held card's drawer says beside who held it. */
+      reason: Schema.optional(Schema.String),
     },
     success: Controlled,
     error: Schema.Union([HostRefused, RequestConflict]),

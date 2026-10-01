@@ -679,10 +679,10 @@ const hold = Effect.fn("Tools.hold")(function* (env: PluginEnv, input: JsonObjec
 
   // One channel for every control, so what chat can do to a Run is exactly what the
   // board and the CLI can do to it — including which Runs there are to do it to.
-  const oneRun: Action = { kind: "hold", run: run! };
+  const oneRun: Action = { kind: "hold", run: run!, reason: why };
   const held = yield* carryOutAsked(
     env,
-    workspace === undefined ? [oneRun] : yield* holdsFor(env, workspace),
+    workspace === undefined ? [oneRun] : yield* holdsFor(env, workspace, why),
     { origin: "chat", requestId },
   );
   const about = on === null ? "" : `On the board's selection, "${on.name}": `;
@@ -695,11 +695,15 @@ const hold = Effect.fn("Tools.hold")(function* (env: PluginEnv, input: JsonObjec
 });
 
 /** Every Run of the Task this workspace belongs to, as one hold each. */
-const holdsFor = Effect.fn("Tools.holdsFor")(function* (env: PluginEnv, workspace: string) {
+const holdsFor = Effect.fn("Tools.holdsFor")(function* (
+  env: PluginEnv,
+  workspace: string,
+  reason: string,
+) {
   const task = yield* taskOfWorkspace(env.stateDir, workspace);
   if (task === null) return [];
   const runs = (yield* runViews(env, task.id)).runs.filter((view) => !isSettled(view));
-  return runs.map((view) => ({ kind: "hold" as const, run: view.runId }));
+  return runs.map((view) => ({ kind: "hold" as const, run: view.runId, reason }));
 });
 
 /** What `collie_workspaces` answers with: where a Run could go, and what could start. */

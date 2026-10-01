@@ -16,6 +16,9 @@ import {
   type Sentence,
 } from "../src/board";
 import {
+  Answered,
+  Controlled,
+  EVIDENCE_GATE,
   foldWaiting,
   headerSentence,
   matchesTask,
@@ -23,7 +26,9 @@ import {
   sectionsOf,
   type TaskView,
 } from "../src/board-model";
+import { recordAudit } from "../src/audit";
 import { recordDisposition } from "../src/disposition";
+import { nothingApproved } from "../src/outcome";
 import { readEnv } from "../src/env";
 import type { AgentInfo } from "../src/herdr";
 import type { ProposalLine } from "../src/proposals";
@@ -984,3 +989,148 @@ test(
     ),
   60_000,
 );
+
+/** A plan of three repositories, each waiting on the one before, in a root with their checkouts. */
+const threeRepoPlan = Effect.fn("board.threeRepoPlan")(function* (runDir: string, root: string) {
+  const fs = yield* FileSystem.FileSystem;
+  yield* fs.makeDirectory(`${runDir}/plan/issues`, { recursive: true });
+  const tickets: Array<[string, string, string]> = [
+    ["01-api.md", "api", "None"],
+    ["02-web.md", "web", "01"],
+    ["03-cli.md", "cli", "02"],
+  ];
+  for (const [file, repo, blocked] of tickets) {
+    yield* fs.makeDirectory(`${root}/${repo}/.git`, { recursive: true });
+    yield* fs.writeFileString(
+      `${runDir}/plan/issues/${file}`,
+      `# ${file}\n\n**Blocked by:** ${blocked}\n\n**Repo:** ${repo}\n`,
+    );
+  }
+});
+
+test("a fan-out's card lists its Repo runs and every repository still to come, by wave", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const root = `${dir}/root`;
+      const parent = yield* madeRun(dir, { id: "r-fan", task: "task-1", cwd: root });
+      yield* threeRepoPlan(parent.dir, root);
+      const api = yield* madeRun(dir, {
+        id: "r-api",
+        task: "task-1",
+        parent: "r-fan",
+        repo: "api",
+        state: "succeeded",
+        mr: "mr:cego/api!4",
+      });
+      const web = yield* madeRun(dir, {
+        id: "r-web",
+        task: "task-1",
+        parent: "r-fan",
+        repo: "web",
+      });
+
+      const views = yield* board(env, [web, api, parent]);
+
+      expect(views).toHaveLength(1);
+      expect(views[0]!.run).toBe("r-fan");
+      expect(views[0]!.children).toEqual([
+        { repo: "api", run: "r-api", state: "done", mr: "mr:cego/api!4" },
+        { repo: "web", run: "r-web", state: "active", mr: null },
+        { repo: "cli", run: null, state: "todo", mr: null },
+      ]);
+      expect(views[0]!.sentence).toBe("Wave 2 of 3. api landed, web is building, cli is next.");
+    }),
+  ));
+
+test("a held card names who held it and why, from the hold its trail recorded", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const run = yield* madeRun(dir, { task: "task-1", held: true });
+      const controlled = {
+        runId: run.id,
+        control: "hold",
+        set: true,
+        applied: true,
+        detail: "",
+        left: [],
+      };
+      yield* recordAudit(run.dir, {
+        operation: "hold",
+        request: "h-1",
+        origin: "chat",
+        reason: "waiting for the API freeze",
+        result: Controlled,
+        value: controlled,
+      });
+
+      const [view] = yield* board(env, [run]);
+
+      expect(view!.heldBy).toEqual({ by: "chat", reason: "waiting for the API freeze" });
+    }),
+  ));
+
+test("a Run parked at its evidence gate is a gate decision listing the checks it could be held to", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const fs = yield* FileSystem.FileSystem;
+      const cwd = `${dir}/checkout`;
+      yield* fs.makeDirectory(`${cwd}/.collie`, { recursive: true });
+      yield* fs.writeFileString(
+        `${cwd}/.collie/verify.json`,
+        '[{"name":"test","executable":"bun","argv":["test"],"cwd":"worktree"}]',
+      );
+      const run = yield* madeRun(dir, {
+        task: "task-1",
+        state: "waiting",
+        cwd,
+        parked: nothingApproved("r1"),
+      });
+
+      const [view] = yield* board(env, [run]);
+
+      expect(sectionOf(view!)).toBe("needs-you");
+      expect(view!.decision).toEqual({
+        kind: "gate",
+        run: "r1",
+        id: EVIDENCE_GATE,
+        step: "evidence",
+        verifications: ["test"],
+      });
+      expect(view!.sentence).toBe("Holding at the evidence gate until you approve the list.");
+    }),
+  ));
+
+test("a Run carrying on with an answer says so until it launches anything", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const run = yield* madeRun(dir, { task: "task-1" });
+      yield* recordAudit(run.dir, {
+        operation: "answer",
+        request: "a-1",
+        origin: "board",
+        result: Answered,
+        value: { runId: run.id, decision: "scope", value: "core", fresh: true },
+      });
+
+      const [view] = yield* board(env, [run]);
+
+      expect(view!.sentence).toBe("Resumed with “core”.");
+    }),
+  ));
+
+test("a Run nothing drives and no agent works on is abandoned", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const run = yield* madeRun(dir, { task: "task-1", undriven: true });
+
+      const [view] = yield* board(env, [run]);
+
+      expect(view!.state).toBe("abandoned");
+      expect(view!.sentence).toStartWith("Its Driver died ");
+    }),
+  ));

@@ -560,6 +560,7 @@ export const controlRun = (
     readonly control: "hold" | "stop";
     readonly set: boolean;
     readonly request: string;
+    readonly reason?: string | undefined;
   },
 ): Effect.Effect<OpResult, never, Client> =>
   asks(
@@ -570,6 +571,7 @@ export const controlRun = (
         control: options.control,
         set: options.set,
         request: options.request,
+        reason: options.reason,
       }),
     options.door,
   ).pipe(Effect.map(controlled));

@@ -536,12 +536,12 @@ does not, with the proposal's id and hash beside **Confirm** — your yes is con
 payload, and nothing else on the card can give it. **Decline** declines it. Either way the
 card leaves Needs you and the header recounts.
 
-A run holding at its [evidence gate](cli.md#outcomes) is a decision card too, and says
-which verifications it would be held to. **Approve** takes the list as it stands, **Skip**
-opens the merge request without checking any of it, and **Edit the list** opens the record
-with the names to tick off — `Approve the list` holds the run to what is left, and nothing
-left is Skip by another name, which the gate refuses. The answer goes on the record, so a
-skipped gate is a decision somebody took rather than a check that quietly did not run.
+A run holding at its [evidence gate](cli.md#outcomes), parked because nothing is approved
+for Collie to run, is a decision card too, and says which checks its checkout's
+`.collie/verify.json` offers. **Approve** grants the list as it stands and takes the run up
+again, and **Edit the list** opens the record with the names to tick off — `Approve the
+list` grants what is left. **Skip** is refused: with nothing approved, no check could prove
+the run. The answer goes on the record under whoever gave it.
 
 The sentence is the step's own words where its workflow gives it a `summary`
 (the module says what it is doing), and the step kind's own verb where it does not. A

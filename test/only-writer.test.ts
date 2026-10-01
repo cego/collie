@@ -7,7 +7,9 @@ import { Effect, FileSystem, Schema } from "effect";
 import { readAudit } from "../src/audit";
 import { readDispositions } from "../src/disposition";
 import { runDir } from "../src/engine";
+import { EVIDENCE_GATE } from "../src/board-model";
 import { connect } from "../src/host";
+import { nothingApproved } from "../src/outcome";
 import { proposalsPath, read as readProposals, record as recordProposal } from "../src/proposals";
 import { stopHost, until } from "./support/host";
 import { collie, proves } from "./support/world";
@@ -187,6 +189,48 @@ test(
           yield* stopHost(world.state);
         }).pipe(Effect.orDie),
       ["plain.workflow.ts"],
+    ),
+  120_000,
+);
+
+test(
+  "a gate is answered through the host: the checks offered are granted and the Run carries on",
+  () =>
+    proves(
+      "collie-writer-gate-",
+      (world) =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const client = yield* connect(world.state);
+          const started = yield* client.start({
+            project: world.project,
+            id: "gated",
+            request: "g-0",
+            input: { note: "x" },
+          });
+          const runId = started.runId;
+          yield* until(
+            () => client.run({ runId }),
+            (view) => view?.parked === nothingApproved(runId),
+          );
+          const gate = { runId, decision: EVIDENCE_GATE, request: "g-1" };
+          const skipped = yield* client.answer({ ...gate, value: "skip" }).pipe(Effect.flip);
+          expect(skipped._tag).toBe("HostRefused");
+
+          yield* fs.makeDirectory(`${world.project}/.collie`, { recursive: true });
+          yield* fs.writeFileString(
+            `${world.project}/.collie/verify.json`,
+            '[{"name":"true","executable":"true","argv":[],"cwd":"worktree"}]',
+          );
+          yield* client.answer({ ...gate, value: "approve", request: "g-2" });
+          const done = yield* until(
+            () => client.run({ runId }),
+            (view) => view?.status.status === "complete",
+          );
+          expect(done?.status).toMatchObject({ value: "true" });
+          yield* stopHost(world.state);
+        }).pipe(Effect.orDie),
+      ["gated.workflow.ts"],
     ),
   120_000,
 );

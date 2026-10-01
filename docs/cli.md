@@ -475,7 +475,7 @@ The first snapshot of the board the host serves
 ([ADR-0038](adr/0038-the-host-builds-and-serves-the-board.md)): every Task on this Herd's
 board, in the order the Home draws them: **Needs you** first,
 then **Working**, then **Finished**, and inside each the state order `blocked`, `active`,
-`quiet`, `failed`, `stopped`, `done`. `state: blocked` is what puts a Task in Needs you,
+`quiet`, `failed`, `stopped`, `abandoned`, `done`. `state: blocked` is what puts a Task in Needs you,
 and it means one of two things: a `decision` to answer, or an agent waiting for you in its
 own pane — a harness dialog herdr will not answer, or a run that parked because its agent's
 pane would not take a prompt. The `sentence` says which, and for the second kind it says which pane. It is the same model the pane renders, so an agent
@@ -484,23 +484,33 @@ Task.
 
 Herd-wide, and never narrowed by which workspace you typed it in: one board per Herd
 ([ADR-0009](adr/0009-the-collie-tab-is-the-herds.md)). A Run belonging to no Task is a
-Task of its own; a child Run is its parent's `children` rather than a Task beside it.
+Task of its own; a Repo run of a fan-out is its parent's `children` rather than a Task beside it.
 
-| Field                    | What it says                                                                                                                    |
-| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------- |
-| `id`                     | The Task, or the Run's own id where it belongs to no Task.                                                                      |
-| `name`, `project`        | The two halves of the task workspace's label. No herdr ids.                                                                     |
-| `herd`                   | The Herd the Task's workspace is in: an `id` in `herds` while that session runs. Absent for a Task recorded before it was kept. |
-| `state`                  | `blocked`, `active`, `quiet`, `failed`, `stopped` or `done`.                                                                    |
-| `steps[]`                | The pipeline across the Task's Runs, each `done`, `active`, `blocked`, `failed` or `todo`. A step that loops is one entry.      |
-| `sentence`               | What is happening, in one plain sentence — no step names, counters or glyph codes.                                              |
-| `age`, `at`              | How long it has been going, and when it last changed.                                                                           |
-| `drift`, `held`          | The one line each carries, or `null`.                                                                                           |
-| `decision`               | The question, proposal or gate waiting on you, or `null`. One of the two ways into Needs you.                                   |
-| `agents[]`, `children[]` | The live agents on it, and the child Runs it started.                                                                           |
-| `mr`, `branch`           | What it is building, where it can be read.                                                                                      |
-| `disposition`            | What became of the work, where a person recorded it — never inferred from a merge request.                                      |
-| `run`, `runs[]`          | The Run a card acts on, and every Run of the Task.                                                                              |
+| Field                     | What it says                                                                                                                                      |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`                      | The Task, or the Run's own id where it belongs to no Task.                                                                                        |
+| `name`, `project`         | The two halves of the task workspace's label. No herdr ids.                                                                                       |
+| `herd`                    | The Herd the Task's workspace is in: an `id` in `herds` while that session runs. Absent for a Task recorded before it was kept.                   |
+| `state`                   | `blocked`, `active`, `quiet`, `failed`, `stopped`, `abandoned` (a Run nothing drives and no agent works on) or `done`.                            |
+| `steps[]`                 | The pipeline across the Task's Runs, each `done`, `active`, `blocked`, `failed` or `todo`. A step that loops is one entry.                        |
+| `sentence`                | What is happening, in one plain sentence — no step names, counters or glyph codes. It names the round, the wave and the answer it resumed with.   |
+| `age`, `at`               | How long it has been going, and when it last changed.                                                                                             |
+| `drift`, `held`           | The one line each carries, or `null`.                                                                                                             |
+| `heldBy`                  | Who set the hold that stands — the front door it came through — and the reason given with it, or `null`.                                          |
+| `decision`                | The question, proposal or gate waiting on you, or `null`. One of the two ways into Needs you.                                                     |
+| `agents[]`                | The live agents on it, its Repo runs' included.                                                                                                   |
+| `children[]`              | A fan-out's repositories in wave order: `repo`, its `run` (`null` until it starts), its `state` as a step glyph and its `mr`.                     |
+| `mr`, `mrState`, `branch` | What it is building, where it can be read, and what GitLab last said about the merge request.                                                     |
+| `disposition`, `landed`   | What became of the work, where a person recorded it — never inferred from a merge request — and whether it needs nothing more, which is Finished. |
+| `ended`                   | When the leading Run ended, or `null` while it has not.                                                                                           |
+| `planReady`, `offer`      | A finished plan nobody has implemented, and the offer its card's first action invokes.                                                            |
+| `run`, `runs[]`           | The Run a card acts on, and every Run of the Task.                                                                                                |
+
+A `gate` is a Run parked at its evidence gate with nothing approved, listing the checks its
+checkout's `.collie/verify.json` (or your config's `verify.json`) offers. Answer it with
+`collie run answer <run-id> approve --decision evidence-gate`, or `approve:<name>,<name>`
+for part of the list: the host grants those, as `run intent verification` does, and takes
+the Run up again. It is not skipped, since with nothing approved no check could prove it.
 
 ## Answer a question
 
@@ -1074,7 +1084,8 @@ nothing lifts a hold at a time.
 
 `--workspace` holds every unfinished run of the Task that workspace belongs to instead of a
 single run. Each run takes its own hold, so releasing one lifts that one and leaves the
-rest held.
+rest held. `--reason "<why>"` is recorded with the hold, and the board's `heldBy` says it
+beside who held it.
 
 ## Fork a workflow or a persona
 

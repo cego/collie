@@ -97,6 +97,8 @@ export const ActionSchema = Schema.Union([
     run: Schema.String,
     /** Refused at admission rather than dropped: nothing lifts a hold at a time. */
     until: Schema.optionalKey(Schema.String),
+    /** Why, in the human's own words. */
+    reason: Schema.optionalKey(Schema.String),
   }),
   Schema.Struct({ kind: Schema.Literal("release"), run: Schema.String }),
   Schema.Struct({ kind: Schema.Literal("stop"), run: Schema.String }),

@@ -4,14 +4,18 @@
 // became of a Run's work is the disposition's answer alone — a finished Run with a merge
 // request has not been merged by anyone.
 
-import { Clock, Effect, FileSystem, Option, Path } from "effect";
+import { Clock, Effect, FileSystem, Option, Path, Schema } from "effect";
+import { readAudit } from "./audit";
+import { nothingApproved } from "./outcome";
+import { planDirOf } from "./run-detail";
+import { approvedFrom, type VerifySpec } from "./verify-spec";
 import { openReports, readDrift } from "./drift";
 import { describeAction } from "./lines";
 import type { PickItem } from "./inputs";
 import { LEADING_GLYPH, type AgentInfo } from "./herdr";
 import { latest, readDispositions } from "./disposition";
 import { runTitle } from "./naming";
-import { planIssuesIn } from "./plan";
+import { planIssuesIn, planReposOf } from "./plan";
 import { diffTargetOf } from "./strategies";
 import { pendingFor, proposalsPath, read as readProposals, type ProposalLine } from "./proposals";
 import { everyRegistered, type AgentEntry } from "./registry";
@@ -19,19 +23,23 @@ import { listRuns, settled as ended, type RunFacts, type RunState } from "./runs
 import type { PluginEnv } from "./env";
 import { herdOf } from "./steering";
 import { listTasks, type TaskRecord } from "./task";
-import { ago, agoShort, spanned } from "./time";
+import { ago, agoMs, agoShort, spanned } from "./time";
 import { readVerifications, verifyingIn, type Verification } from "./verify";
 import { readMrStates } from "./merges";
 import { filed, standingOf } from "./standing";
 import { offersOf } from "./lifecycle";
 import type { OfferView } from "./engine";
 import {
+  Answered,
+  EVIDENCE_GATE,
   sectionsOf,
   sortBoard,
   type BoardAgent,
+  type BoardChild,
   type BoardOffer,
   type BoardStep,
   type Decision,
+  type Gate,
   type MrState,
   type Proposal,
   type Question,
@@ -189,11 +197,14 @@ export function stepOfOperation(operation: string): Pick<Sentence, "step" | "ver
   };
 }
 
+/** Where the Driver keeps a Run's launch order, one operation a line. */
+const launchesOf = (stateDir: string, runId: string) => `${stateDir}/agents/${runId}/launches`;
+
 /** The operation the Driver last launched an agent for, as its launch order records it. */
 const lastLaunched = Effect.fn("Board.lastLaunched")(function* (stateDir: string, runId: string) {
   const fs = yield* FileSystem.FileSystem;
   const order = yield* fs
-    .readFileString(`${stateDir}/agents/${runId}/launches`)
+    .readFileString(launchesOf(stateDir, runId))
     .pipe(Effect.catch(() => Effect.succeed("")));
   return (
     order
@@ -455,6 +466,89 @@ function agentsOf(
   return [...found.values()];
 }
 
+/** A Run parked at its evidence gate, with the checks its checkout and config would approve. */
+const gateOf = Effect.fn("Board.gateOf")(function* (run: RunFacts, userDir: string) {
+  if (run.parked !== nothingApproved(run.id)) return null;
+  const offered = yield* approvedFrom({ cwd: run.cwd, userDir }).pipe(
+    Effect.orElseSucceed((): ReadonlyArray<VerifySpec> => []),
+  );
+  return {
+    kind: "gate",
+    run: run.id,
+    id: EVIDENCE_GATE,
+    // Words, not the workflow's id: the sentence reads "Holding at the evidence gate".
+    step: "evidence",
+    verifications: offered.map((spec) => spec.name),
+  } satisfies Gate;
+});
+
+/** Who set the hold that stands, and why, as the Run's audit trail recorded it. */
+const holderOf = Effect.fn("Board.holderOf")(function* (run: RunFacts) {
+  const lines = yield* readAudit(run.dir).pipe(Effect.orElseSucceed(() => []));
+  const last = lines.findLast((line) => line.operation === "hold" || line.operation === "unhold");
+  return last?.operation === "hold" ? { by: last.actor.origin, reason: last.reason ?? "" } : null;
+});
+
+/** The answer a Run carried on with, while nothing has been launched since it was given. */
+const resumedWith = Effect.fn("Board.resumedWith")(function* (stateDir: string, run: RunFacts) {
+  const last = (yield* readAudit(run.dir).pipe(Effect.orElseSucceed(() => []))).at(-1);
+  if (last?.operation !== "answer") return null;
+  const launched = yield* (yield* FileSystem.FileSystem).stat(launchesOf(stateDir, run.id)).pipe(
+    Effect.map((info) =>
+      Option.match(info.mtime, { onNone: () => 0, onSome: (at) => at.getTime() }),
+    ),
+    Effect.orElseSucceed(() => 0),
+  );
+  if (launched > Date.parse(last.at)) return null;
+  const answered = Schema.decodeUnknownOption(Answered)(last.result);
+  return Option.isSome(answered) ? answered.value.value : null;
+});
+
+/**
+ * A fan-out's Repo runs as a card lists them, every repository its plan names, and the
+ * wave it has got to. Without a readable plan, the Repo runs it has are the one wave.
+ */
+const fanOf = Effect.fn("Board.fanOf")(function* (
+  parent: RunFacts,
+  children: ReadonlyArray<RunFacts>,
+) {
+  const planDir = yield* planDirOf(parent).pipe(Effect.orElseSucceed(() => null));
+  const plan =
+    planDir === null
+      ? null
+      : yield* planReposOf(planDir, parent.cwd).pipe(Effect.orElseSucceed(() => null));
+  // Newest first, so a repository retried is shown by its newest Run.
+  const started = new Map<string, RunFacts>();
+  for (const child of children)
+    if (!started.has(child.repo ?? "")) started.set(child.repo ?? "", child);
+  const planned = plan === null || plan.refusal !== null ? [] : plan.waves;
+  const unplanned = [...started.keys()].filter((repo) => !planned.flat().includes(repo));
+  const waves = unplanned.length === 0 ? planned : [...planned, unplanned];
+  const rows = waves.flat().map((repo): BoardChild => {
+    const run = started.get(repo);
+    return {
+      repo,
+      run: run?.id ?? null,
+      state: run === undefined ? "todo" : STEP_STATE[run.state],
+      mr: run === undefined ? null : mrOf(run),
+    };
+  });
+  const reached = waves.findLastIndex((wave) => wave.some((repo) => started.has(repo)));
+  const where = (state: StepState) =>
+    rows.filter((row) => row.state === state).map((row) => row.repo);
+  return {
+    children: rows,
+    wave: {
+      at: reached + 1,
+      of: waves.length,
+      landed: where("done"),
+      building: [...where("active"), ...where("blocked")],
+      stopped: where("failed"),
+      next: where("todo"),
+    },
+  };
+});
+
 /** The Run a card is about: the newest still going, else the newest. */
 function leaderOf(runs: ReadonlyArray<RunFacts>): RunFacts {
   return runs.find((run) => !ended(run)) ?? runs[0]!;
@@ -604,15 +698,25 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
         Effect.orElseSucceed((): ReadonlyArray<OfferView> => []),
       ));
 
+  // A Repo run is its fan-out's card's child rather than a card of its own.
+  const present = new Set(all.map((run) => run.id));
+  const repoRunsOf = new Map<string, RunFacts[]>();
+  for (const run of all)
+    if (run.repo !== null && run.parent !== null && present.has(run.parent))
+      repoRunsOf.set(run.parent, [...(repoRunsOf.get(run.parent) ?? []), run]);
   const groups = new Map<string, RunFacts[]>();
   for (const run of all) {
+    if (run.parent !== null && repoRunsOf.get(run.parent)?.includes(run)) continue;
     const key = run.task ?? run.id;
     groups.set(key, [...(groups.get(key) ?? []), run]);
   }
 
   const views: TaskView[] = [];
   for (const [id, runs] of groups) {
-    const pending = runs.flatMap((run) => pendingFor(proposals, run.id, now));
+    const children = runs.flatMap((run) => repoRunsOf.get(run.id) ?? []);
+    // What a card answers for and who works on it includes its Repo runs'.
+    const everyRun = [...runs, ...children];
+    const pending = everyRun.flatMap((run) => pendingFor(proposals, run.id, now));
     const touched = new Map<string, number>();
     for (const run of runs) touched.set(run.id, yield* lastActivityAt(stateDir, run));
     // A Run records no end of its own: its last activity is when it ended, and a Run
@@ -633,11 +737,13 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
       continue;
     const leader = leaderOf(runs);
     const proposed = pending[0];
-    const decision: Decision | null = proposed ? asProposal(proposed) : questionOf(runs);
+    const decision: Decision | null = proposed
+      ? asProposal(proposed)
+      : (questionOf(everyRun) ?? (yield* gateOf(leader, opts.env.userDir)));
 
     const status = leader.state;
     const at = touched.get(leader.id) ?? 0;
-    const agents = agentsOf(runs, registered, live);
+    const agents = agentsOf(everyRun, registered, live);
     const checking = yield* verifyingIn(leader.dir);
     // An agent mid-turn or a check Collie is running is work, however little it writes.
     const busy =
@@ -657,10 +763,15 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
     const stalled =
       (blocked ? `${blocked.name}'s pane` : null) ??
       (leader.state === "waiting" && leader.asking.length === 0 ? "its pane" : null);
-    const state = stateOf(status, silent !== null, decision, stalled !== null);
+    // Nothing drives it and nobody works on it: the host could not take it up again.
+    const abandoned = going && leader.undriven && !agents.some((agent) => agent.run === leader.id);
+    const state = abandoned
+      ? "abandoned"
+      : stateOf(status, silent !== null, decision, stalled !== null);
 
-    const holding = runs.some((run) => run.held);
-    const settledNow = state === "done" || state === "failed" || state === "stopped";
+    const held = runs.find((run) => run.held);
+    const settledNow =
+      state === "done" || state === "failed" || state === "stopped" || state === "abandoned";
     // Read whatever the state: a merge GitLab reported lands the work even while the Run
     // is still going, and the card must say so.
     const disposition = latest(
@@ -698,6 +809,8 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
       asking: decision !== null,
     });
     const finishedAt = settledNow ? endedAt(leader) : 0;
+    const fanned = runs.find((run) => repoRunsOf.has(run.id));
+    const fan = fanned === undefined ? null : yield* fanOf(fanned, repoRunsOf.get(fanned.id)!);
     const view: TaskView = {
       id,
       name,
@@ -708,17 +821,17 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
         mr,
         mrState,
         planReady,
-        abandoned: null,
+        abandoned: abandoned && at > 0 ? agoMs(at, now) : null,
         state,
         decision,
         step: doing?.step ?? null,
         // Never the pane's title: a terminal names its harness or file, not the work.
         verb: checkingOf(checking) ?? doing?.verb ?? null,
         silent,
-        wave: null,
+        wave: fan !== null && fanned === leader ? fan.wave : null,
         failure,
         note: leader.note,
-        resumed: null,
+        resumed: going ? yield* resumedWith(stateDir, leader) : null,
         stalled,
         disposition:
           disposition === null
@@ -738,11 +851,11 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
         open.length === 0
           ? null
           : `${open[0]!.constraint}${open.length > 1 ? ` (and ${open.length - 1} more)` : ""}`,
-      held: holding ? heldLine(null) : null,
-      heldBy: null,
+      held: held === undefined ? null : heldLine(null),
+      heldBy: held === undefined ? null : yield* holderOf(held),
       decision,
       agents,
-      children: [],
+      children: fan?.children ?? [],
       mr,
       branch,
       disposition:

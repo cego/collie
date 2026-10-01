@@ -955,6 +955,7 @@ const holdTask = Effect.fn("run.holdTask")(function* (
   env: PluginEnv,
   workspace: string,
   request: string,
+  reason: string | undefined,
 ) {
   const task = yield* taskOfWorkspace(env.stateDir, workspace);
   if (task === null)
@@ -969,6 +970,7 @@ const holdTask = Effect.fn("run.holdTask")(function* (
       control: "hold",
       set: true,
       request: `${request}:${view.runId}`,
+      reason,
     });
     if (done.ok) held.push(view.runId);
   }
@@ -984,11 +986,16 @@ const runHold = Command.make(
   {
     runId: runIdArg.pipe(Argument.optional),
     workspace: holdWorkspaceFlag,
+    reason: Flag.String("reason").pipe(
+      Flag.withDescription("Why, in your own words, which the board's drawer shows"),
+      Flag.optional,
+    ),
     requestId: requestIdFlag,
   },
-  ({ runId, workspace, requestId }) =>
+  ({ runId, workspace, reason, requestId }) =>
     Effect.gen(function* () {
       const global = yield* root;
+      const why = Option.getOrUndefined(reason);
       const where = Option.getOrNull(workspace);
       const id = Option.getOrNull(runId);
       yield* attempt(
@@ -997,7 +1004,7 @@ const runHold = Command.make(
           if (resolved._tag === "ContextFailure") return resolved.result;
           if (where !== null) {
             return yield* mutation(resolved.env, "run-hold-workspace", requestId, (request) =>
-              holdTask(resolved.env, where, request),
+              holdTask(resolved.env, where, request, why),
             );
           }
           if (id === null) {
@@ -1016,6 +1023,7 @@ const runHold = Command.make(
                 runId: id,
                 control: "hold",
                 set: true,
+                reason: why,
               });
             }),
           );

@@ -119,10 +119,16 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
       Effect.catch((cause) => Effect.succeed(failed(reason(cause)))),
     );
 
-  const control = (by: Actor, runId: string, which: "hold" | "stop", set: boolean) =>
+  const control = (
+    by: Actor,
+    runId: string,
+    which: "hold" | "stop",
+    set: boolean,
+    reason?: string,
+  ) =>
     carry(
       Effect.flatMap(newRequestId(), (request) =>
-        controlRun(env, { door: by.origin, runId, control: which, set, request }),
+        controlRun(env, { door: by.origin, runId, control: which, set, request, reason }),
       ),
     );
   registerExecutor("stop", (action, by) => control(by, action.run, "stop", true));
@@ -149,7 +155,7 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
       }),
     ),
   );
-  registerExecutor("hold", (action, by) => control(by, action.run, "hold", true));
+  registerExecutor("hold", (action, by) => control(by, action.run, "hold", true, action.reason));
   registerExecutor("release", (action, by) => control(by, action.run, "hold", false));
   registerExecutor("clear_override", (action, by) =>
     carry(clearOverride(env.stateDir, new Herdr(env), action.run, action.agent, actorName(by))),

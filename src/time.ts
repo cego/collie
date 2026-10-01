@@ -51,8 +51,11 @@ export function spanned(ms: number): string {
  */
 export function ago(iso: string, nowMs: number): string {
   const then = Date.parse(iso);
-  if (Number.isNaN(then)) return iso;
-  const span = spanned(nowMs - then);
+  return Number.isNaN(then) ? iso : agoMs(then, nowMs);
+}
+
+export function agoMs(thenMs: number, nowMs: number): string {
+  const span = spanned(nowMs - thenMs);
   return span === "" ? "just now" : `${span} ago`;
 }
 

@@ -11,6 +11,8 @@ export const AuditLine = Schema.Struct({
   operation: Schema.String,
   request: Schema.String,
   actor: Schema.Struct({ origin: FrontDoor, requestId: Schema.String }),
+  /** Why, in the asker's own words, where they gave one. */
+  reason: Schema.optionalKey(Schema.String),
   result: Schema.Json,
 });
 export type AuditLine = typeof AuditLine.Type;
@@ -27,17 +29,23 @@ export const recordAudit = Effect.fn("Audit.record")(function* <A, I extends Sch
     readonly operation: string;
     readonly request: string;
     readonly origin: FrontDoor;
+    readonly reason?: string | undefined;
     readonly result: Schema.Codec<A, I>;
     readonly value: A;
   },
 ) {
-  yield* appendJournal(fileOf(runDir), AuditJson, {
+  const written: AuditLine = {
     at: yield* nowIso(),
     operation: line.operation,
     request: line.request,
     actor: { origin: line.origin, requestId: line.request },
     result: Schema.encodeSync(line.result)(line.value),
-  });
+  };
+  yield* appendJournal(
+    fileOf(runDir),
+    AuditJson,
+    line.reason === undefined ? written : { ...written, reason: line.reason },
+  );
 });
 
 /**
@@ -51,6 +59,7 @@ export const once = Effect.fn("Audit.once")(function* <A, I extends Schema.Json,
     readonly operation: string;
     readonly request: string;
     readonly origin: FrontDoor;
+    readonly reason?: string | undefined;
     readonly result: Schema.Codec<A, I>;
   },
   act: Effect.Effect<A, E, R>,
