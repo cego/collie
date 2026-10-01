@@ -283,10 +283,6 @@ export function App(props: AppProps) {
         value: verifications === null ? "approve" : `approve:${verifications.join(",")}`,
       });
     },
-    skip: (gate) => {
-      setCutting(null);
-      props.dispatch({ _tag: "Answer", runId: gate.run, choiceId: gate.id, value: "skip" });
-    },
     edit: (gate) => {
       const holding = tasks().find(
         (view) => view.decision?.kind === "gate" && view.decision.id === gate.id,

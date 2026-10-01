@@ -29,7 +29,6 @@ export interface Decide {
   decline: (proposal: Proposal) => void;
   /** A gate: the list as it stands, or `null` for the whole of it. */
   approve: (gate: Gate, verifications: ReadonlyArray<string> | null) => void;
-  skip: (gate: Gate) => void;
   /** Opens the record on the list, which is the only place it can be cut down. */
   edit: (gate: Gate) => void;
   /** What has been typed into this question and not sent. */
@@ -552,7 +551,6 @@ function Gated(props: { gate: Gate; decide: Decide }) {
       <box style={{ flexDirection: "row", flexWrap: "wrap" }}>
         <Button label="Approve" primary onPress={() => props.decide.approve(props.gate, null)} />
         <Button label="Edit the list" onPress={() => props.decide.edit(props.gate)} />
-        <Button label="Skip" onPress={() => props.decide.skip(props.gate)} />
       </box>
     </box>
   );

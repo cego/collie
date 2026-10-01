@@ -1175,6 +1175,17 @@ test("Review lists the findings, the files the Run changed and its verifications
     }),
   ));
 
+test("a hold given no reason names who held it, with nothing after", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const held = task({ held: "⏸ Held.", heldBy: { by: "board", reason: "" } });
+      const app = yield* opened(appState({ tasks: [held], detail: record() }));
+
+      expect(app.said()).toContain("⏸ Held. board ");
+      expect(app.said()).not.toContain("board:");
+    }),
+  ));
+
 test("Plan shows the spec and its tickets, ticked where they are done", () =>
   runEffect(
     Effect.gen(function* () {
@@ -1384,16 +1395,6 @@ test("a gate card lists what would prove the run, and answers on the card", () =
       expect(app.acted()).toEqual([
         { _tag: "Answer", runId: "rg", choiceId: "g1", value: "approve" },
       ]);
-    }),
-  ));
-
-test("Skip takes the run past the gate", () =>
-  runEffect(
-    Effect.gen(function* () {
-      const app = yield* mount(appState({ tasks: [HOLDING] }));
-
-      yield* app.clickOn("Skip");
-      expect(app.acted()).toEqual([{ _tag: "Answer", runId: "rg", choiceId: "g1", value: "skip" }]);
     }),
   ));
 

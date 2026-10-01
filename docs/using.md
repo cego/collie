@@ -540,7 +540,7 @@ A run holding at its [evidence gate](cli.md#outcomes), parked because nothing is
 for Collie to run, is a decision card too, and says which checks its checkout's
 `.collie/verify.json` offers. **Approve** grants the list as it stands and takes the run up
 again, and **Edit the list** opens the record with the names to tick off — `Approve the
-list` grants what is left. **Skip** is refused: with nothing approved, no check could prove
+list` grants what is left. There is no Skip: with nothing approved, no check could prove
 the run. The answer goes on the record under whoever gave it.
 
 The sentence is the step's own words where its workflow gives it a `summary`

@@ -128,7 +128,7 @@ export function Drawer(props: DrawerProps) {
       ? []
       : [
           {
-            text: `${props.view.held ?? "⏸ Held."} ${props.view.heldBy.by}: ${props.view.heldBy.reason}`,
+            text: `${props.view.held ?? "⏸ Held."} ${props.view.heldBy.by}${props.view.heldBy.reason === "" ? "" : `: ${props.view.heldBy.reason}`}`,
             mark: "⏸",
             markFg: C.dim,
           },
