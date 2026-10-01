@@ -28,6 +28,7 @@ import { asRun, enveloped } from "./support/enveloped";
 import { PARKED, controlPath, foundationLayer, loadEntry, pollStatus, runDir } from "../src/engine";
 import { readCards } from "../src/cards";
 import { readDrift } from "../src/drift";
+import { FixOutputSchema, SynthesisSchema } from "../src/output";
 import { seedIntent, writeIntent } from "../src/intent";
 import { appendLine, deliveriesOf, readLedger, reconcile } from "../src/steering";
 import { Store } from "../src/store";
@@ -186,6 +187,23 @@ test("an Output is decoded, and every issue with it is named at once", () => {
 
   const notJson = decodeOutput(Verdict, "I had a look and it seems fine");
   expect(!notJson.ok && notJson.problem).toContain("it is not JSON");
+});
+
+test("a broken rule is named in the problem a repair is given, never as <filter>", () => {
+  const empty = decodeOutput(FixOutputSchema, `{"verdict":"findings","findings":null}`);
+  expect(!empty.ok && empty.problem).toContain('verdict "clean"');
+  const blank = decodeOutput(
+    FixOutputSchema,
+    `{"verdict":"findings","findings":[{"severity":"major","title":" "}]}`,
+  );
+  expect(!blank.ok && blank.problem).toContain("title is required");
+  const unexplained = decodeOutput(
+    SynthesisSchema,
+    `{"verdict":"clean","summary":"s","dropped":[{"severity":"minor","title":"t"}]}`,
+  );
+  expect(!unexplained.ok && unexplained.problem).toContain("needs a reason");
+  for (const read of [empty, blank, unexplained])
+    expect(!read.ok && read.problem).not.toContain("<filter>");
 });
 
 test("a valid Output reaches the workflow as a typed value, from a real launch", () =>
