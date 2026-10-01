@@ -19,6 +19,7 @@ import type { BunServices } from "@effect/platform-bun/BunServices";
 import * as BunSocketServer from "@effect/platform-bun/BunSocketServer";
 import {
   Config,
+  Crypto,
   Data,
   Effect,
   FileSystem,
@@ -27,6 +28,7 @@ import {
   Schedule,
   Schema,
   Scope,
+  Stream,
   Struct,
 } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
@@ -50,6 +52,7 @@ import {
   foundationLayer,
   registryLayer,
   Registry,
+  type HostServices,
   type Locate,
 } from "./engine";
 import { configuredAgents } from "./agents";
@@ -58,8 +61,14 @@ import { RequestConflict } from "./store";
 import { VerifySpecSchema } from "./verify-spec";
 import { IntentSeedSchema } from "./intent";
 import { currentEnv } from "./env";
-import { installation } from "./release";
+import { installation as installedRelease } from "./release";
 import { Herdr } from "./herdr";
+import { buildBoard } from "./board";
+import { FrontDoorRpcs, PROTOCOL } from "./board-model";
+import { boardMessages } from "./board-stream";
+import { loadDefaults } from "./config";
+import { factsOfView } from "./runs";
+import { herdOf } from "./steering";
 import { currentPid, ensureLockDir, lockHolder, withLock, type LockHolder } from "./lock";
 
 /** What a host says it is. A client that is not this stops rather than guessing. */
@@ -95,6 +104,10 @@ const Identity = Schema.Struct({
   root: Schema.optionalKey(Schema.String),
   /** `<version>+<sha>` for a development checkout; absent for a release. */
   development: Schema.optionalKey(Schema.String),
+  /** The board protocol it speaks; absent from a host older than the field. */
+  protocol: Schema.optionalKey(Schema.Int),
+  /** The state directory's own id; absent from a host older than the field. */
+  installation: Schema.optionalKey(Schema.String),
 });
 
 const Loaded = Schema.Struct({
@@ -254,7 +267,7 @@ const serialization = RpcSerialization.layerNdjson;
  * host's. A client's connection is a scope of its own under it, so a client that goes
  * takes nothing with it — not a registration, not an execution, not another client.
  */
-const handlers = (dir: string) =>
+const handlers = (dir: string, installation: string) =>
   HostRpcs.toLayer(
     Effect.gen(function* () {
       const registry = yield* Registry;
@@ -265,12 +278,20 @@ const handlers = (dir: string) =>
         discover(searchPath({ pluginRoot: env.pluginRoot, userDir: env.userDir, project }));
 
       // Checked when the host starts.
-      const installed = yield* installation(env.pluginRoot, BUILD);
+      const installed = yield* installedRelease(env.pluginRoot, BUILD);
       const development = installed.release ? {} : { development: installed.build };
 
       return HostRpcs.of({
         identity: () =>
-          Effect.succeed({ build: BUILD, pid, dir, root: env.pluginRoot, ...development }),
+          Effect.succeed({
+            build: BUILD,
+            pid,
+            dir,
+            root: env.pluginRoot,
+            ...development,
+            protocol: PROTOCOL,
+            installation,
+          }),
         load: ({ entry }) =>
           registry.load(entry).pipe(
             Effect.map((loaded) => ({
@@ -349,6 +370,78 @@ const handlers = (dir: string) =>
       });
     }),
   );
+
+/** How often a board is built again with nothing written, so "silent for" stays true. */
+const BOARD_TICK = "5 seconds";
+
+/**
+ * The board, built here for every front door. Anything written under the state
+ * directory, by this host or anyone else, is a reason to look again.
+ */
+const frontDoorHandlers = (dir: string, installation: string) =>
+  FrontDoorRpcs.toLayer(
+    Effect.gen(function* () {
+      const registry = yield* Registry;
+      const fs = yield* FileSystem.FileSystem;
+      const bun = yield* Effect.context<BunServices>();
+      const hosted = yield* Effect.context<HostServices>();
+      const env = yield* currentEnv.pipe(Effect.orDie);
+      const herdr = new Herdr(env);
+      const build = Effect.gen(function* () {
+        const runs = (yield* registry.views(null)).map((view) => factsOfView(env.stateDir, view));
+        const alive = yield* herdr.agentList().pipe(Effect.orElseSucceed(() => []));
+        return yield* buildBoard({
+          env,
+          runs,
+          alive,
+          quietMs: (yield* loadDefaults(env.userDir)).boardQuietMs,
+          offers: (runId) =>
+            registry.offers(runId).pipe(
+              Effect.provideContext(hosted),
+              Effect.orElseSucceed(() => []),
+            ),
+        });
+      }).pipe(Effect.provideContext(bun));
+      // Debounced apart from the tick, so a burst of writes cannot hold the tick back.
+      const changed = Stream.merge(
+        fs.watch(dir, { recursive: true }).pipe(
+          Stream.catch(() => Stream.empty),
+          Stream.debounce("200 millis"),
+        ),
+        Stream.tick(BOARD_TICK),
+      );
+      const herd = yield* herdOf(env.socketPath).pipe(
+        Effect.provideContext(bun),
+        Effect.orElseSucceed(() => null),
+      );
+      return FrontDoorRpcs.of({
+        board: () =>
+          boardMessages({
+            head: {
+              installation,
+              build: BUILD,
+              protocol: PROTOCOL,
+              herds: herd === null ? [] : [{ id: herd }],
+            },
+            build,
+            changed,
+          }).pipe(Stream.orDie),
+      });
+    }),
+  );
+
+/** The state directory's own id, made the first time a host owns it and kept from then on. */
+const installationOf = Effect.fn("Host.installationOf")(function* (dir: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const file = `${dir}/installation`;
+  const known = (yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => ""))).trim();
+  if (known !== "") return known;
+  const made = yield* (yield* Crypto.Crypto).randomUUIDv4;
+  // Renamed into place, so a host that dies mid-write leaves no half an id.
+  yield* fs.writeFileString(`${file}.new`, `${made}\n`);
+  yield* fs.rename(`${file}.new`, file);
+  return made;
+});
 
 /**
  * One host, for as long as it owns this directory. It runs until it is interrupted:
@@ -443,10 +536,11 @@ const own = (dir: string) =>
     // Under the lock, so anything at this path belongs to a host that is gone: a unix
     // socket cannot be bound while its file is there, and a dead host's is still there.
     yield* fs.remove(socketOf(dir), { force: true }).pipe(Effect.orDie);
+    const installation = yield* installationOf(dir).pipe(Effect.orDie);
     return yield* Layer.launch(
-      RpcServer.layer(HostRpcs).pipe(
+      RpcServer.layer(HostRpcs.merge(FrontDoorRpcs)).pipe(
         Layer.provide(
-          handlers(dir).pipe(
+          Layer.mergeAll(handlers(dir, installation), frontDoorHandlers(dir, installation)).pipe(
             Layer.provide(
               registryLayer(dir, {
                 locate: locateIn(env),
@@ -537,7 +631,7 @@ const stopOwner = Effect.fn("Host.stopOwner")(function* (dir: string, pid: numbe
 });
 
 /** One connection, in the caller's scope: theirs to keep, and theirs to close. */
-const open = (dir: string) =>
+const openGroup = <Rpcs extends Rpc.Any>(dir: string, group: RpcGroup.RpcGroup<Rpcs>) =>
   Effect.gen(function* () {
     const context = yield* Layer.build(
       RpcClient.layerProtocolSocket().pipe(
@@ -545,8 +639,16 @@ const open = (dir: string) =>
         Layer.provide(serialization),
       ),
     );
-    return yield* RpcClient.make(HostRpcs).pipe(Effect.provideContext(context));
+    return yield* RpcClient.make(group).pipe(Effect.provideContext(context));
   }).pipe(Effect.mapError((cause) => unavailable(dir, String(cause))));
+
+const open = (dir: string) => openGroup(dir, HostRpcs);
+
+/**
+ * The public door of the host already answering at `dir`. Nothing is started or stopped
+ * from here, so a client on another Machine can never reach for a process of its own.
+ */
+export const frontDoor = (dir: string) => openGroup(dir, FrontDoorRpcs);
 
 const unavailable = (dir: string, reason: string) => new HostUnavailable({ dir, reason });
 

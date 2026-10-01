@@ -14,7 +14,14 @@ import type { ChildProcessSpawner } from "effect/unstable/process";
 import type * as RpcClientError from "effect/unstable/rpc/RpcClientError";
 import type { PluginEnv } from "./env";
 import { savedModules, type Fault, type Found } from "./discovery";
-import { connect, type HostClient, type HostUnavailable, type HostVersionMismatch } from "./host";
+import {
+  connect,
+  frontDoor,
+  type HostClient,
+  type HostUnavailable,
+  type HostVersionMismatch,
+} from "./host";
+import type { BoardSnapshot } from "./board-model";
 import {
   REFUSED_INPUT,
   runDir,
@@ -287,6 +294,21 @@ export const watchRun = <R>(
       Effect.catchTag("RpcClientError", (cause) => Effect.succeed(refusal(cause))),
     );
   });
+
+/** The board as the host serves it now: the first message of its stream. */
+export const boardSnapshot = (
+  env: PluginEnv,
+): Effect.Effect<{ readonly ok: true; readonly value: BoardSnapshot } | Failure, never, Client> =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      yield* connect(env.stateDir);
+      const door = yield* frontDoor(env.stateDir);
+      const first = yield* Stream.runHead(door.board());
+      if (first._tag === "Some" && first.value._tag === "Snapshot")
+        return { ok: true as const, value: first.value };
+      return err("operation_failed", "The workflow host sent no board.");
+    }).pipe(Effect.catch((cause: HostFailure) => Effect.succeed(refusal(cause)))),
+  );
 
 /**
  * Registers what the modules as they are now allow and hands over what is outstanding,

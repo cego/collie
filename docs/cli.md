@@ -471,7 +471,9 @@ whether `type` is present.
 collie --json board
 ```
 
-Every Task on this Herd's board, in the order the Home draws them: **Needs you** first,
+The first snapshot of the board the host serves
+([ADR-0038](adr/0038-the-host-builds-and-serves-the-board.md)): every Task on this Herd's
+board, in the order the Home draws them: **Needs you** first,
 then **Working**, then **Finished**, and inside each the state order `blocked`, `active`,
 `quiet`, `failed`, `stopped`, `done`. `state: blocked` is what puts a Task in Needs you,
 and it means one of two things: a `decision` to answer, or an agent waiting for you in its
@@ -1349,6 +1351,21 @@ and speaks up when anything a run shows has changed, so watching costs the same 
 client is looking or the whole board is. Closing a client cancels nothing it started;
 stopping the host with `kill` leaves suspended work suspended, and the next client starts a
 host that picks it up.
+
+The operations above are `HostRpcs`: internal, and a Collie client of another build stops
+before sending them anything. Beside them on the same socket is `FrontDoorRpcs`, the door
+any front door uses whatever its build or computer, declared with its Schemas in
+`src/board-model.ts`. `board` streams the board: a `Snapshot` (the state directory's `installation` id, `build`, `protocol`,
+`herds` and every TaskView), then an `Upsert` or a `Remove` keyed by Task id for each
+change, each with a `seq` higher than the last. A client that reconnects gets a fresh
+snapshot. The host builds again when anything under its state directory is written, and
+every five seconds. The installation id is written once, by the first host to own the
+directory, and survives restarts and upgrades.
+
+`protocol` is an integer, also in `identity`. An optional field, a new operation or a new
+kind of message does not change it, and a client reads a kind it does not know as
+`Unknown` and skips it. A removal or a change of meaning bumps it, and from then on the
+host serves its current version and the one before; version 1 has none before it.
 
 `discover` and `start` name the project asking, because one host serves the machine and a
 project's own `.collie/workflows` is its own: two projects can run different implementations

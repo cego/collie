@@ -98,6 +98,11 @@ herdr actions, and the `collie` CLI.
   [`docs/cli.md`](docs/cli.md#the-local-workflow-host), alongside `src/host.ts` and
   `test/host.test.ts`. The lock is `src/lock.ts`'s, so ownership is decided the same way
   wherever Collie needs exactly one owner.
+- **Changing what the host serves a front door, or the board protocol's version** →
+  [ADR-0038](docs/adr/0038-the-host-builds-and-serves-the-board.md) and
+  [`docs/cli.md`](docs/cli.md#the-local-workflow-host), alongside `FrontDoorRpcs` in
+  `src/board-model.ts`, `src/board-stream.ts` and `test/board-stream.test.ts`. An additive
+  change keeps `PROTOCOL`; a removal or a change of meaning bumps it.
 - **Changing how a start is claimed, what a host records about a run, or how an
   interrupted start recovers** →
   [ADR-0017](docs/adr/0017-one-request-is-one-run.md) and

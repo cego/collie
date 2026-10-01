@@ -29,6 +29,11 @@ conversation, proposals, the budget and elections. Keyed by the canonical path o
 session's socket, never by a directory. **Session** keeps its own meaning below — one
 workspace — and is not the Herd.
 
+**Machine** — One computer's Collie: one state directory, its one host, and every Herd on
+that computer. Known by its **installation id**, which the first host to own the state
+directory writes into it and every later host keeps, so two routes to one state directory
+are one Machine. Not the plugin installation a host serves, which `identity` calls `root`.
+
 **Home** — The Herd's dedicated Collie workspace, owned by a record plus proof: a live
 `collie_home` token, or the recorded pane still carrying its recorded `terminal_id`. A
 label is never proof. Anything uncertain is `ownership_unknown` and waits for a human. It

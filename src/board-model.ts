@@ -1,7 +1,9 @@
 // What a board is made of, as every front door decodes it, and the pure rules that place
 // and count its cards. No I/O and no Bun-only import: a browser bundle imports this too.
 
-import { Schema } from "effect";
+import { Schema, SchemaGetter } from "effect";
+import * as Rpc from "effect/unstable/rpc/Rpc";
+import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
 
 const STATE_ORDER = [
   "blocked",
@@ -327,6 +329,69 @@ export const RunDetail = Schema.Struct({
   mr: Schema.NullOr(MrPanel),
 });
 export type RunDetail = typeof RunDetail.Type;
+
+/**
+ * The board protocol's version. An optional field, a new operation or a new kind of
+ * message keeps it; a removal or a change of meaning bumps it.
+ */
+export const PROTOCOL = 1;
+
+/** One herdr session whose Tasks are on this board. */
+export const Herd = Schema.Struct({ id: Schema.String });
+export type Herd = typeof Herd.Type;
+
+/** Every Task as it is now; whatever follows it is a change to this. */
+export const BoardSnapshot = Schema.TaggedStruct("Snapshot", {
+  /** Stable for the state directory, so a Machine reached by two routes is one. */
+  installation: Schema.String,
+  build: Schema.String,
+  protocol: Schema.Int,
+  herds: Schema.Array(Herd),
+  tasks: Schema.Array(TaskView),
+  seq: Schema.Int,
+});
+export type BoardSnapshot = typeof BoardSnapshot.Type;
+
+export const TaskUpserted = Schema.TaggedStruct("Upsert", { seq: Schema.Int, task: TaskView });
+export type TaskUpserted = typeof TaskUpserted.Type;
+
+export const TaskRemoved = Schema.TaggedStruct("Remove", { seq: Schema.Int, id: Schema.String });
+export type TaskRemoved = typeof TaskRemoved.Type;
+
+const KNOWN_MESSAGES: ReadonlyArray<string> = ["Snapshot", "Upsert", "Remove", "Unknown"];
+
+/** A kind of message from a newer host, read as `Unknown` so a client can skip it. */
+export const UnknownMessage = Schema.Struct({
+  _tag: Schema.String.pipe(Schema.check(Schema.makeFilter((tag) => !KNOWN_MESSAGES.includes(tag)))),
+  seq: Schema.optionalKey(Schema.Int),
+}).pipe(
+  Schema.decodeTo(
+    Schema.TaggedStruct("Unknown", { kind: Schema.String, seq: Schema.optionalKey(Schema.Int) }),
+    {
+      decode: SchemaGetter.transform(({ _tag, seq }) =>
+        seq === undefined
+          ? { _tag: "Unknown" as const, kind: _tag }
+          : { _tag: "Unknown" as const, kind: _tag, seq },
+      ),
+      encode: SchemaGetter.transform(({ kind, seq }) =>
+        seq === undefined ? { _tag: kind } : { _tag: kind, seq },
+      ),
+    },
+  ),
+);
+
+export const BoardMessage = Schema.Union([
+  BoardSnapshot,
+  TaskUpserted,
+  TaskRemoved,
+  UnknownMessage,
+]);
+export type BoardMessage = typeof BoardMessage.Type;
+
+/** What any front door, on this computer or another, may ask a host. */
+export const FrontDoorRpcs = RpcGroup.make(
+  Rpc.make("board", { success: BoardMessage, stream: true }),
+);
 
 /**
  * Which of the board's four sections a Task belongs in. A decision beats liveness,
