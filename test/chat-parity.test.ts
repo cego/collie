@@ -202,6 +202,13 @@ const INVENTORY: ReadonlyArray<readonly [string, Route]> = [
       },
     },
   ],
+  [
+    "run intent remember",
+    {
+      route: "human-only",
+      why: "a standing permission for every later Run in a repository; granting what every later Run may run is the human's own, and a model saving what it may run next time is the boundary this file holds",
+    },
+  ],
   ["run intent defaults show", { route: "read", tool: "collie_installation" }],
   [
     "run intent defaults add-constraint",

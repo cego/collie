@@ -26,7 +26,9 @@ the shell. "I have no access" is never an answer here; find the way.
   has `.collie/verify.json`, give `verify`: a list of `{name, executable, argv, cwd}`, the
   commands whose passing on the final tree proves the work. Read the repository for them.
   A running Run's checks change with `set_verification` (`name`, and `command` as
-  `{executable, argv, cwd}` to grant it, or no `command` to withdraw it).
+  `{executable, argv, cwd}` to grant it, or no `command` to withdraw it). Never run
+  `collie run intent remember`, which keeps a Run's checks for every later Run in its
+  repository: that grant is the human's, so tell them the command.
 - `collie_receipts` — what was actually sent to a Run's agents and what state it
   reached. `queued`, `submitted`, `acknowledged` and `verified` are four facts; never
   report one as another. A `deliver` coming back `applied` is queued for the Run's

@@ -4,7 +4,13 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, FileSystem, Path } from "effect";
 import { runEffect } from "./support/effect";
-import { approvedFor, approvedFrom, renderApproved, PROJECT_FILE } from "../src/verify-spec";
+import {
+  approvedFor,
+  approvedFrom,
+  rememberedFile,
+  renderApproved,
+  PROJECT_FILE,
+} from "../src/verify-spec";
 import { DEFAULT_AUTHORITY, readIntent, seedIntent, writeIntent } from "../src/intent";
 import { VerifySpecSchema, type VerifySpec } from "../src/verify-spec";
 import { Schema } from "effect";
@@ -87,6 +93,63 @@ test("a file that does not decode names itself, and never reads as approving not
       if (result._tag === "Failure") expect(String(result.failure)).toContain(file);
     }),
   ));
+
+const REPO = "example.test/team/app";
+const rememberedOf = (dir: string) => `${dir}/verify/example.test/team/app.json`;
+
+test("a repository's remembered file is used when the project has none", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* write(rememberedOf(userDir), [TESTS]);
+      expect(yield* approvedFrom({ cwd, userDir, project: REPO })).toEqual([TESTS]);
+    }),
+  ));
+
+test("the project's file wins over the repository's remembered one", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const path = yield* Path.Path;
+      yield* write(rememberedOf(userDir), [LINT]);
+      yield* write(path.join(cwd, PROJECT_FILE), [TESTS]);
+      expect(yield* approvedFrom({ cwd, userDir, project: REPO })).toEqual([TESTS]);
+    }),
+  ));
+
+test("the repository's remembered file wins whole over the user's", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const path = yield* Path.Path;
+      yield* write(path.join(userDir, "verify.json"), [LINT]);
+      yield* write(rememberedOf(userDir), [TESTS]);
+      expect(yield* approvedFrom({ cwd, userDir, project: REPO })).toEqual([TESTS]);
+    }),
+  ));
+
+test("a checkout with no remote never reads a remembered file", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* write(rememberedOf(userDir), [TESTS]);
+      expect(yield* approvedFrom({ cwd, userDir, project: null })).toEqual([]);
+    }),
+  ));
+
+test("a remembered file that does not decode names itself", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const file = rememberedOf(userDir);
+      yield* writeText(file, `[{"name":"tests"}]`);
+      const result = yield* approvedFrom({ cwd, userDir, project: REPO }).pipe(Effect.result);
+      expect(result._tag).toBe("Failure");
+      if (result._tag === "Failure") expect(String(result.failure)).toContain(file);
+    }),
+  ));
+
+test("a remote whose path would leave verify/ has no remembered file", () => {
+  expect(rememberedFile("/u", "example.test/team/app")).toBe(
+    "/u/verify/example.test/team/app.json",
+  );
+  expect(rememberedFile("/u", "example.test/../../etc")).toBeNull();
+});
 
 test("an Intent's authority is the set; the seed is only for a Run with no Intent", () => {
   const intent = (specs: VerifySpec[]) => ({

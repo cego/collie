@@ -58,7 +58,8 @@ import {
 import { scopeFor, scopeKey } from "../registry";
 import { readTask, taskOfWorkspace, type TaskChoice } from "../task";
 import { runDeliveries } from "./steer";
-import { givenVerifications } from "../verify-spec";
+import { givenVerifications, rememberedFile, renderApproved } from "../verify-spec";
+import { projectHere, shell } from "../mr";
 import { agentStartRefusal, CLI_CHECKOUT_FIX, insideCheckout } from "../agent-start";
 import { PROJECTS_ROOT_OPTION, projectsRoot } from "../projects";
 import { currentReports, readDrift } from "../drift";
@@ -1526,6 +1527,64 @@ const intentVerification = Command.make(
   },
 ).pipe(Command.withDescription("Let Collie run one exact command itself, as a verification"));
 
+const intentRemember = Command.make(
+  "remember",
+  {
+    runId: runIdArg,
+    replace: Flag.Boolean("replace").pipe(
+      Flag.withDescription("Overwrite this repository's remembered checks"),
+      Flag.withDefault(false),
+    ),
+  },
+  ({ runId, replace }) =>
+    Effect.gen(function* () {
+      const global = yield* root;
+      yield* attempt(
+        Effect.gen(function* () {
+          const resolved = yield* resolveCommandRun(global, runId);
+          if (resolved._tag === "RunFailure") return resolved.result;
+          const intent = yield* readIntent(resolved.dir);
+          if (intent === null) return err("invalid_state", `Run "${runId}" has no Intent.`);
+          const project = yield* projectHere(resolved.view.cwd, shell);
+          if (project === null)
+            return err(
+              "invalid_state",
+              `Run ${runId}'s checkout has no remote to remember its checks by`,
+            );
+          const specs = intent.authority.run_verification;
+          if (specs.length === 0)
+            return err("invalid_state", `Run ${runId} has no approved checks to remember`);
+          const file = rememberedFile(resolved.env.userDir, project);
+          if (file === null)
+            return err("invalid_state", `${project} is not a remote a file can be named by`);
+          const fs = yield* FileSystem.FileSystem;
+          const path = yield* Path.Path;
+          if (!replace && (yield* fs.exists(file)))
+            return err(
+              "invalid_state",
+              `${file} already holds this repository's checks; pass --replace to overwrite it`,
+            );
+          yield* fs.makeDirectory(path.dirname(file), { recursive: true });
+          yield* fs.writeFileString(file, `${Schema.encodeSync(PrettyUnknownJson)(specs)}\n`);
+          return {
+            ok: true,
+            data: { file, project, remembered: specs },
+            human: [
+              `Runs started in ${project} will begin with:`,
+              renderApproved(specs),
+              `(${file})`,
+            ].join("\n"),
+          };
+        }),
+        global.json,
+      );
+    }),
+).pipe(
+  Command.withDescription(
+    "Save a Run's approved checks as its repository's own, for every Run started there later",
+  ),
+);
+
 /** The Session's own defaults file, which is what every Run it starts begins with. */
 const defaultsFile = Effect.fn("run.defaultsFile")(function* (env: PluginEnv) {
   return yield* defaultsPath(env.stateDir, scopeKey(scopeFor(env, env.cwd)));
@@ -1627,6 +1686,7 @@ const runIntent = Command.make("intent").pipe(
     intentRemove,
     intentAuthority,
     intentVerification,
+    intentRemember,
     intentDefaults,
   ]),
 );

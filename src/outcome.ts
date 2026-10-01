@@ -115,12 +115,16 @@ export function needsApproved(kind: Outcome): boolean {
   return kind !== "investigation" && kind !== "plan" && kind !== "review";
 }
 
+const REMEMBER_REPAIR =
+  "or `collie run intent remember <run>` once a Run has them, for that repository's later Runs, ";
+
 /** Why a Run that needs the approved set cannot be proved, and both ways to repair it. */
 export function nothingApproved(run = "<run>"): string {
   return (
     "nothing is approved for Collie to run, so no command can prove this Run. " +
     `Grant it one with \`collie run intent verification ${run} --name <name> -- <command>\` ` +
     `and \`collie run resume ${run}\`; for Runs started later, add .collie/verify.json, ` +
+    REMEMBER_REPAIR +
     "or verify.json in your Collie config — a Run reads that file only when it starts"
   );
 }
@@ -130,7 +134,9 @@ export function nothingApprovedToStart(): string {
   return (
     "nothing is approved for Collie to run, so no command could prove this Run and it was not started. " +
     'Give the checks with `--verify \'{"name":…,"executable":…,"argv":[…],"cwd":"worktree"}\'` ' +
-    "(repeatable), or add .collie/verify.json to the project, or verify.json in your Collie config, " +
+    "(repeatable), or add .collie/verify.json to the project, " +
+    REMEMBER_REPAIR +
+    "or verify.json in your Collie config, " +
     "and start it again"
   );
 }

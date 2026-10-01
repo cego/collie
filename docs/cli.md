@@ -1002,8 +1002,9 @@ collie verify --run <run-id> --name regression --expect fail -- bun test test/bu
 
 An agent may `collie verify` anything; Collie runs only this run's
 [approved set](../CONTEXT.md), matched argument for argument. The set is settled when the run starts — the `--verify`
-entries given with it, else `.collie/verify.json` in the project, else
-`~/.collie/user/verify.json`, whichever is found first and taken whole — and copied into the run's Intent as its `run_verification` grant. Editing the file afterwards changes the next run and never a
+entries given with it, else `.collie/verify.json` in the project, else the checks remembered
+for the checkout's remote (`~/.collie/user/verify/<host>/<path>.json`, by `origin`, then
+`upstream`), else `~/.collie/user/verify.json`, whichever is found first and taken whole — and copied into the run's Intent as its `run_verification` grant. Editing the file afterwards changes the next run and never a
 running one. From then on the Intent is the set: `run intent verification` adds to it or
 removes from it, and an Intent whose list has been emptied is a run Collie may run nothing
 for — the seed is not put back behind the human who removed it. A Run of a workflow module
@@ -1030,6 +1031,19 @@ through, so anything wrapping `collie verify -- bun test` behaves as it would ar
 
 Results go to the run's `steering/verifications.jsonl`. An agent's Output saying the tests
 passed is a **claim** and is shown as one; only a collected result is a verification.
+
+A repository's checks are remembered by a human, from a Run that already has them:
+
+```sh
+collie run intent remember <run-id> [--replace]
+```
+
+It writes the Run's current set, whole, to the file for its checkout's remote, and every
+Run started in that repository later begins with it. It refuses a file that is already
+there unless `--replace` is given. Chat is told never to run it: a standing grant for every
+later Run is the human's own
+([ADR-0035](adr/0035-a-repositorys-checks-are-remembered-by-a-human.md)). Edit the file to
+change the set, or delete it to withdraw it.
 
 ## Hold and release
 
