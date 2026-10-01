@@ -76,6 +76,7 @@ import {
   HostRefused,
   PROTOCOL,
   ProposalRefused,
+  RUN_FILE_BYTES,
   RequestConflict,
   Started,
   SteerOutcome,
@@ -924,12 +925,15 @@ const frontDoorHandlers = (
           }).pipe(Effect.provideContext(bun));
           return followDetail(detail, changed).pipe(Stream.orDie);
         },
-        runFile: ({ runId, ref }) =>
+        runFile: ({ runId, ref, offset, length }) =>
           registry.view(runId).pipe(
             Effect.flatMap((view) =>
               view === null
                 ? Effect.fail(new HostRefused({ reason: `no Run ${runId}` }))
-                : fetchRef(factsOfView(env.stateDir, view), ref),
+                : fetchRef(factsOfView(env.stateDir, view), ref, {
+                    offset: offset ?? 0,
+                    length: length ?? RUN_FILE_BYTES,
+                  }),
             ),
             Effect.provideContext(bun),
           ),

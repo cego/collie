@@ -1408,8 +1408,10 @@ without being read. The review's findings come as
 a list. The merge request is what the merge watch last read, asked again after 5 minutes or
 when `refreshMr` is set. Large items are fetched by reference with `runFile`: `log`,
 `diff:<path>`, `evidence:<name>`, `verification:<id>`, `plan:<file>` and `file:<path>` (read
-only, from the Run's checkout), text as it is and anything else as base64. A reference is
-refused where it leaves the directory it belongs to, links followed.
+only, from the Run's checkout), text as it is and anything else as base64. Each answer is
+at most 4 MiB from `offset` (or `length` bytes where asked) and says the item's whole
+`size`, so a long log or a video is read in parts. A reference is refused where it leaves
+the directory it belongs to, links followed, or where it is not a regular file.
 
 `protocol` is an integer, also in `identity`. An optional field, a new operation or a new
 kind of message does not change it, and a client reads a kind it does not know as

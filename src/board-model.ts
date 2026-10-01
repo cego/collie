@@ -340,7 +340,12 @@ export const RunFile = Schema.Struct({
   ref: Schema.String,
   encoding: Schema.Literals(["utf8", "base64"]),
   content: Schema.String,
+  /** The whole item's size in bytes, of which `content` is the part asked for. */
+  size: Schema.Int,
 });
+
+/** How much of an item one `runFile` hands over when no length is asked for. */
+export const RUN_FILE_BYTES = 4 * 1024 * 1024;
 
 export type RunFile = typeof RunFile.Type;
 
@@ -673,7 +678,14 @@ export const FrontDoorRpcs = RpcGroup.make(
    * `verification:<id>`, `plan:<file>` and, read-only from its checkout, `file:<path>`.
    */
   Rpc.make("runFile", {
-    payload: { runId: Schema.String, ref: Schema.String },
+    payload: {
+      runId: Schema.String,
+      ref: Schema.String,
+      /** Where in the item to start, in bytes. */
+      offset: Schema.optional(Schema.Int),
+      /** How many bytes from there; `RUN_FILE_BYTES` when not given. */
+      length: Schema.optional(Schema.Int),
+    },
     success: RunFile,
     error: HostRefused,
   }),

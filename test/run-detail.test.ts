@@ -72,7 +72,19 @@ test(
           expect(log).toMatchObject({ encoding: "utf8" });
           expect(log.content).toContain("later line");
           const shot = yield* door.runFile({ runId, ref: "evidence:shot.png" });
-          expect(shot).toEqual({ ref: "evidence:shot.png", encoding: "base64", content: "AQID" });
+          expect(shot).toEqual({
+            ref: "evidence:shot.png",
+            encoding: "base64",
+            content: "AQID",
+            size: 3,
+          });
+          const part = yield* door.runFile({
+            runId,
+            ref: "evidence:shot.png",
+            offset: 1,
+            length: 1,
+          });
+          expect(part).toMatchObject({ content: "Ag==", size: 3 });
           const outside = yield* door
             .runFile({ runId, ref: "evidence:../../installation" })
             .pipe(Effect.flip);
@@ -237,6 +249,8 @@ test("an ended Run keeps its diff once its checkout has gone, file by file", () 
         const kept = yield* fetchRef(pruned, "diff:kept.txt");
         expect(kept.content).toContain("+three");
         expect(kept.content).not.toContain("new.txt");
+        // A name git quotes in a patch header is still found by the name it has on disk.
+        expect((yield* fetchRef(pruned, "diff:tab\there.txt")).content).toContain("+odd");
       }),
     ),
   ));
