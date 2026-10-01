@@ -191,23 +191,31 @@ binary still starts.
 
 ## Invariants
 
-1. Every capability ships in both front doors: the CLI and the herdr actions are thin
+1. **Anything a human can do, an agent can do.** Every action on the board, in the CLI or
+   in chat has a route an agent can take, through the same validation and executors. The
+   agent is recorded as itself; attribution is audit, never a reason to refuse. A
+   safeguard binds humans and agents alike, or it names a concrete harm only an agent
+   could cause. Everything else is **ceremony** — a confirmation, question, grant or
+   human-only step that protects nothing — and ceremony is a defect: it taxes the user and
+   defeats what Collie is for ([`PRODUCT.md`](PRODUCT.md): the human should not have to
+   manage each agent). `test/chat-parity.test.ts` holds this for chat.
+2. Every capability ships in both front doors: the CLI and the herdr actions are thin
    adapters over the same Effect services ([ADR-0003](docs/adr/0003-collie-is-one-effect-program.md)).
-2. All herdr communication goes through `src/herdr.ts`. The one exception is
+3. All herdr communication goes through `src/herdr.ts`. The one exception is
    `tools/herdr-schema.ts`, which runs a downloaded release offline to print its schema
    and never touches the session — see [`docs/internals.md`](docs/internals.md#the-herdr-boundary).
-3. One host owns a state directory and everything it is running
+4. One host owns a state directory and everything it is running
    ([ADR-0015](docs/adr/0015-one-local-host-owns-a-state-directory.md)). Mutate a Run
    through it, under a request id, and never by writing its files.
-4. Plan artefacts live in the run directory ([ADR-0002](docs/adr/0002-plan-artefacts-live-in-the-run-directory.md)).
+5. Plan artefacts live in the run directory ([ADR-0002](docs/adr/0002-plan-artefacts-live-in-the-run-directory.md)).
    Glossary and ADR changes belong in the repository.
-5. Collie has one engine, and nothing an older one recorded is carried over
+6. Collie has one engine, and nothing an older one recorded is carried over
    ([ADR-0027](docs/adr/0027-one-engine-and-a-hard-cutover.md)). No code reads a `run.json`.
-6. Docs change in the same merge request as the behavior they describe.
-7. A Run proves its outcome ([ADR-0010](docs/adr/0010-a-run-proves-its-outcome.md)):
+7. Docs change in the same merge request as the behavior they describe.
+8. A Run proves its outcome ([ADR-0010](docs/adr/0010-a-run-proves-its-outcome.md)):
    evidence is collected against a revision, and no gate is satisfied by an Output field.
    Usage is recorded and never enforced.
-8. Steering's design decisions are [ADR-0008](docs/adr/0008-collie-steers-through-the-driver.md)
+9. Steering's design decisions are [ADR-0008](docs/adr/0008-collie-steers-through-the-driver.md)
    (one Dispatcher sends; the host is the only actor over a Run's agents, per
    [ADR-0029](docs/adr/0029-one-host-acts-for-a-run-and-a-workflows-name-decides-nothing.md)) and
    [ADR-0009](docs/adr/0009-the-collie-tab-is-the-herds.md) (one board per Herd, in the

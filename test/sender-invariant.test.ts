@@ -69,9 +69,8 @@ test("an action kind is registered by the module that owns the operation, and no
 test("nobody stamps a human actor; who is human is derived", () =>
   runEffect(
     Effect.gen(function* () {
-      // `reconcile` and `confirm` are human-only, and they read that off the string they
-      // are given. A caller that built `human:<request id>` itself would be claiming to be
-      // one — and a Driver has a request id too. `actorName(actorNow(id))` is the only way
+      // The journal records who settled what. A caller that built `human:<request id>`
+      // itself would be claiming to be one — and a Driver has a request id too. `actorName(actorNow(id))` is the only way
       // in, so the front door decides and nothing downstream can fake it.
       const stampers = (yield* sources())
         .filter((file) => /["'`]human:\$\{/.test(file.text))
