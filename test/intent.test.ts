@@ -403,7 +403,8 @@ test(
             project: world.project,
             id: "hello",
             request: yield* uuid,
-            input: { name: "child" },
+            // No goal of its own, so the parent's is the one it works to.
+            input: { name: "" },
             parent: started.runId,
           })
           .pipe(Effect.orDie);

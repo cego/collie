@@ -18,7 +18,6 @@ export const INPUT_STRATEGIES = [
   "plan-dir",
   "work-source",
   "diff-target",
-  "ticket",
   "flag",
   "optional",
   "gitlab-repository",

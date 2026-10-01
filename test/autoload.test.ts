@@ -126,11 +126,12 @@ test(
               {
                 name: "note",
                 required: true,
-                strategy: null,
+                strategy: "goal",
                 schema: { type: "string", $defs: {} },
                 limits: [],
               },
             ],
+            outcome: null,
           },
         ]);
 

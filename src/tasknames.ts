@@ -10,10 +10,8 @@
 // display label — never a path component, an agent name or a command.
 
 import { Effect } from "effect";
-import { evaluate, type EvaluatorDeps, type TaskName } from "./evaluator";
+import { askOnce, type BudgetedDeps, type TaskName } from "./evaluator";
 import { oneLine } from "./naming";
-import { reserve, settle as settleBudget } from "./steering";
-import { newRequestId } from "./operations";
 
 /** The names this person already has, as herdr reports them. Read-only context. */
 export interface LiveNames {
@@ -164,11 +162,7 @@ export function cleanName(answer: TaskName, context: TaskContext, live: LiveName
   };
 }
 
-export interface NamingDeps {
-  readonly evaluator: EvaluatorDeps;
-  /** Where this call is written down as usage, before it is made and after. */
-  readonly budget: string;
-}
+export type NamingDeps = BudgetedDeps;
 
 /**
  * What to call this Task. Asked of the one place a model is asked anything, and answered
@@ -181,22 +175,7 @@ export const nameTask = Effect.fn("tasknames.nameTask")(function* (
   live: LiveNames,
 ) {
   if (deps === null) return fallbackName(context, live);
-  const callId = yield* newRequestId();
-  const asked = yield* Effect.result(
-    Effect.gen(function* () {
-      yield* reserve(deps.budget, { id: callId, run: null }, deps.evaluator.limits);
-      const answer = yield* evaluate(deps.evaluator, "naming", namePack(context, live));
-      yield* settleBudget(deps.budget, callId, {
-        outcome:
-          answer.spent.outcome === "ok" && answer.error !== null ? "failed" : answer.spent.outcome,
-        usd: answer.spent.usd,
-        seconds: answer.spent.seconds,
-        bytes: answer.spent.bytes,
-      });
-      return answer.value;
-    }),
-  );
-  if (asked._tag === "Failure" || asked.success === null || !("project" in asked.success))
-    return fallbackName(context, live);
-  return cleanName(asked.success, context, live);
+  const answer = yield* askOnce(deps, "naming", namePack(context, live));
+  if (answer === null || !("project" in answer)) return fallbackName(context, live);
+  return cleanName(answer, context, live);
 });

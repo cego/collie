@@ -177,11 +177,6 @@ export function inferInput(
         return { ...common, ...inferred };
       }
 
-      case "ticket": {
-        const found = yield* ticketFromBranch(run, ctx.cwd);
-        return found ? { ...base, ...found } : { ...base, value: "", source: "none" };
-      }
-
       case "work-source": {
         const candidates = yield* workSourceCandidates(ctx);
         // One candidate is an answer; none or several are a question for the human.
@@ -387,13 +382,19 @@ export function targetCandidates(
     const inRepo = (yield* run("git", ["rev-parse", "--git-dir"], ctx.cwd)).code === 0;
     const project = inRepo ? yield* projectHere(ctx.cwd, run) : null;
 
+    const branch = inRepo
+      ? (yield* run("git", ["rev-parse", "--abbrev-ref", "HEAD"], ctx.cwd)).stdout.trim()
+      : "";
     const view = yield* run("glab", ["mr", "view", "--output", "json"], ctx.cwd);
     const iid = view.code === 0 ? mrIid(view.stdout) : null;
     if (iid) {
       out.push({
         kind: "mr",
         value: mrTarget(project, iid),
-        source: `open merge request !${iid}`,
+        source:
+          branch === ""
+            ? `open merge request !${iid}`
+            : `branch ${branch}'s open merge request !${iid}`,
         label: `!${iid}`,
       });
     } else {
@@ -402,11 +403,6 @@ export function targetCandidates(
     }
 
     if (inRepo) {
-      const branch = (yield* run(
-        "git",
-        ["rev-parse", "--abbrev-ref", "HEAD"],
-        ctx.cwd,
-      )).stdout.trim();
       const baseRef = yield* defaultBase(run, ctx.cwd);
       if (branch && baseRef && branch !== baseRef) {
         out.push({
@@ -728,13 +724,11 @@ export function confirmLine(
   /** The branch a mutating Run was given, and where it came from. */
   branch?: { name: string | null; source: string | null } | null,
 ): string {
-  const parts = resolutions
-    .filter((r) => r.value !== "" || r.strategy !== "ticket")
-    .map((r) => {
-      // A target's value already says its kind (`mr:42`), so only name it when it adds something.
-      const where = r.kind && !r.value.startsWith(r.kind) ? `${r.kind} · ${r.source}` : r.source;
-      return `${r.name}=${abbreviate(r.value) || "(empty)"} [${where}]`;
-    });
+  const parts = resolutions.map((r) => {
+    // A target's value already says its kind (`mr:42`), so only name it when it adds something.
+    const where = r.kind && !r.value.startsWith(r.kind) ? `${r.kind} · ${r.source}` : r.source;
+    return `${r.name}=${abbreviate(r.value) || "(empty)"} [${where}]`;
+  });
   if (branch?.name) parts.push(`branch=${branch.name} [${branch.source ?? "resolved"}]`);
   return `${workflow}: ${parts.join("  ")}`;
 }

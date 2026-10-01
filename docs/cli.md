@@ -337,12 +337,23 @@ generate, and spending the slug's length cap on it would make two long plans one
 
 It is ignored by a workflow that changes nothing.
 
+**An agent's start names everything.** `run start` infers and routes nothing: that is the
+[Launch flow](using.md)'s, for a human. Run inside a git checkout, the start has named that
+checkout. Anywhere else it has to carry `--input workspace=<absolute path>` or
+`--input workspace=projects-root`, and without one it is `needs_input` listing the
+checkouts under the [Projects root](../CONTEXT.md) to choose from. Every Input the workflow
+declares has to be given too, an optional one as an explicit empty string
+(`--input plan=`): the prompt then says it was not given rather than leaving it out.
+
 `--input workspace=` is the host's, not the workflow's, and it says where the checkout
 comes from. `new` asks herdr for it, so the run gets a worktree workspace of its own
 instead of living in its task's; a fresh task takes that workspace as its own rather than
-opening a second one. An absolute path is an existing checkout the run starts from. It is
-decoded before anything exists: any other value is `invalid_input` naming it, and so is
-`new` for a workflow that makes no checkout. Nothing chains it on: an `implement` that a
+opening a second one. An absolute path is an existing checkout the run starts from.
+`projects-root` roots the run at the Projects root, which is not a repository: a workflow
+that makes no checkout, like `plan`, works there, and one that cuts a worktree, like
+`implement`, is refused because there is nothing to cut it from. It is decoded before
+anything exists: any other value is `invalid_input` naming it, and so is `new` for a
+workflow that makes no checkout. Nothing chains it on: an `implement` that a
 `plan`, an `architecture` or a `review` starts is placed by its own declaration, in the
 same task
 ([what a run does to your repository](using.md#what-a-run-does-to-your-repository)).
@@ -355,23 +366,37 @@ worktree, a workspace or an agent exists.
 Examples:
 
 ```sh
-collie run start review --input target=https://gitlab.example.com/acme/app/-/merge_requests/2
-collie run start review --input target=worktree
+collie run start review --input target=https://gitlab.example.com/acme/app/-/merge_requests/2 --input plan= --input proves=
+collie run start review --input target=worktree --input plan= --input proves=
 collie run start implement --input plan=ENG-123
+collie run start plan --input goal="one registry" --input workspace=projects-root
 ```
 
-An input the workflow needs and inference cannot supply comes back as `needs_input` with
-everything you need to fill the gaps and retry:
+A start that leaves anything out comes back as `needs_input`, one entry per missing field:
+what it means (the field's own description, else what its strategy is) and the facts that
+would fill it — the target inference would pick in this checkout for a diff target, the
+plan directories of finished Runs for a work source, and the checkouts under the Projects
+root for `workspace`:
 
 ```json
 {
   "ok": false,
   "error": {
     "code": "needs_input",
-    "message": "plan needs input.",
+    "message": "review needs \"target\", \"plan\", \"proves\". Nothing is inferred for an agent's start: give every Input, an optional one you leave empty as \"\".\n- target: …",
     "details": {
-      "inputs": [{ "name": "goal", "candidates": [], "question": "What is the goal?" }],
-      "schema": { "goal": "goal", "ticket": "ticket" },
+      "workflow": "review",
+      "inputs": [
+        {
+          "name": "target",
+          "meaning": "The change to review: mr:<iid>, mr:<group/project>!<iid>, branch:<base>...<head>, or worktree",
+          "facts": ["mr:acme/app!2 (open merge request !2)"],
+          "question": "review — an MR, a branch diff, or the working tree — target?",
+          "required": true,
+          "schema": { "type": "string" },
+          "limits": []
+        }
+      ],
       "requestId": "33c306ee-…"
     }
   }
@@ -1156,8 +1181,9 @@ Every prerequisite in one pass, each with the command that fixes it: herdr prese
 least the `min_herdr_version` the plugin manifest declares; the plugin linked from this
 installation; the runner built and the `collie` shim on PATH (installed-but-not-on-PATH is
 its own reported state); a Node runtime for the skills CLI; every skill and every harness
-the loaded workflows and personas name; whether the checkout is behind its remote; and
-`glab` present and logged in.
+the loaded workflows and personas name; whether the checkout is behind its remote; the
+Projects root and its source — `projects.root`, `GITTE_CWD`, or the home directory, the last
+a `!` warning that never fails the run; and `glab` present and logged in.
 
 Two more are optional, and reported rather than required. **Helle**, where a loaded
 workflow waits on it (`renovate` does): the credentials file the Helle MCP wrapper sources,

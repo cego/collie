@@ -21,10 +21,10 @@ target.
 **For:** turning a goal you can describe into a spec and tickets someone — or something —
 can build from.
 
-**Inputs:** `goal` (what you want), supplied at launch or asked for when missing, and `ticket` (a Linear
-issue). `ticket` is read from the branch name and left empty when there is none — it is
-never asked for. The goal is the only launch question, and
-the end menu is asked when the plan is written rather than before it exists.
+**Inputs:** `goal` (what you want), supplied at launch or asked for when missing. A Linear
+issue id or URL goes in the goal, alone or with your words around it: the planner fetches
+it first. The goal is the only launch question, and the end menu is asked when the plan is
+written rather than before it exists.
 
 **What happens:** a planner reads the goal and repository, asks only when a missing
 decision changes the work, then writes `SPEC.md` and one ticket per slice into the run's
@@ -113,6 +113,10 @@ Most plans worth the name touch more than one checkout: a backend contract, its 
 client, a frontend. `plan` writes one plan directory for all of it, and every ticket in it
 carries a `**Repo:**` line — the checkout it changes, relative to the plan run's root and
 as it is on disk, or `.` when the root is itself a repository.
+
+A `plan` or `architecture` started from the Home runs at the
+[Projects root](../CONTEXT.md) — `workspace=projects-root` — and its agent is told the root
+is not a repository: it finds the repositories under it, and each `Repo:` is relative to it.
 
 A plan is single-repository only when its tickets all say `.`, or carry no line at all. A
 plan whose tickets all name one repository _by path_ is not one of those: that repository
@@ -268,7 +272,8 @@ content in [`workflows/renovate.md`](../workflows/renovate.md).
 **For:** looking at what a project already has and improving the parts whose cost you can
 name.
 
-**Inputs:** none. It works on the repo the run is rooted at.
+**Inputs:** `goal` (what you are asking about), required. It works on the repo the run is
+rooted at, and the architect is told the goal so it knows where to look.
 
 **What happens:** an architect rates every candidate by the deletion test, applies the
 strong ones only, and writes a report into the run directory. Everything else is deferred
@@ -276,7 +281,7 @@ with a reason rather than half-applied.
 
 **Ends with a menu:** **Implement now** (chains `implement` on the report) or **Stop here**.
 **Implement now** names the branch after the `slug` the architect put in its Output, which
-is the work you agreed on: `architecture` takes no input that names the work, so without it
+is the work you agreed on: `architecture`'s goal is a question rather than a name for the work, so without it
 every architecture run in a repo would be handed the same branch
 ([how the branch is chosen](cli.md#start-a-run)).
 
@@ -291,8 +296,8 @@ its prompts in [`workflows/architecture.md`](../workflows/architecture.md).
   build gets is the review you would run standalone. It is an import, not a lookup:
   overriding `review` in your layer leaves `implement`'s review as it was, and a fork of
   `implement` imports the pass it wants.
-- `plan` → `architecture`, for a plan whose tickets need architectural decisions. It is a
-  Choice a human takes, not a pass every build makes.
+- `plan` → `architecture`, for a plan whose tickets need architectural decisions, started
+  with the plan's own goal. It is a Choice a human takes, not a pass every build makes.
 - `review` → `implement`, from **Fix findings in a full implement run**. See
   [Hand-offs](using.md#hand-offs-between-runs).
 

@@ -1,7 +1,7 @@
 Review target: {{inputs.target}}
 Project root: {{cwd}}
 Spec: {{inputs.plan}}
-Outcome the change has to prove (empty means unclassified): {{inputs.outcome}}
+Outcome the change has to prove (not given means unclassified): {{inputs.outcome}}
 
 Read the target first:
 

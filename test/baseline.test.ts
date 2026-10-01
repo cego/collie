@@ -353,7 +353,7 @@ scenario(
         yield* parked({
           entry: shipped("architecture"),
           runId: "r-arch",
-          input: {},
+          input: { goal: "why are there two registries" },
           decision: "next",
         });
 
@@ -363,10 +363,43 @@ scenario(
         const work = yield* asked("r-arch", "architecture");
         expect(work).toContain(`Report: ${runDir(dir, "r-arch")}/plan/ARCHITECTURE.md`);
         expect(work).toContain(`Project root: ${rig.projectDir}`);
+        expect(work).toContain("why are there two registries");
         // And the persona is the Markdown persona, with its skills as paths to read.
         const body = yield* persona("r-arch", "architecture");
         expect(body).toContain("You are an architect");
         expect(body).toContain("improve-codebase-architecture/SKILL.md");
+      }),
+    ),
+  120_000,
+);
+
+/** What a planner or architect rooted at the Projects root is told about it. */
+const ROOTED = "it is not a repository: find the\nrepositories under it";
+
+scenario(
+  "architecture at the Projects root is told the root is not a repository, and elsewhere is not",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* rig.queueOutputs([REPORT, REPORT]);
+        yield* parked({
+          entry: shipped("architecture"),
+          runId: "r-arch-root",
+          input: { goal: "why are there two registries" },
+          options: { workspace: "projects-root" },
+          decision: "next",
+        });
+        yield* parked({
+          entry: shipped("architecture"),
+          runId: "r-arch-here",
+          input: { goal: "why are there two registries" },
+          decision: "next",
+        });
+
+        const rooted = yield* asked("r-arch-root", "architecture");
+        expect(rooted).toContain(ROOTED);
+        expect(rooted).toContain("Each ticket's `Repo:` is a path relative to\nit.");
+        expect(yield* asked("r-arch-here", "architecture")).not.toContain(ROOTED);
       }),
     ),
   120_000,
@@ -381,14 +414,14 @@ scenario(
         yield* parked({
           entry: shipped("architecture"),
           runId: "r-arch-go",
-          input: {},
+          input: { goal: "why are there two registries" },
           decision: "next",
         });
 
         const result = yield* answered({
           entry: shipped("architecture"),
           runId: "r-arch-go",
-          input: {},
+          input: { goal: "why are there two registries" },
           decision: "next",
           value: "Implement now",
         });
@@ -413,14 +446,14 @@ scenario(
         yield* parked({
           entry: shipped("architecture"),
           runId: "r-arch-stop",
-          input: {},
+          input: { goal: "why are there two registries" },
           decision: "next",
         });
 
         const result = yield* answered({
           entry: shipped("architecture"),
           runId: "r-arch-stop",
-          input: {},
+          input: { goal: "why are there two registries" },
           decision: "next",
           value: "Stop here",
         });
@@ -441,7 +474,26 @@ const GRILLED = {
 };
 const SPEC = { verdict: "clean", findings: [], spec: "plan/SPEC.md" };
 const TICKETS = { verdict: "clean", findings: [], issues_dir: "plan/issues", tickets: 3 };
-const GOAL = { goal: "make the registries one", ticket: "" };
+const GOAL = { goal: "make the registries one" };
+
+scenario("a plan at the Projects root is told the root is not a repository", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([GRILLED, SPEC, TICKETS]);
+      yield* parked({
+        entry: shipped("plan"),
+        runId: "r-plan-root",
+        input: GOAL,
+        options: { workspace: "projects-root" },
+        decision: "next-1",
+      });
+
+      const interview = yield* asked("r-plan-root", "grill");
+      expect(interview).toContain(ROOTED);
+      expect(interview).toContain("Each ticket's `Repo:` is a path relative to\nit.");
+    }),
+  ),
+);
 
 scenario(
   "plan interviews, writes the spec and cuts the tickets — one planner, its two skills started",
@@ -468,6 +520,7 @@ scenario(
         expect(sent).toHaveLength(3);
         const interview = yield* asked("r-plan", "grill");
         expect(interview).toContain("make the registries one");
+        expect(interview).not.toContain(ROOTED);
         expect(interview).toContain(`collie run answer r-plan "Implement now"`);
         // The two skills that write the plan are started, not merely mentioned: both
         // refuse an agent that invokes them itself.
@@ -509,6 +562,35 @@ scenario(
         expect(started[0]?.input).toEqual({ plan: `${runDir(dir, "r-plan-go")}/plan` });
         // What the work is called and what it proves; where it works is the child's own.
         expect(started[0]?.options).toEqual({ task: "one-registry", outcome: "feature" });
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "architecture first starts the architect on the plan's own goal",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* rig.queueOutputs([GRILLED, SPEC, TICKETS]);
+        yield* parked({
+          entry: shipped("plan"),
+          runId: "r-plan-arch",
+          input: GOAL,
+          decision: "next-1",
+        });
+
+        yield* answered({
+          entry: shipped("plan"),
+          runId: "r-plan-arch",
+          input: GOAL,
+          decision: "next-1",
+          value: "Architecture first",
+        });
+
+        expect(started).toHaveLength(1);
+        expect(started[0]?.workflow).toBe("architecture");
+        expect(started[0]?.input).toEqual(GOAL);
       }),
     ),
   120_000,
@@ -984,6 +1066,26 @@ scenario(
   120_000,
 );
 
+scenario("an Input the review was not given is said to be not given", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([SYNTHESIS]);
+      yield* parked({
+        entry: shipped("review"),
+        runId: "r-review-bare",
+        input: { target: "branch:main...HEAD", plan: "", proves: "" },
+        decision: "post-1",
+      });
+
+      const first = yield* asked("r-review-bare", "review-1");
+      expect(first).toContain("Spec: not given");
+      expect(first).toContain(
+        "Outcome the change has to prove (not given means unclassified): not given",
+      );
+    }),
+  ),
+);
+
 scenario(
   "posting is offered for a merge request and nothing else, and a note that did not land asks again",
   () =>
@@ -1341,7 +1443,7 @@ test(
         yield* parked({
           entry: `${mine}/architecture.workflow.ts`,
           runId: "r-mine",
-          input: {},
+          input: { goal: "why are there two registries" },
           decision: "next",
         });
 
@@ -1356,7 +1458,7 @@ test(
         const result = yield* answered({
           entry: `${mine}/architecture.workflow.ts`,
           runId: "r-mine",
-          input: {},
+          input: { goal: "why are there two registries" },
           decision: "next",
           value: "Stop here",
         });
@@ -2493,6 +2595,9 @@ scenario(
         yield* bin.restore();
 
         expect(said(result)).toBe("REN-1: renovated 1.2.0");
+        const track = yield* asked("r-pkg", "track");
+        expect(track).toMatch(/^Linear team \(not given means .*\): not given$/m);
+        expect(track).toContain("Linear Renovate issue (not given means find it): not given");
         // Five pieces of work, not eight: the three an application needs were not asked
         // for, so nothing wrote `"skipped": "package"` to say it had nothing to do.
         expect(yield* prompts()).toHaveLength(5);

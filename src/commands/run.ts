@@ -14,7 +14,8 @@ import type { BunServices } from "@effect/platform-bun/BunServices";
 import { Argument, Command, Flag } from "effect/unstable/cli";
 import { clearOverride, err, type Failure } from "../operations";
 import { withDirLock } from "../lock";
-import { evidenceDir, runDir } from "../engine";
+import { GIVEN, INFERRED, evidenceDir, runDir } from "../engine";
+import { textOf } from "../runs";
 import { Herdr } from "../herdr";
 import {
   describeWaiting,
@@ -26,7 +27,6 @@ import {
   showOffers,
   steerRun,
   moduleFor,
-  neededInputs,
   runViews,
   isSettled,
   resumeRun,
@@ -59,6 +59,8 @@ import { scopeFor, scopeKey } from "../registry";
 import { readTask, taskOfWorkspace, type TaskChoice } from "../task";
 import { runDeliveries } from "./steer";
 import { givenVerifications } from "../verify-spec";
+import { agentStartRefusal, CLI_CHECKOUT_FIX, insideCheckout } from "../agent-start";
+import { PROJECTS_ROOT_OPTION, projectsRoot } from "../projects";
 import { currentReports, readDrift } from "../drift";
 import { newest, readCards } from "../cards";
 import { metricsOf, readMetrics, type Metrics } from "../metrics";
@@ -323,10 +325,15 @@ const runStart = Command.make(
                 const agent = Object.entries({ harness, model, effort }).flatMap(([name, value]) =>
                   Option.isSome(value) ? [[name, value.value] as const] : [],
                 );
-                // What it declares and nobody gave, with the schemas to answer it by, so
-                // a caller can fill the gaps and retry under the same request id.
-                const needed = "inputs" in saved ? neededInputs(saved, launch.input) : null;
-                if (needed !== null) return needed;
+                // What it declares and nobody gave, with what would fill each, so a caller
+                // can fill the gaps and retry under the same request id.
+                if ("inputs" in saved) {
+                  const needed = yield* agentStartRefusal(resolved.env, saved, launch.input, {
+                    named: yield* namedCheckout(resolved.env, launch.options.workspace ?? ""),
+                    fix: CLI_CHECKOUT_FIX,
+                  });
+                  if (needed !== null) return needed;
+                }
                 const started = yield* startRun(resolved.env, {
                   id: workflow,
                   request: requestId,
@@ -368,8 +375,9 @@ const runStart = Command.make(
   Command.withExamples([
     {
       command:
-        "collie run start review --input target=https://gitlab.example.com/acme/app/-/merge_requests/2",
-      description: "Review a merge request, by URL or by bare iid",
+        "collie run start review --input target=https://gitlab.example.com/acme/app/-/merge_requests/2 --input plan= --input proves=",
+      description:
+        "Review a merge request, by URL or by bare iid, giving the optional Inputs as empty",
     },
     {
       command: "collie run start implement --input plan=ENG-123",
@@ -428,6 +436,18 @@ const childLines = Effect.fn("run.childLines")(function* (env: PluginEnv, runId:
   return children.map((view) => `  ${view.runId}\t${view.workflow}\t${statusOf(view)}`);
 });
 
+/**
+ * The directory a CLI start names as its checkout, or null for none: its `workspace`
+ * option, else the checkout the command was run in.
+ */
+const namedCheckout = Effect.fn("run.namedCheckout")(function* (env: PluginEnv, workspace: string) {
+  const given = workspace.trim();
+  if (given === PROJECTS_ROOT_OPTION) return (yield* projectsRoot(env)).path;
+  if (given.startsWith("/")) return given;
+  if (given !== "" || (yield* insideCheckout(env.cwd))) return env.cwd;
+  return null;
+});
+
 const runShow = Command.make(
   "show",
   {
@@ -455,6 +475,11 @@ const runShow = Command.make(
             },
             human: [
               `${view.runId}\t${statusLine(statusOf(view), disposition)}\t${view.workflow}`,
+              `  in ${view.cwd}${view.provenance["workspace"] === INFERRED ? " (inferred)" : ""}`,
+              ...Object.entries(view.input).map(
+                ([name, value]) =>
+                  `  ${name} = ${textOf(value)} (${view.provenance[name] ?? GIVEN})`,
+              ),
               ...describeWaiting(view),
               ...(yield* childLines(resolved.env, runId)),
             ].join("\n"),

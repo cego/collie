@@ -22,6 +22,7 @@ import { Herdr } from "./herdr";
 import { shell, type Runner } from "./mr";
 import { err } from "./operations";
 import { probeHelle, probeLinearMcp, type Probe } from "./optional";
+import { projectsRoot } from "./projects";
 import { claudeSettingsPath, readStatusLine, STATUS_LINE_ARGS } from "./statusline";
 
 export interface Check {
@@ -285,6 +286,17 @@ const personas = Effect.fn("Doctor.personas")(function* (env: PluginEnv) {
     : noted(found.errors.join("; "), "fix each file named");
 });
 
+/** Where a Run started from the Home is rooted, and which of the three places said so. */
+const projects = Effect.fn("Doctor.projects")(function* (env: PluginEnv) {
+  const root = yield* projectsRoot(env);
+  if (root.source === "config") return passed(`${root.path} (from projects.root)`);
+  if (root.source === "gitte") return passed(`${root.path} (from GITTE_CWD)`);
+  return warned(
+    `${root.path} (the home directory: neither projects.root nor GITTE_CWD is set)`,
+    `set projects.root in ${env.userDir}/config.json to the folder your checkouts live under`,
+  );
+});
+
 /**
  * Every check, in one pass, whatever the state of the machine: a prerequisite that
  * is missing must not stop the ones after it from being reported, or `doctor` is one
@@ -441,6 +453,7 @@ export const doctor = Effect.fn("Doctor.doctor")(function* (
   const auth = glabDir ? yield* answered(run("glab", ["auth", "status"], root)) : null;
   checks.push({ name: "workflows", ...(yield* overrides(env)) });
   checks.push({ name: "personas", ...(yield* personas(env)) });
+  checks.push({ name: "projects root", ...(yield* projects(env)) });
 
   checks.push({
     name: "glab",

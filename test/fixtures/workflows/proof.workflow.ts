@@ -15,6 +15,7 @@ export default defineWorkflow({
   title: "A workflow that waits for a decision",
   description: "Records one launch, then waits to be answered.",
   input: Schema.Struct({ note: Schema.String }),
+  hints: { note: "goal" },
   output: Schema.String,
   run: ({ input }) =>
     Effect.gen(function* () {

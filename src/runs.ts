@@ -54,7 +54,8 @@ export interface RunFacts {
 
 const isText = Schema.is(Schema.String);
 
-const textOf = (value: Schema.Json): string => (isText(value) ? value : JSON.stringify(value));
+export const textOf = (value: Schema.Json): string =>
+  isText(value) ? value : JSON.stringify(value);
 
 const stateOf = (view: RunView): RunState => {
   const stopped = view.controls.includes(STOP);

@@ -24,7 +24,7 @@ import * as DurableDeferred from "effect/unstable/workflow/DurableDeferred";
 import * as Workflow from "effect/unstable/workflow/Workflow";
 import type { Agents } from "./agents";
 import { bodySections, INPUT_STRATEGIES, type InputStrategy } from "./definitions";
-import { exclusiveClashes } from "./strategies";
+import { exclusiveClashes, launchInputProblem } from "./strategies";
 import { expressionsIn, malformedIn } from "./template";
 import {
   KINDS,
@@ -876,7 +876,7 @@ export const RESERVED_INPUTS = {
   branch: "Branch selection for mutating work, offered by the host",
   task: "Task naming and association, never inferred from the workflow's name",
   workspace:
-    "Where the checkout comes from: `new` for a worktree workspace of its own, or an existing checkout's absolute path; distinct from the CLI's workspace scope",
+    "Where the checkout comes from: `new` for a worktree workspace of its own, an existing checkout's absolute path, or `projects-root` for the Projects root; distinct from the CLI's workspace scope",
   repo: "One repository's share of a multi-repository work source",
   outcome: "The selectable outcome, where the workflow does not fix one",
   risks: "Additional review axes, passed as declared context",
@@ -980,6 +980,8 @@ function hintProblems(
     }
   }
   problems.push(...exclusiveClashes(hints));
+  const launch = launchInputProblem([...fields], hints);
+  if (launch !== null) problems.push(launch);
   return problems;
 }
 

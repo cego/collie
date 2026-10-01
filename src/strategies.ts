@@ -98,14 +98,38 @@ export const diffTargetOf = (where: Settled) => settledBy(where, "diff-target");
 export const gitlabRepositoryOf = (where: Settled) => settledBy(where, "gitlab-repository");
 
 /**
- * Strategies only one field may carry. Two fields claiming to be the work source leaves
- * inference with no answer, and picking one by name is what renaming must not change.
+ * Strategies only one field may carry, and the launch Input is the one field that carries
+ * one of them: what the human's words fill. Two fields claiming to be the work source
+ * leaves inference with no answer, and picking one by name is what renaming must not change.
  */
 export const EXCLUSIVE_STRATEGIES: ReadonlyArray<InputStrategy> = [
+  "goal",
   "work-source",
   "diff-target",
   "gitlab-repository",
 ];
+
+/** Why these inputs do not name exactly one launch Input, or null where they do. */
+export function launchInputProblem(
+  fields: ReadonlyArray<string>,
+  hints: Readonly<Record<string, InputStrategy>>,
+): string | null {
+  if (fields.length === 0) return null;
+  const launch = Object.keys(hints)
+    .filter((name) => EXCLUSIVE_STRATEGIES.includes(hints[name] ?? ""))
+    .sort();
+  if (launch.length === 0)
+    return `no input is the launch Input: hint one of ${[...fields]
+      .sort()
+      .map((name) => `"${name}"`)
+      .join(
+        ", ",
+      )} as ${EXCLUSIVE_STRATEGIES.slice(0, -1).join(", ")} or ${EXCLUSIVE_STRATEGIES.at(-1)}`;
+  // Two fields of one strategy are that strategy's clash, said once by `exclusiveClashes`.
+  if (new Set(launch.map((name) => hints[name])).size > 1)
+    return `${launch.map((name) => `"${name}"`).join(" and ")} are both launch Inputs; a workflow has one`;
+  return null;
+}
 
 /** Every exclusive strategy two fields both claim, one sentence each. */
 export function exclusiveClashes(
@@ -118,6 +142,26 @@ export function exclusiveClashes(
       : [];
   });
 }
+
+/** What an Input of each strategy is, for a refusal to tell a caller that never saw the module. */
+const STRATEGY_MEANINGS = new Map<InputStrategy, string>([
+  ["goal", "What the Run is for, in the human's own words"],
+  [
+    "work-source",
+    "Where the work is written down: a plan directory, a Linear issue id or URL, or a description",
+  ],
+  ["plan-dir", "A plan directory, holding SPEC.md and issues/"],
+  [
+    "diff-target",
+    "The change to review: mr:<iid>, mr:<group/project>!<iid>, branch:<base>...<head>, or worktree",
+  ],
+  ["gitlab-repository", "A GitLab repository URL, or the absolute path of a local checkout"],
+  ["flag", "true or false"],
+  ["optional", "Anything, or empty"],
+]);
+
+export const strategyMeaning = (strategy: InputStrategy): string =>
+  STRATEGY_MEANINGS.get(strategy) ?? "";
 
 /** A Run record's Inputs, as every reader above takes them. */
 export const recorded = (record: {

@@ -16,6 +16,7 @@ export default defineWorkflow({
     /** Narrower than the parent's own field, which is what makes the child the authority. */
     grade: Schema.Literals(["pass", "fail"]),
   }),
+  hints: { note: "goal" },
   output: Schema.String,
   layer: reviewLayer(HOUSE),
   run: ({ input }) =>

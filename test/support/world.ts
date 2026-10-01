@@ -40,6 +40,8 @@ const asEnvelope = Schema.decodeUnknownEffect(Envelope);
 export const collie = Effect.fn("World.collie")(function* (
   world: World,
   args: ReadonlyArray<string>,
+  /** More of the operator's environment, over this world's own. */
+  extra: Readonly<Record<string, string>> = {},
 ) {
   const binary = yield* Config.option(Config.String("COLLIE_TEST_BINARY"));
   const command = Option.isSome(binary) ? [binary.value] : [process.execPath, `${root}src/main.ts`];
@@ -56,6 +58,10 @@ export const collie = Effect.fn("World.collie")(function* (
       // The host a client starts is this same program, as an installation's would be.
       COLLIE_HOST: asCommand(command),
       COLLIE_HOST_WATCH_PID: watch,
+      // The world's own herdr, which `proves` set: this env is otherwise built from nothing.
+      HERDR_BIN_PATH: Bun.env.HERDR_BIN_PATH,
+      FAKE_HERDR_LOG: Bun.env.FAKE_HERDR_LOG,
+      ...extra,
     },
     stdout: "pipe",
     stderr: "pipe",
@@ -77,6 +83,37 @@ export const save = (into: string, names: ReadonlyArray<string>) =>
     yield* fs.makeDirectory(into, { recursive: true });
     for (const name of names) yield* fs.copyFile(`${fixtures}/${name}`, `${into}/${name}`);
   }).pipe(Effect.orDie);
+
+/**
+ * The fake herdr on `HERDR_BIN_PATH`, set in the process environment too while the world
+ * lasts: a host is a child that inherits it, not a reader of this world's Config.
+ */
+const fakeHerdrIn = Effect.fn("World.fakeHerdrIn")(function* (dir: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const fake = `${root}test/support/fake-herdr.ts`;
+  const bin = `${dir}/herdr`;
+  yield* fs
+    .writeFileString(bin, `#!/bin/sh\nexec ${process.execPath} ${fake} "$@"\n`, { mode: 0o755 })
+    .pipe(Effect.orDie);
+  const set = { HERDR_BIN_PATH: bin, FAKE_HERDR_LOG: `${dir}/herdr-calls.jsonl` };
+  yield* Effect.acquireRelease(
+    Effect.sync(() => {
+      const before = {
+        HERDR_BIN_PATH: Bun.env.HERDR_BIN_PATH,
+        FAKE_HERDR_LOG: Bun.env.FAKE_HERDR_LOG,
+      };
+      Object.assign(Bun.env, set);
+      return before;
+    }),
+    (before) =>
+      Effect.sync(() => {
+        for (const [key, value] of Object.entries(before))
+          if (value === undefined) delete Bun.env[key];
+          else Bun.env[key] = value;
+      }),
+  );
+  return set;
+});
 
 /**
  * An installation with a workflow saved in it, a project to run it for, and a state
@@ -110,11 +147,16 @@ export const proves = <A, E>(
       ]) {
         yield* fs.makeDirectory(made, { recursive: true }).pipe(Effect.orDie);
       }
+      // A project is a checkout, which is what an agent's start from inside it names.
+      Bun.spawnSync(["git", "init", "-q"], { cwd: world.project });
       yield* save(world.user, modules);
       const binary = yield* Config.option(Config.String("COLLIE_TEST_BINARY"));
       const command = Option.isSome(binary)
         ? [binary.value]
         : [process.execPath, `${root}src/main.ts`];
+      // A herdr of the world's own, for this process and the host it starts: the real one
+      // is not on a CI runner, and on a desk it is the operator's live session.
+      const herdr = yield* fakeHerdrIn(dir);
       return yield* body(world).pipe(
         Effect.scoped,
         Effect.provide(
@@ -126,6 +168,7 @@ export const proves = <A, E>(
               COLLIE_USER_DIR: world.config,
               HOME: world.home,
               COLLIE_CWD: world.project,
+              ...herdr,
             }),
           ),
         ),

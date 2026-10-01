@@ -540,7 +540,8 @@ export default defineWorkflow({
   id: "counts",
   title: "A workflow whose result is a structure",
   description: "Counts what it was given.",
-  input: Schema.Struct({ items: Schema.Array(Schema.String) }),
+  input: Schema.Struct({ goal: Schema.optionalKey(Schema.String), items: Schema.Array(Schema.String) }),
+  hints: { goal: "goal" },
   output: Schema.Struct({ count: Schema.Number, at: Schema.Date }),
   run: ({ input }) => Effect.succeed({ count: input.items.length, at: new Date(0) }),
 });

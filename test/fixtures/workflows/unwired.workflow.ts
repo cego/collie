@@ -14,6 +14,7 @@ export default defineWorkflow({
   title: "A workflow whose service is never provided",
   description: "Its run asks for a service it has no layer for.",
   input: Schema.Struct({ text: Schema.String }),
+  hints: { text: "goal" },
   output: Schema.String,
   run: () =>
     Effect.gen(function* () {

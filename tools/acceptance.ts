@@ -72,9 +72,49 @@ const RETRO = "collie-retro-fixes (this MR)";
 const NATIVE = "native-collie-control-panel (this MR)";
 const OPERATOR = "operator";
 const MODULES = "workflow modules (this MR)";
+const LAUNCH = "launch flow places human starts (this MR)";
 
 /** What the front door owes a person, and cannot be settled below the front door. */
 const FRONT_DOOR: readonly Check[] = [
+  {
+    id: "front-door/no-checkout-is-asked-for-from-the-home",
+    statement:
+      "Starting a Run from the Home asks which Workflow and what you want, and never which checkout: a goal starts at the Projects root with nothing typed about where.",
+    owner: LAUNCH,
+    needs: "ui",
+    proof: {
+      kind: "test",
+      layer: "ui",
+      file: "test/launch.test.ts",
+      name: "no checkout is asked for from the Home: a goal starts at the Projects root",
+    },
+  },
+  {
+    id: "front-door/a-start-from-the-home-is-placed-never-asked-where",
+    statement:
+      "A start from the Home for a workflow that needs a checkout lands in the checkout under the Projects root your words are about — confirmed with Enter — or offers a plan instead, and never asks which checkout.",
+    owner: LAUNCH,
+    needs: "ui",
+    proof: {
+      kind: "test",
+      layer: "ui",
+      file: "test/launch.test.ts",
+      name: "a start from the Home is placed, never asked where: one routing call over every checkout, confirmed with Enter",
+    },
+  },
+  {
+    id: "front-door/what-was-inferred-is-shown-before-the-start",
+    statement:
+      "Where anything was inferred, one row says where the Run starts and each Input as given or inferred from what, before anything starts; Enter starts it and Esc starts nothing.",
+    owner: LAUNCH,
+    needs: "ui",
+    proof: {
+      kind: "test",
+      layer: "ui",
+      file: "test/launch.test.ts",
+      name: "what was inferred is shown before the start, and Esc starts nothing",
+    },
+  },
   {
     id: "front-door/native-chat-takes-what-is-typed",
     statement:
@@ -221,6 +261,19 @@ const FRONT_DOOR: readonly Check[] = [
 
 /** Facts about the code beneath the front door. True, useful, and not front-door proof. */
 const BACKEND: readonly Check[] = [
+  {
+    id: "backend/an-agent-start-names-everything-or-is-refused",
+    statement:
+      "An agent starting a Run through chat's start action is refused unless it names the checkout (or projects-root) and every Input, an optional one as an explicit empty string; the refusal names each field it left out, and nothing is inferred for it.",
+    owner: LAUNCH,
+    needs: "backend",
+    proof: {
+      kind: "test",
+      layer: "backend",
+      file: "test/proposals.test.ts",
+      name: "chat's start names projects-root and every Input, or is told each one it left out",
+    },
+  },
   {
     id: "backend/every-operation-has-a-conversational-route",
     statement:

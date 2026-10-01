@@ -13,6 +13,7 @@ export default defineWorkflow({
   title: "Look at something and offer what to do about it",
   description: "Declares an action and a follow-up over its own facts.",
   input: Schema.Struct({ note: Schema.String }),
+  hints: { note: "goal" },
   output: Schema.String,
   outcome: { fixed: "review" },
   actions: [

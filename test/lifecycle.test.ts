@@ -11,6 +11,7 @@
 import { expect, test } from "bun:test";
 import { Deferred, Effect, Fiber, FileSystem, Option, Schema, Scope, Stream } from "effect";
 import type { BunServices } from "@effect/platform-bun/BunServices";
+import { writeConfigValue } from "../src/config";
 import { currentEnv } from "../src/env";
 import { pickFlow, type FlowPrompts } from "../src/flows";
 import { Herdr } from "../src/herdr";
@@ -345,6 +346,82 @@ test(
 );
 
 test(
+  "workspace=projects-root roots a Run at the Projects root, and a worktree cannot be cut there",
+  () =>
+    provesWith(
+      "collie-lifecycle-root-",
+      (world) =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const root = `${world.home}/projects`;
+          yield* fs.makeDirectory(`${root}/app/.git`, { recursive: true });
+          yield* writeConfigValue(world.config, "projects.root", root);
+
+          const started = yield* collie(world, [
+            "run",
+            "start",
+            "planned",
+            "--input",
+            "goal=one registry",
+            "--input",
+            "workspace=projects-root",
+          ]);
+          const runId = (yield* payloadOf(started.envelope)).runId ?? "";
+          expect(runId).not.toBe("");
+          const client = yield* connect(world.state).pipe(Effect.orDie);
+          const view = yield* client.run({ runId }).pipe(Effect.orDie);
+          expect(view?.cwd).toBe(root);
+
+          const refused = yield* collie(world, [
+            "run",
+            "start",
+            "builds",
+            "--input",
+            "work=one registry",
+            "--input",
+            "workspace=projects-root",
+          ]);
+          expect(refused.envelope.ok).toBe(false);
+          expect(refused.envelope.error?.message).toContain(
+            "is not a git checkout to cut one from",
+          );
+          yield* stopHost(world.state);
+        }),
+      ["planned.workflow.ts", "builds.workflow.ts"],
+    ),
+  240_000,
+);
+
+test(
+  "projects-root is the root the starting front door resolved, whatever the running host's environment",
+  () =>
+    provesWith(
+      "collie-lifecycle-root-once-",
+      (world) =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          // The host is started by a shell with no GITTE_CWD, so its own fallback is HOME.
+          const first = yield* collie(world, ["run", "start", "planned", "--input", "goal=warm"]);
+          expect(first.exit).toBe(0);
+
+          const root = `${world.home}/gitte`;
+          yield* fs.makeDirectory(`${root}/app/.git`, { recursive: true });
+          const started = yield* collie(
+            world,
+            ["run", "start", "planned", "--input", "goal=x", "--input", "workspace=projects-root"],
+            { GITTE_CWD: root },
+          );
+          const runId = (yield* payloadOf(started.envelope)).runId ?? "";
+          const client = yield* connect(world.state).pipe(Effect.orDie);
+          expect((yield* client.run({ runId }).pipe(Effect.orDie))?.cwd).toBe(root);
+          yield* stopHost(world.state);
+        }),
+      ["planned.workflow.ts"],
+    ),
+  240_000,
+);
+
+test(
   "a resume answers with the Run as it is once its stop is cleared",
   () =>
     proves("collie-lifecycle-unstop-", (world) =>
@@ -482,9 +559,9 @@ test(
         const env = yield* currentEnv;
         const { prompts, asked } = answering(["proof", "picked"]);
         expect(yield* pickFlow(new Herdr(env), env, prompts, "inline")).toBe(0);
-        // Offered by the picker, and asked for by the name the module declares.
+        // Offered by the picker, and the one question is what the human wants.
         expect(asked.some((question) => question.includes("Workflows"))).toBe(true);
-        expect(asked.at(-1)).toContain("note");
+        expect(asked.at(-1)).toBe("What do you want?");
 
         // The Run it started is the host's, with this project's and this module's marks
         // on it — the same row a `collie run start` would have made, read back through

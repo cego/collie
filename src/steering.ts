@@ -356,6 +356,9 @@ const BudgetSchema = Schema.Union([
     max_usd: Schema.optionalKey(Schema.Number),
     max_seconds: Schema.Number,
     max_output_bytes: Schema.Number,
+    /** What the call was asked of; absent on records from before either was written. */
+    model: Schema.optionalKey(Schema.String),
+    effort: Schema.optionalKey(Schema.String),
   }),
   Schema.Struct({
     kind: Schema.Literal("settle"),
@@ -385,6 +388,8 @@ export const readBudget = (file: string) => readJournal(file, BudgetJson);
 export interface CallLimits {
   readonly maxSeconds: number;
   readonly maxOutputBytes: number;
+  readonly model?: string;
+  readonly effort?: string;
 }
 
 /**
@@ -427,7 +432,11 @@ export function planReservation(
     max_seconds: limits.maxSeconds,
     max_output_bytes: limits.maxOutputBytes,
   };
-  return { append: [...stale, reserve] };
+  const asked =
+    limits.model === undefined || limits.effort === undefined
+      ? reserve
+      : { ...reserve, model: limits.model, effort: limits.effort };
+  return { append: [...stale, asked] };
 }
 
 export const appendBudget = Effect.fn("Steering.appendBudget")(function* (

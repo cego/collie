@@ -88,6 +88,8 @@ const proves = <A, E>(
       for (const made of [world.user, `${world.install}/workflows`, world.state, world.project]) {
         yield* fs.makeDirectory(made, { recursive: true }).pipe(Effect.orDie);
       }
+      // A project is a checkout, which is what an agent's start from inside it names.
+      Bun.spawnSync(["git", "init", "-q"], { cwd: world.project });
       for (const name of MODULE) {
         yield* fs.copyFile(`${fixtures}/${name}`, `${world.user}/${name}`).pipe(Effect.orDie);
       }
@@ -426,7 +428,7 @@ const answering = (script: ReadonlyArray<string>) => {
 };
 
 test(
-  "the command line and the picker settle the same values and refuse the same way",
+  "the command line settles typed values, and the picker refuses what it cannot infer",
   () =>
     proves("collie-typed-doors-", (world) =>
       Effect.gen(function* () {
@@ -445,6 +447,7 @@ test(
             ticket: "ENG-1",
             mode: "fast",
             ref: "a",
+            spec: "",
           }),
         ]);
         expect(bad.exit).toBe(2);
@@ -466,34 +469,20 @@ test(
             ticket: "ENG-1",
             mode: "fast",
             ref: "7",
+            spec: "",
           }),
         ]);
         expect(started.exit).toBe(0);
 
-        // The picker, asked for the same module: a closed set is offered as a menu rather
-        // than typed, and it lands on the same host as the command line's.
-        const { prompts, asked } = answering([
-          "typed",
-          "y",
-          "4",
-          "true",
-          "[]",
-          "ENG-2",
-          "thorough",
-          "8",
-          // `spec` is optional and its work-source strategy found nothing here, so it is
-          // asked for and declined — and stays absent rather than becoming empty.
-          "",
-        ]);
+        // The picker asks only for the launch Input and infers the rest, so a required
+        // Input nothing can infer is refused with its name rather than asked for.
+        const { prompts, asked } = answering(["typed", "the spec"]);
         expect(yield* pickFlow(new Herdr(env), env, prompts, "inline")).toBe(0);
-        // `mode` is a closed set, so its question is a menu of the values it takes.
-        expect(asked).toContain("A workflow with typed inputs — mode");
+        expect(asked.slice(1, 2)).toEqual(["What do you want?"]);
+        expect(asked.at(-1)).toContain('typed needs "note"');
 
         const listed = (yield* runViews(env, null)).runs;
-        expect(listed).toHaveLength(2);
-        expect(
-          listed.map((run) => run.input.count).sort((one, other) => Number(one) - Number(other)),
-        ).toEqual([2, 4]);
+        expect(listed.map((run) => run.input.count)).toEqual([2]);
         expect(listed.every((run) => run.workflow === "typed")).toBe(true);
         yield* stopHost(world.state);
       }),

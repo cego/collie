@@ -21,6 +21,7 @@ export default defineWorkflow({
     /** Any string here; the child takes two of them, and the child is what decides. */
     grade: Schema.String,
   }),
+  hints: { notes: "goal" },
   output: Schema.String,
   layer: reviewLayer(HOUSE),
   run: ({ input }) =>

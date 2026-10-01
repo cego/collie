@@ -33,6 +33,9 @@ import { readIntent, seedIntent, writeIntent } from "../src/intent";
 import { herdOf } from "../src/steering";
 import { runEffect } from "./support/effect";
 import { hosted, hostedRun, settledRun } from "./support/hosted";
+import { save } from "./support/world";
+import { connect } from "../src/host";
+import { writeConfigValue } from "../src/config";
 import type { World } from "./support/world";
 
 let stateDir: string;
@@ -429,6 +432,63 @@ test(
             },
           },
         });
+      }),
+    ),
+  60_000,
+);
+
+test(
+  "chat's start names projects-root and every Input, or is told each one it left out",
+  () =>
+    inHerd(({ world, env, herdFile }) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const root = `${world.home}/projects`;
+        yield* fs.makeDirectory(`${root}/app/.git`, { recursive: true });
+        yield* writeConfigValue(world.config, "projects.root", root);
+        yield* save(world.user, ["branches.workflow.ts"]);
+        const carry = (action: Action) =>
+          Effect.gen(function* () {
+            const proposal = yield* record(herdFile, {
+              interpretation: "start it",
+              targets: [],
+              actions: [action],
+              allowedNow: [],
+              intentVersions: {},
+              by: "evaluator:call-1",
+            });
+            return yield* carryOutProposal(env, proposal.id, proposal.content_hash, board);
+          });
+
+        const started = yield* carry({
+          kind: "start",
+          workflow: "proof",
+          workspace: "projects-root",
+          inputs: { note: "x" },
+        });
+        expect(started.ok).toBe(true);
+        const client = yield* connect(world.state).pipe(Effect.orDie);
+        const runs = yield* client.runs({ task: null }).pipe(Effect.orDie);
+        expect(runs.map((one) => one.cwd)).toEqual([root]);
+
+        const short = yield* carry({
+          kind: "start",
+          workflow: "branches",
+          workspace: "projects-root",
+          inputs: { size: "small" },
+        });
+        expect(short.ok).toBe(false);
+        if (short.ok) return;
+        expect(short.error.message).toContain('"goal"');
+        expect(short.error.message).toContain('as ""');
+
+        const nowhere = yield* carry({ kind: "start", workflow: "proof", inputs: { note: "x" } });
+        expect(nowhere.ok).toBe(false);
+        if (nowhere.ok) return;
+        expect(nowhere.error.message).toContain('"workspace"');
+        // Told how chat names one, not the command line's flag.
+        expect(nowhere.error.message).toContain("the action's workspace");
+        expect(nowhere.error.message).not.toContain("--input");
       }),
     ),
   60_000,

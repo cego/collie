@@ -248,12 +248,24 @@ export const renovation = (landing: Landing = shippedLanding) =>
     description:
       "Assesses every Renovate Bot merge request, gathers an application's into one batch branch proven on stage under the shared claim and approved by a teammate, merges, tags and watches the release, then checks the repository off the team's shared Renovate issue in Linear.",
     input: Schema.Struct({
-      /** A GitLab URL or an existing local checkout; empty is the workspace it started from. */
-      repository: Schema.optionalKey(Schema.String),
-      /** The Linear team whose shared Renovate issue this Run records itself on. */
-      team: Schema.optionalKey(Schema.String),
-      /** The team's shared Renovate issue, where the operator already knows which it is. */
-      issue: Schema.optionalKey(Schema.String),
+      repository: Schema.optionalKey(
+        Schema.String.annotate({
+          description:
+            "A GitLab URL or an existing local checkout; empty is the checkout it started from",
+        }),
+      ),
+      team: Schema.optionalKey(
+        Schema.String.annotate({
+          description:
+            "The Linear team whose shared Renovate issue this Run records itself on; empty is the configured linear.team",
+        }),
+      ),
+      issue: Schema.optionalKey(
+        Schema.String.annotate({
+          description:
+            "The team's shared Renovate issue, where you already know it; empty finds it",
+        }),
+      ),
     }),
     output: Schema.String,
     // The one agent every step continues, on Claude Code, whose auto mode it is started in.

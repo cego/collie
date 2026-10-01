@@ -306,6 +306,8 @@ export default defineWorkflow({
   title: "What ${id} is for",
   description: "One sentence an operator reads before starting it.",
   input: Schema.Struct({ note: Schema.String }),
+  // The one Input a human's words fill when they start it.
+  hints: { note: "goal" },
   output: Schema.String,
   run: ({ input }) =>
     Effect.gen(function* () {

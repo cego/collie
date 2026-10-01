@@ -2,10 +2,11 @@ The goal, in my words:
 
 {{inputs.goal}}
 
-Ticket (may be empty): {{inputs.ticket}}
 Project root: {{cwd}}
 This run's plan directory: {{run.dir}}/plan
 This run's id: {{run.id}}
+
+{{rooting}}
 
 When I say proceed, implement, build or go, I am answering this run's end menu: run
 `collie run answer {{run.id}} "Implement now"` and change nothing else — the run starts the
@@ -114,3 +115,9 @@ I want changes to the plan. Ask me what, one question at a time, then rewrite
 
 Then write your Output. The `changelog` is sent to an implementer already building from
 this plan, with the diff, so write it for that reader.
+
+## projects-root
+
+The project root above is the Projects root, and it is not a repository: find the
+repositories under it that the goal is about. Each ticket's `Repo:` is a path relative to
+it.
