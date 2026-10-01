@@ -798,9 +798,8 @@ const SECTION_ORDER = new Map<Section, number>([
 const STATE_RANK = new Map<TaskState, number>(STATE_ORDER.map((state, at) => [state, at]));
 
 /**
- * The board's order: the three sections, then the state order inside each, then whatever
- * changed last. Nothing else is ranked — a board that reordered itself on every tick is
- * one a human cannot point at.
+ * The board's order: the four sections, then whatever changed last inside each. Nothing
+ * else is ranked — a board that reordered itself on every tick is one a human cannot point at.
  */
 export function sortBoard(views: ReadonlyArray<TaskView>): TaskView[] {
   return [...views].sort(
