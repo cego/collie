@@ -564,3 +564,25 @@ test("a signature that cannot be fetched leaves the runner already there", () =>
       expect(yield* read(`${root}/bin/collie`)).toBe("the runner already here");
     }),
   ));
+
+test("an OpenSSL that cannot check Ed25519 is named, not taken for a tampered download", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const release = yield* downloadable();
+      yield* release.signature();
+      // macOS's LibreSSL: on PATH, answering, and with no `pkeyutl -rawin`.
+      yield* bin.add(
+        "openssl",
+        `case "$1" in version) echo "LibreSSL 3.3.6" ;; *) echo "pkeyutl: unknown option -rawin" >&2; exit 1 ;; esac`,
+      );
+
+      const done = release.install();
+
+      expect(done.out).toContain("no OpenSSL 3.0 or later");
+      expect(done.out).not.toContain("does not match");
+      expect(done.out).toContain("the download from");
+      expect(done.out).toContain("was refused");
+      expect(done.code).not.toBe(0);
+      expect(yield* read(`${root}/bin/collie`)).toBe("the runner already here");
+    }),
+  ));

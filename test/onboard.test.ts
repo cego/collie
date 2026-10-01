@@ -262,6 +262,22 @@ test("missing git stops with the exact command to run as root, and changes nothi
     }),
   ));
 
+test("an openssl that cannot check a signature stops with the command for OpenSSL 3", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* bin.add("openssl", `echo "LibreSSL 3.3.6"`);
+
+      const { events } = yield* onboarded({ PATH: `${home}/stubs:/usr/bin:/bin` });
+
+      expect(results(events).find((event) => event.step === "system")).toMatchObject({
+        status: "needs_root",
+        detail: expect.stringContaining("LibreSSL"),
+        command: expect.stringMatching(/install( -y)? openssl$/),
+      });
+      expect(results(events).map((event) => event.step)).toEqual(["system"]);
+    }),
+  ));
+
 test("a development checkout gets the checks, and nothing installed or moved", () =>
   runEffect(
     Effect.gen(function* () {

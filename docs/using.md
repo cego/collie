@@ -39,7 +39,8 @@ Collie's releases are public, so the install needs no token. A project that is n
 fork, or a mirror — answers an unauthenticated download with a sign-in page rather than a binary — with HTTP 200, which is why the install
 checks that what arrived is a program rather than trusting the status code. A downloaded
 runner is installed only once its signature from Collie's release key checks out, which
-needs `openssl`.
+needs OpenSSL 3.0 or later: macOS's own LibreSSL and OpenSSL 1.1 cannot check it, so a Mac
+needs `brew install openssl` and a RHEL 8 Machine EPEL's `openssl3`.
 
 For one of those, the install finds a token in this order:
 

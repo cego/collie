@@ -61,6 +61,13 @@ const CLAUDE_LOGIN = "claude auth login";
 const LOGIN_LIMIT = "10 minutes";
 /** Long enough for an installer or a clone; a network that never answers still ends. */
 const COMMAND_LIMIT = "15 minutes";
+/** Where install.sh looks for an OpenSSL that can check a signature, in its order. */
+const OPENSSL_CANDIDATES = [
+  "openssl",
+  "openssl3",
+  "/opt/homebrew/opt/openssl@3/bin/openssl",
+  "/usr/local/opt/openssl@3/bin/openssl",
+];
 const SETTLED: ReadonlyArray<StepStatus> = ["done", "in_place", "skipped"];
 /** A URL's own characters (RFC 3986), so the terminal escapes around it are not part of it. */
 const URL_IN = /https:\/\/[\w\-.~:/?#[\]@!$&'()*+,;=%]+/;
@@ -223,8 +230,19 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
       for (const tool of ["git", "curl", "openssl"]) {
         if ((yield* onPath(search, tool)) === null) missing.push(tool);
       }
-      if (missing.length === 0) return inPlace("git, curl and openssl are installed");
-      return yield* needsRoot(search, missing);
+      if (missing.length > 0) return yield* needsRoot(search, missing);
+      for (const candidate of OPENSSL_CANDIDATES) {
+        if (
+          /^OpenSSL ([3-9]|[1-9]\d)/.test((yield* exec(candidate, ["version"], env.home)).stdout)
+        ) {
+          return inPlace("git, curl and openssl are installed");
+        }
+      }
+      return {
+        ...(yield* needsRoot(search, ["openssl"])),
+        detail:
+          "openssl is older than 3.0 or is LibreSSL, so it cannot check a runner's Ed25519 signature; install OpenSSL 3, then onboard again",
+      } satisfies Outcome;
     }),
   );
   if (system.status !== "in_place") return finish(false);

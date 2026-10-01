@@ -1165,8 +1165,8 @@ the one routine every entry point ends in, so this brings the plugin link, the r
 shim, the operator skill and the skills up to date together rather than replacing the
 runner alone. A pull it cannot do is reported rather than installed over. A runner
 `install.sh` downloads replaces the one there only once its signature checks out
-([Build and release](internals.md)); otherwise the runner already there stays and the
-`runner` step fails.
+([Build and release](internals.md)). Otherwise an install with bun builds the runner from
+source, and one without keeps the runner already there and the `runner` step fails.
 
 The report names what moved: the commit range where the checkout advanced, and one line
 per preparation step saying whether it was done, was already in place, or was skipped —
@@ -1196,7 +1196,7 @@ release to install, this runner's own version when it is not given. Nothing runs
 
 | Step           | What it does                                                                                                                                                                                                                                                                   |
 | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `system`       | Checks for `git`, `curl` and `openssl` (which checks a downloaded runner's signature). Any missing stops here with `needs_root` and the exact command                                                                                                                          |
+| `system`       | Checks for `git`, `curl` and an OpenSSL 3.0 or later (which checks a downloaded runner's signature; LibreSSL and 1.1 cannot). Any missing stops here with `needs_root` and the exact command                                                                                   |
 | `collie`       | Clones `https://github.com/cego/collie.git` (or `COLLIE_REPO`) into `~/.collie` (or `COLLIE_DIR`) and resets `master` to the tag, so a plain `collie upgrade` can still pull; or moves a released checkout to the tag as `upgrade --to` does                                   |
 | `herdr`        | `curl -fsSL https://herdr.dev/install.sh \| sh`, if there is no `herdr`                                                                                                                                                                                                        |
 | `claude`       | Anthropic's user-level installer, `curl -fsSL https://claude.ai/install.sh \| bash`, if there is no `claude`                                                                                                                                                                   |

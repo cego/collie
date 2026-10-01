@@ -544,8 +544,12 @@ key that does not match the public key built into `src/signing.ts`. The public k
 `verifyRelease`, and `install.sh` checks one with `openssl pkeyutl` against the same file,
 fetching `<asset>.sig` with the same token as the asset, before it replaces `bin/collie`. A
 download that is unsigned, does not match, or whose signature cannot be fetched is never
-installed or run, and the runner already there stays. So a Machine without bun can install
-a release only once it is signed. Rotating the key means changing both the secret and
+installed or run, and the runner already there stays. Checking needs OpenSSL 3.0 or later,
+found on PATH as `openssl` or `openssl3`, or in Homebrew's `openssl@3`; without one, or with
+an OpenSSL that cannot do it, the download is refused as unchecked rather than mismatched.
+So a Machine without bun can install a release only once it is signed. The check is the
+target release's own `install.sh`, so `upgrade --to` or `onboard --to` a release from before
+it installs that release's runner unchecked. Rotating the key means changing both the secret and
 `release.pub`, and
 releases signed with the old key stop verifying.
 
