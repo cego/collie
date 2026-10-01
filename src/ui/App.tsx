@@ -20,7 +20,7 @@ import {
   type Row,
   type ViewName,
 } from "./state";
-import { headerSentence, sectionsOf, type Question, type TaskView } from "../board";
+import { headerSentence, sectionsOf, type Question, type TaskView } from "../board-model";
 import { truncated } from "../views";
 import { columnsFor, C } from "./sections";
 import { Board, Button, CardMenu, KeyHelp, type Batch, type Decide, type Where } from "./Board";

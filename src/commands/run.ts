@@ -64,7 +64,8 @@ import { agentStartRefusal, CLI_CHECKOUT_FIX, insideCheckout } from "../agent-st
 import { PROJECTS_ROOT_OPTION, projectsRoot } from "../projects";
 import { currentReports, readDrift } from "../drift";
 import { newest, readCards } from "../cards";
-import { metricsOf, readMetrics, type Metrics } from "../metrics";
+import { metricsOf, readMetrics } from "../metrics";
+import type { Metrics } from "../board-model";
 import { reportOf } from "../report";
 import { latest, readDispositions, recordDisposition, statusLine } from "../disposition";
 import { nowIso } from "../time";

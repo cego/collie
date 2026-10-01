@@ -4,22 +4,18 @@
 
 import { For, Show, type JSX } from "solid-js";
 import { TextAttributes, type MouseEvent } from "@opentui/core";
+import { agentCount, finishedLabel, whereItIs, workingLabel, waitingLabel } from "../board";
 import {
-  agentCount,
-  finishedLabel,
+  foldWaiting,
+  sectionOf,
   type Decision,
   type Gate,
   type HeaderSentence,
   type Proposal,
   type Question,
-  whereItIs,
-  workingLabel,
   type Sections,
   type TaskView,
-  foldWaiting,
-  sectionOf,
-  waitingLabel,
-} from "../board";
+} from "../board-model";
 import { ALL_KEYS, type Command, type MenuItem, type Older, primaryFor } from "./state";
 import { C, cardEdge, sentenceColour, stateGlyph, stepGlyph } from "./sections";
 

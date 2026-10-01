@@ -7,7 +7,8 @@ import { behindRemote } from "./doctor";
 import { COLLIE_TAB, displayName, GLYPH, runTitle } from "./naming";
 import { diffTargetOf } from "./strategies";
 import type { Live } from "./live";
-import { boardLines, type PendingChoice, type TaskView } from "./board";
+import { boardLines, type PendingChoice } from "./board";
+import type { TaskView } from "./board-model";
 import {
   asText,
   cardLines,

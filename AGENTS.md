@@ -46,9 +46,10 @@ herdr actions, and the `collie` CLI.
   is asked, and the rule that live labels are data) and `src/naming.ts` (the labels
   themselves, and which of them are still Collie's to write).
 - **Changing what the board draws, what it is a board of, or which workspace owns it** →
-  [`docs/using.md`](docs/using.md#the-control-plane), alongside `src/board.ts` (the TaskView
-  model and the sentence), `src/ui/Board.tsx` and `src/ui/Drawer.tsx` (the cards and the
-  record) and `src/home.ts` (ownership). One board per Herd, in the Home
+  [`docs/using.md`](docs/using.md#the-control-plane), alongside `src/board-model.ts` (the
+  board's and drawer's Schemas), `src/board.ts` (building it, and the sentence),
+  `src/ui/Board.tsx` and `src/ui/Drawer.tsx` (the cards and the record) and `src/home.ts`
+  (ownership). One board per Herd, in the Home
   ([ADR-0009](docs/adr/0009-the-collie-tab-is-the-herds.md)), and it is one card per Task
   rather than a table of Runs
   ([ADR-0013](docs/adr/0013-the-board-is-cards-of-tasks.md), which supersedes what

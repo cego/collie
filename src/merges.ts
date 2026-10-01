@@ -3,7 +3,8 @@
 // signal that the work landed, so Collie records the disposition itself.
 
 import { Effect, FileSystem, Option, Path, Schema } from "effect";
-import { mrLabel, sectionOf, type MrState, type TaskView } from "./board";
+import { mrLabel } from "./board";
+import { sectionOf, type MrState, type TaskView } from "./board-model";
 import { latest, readDispositions, recordDisposition } from "./disposition";
 import { liveTier, mrDetails, parseMrTarget, type MrRef, type Runner } from "./mr";
 import { runDir } from "./engine";

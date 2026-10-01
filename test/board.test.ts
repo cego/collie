@@ -9,18 +9,20 @@ import {
   boardLines,
   buildBoard,
   finishedLabel,
-  headerSentence,
-  foldWaiting,
   heldLine,
-  matchesTask,
-  sectionOf,
-  sectionsOf,
   sentenceFor,
   whereItIs,
   workingLabel,
   type Sentence,
-  type TaskView,
 } from "../src/board";
+import {
+  foldWaiting,
+  headerSentence,
+  matchesTask,
+  sectionOf,
+  sectionsOf,
+  type TaskView,
+} from "../src/board-model";
 import { recordDisposition } from "../src/disposition";
 import { readEnv } from "../src/env";
 import type { AgentInfo } from "../src/herdr";

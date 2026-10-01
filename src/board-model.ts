@@ -1,0 +1,446 @@
+// What a board is made of, as every front door decodes it, and the pure rules that place
+// and count its cards. No I/O and no Bun-only import: a browser bundle imports this too.
+
+import { Schema } from "effect";
+
+const STATE_ORDER = [
+  "blocked",
+  "active",
+  "quiet",
+  "failed",
+  "stopped",
+  "abandoned",
+  "done",
+] as const;
+
+/** How a card reads, and the order Tasks take inside a section. */
+export const TaskState = Schema.Literals(STATE_ORDER);
+export type TaskState = typeof TaskState.Type;
+
+/** Where a Task is in its pipeline, one glyph per step. */
+export const StepState = Schema.Literals(["done", "active", "blocked", "failed", "todo"]);
+export type StepState = typeof StepState.Type;
+
+export const BoardStep = Schema.Struct({ name: Schema.String, state: StepState });
+export type BoardStep = typeof BoardStep.Type;
+
+/** A question a Run's Driver is holding open, with the options to answer it with. */
+export const Question = Schema.Struct({
+  kind: Schema.Literal("question"),
+  run: Schema.String,
+  /** The Choice id an answer names, so a question replaced meanwhile is not answered. */
+  id: Schema.String,
+  step: Schema.String,
+  /** What the answer is about, for the sentence. */
+  topic: Schema.String,
+  text: Schema.String,
+  /** Empty for a question typed into rather than picked from. */
+  options: Schema.Array(
+    Schema.Struct({
+      id: Schema.String,
+      title: Schema.String,
+      subtitle: Schema.NullOr(Schema.String),
+    }),
+  ),
+});
+export type Question = typeof Question.Type;
+
+/** A correction Collie proposes, which only a human may confirm. */
+export const Proposal = Schema.Struct({
+  kind: Schema.Literal("proposal"),
+  id: Schema.String,
+  /** The payload a yes names exactly; a changed action hashes differently. */
+  hash: Schema.String,
+  text: Schema.String,
+  actions: Schema.Array(Schema.Struct({ text: Schema.String, allowed: Schema.Boolean })),
+});
+export type Proposal = typeof Proposal.Type;
+
+/** An evidence gate a Run is holding at until the verification list is approved. */
+export const Gate = Schema.Struct({
+  kind: Schema.Literal("gate"),
+  run: Schema.String,
+  id: Schema.String,
+  step: Schema.String,
+  verifications: Schema.Array(Schema.String),
+});
+export type Gate = typeof Gate.Type;
+
+export const Decision = Schema.Union([Question, Proposal, Gate]);
+export type Decision = typeof Decision.Type;
+
+/** One live agent of the Task, as a card counts them and a search matches them. */
+export const BoardAgent = Schema.Struct({
+  /** herdr's own name for it, which carries the role it was started as. */
+  name: Schema.String,
+  status: Schema.String,
+  /** Its pane's terminal title, or null for none: what the harness shows, not the step. */
+  now: Schema.NullOr(Schema.String),
+  run: Schema.String,
+});
+export type BoardAgent = typeof BoardAgent.Type;
+
+/** One repository of a plan that spans several, and what became of its Run. */
+export const BoardChild = Schema.Struct({
+  repo: Schema.String,
+  /** Null for a repository the fan-out never got to. */
+  run: Schema.NullOr(Schema.String),
+  state: StepState,
+  mr: Schema.NullOr(Schema.String),
+});
+export type BoardChild = typeof BoardChild.Type;
+
+/** An offer a card can invoke by id, under the title its workflow gave it. */
+export const BoardOffer = Schema.Struct({ id: Schema.String, title: Schema.String });
+export type BoardOffer = typeof BoardOffer.Type;
+
+/** `on-stage` and `in-prod` are merged too: the furthest its deploy jobs have taken it. */
+export const MrState = Schema.Literals(["open", "merged", "closed", "on-stage", "in-prod"]);
+export type MrState = typeof MrState.Type;
+
+/** One Task as the board draws it. */
+export const TaskView = Schema.Struct({
+  /** The Task's id, or the Run's own where it belongs to no Task. */
+  id: Schema.String,
+  name: Schema.String,
+  project: Schema.String,
+  state: TaskState,
+  steps: Schema.Array(BoardStep),
+  sentence: Schema.String,
+  age: Schema.String,
+  /** What drifted, in one line, or null where nothing has. */
+  drift: Schema.NullOr(Schema.String),
+  /** `⏸ Held until 14:00.`, or null while nothing is holding it. */
+  held: Schema.NullOr(Schema.String),
+  /** Who asked for the hold and why, which the drawer says and the card does not. */
+  heldBy: Schema.NullOr(Schema.Struct({ by: Schema.String, reason: Schema.String })),
+  decision: Schema.NullOr(Decision),
+  agents: Schema.Array(BoardAgent),
+  children: Schema.Array(BoardChild),
+  mr: Schema.NullOr(Schema.String),
+  branch: Schema.NullOr(Schema.String),
+  /** What became of the work, where someone recorded it. */
+  disposition: Schema.NullOr(Schema.String),
+  /**
+   * Whether the work needs nothing more from anyone: a disposition was recorded, or the
+   * Run succeeded at a Workflow that produces nothing to land. Places the card in
+   * Finished rather than Waiting on you.
+   */
+  landed: Schema.Boolean,
+  /** When the leading Run ended, or null while it has not. Orders Waiting on you. */
+  ended: Schema.NullOr(Schema.Number),
+  /** What GitLab last said about the merge request, where Collie has asked. */
+  mrState: Schema.NullOr(MrState),
+  /** A plan that finished and nobody has implemented: its card's first action starts that. */
+  planReady: Schema.Boolean,
+  /** That action: the Run's primary offer as its module declares it now, or null for none. */
+  offer: Schema.NullOr(BoardOffer),
+  /** The Run a card's actions act on: the one the sentence is about. */
+  run: Schema.String,
+  /** Every Run of this Task, newest first, for the drawer. */
+  runs: Schema.Array(Schema.String),
+  /** When this Task last changed, in epoch milliseconds, which is what orders the board. */
+  at: Schema.Number,
+});
+export type TaskView = typeof TaskView.Type;
+
+/** Text a panel read from a file, or why it has none. */
+export const Panel = Schema.Union([
+  Schema.TaggedStruct("None", { reason: Schema.String }),
+  Schema.TaggedStruct("Text", { text: Schema.String, truncated: Schema.Boolean }),
+]);
+export type Panel = typeof Panel.Type;
+
+/** One ticket of a run's plan, as the panel lists it. */
+export const PlanTicket = Schema.Struct({
+  /** Its file name inside `plan/issues/`, which is what orders the list. */
+  file: Schema.String,
+  title: Schema.String,
+  /** Whether every checkbox in it is checked. No boxes at all is not done. */
+  done: Schema.Boolean,
+});
+export type PlanTicket = typeof PlanTicket.Type;
+
+/** The plan a run is building from: its spec, and the tickets under it. */
+export const PlanPanel = Schema.Struct({ spec: Panel, tickets: Schema.Array(PlanTicket) });
+export type PlanPanel = typeof PlanPanel.Type;
+
+/** One step's Output: what it was asked for, and what is actually there. */
+export const OutputPanel = Schema.Struct({
+  step: Schema.String,
+  /** Where it was asked for, relative to the run dir, so the path is readable. */
+  where: Schema.String,
+  /** `recorded`, `missing`, or `unreadable` — the states `src/output.ts` already models. */
+  state: Schema.Literals(["recorded", "missing", "unreadable"]),
+  text: Schema.String,
+});
+export type OutputPanel = typeof OutputPanel.Type;
+
+/**
+ * What a Run wants from whoever is watching it. `none` is the ordinary case — the Run
+ * is working and nobody has to do anything — and everything else is a reason to come
+ * back to it.
+ */
+export const AttentionCategory = Schema.Literals([
+  "none",
+  "question",
+  "drift",
+  "completed",
+  "interrupted",
+]);
+export type AttentionCategory = typeof AttentionCategory.Type;
+
+export const Attention = Schema.Struct({
+  category: AttentionCategory,
+  /** Stable across releases; the code an agent branches on. */
+  reason: Schema.String,
+  explanation: Schema.String,
+  /** The `run` subcommands that make sense here, by name. */
+  actions: Schema.Array(Schema.String),
+});
+export type Attention = typeof Attention.Type;
+
+/** What a Run cost and how it went, for `run metrics` and the detail panel. */
+export const Metrics = Schema.Struct({
+  /** From the Run's creation to the first collected verification, in seconds. */
+  timeToFirstEvidence: Schema.NullOr(Schema.Number),
+  verifications: Schema.Struct({
+    pass: Schema.Number,
+    fail: Schema.Number,
+    unstable: Schema.Number,
+    byCollie: Schema.Number,
+  }),
+  slices: Schema.Struct({ done: Schema.Number, total: Schema.Number }),
+  /** Fix rounds plus halts: how much of this Run was doing work again. */
+  rework: Schema.Number,
+  /** The largest context sample any agent reported, and which agent. */
+  peakContext: Schema.NullOr(Schema.Struct({ agent: Schema.String, tokens: Schema.Number })),
+  halts: Schema.Array(Schema.String),
+  obstacles: Schema.Array(Schema.String),
+});
+export type Metrics = typeof Metrics.Type;
+
+/**
+ * The merge request behind a review, as the app's panel shows it. Every field but the
+ * iid is optional on the wire — glab's shape varies with the GitLab version and what
+ * the token may see — so a field nobody answered renders as unknown rather than
+ * taking the panel down.
+ */
+export const MrDetails = Schema.TaggedStruct("Details", {
+  iid: Schema.String,
+  project: Schema.NullOr(Schema.String),
+  title: Schema.String,
+  /** `opened`, `merged`, `closed`, or `draft` where the MR says it is one. */
+  state: Schema.String,
+  author: Schema.String,
+  /**
+   * Who has to get this merged, by username. Empty where GitLab named nobody — which is
+   * a merge request waiting for someone, not one that is mine.
+   */
+  assignees: Schema.Array(Schema.String),
+  sourceBranch: Schema.String,
+  targetBranch: Schema.String,
+  /** The head pipeline's status, or `""` when there is no pipeline to report. */
+  pipeline: Schema.String,
+  /** Phrased, because "2" alone does not say whether that is good. */
+  approvals: Schema.String,
+  /** Whether a discussion is still blocking, which is the one a reviewer chases. */
+  unresolved: Schema.Boolean,
+  notes: Schema.Number,
+  /** Seven characters: enough to tell two heads apart, short enough to read. */
+  headSha: Schema.String,
+  /** The commit the merge put on the target branch, in full, or "" while it is not merged. */
+  mergedSha: Schema.String,
+  /** When GitLab last saw it change, in epoch milliseconds, or 0 when it did not say. */
+  updatedAt: Schema.Number,
+  url: Schema.String,
+});
+export type MrDetails = typeof MrDetails.Type;
+
+/** Why the panel has nothing to show — one line, and nothing else in the panel breaks. */
+export const MrUnavailable = Schema.TaggedStruct("Unavailable", { reason: Schema.String });
+export type MrUnavailable = typeof MrUnavailable.Type;
+
+export const MrPanel = Schema.Union([MrDetails, MrUnavailable]);
+export type MrPanel = typeof MrPanel.Type;
+
+/** Everything the detail panel shows for the selected Run. */
+export const RunDetail = Schema.Struct({
+  id: Schema.String,
+  dir: Schema.String,
+  title: Schema.String,
+  status: Schema.String,
+  inputs: Schema.Array(
+    Schema.Struct({ name: Schema.String, value: Schema.String, source: Schema.String }),
+  ),
+  /** `took` is how long a finished step took, or how long a running one has been going. */
+  steps: Schema.Array(
+    Schema.Struct({
+      id: Schema.String,
+      status: Schema.String,
+      note: Schema.String,
+      took: Schema.NullOr(Schema.String),
+      agents: Schema.Array(Schema.String),
+    }),
+  ),
+  /** One line each, as the record wrote them. */
+  handoffs: Schema.Array(Schema.String),
+  /**
+   * What this Run is for and what bounds it, so the drawer can judge the work against
+   * its intent. Null where the Run has none readable.
+   */
+  intent: Schema.NullOr(
+    Schema.Struct({ goal: Schema.NullOr(Schema.String), constraints: Schema.Array(Schema.String) }),
+  ),
+  /** The rendered review — the thing the panel exists for. */
+  review: Panel,
+  /**
+   * The plan this Run is building from, so the work can be judged against its intent
+   * without leaving the tab. `null` for a Run that has no plan behind it.
+   */
+  plan: Schema.NullOr(PlanPanel),
+  outputs: Schema.Array(OutputPanel),
+  /** The end of the run's log while the panel's tail is toggled on; `null` while it is off. */
+  tail: Schema.NullOr(Panel),
+  /**
+   * Why the Run is where it is, and what is safe to do about it — the same value the
+   * CLI's `run show` and attention wait return. One classification, so the board and an
+   * agent driving the CLI cannot tell a human two different stories about one Run.
+   */
+  attention: Attention,
+  /**
+   * What this Run has to prove, what it has not proved yet, what is in its way, what to
+   * do next, and what became of its work. The panel used to say only why a Run stopped;
+   * these say what it was for and whether it got there.
+   */
+  outcome: Schema.Struct({
+    kind: Schema.NullOr(Schema.String),
+    gaps: Schema.Array(Schema.String),
+    obstacle: Schema.NullOr(Schema.String),
+    next: Schema.NullOr(Schema.String),
+    delivered: Schema.NullOr(Schema.String),
+    metrics: Metrics,
+  }),
+  /** When this Run finished, so the merge-request panel can say what moved since. */
+  finishedAt: Schema.Number,
+  /** Filled by the bridge for a Run whose target is a merge request; never here. */
+  mr: Schema.NullOr(MrPanel),
+});
+export type RunDetail = typeof RunDetail.Type;
+
+/**
+ * Which of the board's four sections a Task belongs in. A decision beats liveness,
+ * liveness beats history, and history is split by whether the work landed.
+ */
+export type Section = "needs-you" | "working" | "waiting" | "finished";
+
+export function sectionOf(view: Pick<TaskView, "state" | "landed">): Section {
+  // Read off the state alone, because a Decision is not the only way to stop for a
+  // human: an agent at its harness's own dialog is one too, and a section derived from
+  // the Decision could not see it. `stateOf` is where the two become one word.
+  if (view.state === "blocked") return "needs-you";
+  if (view.state === "active" || view.state === "quiet") return "working";
+  return view.landed ? "finished" : "waiting";
+}
+
+const SECTION_ORDER = new Map<Section, number>([
+  ["needs-you", 0],
+  ["working", 1],
+  ["waiting", 2],
+  ["finished", 3],
+]);
+const STATE_RANK = new Map<TaskState, number>(STATE_ORDER.map((state, at) => [state, at]));
+
+/**
+ * The board's order: the three sections, then the state order inside each, then whatever
+ * changed last. Nothing else is ranked — a board that reordered itself on every tick is
+ * one a human cannot point at.
+ */
+export function sortBoard(views: ReadonlyArray<TaskView>): TaskView[] {
+  return [...views].sort(
+    (a, b) =>
+      SECTION_ORDER.get(sectionOf(a))! - SECTION_ORDER.get(sectionOf(b))! ||
+      (sectionOf(a) === "needs-you" ? STATE_RANK.get(a.state)! - STATE_RANK.get(b.state)! : 0) ||
+      // What moved last is at the top: in Working what is doing something, in Waiting on
+      // you what you were just doing.
+      (b.ended ?? b.at) - (a.ended ?? a.at),
+  );
+}
+
+/** Waiting on you shows a week open; what is older folds into one counted line. */
+export const WAIT_FOLD_MS = 7 * 24 * 60 * 60 * 1000;
+
+export interface Sections {
+  needs: TaskView[];
+  working: TaskView[];
+  waiting: TaskView[];
+  finished: TaskView[];
+}
+
+/** Waiting on you, split at a week: what is older folds into one counted line. */
+export function foldWaiting(waiting: ReadonlyArray<TaskView>, now: number) {
+  const recent = waiting.filter((view) => (view.ended ?? view.at) >= now - WAIT_FOLD_MS);
+  const older = waiting.filter((view) => (view.ended ?? view.at) < now - WAIT_FOLD_MS);
+  return { recent, older };
+}
+
+/** What a search is matched against: what a human remembers about a Task, and no ids. */
+function haystack(view: TaskView): string {
+  return [
+    view.name,
+    view.project,
+    view.branch ?? "",
+    ...view.agents.flatMap((agent) => [agent.name, agent.now ?? ""]),
+  ]
+    .join(" ")
+    .toLowerCase();
+}
+
+export function matchesTask(view: TaskView, query: string): boolean {
+  const wanted = query.trim().toLowerCase();
+  return wanted === "" || haystack(view).includes(wanted);
+}
+
+/**
+ * The three sections, in the order the board draws them, from a list already in the
+ * board's own order. The search narrows all three the same way: a Task hidden from one
+ * section must not be visible in another.
+ */
+export function sectionsOf(views: ReadonlyArray<TaskView>, query: string): Sections {
+  const found = views.filter((view) => matchesTask(view, query));
+  return {
+    needs: found.filter((view) => sectionOf(view) === "needs-you"),
+    working: found.filter((view) => sectionOf(view) === "working"),
+    waiting: found.filter((view) => sectionOf(view) === "waiting"),
+    finished: found.filter((view) => sectionOf(view) === "finished"),
+  };
+}
+
+/** The one sentence over the board, and whether anything in it wants a human. */
+export interface HeaderSentence {
+  text: string;
+  urgent: boolean;
+}
+
+/**
+ * Counted over every Task: a decision the search is hiding is still waiting. Waiting on
+ * you counts the week's endings; what the fold holds is counted on the fold's own line,
+ * because a header that says 56 over four cards worth a look reads as 56 obligations.
+ */
+export function headerSentence(views: ReadonlyArray<TaskView>, now?: number): HeaderSentence {
+  const needs = views.filter((view) => sectionOf(view) === "needs-you").length;
+  const working = views.filter((view) => sectionOf(view) === "working");
+  const quiet = working.filter((view) => view.state === "quiet").length;
+  const opening =
+    needs === 0
+      ? "Nothing needs you."
+      : // Not "decisions": an agent at its harness's own dialog is counted here too, and
+        // it is a pane to go to rather than anything this board can answer.
+        `${needs === 1 ? "One task is" : `${needs} tasks are`} waiting on you.`;
+  const gone = quiet === 0 ? "" : `, ${quiet} gone quiet`;
+  const waitingAll = views.filter((view) => sectionOf(view) === "waiting");
+  const waiting =
+    now === undefined ? waitingAll.length : foldWaiting(waitingAll, now).recent.length;
+  const held = waiting === 0 ? "" : ` ${waiting} waiting on you.`;
+  return { text: `${opening} ${working.length} working${gone}.${held}`, urgent: needs > 0 };
+}

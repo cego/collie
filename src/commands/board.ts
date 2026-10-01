@@ -4,7 +4,8 @@
 
 import { Effect } from "effect";
 import { Command } from "effect/unstable/cli";
-import { buildBoard, sectionOf, type TaskView } from "../board";
+import { buildBoard } from "../board";
+import { sectionOf, type TaskView } from "../board-model";
 import { loadDefaults } from "../config";
 import { Herdr } from "../herdr";
 import { answering } from "./shared";

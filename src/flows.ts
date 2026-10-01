@@ -19,7 +19,8 @@ import { diffTargetOf, EXCLUSIVE_STRATEGIES, strategyMeaning } from "./strategie
 import { PROJECTS_ROOT_OPTION, projectsRoot } from "./projects";
 import { insideCheckout } from "./agent-start";
 import { placeableUnder, placedByUrl, routed, routerDeps } from "./route";
-import { buildBoard, type MrState, type TaskView } from "./board";
+import { buildBoard } from "./board";
+import type { MrPanel, MrState, PlanPanel, TaskView } from "./board-model";
 import { settleMerges } from "./merges";
 import { nowIso } from "./time";
 import {
@@ -105,19 +106,9 @@ import {
   buildSettings,
   buildWorkflows,
   NUMERIC_DEFAULTS,
-  type PlanPanel,
 } from "./views";
 import { isPermissionMode, PERMISSION_MODES } from "./harness";
-import {
-  mrDetails,
-  mrTarget,
-  parseMrTarget,
-  parseMrUrl,
-  repoArgs,
-  shell,
-  type MrPanel,
-  type Runner,
-} from "./mr";
+import { mrDetails, mrTarget, parseMrTarget, parseMrUrl, repoArgs, shell, type Runner } from "./mr";
 import type { ChildProcessSpawner } from "effect/unstable/process";
 import {
   agentForKey,

@@ -12,10 +12,10 @@
 import { createMemo, For, Show, type JSX } from "solid-js";
 import { TextAttributes, type MouseEvent, type ScrollBoxRenderable } from "@opentui/core";
 import { useRenderer } from "@opentui/solid";
-import type { TaskView } from "../board";
-import { truncated, type Panel, type PlanPanel, type RunDetail } from "../views";
+import type { MrDetails, MrPanel, Panel, PlanPanel, RunDetail, TaskView } from "../board-model";
+import { truncated } from "../views";
 import type { Live } from "../live";
-import { sinceReview, type MrDetails, type MrPanel } from "../mr";
+import { sinceReview } from "../mr";
 import {
   asText,
   cardLines,

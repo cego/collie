@@ -5,14 +5,13 @@
 // the tab slow the day it became useful.
 
 import { Effect, FileSystem, Path, Stream } from "effect";
-import { attentionFor, type Attention } from "./attention";
+import { attentionFor } from "./attention";
 import { loadDefaults, readConfig } from "./config";
 import { readIntent } from "./intent";
 import { savedModules } from "./discovery";
 import { checkModule, readModule } from "./authoring";
 import type { PluginEnv } from "./env";
 import { runTitle } from "./naming";
-import type { MrPanel } from "./mr";
 import { REVIEW_FILE, openFindingsIn } from "./output";
 import { findRun, settled, type RunFacts, type RunState } from "./runs";
 import { diffTargetOf, workSourceOf } from "./strategies";
@@ -22,7 +21,8 @@ import { claudeTrust } from "./trust";
 import { isYamlMap, type YamlMap, type YamlValue } from "./yaml";
 import { NO_OUTCOME, type RunRow } from "./workspace";
 import { latest, readDispositions, type Disposition } from "./disposition";
-import { metricsOf, readMetrics, type Metrics } from "./metrics";
+import { metricsOf, readMetrics } from "./metrics";
+import type { MrPanel, Panel, PlanPanel, PlanTicket, RunDetail } from "./board-model";
 
 /** Long enough to answer "what did I do here", short enough to stay one read. */
 const HISTORY = 200;
@@ -126,11 +126,6 @@ export const buildWorkflows = Effect.fn("Views.buildWorkflows")(function* (env: 
   };
 });
 
-/** Text a panel read from a file, or why it has none. */
-export type Panel =
-  | { _tag: "None"; reason: string }
-  | { _tag: "Text"; text: string; truncated: boolean };
-
 /**
  * Whether a panel's text was cut short, which is the one thing a `Text` panel says
  * beyond its text — and the only thing `m` can act on. Takes an absent panel too,
@@ -187,21 +182,6 @@ const tailed = Effect.fn("Views.tailed")(function* (file: string, cap: number) {
     : { _tag: "Text" as const, text: text.slice(text.indexOf("\n") + 1), truncated: true };
 });
 
-/** One ticket of a run's plan, as the panel lists it. */
-export interface PlanTicket {
-  /** Its file name inside `plan/issues/`, which is what orders the list. */
-  file: string;
-  title: string;
-  /** Whether every checkbox in it is checked. No boxes at all is not done. */
-  done: boolean;
-}
-
-/** The plan a run is building from: its spec, and the tickets under it. */
-export interface PlanPanel {
-  spec: Panel;
-  tickets: PlanTicket[];
-}
-
 const CHECKBOX = /^\s*[-*]\s*\[( |x|X)\]/;
 
 /**
@@ -221,16 +201,6 @@ export function planTicket(file: string, text: string): PlanTicket {
     // which would have called every prose-only ticket done.
     done: marks.length > 0 && marks.every((mark) => mark !== " "),
   };
-}
-
-/** One step's Output: what it was asked for, and what is actually there. */
-export interface OutputPanel {
-  step: string;
-  /** Where it was asked for, relative to the run dir, so the path is readable. */
-  where: string;
-  /** `recorded`, `missing`, or `unreadable` — the states `src/output.ts` already models. */
-  state: "recorded" | "missing" | "unreadable";
-  text: string;
 }
 
 /** What a Run's own plan directory is called inside it (ADR-0002). */
@@ -296,57 +266,6 @@ const plannedFor = Effect.fn("Views.plannedFor")(function* (
   plans.set(key, plan);
   return plan;
 });
-
-/** Everything the detail panel shows for the selected Run. */
-export interface RunDetail {
-  id: string;
-  dir: string;
-  title: string;
-  status: string;
-  inputs: Array<{ name: string; value: string; source: string }>;
-  /** `took` is how long a finished step took, or how long a running one has been going. */
-  steps: Array<{ id: string; status: string; note: string; took: string | null; agents: string[] }>;
-  /** One line each, as the record wrote them. */
-  handoffs: string[];
-  /**
-   * What this Run is for and what bounds it, so the drawer can judge the work against
-   * its intent. Null where the Run has none readable.
-   */
-  intent: { goal: string | null; constraints: ReadonlyArray<string> } | null;
-  /** The rendered review — the thing the panel exists for. */
-  review: Panel;
-  /**
-   * The plan this Run is building from, so the work can be judged against its intent
-   * without leaving the tab. `null` for a Run that has no plan behind it.
-   */
-  plan: PlanPanel | null;
-  outputs: OutputPanel[];
-  /** The end of the run's log while the panel's tail is toggled on; `null` while it is off. */
-  tail: Panel | null;
-  /**
-   * Why the Run is where it is, and what is safe to do about it — the same value the
-   * CLI's `run show` and attention wait return. One classification, so the board and an
-   * agent driving the CLI cannot tell a human two different stories about one Run.
-   */
-  attention: Attention;
-  /**
-   * What this Run has to prove, what it has not proved yet, what is in its way, what to
-   * do next, and what became of its work. The panel used to say only why a Run stopped;
-   * these say what it was for and whether it got there.
-   */
-  outcome: {
-    kind: string | null;
-    gaps: ReadonlyArray<string>;
-    obstacle: string | null;
-    next: string | null;
-    delivered: string | null;
-    metrics: Metrics;
-  };
-  /** When this Run finished, so the merge-request panel can say what moved since. */
-  finishedAt: number;
-  /** Filled by the bridge for a Run whose target is a merge request; never here. */
-  mr: MrPanel | null;
-}
 
 /**
  * The selected Run, read from its own directory. Files, so this is state produced by an

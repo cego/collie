@@ -46,14 +46,8 @@ import {
 } from "./proposals";
 import { recordDisposition, statusLine } from "./disposition";
 import { Herdr } from "./herdr";
-import {
-  buildBoard,
-  headerSentence,
-  mrLabel,
-  sectionOf,
-  type Section,
-  type TaskView,
-} from "./board";
+import { buildBoard, mrLabel } from "./board";
+import { headerSentence, sectionOf, type Section, type TaskView } from "./board-model";
 import { loadDefaults } from "./config";
 import {
   asText as newsText,
