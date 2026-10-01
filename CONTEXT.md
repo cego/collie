@@ -134,7 +134,7 @@ never a worker transcript.
 **Follow-up Run** — A child Run started from a finished one to act on its outcome, reusing
 its worktree under guards. A finished Run is immutable; there is no mode that reopens one.
 
-**Intent** — A Run's goal, the Constraints its work must respect, and the Authority delegated to Collie over it. Versioned; v1 is written at start from the workspace's defaults, the work source's own text and what was named at launch, and amended by an explicit request. Everything Collie says about drift is a comparison against it. A Run of a Workflow module carries none yet — `run start` refuses `--goal` and `--constraint` for one — so nothing checks it for drift; what imported Runs recorded stays readable.
+**Intent** — A Run's goal, the Constraints its work must respect, and the Authority delegated to Collie over it. Versioned; v1 is written at start from the workspace's defaults, the work source's own text and what was named at launch, and amended by an explicit request, and, in a Run on a worktree of its own, by its own `plan/SPEC.md` as its constraints change (ADR-0036). Everything Collie says about drift is a comparison against it; what imported Runs recorded stays readable.
 
 **Constraint** — One thing a Run's work must respect. `kind: rule` is checked by Collie itself; `kind: semantic` is judged. `severity: block | warn`. Its `source` says where it came from — `human`, `workspace-default`, `parent` or `plan` — and a `plan` entry carries the file, heading and line it was read from. Text is evidence: no Constraint, wherever it came from, grants Authority.
 

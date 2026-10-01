@@ -14,6 +14,7 @@ import {
   judge,
   currentReports,
   evidenceFor,
+  fileReport,
   findingKey,
   flattenOutput,
   looksSecret,
@@ -185,6 +186,61 @@ test("the same finding in the same place is not a second finding", () => {
   const settled = found.map((report) => ({ ...report, resolution: "verified" as const }));
   expect(newReports(found, settled)).toHaveLength(1);
 });
+
+test("a finding still there after the Intent moves is the same report, at the new version", () => {
+  const intent = intentWith({ kind: "protected_paths", globs: ["src/**"] });
+  const onFile = checkRules(intent, facts({ changedFiles: ["docs/using.md"] }), "t").map(
+    (report) => ({ ...report, resolution: "correction_submitted" as const }),
+  );
+  const moved = { ...intent, version: 2 };
+  const again = checkRules(moved, facts({ changedFiles: ["docs/using.md"] }), "t2");
+
+  const refiled = newReports(again, onFile);
+  expect(refiled.map((r) => [r.id, r.intent_version, r.resolution])).toEqual([
+    [onFile[0]!.id, 2, "correction_submitted"],
+  ]);
+  expect(openReports([...onFile, ...refiled]).map((r) => r.intent_version)).toEqual([2]);
+  expect(newReports(again, [...onFile, ...refiled])).toEqual([]);
+});
+
+test("a moved report says what the new version found, under the id and state on file", () => {
+  const warn = intentWith({ kind: "protected_paths", globs: ["src/**"] }, "warn");
+  const onFile = checkRules(warn, facts({ changedFiles: ["docs/using.md"] }), "t").map(
+    (report) => ({ ...report, resolution: "correction_submitted" as const, correction: "del-1" }),
+  );
+  const raised = { ...intentWith({ kind: "protected_paths", globs: ["src/**"] }), version: 2 };
+  const again = checkRules(raised, facts({ changedFiles: ["docs/using.md"] }), "t2").map(
+    (report) => ({ ...report, id: "model-chose-this" }),
+  );
+
+  const [moved] = newReports(again, onFile);
+  expect(moved).toEqual({
+    ...again[0]!,
+    id: onFile[0]!.id,
+    resolution: "correction_submitted",
+    correction: "del-1",
+  });
+  expect(moved!.severity).toBe("block");
+});
+
+test("a finding filed again after the Intent moves is still one open report", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectory({ prefix: "hw-refile-" });
+      const intent = intentWith({ kind: "protected_paths", globs: ["src/**"] });
+      const [onFile] = checkRules(intent, facts({ changedFiles: ["docs/using.md"] }), "t");
+      yield* appendDrift(dir, onFile!);
+      expect(yield* fileReport(dir, { ...onFile!, id: "cross-run-id", intent_version: 2 })).toBe(
+        true,
+      );
+      expect(yield* fileReport(dir, { ...onFile!, id: "cross-run-id", intent_version: 2 })).toBe(
+        false,
+      );
+      const open = openReports(yield* readDrift(dir));
+      expect(open.map((r) => [r.id, r.intent_version])).toEqual([[onFile!.id, 2]]);
+    }),
+  ));
 
 test("an amended Intent supersedes what it moved past, and nothing else", () => {
   const intent = seedIntent("r1", {

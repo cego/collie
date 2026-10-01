@@ -194,7 +194,9 @@ checks below run for it: rules after each piece of agent work is collected and b
 next starts, and a judgement before each piece of work and at the finish. What they find is
 [corrected](#correcting-drift) through the agent that did the work last, a Run
 [finishes](#finishing) the same way whatever its workflow, and related Runs are
-[checked against each other](#cross-run-checks). Two kinds, kept apart on purpose.
+[checked against each other](#cross-run-checks). Before each check in a Run on a worktree of
+its own, the constraints in its `plan/SPEC.md` are brought into its Intent, and one anyone
+else removed stays removed ([ADR-0036](adr/0036-a-runs-own-plan-bounds-it.md)). Two kinds, kept apart on purpose.
 
 A **rule** constraint is a fact Collie can establish by itself: which files changed,
 which branch it is on, what a step's Output field says, what a named verification exited
@@ -242,9 +244,9 @@ verifications.
 **Significance** decides whether this is worth interrupting somebody, by rules over facts:
 `decision` when something is waiting for the human (a Choice, unresolved drift, a pending
 proposal, an unacknowledged correction), `consequential` when something happened they
-should know about (blocking drift, a correction sent, the Intent moved, the run failed or
-stopped), `try-it` when there is something to look at or a merge request moved, and
-`routine` otherwise. A `decision` outranks a `consequential` because a decision is the
+should know about (blocking drift, a correction sent, anyone but the plan moved the Intent,
+the run failed or stopped), `try-it` when there is something to look at or a merge request
+moved, and `routine` otherwise. A `decision` outranks a `consequential` because a decision is the
 human being _waited on_.
 
 The narrative is an input the rule ignores. There is no path by which a model makes its
