@@ -341,7 +341,9 @@ installed, are refused before an agent's tab opens.
 `trust.ts` handles a harness's own "may I work in this directory" question, answering it
 where that harness looks for the answer rather than driving its dialog. For claude that is a
 read-modify-write of `~/.claude.json`, a file claude owns — which is why it is done once per
-directory, atomically, and with a backup. What the user sees and how they configure it:
+directory, atomically, and with a backup. `start` in `agents.ts` calls it before each
+agent's harness starts, for the agent's own directory, and only once per directory and
+harness in a Run. What the user sees and how they configure it:
 [Using Collie](using.md#trust-the-first-run-in-a-repo).
 
 ## Compaction at a work boundary

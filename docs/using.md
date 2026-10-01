@@ -1219,13 +1219,19 @@ installed releases turned out not to support:
 ## Trust: the first run in a repo
 
 Starting a Run selects its directory; Collie does not ask you to approve that selection
-again. By default, it writes `hasTrustDialogAccepted` for that directory into `~/.claude.json`,
+again. Before an agent's harness starts, Collie checks whether that harness trusts the
+directory the agent will work in, once per directory and harness in a Run. If it does not,
+Collie writes `hasTrustDialogAccepted` for that directory into `~/.claude.json`,
 which is where claude keeps the answer to its own dialog. The previous file is copied to
 `claude.json.bak` in the Collie state dir first, every other project and setting is carried
 over as it was, and the new file is renamed into place with the old one's permissions, so
 no reader ever sees it half-written. It is still a read-modify-write of a file claude owns:
 if a claude session saves in the same instant, that save is the one that loses. It happens
 once per directory, so the window is opened once.
+
+Each check is a `trust claude:` line in the Run's `agents.log`. A `~/.claude.json` Collie
+cannot read is left alone, and a grant that fails never stops the launch: claude asks in
+its own pane instead.
 
 `trust` defaults to `auto`. `never` leaves trust to Claude's own dialog. The old `ask`
 setting is accepted as `auto`; Collie's duplicate trust menu has been removed.

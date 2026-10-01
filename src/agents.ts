@@ -41,7 +41,7 @@ import {
 import { COMPACTION_PORTS, submittedDelivery } from "./compactors";
 import { kindForRole } from "./cards";
 import { Oversight } from "./oversight";
-import { FALLBACK_DEFAULTS, loadDefaults } from "./config";
+import { FALLBACK_DEFAULTS, loadDefaults, type Defaults } from "./config";
 import * as dispatch from "./dispatcher";
 import { bodySections, layers, personaHoles, skillDirs } from "./definitions";
 import { currentEnv, type PluginEnv } from "./env";
@@ -54,6 +54,7 @@ import {
   resolveChoice,
   startArgs,
   type AgentChoice,
+  type HarnessAdapter,
   type PermissionMode,
   type Preferences,
 } from "./harness";
@@ -798,6 +799,8 @@ export interface AgentHost {
   /** Models the operator added per harness, beside the ones each adapter knows. */
   readonly models?: Readonly<Record<string, ReadonlyArray<string>>>;
   readonly permissions: PermissionMode;
+  /** `auto` where not given. */
+  readonly trust?: Defaults["trust"];
   readonly compactAtTokens: number;
   readonly pollMs?: number;
   /** How long an Output may take. Past it the work is uncertain, never finished. */
@@ -1076,6 +1079,40 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
       );
     }).pipe(Effect.catch(() => Effect.succeed({ dispatch: true as const })));
 
+  const checkedTrust = new Set<string>();
+
+  /**
+   * The harness's own "may I work here", answered before it can ask. A grant that cannot be
+   * written never stops the launch: the harness then asks in its own pane.
+   */
+  const ensureTrusted = Effect.fn("Agents.ensureTrusted")(function* (
+    runId: string,
+    adapter: HarnessAdapter,
+    cwd: string,
+  ) {
+    const trust = adapter.trust?.(host.env.home, host.env.stateDir);
+    const key = `${runId}\0${adapter.id}\0${cwd}`;
+    if (host.trust === "never" || trust === undefined || checkedTrust.has(key)) return;
+    checkedTrust.add(key);
+    const message = yield* trust.state(cwd).pipe(
+      Effect.flatMap((state) =>
+        state === "untrusted"
+          ? trust.grant(cwd).pipe(Effect.map((result) => result.message))
+          : Effect.succeed(
+              state === "unknown"
+                ? `nothing readable records trust for ${cwd}; nothing written, ${adapter.id} will ask in its own pane`
+                : null,
+            ),
+      ),
+      Effect.catch((cause) =>
+        Effect.succeed(
+          `could not record trust for ${cwd} (${reason(cause)}); ${adapter.id} will ask in its own pane`,
+        ),
+      ),
+    );
+    if (message !== null) yield* log(runId, `trust ${adapter.id}: ${message}`);
+  });
+
   /** A pane, an agent in it, and the registry entry that makes it addressable. */
   const start = Effect.fn("Agents.start")(function* (
     ask: AgentAsk,
@@ -1090,6 +1127,7 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
         ? yield* adapter.bypassForbidden(host.env)
         : false;
     const permissions = forbidden ? "auto" : asked;
+    yield* ensureTrusted(ask.runId, adapter, ask.cwd);
     const persona = `${dirFor(ask.runId)}/${ask.operation}.persona.md`;
     yield* write(persona, `${yield* personaOf(ask.persona ?? ask.role)}\n`);
     return yield* withControlLock(
@@ -1791,6 +1829,7 @@ export const configuredAgents = Effect.fn("Agents.configured")(function* (dir: s
     effort: defaults.effort,
     models: defaults.models,
     permissions: isPermissionMode(defaults.permissions) ? defaults.permissions : "auto",
+    trust: defaults.trust,
     compactAtTokens: defaults.compactAtTokens,
   });
 });

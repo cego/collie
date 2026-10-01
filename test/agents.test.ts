@@ -39,6 +39,7 @@ import { HerdrError } from "../src/herdr";
 import { agentName, shellQuote } from "../src/naming";
 import { controlDir, type CompactionPorts } from "../src/compaction";
 import { COMPACTION_PORTS, recordClaudeEvent } from "../src/compactors";
+import { claudeTrust } from "../src/trust";
 
 let rig: Rig;
 let dir: string;
@@ -612,6 +613,74 @@ test(
     ),
   120_000,
 );
+
+/** This test's own ~/.claude.json: the rig's HOME is its temporary root. */
+const claudeJson = () => `${rig.root}/.claude.json`;
+
+const claudeKnows = (projects: Record<string, { readonly hasTrustDialogAccepted: boolean }>) =>
+  FileSystem.FileSystem.pipe(
+    Effect.flatMap((fs) =>
+      fs.writeFileString(claudeJson(), JSON.stringify({ numStartups: 3, projects })),
+    ),
+  );
+
+const trustedByClaude = () => claudeTrust(rig.root, rig.pluginEnv().stateDir).state(rig.projectDir);
+
+test("an agent launched under trust auto finds its untrusted directory trusted before its harness starts", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* claudeKnows({ "/elsewhere": { hasTrustDialogAccepted: true } });
+      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+      yield* session(started("r1"));
+
+      expect(yield* trustedByClaude()).toBe("trusted");
+      const log = yield* read(`${dir}/agents/r1/agents.log`);
+      const granted = log.indexOf(`trust claude: trusted ${rig.projectDir}`);
+      expect(granted).toBeGreaterThanOrEqual(0);
+      expect(granted).toBeLessThan(log.indexOf(`${agentFor("r1")}: claude in`));
+    }),
+  ));
+
+test("under trust never an agent's directory is left for its harness to ask about", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* claudeKnows({});
+      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+      yield* session(started("r1"), { trust: "never" });
+
+      expect(yield* trustedByClaude()).toBe("untrusted");
+    }),
+  ));
+
+test("a config claude cannot read still launches the agent, and the log says why nothing was written", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* fs.writeFileString(claudeJson(), "{ half written");
+      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+      const result = yield* session(started("r1"));
+
+      expect(result._tag).toBe("Success");
+      expect(yield* fs.readFileString(claudeJson())).toBe("{ half written");
+      expect(yield* read(`${dir}/agents/r1/agents.log`)).toContain(
+        `trust claude: nothing readable records trust for ${rig.projectDir}; nothing written`,
+      );
+    }),
+  ));
+
+test("a directory claude already trusts is not written", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* claudeKnows({ [rig.projectDir]: { hasTrustDialogAccepted: true } });
+      const before = yield* fs.readFileString(claudeJson());
+      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+      yield* session(started("r1"));
+
+      expect(yield* fs.readFileString(claudeJson())).toBe(before);
+      expect(yield* fs.exists(`${rig.pluginEnv().stateDir}/claude.json.bak`)).toBe(false);
+    }),
+  ));
 
 /** Every agent's `--` arguments, in the order the agents were started. */
 const everyLaunch = (calls: ReadonlyArray<Call>) =>
