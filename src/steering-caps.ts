@@ -44,8 +44,8 @@ export const CAPABILITIES = {
       interrupt_key: ["Escape"],
     },
     ack: { status: "proven", version_floor: "2.1.263", tested_at: "2026-09-11" },
-    // Unproven: the submit hook records turns Claude injects itself (a task notification) as
-    // external, so it cannot yet tell them from a typed line.
+    // Unproven until the probe passes against an installed release that records Claude's
+    // injected turns as harness rather than external.
     attribution: { status: "unproven", version_floor: "2.1.263", tested_at: null },
   },
   codex: {

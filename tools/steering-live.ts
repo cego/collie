@@ -9,16 +9,15 @@
 // to do — start it the way you normally would. This asks the three questions the
 // capability table has rows for and prints them as markdown to paste into
 // `CAPABILITIES.md`. Attribution asks for a line typed into that pane, by a person or an
-// agent, and waits. It cannot pass yet: it reads the ledger for a `manual_override`, which
-// only a live Run's oversight writes.
+// agent, and waits.
 
 import { BunServices } from "@effect/platform-bun";
 import { Clock, Effect, FileSystem, ManagedRuntime, Path } from "effect";
 import { currentEnv } from "../src/env";
 import { Herdr } from "../src/herdr";
-import { installedVersion } from "../src/compactors";
+import { externalSubmissions, installedVersion, submittedDelivery } from "../src/compactors";
+import { controlDir } from "../src/compaction";
 import { ackPath, entryFromLive, transaction, INTERRUPT_WAIT_MS } from "../src/dispatcher";
-import { ledgerPath, overrideActive, readLedger } from "../src/steering";
 import { nowIso } from "../src/time";
 
 const runtime = ManagedRuntime.make(BunServices.layer);
@@ -76,7 +75,7 @@ const live = Effect.fn("live.run")(function* (harness: string, agent: string, ke
   });
   const entry = addressed.entry;
   if (entry === null) return { version, rows: allNotRun(addressed.reason) };
-  const ledger = yield* ledgerPath(env.stateDir, entry.incarnation?.terminalId ?? "");
+  const hookDir = yield* controlDir(env.stateDir, agent);
 
   /** Whether the agent wrote the ack for this delivery within the budget. */
   const acked = Effect.fn("live.acked")(function* (id: string, budgetMs: number) {
@@ -147,13 +146,16 @@ const live = Effect.fn("live.run")(function* (harness: string, agent: string, ke
       note: "no hook surface Collie can install on this harness",
     });
   } else {
+    // The hook's record, not the ledger: only a live Run's oversight writes manual_override.
+    const deliveredAsCollie = yield* submittedDelivery(hookDir, nowId);
+    const before = yield* externalSubmissions(hookDir);
     yield* Effect.log(`Type any line into ${agent}'s pane now, then Enter. Waiting 90 seconds.`);
     yield* Effect.sleep(90_000);
-    const flagged = overrideActive(yield* readLedger(ledger));
+    const typed = (yield* externalSubmissions(hookDir)) - before;
     rows.push({
       capability: "attribution",
-      result: flagged ? "pass" : "fail",
-      note: flagged ? "manual_override recorded" : "no manual_override recorded",
+      result: deliveredAsCollie && typed === 1 ? "pass" : "fail",
+      note: `${nowId} recorded as collie: ${deliveredAsCollie}; external submissions while typing: ${typed}`,
     });
   }
 
