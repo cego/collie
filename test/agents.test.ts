@@ -663,7 +663,7 @@ test("a config claude cannot read still launches the agent, and the log says why
       expect(result._tag).toBe("Success");
       expect(yield* fs.readFileString(claudeJson())).toBe("{ half written");
       expect(yield* read(`${dir}/agents/r1/agents.log`)).toContain(
-        `trust claude: nothing readable records trust for ${rig.projectDir}; nothing written`,
+        `trust claude: claude's record of trusted directories is missing or not readable; nothing written for ${rig.projectDir}`,
       );
     }),
   ));

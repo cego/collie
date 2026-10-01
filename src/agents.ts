@@ -1090,24 +1090,24 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
     adapter: HarnessAdapter,
     cwd: string,
   ) {
+    if (host.trust === "never") return;
     const trust = adapter.trust?.(host.env.home, host.env.stateDir);
     const key = `${runId}\0${adapter.id}\0${cwd}`;
-    if (host.trust === "never" || trust === undefined || checkedTrust.has(key)) return;
+    if (trust === undefined || checkedTrust.has(key)) return;
     checkedTrust.add(key);
+    const asks = `${adapter.id} will ask in its own pane`;
     const message = yield* trust.state(cwd).pipe(
       Effect.flatMap((state) =>
         state === "untrusted"
           ? trust.grant(cwd).pipe(Effect.map((result) => result.message))
           : Effect.succeed(
               state === "unknown"
-                ? `nothing readable records trust for ${cwd}; nothing written, ${adapter.id} will ask in its own pane`
+                ? `${adapter.id}'s record of trusted directories is missing or not readable; nothing written for ${cwd}, ${asks}`
                 : null,
             ),
       ),
       Effect.catch((cause) =>
-        Effect.succeed(
-          `could not record trust for ${cwd} (${reason(cause)}); ${adapter.id} will ask in its own pane`,
-        ),
+        Effect.succeed(`could not record trust for ${cwd} (${reason(cause)}); ${asks}`),
       ),
     );
     if (message !== null) yield* log(runId, `trust ${adapter.id}: ${message}`);
