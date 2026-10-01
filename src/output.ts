@@ -577,7 +577,14 @@ export function settleRound(round: {
 
 export type FinalFix =
   | { ok: true; attestation: string; outstanding: Finding[] }
-  | { ok: false; halt: Halt; reasons: string[]; outstanding: Finding[] };
+  | {
+      ok: false;
+      halt: "dispute_unresolved";
+      attestation: string;
+      reasons: string[];
+      outstanding: Finding[];
+    }
+  | { ok: false; halt: "fix_unverified"; reasons: string[]; outstanding: Finding[] };
 
 /**
  * A fix report as a reader takes one. The lists are not the reader's to change, so a
@@ -626,7 +633,11 @@ export function settleFinalFix(
   evidence: CheckEvidence,
 ): FinalFix {
   const fixed = new Set(fix.fixed.map(findingKey));
-  const disputed = new Set(fix.disputed.map(findingKey));
+  const disputed = new Map(fix.disputed.map((d) => [findingKey(d), d]));
+  const disputeLine = (f: Finding) => {
+    const reason = disputed.get(findingKey(f))?.reason;
+    return `disputed blocking finding: ${oneLine(f)}${reason ? `: ${reason}` : ""}`;
+  };
   const disputes: string[] = [];
   const unverified: string[] = [];
   if (fix.verdict !== "clean") unverified.push(`the fix reports verdict "findings"`);
@@ -650,7 +661,7 @@ export function settleFinalFix(
     } else if (fixed.has(key)) {
       continue;
     } else if (disputed.has(key)) {
-      disputes.push(`disputed blocking finding: ${oneLine(finding)}`);
+      disputes.push(disputeLine(finding));
     } else {
       unverified.push(`no disposition for ${oneLine(finding)}`);
     }
@@ -659,7 +670,7 @@ export function settleFinalFix(
   // were told to leave it to the human, and leaving it out is not the human deciding.
   const raised = new Set(live.map(findingKey));
   const standing = fix.disputed.filter((d) => isBlocking(d) && !raised.has(findingKey(d)));
-  for (const d of standing) disputes.push(`disputed blocking finding: ${oneLine(d)}`);
+  for (const d of standing) disputes.push(disputeLine(d));
   if (fix.checks.length === 0) unverified.push("no checks reported");
   for (const check of fix.checks) {
     const gap = checkGap(check.name, evidence);
@@ -676,16 +687,19 @@ export function settleFinalFix(
       outstanding: unresolved,
     };
   }
+  const reportedFixed = live.filter((f) => isBlocking(f) && fixed.has(findingKey(f))).length;
+  const disputedToo = disputes.length > 0 ? `, ${disputes.length} disputed` : "";
+  const attestation = `last fix: ${reportedFixed} blocking finding(s) reported fixed${disputedToo}, ${fix.checks.length} check(s) verified on this tree — implementer-reported, not re-reviewed`;
   if (disputes.length > 0) {
-    return { ok: false, halt: "dispute_unresolved", reasons: disputes, outstanding: unresolved };
+    return {
+      ok: false,
+      halt: "dispute_unresolved",
+      attestation,
+      reasons: disputes,
+      outstanding: unresolved,
+    };
   }
-  const outstanding = live.filter((f) => !fixed.has(findingKey(f)));
-  const blocking = live.filter(isBlocking).length;
-  return {
-    ok: true,
-    attestation: `last fix: ${blocking} blocking finding(s) reported fixed, ${fix.checks.length} check(s) verified on this tree — implementer-reported, not re-reviewed`,
-    outstanding,
-  };
+  return { ok: true, attestation, outstanding: live.filter((f) => !fixed.has(findingKey(f))) };
 }
 
 const oneLine = (f: Finding) => `[${f.severity}] ${f.title}${f.file ? ` (${f.file})` : ""}`;

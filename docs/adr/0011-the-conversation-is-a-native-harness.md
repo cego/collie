@@ -3,7 +3,8 @@
 **Status: accepted**, amended by the Control Plane redesign. Built for the Home's first
 slice: the two-pane Home, the harness preference, the bounded read contract, and the two
 transport adapters. The amendment is "Chat may do what the human could do on the board"
-below, which replaces this ADR's original rule that chat's write tools carry nothing out.
+below, which replaces this ADR's original rule that chat's write tools carry nothing out,
+and "Amended 2026-09-29: chat may choose what proves a Run".
 
 The Herd's conversation is an ordinary Claude Code or Pi session running in the Home's
 right-hand pane. Collie does not implement a chat.
@@ -70,7 +71,10 @@ The line is not "does it change a Run"; it is **who wanted it**.
   proposal over the same closed action set, the same `validate` and the same executors a
   typed steer and the CLI go through; the human confirms it on the board by its id and the
   hash of exactly those actions. Drift Collie noticed and corrections it wants to send are
-  this, and stay this.
+  this, and stay this. _Superseded for chat: `collie_propose` now carries out what it is
+  given in the same call, with no separate confirmation — `set_verification` included
+  (the 2026-09-29 amendment below, and [cli.md](../cli.md)). The evaluator's own proposals
+  still wait on the board._
 
 `test/chat-parity.test.ts` is where the line is kept honest: every operation the CLI offers
 carries a route, and `write` says a tool does it directly.
@@ -92,7 +96,38 @@ matters:
 - **Everything chat proposes of its own accord is `pending`**, whatever a Run granted its
   Driver: that grant was for the Driver's own drift checks, and a conversation is not a
   Driver. Reconciling and verifying stay the human's, because they are an account of what
-  somebody watched happen.
+  somebody watched happen. _Superseded for what `collie_propose` carries out, which is
+  applied at once, not left `pending` — `set_verification` too (2026-09-29, below).
+  Reconciling and recording evidence are still the human's._
+
+## Amended 2026-09-29: chat may choose what proves a Run
+
+A Run that verifies is now refused at start when nothing is approved to prove it, and the
+human put the line here: "the model may decide what counts as proof". The human verifies
+the work in the merge request before it lands, and is not needed in the loop before then.
+So the approved set is the one piece of authority chat sets on its own judgment:
+
+- A `start` through `collie_do` may carry `verify`, the checks chat chose, read from the
+  repository. The start is still the human's instruction; the checks it carries are
+  chat's choice.
+- `set_verification` adds or withdraws a running Run's check, through the same host grant
+  and Intent amendment as `run intent verification`. `collie_propose` carries it out in
+  the same call, with no yes: nobody confirms it.
+
+This is a reach, and it is kept on purpose. A check is an executable and its arguments,
+never a shell string, but the executable may be `sh` and its argument anything, and
+Collie spawns it itself at the gate — outside the agents' permission rules, including
+any managed-settings deny rules. Chat reads the repository to choose it, so what the
+repository says can decide what Collie runs. Bounding it — a board yes, or only
+executables a verify.json already names — would put the human back in the loop before the
+merge request, which is the line the human drew. What bounds it instead is the merge
+request: it lists each check the Run was held to with its command, and the human reads that
+before anything lands. The same holds for a `start`'s `verify`, which `collie_do` carries
+out as the start it is part of.
+
+Recording evidence stays out of reach: there is still no `verify` action kind, so chat can
+choose a command but never say it passed. And chat itself still has no shell: the
+commands it chooses run at the gate, not in the conversation.
 
 **The built-in tools are off** in both launches — `--tools ""` and `--no-builtin-tools`.
 Collie's reads are the agent's entire reach, so there is no shell beside the admission

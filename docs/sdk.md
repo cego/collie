@@ -324,10 +324,13 @@ opens, no agent starts and no Output is fabricated. Say why in what you return.
 
 `agents.askRoute(role, place.lineage)` is what an agent is told about asking for a decision
 its work does not cover: the pane of whoever is live in that role in this Run's lineage —
-the Run itself, then the Runs it was started from or builds a plan of, and so on — and otherwise to decide and
-record the decision. Another Run's agent in the same role is never the answer, however
-recently it was started from the same place. You name the role — who may be asked is your
-workflow's declaration, not an assumption Collie makes about it.
+the Run itself, then the Runs it was started from or builds a plan of, and so on — and
+otherwise to decide and record it under `assumptions` in its Output. Another Run's agent in
+the same role is never the answer, however recently it was started from the same place. You
+name the role — who may be asked is your workflow's declaration, not an assumption Collie
+makes about it. Give that work's Output an `assumptions` field and carry what it says to the
+human, as implement's `Built` does into the merge request: a field the schema lacks is
+decoded away.
 
 The work itself is written to `<state>/agents/<run>/<operation>.prompt.md` and the message
 names that file. One send is one message and not a transcript: a step's prompt carries a
@@ -719,7 +722,9 @@ rally converges, stands on a dispute and runs out of rounds where these three de
   the previous round's `keys`; without it nothing can notice a rally going round.
 - **`settleFinalFix(live, fix, evidence)`** — the last round has no review after it, so the
   fix's own account is what is left. Every blocking finding needs a disposition, and every
-  check it names needs a passing verification on the tree as it stands.
+  check it names needs a passing verification on the tree as it stands. A fix that holds up
+  but disputes a blocking finding comes back `dispute_unresolved`, with the same
+  `attestation` a fix that stands carries, since the human reads both.
 
 `ReviewOutputSchema`, `FixOutputSchema` and `SynthesisSchema` are the shapes those steps
 write. Hand one to `agentWork` and what comes back is its own type — the same contract the
@@ -736,8 +741,9 @@ tree.
 `host.verify({ runId, name, cwd })` runs one of the commands your Run was started under the
 authority of, in the directory the grant names, resolved from `cwd` — which has to be the
 Run's own checkout — and records what it did. The list is `.collie/verify.json`, read when the Run
-started, plus whatever a human has granted it since with `collie run intent verification` —
-a name nobody approved is refused, and a workflow cannot add to it. Anyone else
+started, plus whatever has been granted it since: by a human with `collie run intent
+verification`, or by chat with `set_verification`, which `collie_propose` carries out with no
+yes. A name not on it is refused, and a workflow cannot add to it. Anyone else
 collects the same way from outside: `collie verify --run <your run id> -- <command>`.
 With `at: "default-base"` it runs at the merge-base of the checkout and its default branch,
 in that same checkout so what the build installed is there, and then puts the checkout back;
@@ -774,6 +780,11 @@ const gaps = evidenceGapsOf({
   tickets,
 });
 ```
+
+`checkGapsOf` takes the same question and answers only the gaps a verification on this
+tree could close: a check that failed, never ran, or passed on an earlier tree. Those are
+what a fix may be handed. A reviewer's judgement and an Output's claim are not moved by
+running anything, so a fix handed one spends a session and changes nothing.
 
 [ADR-0023](adr/0023-a-rally-is-a-loop-and-a-claim-is-not-proof.md) is why the rally is a
 loop and why a claim is not proof.

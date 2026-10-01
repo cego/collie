@@ -80,7 +80,9 @@ the work itself. Nobody is asked for one ([the full order](cli.md#start-a-run)).
 built with the same pass `review` runs — one complete review — and loops on the findings for
 at most four review and fix rounds. Every commit is pushed, so the reviewers read the change
 rather than the state before it. The merge request is opened or updated last, and not at
-all where there is no GitLab to open one on or the evidence is not there.
+all only where there is no GitLab to open one on. Missing evidence does not keep it
+closed: an opened merge request is not a gate that passed, and what is unproved is
+written into it (see **Ends:**).
 
 **Outcome.** `--input outcome=bug|refactor|investigation|docs|migration|feature` says what
 kind of result this run has to prove, and so what evidence closes it — see
@@ -92,9 +94,11 @@ documentation for a feature's evidence would ask for tickets that do not exist.
 **Ends:** with the merge request, or with the reason there is none. Nobody is asked along
 the way: the human verifies the work in the merge request, before it lands. The gate re-runs
 a failed check once, since a check that fails and then passes is a flake, and then hands
-what is unproved to the implementer for up to four fixes. Before any fix, a check that failed is run once
-where the branch leaves the default branch: one that fails there too is named in the merge
-request as failing before the run's changes, and is not handed to the implementer. A gate fix lands after the last
+what a check could still prove to the implementer for up to four fixes; a reviewer's
+judgement or an Output's claim is not handed over, since no fix moves it. Before any fix, a
+check that failed is run once where the branch leaves the default branch: one that fails
+there too is named in the merge request as failing before the run's changes, and is not
+handed to the implementer. A gate fix lands after the last
 review, so the merge request says it was not re-reviewed. What the Run could not settle —
 checks still unproved, blocking disputes the reviewers left unanswered, and the assumptions
 an implementer made where the spec was silent — goes into the description under **Not

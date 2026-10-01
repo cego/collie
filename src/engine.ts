@@ -234,6 +234,9 @@ export const SDK_DECLARATIONS = `declare module "collie" {
   /** A command Collie watched, bound to the tree it ran on. Never an Output's claim. */
   export interface Verification {
     readonly name: string;
+    /** As PATH resolved it when it ran, so the record says what ran. */
+    readonly executable: string;
+    readonly argv: ReadonlyArray<string>;
     readonly cwd: string;
     readonly start: Snapshot;
     readonly end: Snapshot;
@@ -270,7 +273,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly message: string;
   }
 
-  /** One command a human approved Collie to run for this Run. */
+  /** One command Collie may run for this Run, granted by a human or chosen by chat. */
   export interface VerifySpec {
     readonly name: string;
     readonly executable: string;
@@ -585,7 +588,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     ) => Effect.Effect<ReadonlyMap<string, string>>;
     /**
      * What an agent is told about asking for a decision its work does not cover: the
-     * pane of whoever is live in that role in this lineage, and otherwise to decide.
+     * pane of whoever is live in that role in this lineage, and otherwise to decide and
+     * record it under \`assumptions\` in its Output, which that Output's schema has to have.
      */
     readonly askRoute: (role: string, lineage: ReadonlyArray<string>) => Effect.Effect<string>;
     readonly launch: (ask: AgentAsk) => Effect.Effect<Launched, AgentUncertain | AgentParked>;
@@ -873,7 +877,14 @@ export const SDK_DECLARATIONS = `declare module "collie" {
 
   export type FinalFix =
     | { ok: true; attestation: string; outstanding: Finding[] }
-    | { ok: false; halt: Halt; reasons: string[]; outstanding: Finding[] };
+    | {
+        ok: false;
+        halt: "dispute_unresolved";
+        attestation: string;
+        reasons: string[];
+        outstanding: Finding[];
+      }
+    | { ok: false; halt: "fix_unverified"; reasons: string[]; outstanding: Finding[] };
 
   /** Minor is the one severity not worth blocking on; anything else fails closed. */
   export function isBlocking(finding: Finding): boolean;
@@ -1135,6 +1146,13 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     /** Approved checks that also failed where the branch leaves the default branch. */
     readonly preexisting?: ReadonlyArray<string>;
   }): ReadonlyArray<string>;
+  /**
+   * The gaps among those a verification on this tree could close: what a fix may be
+   * handed. A reviewer's judgement and an Output's claim are not moved by running anything.
+   */
+  export function checkGapsOf(
+    options: Parameters<typeof evidenceGapsOf>[0],
+  ): ReadonlyArray<string>;
 
   /** Where the work to be done was described. */
   export interface WorkSource {
@@ -4276,6 +4294,8 @@ const makeRegistry: (
     yield* refuseAgent(generation, asked);
     const request = yield* checkoutRequest(generation, asked);
     const launch = launchOptions(generation, asked);
+    // An empty set given is none given, so the project's verify.json still applies.
+    const verify = options.verify?.length ? options.verify : undefined;
     // Settled before anything exists to clean up: an input the workflow's own schema
     // rejects names its field here, and no row, claim or execution is created.
     const settled = yield* settleInput(generation.fields, {
@@ -4295,7 +4315,8 @@ const makeRegistry: (
     )({ runId, input: settled.input }).pipe(
       Effect.mapError((cause) => new HostRefused({ reason: `${REFUSED_INPUT}: ${cause.message}` })),
     );
-    // A retry of a Run already admitted is not a new start, and keeps what it froze.
+    // A retry of a Run already admitted is not a new start: it keeps what it froze, or
+    // freezes what it carries.
     const approved =
       (yield* store.requested(options.request)) === null
         ? yield* refuseUnprovable({
@@ -4304,10 +4325,10 @@ const makeRegistry: (
             launch,
             from: request.kind === "existing" ? request.path : options.project,
             project: options.project,
-            verify: options.verify,
+            verify,
             userDir,
           })
-        : undefined;
+        : verify;
     const claimed = yield* claimAndPlace({
       request: options.request,
       run: runId,
@@ -4439,10 +4460,10 @@ const makeRegistry: (
       // caller's own values win: an offer names where a value comes from, and a caller
       // that has a better one for the same field is not overruled by a default.
       const filled = { ...inputsFor(offer, { runDir: where, facts, input }), ...options.input };
-      // The offer's own workflow settles what it was given, so arguments it will not
-      // take are refused here and nothing is started.
       // Held to what its parent was, grants included, where the parent had anything.
       const inherited = yield* approvedOf(dir, row.run);
+      // The offer's own workflow settles what it was given, so arguments it will not
+      // take are refused here and nothing is started.
       return yield* startWork({
         generation: starting,
         request: options.request,
@@ -4450,7 +4471,7 @@ const makeRegistry: (
         input: filled,
         task: row.task,
         parent: row.run,
-        verify: inherited.length > 0 ? inherited : undefined,
+        verify: inherited,
       });
     }),
 

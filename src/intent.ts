@@ -179,6 +179,19 @@ export type Change =
   | { readonly kind: "remove-constraint"; readonly id: string }
   | { readonly kind: "authority"; readonly patch: Partial<Authority> };
 
+/** The authority change granting `name` this command, or withdrawing it where there is none. */
+export function verificationGrant(
+  intent: Intent,
+  name: string,
+  command: Omit<VerifySpec, "name"> | null,
+): Change {
+  const kept = intent.authority.run_verification.filter((spec) => spec.name !== name);
+  return {
+    kind: "authority",
+    patch: { run_verification: command === null ? kept : [...kept, { name, ...command }] },
+  };
+}
+
 function describe(change: Change): string {
   switch (change.kind) {
     case "set-goal":
