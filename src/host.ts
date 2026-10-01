@@ -212,9 +212,10 @@ export const HostRpcs = RpcGroup.make(
       runId: Schema.String,
       name: Schema.String,
       command: Schema.NullOr(VerifySpecSchema.mapFields(Struct.omit(["name"]))),
+      request: Schema.String,
     },
     success: Schema.Array(VerifySpecSchema),
-    error: HostRefused,
+    error: Schema.Union([HostRefused, RequestConflict]),
   }),
   /** A human's own words to the agent this run has, through the one sender. */
   Rpc.make("steer", {
@@ -227,7 +228,7 @@ export const HostRpcs = RpcGroup.make(
       mode: Schema.optional(Schema.Literals(["boundary", "now", "interrupt"])),
     },
     success: Steered,
-    error: HostRefused,
+    error: Schema.Union([HostRefused, RequestConflict]),
   }),
 );
 
@@ -241,15 +242,20 @@ export type HostClient = RpcClient.RpcClient<
 
 const serialization = RpcSerialization.layerNdjson;
 
+/** The front door each connection declared, which every operation it asks is recorded under. */
+// ponytail: one entry per connection, never removed; prune on disconnect if hosts live for months.
+type Declared = Map<number, FrontDoor>;
+
 /**
  * The handlers, and with them the registry: built in this layer's scope, which is the
  * host's. A client's connection is a scope of its own under it, so a client that goes
  * takes nothing with it — not a registration, not an execution, not another client.
  */
-const handlers = (dir: string, installation: string) =>
+const handlers = (dir: string, installation: string, declared: Declared) =>
   HostRpcs.toLayer(
     Effect.gen(function* () {
       const registry = yield* Registry;
+      const bun = yield* Effect.context<BunServices>();
       const pid = yield* currentPid;
       // The installation this host belongs to, which the client that started it named.
       const env = yield* currentEnv.pipe(Effect.orDie);
@@ -304,9 +310,35 @@ const handlers = (dir: string, installation: string) =>
         watch: ({ runId }) => registry.watch(runId),
         recover: () => registry.recover,
         offers: ({ runId }) => registry.offers(runId),
-        grant: ({ runId, name, command }) => registry.grant({ runId, name, command }),
-        steer: ({ runId, text, request, operation, agent, mode }) =>
-          registry.steer({ runId, text, request, operation, agent, mode }),
+        grant: ({ runId, name, command, request }, { client }) =>
+          once(
+            runDir(dir, runId),
+            {
+              operation: "grant",
+              request,
+              origin: declared.get(client.id) ?? "cli",
+              asked: { name, command: fromText(toText(command)) },
+              result: Schema.Array(VerifySpecSchema),
+            },
+            registry.grant({ runId, name, command }),
+          ).pipe(Effect.provideContext(bun)),
+        steer: ({ runId, text, request, operation, agent, mode }, { client }) =>
+          once(
+            runDir(dir, runId),
+            {
+              operation: "deliver",
+              request,
+              origin: declared.get(client.id) ?? "cli",
+              asked: {
+                text,
+                operation: operation ?? null,
+                agent: agent ?? null,
+                mode: mode ?? null,
+              },
+              result: Steered,
+            },
+            registry.steer({ runId, text, request, operation, agent, mode }),
+          ).pipe(Effect.provideContext(bun)),
       });
     }),
   );
@@ -384,15 +416,18 @@ const sideJobsLayer = (dir: string, panels: MrPanels) =>
  * The board, built here for every front door. Anything written under the state
  * directory, by this host or anyone else, is a reason to look again.
  */
-const frontDoorHandlers = (dir: string, installation: string, panels: MrPanels) =>
+const frontDoorHandlers = (
+  dir: string,
+  installation: string,
+  panels: MrPanels,
+  declared: Declared,
+) =>
   FrontDoorRpcs.toLayer(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const registry = yield* Registry;
       const hosted = yield* Effect.context<HostServices>();
       const { env, herdr, bun, build } = yield* hostBoard(dir);
-      // ponytail: one entry per connection, never removed; prune on disconnect if hosts live for months.
-      const declared = new Map<number, FrontDoor>();
       // A finished Run's plan cannot change, so every drawer on it shares one read.
       // ponytail: kept for the host's life; evict by age if a host lives for months.
       const plans = new Map<string, PlanPanel | null>();
@@ -1030,12 +1065,13 @@ const own = (dir: string) =>
     yield* fs.remove(socketOf(dir), { force: true }).pipe(Effect.orDie);
     const installation = yield* installationOf(dir).pipe(Effect.orDie);
     const panels: MrPanels = new Map();
+    const declared: Declared = new Map();
     return yield* Layer.launch(
       RpcServer.layer(AllRpcs).pipe(
         Layer.provide(
           Layer.mergeAll(
-            handlers(dir, installation),
-            frontDoorHandlers(dir, installation, panels),
+            handlers(dir, installation, declared),
+            frontDoorHandlers(dir, installation, panels, declared),
             sideJobsLayer(dir, panels),
           ).pipe(
             Layer.provide(

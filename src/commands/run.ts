@@ -12,7 +12,7 @@ import {
 } from "effect";
 import type { BunServices } from "@effect/platform-bun/BunServices";
 import { Argument, Command, Flag } from "effect/unstable/cli";
-import { clearOverride, err, type Failure } from "../operations";
+import { clearOverride, err, newRequestId, type Failure } from "../operations";
 import { withDirLock } from "../lock";
 import { GIVEN, INFERRED, evidenceDir, runDir } from "../engine";
 import { textOf } from "../runs";
@@ -907,12 +907,14 @@ const runSteer = Command.make(
           if (!(yield* anyRuns(resolved.env))) {
             return err("run_not_found", `No workflow host has a Run "${runId}".`, { run: runId });
           }
+          const door = yield* cliDoor(resolved.env);
           return yield* mutation(resolved.env, "run-steer", requestId, (id) =>
             steerRun(resolved.env, {
               runId,
               text,
               request: id,
               operation: Option.getOrNull(operation) ?? undefined,
+              door,
             }),
           );
         }),
@@ -1568,7 +1570,12 @@ const intentVerification = Command.make(
         hosted: (env) =>
           !remove && granted === null
             ? Effect.succeed(missing)
-            : grantRun(env, { runId, name, command: granted }),
+            : Effect.all([cliDoor(env), newRequestId()]).pipe(
+                Effect.orDie,
+                Effect.flatMap(([door, request]) =>
+                  grantRun(env, { runId, name, command: granted, request, door }),
+                ),
+              ),
       },
     );
   },

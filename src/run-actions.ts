@@ -160,7 +160,7 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
   registerExecutor("clear_override", (action, by) =>
     carry(clearOverride(env.stateDir, new Herdr(env), action.run, action.agent, actorName(by))),
   );
-  registerExecutor("deliver", (action) =>
+  registerExecutor("deliver", (action, by) =>
     carry(
       Effect.gen(function* () {
         const id = yield* newRequestId();
@@ -170,6 +170,7 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
           text: action.text,
           request: id,
           mode: action.mode,
+          door: by.origin,
         });
       }),
     ),
@@ -235,7 +236,13 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
   registerExecutor("set_verification", (action, by) =>
     Effect.gen(function* () {
       const command = action.command ?? null;
-      const granted = yield* grantRun(env, { runId: action.run, name: action.name, command });
+      const granted = yield* grantRun(env, {
+        runId: action.run,
+        name: action.name,
+        command,
+        request: yield* newRequestId(),
+        door: by.origin,
+      });
       if (!granted.ok) return failed(granted.error.message);
       const dir = runDir(env.stateDir, action.run);
       // The grant is what the gate runs; an Intent that failed to follow it is reported,

@@ -159,6 +159,7 @@ test(
             .dispose({ ...asked, kind: "abandoned" })
             .pipe(Effect.flip);
           expect(otherwise._tag).toBe("RequestConflict");
+          yield* client.grant({ runId, name: "lint", command: null, request: "g-1" });
           const dir = runDir(world.state, runId);
           expect(yield* readDispositions(dir)).toEqual([line]);
           expect(
@@ -167,6 +168,7 @@ test(
             ["start", "board", "s-1"],
             ["followup", "board", "f-1"],
             ["disposition", "board", "d-1"],
+            ["grant", "board", "g-1"],
           ]);
           yield* stopHost(world.state);
         }).pipe(Effect.orDie),

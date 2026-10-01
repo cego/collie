@@ -621,9 +621,22 @@ export const grantRun = (
     readonly runId: string;
     readonly name: string;
     readonly command: Omit<VerifySpec, "name"> | null;
+    readonly request: string;
+    /** Who asked, where it is not the command line. */
+    readonly door?: FrontDoor;
   },
 ): Effect.Effect<OpResult, never, Client> =>
-  asks(env, (client) => client.grant(options)).pipe(
+  asks(
+    env,
+    (client) =>
+      client.grant({
+        runId: options.runId,
+        name: options.name,
+        command: options.command,
+        request: options.request,
+      }),
+    options.door,
+  ).pipe(
     Effect.map((answered) =>
       answered.ok
         ? {
@@ -695,9 +708,23 @@ export const steerRun = (
     readonly operation?: string;
     readonly agent?: string;
     readonly mode?: "boundary" | "now" | "interrupt";
+    /** Who asked, where it is not the command line. */
+    readonly door?: FrontDoor;
   },
 ): Effect.Effect<OpResult, never, Client> =>
-  asks(env, (client) => client.steer(options)).pipe(
+  asks(
+    env,
+    (client) =>
+      client.steer({
+        runId: options.runId,
+        text: options.text,
+        request: options.request,
+        operation: options.operation,
+        agent: options.agent,
+        mode: options.mode,
+      }),
+    options.door,
+  ).pipe(
     Effect.map((answered) => {
       if (!answered.ok) return answered;
       const sent = answered.value;
