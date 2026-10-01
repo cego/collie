@@ -745,8 +745,9 @@ does not have comes back as a question for you rather than being dropped. `start
 `workspace`, so a launch asked for from the Home lands in the repository it is about
 rather than in Collie's own namespace directory — and it needs no existing run.
 
-Requests retain their origin (`chat:`, `cli:`, or the board). Attribution is an audit
-record, not an approval requirement. Launches into Collie's Home state directory return
+Requests retain their origin (`chat:`, `cli:`, or the board). A `collie` command is a
+human's (`cli-tty`) only at a terminal, in a pane herdr does not report as an agent's or
+outside herdr; anywhere else it is `cli`. Attribution is an audit record, not an approval requirement. Launches into Collie's Home state directory return
 `needs_input`: choose the project with `--workspace` or `COLLIE_CWD` before starting work.
 Legacy Runs rooted there cannot be resumed into the state directory; start a new Run
 against the project instead.
@@ -1342,11 +1343,10 @@ never adopted and never signalled.
 
 Clients talk to it over a unix socket in that same directory, with Effect's own RPC: the
 same schemas at both ends, and nothing listening off this machine. It answers `identity`,
-`discover`, `load`, `registrations`, `start`, `status`, `run`, `runs`, `watch`, `recover`, `answer`, `offers`, `invoke`, `control`, `grant` and `steer` — one
+`discover`, `load`, `registrations`, `status`, `run`, `runs`, `watch`, `recover`, `offers`, `grant` and `steer` — one
 registry, in front of as many clients as ask. `run` and `runs` are the read model the front
 doors show; `watch` streams it, current state first and a whole state each time; `recover`
-registers what current files now allow and hands over what is outstanding; `control` sets
-or clears a hold or a stop on one run, and every watcher hears about it. One fiber in the
+registers what current files now allow and hands over what is outstanding. One fiber in the
 host asks the engine about the work it has not finished, on a schedule every client shares,
 and speaks up when anything a run shows has changed, so watching costs the same whether one
 client is looking or the whole board is. Closing a client cancels nothing it started;
@@ -1368,6 +1368,14 @@ the first host to own the directory, and survives restarts and upgrades.
 The host also runs what nobody has to have a pane open for: the merge watch, which asks
 GitLab about each waiting merge request every 5 minutes and records a merge; each Herd's
 News; and worktree pruning, every 3 minutes.
+
+The operations that change a Run are on `FrontDoorRpcs` too: `start`, `answer`, `control`
+(a hold or a stop, set or cleared, and every watcher hears about it), `resume` and
+`invoke` (an offer). Each takes a request id, and the same id twice is one operation. A
+channel first sends `declare` with its front door, and the host stamps every operation on
+it with that, as a line in the Run's `operations.jsonl`: the operation, the request, the
+Actor and what came of it ([ADR-0039](adr/0039-every-operation-records-who-asked.md)). A
+channel that declares nothing is `cli`.
 
 `protocol` is an integer, also in `identity`. An optional field, a new operation or a new
 kind of message does not change it, and a client reads a kind it does not know as

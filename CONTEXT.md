@@ -85,6 +85,11 @@ is required. Questions about the flock are Native chat's.
 **Proposal** — A durable, hash-bound set of actions. Explicit requests execute through
 this record immediately. Unsolicited background suggestions remain pending.
 
+**Actor** — Who asked for an operation: the front door its channel declared (`board`,
+`cli-tty`, `cli`, `chat`, …) and the request id. The host records it in the Run's audit
+trail with every start, answer, hold, stop, resume and offer invoked. `board` and
+`cli-tty` are a human; `cli-tty` needs a terminal outside any agent's pane.
+
 **Confirmation** — A command naming a Proposal's id **and** its content hash. A yes to a
 summary is not consent to a payload nobody read. Anyone may give one — a human at a
 terminal or on the board, or chat through `collie_do` — and who did is recorded: a human

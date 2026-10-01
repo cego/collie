@@ -81,7 +81,9 @@ export const confirm = Command.make(
   { proposalId: proposalIdArg, hash: hashFlag, requestId: requestIdFlag },
   ({ proposalId, hash, requestId }) =>
     mutating("confirm", requestId, (env, id) =>
-      carryOutProposal(env, proposalId, Option.getOrUndefined(hash), actorNow(id)),
+      Effect.flatMap(actorNow(env, id), (actor) =>
+        carryOutProposal(env, proposalId, Option.getOrUndefined(hash), actor),
+      ),
     ),
 ).pipe(Command.withDescription("Carry out a proposal, naming it and its exact contents"));
 
@@ -89,7 +91,9 @@ export const decline = Command.make(
   "decline",
   { proposalId: proposalIdArg, requestId: requestIdFlag },
   ({ proposalId, requestId }) =>
-    mutating("decline", requestId, (env, id) => declineProposal(env, proposalId, actorNow(id))),
+    mutating("decline", requestId, (env, id) =>
+      Effect.flatMap(actorNow(env, id), (actor) => declineProposal(env, proposalId, actor)),
+    ),
 ).pipe(Command.withDescription("Say no to a proposal, so it stops being pending"));
 
 /**
@@ -146,7 +150,7 @@ export const runDeliveries = Command.make(
               lines,
               settleId,
               how,
-              actorName(actorNow(id)),
+              actorName(yield* actorNow(env, id)),
               yield* nowIso(),
             );
             if ("error" in settled) return err("invalid_input", settled.error);
@@ -189,7 +193,13 @@ export const proposal = Command.make("proposal").pipe(
             return yield* mutation(env, "proposal-reconcile", requestId, (id) =>
               Effect.gen(function* () {
                 const file = yield* proposalsPath(env.stateDir, yield* herdOf(env.socketPath));
-                const done = yield* reconcileStep(file, proposalId, at, as, actorNow(id));
+                const done = yield* reconcileStep(
+                  file,
+                  proposalId,
+                  at,
+                  as,
+                  yield* actorNow(env, id),
+                );
                 return done.refused === null
                   ? {
                       ok: true as const,

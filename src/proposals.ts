@@ -6,6 +6,7 @@
 // Nothing here runs an action: `confirm` returns the actions that may run, and who runs
 // them is `executors.ts` and the front door's business.
 
+import type { FrontDoor } from "./board-model";
 import { Data, DateTime, Duration, Effect, Path, Schema } from "effect";
 import type { Action, ActionKind } from "./evaluator";
 import { ActionSchema } from "./evaluator";
@@ -172,7 +173,7 @@ export const record = Effect.fn("Proposals.record")(function* (file: string, wha
  * a proposal because of where it came from, never because of who confirms it.
  */
 export interface Actor {
-  readonly origin: "cli" | "cli-tty" | "board" | "driver" | "evaluator" | "chat";
+  readonly origin: FrontDoor;
   readonly requestId: string;
 }
 

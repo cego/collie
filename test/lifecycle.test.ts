@@ -238,7 +238,9 @@ test(
         // Past the host's own sweep of the suspension, so only the hold can say anything.
         yield* Effect.sleep("2 seconds");
 
-        yield* client.control({ runId, control: "hold", set: true }).pipe(Effect.orDie);
+        yield* client
+          .control({ runId, control: "hold", set: true, request: "hold-watched" })
+          .pipe(Effect.orDie);
         const seen = yield* Fiber.join(watching).pipe(Effect.timeout("10 seconds"), Effect.orDie);
         expect(Option.getOrNull(seen)?.status).toEqual({ status: "suspended" });
         yield* stopHost(world.state);
@@ -668,7 +670,7 @@ test(
         );
 
         const held = yield* client
-          .control({ runId, control: "hold", set: true })
+          .control({ runId, control: "hold", set: true, request: "hold-1" })
           .pipe(Effect.orDie);
         expect(held).toMatchObject({ applied: true, detail: "" });
         // The control is part of what the Run is, not a fact only the host that set it has.

@@ -132,7 +132,8 @@ import { openFindingsIn } from "./output";
 import { isSingleRepo, planIssuesIn, planReposOf } from "./plan";
 import { SELF, inputsFor, offersFrom, type Declared, type Offer } from "./offers";
 import { isOutcome, needsApproved, nothingApprovedToStart } from "./outcome";
-import { RequestConflict, Store, storeLayer, type Admission, type RunRow } from "./store";
+import { Store, storeLayer, type Admission, type RunRow } from "./store";
+import { Answered, Controlled, HostRefused, RequestConflict } from "./board-model";
 import { TASK_INPUT, checkoutFor, repositoryName, workOf } from "./worktree";
 import { Herdr, herdrFailureReason } from "./herdr";
 import type { PluginEnv } from "./env";
@@ -161,11 +162,6 @@ export class EntryError extends Schema.TaggedError<EntryError>()("EntryError", {
 
 /** What a refusal says first where the input is why, which a front door reads back. */
 export const REFUSED_INPUT = "invalid_input";
-
-/** Anything else a host will not do, said in one sentence a caller can show. */
-export class HostRefused extends Schema.TaggedError<HostRefused>()("HostRefused", {
-  reason: Schema.String,
-}) {}
 
 /** A placement that may have changed something outside, which nothing here can prove either way. */
 class PlacementUncertain extends Schema.TaggedError<PlacementUncertain>()("PlacementUncertain", {
@@ -2942,29 +2938,6 @@ export const OpenDecision = Schema.Struct({
   answer: Schema.NullOr(Schema.String),
 });
 export type OpenDecision = typeof OpenDecision.Type;
-
-/** What an accepted answer became. `fresh` is false for the same claim arriving twice. */
-export const Answered = Schema.Struct({
-  runId: Schema.String,
-  decision: Schema.String,
-  value: Schema.String,
-  fresh: Schema.Boolean,
-});
-
-/**
- * What a control did. `applied` is whether the run was actually told: a control recorded
- * over work no host is running is an intent, and saying otherwise would be a confirmation
- * nobody can stand behind.
- */
-export const Controlled = Schema.Struct({
-  runId: Schema.String,
-  control: Schema.String,
-  set: Schema.Boolean,
-  applied: Schema.Boolean,
-  detail: Schema.String,
-  /** The agents a stop could not close, which may still be changing the workspace. */
-  left: Schema.Array(Schema.String),
-});
 
 /** What became of one delivery to a run's agent. */
 export const Steered = Schema.Struct({

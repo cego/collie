@@ -40,9 +40,6 @@ import * as RpcSerialization from "effect/unstable/rpc/RpcSerialization";
 import * as RpcServer from "effect/unstable/rpc/RpcServer";
 import manifest from "../herdr-plugin.toml";
 import {
-  Answered,
-  Controlled,
-  HostRefused,
   EntryError,
   OfferView,
   Registrations,
@@ -52,20 +49,28 @@ import {
   foundationLayer,
   registryLayer,
   Registry,
+  runDir,
   type HostServices,
   type Locate,
 } from "./engine";
 import { configuredAgents } from "./agents";
 import { Catalogue, discover, searchPath } from "./discovery";
 import { sideJobs } from "./side-jobs";
-import { RequestConflict } from "./store";
+import { once, recordAudit } from "./audit";
 import { VerifySpecSchema } from "./verify-spec";
-import { IntentSeedSchema } from "./intent";
 import { currentEnv } from "./env";
 import { installation as installedRelease } from "./release";
 import { Herdr } from "./herdr";
 import { buildBoard } from "./board";
-import { FrontDoorRpcs, PROTOCOL } from "./board-model";
+import {
+  Answered,
+  Controlled,
+  FrontDoorRpcs,
+  HostRefused,
+  PROTOCOL,
+  Started,
+  type FrontDoor,
+} from "./board-model";
 import { boardMessages } from "./board-stream";
 import { loadDefaults } from "./config";
 import { factsOfView } from "./runs";
@@ -117,14 +122,6 @@ const Loaded = Schema.Struct({
   title: Schema.String,
 });
 
-/** What a start became: the run it is, and whether this call is what made it. */
-const Started = Schema.Struct({
-  runId: Schema.String,
-  registration: Schema.String,
-  execution: Schema.String,
-  fresh: Schema.Boolean,
-});
-
 /**
  * What a client may ask of a host. Both ends read these declarations, so a request is a
  * value with a schema at each hop rather than a shape one side remembers.
@@ -140,35 +137,6 @@ export const HostRpcs = RpcGroup.make(
   // Which project is asking, because the answer differs: an override is one project's
   // and the host serves them all.
   Rpc.make("discover", { payload: { project: Schema.String }, success: Catalogue }),
-  // The request id is the caller's claim on this work: sending it twice is one run, and
-  // sending it with other arguments is refused rather than quietly becoming something else.
-  Rpc.make("start", {
-    payload: {
-      project: Schema.String,
-      id: Schema.String,
-      request: Schema.String,
-      /** Values that already have a type, and values as a human typed them. */
-      input: Schema.Record(Schema.String, Schema.Json),
-      text: Schema.optional(Schema.Record(Schema.String, Schema.String)),
-      /** The names among those a front door worked out rather than was told. */
-      inferred: Schema.optional(Schema.Array(Schema.String)),
-      /** The Projects root the front door resolved, which `workspace=projects-root` names. */
-      root: Schema.optional(Schema.String),
-      /** The host's own launch options, which never reach the author's payload. */
-      options: Schema.optional(Schema.Record(Schema.String, Schema.String)),
-      // What this work belongs to, which is the caller's to know and the host's to keep.
-      // Left out by a caller that is neither continuing a Task nor inside another run.
-      task: Schema.optional(Schema.String),
-      /** A new Task to open for it under this label, once its checkout is known. */
-      taskLabel: Schema.optional(Schema.String),
-      parent: Schema.optional(Schema.String),
-      intent: Schema.optional(IntentSeedSchema),
-      /** The approved set given with the start, over the project's and the user's files. */
-      verify: Schema.optional(Schema.Array(VerifySpecSchema)),
-    },
-    success: Started,
-    error: Schema.Union([HostRefused, RequestConflict]),
-  }),
   Rpc.make("status", {
     payload: { runId: Schema.String },
     success: RunStatus,
@@ -190,45 +158,12 @@ export const HostRpcs = RpcGroup.make(
   }),
   /** Registers what current files now allow and hands over what is outstanding. */
   Rpc.make("recover", { success: Registrations }),
-  // The decision is named where a caller knows which question it is answering, and null
-  // where it means "the one this run is waiting on" — refused where that is not one.
-  // The request is the claim: the same one twice is one answer, not a second.
-  Rpc.make("answer", {
-    payload: {
-      runId: Schema.String,
-      decision: Schema.NullOr(Schema.String),
-      value: Schema.String,
-      request: Schema.String,
-    },
-    success: Answered,
-    error: HostRefused,
-  }),
-  // What a finished Run offers to do next, and carrying one out. Both go through the
-  // host because only it holds the module that declared them: an offer is decided by the
-  // author's own code against the facts as they are now, never by a card's memory of it.
+  // What a finished Run offers to do next. Through the host because only it holds the
+  // module that declared them: an offer is decided by the author's own code against the
+  // facts as they are now, never by a card's memory of it.
   Rpc.make("offers", {
     payload: { runId: Schema.String },
     success: Schema.Array(OfferView),
-    error: HostRefused,
-  }),
-  Rpc.make("invoke", {
-    payload: {
-      runId: Schema.String,
-      offer: Schema.String,
-      input: Schema.Record(Schema.String, Schema.Json),
-      request: Schema.String,
-    },
-    success: Started,
-    error: Schema.Union([HostRefused, RequestConflict]),
-  }),
-  /** A hold or a stop over one run, set or cleared. It reaches no other run and no host. */
-  Rpc.make("control", {
-    payload: {
-      runId: Schema.String,
-      control: Schema.Literals(["hold", "stop"]),
-      set: Schema.Boolean,
-    },
-    success: Controlled,
     error: HostRefused,
   }),
   /** One command Collie may run for a run, granted or, with no command, withdrawn. */
@@ -256,8 +191,11 @@ export const HostRpcs = RpcGroup.make(
   }),
 );
 
+/** Everything this build serves; a client of another build uses `FrontDoorRpcs` alone. */
+const AllRpcs = HostRpcs.merge(FrontDoorRpcs);
+
 export type HostClient = RpcClient.RpcClient<
-  RpcGroup.Rpcs<typeof HostRpcs>,
+  RpcGroup.Rpcs<typeof AllRpcs>,
   RpcClientError.RpcClientError
 >;
 
@@ -320,51 +258,12 @@ const handlers = (dir: string, installation: string) =>
               problems: found.problems,
             })),
           ),
-        start: ({
-          project,
-          id,
-          request,
-          input,
-          text,
-          inferred,
-          root,
-          options,
-          task,
-          taskLabel,
-          parent,
-          intent,
-          verify,
-        }) =>
-          registry.resolve({ project, id }).pipe(
-            Effect.flatMap((generation) =>
-              registry.start({
-                generation,
-                project,
-                request,
-                input,
-                text,
-                inferred,
-                root,
-                options,
-                task,
-                taskLabel,
-                parent,
-                intent,
-                verify,
-              }),
-            ),
-          ),
         status: ({ runId }) => registry.status(runId),
         run: ({ runId }) => registry.view(runId),
         runs: ({ task }) => registry.views(task),
         watch: ({ runId }) => registry.watch(runId),
         recover: () => registry.recover,
         offers: ({ runId }) => registry.offers(runId),
-        invoke: ({ runId, offer, input, request }) =>
-          registry.invoke({ runId, offer, input, request }),
-        answer: ({ runId, decision, value, request }) =>
-          registry.answer({ runId, decision, value, request }),
-        control: ({ runId, control, set }) => registry.control({ runId, control, set }),
         grant: ({ runId, name, command }) => registry.grant({ runId, name, command }),
         steer: ({ runId, text, request, operation, agent, mode }) =>
           registry.steer({ runId, text, request, operation, agent, mode }),
@@ -375,42 +274,51 @@ const handlers = (dir: string, installation: string) =>
 /** How often a board is built again with nothing written, so "silent for" stays true. */
 const BOARD_TICK = "5 seconds";
 
+/** This process's env, for the state directory it serves rather than the one it inherited. */
+const servingEnv = (dir: string) =>
+  currentEnv.pipe(
+    Effect.orDie,
+    Effect.map((env) => ({ ...env, stateDir: dir })),
+  );
+
 /** Every Run the host knows, and the board built from them, for this host's own env. */
-const hostBoard = Effect.gen(function* () {
-  const registry = yield* Registry;
-  const bun = yield* Effect.context<BunServices>();
-  const hosted = yield* Effect.context<HostServices>();
-  const env = yield* currentEnv.pipe(Effect.orDie);
-  const herdr = new Herdr(env);
-  const runs = registry
-    .views(null)
-    .pipe(Effect.map((views) => views.map((view) => factsOfView(env.stateDir, view))));
-  const build = Effect.gen(function* () {
-    const alive = yield* aliveIn(yield* liveHerds(herdr, env));
-    return yield* buildBoard({
-      env,
-      runs: yield* runs,
-      alive,
-      quietMs: (yield* loadDefaults(env.userDir)).boardQuietMs,
-      offers: (runId) =>
-        registry.offers(runId).pipe(
-          Effect.provideContext(hosted),
-          Effect.orElseSucceed(() => []),
-        ),
-    });
-  }).pipe(Effect.provideContext(bun));
-  return { env, herdr, bun, runs, build };
-});
+const hostBoard = (dir: string) =>
+  Effect.gen(function* () {
+    const registry = yield* Registry;
+    const bun = yield* Effect.context<BunServices>();
+    const hosted = yield* Effect.context<HostServices>();
+    const env = yield* servingEnv(dir);
+    const herdr = new Herdr(env);
+    const runs = registry
+      .views(null)
+      .pipe(Effect.map((views) => views.map((view) => factsOfView(env.stateDir, view))));
+    const build = Effect.gen(function* () {
+      const alive = yield* aliveIn(yield* liveHerds(herdr, env));
+      return yield* buildBoard({
+        env,
+        runs: yield* runs,
+        alive,
+        quietMs: (yield* loadDefaults(env.userDir)).boardQuietMs,
+        offers: (runId) =>
+          registry.offers(runId).pipe(
+            Effect.provideContext(hosted),
+            Effect.orElseSucceed(() => []),
+          ),
+      });
+    }).pipe(Effect.provideContext(bun));
+    return { env, herdr, bun, runs, build };
+  });
 
 /** The merge watch, News and pruning, for as long as this host runs. */
-const sideJobsLayer = Layer.effectDiscard(
-  Effect.gen(function* () {
-    const { env, herdr, bun, runs, build } = yield* hostBoard;
-    yield* Effect.forkScoped(
-      sideJobs({ env, herdr, runs, board: build }).pipe(Effect.provideContext(bun)),
-    );
-  }),
-);
+const sideJobsLayer = (dir: string) =>
+  Layer.effectDiscard(
+    Effect.gen(function* () {
+      const { env, herdr, bun, runs, build } = yield* hostBoard(dir);
+      yield* Effect.forkScoped(
+        sideJobs({ env, herdr, runs, board: build }).pipe(Effect.provideContext(bun)),
+      );
+    }),
+  );
 
 /**
  * The board, built here for every front door. Anything written under the state
@@ -420,7 +328,39 @@ const frontDoorHandlers = (dir: string, installation: string) =>
   FrontDoorRpcs.toLayer(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const { env, herdr, bun, build } = yield* hostBoard;
+      const registry = yield* Registry;
+      const hosted = yield* Effect.context<HostServices>();
+      const { env, herdr, bun, build } = yield* hostBoard(dir);
+      // ponytail: one entry per connection, never removed; prune on disconnect if hosts live for months.
+      const declared = new Map<number, FrontDoor>();
+      const doorOf = (client: { readonly id: number }) => declared.get(client.id) ?? "cli";
+      const trail = (runId: string) => runDir(env.stateDir, runId);
+      /** An operation that is idempotent by itself, recorded the first time it does anything. */
+      // ponytail: a host that dies between acting and recording leaves that one unrecorded.
+      const fresh = <A extends { readonly fresh: boolean }, I extends Schema.Json, E>(
+        runId: (value: A) => string,
+        line: {
+          readonly operation: string;
+          readonly request: string;
+          readonly origin: FrontDoor;
+          readonly result: Schema.Codec<A, I>;
+        },
+        act: Effect.Effect<A, E, HostServices>,
+      ) =>
+        act.pipe(
+          Effect.tap((value) =>
+            value.fresh
+              ? recordAudit(trail(runId(value)), { ...line, value }).pipe(Effect.orDie)
+              : Effect.void,
+          ),
+          Effect.provideContext(hosted),
+        );
+      const auditedControl =
+        (runId: string, operation: string, request: string, origin: FrontDoor) =>
+        <E>(act: Effect.Effect<typeof Controlled.Type, E, HostServices>) =>
+          once(trail(runId), { operation, request, origin, result: Controlled }, act).pipe(
+            Effect.provideContext(hosted),
+          );
       // Debounced apart from the tick, so a burst of writes cannot hold the tick back.
       const changed = Stream.mergeAll(
         [
@@ -438,6 +378,86 @@ const frontDoorHandlers = (dir: string, installation: string) =>
         { concurrency: "unbounded" },
       );
       return FrontDoorRpcs.of({
+        declare: ({ frontDoor }, { client }) => {
+          const already = declared.get(client.id);
+          if (already !== undefined && already !== frontDoor) {
+            return Effect.fail(new HostRefused({ reason: `this channel is already ${already}` }));
+          }
+          return Effect.sync(() => {
+            declared.set(client.id, frontDoor);
+          });
+        },
+        start: (
+          {
+            project,
+            id,
+            request,
+            input,
+            text,
+            inferred,
+            root,
+            options,
+            task,
+            taskLabel,
+            parent,
+            intent,
+            verify,
+          },
+          { client },
+        ) =>
+          fresh(
+            (started) => started.runId,
+            { operation: "start", request, origin: doorOf(client), result: Started },
+            registry.resolve({ project, id }).pipe(
+              Effect.flatMap((generation) =>
+                registry.start({
+                  generation,
+                  project,
+                  request,
+                  input,
+                  text,
+                  inferred,
+                  root,
+                  options,
+                  task,
+                  taskLabel,
+                  parent,
+                  intent,
+                  verify,
+                }),
+              ),
+            ),
+          ),
+        answer: ({ runId, decision, value, request }, { client }) =>
+          fresh(
+            () => runId,
+            { operation: "answer", request, origin: doorOf(client), result: Answered },
+            registry.answer({ runId, decision, value, request }),
+          ),
+        control: ({ runId, control, set, request }, { client }) =>
+          auditedControl(
+            runId,
+            `${set ? "" : "un"}${control}`,
+            request,
+            doorOf(client),
+          )(registry.control({ runId, control, set })),
+        resume: ({ runId, request }, { client }) =>
+          auditedControl(
+            runId,
+            "resume",
+            request,
+            doorOf(client),
+          )(
+            registry.recover.pipe(
+              Effect.andThen(registry.control({ runId, control: "stop", set: false })),
+            ),
+          ),
+        invoke: ({ runId, offer, input, request }, { client }) =>
+          fresh(
+            () => runId,
+            { operation: "invoke", request, origin: doorOf(client), result: Started },
+            registry.invoke({ runId, offer, input, request }),
+          ),
         board: () =>
           Stream.unwrap(
             liveHerds(herdr, env).pipe(
@@ -570,12 +590,12 @@ const own = (dir: string) =>
     yield* fs.remove(socketOf(dir), { force: true }).pipe(Effect.orDie);
     const installation = yield* installationOf(dir).pipe(Effect.orDie);
     return yield* Layer.launch(
-      RpcServer.layer(HostRpcs.merge(FrontDoorRpcs)).pipe(
+      RpcServer.layer(AllRpcs).pipe(
         Layer.provide(
           Layer.mergeAll(
             handlers(dir, installation),
             frontDoorHandlers(dir, installation),
-            sideJobsLayer,
+            sideJobsLayer(dir),
           ).pipe(
             Layer.provide(
               registryLayer(dir, {
@@ -678,7 +698,7 @@ const openGroup = <Rpcs extends Rpc.Any>(dir: string, group: RpcGroup.RpcGroup<R
     return yield* RpcClient.make(group).pipe(Effect.provideContext(context));
   }).pipe(Effect.mapError((cause) => unavailable(dir, String(cause))));
 
-const open = (dir: string) => openGroup(dir, HostRpcs);
+const open = (dir: string) => openGroup(dir, AllRpcs);
 
 /**
  * The public door of the host already answering at `dir`. Nothing is started or stopped

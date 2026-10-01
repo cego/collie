@@ -207,7 +207,7 @@ export const openHost = Effect.fn("HostTest.open")(function* (
   const control = (op: string, runId: string, name: "hold" | "stop", set: boolean) =>
     Effect.gen(function* () {
       const done = yield* client
-        .control({ runId: yield* resolve(runId), control: name, set })
+        .control({ runId: yield* resolve(runId), control: name, set, request: `${op}:${runId}` })
         .pipe(Effect.result);
       if (done._tag === "Failure") return { ok: false, op, detail: sentenceOf(done.failure) };
       // Recorded either way, and the reply says which: a control over work no host is

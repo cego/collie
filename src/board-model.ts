@@ -4,6 +4,8 @@
 import { Schema, SchemaGetter } from "effect";
 import * as Rpc from "effect/unstable/rpc/Rpc";
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
+import { IntentSeedSchema } from "./intent-model";
+import { VerifySpecSchema } from "./verify-spec";
 
 const STATE_ORDER = [
   "blocked",
@@ -394,9 +396,139 @@ export const BoardMessage = Schema.Union([
 ]);
 export type BoardMessage = typeof BoardMessage.Type;
 
-/** What any front door, on this computer or another, may ask a host. */
+/** Anything else a host will not do, said in one sentence a caller can show. */
+export class HostRefused extends Schema.TaggedError<HostRefused>()("HostRefused", {
+  reason: Schema.String,
+}) {}
+
+/**
+ * A request id that was accepted for other arguments. Schema-backed, so a host can fail a
+ * client with this value rather than a sentence about it: the caller is retrying something
+ * it has changed its mind about, and changing an accepted request silently is the one
+ * thing an idempotency key must never do.
+ */
+export class RequestConflict extends Schema.TaggedError<RequestConflict>()("RequestConflict", {
+  request: Schema.String,
+  reason: Schema.String,
+}) {}
+
+/** What an accepted answer became. `fresh` is false for the same claim arriving twice. */
+export const Answered = Schema.Struct({
+  runId: Schema.String,
+  decision: Schema.String,
+  value: Schema.String,
+  fresh: Schema.Boolean,
+});
+
+/**
+ * What a control did. `applied` is whether the run was actually told: a control recorded
+ * over work no host is running is an intent, and saying otherwise would be a confirmation
+ * nobody can stand behind.
+ */
+export const Controlled = Schema.Struct({
+  runId: Schema.String,
+  control: Schema.String,
+  set: Schema.Boolean,
+  applied: Schema.Boolean,
+  detail: Schema.String,
+  /** The agents a stop could not close, which may still be changing the workspace. */
+  left: Schema.Array(Schema.String),
+});
+
+/** What a start became: the run it is, and whether this call is what made it. */
+export const Started = Schema.Struct({
+  runId: Schema.String,
+  registration: Schema.String,
+  execution: Schema.String,
+  fresh: Schema.Boolean,
+});
+
+/** Which front door is acting: what a channel declares, and what its operations are stamped with. */
+export const FrontDoor = Schema.Literals([
+  "cli",
+  "cli-tty",
+  "board",
+  "driver",
+  "evaluator",
+  "chat",
+]);
+export type FrontDoor = typeof FrontDoor.Type;
+
+/**
+ * What any front door, on this computer or another, may ask a host. Every operation takes
+ * a request id: the same one twice is one operation, and with other arguments is refused.
+ */
 export const FrontDoorRpcs = RpcGroup.make(
   Rpc.make("board", { success: BoardMessage, stream: true }),
+  /** Once per channel, for good; a channel that never declares is stamped `cli`, never a human. */
+  Rpc.make("declare", { payload: { frontDoor: FrontDoor }, error: HostRefused }),
+  Rpc.make("start", {
+    payload: {
+      project: Schema.String,
+      id: Schema.String,
+      request: Schema.String,
+      /** Values that already have a type, and values as a human typed them. */
+      input: Schema.Record(Schema.String, Schema.Json),
+      text: Schema.optional(Schema.Record(Schema.String, Schema.String)),
+      /** The names among those a front door worked out rather than was told. */
+      inferred: Schema.optional(Schema.Array(Schema.String)),
+      /** The Projects root the front door resolved, which `workspace=projects-root` names. */
+      root: Schema.optional(Schema.String),
+      /** The host's own launch options, which never reach the author's payload. */
+      options: Schema.optional(Schema.Record(Schema.String, Schema.String)),
+      // What this work belongs to, which is the caller's to know and the host's to keep.
+      // Left out by a caller that is neither continuing a Task nor inside another run.
+      task: Schema.optional(Schema.String),
+      /** A new Task to open for it under this label, once its checkout is known. */
+      taskLabel: Schema.optional(Schema.String),
+      parent: Schema.optional(Schema.String),
+      intent: Schema.optional(IntentSeedSchema),
+      /** The approved set given with the start, over the project's and the user's files. */
+      verify: Schema.optional(Schema.Array(VerifySpecSchema)),
+    },
+    success: Started,
+    error: Schema.Union([HostRefused, RequestConflict]),
+  }),
+  // The decision is named where a caller knows which question it is answering, and null
+  // where it means "the one this run is waiting on" — refused where that is not one.
+  Rpc.make("answer", {
+    payload: {
+      runId: Schema.String,
+      decision: Schema.NullOr(Schema.String),
+      value: Schema.String,
+      request: Schema.String,
+    },
+    success: Answered,
+    error: Schema.Union([HostRefused, RequestConflict]),
+  }),
+  /** A hold or a stop over one run, set or cleared. It reaches no other run and no host. */
+  Rpc.make("control", {
+    payload: {
+      runId: Schema.String,
+      control: Schema.Literals(["hold", "stop"]),
+      set: Schema.Boolean,
+      request: Schema.String,
+    },
+    success: Controlled,
+    error: Schema.Union([HostRefused, RequestConflict]),
+  }),
+  /** Picks a Run up again: what current files allow is registered, then its stop cleared. */
+  Rpc.make("resume", {
+    payload: { runId: Schema.String, request: Schema.String },
+    success: Controlled,
+    error: Schema.Union([HostRefused, RequestConflict]),
+  }),
+  /** Carries out what a finished Run offers, as a Run of its own. */
+  Rpc.make("invoke", {
+    payload: {
+      runId: Schema.String,
+      offer: Schema.String,
+      input: Schema.Record(Schema.String, Schema.Json),
+      request: Schema.String,
+    },
+    success: Started,
+    error: Schema.Union([HostRefused, RequestConflict]),
+  }),
 );
 
 /**

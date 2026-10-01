@@ -8,6 +8,7 @@
 import type { BunServices } from "@effect/platform-bun/BunServices";
 import type { Effect } from "effect";
 import type { Action, ActionKind } from "./evaluator";
+import type { Actor } from "./proposals";
 
 /** What running one action reports back. A failure is a result here, never a throw. */
 export type ExecutionResult =
@@ -17,17 +18,17 @@ export type ExecutionResult =
 export type Executor<K extends ActionKind> = (
   action: Extract<Action, { kind: K }>,
   /**
-   * Who confirmed the proposal this action came out of, as `actorName` writes it. An
-   * action that records who asked for it records the confirmation rather than its own
-   * request id, which is Collie's and says nothing about who consented.
+   * Who confirmed the proposal this action came out of. An action that records who asked
+   * for it records the confirmation rather than its own request id, which is Collie's and
+   * says nothing about who consented.
    */
-  by: string,
+  by: Actor,
 ) => Effect.Effect<ExecutionResult, never, BunServices>;
 
 /** What the registry holds: an action of any kind, narrowed by the kind it was filed under. */
 type AnyExecutor = (
   action: Action,
-  by: string,
+  by: Actor,
 ) => Effect.Effect<ExecutionResult, never, BunServices>;
 
 const registry = new Map<ActionKind, AnyExecutor>();

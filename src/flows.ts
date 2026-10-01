@@ -501,6 +501,7 @@ const startModule = Effect.fn("Flows.startModule")(function* (
     if (confirmed === null) return null;
   }
   const started = yield* startRun(at, {
+    door: "board",
     id: module.id,
     request: yield* newRequestId(),
     input: { json: {}, text, inferred: [...inferred.keys()] },
@@ -682,7 +683,11 @@ export const resumeFlow = Effect.fn("Flows.resumeFlow")(function* (
   });
   if (!chosen) return 0;
 
-  const resumed = yield* resumeRun(env, chosen.id);
+  const resumed = yield* resumeRun(env, {
+    door: "board",
+    runId: chosen.id,
+    request: yield* newRequestId(),
+  });
   if (!resumed.ok) return yield* bail(prompts, `${chosen.id}: ${resumed.error.message}`);
   // Only a popup can close itself; running the picker in a plain pane is fine..
   if (placement === "popup") yield* Effect.ignore(herdr.popupClose());
@@ -735,6 +740,7 @@ export const makeOffer = Effect.fn("Flows.makeOffer")(function* (
   const input = yield* offerArguments(prompts, offer.arguments);
   if (input === null) return null;
   const done = yield* invokeOffer(env, {
+    door: "board",
     runId,
     offer: offer.id,
     input,
@@ -1241,9 +1247,11 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
     // question the run directory answers on its own.
     case "StopRun": {
       const stopped = yield* controlRun(env, {
+        door: "board",
         runId: command.runId,
         control: "stop",
         set: true,
+        request: yield* newRequestId(),
       });
       return stopped.ok ? stopped.human : stopped.error.message;
     }
@@ -1251,6 +1259,7 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
       return "a Run keeps no log of its own: its agents' panes are the record";
     case "Answer": {
       const answered = yield* answerRun(env, {
+        door: "board",
         runId: command.runId,
         decision: command.choiceId === "" ? null : command.choiceId,
         value: command.value,
@@ -1394,7 +1403,11 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
 
     /** A Run taken up again where it stopped, as every door resumes one. */
     case "ResumeRun": {
-      const resumed = yield* resumeRun(env, command.runId);
+      const resumed = yield* resumeRun(env, {
+        door: "board",
+        runId: command.runId,
+        request: yield* newRequestId(),
+      });
       return resumed.ok ? resumed.human : resumed.error.message;
     }
 
@@ -1633,6 +1646,7 @@ export const answerKey = Effect.fn("Flows.answerKey")(function* (
   const next = answerFor(choice, asking, key);
   if (next.value === null) return { asking: next.asking };
   const answered = yield* answerRun(env, {
+    door: "board",
     runId: waiting.id,
     decision: choice.id === "" ? null : choice.id,
     value: next.value,
@@ -1714,7 +1728,13 @@ const act = Effect.fn("Flows.act")(function* (
  * transcript of what happened.
  */
 export const stopRun = Effect.fn("Flows.stopRun")(function* (env: PluginEnv, runId: string) {
-  const stopped = yield* controlRun(env, { runId, control: "stop", set: true });
+  const stopped = yield* controlRun(env, {
+    door: "board",
+    runId,
+    control: "stop",
+    set: true,
+    request: yield* newRequestId(),
+  });
   return stopped.ok ? stopped.human : stopped.error.message;
 });
 

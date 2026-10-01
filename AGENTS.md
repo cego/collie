@@ -102,7 +102,9 @@ herdr actions, and the `collie` CLI.
   [ADR-0038](docs/adr/0038-the-host-builds-and-serves-the-board.md) and
   [`docs/cli.md`](docs/cli.md#the-local-workflow-host), alongside `FrontDoorRpcs` in
   `src/board-model.ts`, `src/board-stream.ts` and `test/board-stream.test.ts`. An additive
-  change keeps `PROTOCOL`; a removal or a change of meaning bumps it.
+  change keeps `PROTOCOL`; a removal or a change of meaning bumps it. Who an operation
+  is recorded as is [ADR-0039](docs/adr/0039-every-operation-records-who-asked.md), with
+  `src/audit.ts` and `test/actor.test.ts`.
 - **Changing how a start is claimed, what a host records about a run, or how an
   interrupted start recovers** →
   [ADR-0017](docs/adr/0017-one-request-is-one-run.md) and

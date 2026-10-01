@@ -127,15 +127,26 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
       Effect.catch((cause) => Effect.succeed(failed(reason(cause)))),
     );
 
-  registerExecutor("stop", (action) =>
-    carry(controlRun(env, { runId: action.run, control: "stop", set: true })),
+  const control = (by: Actor, runId: string, which: "hold" | "stop", set: boolean) =>
+    carry(
+      Effect.flatMap(newRequestId(), (request) =>
+        controlRun(env, { door: by.origin, runId, control: which, set, request }),
+      ),
+    );
+  registerExecutor("stop", (action, by) => control(by, action.run, "stop", true));
+  registerExecutor("resume", (action, by) =>
+    carry(
+      Effect.flatMap(newRequestId(), (request) =>
+        resumeRun(env, { door: by.origin, runId: action.run, request }),
+      ),
+    ),
   );
-  registerExecutor("resume", (action) => carry(resumeRun(env, action.run)));
-  registerExecutor("answer", (action) =>
+  registerExecutor("answer", (action, by) =>
     carry(
       Effect.gen(function* () {
         const id = yield* newRequestId();
         return yield* answerRun(env, {
+          door: by.origin,
           runId: action.run,
           // The question as the board named it, so an answer that arrives after it was
           // replaced lands on the one it was given rather than on whatever is open now.
@@ -146,14 +157,10 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
       }),
     ),
   );
-  registerExecutor("hold", (action) =>
-    carry(controlRun(env, { runId: action.run, control: "hold", set: true })),
-  );
-  registerExecutor("release", (action) =>
-    carry(controlRun(env, { runId: action.run, control: "hold", set: false })),
-  );
+  registerExecutor("hold", (action, by) => control(by, action.run, "hold", true));
+  registerExecutor("release", (action, by) => control(by, action.run, "hold", false));
   registerExecutor("clear_override", (action, by) =>
-    carry(clearOverride(env.stateDir, new Herdr(env), action.run, action.agent, by)),
+    carry(clearOverride(env.stateDir, new Herdr(env), action.run, action.agent, actorName(by))),
   );
   registerExecutor("deliver", (action) =>
     carry(
@@ -213,7 +220,7 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
                       source: "human",
                     },
                   },
-            by,
+            actorName(by),
             yield* nowIso(),
           );
           yield* writeIntentHeld(dir, amended);
@@ -244,7 +251,7 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
           );
           if (intent === null) return;
           const change = verificationGrant(intent, action.name, command);
-          yield* writeIntentHeld(dir, amendIntent(intent, change, by, yield* nowIso()));
+          yield* writeIntentHeld(dir, amendIntent(intent, change, actorName(by), yield* nowIso()));
         }),
       ).pipe(
         Effect.as(""),
@@ -278,7 +285,7 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
   // Which Workflow carries a follow-up is the Workflow's own declaration — the offer it
   // marks `follow-up` — never a name known here. One that declares none has nothing to
   // carry on with, and says so rather than starting something nobody asked for.
-  registerExecutor("followup", (action) =>
+  registerExecutor("followup", (action, by) =>
     Effect.gen(function* () {
       const offers = yield* offersOf(env, action.run);
       if ("ok" in offers) return failed(offers.error.message);
@@ -291,6 +298,7 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
       const id = yield* newRequestId();
       return settled(
         yield* invokeOffer(env, {
+          door: by.origin,
           runId: action.run,
           offer: offered.id,
           input: { [into.field]: action.text },
@@ -302,7 +310,7 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
   // Through the same door `run start` takes, so a confirmed proposal and a typed command
   // settle Inputs the same way. Nothing is inferred: the action names its checkout and
   // every Input, and a gap is refused with what would fill it (ADR-0033).
-  registerExecutor("start", (action) =>
+  registerExecutor("start", (action, by) =>
     Effect.gen(function* () {
       const atRoot = action.workspace?.trim() === PROJECTS_ROOT_OPTION;
       const where = atRoot ? null : yield* workspaceNamed(env, action.workspace);
@@ -322,6 +330,7 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
       }
       const id = yield* newRequestId();
       const started = yield* startRun(rooted, {
+        door: by.origin,
         id: action.workflow,
         request: id,
         // Text, as the action carries it: the module's own schema is what turns it into
@@ -524,7 +533,7 @@ export const carryOutProposal = Effect.fn("runActions.carryOutProposal")(functio
       break;
     }
     yield* stepStarted(file, proposalId, index);
-    const outcome = yield* executor(action, actorName(actor));
+    const outcome = yield* executor(action, actor);
     yield* stepSettled(file, proposalId, index, outcome.state, outcome.note);
     results.push({
       index,
@@ -580,7 +589,7 @@ export const carryOutAsked = Effect.fn("runActions.carryOutAsked")(function* (
       results.push({ kind: action.kind, state: "skipped", note: refusal });
       continue;
     }
-    const outcome = yield* executor(action, actorName(actor));
+    const outcome = yield* executor(action, actor);
     results.push({ kind: action.kind, state: outcome.state, note: outcome.note ?? "" });
     // What follows a failure was asked for on the assumption that it did not happen.
     if (outcome.state === "failed") break;

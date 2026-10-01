@@ -71,7 +71,7 @@ const defaultsOfW1 = Effect.fn("test.defaultsOfW1")(function* () {
 });
 
 const carry = (action: Parameters<NonNullable<ReturnType<typeof executorFor>>>[0]) =>
-  Effect.suspend(() => executorFor(action.kind)!(action, "cli-tty:h-1"));
+  Effect.suspend(() => executorFor(action.kind)!(action, { origin: "cli-tty", requestId: "h-1" }));
 
 beforeEach(() =>
   runEffect(

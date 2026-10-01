@@ -23,6 +23,7 @@ Runner source (Bun/TypeScript). Compiled to `bin/collie` per platform; see ADR-0
 | `views.ts`         | History, Workflows, Settings and a Run's detail, as state the app renders                |
 | `board.ts`         | Builds the board from the files: one TaskView per Task and a card's sentence             |
 | `board-model.ts`   | The board's Schemas and `FrontDoorRpcs`, and the pure section and header rules           |
+| `audit.ts`         | A Run's audit trail: each operation, the Actor that asked for it, and what came of it    |
 | `board-stream.ts`  | The board a host serves one client: a snapshot, then each Task that changed              |
 | `herds.ts`         | Every running herdr session the host reads, its agents, and the events it pushes         |
 | `attention.ts`     | Why a run wants a human, and which actions are safe now                                  |
@@ -31,6 +32,7 @@ Runner source (Bun/TypeScript). Compiled to `bin/collie` per platform; see ADR-0
 | `output.ts`        | The Output and Synthesis schemas, `review.md`, and which findings the loop still owns    |
 | `run.ts`           | The run directory: audit trail and resume state                                          |
 | `intent.ts`        | What a Run is for, what bounds it, and what Collie may do about it without asking        |
+| `intent-model.ts`  | The Intent's Schemas alone, so a browser bundle of the board can carry a start           |
 | `steering.ts`      | The delivery ledger per live agent, and the Herd's model-call budget                     |
 | `dispatcher.ts`    | The only sender: one transaction per agent, reserved before the send, ordered            |
 | `steering-caps.ts` | What each harness has been shown to do about a delivery, and the gate that fails closed  |
