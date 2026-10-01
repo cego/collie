@@ -6,6 +6,7 @@ import { parseMrTarget } from "./mr";
 import { diffTargetOf, type Settled } from "./strategies";
 
 const MAX = 32;
+const DIGEST = 6;
 
 function sanitize(text: string): string {
   return text
@@ -21,7 +22,7 @@ function sanitize(text: string): string {
  * (`openai-codex/gpt-5.6-sol`) is long enough to have truncated it away, and two
  * runs then picked the same name and herdr refused the second with
  * `agent_name_taken`. The step and the variant take what is left, and the run's
- * slug only what is left after that.
+ * slug only what is left after that, ending in a digest of the whole slug where it was cut.
  */
 export function agentName(
   slug: string,
@@ -37,7 +38,12 @@ export function agentName(
   );
   const tail = core ? `${core}-${suffix}` : suffix;
   const room = MAX - tail.length - 1;
-  const head = room > 0 ? trim(sanitize(slug), room) : "";
+  const clean = sanitize(slug);
+  let head = room > 0 ? trim(clean, room) : "";
+  if (clean.length > room) {
+    const kept = trim(clean, room - DIGEST - 1);
+    if (kept) head = `${kept}-${Bun.hash(slug).toString(36).slice(-DIGEST)}`;
+  }
   const name = head ? `${head}-${tail}` : tail;
   return (/^[a-z]/.test(name) ? name : `w${name}`).slice(0, MAX);
 }

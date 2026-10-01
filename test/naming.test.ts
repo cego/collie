@@ -130,6 +130,31 @@ test("a long model never truncates away the number that makes a name unique", ()
   );
 });
 
+test("sibling children that share a long prefix get agents of their own", () => {
+  // The live failure: both registered run-053c5b9d-implement-build-r1.
+  const nuxt = agentName(
+    "run-053c5b9d.implement.implement-gitlab.cego.dk-cego-ci-modules-nuxt",
+    "build",
+    null,
+    1,
+  );
+  const gateway = agentName(
+    "run-053c5b9d.implement.implement-gitlab.cego.dk-spilnu-gateway",
+    "build",
+    null,
+    1,
+  );
+
+  expect(nuxt).not.toBe(gateway);
+  for (const name of [nuxt, gateway]) {
+    expect(name).toMatch(/^[a-z][a-z0-9_-]{0,31}$/);
+    expect(name).toStartWith("run-053c5b9d");
+    expect(name).toEndWith("-build-r1");
+  }
+  // A name nothing was cut from is the name it always was.
+  expect(agentName("run-053c5b9d", "build", null, 1)).toBe("run-053c5b9d-build-r1");
+});
+
 test("agent names stay herdr-legal and are never what a label shows", () => {
   const name = agentName("review-branch-b5571dc-head", "review", "claude-opus", 12);
   expect(name).toMatch(/^[a-z][a-z0-9_-]{0,31}$/);
