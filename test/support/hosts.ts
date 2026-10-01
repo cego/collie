@@ -5,15 +5,23 @@
 // temporary root of its own and every host it starts is told to live no longer than this
 // process; a host whose directory goes stops by itself. After every test, a host still
 // holding a directory under that root is killed and fails the test that left it.
+//
+// No HERDR_* or operator's Collie directories reach a test but what it sets itself, and HOME
+// is the suite's own, so a suite run from a herdr pane cannot reach the live herd.
 
 import { afterEach } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
 const root = mkdtempSync(join(tmpdir(), `collie-test-${process.pid}-`));
 process.env.TMPDIR = root;
 process.env.COLLIE_HOST_WATCH_PID = String(process.pid);
+for (const key of Object.keys(process.env)) if (key.startsWith("HERDR_")) delete process.env[key];
+delete process.env.COLLIE_USER_DIR;
+delete process.env.COLLIE_CWD;
+process.env.HOME = join(root, "home");
+mkdirSync(process.env.HOME);
 
 const alive = (pid: number) => {
   try {
