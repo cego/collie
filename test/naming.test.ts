@@ -149,7 +149,8 @@ test("sibling children that share a long prefix get agents of their own", () => 
   for (const name of [nuxt, gateway]) {
     expect(name).toMatch(/^[a-z][a-z0-9_-]{0,31}$/);
     expect(name).toStartWith("run-053c5b9d");
-    expect(name).toEndWith("-build-r1");
+    expect(name).toContain("-build-");
+    expect(name).toEndWith("-r1");
   }
   // A step long enough to leave no room for the slug still keeps them apart.
   const step = "a-very-long-operation-name-here";
@@ -160,6 +161,18 @@ test("sibling children that share a long prefix get agents of their own", () => 
   for (const name of crowded) expect(name).toMatch(/^[a-z][a-z0-9_-]{0,31}$/);
   // A name nothing was cut from is the name it always was.
   expect(agentName("run-053c5b9d", "build", null, 1)).toBe("run-053c5b9d-build-r1");
+});
+
+test("two steps of one Run that differ only where the name is cut get agents of their own", () => {
+  const seats = ["review-2-correctness-a", "review-2-correctness-b"].map((step) =>
+    agentName("run-053c5b9d", step, null, 1),
+  );
+  expect(seats[0]).not.toBe(seats[1]);
+  for (const name of seats) expect(name).toMatch(/^[a-z][a-z0-9_-]{0,31}$/);
+  const panel = ["security", "standards"].map((seat) =>
+    agentName("run-053c5b9d", "review", `claude-opus-${seat}`, 1),
+  );
+  expect(panel[0]).not.toBe(panel[1]);
 });
 
 test("agent names stay herdr-legal and are never what a label shows", () => {
