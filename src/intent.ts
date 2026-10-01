@@ -67,9 +67,12 @@ const AuthoritySchema = Schema.Struct({
 });
 export type Authority = Schema.Schema.Type<typeof AuthoritySchema>;
 
-/** Every grant off. A Run that was never told otherwise supervises and says so. */
+/**
+ * The one grant on by default is correcting drift at a work boundary, within the bound.
+ * Every other grant is off.
+ */
 export const DEFAULT_AUTHORITY: Authority = {
-  auto_correct: false,
+  auto_correct: true,
   max_corrections_per_constraint: 2,
   now_allowed: false,
   interrupt_allowed: false,

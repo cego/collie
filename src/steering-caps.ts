@@ -44,8 +44,8 @@ export const CAPABILITIES = {
       interrupt_key: ["Escape"],
     },
     ack: { status: "proven", version_floor: "2.1.263", tested_at: "2026-09-11" },
-    // Needs a human typing into a Collie-launched agent's pane: not something an agent
-    // pressing keys can stand in for, so it stays unproven until an operator records it.
+    // Unproven: the submit hook records turns Claude injects itself (a task notification) as
+    // external, so it cannot yet tell them from a typed line.
     attribution: { status: "unproven", version_floor: "2.1.263", tested_at: null },
   },
   codex: {

@@ -125,8 +125,11 @@ that turn ends — `submitted` with the note `unobserved`, exactly what the Disp
 records — so `now` is not something pi has been shown to do. Codex and opencode took the
 text but their own sandboxes and permission prompts stood between them and the ack file
 in the probe; a blocked agent is one herdr refuses to prompt at all, and that refusal is
-what the ledger shows (`deferred`, then `failed`, with the code `agent_blocked`). Attribution on Claude needs a human
-typing into a Collie-launched agent's pane and is the one row an operator has to record.
+what the ledger shows (`deferred`, then `failed`, with the code `agent_blocked`). Attribution on Claude is
+unproven: its `UserPromptSubmit` hook also fires on turns Claude injects itself, such as a
+task notification, and records them as external, so it cannot yet tell those from a line
+typed into the pane. Until it can, oversight may read such a turn as a manual override,
+and on Claude a correction still needs `exclusive_steering`.
 `boundary` deliveries need none of this and work on every harness.
 
 The evaluator has been run against the installed `claude` 2.1.268, ten calls and one
@@ -271,14 +274,20 @@ and none of it takes focus.
 
 ## Correcting drift
 
-Collie corrects drift by itself only where the run's Intent granted `auto_correct`, and
-even then every gate below is somebody being deferred to:
+`auto_correct` is the one grant every run starts with
+([ADR-0037](adr/0037-collie-corrects-by-default.md)), and `run intent authority <run>
+auto_correct=false` or a workspace default turns it off. A correction goes at a work boundary,
+never as an interrupt, unless `now_allowed` was granted too. Every gate below still applies,
+and each one is somebody being deferred to. The attribution gate means that today no run is
+corrected without `exclusive_steering`: no harness has proven attribution yet.
 
 - **Somebody typed into that pane.** A manual override stops automatic corrections to that
   agent until `run clear-override`. Collie does not take turns with a human.
 - **On a harness with no attribution**, Collie cannot tell its own submissions from a
   person's — so correcting needs `authority.exclusive_steering`, the human saying nobody
   else is steering this run, and the row says `⚠ unattributed` while it is being honoured.
+  Claude's attribution is unproven, so that includes Claude: a correction there is sent
+  only with `exclusive_steering`.
 - **The run is held.** A hold is the human saying stop; a correction is starting something.
 - **Something about that constraint is already in the air.** The causal key is the
   constraint, so a second correction waits for the first to settle.
@@ -286,8 +295,8 @@ even then every gate below is somebody being deferred to:
   report is `escalated` and it is the human's.
 
 The text is a **fixed template**, not the model's words — it goes out without anybody
-reading it first, so what it can say has to be what the human agreed to when they granted
-this. Its last sentence is the important one: it tells the agent that where the constraint
+reading it first, so what it can say has to be what the run's authority allows, on by
+default and revocable. Its last sentence is the important one: it tells the agent that where the constraint
 conflicts with the goal, it should **say so in its Output instead of choosing**. An agent
 told only to obey picks one silently, and the conflict is exactly what the human needs to
 see.

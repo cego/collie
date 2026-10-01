@@ -178,7 +178,8 @@ test("nothing is allowed without a grant, and a grant is only good for a Driver'
   const correction = proposal([
     { kind: "deliver", run: "r1", agent: "impl-1", text: "stay in src", mode: "boundary" },
   ]);
-  expect(validate(correction, ctx())[0]?.state).toBe("pending");
+  const ungranted = { ...DEFAULT_AUTHORITY, auto_correct: false };
+  expect(validate(correction, ctx({}, ungranted))[0]?.state).toBe("pending");
 
   const granting = { ...DEFAULT_AUTHORITY, auto_correct: true };
   expect(validate(correction, ctx({}, granting))[0]?.state).toBe("allowed_now");

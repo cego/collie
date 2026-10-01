@@ -588,7 +588,7 @@ export interface Correction {
 /**
  * Which open reports Collie may correct by itself, and how. Every gate here is a way of
  * not fighting somebody: the human who typed into that pane, the human who held the Run,
- * the human who never granted `auto_correct` in the first place, and the previous
+ * the human who turned `auto_correct` off, and the previous
  * correction that may or may not have arrived.
  *
  * Pure, and every gate independent, so the matrix is a test rather than a reading.
@@ -621,8 +621,8 @@ export function decideCorrections(
 
 /**
  * What a correction says. A fixed template, not a model's words: this text is sent
- * without a human reading it first, so what it can say has to be something a human
- * already agreed to when they granted `auto_correct`.
+ * without a human reading it first, so what it can say has to be what the Run's
+ * authority allows, on by default and revocable.
  *
  * The last sentence is the important one. An agent told to obey a constraint that
  * conflicts with the goal will pick one, silently; told to say so instead, it hands the
