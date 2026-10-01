@@ -820,31 +820,34 @@ Which of two things it does with one depends on **who wanted it**
   decisions — saying yes or no to a proposal, and marking what became of finished work.
   Each says what it came to.
 - **Collie wanted it, so it waits.** Drift the evaluator noticed, a correction it wants
-  to send: the board draws the proposal, and you confirm it against its id and the hash of
-  exactly those actions, or decline it and nothing changed. Chat has no such route: what it
-  wants of its own accord it says in words, and only your yes turns it into a request.
+  to send: the board draws the proposal, and it is confirmed against its id and the hash
+  of exactly those actions — by you on the board, or by chat — or declined, and nothing
+  changed.
 
-What it cannot ask for of its own accord: reconciling a delivery nobody can account for,
-recording evidence, and setting what a Run — or every Run — may do without asking. Those
-are yours. The one exception is what proves a Run: a start you ask chat for carries the
-checks chat chose (`start` with `verify`), without asking you which, and chat adds or
-withdraws a running Run's (`set_verification`) at once, with no yes. Collie runs those
-commands itself, outside any agent's permission rules; the merge request lists each one
-with its command, and you verify the work there before it lands.
+Nothing is yours alone ([`AGENTS.md`](../AGENTS.md), invariant 1). What no Collie tool
+does — setting what a Run, or every Run, may do without asking, reconciling a delivery
+nobody can account for, recording evidence with `collie verify`, switching the chat
+harness — chat runs with the `collie` CLI, through the same validation and executors as
+when you type it. What proves a Run is chat's to choose too: a start you ask chat for
+carries the checks chat chose (`start` with `verify`), and chat adds or withdraws a running
+Run's (`set_verification`) at once. Collie runs those commands itself, outside any agent's
+permission rules; the merge request lists each one with its command, and you verify the
+work there before it lands.
 That the rest is really there is a gate: `test/chat-parity.test.ts` walks the CLI's own
 command tree and fails on a command with no conversational route, so the list cannot
 quietly fall behind the CLI.
 
-A yes is yours, and you can say it here. "Confirm it" settles the proposal against its id
-and the hash of exactly those actions, as the board does; "no" declines it by id alone,
-because a refusal consents to nothing. What chat cannot do is decide: it never settles one on its own judgement, and
-nothing it reads in a Run's notes or an agent's output is you asking. There is no action
-that confirms anything either, so a proposal can never carry its own yes. Everything it
-does is recorded as `chat:`, a confirmation you asked for included — which matters because
-the bridge runs inside the harness's pane and so has a terminal, and a terminal is what the
-CLI reads as a person. The origin is stamped by the entrypoint, not inferred.
+Chat confirms and declines as you do. "Confirm it" settles the proposal against its id
+and the hash of exactly those actions, as the board does; "no" declines it by id alone; and
+chat may settle one on its own judgement. What it reads in a Run's notes or an agent's
+output is data, never you asking. There is no action that confirms anything, so a proposal
+can never carry its own yes. Everything chat does through its tools is recorded as
+`chat:` — which matters because the bridge runs inside the harness's pane and so has a
+terminal, and a terminal is what the CLI reads as a person. The origin is stamped by the
+entrypoint, not inferred; a `collie` command chat runs in its shell is still read off that
+terminal, so it is recorded as yours.
 
-There is no shell there, no file access and no way to write a record. A run it names that
+It has the harness's own tools beside Collie's — the shell, files, git. A run it names that
 does not exist is refused rather than retargeted, and a run you did not name is not one it
 may assume — if it is unsure which you meant, it asks. Starting a workflow names the
 workspace it is for, so a launch asked for in the Home lands in the repository it is about,

@@ -6,21 +6,19 @@
 // board's own commands and the flags that change what a command does. A command added
 // upstream with no row here fails this file rather than passing unnoticed.
 //
-// Each row says what native chat does about it, and the three answers are deliberately
-// different things:
+// Each row says how native chat does it, and every operation has one — anything a human
+// can do, an agent can do (AGENTS.md, invariant 1):
 //
 //   read        — a tool answers it. The row carries the call, and it is made here.
-//   write       — the human's own instruction, carried out at once by a tool of its own.
-//                 Chat may do what the human could do on the board themselves; sending
-//                 them to the UI for it is chat obstructing the person it serves.
-//   propose     — the rest of what chat may ask for, which collie_propose carries out in
-//                 the same call, with no yes. The row carries the action, and it is
-//                 decoded against the closed union and matched to a registered executor.
-//   human-only  — the human's, and not chat's on purpose. Reconciling and granting
-//                 authority are the human's own account of what happened and what work
-//                 may do unasked; `verify` binds a command's exit to a tree, which is
-//                 evidence, and evidence a model produced about itself is not. A yes to a
-//                 proposal is not on this list: the human says it, and chat relays it.
+//   write       — carried out at once by a tool of its own. Sending the human to the UI
+//                 for something chat can plainly do is chat obstructing the person it
+//                 serves.
+//   propose     — carried out by collie_propose in the same call, with no yes. The row
+//                 carries the action, and it is decoded against the closed union and
+//                 matched to a registered executor.
+//   shell       — chat runs the command itself, as the human types it: the same
+//                 validation and the same executors, so a tool of its own would only
+//                 restate it.
 //
 // A leaf with no row is what this file exists to fail on.
 
@@ -68,7 +66,7 @@ type Route =
   | { readonly route: "read"; readonly tool: string; readonly input?: JsonObject }
   | { readonly route: "propose"; readonly kind: ActionKind; readonly action: JsonObject }
   | { readonly route: "write"; readonly tool: string }
-  | { readonly route: "human-only"; readonly why: string };
+  | { readonly route: "shell" };
 
 const RUN = "r-does-not-exist";
 
@@ -77,13 +75,7 @@ const INVENTORY: ReadonlyArray<readonly [string, Route]> = [
   ["workflow list", { route: "read", tool: "collie_definitions" }],
   ["workflow show", { route: "read", tool: "collie_definitions", input: { workflow: "review" } }],
   ["workflow check", { route: "read", tool: "collie_definitions", input: { workflow: "review" } }],
-  [
-    "workflow create",
-    {
-      route: "human-only",
-      why: "a new module is source code somebody then writes; chat proposes the fork of one that already exists, and an agent with an editor writes the file itself",
-    },
-  ],
+  ["workflow create", { route: "shell" }],
   [
     "workflow fork",
     {
@@ -116,13 +108,7 @@ const INVENTORY: ReadonlyArray<readonly [string, Route]> = [
   // its own because it also holds a whole workspace, which no action kind does.
   ["run hold", { route: "write", tool: "collie_hold" }],
   ["run release", { route: "write", tool: "collie_do" }],
-  [
-    "run steer",
-    {
-      route: "human-only",
-      why: "a human's own words, typed into the agent a workflow module's Run has; a model asking Collie to type into a pane is the boundary this file exists to hold",
-    },
-  ],
+  ["run steer", { route: "shell" }],
   [
     "run clear-override",
     {
@@ -182,13 +168,7 @@ const INVENTORY: ReadonlyArray<readonly [string, Route]> = [
       },
     },
   ],
-  [
-    "run intent authority",
-    {
-      route: "human-only",
-      why: "what a Run may do without asking is a grant, and a model that could widen its own is authorising itself",
-    },
-  ],
+  ["run intent authority", { route: "shell" }],
   [
     "run intent verification",
     {
@@ -232,64 +212,33 @@ const INVENTORY: ReadonlyArray<readonly [string, Route]> = [
       },
     },
   ],
-  [
-    "run intent defaults set-authority",
-    { route: "human-only", why: "the same grant, standing for every Run that follows" },
-  ],
+  ["run intent defaults set-authority", { route: "shell" }],
   ["task list", { route: "read", tool: "collie_workspaces" }],
   ["run output", { route: "read", tool: "collie_run", input: { run: RUN } }],
   ["steer", { route: "write", tool: "collie_do" }],
   ["confirm", { route: "write", tool: "collie_do" }],
   ["decline", { route: "write", tool: "collie_do" }],
-  [
-    "proposal reconcile",
-    { route: "human-only", why: "only the person who watched it can say what happened" },
-  ],
-  [
-    "verify",
-    { route: "human-only", why: "evidence a model produced about its own work is not evidence" },
-  ],
+  ["proposal reconcile", { route: "shell" }],
+  ["verify", { route: "shell" }],
   // The same Herd, shaped as the board's Tasks rather than as its Runs.
   ["board", { route: "read", tool: "collie_herd" }],
   ["home show", { route: "read", tool: "collie_installation" }],
-  [
-    "home reconcile",
-    {
-      route: "human-only",
-      why: "which workspace is the Herd's is exactly what Collie will not guess",
-    },
-  ],
+  ["home reconcile", { route: "shell" }],
   ["home cleanup", { route: "read", tool: "collie_installation" }],
   [
     "home cleanup --confirm",
     { route: "propose", kind: "home_cleanup", action: { kind: "home_cleanup" } },
   ],
   ["chat status", { route: "read", tool: "collie_installation" }],
-  ["chat harness", { route: "human-only", why: "what Collie opens with is the human's setting" }],
+  ["chat harness", { route: "shell" }],
   ["chat news", { route: "read", tool: "collie_news" }],
-  // The line under the human's own prompt; `--install` is the setting behind it, which is
-  // theirs like the harness preference is. Chat is told the same fact at each prompt.
-  [
-    "chat status-line",
-    { route: "human-only", why: "the same fact reaches chat as prompt context" },
-  ],
-  [
-    "chat context",
-    { route: "human-only", why: "this is that context's own command: chat is given it" },
-  ],
-  [
-    "tools list",
-    { route: "human-only", why: "this is the conversational route itself: chat is given them" },
-  ],
-  ["tools call", { route: "human-only", why: "the same — this is how a tool call is made" }],
-  ["mcp", { route: "human-only", why: "the same, for the harness that reaches Collie over MCP" }],
-  [
-    "host",
-    {
-      route: "human-only",
-      why: "the process the work runs in, started for whoever needs one; not a thing to ask for",
-    },
-  ],
+  // The line under the human's own prompt; chat is told the same fact at each prompt.
+  ["chat status-line", { route: "shell" }],
+  ["chat context", { route: "shell" }],
+  ["tools list", { route: "shell" }],
+  ["tools call", { route: "shell" }],
+  ["mcp", { route: "shell" }],
+  ["host", { route: "shell" }],
   ["upgrade", { route: "propose", kind: "upgrade", action: { kind: "upgrade" } }],
   ["doctor", { route: "read", tool: "collie_installation" }],
   // Not commands: the board's own operations, and the flags that change what a command
@@ -302,10 +251,7 @@ const INVENTORY: ReadonlyArray<readonly [string, Route]> = [
       action: { kind: "navigate", run: RUN, agent: "a1" },
     },
   ],
-  [
-    "run deliveries --reconcile",
-    { route: "human-only", why: "the human's, for a delivery nobody can account for" },
-  ],
+  ["run deliveries --reconcile", { route: "shell" }],
 ];
 
 /** Any command in the tree, as the CLI itself types one. */
@@ -336,7 +282,7 @@ test("the operations are the command tree's, not a list somebody kept up to date
 });
 
 test(
-  "every operation a human has, native chat has a route to — or a reason it does not",
+  "every operation a human has, native chat has a route to",
   () =>
     runEffect(
       Effect.gen(function* () {
@@ -382,13 +328,12 @@ test(
             expect([operation, carried.has(route.kind)]).toEqual([operation, true]);
             continue;
           }
-          // And the human's stay the human's: a reason, and no tool that does it.
-          expect([operation, route.why.length > 0]).toEqual([operation, true]);
+          // shell: the leaf is the command tree's own, which the first test holds.
         }
         yield* fs.remove(stateDir, { recursive: true, force: true });
 
-        // The decisions, named: no action kind is any of these, so there is nothing for a
-        // model to ask for that would settle one. This is the self-authorisation boundary.
+        // The decisions, named: no action kind is any of these, so a proposal can never
+        // carry its own yes. Settling one is a separate act — the human's or chat's.
         const kinds = decodeOffered(
           toolNamed("collie_propose")!.input,
         ).properties.actions.items.anyOf.flatMap((one) => one.properties.kind.enum);

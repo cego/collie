@@ -723,16 +723,17 @@ remove — prose there matches no id, and is refused rather than reported as app
 proposal about the installation names no run, so the board draws it whichever row is
 selected.
 
-What is deliberately not in that set: confirming, declining, reconciling, verifying, and
-setting a Run's or the Herd's **authority** — except the checks that prove a Run: a `start`
-carries the ones chat chose as `verify`, `set_verification` adds or withdraws one, and `remember_verification` keeps a run's set for
-its repository's later runs, at once. There is no action kind that settles a
-proposal, so a proposal can never contain its own yes. What a human says in chat is a
-different thing: `collie_do` relays it, against an id and a hash they were shown.
-Everything else a human can type — including forking a Workflow or a Persona, changing
-what every new Run begins with, closing the panes an older release left, and upgrading
-this installation — chat may ask for, and you confirm. `test/chat-parity.test.ts` walks the command tree itself and fails on a command
-with no route, so this list cannot quietly fall behind.
+Settling is not in that set: there is no action kind that confirms, declines or
+reconciles, so a proposal can never contain its own yes. Settling is a separate act, and
+chat takes it as the human does — `collie_do` confirms against an id and hash, or
+declines. Everything else a human can type, chat does too. The checks that prove a Run have tools of
+their own: a `start` carries the ones chat chose as `verify`, `set_verification` adds or
+withdraws one, and `remember_verification` keeps a Run's set for its repository's later
+Runs. What no tool covers — setting a
+Run's or the Herd's **authority**, reconciling, `collie verify`, `chat harness` — it runs
+with the `collie` CLI, through the same validation and executors
+([`AGENTS.md`](../AGENTS.md), invariant 1). `test/chat-parity.test.ts` walks the command
+tree itself and fails on a command with no route, so this list cannot quietly fall behind.
 
 A run it names that does not exist is refused rather than retargeted; an agent the run
 does not have comes back as a question for you rather than being dropped. `start` takes a

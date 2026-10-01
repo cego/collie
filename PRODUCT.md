@@ -60,7 +60,8 @@ course correction, not unrestricted autonomy or unexplained model judgement.
 
 - The human owns goals, priorities, constraints, and the authority delegated to Collie.
 - Collie corrects drift within that authority; ambiguous goals, conflicting constraints,
-  and actions beyond it require a human decision.
+  and actions beyond it require a decision — the human's, or an agent's acting for them.
+  Anything a human can do, an agent can do.
 - Steering and correction are visible and traceable. A message sent, an instruction
   acknowledged, and an outcome verified are different facts.
 - Global visibility does not by itself authorize changes across every workspace.
