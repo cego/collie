@@ -79,7 +79,10 @@ import { fingerprint } from "./verify";
 import { findRun, settled } from "./runs";
 
 const takesFields = Schema.decodeUnknownOption(
-  Schema.Struct({ properties: Schema.optional(Schema.Record(Schema.String, Schema.Json)) }),
+  Schema.Struct({
+    properties: Schema.optional(Schema.Record(Schema.String, Schema.Json)),
+    required: Schema.optional(Schema.Array(Schema.String)),
+  }),
 );
 
 /**
@@ -251,11 +254,13 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
       if (offered === undefined)
         return failed(`${action.run} declares no follow-up, so there is nothing to carry on with`);
       // The words go to the one input the offer leaves for the caller, whatever it is called.
-      const open = Option.getOrUndefined(takesFields(offered.arguments))?.properties ?? {};
-      const [field, ...more] = Object.keys(open);
-      if (field === undefined || more.length > 0)
+      const takes = Option.getOrUndefined(takesFields(offered.arguments));
+      const open = Object.keys(takes?.properties ?? {});
+      const required = takes?.required ?? [];
+      const field = required.length === 1 ? required[0] : open.length === 1 ? open[0] : undefined;
+      if (field === undefined)
         return failed(
-          `${action.run}'s follow-up "${offered.id}" takes ${Object.keys(open).join(", ") || "nothing"} rather than one piece of text`,
+          `${action.run}'s follow-up "${offered.id}" takes ${open.join(", ") || "nothing"} rather than one piece of text`,
         );
       const id = yield* newRequestId();
       return settled(

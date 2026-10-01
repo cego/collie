@@ -34,15 +34,17 @@ export function agentName(
   const trim = (text: string, room: number) => text.slice(0, Math.max(0, room)).replace(/-+$/g, "");
   const core = trim(
     sanitize([stepId, variantKey].filter((p) => p).join("-")),
-    MAX - suffix.length - 1,
+    // Room is left for a slug's first letter and its digest, which keep two runs apart.
+    MAX - suffix.length - 1 - (DIGEST + 3),
   );
   const tail = core ? `${core}-${suffix}` : suffix;
   const room = MAX - tail.length - 1;
   const clean = sanitize(slug);
   let head = room > 0 ? trim(clean, room) : "";
   if (clean.length > room) {
+    const sum = Bun.hash(slug).toString(36).slice(-DIGEST);
     const kept = trim(clean, room - DIGEST - 1);
-    if (kept) head = `${kept}-${Bun.hash(slug).toString(36).slice(-DIGEST)}`;
+    head = `${kept}-${sum}`;
   }
   const name = head ? `${head}-${tail}` : tail;
   return (/^[a-z]/.test(name) ? name : `w${name}`).slice(0, MAX);

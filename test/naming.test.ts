@@ -151,6 +151,13 @@ test("sibling children that share a long prefix get agents of their own", () => 
     expect(name).toStartWith("run-053c5b9d");
     expect(name).toEndWith("-build-r1");
   }
+  // A step long enough to leave no room for the slug still keeps them apart.
+  const step = "a-very-long-operation-name-here";
+  const crowded = ["a", "b"].map((repo) =>
+    agentName(`run-053c5b9d.implement.implement-gitlab.cego.dk-${repo}`, step, null, 1),
+  );
+  expect(crowded[0]).not.toBe(crowded[1]);
+  for (const name of crowded) expect(name).toMatch(/^[a-z][a-z0-9_-]{0,31}$/);
   // A name nothing was cut from is the name it always was.
   expect(agentName("run-053c5b9d", "build", null, 1)).toBe("run-053c5b9d-build-r1");
 });
