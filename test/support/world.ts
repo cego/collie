@@ -59,8 +59,8 @@ export const collie = Effect.fn("World.collie")(function* (
       COLLIE_HOST: asCommand(command),
       COLLIE_HOST_WATCH_PID: watch,
       // The world's own herdr, which `proves` set: this env is otherwise built from nothing.
-      ...(Bun.env.HERDR_BIN_PATH === undefined ? {} : { HERDR_BIN_PATH: Bun.env.HERDR_BIN_PATH }),
-      ...(Bun.env.FAKE_HERDR_LOG === undefined ? {} : { FAKE_HERDR_LOG: Bun.env.FAKE_HERDR_LOG }),
+      HERDR_BIN_PATH: Bun.env.HERDR_BIN_PATH,
+      FAKE_HERDR_LOG: Bun.env.FAKE_HERDR_LOG,
       ...extra,
     },
     stdout: "pipe",
