@@ -8,8 +8,9 @@
 // The agent is one you already have live in herdr, on that harness, with something slow
 // to do — start it the way you normally would. This asks the three questions the
 // capability table has rows for and prints them as markdown to paste into
-// `CAPABILITIES.md`. Attribution is the one that needs you: it asks you to type a line
-// into that pane and waits.
+// `CAPABILITIES.md`. Attribution asks for a line typed into that pane, by a person or an
+// agent, and waits. It cannot pass yet: it reads the ledger for a `manual_override`, which
+// only a live Run's oversight writes.
 
 import { BunServices } from "@effect/platform-bun";
 import { Clock, Effect, FileSystem, ManagedRuntime, Path } from "effect";

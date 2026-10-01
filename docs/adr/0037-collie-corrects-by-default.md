@@ -3,8 +3,8 @@
 **Status: accepted, not yet in effect.** Built: `auto_correct` is on in `DEFAULT_AUTHORITY`.
 It reaches no shipped harness yet: attribution is `unproven` on Claude and `none` on codex,
 opencode and pi, so a Run nobody granted anything is still not corrected. On Claude it
-takes effect when an operator records attribution with `tools/steering-live.ts`; until
-then, a Run is corrected only where `exclusive_steering` was granted too.
+takes effect once attribution is proven; until then, a Run is corrected only where
+`exclusive_steering` was granted too.
 
 The `auto_correct` grant is on for every Run, so that the only thing between a Run and a
 boundary correction is a gate that defers to somebody. Every other grant stays off.
@@ -36,7 +36,7 @@ content or worker output.
 correction in flight, the bound and the attribution gate each still refuse on their own.
 
 **D4. Attribution is not claimed.** Claude's `attribution` row moves to `proven` only from
-an operator's recorded live result. Until then a correction on Claude, as on any harness
+a recorded live result of `tools/steering-live.ts`. Until then a correction on Claude, as on any harness
 without attribution, needs `exclusive_steering`.
 
 ## Consequences
@@ -44,7 +44,13 @@ without attribution, needs `exclusive_steering`.
 - Today nothing changes on a Run nobody granted anything: no shipped harness has proven
   attribution. A Run granted `exclusive_steering` is now corrected without also needing
   `auto_correct`.
-- Once Claude's attribution is recorded, Collie types into Claude panes unasked, but only
+- Claude's attribution cannot be proven yet. Its `UserPromptSubmit` hook also fires on
+  turns Claude injects itself, such as a task notification, and records them as external,
+  so every Claude agent shows external submissions nobody typed, and oversight's
+  `noticeOverride` may read them as a manual override. The probe cannot pass either: it
+  looks for a `manual_override` that only a live Run's oversight writes. Both are fixed
+  separately.
+- Once Claude's attribution is proven, Collie types into Claude panes unasked, but only
   at a work boundary and with the fixed template.
 - A human who types into a pane stops it for that agent until `run clear-override`.
 - After `max_corrections_per_constraint` (2) corrections, a report is escalated to the

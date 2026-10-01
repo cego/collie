@@ -125,9 +125,11 @@ that turn ends — `submitted` with the note `unobserved`, exactly what the Disp
 records — so `now` is not something pi has been shown to do. Codex and opencode took the
 text but their own sandboxes and permission prompts stood between them and the ack file
 in the probe; a blocked agent is one herdr refuses to prompt at all, and that refusal is
-what the ledger shows (`deferred`, then `failed`, with the code `agent_blocked`). Attribution on Claude needs a human
-typing into a Collie-launched agent's pane and is the one row an operator has to record;
-nobody has yet, so on Claude a correction still needs `exclusive_steering`.
+what the ledger shows (`deferred`, then `failed`, with the code `agent_blocked`). Attribution on Claude is
+unproven: its `UserPromptSubmit` hook also fires on turns Claude injects itself, such as a
+task notification, and records them as external, so it cannot yet tell those from a line
+typed into the pane. Until it can, oversight may read such a turn as a manual override,
+and on Claude a correction still needs `exclusive_steering`.
 `boundary` deliveries need none of this and work on every harness.
 
 The evaluator has been run against the installed `claude` 2.1.268, ten calls and one
@@ -284,8 +286,8 @@ corrected without `exclusive_steering`: no harness has proven attribution yet.
 - **On a harness with no attribution**, Collie cannot tell its own submissions from a
   person's — so correcting needs `authority.exclusive_steering`, the human saying nobody
   else is steering this run, and the row says `⚠ unattributed` while it is being honoured.
-  Until an operator records Claude's attribution with `tools/steering-live.ts`, that
-  includes Claude: a correction there is sent only with `exclusive_steering`.
+  Claude's attribution is unproven, so that includes Claude: a correction there is sent
+  only with `exclusive_steering`.
 - **The run is held.** A hold is the human saying stop; a correction is starting something.
 - **Something about that constraint is already in the air.** The causal key is the
   constraint, so a second correction waits for the first to settle.
