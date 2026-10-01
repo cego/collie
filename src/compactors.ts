@@ -591,6 +591,14 @@ const decodeClaudePayload = Schema.decodeUnknownOption(Schema.fromJsonString(Cla
  */
 const CLAUDE_MARKER = /\(collie:([A-Za-z0-9-]+)\)/;
 
+/**
+ * Turns Claude submits itself through `UserPromptSubmit`: a background task or monitor
+ * finishing, and a message from another agent. The payload has no field saying so; the
+ * opening tag is the only sign, and it is checked before the delivery token because a
+ * task's output can quote one.
+ */
+const CLAUDE_INJECTED = ["<task-notification>", "<agent-message "];
+
 function claudeInstructions(requestId: string): string {
   return `Keep the work in progress, the decisions taken and what is left to do. (collie:${requestId})`;
 }
@@ -621,14 +629,17 @@ export const recordClaudeEvent = Effect.fn("Compactors.recordClaudeEvent")(funct
   const event = payload.hook_event_name;
   if (event === "UserPromptSubmit") {
     // Recorded whole? No: the prompt is the human's own text, and a transcript is not
-    // Collie's to keep (SPEC §2). Only which Collie delivery it carried, if any, which is
-    // the whole question attribution asks.
-    const delivery = carriedDelivery(payload.prompt ?? "");
+    // Collie's to keep (SPEC §2). Only who submitted it, which is the whole question
+    // attribution asks.
+    const prompt = payload.prompt ?? "";
+    const delivery = carriedDelivery(prompt);
     yield* writeEvent(
       dir,
-      delivery === null
-        ? { session, kind: "submit", reason: "external" }
-        : { session, kind: "submit", reason: "collie", delivery },
+      CLAUDE_INJECTED.some((tag) => prompt.startsWith(tag))
+        ? { session, kind: "submit", reason: "harness" }
+        : delivery === null
+          ? { session, kind: "submit", reason: "external" }
+          : { session, kind: "submit", reason: "collie", delivery },
     );
     return "";
   }
@@ -1091,10 +1102,10 @@ const opencode: CompactionPort = {
 export const COMPACTION_PORTS: CompactionPorts = { claude, codex, opencode, pi };
 
 /**
- * Submissions this agent has taken that Collie did not make. Claude's `UserPromptSubmit`
- * hook is the only place a submitted turn is visible, and a submission without Collie's
- * delivery token is a human typing into that pane — which is the one thing automatic
- * correction must never fight.
+ * Submissions this agent has taken that neither Collie nor Claude itself made. Claude's
+ * `UserPromptSubmit` hook is the only place a submitted turn is visible, and what is left
+ * is a human typing into that pane — which is the one thing automatic correction must
+ * never fight.
  *
  * Counted rather than timestamped: the caller compares this against what it saw last
  * time, so a submission it has already turned into an override is not one again.

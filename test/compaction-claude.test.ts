@@ -9,7 +9,14 @@ import { Rig } from "./support/recorder";
 import { runEffect } from "./support/effect";
 import { onMachineWith } from "./support/live";
 import { fakeChannel } from "./support/compaction";
-import { atLeast, COMPACTION_PORTS, recordClaudeEvent, VERIFIED_VERSIONS } from "../src/compactors";
+import {
+  atLeast,
+  COMPACTION_PORTS,
+  externalSubmissions,
+  recordClaudeEvent,
+  submittedDelivery,
+  VERIFIED_VERSIONS,
+} from "../src/compactors";
 import type { AgentContext } from "../src/compaction";
 
 let rig: Rig;
@@ -93,6 +100,16 @@ const post = (session: string, trigger: string) =>
     trigger,
     compact_summary: "what the agent was doing, condensed",
   });
+
+/** A submitted turn, as the installed release builds it; the prompt is all Collie reads. */
+const Submit = Schema.Struct({
+  session_id: Schema.String,
+  hook_event_name: Schema.tag("UserPromptSubmit"),
+  prompt: Schema.String,
+});
+const encodeSubmit = Schema.encodeSync(Schema.fromJsonString(Submit));
+const submit = (prompt: string) =>
+  encodeSubmit({ session_id: "s-1", hook_event_name: "UserPromptSubmit", prompt });
 
 const measured = (session: string, input: number, output: number, percent: number) =>
   encodeStatusLine({
@@ -255,6 +272,44 @@ test("a duplicate PostCompact says success once, not twice, and never a failure"
       yield* recordClaudeEvent(dir, post("s-1", "manual"));
 
       expect(yield* claude.poll(ctx(), "req-1")).toEqual({ kind: "success" });
+    }),
+  ));
+
+test("a background task finishing is Claude's own turn, not a person typing", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* recordClaudeEvent(
+        dir,
+        submit(
+          "<task-notification>\n<task-id>b11e8rx1q</task-id>\n<status>completed</status>\n</task-notification>",
+        ),
+      );
+      yield* recordClaudeEvent(
+        dir,
+        submit('<agent-message from="reviewer">\nthe review is done\n</agent-message>'),
+      );
+
+      // A task's output can quote a delivery token; that does not make the turn Collie's.
+      yield* recordClaudeEvent(
+        dir,
+        submit("<task-notification>\n<summary>grep collie-delivery:run-1-steer-1</summary>"),
+      );
+
+      expect(yield* externalSubmissions(dir)).toBe(0);
+      expect(yield* submittedDelivery(dir, "run-1-steer-1")).toBe(false);
+    }),
+  ));
+
+test("a submission is Collie's when it carries a delivery token, and a person's otherwise", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* recordClaudeEvent(dir, submit("collie-delivery:run-1-steer-1\nStop and do this."));
+      yield* recordClaudeEvent(dir, submit("wait, use the other branch"));
+
+      expect(yield* submittedDelivery(dir, "run-1-steer-1")).toBe(true);
+      expect(yield* externalSubmissions(dir)).toBe(1);
+      const written = yield* fs.readFileString(path.join(dir, "events.jsonl"));
+      expect(written).not.toContain("other branch");
     }),
   ));
 

@@ -94,8 +94,12 @@ If someone types into an agent's pane, Collie stops correcting that agent automa
 On Claude this is detected by a `UserPromptSubmit` hook. Every prompt Collie sends — a
 step's pointer, a repair, a hand-off, a steer, a compaction request — carries a line of
 its own, `collie-delivery:<id>`, first or straight after a slash command, and the hook records that id with the submission, so a
-prompt Collie sent is tied to its delivery. A submission without the token is somebody
-else's. Only `collie run clear-override <run> <agent>`
+prompt Collie sent is tied to its delivery. Claude also submits turns of its own through
+the same hook — a background task or monitor finishing (`<task-notification>`) and a
+message from another agent (`<agent-message from=…>`) — and those are recorded as
+`harness`, not as a person: nobody typed them. What is left, a submission that is neither
+Collie's nor Claude's own, is somebody else's, and only those are counted. The prompt's
+text is never kept, only who submitted it. Only `collie run clear-override <run> <agent>`
 lifts it — nothing times it back on, because a human who took the keyboard is assumed to
 still have it until they say otherwise.
 
@@ -127,6 +131,11 @@ text but their own sandboxes and permission prompts stood between them and the a
 in the probe; a blocked agent is one herdr refuses to prompt at all, and that refusal is
 what the ledger shows (`deferred`, then `failed`, with the code `agent_blocked`). Attribution on Claude needs a human
 typing into a Collie-launched agent's pane and is the one row an operator has to record.
+The probe decides it from the hook's own record: its delivery is recorded as `collie`, and
+the agent's count of external submissions rises by exactly one while the line is typed.
+Before that, the hook counted Claude's injected turns as a person, so every
+Collie-launched Claude agent looked typed into; the hook runs from the installed binary,
+so the row can only be recorded against a release with the fix installed.
 `boundary` deliveries need none of this and work on every harness.
 
 The evaluator has been run against the installed `claude` 2.1.268, ten calls and one
