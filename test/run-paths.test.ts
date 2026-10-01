@@ -3,7 +3,7 @@
 
 import { Clock, DateTime, Effect, FileSystem, Path, Schema } from "effect";
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { breakStaleLock, processStartTime, withDirLock } from "../src/lock";
+import { breakStaleLock, processStartTime, withDirLock, withLock } from "../src/lock";
 import { runEffect } from "./support/effect";
 
 let stateDir: string;
@@ -238,5 +238,32 @@ test("a claim that changed since it was inspected is never the one removed", () 
         "broke=true",
       );
       expect(yield* fs.exists(unchanged)).toBe(false);
+    }),
+  ));
+
+test("fibers of one process contending for one lock each get it in turn, and none fails on the break guard", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const path = yield* Path.Path;
+      const lock = path.join(dir, "shared.json.lock");
+      let held = 0;
+      let most = 0;
+      const turn = withLock(
+        lock,
+        Effect.fail(new Error("contended")),
+        Effect.gen(function* () {
+          held += 1;
+          most = Math.max(most, held);
+          yield* Effect.sleep("2 millis");
+          held -= 1;
+        }),
+        2000,
+      );
+      for (let round = 0; round < 5; round++)
+        yield* Effect.all(
+          Array.from({ length: 20 }, () => turn),
+          { concurrency: "unbounded" },
+        );
+      expect(most).toBe(1);
     }),
   ));

@@ -201,15 +201,20 @@ is **Finished**, the board's last section.
 and lifted by a human.
 
 **Session** — One herdr session and one workspace, taken together. It is the
-scope of a Control Plane tab and of the register of live agents, so only Runs in the same
-Session can hand work to each other. There is only ever one agent per role in a Session.
-One workspace, always: a mutating Run's checkout does not take it out of the Session it
-was started in, which is what lets `implement` ask the live `plan` agent a question.
+scope of a Control Plane tab and of a register file of live agents, which holds one entry
+per agent for every Run started there. One workspace, always: a mutating Run's checkout
+does not take it out of the Session it was started in.
 
-**Hand-off** — What one Run's agent is told about another Run's live agent: the implementer's
-prompt names the planner's pane in the same Session and tells it to ask there rather than
-stop, and with no planner live, to stop and ask the human. Nothing is typed into another
-Run's pane on its behalf.
+**Lineage** — A Run, the Run it was started from, that Run's own, and so on: a child's
+parent, or the Run whose `runs/<id>/plan` an `implement` builds, however it was started. The only Runs whose agents
+a Run's agents are pointed at.
+
+**Hand-off** — What one Run's agent is told about a live agent of a Run in its **Lineage**:
+the implementer's prompt names the pane of the planner of the plan it was started from and
+tells it to ask there rather than stop, and with no planner live in its lineage, to decide
+and record the decision. Another Run's agent in the same role is never named, however
+recently it was started from the same place. Nothing is typed into another Run's pane on
+its behalf.
 
 **Worktree** — The checkout a mutating Run owns: one per branch, because git allows
 exactly one worktree per checked-out branch. The branch names the work rather than the path
@@ -359,8 +364,8 @@ driven, still checked and still corrected.
 
 **Scope** — `local`, this Session's own workspace, or `all`, every workspace of this herdr
 session that Collie has a Run, an agent or a history in. It is what a Run lookup searches
-and never what a Session is: hand-offs, the register and starting a Workflow stay this
-Session's. The board no longer has one — it is the whole Herd's, one card per Task
+and never what a Session is: the register a Run's agents are written to and starting a
+Workflow stay this Session's, and a hand-off stays in the Run's **Lineage**. The board no longer has one — it is the whole Herd's, one card per Task
 ([ADR-0013](docs/adr/0013-the-board-is-cards-of-tasks.md)) — so the `scope` default in
 `config.json` is read at launch and narrows nothing a human sees.
 

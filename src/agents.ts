@@ -57,10 +57,11 @@ import {
   type PermissionMode,
   type Preferences,
 } from "./harness";
-import { Herdr, herdrFailureReason, type HerdrError, type PaneInfo } from "./herdr";
+import { Herdr, herdrFailureReason, type AgentInfo, type HerdrError, type PaneInfo } from "./herdr";
 import { agentName, agentTabLabel, reason, shellQuote, unsafePathComponent } from "./naming";
 import { askRouteTo } from "./handoff";
-import { liveAgent, registerAgent, registryPath, scopeFor, verifyIncarnation } from "./registry";
+import { nowIso } from "./time";
+import { lineageAgent, registerAgent, registryPath, scopeFor, verifyIncarnation } from "./registry";
 import {
   jsonSchemaFor,
   AgentScopes,
@@ -172,10 +173,11 @@ export interface AgentsApi {
   readonly skills: (names: ReadonlyArray<string>) => Effect.Effect<ReadonlyMap<string, string>>;
   /**
    * What an agent is told about asking for a decision its work does not cover: the pane
-   * of whoever is live in that role, and otherwise to stop and ask the human. A role, not
-   * a bare route: who may be asked is the workflow's own declaration.
+   * of whoever is live in that role in this Run's lineage — `Place.lineage` — and
+   * otherwise to decide and say so. A role, not a bare route: who may be asked is the
+   * workflow's own declaration.
    */
-  readonly askRoute: (role: string, cwd: string) => Effect.Effect<string>;
+  readonly askRoute: (role: string, lineage: ReadonlyArray<string>) => Effect.Effect<string>;
   /** How often anything here looks again, which a workflow's own watch for a stop shares. */
   readonly pollMs: number;
   /** The agent these preferences come to over the operator's configuration, lowest first. */
@@ -194,13 +196,14 @@ export interface AgentsApi {
     unless?: string | null,
   ) => Effect.Effect<void, AgentUncertain | AgentParked>;
   /**
-   * Hands a message, through the one sender, to another Run's live agent in this role here;
-   * null where none. Parked where nobody can say whether it arrived.
+   * Hands a message, through the one sender, to the live agent in this role of a Run this
+   * one came from; null where none. Parked where nobody can say whether it arrived.
    */
   readonly handOff: (options: {
     readonly runId: string;
     readonly role: string;
-    readonly cwd: string;
+    /** The Run and the Runs it came from, nearest first: `Place.lineage`. */
+    readonly lineage: ReadonlyArray<string>;
     readonly text: string;
   }) => Effect.Effect<Steered | null, AgentParked>;
   /** Closes the panes of this run's live agents, which stops them; `left` may still be running. */
@@ -587,14 +590,13 @@ const agrees = (held: AgentChoice, requested: Preferences) =>
   (requested.effort === undefined || requested.effort === held.effort);
 
 /**
- * A message handed, as an Activity, to another Run's live agent in this role: the agent it
- * reached, or null where there is none to take it. One nobody can say arrived parks the Run.
+ * A message handed, as an Activity, to the live agent in this role of a Run this one came
+ * from: the agent it reached, or null where there is none to take it. One nobody can say
+ * arrived parks the Run.
  */
 export const handOffWork = (given: {
   readonly operation: string;
   readonly role: string;
-  /** Where the agent to hand to works; the Run's own checkout where it is left out. */
-  readonly cwd?: string;
   readonly text: string;
 }): Effect.Effect<
   string | null,
@@ -605,7 +607,7 @@ export const handOffWork = (given: {
     const agents = yield* Agents;
     const host = yield* Host;
     const runId = (yield* Run).id;
-    const options = { ...given, runId, cwd: given.cwd ?? (yield* host.place(runId)).cwd };
+    const options = { ...given, runId, lineage: (yield* host.place(runId)).lineage };
     return yield* Activity.make({
       name: `${options.operation}.handoff`,
       success: Schema.NullOr(Schema.String),
@@ -1075,7 +1077,11 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
     }).pipe(Effect.catch(() => Effect.succeed({ dispatch: true as const })));
 
   /** A pane, an agent in it, and the registry entry that makes it addressable. */
-  const start = Effect.fn("Agents.start")(function* (ask: AgentAsk, agent: string) {
+  const start = Effect.fn("Agents.start")(function* (
+    ask: AgentAsk,
+    agent: string,
+    alive: { readonly agents: ReadonlyArray<AgentInfo>; readonly listedAt: string },
+  ) {
     const adapter = adapterFor(ask.harness ?? host.harness);
     const wanted = ask.permissions ?? undefined;
     const asked = isPermissionMode(wanted) ? wanted : host.permissions;
@@ -1135,6 +1141,7 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
         yield* registerAgent(
           yield* registryPath(host.env.stateDir, scopeFor(host.env, ask.cwd)),
           found.entry,
+          alive,
         );
         return found.entry.incarnation?.terminalId;
       }),
@@ -1147,6 +1154,7 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
         // Derived, not minted: this is the name a replay looks for rather than starting
         // a second agent, and a run id is already unique.
         const agent = agentName(ask.runId, ask.agent ?? ask.operation, null, 1);
+        const listedAt = yield* nowIso();
         const listing = yield* host.herdr.agentList().pipe(Effect.result);
         if (listing._tag === "Failure") {
           // Nothing is started on a question nobody answered: a second agent on the same
@@ -1163,7 +1171,9 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
         const replayed = yield* fs
           .exists(launchPath(ask.runId, ask.operation))
           .pipe(Effect.orElseSucceed(() => false));
-        const terminalId = alive ? (live.terminalId ?? undefined) : yield* start(ask, agent);
+        const terminalId = alive
+          ? (live.terminalId ?? undefined)
+          : yield* start(ask, agent, { agents: listing.success, listedAt });
         const landed: Launched = {
           agent,
           output: ask.output,
@@ -1414,16 +1424,16 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
   const handOff = (options: {
     readonly runId: string;
     readonly role: string;
-    readonly cwd: string;
+    readonly lineage: ReadonlyArray<string>;
     readonly text: string;
   }) =>
     under(
       Effect.gen(function* () {
         const alive = yield* host.herdr.agentList();
-        const file = yield* registryPath(host.env.stateDir, scopeFor(host.env, options.cwd));
-        const entry = yield* liveAgent(file, alive, options.role);
+        const others = options.lineage.filter((runId) => runId !== options.runId);
+        const entry = yield* lineageAgent(host.env.stateDir, alive, options.role, others);
         // Without a proven incarnation the entry names a pane, not the agent now in it.
-        if (entry === null || entry.runId === options.runId) return null;
+        if (entry === null) return null;
         if (!verifyIncarnation(entry, alive).ok) return null;
         const handed = { agent: entry.agent, delivered: true, detail: "" };
         const earlier = (yield* deliveriesOf(host.env.stateDir, entry.runId)).filter(
@@ -1592,12 +1602,11 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
   return {
     outputFor,
     skills: (names) => under(skills(names)),
-    askRoute: (role, cwd) =>
+    askRoute: (role, lineage) =>
       under(
         Effect.gen(function* () {
           const alive = yield* host.herdr.agentList();
-          const file = yield* registryPath(host.env.stateDir, scopeFor(host.env, cwd));
-          const entry = yield* liveAgent(file, alive, role);
+          const entry = yield* lineageAgent(host.env.stateDir, alive, role, lineage);
           // A register entry with no incarnation names a pane, and whatever is in that
           // pane now is not the agent it was written about.
           return askRouteTo(entry !== null && verifyIncarnation(entry, alive).ok ? entry : null);

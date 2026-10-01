@@ -420,8 +420,10 @@ section is for. **Working** is one card per Task something is
 actually doing — a Run the host holds that has not settled, or an agent herdr still has: its name,
 its project, one plain sentence about what is happening, one amber line when it has
 drifted, the step glyphs, where it has got to, how many agents are on it and how long it
-has been going. Silence past `board_quiet_ms` reads `…but silent for 14 minutes` and moves
-nothing. **Waiting on you** is work that ended without landing, and that nobody has
+has been going. The sentence names the step the Run last launched an agent for, with its
+round (`Fixing the review findings, round 1.`, `Building ticket 02.`). Silence past
+`board_quiet_ms` reads `…but silent for 14 minutes` and moves nothing; a Run whose agent
+herdr reports working, or whose check Collie is running, is never silent. **Waiting on you** is work that ended without landing, and that nobody has
 asked you about: an implement that succeeded and whose merge request is open, a plan that
 is ready to implement, a Run that failed, was stopped or was abandoned with a branch or a
 merge request behind it and has neither been resumed nor disposed of. A Run that ended with
@@ -939,15 +941,17 @@ an older Collie recorded is not read at all; `collie run start` begins the same 
 
 ## Hand-offs between runs
 
-Runs in the same **session** — one herdr session, one workspace — know about
-each other's long-lived agents. There is only ever one implementer and one planner per
-session.
+A Run knows about the long-lived agents of its **lineage** only: itself, the Run it was
+started from or whose plan it builds, and so on up. An `implement` given a plan's
+`runs/<id>/plan`, however it was started, asks that plan's planner;
+another Run's planner or implementer, however recently it was started from the same place,
+is never the one asked or handed work.
 
 **A review, to whoever can act on it.** After the synthesis, `review` asks **What next?**:
 
-- **Fix findings** — the implementer already live in this workspace is handed them, where
-  there is one; otherwise an implementer on this review's own run applies them as a fix
-  round, `disputed` and all, and the fix is reviewed again at once. The rally goes on by
+- **Fix findings** — the live implementer of a Run this review was started from is handed
+  them, where there is one; otherwise an implementer on this review's own run applies them
+  as a fix round, `disputed` and all, and the fix is reviewed again at once. The rally goes on by
   itself until nothing blocking is left, it stops making progress, or four rounds have run,
   and then asks again. A hand-off offers **Review again** for when the implementer is done.
 - **Fix findings in a full implement run** — starts `implement` with the review itself as
@@ -1063,7 +1067,8 @@ Settings, but a run of a workflow module consults none of them: `implement` carr
 ceiling of four review and fix rounds, there is no hand-off between runs to time out, and no
 quiet agent is nudged.
 
-`board_quiet_ms` is how long a running run's directory may go unchanged before its card
+`board_quiet_ms` is how long a running run's directories — its own, its agents' and its
+evidence — may go unchanged, with no agent of it working and no check running, before its card
 reads `…but silent for 9m` and takes the quiet edge. Five minutes by default. Nothing is
 nudged and nothing is given up on — it is shown, so a hung run is visible before you notice
 by accident.
