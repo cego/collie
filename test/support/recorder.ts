@@ -522,14 +522,23 @@ export class Rig {
                 Queue.offerUnsafe(writes, {
                   entry,
                   tokens,
-                  succeed: () =>
+                  succeed: () => {
                     socket.write(
                       `${encodeJson(
                         failure
                           ? { id: req.id, error: { message: failure } }
                           : { id: req.id, result: { type: "ok" } },
                       )}\n`,
-                    ),
+                    );
+                    // A subscription herdr has something to say on at once.
+                    if (req.method === "events.subscribe" && Bun.env.FAKE_HERDR_PUSH_EVENT === "1")
+                      socket.write(
+                        `${encodeJson({
+                          event: "pane.agent_status_changed",
+                          data: { pane_id: "1-1", workspace_id: "w1", agent_status: "blocked" },
+                        })}\n`,
+                      );
+                  },
                   fail: () =>
                     socket.write(
                       `${encodeJson({ id: req.id, error: { message: "log write failed" } })}\n`,

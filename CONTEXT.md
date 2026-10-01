@@ -26,7 +26,8 @@
 
 **Herd** — One herdr session: every workspace in it. The scope of the Collie tab, the
 conversation, proposals, the budget and elections. Keyed by the canonical path of the
-session's socket, never by a directory. **Session** keeps its own meaning below — one
+session's socket, never by a directory. A Task records the Herd its workspace is in, and a
+Machine's host reads every Herd on it. **Session** keeps its own meaning below — one
 workspace — and is not the Herd.
 
 **Machine** — One computer's Collie: one state directory, its one host, and every Herd on

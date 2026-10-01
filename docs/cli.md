@@ -486,20 +486,21 @@ Herd-wide, and never narrowed by which workspace you typed it in: one board per 
 ([ADR-0009](adr/0009-the-collie-tab-is-the-herds.md)). A Run belonging to no Task is a
 Task of its own; a child Run is its parent's `children` rather than a Task beside it.
 
-| Field                    | What it says                                                                                                               |
-| ------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
-| `id`                     | The Task, or the Run's own id where it belongs to no Task.                                                                 |
-| `name`, `project`        | The two halves of the task workspace's label. No herdr ids.                                                                |
-| `state`                  | `blocked`, `active`, `quiet`, `failed`, `stopped` or `done`.                                                               |
-| `steps[]`                | The pipeline across the Task's Runs, each `done`, `active`, `blocked`, `failed` or `todo`. A step that loops is one entry. |
-| `sentence`               | What is happening, in one plain sentence — no step names, counters or glyph codes.                                         |
-| `age`, `at`              | How long it has been going, and when it last changed.                                                                      |
-| `drift`, `held`          | The one line each carries, or `null`.                                                                                      |
-| `decision`               | The question, proposal or gate waiting on you, or `null`. One of the two ways into Needs you.                              |
-| `agents[]`, `children[]` | The live agents on it, and the child Runs it started.                                                                      |
-| `mr`, `branch`           | What it is building, where it can be read.                                                                                 |
-| `disposition`            | What became of the work, where a person recorded it — never inferred from a merge request.                                 |
-| `run`, `runs[]`          | The Run a card acts on, and every Run of the Task.                                                                         |
+| Field                    | What it says                                                                                                                    |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------- |
+| `id`                     | The Task, or the Run's own id where it belongs to no Task.                                                                      |
+| `name`, `project`        | The two halves of the task workspace's label. No herdr ids.                                                                     |
+| `herd`                   | The Herd the Task's workspace is in: an `id` in `herds` while that session runs. Absent for a Task recorded before it was kept. |
+| `state`                  | `blocked`, `active`, `quiet`, `failed`, `stopped` or `done`.                                                                    |
+| `steps[]`                | The pipeline across the Task's Runs, each `done`, `active`, `blocked`, `failed` or `todo`. A step that loops is one entry.      |
+| `sentence`               | What is happening, in one plain sentence — no step names, counters or glyph codes.                                              |
+| `age`, `at`              | How long it has been going, and when it last changed.                                                                           |
+| `drift`, `held`          | The one line each carries, or `null`.                                                                                           |
+| `decision`               | The question, proposal or gate waiting on you, or `null`. One of the two ways into Needs you.                                   |
+| `agents[]`, `children[]` | The live agents on it, and the child Runs it started.                                                                           |
+| `mr`, `branch`           | What it is building, where it can be read.                                                                                      |
+| `disposition`            | What became of the work, where a person recorded it — never inferred from a merge request.                                      |
+| `run`, `runs[]`          | The Run a card acts on, and every Run of the Task.                                                                              |
 
 ## Answer a question
 
@@ -1355,12 +1356,14 @@ host that picks it up.
 The operations above are `HostRpcs`: internal, and a Collie client of another build stops
 before sending them anything. Beside them on the same socket is `FrontDoorRpcs`, the door
 any front door uses whatever its build or computer, declared with its Schemas in
-`src/board-model.ts`. `board` streams the board: a `Snapshot` (the state directory's `installation` id, `build`, `protocol`,
-`herds` and every TaskView), then an `Upsert` or a `Remove` keyed by Task id for each
-change, each with a `seq` higher than the last. A client that reconnects gets a fresh
-snapshot. The host builds again when anything under its state directory is written, and
-every five seconds. The installation id is written once, by the first host to own the
-directory, and survives restarts and upgrades.
+`src/board-model.ts`. `board` streams the board: a `Snapshot` (the state directory's
+`installation` id, `build`, `protocol`, the `herds` — every running herdr session, by Herd
+`id` and herdr's `name` — and every TaskView), then an `Upsert` or a `Remove` keyed by Task
+id for each change, each with a `seq` higher than the last. A client that reconnects gets a
+fresh snapshot. The host builds again when anything under its state directory is written,
+when herdr pushes an event from any of its sessions (a pane opening or closing, or an
+agent's status changing), and every five seconds. The installation id is written once, by
+the first host to own the directory, and survives restarts and upgrades.
 
 `protocol` is an integer, also in `identity`. An optional field, a new operation or a new
 kind of message does not change it, and a client reads a kind it does not know as

@@ -52,5 +52,5 @@ and the one before. Version 1 has none before it.
 - One board per Machine. Front doors stop disagreeing about a Task.
 - Each subscribed client costs one build per change. That is cheap for the handful of
   clients a Machine has. A board shared between clients is the upgrade if it ever is not.
-- Until the host watches every herdr session (the next step), the agents on a card are
-  the ones in the session the host inherited.
+- The host reads every running herdr session on the Machine, and a Task records the Herd
+  its workspace is in, so a card names its Herd whichever session started the host.

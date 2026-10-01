@@ -106,6 +106,8 @@ export const TaskView = Schema.Struct({
   id: Schema.String,
   name: Schema.String,
   project: Schema.String,
+  /** The Herd the Task's workspace is in, where its record says; a `herds` id. */
+  herd: Schema.optionalKey(Schema.String),
   state: TaskState,
   steps: Schema.Array(BoardStep),
   sentence: Schema.String,
@@ -337,7 +339,11 @@ export type RunDetail = typeof RunDetail.Type;
 export const PROTOCOL = 1;
 
 /** One herdr session whose Tasks are on this board. */
-export const Herd = Schema.Struct({ id: Schema.String });
+export const Herd = Schema.Struct({
+  id: Schema.String,
+  /** herdr's name for the session, where herdr names its sessions. */
+  name: Schema.optionalKey(Schema.String),
+});
 export type Herd = typeof Herd.Type;
 
 /** Every Task as it is now; whatever follows it is a change to this. */

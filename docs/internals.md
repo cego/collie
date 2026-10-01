@@ -211,6 +211,14 @@ answer it (`herdr agent explain --file <screen> --agent claude --json` checks a 
 without a server), and a reply without it reads as a box nobody can see, which asks a
 human rather than pressing Enter.
 
+`session list --json` is the second: it answers with a bare `{ sessions }` rather than an
+envelope, so it is not in the socket schema either. The host reads it to find every running
+session on the Machine (0.9.1 has the command; whether the pinned 0.8.2 does is not
+checked), and an answer it cannot decode reads as the one session the host inherited. Each
+session's agents come from `agent list` with that session's `HERDR_SOCKET_PATH`, and its
+changes from `events.subscribe` on its socket: pane lifecycle events and each agent pane's
+status, subscribed again after every event so a new pane is watched too.
+
 The version Collie is verified against is `herdr-pin.json`, with the schema that version
 prints committed beside it as `herdr-api-schema.json`, and `min_herdr_version` in
 `herdr-plugin.toml` equal to it. The `ci` workflow runs the test against the snapshot

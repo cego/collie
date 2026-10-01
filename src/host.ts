@@ -68,7 +68,7 @@ import { FrontDoorRpcs, PROTOCOL } from "./board-model";
 import { boardMessages } from "./board-stream";
 import { loadDefaults } from "./config";
 import { factsOfView } from "./runs";
-import { herdOf } from "./steering";
+import { aliveIn, herdChanges, liveHerds } from "./herds";
 import { currentPid, ensureLockDir, lockHolder, withLock, type LockHolder } from "./lock";
 
 /** What a host says it is. A client that is not this stops rather than guessing. */
@@ -389,7 +389,7 @@ const frontDoorHandlers = (dir: string, installation: string) =>
       const herdr = new Herdr(env);
       const build = Effect.gen(function* () {
         const runs = (yield* registry.views(null)).map((view) => factsOfView(env.stateDir, view));
-        const alive = yield* herdr.agentList().pipe(Effect.orElseSucceed(() => []));
+        const alive = yield* aliveIn(yield* liveHerds(herdr, env));
         return yield* buildBoard({
           env,
           runs,
@@ -403,29 +403,42 @@ const frontDoorHandlers = (dir: string, installation: string) =>
         });
       }).pipe(Effect.provideContext(bun));
       // Debounced apart from the tick, so a burst of writes cannot hold the tick back.
-      const changed = Stream.merge(
-        fs.watch(dir, { recursive: true }).pipe(
-          Stream.catch(() => Stream.empty),
-          Stream.debounce("200 millis"),
-        ),
-        Stream.tick(BOARD_TICK),
-      );
-      const herd = yield* herdOf(env.socketPath).pipe(
-        Effect.provideContext(bun),
-        Effect.orElseSucceed(() => null),
+      const changed = Stream.mergeAll(
+        [
+          fs.watch(dir, { recursive: true }).pipe(
+            Stream.catch(() => Stream.empty),
+            Stream.debounce("200 millis"),
+            Stream.map(() => undefined),
+          ),
+          Stream.tick(BOARD_TICK),
+          herdChanges(herdr, env).pipe(
+            Stream.provideContext(bun),
+            Stream.catch(() => Stream.empty),
+          ),
+        ],
+        { concurrency: "unbounded" },
       );
       return FrontDoorRpcs.of({
         board: () =>
-          boardMessages({
-            head: {
-              installation,
-              build: BUILD,
-              protocol: PROTOCOL,
-              herds: herd === null ? [] : [{ id: herd }],
-            },
-            build,
-            changed,
-          }).pipe(Stream.orDie),
+          Stream.unwrap(
+            liveHerds(herdr, env).pipe(
+              Effect.map((sessions) =>
+                boardMessages({
+                  head: {
+                    installation,
+                    build: BUILD,
+                    protocol: PROTOCOL,
+                    herds: sessions.flatMap(({ herd, name }) =>
+                      herd === null ? [] : [name === undefined ? { id: herd } : { id: herd, name }],
+                    ),
+                  },
+                  build,
+                  changed,
+                }),
+              ),
+              Effect.provideContext(bun),
+            ),
+          ).pipe(Stream.orDie),
       });
     }),
   );

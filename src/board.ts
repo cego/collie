@@ -698,7 +698,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
       asking: decision !== null,
     });
     const finishedAt = settledNow ? endedAt(leader) : 0;
-    views.push({
+    const view: TaskView = {
       id,
       name,
       project,
@@ -760,7 +760,8 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
       run: leader.id,
       runs: runs.map((run) => run.id),
       at: at === 0 ? first : at,
-    });
+    };
+    views.push(task?.herd ? { ...view, herd: task.herd } : view);
   }
   return sortBoard(views);
 });

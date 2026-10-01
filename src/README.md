@@ -24,6 +24,7 @@ Runner source (Bun/TypeScript). Compiled to `bin/collie` per platform; see ADR-0
 | `board.ts`         | Builds the board from the files: one TaskView per Task and a card's sentence             |
 | `board-model.ts`   | The board's Schemas and `FrontDoorRpcs`, and the pure section and header rules           |
 | `board-stream.ts`  | The board a host serves one client: a snapshot, then each Task that changed              |
+| `herds.ts`         | Every running herdr session the host reads, its agents, and the events it pushes         |
 | `attention.ts`     | Why a run wants a human, and which actions are safe now                                  |
 | `registry.ts`      | Which long-lived agents this Session still has, per workspace + repo                     |
 | `handoff.ts`       | Giving one Run's result to another Run's live agent                                      |

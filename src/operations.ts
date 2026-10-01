@@ -492,6 +492,7 @@ const taskHere = Effect.fn("operations.taskHere")(function* (
     .workspaceList()
     .pipe(Effect.orElseSucceed((): WorkspaceInfo[] => []));
   const task = yield* newTask({
+    herd: yield* herdOf(env.socketPath).pipe(Effect.orElseSucceed(() => null)),
     workspace: env.workspaceId,
     label:
       open.find((one) => one.workspaceId === env.workspaceId)?.label ??

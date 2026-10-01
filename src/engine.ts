@@ -115,7 +115,7 @@ import {
   type Watched,
 } from "./oversight";
 import { evaluationDeps } from "./evaluator";
-import { budgetPath } from "./steering";
+import { budgetPath, herdOf } from "./steering";
 import type { JudgementDeps } from "./drift";
 import type { Card } from "./cards";
 import { reason } from "./naming";
@@ -3608,7 +3608,13 @@ const makeRegistry: (
         : yield* taskOfWorkspace(placing.env.stateDir, workspace).pipe(Effect.orDie);
     const task =
       known ??
-      (yield* newTask({ workspace, label, cwd: placed.cwd, rootPane }).pipe(
+      (yield* newTask({
+        workspace,
+        label,
+        cwd: placed.cwd,
+        rootPane,
+        herd: yield* herdOf(placing.env.socketPath).pipe(Effect.orElseSucceed(() => null)),
+      }).pipe(
         Effect.flatMap((made) => writeTask(placing.env.stateDir, made)),
         Effect.orDie,
       ));

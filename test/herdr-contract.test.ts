@@ -57,6 +57,14 @@ const replies = {
   },
 } satisfies Record<string, { of: Schema.Top; at: ReplyLocation }>;
 
+/** What the host subscribes a herdr session to. */
+const SUBSCRIPTIONS: ReadonlyArray<Schema.JsonObject> = [
+  { type: "pane.created" },
+  { type: "pane.closed" },
+  { type: "pane.agent_detected" },
+  { type: "pane.agent_status_changed", pane_id: "1-2" },
+];
+
 /**
  * The params each socket method in `src/herdr.ts` actually sends. Keyed by
  * `SocketMethod`, so a method added to `SOCKET_METHODS` without a row here does not
@@ -85,6 +93,7 @@ const requests = {
     ttl_ms: 86_400_000,
   },
   "popup.close": {},
+  "events.subscribe": { subscriptions: SUBSCRIPTIONS },
 } satisfies Record<SocketMethod, Schema.JsonObject>;
 
 // Only meaningful for the committed snapshot; a fresh schema printed by some other
