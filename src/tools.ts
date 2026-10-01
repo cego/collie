@@ -160,6 +160,7 @@ const ASKED_KINDS = [
   "deliver",
   "followup",
   "start",
+  "remember_verification",
 ] as const;
 
 /**

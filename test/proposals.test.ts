@@ -568,6 +568,45 @@ test(
   60_000,
 );
 
+test(
+  "remember_verification keeps a finished Run's checks for its repository, and overwrites only when told",
+  () =>
+    inHerd(({ world, env, herdFile }) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const unit = { name: "unit", executable: "true", argv: [], cwd: "worktree" };
+        const run = yield* settledRun(world, "hello");
+        yield* writeIntent(run.dir, seedIntent(run.id, { runVerification: [unit] }));
+        Bun.spawnSync(["git", "remote", "add", "origin", "git@example.test:team/app.git"], {
+          cwd: world.project,
+        });
+        const carry = (replace?: boolean) =>
+          Effect.gen(function* () {
+            const proposal = yield* record(herdFile, {
+              interpretation: "keep these checks for the repository",
+              targets: [{ run: run.id }],
+              actions: [
+                replace === undefined
+                  ? { kind: "remember_verification", run: run.id }
+                  : { kind: "remember_verification", run: run.id, replace },
+              ],
+              allowedNow: [],
+              intentVersions: {},
+              by: "chat",
+            });
+            return yield* carryOutProposal(env, proposal.id, proposal.content_hash, board);
+          });
+
+        expect((yield* carry()).ok).toBe(true);
+        const file = `${world.config}/verify/example.test/team/app.json`;
+        expect(yield* fs.readFileString(file)).toContain('"executable": "true"');
+        expect((yield* carry()).ok).toBe(false);
+        expect((yield* carry(true)).ok).toBe(true);
+      }),
+    ),
+  60_000,
+);
+
 test("a proposal is pending until it is answered or it expires", () => {
   const now = Date.parse("2026-09-09T10:00:00Z");
   const proposal: ProposalLine = {

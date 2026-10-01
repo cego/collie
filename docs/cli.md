@@ -694,7 +694,8 @@ it is chat obstructing the person it serves. What Collie wants of its own accord
 comes through these: the evaluator's proposals wait on the board, and chat asks in words.
 
 `collie_do` takes the board's own actions on a named run — `stop`, `resume`, `release`,
-`answer`, `deliver`, `followup` and `start` — through the same closed union, the same
+`answer`, `deliver`, `followup`, `start` and `remember_verification`, which keeps a run's
+checks for every later run in its repository — through the same closed union, the same
 last-moment admission check and the same executors a confirmation runs. It also takes the
 board's decisions, which are not actions on a run: `confirm` a waiting proposal by its id
 and the hash `collie_receipts` lists beside it, `decline` one, and `disposition` to record
@@ -705,7 +706,7 @@ are `collie_propose`'s.
 
 `collie_propose` takes the same closed action set a steer produces — `stop`, `resume`,
 `hold`, `release`, `answer`, `deliver`, `start`, `followup`, `update_intent`,
-`set_verification`, `clear_override`, `navigate`, `update_defaults`, `fork_definition`, `home_cleanup`,
+`set_verification`, `remember_verification`, `clear_override`, `navigate`, `update_defaults`, `fork_definition`, `home_cleanup`,
 `upgrade` — through the same `validate`, the same proposals journal and
 the same executors. It executes the request immediately, with no separate confirmation.
 Supply `request_id` and reuse it on retries to return the original receipt rather than
@@ -724,7 +725,8 @@ selected.
 
 What is deliberately not in that set: confirming, declining, reconciling, verifying, and
 setting a Run's or the Herd's **authority** — except the checks that prove a Run: a `start`
-carries the ones chat chose as `verify`, and `set_verification` adds or withdraws one, at once. There is no action kind that settles a
+carries the ones chat chose as `verify`, `set_verification` adds or withdraws one, and `remember_verification` keeps a run's set for
+its repository's later runs, at once. There is no action kind that settles a
 proposal, so a proposal can never contain its own yes. What a human says in chat is a
 different thing: `collie_do` relays it, against an id and a hash they were shown.
 Everything else a human can type — including forking a Workflow or a Persona, changing
@@ -1032,18 +1034,17 @@ through, so anything wrapping `collie verify -- bun test` behaves as it would ar
 Results go to the run's `steering/verifications.jsonl`. An agent's Output saying the tests
 passed is a **claim** and is shown as one; only a collected result is a verification.
 
-A repository's checks are remembered by a human, from a Run that already has them:
+A repository's checks are remembered from a Run that already has them:
 
 ```sh
-collie run intent remember <run-id> [--replace]
+collie run intent remember <run-id> [--replace] [--request-id <id>]
 ```
 
 It writes the Run's current set, whole, to the file for its checkout's remote, and every
 Run started in that repository later begins with it. It refuses a file that is already
-there unless `--replace` is given. Chat is told never to run it: a standing grant for every
-later Run is the human's own
-([ADR-0035](adr/0035-a-repositorys-checks-are-remembered-by-a-human.md)). Edit the file to
-change the set, or delete it to withdraw it.
+there unless `--replace` is given. Chat does the same with `remember_verification`
+([ADR-0035](adr/0035-a-repositorys-checks-are-remembered-by-its-remote.md)). Edit the file
+to change the set, or delete it to withdraw it.
 
 ## Hold and release
 

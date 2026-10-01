@@ -491,6 +491,7 @@ export function admit(action: Action, ctx: AdmissionContext): string | null {
     action.kind !== "followup" &&
     action.kind !== "resume" &&
     action.kind !== "navigate" &&
+    action.kind !== "remember_verification" &&
     terminal
   )
     return `the run is ${ctx.run.status}`;
