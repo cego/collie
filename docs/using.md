@@ -561,7 +561,9 @@ selection back immediately.
 **Click a card** and its whole record slides over the board as a drawer — intent, the steps
 with their durations, the agents, the branch and merge request, and the latest card — with
 `close` and Esc to dismiss it. It is an overlay: the board behind it keeps every other card
-where it was, so reading one Task never costs you the overview.
+where it was, so reading one Task never costs you the overview. Everything in it comes from
+the host and follows the Run while the drawer is open, the log tail included; the merge
+request is what the host's merge watch last read, and `R` asks it again.
 
 **Point at a card** and, where its age was, `go to tab` and `⋯` appear; the card does not
 move or grow. `⋯` opens that Task's menu, and so does a right-click anywhere on the card —

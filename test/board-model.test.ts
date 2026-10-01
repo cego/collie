@@ -130,6 +130,17 @@ test("a TaskView and a RunDetail survive a round trip through JSON", () => {
     },
     finishedAt: 0,
     mr: { _tag: "Unavailable", reason: "no glab" },
+    findings: [{ severity: "major", title: "Off by one", file: "a.ts", line: 3, detail: null }],
+    verifications: [
+      { id: "v1", name: "test", result: "pass", expect: "pass", exit: 0, at: "t", by: "collie" },
+    ],
+    steering: [],
+    evidence: [{ name: "shot.png", bytes: 3 }],
+    diff: {
+      base: "abc",
+      live: true,
+      files: [{ path: "a.ts", status: "modified", added: 1, removed: null }],
+    },
   };
   expect(
     Schema.decodeUnknownSync(Schema.toCodecJson(RunDetail))(JSON.parse(JSON.stringify(detail))),

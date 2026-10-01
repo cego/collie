@@ -1377,6 +1377,18 @@ it with that, as a line in the Run's `operations.jsonl`: the operation, the requ
 Actor and what came of it ([ADR-0039](adr/0039-every-operation-records-who-asked.md)). A
 channel that declares nothing is `cli`.
 
+`runDetail` streams one Run's details while a drawer is open — intent, plan, review,
+log tail, verifications, metrics, steering cards, the files it kept as evidence, its diff
+and its merge request — current first, then again whenever they change. The diff is the
+Run's branch against its merge base with the default branch, per file: the checkout as it
+is while the Run works, the branch's commits once it has ended, kept in the Run's directory
+then so a merged branch or a pruned checkout does not lose it. The review's findings come as
+a list. The merge request is what the merge watch last read, asked again after 5 minutes or
+when `refreshMr` is set. Large items are fetched by reference with `runFile`: `log`,
+`diff:<path>`, `evidence:<name>`, `verification:<id>`, `plan:<file>` and `file:<path>` (read
+only, from the Run's checkout), text as it is and anything else as base64. A reference is
+refused where it leaves the directory it belongs to, links followed.
+
 `protocol` is an integer, also in `identity`. An optional field, a new operation or a new
 kind of message does not change it, and a client reads a kind it does not know as
 `Unknown` and skips it. A removal or a change of meaning bumps it, and from then on the

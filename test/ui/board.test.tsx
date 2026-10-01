@@ -1018,6 +1018,11 @@ function record(over: Partial<RunDetail> = {}): RunDetail {
     outcome: NO_RUN_OUTCOME,
     finishedAt: 0,
     mr: MR_PANEL,
+    findings: [],
+    verifications: [],
+    steering: [],
+    evidence: [],
+    diff: null,
     ...over,
   };
 }
@@ -1106,6 +1111,51 @@ test("Review shows the verdict and findings, and says when it was cut short", ()
       expect(said).toContain("m reads more");
       // One tab at a time: Summary's sections are not under it.
       expect(said).not.toContain("no production writes");
+    }),
+  ));
+
+test("Review lists the findings, the files the Run changed and its verifications", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const app = yield* opened(
+        appState({
+          tasks: [task()],
+          detail: record({
+            findings: [
+              { severity: "major", title: "Seeds twice", file: "seed.ts", line: 12, detail: null },
+            ],
+            diff: {
+              base: "abc",
+              live: false,
+              files: [
+                { path: "seed.ts", status: "modified", added: 3, removed: 1 },
+                { path: "logo.png", status: "added", added: null, removed: null },
+              ],
+            },
+            verifications: [
+              {
+                id: "v1",
+                name: "seeder-tests",
+                result: "fail",
+                expect: "pass",
+                exit: 1,
+                at: "2026-10-01T10:00:00Z",
+                by: "collie",
+              },
+            ],
+          }),
+        }),
+      );
+
+      yield* app.clickOn("Review");
+
+      const said = app.said();
+      expect(said).toContain("Seeds twice");
+      expect(said).toContain("seed.ts:12");
+      expect(said).toContain("+3 -1");
+      expect(said).toContain("logo.png");
+      expect(said).toContain("binary");
+      expect(said).toContain("✗ seeder-tests");
     }),
   ));
 

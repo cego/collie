@@ -4,7 +4,7 @@
 
 import { Effect, FileSystem, Option, Path, Schema } from "effect";
 import { mrLabel } from "./board";
-import { sectionOf, type MrState, type TaskView } from "./board-model";
+import { sectionOf, type MrPanel, type MrState, type TaskView } from "./board-model";
 import { latest, readDispositions, recordDisposition } from "./disposition";
 import { liveTier, mrDetails, parseMrTarget, type MrRef, type Runner } from "./mr";
 import { runDir } from "./engine";
@@ -12,6 +12,31 @@ import { nowIso } from "./time";
 
 /** How long one merge request's answer stands before GitLab is asked again. */
 export const MERGE_POLL_MS = 5 * 60_000;
+
+/** What the merge watch last read of each merge request, by label, and when. */
+export type MrPanels = Map<string, { readonly at: number; readonly panel: MrPanel }>;
+
+/**
+ * A merge request's panel as the watch last read it, read again only once that is
+ * `MERGE_POLL_MS` old or a front door asked for it fresh.
+ */
+export const watchedMr = Effect.fn("Merges.watchedMr")(function* <R>(opts: {
+  readonly panels: MrPanels;
+  readonly target: string;
+  readonly cwd: string;
+  readonly run: Runner<R>;
+  readonly now: number;
+  readonly fresh: boolean;
+}) {
+  const ref = mrRefOf(opts.target);
+  if (ref === null) return null;
+  const label = mrLabel(opts.target);
+  const known = opts.panels.get(label);
+  if (known !== undefined && !opts.fresh && known.at + MERGE_POLL_MS > opts.now) return known.panel;
+  const panel = yield* mrDetails(ref, opts.cwd, opts.run);
+  opts.panels.set(label, { at: opts.now, panel });
+  return panel;
+});
 
 /** Where the CLI's board reads what the pane's watch last learned. */
 export const MR_STATES_FILE = "board/mr-states.json";
@@ -50,6 +75,8 @@ export const settleMerges = Effect.fn("Merges.settle")(function* <R>(opts: {
   now: number;
   checked: Map<string, number>;
   states: Map<string, MrState>;
+  /** Where each panel read is kept, for the drawer of the Run it belongs to. */
+  panels: MrPanels;
 }) {
   // What earlier panes learned, under this pane's own answers: a new pane's empty memory
   // must not ask production again about what an earlier one already saw land there.
@@ -70,6 +97,7 @@ export const settleMerges = Effect.fn("Merges.settle")(function* <R>(opts: {
     if (ref === null) continue;
     opts.checked.set(label, opts.now);
     const panel = yield* mrDetails(ref, opts.cwd, opts.run);
+    opts.panels.set(label, { at: opts.now, panel });
     if (panel._tag !== "Details") continue;
     let state = stateOf(panel.state);
     if (state === "merged") {

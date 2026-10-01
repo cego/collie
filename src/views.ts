@@ -12,9 +12,9 @@ import { savedModules } from "./discovery";
 import { checkModule, readModule } from "./authoring";
 import type { PluginEnv } from "./env";
 import { runTitle } from "./naming";
-import { REVIEW_FILE, openFindingsIn } from "./output";
+import { REVIEW_FILE, findingsIn, openFindingsIn } from "./output";
 import { findRun, settled, type RunFacts, type RunState } from "./runs";
-import { diffTargetOf, workSourceOf } from "./strategies";
+import { diffTargetOf } from "./strategies";
 import { isString } from "./schema";
 import { took } from "./time";
 import { claudeTrust } from "./trust";
@@ -23,6 +23,9 @@ import { NO_OUTCOME, type RunRow } from "./workspace";
 import { latest, readDispositions, type Disposition } from "./disposition";
 import { metricsOf, readMetrics } from "./metrics";
 import type { MrPanel, Panel, PlanPanel, PlanTicket, RunDetail } from "./board-model";
+import { newest, readCards } from "./cards";
+import { diffOf, planDirOf } from "./run-detail";
+import { readVerifications } from "./verify";
 
 /** Long enough to answer "what did I do here", short enough to stay one read. */
 const HISTORY = 200;
@@ -203,23 +206,6 @@ export function planTicket(file: string, text: string): PlanTicket {
   };
 }
 
-/** What a Run's own plan directory is called inside it (ADR-0002). */
-const PLAN_DIR = "plan";
-
-/** Which directory holds this run's plan, or `null` when it has none behind it. */
-const planDirOf = Effect.fn("Views.planDirOf")(function* (run: RunFacts) {
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  // Its own copy first: a run that wrote a plan is building from that one.
-  const own = path.join(run.dir, PLAN_DIR);
-  if (yield* fs.exists(own)) return own;
-  // Then the directory it was started from, which is how an `implement` run reaches the
-  // spec a `plan` run wrote for it.
-  const work = workSourceOf(run.settled);
-  if (work?.kind !== "plan-dir") return null;
-  return (yield* fs.exists(work.value)) ? work.value : null;
-});
-
 /**
  * The plan behind a run, and `null` for one that has none.
  *
@@ -291,6 +277,22 @@ function dispositionOf(line: Disposition | null): string | null {
   return line.ref === "" ? line.kind : `${line.kind} ${line.ref}`;
 }
 
+/** What a Run kept beside its journals, which a drawer fetches one by one. */
+const evidenceIn = Effect.fn("Views.evidenceIn")(function* (dir: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const kept = [];
+  for (const name of (yield* fs.readDirectory(dir).pipe(Effect.orElseSucceed(() => []))).sort(
+    (a, b) => a.localeCompare(b),
+  )) {
+    if (name.endsWith(".jsonl")) continue;
+    const info = yield* fs.stat(path.join(dir, name)).pipe(Effect.option);
+    if (info._tag === "Some" && info.value.type === "File")
+      kept.push({ name, bytes: Number(info.value.size) });
+  }
+  return kept;
+});
+
 export const buildRunDetail = Effect.fn("Views.buildRunDetail")(function* (opts: {
   env: PluginEnv;
   runId: string;
@@ -361,6 +363,37 @@ export const buildRunDetail = Effect.fn("Views.buildRunDetail")(function* (opts:
       : null,
     finishedAt: run.finished ? Date.parse(run.finished) : 0,
     mr: opts.mr,
+    findings: (yield* findingsIn(run.dir)).map((finding) => ({
+      severity: finding.severity,
+      title: finding.title,
+      file: finding.file ?? null,
+      line: finding.line ?? null,
+      detail: finding.detail ?? null,
+    })),
+    verifications: (yield* readVerifications(run.evidence).pipe(
+      Effect.orElseSucceed(() => []),
+    )).map(({ id, name, result, expect, exit, at, by }) => ({
+      id,
+      name,
+      result,
+      expect,
+      exit,
+      at,
+      by,
+    })),
+    steering: newest(yield* readCards(run.dir).pipe(Effect.orElseSucceed(() => []))).map(
+      (card) => ({
+        id: card.id,
+        kind: card.kind,
+        at: card.at,
+        readiness: card.readiness,
+        significance: card.significance,
+        narrative: card.narrative,
+        missing: card.missing,
+      }),
+    ),
+    evidence: yield* evidenceIn(run.evidence),
+    diff: yield* diffOf(run),
   } satisfies RunDetail;
 });
 

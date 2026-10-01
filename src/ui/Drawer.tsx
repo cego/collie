@@ -161,6 +161,30 @@ export function Drawer(props: DrawerProps) {
    */
   const mr = () => props.detail?.mr ?? null;
 
+  const findings = (): Line[] =>
+    (props.detail?.findings ?? []).map((finding) => ({
+      text: finding.title,
+      mark: "•",
+      right:
+        finding.file === null
+          ? finding.severity
+          : `${finding.file}${finding.line === null ? "" : `:${finding.line}`}`,
+    }));
+
+  /** The Run's branch against its merge base, one line per file, as plain text. */
+  const changed = (): Line[] =>
+    (props.detail?.diff?.files ?? []).map((file) => ({
+      text: file.path,
+      mark: file.status === "added" ? "+" : file.status === "deleted" ? "-" : "~",
+      right: file.added === null ? "binary" : `+${file.added} -${file.removed}`,
+    }));
+
+  const verified = (): Line[] =>
+    (props.detail?.verifications ?? []).map((one) => {
+      const held = one.result === one.expect;
+      return { text: one.name, mark: held ? "✓" : "✗", markFg: held ? C.green : C.red };
+    });
+
   const card = (): Line[] => {
     const newest = props.live?.cards[0];
     return newest === undefined ? [] : cardLines(newest).map((line) => ({ text: line.text }));
@@ -296,6 +320,15 @@ export function Drawer(props: DrawerProps) {
 
         <Show when={props.tab === "review"}>
           <Document title="review" panel={props.detail?.review ?? null} />
+          <Show when={findings().length > 0}>
+            <Section title="findings" lines={findings()} />
+          </Show>
+          <Show when={changed().length > 0}>
+            <Section title={props.detail?.diff?.live ? "changing" : "changed"} lines={changed()} />
+          </Show>
+          <Show when={verified().length > 0}>
+            <Section title="verifications" lines={verified()} />
+          </Show>
         </Show>
 
         <Show when={props.tab === "plan"}>

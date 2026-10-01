@@ -18,6 +18,7 @@ import * as BunSocket from "@effect/platform-bun/BunSocket";
 import type { BunServices } from "@effect/platform-bun/BunServices";
 import * as BunSocketServer from "@effect/platform-bun/BunSocketServer";
 import {
+  Clock,
   Config,
   Crypto,
   Data,
@@ -61,7 +62,11 @@ import { VerifySpecSchema } from "./verify-spec";
 import { currentEnv } from "./env";
 import { installation as installedRelease } from "./release";
 import { Herdr } from "./herdr";
-import { buildBoard } from "./board";
+import { buildBoard, mrOf } from "./board";
+import { watchedMr, type MrPanels } from "./merges";
+import { shell } from "./mr";
+import { fetchRef, followDetail } from "./run-detail";
+import { buildRunDetail } from "./views";
 import {
   Answered,
   Controlled,
@@ -70,6 +75,7 @@ import {
   PROTOCOL,
   Started,
   type FrontDoor,
+  type PlanPanel,
 } from "./board-model";
 import { boardMessages } from "./board-stream";
 import { loadDefaults } from "./config";
@@ -310,12 +316,12 @@ const hostBoard = (dir: string) =>
   });
 
 /** The merge watch, News and pruning, for as long as this host runs. */
-const sideJobsLayer = (dir: string) =>
+const sideJobsLayer = (dir: string, panels: MrPanels) =>
   Layer.effectDiscard(
     Effect.gen(function* () {
       const { env, herdr, bun, runs, build } = yield* hostBoard(dir);
       yield* Effect.forkScoped(
-        sideJobs({ env, herdr, runs, board: build }).pipe(Effect.provideContext(bun)),
+        sideJobs({ env, herdr, runs, board: build, panels }).pipe(Effect.provideContext(bun)),
       );
     }),
   );
@@ -324,7 +330,7 @@ const sideJobsLayer = (dir: string) =>
  * The board, built here for every front door. Anything written under the state
  * directory, by this host or anyone else, is a reason to look again.
  */
-const frontDoorHandlers = (dir: string, installation: string) =>
+const frontDoorHandlers = (dir: string, installation: string, panels: MrPanels) =>
   FrontDoorRpcs.toLayer(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -333,6 +339,9 @@ const frontDoorHandlers = (dir: string, installation: string) =>
       const { env, herdr, bun, build } = yield* hostBoard(dir);
       // ponytail: one entry per connection, never removed; prune on disconnect if hosts live for months.
       const declared = new Map<number, FrontDoor>();
+      // A finished Run's plan cannot change, so every drawer on it shares one read.
+      // ponytail: kept for the host's life; evict by age if a host lives for months.
+      const plans = new Map<string, PlanPanel | null>();
       const doorOf = (client: { readonly id: number }) => declared.get(client.id) ?? "cli";
       const trail = (runId: string) => runDir(env.stateDir, runId);
       /** An operation that is idempotent by itself, recorded the first time it does anything. */
@@ -457,6 +466,38 @@ const frontDoorHandlers = (dir: string, installation: string) =>
             () => runId,
             { operation: "invoke", request, origin: doorOf(client), result: Started },
             registry.invoke({ runId, offer, input, request }),
+          ),
+        runDetail: ({ runId, tail, pages, refreshMr }) => {
+          let fresh = refreshMr;
+          const detail = Effect.gen(function* () {
+            const view = yield* registry.view(runId);
+            if (view === null) return null;
+            const run = factsOfView(env.stateDir, view);
+            const target = mrOf(run);
+            const mr =
+              target === null
+                ? null
+                : yield* watchedMr({
+                    panels,
+                    target,
+                    cwd: env.cwd,
+                    run: shell,
+                    now: yield* Clock.currentTimeMillis,
+                    fresh,
+                  });
+            fresh = false;
+            return yield* buildRunDetail({ env, runId, runs: [run], mr, tail, pages, plans });
+          }).pipe(Effect.provideContext(bun));
+          return followDetail(detail, changed).pipe(Stream.orDie);
+        },
+        runFile: ({ runId, ref }) =>
+          registry.view(runId).pipe(
+            Effect.flatMap((view) =>
+              view === null
+                ? Effect.fail(new HostRefused({ reason: `no Run ${runId}` }))
+                : fetchRef(factsOfView(env.stateDir, view), ref),
+            ),
+            Effect.provideContext(bun),
           ),
         board: () =>
           Stream.unwrap(
@@ -589,13 +630,14 @@ const own = (dir: string) =>
     // socket cannot be bound while its file is there, and a dead host's is still there.
     yield* fs.remove(socketOf(dir), { force: true }).pipe(Effect.orDie);
     const installation = yield* installationOf(dir).pipe(Effect.orDie);
+    const panels: MrPanels = new Map();
     return yield* Layer.launch(
       RpcServer.layer(AllRpcs).pipe(
         Layer.provide(
           Layer.mergeAll(
             handlers(dir, installation),
-            frontDoorHandlers(dir, installation),
-            sideJobsLayer(dir),
+            frontDoorHandlers(dir, installation, panels),
+            sideJobsLayer(dir, panels),
           ).pipe(
             Layer.provide(
               registryLayer(dir, {

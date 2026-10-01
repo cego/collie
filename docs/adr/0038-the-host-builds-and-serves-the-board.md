@@ -54,6 +54,8 @@ and the one before. Version 1 has none before it.
   clients a Machine has. A board shared between clients is the upgrade if it ever is not.
 - The host reads every running herdr session on the Machine, and a Task records the Herd
   its workspace is in, so a card names its Herd whichever session started the host.
+- A drawer's Run details come from the host too, on a subscription of their own, with
+  large items fetched by reference; the TUI reads no Run's files to draw one.
 - The merge watch, News and worktree pruning run in the host, because it is always
   running: Collie learns a merge with no pane open. Each Herd's News comes from the Runs
   whose Task is in it; a Task with no Herd recorded is the host's own Herd's. Event turns stay with each conversation, which reads its Herd's

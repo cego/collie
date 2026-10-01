@@ -270,6 +270,77 @@ export type MrUnavailable = typeof MrUnavailable.Type;
 export const MrPanel = Schema.Union([MrDetails, MrUnavailable]);
 export type MrPanel = typeof MrPanel.Type;
 
+/** One file the Run changed; `added` and `removed` are null for a binary file. */
+export const DiffFile = Schema.Struct({
+  path: Schema.String,
+  status: Schema.Literals(["added", "modified", "deleted"]),
+  added: Schema.NullOr(Schema.Int),
+  removed: Schema.NullOr(Schema.Int),
+});
+
+export type DiffFile = typeof DiffFile.Type;
+
+/**
+ * The Run's branch against its merge base. `live` while the Run works: what its checkout
+ * holds now, committed or not. Each file's own diff is fetched by reference, `diff:<path>`.
+ */
+export const RunDiff = Schema.Struct({
+  base: Schema.String,
+  live: Schema.Boolean,
+  files: Schema.Array(DiffFile),
+});
+
+export type RunDiff = typeof RunDiff.Type;
+
+/** One verification as the drawer lists it; its output is fetched as `verification:<id>`. */
+export const VerificationView = Schema.Struct({
+  id: Schema.String,
+  name: Schema.String,
+  result: Schema.Literals(["pass", "fail", "unstable"]),
+  expect: Schema.Literals(["pass", "fail"]),
+  exit: Schema.Int,
+  at: Schema.String,
+  by: Schema.Literals(["agent", "collie"]),
+});
+
+export type VerificationView = typeof VerificationView.Type;
+
+/** One review finding; `file` and `line` point into the diff, or at `file:<path>`. */
+export const ReviewFinding = Schema.Struct({
+  severity: Schema.String,
+  title: Schema.String,
+  file: Schema.NullOr(Schema.String),
+  line: Schema.NullOr(Schema.Number),
+  detail: Schema.NullOr(Schema.String),
+});
+export type ReviewFinding = typeof ReviewFinding.Type;
+
+/** One steering card, newest per slice of work. */
+export const SteeringCard = Schema.Struct({
+  id: Schema.String,
+  kind: Schema.String,
+  at: Schema.String,
+  readiness: Schema.String,
+  significance: Schema.String,
+  narrative: Schema.NullOr(Schema.String),
+  missing: Schema.Array(Schema.String),
+});
+
+export type SteeringCard = typeof SteeringCard.Type;
+
+/** A file the Run kept as evidence, fetched as `evidence:<name>`. */
+export const EvidenceFile = Schema.Struct({ name: Schema.String, bytes: Schema.Int });
+export type EvidenceFile = typeof EvidenceFile.Type;
+
+/** What a reference fetches: text as it is, anything else as base64. */
+export const RunFile = Schema.Struct({
+  ref: Schema.String,
+  encoding: Schema.Literals(["utf8", "base64"]),
+  content: Schema.String,
+});
+
+export type RunFile = typeof RunFile.Type;
+
 /** Everything the detail panel shows for the selected Run. */
 export const RunDetail = Schema.Struct({
   id: Schema.String,
@@ -329,8 +400,14 @@ export const RunDetail = Schema.Struct({
   }),
   /** When this Run finished, so the merge-request panel can say what moved since. */
   finishedAt: Schema.Number,
-  /** Filled by the bridge for a Run whose target is a merge request; never here. */
+  /** What the host's merge watch last read, for a Run that has a merge request. */
   mr: Schema.NullOr(MrPanel),
+  findings: Schema.Array(ReviewFinding),
+  verifications: Schema.Array(VerificationView),
+  steering: Schema.Array(SteeringCard),
+  evidence: Schema.Array(EvidenceFile),
+  /** Null for a Run with no branch or no checkout left to compare. */
+  diff: Schema.NullOr(RunDiff),
 });
 export type RunDetail = typeof RunDetail.Type;
 
@@ -517,6 +594,29 @@ export const FrontDoorRpcs = RpcGroup.make(
     payload: { runId: Schema.String, request: Schema.String },
     success: Controlled,
     error: Schema.Union([HostRefused, RequestConflict]),
+  }),
+  /**
+   * One Run's details while a drawer is open: current first, then again whenever they
+   * change. `refreshMr` asks the merge watch again rather than taking what it last read.
+   */
+  Rpc.make("runDetail", {
+    payload: {
+      runId: Schema.String,
+      tail: Schema.Boolean,
+      pages: Schema.Int,
+      refreshMr: Schema.Boolean,
+    },
+    success: Schema.NullOr(RunDetail),
+    stream: true,
+  }),
+  /**
+   * A large item of a Run's, by reference: `log`, `diff:<path>`, `evidence:<name>`,
+   * `verification:<id>`, `plan:<file>` and, read-only from its checkout, `file:<path>`.
+   */
+  Rpc.make("runFile", {
+    payload: { runId: Schema.String, ref: Schema.String },
+    success: RunFile,
+    error: HostRefused,
   }),
   /** Carries out what a finished Run offers, as a Run of its own. */
   Rpc.make("invoke", {

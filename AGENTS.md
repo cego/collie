@@ -104,7 +104,8 @@ herdr actions, and the `collie` CLI.
   `src/board-model.ts`, `src/board-stream.ts` and `test/board-stream.test.ts`. An additive
   change keeps `PROTOCOL`; a removal or a change of meaning bumps it. Who an operation
   is recorded as is [ADR-0039](docs/adr/0039-every-operation-records-who-asked.md), with
-  `src/audit.ts` and `test/actor.test.ts`.
+  `src/audit.ts` and `test/actor.test.ts`. A drawer's details are `src/run-detail.ts` and
+  `test/run-detail.test.ts`.
 - **Changing how a start is claimed, what a host records about a run, or how an
   interrupted start recovers** →
   [ADR-0017](docs/adr/0017-one-request-is-one-run.md) and

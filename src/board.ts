@@ -511,7 +511,7 @@ const isMrTarget = (target: string | null): target is string =>
   target !== null && target.startsWith("mr:");
 
 /** The merge request this Run opened, or the one it was pointed at; null for neither. */
-function mrOf(run: RunFacts): string | null {
+export function mrOf(run: RunFacts): string | null {
   const target = diffTargetOf(run.settled)?.value ?? null;
   return run.mr ?? (isMrTarget(target) ? target : null);
 }

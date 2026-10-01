@@ -8,7 +8,7 @@
 // What a Run is and what became of it stays Collie's; what a workflow has done stays
 // Effect's. Nothing here copies the second into the first.
 
-import { Deferred, Effect, FileSystem, Schedule, Schema, Stream } from "effect";
+import { Deferred, Effect, Fiber, FileSystem, Option, Schedule, Schema, Stream } from "effect";
 import type { Scope } from "effect";
 import type { ChildProcessSpawner } from "effect/unstable/process";
 import type * as RpcClientError from "effect/unstable/rpc/RpcClientError";
@@ -25,6 +25,7 @@ import {
   sortBoard,
   type BoardMessage,
   type BoardSnapshot,
+  type RunDetail,
   type Controlled,
   type FrontDoor,
   type HostRefused,
@@ -391,6 +392,81 @@ export const followBoard = Effect.fn("Lifecycle.followBoard")(function* (env: Pl
         };
       }),
     );
+});
+
+/** Which of a Run's details a drawer is showing. */
+export interface DetailKey {
+  readonly runId: string;
+  readonly tail: boolean;
+  readonly pages: number;
+  /** Ask the host's merge watch again rather than take what it last read. */
+  readonly refreshMr: boolean;
+}
+
+/** One Run's details from the host, from a host started here if none is running. */
+const detailStream = (env: PluginEnv, key: DetailKey) =>
+  Effect.gen(function* () {
+    yield* connect(env.stateDir);
+    return (yield* frontDoor(env.stateDir)).runDetail({ ...key });
+  });
+
+/** A Run's details as the host has them now, for a caller that follows nothing. */
+export const runDetailNow = (
+  env: PluginEnv,
+  key: DetailKey,
+): Effect.Effect<RunDetail | null, never, Client> =>
+  Effect.scoped(
+    Effect.flatMap(detailStream(env, key), Stream.runHead).pipe(
+      Effect.map(Option.getOrNull),
+      Effect.orElseSucceed(() => null),
+    ),
+  );
+
+/** How long a newly opened drawer waits for its first details; later reads take what there is. */
+const FIRST_DETAIL_WAIT = "5 seconds";
+
+/**
+ * The open drawer's details, followed for as long as the caller's scope. A read for
+ * another Run, or the same one shown differently, follows that instead.
+ */
+export const followRunDetail = Effect.fn("Lifecycle.followRunDetail")(function* (env: PluginEnv) {
+  const scope = yield* Effect.scope;
+  const services = yield* Effect.context<Client>();
+  let open: {
+    readonly key: string;
+    readonly first: Deferred.Deferred<void>;
+    readonly fiber: Fiber.Fiber<unknown>;
+    latest: RunDetail | null;
+  } | null = null;
+  return (key: DetailKey): Effect.Effect<RunDetail | null> =>
+    Effect.gen(function* () {
+      const showingKey = `${key.runId}|${key.tail}|${key.pages}`;
+      if (open === null || open.key !== showingKey || key.refreshMr) {
+        if (open !== null) yield* Fiber.interrupt(open.fiber);
+        const first = yield* Deferred.make<void>();
+        let refreshMr = key.refreshMr;
+        const follow = Effect.scoped(
+          Effect.flatMap(
+            Effect.suspend(() => detailStream(env, { ...key, refreshMr })),
+            (stream) =>
+              Stream.runForEach(stream, (detail) =>
+                Effect.sync(() => {
+                  refreshMr = false;
+                  if (open?.key === showingKey) open.latest = detail;
+                }).pipe(Effect.andThen(Deferred.succeed(first, undefined))),
+              ),
+          ),
+        ).pipe(
+          Effect.catchCause(() => Effect.void),
+          Effect.repeat(Schedule.spaced("1 second")),
+        );
+        const fiber = yield* Effect.forkIn(follow, scope);
+        open = { key: showingKey, first, fiber, latest: null };
+      }
+      const showing = open;
+      yield* Deferred.await(showing.first).pipe(Effect.timeoutOption(FIRST_DETAIL_WAIT));
+      return showing.latest;
+    }).pipe(Effect.provideContext(services));
 });
 
 /**

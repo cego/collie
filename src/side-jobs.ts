@@ -8,7 +8,7 @@ import { currentReports, readDrift } from "./drift";
 import type { PluginEnv } from "./env";
 import type { Herdr } from "./herdr";
 import { liveHerds } from "./herds";
-import { settleMerges } from "./merges";
+import { settleMerges, type MrPanels } from "./merges";
 import { shell } from "./mr";
 import { append as appendNews, newsPath } from "./news";
 import { eventsIn, readSaid, remember } from "./proactive";
@@ -100,6 +100,7 @@ export const sideJobs = <E, R>(opts: {
   readonly herdr: Herdr;
   readonly runs: Effect.Effect<ReadonlyArray<RunFacts>, E, R>;
   readonly board: Effect.Effect<ReadonlyArray<TaskView>, E, R>;
+  readonly panels: MrPanels;
 }) => {
   const { env, herdr } = opts;
   const checked = new Map<string, number>();
@@ -117,6 +118,7 @@ export const sideJobs = <E, R>(opts: {
             now: yield* Clock.currentTimeMillis,
             checked,
             states,
+            panels: opts.panels,
           });
         }),
       ),

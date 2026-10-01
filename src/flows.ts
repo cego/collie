@@ -14,11 +14,11 @@ import {
   Schedule,
   Schema,
 } from "effect";
-import { diffTargetOf, EXCLUSIVE_STRATEGIES, strategyMeaning } from "./strategies";
+import { EXCLUSIVE_STRATEGIES, strategyMeaning } from "./strategies";
 import { PROJECTS_ROOT_OPTION, projectsRoot } from "./projects";
 import { insideCheckout } from "./agent-start";
 import { placeableUnder, placedByUrl, routed, routerDeps } from "./route";
-import type { MrPanel, PlanPanel } from "./board-model";
+import type { RunDetail } from "./board-model";
 import { nowIso } from "./time";
 import {
   DENSITIES,
@@ -60,6 +60,9 @@ import {
   boardSnapshot,
   controlRun,
   followBoard,
+  followRunDetail,
+  runDetailNow,
+  type DetailKey,
   invokeOffer,
   type BoardRead,
   offersOf,
@@ -98,15 +101,9 @@ import {
   type Command,
 } from "./ui/state";
 import type { Focus } from "./ui/bridge";
-import {
-  buildHistory,
-  buildRunDetail,
-  buildSettings,
-  buildWorkflows,
-  NUMERIC_DEFAULTS,
-} from "./views";
+import { buildHistory, buildSettings, buildWorkflows, NUMERIC_DEFAULTS } from "./views";
 import { isPermissionMode, PERMISSION_MODES } from "./harness";
-import { mrDetails, mrTarget, parseMrTarget, parseMrUrl, repoArgs, shell, type Runner } from "./mr";
+import { parseMrTarget, repoArgs, shell } from "./mr";
 import type { ChildProcessSpawner } from "effect/unstable/process";
 import {
   agentForKey,
@@ -142,6 +139,8 @@ export interface ControlSession extends BoardSession {
   runsOf?: RunsOf;
   /** Where the board's Tasks come from: one read of the host's board, unless followed. */
   tasksOf?: () => Effect.Effect<BoardRead>;
+  /** Where the drawer's details come from: one read of the host's, unless followed. */
+  detailOf?: (key: DetailKey) => Effect.Effect<RunDetail | null>;
   /** Where the defaults live. */
   userDir: string;
 }
@@ -826,6 +825,7 @@ export const workspaceFlow = Effect.fn("Flows.workspaceFlow")(function* (
     // again when the pane says it has finished. No work is sent either way.
     compaction: { waitMs: 0 },
     tasksOf: yield* followBoard(env),
+    detailOf: yield* followRunDetail(env),
   };
   const key = yield* herdOf(env.socketPath).pipe(Effect.catch(() => Effect.succeed(null)));
   const home = key === null ? null : yield* readHome(yield* homePath(env.stateDir, key));
@@ -957,8 +957,9 @@ const redirectBoard = Effect.fn("Flows.redirectBoard")(function* (herdr: Herdr, 
   }
 });
 
-/** How long a merge request read stays good for. Re-selecting inside it costs nothing. */
-const MR_TTL_MS = 60_000;
+/** One Run's details from the host, as this session reads them. */
+const detailRead = (session: ControlSession, env: PluginEnv, key: DetailKey) =>
+  session.detailOf?.(key) ?? runDetailNow(env, key);
 
 /** The host's board, as this session reads it. */
 const boardRead = (session: ControlSession, env: PluginEnv) =>
@@ -971,24 +972,10 @@ const boardRead = (session: ControlSession, env: PluginEnv) =>
     ),
   );
 
-/**
- * Everything the app draws, for whatever it is looking at. One closure, because the
- * merge-request cache belongs with the reads it saves: a History of 40 merge-request
- * Runs must make no `glab` call to draw, one selection makes exactly one, and
- * re-selecting the same Run inside the TTL makes none.
- */
+/** Everything the app draws, for whatever it is looking at. */
 export function appState(
   session: ControlSession,
   env: PluginEnv,
-  /**
-   * A parameter for the same reason inference takes one: a test should watch it run.
-   * The default ignores stderr, because what this reads is JSON: glab writes non-fatal
-   * notices there while still exiting 0, and one of those folded into the output made
-   * `mrDetails` report a merge request it had just read successfully as "not a merge
-   * request" — and cached that answer for the whole TTL. `"say"` is for the calls whose
-   * output a human reads, like `OpenMr`.
-   */
-  run: Runner<ChildProcessSpawner.ChildProcessSpawner> = shell,
   /**
    * The Home's ownership question, when there is one nobody has settled. Decided once at
    * startup rather than per tick: it is a herdr answer, `collie home reconcile` is what
@@ -998,30 +985,6 @@ export function appState(
   ownership: Live["ownership"] = null,
 ) {
   const runsOf = session.runsOf ?? listRuns;
-  const mrCache = new Map<string, { at: number; panel: MrPanel }>();
-  /**
-   * A finished Run's plan, kept between reads for the same reason the merge request is:
-   * the panel is re-produced on every board tick, and a Run that has stopped cannot
-   * change the plan it was built from. Cleared whenever something asked for a fresh
-   * read, so `R` re-reads a plan the same way it re-reads the merge request.
-   */
-  const planCache = new Map<string, PlanPanel | null>();
-  const merge = Effect.fn("Flows.mergeRequestFor")(function* (
-    target: string | null,
-    cwd: string,
-    force: boolean,
-  ) {
-    const ref = target ? parseMrTarget(target) : null;
-    if (!ref) return null;
-    const key = mrTarget(ref.project, ref.iid);
-    const now = yield* Clock.currentTimeMillis;
-    const cached = mrCache.get(key);
-    if (cached && !force && now - cached.at < MR_TTL_MS) return cached.panel;
-    const panel = yield* mrDetails(ref, cwd, run);
-    mrCache.set(key, { at: now, panel });
-    return panel;
-  });
-
   /** The board from the last read, for whatever `rereads` says may be taken from it. */
   let last: { focus: Focus; state: AppState } | null = null;
   /** One row per Run: a Run on the local board is on the wide one too. */
@@ -1081,14 +1044,6 @@ export function appState(
         : selectedRun === null
           ? null
           : { id: selectedRun.id, dir: selectedRun.dir };
-    // Read for the Selection and never for a list, and a badge is only ever filled from
-    // what is in the cache. When to read past that cache is `rereads`' decision.
-    const mr = yield* merge(
-      mrAbout(selectedRun) ?? selected?.target ?? null,
-      env.cwd,
-      again.forceMr,
-    );
-    if (again.forceMr) planCache.clear();
     /**
      * Every Run on whichever board is showing, for the marks and for the Herd-wide
      * cards. From the boards rather than from the store's whole list: History keeps two
@@ -1158,15 +1113,13 @@ export function appState(
       // Always re-read: this is the one thing a moved Selection actually changes.
       // The bridge's own, and it overlays what it is holding onto every load.
       stopping: [],
+      // The host's, followed while the drawer is open; `R` asks its merge watch again.
       detail: runId
-        ? yield* buildRunDetail({
-            env,
+        ? yield* detailRead(session, env, {
             runId,
-            runs: runs ?? (yield* runsOf(env)),
-            mr,
             tail: focus.tail,
             pages: focus.reviewPages,
-            plans: planCache,
+            refreshMr: again.forceMr,
           })
         : null,
     } satisfies AppState;
@@ -1175,17 +1128,6 @@ export function appState(
   });
 
   return { load };
-}
-
-/**
- * The merge request a Run is about: the one it opened, else the one it was pointed at.
- * Both, because `implement` produces one and `review` is given one — reading only the
- * second left every merge request a Run built without a state, a pipeline or approvals.
- */
-function mrAbout(run: RunFacts | null): string | null {
-  const opened = run?.mr ? parseMrUrl(run.mr) : null;
-  if (opened !== null) return mrTarget(opened.project, opened.iid);
-  return run === null ? null : (diffTargetOf(run.settled)?.value ?? null);
 }
 
 /** One command, run against the Selection it names. The string becomes the footer note. */
