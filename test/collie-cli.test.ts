@@ -6,6 +6,7 @@ import { readIntent, seedIntent, writeIntent } from "../src/intent";
 import { appendMetric } from "../src/metrics";
 import { hosted, settledRun } from "./support/hosted";
 import { evidenceDir } from "../src/engine";
+import { connect } from "../src/host";
 import { VerifySpecSchema } from "../src/verify-spec";
 
 const root = new URL("../", import.meta.url).pathname;
@@ -823,11 +824,18 @@ test(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const env = { HERDR_PLUGIN_STATE_DIR: world.state, COLLIE_USER_DIR: world.config };
-        const run = yield* settledRun(world, "hello");
+        // A checkout of its own, as a worktree is, and gone once the Run has settled.
+        const worktree = join(world.home, "worktree");
+        yield* fs.makeDirectory(worktree, { recursive: true });
+        Bun.spawnSync(["git", "init", "-q"], { cwd: worktree });
+        for (const cwd of [world.project, worktree])
+          Bun.spawnSync(["git", "remote", "add", "origin", "git@example.test:team/app.git"], {
+            cwd,
+          });
+        const run = yield* settledRun(world, "hello", { workspace: worktree });
+        const client = yield* connect(world.state).pipe(Effect.orDie);
+        expect((yield* client.run({ runId: run.id }).pipe(Effect.orDie))?.cwd).toBe(worktree);
         yield* writeIntent(run.dir, seedIntent(run.id, { goal: "ship it" }));
-        Bun.spawnSync(["git", "remote", "add", "origin", "git@example.test:team/app.git"], {
-          cwd: world.project,
-        });
 
         const granted = yield* cli(
           ["--json", "run", "intent", "verification", run.id, "--name", "unit", "--", "true"],
@@ -844,6 +852,8 @@ test(
           { name: "unit", executable: "true", argv: [], cwd: "worktree" },
         ]);
 
+        // The checkout it was started for still names the repository.
+        yield* fs.remove(worktree, { recursive: true });
         const again = yield* cli(remember, env);
         expect(again.exit).not.toBe(0);
         expect(yield* parseEnvelope(again.stdout)).toMatchObject({ ok: false });

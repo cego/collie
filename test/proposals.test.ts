@@ -575,11 +575,18 @@ test(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const unit = { name: "unit", executable: "true", argv: [], cwd: "worktree" };
-        const run = yield* settledRun(world, "hello");
+        // A checkout of its own, as a worktree is, and gone once the Run has settled.
+        const worktree = `${world.home}/worktree`;
+        yield* fs.makeDirectory(worktree, { recursive: true });
+        Bun.spawnSync(["git", "init", "-q"], { cwd: worktree });
+        for (const cwd of [world.project, worktree])
+          Bun.spawnSync(["git", "remote", "add", "origin", "git@example.test:team/app.git"], {
+            cwd,
+          });
+        const run = yield* settledRun(world, "hello", { workspace: worktree });
+        const client = yield* connect(world.state).pipe(Effect.orDie);
+        expect((yield* client.run({ runId: run.id }).pipe(Effect.orDie))?.cwd).toBe(worktree);
         yield* writeIntent(run.dir, seedIntent(run.id, { runVerification: [unit] }));
-        Bun.spawnSync(["git", "remote", "add", "origin", "git@example.test:team/app.git"], {
-          cwd: world.project,
-        });
         const carry = (replace?: boolean) =>
           Effect.gen(function* () {
             const proposal = yield* record(herdFile, {
@@ -600,6 +607,8 @@ test(
         expect((yield* carry()).ok).toBe(true);
         const file = `${world.config}/verify/example.test/team/app.json`;
         expect(yield* fs.readFileString(file)).toContain('"executable": "true"');
+        // The checkout it was started for still names the repository.
+        yield* fs.remove(worktree, { recursive: true });
         expect((yield* carry()).ok).toBe(false);
         expect((yield* carry(true)).ok).toBe(true);
       }),

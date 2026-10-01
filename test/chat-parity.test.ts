@@ -182,7 +182,14 @@ const INVENTORY: ReadonlyArray<readonly [string, Route]> = [
       },
     },
   ],
-  ["run intent remember", { route: "write", tool: "collie_do" }],
+  [
+    "run intent remember",
+    {
+      route: "propose",
+      kind: "remember_verification",
+      action: { kind: "remember_verification", run: RUN, replace: true },
+    },
+  ],
   ["run intent defaults show", { route: "read", tool: "collie_installation" }],
   [
     "run intent defaults add-constraint",

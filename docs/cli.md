@@ -694,15 +694,14 @@ it is chat obstructing the person it serves. What Collie wants of its own accord
 comes through these: the evaluator's proposals wait on the board, and chat asks in words.
 
 `collie_do` takes the board's own actions on a named run — `stop`, `resume`, `release`,
-`answer`, `deliver`, `followup`, `start` and `remember_verification`, which keeps a run's
-checks for every later run in its repository — through the same closed union, the same
+`answer`, `deliver`, `followup` and `start` — through the same closed union, the same
 last-moment admission check and the same executors a confirmation runs. It also takes the
 board's decisions, which are not actions on a run: `confirm` a waiting proposal by its id
 and the hash `collie_receipts` lists beside it, `decline` one, and `disposition` to record
 what became of a finished run's work. It answers a line per action saying what each one
 came to. A kind outside that set is refused with the name of the tool that does take it:
-amending an Intent, forking a definition, changing the defaults, a cleanup and an upgrade
-are `collie_propose`'s.
+amending an Intent, forking a definition, changing the defaults, keeping a run's checks for
+its repository, a cleanup and an upgrade are `collie_propose`'s.
 
 `collie_propose` takes the same closed action set a steer produces — `stop`, `resume`,
 `hold`, `release`, `answer`, `deliver`, `start`, `followup`, `update_intent`,
