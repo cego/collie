@@ -20,6 +20,7 @@ import type { PluginEnv } from "./env";
 import { HARNESSES } from "./harness";
 import { Herdr } from "./herdr";
 import { shell, type Runner } from "./mr";
+import { manifestField } from "./release";
 import { err } from "./operations";
 import { probeHelle, probeLinearMcp, type Probe } from "./optional";
 import { projectsRoot } from "./projects";
@@ -102,19 +103,6 @@ function older(version: string, than: string): boolean {
   }
   return false;
 }
-
-/** One string field of the plugin manifest at `root`, or "" where there is none. */
-export const manifestField = Effect.fn("Doctor.manifestField")(function* (
-  root: string,
-  key: string,
-) {
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const manifest = path.join(root, "herdr-plugin.toml");
-  if (!(yield* fs.exists(manifest))) return "";
-  const text = yield* fs.readFileString(manifest);
-  return new RegExp(`^${key}\\s*=\\s*"([^"]+)"`, "m").exec(text)?.[1] ?? "";
-});
 
 /**
  * What this machine needs to run work: the skills the operator's own guidance names, and

@@ -8,6 +8,8 @@ import { runEffect } from "./support/effect";
 import { FakeBin } from "./support/bin";
 import { readEnv } from "../src/env";
 import { eventText } from "../src/commands/onboard";
+import { generateKeyPairSync } from "node:crypto";
+import { signRelease } from "../src/signing";
 import { onboard, type OnboardEvent, type OnboardOptions } from "../src/onboard";
 import { err, type OpResult } from "../src/operations";
 
@@ -37,7 +39,7 @@ const release = (version: string) => {
     [
       "sh",
       "-c",
-      `printf 'echo ran >> "$HOME/prepared"\\necho "prepare: runner: done"\\necho "prepare: skills: done"\\n' > prepare.sh; echo 'version = "${version}"' > herdr-plugin.toml`,
+      `printf 'echo ran >> "$HOME/prepared"\\nmkdir -p bin; echo a runner > bin/collie\\necho "prepare: runner: done"\\necho "prepare: skills: done"\\n' > prepare.sh; echo 'version = "${version}"' > herdr-plugin.toml; echo bin/ > .gitignore`,
     ],
     { cwd: origin },
   );
@@ -137,9 +139,12 @@ beforeEach(() =>
         case "$*" in
           *herdr.dev/install.sh*) cat "${home}/herdr-installer" ;;
           *claude.ai/install.sh*) cat "${home}/claude-installer" ;;
+          *.sig) cat "${home}/published.sig" 2>/dev/null || exit 22 ;;
           *) exit 22 ;;
         esac`,
       );
+      // install.sh builds a checkout's runner from source where there is a bun.
+      yield* bin.add("bun", "exit 0");
       // No test reaches a real GitLab over SSH.
       yield* bin.add("ssh", `echo "Permission denied (publickey)."; exit 255`);
       // Logged in to GitLab, and pushing over HTTPS with that login.
@@ -196,6 +201,8 @@ test("a bare Machine gets herdr, Claude Code, Collie at the tag, the plugin and 
         expect(statusOf(events, step)).toBe("in_place");
       for (const step of ["helle", "linear"]) expect(statusOf(events, step)).toBe("skipped");
       expect(git(root, "describe", "--exact-match", "--tags", "HEAD")).toBe("0.2.0");
+      // On its branch, so a plain `collie upgrade` can pull.
+      expect(git(root, "symbolic-ref", "--short", "HEAD")).toBe("master");
       expect(yield* read(`${home}/curl-calls`)).toContain("https://herdr.dev/install.sh");
       expect(yield* read(`${home}/curl-calls`)).toContain("https://claude.ai/install.sh");
       expect(yield* read(`${home}/prepared`)).toBe("ran\n");
@@ -400,6 +407,26 @@ test("Helle's credentials file is written owner-only", () =>
     }),
   ));
 
+test("an existing Helle file readable by others is made owner-only", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const file = `${home}/.config/helle/env`;
+      yield* fs.makeDirectory(`${home}/.config/helle`, { recursive: true });
+      yield* fs.writeFileString(file, "HELLE_API_URL=old\n", { mode: 0o644 });
+
+      yield* onboarded(
+        {},
+        {
+          skip: ["linear"],
+          secrets: { HELLE_API_URL: "https://helle.example", HELLE_API_TOKEN: "helle-secret" },
+        },
+      );
+
+      expect((yield* fs.stat(file)).mode & 0o777).toBe(0o600);
+    }),
+  ));
+
 test("Helle without credentials is not onboarded unless it is skipped", () =>
   runEffect(
     Effect.gen(function* () {
@@ -489,3 +516,87 @@ test("a terminal shows each step as text", () => {
     eventText({ event: "human", step: "linear", detail: "open this", url: "https://x.example" }),
   ).toBe("  … open this\n    open: https://x.example");
 });
+
+/** Publishes a signature for the runner every release's prepare.sh writes, under a key of the test's own. */
+const publishSignature = Effect.fn("onboardTest.publishSignature")(function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+  yield* fs.writeFileString(
+    `${home}/published.sig`,
+    signRelease(
+      new TextEncoder().encode("a runner\n"),
+      privateKey.export({ type: "pkcs8", format: "pem" }).toString(),
+    ),
+  );
+  return publicKey.export({ type: "spki", format: "pem" }).toString();
+});
+
+test("a downloaded runner signed by the release key is kept", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* fs.remove(`${home}/stubs/bun`);
+      const releaseKey = yield* publishSignature();
+
+      const { events } = yield* onboarded({}, { releaseKey });
+
+      expect(statusOf(events, "plugin")).toBe("done");
+      expect(yield* read(`${home}/curl-calls`)).toContain(".sig");
+      expect(yield* fs.exists(`${root}/bin/collie`)).toBe(true);
+    }),
+  ));
+
+test("a downloaded runner without the release key's signature is refused and removed", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* fs.remove(`${home}/stubs/bun`);
+
+      const { result, events } = yield* onboarded();
+
+      expect(results(events).find((event) => event.step === "plugin")).toMatchObject({
+        status: "failed",
+      });
+      expect(results(events).find((event) => event.step === "plugin")?.detail).toContain(
+        "unsigned",
+      );
+      expect(yield* fs.exists(`${root}/bin/collie`)).toBe(false);
+      expect(result).toMatchObject({ ok: false });
+    }),
+  ));
+
+test("a fresh Machine with an unknown host key and no registered key gets one in one pass", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* glab(`echo "${GITLAB}"`, `touch "${home}/registered"`);
+      yield* bin.add(
+        "ssh",
+        `case "$*" in *StrictHostKeyChecking=accept-new*) touch "${home}/known"; exit 255 ;; esac
+        [ -f "${home}/known" ] || { echo "Host key verification failed."; exit 255; }
+        [ -f "${home}/registered" ] && exit 0
+        echo "Permission denied (publickey)."; exit 255`,
+      );
+
+      const { events } = yield* onboarded();
+
+      expect(statusOf(events, "push")).toBe("done");
+    }),
+  ));
+
+test("a key GitLab already has is not a failed registration", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* glab(
+        `echo "${GITLAB}"`,
+        `touch "${home}/registered"; echo "fingerprint has already been taken"; exit 1`,
+      );
+      yield* bin.add(
+        "ssh",
+        `[ -f "${home}/registered" ] && exit 0; echo "Permission denied (publickey)."; exit 255`,
+      );
+
+      const { events } = yield* onboarded();
+
+      expect(statusOf(events, "push")).toBe("done");
+    }),
+  ));

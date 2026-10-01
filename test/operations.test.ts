@@ -7,7 +7,9 @@ import { Rig } from "./support/recorder";
 import { installBaseline } from "./support/engine";
 import { installFakeSkills } from "./support/defs";
 import { FakeBin } from "./support/bin";
+import { generateKeyPairSync } from "node:crypto";
 import { upgrade } from "../src/operations";
+import { signRelease } from "../src/signing";
 
 let rig: Rig;
 let bin: FakeBin;
@@ -22,6 +24,8 @@ beforeEach(() =>
       // Inference shells out; nothing here depends on what it finds.
       yield* bin.add("glab", `exit 1`);
       yield* bin.add("git", `echo main`);
+      // A release's signature, where a test has published one.
+      yield* bin.add("curl", `cat "${rig.root}/published.sig" 2>/dev/null || exit 22`);
     }),
   ),
 );
@@ -35,6 +39,20 @@ afterEach(() =>
   ),
 );
 
+/** A downloaded runner and its published signature, under a key of this test's own. */
+const signedRunner = Effect.fn("operationsTest.signedRunner")(function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+  const runner = new TextEncoder().encode("a runner");
+  yield* fs.makeDirectory(`${rig.projectDir}/bin`, { recursive: true });
+  yield* fs.writeFile(`${rig.projectDir}/bin/collie`, runner);
+  yield* fs.writeFileString(
+    `${rig.root}/published.sig`,
+    signRelease(runner, privateKey.export({ type: "pkcs8", format: "pem" }).toString()),
+  );
+  return publicKey.export({ type: "spki", format: "pem" }).toString();
+});
+
 const PREPARED = [
   "prepare: plugin-link: already in place",
   "prepare: runner: done",
@@ -42,12 +60,18 @@ const PREPARED = [
   "prepare: skills: skipped — no npx on PATH; install Node, then run `collie upgrade`",
 ].join("\n");
 
+/** A checkout with bun, so its runner is built from source rather than downloaded. */
+const buildsFromSource = Effect.flatMap(FileSystem.FileSystem, (fs) =>
+  fs.makeDirectory(`${rig.projectDir}/.git`, { recursive: true }),
+);
+
 /** A checkout that answers `git` and a `prepare.sh` that says what it did. */
 const fakeTools = Effect.fn("operationsTest.fakeTools")(function* (opts: {
   head: string;
   pull?: string;
   install?: string;
 }) {
+  yield* buildsFromSource;
   yield* bin.add(
     "git",
     `case "$1 $2" in
@@ -140,6 +164,7 @@ test("upgrade that moves the checkout says the range it moved through", () =>
           *) exit 1 ;;
         esac`,
       );
+      yield* buildsFromSource;
       yield* bin.add(
         "sh",
         `cat <<'OUT'
@@ -170,13 +195,34 @@ test("upgrade of a plain install fetches the release without asking git anything
       // Not a checkout: `git rev-parse --git-dir` fails, and there is nothing to pull.
       yield* bin.add("git", `exit 1`);
       yield* bin.add("sh", `echo installed collie-linux-x64; exit 0`);
+      const key = yield* signedRunner();
 
-      const fetched = yield* upgrade(env);
+      const fetched = yield* upgrade(env, { releaseKey: key });
 
       expect(fetched).toMatchObject({
         ok: true,
         data: { checkout: false, updated: false },
       });
       expect(fetched.ok && fetched.human).toContain("not a checkout");
+    }),
+  ));
+
+test("a downloaded runner that is not signed by the release key is refused and removed", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const env = { ...rig.pluginEnv(), pluginRoot: rig.projectDir };
+      yield* bin.add("git", `exit 1`);
+      yield* bin.add("sh", `echo installed collie-linux-x64; exit 0`);
+      yield* signedRunner();
+      const { publicKey } = generateKeyPairSync("ed25519");
+
+      const refused = yield* upgrade(env, {
+        releaseKey: publicKey.export({ type: "spki", format: "pem" }).toString(),
+      });
+
+      expect(refused).toMatchObject({ ok: false, error: { code: "operation_failed" } });
+      expect(!refused.ok && refused.error.message).toContain("does not match its signature");
+      expect(yield* fs.exists(`${rig.projectDir}/bin/collie`)).toBe(false);
     }),
   ));

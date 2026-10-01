@@ -8,11 +8,11 @@ import { Effect, FileSystem, Option, Schema, Stream } from "effect";
 import type { PlatformError } from "effect/PlatformError";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { hostname } from "node:os";
-import { doctor, glabHosts, manifestField, onPath, pushCheck, tokenPage } from "./doctor";
+import { doctor, glabHosts, onPath, pushCheck, tokenPage } from "./doctor";
 import type { PluginEnv } from "./env";
 import { err, moveToRelease, prepareSteps, type OpResult } from "./operations";
 import { helleEnvPath, LINEAR_MCP_ADD, LINEAR_MCP_FIX, probeLinearMcp } from "./optional";
-import { installation, RELEASE_TAG } from "./release";
+import { installation, manifestField, RELEASE_TAG, refusedRunner, releaseBase } from "./release";
 
 export type StepStatus = "done" | "in_place" | "skipped" | "needs_root" | "needs_human" | "failed";
 
@@ -49,6 +49,8 @@ export interface OnboardOptions {
   readonly terminal?: boolean;
   /** Someone sees the stream, so a login that needs the human may be started. Default true. */
   readonly attended?: boolean;
+  /** The key a downloaded runner must be signed with: Collie's release key unless a test supplies one. */
+  readonly releaseKey?: string;
 }
 
 const HERDR_INSTALL = "curl -fsSL https://herdr.dev/install.sh | sh";
@@ -236,14 +238,15 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
     Effect.gen(function* () {
       if (!(yield* fs.exists(root))) {
         const repo = env.raw["COLLIE_REPO"] ?? COLLIE_REPO;
-        const cloned = yield* exec(
-          "git",
-          ["clone", "--quiet", "--branch", to, repo, root],
-          env.home,
-        );
-        return cloned.code === 0
+        const cloned = yield* exec("git", ["clone", "--quiet", repo, root], env.home);
+        if (cloned.code !== 0) {
+          return failed(`could not clone ${repo}: ${lastWords(cloned.stdout)}`);
+        }
+        // On its branch rather than detached, so a plain `collie upgrade` can still pull.
+        const atTag = yield* exec("git", ["reset", "--quiet", "--hard", `refs/tags/${to}`], root);
+        return atTag.code === 0
           ? done(`cloned ${repo} at ${to}`)
-          : failed(`could not clone ${repo} at ${to}: ${lastWords(cloned.stdout)}`);
+          : failed(`${repo} has no release ${to}: ${lastWords(atTag.stdout)}`);
       }
       if (!(yield* fs.exists(`${root}/.git`))) {
         return failed(`${root} is there and is not a checkout of Collie`);
@@ -312,6 +315,9 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
             `sh ${root}/prepare.sh`,
           );
         }
+        const base = releaseBase(env.raw, yield* manifestField(root, "version"));
+        const refused = yield* refusedRunner(root, base, exec, options.releaseKey);
+        if (refused) return failed(refused, `sh ${root}/prepare.sh`);
         return steps.some((one) => one.state === "done") ? done(said) : inPlace(said);
       }),
     );
@@ -403,6 +409,20 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
         host,
         https: false,
       };
+      if (ssh && !known.https) {
+        // Trusts GitLab's host key on first use, as doctor's own fix does; a changed key is still refused.
+        yield* exec(
+          "ssh",
+          [
+            "-oBatchMode=yes",
+            "-oConnectTimeout=5",
+            "-oStrictHostKeyChecking=accept-new",
+            "-T",
+            `git@${host}`,
+          ],
+          env.home,
+        );
+      }
       const before = yield* pushCheck(known, here, ssh, exec);
       if (before.ok) return inPlace(before.detail);
       if (status.code !== 0) {
@@ -429,7 +449,8 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
         null,
         { GITLAB_HOST: host },
       );
-      if (added.code !== 0) {
+      const registered = /already been taken|already exists/i.test(added.stdout);
+      if (added.code !== 0 && !registered) {
         return failed(`glab would not register ${key}.pub: ${lastWords(added.stdout)}`);
       }
       const after = yield* pushCheck(known, here, ssh, exec);
@@ -466,9 +487,9 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
       const text = `HELLE_API_URL=${url}\nHELLE_API_TOKEN=${token}\n`;
       const current = there ? yield* fs.readFileString(file) : "";
       yield* fs.makeDirectory(file.slice(0, file.lastIndexOf("/")), { recursive: true });
+      // Before the write: a file from before may be readable by others, and `mode` only applies to a new one.
+      if (there) yield* fs.chmod(file, 0o600);
       if (current !== text) yield* fs.writeFileString(file, text, { mode: 0o600 });
-      // A file written before this one may have been readable by others.
-      yield* fs.chmod(file, 0o600);
       return current === text ? inPlace(`credentials at ${file}`) : done(`wrote ${file}`);
     }),
   );

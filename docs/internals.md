@@ -540,8 +540,9 @@ Each runner binary is published with a detached ed25519 signature beside it, `<a
 The release job signs with `tools/sign.ts`, which reads the private key from the
 `COLLIE_SIGNING_KEY` secret (PKCS#8 PEM). It refuses to run without that key, and refuses a
 key that does not match the public key built into `src/signing.ts`. `verifyRelease` is the one check
-Desktop runs before installing a runner it downloaded: one that is unsigned or does not
-match is refused. `install.sh` does not check it yet. Rotating the key means changing both the secret and `RELEASE_PUBLIC_KEY`, and
+every downloaded runner passes: Desktop runs it before installing one, and `collie onboard`
+and `collie upgrade` run it on whatever `install.sh` downloaded (`refusedRunner` in
+`src/release.ts`). One that is unsigned or does not match is refused and removed. Rotating the key means changing both the secret and `RELEASE_PUBLIC_KEY`, and
 releases signed with the old key stop verifying.
 
 `bun run build` compiles beside the binary and renames over it, because replacing a running
