@@ -4,6 +4,7 @@
 
 import { expect, test } from "bun:test";
 import {
+  checkGaps,
   evidenceGaps,
   endsWithoutPatch,
   isOutcome,
@@ -144,6 +145,56 @@ test("the approved set has to pass here, now, and by Collie", () => {
   ).toEqual(["tests last passed on a different tree"]);
 });
 
+test("the latest of Collie's results on this tree is the one that counts", () => {
+  const passThenFail = [record({ name: "tests" }), record({ name: "tests", result: "fail" })];
+  expect(evidenceGaps("unspecified", collected({ verifications: passThenFail }))).toEqual([
+    "tests failed",
+  ]);
+  expect(
+    evidenceGaps("unspecified", collected({ verifications: [...passThenFail].reverse() })),
+  ).toEqual([]);
+});
+
+test("a check that already failed before the Run is not a gap the Run can close", () => {
+  const failing = [record({ name: "tests", result: "fail" })];
+  expect(
+    evidenceGaps(
+      "unspecified",
+      collected({ verifications: failing, preexisting: new Set(["tests"]) }),
+    ),
+  ).toEqual([]);
+  expect(evidenceGaps("unspecified", collected({ verifications: failing }))).toEqual([
+    "tests failed",
+  ]);
+  expect(
+    evidenceGaps(
+      "unspecified",
+      collected({ verifications: [record({ name: "tests" })], preexisting: new Set(["tests"]) }),
+    ),
+  ).toEqual([]);
+  // Only a check that still fails is excused: one the tree moved under is the Run's to settle.
+  const moved = [...failing, record({ name: "tests", result: "unstable" })];
+  expect(
+    evidenceGaps(
+      "unspecified",
+      collected({ verifications: moved, preexisting: new Set(["tests"]) }),
+    ),
+  ).toHaveLength(1);
+  // A ticket's promise of the same check is the same statement, and is reported, not fixed.
+  const promised = {
+    verifications: failing,
+    tickets: [{ file: "01-picker.md", checks: ["tests"] }],
+  };
+  const built = { tickets_done: ["01"], scope_met: true };
+  expect(
+    evidenceGaps("feature", withOutput(built, { ...promised, preexisting: new Set(["tests"]) })),
+  ).toEqual([]);
+  expect(evidenceGaps("feature", withOutput(built, promised))).toEqual([
+    "tests failed",
+    '01-picker.md promised check "tests", which has no passing verification on this tree',
+  ]);
+});
+
 test("a feature names what it built and the review says the scope was met", () => {
   expect(evidenceGaps("feature", collected())).toEqual([
     "no ticket is reported built (tickets_done is empty)",
@@ -181,6 +232,22 @@ test("a feature names what it built and the review says the scope was met", () =
       }),
     ),
   ).toHaveLength(1);
+});
+
+test("a gap is a check's only where a verification on this tree could close it", () => {
+  // The reviewer's judgement and the implementer's Output are what they are; running a
+  // check again moves neither, so a fix is never asked to.
+  const got = withOutput(
+    { tickets_done: [], scope_met: false },
+    { verifications: [], tickets: [{ file: "01.md", checks: ["typecheck"] }] },
+  );
+  expect(checkGaps("feature", got)).toEqual([
+    "tests was never run",
+    '01.md promised check "typecheck", which has no passing verification on this tree',
+  ]);
+  expect(evidenceGaps("feature", got)).toHaveLength(4);
+  // Nothing approved is a grant only the human or chat can make.
+  expect(checkGaps("unspecified", collected({ approved: [] }))).toEqual([]);
 });
 
 test("a bug is a fail then a pass, on two different trees", () => {

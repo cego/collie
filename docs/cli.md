@@ -182,8 +182,8 @@ or an execution exists — so a value one of them refuses costs nothing to refus
 `collie verify --run <run-id> -- <command>` records against a module's Run as it does
 against any other: the same collector, the same binding to the tree the command ran on, and
 the same refusal for a directory that is not that Run's. A module can ask for one itself,
-but only for a command `.collie/verify.json` named when the Run started, or one a human has
-granted it since with `run intent verification`.
+but only for a command its approved set named when the Run started, or one granted it since
+with `run intent verification` or chat's `set_verification`.
 
 A module may be made of other modules. A child is a Run of its own — `run list` has it,
 `run show` says whose it is, and the Task it belongs to is its parent's — and it is started
@@ -544,9 +544,13 @@ collie --json run intent authority <run-id> auto_correct=true --propagate
 Version 1 is the workspace's defaults, then what the work source itself asks for, then
 what `--goal` and `--constraint` named — later beating earlier where they name the same
 constraint. For a plan directory the work source's ask is read from its `SPEC.md`: the
-bullets under a heading matching `Requirements`, `Success criteria`, `Boundaries` or
-`Constraints` become `warn` constraints carrying the file, heading and line they came
-from. **No text ever grants authority** — not a plan, not the repository, not a prompt.
+bullets under a heading matching `Requirements`, `Success criteria`, `Boundaries`,
+`Constraints`, `Out of scope` or `Done when` become `warn` constraints carrying the file,
+heading and line they came from; an out-of-scope bullet reads `Out of scope: <bullet>`. In a
+Run on a worktree of its own, its `plan/SPEC.md`, written by its planner, is read the same
+way at every work boundary: new bullets are added, dropped ones are removed, and a
+constraint anyone but the plan removed stays removed. **No text ever grants authority** —
+not a plan, not the repository, not a prompt.
 
 `--severity` pairs with the `--constraint` in the same position; a constraint given
 without one is `warn`. A `block` constraint stops work; a `warn` one is reported.
@@ -676,11 +680,15 @@ are `collie_propose`'s.
 
 `collie_propose` takes the same closed action set a steer produces — `stop`, `resume`,
 `hold`, `release`, `answer`, `deliver`, `start`, `followup`, `update_intent`,
-`clear_override`, `navigate`, `update_defaults`, `fork_definition`, `home_cleanup`,
+`set_verification`, `clear_override`, `navigate`, `update_defaults`, `fork_definition`, `home_cleanup`,
 `upgrade` — through the same `validate`, the same proposals journal and
 the same executors. It executes the request immediately, with no separate confirmation.
 Supply `request_id` and reuse it on retries to return the original receipt rather than
-repeat the action. There is no arbitrary shell-command action.
+repeat the action. There is no arbitrary shell-command action for chat to run — but
+`set_verification`, carried out in the same call with no yes, names a command Collie
+spawns itself at the gate, outside any agent's permission rules, and it may be `sh -c`
+anything. The merge request lists each check with its command, and that is where the human
+reads it ([ADR-0011](adr/0011-the-conversation-is-a-native-harness.md#amended-2026-09-29-chat-may-choose-what-proves-a-run)).
 
 `update_defaults` names the workspace whose new runs it changes, for the reason `start`
 names one: defaults are filed per workspace, and the board carrying out a confirmation is
@@ -690,7 +698,8 @@ proposal about the installation names no run, so the board draws it whichever ro
 selected.
 
 What is deliberately not in that set: confirming, declining, reconciling, verifying, and
-setting a Run's or the Herd's **authority**. There is no action kind that settles a
+setting a Run's or the Herd's **authority** — except the checks that prove a Run: a `start`
+carries the ones chat chose as `verify`, and `set_verification` adds or withdraws one, at once. There is no action kind that settles a
 proposal, so a proposal can never contain its own yes. What a human says in chat is a
 different thing: `collie_do` relays it, against an id and a hash they were shown.
 Everything else a human can type — including forking a Workflow or a Persona, changing
@@ -750,8 +759,10 @@ collie --json run deliveries <run-id>
 collie --json run deliveries <run-id> --reconcile <delivery-id> --as sent|not-sent
 ```
 
-What has been sent to a run's agents. Explicitly settle an unknown delivery once you have
-checked whether it arrived; a timeout alone never authorizes a resend — see
+What has been sent to a run's agents. Explicitly settle an unknown delivery, or an
+`unobserved` one a Run parked on, once you have checked whether it arrived; a timeout
+alone never authorizes a resend. A parked step's prompt settled `not-sent` is sent once
+more by `run resume` — see
 [Delivery](steering.md#delivery).
 
 ## Carry on from a finished run
@@ -862,9 +873,14 @@ What kind of result a run has to prove, and so what evidence closes it:
 
 The gate runs before the merge request, which is where the claim is made. Collie runs the
 run's own approved set itself at the tree as it stands, then says what is missing. A check
-that failed runs once more; gaps left after that go to the implementer for up to four
-fixes, and whatever is still unproved is named in the merge request, which opens anyway: the
-human verifies before it lands. A run with nothing approved is told so rather than passed —
+that failed runs once more; gaps a check could still close go to the implementer for up to
+four fixes, a reviewer's judgement or an Output's claim goes straight to the merge request
+since no fix moves it, and whatever is still unproved is named in the merge request, which opens anyway: the
+human verifies before it lands. Only the latest of Collie's results on that tree counts, so a
+pass a later fail contradicts is not one. In `implement`, a check that fails at the gate is run once more,
+before any fix, where the branch leaves the default branch, in the run's own checkout. One that
+fails there too is named in the merge request as failing before the run's changes, with that
+revision, and is not handed to the implementer. A run with nothing approved is told so rather than passed —
 an empty set would make the gate say yes to anything — and a run whose outcome needs the
 approved set is refused at `run start` when it has none (see [What Collie may run
 itself](#what-collie-may-run-itself)). A grant withdrawn while the run works parks it at its
@@ -908,6 +924,21 @@ same last line — Collie says so: on the record, in `run show`, and in the next
 the agent can change approach rather than repeat itself. It is a sentence, not a stop. A
 counter reaching a number is not evidence that work cannot be done, and what prevents a
 false claim of success is the evidence gate reading collected results.
+
+## Report
+
+```sh
+collie --json run report [--since <iso-date>]
+```
+
+Where Runs end, across every Run the host knows, whatever workspace is selected. For each
+workflow: how many Runs completed, failed, are suspended or pending, how many recorded a
+merge request, how many a human stopped, how many decisions were answered or are still
+open, and the rework and verifications summed from each Run's metrics. Then each Run that
+failed, with its reason, each that completed, with its result, and each that was stopped.
+`--since` keeps only Runs admitted at or after that date.
+
+Like metrics, the report is data: no number in it is a threshold, and it refuses nothing.
 
 ## Verify
 

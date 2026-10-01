@@ -50,6 +50,8 @@ ignored look the same from here, and the note is what tells a later reader that.
 The terminal states are `failed` (herdr refused), `unknown` (herdr never answered, so
 nobody can say), `superseded` and `expired`. `unknown` blocks further deliveries about the
 same work until a human reconciles it, and Collie never retries out of it on its own.
+A step's prompt or repair left `unobserved` with nothing to show it was taken parks its
+Run the same way, and is reconciled the same way; `not-sent` has the resume send it again.
 
 `deferred` is the one refusal that is retried, because it is the one that proves the prompt
 was not delivered and says why the next try may land. Which refusals count is decided by
@@ -89,8 +91,11 @@ none of it.
 ## Manual override
 
 If someone types into an agent's pane, Collie stops correcting that agent automatically.
-On Claude this is detected by a `UserPromptSubmit` hook: a submission without Collie's
-`collie-delivery:` token is somebody else's. Only `collie run clear-override <run> <agent>`
+On Claude this is detected by a `UserPromptSubmit` hook. Every prompt Collie sends — a
+step's pointer, a repair, a hand-off, a steer, a compaction request — carries a line of
+its own, `collie-delivery:<id>`, first or straight after a slash command, and the hook records that id with the submission, so a
+prompt Collie sent is tied to its delivery. A submission without the token is somebody
+else's. Only `collie run clear-override <run> <agent>`
 lifts it — nothing times it back on, because a human who took the keyboard is assumed to
 still have it until they say otherwise.
 
@@ -144,8 +149,11 @@ content of every untracked file git is not ignoring — and a result whose two s
 differ is `unstable`, never `pass`. So is one where either snapshot says the tree was too
 large to look at: two unmeasured trees are not one tree.
 
-Collie will also run a verification itself, but only one the human wrote into the run's
-`authority.run_verification` with `run intent verification`, matched argument for argument.
+Collie will also run a verification itself, but only one in the run's approved set,
+matched argument for argument. A human grants one with `run intent verification`; so does
+chat, with `set_verification`, which `collie_propose` carries out in the same call with no
+yes ([ADR-0011](adr/0011-the-conversation-is-a-native-harness.md#amended-2026-09-29-chat-may-choose-what-proves-a-run)).
+Collie spawns it itself, outside any agent's permission rules.
 The wrapper is part of what was approved — `bun test` and `bun test --bail` are not the
 same permission. It runs at the run's finish, and only where a `command_exit` rule names
 it and nothing has verified that name yet.
@@ -189,7 +197,9 @@ checks below run for it: rules after each piece of agent work is collected and b
 next starts, and a judgement before each piece of work and at the finish. What they find is
 [corrected](#correcting-drift) through the agent that did the work last, a Run
 [finishes](#finishing) the same way whatever its workflow, and related Runs are
-[checked against each other](#cross-run-checks). Two kinds, kept apart on purpose.
+[checked against each other](#cross-run-checks). Before each check in a Run on a worktree of
+its own, the constraints in its `plan/SPEC.md` are brought into its Intent, and one anyone
+else removed stays removed ([ADR-0036](adr/0036-a-runs-own-plan-bounds-it.md)). Two kinds, kept apart on purpose.
 
 A **rule** constraint is a fact Collie can establish by itself: which files changed,
 which branch it is on, what a step's Output field says, what a named verification exited
@@ -237,9 +247,9 @@ verifications.
 **Significance** decides whether this is worth interrupting somebody, by rules over facts:
 `decision` when something is waiting for the human (a Choice, unresolved drift, a pending
 proposal, an unacknowledged correction), `consequential` when something happened they
-should know about (blocking drift, a correction sent, the Intent moved, the run failed or
-stopped), `try-it` when there is something to look at or a merge request moved, and
-`routine` otherwise. A `decision` outranks a `consequential` because a decision is the
+should know about (blocking drift, a correction sent, anyone but the plan moved the Intent,
+the run failed or stopped), `try-it` when there is something to look at or a merge request
+moved, and `routine` otherwise. A `decision` outranks a `consequential` because a decision is the
 human being _waited on_.
 
 The narrative is an input the rule ignores. There is no path by which a model makes its

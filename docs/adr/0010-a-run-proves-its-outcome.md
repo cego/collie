@@ -3,7 +3,8 @@
 **Status: accepted.** Built: definitions are frozen per Run, verifications are collected
 against a revision, `implement` is `build → review → fix → mr`, plans build in slices, and
 a gate reads evidence before a merge request is opened. What remains outstanding is live
-evidence rather than design — see Consequences.
+evidence rather than design — see Consequences. D3's halt is amended 2026-09-29: the gate
+no longer stops the Run before the merge request.
 
 A Run has an **outcome** it must prove, and the proof is a collected **Verification**
 bound to the tree it ran on. An agent writing `"verdict": "clean"` is a claim, and Collie
@@ -49,7 +50,8 @@ Run never started.
 agent ran through the collector, with the tree fingerprinted before and after. A result on
 a tree that moved is `unstable` and never `pass`. `--expect fail` is how a bug is proved
 to exist. What _Collie itself_ may run is a Run's approved set, read from
-`.collie/verify.json` or the config directory when the Run starts and copied into
+`.collie/verify.json` or the config directory when the Run starts _(or given with the
+start, by the human or by chat; see [ADR-0011's 2026-09-29 amendment](0011-the-conversation-is-a-native-harness.md))_ and copied into
 `run.json`: a permission that moved under a Run is not a permission.
 
 **D3. An outcome decides what closes a Run.** One pure table (`src/outcome.ts`): a feature
@@ -58,7 +60,7 @@ failed before the fix and passes after, on two different trees; a refactor prese
 behaviour; an investigation reaches a supported conclusion and may legitimately have no
 patch; docs prove the documented commands by running them; a migration proves it can go
 back. A gate before the `mr` step runs the approved set and halts with `evidence_missing`
-listing what is not there.
+listing what is not there. _(Amended 2026-09-29, below: `implement` no longer halts there.)_
 
 **The default outcome is `unspecified`, not `feature`.** A Run nobody classified proves
 its approved set and nothing else. Documentation, an investigation and a bug fix are not
@@ -110,6 +112,17 @@ repeating and asks for a different approach; the gate is what refuses a false cl
 
 **Spending caps and model-call quotas.** Usage is recorded — counts, tokens, costs,
 timings — and never enforced. The budget machinery removed in 0.8.0 is not reintroduced.
+
+## Amended 2026-09-29: the gate writes what is unproved into the merge request
+
+The human put the line here: they verify the work in the merge request before it lands,
+and are not in the loop before then. So `implement`'s gate no longer halts with
+`evidence_missing`. It runs the approved set, re-runs a failure once as a possible flake,
+and hands the implementer up to four fixes for what a check could still prove — never a
+reviewer's judgement or an Output's claim, which no fix moves. Whatever is left opens the
+merge request anyway, listed under **Not settled by the run**, with each gate fix marked
+as not re-reviewed. An opened merge request is not a gate that passed: what it says is
+unproved is the gate's answer. `evidence_missing` stays a halt a module may still use.
 
 ## Consequences
 

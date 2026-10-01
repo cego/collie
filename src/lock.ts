@@ -1,4 +1,15 @@
-import { Data, Schema, FileSystem, Clock, Effect, Option, Path, Schedule, Stream } from "effect";
+import {
+  Data,
+  Schema,
+  FileSystem,
+  Clock,
+  Effect,
+  Option,
+  Path,
+  Random,
+  Schedule,
+  Stream,
+} from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 // Cooperative pid-lock files: `wx` creation is the claim; holder liveness, not age, decides
@@ -124,9 +135,13 @@ export const breakStaleLock = Effect.fn("breakStaleLock")(function* (lock: strin
 const claimBreakGuard = Effect.fn("claimBreakGuard")(function* (guard: string) {
   const fs = yield* FileSystem.FileSystem;
   if (yield* tryClaimLock(guard)) return true;
-  const fresh = yield* lockWriteIsFresh(guard).pipe(Effect.catch(() => Effect.succeed(false)));
+  // A guard gone since the claim failed was let go, not abandoned: the next claim is a `wx`.
+  const fresh = yield* lockWriteIsFresh(guard).pipe(
+    Effect.catchTag("PlatformError", (error) => Effect.succeed(error.reason._tag === "NotFound")),
+  );
   if (fresh) return false;
-  const tmp = `${guard}.${yield* currentPid}.tmp`;
+  // Per claim, not per process: fibers of one process take over the same guard too.
+  const tmp = `${guard}.${yield* currentPid}.${yield* Random.nextInt}.tmp`;
   yield* fs.writeFileString(tmp, yield* ownClaim());
   yield* fs.rename(tmp, guard);
   return yield* holdsLock(guard);

@@ -74,29 +74,40 @@ export interface Collected {
     readonly file: string;
     readonly checks: ReadonlyArray<string>;
   }>;
+  /**
+   * Approved checks that also failed where the branch leaves the default branch. One whose
+   * latest run here failed is not a gap the Run can close; the Run reports it instead.
+   */
+  readonly preexisting?: ReadonlySet<string>;
 }
 
-/** A verification that passed on the tree in front of us, not on one that has moved. */
-function passedAtFinal(got: Collected, name: string): boolean {
-  return got.verifications.some(
-    (v) =>
-      v.name === name &&
-      v.result === "pass" &&
-      v.by === "collie" &&
-      v.end.head_sha === got.final.head_sha &&
-      v.end.fingerprint === got.final.fingerprint,
-  );
+/**
+ * Whether the latest result for this check, on the tree in front of us, passed: a pass a
+ * later fail contradicts is not one. `by` narrows it to one collector, Collie or an agent.
+ */
+function lastPassedAtFinal(got: Collected, name: string, by?: Verification["by"]): boolean {
+  return lastAtFinal(got, name, by) === "pass";
 }
 
-/** The same, for a verification an agent was allowed to collect (docs commands, checks). */
-function anyPassAtFinal(got: Collected, name: string): boolean {
-  return got.verifications.some(
-    (v) =>
-      v.name === name &&
-      v.result === "pass" &&
-      v.end.head_sha === got.final.head_sha &&
-      v.end.fingerprint === got.final.fingerprint,
-  );
+function lastAtFinal(
+  got: Collected,
+  name: string,
+  by?: Verification["by"],
+): Verification["result"] | undefined {
+  return got.verifications
+    .filter(
+      (v) =>
+        v.name === name &&
+        (by === undefined || v.by === by) &&
+        v.end.head_sha === got.final.head_sha &&
+        v.end.fingerprint === got.final.fingerprint,
+    )
+    .at(-1)?.result;
+}
+
+/** Failed where the branch leaves the default branch, and Collie's latest run here failed too. */
+function stillPreexisting(got: Collected, name: string): boolean {
+  return got.preexisting?.has(name) === true && lastAtFinal(got, name, "collie") === "fail";
 }
 
 /** Whether this kind of result is proved by Collie's own run of the approved set. */
@@ -133,7 +144,8 @@ function approvedSetGaps(got: Collected): string[] {
   if (got.approved.length === 0) return [nothingApproved()];
   const gaps: string[] = [];
   for (const spec of got.approved) {
-    if (passedAtFinal(got, spec.name)) continue;
+    if (lastPassedAtFinal(got, spec.name, "collie")) continue;
+    if (stillPreexisting(got, spec.name)) continue;
     const any = got.verifications.filter((v) => v.name === spec.name);
     if (any.length === 0) gaps.push(`${spec.name} was never run`);
     else if (any.some((v) => v.result === "fail")) gaps.push(`${spec.name} failed`);
@@ -192,25 +204,43 @@ export function refInside(roots: ReadonlyArray<string>, ref: string): boolean {
  * there; every entry is one sentence a human can act on.
  */
 export function evidenceGaps(kind: Outcome, got: Collected): string[] {
-  const gaps: string[] = [];
-  if (needsApproved(kind)) gaps.push(...approvedSetGaps(got));
+  return gapsOf(kind, got).map((gap) => gap.text);
+}
+
+/**
+ * The gaps a verification on this tree could close: what a fix may be handed. The rest
+ * are a reviewer's judgement or an Output's claim, and no command moves them.
+ */
+export function checkGaps(kind: Outcome, got: Collected): string[] {
+  return gapsOf(kind, got)
+    .filter((gap) => gap.check)
+    .map((gap) => gap.text);
+}
+
+function gapsOf(kind: Outcome, got: Collected): Array<{ text: string; check: boolean }> {
+  const gaps: Array<{ text: string; check: boolean }> = [];
+  const check = (text: string) => gaps.push({ text, check: true });
+  const claim = (text: string) => gaps.push({ text, check: false });
+  // Nothing approved is a grant to make, not a check to run.
+  if (needsApproved(kind))
+    for (const gap of approvedSetGaps(got)) (got.approved.length === 0 ? claim : check)(gap);
 
   switch (kind) {
     case "unspecified":
       break;
     case "feature": {
       const done = names(anyField(got, "tickets_done"));
-      if (done.length === 0) gaps.push("no ticket is reported built (tickets_done is empty)");
+      if (done.length === 0) claim("no ticket is reported built (tickets_done is empty)");
       if (!reviewerSays(got, "scope_met"))
-        gaps.push("the review did not report scope_met: true for the agreed scope");
+        claim("the review did not report scope_met: true for the agreed scope");
       // What each ticket said would prove it, before it was built. An agent may have
       // collected these itself; what matters is a pass on the tree in front of us.
       for (const ticket of got.tickets) {
         for (const name of ticket.checks) {
-          if (!anyPassAtFinal(got, name))
-            gaps.push(
-              `${ticket.file} promised check "${name}", which has no passing verification on this tree`,
-            );
+          if (lastPassedAtFinal(got, name) || stillPreexisting(got, name)) continue;
+          check(
+            `${ticket.file} promised check "${name}", which has no passing verification on this tree`,
+          );
         }
       }
       break;
@@ -221,71 +251,71 @@ export function evidenceGaps(kind: Outcome, got: Collected): string[] {
       const regression = got.verifications.filter((v) => v.name === "regression");
       const reproduced = regression.filter((v) => v.expect === "fail" && v.result === "pass");
       if (reproduced.length === 0)
-        gaps.push(
+        check(
           "no regression verification recorded with --expect fail, so the bug was never reproduced",
         );
       else if (!reproduced.some((v) => earlierTree(v, got.final)))
-        gaps.push(
+        check(
           "the bug was only reproduced on the tree the fix is already on, so nothing shows it failing before the fix",
         );
-      if (!anyPassAtFinal(got, "regression"))
-        gaps.push("regression does not pass on the current tree, so the fix is not proven");
+      if (!lastPassedAtFinal(got, "regression"))
+        check("regression does not pass on the current tree, so the fix is not proven");
       const named = anyField(got, "reproduced");
       if (!isString(named) || named.trim() === "")
-        gaps.push("the Output does not name the verification that reproduced the bug");
+        claim("the Output does not name the verification that reproduced the bug");
       break;
     }
     case "refactor":
       if (!reviewerSays(got, "behavior_preserved"))
-        gaps.push("the review did not report behavior_preserved: true");
+        claim("the review did not report behavior_preserved: true");
       break;
     case "investigation": {
       const conclusion = anyField(got, "conclusion");
       if (!isString(conclusion) || conclusion.trim() === "")
-        gaps.push("the investigation reports no conclusion");
+        claim("the investigation reports no conclusion");
       const refs = names(anyField(got, "evidence"));
-      if (refs.length === 0) gaps.push("the conclusion is supported by no evidence references");
+      if (refs.length === 0) claim("the conclusion is supported by no evidence references");
       for (const ref of refs) {
-        if (!got.insideRun(ref)) gaps.push(`evidence reference "${ref}" is outside this Run`);
+        if (!got.insideRun(ref)) claim(`evidence reference "${ref}" is outside this Run`);
       }
       if (!isBoolean(anyField(got, "patch")))
-        gaps.push("the investigation does not say whether it produced a patch");
+        claim("the investigation does not say whether it produced a patch");
       if (!reviewerSays(got, "supported"))
-        gaps.push("the review did not report supported: true for the conclusion");
+        claim("the review did not report supported: true for the conclusion");
       break;
     }
     case "docs": {
       const documented = names(anyField(got, "documented_commands"));
       if (documented.length === 0)
-        gaps.push("no documented command is named, so the instructions were never run");
+        claim("no documented command is named, so the instructions were never run");
       for (const name of documented) {
-        if (!anyPassAtFinal(got, name))
-          gaps.push(`documented command "${name}" has no passing verification on this tree`);
+        if (!lastPassedAtFinal(got, name))
+          check(`documented command "${name}" has no passing verification on this tree`);
       }
       if (!reviewerSays(got, "accurate"))
-        gaps.push("the review did not report accurate: true for the instructions");
+        claim("the review did not report accurate: true for the instructions");
       break;
     }
     case "migration": {
       for (const name of ["migrate-up", "migrate-down"]) {
-        if (anyPassAtFinal(got, name)) continue;
+        if (lastPassedAtFinal(got, name)) continue;
         // `rollback` is the same thing under another name, and a project that calls it
         // that has still proved it can go back.
-        if (name === "migrate-down" && anyPassAtFinal(got, "rollback")) continue;
-        gaps.push(`${name} has no passing verification on this tree`);
+        if (name === "migrate-down" && lastPassedAtFinal(got, "rollback")) continue;
+        check(`${name} has no passing verification on this tree`);
       }
-      if (!reviewerSays(got, "compatible")) gaps.push("the review did not report compatible: true");
+      if (!reviewerSays(got, "compatible")) claim("the review did not report compatible: true");
       break;
     }
     case "plan": {
       const issues = anyField(got, "issues_dir");
-      if (!isString(issues) || issues.trim() === "") gaps.push("the plan wrote no tickets");
+      if (!isString(issues) || issues.trim() === "") claim("the plan wrote no tickets");
       break;
     }
     case "review": {
       const summary = anyField(got, "summary");
       if (!isString(summary) || summary.trim() === "")
-        gaps.push("the review has no summary a human can read");
+        claim("the review has no summary a human can read");
       break;
     }
   }

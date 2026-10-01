@@ -15,6 +15,8 @@ import {
   MAX_DELIVERY_BYTES,
   settleCollected,
   submitPatiently,
+  marked,
+  carriedDelivery,
 } from "../src/dispatcher";
 import {
   appendLine,
@@ -155,7 +157,9 @@ test("a continuation recovers a lost name using its recorded incarnation", () =>
         channel.submit("continue with the spec", draft),
       );
       expect(outcome.ok).toBe(true);
-      expect(h.calls).toContain("agentPrompt impl-1 continue with the spec");
+      expect(h.calls).toContain(
+        "agentPrompt impl-1 collie-delivery:req-1-1\ncontinue with the spec",
+      );
     }),
   ));
 
@@ -572,4 +576,13 @@ test("a boundary steer is composed in front of the work, with its acknowledgemen
   expect(section).toContain("/runs/r1/steering/acks/d1.json");
   expect(section).toContain("collie-delivery:d1");
   expect(section).toContain('"intent_version":2');
+});
+
+test("a prompt's delivery token is near its top, and a slash command keeps its first line", () => {
+  expect(marked("do the thing", "d1")).toBe("collie-delivery:d1\ndo the thing");
+  expect(marked("/implement do the thing\nmore", "d1")).toBe(
+    "/implement do the thing\ncollie-delivery:d1\nmore",
+  );
+  // What the submit hook reads back is that same delivery, not a steering item's inside it.
+  expect(carriedDelivery(marked("item\ncollie-delivery:item-1", "d1"))).toBe("d1");
 });

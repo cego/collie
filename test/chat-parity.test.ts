@@ -13,9 +13,9 @@
 //   write       — the human's own instruction, carried out at once by a tool of its own.
 //                 Chat may do what the human could do on the board themselves; sending
 //                 them to the UI for it is chat obstructing the person it serves.
-//   propose     — something Collie wants of its own accord. The row carries the action,
-//                 and it is decoded against the closed union and matched to a registered
-//                 executor; the human confirms it on the board.
+//   propose     — the rest of what chat may ask for, which collie_propose carries out in
+//                 the same call, with no yes. The row carries the action, and it is
+//                 decoded against the closed union and matched to a registered executor.
 //   human-only  — the human's, and not chat's on purpose. Reconciling and granting
 //                 authority are the human's own account of what happened and what work
 //                 may do unasked; `verify` binds a command's exit to a tree, which is
@@ -134,6 +134,7 @@ const INVENTORY: ReadonlyArray<readonly [string, Route]> = [
   ["run deliveries", { route: "read", tool: "collie_receipts", input: { run: RUN } }],
   ["run disposition", { route: "write", tool: "collie_do" }],
   ["run metrics", { route: "read", tool: "collie_run", input: { run: RUN } }],
+  ["run report", { route: "read", tool: "collie_herd" }],
   ["run drift", { route: "read", tool: "collie_run", input: { run: RUN } }],
   ["run cards", { route: "read", tool: "collie_run", input: { run: RUN } }],
   ["run actions", { route: "read", tool: "collie_run", input: { run: RUN } }],

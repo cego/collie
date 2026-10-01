@@ -23,6 +23,7 @@ import {
   Run,
   WorkflowError,
   agentWork,
+  checkGapsOf,
   classifyWorkSource,
   contentOf,
   defineWorkflow,
@@ -42,10 +43,13 @@ import {
   settleFinalFix,
   settleRound,
   splitDisputed,
+  type CheckEvidence,
   type Finding,
   type Handed,
   type Slice,
   type SynthesisReport,
+  type Verification,
+  type VerifySpec,
 } from "collie";
 import { DateTime, Effect, FileSystem, Schema } from "effect";
 import type { WorkflowEngine, WorkflowInstance } from "effect/unstable/workflow/WorkflowEngine";
@@ -143,6 +147,21 @@ const Opened = Schema.Struct({
  * leaves the loop at the first review with nothing blocking.
  */
 const ROUNDS = 4;
+
+/** The checks whose latest run by Collie, on the tree in front of it, failed. */
+const failingNow = (evidence: CheckEvidence, names: ReadonlyArray<string>) =>
+  names.filter(
+    (name) =>
+      evidence.verifications
+        .filter(
+          (v) =>
+            v.name === name &&
+            v.by === "collie" &&
+            v.end.head_sha === evidence.final.head_sha &&
+            v.end.fingerprint === evidence.final.fingerprint,
+        )
+        .at(-1)?.result === "fail",
+  );
 
 /** One agent for the whole Run, so its model is named once and the fixes know the build. */
 const BUILDER = "build";
@@ -247,7 +266,7 @@ export default defineWorkflow({
       };
       // Where a question the plan does not cover goes: the planner's own pane while one
       // is live, and otherwise the human's.
-      const session = { ask: yield* agents.askRoute("planner", cwd) };
+      const session = { ask: yield* agents.askRoute("planner", place.lineage) };
 
       // The tickets as they stand at each boundary: one added, removed or reordered while
       // another is being built is the plan from then on, and what is built stays built by
@@ -337,17 +356,20 @@ export default defineWorkflow({
       // this kind of result still has no evidence for. An Output saying the tests pass is
       // a claim; a record in the journal, bound to this tree, is not.
       const granted = yield* requireApproved(kind);
-      // Each pass is journaled, so a replay follows the results the human was shown rather
-      // than a fresh run of checks that may come out differently. What passed is not run
-      // again until a gate answer says to.
+      // Each pass is journaled, so a replay follows the results the merge request will
+      // cite rather than a fresh run of checks that may come out differently. What passed
+      // is not run again until a gate fix changes the tree.
       let passes = 0;
       let passed: ReadonlyArray<string> = [];
+      let baseline: ReadonlyArray<{ readonly name: string; readonly at: string }> = [];
       const gapsNow = Effect.gen(function* () {
         passes += 1;
         const pass = yield* Activity.make({
           name: `gate.${passes}`,
           success: Schema.Struct({
             gaps: Schema.Array(Schema.String),
+            // A pass journaled before gaps were told apart handed a fix every gap.
+            fixable: Schema.optionalKey(Schema.Array(Schema.String)),
             passed: Schema.Array(Schema.String),
           }),
           execute: Effect.gen(function* () {
@@ -357,8 +379,8 @@ export default defineWorkflow({
               const ran = yield* host.verify({ runId, name: spec.name, cwd });
               if (ran.result === "pass") now.push(spec.name);
             }
-            const gaps = evidenceGapsOf({
-              kind: isOutcome(kind) ? kind : "unspecified",
+            const asked = {
+              kind: isOutcome(kind) ? kind : ("unspecified" as const),
               evidence: yield* host.evidence(runId, cwd),
               approved: granted,
               outputs: { build: { ...build }, synthesize: { ...rallied.reviewed } },
@@ -367,24 +389,49 @@ export default defineWorkflow({
               reviewed: ["synthesize"],
               roots: [place.dir, cwd],
               tickets: tickets.map((ticket) => ({ file: ticket.file, checks: ticket.checks })),
-            });
-            return { gaps, passed: now };
+              preexisting: baseline.map((one) => one.name),
+            };
+            return { gaps: evidenceGapsOf(asked), fixable: checkGapsOf(asked), passed: now };
           }).pipe(Effect.orDie),
         });
         passed = pass.passed;
-        return pass.gaps;
+        return { gaps: pass.gaps, fixable: pass.fixable ?? pass.gaps };
       });
       let gaps = yield* gapsNow;
-      // Once more before a fix: a check that fails and then passes on the same tree is a
-      // flake, and a Run that ends on one has proved nothing about the change.
-      if (gaps.length > 0) gaps = yield* gapsNow;
+      if (gaps.fixable.length > 0) {
+        // A check that failed is run once where this branch left the default branch. One
+        // that fails there too was never this Run's to fix, and the merge request says so.
+        baseline = yield* Activity.make({
+          name: "baseline",
+          success: Schema.Array(Schema.Struct({ name: Schema.String, at: Schema.String })),
+          execute: Effect.gen(function* () {
+            const failing = failingNow(
+              yield* host.evidence(runId, cwd),
+              granted.map((spec) => spec.name),
+            );
+            const failed: Array<{ name: string; at: string }> = [];
+            for (const name of failing) {
+              const ran = yield* host
+                .verify({ runId, name, cwd, at: "default-base" })
+                .pipe(Effect.orElseSucceed(() => null));
+              if (ran?.result === "fail") failed.push({ name, at: ran.start.head_sha });
+            }
+            return failed;
+          }),
+        });
+        // Once more before a fix: a check that fails and then passes on the same tree is a
+        // flake, and a Run that ends on one has proved nothing about the change.
+        gaps = yield* gapsNow;
+      }
       // A gate fix lands after the last review, so the merge request says it was not re-reviewed.
       let unreviewed = rallied.unreviewed;
-      // The implementer fixes what is unproved, bounded like the rally; the human reads
-      // what is left in the merge request, before it lands.
-      for (let at = 1; gaps.length > 0 && at <= ROUNDS; at++) {
+      // The implementer fixes what a check could still prove, bounded like the rally; the
+      // human reads what is left in the merge request, before it lands.
+      let fixes = 0;
+      for (; gaps.fixable.length > 0 && fixes < ROUNDS; fixes++) {
+        const at = fixes + 1;
         passed = [];
-        const findings = gaps.map((gap) => ({
+        const findings = gaps.fixable.map((gap) => ({
           severity: "blocker",
           title: gap,
           detail:
@@ -414,10 +461,24 @@ export default defineWorkflow({
           .filter((line) => line !== "")
           .join("\n");
       }
+      // Failed before this Run changed anything, and still fails: reported, never passed.
+      const failing = failingNow(
+        yield* host.evidence(runId, cwd),
+        granted.map((spec) => spec.name),
+      );
+      const preexisting = baseline.filter((one) => failing.includes(one.name));
       const unsettled = [
         ...assumed,
         ...rallied.unsettled,
-        ...gaps.map((gap) => `unproved after ${ROUNDS} gate fixes: ${gap}`),
+        ...gaps.gaps.map((gap) =>
+          gaps.fixable.includes(gap)
+            ? `unproved after ${fixes} gate fixes: ${gap}`
+            : `unproved, and no check can prove it: ${gap}`,
+        ),
+        ...preexisting.map(
+          ({ name, at }) =>
+            `${name} also fails at ${at.slice(0, 12)}, where this branch leaves the default branch, so it failed before this Run's changes and still fails (by exit code only: a dependency this branch changed can make that comparison wrong)`,
+        ),
       ];
       if (unsettled.length > 0) yield* host.record(runId, `unsettled: ${unsettled.join("; ")}`);
 
@@ -429,6 +490,7 @@ export default defineWorkflow({
         return `no merge request: ${gitlab.reason}`;
       }
 
+      const settledEvidence = yield* host.evidence(runId, cwd);
       const opened = yield* agentWork({
         operation: "mr",
         agent: BUILDER,
@@ -436,8 +498,9 @@ export default defineWorkflow({
         instructions: prompts.mr,
         input: {
           ...input,
+          verify: renderApproved(spawned(granted, settledEvidence.verifications)),
           // Read after the gate settled, so the merge request cites the passing runs.
-          evidence: renderEvidence(yield* host.evidence(runId, cwd)),
+          evidence: renderEvidence(settledEvidence),
           unreviewed,
           unsettled: unsettled.map((line) => `- ${line}`).join("\n"),
           mr: {
@@ -555,6 +618,21 @@ const asCheckpoint = Schema.encodeSync(
   ),
 );
 
+/**
+ * Each check as the gate last spawned it: a grant can change under a Run, and the command
+ * the human reads has to be the one that ran.
+ */
+const spawned = (
+  granted: ReadonlyArray<VerifySpec>,
+  verifications: ReadonlyArray<Verification>,
+): ReadonlyArray<VerifySpec> =>
+  granted.map((spec) => {
+    const ran = verifications.findLast((one) => one.name === spec.name && one.by === "collie");
+    return ran === undefined
+      ? spec
+      : { name: spec.name, executable: ran.executable, argv: ran.argv, cwd: ran.cwd };
+  });
+
 /** Each blocking dispute left standing, as the merge request lists it for the human. */
 const disputesOf = (findings: ReadonlyArray<Finding>): string[] =>
   findings
@@ -659,21 +737,22 @@ const rally = (ask: {
         output: FixOutputSchema,
       });
       // A dispute is carried, not re-argued: the next review either answers it with a
-      // rebuttal or it stops driving the loop.
-      const known = new Set(disputed.map(findingKey));
-      disputed = [...disputed, ...fixed.disputed.filter((one) => !known.has(findingKey(one)))];
+      // rebuttal or it stops driving the loop. One renewed after a rebuttal carries its new
+      // reason, and one fixed since is gone.
+      const settledNow = new Set([...fixed.fixed, ...fixed.disputed].map(findingKey));
+      disputed = [...disputed.filter((one) => !settledNow.has(findingKey(one))), ...fixed.disputed];
 
       if (at === ROUNDS) {
         const settled = settleFinalFix(round.live, fixed, yield* host.evidence(runId, ask.cwd));
-        if (settled.ok)
+        // Every round's disputes, not only this fix's: earlier ones were split out of what
+        // this fix was shown, and are still the human's to settle.
+        if (settled.ok || settled.halt === "dispute_unresolved")
           return {
             halted: null,
             unreviewed: settled.attestation,
-            unsettled: [],
+            unsettled: disputesOf(disputed),
             reviewed: synthesis,
           };
-        if (settled.halt === "dispute_unresolved")
-          return { halted: null, unreviewed: "", unsettled: settled.reasons, reviewed: synthesis };
         return {
           halted: `${settled.halt}: ${settled.reasons.join("; ")}`,
           unreviewed: "",

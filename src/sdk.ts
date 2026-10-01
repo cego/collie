@@ -29,6 +29,7 @@ import { expressionsIn, malformedIn } from "./template";
 import {
   KINDS,
   REQUESTABLE,
+  checkGaps,
   evidenceGaps,
   isOutcome,
   needsApproved,
@@ -251,7 +252,19 @@ const FRONT_MATTER = /^---\r?\n[\s\S]*?\r?\n---\r?\n?/;
  * an Output is only ever a claim — what decides a check is the journal, bound to the
  * tree in front of it.
  */
-export function evidenceGapsOf(options: {
+export function evidenceGapsOf(options: EvidenceAsk): ReadonlyArray<string> {
+  return evidenceGaps(options.kind, collectedOf(options));
+}
+
+/**
+ * The gaps among those a verification on this tree could close: what a fix may be
+ * handed. A reviewer's judgement and an Output's claim are not moved by running anything.
+ */
+export function checkGapsOf(options: EvidenceAsk): ReadonlyArray<string> {
+  return checkGaps(options.kind, collectedOf(options));
+}
+
+export interface EvidenceAsk {
   readonly kind: Outcome;
   readonly evidence: CheckEvidence;
   readonly approved: ReadonlyArray<VerifySpec>;
@@ -265,17 +278,20 @@ export function evidenceGapsOf(options: {
     readonly file: string;
     readonly checks: ReadonlyArray<string>;
   }>;
-}): ReadonlyArray<string> {
-  return evidenceGaps(options.kind, {
-    verifications: options.evidence.verifications,
-    final: options.evidence.final,
-    approved: options.approved,
-    outputs: new Map(Object.entries(options.outputs)),
-    reviewed: new Set(options.reviewed),
-    insideRun: (ref) => refInside(options.roots, ref),
-    tickets: options.tickets,
-  });
+  /** Approved checks that also failed where the branch leaves the default branch. */
+  readonly preexisting?: ReadonlyArray<string>;
 }
+
+const collectedOf = (options: EvidenceAsk) => ({
+  verifications: options.evidence.verifications,
+  final: options.evidence.final,
+  approved: options.approved,
+  outputs: new Map(Object.entries(options.outputs)),
+  reviewed: new Set(options.reviewed),
+  insideRun: (ref: string) => refInside(options.roots, ref),
+  tickets: options.tickets,
+  preexisting: new Set(options.preexisting ?? []),
+});
 
 /**
  * A workflow's failure, as every workflow reports one. One shape rather than an
@@ -504,6 +520,11 @@ export interface HostApi {
     readonly cwd: string;
     /** What a pass looks like; `fail` is how a reproduction is proved to reproduce. */
     readonly expect?: "pass" | "fail";
+    /**
+     * Run it at the merge-base of this checkout and the default branch, in the same
+     * checkout, then put it back. Refused on a checkout with changes of its own.
+     */
+    readonly at?: "default-base";
   }) => Effect.Effect<Verification, WorkflowError>;
   /**
    * What this Run may have Collie run for it. A prompt names them so an agent knows what
@@ -582,6 +603,8 @@ export interface Place {
   readonly task: string | null;
   /** A workspace of the Run's own, where it asked for one; null lives in its Task's. */
   readonly workspace: string | null;
+  /** This Run, then the Runs it was started from or builds a plan of, and so on: whose agents it may ask. */
+  readonly lineage: ReadonlyArray<string>;
 }
 
 /** What opening a merge request from here needs, and what it would be filled in with. */

@@ -23,20 +23,22 @@ import {
   promptFor,
   type AgentHost,
 } from "../src/agents";
-import { Children, Run, jsonSchemaFor, withAgents } from "../src/sdk";
+import { Children, Host, Run, jsonSchemaFor, withAgents } from "../src/sdk";
 import { asRun, enveloped } from "./support/enveloped";
 import { PARKED, controlPath, foundationLayer, loadEntry, pollStatus, runDir } from "../src/engine";
 import { readCards } from "../src/cards";
 import { readDrift } from "../src/drift";
+import { FixOutputSchema, SynthesisSchema } from "../src/output";
 import { seedIntent, writeIntent } from "../src/intent";
 import { appendLine, deliveriesOf, readLedger, reconcile } from "../src/steering";
 import { Store } from "../src/store";
 import { readTask, writeTask } from "../src/task";
 import { taskFor } from "../src/operations";
-import { readRegistry, registerAgent, registryPath, scopeFor } from "../src/registry";
+import { lineageAgent, readRegistry, registerAgent, registryPath, scopeFor } from "../src/registry";
 import { HerdrError } from "../src/herdr";
 import { agentName, shellQuote } from "../src/naming";
-import type { CompactionPorts } from "../src/compaction";
+import { controlDir, type CompactionPorts } from "../src/compaction";
+import { COMPACTION_PORTS, recordClaudeEvent } from "../src/compactors";
 
 let rig: Rig;
 let dir: string;
@@ -186,6 +188,23 @@ test("an Output is decoded, and every issue with it is named at once", () => {
 
   const notJson = decodeOutput(Verdict, "I had a look and it seems fine");
   expect(!notJson.ok && notJson.problem).toContain("it is not JSON");
+});
+
+test("a broken rule is named in the problem a repair is given, never as <filter>", () => {
+  const empty = decodeOutput(FixOutputSchema, `{"verdict":"findings","findings":null}`);
+  expect(!empty.ok && empty.problem).toContain('verdict "clean"');
+  const blank = decodeOutput(
+    FixOutputSchema,
+    `{"verdict":"findings","findings":[{"severity":"major","title":" "}]}`,
+  );
+  expect(!blank.ok && blank.problem).toContain("title is required");
+  const unexplained = decodeOutput(
+    SynthesisSchema,
+    `{"verdict":"clean","summary":"s","dropped":[{"severity":"minor","title":"t"}]}`,
+  );
+  expect(!unexplained.ok && unexplained.problem).toContain("needs a reason");
+  for (const read of [empty, blank, unexplained])
+    expect(!read.ok && read.problem).not.toContain("<filter>");
 });
 
 test("a valid Output reaches the workflow as a typed value, from a real launch", () =>
@@ -968,7 +987,7 @@ const handedOff = Agents.pipe(
     agents.handOff({
       runId: "r-review",
       role: "implementer",
-      cwd: rig.projectDir,
+      lineage: ["r-review", "r-building"],
       text: "the review is ready",
     }),
   ),
@@ -1006,6 +1025,156 @@ test("a hand-off nobody can say arrived parks until a human says what became of 
     }),
   ));
 
+/** An agent of some Run, live and registered here as herdr started it. */
+const liveIn = Effect.fn("test.liveIn")(function* (
+  runId: string,
+  role: string,
+  agent: string,
+  paneId: string,
+) {
+  yield* rig.addAgent(agent, paneId);
+  const env = rig.pluginEnv();
+  yield* registerAgent(yield* registryPath(env.stateDir, scopeFor(env, rig.projectDir)), {
+    role,
+    agent,
+    paneId,
+    workspaceId: null,
+    runId,
+    workflow: "plan",
+    at: "2026-09-30T10:00:00Z",
+    incarnation: { terminalId: `term-${agent}`, agentSession: null },
+  });
+});
+
+test("a Run built from another Run's plan has that Run in its lineage, however it was started", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const store = yield* Store;
+      const admit = (run: string, input: Record<string, string>, parent: string | null = null) =>
+        store.admit({
+          request: `req-${run}`,
+          run,
+          workflow: "w",
+          project: dir,
+          input,
+          provenance: {},
+          options: {},
+          generation: "g",
+          execution: `exec-${run}`,
+          task: null,
+          parent,
+        });
+      yield* admit("run-p", { work: "Plan it" });
+      // Started on its own: the plan it was given is its only link to run-p.
+      yield* admit("run-i", { plan: `${dir}/runs/run-p/plan` });
+      yield* admit("run-c", { work: "A child" }, "run-i");
+      yield* admit("run-o", { plan: "/somewhere/plans/next", note: "fix runs/run-p/plan typo" });
+      const host = yield* Host;
+      expect((yield* host.place("run-c")).lineage).toEqual(["run-c", "run-i", "run-p"]);
+      expect((yield* host.place("run-o")).lineage).toEqual(["run-o"]);
+    }).pipe(Effect.provide(foundationLayer({ dir })), Effect.scoped, Effect.orDie),
+  ));
+
+test("a question and a hand-off stay in the asking Run's lineage, whoever else registered the role here", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* liveIn("r-plan", "planner", "plan-grill", "9-1");
+      yield* liveIn("r-plan.implement", "implementer", "plan-build", "9-2");
+      // Started later from the same place, in the same roles.
+      yield* liveIn("r-other", "planner", "other-grill", "9-3");
+      yield* liveIn("r-other.implement", "implementer", "other-build", "9-4");
+      const env = rig.pluginEnv();
+      const kept = yield* readRegistry(
+        yield* registryPath(env.stateDir, scopeFor(env, rig.projectDir)),
+      );
+      expect(kept.map((entry) => entry.agent)).toEqual([
+        "plan-grill",
+        "plan-build",
+        "other-grill",
+        "other-build",
+      ]);
+
+      const asked = (lineage: ReadonlyArray<string>) =>
+        Agents.pipe(Effect.flatMap((agents) => agents.askRoute("planner", lineage)));
+      const route = yield* session(asked(["r-plan.implement", "r-plan"]));
+      expect(route).toContain("`plan-grill`");
+      expect(route).not.toContain("other-grill");
+      expect(yield* session(asked(["r-lonely"]))).toContain("There is no planner live");
+
+      const handed = (lineage: ReadonlyArray<string>) =>
+        Agents.pipe(
+          Effect.flatMap((agents) =>
+            agents.handOff({
+              runId: lineage[0]!,
+              role: "implementer",
+              lineage,
+              text: "the review is ready",
+            }),
+          ),
+        );
+      const to = yield* session(handed(["r-plan.implement.review", "r-plan.implement", "r-plan"]));
+      expect(to?.agent).toBe("plan-build");
+      expect(yield* session(handed(["r-lonely"]))).toBeNull();
+    }),
+  ));
+
+test("seats launched together all stay registered, and a gone agent's entry leaves with the next registration", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const env = rig.pluginEnv();
+      const file = yield* registryPath(env.stateDir, scopeFor(env, rig.projectDir));
+      const seat = (agent: string, runId: string, at: string) => ({
+        role: "reviewer",
+        agent,
+        paneId: `p-${agent}`,
+        workspaceId: null,
+        runId,
+        workflow: "review",
+        at,
+        incarnation: { terminalId: `term-${agent}`, agentSession: null },
+      });
+      yield* registerAgent(file, seat("old-review", "r-done", "2026-09-30T09:00:00.000Z"));
+      // Both seats listed herdr's agents before either had started, as a panel launched
+      // at once does: neither list has the other seat, and neither has the gone agent.
+      const listed = { agents: [], listedAt: "2026-09-30T10:00:00.000Z" };
+      yield* registerAgent(file, seat("seat-1", "r-panel", "2026-09-30T10:00:05.000Z"), listed);
+      yield* registerAgent(file, seat("seat-2", "r-panel", "2026-09-30T10:00:06.000Z"), listed);
+      expect((yield* readRegistry(file)).map((entry) => entry.agent)).toEqual(["seat-1", "seat-2"]);
+    }),
+  ));
+
+test("a lineage lookup leaves every register as it found it, and registrations at once all land", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const env = rig.pluginEnv();
+      const file = yield* registryPath(env.stateDir, scopeFor(env, rig.projectDir));
+      const elsewhere = `${env.stateDir}/agents/other-herd-0123456789ab.json`;
+      const seat = (agent: string) => ({
+        role: "reviewer",
+        agent,
+        paneId: `p-${agent}`,
+        workspaceId: null,
+        runId: "r-panel",
+        workflow: "review",
+        at: "2026-09-30T10:00:00.000Z",
+        incarnation: { terminalId: `term-${agent}`, agentSession: null },
+      });
+      // Ten seats registering at the same moment, each reading and rewriting one file.
+      const seats = Array.from({ length: 10 }, (_, at) => `seat-${at}`);
+      yield* Effect.all(
+        seats.map((agent) => registerAgent(file, seat(agent))),
+        { concurrency: "unbounded" },
+      );
+      yield* registerAgent(elsewhere, seat("another-herds"));
+      expect((yield* readRegistry(file)).map((entry) => entry.agent).sort()).toEqual(seats);
+
+      // A list taken before any of them started, as an ask's is, knows none of them.
+      expect(yield* lineageAgent(env.stateDir, [], "reviewer", ["r-panel"])).toBeNull();
+      expect(yield* readRegistry(file)).toHaveLength(10);
+      expect(yield* readRegistry(elsewhere)).toHaveLength(1);
+    }),
+  ));
+
 /** The controls an operator sets, as the host keeps them beside the run. */
 const control = (name: string, runId: string, set: boolean) =>
   FileSystem.FileSystem.pipe(
@@ -1016,11 +1185,11 @@ const control = (name: string, runId: string, set: boolean) =>
     Effect.orDie,
   );
 
-/** What was typed into an agent's pane, in the order herdr was asked to type it. */
+/** What was typed into an agent's pane, in order, without a leading delivery token. */
 const prompts = (calls: ReadonlyArray<Call>) =>
   calls
     .filter((call) => (call.argv ?? [])[0] === "agent" && (call.argv ?? [])[1] === "prompt")
-    .map((call) => (call.argv ?? [])[3] ?? "");
+    .map((call) => ((call.argv ?? [])[3] ?? "").replace(/^collie-delivery:\S+\n/, ""));
 
 /** One thing an operator says to the run's agent, through the host's own service. */
 const say = (runId: string, text: string, request: string, mode?: "boundary" | "now") =>
@@ -1150,11 +1319,11 @@ test(
   120_000,
 );
 
-/** An operator stopping the Run as its repair goes out. */
+/** An operator stopping the Run once its repair has gone out. */
 class StopsAtRepair extends FakeHerdr {
   override agentPrompt(target: string, text: string) {
     const stop = text.includes("not usable") ? control("stop", "r1", true) : Effect.void;
-    return stop.pipe(Effect.andThen(super.agentPrompt(target, text)));
+    return super.agentPrompt(target, text).pipe(Effect.tap(() => stop));
   }
 }
 
@@ -1705,3 +1874,223 @@ test("a start kept here is the workspace it was started from: its Task, or a new
       ).toBe("workspace_required");
     }),
   ));
+
+const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const decodeJson = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
+
+/** Claude's own controls, without asking this machine which Claude it has installed. */
+const claudeControls = (): CompactionPorts => ({
+  claude: { ...COMPACTION_PORTS.claude!, gate: () => Effect.void },
+});
+
+/** Claude drawing its status line: the first call into the agent's control dir. */
+const statusLineCall = (agent: string) =>
+  Effect.gen(function* () {
+    const dir = yield* controlDir(hostOf().env.stateDir, agent);
+    yield* recordClaudeEvent(dir, encodeJson({ session_id: "s1", context_window: null }));
+  });
+
+const untilStarted = Effect.gen(function* () {
+  while (!(yield* rig.cmds()).includes("agent start")) yield* Effect.sleep(Duration.millis(10));
+});
+
+test("the first prompt to a new agent waits for the harness to say it is up, not only herdr", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([{ verdict: "clean", note: "after the status line" }]);
+      let typedBeforeReady = -1;
+      // herdr has said the agent started; Claude has not drawn its REPL yet.
+      const claudeComesUp = Effect.gen(function* () {
+        yield* untilStarted;
+        yield* Effect.sleep(Duration.millis(300));
+        typedBeforeReady = sent(yield* rig.calls(), "Your task for this step");
+        yield* statusLineCall(agentFor("r1"));
+      });
+      const [result] = yield* Effect.all(
+        [
+          session(started("r1"), {
+            compactAtTokens: 1000,
+            ports: claudeControls(),
+            herdr: new FakeHerdr(rig.pluginEnv({ FAKE_HERDR_HARNESS_SILENT: "1" })),
+          }),
+          claudeComesUp,
+        ],
+        { concurrency: 2 },
+      );
+      expect(result._tag === "Success" && result.success.note).toBe("after the status line");
+      expect(typedBeforeReady).toBe(0);
+      expect(sent(yield* rig.calls(), "Your task for this step")).toBe(1);
+    }),
+  ));
+
+test(
+  "a harness that never says it is up parks the step naming its pane, and types nothing",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* rig.queueOutputs([{ verdict: "clean", note: "never" }]);
+        yield* interrupted("r1", 1_500, {
+          compactAtTokens: 1000,
+          ports: claudeControls(),
+          herdr: new FakeHerdr(rig.pluginEnv({ FAKE_HERDR_HARNESS_SILENT: "1" })),
+          readyMs: 300,
+        });
+        expect(yield* statusNow("r1")).toBe("suspended");
+        const why = yield* read(controlPath(dir, PARKED, "r1"));
+        expect(why).toContain(agentFor("r1"));
+        expect(why).toMatch(/pane 1-\d+/);
+        expect(sent(yield* rig.calls(), "Your task for this step")).toBe(0);
+      }),
+    ),
+  120_000,
+);
+
+test("a step pointer the harness took is recorded as Collie's, with its delivery id", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+      yield* session(started("r1"));
+      const pointer = (yield* rig.calls()).find(
+        (call) => call.cmd === "agent prompt" && (call.argv?.[3] ?? "").includes("Your task"),
+      )?.argv?.[3];
+      const [step] = yield* steps("r1");
+      // What Claude's UserPromptSubmit hook is given: the prompt exactly as it was typed.
+      const dir = yield* controlDir(hostOf().env.stateDir, agentFor("r1"));
+      yield* recordClaudeEvent(
+        dir,
+        encodeJson({ session_id: "s1", hook_event_name: "UserPromptSubmit", prompt: pointer }),
+      );
+      const events = (yield* read(`${dir}/events.jsonl`))
+        .split("\n")
+        .filter((line) => line.includes('"submit"'))
+        .map((line) => decodeJson(line));
+      expect(events).toMatchObject([
+        { kind: "submit", reason: "collie", delivery: step!.delivery.id },
+      ]);
+      expect(pointer?.split("\n")).toContain(`collie-delivery:${step!.delivery.id}`);
+    }),
+  ));
+
+/** A just-started agent: herdr sees it busy booting when the prompt goes out, then idle. */
+const promptNotTaken = (lost: "enter" | "text") =>
+  new FakeHerdr(
+    rig.pluginEnv({ FAKE_HERDR_PROMPT_LOST: lost, FAKE_HERDR_AGENT_STATUS: "working,idle" }),
+  );
+
+const enters = (calls: ReadonlyArray<Call>) =>
+  calls.filter((call) => call.cmd === "agent send-keys" && call.argv?.[3] === "enter").length;
+
+test(
+  "a step pointer whose Enter was lost is sent with one Enter, never the text again",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* rig.queueOutputs([{ verdict: "clean", note: "after the Enter" }]);
+        yield* interrupted("r1", 8_000, { herdr: promptNotTaken("enter"), confirmGraceMs: 300 });
+        expect(yield* read(outputPath("r1"))).toContain("after the Enter");
+        const calls = yield* rig.calls();
+        expect(sent(calls, "Your task for this step")).toBe(1);
+        expect(enters(calls)).toBe(1);
+      }),
+    ),
+  120_000,
+);
+
+test(
+  "a step pointer that vanished is not sent again: the step waits for you, naming the pane and the delivery",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* rig.queueOutputs([{ verdict: "clean", note: "never" }]);
+        yield* interrupted("r1", 8_000, { herdr: promptNotTaken("text"), confirmGraceMs: 300 });
+        const why = yield* read(controlPath(dir, PARKED, "r1"));
+        const [step] = yield* steps("r1");
+        expect(why).toContain(step!.delivery.id);
+        expect(why).toMatch(/pane 1-\d+/);
+        const calls = yield* rig.calls();
+        expect(sent(calls, "Your task for this step")).toBe(1);
+        expect(enters(calls)).toBe(0);
+      }),
+    ),
+  120_000,
+);
+
+/** What the park's own instructions say to run, done as the command does it. */
+const reconciled = (runId: string, as: "sent" | "not-sent") =>
+  Effect.gen(function* () {
+    const why = yield* read(controlPath(dir, PARKED, runId));
+    const [step] = yield* steps(runId);
+    expect(why).toContain(`--reconcile ${step!.delivery.id} --as sent|not-sent`);
+    const settled = reconcile(yield* readLedger(step!.file), step!.delivery.id, as, "tester", "t");
+    if ("error" in settled) throw new Error(settled.error);
+    yield* appendLine(step!.file, settled);
+  });
+
+test(
+  "a vanished step pointer settled as not sent goes out once more on resume, under a new delivery",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* rig.queueOutputs([{ verdict: "clean", note: "never" }]);
+        yield* interrupted("r1", 8_000, { herdr: promptNotTaken("text"), confirmGraceMs: 300 });
+        yield* reconciled("r1", "not-sent");
+
+        yield* rig.queueOutputs([{ verdict: "clean", note: "sent again" }]);
+        const result = yield* releasedInto("r1");
+        expect(result._tag === "Success" && result.success.note).toBe("sent again");
+        expect(sent(yield* rig.calls(), "Your task for this step")).toBe(2);
+        expect(new Set((yield* steps("r1")).map((one) => one.delivery.id)).size).toBe(2);
+      }),
+    ),
+  120_000,
+);
+
+test(
+  "a resend herdr refuses parks saying the next resume tries again, and it does",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* rig.queueOutputs([{ verdict: "clean", note: "never" }]);
+        yield* interrupted("r1", 8_000, { herdr: promptNotTaken("text"), confirmGraceMs: 300 });
+        yield* reconciled("r1", "not-sent");
+
+        // herdr answers `no agent` for every prompt from the second on: the resend.
+        const refusing = new FakeHerdr(rig.pluginEnv({ FAKE_HERDR_FAIL_PROMPT_FROM: "1" }));
+        yield* session(
+          Effect.gen(function* () {
+            const engine = yield* WorkflowEngine.WorkflowEngine;
+            const payload = { runId: "r1", input: { skip: false } };
+            yield* engine.resume(work, yield* work.executionId(payload));
+            yield* work.execute(payload, { discard: true });
+            yield* Effect.sleep(Duration.millis(3_000));
+          }),
+          { herdr: refusing, collectMs: 30_000 },
+        );
+        expect(yield* read(controlPath(dir, PARKED, "r1"))).toContain("collie run resume r1");
+
+        yield* rig.queueOutputs([{ verdict: "clean", note: "third time" }]);
+        const result = yield* releasedInto("r1");
+        expect(result._tag === "Success" && result.success.note).toBe("third time");
+      }),
+    ),
+  120_000,
+);
+
+test(
+  "a vanished step pointer settled as sent is not sent again: the resume waits for its Output",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        yield* rig.queueOutputs([{ verdict: "clean", note: "never" }]);
+        yield* interrupted("r1", 8_000, { herdr: promptNotTaken("text"), confirmGraceMs: 300 });
+        yield* reconciled("r1", "sent");
+
+        yield* fs.writeFileString(outputPath("r1"), `{"verdict":"clean","note":"typed by hand"}`);
+        const result = yield* releasedInto("r1");
+        expect(result._tag === "Success" && result.success.note).toBe("typed by hand");
+        expect(sent(yield* rig.calls(), "Your task for this step")).toBe(1);
+      }),
+    ),
+  120_000,
+);

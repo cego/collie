@@ -30,6 +30,7 @@ import {
   runDir,
 } from "../src/engine";
 import { VerifySpecSchema } from "../src/verify-spec";
+import { collect } from "../src/verify";
 import { inputsFor, offersFrom } from "../src/offers";
 import { Store } from "../src/store";
 import { registerAgent, registryPath, scopeFor } from "../src/registry";
@@ -189,6 +190,7 @@ const admit = (options: {
   readonly workflow: string;
   readonly input: Readonly<Record<string, Schema.Json>>;
   readonly options?: Readonly<Record<string, string>>;
+  readonly parent?: string;
 }) =>
   Store.pipe(
     Effect.flatMap((store) =>
@@ -203,7 +205,7 @@ const admit = (options: {
         generation: `${options.workflow}@${options.runId}`,
         execution: options.runId,
         task: null,
-        parent: null,
+        parent: options.parent ?? null,
       }),
     ),
     Effect.orDie,
@@ -217,6 +219,8 @@ const parked = (options: {
   /** The host's own launch options, as a front door settles them apart from the input. */
   readonly options?: Readonly<Record<string, string>>;
   readonly decision: string;
+  /** The Run this one was started from. */
+  readonly parent?: string;
 }) =>
   session(
     Effect.gen(function* () {
@@ -227,6 +231,7 @@ const parked = (options: {
         workflow: made.workflow.name,
         input: options.input,
         options: options.options,
+        parent: options.parent,
       });
       return yield* Effect.gen(function* () {
         yield* made.workflow.execute(
@@ -1185,7 +1190,7 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         yield* rig.queueOutputs([SYNTHESIS, SYNTHESIS]);
-        // Another Run's implementer, live in this checkout's workspace and registered as it.
+        // The implementer of the Run this review was started from, live and registered as it.
         yield* rig.addAgent("impl-live", "9-1");
         const env = hostOf().env;
         yield* registerAgent(yield* registryPath(env.stateDir, scopeFor(env, rig.projectDir)), {
@@ -1204,6 +1209,7 @@ scenario(
           runId: "r-review-live",
           input: { target },
           decision: "post-1",
+          parent: "r-building",
         });
         yield* answeredThen({
           entry: shipped("review"),
@@ -1227,6 +1233,7 @@ scenario(
           runId: "r-review-live",
           input: { target },
           decision: "post-2",
+          parent: "r-building",
         });
         expect(optionsOf(rows, "post-2")).toContain("Review again");
         expect(optionsOf(rows, "post-2")).not.toContain("Fix findings");
@@ -1763,13 +1770,24 @@ scenario(
         yield* bin.add("glab", `exit 0`);
         yield* repository();
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
-        // Approved, and it always fails: an Output that says the tests pass is a claim,
-        // and the journal is what the gate reads.
+        // Approved, and it passes only at the default branch's base: an Output that says the
+        // tests pass is a claim, and the journal is what the gate reads.
+        const count = `${rig.root}/runs`;
         yield* approve("r-impl-gate", ["unit"]);
         const fs = yield* FileSystem.FileSystem;
         yield* fs.writeFileString(
           `${evidenceDir(dir, "r-impl-gate")}/approved.json`,
-          asApproved([{ name: "unit", executable: "false", argv: [], cwd: rig.projectDir }]),
+          asApproved([
+            {
+              name: "unit",
+              executable: "sh",
+              argv: [
+                "-c",
+                `n=$(($(cat ${count} 2>/dev/null || echo 0) + 1)); echo $n > ${count}; [ $n -eq 2 ]`,
+              ],
+              cwd: rig.projectDir,
+            },
+          ]),
         );
         const fix = {
           verdict: "clean",
@@ -1800,6 +1818,35 @@ scenario(
 );
 
 scenario(
+  "a gap no check can close goes to the merge request without a gate fix chasing it",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* bin.add("glab", `exit 0`);
+        yield* repository();
+        const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
+        yield* approve("r-gate-judged", ["unit"]);
+        yield* rig.queueOutputs([BUILT, { ...CLEAN_SYNTHESIS, scope_met: false }, OPENED]);
+        const result = yield* ran({
+          entry: shipped("implement"),
+          runId: "r-gate-judged",
+          input: { plan },
+          options: { outcome: "feature" },
+        });
+        yield* bin.restore();
+
+        expect(said(result)).toBe(OPENED.mr_url);
+        expect(yield* prompts()).toHaveLength(3);
+        expect(yield* asked("r-gate-judged", "mr")).toContain(
+          "- unproved, and no check can prove it: the review did not report scope_met: true for the agreed scope",
+        );
+      }),
+    ),
+  120_000,
+);
+
+scenario(
   "a gate fix runs without asking, and reaches the merge request as not re-reviewed",
   () =>
     runEffect(
@@ -1808,7 +1855,8 @@ scenario(
         yield* bin.add("glab", `exit 0`);
         yield* repository();
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
-        // Fails twice, then passes once the fix has run.
+        // Fails at the gate, passes at the default branch's base, fails once more, then passes
+        // once the fix has run.
         const count = `${rig.root}/runs`;
         yield* approve("r-gate-fix", ["unit"]);
         const fs = yield* FileSystem.FileSystem;
@@ -1820,7 +1868,7 @@ scenario(
               executable: "sh",
               argv: [
                 "-c",
-                `n=$(($(cat ${count} 2>/dev/null || echo 0) + 1)); echo $n > ${count}; [ $n -ge 3 ]`,
+                `n=$(($(cat ${count} 2>/dev/null || echo 0) + 1)); echo $n > ${count}; [ $n -eq 2 ] || [ $n -ge 4 ]`,
               ],
               cwd: rig.projectDir,
             },
@@ -1846,6 +1894,98 @@ scenario(
         const opening = yield* asked("r-gate-fix", "mr");
         expect(opening).toContain("gate fix 1");
         expect(opening).not.toContain("- unproved after");
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a check red before the Run is reported in the merge request, and no gate fix is asked for it",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* bin.add("glab", `exit 0`);
+        yield* repository();
+        const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
+        yield* approve("r-impl-red-base", ["unit"]);
+        const fs = yield* FileSystem.FileSystem;
+        yield* fs.writeFileString(
+          `${evidenceDir(dir, "r-impl-red-base")}/approved.json`,
+          asApproved([{ name: "unit", executable: "false", argv: [], cwd: rig.projectDir }]),
+        );
+        yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, OPENED]);
+        const result = yield* ran({
+          entry: shipped("implement"),
+          runId: "r-impl-red-base",
+          input: { plan },
+          options: { outcome: "feature" },
+        });
+        yield* bin.restore();
+
+        expect(said(result)).toBe(OPENED.mr_url);
+        const opening = yield* asked("r-impl-red-base", "mr");
+        expect(opening).toContain("unit also fails at ");
+        expect(opening).toContain("before this Run's changes");
+        expect(yield* fs.exists(`${dir}/agents/r-impl-red-base/gate-fix-1.prompt.md`)).toBe(false);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a check that passes where the branch left the default branch is the Run's to fix",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* bin.add("glab", `exit 0`);
+        yield* repository();
+        const git = (...args: string[]) =>
+          Bun.spawnSync(["git", ...args], { cwd: rig.projectDir })
+            .stdout.toString()
+            .trim();
+        const base = git("rev-parse", "HEAD");
+        git("checkout", "-qb", "feature");
+        const fs = yield* FileSystem.FileSystem;
+        yield* fs.writeFileString(`${rig.projectDir}/broken`, "");
+        git("add", "broken");
+        git("commit", "-qm", "break it");
+        const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
+        yield* approve("r-impl-own-red", ["unit"]);
+        yield* fs.writeFileString(
+          `${evidenceDir(dir, "r-impl-own-red")}/approved.json`,
+          asApproved([
+            { name: "unit", executable: "test", argv: ["!", "-f", "broken"], cwd: rig.projectDir },
+          ]),
+        );
+        const fix = {
+          verdict: "clean",
+          findings: [],
+          fixed: [],
+          disputed: [],
+          checks: [{ name: "unit" }],
+        };
+        yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, fix, fix, fix, fix, OPENED]);
+        const result = yield* ran({
+          entry: shipped("implement"),
+          runId: "r-impl-own-red",
+          input: { plan },
+          options: { outcome: "feature" },
+        });
+        yield* bin.restore();
+
+        expect(said(result)).toBe(OPENED.mr_url);
+        expect(yield* asked("r-impl-own-red", "gate-fix-1")).toContain("unit failed");
+        const opening = yield* asked("r-impl-own-red", "mr");
+        expect(opening).toContain("- unproved after 4 gate fixes: unit failed");
+        expect(opening).not.toContain("also fails at");
+        // The comparison ran at the base and put the branch back.
+        expect(git("rev-parse", "--abbrev-ref", "HEAD")).toBe("feature");
+        const journal = yield* fs.readFileString(
+          `${evidenceDir(dir, "r-impl-own-red")}/steering/verifications.jsonl`,
+        );
+        expect(journal).toContain(base);
       }),
     ),
   120_000,
@@ -1894,6 +2034,188 @@ scenario(
           "- disputed blocking finding: [blocker] the guard is on the wrong side (src/a.ts): the list is never empty here",
         );
         expect(opening).toContain("- assumed in build: callers never pass an empty list");
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a dispute left open by the last fix reaches the merge request, and so does that fix being unreviewed",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* bin.add("glab", `exit 0`);
+        yield* repository();
+        const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
+        yield* approve("r-final-dispute", ["unit"]);
+        yield* collect(evidenceDir(dir, "r-final-dispute"), {
+          run: "r-final-dispute",
+          name: "unit",
+          executable: "true",
+          argv: [],
+          cwd: rig.projectDir,
+          by: "agent",
+        }).pipe(Effect.orDie);
+        const blocker = (title: string) => ({
+          severity: "blocker",
+          title,
+          file: "src/a.ts",
+          detail: "it breaks",
+        });
+        const round = (title: string): Schema.Json[] => [
+          { ...CLEAN_SYNTHESIS, verdict: "findings", findings: [blocker(title)] },
+          { verdict: "clean", fixed: [{ title, file: "src/a.ts" }], checks: [{ name: "unit" }] },
+        ];
+        yield* rig.queueOutputs([
+          BUILT,
+          { ...CLEAN_SYNTHESIS, verdict: "findings", findings: [blocker("one"), blocker("B")] },
+          {
+            verdict: "clean",
+            fixed: [{ title: "one", file: "src/a.ts" }],
+            disputed: [{ ...blocker("B"), reason: "a reason the reviewer answers" }],
+            checks: [{ name: "unit" }],
+          },
+          ...round("two"),
+          ...round("three"),
+          // B again, answered: the dispute that follows is the one the human settles.
+          {
+            ...CLEAN_SYNTHESIS,
+            verdict: "findings",
+            findings: [blocker("A"), { ...blocker("B"), rebuttal: "it is not by design" }],
+          },
+          {
+            verdict: "clean",
+            fixed: [{ title: "A", file: "src/a.ts" }],
+            disputed: [{ ...blocker("B"), reason: "B is by design" }],
+            checks: [{ name: "unit" }],
+          },
+          OPENED,
+        ]);
+        const result = yield* ran({
+          entry: shipped("implement"),
+          runId: "r-final-dispute",
+          input: { plan },
+        });
+        yield* bin.restore();
+
+        expect(said(result)).toBe(OPENED.mr_url);
+        const opening = yield* asked("r-final-dispute", "mr");
+        expect(opening).toContain("implementer-reported, not re-reviewed");
+        expect(opening).toContain(
+          "- disputed blocking finding: [blocker] B (src/a.ts): B is by design",
+        );
+        expect(opening).not.toContain("a reason the reviewer answers");
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "the merge request lists the commands the gate spawned, including one re-granted during the gate",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* bin.add("glab", `exit 0`);
+        yield* repository();
+        const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
+        yield* approve("r-late-grant", ["unit"]);
+        const fs = yield* FileSystem.FileSystem;
+        const approvedFile = `${evidenceDir(dir, "r-late-grant")}/approved.json`;
+        const regrant = `${rig.root}/regranted.json`;
+        yield* fs.writeFileString(
+          regrant,
+          asApproved([
+            { name: "unit", executable: "true", argv: ["regranted"], cwd: rig.projectDir },
+          ]),
+        );
+        // Its first run re-grants it, as a set_verification made meanwhile would, and fails.
+        yield* fs.writeFileString(
+          approvedFile,
+          asApproved([
+            {
+              name: "unit",
+              executable: "sh",
+              argv: ["-c", `cp ${regrant} ${approvedFile}; exit 1`],
+              cwd: rig.projectDir,
+            },
+          ]),
+        );
+        yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, OPENED]);
+        yield* ran({ entry: shipped("implement"), runId: "r-late-grant", input: { plan } });
+        yield* bin.restore();
+
+        const opening = yield* asked("r-late-grant", "mr");
+        expect(opening).toContain("/true regranted (in ");
+        expect(opening).not.toContain("- unit: sh -c");
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a dispute from an early round still reaches the merge request when the last fix holds",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* bin.add("glab", `exit 0`);
+        yield* repository();
+        const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
+        yield* approve("r-early-dispute", ["unit"]);
+        yield* collect(evidenceDir(dir, "r-early-dispute"), {
+          run: "r-early-dispute",
+          name: "unit",
+          executable: "true",
+          argv: [],
+          cwd: rig.projectDir,
+          by: "agent",
+        }).pipe(Effect.orDie);
+        const blocker = (title: string) => ({
+          severity: "blocker",
+          title,
+          file: "src/a.ts",
+          detail: "it breaks",
+        });
+        const review = (title: string) => ({
+          ...CLEAN_SYNTHESIS,
+          verdict: "findings",
+          findings: [blocker(title)],
+        });
+        const fixes = (title: string) => ({
+          verdict: "clean",
+          fixed: [{ title, file: "src/a.ts" }],
+          checks: [{ name: "unit" }],
+        });
+        yield* rig.queueOutputs([
+          BUILT,
+          { ...CLEAN_SYNTHESIS, verdict: "findings", findings: [blocker("X"), blocker("one")] },
+          {
+            verdict: "clean",
+            fixed: [{ title: "one", file: "src/a.ts" }],
+            disputed: [{ ...blocker("X"), reason: "X is by design" }],
+            checks: [{ name: "unit" }],
+          },
+          review("two"),
+          fixes("two"),
+          review("three"),
+          fixes("three"),
+          review("four"),
+          fixes("four"),
+          OPENED,
+        ]);
+        const result = yield* ran({
+          entry: shipped("implement"),
+          runId: "r-early-dispute",
+          input: { plan },
+        });
+        yield* bin.restore();
+
+        expect(said(result)).toBe(OPENED.mr_url);
+        expect(yield* asked("r-early-dispute", "mr")).toContain(
+          "- disputed blocking finding: [blocker] X (src/a.ts): X is by design",
+        );
       }),
     ),
   120_000,
