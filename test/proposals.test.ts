@@ -568,6 +568,54 @@ test(
   60_000,
 );
 
+test(
+  "remember_verification keeps a finished Run's checks for its repository, and overwrites only when told",
+  () =>
+    inHerd(({ world, env, herdFile }) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const unit = { name: "unit", executable: "true", argv: [], cwd: "worktree" };
+        // A checkout of its own, as a worktree is, and gone once the Run has settled.
+        const worktree = `${world.home}/worktree`;
+        yield* fs.makeDirectory(worktree, { recursive: true });
+        Bun.spawnSync(["git", "init", "-q"], { cwd: worktree });
+        for (const cwd of [world.project, worktree])
+          Bun.spawnSync(["git", "remote", "add", "origin", "git@example.test:team/app.git"], {
+            cwd,
+          });
+        const run = yield* settledRun(world, "hello", { workspace: worktree });
+        const client = yield* connect(world.state).pipe(Effect.orDie);
+        expect((yield* client.run({ runId: run.id }).pipe(Effect.orDie))?.cwd).toBe(worktree);
+        yield* writeIntent(run.dir, seedIntent(run.id, { runVerification: [unit] }));
+        const carry = (replace?: boolean) =>
+          Effect.gen(function* () {
+            const proposal = yield* record(herdFile, {
+              interpretation: "keep these checks for the repository",
+              targets: [{ run: run.id }],
+              actions: [
+                replace === undefined
+                  ? { kind: "remember_verification", run: run.id }
+                  : { kind: "remember_verification", run: run.id, replace },
+              ],
+              allowedNow: [],
+              intentVersions: {},
+              by: "chat",
+            });
+            return yield* carryOutProposal(env, proposal.id, proposal.content_hash, board);
+          });
+
+        expect((yield* carry()).ok).toBe(true);
+        const file = `${world.config}/verify/example.test/team/app.json`;
+        expect(yield* fs.readFileString(file)).toContain('"executable": "true"');
+        // The checkout it was started for still names the repository.
+        yield* fs.remove(worktree, { recursive: true });
+        expect((yield* carry()).ok).toBe(false);
+        expect((yield* carry(true)).ok).toBe(true);
+      }),
+    ),
+  60_000,
+);
+
 test("a proposal is pending until it is answered or it expires", () => {
   const now = Date.parse("2026-09-09T10:00:00Z");
   const proposal: ProposalLine = {

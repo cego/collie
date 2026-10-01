@@ -1708,6 +1708,7 @@ export const freezeApproved = Effect.fn("Engine.freezeApproved")(function* (opti
     (yield* approvedFrom({
       cwd: options.project,
       userDir: options.userDir,
+      project: yield* projectHere(options.project, runShell),
     }).pipe(Effect.orElseSucceed((): ReadonlyArray<VerifySpec> => [])));
   yield* fs.makeDirectory(evidenceDir(options.dir, options.runId), { recursive: true });
   yield* fs.writeFileString(path, encodeApproved(approved));
@@ -2820,9 +2821,13 @@ const refuseUnprovable = Effect.fn("Engine.refuseUnprovable")(function* (o: {
   readonly userDir: string;
 }) {
   const readApproved = (cwd: string) =>
-    approvedFrom({ cwd, userDir: o.userDir }).pipe(
-      Effect.catch((cause) => refusedInput(cause.message)),
-    );
+    Effect.gen(function* () {
+      return yield* approvedFrom({
+        cwd,
+        userDir: o.userDir,
+        project: yield* projectHere(cwd, runShell),
+      }).pipe(Effect.catch((cause) => refusedInput(cause.message)));
+    });
   const approved = o.verify ?? (yield* readApproved(o.project));
   const kind = o.launch.outcome ?? "";
   if (!o.generation.verifies || !needsApproved(isOutcome(kind) ? kind : "unspecified"))
@@ -2836,7 +2841,7 @@ const refuseUnprovable = Effect.fn("Engine.refuseUnprovable")(function* (o: {
   if (fanOut.refusal !== null) return approved;
   if (o.verify !== undefined)
     return yield* refusedInput(
-      "--verify gives one repository's checks, and this plan spans repositories: each is held to its own .collie/verify.json",
+      "--verify gives one repository's checks, and this plan spans repositories: each is held to its own .collie/verify.json or remembered checks",
     );
   const path = yield* Path.Path;
   const bare: string[] = [];
@@ -2844,7 +2849,7 @@ const refuseUnprovable = Effect.fn("Engine.refuseUnprovable")(function* (o: {
     if ((yield* readApproved(path.join(o.from, repo.path))).length === 0) bare.push(repo.path);
   if (bare.length > 0)
     return yield* refusedInput(
-      `${nothingApprovedToStart()}. A plan spanning repositories is held to each one's own .collie/verify.json, and nothing is approved in ${bare.join(", ")}`,
+      `${nothingApprovedToStart()}. A plan spanning repositories is held to each one's own .collie/verify.json or remembered checks, and nothing is approved in ${bare.join(", ")}`,
     );
   return approved;
 });
@@ -3802,7 +3807,7 @@ const makeRegistry: (
       runId: claimed.row.run,
       project: request.kind === "existing" ? request.path : parent.project,
       userDir,
-    }).pipe(Effect.ignore);
+    }).pipe(Effect.provideContext(bun), Effect.ignore);
     yield* seedIntentOf({ dir, row: claimed.row, generation, seed: undefined, parent }).pipe(
       Effect.provideContext(bun),
       Effect.ignore,
@@ -4351,7 +4356,7 @@ const makeRegistry: (
             project: options.project,
             verify,
             userDir,
-          })
+          }).pipe(Effect.provideContext(bun))
         : verify;
     const claimed = yield* claimAndPlace({
       request: options.request,
@@ -4384,7 +4389,7 @@ const makeRegistry: (
       project: options.project,
       userDir,
       approved,
-    }).pipe(Effect.ignore);
+    }).pipe(Effect.provideContext(bun), Effect.ignore);
     yield* seedIntentOf({
       dir,
       row: claimed.row,

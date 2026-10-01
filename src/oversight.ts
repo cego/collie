@@ -400,7 +400,7 @@ const noticeOverride = Effect.fn("Oversight.noticeOverride")(function* (
 /**
  * Sends what this Run's own authority lets Collie send about its open drift, and gives up
  * where the bound is spent. Every refusal is somebody being deferred to: the human at that
- * keyboard, the human who held the Run, the human who never granted this. A correction is
+ * keyboard, the human who held the Run, the human who turned this off. A correction is
  * `correction_submitted`, never `verified`: sending text is not the work changing.
  */
 const correctDrift = Effect.fn("Oversight.correctDrift")(function* (

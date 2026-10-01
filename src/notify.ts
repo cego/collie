@@ -23,8 +23,8 @@ export const NOTIFICATION_KINDS = [
    */
   "drift-unresolved",
   /**
-   * Collie sent a correction to an agent by itself. `request` on purpose: the human
-   * granted `auto_correct`, which is not the same as wanting it done behind their back.
+   * Collie sent a correction to an agent by itself. `request` on purpose: `auto_correct`
+   * being on is not the same as the human wanting it done behind their back.
    */
   "correction-sent",
   /** Something is waiting for a yes or a no, and nothing else will happen until it gets one. */

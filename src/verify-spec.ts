@@ -57,14 +57,26 @@ export class ApprovedUnreadable extends Data.TaggedError("ApprovedUnreadable")<{
 
 /** What a layer's file holds: the specs, whole. A file is taken or refused, never merged. */
 const ApprovedJson = Schema.fromJsonString(Schema.Array(VerifySpecSchema));
+export const encodeApprovedFile = Schema.encodeSync(
+  Schema.fromJsonString(Schema.Array(VerifySpecSchema), { space: 2 }),
+);
 
 /** The project's own list, and then the user's. Relative to the Run's root. */
 export const PROJECT_FILE = ".collie/verify.json";
 export const USER_FILE = "verify.json";
+/**
+ * A repository's own list in the user's config, by its remote: `verify/<host>/<path>.json`.
+ * Null for a remote whose path would leave `verify/`.
+ */
+export const rememberedFile = (userDir: string, project: string): string | null =>
+  project.split("/").some((part) => part === "" || part === "." || part === "..")
+    ? null
+    : `${userDir}/verify/${project}.json`;
 
 /**
  * The approved set for a Run starting here: the project's file if there is one, else the
- * user's, else nothing. First found wins **whole** — the two are not merged, because a
+ * one remembered for its repository's remote, else the user's, else nothing. First found
+ * wins **whole** — the layers are not merged, because a
  * project that lists its own three commands has said what this repository's verifications
  * are, and quietly adding the user's global ones to them would run commands in a
  * repository neither file names together.
@@ -76,10 +88,17 @@ export const USER_FILE = "verify.json";
 export const approvedFrom = Effect.fn("VerifySpec.approvedFrom")(function* (layers: {
   readonly cwd: string;
   readonly userDir: string;
+  readonly project?: string | null;
 }) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  for (const file of [path.join(layers.cwd, PROJECT_FILE), path.join(layers.userDir, USER_FILE)]) {
+  const remembered = layers.project ? rememberedFile(layers.userDir, layers.project) : null;
+  const files = [
+    path.join(layers.cwd, PROJECT_FILE),
+    ...(remembered === null ? [] : [remembered]),
+    path.join(layers.userDir, USER_FILE),
+  ];
+  for (const file of files) {
     const text = yield* fs.readFileString(file).pipe(Effect.catch(() => Effect.succeed(null)));
     if (text === null) continue;
     const decoded = yield* Schema.decodeUnknownEffect(ApprovedJson)(text.trim()).pipe(

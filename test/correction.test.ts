@@ -56,9 +56,20 @@ const ctx = (over: Partial<CorrectionContext> = {}): CorrectionContext => ({
 });
 
 test("without the grant, nothing is corrected however bad it looks", () => {
-  const ungranted = { ...intentWith(), authority: DEFAULT_AUTHORITY };
+  const ungranted = { ...intentWith(), authority: { ...DEFAULT_AUTHORITY, auto_correct: false } };
   expect(decideCorrections(ungranted, [report({ severity: "block" })], ctx())).toEqual([]);
   expect(decideCorrections(intentWith(), [report()], ctx())).toHaveLength(1);
+});
+
+test("a Run nobody granted anything is corrected at a boundary, never now", () => {
+  const ungranted = { ...intentWith(), authority: seedIntent("r1", {}).authority };
+  const corrections = decideCorrections(
+    ungranted,
+    [report({ severity: "block" })],
+    ctx({ attributable: true, nowProven: true }),
+  );
+  expect(corrections).toHaveLength(1);
+  expect(corrections[0]?.mode).toBe("boundary");
 });
 
 test("each gate refuses on its own, and none of them substitutes for another", () => {

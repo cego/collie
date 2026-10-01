@@ -20,6 +20,7 @@ import {
   answerRun,
   controlRun,
   grantRun,
+  rememberChecks,
   invokeOffer,
   offersOf,
   moduleFor,
@@ -234,6 +235,21 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
             ? done
             : `${done}; the grant holds, but intent show will not list it: ${unlisted}`,
       };
+    }).pipe(Effect.catch((cause) => Effect.succeed(failed(String(cause))))),
+  );
+  // A finished Run is the usual one: its checks were granted while it ran.
+  registerExecutor("remember_verification", (action) =>
+    Effect.gen(function* () {
+      const run = yield* findRun(env, action.run);
+      if (run === null) return failed(`no run "${action.run}"`);
+      const remembered = yield* rememberChecks(env, {
+        runId: action.run,
+        checkouts: [run.cwd, run.project],
+        replace: action.replace === true,
+      });
+      return remembered.ok
+        ? { state: "applied" as const, note: remembered.human }
+        : failed(remembered.error.message);
     }).pipe(Effect.catch((cause) => Effect.succeed(failed(String(cause))))),
   );
   // Which Workflow carries a follow-up is the Workflow's own declaration — the offer it

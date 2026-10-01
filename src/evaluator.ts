@@ -75,6 +75,13 @@ export const ActionSchema = Schema.Union([
     /** What Collie runs for it; absent withdraws the check of that name. */
     command: Schema.optionalKey(VerifySpecSchema.mapFields(Struct.omit(["name"]))),
   }),
+  /** The Run's checks, kept as its repository's own for every Run started there later. */
+  Schema.Struct({
+    kind: Schema.Literal("remember_verification"),
+    run: Schema.String,
+    /** Overwrite checks already kept for that repository. */
+    replace: Schema.optionalKey(Schema.Boolean),
+  }),
   Schema.Struct({
     kind: Schema.Literal("deliver"),
     run: Schema.String,
