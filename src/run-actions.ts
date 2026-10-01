@@ -444,6 +444,8 @@ export const carryOut = Effect.fn("runActions.carryOut")(function* (
   proposalId: string,
   hash: string | undefined,
   actor: Actor,
+  /** Recorded by this same request, so a retry that records it again is the same steps. */
+  ownRequest = false,
 ) {
   // The operations register what they can carry out; without this the registry is empty
   // and every action is refused as `executor_missing`, which would be a lie about this
@@ -531,7 +533,10 @@ export const carryOut = Effect.fn("runActions.carryOut")(function* (
       break;
     }
     yield* stepStarted(file, proposalId, index);
-    const outcome = yield* executor(action, stepOf(actor, `${proposalId}:${index}`));
+    const outcome = yield* executor(
+      action,
+      stepOf(actor, ownRequest ? index : `${proposalId}:${index}`),
+    );
     yield* settle(index, outcome.state, outcome.note);
     if (outcome.state === "failed" && "run" in action) failedRuns.add(action.run);
     if (outcome.state !== "failed" && action.kind === "update_intent")
@@ -546,8 +551,9 @@ export const carryOutProposal = (
   proposalId: string,
   hash: string | undefined,
   actor: Actor,
+  ownRequest = false,
 ) =>
-  carryOut(env, proposalId, hash, actor).pipe(
+  carryOut(env, proposalId, hash, actor, ownRequest).pipe(
     Effect.map(carriedResult),
     Effect.catchTag("ProposalRefused", (refused) =>
       Effect.succeed(err("invalid_input", refused.detail, { reason: refused.refused })),

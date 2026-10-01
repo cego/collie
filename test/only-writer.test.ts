@@ -135,6 +135,7 @@ test(
       "collie-writer-run-",
       (world) =>
         Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
           const client = yield* connect(world.state);
           yield* client.declare({ frontDoor: "board" });
           const started = yield* client.start({
@@ -160,6 +161,20 @@ test(
             (one) => one.parent === runId,
           );
           expect(children).toHaveLength(1);
+          // A propose cut off before its answer was kept is carried out again as the same steps.
+          const proposed = {
+            ...followUp,
+            herd: "some-herd",
+            interpretation: "more",
+            request: "p-1",
+          };
+          yield* client.propose(proposed);
+          yield* fs.remove(`${world.state}/herd/some-herd/operations.jsonl`);
+          yield* client.propose(proposed);
+          const afterPropose = (yield* client.runs({ task: null })).filter(
+            (one) => one.parent === runId,
+          );
+          expect(afterPropose).toHaveLength(2);
 
           const child = yield* client.followUp({ runId, text: "what is left", request: "f-1" });
           expect((yield* client.run({ runId: child.runId }))?.parent).toBe(runId);
@@ -187,6 +202,7 @@ test(
           ).toEqual([
             ["start", "board", "s-1"],
             ["followup", "board", "a-1:0"],
+            ["followup", "board", "p-1:0"],
             ["followup", "board", "f-1"],
             ["disposition", "board", "d-1"],
             ["grant", "board", "g-1"],

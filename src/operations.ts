@@ -613,7 +613,7 @@ export const request = Effect.fn("operations.request")(function* (
     file,
     Object.keys(addressed).length === 0 ? proposal : { ...proposal, incarnations: addressed },
   );
-  return yield* carryOutProposal(env, recorded.id, recorded.content_hash, options.actor);
+  return yield* carryOutProposal(env, recorded.id, recorded.content_hash, options.actor, true);
 });
 
 const incarnationsFor = Effect.fn("operations.incarnationsFor")(function* (
@@ -787,10 +787,13 @@ export const steer = Effect.fn("operations.steer")(function* (
   yield* append(journal, from === null ? reply : { ...reply, card: from }, roots);
 
   if (options.asked !== "event")
-    return yield* carryOutProposal(env, recorded.id, recorded.content_hash, {
-      origin: options.origin ?? "cli",
-      requestId: options.requestId,
-    });
+    return yield* carryOutProposal(
+      env,
+      recorded.id,
+      recorded.content_hash,
+      { origin: options.origin ?? "cli", requestId: options.requestId },
+      true,
+    );
 
   return ok(
     {
