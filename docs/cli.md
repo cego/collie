@@ -593,8 +593,9 @@ judged. The spellings:
 
 `authority` takes `k=v` pairs: `auto_correct`, `now_allowed`, `interrupt_allowed`,
 `stop_allowed` and `exclusive_steering` are `true`/`false`; `max_corrections_per_constraint`
-is a whole number. Every grant is off by default, and a key that is not one of these is
-refused rather than stored. There is no model-call quota among them: how many calls a run
+is a whole number. `auto_correct` is on by default, so drift is corrected at a work boundary
+within the bound, and `auto_correct=false` turns it off for one run; every other grant is off
+by default. A key that is not one of these is refused rather than stored. There is no model-call quota among them: how many calls a run
 or the Herd makes, and what they cost, is recorded under `herd/<herdKey>/budget.jsonl` as
 usage, and never used to refuse the next one. An Intent written by an earlier build with
 `model_calls_per_run` still reads; the number decides nothing.

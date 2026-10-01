@@ -126,7 +126,8 @@ records — so `now` is not something pi has been shown to do. Codex and opencod
 text but their own sandboxes and permission prompts stood between them and the ack file
 in the probe; a blocked agent is one herdr refuses to prompt at all, and that refusal is
 what the ledger shows (`deferred`, then `failed`, with the code `agent_blocked`). Attribution on Claude needs a human
-typing into a Collie-launched agent's pane and is the one row an operator has to record.
+typing into a Collie-launched agent's pane and is the one row an operator has to record;
+nobody has yet, so on Claude a correction still needs `exclusive_steering`.
 `boundary` deliveries need none of this and work on every harness.
 
 The evaluator has been run against the installed `claude` 2.1.268, ten calls and one
@@ -271,14 +272,19 @@ and none of it takes focus.
 
 ## Correcting drift
 
-Collie corrects drift by itself only where the run's Intent granted `auto_correct`, and
-even then every gate below is somebody being deferred to:
+Collie corrects drift by itself by default: `auto_correct` is the one grant every run starts
+with ([ADR-0037](adr/0037-collie-corrects-by-default.md)), and `run intent authority <run>
+auto_correct=false` or a workspace default turns it off. A correction goes at a work boundary,
+never as an interrupt, unless `now_allowed` was granted too. Every gate below still applies,
+and each one is somebody being deferred to:
 
 - **Somebody typed into that pane.** A manual override stops automatic corrections to that
   agent until `run clear-override`. Collie does not take turns with a human.
 - **On a harness with no attribution**, Collie cannot tell its own submissions from a
   person's — so correcting needs `authority.exclusive_steering`, the human saying nobody
   else is steering this run, and the row says `⚠ unattributed` while it is being honoured.
+  Until an operator records Claude's attribution with `tools/steering-live.ts`, that
+  includes Claude: on by default, a correction there is sent only with `exclusive_steering`.
 - **The run is held.** A hold is the human saying stop; a correction is starting something.
 - **Something about that constraint is already in the air.** The causal key is the
   constraint, so a second correction waits for the first to settle.

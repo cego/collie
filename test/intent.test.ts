@@ -294,7 +294,7 @@ test("following an unchanged plan changes nothing", () => {
   expect(followPlan(once, found, "2026-09-30T00:01:00Z")).toBe(once);
 });
 
-test("what the human typed beats a workspace default, and defaults never grant authority", () => {
+test("what the human typed beats a workspace default, and a default grants only boundary correction", () => {
   const intent = seedIntent("r1", {
     defaults: {
       constraints: [
@@ -326,7 +326,7 @@ test("what the human typed beats a workspace default, and defaults never grant a
   expect(intent.constraints[0]?.severity).toBe("block");
   expect(intent.constraints[0]?.source).toBe("human");
   expect(intent.authority.max_corrections_per_constraint).toBe(5);
-  expect(intent.authority.auto_correct).toBe(false);
+  expect(intent.authority.auto_correct).toBe(true);
 });
 
 test("a rule constraint is spelled out, and a misspelled one says how", () => {
