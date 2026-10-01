@@ -35,7 +35,7 @@ import {
   workspaceCwdFromPanes,
 } from "./operations";
 import { ActionSchema, type Action } from "./evaluator";
-import { runViews, isSettled } from "./lifecycle";
+import { boardSnapshot, runViews, isSettled } from "./lifecycle";
 import { taskOfWorkspace } from "./task";
 import {
   actorName,
@@ -46,9 +46,8 @@ import {
 } from "./proposals";
 import { recordDisposition, statusLine } from "./disposition";
 import { Herdr } from "./herdr";
-import { buildBoard, mrLabel } from "./board";
+import { mrLabel } from "./board";
 import { headerSentence, sectionOf, type Section, type TaskView } from "./board-model";
-import { loadDefaults } from "./config";
 import {
   asText as newsText,
   newsPath,
@@ -564,14 +563,10 @@ function cardLine(view: TaskView): string {
 
 /** What `collie_herd` answers with: the board, so chat and board can never disagree about a card. */
 const boardFacts = Effect.fn("Tools.boardFacts")(function* (env: PluginEnv) {
-  const alive = yield* new Herdr(env).agentList().pipe(Effect.catch(() => Effect.succeed([])));
+  const read = yield* boardSnapshot(env);
+  if (!read.ok) return `- (the board could not be read: ${read.error.message})`;
+  const views = read.value.tasks;
   const now = yield* Clock.currentTimeMillis;
-  const views = yield* buildBoard({
-    env,
-    alive,
-    now,
-    quietMs: (yield* loadDefaults(env.userDir)).boardQuietMs,
-  });
   if (views.length === 0) return "- (no Runs in this Herd)";
   const lines = [headerSentence(views, now).text];
   let room = HERD_CARDS;

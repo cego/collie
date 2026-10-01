@@ -3,7 +3,7 @@
 // which command went out — never about a component's own state.
 
 import { expect, test } from "bun:test";
-import { Effect } from "effect";
+import { Effect, Schedule } from "effect";
 import { createSignal } from "solid-js";
 import { testRender } from "@opentui/solid";
 import { runEffect } from "../support/effect";
@@ -17,6 +17,14 @@ import type { Live } from "../../src/live";
 import type { Card } from "../../src/cards";
 import type { Delivery } from "../../src/steering";
 import { NO_OUTCOME, type WorkspaceView } from "../../src/workspace";
+import { currentEnv } from "../../src/env";
+import { appState as homeState } from "../../src/flows";
+import { Herdr } from "../../src/herdr";
+import { followBoard } from "../../src/lifecycle";
+import { scopeFor } from "../../src/registry";
+import { focus } from "../support/focus";
+import { stopHost } from "../support/host";
+import { collie, proves } from "../support/world";
 
 const NOW = Date.parse("2026-09-16T12:00:00.000Z");
 
@@ -1522,3 +1530,58 @@ test("a long name is cut to its card, and the project and age keep their place",
       expect(app.said()).not.toContain("everything after it");
     }),
   ));
+
+test(
+  "the Home draws a card the host serves, with no board built here",
+  () =>
+    proves(
+      "collie-home-drawn-",
+      (world) =>
+        Effect.gen(function* () {
+          const started = yield* collie(
+            world,
+            [
+              "run",
+              "start",
+              "agent",
+              "--input",
+              "target=worktree",
+              "--input",
+              `cwd=${world.project}`,
+              "--input",
+              "skip=false",
+            ],
+            { FAKE_HERDR_AGENT_STATUS: "blocked" },
+          );
+          expect(started.envelope.ok).toBe(true);
+          const env = yield* currentEnv.pipe(Effect.orDie);
+          const home = homeState(
+            {
+              herdr: new Herdr(env),
+              ...scopeFor(env, env.cwd),
+              stateDir: env.stateDir,
+              userDir: env.userDir,
+              paneId: env.paneId,
+              pluginRoot: env.pluginRoot,
+              tasksOf: yield* followBoard(env),
+            },
+            env,
+          );
+          const state = yield* home.load(focus()).pipe(
+            Effect.repeat({
+              until: (loaded) => loaded.tasks[0]?.state === "blocked",
+              schedule: Schedule.spaced("250 millis"),
+              times: 40,
+            }),
+          );
+          yield* stopHost(world.state);
+          const app = yield* mount(state);
+          const said = app.said();
+          expect(said).toContain("One task is waiting on you.");
+          expect(said).toContain("Needs you");
+          expect(said).toContain("Waiting for you in");
+        }),
+      ["agent.workflow.ts", "notes.md"],
+    ),
+  120_000,
+);

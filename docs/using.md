@@ -382,7 +382,10 @@ is left.
 ([ADR-0009](adr/0009-the-collie-tab-is-the-herds.md)). One herdr session is one **Herd**,
 and one Herd has one board: two boards would be two views disagreeing about the same Runs.
 There is no per-workspace board and no view to switch to: one workspace's work is its own
-cards on this one, and the search is what narrows to it. Your work stays where it is — a
+cards on this one, and the search is what narrows to it. The host builds the board and the
+Home follows what it serves, as the text view, chat and `collie --json board` do
+([ADR-0038](adr/0038-the-host-builds-and-serves-the-board.md)), so none of them can show a
+card the others do not. Your work stays where it is — a
 Run still runs in the workspace it was started from, and so do its worktrees, its agents
 and its hand-offs.
 

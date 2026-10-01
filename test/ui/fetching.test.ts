@@ -73,6 +73,7 @@ function session(): ControlSession {
     paneId: env.paneId,
     pluginRoot: env.pluginRoot,
     runsOf: () => Effect.succeed(runs),
+    tasksOf: () => Effect.succeed({ tasks: [], unreadable: null }),
   };
 }
 

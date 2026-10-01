@@ -19,7 +19,6 @@ import { diffTargetOf, EXCLUSIVE_STRATEGIES, strategyMeaning } from "./strategie
 import { PROJECTS_ROOT_OPTION, projectsRoot } from "./projects";
 import { insideCheckout } from "./agent-start";
 import { placeableUnder, placedByUrl, routed, routerDeps } from "./route";
-import { buildBoard } from "./board";
 import type { MrPanel, MrState, PlanPanel, TaskView } from "./board-model";
 import { settleMerges } from "./merges";
 import { nowIso } from "./time";
@@ -62,8 +61,11 @@ import { inferInput, type InputPrompts, type PickItem } from "./inputs";
 import type { Found } from "./discovery";
 import {
   answerRun,
+  boardSnapshot,
   controlRun,
+  followBoard,
   invokeOffer,
+  type BoardRead,
   offersOf,
   resumeRun,
   savedModules,
@@ -142,7 +144,9 @@ export interface ControlSession extends BoardSession {
   pluginRoot: string;
   /** Where the board's Runs come from: the host's, unless a test hands over its own. */
   runsOf?: RunsOf;
-  /** Where the defaults live, so the board can read its own quiet threshold. */
+  /** Where the board's Tasks come from: one read of the host's board, unless followed. */
+  tasksOf?: () => Effect.Effect<BoardRead>;
+  /** Where the defaults live. */
   userDir: string;
   /**
    * What the last worktree sweep said, and whether one is out working right now. A
@@ -826,6 +830,7 @@ export const workspaceFlow = Effect.fn("Flows.workspaceFlow")(function* (
     // again when the pane says it has finished. No work is sent either way.
     compaction: { waitMs: 0 },
     pruned: { at: 0, lines: [], running: false },
+    tasksOf: yield* followBoard(env),
   };
   const key = yield* herdOf(env.socketPath).pipe(Effect.catch(() => Effect.succeed(null)));
   const home = key === null ? null : yield* readHome(yield* homePath(env.stateDir, key));
@@ -925,7 +930,7 @@ export const workspaceFlow = Effect.fn("Flows.workspaceFlow")(function* (
     ));
   if (why === null) return replaced ? RELAUNCH : 0;
   return yield* textBoard(session, herdr, env, why);
-});
+}, Effect.scoped);
 
 /**
  * A pane left over from when every workspace had its own Collie tab. One line saying
@@ -1024,6 +1029,17 @@ const sayWhatHappened = Effect.fn("Flows.sayWhatHappened")(function* (
     if (queued !== null) yield* remember(dir, event.key, yield* nowIso());
   }
 });
+
+/** The host's board, as this session reads it. */
+const boardRead = (session: ControlSession, env: PluginEnv) =>
+  session.tasksOf?.() ??
+  boardSnapshot(env).pipe(
+    Effect.map((read): BoardRead =>
+      read.ok
+        ? { tasks: read.value.tasks, unreadable: null }
+        : { tasks: [], unreadable: read.error.message },
+    ),
+  );
 
 export function appState(
   session: ControlSession,
@@ -1233,29 +1249,20 @@ export function appState(
             region: focus.view === "runs",
           });
     const defaults = yield* loadDefaults(env.userDir);
-    const tasksBuilt = reuse
-      ? reuse.state.tasks
-      : yield* buildBoard({
-          env,
-          alive: live?.alive ?? [],
-          runs,
-          tasks: scanned?.tasks,
-          registered: scanned?.registered,
-          quietMs: defaults.boardQuietMs,
-          mrStates,
-        });
+    const read = reuse ? null : yield* boardRead(session, env);
+    const tasksBuilt = read === null ? reuse!.state.tasks : read.tasks;
     if (!reuse) yield* settleInBackground(tasksBuilt, yield* Clock.currentTimeMillis);
     const state = {
       view: focus.view,
       filter: focus.filter,
-      // The board's own model, Herd-wide: a workspace is a filter over one board, never
-      // a board of its own (ADR-0009). From the scan this read already made.
+      // The host's board, Herd-wide: a workspace is a filter over one board, never a board
+      // of its own (ADR-0009).
       tasks: tasksBuilt,
       now: yield* Clock.currentTimeMillis,
       density: defaults.density,
       wide,
       board,
-      note: null,
+      note: read?.unreadable ?? null,
       history,
       definitions: reuse
         ? reuse.state.definitions
@@ -1639,12 +1646,7 @@ const textBoard = Effect.fn("Flows.textBoard")(function* (
    * does — a pane too narrow for the renderer must not be a quieter board.
    */
   /** The board's own Tasks, so the text view and the pane draw the same three sections. */
-  const tasksOf = Effect.fn("Flows.textBoard.tasks")(function* () {
-    return yield* buildBoard({
-      env,
-      quietMs: (yield* loadDefaults(env.userDir)).boardQuietMs,
-    });
-  });
+  const tasksOf = () => boardRead(session, env).pipe(Effect.map((read) => read.tasks));
 
   const steeringOf = Effect.fn("Flows.textBoard.steering")(function* (view: WorkspaceView) {
     const rows = [...view.active, ...view.recent];

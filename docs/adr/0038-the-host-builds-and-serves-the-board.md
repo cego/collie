@@ -1,8 +1,8 @@
 # The host builds and serves the board
 
-**Status: accepted.** The host serves the board stream on `FrontDoorRpcs` and
-`collie --json board` reads it. The Home, the text view and chat's `collie_herd` move onto
-it next.
+**Status: accepted.** The host serves the board stream on `FrontDoorRpcs`. The Home
+follows it; the text view, chat's `collie_herd` and `collie --json board` read its
+snapshot. Nothing else builds a board.
 
 **Reverses:** where [ADR-0013](0013-the-board-is-cards-of-tasks.md) D1 has the board built.
 The card is still a Task, built by one function; that function now runs in the host and

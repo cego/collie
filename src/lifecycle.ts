@@ -8,7 +8,7 @@
 // What a Run is and what became of it stays Collie's; what a workflow has done stays
 // Effect's. Nothing here copies the second into the first.
 
-import { Effect, FileSystem, Schema, Stream } from "effect";
+import { Deferred, Effect, FileSystem, Schedule, Schema, Stream } from "effect";
 import type { Scope } from "effect";
 import type { ChildProcessSpawner } from "effect/unstable/process";
 import type * as RpcClientError from "effect/unstable/rpc/RpcClientError";
@@ -21,7 +21,7 @@ import {
   type HostUnavailable,
   type HostVersionMismatch,
 } from "./host";
-import type { BoardSnapshot } from "./board-model";
+import { sortBoard, type BoardMessage, type BoardSnapshot, type TaskView } from "./board-model";
 import {
   REFUSED_INPUT,
   runDir,
@@ -295,20 +295,91 @@ export const watchRun = <R>(
     );
   });
 
+/** The host's board stream, from a host started here if none is running. */
+const boardStream = (env: PluginEnv) =>
+  Effect.gen(function* () {
+    yield* connect(env.stateDir);
+    return (yield* frontDoor(env.stateDir)).board();
+  });
+
 /** The board as the host serves it now: the first message of its stream. */
 export const boardSnapshot = (
   env: PluginEnv,
 ): Effect.Effect<{ readonly ok: true; readonly value: BoardSnapshot } | Failure, never, Client> =>
   Effect.scoped(
     Effect.gen(function* () {
-      yield* connect(env.stateDir);
-      const door = yield* frontDoor(env.stateDir);
-      const first = yield* Stream.runHead(door.board());
+      const first = yield* Stream.runHead(yield* boardStream(env));
       if (first._tag === "Some" && first.value._tag === "Snapshot")
         return { ok: true as const, value: first.value };
       return err("operation_failed", "The workflow host sent no board.");
     }).pipe(Effect.catch((cause: HostFailure) => Effect.succeed(refusal(cause)))),
   );
+
+/** The board's Tasks, and why there are none where the host could not be read. */
+export interface BoardRead {
+  readonly tasks: ReadonlyArray<TaskView>;
+  readonly unreadable: string | null;
+}
+
+/** How long the first read waits for the host's board; later reads take what there is. */
+const FIRST_BOARD_WAIT = "10 seconds";
+
+/**
+ * The board the host serves, followed for as long as the caller's scope: each read is the
+ * latest the stream has said. A dropped stream reconnects and starts from a fresh snapshot.
+ */
+export const followBoard = Effect.fn("Lifecycle.followBoard")(function* (env: PluginEnv) {
+  const tasks = new Map<string, TaskView>();
+  const first = yield* Deferred.make<void>();
+  let waited = false;
+  /** False between a dropped stream and the fresh snapshot after it. */
+  let live = false;
+  const apply = (message: BoardMessage) =>
+    Effect.suspend(() => {
+      switch (message._tag) {
+        case "Snapshot":
+          tasks.clear();
+          for (const task of message.tasks) tasks.set(task.id, task);
+          live = true;
+          return Deferred.succeed(first, undefined);
+        case "Upsert":
+          tasks.set(message.task.id, message.task);
+          return Effect.void;
+        case "Remove":
+          tasks.delete(message.id);
+          return Effect.void;
+        default:
+          return Effect.void;
+      }
+    });
+  const follow = Effect.scoped(
+    Effect.flatMap(boardStream(env), (stream) => Stream.runForEach(stream, apply)),
+  ).pipe(
+    Effect.catchCause(() => Effect.void),
+    Effect.ensuring(
+      Effect.sync(() => {
+        live = false;
+      }),
+    ),
+  );
+  yield* Effect.forkScoped(follow.pipe(Effect.repeat(Schedule.spaced("1 second"))));
+  return (): Effect.Effect<BoardRead> =>
+    Deferred.await(first).pipe(
+      Effect.timeoutOption(waited ? 0 : FIRST_BOARD_WAIT),
+      Effect.map((arrived) => {
+        waited = true;
+        return {
+          tasks: sortBoard([...tasks.values()]),
+          unreadable:
+            arrived._tag === "None"
+              ? "the workflow host has not sent its board"
+              : live
+                ? null
+                : "reconnecting to the workflow host; these cards may be out of date",
+        };
+      }),
+    );
+});
 
 /**
  * Registers what the modules as they are now allow and hands over what is outstanding,
