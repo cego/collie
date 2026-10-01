@@ -1575,41 +1575,6 @@ export function keyIntent(at: KeyContext, key: Keypress): KeyIntent | null {
   return action ? doing(action.command) : null;
 }
 
-/** How one line of a panel's markdown is drawn. Four, because four is what helps. */
-export type LineStyle = "heading" | "list" | "code" | "plain";
-
-export interface StyledLine {
-  text: string;
-  style: LineStyle;
-}
-
-/**
- * A review or a plan spec as styled lines. Four styles and no markdown dependency: the
- * panel needs a long document to be skimmable — where the headings are, what is a list,
- * what is code — and nothing beyond that. Inline emphasis is deliberately left alone,
- * because rewriting the text is how a review stops saying what the agent wrote.
- *
- * ponytail: line-level only. A parser goes in the day something needs tables.
- */
-/** A hash needs its space: `#!/bin/sh` in something the agent pasted is not a heading. */
-const HEADING = /^#{1,6}\s/;
-const LIST_ITEM = /^\s*([-*+]|\d+\.)\s/;
-const FENCE = "```";
-
-export function markdownLines(text: string): StyledLine[] {
-  let fenced = false;
-  return text.split("\n").map((line): StyledLine => {
-    if (line.trimStart().startsWith(FENCE)) {
-      fenced = !fenced;
-      return { text: line, style: "code" };
-    }
-    if (fenced) return { text: line, style: "code" };
-    if (HEADING.test(line)) return { text: line, style: "heading" };
-    if (LIST_ITEM.test(line)) return { text: line, style: "list" };
-    return { text: line, style: "plain" };
-  });
-}
-
 /** Where a pending question has got to: the highlighted option, or the text so far. */
 export interface Asking {
   index: number;

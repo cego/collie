@@ -665,10 +665,10 @@ is showing at a time:
   read only while this tab is showing it, because a log can be any size.
 
 The review and the plan's spec are capped and paged: `… truncated` says so, and `m` reads
-another cap of it. They are rendered a line at a time — headings in accent and bold, list
-markers dim, fenced code dim, everything else plain. Line-level and no markdown dependency:
-inline emphasis is left exactly as the agent wrote it, because rewriting the text is how a
-review stops saying what it said.
+another cap of it. They are markdown, drawn through [Comark](https://comark.dev)'s
+terminal renderer: headings, emphasis, lists, tables and fenced code are styled, and
+Comark's security plugin drops scripts and embedded content first, because what an agent
+writes is untrusted. Tables and rules are drawn to the drawer's width. The log is shown as plain text.
 
 The record scrolls with the wheel wherever the pointer is over it, and a new record — or a
 new tab — starts at the top, because how far the last one had been scrolled says nothing

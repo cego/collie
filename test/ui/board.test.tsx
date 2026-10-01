@@ -6,6 +6,7 @@ import { expect, test } from "bun:test";
 import { Effect, Schedule } from "effect";
 import { createSignal } from "solid-js";
 import { testRender } from "@opentui/solid";
+import { TextAttributes } from "@opentui/core";
 import { runEffect } from "../support/effect";
 import { task } from "../support/task";
 import { App } from "../../src/ui/App";
@@ -157,6 +158,21 @@ const mount = Effect.fn("board.mount")(function* (
       }
       throw new Error(`nothing drawn containing ${JSON.stringify(text)}`);
     },
+    attributesOf(text: string) {
+      for (const line of t.captureSpans().lines) {
+        for (const span of line.spans) if (span.text.includes(text)) return span.attributes;
+      }
+      throw new Error(`nothing drawn containing ${JSON.stringify(text)}`);
+    },
+    /** Flushes until the frame says `text`: Comark renders a document asynchronously. */
+    until: (text: string) =>
+      flush.pipe(
+        Effect.repeat({
+          until: () => t.captureCharFrame().includes(text),
+          schedule: Schedule.spaced("20 millis"),
+          times: 100,
+        }),
+      ),
     setState: (next: AppState) =>
       Effect.andThen(
         Effect.sync(() => setState(next)),
@@ -1170,6 +1186,45 @@ test("Plan shows the spec and its tickets, ticked where they are done", () =>
       expect(said).toContain("One command seeds every brand");
       expect(said).toContain("✓ The loader");
       expect(said).toContain("· Brands per environment");
+    }),
+  ));
+
+const PLAN_SPEC = [
+  "# The seeder",
+  "",
+  "| brand | env |",
+  "| --- | --- |",
+  "| alpha | prod |",
+  "",
+  "```ts",
+  "seed(brands);",
+  "```",
+  "",
+  "<script>steal()</script>",
+].join("\n");
+
+test("Plan renders its spec through Comark: headings, a table and a code block, sanitised", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const app = yield* opened(
+        appState({
+          tasks: [task()],
+          detail: record({
+            plan: { spec: { _tag: "Text", text: PLAN_SPEC, truncated: false }, tickets: [] },
+          }),
+        }),
+      );
+
+      yield* app.clickOn("Plan");
+      yield* app.until("┬");
+
+      const frame = app.frame();
+      expect(frame).toMatch(/│ *brand *│ *env *│/);
+      expect(frame).toMatch(/│ *alpha *│ *prod *│/);
+      expect(frame).not.toContain("| --- |");
+      expect(frame).toContain("seed(brands);");
+      expect(app.attributesOf("The seeder") & TextAttributes.BOLD).toBe(TextAttributes.BOLD);
+      expect(frame).not.toContain("steal()");
     }),
   ));
 
