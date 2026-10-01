@@ -1179,11 +1179,32 @@ test("a Run nothing drives and no agent works on is abandoned", () =>
   runEffect(
     Effect.gen(function* () {
       const { dir, env } = yield* scratch();
-      const run = yield* madeRun(dir, { task: "task-1", undriven: true });
+      const broken = "workflows/plain.workflow.ts does not load: Unexpected token";
+      const run = yield* madeRun(dir, { task: "task-1", undriven: true, note: broken });
 
       const [view] = yield* board(env, [run]);
 
       expect(view!.state).toBe("abandoned");
       expect(view!.sentence).toStartWith("Its Driver died ");
+      // What to repair, because fixing the file brings the Run back.
+      expect(view!.sentence).toContain(broken);
+    }),
+  ));
+
+test("a question outranks a Run nothing drives: it is still waiting on you", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const run = yield* madeRun(dir, {
+        task: "task-1",
+        undriven: true,
+        state: "waiting",
+        asking: [{ name: "scope", prompt: "Which brands?", options: [] }],
+      });
+
+      const [view] = yield* board(env, [run]);
+
+      expect(view!.decision).toMatchObject({ kind: "question" });
+      expect(sectionOf(view!)).toBe("needs-you");
     }),
   ));

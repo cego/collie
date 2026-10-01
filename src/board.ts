@@ -315,7 +315,10 @@ export function sentenceFor(facts: Sentence): string {
     case "stopped":
       return alsoBecame("Stopped by you.", facts.disposition);
     case "abandoned":
-      return alsoBecame(`Its Driver died ${facts.abandoned ?? "a while ago"}.`, facts.disposition);
+      return alsoBecame(
+        `Its Driver died ${facts.abandoned ?? "a while ago"}${facts.note === null ? "" : `: ${facts.note}`}.`,
+        facts.disposition,
+      );
     // Only reachable with no Decision: one above would have answered already.
     case "blocked":
       return stalledSentence(facts);
@@ -756,8 +759,13 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
     const stalled =
       (blocked ? `${blocked.name}'s pane` : null) ??
       (leader.state === "waiting" && leader.asking.length === 0 ? "its pane" : null);
-    // Nothing drives it and nobody works on it: the host could not take it up again.
-    const abandoned = going && leader.undriven && !agents.some((agent) => agent.run === leader.id);
+    // Nothing drives it and nobody works on it: the host could not take it up again. A
+    // Decision outranks it, because answering is still what moves the work.
+    const abandoned =
+      decision === null &&
+      going &&
+      leader.undriven &&
+      !agents.some((agent) => agent.run === leader.id);
     const state = abandoned
       ? "abandoned"
       : stateOf(status, silent !== null, decision, stalled !== null);
