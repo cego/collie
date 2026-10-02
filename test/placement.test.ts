@@ -9,9 +9,10 @@
 // repository is a real git one, so the worktree is one git actually made.
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
+import type { BunServices } from "@effect/platform-bun";
 import { Effect, FileSystem, Result, Schema } from "effect";
 import { Rig, FakeHerdr } from "./support/recorder";
-import { runEffect } from "./support/effect";
+import { fastForward, runEffect as runLive } from "./support/effect";
 import { installFakeSkills } from "./support/defs";
 import { fixtures, until } from "./support/host";
 import { agentsLayer, type AgentHost } from "../src/agents";
@@ -84,6 +85,10 @@ const hostOf = (): AgentHost => ({
   pollMs: 20,
   collectMs: 60_000,
 });
+
+/** Every wait in here is on a clock that moves many times faster than the wall's. */
+const runEffect = <A, E>(effect: Effect.Effect<A, E, BunServices.BunServices>) =>
+  runLive(fastForward(effect));
 
 const hosted = <A, E>(
   run: Effect.Effect<A, E, Registry | Store | HostServices>,
@@ -647,18 +652,23 @@ test(
             const started = yield* start(implement!, { request: "r1", text: { plan } });
             if (started._tag === "Failure") return yield* Effect.die(started.failure);
             const runId = started.success.runId;
-            const api = yield* until(
-              () => registry.view(`${runId}.implement-api`),
-              (view) => view !== null,
+            // Until the api's Run is placed and held to what it approved, not merely admitted.
+            const [api, approved] = yield* until(
+              () =>
+                Effect.all([
+                  registry.view(`${runId}.implement-api`),
+                  fs
+                    .readFileString(`${evidenceDir(dir(), `${runId}.implement-api`)}/approved.json`)
+                    .pipe(Effect.orElseSucceed(() => null)),
+                ]),
+              ([view, read]) => view?.branch != null && read !== null,
             );
             return {
               runId,
               parent: yield* registry.view(runId),
               api,
               web: yield* registry.view(`${runId}.implement-web`),
-              approved: yield* fs.readFileString(
-                `${evidenceDir(dir(), `${runId}.implement-api`)}/approved.json`,
-              ),
+              approved,
             };
           }),
         );
@@ -1297,7 +1307,8 @@ test(
                   child: registry.view(`${runId}.implement`),
                 }),
               (both) =>
-                both.child !== null || (both.parent !== null && isOver(both.parent.status.status)),
+                both.child?.branch != null ||
+                (both.parent !== null && isOver(both.parent.status.status)),
             );
           }),
         );

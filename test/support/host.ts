@@ -44,6 +44,8 @@ export const HostRequest = Schema.Union([
   Schema.Struct({ op: Schema.Literal("resume"), id: Schema.String, runId: Schema.String }),
   Schema.Struct({ op: Schema.Literal("provision"), dir: Schema.String }),
   Schema.Struct({ op: Schema.Literal("check"), dir: Schema.String, entry: Schema.String }),
+  /** Every module in one command, as an author checks a directory; `value` maps each entry to its problems. */
+  Schema.Struct({ op: Schema.Literal("checks"), entries: Schema.Array(Schema.String) }),
   Schema.Struct({ op: Schema.Literal("metadata"), id: Schema.String }),
 ]);
 type HostRequest = typeof HostRequest.Type;
@@ -367,6 +369,25 @@ export const openHost = Effect.fn("HostTest.open")(function* (
             : { ok: false, op: "check", detail: one.toolchain };
         }
 
+        case "checks": {
+          const checked = yield* collie(world, ["workflow", "check"]);
+          const envelope = checked.envelope;
+          const report = yield* Schema.decodeUnknownEffect(Checked)(
+            envelope.ok ? envelope.data : envelope.error?.details,
+          ).pipe(Effect.orDie);
+          const unavailable = report.workflows.find((module) => module.toolchain !== null);
+          if (unavailable !== undefined) {
+            return { ok: false, op: "checks", detail: unavailable.toolchain ?? "" };
+          }
+          const problems = (entry: string) =>
+            report.workflows.find((module) => module.path === entry)?.problems ?? ["not checked"];
+          return {
+            ok: true,
+            op: "checks",
+            value: Object.fromEntries(request.entries.map((entry) => [entry, problems(entry)])),
+          };
+        }
+
         case "metadata": {
           const shown = yield* collie(world, ["workflow", "show", request.id]);
           if (!shown.envelope.ok) {
@@ -409,7 +430,7 @@ export const openHost = Effect.fn("HostTest.open")(function* (
         Effect.flatMap((reply) =>
           wanted(reply) ? Effect.succeed(reply) : Effect.fail(new Error("not yet")),
         ),
-        Effect.retry({ times: 80, schedule: Schedule.spaced("250 millis") }),
+        Effect.retry({ times: 1_000, schedule: Schedule.spaced("20 millis") }),
         Effect.orDie,
       ),
     stop: child.kill({ killSignal: "SIGTERM" }).pipe(
@@ -542,6 +563,6 @@ export const until = <A, E, R>(
     Effect.flatMap((value) =>
       wanted(value) ? Effect.succeed(value) : Effect.fail(new Error("not yet")),
     ),
-    Effect.retry({ times: 80, schedule: Schedule.spaced("250 millis") }),
+    Effect.retry({ times: 1_000, schedule: Schedule.spaced("20 millis") }),
     Effect.orDie,
   );

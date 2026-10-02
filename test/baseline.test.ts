@@ -13,7 +13,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, Fiber, FileSystem, Layer, Option, Path, Schema } from "effect";
 import * as WorkflowEngine from "effect/unstable/workflow/WorkflowEngine";
 import { Rig, FakeHerdr } from "./support/recorder";
-import { runEffect } from "./support/effect";
+import { fastForward, runEffect } from "./support/effect";
 import { FakeBin } from "./support/bin";
 import { installFakeSkills } from "./support/defs";
 import { Agents, agentsLayer, type AgentHost } from "../src/agents";
@@ -2493,22 +2493,27 @@ scenario(
   "a Run whose outcome needs no evidence is not stopped for having nothing approved",
   () =>
     runEffect(
-      Effect.gen(function* () {
-        yield* repository();
-        yield* approve("r-impl-inv", []);
-        yield* rig.queueOutputs([null]);
+      // Its agent never answers, so what it waits on is the clock.
+      fastForward(
+        Effect.gen(function* () {
+          yield* repository();
+          yield* approve("r-impl-inv", []);
+          yield* rig.queueOutputs([null]);
 
-        yield* stalled({
-          entry: shipped("implement"),
-          runId: "r-impl-inv",
-          input: { plan: "why is the board slow?" },
-          options: { outcome: "investigation" },
-        }).pipe(Effect.timeout("3 seconds"), Effect.ignore);
+          yield* stalled({
+            entry: shipped("implement"),
+            runId: "r-impl-inv",
+            input: { plan: "why is the board slow?" },
+            options: { outcome: "investigation" },
+          }).pipe(Effect.timeout("3 seconds"), Effect.ignore);
 
-        // Its agent writes nothing, which parks it for that; never for what was approved.
-        expect(yield* parkedWhy("r-impl-inv")).not.toContain("approved");
-        expect((yield* rig.cmds()).filter((cmd) => cmd === "agent start")).toHaveLength(1);
-      }),
+          // Its agent writes nothing, which parks it for that; never for what was approved.
+          const why = yield* parkedWhy("r-impl-inv");
+          expect(why).toContain("has written nothing to");
+          expect(why).not.toContain("approved");
+          expect((yield* rig.cmds()).filter((cmd) => cmd === "agent start")).toHaveLength(1);
+        }),
+      ),
     ),
   30_000,
 );
