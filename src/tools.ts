@@ -89,9 +89,7 @@ const RunInput = Schema.Struct({ run: Schema.optionalKey(Schema.String) });
 const HoldInput = Schema.Struct({
   run: Schema.optionalKey(Schema.String.annotate({ description: "The Run to hold" })),
   workspace: Schema.optionalKey(
-    Schema.String.annotate({
-      description: "Hold every unfinished Run in this workspace",
-    }),
+    Schema.String.annotate({ description: "Hold every unfinished Run in this workspace" }),
   ),
   reason: Schema.optionalKey(
     Schema.String.annotate({ description: "Why, in the human's own words" }),
@@ -133,11 +131,7 @@ const SettleSchema = Schema.Union([
     /** The hash of exactly those actions, as `collie_receipts` lists it beside the id. */
     hash: Schema.String,
   }),
-  Schema.Struct({
-    kind: Schema.Literal("decline"),
-    proposal: Schema.String,
-    hash: Schema.String,
-  }),
+  Schema.Struct({ kind: Schema.Literal("decline"), proposal: Schema.String, hash: Schema.String }),
   Schema.Struct({
     kind: Schema.Literal("disposition"),
     run: Schema.String,
@@ -174,10 +168,7 @@ const DoInput = Schema.Struct({
     Schema.Union(
       [...MEMBERS.values()].map((member) =>
         "run" in member.fields
-          ? member.mapFields((fields) => ({
-              ...fields,
-              run: Schema.optionalKey(Schema.String),
-            }))
+          ? member.mapFields((fields) => ({ ...fields, run: Schema.optionalKey(Schema.String) }))
           : member,
       ),
     ),
@@ -303,9 +294,7 @@ export const CollieTools = Toolkit.make(
       "another. Read this instead of saying that something was done. With no `run` it " +
       "answers about whatever the board has selected, and says which that was.",
     parameters: RunInput.mapFields((fields) => ({
-      run: fields.run.annotate({
-        description: "The Run id; omit for the board's selection",
-      }),
+      run: fields.run.annotate({ description: "The Run id; omit for the board's selection" }),
     })),
   }),
   collieTool("collie_news", {
@@ -538,11 +527,9 @@ const carryOut = Effect.fn("Tools.carryOut")(function* (env: PluginEnv, input: J
   for (const [index, action] of actions.entries()) {
     const done = yield* isSettle(action)
       ? settle(env, door, action, `${requestId}-${index}`)
-      : actAsked(env, {
-          door,
-          actions: [action],
-          request: `${requestId}-${index}`,
-        }).pipe(Effect.map((results) => results[0]!));
+      : actAsked(env, { door, actions: [action], request: `${requestId}-${index}` }).pipe(
+          Effect.map((results) => results[0]!),
+        );
     said.push(`${done.kind}: ${done.state}${done.note ? ` — ${done.note}` : ""}`);
     // What follows a failure was asked for on the assumption that it did not happen.
     if (done.state === "failed") break;
@@ -559,12 +546,7 @@ const settle = Effect.fn("Tools.settle")(function* (
 ) {
   if (action.kind === "disposition") {
     const run = yield* findRun(env, action.run);
-    if (run === null)
-      return {
-        kind: action.kind,
-        state: "failed",
-        note: `no Run "${action.run}"`,
-      };
+    if (run === null) return { kind: action.kind, state: "failed", note: `no Run "${action.run}"` };
     const done = yield* disposeRun(env, {
       door,
       runId: run.id,
@@ -574,11 +556,7 @@ const settle = Effect.fn("Tools.settle")(function* (
       request,
     });
     return done.ok
-      ? {
-          kind: action.kind,
-          state: "applied",
-          note: statusLine(run.state, done.value),
-        }
+      ? { kind: action.kind, state: "applied", note: statusLine(run.state, done.value) }
       : { kind: action.kind, state: "failed", note: done.error.message };
   }
   const done =
@@ -776,11 +754,7 @@ const holdsFor = Effect.fn("Tools.holdsFor")(function* (
   const task = yield* taskOfWorkspace(env.stateDir, workspace);
   if (task === null) return [];
   const runs = (yield* runViews(env, task.id)).runs.filter((view) => !isSettled(view));
-  return runs.map((view) => ({
-    kind: "hold" as const,
-    run: view.runId,
-    reason,
-  }));
+  return runs.map((view) => ({ kind: "hold" as const, run: view.runId, reason }));
 });
 
 /** What `collie_workspaces` answers with: where a Run could go, and what could start. */
@@ -950,11 +924,7 @@ const installationFacts = Effect.fn("Tools.installation")(function* (env: Plugin
     Effect.gen(function* () {
       const cwd =
         workspace.cwd !== "" ? workspace.cwd : workspaceCwdFromPanes(workspace.workspaceId, panes);
-      const scope = {
-        session: env.socketPath,
-        workspaceId: workspace.workspaceId,
-        cwd,
-      };
+      const scope = { session: env.socketPath, workspaceId: workspace.workspaceId, cwd };
       const found =
         (yield* readDefaults(yield* defaultsPath(env.stateDir, scopeKey(scope)))) ?? EMPTY_DEFAULTS;
       return `- ${workspace.workspaceId} (${workspace.label}): ${

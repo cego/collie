@@ -134,12 +134,7 @@ test("the Tasks a Run can be started into are something chat can read", () =>
       // `collie task list` is an operation a human has, so chat has to have one too —
       // and a Task with no Run yet is invisible in the Herd, which is the whole reason
       // this is not answered from the Run list.
-      const task = yield* newTask({
-        workspace: "w1",
-        label: "picker",
-        cwd: project,
-        herd: null,
-      });
+      const task = yield* newTask({ workspace: "w1", label: "picker", cwd: project, herd: null });
       yield* writeTask(stateDir, task);
       const said = yield* call("collie_workspaces");
       expect(said).toContain(task.id);
@@ -587,12 +582,9 @@ test("a request outside the closed set of actions is not a request", () =>
         [{ kind: "confirm", proposal: "p-1" }],
         [{ kind: "stop" }],
       ]) {
-        expect(
-          yield* call("collie_propose", {
-            interpretation: "go on then",
-            actions,
-          }),
-        ).toContain("collie_propose refused the request (InvalidInput)");
+        expect(yield* call("collie_propose", { interpretation: "go on then", actions })).toContain(
+          "collie_propose refused the request (InvalidInput)",
+        );
       }
       // Nor does saying so make a request a person's.
       const said = yield* call("collie_propose", {
@@ -716,16 +708,8 @@ test("reading the news is what settles it, and it settles once", () =>
   inWorld(
     Effect.gen(function* () {
       const file = yield* newsPath(stateDir, KEY);
-      yield* appendNews(file, {
-        key: "r1:ended",
-        run: "r1",
-        text: "Run r1 ended done.",
-      });
-      yield* appendNews(file, {
-        key: "r2:halt",
-        run: "r2",
-        text: "Run r2 stopped.",
-      });
+      yield* appendNews(file, { key: "r1:ended", run: "r1", text: "Run r1 ended done." });
+      yield* appendNews(file, { key: "r2:halt", run: "r2", text: "Run r2 stopped." });
 
       const first = yield* call("collie_news");
       expect(first).toContain("Run r1 ended done.");
@@ -742,11 +726,7 @@ test("what Native chat read is still news to another conversation", () =>
   inWorld(
     Effect.gen(function* () {
       const file = yield* newsPath(stateDir, KEY);
-      yield* appendNews(file, {
-        key: "r1:ended",
-        run: "r1",
-        text: "Run r1 ended done.",
-      });
+      yield* appendNews(file, { key: "r1:ended", run: "r1", text: "Run r1 ended done." });
       expect(yield* call("collie_news")).toContain("Run r1 ended done.");
       const lines = yield* readNews(file);
       expect(pendingNews(lines, NATIVE).items).toEqual([]);
@@ -793,9 +773,7 @@ test("collie_do resumes a Run, which the host picks up where it is", () =>
     Effect.gen(function* () {
       const run = yield* aRun("add a picker");
 
-      const said = yield* call("collie_do", {
-        actions: [{ kind: "resume", run: run.id }],
-      });
+      const said = yield* call("collie_do", { actions: [{ kind: "resume", run: run.id }] });
       expect(said).toContain("resume: applied");
       expect(said).toContain(run.id);
     }),
@@ -825,13 +803,7 @@ test("collie_do settles a proposal the human said yes to in chat", () =>
 
       // "Yes, do it" is the human's own decision, said here rather than on the board.
       const said = yield* call("collie_do", {
-        actions: [
-          {
-            kind: "confirm",
-            proposal: proposal.id,
-            hash: proposal.content_hash,
-          },
-        ],
+        actions: [{ kind: "confirm", proposal: proposal.id, hash: proposal.content_hash }],
       });
       expect(said).toContain("release");
       const lines = yield* readProposals(yield* proposalsPath(stateDir, KEY));
@@ -901,13 +873,7 @@ test("a confirmation whose actions failed stops the rest of what was asked", () 
       const run = yield* aRun("add a picker");
       yield* call("collie_propose", {
         interpretation: "start the review",
-        actions: [
-          {
-            kind: "start",
-            workflow: "no-such-workflow",
-            inputs: { goal: "x" },
-          },
-        ],
+        actions: [{ kind: "start", workflow: "no-such-workflow", inputs: { goal: "x" } }],
       });
       const proposal = (yield* readProposals(yield* proposalsPath(stateDir, KEY))).flatMap(
         (line) => (line.kind === "proposal" ? [line] : []),
@@ -915,17 +881,8 @@ test("a confirmation whose actions failed stops the rest of what was asked", () 
 
       const said = yield* call("collie_do", {
         actions: [
-          {
-            kind: "confirm",
-            proposal: proposal.id,
-            hash: proposal.content_hash,
-          },
-          {
-            kind: "disposition",
-            run: run.id,
-            became: "merged",
-            ref: "collie!151",
-          },
+          { kind: "confirm", proposal: proposal.id, hash: proposal.content_hash },
+          { kind: "disposition", run: run.id, became: "merged", ref: "collie!151" },
         ],
       });
 
@@ -942,14 +899,7 @@ test("collie_do records what became of the work, and starts a Run when asked to"
       const run = yield* aRun("add a picker");
 
       const marked = yield* call("collie_do", {
-        actions: [
-          {
-            kind: "disposition",
-            run: run.id,
-            became: "merged",
-            ref: "collie!151",
-          },
-        ],
+        actions: [{ kind: "disposition", run: run.id, became: "merged", ref: "collie!151" }],
       });
       expect(marked).toContain("merged");
       const line = latest(yield* readDispositions(run.dir));
@@ -960,13 +910,7 @@ test("collie_do records what became of the work, and starts a Run when asked to"
       // A launch the human asked for is theirs too: what comes back is about the
       // workflow, never a note that this is somebody else's to confirm.
       const launched = yield* call("collie_do", {
-        actions: [
-          {
-            kind: "start",
-            workflow: "no-such-workflow",
-            inputs: { goal: "x" },
-          },
-        ],
+        actions: [{ kind: "start", workflow: "no-such-workflow", inputs: { goal: "x" } }],
       });
       expect(launched).not.toContain("collie_propose");
       expect(launched).toContain("no-such-workflow");
@@ -1015,11 +959,7 @@ const chatting = Effect.fn("test.chatting")(function* () {
 });
 
 const hookInput = (session: string, prompt: string) =>
-  encodeJson({
-    session_id: session,
-    hook_event_name: "UserPromptSubmit",
-    prompt,
-  });
+  encodeJson({ session_id: session, hook_event_name: "UserPromptSubmit", prompt });
 const stopInput = (session: string) => encodeJson({ session_id: session, hook_event_name: "Stop" });
 
 test("what collie_do does is recorded with the human's words from that turn", () =>
@@ -1057,11 +997,7 @@ test("a chat's hold and proposal are recorded with the human's words too", () =>
       const run = yield* aRun("add a picker");
       yield* hear(env, hookInput("s-1", "hold the picker run while I look"));
       expect(yield* call("collie_hold", { run: run.id })).toContain("hold:");
-      const voice = {
-        origin: "chat",
-        conversation: KEY,
-        said: "hold the picker run while I look",
-      };
+      const voice = { origin: "chat", conversation: KEY, said: "hold the picker run while I look" };
       expect(
         (yield* readAudit(run.dir)).find((line) => line.operation === "hold")?.actor,
       ).toMatchObject(voice);
@@ -1121,19 +1057,10 @@ test("a proposal chat settles carries the words it was settled with", () =>
       yield* hear(env, hookInput("s-1", "no, drop that"));
       expect(
         yield* call("collie_do", {
-          actions: [
-            {
-              kind: "decline",
-              proposal: proposal.id,
-              hash: proposal.content_hash,
-            },
-          ],
+          actions: [{ kind: "decline", proposal: proposal.id, hash: proposal.content_hash }],
         }),
       ).toContain("decline: applied");
       const declined = (yield* readProposals(file)).find((line) => line.kind === "declined");
-      expect(declined).toMatchObject({
-        conversation: KEY,
-        said: "no, drop that",
-      });
+      expect(declined).toMatchObject({ conversation: KEY, said: "no, drop that" });
     }),
   ));

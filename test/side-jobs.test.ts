@@ -40,13 +40,7 @@ const runIdOf = (envelope: { readonly data?: unknown }) =>
   );
 
 const until = <A, R>(read: Effect.Effect<A, never, R>, done: (a: A) => boolean) =>
-  read.pipe(
-    Effect.repeat({
-      until: done,
-      schedule: Schedule.spaced("250 millis"),
-      times: 120,
-    }),
-  );
+  read.pipe(Effect.repeat({ until: done, schedule: Schedule.spaced("250 millis"), times: 120 }));
 
 test(
   "with no pane open the host asks GitLab about a waiting merge request and records the merge",
