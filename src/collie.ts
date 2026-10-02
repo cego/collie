@@ -17,6 +17,7 @@ import { board } from "./commands/board";
 import { home } from "./commands/home";
 import { workflow } from "./commands/workflow";
 import { host } from "./commands/host";
+import { bridge } from "./commands/bridge";
 import { printResult } from "./envelope";
 import { err } from "./operations";
 
@@ -40,6 +41,7 @@ export const app = root.pipe(
     onboard,
     doctor,
     host,
+    bridge,
   ]),
 );
 

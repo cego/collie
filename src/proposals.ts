@@ -200,7 +200,7 @@ export interface Actor {
 }
 
 export function isHuman(actor: Actor): boolean {
-  return actor.origin === "cli-tty" || actor.origin === "board";
+  return actor.origin === "cli-tty" || actor.origin === "board" || actor.origin === "desktop";
 }
 
 export function actorName(actor: Actor): string {

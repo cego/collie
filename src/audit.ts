@@ -2,7 +2,7 @@
 // of it. Written by the host alone, which stamps the front door the channel declared.
 
 import { Effect, Schema } from "effect";
-import { FrontDoor, RequestConflict } from "./board-model";
+import { FrontDoor, RequestConflict, Where } from "./board-model";
 import { appendJournal, readJournal } from "./journal";
 import { nowIso } from "./time";
 
@@ -10,7 +10,11 @@ export const AuditLine = Schema.Struct({
   at: Schema.String,
   operation: Schema.String,
   request: Schema.String,
-  actor: Schema.Struct({ origin: FrontDoor, requestId: Schema.String }),
+  actor: Schema.Struct({
+    origin: FrontDoor,
+    requestId: Schema.String,
+    from: Schema.optionalKey(Where),
+  }),
   /** Why, in the asker's own words, where they gave one. */
   reason: Schema.optionalKey(Schema.String),
   /** What the request asked for, which the same request asking again has to match. */
@@ -33,6 +37,7 @@ export const recordAudit = Effect.fn("Audit.record")(function* <A, I extends Sch
     readonly operation: string;
     readonly request: string;
     readonly origin: FrontDoor;
+    readonly from?: Where | undefined;
     readonly reason?: string | undefined;
     readonly asked?: Schema.Json | undefined;
     readonly result: Schema.Codec<A, I>;
@@ -43,7 +48,10 @@ export const recordAudit = Effect.fn("Audit.record")(function* <A, I extends Sch
     at: yield* nowIso(),
     operation: line.operation,
     request: line.request,
-    actor: { origin: line.origin, requestId: line.request },
+    actor:
+      line.from === undefined
+        ? { origin: line.origin, requestId: line.request }
+        : { origin: line.origin, requestId: line.request, from: line.from },
     result: Schema.encodeSync(line.result)(line.value),
   };
   let full = written;
@@ -63,6 +71,7 @@ export const once = Effect.fn("Audit.once")(function* <A, I extends Schema.Json,
     readonly operation: string;
     readonly request: string;
     readonly origin: FrontDoor;
+    readonly from?: Where | undefined;
     readonly reason?: string | undefined;
     readonly asked?: Schema.Json | undefined;
     readonly result: Schema.Codec<A, I>;

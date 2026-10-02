@@ -33,6 +33,14 @@ it; nothing else does.
 `cli-tty` only with a terminal on one of its streams, run in a pane herdr does not report
 as an agent's or outside herdr altogether. Where herdr cannot say, it is `cli`.
 
+## Amended 2026-10-02: a bridged channel is declared by its bridge
+
+`collie bridge --as <front door>` declares the channel it pipes before handing it over, so
+a front door on another computer is stamped as what it was started as. `desktop` is a
+human origin beside `board` and `cli-tty`, and its Actor records `from`: the computer the
+front door named and the SSH client the bridge saw. Like every declaration it is a record,
+not a check: anything that can run the bridge runs as the user already.
+
 ## Consequences
 
 - An audit names who stopped, held, resumed, answered, started or carried on with each Run.

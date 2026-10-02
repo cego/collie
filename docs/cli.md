@@ -1433,6 +1433,21 @@ session socket the front door runs in: a confirmed, asked or proposed action loo
 workspaces, panes and Herd up there. A channel that names none has them looked up in the
 session the host was started from.
 
+```sh
+collie bridge --as <board|desktop|chat> [--client <name>]
+```
+
+A front door on another computer reaches the host through this, run on the Machine — over
+SSH for Desktop, or spawned without it for Local. It starts the host if none runs, handing
+it the state directory and the herdr session socket (asked of `herdr status server` when a
+login shell sets none), declares the channel as the front door it was started as, prints
+`collie-bridge-ready` on a line of its own, and from then on copies bytes between its stdio
+and the host's socket. Whatever came before that line is a login shell's and is discarded.
+The declaration is the bridge's: a `declare` of another front door on the channel is
+refused, and the client at the other end never starts, stops or signals a process.
+`desktop` is a human, as `board` and `cli-tty` are, and its Actor carries `from`: the
+`--client` name and the SSH client address the bridge saw.
+
 So are the ones that write anything else: `confirm` (a proposal's id and content hash) and
 `decline` (its id and content hash too), recorded in its Herd's proposals journal under the Actor; `dispose`,
 what became of a Run's work; `steerAbout`, which has the evaluator turn free words about a

@@ -664,11 +664,28 @@ export const FrontDoor = Schema.Literals([
   "cli",
   "cli-tty",
   "board",
+  "desktop",
   "driver",
   "evaluator",
   "chat",
 ]);
 export type FrontDoor = typeof FrontDoor.Type;
+
+/** Where a bridged channel came from: the computer its front door named, and the SSH client the bridge saw. */
+export const Where = Schema.Struct({
+  client: Schema.optionalKey(Schema.String),
+  ssh: Schema.optionalKey(Schema.String),
+});
+export type Where = typeof Where.Type;
+
+/** What a channel says it is, once. */
+export const Declaration = Schema.Struct({
+  frontDoor: FrontDoor,
+  /** The herdr session socket it runs in, where what it asks names workspaces and panes. */
+  session: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  from: Schema.optionalKey(Where),
+});
+export type Declaration = typeof Declaration.Type;
 
 /**
  * What any front door, on this computer or another, may ask a host. Every operation takes
@@ -678,11 +695,7 @@ export const FrontDoorRpcs = RpcGroup.make(
   Rpc.make("board", { success: BoardMessage, stream: true }),
   /** Once per channel, for good; a channel that never declares is stamped `cli`, never a human. */
   Rpc.make("declare", {
-    payload: {
-      frontDoor: FrontDoor,
-      /** The herdr session socket it runs in, where what it asks names workspaces and panes. */
-      session: Schema.optionalKey(Schema.NullOr(Schema.String)),
-    },
+    payload: Declaration,
     error: HostRefused,
   }),
   Rpc.make("start", {
