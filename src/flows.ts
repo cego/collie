@@ -805,21 +805,6 @@ export const workspaceFlow = Effect.fn("Flows.workspaceFlow")(function* (
   herdr: Herdr,
   env: PluginEnv,
 ) {
-  const session: ControlSession = {
-    herdr,
-    ...scopeFor(env, env.cwd),
-    stateDir: env.stateDir,
-    paneId: env.paneId,
-    pluginRoot: env.pluginRoot,
-    userDir: env.userDir,
-    // The Control Plane runs its actions on one fiber, one at a time, so a hand-off to
-    // an agent over the threshold must not hold that queue while a compaction runs. It
-    // asks, and reports that the compaction is in the air; the human presses the key
-    // again when the pane says it has finished. No work is sent either way.
-    compaction: { waitMs: 0 },
-    tasksOf: yield* followBoard(env),
-    detailOf: yield* followRunDetail(env),
-  };
   const key = yield* herdOf(env.socketPath).pipe(Effect.catch(() => Effect.succeed(null)));
   const home = key === null ? null : yield* readHome(yield* homePath(env.stateDir, key));
   // A board outside the Home is a board this Herd no longer has: one Home per Herd, so
@@ -839,6 +824,21 @@ export const workspaceFlow = Effect.fn("Flows.workspaceFlow")(function* (
     }
     return yield* redirectBoard(herdr, env);
   }
+  const session: ControlSession = {
+    herdr,
+    ...scopeFor(env, env.cwd),
+    stateDir: env.stateDir,
+    paneId: env.paneId,
+    pluginRoot: env.pluginRoot,
+    userDir: env.userDir,
+    // The Control Plane runs its actions on one fiber, one at a time, so a hand-off to
+    // an agent over the threshold must not hold that queue while a compaction runs. It
+    // asks, and reports that the compaction is in the air; the human presses the key
+    // again when the pane says it has finished. No work is sent either way.
+    compaction: { waitMs: 0 },
+    tasksOf: yield* followBoard(env),
+    detailOf: yield* followRunDetail(env),
+  };
   /**
    * Where the shortcut was pressed, which is what `g` narrows to and what the board
    * opens on. `env.workspaceId` is the fallback for a board nobody arrived at through
