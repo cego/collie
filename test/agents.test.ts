@@ -10,10 +10,11 @@
 // second engine on the same file rather than a second map.
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
+import type { BunServices } from "@effect/platform-bun";
 import { Duration, Effect, FileSystem, Layer, Schema } from "effect";
 import * as WorkflowEngine from "effect/unstable/workflow/WorkflowEngine";
 import { Rig, FakeHerdr, type Call } from "./support/recorder";
-import { runEffect } from "./support/effect";
+import { fastForward, runEffect as runLive } from "./support/effect";
 import { onMachineWith } from "./support/live";
 import {
   Agents,
@@ -101,6 +102,10 @@ const hostOf = (): AgentHost => ({
   pollMs: 20,
   collectMs: 400,
 });
+
+/** Every wait in here is on a clock that moves many times faster than the wall's. */
+const runEffect = <A, E>(effect: Effect.Effect<A, E, BunServices.BunServices>) =>
+  runLive(fastForward(effect));
 
 /** One host's lifetime: a fresh engine on the same directory is what a restart is. */
 const session = <A, E>(

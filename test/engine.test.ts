@@ -6,7 +6,8 @@
 // a missing module leave work recoverable — have no answer in an in-memory engine.
 
 import { expect, test } from "bun:test";
-import { Effect, FileSystem, Layer, Schema, Scope } from "effect";
+import { Effect, Exit, FileSystem, Layer, Option, Schema, Scope } from "effect";
+import { TestClock } from "effect/testing";
 import * as WorkflowEngine from "effect/unstable/workflow/WorkflowEngine";
 import * as Workflow from "effect/unstable/workflow/Workflow";
 import { engineLayer, TOOLCHAIN } from "../src/engine";
@@ -16,6 +17,9 @@ import { HostReply, events, fixtures, openHost, root, until, workspace } from ".
 const stopsIn = (log: ReadonlyArray<string>) => log.filter((line) => line === "stopped").length;
 
 const suspended = (reply: typeof HostReply.Type) => reply.status === "suspended";
+
+/** What a `checks` reply carries: each entry asked about, with its problems. */
+const Problems = Schema.Record(Schema.String, Schema.Array(Schema.String));
 
 /** The run has reached its question and the host knows it, so an answer has one to land on. */
 const asking = (reply: typeof HostReply.Type) => (reply.diagnostics ?? []).includes("decision");
@@ -318,19 +322,18 @@ test(
         expect(clean.diagnostics).toEqual([]);
 
         // One module's error says nothing about another's: the broken one names its own
-        // file and line, and the entry beside it still checks clean.
-        const broken = yield* host.ask({ op: "check", dir: wf, entry: `${wf}/broken.workflow.ts` });
-        expect(broken.diagnostics?.join("\n")).toContain("broken.workflow.ts(");
-        const beside = yield* host.ask({ op: "check", dir: wf, entry: `${wf}/plain.workflow.ts` });
-        expect(beside.diagnostics).toEqual([]);
-        // A definition is typechecked against the same declarations authors are given.
-        for (const defined of ["hello", "quiet", "branches", "delegates", "declines"]) {
-          const checked = yield* host.ask({
-            op: "check",
-            dir: wf,
-            entry: `${wf}/${defined}.workflow.ts`,
-          });
-          expect(checked.diagnostics).toEqual([]);
+        // file and line, and the entries beside it still check clean — a definition among
+        // them, typechecked against the same declarations authors are given.
+        const beside = ["plain", "hello", "quiet", "branches", "delegates", "declines"];
+        const checked = yield* host.ask({
+          op: "checks",
+          entries: ["broken", ...beside].map((name) => `${wf}/${name}.workflow.ts`),
+        });
+        expect(checked.ok).toBe(true);
+        const problems = Schema.decodeUnknownSync(Problems)(checked.value);
+        expect(problems[`${wf}/broken.workflow.ts`]?.join("\n")).toContain("broken.workflow.ts(");
+        for (const name of beside) {
+          expect([name, problems[`${wf}/${name}.workflow.ts`]]).toEqual([name, []]);
         }
         yield* host.stop;
       }).pipe(Effect.scoped),
@@ -387,45 +390,64 @@ test(
   120_000,
 );
 
-test(
-  "a run whose module is missing outlasts the deadline a default host would fail it on",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const { wf, state } = yield* workspace("collie-engine-deadline-");
-        const first = yield* openHost(state);
-        yield* first.ask({ op: "load", entry: `${wf}/proof.workflow.ts` });
-        yield* first.ask({ op: "start", id: "proof", runId: "r1", input: { note: "patient" } });
-        yield* first.until({ op: "poll", id: "proof", runId: "r1" }, suspended);
-        yield* first.stop;
-
-        yield* fs.remove(`${wf}/proof.workflow.ts`);
-        const second = yield* openHost(state);
-        // Longer than upstream's one-minute entityRegistrationTimeout, which this host
-        // does not use: the point of the setting is that waiting is not a failure.
-        yield* Effect.sleep("70 seconds");
-        yield* fs.copyFile(`${fixtures}/proof.workflow.ts`, `${wf}/proof.workflow.ts`);
-        yield* second.stop;
-
-        const third = yield* openHost(state);
-        yield* third.ask({
-          op: "answer",
-          id: "proof",
-          runId: "r1",
-          decision: "decision",
-          value: "late",
+test("work for a workflow nobody has registered waits past upstream's deadline for it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-engine-deadline-" });
+      const flow = (name: string) =>
+        Workflow.make(name, {
+          payload: { runId: Schema.String },
+          idempotencyKey: (payload) => payload.runId,
+          success: Schema.String,
         });
-        const done = yield* third.until({ op: "poll", id: "proof", runId: "r1" }, complete);
-        expect(done.value).toBe("note:patient=late");
-        yield* third.stop;
-        expect(
-          (yield* events(state, "r1")).filter((line) => line.startsWith("launch")),
-        ).toHaveLength(1);
-      }).pipe(Effect.scoped),
-    ),
-  240_000,
-);
+      const patient = flow("patient");
+      const sibling = flow("sibling");
+      const payload = { runId: "r1" };
+      const executionId = yield* patient.executionId(payload);
+      // In-process, so the minute upstream would fail it after passes on a test clock.
+      const session = <A, E>(
+        registered: Layer.Layer<never, never, WorkflowEngine.WorkflowEngine>,
+        body: Effect.Effect<A, E, WorkflowEngine.WorkflowEngine | TestClock.TestClock>,
+      ) =>
+        body.pipe(
+          Effect.provide(registered),
+          Effect.provide(engineLayer({ dir })),
+          Effect.provide(TestClock.layer()),
+          Effect.scoped,
+          Effect.orDie,
+        );
+
+      // Its module is missing while another one loaded, which is when upstream's
+      // registration window starts; three minutes is past it whichever way it counts.
+      const waiting = yield* session(
+        sibling.toLayer(() => Effect.succeed("ran")),
+        Effect.gen(function* () {
+          yield* patient.execute(payload, { discard: true });
+          for (let step = 0; step < 36; step++) {
+            yield* TestClock.adjust("5 seconds");
+            // The engine's storage reads are real IO between ticks.
+            yield* TestClock.withLive(Effect.sleep("2 millis"));
+          }
+          return yield* patient.poll(executionId);
+        }),
+      );
+      expect(Option.isNone(waiting)).toBe(true);
+
+      const done = yield* session(
+        patient.toLayer(() => Effect.succeed("recovered")),
+        TestClock.withLive(
+          until(
+            () => patient.poll(executionId),
+            (result) => Option.isSome(result) && result.value._tag === "Complete",
+          ),
+        ),
+      );
+      expect(Option.isSome(done) && done.value._tag === "Complete" && done.value.exit).toEqual(
+        Exit.succeed("recovered"),
+      );
+    }).pipe(Effect.scoped),
+  ));
 
 test(
   "a host killed mid-run leaves the work suspended rather than failed, and the next one finishes it",
@@ -626,7 +648,7 @@ test(
         const { wf, state } = yield* workspace("collie-engine-sdk-types-");
         const host = yield* openHost(state);
         expect((yield* host.ask({ op: "provision", dir: wf })).ok).toBe(true);
-        for (const entry of [
+        const entries = [
           "echo.workflow.ts",
           "unwired.workflow.ts",
           "proof.workflow.ts",
@@ -649,9 +671,15 @@ test(
           "architecture.workflow.ts",
           "implement.workflow.ts",
           "renovate.workflow.ts",
-        ]) {
-          const checked = yield* host.ask({ op: "check", dir: wf, entry: `${wf}/${entry}` });
-          expect([entry, checked.diagnostics]).toEqual([entry, []]);
+        ];
+        const checked = yield* host.ask({
+          op: "checks",
+          entries: entries.map((entry) => `${wf}/${entry}`),
+        });
+        expect(checked.ok).toBe(true);
+        const problems = Schema.decodeUnknownSync(Problems)(checked.value);
+        for (const entry of entries) {
+          expect([entry, problems[`${wf}/${entry}`]]).toEqual([entry, []]);
         }
         yield* host.stop;
       }).pipe(Effect.scoped),
