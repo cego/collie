@@ -479,10 +479,16 @@ land, such as a review, or it ended with nothing to file — as one line, `3 fin
 reads it from this checkout's history rather than carding every Run Collie has ever kept.
 
 Collie learns a merge by itself. In the background, every few minutes and never on a
-redraw, it asks GitLab about each merge request in Waiting on you; one that merged gets its
-`merged` disposition recorded as GitLab's word and its card moves to Finished. One that was
-closed without merging only changes its card's sentence: closing can mean superseded as
-easily as abandoned, and only you know which.
+redraw, it asks GitLab (`glab`) or GitHub (`gh`) about each merge request in Waiting on you;
+one that merged gets its `merged` disposition recorded as that forge's word and its card
+moves to Finished. One that was closed without merging only changes its card's sentence:
+closing can mean superseded as easily as abandoned, and only you know which. The same
+answer carries the forge's own checks — GitLab's head pipeline, GitHub's check rollup —
+and the revision they ran at, which is the one Collie's own checks are counted at too: a
+failing one names itself (`cego/collie#30 is open, but lint failed at 1a2b3c4.`), a pending
+one reads `cego/collie#30 is open; its pipeline is still running.`, and Ready to release
+needs every check the card knows of to have passed. No `gh`, or one nobody logged in to,
+leaves the card `nothing has checked it` and says nothing about why.
 
 The header sentence counts the whole Herd, not what the search left: `One task is
 waiting on you. 1 ready to release, 2 waiting on you. 4 working, 1 gone quiet.` — the

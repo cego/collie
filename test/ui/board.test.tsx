@@ -978,6 +978,7 @@ const MR_PANEL = {
   unresolved: true,
   notes: 3,
   headSha: "abc1234",
+  head: "abc1234",
   mergedSha: "",
   updatedAt: NOW,
   url: "https://gitlab.cego.dk/mk/collie/-/merge_requests/151",

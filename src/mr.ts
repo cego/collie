@@ -318,6 +318,8 @@ export interface MrDetails {
   notes: number;
   /** Seven characters: enough to tell two heads apart, short enough to read. */
   headSha: string;
+  /** The head revision in full, which evidence is matched against, or "" where unsaid. */
+  head: string;
   /** The commit the merge put on the target branch, in full, or "" while it is not merged. */
   mergedSha: string;
   /** When GitLab last saw it change, in epoch milliseconds, or 0 when it did not say. */
@@ -389,6 +391,7 @@ export function mrDetails<R>(
       unresolved: mr.blocking_discussions_resolved === false,
       notes: mr.user_notes_count ?? 0,
       headSha: (mr.sha ?? "").slice(0, 7),
+      head: mr.sha ?? "",
       mergedSha:
         mr.state === "merged" ? (mr.merge_commit_sha ?? mr.squash_commit_sha ?? mr.sha ?? "") : "",
       updatedAt: Number.isFinite(updated) ? updated : 0,

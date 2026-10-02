@@ -22,7 +22,7 @@ import { listTasks, type TaskRecord } from "./task";
 import { ago, agoShort, spanned } from "./time";
 import { readVerifications, type Verification } from "./verify";
 import { markersOf, runningCheck, type RunningCheck } from "./checks";
-import { readMrStates } from "./merges";
+import { readForge, readMrStates } from "./merges";
 import { filed, standingOf } from "./standing";
 import { offersOf } from "./lifecycle";
 import { shell } from "./mr";
@@ -213,6 +213,31 @@ export type Checks =
   | { readonly state: "failed"; readonly name: string; readonly at: string }
   | { readonly state: "running" }
   | { readonly state: "unchecked" };
+
+/** What the forge said of a merge request's own checks: a pipeline or a check rollup. */
+export type ForgeChecks =
+  | { readonly state: "passed" | "running" | "unknown" }
+  | { readonly state: "failed"; readonly name: string };
+
+/** The forge's word on a merge request's checks, and the head revision it said it of. */
+export interface ForgeFacts {
+  readonly checks: ForgeChecks;
+  readonly head: string | null;
+}
+
+/**
+ * Collie's own checks and the forge's, as one: any failure fails, anything running is
+ * running, and passed needs every source that said anything to have passed.
+ */
+export function withForge(collie: Checks, forge: ForgeFacts | null): Checks {
+  const said = forge?.checks ?? { state: "unknown" };
+  const at = forge?.head ?? ("at" in collie ? collie.at : "");
+  if (said.state === "failed") return { state: "failed", name: said.name, at };
+  if (collie.state === "failed") return collie;
+  if (said.state === "running" || collie.state === "running") return { state: "running" };
+  if (said.state === "passed") return { state: "passed", at };
+  return collie;
+}
 
 /** Everything the sentence is made of, apart from the TaskView so the formatter is pure. */
 export interface Sentence {
@@ -409,8 +434,8 @@ function doneSentence(
   switch (disposition.kind) {
     case "merged": {
       const deployed = mrState === "on-stage" || mrState === "in-prod" ? DEPLOYED[mrState] : "";
-      // GitLab's word carries no time of its own: the stamp is when Collie asked.
-      if (disposition.by === "gitlab")
+      // The forge's word carries no time of its own: the stamp is when Collie asked.
+      if (disposition.by === "gitlab" || disposition.by === "github")
         return (disposition.ref === "" ? "Merged." : `Merged as ${disposition.ref}.`) + deployed;
       return (
         (disposition.ref === ""
@@ -826,6 +851,8 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
   quietMs?: number;
   /** What GitLab last said about each merge request, by the reference the card carries. */
   mrStates?: ReadonlyMap<string, MrState>;
+  /** What the forge last said about each merge request's checks, by its label. */
+  forge?: ReadonlyMap<string, ForgeFacts>;
   /** What a Run offers now; the host is asked where this is not given. */
   offers?: (runId: string) => Effect.Effect<ReadonlyArray<OfferView>>;
 }) {
@@ -839,6 +866,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
   const registered = opts.registered ?? (yield* everyRegistered(stateDir));
   const proposals = opts.proposals ?? (yield* proposalsOf(stateDir, socketPath));
   const mrStates = opts.mrStates ?? (yield* readMrStates(stateDir));
+  const forge = opts.forge ?? (yield* readForge(stateDir));
   const live = new Map((opts.alive ?? []).map((agent) => [agent.name, agent]));
   const markers = yield* markersOf(all);
   const offersOfRun =
@@ -948,10 +976,15 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
       disposition === null &&
       !landed &&
       (mrState === null || mrState === "open");
+    // Collie's own evidence counts at the head the forge reported, where it reported one.
+    const forged = mr === null ? null : (forge.get(mrLabel(mr)) ?? null);
     const checks = awaitingMerge
-      ? checksAt(
-          yield* readVerifications(leader.evidence).pipe(Effect.catch(() => Effect.succeed([]))),
-          yield* branchHead(leader),
+      ? withForge(
+          checksAt(
+            yield* readVerifications(leader.evidence).pipe(Effect.catch(() => Effect.succeed([]))),
+            forged?.head ?? (yield* branchHead(leader)),
+          ),
+          forged,
         )
       : null;
     const finishedAt = settledNow ? endedAt(leader) : 0;
