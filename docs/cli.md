@@ -1386,7 +1386,10 @@ The operations that change a Run are on `FrontDoorRpcs` too: `start`, `answer`, 
 channel first sends `declare` with its front door, and the host stamps every operation on
 it with that, as a line in the Run's `operations.jsonl`: the operation, the request, the
 Actor and what came of it ([ADR-0039](adr/0039-every-operation-records-who-asked.md)). A
-channel that declares nothing is `cli`.
+channel that declares nothing is `cli`. `declare` may also carry `session`, the herdr
+session socket the front door runs in: a confirmed, asked or proposed action looks its
+workspaces, panes and Herd up there. A channel that names none has them looked up in the
+session the host was started from.
 
 So are the ones that write anything else: `confirm` (a proposal's id and content hash) and
 `decline` (its id and content hash too), recorded in its Herd's proposals journal under the Actor; `dispose`,

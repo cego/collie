@@ -55,9 +55,7 @@ const decodeOffered = Schema.decodeUnknownSync(
 );
 const decodeAction = Schema.decodeUnknownSync(ActionSchema);
 
-// Registration is once per process and closes over the registering caller's state
-// directory, so a file that registers has to put the registry back — otherwise the next
-// file's confirmations run against this one's directory and change nothing it can see.
+// A file that registers its own executors leaves none for the next file.
 afterAll(() => {
   resetExecutors();
 });

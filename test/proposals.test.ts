@@ -59,8 +59,6 @@ beforeEach(() =>
       const fs = yield* FileSystem.FileSystem;
       stateDir = yield* fs.makeTempDirectory({ prefix: "hw-proposals-" });
       file = yield* proposalsPath(stateDir, "herd-1");
-      // The executors register once per process and close over the environment they were
-      // given, so without this a test carries out its actions in the first test's.
       resetExecutors();
     }),
   ),

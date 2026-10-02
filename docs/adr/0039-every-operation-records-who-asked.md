@@ -20,7 +20,9 @@ asking for something else is refused.
 `declare` with its front door (`board`, `cli`, `cli-tty`, `chat` and the rest of an
 Actor's origins). The host stamps every operation on that channel with it, so nothing
 that performs an operation can name its own origin. A channel that declares nothing is
-`cli`, which is never a human.
+`cli`, which is never a human. `declare` may also name the herdr session the front door
+runs in (`session`); what it confirms, asks for or proposes is carried out in that session,
+or in the host's own where it names none.
 
 **D3. The Run's audit trail holds it.** Each operation is a line in the Run's
 `operations.jsonl`: what it was, the request, the Actor (front door and request id) and
