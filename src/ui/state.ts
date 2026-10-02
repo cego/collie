@@ -14,11 +14,11 @@ import { GLYPH } from "../naming";
 import { markFor, marksOf, NO_MARKS, worstOf, type Marks } from "../lines";
 import { agoShort } from "../time";
 import type { Mode } from "../flows";
-import type { DefinitionRow, RunDetail, SettingsView } from "../views";
+import type { DefinitionRow, SettingsView } from "../views";
 import { MAX_AGENTS, type AgentRow, type RunRow } from "../workspace";
 import type { WideGroup, WideView, WorkspaceView } from "../workspace";
 import type { Density, Scope } from "../config";
-import type { TaskView } from "../board";
+import type { RunDetail, TaskView } from "../board-model";
 import { mrTarget, parseMrTarget, parseMrUrl } from "../mr";
 import type { Live } from "../live";
 import type { Selection } from "../selection";
@@ -265,7 +265,7 @@ export type Command =
    * it drew.
    */
   | { _tag: "ConfirmProposal"; id: string; hash: string }
-  | { _tag: "DeclineProposal"; id: string }
+  | { _tag: "DeclineProposal"; id: string; hash: string }
   /**
    * Ask for a value, rather than write one. The app answers this itself by opening its
    * editor: an empty `SetDefault` used to stand in for "ask me first", which the
@@ -1460,7 +1460,7 @@ export function keyIntent(at: KeyContext, key: Keypress): KeyIntent | null {
   if (at.on._tag === "Proposal") {
     const { id, hash } = at.on.proposal;
     if (key.name === "return") return doing({ _tag: "ConfirmProposal", id, hash });
-    if (key.name === "escape") return doing({ _tag: "DeclineProposal", id });
+    if (key.name === "escape") return doing({ _tag: "DeclineProposal", id, hash });
     return null;
   }
   // Before whoever has the keyboard, but only where that is not a field taking text:
@@ -1573,41 +1573,6 @@ export function keyIntent(at: KeyContext, key: Keypress): KeyIntent | null {
     (a) => a.key === (key.name === "return" ? "\r" : key.sequence),
   );
   return action ? doing(action.command) : null;
-}
-
-/** How one line of a panel's markdown is drawn. Four, because four is what helps. */
-export type LineStyle = "heading" | "list" | "code" | "plain";
-
-export interface StyledLine {
-  text: string;
-  style: LineStyle;
-}
-
-/**
- * A review or a plan spec as styled lines. Four styles and no markdown dependency: the
- * panel needs a long document to be skimmable — where the headings are, what is a list,
- * what is code — and nothing beyond that. Inline emphasis is deliberately left alone,
- * because rewriting the text is how a review stops saying what the agent wrote.
- *
- * ponytail: line-level only. A parser goes in the day something needs tables.
- */
-/** A hash needs its space: `#!/bin/sh` in something the agent pasted is not a heading. */
-const HEADING = /^#{1,6}\s/;
-const LIST_ITEM = /^\s*([-*+]|\d+\.)\s/;
-const FENCE = "```";
-
-export function markdownLines(text: string): StyledLine[] {
-  let fenced = false;
-  return text.split("\n").map((line): StyledLine => {
-    if (line.trimStart().startsWith(FENCE)) {
-      fenced = !fenced;
-      return { text: line, style: "code" };
-    }
-    if (fenced) return { text: line, style: "code" };
-    if (HEADING.test(line)) return { text: line, style: "heading" };
-    if (LIST_ITEM.test(line)) return { text: line, style: "list" };
-    return { text: line, style: "plain" };
-  });
 }
 
 /** Where a pending question has got to: the highlighted option, or the text so far. */

@@ -165,11 +165,10 @@ manager removes it: git's refusals are the last guard, so a wrong judgement here
 fail to clean, never delete work. Only paths some run recorded with `created_by_collie`
 are candidates.
 
-There is no daemon and no cron: pruning runs at `run start` and, at most every few
-minutes, on the Control Plane's refresh — forked, never awaited, because the board redraws
-on every keypress and a sweep walks every due checkout with git and glab. The frame goes
-out with what the last sweep said; one sweep runs at a time, and its clock starts when it
-finishes. Each
+Pruning runs every 3 minutes in the host, beside its merge watch and
+News, so it happens with no pane open. A board shows what the last sweep said, read from
+`worktrees.json`, and never sweeps itself. One sweep runs at a time, and its clock starts
+when it finishes. Each
 worktree's verdict is also kept for a few minutes in `worktrees.json` in the state
 directory, so a due check is the only thing that shells out to git and glab, and the state
 file is rewritten only when something moved.
@@ -210,6 +209,14 @@ the `prompt_box_body` rule's `evidence.region_preview`; the pinned 0.8.2 and 0.9
 answer it (`herdr agent explain --file <screen> --agent claude --json` checks a binary
 without a server), and a reply without it reads as a box nobody can see, which asks a
 human rather than pressing Enter.
+
+`session list --json` is the second: it answers with a bare `{ sessions }` rather than an
+envelope, so it is not in the socket schema either. The host reads it to find every running
+session on the Machine (0.9.1 has the command; whether the pinned 0.8.2 does is not
+checked), and an answer it cannot decode reads as the one session the host inherited. Each
+session's agents come from `agent list` with that session's `HERDR_SOCKET_PATH`, and its
+changes from `events.subscribe` on its socket: pane lifecycle events and each agent pane's
+status, subscribed again after every event so a new pane is watched too.
 
 The version Collie is verified against is `herdr-pin.json`, with the schema that version
 prints committed beside it as `herdr-api-schema.json`, and `min_herdr_version` in

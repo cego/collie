@@ -14,8 +14,8 @@ import {
   buildSettings,
   buildWorkflows,
   planTicket,
-  type PlanPanel,
 } from "../../src/views";
+import type { PlanPanel } from "../../src/board-model";
 import { FINDINGS_FILE, FindingSchema, REVIEW_FILE } from "../../src/output";
 import type { RunFacts } from "../../src/runs";
 import { madeRun } from "../support/records";

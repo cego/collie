@@ -21,12 +21,7 @@ export const MODULES = [
   "retains.workflow.ts",
 ];
 
-/**
- * One test, in an installation of its own whose host is stopped when it ends. Executors
- * register once per process and close over the registering caller's state directory, so
- * the registry is emptied for every test — otherwise a confirmation runs against another
- * test's Runs.
- */
+/** One test, in an installation of its own whose host is stopped when it ends. */
 export const hosted = <A, E>(
   prefix: string,
   body: (herd: { world: World; env: PluginEnv }) => Effect.Effect<A, E, BunServices | Scope.Scope>,

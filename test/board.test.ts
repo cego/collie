@@ -9,22 +9,29 @@ import {
   boardLines,
   buildBoard,
   finishedLabel,
-  headerSentence,
-  foldWaiting,
   heldLine,
-  matchesTask,
-  sectionOf,
-  sectionsOf,
   sentenceFor,
   whereItIs,
   workingLabel,
   type Sentence,
-  type TaskView,
 } from "../src/board";
+import {
+  Answered,
+  Controlled,
+  EVIDENCE_GATE,
+  foldWaiting,
+  headerSentence,
+  matchesTask,
+  sectionOf,
+  sectionsOf,
+  type TaskView,
+} from "../src/board-model";
+import { recordAudit } from "../src/audit";
 import { recordDisposition } from "../src/disposition";
+import { nothingApproved } from "../src/outcome";
 import { readEnv } from "../src/env";
 import type { AgentInfo } from "../src/herdr";
-import type { ProposalLine } from "../src/proposals";
+import { append as appendProposal, type ProposalLine } from "../src/proposals";
 import type { AgentEntry } from "../src/registry";
 import type { RunFacts } from "../src/runs";
 import type { TaskRecord } from "../src/task";
@@ -544,6 +551,32 @@ test("the pipeline is the Task's Runs in the order they started, each as it stan
     }),
   ));
 
+test("a Task's card speaks for its newest Run, in whatever order the Runs arrive", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const plan = yield* madeRun(dir, {
+        id: "r-plan",
+        workflow: "plan",
+        task: "task-1",
+        state: "succeeded",
+        created: "2026-09-14T09:00:00Z",
+      });
+      const build = yield* madeRun(dir, {
+        id: "r-impl",
+        task: "task-1",
+        state: "failed",
+        created: "2026-09-14T10:00:00Z",
+      });
+
+      // The host's registry lists Runs in the order they were admitted.
+      const [view] = yield* board(env, [plan, build]);
+
+      expect(view!.run).toBe("r-impl");
+      expect(view!.state).toBe("failed");
+    }),
+  ));
+
 test("a question the host holds is the card's Decision, and it is Needs you", () =>
   runEffect(
     Effect.gen(function* () {
@@ -723,6 +756,22 @@ test("a Run is not quiet while its agent works, a check runs, or its agents writ
       // An idle agent and nothing written for an hour is what quiet is.
       expect(view(idle.id).state).toBe("quiet");
       expect(view(idle.id).sentence).toBe("Building, but silent for 1 hour.");
+    }),
+  ));
+
+test("what the host writes about a finished Run does not move when it ended", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const old = "2026-09-13T09:00:00Z";
+      const run = yield* madeRun(dir, { state: "failed", branch: "mk/old-work" });
+      yield* writtenAt(`${run.dir}/log`, old);
+      // The diff kept for its drawer and the trail of who disposed of it.
+      yield* writtenAt(`${run.dir}/diff.json`, "2026-09-14T10:04:00Z");
+      yield* writtenAt(`${run.dir}/operations.jsonl`, "2026-09-14T10:04:00Z");
+
+      const [view] = yield* board(env, [run]);
+      expect(view!.ended).toBe(Date.parse(old));
     }),
   ));
 
@@ -918,6 +967,33 @@ test("a child Run's proposal is its Task's own decision", () =>
     }),
   ));
 
+test("the board reads every Herd's proposals, not only the one its host came from", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const run = yield* madeRun(dir, { id: "r1", task: "task-1" });
+      const proposal = (id: string): ProposalLine => ({
+        kind: "proposal",
+        id,
+        created_at: "2026-09-14T09:00:00Z",
+        expires_at: "2026-09-14T11:00:00Z",
+        interpretation: "follow up on the review",
+        targets: [{ run: run.id }],
+        actions: [{ kind: "stop", run: run.id }],
+        allowed_now: [],
+        intent_versions: {},
+        content_hash: "abc",
+        by: "evaluator:call-1",
+        state: "pending",
+      });
+      yield* appendProposal(`${dir}/herd/other-session/proposals.jsonl`, proposal("p-other"));
+
+      const views = yield* board(env, [run], { proposals: undefined });
+
+      expect(views[0]!.decision).toMatchObject({ kind: "proposal", id: "p-other" });
+    }),
+  ));
+
 test("Finished is today's work, and older finished Runs are History's", () =>
   runEffect(
     Effect.gen(function* () {
@@ -982,3 +1058,206 @@ test(
     ),
   60_000,
 );
+
+/** A plan of three repositories, each waiting on the one before, in a root with their checkouts. */
+const threeRepoPlan = Effect.fn("board.threeRepoPlan")(function* (runDir: string, root: string) {
+  const fs = yield* FileSystem.FileSystem;
+  yield* fs.makeDirectory(`${runDir}/plan/issues`, { recursive: true });
+  const tickets: Array<[string, string, string]> = [
+    ["01-api.md", "api", "None"],
+    ["02-web.md", "web", "01"],
+    ["03-cli.md", "cli", "02"],
+  ];
+  for (const [file, repo, blocked] of tickets) {
+    yield* fs.makeDirectory(`${root}/${repo}/.git`, { recursive: true });
+    yield* fs.writeFileString(
+      `${runDir}/plan/issues/${file}`,
+      `# ${file}\n\n**Blocked by:** ${blocked}\n\n**Repo:** ${repo}\n`,
+    );
+  }
+});
+
+test("a fan-out's card lists its Repo runs and every repository still to come, by wave", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const root = `${dir}/root`;
+      const parent = yield* madeRun(dir, { id: "r-fan", task: "task-1", cwd: root });
+      yield* threeRepoPlan(parent.dir, root);
+      const api = yield* madeRun(dir, {
+        id: "r-api",
+        task: "task-1",
+        parent: "r-fan",
+        repo: "api",
+        state: "succeeded",
+        mr: "mr:cego/api!4",
+      });
+      const web = yield* madeRun(dir, {
+        id: "r-web",
+        task: "task-1",
+        parent: "r-fan",
+        repo: "web",
+      });
+
+      const views = yield* board(env, [web, api, parent]);
+
+      expect(views).toHaveLength(1);
+      expect(views[0]!.run).toBe("r-fan");
+      expect(views[0]!.children).toEqual([
+        { repo: "api", run: "r-api", state: "done", mr: "mr:cego/api!4" },
+        { repo: "web", run: "r-web", state: "active", mr: null },
+        { repo: "cli", run: null, state: "todo", mr: null },
+      ]);
+      expect(views[0]!.sentence).toBe("Wave 2 of 3. api landed, web is building, cli is next.");
+    }),
+  ));
+
+test("a fan-out is not quiet while one of its Repo runs works or writes", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const fs = yield* FileSystem.FileSystem;
+      const old = "2026-09-14T09:00:00Z";
+      const root = `${dir}/root`;
+      const parent = yield* madeRun(dir, { id: "r-fan", task: "task-1", cwd: root });
+      yield* threeRepoPlan(parent.dir, root);
+      const web = yield* madeRun(dir, {
+        id: "r-web",
+        task: "task-1",
+        parent: "r-fan",
+        repo: "web",
+      });
+      const then = DateTime.toDateUtc(DateTime.makeUnsafe(old));
+      yield* fs.utimes(`${parent.dir}/plan`, then, then);
+      for (const run of [parent, web]) {
+        yield* launched(dir, run.id, ["build"]);
+        yield* writtenAt(`${run.dir}/log`, old);
+        yield* fs.utimes(`${dir}/agents/${run.id}/launches`, then, then);
+      }
+      const stateOf = (over: Partial<Parameters<typeof buildBoard>[0]>) =>
+        board(env, [web, parent], over).pipe(Effect.map((views) => views[0]!.state));
+
+      expect(yield* stateOf({})).toBe("quiet");
+      expect(
+        yield* stateOf({
+          alive: [agent("impl-web", "working")],
+          registered: [registered("impl-web", web.id)],
+        }),
+      ).toBe("active");
+      yield* writtenAt(`${dir}/agents/${web.id}/build.prompt.md`, "2026-09-14T10:04:00Z");
+      expect(yield* stateOf({})).toBe("active");
+    }),
+  ));
+
+test("a held card names who held it and why, from the hold its trail recorded", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const run = yield* madeRun(dir, { task: "task-1", held: true });
+      const controlled = {
+        runId: run.id,
+        control: "hold",
+        set: true,
+        applied: true,
+        detail: "",
+        left: [],
+      };
+      yield* recordAudit(run.dir, {
+        operation: "hold",
+        request: "h-1",
+        origin: "chat",
+        reason: "waiting for the API freeze",
+        result: Controlled,
+        value: controlled,
+      });
+
+      const [view] = yield* board(env, [run]);
+
+      expect(view!.heldBy).toEqual({ by: "chat", reason: "waiting for the API freeze" });
+    }),
+  ));
+
+test("a Run parked at its evidence gate is a gate decision listing the checks it could be held to", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const fs = yield* FileSystem.FileSystem;
+      const cwd = `${dir}/checkout`;
+      yield* fs.makeDirectory(`${cwd}/.collie`, { recursive: true });
+      yield* fs.writeFileString(
+        `${cwd}/.collie/verify.json`,
+        '[{"name":"test","executable":"bun","argv":["test"],"cwd":"worktree"}]',
+      );
+      const run = yield* madeRun(dir, {
+        task: "task-1",
+        state: "waiting",
+        cwd,
+        parked: nothingApproved("r1"),
+      });
+
+      const [view] = yield* board(env, [run]);
+
+      expect(sectionOf(view!)).toBe("needs-you");
+      expect(view!.decision).toEqual({
+        kind: "gate",
+        run: "r1",
+        id: EVIDENCE_GATE,
+        step: "evidence",
+        verifications: ["test"],
+      });
+      expect(view!.sentence).toBe("Holding at the evidence gate until you approve the list.");
+    }),
+  ));
+
+test("a Run carrying on with an answer says so until it launches anything", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const run = yield* madeRun(dir, { task: "task-1" });
+      yield* recordAudit(run.dir, {
+        operation: "answer",
+        request: "a-1",
+        origin: "board",
+        result: Answered,
+        value: { runId: run.id, decision: "scope", value: "core", fresh: true },
+      });
+
+      const [view] = yield* board(env, [run]);
+
+      expect(view!.sentence).toBe("Resumed with “core”.");
+    }),
+  ));
+
+test("a Run nothing drives and no agent works on is abandoned", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const broken = "workflows/plain.workflow.ts does not load: Unexpected token";
+      const run = yield* madeRun(dir, { task: "task-1", undriven: true, note: broken });
+
+      const [view] = yield* board(env, [run]);
+
+      expect(view!.state).toBe("abandoned");
+      expect(view!.sentence).toStartWith("Its Driver died ");
+      // What to repair, because fixing the file brings the Run back.
+      expect(view!.sentence).toContain(broken);
+    }),
+  ));
+
+test("a question outranks a Run nothing drives: it is still waiting on you", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const run = yield* madeRun(dir, {
+        task: "task-1",
+        undriven: true,
+        state: "waiting",
+        asking: [{ name: "scope", prompt: "Which brands?", options: [] }],
+      });
+
+      const [view] = yield* board(env, [run]);
+
+      expect(view!.decision).toMatchObject({ kind: "question" });
+      expect(sectionOf(view!)).toBe("needs-you");
+    }),
+  ));

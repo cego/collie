@@ -145,6 +145,9 @@ const stem = (entry: string) =>
  * shipped `collie host`, started here rather than by the client so a proof can kill it;
  * `crashAt` has it kill itself between the two writes a start is made of.
  */
+/** Every control a helper asks is a new one, as a human pressing the key again would be. */
+let controls = 0;
+
 export const openHost = Effect.fn("HostTest.open")(function* (
   state: string,
   options?: { readonly crashAt?: CrashPoint },
@@ -206,8 +209,10 @@ export const openHost = Effect.fn("HostTest.open")(function* (
 
   const control = (op: string, runId: string, name: "hold" | "stop", set: boolean) =>
     Effect.gen(function* () {
+      controls += 1;
+      const request = `${op}:${runId}:${controls}`;
       const done = yield* client
-        .control({ runId: yield* resolve(runId), control: name, set })
+        .control({ runId: yield* resolve(runId), control: name, set, request })
         .pipe(Effect.result);
       if (done._tag === "Failure") return { ok: false, op, detail: sentenceOf(done.failure) };
       // Recorded either way, and the reply says which: a control over work no host is

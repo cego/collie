@@ -2,22 +2,7 @@ import { Effect, type FileSystem, type Path } from "effect";
 import { currentReports, openReports, readDrift } from "./drift";
 import { readCards } from "./cards";
 import { settled, type RunFacts } from "./runs";
-
-/**
- * What a Run wants from whoever is watching it. `none` is the ordinary case — the Run
- * is working and nobody has to do anything — and everything else is a reason to come
- * back to it.
- */
-export type AttentionCategory = "none" | "question" | "drift" | "completed" | "interrupted";
-
-export interface Attention {
-  readonly category: AttentionCategory;
-  /** Stable across releases; the code an agent branches on. */
-  readonly reason: string;
-  readonly explanation: string;
-  /** The `run` subcommands that make sense here, by name. */
-  readonly actions: ReadonlyArray<string>;
-}
+import type { Attention } from "./board-model";
 
 /**
  * The one classification every front door reads: chat, the board's detail and the CLI

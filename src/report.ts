@@ -3,7 +3,7 @@
 
 import { STOP, type RunView } from "./engine";
 import { resultText } from "./lifecycle";
-import type { Metrics } from "./metrics";
+import type { Metrics } from "./board-model";
 
 export interface WorkflowTally {
   readonly workflow: string;

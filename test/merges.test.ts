@@ -58,6 +58,7 @@ test("a merge GitLab reports lands the work: a disposition by gitlab, and the ca
         now: Date.parse("2026-09-17T10:00:00Z"),
         checked: new Map(),
         states,
+        panels: new Map(),
       });
 
       const recorded = yield* readDispositions(run.dir);
@@ -89,6 +90,7 @@ test("a closed merge request is news, not a verdict, and a fresh answer is not a
         now,
         checked,
         states,
+        panels: new Map(),
       });
       expect(yield* readDispositions(run.dir)).toEqual([]);
       const again = yield* boardOf({ mrStates: states, now });
@@ -105,6 +107,7 @@ test("a closed merge request is news, not a verdict, and a fresh answer is not a
         now: now + 120_000,
         checked,
         states,
+        panels: new Map(),
       });
       expect(log.length).toBe(asked);
     }),
@@ -168,6 +171,7 @@ test("a merged card follows its deploy jobs: on stage, then in production, then 
             now,
             checked,
             states,
+            panels: new Map(),
           });
           return log;
         });
@@ -221,6 +225,7 @@ test("what is working, or already disposed of, is not asked about", () =>
         now: Date.parse("2026-09-17T10:00:00Z"),
         checked: new Map(),
         states: new Map(),
+        panels: new Map(),
       });
       expect(log).toEqual([]);
     }),

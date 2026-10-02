@@ -55,9 +55,7 @@ const decodeOffered = Schema.decodeUnknownSync(
 );
 const decodeAction = Schema.decodeUnknownSync(ActionSchema);
 
-// Registration is once per process and closes over the registering caller's state
-// directory, so a file that registers has to put the registry back — otherwise the next
-// file's confirmations run against this one's directory and change nothing it can see.
+// A file that registers its own executors leaves none for the next file.
 afterAll(() => {
   resetExecutors();
 });
@@ -300,7 +298,7 @@ test(
         // The registry is filled by the module that owns each operation, so it has to be
         // asked rather than listed: a kind with no executor is refused at confirmation as
         // `executor_missing`, and a route to one would be control reduced to advice.
-        yield* registerRunExecutors(env);
+        yield* registerRunExecutors();
         const carried = new Set(registeredKinds());
         const offered = encodeJson(toolNamed("collie_propose")!.input);
 
@@ -359,7 +357,7 @@ test(
 test("nothing this build cannot carry out is offered as something to ask for", () =>
   runEffect(
     Effect.gen(function* () {
-      yield* registerRunExecutors(readEnv({ ...process.env }));
+      yield* registerRunExecutors();
       const carried = new Set(registeredKinds());
       // `ask_human` and `none` are what the validator turns a refused action into, not
       // something to ask for; everything else the schema offers has to be runnable.

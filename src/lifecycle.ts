@@ -8,29 +8,56 @@
 // What a Run is and what became of it stays Collie's; what a workflow has done stays
 // Effect's. Nothing here copies the second into the first.
 
-import { Effect, FileSystem, Schema, Stream } from "effect";
+import {
+  Cause,
+  Deferred,
+  Effect,
+  Fiber,
+  FileSystem,
+  Option,
+  Predicate,
+  Schedule,
+  Schema,
+  Stream,
+} from "effect";
 import type { Scope } from "effect";
 import type { ChildProcessSpawner } from "effect/unstable/process";
 import type * as RpcClientError from "effect/unstable/rpc/RpcClientError";
 import type { PluginEnv } from "./env";
 import { savedModules, type Fault, type Found } from "./discovery";
-import { connect, type HostClient, type HostUnavailable, type HostVersionMismatch } from "./host";
 import {
-  REFUSED_INPUT,
-  runDir,
-  type Given,
+  connect,
+  frontDoor,
+  type HostClient,
+  type HostUnavailable,
+  type HostVersionMismatch,
+} from "./host";
+import {
+  sortBoard,
+  type BoardMessage,
+  type BoardSnapshot,
+  type RunDetail,
+  type Controlled,
+  type FrontDoor,
   type HostRefused,
-  type OfferView,
-  type RunView,
-} from "./engine";
-import { err, taskFor, type Failure, type OpResult } from "./operations";
+  type Disposition,
+  type ProposalCarried,
+  type ProposalRefused,
+  type RequestConflict,
+  type ActionResult,
+  type SteerOutcome,
+  type TaskView,
+} from "./board-model";
+import type { Action } from "./evaluator";
+import { REFUSED_INPUT, runDir, type Given, type OfferView, type RunView } from "./engine";
+import { err, ExpectedError, taskFor, type Failure, type OpResult } from "./operations";
 import type { TaskChoice } from "./task";
-import type { RequestConflict } from "./store";
 import { encodeApprovedFile, rememberedFile, renderApproved, type VerifySpec } from "./verify-spec";
 import { projectHere, shell } from "./mr";
 import { defaultsPath, readDefaults, readIntent, type IntentSeed } from "./intent";
 import { scopeFor, scopeKey } from "./registry";
 import { PROJECTS_ROOT_OPTION, projectsRoot } from "./projects";
+import { reason } from "./naming";
 
 export { savedModules } from "./discovery";
 
@@ -100,6 +127,7 @@ export const anyRuns = (env: PluginEnv): Effect.Effect<boolean, never, FileSyste
 
 type HostFailure =
   | HostRefused
+  | ProposalRefused
   | RequestConflict
   | HostUnavailable
   | HostVersionMismatch
@@ -115,6 +143,8 @@ const refusal = (cause: HostFailure): Failure => {
       return cause.reason.startsWith(`${REFUSED_INPUT}:`)
         ? err("invalid_input", cause.reason.slice(REFUSED_INPUT.length + 1).trim())
         : err("operation_failed", cause.reason);
+    case "ProposalRefused":
+      return err("invalid_input", cause.detail, { reason: cause.refused });
     case "RequestConflict":
       return err("invalid_input", cause.reason, { request: cause.request });
     case "HostVersionMismatch":
@@ -126,13 +156,22 @@ const refusal = (cause: HostFailure): Failure => {
   }
 };
 
-/** One question to the host that owns this state directory, asked on its own connection. */
+/**
+ * One question to the host that owns this state directory, asked on its own connection.
+ * An operation names the front door asking, which the channel declares before anything else.
+ */
 const asks = <A>(
   env: PluginEnv,
   question: (client: HostClient) => Effect.Effect<A, HostFailure>,
+  door?: FrontDoor,
 ): Effect.Effect<{ readonly ok: true; readonly value: A } | Failure, never, Client> =>
   Effect.scoped(
     connect(env.stateDir).pipe(
+      Effect.tap((client) =>
+        door === undefined
+          ? Effect.void
+          : client.declare({ frontDoor: door, session: env.socketPath }),
+      ),
       Effect.flatMap(question),
       Effect.map((value) => ({ ok: true as const, value })),
       Effect.catch((cause: HostFailure) => Effect.succeed(refusal(cause))),
@@ -151,6 +190,7 @@ const asks = <A>(
 export const startRun = Effect.fn("Lifecycle.startRun")(function* (
   env: PluginEnv,
   options: {
+    readonly door: FrontDoor;
     readonly id: string;
     readonly request: string;
     /** What the caller said, in the two halves the author's schemas settle differently. */
@@ -179,22 +219,25 @@ export const startRun = Effect.fn("Lifecycle.startRun")(function* (
     options.options?.workspace === PROJECTS_ROOT_OPTION
       ? (yield* projectsRoot(env)).path
       : undefined;
-  return yield* asks(env, (client) =>
-    client.start({
-      project: env.cwd,
-      id: options.id,
-      request: options.request,
-      input: options.input.json,
-      text: options.input.text,
-      inferred: options.input.inferred,
-      root,
-      options: options.options,
-      task: placed.task?.id,
-      taskLabel: placed.label ?? undefined,
-      parent: options.parent ?? undefined,
-      intent: defaults === null ? { ...options.intent } : { ...options.intent, defaults },
-      verify: options.verify,
-    }),
+  return yield* asks(
+    env,
+    (client) =>
+      client.start({
+        project: env.cwd,
+        id: options.id,
+        request: options.request,
+        input: options.input.json,
+        text: options.input.text,
+        inferred: options.input.inferred,
+        root,
+        options: options.options,
+        task: placed.task?.id,
+        taskLabel: placed.label ?? undefined,
+        parent: options.parent ?? undefined,
+        intent: defaults === null ? { ...options.intent } : { ...options.intent, defaults },
+        verify: options.verify,
+      }),
+    options.door,
   ).pipe(
     Effect.map((answered) =>
       answered.ok
@@ -288,6 +331,179 @@ export const watchRun = <R>(
     );
   });
 
+/** The host's board stream, from a host started here if none is running. */
+const boardStream = (env: PluginEnv) =>
+  Effect.gen(function* () {
+    yield* connect(env.stateDir);
+    return (yield* frontDoor(env.stateDir)).board();
+  });
+
+/** The board as the host serves it now: the first message of its stream. */
+export const boardSnapshot = (
+  env: PluginEnv,
+): Effect.Effect<{ readonly ok: true; readonly value: BoardSnapshot } | Failure, never, Client> =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const first = yield* Stream.runHead(yield* boardStream(env));
+      if (first._tag === "Some" && first.value._tag === "Snapshot")
+        return { ok: true as const, value: first.value };
+      return err("operation_failed", "The workflow host sent no board.");
+    }).pipe(Effect.catch((cause: HostFailure) => Effect.succeed(refusal(cause)))),
+  );
+
+/** The board's Tasks, and why there are none where the host could not be read. */
+export interface BoardRead {
+  readonly tasks: ReadonlyArray<TaskView>;
+  readonly unreadable: string | null;
+}
+
+/** How long the first read waits for the host's board; later reads take what there is. */
+const FIRST_BOARD_WAIT = "10 seconds";
+
+/**
+ * The board the host serves, followed for as long as the caller's scope: each read is the
+ * latest the stream has said. A dropped stream reconnects and starts from a fresh snapshot.
+ */
+export const followBoard = Effect.fn("Lifecycle.followBoard")(function* (env: PluginEnv) {
+  const tasks = new Map<string, TaskView>();
+  const first = yield* Deferred.make<void>();
+  let waited = false;
+  /** False between a dropped stream and the fresh snapshot after it. */
+  let live = false;
+  let lost: string | null = null;
+  const apply = (message: BoardMessage) =>
+    Effect.suspend(() => {
+      switch (message._tag) {
+        case "Snapshot":
+          tasks.clear();
+          for (const task of message.tasks) tasks.set(task.id, task);
+          live = true;
+          lost = null;
+          return Deferred.succeed(first, undefined);
+        case "Upsert":
+          tasks.set(message.task.id, message.task);
+          return Effect.void;
+        case "Remove":
+          tasks.delete(message.id);
+          return Effect.void;
+        default:
+          return Effect.void;
+      }
+    });
+  const follow = Effect.scoped(
+    Effect.flatMap(boardStream(env), (stream) => Stream.runForEach(stream, apply)),
+  ).pipe(
+    Effect.catchCause((cause) =>
+      Effect.sync(() => {
+        lost = Cause.hasInterruptsOnly(cause) ? null : reason(Cause.squash(cause)).split("\n")[0]!;
+      }),
+    ),
+    Effect.ensuring(
+      Effect.sync(() => {
+        live = false;
+      }),
+    ),
+  );
+  yield* Effect.forkScoped(follow.pipe(Effect.repeat(Schedule.spaced("1 second"))));
+  return (): Effect.Effect<BoardRead> =>
+    Deferred.await(first).pipe(
+      Effect.timeoutOption(waited ? 0 : FIRST_BOARD_WAIT),
+      Effect.map((arrived) => {
+        waited = true;
+        const why = lost === null ? "" : ` (${lost})`;
+        return {
+          tasks: sortBoard([...tasks.values()]),
+          unreadable:
+            arrived._tag === "None"
+              ? `the workflow host has not sent its board${why}`
+              : live
+                ? null
+                : `reconnecting to the workflow host${why}; these cards may be out of date`,
+        };
+      }),
+    );
+});
+
+/** Which of a Run's details a drawer is showing. */
+export interface DetailKey {
+  readonly runId: string;
+  readonly tail: boolean;
+  readonly pages: number;
+  /** Ask the host's merge watch again rather than take what it last read. */
+  readonly refreshMr: boolean;
+}
+
+/** One Run's details from the host, from a host started here if none is running. */
+const detailStream = (env: PluginEnv, key: DetailKey) =>
+  Effect.gen(function* () {
+    yield* connect(env.stateDir);
+    return (yield* frontDoor(env.stateDir)).runDetail({ ...key });
+  });
+
+/** A Run's details as the host has them now, for a caller that follows nothing. */
+export const runDetailNow = (
+  env: PluginEnv,
+  key: DetailKey,
+): Effect.Effect<RunDetail | null, never, Client> =>
+  Effect.scoped(
+    Effect.flatMap(detailStream(env, key), Stream.runHead).pipe(
+      Effect.map(Option.getOrNull),
+      Effect.orElseSucceed(() => null),
+    ),
+  );
+
+/** How long a newly opened drawer waits for its first details; later reads take what there is. */
+const FIRST_DETAIL_WAIT = "5 seconds";
+
+/**
+ * The open drawer's details, followed for as long as the caller's scope. A read for
+ * another Run, or the same one shown differently, follows that instead.
+ */
+export const followRunDetail = Effect.fn("Lifecycle.followRunDetail")(function* (env: PluginEnv) {
+  const scope = yield* Effect.scope;
+  const services = yield* Effect.context<Client>();
+  let open: {
+    readonly key: string;
+    readonly first: Deferred.Deferred<void>;
+    readonly fiber: Fiber.Fiber<unknown>;
+    latest: RunDetail | null;
+  } | null = null;
+  return (key: DetailKey | null): Effect.Effect<RunDetail | null> =>
+    Effect.gen(function* () {
+      if (key === null) {
+        if (open !== null) yield* Fiber.interrupt(open.fiber);
+        open = null;
+        return null;
+      }
+      const showingKey = `${key.runId}|${key.tail}|${key.pages}`;
+      if (open === null || open.key !== showingKey || key.refreshMr) {
+        if (open !== null) yield* Fiber.interrupt(open.fiber);
+        const first = yield* Deferred.make<void>();
+        let refreshMr = key.refreshMr;
+        const follow = Effect.scoped(
+          Effect.flatMap(
+            Effect.suspend(() => detailStream(env, { ...key, refreshMr })),
+            (stream) =>
+              Stream.runForEach(stream, (detail) =>
+                Effect.sync(() => {
+                  refreshMr = false;
+                  if (open?.key === showingKey) open.latest = detail;
+                }).pipe(Effect.andThen(Deferred.succeed(first, undefined))),
+              ),
+          ),
+        ).pipe(
+          Effect.catchCause(() => Effect.void),
+          Effect.repeat(Schedule.spaced("1 second")),
+        );
+        const fiber = yield* Effect.forkIn(follow, scope);
+        open = { key: showingKey, first, fiber, latest: null };
+      }
+      const showing = open;
+      yield* Deferred.await(showing.first).pipe(Effect.timeoutOption(FIRST_DETAIL_WAIT));
+      return showing.latest;
+    }).pipe(Effect.provideContext(services));
+});
+
 /**
  * Registers what the modules as they are now allow and hands over what is outstanding,
  * then says where this Run is. A file that was missing and has been put back is picked up
@@ -319,19 +535,23 @@ const shown =
 export const answerRun = (
   env: PluginEnv,
   options: {
+    readonly door: FrontDoor;
     readonly runId: string;
     readonly decision: string | null;
     readonly value: string;
     readonly request: string;
   },
 ): Effect.Effect<OpResult, never, Client> =>
-  asks(env, (client) =>
-    client.answer({
-      runId: options.runId,
-      decision: options.decision,
-      value: options.value,
-      request: options.request,
-    }),
+  asks(
+    env,
+    (client) =>
+      client.answer({
+        runId: options.runId,
+        decision: options.decision,
+        value: options.value,
+        request: options.request,
+      }),
+    options.door,
   ).pipe(
     Effect.map((answered) =>
       answered.ok
@@ -354,47 +574,61 @@ export const answerRun = (
 export const controlRun = (
   env: PluginEnv,
   options: {
+    readonly door: FrontDoor;
     readonly runId: string;
     readonly control: "hold" | "stop";
     readonly set: boolean;
+    readonly request: string;
+    readonly reason?: string | undefined;
   },
 ): Effect.Effect<OpResult, never, Client> =>
-  asks(env, (client) => client.control(options)).pipe(
-    Effect.map((answered) => {
-      if (!answered.ok) return answered;
-      const done = answered.value;
-      const what = `${done.set ? done.control : `un${done.control}`} ${done.runId}`;
-      if (done.left.length > 0) {
-        return err("operation_failed", `Recorded ${what}, but ${done.left.join("; ")}.`, {
-          run: done.runId,
-          left: [...done.left],
-        });
-      }
-      return {
-        ok: true as const,
-        data: { run: done.runId, ...done },
-        human: done.applied
-          ? `${capitalised(what)}.`
-          : `Recorded ${what}, but nothing here is running it: ${done.detail}`,
-      };
-    }),
-  );
+  asks(
+    env,
+    (client) =>
+      client.control({
+        runId: options.runId,
+        control: options.control,
+        set: options.set,
+        request: options.request,
+        reason: options.reason,
+      }),
+    options.door,
+  ).pipe(Effect.map(controlled));
+
+const controlled = (
+  answered: { readonly ok: true; readonly value: typeof Controlled.Type } | Failure,
+): OpResult => {
+  if (!answered.ok) return answered;
+  const done = answered.value;
+  const what = `${done.set ? done.control : `un${done.control}`} ${done.runId}`;
+  if (done.left.length > 0) {
+    return err("operation_failed", `Recorded ${what}, but ${done.left.join("; ")}.`, {
+      run: done.runId,
+      left: [...done.left],
+    });
+  }
+  return {
+    ok: true as const,
+    data: { run: done.runId, ...done },
+    human: done.applied
+      ? `${capitalised(what)}.`
+      : `Recorded ${what}, but nothing here is running it: ${done.detail}`,
+  };
+};
 
 /** Picks a Run up again from any door: recovered first, then its stop cleared, so what wakes can run. */
-export const resumeRun = (env: PluginEnv, runId: string): Effect.Effect<OpResult, never, Client> =>
-  recoverRun(env, runId).pipe(
-    Effect.flatMap((recovered) =>
-      recovered.ok
-        ? controlRun(env, { runId, control: "stop", set: false }).pipe(
-            Effect.flatMap((cleared) =>
-              cleared.ok
-                ? asks(env, (client) => client.run({ runId })).pipe(Effect.map(shown(runId)))
-                : Effect.succeed(cleared),
-            ),
-          )
-        : Effect.succeed(recovered),
-    ),
-  );
+export const resumeRun = (
+  env: PluginEnv,
+  options: { readonly door: FrontDoor; readonly runId: string; readonly request: string },
+): Effect.Effect<OpResult, never, Client> =>
+  asks(
+    env,
+    (client) =>
+      client
+        .resume({ runId: options.runId, request: options.request })
+        .pipe(Effect.andThen(client.run({ runId: options.runId }))),
+    options.door,
+  ).pipe(Effect.map(shown(options.runId)));
 
 /** Grants a Run one command Collie may run itself, or withdraws it, through the host. */
 export const grantRun = (
@@ -403,9 +637,21 @@ export const grantRun = (
     readonly runId: string;
     readonly name: string;
     readonly command: Omit<VerifySpec, "name"> | null;
+    readonly request: string;
+    readonly door: FrontDoor;
   },
 ): Effect.Effect<OpResult, never, Client> =>
-  asks(env, (client) => client.grant(options)).pipe(
+  asks(
+    env,
+    (client) =>
+      client.grant({
+        runId: options.runId,
+        name: options.name,
+        command: options.command,
+        request: options.request,
+      }),
+    options.door,
+  ).pipe(
     Effect.map((answered) =>
       answered.ok
         ? {
@@ -477,9 +723,22 @@ export const steerRun = (
     readonly operation?: string;
     readonly agent?: string;
     readonly mode?: "boundary" | "now" | "interrupt";
+    readonly door: FrontDoor;
   },
 ): Effect.Effect<OpResult, never, Client> =>
-  asks(env, (client) => client.steer(options)).pipe(
+  asks(
+    env,
+    (client) =>
+      client.steer({
+        runId: options.runId,
+        text: options.text,
+        request: options.request,
+        operation: options.operation,
+        agent: options.agent,
+        mode: options.mode,
+      }),
+    options.door,
+  ).pipe(
     Effect.map((answered) => {
       if (!answered.ok) return answered;
       const sent = answered.value;
@@ -494,6 +753,21 @@ export const steerRun = (
       };
     }),
   );
+
+/** A carried-out proposal as a front door prints it: one line per action, failing on the first that did not apply. */
+export const carriedResult = ({ proposal, results }: ProposalCarried): OpResult => {
+  const message = results
+    .map((r) => `${r.index} ${r.kind}: ${r.state}${r.note ? ` — ${r.note}` : ""}`)
+    .join("\n");
+  if (results.some((r) => r.state !== "applied")) {
+    const changed = results.some((r) => r.state === "applied" && r.kind !== "none");
+    // needs_input is retryable without a receipt only when nothing has happened yet.
+    const code =
+      results.at(-1)?.kind === "ask_human" && !changed ? "needs_input" : "operation_failed";
+    return err(code, message, { proposal, results: results.map((r) => ({ ...r })) });
+  }
+  return { ok: true as const, data: { proposal, results }, human: message };
+};
 
 const capitalised = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
 
@@ -582,19 +856,23 @@ const describeOffers = (offers: ReadonlyArray<OfferView>): string =>
 export const invokeOffer = (
   env: PluginEnv,
   options: {
+    readonly door: FrontDoor;
     readonly runId: string;
     readonly offer: string;
     readonly input: Readonly<Record<string, Schema.Json>>;
     readonly request: string;
   },
 ): Effect.Effect<OpResult, never, Client> =>
-  asks(env, (client) =>
-    client.invoke({
-      runId: options.runId,
-      offer: options.offer,
-      input: options.input,
-      request: options.request,
-    }),
+  asks(
+    env,
+    (client) =>
+      client.invoke({
+        runId: options.runId,
+        offer: options.offer,
+        input: options.input,
+        request: options.request,
+      }),
+    options.door,
   ).pipe(
     Effect.map((answered) =>
       answered.ok
@@ -602,6 +880,262 @@ export const invokeOffer = (
             ok: true as const,
             data: { run: answered.value.runId, from: options.runId, offer: options.offer },
             human: `Started run ${answered.value.runId} from ${options.runId}'s "${options.offer}".`,
+          }
+        : answered,
+    ),
+  );
+
+/** A yes to a proposal, carried out by the host under the front door asking. */
+export const confirmProposed = (
+  env: PluginEnv,
+  options: {
+    readonly door: FrontDoor;
+    readonly proposal: string;
+    readonly hash: string;
+    readonly request: string;
+  },
+): Effect.Effect<OpResult, never, Client> =>
+  asks(
+    env,
+    (client) =>
+      client.confirm({
+        proposal: options.proposal,
+        hash: options.hash,
+        request: options.request,
+      }),
+    options.door,
+  ).pipe(Effect.map((answered) => (answered.ok ? carriedResult(answered.value) : answered)));
+
+export const declineProposed = (
+  env: PluginEnv,
+  options: {
+    readonly door: FrontDoor;
+    readonly proposal: string;
+    readonly hash: string;
+    readonly request: string;
+  },
+): Effect.Effect<OpResult, never, Client> =>
+  asks(
+    env,
+    (client) =>
+      client.decline({ proposal: options.proposal, hash: options.hash, request: options.request }),
+    options.door,
+  ).pipe(
+    Effect.map((answered) =>
+      answered.ok
+        ? {
+            ok: true as const,
+            data: { declined: options.proposal },
+            human: `Declined ${options.proposal}.`,
+          }
+        : answered,
+    ),
+  );
+
+/** What became of a Run's work, written by the host; the line it wrote, or why not. */
+export const disposeRun = (
+  env: PluginEnv,
+  options: {
+    readonly door: FrontDoor;
+    readonly runId: string;
+    readonly kind: Disposition["kind"];
+    readonly ref: string;
+    readonly note: string | null;
+    readonly request: string;
+  },
+): Effect.Effect<{ readonly ok: true; readonly value: Disposition } | Failure, never, Client> =>
+  asks(
+    env,
+    (client) =>
+      client.dispose({
+        runId: options.runId,
+        kind: options.kind,
+        ref: options.ref,
+        note: options.note,
+        request: options.request,
+      }),
+    options.door,
+  );
+
+/** Free words about one Run, which the host has the evaluator turn into what to do. */
+export const steerAbout = (
+  env: PluginEnv,
+  options: {
+    readonly door: FrontDoor;
+    readonly runId: string;
+    readonly text: string;
+    readonly from: string | null;
+    readonly dryRun: boolean;
+    readonly request: string;
+  },
+): Effect.Effect<OpResult, never, Client> =>
+  asks(
+    env,
+    (client) =>
+      client.steerAbout({
+        runId: options.runId,
+        text: options.text,
+        from: options.from,
+        dryRun: options.dryRun,
+        request: options.request,
+      }),
+    options.door,
+  ).pipe(Effect.map((answered) => (answered.ok ? opResultOf(answered.value) : answered)));
+
+/** An outcome the host sent back, as the result every front door prints. */
+const opResultOf = (said: SteerOutcome): OpResult => {
+  if (said.ok)
+    return {
+      ok: true,
+      data: Predicate.isObject(said.data) ? said.data : { said: said.data },
+      human: said.human,
+    };
+  const failed = Schema.decodeUnknownOption(ExpectedError)({
+    code: said.code,
+    message: said.human,
+    details: said.data,
+  });
+  return failed._tag === "Some"
+    ? { ok: false, error: failed.value }
+    : err("operation_failed", said.human);
+};
+
+/** Actions chat was asked for, which the host records as a proposal and carries out. */
+export const proposeActions = (
+  env: PluginEnv,
+  options: {
+    readonly door: FrontDoor;
+    readonly herd: string | null;
+    readonly interpretation: string;
+    readonly actions: ReadonlyArray<Action>;
+    readonly request: string;
+  },
+): Effect.Effect<OpResult, never, Client> =>
+  asks(
+    env,
+    (client) =>
+      client.propose({
+        herd: options.herd,
+        interpretation: options.interpretation,
+        actions: options.actions,
+        request: options.request,
+      }),
+    options.door,
+  ).pipe(Effect.map((answered) => (answered.ok ? opResultOf(answered.value) : answered)));
+
+/** The board's own actions, asked for by name and carried out by the host. */
+export const actAsked = (
+  env: PluginEnv,
+  options: {
+    readonly door: FrontDoor;
+    readonly actions: ReadonlyArray<Action>;
+    readonly request: string;
+  },
+): Effect.Effect<ReadonlyArray<ActionResult>, never, Client> =>
+  asks(
+    env,
+    (client) => client.act({ actions: options.actions, request: options.request }),
+    options.door,
+  ).pipe(
+    Effect.map((answered) =>
+      answered.ok
+        ? answered.value
+        : options.actions.slice(0, 1).map((action) => ({
+            kind: action.kind,
+            state: "failed",
+            note: answered.error.message,
+          })),
+    ),
+  );
+
+/** A proposal step nobody can account for, settled as what actually happened. */
+export const reconcileProposed = (
+  env: PluginEnv,
+  options: {
+    readonly door: FrontDoor;
+    readonly proposal: string;
+    readonly index: number;
+    readonly as: "applied" | "not-applied";
+    readonly request: string;
+  },
+): Effect.Effect<OpResult, never, Client> =>
+  asks(
+    env,
+    (client) =>
+      client.reconcile({
+        proposal: options.proposal,
+        index: options.index,
+        as: options.as,
+        request: options.request,
+      }),
+    options.door,
+  ).pipe(
+    Effect.map((answered): OpResult =>
+      answered.ok
+        ? {
+            ok: true,
+            data: { proposal: options.proposal, index: options.index, as: options.as },
+            human: `Settled action ${options.index} as ${options.as}.`,
+          }
+        : answered,
+    ),
+  );
+
+/** A message nobody knows reached its agent, settled as what actually happened. */
+export const reconcileDelivered = (
+  env: PluginEnv,
+  options: {
+    readonly door: FrontDoor;
+    readonly runId: string;
+    readonly delivery: string;
+    readonly as: "sent" | "not-sent";
+    readonly request: string;
+  },
+): Effect.Effect<OpResult, never, Client> =>
+  asks(
+    env,
+    (client) =>
+      client.settleDelivery({
+        runId: options.runId,
+        delivery: options.delivery,
+        as: options.as,
+        request: options.request,
+      }),
+    options.door,
+  ).pipe(
+    Effect.map((answered): OpResult =>
+      answered.ok
+        ? {
+            ok: true,
+            data: { delivery: answered.value },
+            human: `Reconciled ${options.delivery} as ${options.as}.`,
+          }
+        : answered,
+    ),
+  );
+
+/** A child Run on a finished one, carrying on with what is left in these words. */
+export const followUpRun = (
+  env: PluginEnv,
+  options: {
+    readonly door: FrontDoor;
+    readonly runId: string;
+    readonly text: string;
+    readonly request: string;
+  },
+): Effect.Effect<OpResult, never, Client> =>
+  asks(
+    env,
+    (client) =>
+      client.followUp({ runId: options.runId, text: options.text, request: options.request }),
+    options.door,
+  ).pipe(
+    Effect.map((answered) =>
+      answered.ok
+        ? {
+            ok: true as const,
+            data: { run: answered.value.runId, from: options.runId },
+            human: `Started run ${answered.value.runId} to follow up ${options.runId}.`,
           }
         : answered,
     ),

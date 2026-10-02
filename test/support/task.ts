@@ -1,7 +1,7 @@
 // The TaskView a test starts from. Shared rather than copied per file, for the reason
 // `focus.ts` gives: one fixture that grows every time a card learns to say something new.
 
-import type { TaskView } from "../../src/board";
+import type { TaskView } from "../../src/board-model";
 
 /** One Task, with the parts a test does not care about at rest. */
 export function task(over: Partial<TaskView> = {}): TaskView {

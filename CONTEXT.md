@@ -26,8 +26,14 @@
 
 **Herd** — One herdr session: every workspace in it. The scope of the Collie tab, the
 conversation, proposals, the budget and elections. Keyed by the canonical path of the
-session's socket, never by a directory. **Session** keeps its own meaning below — one
+session's socket, never by a directory. A Task records the Herd its workspace is in, and a
+Machine's host reads every Herd on it. **Session** keeps its own meaning below — one
 workspace — and is not the Herd.
+
+**Machine** — One computer's Collie: one state directory, its one host, and every Herd on
+that computer. Known by its **installation id**, which the first host to own the state
+directory writes into it and every later host keeps, so two routes to one state directory
+are one Machine. Not the plugin installation a host serves, which `identity` calls `root`.
 
 **Home** — The Herd's dedicated Collie workspace, owned by a record plus proof: a live
 `collie_home` token, or the recorded pane still carrying its recorded `terminal_id`. A
@@ -78,6 +84,12 @@ is required. Questions about the flock are Native chat's.
 
 **Proposal** — A durable, hash-bound set of actions. Explicit requests execute through
 this record immediately. Unsolicited background suggestions remain pending.
+
+**Actor** — Who asked for an operation: the front door its channel declared (`board`,
+`cli-tty`, `cli`, `chat`, …) and the request id. The host records it in the Run's audit
+trail with every start, answer, hold, stop, resume, offer invoked, grant, steer,
+disposition and follow-up. `board` and
+`cli-tty` are a human; `cli-tty` needs a terminal outside any agent's pane.
 
 **Confirmation** — A command naming a Proposal's id **and** its content hash. A yes to a
 summary is not consent to a payload nobody read. Anyone may give one — a human at a
@@ -389,7 +401,7 @@ does with each outcome, and what a five-minute unresolved attempt stops:
 
 **Notification** — The only channel from an unattended Run to the person who started it, so what is not worth interrupting for is not sent at all. One title shape — `<repo> · <slug> <what happened>` — one taxonomy in `src/notify.ts`, once per `(run, kind, step)`, and never a reason for a Run to fail.
 
-**Host** — The one background process that runs work for a state directory. CLI, board and chat all reach it over the same local RPC, and closing any of them leaves its work running. It owns the directory under `host.lock`, keeps its Runs in SQLite, and on restart hands every accepted Run back to the engine, so completed work is reused rather than repeated. A client of another build is told to restart it, not served (ADR-0015).
+**Host** — The one background process that runs work for a state directory. CLI, board and chat all reach it over the same local RPC, and closing any of them leaves its work running. It owns the directory under `host.lock`, keeps its Runs in SQLite, and on restart hands every accepted Run back to the engine, so completed work is reused rather than repeated. A client of another build is told to restart it before `HostRpcs` (ADR-0015); `FrontDoorRpcs` serves any build (ADR-0038).
 
 **Ownership** — Who holds something that must have one owner. A claim stands while its process answers and is still the one that wrote it, and one whose process answers but whose identity cannot be read stands too: "I could not tell" is not permission to take over. It decides which process may be the host for a state directory; canonical in `src/lock.ts`.
 

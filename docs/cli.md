@@ -471,9 +471,11 @@ whether `type` is present.
 collie --json board
 ```
 
-Every Task on this Herd's board, in the order the Home draws them: **Needs you** first,
-then **Working**, then **Finished**, and inside each the state order `blocked`, `active`,
-`quiet`, `failed`, `stopped`, `done`. `state: blocked` is what puts a Task in Needs you,
+The first snapshot of the board the host serves
+([ADR-0038](adr/0038-the-host-builds-and-serves-the-board.md)): every Task on this Herd's
+board, in the order the Home draws them: **Needs you** first, then **Working** (`active`
+and `quiet`), then **Waiting on you** (work that ended and has not landed), then
+**Finished** (landed), and inside each whatever changed last first. `state: blocked` is what puts a Task in Needs you,
 and it means one of two things: a `decision` to answer, or an agent waiting for you in its
 own pane — a harness dialog herdr will not answer, or a run that parked because its agent's
 pane would not take a prompt. The `sentence` says which, and for the second kind it says which pane. It is the same model the pane renders, so an agent
@@ -482,22 +484,33 @@ Task.
 
 Herd-wide, and never narrowed by which workspace you typed it in: one board per Herd
 ([ADR-0009](adr/0009-the-collie-tab-is-the-herds.md)). A Run belonging to no Task is a
-Task of its own; a child Run is its parent's `children` rather than a Task beside it.
+Task of its own; a Repo run of a fan-out is its parent's `children` rather than a Task beside it.
 
-| Field                    | What it says                                                                                                               |
-| ------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
-| `id`                     | The Task, or the Run's own id where it belongs to no Task.                                                                 |
-| `name`, `project`        | The two halves of the task workspace's label. No herdr ids.                                                                |
-| `state`                  | `blocked`, `active`, `quiet`, `failed`, `stopped` or `done`.                                                               |
-| `steps[]`                | The pipeline across the Task's Runs, each `done`, `active`, `blocked`, `failed` or `todo`. A step that loops is one entry. |
-| `sentence`               | What is happening, in one plain sentence — no step names, counters or glyph codes.                                         |
-| `age`, `at`              | How long it has been going, and when it last changed.                                                                      |
-| `drift`, `held`          | The one line each carries, or `null`.                                                                                      |
-| `decision`               | The question, proposal or gate waiting on you, or `null`. One of the two ways into Needs you.                              |
-| `agents[]`, `children[]` | The live agents on it, and the child Runs it started.                                                                      |
-| `mr`, `branch`           | What it is building, where it can be read.                                                                                 |
-| `disposition`            | What became of the work, where a person recorded it — never inferred from a merge request.                                 |
-| `run`, `runs[]`          | The Run a card acts on, and every Run of the Task.                                                                         |
+| Field                     | What it says                                                                                                                                                    |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`                      | The Task, or the Run's own id where it belongs to no Task.                                                                                                      |
+| `name`, `project`         | The two halves of the task workspace's label. No herdr ids.                                                                                                     |
+| `herd`                    | The Herd the Task's workspace is in: an `id` in `herds` while that session runs. Absent for a Task recorded before it was kept.                                 |
+| `state`                   | `blocked`, `active`, `quiet`, `failed`, `stopped`, `abandoned` (a Run nothing drives and no agent works on) or `done`.                                          |
+| `steps[]`                 | The pipeline across the Task's Runs, each `done`, `active`, `blocked`, `failed` or `todo`. A step that loops is one entry.                                      |
+| `sentence`                | What is happening, in one plain sentence — no step names, counters or glyph codes. It names the round, the wave and the answer it resumed with.                 |
+| `age`, `at`               | How long it has been going, and when it last changed.                                                                                                           |
+| `drift`, `held`           | The one line each carries, or `null`.                                                                                                                           |
+| `heldBy`                  | Who set the hold that stands — the front door it came through — and the reason given with it, or `null`.                                                        |
+| `decision`                | The question, proposal or gate waiting on you, or `null`. One of the two ways into Needs you.                                                                   |
+| `agents[]`                | The live agents on it, its Repo runs' included.                                                                                                                 |
+| `children[]`              | A fan-out's repositories in wave order: `repo`, its `run` (`null` until it starts), its `state` (`done`, `active`, `blocked`, `failed` or `todo`) and its `mr`. |
+| `mr`, `mrState`, `branch` | What it is building, where it can be read, and what GitLab last said about the merge request.                                                                   |
+| `disposition`, `landed`   | What became of the work, where a person recorded it — never inferred from a merge request — and whether it needs nothing more, which is Finished.               |
+| `ended`                   | When the leading Run ended, or `null` while it has not.                                                                                                         |
+| `planReady`, `offer`      | A finished plan nobody has implemented, and the offer its card's first action invokes.                                                                          |
+| `run`, `runs[]`           | The Run a card acts on, and every Run of the Task.                                                                                                              |
+
+A `gate` is a Run parked at its evidence gate with nothing approved, listing the checks its
+checkout's `.collie/verify.json` (or your config's `verify.json`) offers. Answer it with
+`collie run answer <run-id> approve --decision evidence-gate`, or `approve:<name>,<name>`
+for part of the list: the host grants those, as `run intent verification` does, and takes
+the Run up again. It is not skipped, since with nothing approved no check could prove it.
 
 ## Answer a question
 
@@ -700,7 +713,7 @@ comes through these: the evaluator's proposals wait on the board, and chat asks 
 `answer`, `deliver`, `followup` and `start` — through the same closed union, the same
 last-moment admission check and the same executors a confirmation runs. It also takes the
 board's decisions, which are not actions on a run: `confirm` a waiting proposal by its id
-and the hash `collie_receipts` lists beside it, `decline` one, and `disposition` to record
+and the hash `collie_receipts` lists beside it, `decline` one by the same two, and `disposition` to record
 what became of a finished run's work. It answers a line per action saying what each one
 came to. A kind outside that set is refused with the name of the tool that does take it:
 amending an Intent, forking a definition, changing the defaults, keeping a run's checks for
@@ -742,8 +755,9 @@ does not have comes back as a question for you rather than being dropped. `start
 `workspace`, so a launch asked for from the Home lands in the repository it is about
 rather than in Collie's own namespace directory — and it needs no existing run.
 
-Requests retain their origin (`chat:`, `cli:`, or the board). Attribution is an audit
-record, not an approval requirement. Launches into Collie's Home state directory return
+Requests retain their origin (`chat:`, `cli:`, or the board). A `collie` command is a
+human's (`cli-tty`) only at a terminal, in a pane herdr does not report as an agent's or
+outside herdr; anywhere else it is `cli`. Attribution is an audit record, not an approval requirement. Launches into Collie's Home state directory return
 `needs_input`: choose the project with `--workspace` or `COLLIE_CWD` before starting work.
 Legacy Runs rooted there cannot be resumed into the state directory; start a new Run
 against the project instead.
@@ -770,8 +784,8 @@ collie --json decline <proposal-id>
 collie --json proposal reconcile <proposal-id> <index> --as applied|not-applied
 ```
 
-`confirm` executes an existing proposal. Optional `--hash <content-hash>` checks that you
-are addressing those exact contents. Expired or stale-target proposals are still rejected.
+`confirm` executes an existing proposal and `decline` refuses one. Optional
+`--hash <content-hash>` checks that you are addressing those exact contents. Expired or stale-target proposals are still rejected.
 Ordinary chat requests and steers do not need this command.
 
 Actions run in order, each one re-checked immediately before it runs and journalled on
@@ -1070,7 +1084,8 @@ nothing lifts a hold at a time.
 
 `--workspace` holds every unfinished run of the Task that workspace belongs to instead of a
 single run. Each run takes its own hold, so releasing one lifts that one and leaves the
-rest held.
+rest held. `--reason "<why>"` is recorded with the hold, and the board's `heldBy` says it
+beside who held it.
 
 ## Fork a workflow or a persona
 
@@ -1339,16 +1354,79 @@ never adopted and never signalled.
 
 Clients talk to it over a unix socket in that same directory, with Effect's own RPC: the
 same schemas at both ends, and nothing listening off this machine. It answers `identity`,
-`discover`, `load`, `registrations`, `start`, `status`, `run`, `runs`, `watch`, `recover`, `answer`, `offers`, `invoke`, `control`, `grant` and `steer` — one
+`discover`, `load`, `registrations`, `status`, `run`, `runs`, `watch`, `recover`, `offers`, `grant` and `steer` — one
 registry, in front of as many clients as ask. `run` and `runs` are the read model the front
 doors show; `watch` streams it, current state first and a whole state each time; `recover`
-registers what current files now allow and hands over what is outstanding; `control` sets
-or clears a hold or a stop on one run, and every watcher hears about it. One fiber in the
+registers what current files now allow and hands over what is outstanding. One fiber in the
 host asks the engine about the work it has not finished, on a schedule every client shares,
 and speaks up when anything a run shows has changed, so watching costs the same whether one
 client is looking or the whole board is. Closing a client cancels nothing it started;
 stopping the host with `kill` leaves suspended work suspended, and the next client starts a
 host that picks it up.
+
+The operations above are `HostRpcs`: internal, and a Collie client of another build stops
+before sending them anything. Beside them on the same socket is `FrontDoorRpcs`, the door
+any front door uses whatever its build or computer, declared with its Schemas in
+`src/board-model.ts`. `board` streams the board: a `Snapshot` (the state directory's
+`installation` id, `build`, `protocol`, the `herds` — every running herdr session, by Herd
+`id` and herdr's `name` — and every TaskView), then an `Upsert` or a `Remove` keyed by Task
+id for each change, each with a `seq` higher than the last. A client that reconnects gets a
+fresh snapshot. The host builds again when anything under its state directory is written,
+when herdr pushes an event from any of its sessions (a pane opening or closing, or an
+agent's status changing), and every five seconds. The installation id is written once, by
+the first host to own the directory, and survives restarts and upgrades.
+
+The host also runs what nobody has to have a pane open for: the merge watch, which asks
+GitLab about each waiting merge request every 5 minutes and records a merge; each Herd's
+News; and worktree pruning, every 3 minutes.
+
+The operations that change a Run are on `FrontDoorRpcs` too: `start`, `answer`, `control`
+(a hold or a stop, set or cleared, and every watcher hears about it), `resume` and
+`invoke` (an offer). `grant` and `steer` stay on `HostRpcs`. Each takes a request id, and the same id twice is one operation. A
+channel first sends `declare` with its front door, and the host stamps every operation on
+it with that, as a line in the Run's `operations.jsonl`: the operation, the request, the
+Actor and what came of it ([ADR-0039](adr/0039-every-operation-records-who-asked.md)). A
+channel that declares nothing is `cli`. `declare` may also carry `session`, the herdr
+session socket the front door runs in: a confirmed, asked or proposed action looks its
+workspaces, panes and Herd up there. A channel that names none has them looked up in the
+session the host was started from.
+
+So are the ones that write anything else: `confirm` (a proposal's id and content hash) and
+`decline` (its id and content hash too), recorded in its Herd's proposals journal under the Actor; `dispose`,
+what became of a Run's work; `steerAbout`, which has the evaluator turn free words about a
+Run into actions and carries them out; `followUp`, which starts the follow-up the Run's
+Workflow declares; `propose`, which records what chat was asked for as a proposal and
+carries it out; `act`, which carries out the board's own actions on a Run (`stop`, `resume`,
+`release`, `hold`, `answer`, `deliver`, `followup`, `start`) with no proposal, anything else
+being refused as `propose`'s; `reconcile`, which settles a proposal step nobody can account
+for; and `settleDelivery`, which does the same for a message to an agent. Actions travel as
+JSON and the host decodes them. `collie confirm`, `decline`, `steer`, `run disposition`,
+`proposal reconcile` and `run deliveries --reconcile`, the board and chat's tools all go
+through these, so the host is the only writer of what they record
+([ADR-0040](adr/0040-the-host-is-the-only-writer.md)).
+
+`runDetail` streams one Run's details while a drawer is open — intent, plan, review,
+log tail, verifications, metrics, steering cards, the files it kept as evidence, its diff
+and its merge request — current first, then again whenever they change. The diff is the
+Run's branch against its merge base with the default branch, per file: the checkout as it
+is while the Run works, the branch's commits once it has ended. The host keeps that in the
+Run's directory as soon as the Run ends, with the branch head it was taken at, so a merged
+branch or a pruned checkout does not lose it and a resumed Run that committed more is read
+again. An untracked file reached through a link, or that is not a regular file, is listed
+without being read. The review's findings come as
+a list. The merge request is what the merge watch last read, asked again after 5 minutes or
+when `refreshMr` is set. Large items are fetched by reference with `runFile`: `log`,
+`diff:<path>`, `evidence:<name>`, `verification:<id>`, `plan:<file>` and `file:<path>` (read
+only, from the Run's checkout), text as it is and anything else as base64. Each answer is
+at most 4 MiB from `offset` (or `length` bytes where asked) and says the item's whole
+`size`, so a long log or a video is read in parts. A part of an item is base64 whatever it
+is, so a character split across two parts is whole once they are joined. A reference is refused where it leaves
+the directory it belongs to, links followed, or where it is not a regular file.
+
+`protocol` is an integer, also in `identity`. An optional field, a new operation or a new
+kind of message does not change it, and a client reads a kind it does not know as
+`Unknown` and skips it. A removal or a change of meaning bumps it, and from then on the
+host serves its current version and the one before; version 1 has none before it.
 
 `discover` and `start` name the project asking, because one host serves the machine and a
 project's own `.collie/workflows` is its own: two projects can run different implementations

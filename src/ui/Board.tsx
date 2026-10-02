@@ -4,22 +4,18 @@
 
 import { For, Show, type JSX } from "solid-js";
 import { TextAttributes, type MouseEvent } from "@opentui/core";
+import { agentCount, finishedLabel, whereItIs, workingLabel, waitingLabel } from "../board";
 import {
-  agentCount,
-  finishedLabel,
+  foldWaiting,
+  sectionOf,
   type Decision,
   type Gate,
   type HeaderSentence,
   type Proposal,
   type Question,
-  whereItIs,
-  workingLabel,
   type Sections,
   type TaskView,
-  foldWaiting,
-  sectionOf,
-  waitingLabel,
-} from "../board";
+} from "../board-model";
 import { ALL_KEYS, type Command, type MenuItem, type Older, primaryFor } from "./state";
 import { C, cardEdge, sentenceColour, stateGlyph, stepGlyph } from "./sections";
 
@@ -33,7 +29,6 @@ export interface Decide {
   decline: (proposal: Proposal) => void;
   /** A gate: the list as it stands, or `null` for the whole of it. */
   approve: (gate: Gate, verifications: ReadonlyArray<string> | null) => void;
-  skip: (gate: Gate) => void;
   /** Opens the record on the list, which is the only place it can be cut down. */
   edit: (gate: Gate) => void;
   /** What has been typed into this question and not sent. */
@@ -556,7 +551,6 @@ function Gated(props: { gate: Gate; decide: Decide }) {
       <box style={{ flexDirection: "row", flexWrap: "wrap" }}>
         <Button label="Approve" primary onPress={() => props.decide.approve(props.gate, null)} />
         <Button label="Edit the list" onPress={() => props.decide.edit(props.gate)} />
-        <Button label="Skip" onPress={() => props.decide.skip(props.gate)} />
       </box>
     </box>
   );

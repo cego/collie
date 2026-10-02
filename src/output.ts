@@ -243,18 +243,23 @@ export function riskLine(risks: string): string {
   );
 }
 
+/** The findings of the review a Run left, or none where it left no review. */
+export const findingsIn = (
+  dir: string,
+): Effect.Effect<ReadonlyArray<typeof FindingSchema.Type>, never, FileSystem.FileSystem> =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    if (!(yield* fs.exists(`${dir}/${REVIEW_FILE}`))) return [];
+    return yield* decodeFindings(yield* fs.readFileString(`${dir}/${FINDINGS_FILE}`));
+  }).pipe(Effect.orElseSucceed(() => []));
+
 /**
  * How many findings this Run left for somebody to fix. A finding still open *and* the
  * review that holds it: a Run with findings and no review wrote no review, and one with
  * a review and no findings came back clean.
  */
 export const openFindingsIn = (dir: string): Effect.Effect<number, never, FileSystem.FileSystem> =>
-  Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    if (!(yield* fs.exists(`${dir}/${REVIEW_FILE}`))) return 0;
-    const found = yield* decodeFindings(yield* fs.readFileString(`${dir}/${FINDINGS_FILE}`));
-    return found.length;
-  }).pipe(Effect.orElseSucceed(() => 0));
+  findingsIn(dir).pipe(Effect.map((found) => found.length));
 
 export type Parsed<T> = { ok: true; value: T } | { ok: false; error: string };
 

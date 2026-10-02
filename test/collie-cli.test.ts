@@ -160,19 +160,14 @@ test("invalid input is one envelope on stdout, its reason on stderr, and exit 2"
     }),
   ));
 
-test("a hold takes no time to lift at and no reason, because nothing would read either", () =>
+test("a hold takes no time to lift at, and a release no reason, which nothing would read", () =>
   runEffect(
     Effect.gen(function* () {
-      for (const [command, flag] of [
-        ["hold", "--reason"],
-        ["release", "--reason"],
-      ]) {
-        const given = yield* cli(["--json", "run", command!, "r1", flag!, "lunch"]);
-        expect(yield* parseEnvelope(given.stdout)).toMatchObject({
-          ok: false,
-          error: { message: `Unrecognized flag: ${flag} in command collie run ${command}` },
-        });
-      }
+      const released = yield* cli(["--json", "run", "release", "r1", "--reason", "lunch"]);
+      expect(yield* parseEnvelope(released.stdout)).toMatchObject({
+        ok: false,
+        error: { message: "Unrecognized flag: --reason in command collie run release" },
+      });
       const timed = yield* cli(["--json", "run", "hold", "r1", "--until", "14:00"]);
       expect(yield* parseEnvelope(timed.stdout)).toMatchObject({
         ok: false,

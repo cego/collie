@@ -258,6 +258,7 @@ export const SOCKET_METHODS = [
   "workspace.report_metadata",
   "pane.report_metadata",
   "popup.close",
+  "events.subscribe",
 ] as const;
 
 export type SocketMethod = (typeof SOCKET_METHODS)[number];
@@ -365,6 +366,22 @@ const decodeOrNamed = <S extends Schema.Top>(
   const named = envelopeError(operation, value);
   return named ? Effect.fail(named) : decodeBoundary(operation, schema, value);
 };
+
+/**
+ * `session list --json` answers with this rather than an envelope, so it is not in the
+ * socket schema the contract test reads; a herdr without the command has no sessions.
+ */
+const SessionListReply = Schema.Struct({
+  sessions: Schema.Array(
+    Schema.Struct({ name: Schema.String, running: Schema.Boolean, socket_path: Schema.String }),
+  ),
+});
+
+/** One running herdr session: its name, and the socket that reaches it. */
+export interface HerdrSession {
+  readonly name: string;
+  readonly socketPath: string;
+}
 
 const decodeBoundary = <S extends Schema.Top>(operation: string, schema: S, value: BoundaryValue) =>
   Schema.decodeUnknownEffect(schema)(value).pipe(
@@ -992,6 +1009,63 @@ export class Herdr {
 
   agentList(): HerdrEffect<AgentInfo[]> {
     return this.cli(["agent", "list"]).pipe(Effect.flatMap(decodeAgentList));
+  }
+
+  /** Every herdr session on this computer that is running now. */
+  sessionList(): HerdrEffect<HerdrSession[]> {
+    return this.cli(["session", "list", "--json"]).pipe(
+      Effect.flatMap((reply) => decodeBoundary("session list", SessionListReply, reply)),
+      Effect.map((reply) =>
+        reply.sessions
+          .filter((one) => one.running)
+          .map((one) => ({ name: one.name, socketPath: one.socket_path })),
+      ),
+    );
+  }
+
+  /** The same herdr, reaching another session through that session's socket. */
+  inSession(socketPath: string): Herdr {
+    return new Herdr({
+      ...this.env,
+      socketPath,
+      raw: { ...this.env.raw, HERDR_SOCKET_PATH: socketPath },
+    });
+  }
+
+  /**
+   * Subscribes to these events on this session's socket and resolves on the first one
+   * herdr pushes; the connection closes with it.
+   */
+  waitForEvent(subscriptions: ReadonlyArray<HerdrParams>): HerdrEffect<void> {
+    const path = this.env.socketPath;
+    if (!path) return herdrFail("cannot subscribe to herdr events", "no socket path");
+    const id = `hw-${++this.seq}`;
+    const payload = `${encodeJson({ id, method: "events.subscribe", params: { subscriptions } })}\n`;
+    return Effect.gen(function* () {
+      const socket = yield* BunSocket.makeNet({ path });
+      const pull = yield* Socket.readerString(socket);
+      yield* (yield* socket.writer).write(payload);
+      let buffered = "";
+      let acknowledged = false;
+      while (true) {
+        buffered += (yield* pull).join("");
+        let newline = buffered.indexOf("\n");
+        while (newline >= 0) {
+          const line = buffered.slice(0, newline);
+          buffered = buffered.slice(newline + 1);
+          // The first line answers the subscription; any after it is an event.
+          if (acknowledged) return;
+          yield* decodeReply("events.subscribe", line);
+          acknowledged = true;
+          newline = buffered.indexOf("\n");
+        }
+      }
+    }).pipe(
+      Effect.scoped,
+      Effect.catchTag("SocketError", (cause) =>
+        herdrFail("events.subscribe failed", String(cause)),
+      ),
+    );
   }
 
   /** Restore only a lost alias, never a human rename or another session in this pane. */

@@ -47,6 +47,12 @@ export interface RunFacts {
   readonly evidence: string;
   readonly asking: ReadonlyArray<Asked>;
   readonly held: boolean;
+  /** The repository of a fan-out this Run builds, or null for a Run that is no Repo run. */
+  readonly repo: string | null;
+  /** Why it parked its own work, in its own words, or null while it has not. */
+  readonly parked: string | null;
+  /** Whether the engine could not be asked about it, so nothing drives it. */
+  readonly undriven: boolean;
   /** Why it is not moving or why it ended, in its own words, where it said. */
   readonly note: string | null;
   readonly summary: string | null;
@@ -105,6 +111,9 @@ export const factsOfView = (stateDir: string, view: RunView): RunFacts => ({
     .filter((one) => one.answer === null)
     .map((one) => ({ name: one.name, prompt: one.prompt, options: one.options })),
   held: view.controls.includes(HOLD),
+  repo: view.options.repo ?? null,
+  parked: view.parked,
+  undriven: view.diagnostic !== null,
   note:
     view.parked ??
     (view.status.status === "failed"
@@ -121,10 +130,11 @@ type Client = FileSystem.FileSystem | ChildProcessSpawner.ChildProcessSpawner;
  */
 export const listRuns = Effect.fn("Runs.list")(function* (env: PluginEnv) {
   const live = yield* runViews(env, null);
-  return live.runs
-    .map((view) => factsOfView(env.stateDir, view))
-    .sort((a, b) => b.created.localeCompare(a.created));
+  return newestFirst(live.runs.map((view) => factsOfView(env.stateDir, view)));
 });
+
+export const newestFirst = (runs: ReadonlyArray<RunFacts>): RunFacts[] =>
+  [...runs].sort((a, b) => b.created.localeCompare(a.created));
 
 /** One Run by id, or null where there is none. */
 export const findRun = (

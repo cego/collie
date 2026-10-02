@@ -6,7 +6,8 @@
 // Nothing here runs an action: `confirm` returns the actions that may run, and who runs
 // them is `executors.ts` and the front door's business.
 
-import { Data, DateTime, Duration, Effect, Path, Schema } from "effect";
+import type { FrontDoor } from "./board-model";
+import { Data, DateTime, Duration, Effect, FileSystem, Path, Schema } from "effect";
 import type { Action, ActionKind } from "./evaluator";
 import { ActionSchema } from "./evaluator";
 import { appendJournal, readJournal } from "./journal";
@@ -103,6 +104,28 @@ export const proposalsPath = Effect.fn("Proposals.path")(function* (
   return path.join(yield* herdDir(stateDir, herdKey), "proposals.jsonl");
 });
 
+/** Every Herd's proposals journal, with what it holds. */
+export const everyJournal = Effect.fn("Proposals.everyJournal")(function* (stateDir: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const herds = path.join(stateDir, "herd");
+  const journals: Array<{ file: string; lines: ReadonlyArray<ProposalLine> }> = [];
+  for (const herd of yield* fs.readDirectory(herds).pipe(Effect.orElseSucceed(() => []))) {
+    const file = path.join(herds, herd, "proposals.jsonl");
+    journals.push({ file, lines: yield* read(file).pipe(Effect.orElseSucceed(() => [])) });
+  }
+  return journals;
+});
+
+/** The Herd journal this proposal was written to, or null where no Herd has one by that id. */
+export const journalOf = Effect.fn("Proposals.journalOf")(function* (stateDir: string, id: string) {
+  const journals = yield* everyJournal(stateDir);
+  const found = journals.find(({ lines }) =>
+    lines.some((line) => line.kind === "proposal" && line.id === id),
+  );
+  return found?.file ?? null;
+});
+
 export const append = (file: string, line: ProposalLine) => appendJournal(file, LineJson, line);
 
 export const read = (file: string) => readJournal(file, LineJson);
@@ -172,7 +195,7 @@ export const record = Effect.fn("Proposals.record")(function* (file: string, wha
  * a proposal because of where it came from, never because of who confirms it.
  */
 export interface Actor {
-  readonly origin: "cli" | "cli-tty" | "board" | "driver" | "evaluator" | "chat";
+  readonly origin: FrontDoor;
   readonly requestId: string;
 }
 
@@ -373,6 +396,52 @@ export const decline = Effect.fn("Proposals.decline")(function* (
     }),
   );
 });
+
+/** The yes or no this request already gave, so a retried answer is the one answer. */
+export function answeredBy(
+  lines: ReadonlyArray<ProposalLine>,
+  request: string,
+): { readonly kind: "confirmed" | "declined"; readonly id: string } | undefined {
+  return lines.find(
+    (line): line is Schema.Schema.Type<typeof SettledSchema> =>
+      (line.kind === "confirmed" || line.kind === "declined") &&
+      line.by.slice(line.by.indexOf(":") + 1) === request,
+  );
+}
+
+/**
+ * What each action of a confirmed proposal came to, as its journal last says. One that
+ * started and never settled is `unknown`; one never reached is `skipped` as `not_run`,
+ * except after the `ask_human` a carry-out stops at.
+ */
+export function stepResults(lines: ReadonlyArray<ProposalLine>, id: string) {
+  const proposal = lines.find(
+    (line): line is ProposalRecord => line.kind === "proposal" && line.id === id,
+  );
+  const last = new Map<number, Schema.Schema.Type<typeof StepSchema>>();
+  for (const line of lines)
+    if (line.kind === "step" && line.proposal === id) last.set(line.index, line);
+  const results = [];
+  for (const [index, action] of (proposal?.actions ?? []).entries()) {
+    const step = last.get(index);
+    const asked = results.at(-1)?.kind === "ask_human";
+    if (step === undefined && asked) break;
+    const [state, note] =
+      step === undefined
+        ? (["skipped", "not_run"] as const)
+        : step.state === "started"
+          ? (["unknown", "started and never settled, so it may have run"] as const)
+          : ([step.state, step.note ?? ""] as const);
+    results.push({
+      index,
+      kind: action.kind,
+      state,
+      note,
+      run: "run" in action ? action.run : null,
+    });
+  }
+  return results;
+}
 
 /** Written before an action runs, so a crash leaves a record that it may have. */
 export const stepStarted = Effect.fn("Proposals.stepStarted")(function* (

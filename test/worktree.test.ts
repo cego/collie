@@ -1040,6 +1040,45 @@ test("a run starting in a checkout keeps it; its own board may still remove it",
     }),
   ));
 
+test("a checkout an agent in another herdr session works in is kept", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const worktreePath = yield* collieWorktree("wt");
+      yield* settledGit();
+      yield* mergedMr();
+      class OtherSession extends Herdr {
+        override paneList() {
+          return Effect.succeed([
+            {
+              paneId: "9-1",
+              tabId: "9:1",
+              label: null,
+              agent: "claude",
+              agentStatus: "working",
+              workspaceId: "w-other",
+              cwd: worktreePath,
+              foregroundCwd: null,
+              tokens: {},
+              terminalId: null,
+            },
+          ]);
+        }
+      }
+
+      const said = yield* pruneWorktrees({
+        herdr: new Herdr(rig.pluginEnv()),
+        sessions: [new OtherSession(rig.pluginEnv())],
+        stateDir: rig.stateDir,
+        runs: recorded,
+        registered,
+        cwd: rig.projectDir,
+      });
+
+      expect(said).toEqual(["kept wt · an agent is working in it"]);
+      expect((yield* rig.cmds()).includes("worktree remove")).toBe(false);
+    }),
+  ));
+
 test("a herdr that will not list panes judges nothing, and says so", () =>
   runEffect(
     Effect.gen(function* () {

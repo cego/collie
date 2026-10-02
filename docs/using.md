@@ -353,10 +353,8 @@ look at what it built. It is removed only once **settled** — the tree is clean
 no commit that is not on the remote already, nothing is working in it or could be resumed
 in it, and its merge request is merged or closed (or its remote branch is gone). A
 `renovate` checkout has no branch to ask either question about, so a clean one nothing is
-working in is settled, and there is no branch to delete with it. Pruning happens when Collie is already awake: at every run start —
-which never touches the checkout that run is about to work in — and every few minutes
-while a Control Plane is open, including for the worktree whose own board you are looking
-at, which closes with it. The board says both what went and what is being held on to, with
+working in is settled, and there is no branch to delete with it. Pruning happens every 3 minutes in the
+host, whether or not a pane is open. The board says both what went and what is being held on to, with
 the reason:
 
 ```
@@ -382,7 +380,10 @@ is left.
 ([ADR-0009](adr/0009-the-collie-tab-is-the-herds.md)). One herdr session is one **Herd**,
 and one Herd has one board: two boards would be two views disagreeing about the same Runs.
 There is no per-workspace board and no view to switch to: one workspace's work is its own
-cards on this one, and the search is what narrows to it. Your work stays where it is — a
+cards on this one, and the search is what narrows to it. The host builds the board and the
+Home follows what it serves, as the text view, chat and `collie --json board` do
+([ADR-0038](adr/0038-the-host-builds-and-serves-the-board.md)), so none of them can show a
+card the others do not. Your work stays where it is — a
 Run still runs in the workspace it was started from, and so do its worktrees, its agents
 and its hand-offs.
 
@@ -479,8 +480,8 @@ land, such as a review, or it ended with nothing to file — as one line, `3 fin
 1 failed`, until you click it open; anything older than a day is behind `older…`, which
 reads it from this checkout's history rather than carding every Run Collie has ever kept.
 
-Collie learns a merge by itself. In the background, every few minutes and never on a
-redraw, it asks GitLab about each merge request in Waiting on you; one that merged gets its
+Collie learns a merge by itself, whether or not a pane is open: the host asks GitLab
+about each merge request in Waiting on you every 5 minutes; one that merged gets its
 `merged` disposition recorded as GitLab's word and its card moves to Finished. One that was
 closed without merging only changes its card's sentence: closing can mean superseded as
 easily as abandoned, and only you know which.
@@ -534,12 +535,12 @@ does not, with the proposal's id and hash beside **Confirm** — your yes is con
 payload, and nothing else on the card can give it. **Decline** declines it. Either way the
 card leaves Needs you and the header recounts.
 
-A run holding at its [evidence gate](cli.md#outcomes) is a decision card too, and says
-which verifications it would be held to. **Approve** takes the list as it stands, **Skip**
-opens the merge request without checking any of it, and **Edit the list** opens the record
-with the names to tick off — `Approve the list` holds the run to what is left, and nothing
-left is Skip by another name, which the gate refuses. The answer goes on the record, so a
-skipped gate is a decision somebody took rather than a check that quietly did not run.
+A run holding at its [evidence gate](cli.md#outcomes), parked because nothing is approved
+for Collie to run, is a decision card too, and says which checks its checkout's
+`.collie/verify.json` offers. **Approve** grants the list as it stands and takes the run up
+again, and **Edit the list** opens the record with the names to tick off — `Approve the
+list` grants what is left. There is no Skip: with nothing approved, no check could prove
+the run. The answer goes on the record under whoever gave it.
 
 The sentence is the step's own words where its workflow gives it a `summary`
 (the module says what it is doing), and the step kind's own verb where it does not. A
@@ -559,7 +560,9 @@ selection back immediately.
 **Click a card** and its whole record slides over the board as a drawer — intent, the steps
 with their durations, the agents, the branch and merge request, and the latest card — with
 `close` and Esc to dismiss it. It is an overlay: the board behind it keeps every other card
-where it was, so reading one Task never costs you the overview.
+where it was, so reading one Task never costs you the overview. Everything in it comes from
+the host and follows the Run while the drawer is open, the log tail included; the merge
+request is what the host's merge watch last read, and `R` asks it again.
 
 **Point at a card** and, where its age was, `go to tab` and `⋯` appear; the card does not
 move or grow. `⋯` opens that Task's menu, and so does a right-click anywhere on the card —
@@ -661,10 +664,10 @@ is showing at a time:
   read only while this tab is showing it, because a log can be any size.
 
 The review and the plan's spec are capped and paged: `… truncated` says so, and `m` reads
-another cap of it. They are rendered a line at a time — headings in accent and bold, list
-markers dim, fenced code dim, everything else plain. Line-level and no markdown dependency:
-inline emphasis is left exactly as the agent wrote it, because rewriting the text is how a
-review stops saying what it said.
+another cap of it. They are markdown, drawn through [Comark](https://comark.dev)'s
+terminal renderer: headings, emphasis, lists, tables and fenced code are styled, and
+Comark's security plugin drops scripts and embedded content first, because what an agent
+writes is untrusted. Tables and rules are drawn to the drawer's width. The log is shown as plain text.
 
 The record scrolls with the wheel wherever the pointer is over it, and a new record — or a
 new tab — starts at the top, because how far the last one had been scrolled says nothing
@@ -886,9 +889,10 @@ its Intent past what Collie may correct, starts repeating itself, or claims to b
 without being able to show it, Collie writes that down as news. Turn it off with
 `"proactive": false` in `config.json`.
 
-What it does **not** do is call a model to find that out. The board already recomputes
-this to draw it, and a transition in it is the whole trigger; noticing nothing writes
-nothing, so a board redrawing over unchanged state costs exactly nothing. Output arriving,
+What it does **not** do is call a model to find that out. The host looks at each Herd's
+Runs every few seconds, whether or not a pane is open, and writes each Run's news to the
+Herd its Task is in, or to the host's own Herd for a Task from before Herds were recorded; noticing nothing writes nothing, so an unchanged Herd costs exactly
+nothing. Output arriving,
 a commit, a step starting, a pane changing and time passing are not on the list, and never
 were — a changing pane is not progress.
 

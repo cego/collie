@@ -9,13 +9,18 @@
 // a claim reads as `claimed:` and `missing` is always there, exactly as the Live region
 // draws them.
 
-import { createMemo, For, Show, type JSX } from "solid-js";
-import { TextAttributes, type MouseEvent, type ScrollBoxRenderable } from "@opentui/core";
-import { useRenderer } from "@opentui/solid";
-import type { TaskView } from "../board";
-import { truncated, type Panel, type PlanPanel, type RunDetail } from "../views";
+import { createEffect, createMemo, createResource, For, Show, type JSX } from "solid-js";
+import {
+  TextAttributes,
+  type MouseEvent,
+  type ScrollBoxRenderable,
+  type TextRenderable,
+} from "@opentui/core";
+import { useRenderer, useTerminalDimensions } from "@opentui/solid";
+import type { MrDetails, MrPanel, Panel, PlanPanel, RunDetail, TaskView } from "../board-model";
+import { truncated } from "../views";
 import type { Live } from "../live";
-import { sinceReview, type MrDetails, type MrPanel } from "../mr";
+import { sinceReview } from "../mr";
 import {
   asText,
   cardLines,
@@ -24,14 +29,8 @@ import {
   type Line as Evidence,
   type Tone,
 } from "../lines";
-import {
-  dispositionsFor,
-  markdownLines,
-  menuFor,
-  type Command,
-  type LineStyle,
-  type MenuItem,
-} from "./state";
+import { dispositionsFor, menuFor, type Command, type MenuItem } from "./state";
+import { styledMarkdown } from "./markdown";
 import { C, stateGlyph, stepGlyph } from "./sections";
 
 /** What the record is being read for. One at a time, and Summary is where it opens. */
@@ -45,7 +44,7 @@ export const TABS: ReadonlyArray<{ tab: Tab; label: string }> = [
 ];
 
 /** The drawer's share of the board, and what it stops growing at on a wide pane. */
-const SHARE = "60%";
+const SHARE = 0.6;
 const MAX = 72;
 
 /**
@@ -129,7 +128,7 @@ export function Drawer(props: DrawerProps) {
       ? []
       : [
           {
-            text: `${props.view.held ?? "⏸ Held."} ${props.view.heldBy.by}: ${props.view.heldBy.reason}`,
+            text: `${props.view.held ?? "⏸ Held."} ${props.view.heldBy.by}${props.view.heldBy.reason === "" ? "" : `: ${props.view.heldBy.reason}`}`,
             mark: "⏸",
             markFg: C.dim,
           },
@@ -161,6 +160,30 @@ export function Drawer(props: DrawerProps) {
    */
   const mr = () => props.detail?.mr ?? null;
 
+  const findings = (): Line[] =>
+    (props.detail?.findings ?? []).map((finding) => ({
+      text: finding.title,
+      mark: "•",
+      right:
+        finding.file === null
+          ? finding.severity
+          : `${finding.file}${finding.line === null ? "" : `:${finding.line}`}`,
+    }));
+
+  /** The Run's branch against its merge base, one line per file, as plain text. */
+  const changed = (): Line[] =>
+    (props.detail?.diff?.files ?? []).map((file) => ({
+      text: file.path,
+      mark: file.status === "added" ? "+" : file.status === "deleted" ? "-" : "~",
+      right: file.added === null ? "binary" : `+${file.added} -${file.removed}`,
+    }));
+
+  const verified = (): Line[] =>
+    (props.detail?.verifications ?? []).map((one) => {
+      const held = one.result === one.expect;
+      return { text: one.name, mark: held ? "✓" : "✗", markFg: held ? C.green : C.red };
+    });
+
   const card = (): Line[] => {
     const newest = props.live?.cards[0];
     return newest === undefined ? [] : cardLines(newest).map((line) => ({ text: line.text }));
@@ -181,7 +204,7 @@ export function Drawer(props: DrawerProps) {
         top: 0,
         right: 0,
         bottom: 0,
-        width: SHARE,
+        width: `${SHARE * 100}%`,
         maxWidth: MAX,
         flexDirection: "column",
         backgroundColor: C.pane,
@@ -295,7 +318,16 @@ export function Drawer(props: DrawerProps) {
         </Show>
 
         <Show when={props.tab === "review"}>
-          <Document title="review" panel={props.detail?.review ?? null} />
+          <Document title="review" panel={props.detail?.review ?? null} markdown />
+          <Show when={findings().length > 0}>
+            <Section title="findings" lines={findings()} />
+          </Show>
+          <Show when={changed().length > 0}>
+            <Section title={props.detail?.diff?.live ? "changing" : "changed"} lines={changed()} />
+          </Show>
+          <Show when={verified().length > 0}>
+            <Section title="verifications" lines={verified()} />
+          </Show>
         </Show>
 
         <Show when={props.tab === "plan"}>
@@ -392,11 +424,10 @@ function Section(props: { title: string; lines: ReadonlyArray<Line> }) {
 }
 
 /**
- * A read document — the review, the plan's spec, the end of the log — one styled line at
- * a time. Flat text is what makes a review unskimmable, and a review readable without
- * splitting a pane is what the record is opened for.
+ * A read document — the review, the plan's spec, the end of the log. The review and spec
+ * are agent-written markdown, drawn through Comark; the log is plain text.
  */
-function Document(props: { title: string; panel: Panel | null }) {
+function Document(props: { title: string; panel: Panel | null; markdown?: boolean }) {
   const panel = () => props.panel;
   return (
     <Titled title={props.title}>
@@ -408,7 +439,9 @@ function Document(props: { title: string; panel: Panel | null }) {
           </text>
         }
       >
-        <Markdown text={panelLine(panel()!)} />
+        <Show when={props.markdown} fallback={<text fg={C.text}>{panelLine(panel()!)}</text>}>
+          <Markdown text={panelLine(panel()!)} />
+        </Show>
         <Show when={truncated(panel())}>
           <text fg={C.dim}>{"… truncated; m reads more of it"}</text>
         </Show>
@@ -422,34 +455,27 @@ function panelLine(panel: Panel): string {
   return panel._tag === "Text" ? panel.text : panel.reason;
 }
 
-/** What each markdown line style is drawn in. Exhaustive, so a new style is a type error. */
-const LINE_FG = {
-  heading: C.blue,
-  list: C.dim,
-  code: C.dim,
-  plain: C.text,
-} satisfies Record<LineStyle, string>;
+/** The drawer's padding and a section's indent, which a document is drawn inside. */
+const INSET = 8;
 
 /**
- * Two memos, so the work stops at the text rather than at the render: the bridge replaces
- * the whole state every three seconds, and `markdownLines` returns a fresh array each
- * call — which reconciled every line of a cap's worth of review on each of those.
+ * The text as written until Comark has rendered it, or if it cannot. Set through a ref,
+ * because Solid's `content` prop takes only a string. The memos keep the bridge's
+ * three-second state refresh from rendering the same text again.
  */
 function Markdown(props: { text: string }) {
+  const terminal = useTerminalDimensions();
   const text = createMemo(() => props.text);
-  const lines = createMemo(() => markdownLines(text()));
-  return (
-    <For each={lines()}>
-      {(line) => (
-        <text
-          fg={LINE_FG[line.style]}
-          attributes={line.style === "heading" ? TextAttributes.BOLD : TextAttributes.NONE}
-        >
-          {line.text}
-        </text>
-      )}
-    </For>
+  const width = createMemo(() => Math.min(Math.floor(terminal().width * SHARE), MAX) - INSET);
+  const [styled] = createResource(
+    () => ({ text: text(), width: width() }),
+    (to) => styledMarkdown(to.text, to.width),
   );
+  let node: TextRenderable | undefined;
+  createEffect(() => {
+    if (node) node.content = (styled.state === "ready" && styled()) || text();
+  });
+  return <text ref={node} fg={C.text} />;
 }
 
 /**
@@ -467,7 +493,7 @@ function Plan(props: { plan: PlanPanel | null }) {
         </Titled>
       }
     >
-      <Document title="spec" panel={props.plan!.spec} />
+      <Document title="spec" panel={props.plan!.spec} markdown />
       <Titled title="tickets">
         <For each={props.plan!.tickets}>
           {(ticket) => (

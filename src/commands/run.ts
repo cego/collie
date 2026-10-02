@@ -24,6 +24,7 @@ import {
   rememberChecks,
   anyRuns,
   controlRun,
+  disposeRun,
   invokeOffer,
   showOffers,
   steerRun,
@@ -64,9 +65,10 @@ import { agentStartRefusal, CLI_CHECKOUT_FIX, insideCheckout } from "../agent-st
 import { PROJECTS_ROOT_OPTION, projectsRoot } from "../projects";
 import { currentReports, readDrift } from "../drift";
 import { newest, readCards } from "../cards";
-import { metricsOf, readMetrics, type Metrics } from "../metrics";
+import { metricsOf, readMetrics } from "../metrics";
+import type { Metrics } from "../board-model";
 import { reportOf } from "../report";
-import { latest, readDispositions, recordDisposition, statusLine } from "../disposition";
+import { latest, readDispositions, statusLine } from "../disposition";
 import { nowIso } from "../time";
 import type { PluginEnv } from "../env";
 import {
@@ -83,6 +85,7 @@ import {
   UnknownJson,
   actorName,
   actorNow,
+  cliDoor,
   context,
   mutating,
   parseInput,
@@ -336,6 +339,7 @@ const runStart = Command.make(
                   if (needed !== null) return needed;
                 }
                 const started = yield* startRun(resolved.env, {
+                  door: yield* cliDoor(resolved.env),
                   id: workflow,
                   request: requestId,
                   input: launch.input,
@@ -868,12 +872,15 @@ const runAnswer = Command.make(
   },
   ({ runId, answer, decision, requestId }) =>
     runMutationCommand("run-answer", runId, requestId, (env, id) =>
-      answerRun(env, {
-        runId,
-        decision: Option.getOrNull(decision),
-        value: answer,
-        request: id,
-      }),
+      Effect.flatMap(cliDoor(env), (door) =>
+        answerRun(env, {
+          door,
+          runId,
+          decision: Option.getOrNull(decision),
+          value: answer,
+          request: id,
+        }),
+      ),
     ),
 ).pipe(Command.withDescription("Answer the Choice or the decision a waiting Run is asking"));
 
@@ -900,12 +907,14 @@ const runSteer = Command.make(
           if (!(yield* anyRuns(resolved.env))) {
             return err("run_not_found", `No workflow host has a Run "${runId}".`, { run: runId });
           }
+          const door = yield* cliDoor(resolved.env);
           return yield* mutation(resolved.env, "run-steer", requestId, (id) =>
             steerRun(resolved.env, {
               runId,
               text,
               request: id,
               operation: Option.getOrNull(operation) ?? undefined,
+              door,
             }),
           );
         }),
@@ -924,8 +933,10 @@ const mutationFlags = {
 };
 
 const runStop = Command.make("stop", mutationFlags, ({ runId, requestId }) =>
-  runMutationCommand("run-stop", runId, requestId, (env) =>
-    controlRun(env, { runId, control: "stop", set: true }),
+  runMutationCommand("run-stop", runId, requestId, (env, id) =>
+    Effect.flatMap(cliDoor(env), (door) =>
+      controlRun(env, { door, runId, control: "stop", set: true, request: id }),
+    ),
   ),
 ).pipe(
   Command.withDescription(
@@ -942,14 +953,27 @@ const holdWorkspaceFlag = Flag.String("workspace").pipe(
  * Every Run of the Task this workspace belongs to, held. A workspace is where a Task is
  * worked, so "hold this workspace" is the Task's Runs and not whatever else is open in it.
  */
-const holdTask = Effect.fn("run.holdTask")(function* (env: PluginEnv, workspace: string) {
+const holdTask = Effect.fn("run.holdTask")(function* (
+  env: PluginEnv,
+  workspace: string,
+  request: string,
+  reason: string | undefined,
+) {
   const task = yield* taskOfWorkspace(env.stateDir, workspace);
   if (task === null)
     return err("invalid_input", `Workspace "${workspace}" is not a Task's.`, { workspace });
   const runs = (yield* runViews(env, task.id)).runs.filter((view) => !isSettled(view));
   const held: string[] = [];
+  const door = yield* cliDoor(env);
   for (const view of runs) {
-    const done = yield* controlRun(env, { runId: view.runId, control: "hold", set: true });
+    const done = yield* controlRun(env, {
+      door,
+      runId: view.runId,
+      control: "hold",
+      set: true,
+      request: `${request}:${view.runId}`,
+      reason,
+    });
     if (done.ok) held.push(view.runId);
   }
   return {
@@ -964,11 +988,16 @@ const runHold = Command.make(
   {
     runId: runIdArg.pipe(Argument.optional),
     workspace: holdWorkspaceFlag,
+    reason: Flag.String("reason").pipe(
+      Flag.withDescription("Why, in your own words, which the board's drawer shows"),
+      Flag.optional,
+    ),
     requestId: requestIdFlag,
   },
-  ({ runId, workspace, requestId }) =>
+  ({ runId, workspace, reason, requestId }) =>
     Effect.gen(function* () {
       const global = yield* root;
+      const why = Option.getOrUndefined(reason);
       const where = Option.getOrNull(workspace);
       const id = Option.getOrNull(runId);
       yield* attempt(
@@ -976,8 +1005,8 @@ const runHold = Command.make(
           const resolved = yield* context(global, false);
           if (resolved._tag === "ContextFailure") return resolved.result;
           if (where !== null) {
-            return yield* mutation(resolved.env, "run-hold-workspace", requestId, () =>
-              holdTask(resolved.env, where),
+            return yield* mutation(resolved.env, "run-hold-workspace", requestId, (request) =>
+              holdTask(resolved.env, where, request, why),
             );
           }
           if (id === null) {
@@ -986,14 +1015,17 @@ const runHold = Command.make(
               "`run hold` takes a Run's id, or `--workspace <id>` for every Run in one.",
             );
           }
-          return yield* mutation(resolved.env, "run-hold", requestId, () =>
+          return yield* mutation(resolved.env, "run-hold", requestId, (request) =>
             Effect.gen(function* () {
               if (!(yield* anyRuns(resolved.env)))
                 return err("run_not_found", `Run "${id}" was not found.`, { run: id });
               return yield* controlRun(resolved.env, {
+                door: yield* cliDoor(resolved.env),
+                request,
                 runId: id,
                 control: "hold",
                 set: true,
+                reason: why,
               });
             }),
           );
@@ -1009,8 +1041,10 @@ const runRelease = Command.make(
   "release",
   { runId: runIdArg, requestId: requestIdFlag },
   ({ runId, requestId }) =>
-    runMutationCommand("run-release", runId, requestId, (env) =>
-      controlRun(env, { runId, control: "hold", set: false }),
+    runMutationCommand("run-release", runId, requestId, (env, id) =>
+      Effect.flatMap(cliDoor(env), (door) =>
+        controlRun(env, { door, runId, control: "hold", set: false, request: id }),
+      ),
     ),
 ).pipe(Command.withDescription("Let a held Run carry on"));
 
@@ -1025,7 +1059,9 @@ const runClearOverride = Command.make(
   },
   ({ runId, agent, requestId }) =>
     runMutationCommand("run-clear-override", runId, requestId, (env, id) =>
-      clearOverride(env.stateDir, new Herdr(env), runId, agent, actorName(actorNow(id))),
+      Effect.flatMap(actorNow(env, id), (actor) =>
+        clearOverride(env.stateDir, new Herdr(env), runId, agent, actorName(actor)),
+      ),
     ),
 ).pipe(
   Command.withDescription("Let Collie correct an agent again after someone typed into its pane"),
@@ -1075,18 +1111,19 @@ const runDisposition = Command.make(
           }
           return yield* mutation(resolved.env, "run-disposition", requestId, (id) =>
             Effect.gen(function* () {
-              const line = {
-                at: yield* nowIso(),
-                by: actorName(actorNow(id)),
+              const done = yield* disposeRun(resolved.env, {
+                door: yield* cliDoor(resolved.env),
+                runId: facts.id,
                 kind,
                 ref,
                 note: Option.getOrNull(note),
-              };
-              yield* recordDisposition(resolved.dir, line);
+                request: id,
+              });
+              if (!done.ok) return done;
               return {
                 ok: true,
-                data: { run: facts.id, status, disposition: line },
-                human: statusLine(status, line),
+                data: { run: facts.id, status, disposition: done.value },
+                human: statusLine(status, done.value),
               };
             }),
           );
@@ -1198,17 +1235,20 @@ const runAction = Command.make(
   },
   ({ runId, offer, input, requestId }) =>
     runMutationCommand("run-action", runId, requestId, (env, id) =>
-      invokeOffer(env, {
-        runId,
-        offer,
-        input: Object.fromEntries(
-          input.flatMap((pair) => {
-            const at = pair.indexOf("=");
-            return at === -1 ? [] : [[pair.slice(0, at), pair.slice(at + 1)] as const];
-          }),
-        ),
-        request: id,
-      }),
+      Effect.flatMap(cliDoor(env), (door) =>
+        invokeOffer(env, {
+          door,
+          runId,
+          offer,
+          input: Object.fromEntries(
+            input.flatMap((pair) => {
+              const at = pair.indexOf("=");
+              return at === -1 ? [] : [[pair.slice(0, at), pair.slice(at + 1)] as const];
+            }),
+          ),
+          request: id,
+        }),
+      ),
     ),
 ).pipe(Command.withDescription("Do one of the things this Run offers, if it still offers it"));
 
@@ -1223,11 +1263,15 @@ const runResume = Command.make("resume", mutationFlags, ({ runId, requestId }) =
       Effect.gen(function* () {
         const resolved = yield* context(global, false);
         if (resolved._tag === "ContextFailure") return resolved.result;
-        return yield* mutation(resolved.env, "run-resume", requestId, () =>
+        return yield* mutation(resolved.env, "run-resume", requestId, (request) =>
           Effect.gen(function* () {
             if (!(yield* anyRuns(resolved.env)))
               return err("run_not_found", `Run "${runId}" was not found.`, { run: runId });
-            const recovered = yield* resumeRun(resolved.env, runId);
+            const recovered = yield* resumeRun(resolved.env, {
+              door: yield* cliDoor(resolved.env),
+              runId,
+              request,
+            });
             if (Option.isNone(global.workspace) || !recovered.ok) return recovered;
             return {
               ok: true as const,
@@ -1256,7 +1300,7 @@ function intentChange(
   options: {
     readonly propagate?: boolean;
     /** What a hosted Run does instead, where it keeps this outside an Intent. */
-    readonly hosted?: (env: PluginEnv) => Effect.Effect<Result, never, BunServices>;
+    readonly hosted?: (env: PluginEnv, id: string) => Effect.Effect<Result, never, BunServices>;
   } = {},
 ) {
   return Effect.gen(function* () {
@@ -1284,14 +1328,19 @@ function intentChange(
                 return err("invalid_state", `Run "${runId}" has no Intent to amend.`);
               const wanted = change(intent);
               if ("ok" in wanted) return wanted;
-              const next = amend(intent, wanted, actorName(actorNow(id)), yield* nowIso());
+              const next = amend(
+                intent,
+                wanted,
+                actorName(yield* actorNow(resolved.env, id)),
+                yield* nowIso(),
+              );
               if (next !== intent) yield* writeIntentHeld(dir, next);
               return next;
             }),
           );
         if (hosted !== undefined)
           return yield* mutation(resolved.env, operation, requestId, (id) =>
-            hosted(resolved.env).pipe(
+            hosted(resolved.env, id).pipe(
               // The host keeps what it acts on; the Intent says the same, so what `intent
               // show` and oversight read is what the gate will run, not an empty list.
               Effect.flatMap((result): Effect.Effect<Result, CollieError, BunServices> =>
@@ -1518,10 +1567,15 @@ const intentVerification = Command.make(
         !remove && granted === null ? missing : verificationGrant(intent, name, granted),
       {
         propagate: wants,
-        hosted: (env) =>
+        hosted: (env, request) =>
           !remove && granted === null
             ? Effect.succeed(missing)
-            : grantRun(env, { runId, name, command: granted }),
+            : cliDoor(env).pipe(
+                Effect.orDie,
+                Effect.flatMap((door) =>
+                  grantRun(env, { runId, name, command: granted, request, door }),
+                ),
+              ),
       },
     );
   },

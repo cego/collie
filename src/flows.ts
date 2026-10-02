@@ -14,14 +14,11 @@ import {
   Schedule,
   Schema,
 } from "effect";
-import { currentReports, readDrift } from "./drift";
-import { diffTargetOf, EXCLUSIVE_STRATEGIES, strategyMeaning } from "./strategies";
+import { EXCLUSIVE_STRATEGIES, strategyMeaning } from "./strategies";
 import { PROJECTS_ROOT_OPTION, projectsRoot } from "./projects";
 import { insideCheckout } from "./agent-start";
 import { placeableUnder, placedByUrl, routed, routerDeps } from "./route";
-import { buildBoard, type MrState, type TaskView } from "./board";
-import { settleMerges } from "./merges";
-import { nowIso } from "./time";
+import { StepResult, type RunDetail } from "./board-model";
 import {
   DENSITIES,
   isDensity,
@@ -32,14 +29,9 @@ import {
   SCOPES,
   writeConfigValue,
 } from "./config";
-import type { BunServices } from "@effect/platform-bun/BunServices";
-import type { PlatformError } from "effect/PlatformError";
-import type { SchemaError } from "effect/Schema";
 import { COMPACTION_OFF, validThreshold } from "./compaction";
-import { herdDir, herdOf, HerdrUnreachable } from "./steering";
+import { herdOf } from "./steering";
 import { chatHarnessOf, ensureChatFor } from "./chat";
-import { append as appendNews, newsPath } from "./news";
-import { eventsIn, readSaid, remember } from "./proactive";
 import {
   ensureHomeFor,
   homePath,
@@ -52,8 +44,6 @@ import {
   UNREADABLE,
 } from "./home";
 import { liveFor, markedOf, type Live } from "./live";
-import type { IntentUnreadable } from "./intent";
-import { ProposalsBusy, type Actor } from "./proposals";
 import { isStale, layers, loadDefinitions, type Definitions, type Provenance } from "./definitions";
 import type { PluginEnv } from "./env";
 import { Herdr, type AgentInfo, type WorkspaceInfo } from "./herdr";
@@ -61,35 +51,37 @@ import { inferInput, type InputPrompts, type PickItem } from "./inputs";
 import type { Found } from "./discovery";
 import {
   answerRun,
+  boardSnapshot,
+  confirmProposed,
   controlRun,
+  declineProposed,
+  disposeRun,
+  followBoard,
+  followUpRun,
+  followRunDetail,
+  runDetailNow,
+  type DetailKey,
   invokeOffer,
+  type BoardRead,
   offersOf,
   resumeRun,
   savedModules,
   startRun,
+  steerAbout,
 } from "./lifecycle";
 import { releaseKeyboard, startKeyboard, takeKey } from "./keys";
 import { forkResolvedDefinition, type DefinitionKind } from "./fork";
 import { COLLIE_TAB, reason, runTitle } from "./naming";
 import { listRuns, settled, type RunFacts } from "./runs";
 import { everyRegistered, type AgentEntry } from "./registry";
-import { pruneWorktrees } from "./worktree";
+import { reportedWorktrees } from "./worktree";
 import { scopeFor, type RegistryScope } from "./registry";
 import type { CompactionSettings } from "./compaction";
-import { recordDisposition, statusLine } from "./disposition";
+import { statusLine } from "./disposition";
 import { selectionPath, writeSelection } from "./selection";
 import { everyViewerPaints } from "./outer";
-import { actorName } from "./proposals";
-import { evaluationDeps } from "./evaluator";
 import { listTasks, taskOfWorkspace, type TaskChoice, type TaskRecord } from "./task";
-import {
-  carryOutAsked,
-  carryOutProposal,
-  declineProposal,
-  newRequestId,
-  registerRunExecutors,
-  steer,
-} from "./operations";
+import { newRequestId } from "./operations";
 import {
   answerFor,
   openingFilter,
@@ -99,25 +91,9 @@ import {
   type Command,
 } from "./ui/state";
 import type { Focus } from "./ui/bridge";
-import {
-  buildHistory,
-  buildRunDetail,
-  buildSettings,
-  buildWorkflows,
-  NUMERIC_DEFAULTS,
-  type PlanPanel,
-} from "./views";
+import { buildHistory, buildSettings, buildWorkflows, NUMERIC_DEFAULTS } from "./views";
 import { isPermissionMode, PERMISSION_MODES } from "./harness";
-import {
-  mrDetails,
-  mrTarget,
-  parseMrTarget,
-  parseMrUrl,
-  repoArgs,
-  shell,
-  type MrPanel,
-  type Runner,
-} from "./mr";
+import { parseMrTarget, repoArgs, shell } from "./mr";
 import type { ChildProcessSpawner } from "effect/unstable/process";
 import {
   agentForKey,
@@ -130,6 +106,9 @@ import {
   type RunRow,
   type WorkspaceView,
 } from "./workspace";
+
+/** The steps a confirm carried out, as the host answered them. */
+const CarriedSteps = Schema.Struct({ results: Schema.Array(StepResult) });
 
 /**
  * What a board is looking at: which workspace and repository, where the state is, and
@@ -151,14 +130,12 @@ export interface ControlSession extends BoardSession {
   pluginRoot: string;
   /** Where the board's Runs come from: the host's, unless a test hands over its own. */
   runsOf?: RunsOf;
-  /** Where the defaults live, so the board can read its own quiet threshold. */
+  /** Where the board's Tasks come from: one read of the host's board, unless followed. */
+  tasksOf?: () => Effect.Effect<BoardRead>;
+  /** Where the drawer's details come from: one read of the host's, unless followed; null closes it. */
+  detailOf?: (key: DetailKey | null) => Effect.Effect<RunDetail | null>;
+  /** Where the defaults live. */
   userDir: string;
-  /**
-   * What the last worktree sweep said, and whether one is out working right now. A
-   * caller that keeps none — a test drawing one board, a view built to be rendered
-   * once — sweeps nothing and shows nothing about worktrees.
-   */
-  pruned?: Pruned;
 }
 
 export type Mode = "pick" | "continue" | "resume" | "fork";
@@ -516,6 +493,7 @@ const startModule = Effect.fn("Flows.startModule")(function* (
     if (confirmed === null) return null;
   }
   const started = yield* startRun(at, {
+    door: "board",
     id: module.id,
     request: yield* newRequestId(),
     input: { json: {}, text, inferred: [...inferred.keys()] },
@@ -697,7 +675,11 @@ export const resumeFlow = Effect.fn("Flows.resumeFlow")(function* (
   });
   if (!chosen) return 0;
 
-  const resumed = yield* resumeRun(env, chosen.id);
+  const resumed = yield* resumeRun(env, {
+    door: "board",
+    runId: chosen.id,
+    request: yield* newRequestId(),
+  });
   if (!resumed.ok) return yield* bail(prompts, `${chosen.id}: ${resumed.error.message}`);
   // Only a popup can close itself; running the picker in a plain pane is fine..
   if (placement === "popup") yield* Effect.ignore(herdr.popupClose());
@@ -750,6 +732,7 @@ export const makeOffer = Effect.fn("Flows.makeOffer")(function* (
   const input = yield* offerArguments(prompts, offer.arguments);
   if (input === null) return null;
   const done = yield* invokeOffer(env, {
+    door: "board",
     runId,
     offer: offer.id,
     input,
@@ -822,20 +805,6 @@ export const workspaceFlow = Effect.fn("Flows.workspaceFlow")(function* (
   herdr: Herdr,
   env: PluginEnv,
 ) {
-  const session: ControlSession = {
-    herdr,
-    ...scopeFor(env, env.cwd),
-    stateDir: env.stateDir,
-    paneId: env.paneId,
-    pluginRoot: env.pluginRoot,
-    userDir: env.userDir,
-    // The Control Plane runs its actions on one fiber, one at a time, so a hand-off to
-    // an agent over the threshold must not hold that queue while a compaction runs. It
-    // asks, and reports that the compaction is in the air; the human presses the key
-    // again when the pane says it has finished. No work is sent either way.
-    compaction: { waitMs: 0 },
-    pruned: { at: 0, lines: [], running: false },
-  };
   const key = yield* herdOf(env.socketPath).pipe(Effect.catch(() => Effect.succeed(null)));
   const home = key === null ? null : yield* readHome(yield* homePath(env.stateDir, key));
   // A board outside the Home is a board this Herd no longer has: one Home per Herd, so
@@ -855,6 +824,21 @@ export const workspaceFlow = Effect.fn("Flows.workspaceFlow")(function* (
     }
     return yield* redirectBoard(herdr, env);
   }
+  const session: ControlSession = {
+    herdr,
+    ...scopeFor(env, env.cwd),
+    stateDir: env.stateDir,
+    paneId: env.paneId,
+    pluginRoot: env.pluginRoot,
+    userDir: env.userDir,
+    // The Control Plane runs its actions on one fiber, one at a time, so a hand-off to
+    // an agent over the threshold must not hold that queue while a compaction runs. It
+    // asks, and reports that the compaction is in the air; the human presses the key
+    // again when the pane says it has finished. No work is sent either way.
+    compaction: { waitMs: 0 },
+    tasksOf: yield* followBoard(env),
+    detailOf: yield* followRunDetail(env),
+  };
   /**
    * Where the shortcut was pressed, which is what `g` narrows to and what the board
    * opens on. `env.workspaceId` is the fallback for a board nobody arrived at through
@@ -881,10 +865,8 @@ export const workspaceFlow = Effect.fn("Flows.workspaceFlow")(function* (
        * herdr focus method to show a human something (ADR-0008).
        */
       let dispatch: ((command: Command) => void) | null = null;
-      yield* registerRunExecutors(env, {
-        navigate: (target) =>
-          dispatch?.({ _tag: "SetFilter", filter: { kind: "run", id: target.run } }),
-      });
+      const navigate = (run: string) =>
+        dispatch?.({ _tag: "SetFilter", filter: { kind: "run", id: run } });
       yield* runApp({
         onReady: (own) => {
           dispatch = own;
@@ -895,7 +877,7 @@ export const workspaceFlow = Effect.fn("Flows.workspaceFlow")(function* (
         filter: opening,
         origin,
         load: (focus) => app.load(focus),
-        act: (command, prompts) => runCommand(session, env, command, prompts),
+        act: (command, prompts) => runCommand(session, env, command, prompts, navigate),
         // A picture only where every human attached can see one; otherwise no mark.
         logo: (yield* everyViewerPaints())
           ? `${env.pluginRoot}/assets/brand/logos/collie-horizontal-light-512.png`
@@ -934,7 +916,7 @@ export const workspaceFlow = Effect.fn("Flows.workspaceFlow")(function* (
     ));
   if (why === null) return replaced ? RELAUNCH : 0;
   return yield* textBoard(session, herdr, env, why);
-});
+}, Effect.scoped);
 
 /**
  * A pane left over from when every workspace had its own Collie tab. One line saying
@@ -966,86 +948,25 @@ const redirectBoard = Effect.fn("Flows.redirectBoard")(function* (herdr: Herdr, 
   }
 });
 
-/** How long a merge request read stays good for. Re-selecting inside it costs nothing. */
-const MR_TTL_MS = 60_000;
+/** One Run's details from the host, as this session reads them. */
+const detailRead = (session: ControlSession, env: PluginEnv, key: DetailKey) =>
+  session.detailOf?.(key) ?? runDetailNow(env, key);
 
-/**
- * Everything the app draws, for whatever it is looking at. One closure, because the
- * merge-request cache belongs with the reads it saves: a History of 40 merge-request
- * Runs must make no `glab` call to draw, one selection makes exactly one, and
- * re-selecting the same Run inside the TTL makes none.
- */
-/**
- * The next meaningful thing that happened, asked about once. One turn per tick at most,
- * and one per event ever: several Runs ending together is one thing that happened, and a
- * board that fired five turns at once would be the notification storm this replaces.
- *
- * Read-only where it can be: the turn is a question about a Run, and what may then be
- * *done* about it goes through the same `validate` path a typed message does. Who started
- * the turn is not an input to what is permitted.
- */
-/**
- * The Runs still going whose drift was escalated to the human, by constraint. Only the
- * unfinished ones are read: a finished Run's drift is history, and its ending is the event.
- */
-const escalatedDrift = Effect.fn("Flows.escalatedDrift")(function* (runs: ReadonlyArray<RunFacts>) {
-  const drifting = new Map<string, string>();
-  for (const run of runs) {
-    if (settled(run)) continue;
-    const lines = yield* readDrift(run.dir).pipe(Effect.catch(() => Effect.succeed([])));
-    const stuck = currentReports(lines).find((report) => report.resolution === "escalated");
-    if (stuck) drifting.set(run.id, stuck.constraint);
-  }
-  return drifting;
-});
+/** The host's board, as this session reads it. */
+const boardRead = (session: ControlSession, env: PluginEnv) =>
+  session.tasksOf?.() ??
+  boardSnapshot(env).pipe(
+    Effect.map((read): BoardRead =>
+      read.ok
+        ? { tasks: read.value.tasks, unreadable: null }
+        : { tasks: [], unreadable: read.error.message },
+    ),
+  );
 
-/**
- * What the board noticed, written down for the conversation to pick up.
- *
- * No model is called here, and that is the whole change: a meaningful transition becomes
- * a **fact** in this Herd's news, built from the Run's own record. An unchanged Herd
- * produces no events, so nothing is appended and nothing wakes anything — the board
- * redrawing every three seconds costs nothing at all.
- *
- * Every event the board finds is written, not just the first: a burst becomes a batch the
- * conversation is given together, rather than one turn per Run ending.
- */
-const sayWhatHappened = Effect.fn("Flows.sayWhatHappened")(function* (
-  env: PluginEnv,
-  runs: ReadonlyArray<RunFacts>,
-) {
-  if (!(yield* loadDefaults(env.userDir)).proactive) return;
-  const key = yield* herdOf(env.socketPath).pipe(Effect.catch(() => Effect.succeed(null)));
-  if (key === null) return;
-  const dir = yield* herdDir(env.stateDir, key);
-  const said = yield* readSaid(dir);
-  const file = yield* newsPath(env.stateDir, key);
-  for (const event of eventsIn(runs, yield* escalatedDrift(runs))) {
-    if (said.has(event.key)) continue;
-    // Remembered only once it is in the journal. The journal deduplicates by unread key,
-    // so a failed write costs a retry on the next tick — where remembering first would
-    // cost the news itself, and nobody would be told that Run halted.
-    const queued = yield* appendNews(file, {
-      key: event.key,
-      run: event.run,
-      text: event.text,
-    }).pipe(Effect.catchCause(() => Effect.succeed(null)));
-    if (queued !== null) yield* remember(dir, event.key, yield* nowIso());
-  }
-});
-
+/** Everything the app draws, for whatever it is looking at. */
 export function appState(
   session: ControlSession,
   env: PluginEnv,
-  /**
-   * A parameter for the same reason inference takes one: a test should watch it run.
-   * The default ignores stderr, because what this reads is JSON: glab writes non-fatal
-   * notices there while still exiting 0, and one of those folded into the output made
-   * `mrDetails` report a merge request it had just read successfully as "not a merge
-   * request" — and cached that answer for the whole TTL. `"say"` is for the calls whose
-   * output a human reads, like `OpenMr`.
-   */
-  run: Runner<ChildProcessSpawner.ChildProcessSpawner> = shell,
   /**
    * The Home's ownership question, when there is one nobody has settled. Decided once at
    * startup rather than per tick: it is a herdr answer, `collie home reconcile` is what
@@ -1055,71 +976,8 @@ export function appState(
   ownership: Live["ownership"] = null,
 ) {
   const runsOf = session.runsOf ?? listRuns;
-  const mrCache = new Map<string, { at: number; panel: MrPanel }>();
-  /**
-   * A finished Run's plan, kept between reads for the same reason the merge request is:
-   * the panel is re-produced on every board tick, and a Run that has stopped cannot
-   * change the plan it was built from. Cleared whenever something asked for a fresh
-   * read, so `R` re-reads a plan the same way it re-reads the merge request.
-   */
-  const planCache = new Map<string, PlanPanel | null>();
-  /**
-   * What GitLab last said about each merge request the board waits on, and when it was
-   * asked. Asked in the background after a load, never on the load's own path: ten open
-   * merge requests must not cost ten `glab` calls per redraw.
-   */
-  const mrStates = new Map<string, MrState>();
-  const mrChecked = new Map<string, number>();
-  let settling = false;
-  const settleInBackground = (views: ReadonlyArray<TaskView>, now: number) =>
-    Effect.gen(function* () {
-      if (settling) return;
-      settling = true;
-      yield* Effect.forkDetach(
-        settleMerges({
-          stateDir: env.stateDir,
-          cwd: env.cwd,
-          run,
-          views,
-          now,
-          checked: mrChecked,
-          states: mrStates,
-        }).pipe(
-          Effect.ensuring(
-            Effect.sync(() => {
-              settling = false;
-            }),
-          ),
-          Effect.ignore,
-        ),
-      );
-    });
-
-  const merge = Effect.fn("Flows.mergeRequestFor")(function* (
-    target: string | null,
-    cwd: string,
-    force: boolean,
-  ) {
-    const ref = target ? parseMrTarget(target) : null;
-    if (!ref) return null;
-    const key = mrTarget(ref.project, ref.iid);
-    const now = yield* Clock.currentTimeMillis;
-    const cached = mrCache.get(key);
-    if (cached && !force && now - cached.at < MR_TTL_MS) return cached.panel;
-    const panel = yield* mrDetails(ref, cwd, run);
-    mrCache.set(key, { at: now, panel });
-    return panel;
-  });
-
   /** The board from the last read, for whatever `rereads` says may be taken from it. */
   let last: { focus: Focus; state: AppState } | null = null;
-  /**
-   * Whether a turn Collie started is still being answered. At most one in flight: the
-   * next tick does not start a second while the evaluator is still thinking about the
-   * first, and — the reason it is a flag and not an await — the board never waits for it.
-   */
-  let speaking = false;
-
   /** One row per Run: a Run on the local board is on the wide one too. */
   const dedupe = (rows: ReadonlyArray<{ id: string; dir: string }>) => [
     ...new Map(rows.map((row) => [row.id, { id: row.id, dir: row.dir }])).values(),
@@ -1135,24 +993,6 @@ export function appState(
     // One read of the register and the workspace list for both boards: a wide tick
     // costs the local board's calls plus nothing, and the two boards cannot reconcile
     // a tab label from two different answers about the same agent.
-    // A meaningful change in what this read already looked at, said out loud. Never a
-    // second scan and never a timer: the board recomputes this to draw it, and a
-    // transition in it is the whole trigger. Best effort — a Herd nobody can talk to
-    // still has a board. No model is called: what this does is write a fact down, so a
-    // board that redraws over unchanged state finds no events and does nothing at all.
-    if (runs !== undefined && !speaking) {
-      speaking = true;
-      yield* Effect.forkDetach(
-        sayWhatHappened(env, runs).pipe(
-          Effect.ignore,
-          Effect.ensuring(
-            Effect.sync(() => {
-              speaking = false;
-            }),
-          ),
-        ),
-      );
-    }
     const live = reuse ? undefined : yield* liveOf(session);
     const board = reuse ? reuse.state.board : yield* boardOf(session, scanned!, live);
     // Read only while the Runs view is showing it: a local board, and every other View,
@@ -1195,14 +1035,6 @@ export function appState(
         : selectedRun === null
           ? null
           : { id: selectedRun.id, dir: selectedRun.dir };
-    // Read for the Selection and never for a list, and a badge is only ever filled from
-    // what is in the cache. When to read past that cache is `rereads`' decision.
-    const mr = yield* merge(
-      mrAbout(selectedRun) ?? selected?.target ?? null,
-      env.cwd,
-      again.forceMr,
-    );
-    if (again.forceMr) planCache.clear();
     /**
      * Every Run on whichever board is showing, for the marks and for the Herd-wide
      * cards. From the boards rather than from the store's whole list: History keeps two
@@ -1242,29 +1074,20 @@ export function appState(
             region: focus.view === "runs",
           });
     const defaults = yield* loadDefaults(env.userDir);
-    const tasksBuilt = reuse
-      ? reuse.state.tasks
-      : yield* buildBoard({
-          env,
-          alive: live?.alive ?? [],
-          runs,
-          tasks: scanned?.tasks,
-          registered: scanned?.registered,
-          quietMs: defaults.boardQuietMs,
-          mrStates,
-        });
-    if (!reuse) yield* settleInBackground(tasksBuilt, yield* Clock.currentTimeMillis);
+    const read = reuse ? null : yield* boardRead(session, env);
+    const tasksBuilt = read === null ? reuse!.state.tasks : read.tasks;
     const state = {
       view: focus.view,
       filter: focus.filter,
-      // The board's own model, Herd-wide: a workspace is a filter over one board, never
-      // a board of its own (ADR-0009). From the scan this read already made.
+      // The host's board, Herd-wide: a workspace is a filter over one board, never a board
+      // of its own (ADR-0009).
       tasks: tasksBuilt,
       now: yield* Clock.currentTimeMillis,
       density: defaults.density,
       wide,
       board,
-      note: null,
+      // A reuse read the board not at all, so what it said last still holds.
+      note: read === null ? reuse!.state.note : read.unreadable,
       history,
       definitions: reuse
         ? reuse.state.definitions
@@ -1282,17 +1105,15 @@ export function appState(
       // Always re-read: this is the one thing a moved Selection actually changes.
       // The bridge's own, and it overlays what it is holding onto every load.
       stopping: [],
+      // The host's, followed while the drawer is open; `R` asks its merge watch again.
       detail: runId
-        ? yield* buildRunDetail({
-            env,
+        ? yield* detailRead(session, env, {
             runId,
-            runs: runs ?? (yield* runsOf(env)),
-            mr,
             tail: focus.tail,
             pages: focus.reviewPages,
-            plans: planCache,
+            refreshMr: again.forceMr,
           })
-        : null,
+        : yield* session.detailOf?.(null) ?? Effect.succeed(null),
     } satisfies AppState;
     last = { focus, state };
     return state;
@@ -1301,23 +1122,14 @@ export function appState(
   return { load };
 }
 
-/**
- * The merge request a Run is about: the one it opened, else the one it was pointed at.
- * Both, because `implement` produces one and `review` is given one — reading only the
- * second left every merge request a Run built without a state, a pipeline or approvals.
- */
-function mrAbout(run: RunFacts | null): string | null {
-  const opened = run?.mr ? parseMrUrl(run.mr) : null;
-  if (opened !== null) return mrTarget(opened.project, opened.iid);
-  return run === null ? null : (diffTargetOf(run.settled)?.value ?? null);
-}
-
 /** One command, run against the Selection it names. The string becomes the footer note. */
 export const runCommand = Effect.fn("Flows.runCommand")(function* (
   session: ControlSession,
   env: PluginEnv,
   command: Command,
   prompts: FlowPrompts,
+  /** Puts a Run on the board's screen, for a confirmed `navigate`. */
+  navigate: (runId: string) => void = () => {},
 ) {
   const runOf = (runId: string) =>
     (session.runsOf ?? listRuns)(env).pipe(
@@ -1371,9 +1183,11 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
     // question the run directory answers on its own.
     case "StopRun": {
       const stopped = yield* controlRun(env, {
+        door: "board",
         runId: command.runId,
         control: "stop",
         set: true,
+        request: yield* newRequestId(),
       });
       return stopped.ok ? stopped.human : stopped.error.message;
     }
@@ -1381,6 +1195,7 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
       return "a Run keeps no log of its own: its agents' panes are the record";
     case "Answer": {
       const answered = yield* answerRun(env, {
+        door: "board",
         runId: command.runId,
         decision: command.choiceId === "" ? null : command.choiceId,
         value: command.value,
@@ -1428,19 +1243,33 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
       // on the Run's behalf.
       return "a review is posted by the Run that wrote it";
 
-    case "ConfirmProposal":
-      return yield* fromBoard(env, (actor) =>
-        carryOutProposal(env, command.id, command.hash, actor).pipe(
-          Effect.map((done) => (done.ok ? done.human : done.error.message)),
-        ),
+    case "ConfirmProposal": {
+      const done = yield* confirmProposed(env, {
+        door: "board",
+        proposal: command.id,
+        hash: command.hash,
+        request: yield* newRequestId(),
+      });
+      // A confirmed `navigate` puts its target on screen here: the host has no screen.
+      // Even where a later action failed: an applied one did happen.
+      const carried = Schema.decodeUnknownOption(CarriedSteps)(
+        done.ok ? done.data : done.error.details,
       );
+      for (const step of Option.getOrElse(carried, () => ({ results: [] })).results)
+        if (step.kind === "navigate" && step.state === "applied" && step.run !== null)
+          navigate(step.run);
+      return done.ok ? done.human : done.error.message;
+    }
 
-    case "DeclineProposal":
-      return yield* fromBoard(env, (actor) =>
-        declineProposal(env, command.id, actor).pipe(
-          Effect.map((done) => (done.ok ? done.human : done.error.message)),
-        ),
-      );
+    case "DeclineProposal": {
+      const done = yield* declineProposed(env, {
+        door: "board",
+        proposal: command.id,
+        hash: command.hash,
+        request: yield* newRequestId(),
+      });
+      return done.ok ? done.human : done.error.message;
+    }
 
     case "OpenMr": {
       const ref = parseMrTarget(command.target);
@@ -1524,7 +1353,11 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
 
     /** A Run taken up again where it stopped, as every door resumes one. */
     case "ResumeRun": {
-      const resumed = yield* resumeRun(env, command.runId);
+      const resumed = yield* resumeRun(env, {
+        door: "board",
+        runId: command.runId,
+        request: yield* newRequestId(),
+      });
       return resumed.ok ? resumed.human : resumed.error.message;
     }
 
@@ -1536,12 +1369,13 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
     case "FollowUp": {
       const text = yield* prompts.ask(`What still needs doing on ${command.runId}?`);
       if (text === null || text.trim() === "") return null;
-      const done = yield* carryOutAsked(
-        env,
-        [{ kind: "followup", run: command.runId, text: text.trim() }],
-        { origin: "board", requestId: yield* newRequestId() },
-      );
-      return done.map((one) => `${one.state}: ${one.note}`).join("\n");
+      const done = yield* followUpRun(env, {
+        door: "board",
+        runId: command.runId,
+        text: text.trim(),
+        request: yield* newRequestId(),
+      });
+      return done.ok ? done.human : done.error.message;
     }
 
     /**
@@ -1551,10 +1385,13 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
     case "Steer": {
       const run = yield* runOf(command.runId);
       if (!run) return `${command.runId} has gone`;
-      const said = yield* steer(env, yield* evaluationDeps(env), {
+      const said = yield* steerAbout(env, {
+        door: "board",
+        runId: run.id,
         text: command.text,
-        target: run.id,
-        requestId: yield* newRequestId(),
+        from: null,
+        dryRun: false,
+        request: yield* newRequestId(),
       });
       return said.ok ? said.human : said.error.message;
     }
@@ -1566,19 +1403,15 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
     case "RecordDisposition": {
       const run = yield* runOf(command.runId);
       if (!run) return `${command.runId} has gone`;
-      return yield* fromBoard(env, (actor) =>
-        Effect.gen(function* () {
-          const line = {
-            at: yield* nowIso(),
-            by: actorName(actor),
-            kind: command.kind,
-            ref: command.ref,
-            note: null,
-          };
-          yield* recordDisposition(run.dir, line);
-          return statusLine(run.state, line);
-        }),
-      );
+      const done = yield* disposeRun(env, {
+        door: "board",
+        runId: run.id,
+        kind: command.kind,
+        ref: command.ref,
+        note: null,
+        request: yield* newRequestId(),
+      });
+      return done.ok ? statusLine(run.state, done.value) : done.error.message;
     }
 
     case "EditSetting":
@@ -1647,13 +1480,15 @@ const textBoard = Effect.fn("Flows.textBoard")(function* (
    * The same reads the app makes, so this view says no less about a Run than the app
    * does — a pane too narrow for the renderer must not be a quieter board.
    */
-  /** The board's own Tasks, so the text view and the pane draw the same three sections. */
-  const tasksOf = Effect.fn("Flows.textBoard.tasks")(function* () {
-    return yield* buildBoard({
-      env,
-      quietMs: (yield* loadDefaults(env.userDir)).boardQuietMs,
-    });
-  });
+  let unreadable: string | null = null;
+  /** The board's own Tasks, so the text view and the pane draw the same sections. */
+  const tasksOf = () =>
+    boardRead(session, env).pipe(
+      Effect.map((read) => {
+        unreadable = read.unreadable;
+        return read.tasks;
+      }),
+    );
 
   const steeringOf = Effect.fn("Flows.textBoard.steering")(function* (view: WorkspaceView) {
     const rows = [...view.active, ...view.recent];
@@ -1679,7 +1514,8 @@ const textBoard = Effect.fn("Flows.textBoard")(function* (
   // and the entrypoint ends rather than spinning on a `takeKey` that can never answer.
   if (!process.stdin.isTTY) {
     const view = yield* boardOf(session, yield* scan(env, session.runsOf));
-    const once = renderWorkspace(view, why, undefined, yield* steeringOf(view));
+    const steering = yield* steeringOf(view);
+    const once = renderWorkspace(view, unreadable ?? why, undefined, steering);
     process.stdout.write(`${once}\n`);
     return 0;
   }
@@ -1702,7 +1538,8 @@ const textBoard = Effect.fn("Flows.textBoard")(function* (
     }
     if (!waiting) answering = null;
 
-    const text = renderWorkspace(view, note ?? undefined, asking, yield* steeringOf(view));
+    const steering = yield* steeringOf(view);
+    const text = renderWorkspace(view, unreadable ?? note ?? undefined, asking, steering);
     if (text !== drawn) {
       process.stdout.write(`${CLEAR}${text.replace(/\n/g, "\r\n")}\r\n`);
       drawn = text;
@@ -1768,6 +1605,7 @@ export const answerKey = Effect.fn("Flows.answerKey")(function* (
   const next = answerFor(choice, asking, key);
   if (next.value === null) return { asking: next.asking };
   const answered = yield* answerRun(env, {
+    door: "board",
     runId: waiting.id,
     decision: choice.id === "" ? null : choice.id,
     value: next.value,
@@ -1849,7 +1687,13 @@ const act = Effect.fn("Flows.act")(function* (
  * transcript of what happened.
  */
 export const stopRun = Effect.fn("Flows.stopRun")(function* (env: PluginEnv, runId: string) {
-  const stopped = yield* controlRun(env, { runId, control: "stop", set: true });
+  const stopped = yield* controlRun(env, {
+    door: "board",
+    runId,
+    control: "stop",
+    set: true,
+    request: yield* newRequestId(),
+  });
   return stopped.ok ? stopped.human : stopped.error.message;
 });
 
@@ -1872,49 +1716,6 @@ const liveOf = Effect.fn("Flows.liveOf")(function* (session: ControlSession) {
   ).pipe(
     // A herdr that will not answer means "nothing verified live", not a crash.
     Effect.catch(() => Effect.succeed<SessionNow>({ alive: [], workspaces: [] })),
-  );
-});
-
-/**
- * How often the board prunes. Loading the board happens on every keypress and every
- * 1.5-second refresh; pruning lists runs, asks herdr and writes its own state, so
- * doing it per redraw put a subprocess and a disk write behind every keystroke. The
- * lines it last answered with are what the board shows in between.
- */
-const PRUNE_MS = 3 * 60_000;
-
-/** The last sweep's lines, and whether one is out working right now. */
-interface Pruned {
-  at: number;
-  lines: string[];
-  running: boolean;
-}
-
-/**
- * Prunes in the background, never in the way. A sweep walks every due checkout with
- * git and glab, and the board is a screen that has to redraw on a keypress — so the
- * sweep is forked and the frame goes out with whatever the last one said. One at a
- * time, and the clock starts when it finishes, so a slow sweep does not queue more.
- */
-const sweep = Effect.fn("Flows.sweep")(function* (session: ControlSession, scanned: Scanned) {
-  const pruned = session.pruned;
-  if (!pruned || pruned.running) return;
-  const now = yield* Clock.currentTimeMillis;
-  if (pruned.at !== 0 && now - pruned.at < PRUNE_MS) return;
-  pruned.running = true;
-  yield* Effect.forkDetach(
-    Effect.gen(function* () {
-      const lines = yield* pruneWorktrees({
-        herdr: session.herdr,
-        stateDir: session.stateDir,
-        runs: scanned.runs,
-        registered: scanned.registered,
-        cwd: session.cwd,
-      });
-      pruned.lines = lines;
-      pruned.at = yield* Clock.currentTimeMillis;
-      pruned.running = false;
-    }),
   );
 });
 
@@ -1966,7 +1767,6 @@ const boardOf = Effect.fn("Flows.boardOf")(function* (
   scanned: Scanned,
   seen?: SessionNow,
 ) {
-  yield* sweep(session, scanned);
   const live = seen ?? (yield* liveOf(session));
   const view = yield* buildView({
     ...session,
@@ -1976,7 +1776,7 @@ const boardOf = Effect.fn("Flows.boardOf")(function* (
     workspaceLabel:
       live.workspaces.find((w) => w.workspaceId === session.workspaceId)?.label ?? null,
     alive: live.alive,
-    worktrees: session.pruned?.lines ?? [],
+    worktrees: yield* reportedWorktrees(session.stateDir),
     pluginRoot: session.pluginRoot,
     quietMs: yield* boardQuietMs(session.userDir),
     ...scanned,
@@ -2034,23 +1834,4 @@ const notice = Effect.fn("Flows.notice")(function* (
     footer: "Enter or Esc closes this",
   });
   return code;
-});
-
-/**
- * The board's own front door. A keypress on it is a person acting, so it stamps `board`
- * — the one origin besides a controlling terminal that counts as human, and the reason
- * `confirm` from here is allowed at all.
- */
-const fromBoard = Effect.fn("Flows.fromBoard")(function* (
-  env: PluginEnv,
-  what: (
-    actor: Actor,
-  ) => Effect.Effect<
-    string,
-    HerdrUnreachable | IntentUnreadable | PlatformError | ProposalsBusy | SchemaError,
-    BunServices
-  >,
-) {
-  const actor: Actor = { origin: "board", requestId: yield* newRequestId() };
-  return yield* what(actor).pipe(Effect.catch((cause) => Effect.succeed(reason(cause))));
 });

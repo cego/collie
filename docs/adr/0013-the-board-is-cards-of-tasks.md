@@ -29,7 +29,8 @@ of it; the table showed three rows, in three places, and left the human to join 
 ## Decision
 
 **D1. The card is a Task.** One card per Task, whatever Runs it took, built by one function
-from the Runs, the live agents and the run directories. A Run belonging to no Task is a
+from the Runs, the live agents and the run directories. That function runs in the host
+([ADR-0038](0038-the-host-builds-and-serves-the-board.md)). A Run belonging to no Task is a
 card of its own. No herdr id reaches the screen.
 
 **D2. Four sections, in the order the questions are asked.** Needs you (every Task with a

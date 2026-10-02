@@ -202,6 +202,43 @@ test("a command that fails leaves its reason in the footer", () =>
     ),
   ));
 
+test("a load's own note is shown, and taken back when the load stops saying it", () =>
+  runEffect(
+    Effect.scoped(
+      Effect.gen(function* () {
+        let hostSays: string | null = "the workflow host has not sent its board";
+        const driven = yield* driveBridge({
+          filter: { kind: "workspace", id: "w1" } as const,
+          origin: "w1",
+          stateDir: rig.stateDir,
+          load: (focus: Focus) =>
+            Effect.sync(() => ({ ...stateFor(focus.selected), note: hostSays })),
+          act: () => Effect.succeed("opened"),
+        });
+        const refreshed = (note: string | null) =>
+          Effect.gen(function* () {
+            driven.dispatch({ _tag: "Refresh" });
+            yield* until(`the note to be ${note}`, () => driven.state().note === note);
+          });
+
+        expect(driven.state().note).toBe("the workflow host has not sent its board");
+        hostSays = null;
+        yield* refreshed(null);
+        hostSays = "reconnecting to the workflow host; these cards may be out of date";
+        yield* refreshed(hostSays);
+        hostSays = null;
+        yield* refreshed(null);
+
+        // A command's note is the command's: a load with nothing to say leaves it.
+        driven.dispatch({ _tag: "OpenMr", target: "mr:host/g/p!1", runId: null });
+        yield* until("the command's note", () => driven.state().note === "opened");
+        driven.dispatch({ _tag: "Refresh" });
+        yield* Effect.sleep("30 millis");
+        expect(driven.state().note).toBe("opened");
+      }),
+    ),
+  ));
+
 test("the board opens on the scope from config, and g is what changes it after", () =>
   runEffect(
     Effect.scoped(

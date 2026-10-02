@@ -13,6 +13,7 @@
 
 import { Effect, FileSystem, Path, Schema } from "effect";
 import { appendJournal, readJournal } from "./journal";
+import type { Metrics } from "./board-model";
 
 const MetricSchema = Schema.Struct({
   at: Schema.String,
@@ -142,20 +143,6 @@ export function obstacleOf(found: {
     `${found.name} has failed ${found.times} times in a row the same way (exit ${found.exit})${said}. ` +
     `Repeating it will not change it — change approach, or say precisely what is blocking you.`
   );
-}
-
-/** What a Run cost and how it went, for `run metrics` and the detail panel. */
-export interface Metrics {
-  /** From the Run's creation to the first collected verification, in seconds. */
-  timeToFirstEvidence: number | null;
-  verifications: { pass: number; fail: number; unstable: number; byCollie: number };
-  slices: { done: number; total: number };
-  /** Fix rounds plus halts: how much of this Run was doing work again. */
-  rework: number;
-  /** The largest context sample any agent reported, and which agent. */
-  peakContext: { agent: string; tokens: number } | null;
-  halts: string[];
-  obstacles: string[];
 }
 
 export function metricsOf(lines: ReadonlyArray<Metric>, createdAt: string): Metrics {

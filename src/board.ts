@@ -4,49 +4,48 @@
 // became of a Run's work is the disposition's answer alone — a finished Run with a merge
 // request has not been merged by anyone.
 
-import { Clock, Effect, FileSystem, Option, Path } from "effect";
+import { Clock, Effect, FileSystem, Option, Path, Schema } from "effect";
+import { AUDIT_FILE, readAudit } from "./audit";
+import { nothingApproved } from "./outcome";
+import { FINAL_DIFF, planDirOf } from "./run-detail";
+import { approvedFrom, type VerifySpec } from "./verify-spec";
 import { openReports, readDrift } from "./drift";
 import { describeAction } from "./lines";
 import type { PickItem } from "./inputs";
 import { LEADING_GLYPH, type AgentInfo } from "./herdr";
 import { latest, readDispositions } from "./disposition";
 import { runTitle } from "./naming";
-import { planIssuesIn } from "./plan";
+import { planIssuesIn, planReposOf } from "./plan";
 import { diffTargetOf } from "./strategies";
-import { pendingFor, proposalsPath, read as readProposals, type ProposalLine } from "./proposals";
+import { everyJournal, pendingFor, type ProposalLine } from "./proposals";
 import { everyRegistered, type AgentEntry } from "./registry";
-import { listRuns, settled as ended, type RunFacts, type RunState } from "./runs";
+import { listRuns, newestFirst, settled as ended, type RunFacts, type RunState } from "./runs";
 import type { PluginEnv } from "./env";
-import { herdOf } from "./steering";
 import { listTasks, type TaskRecord } from "./task";
-import { ago, agoShort, spanned } from "./time";
+import { ago, agoMs, agoShort, spanned } from "./time";
 import { readVerifications, verifyingIn, type Verification } from "./verify";
 import { readMrStates } from "./merges";
 import { filed, standingOf } from "./standing";
 import { offersOf } from "./lifecycle";
 import type { OfferView } from "./engine";
-
-/** How a card reads, and the order Tasks take inside a section. */
-export type TaskState =
-  | "blocked"
-  | "active"
-  | "quiet"
-  | "failed"
-  | "stopped"
-  | "abandoned"
-  | "done";
-const STATE_ORDER: ReadonlyArray<TaskState> = [
-  "blocked",
-  "active",
-  "quiet",
-  "failed",
-  "stopped",
-  "abandoned",
-  "done",
-];
-
-/** Where a Task is in its pipeline, one glyph per step. */
-export type StepState = "done" | "active" | "blocked" | "failed" | "todo";
+import {
+  Answered,
+  EVIDENCE_GATE,
+  sectionsOf,
+  sortBoard,
+  type BoardAgent,
+  type BoardChild,
+  type BoardOffer,
+  type BoardStep,
+  type Decision,
+  type Gate,
+  type MrState,
+  type Proposal,
+  type Question,
+  type StepState,
+  type TaskState,
+  type TaskView,
+} from "./board-model";
 
 /** The character each state is drawn as, wherever it is drawn. The colour is the pane's. */
 export const GLYPH_FOR: Readonly<Record<TaskState, string>> = {
@@ -84,118 +83,6 @@ export interface PendingChoice {
   verifications?: readonly string[];
 }
 
-export interface BoardStep {
-  name: string;
-  state: StepState;
-}
-
-/** A question a Run's Driver is holding open, with the options to answer it with. */
-export interface Question {
-  kind: "question";
-  run: string;
-  /** The Choice id an answer names, so a question replaced meanwhile is not answered. */
-  id: string;
-  step: string;
-  /** What the answer is about, for the sentence. */
-  topic: string;
-  text: string;
-  /** Empty for a question typed into rather than picked from. */
-  options: ReadonlyArray<{ id: string; title: string; subtitle: string | null }>;
-}
-
-/** A correction Collie proposes, which only a human may confirm. */
-export interface Proposal {
-  kind: "proposal";
-  id: string;
-  /** The payload a yes names exactly; a changed action hashes differently. */
-  hash: string;
-  text: string;
-  actions: ReadonlyArray<{ text: string; allowed: boolean }>;
-}
-
-/** An evidence gate a Run is holding at until the verification list is approved. */
-export interface Gate {
-  kind: "gate";
-  run: string;
-  id: string;
-  step: string;
-  verifications: ReadonlyArray<string>;
-}
-
-export type Decision = Question | Proposal | Gate;
-
-/** One live agent of the Task, as a card counts them and a search matches them. */
-export interface BoardAgent {
-  /** herdr's own name for it, which carries the role it was started as. */
-  name: string;
-  status: string;
-  /** Its pane's terminal title, or null for none: what the harness shows, not the step. */
-  now: string | null;
-  run: string;
-}
-
-/** One repository of a plan that spans several, and what became of its Run. */
-export interface BoardChild {
-  repo: string;
-  /** Null for a repository the fan-out never got to. */
-  run: string | null;
-  state: StepState;
-  mr: string | null;
-}
-
-/** One Task as the board draws it. */
-export interface TaskView {
-  /** The Task's id, or the Run's own where it belongs to no Task. */
-  id: string;
-  name: string;
-  project: string;
-  state: TaskState;
-  steps: ReadonlyArray<BoardStep>;
-  sentence: string;
-  age: string;
-  /** What drifted, in one line, or null where nothing has. */
-  drift: string | null;
-  /** `⏸ Held until 14:00.`, or null while nothing is holding it. */
-  held: string | null;
-  /** Who asked for the hold and why, which the drawer says and the card does not. */
-  heldBy: { by: string; reason: string } | null;
-  decision: Decision | null;
-  agents: ReadonlyArray<BoardAgent>;
-  children: ReadonlyArray<BoardChild>;
-  mr: string | null;
-  branch: string | null;
-  /** What became of the work, where someone recorded it. */
-  disposition: string | null;
-  /**
-   * Whether the work needs nothing more from anyone: a disposition was recorded, or the
-   * Run succeeded at a Workflow that produces nothing to land. Places the card in
-   * Finished rather than Waiting on you.
-   */
-  landed: boolean;
-  /** When the leading Run ended, or null while it has not. Orders Waiting on you. */
-  ended: number | null;
-  /** What GitLab last said about the merge request, where Collie has asked. */
-  mrState: MrState | null;
-  /** A plan that finished and nobody has implemented: its card's first action starts that. */
-  planReady: boolean;
-  /** That action: the Run's primary offer as its module declares it now, or null for none. */
-  offer: BoardOffer | null;
-  /** The Run a card's actions act on: the one the sentence is about. */
-  run: string;
-  /** Every Run of this Task, newest first, for the drawer. */
-  runs: ReadonlyArray<string>;
-  /** When this Task last changed, in epoch milliseconds, which is what orders the board. */
-  at: number;
-}
-
-/** An offer a card can invoke by id, under the title its workflow gave it. */
-export interface BoardOffer {
-  readonly id: string;
-  readonly title: string;
-}
-
-/** `on-stage` and `in-prod` are merged too: the furthest its deploy jobs have taken it. */
-export type MrState = "open" | "merged" | "closed" | "on-stage" | "in-prod";
 const LANDED_STATES: ReadonlySet<MrState> = new Set(["merged", "on-stage", "in-prod"]);
 const DEPLOYED = { "on-stage": " On stage.", "in-prod": " In production." } as const;
 
@@ -309,11 +196,14 @@ export function stepOfOperation(operation: string): Pick<Sentence, "step" | "ver
   };
 }
 
+/** Where the Driver keeps a Run's launch order, one operation a line. */
+const launchesOf = (stateDir: string, runId: string) => `${stateDir}/agents/${runId}/launches`;
+
 /** The operation the Driver last launched an agent for, as its launch order records it. */
 const lastLaunched = Effect.fn("Board.lastLaunched")(function* (stateDir: string, runId: string) {
   const fs = yield* FileSystem.FileSystem;
   const order = yield* fs
-    .readFileString(`${stateDir}/agents/${runId}/launches`)
+    .readFileString(launchesOf(stateDir, runId))
     .pipe(Effect.catch(() => Effect.succeed("")));
   return (
     order
@@ -425,7 +315,10 @@ export function sentenceFor(facts: Sentence): string {
     case "stopped":
       return alsoBecame("Stopped by you.", facts.disposition);
     case "abandoned":
-      return alsoBecame(`Its Driver died ${facts.abandoned ?? "a while ago"}.`, facts.disposition);
+      return alsoBecame(
+        `Its Driver died ${facts.abandoned ?? "a while ago"}${facts.note === null ? "" : `: ${facts.note}`}.`,
+        facts.disposition,
+      );
     // Only reachable with no Decision: one above would have answered already.
     case "blocked":
       return stalledSentence(facts);
@@ -456,45 +349,6 @@ export function mrLabel(mr: string): string {
 /** The second line a held Task carries, under its sentence. */
 export function heldLine(until: string | null): string {
   return until === null ? "⏸ Held." : `⏸ Held until ${until}.`;
-}
-
-/**
- * Which of the board's four sections a Task belongs in. A decision beats liveness,
- * liveness beats history, and history is split by whether the work landed.
- */
-export type Section = "needs-you" | "working" | "waiting" | "finished";
-
-export function sectionOf(view: Pick<TaskView, "state" | "landed">): Section {
-  // Read off the state alone, because a Decision is not the only way to stop for a
-  // human: an agent at its harness's own dialog is one too, and a section derived from
-  // the Decision could not see it. `stateOf` is where the two become one word.
-  if (view.state === "blocked") return "needs-you";
-  if (view.state === "active" || view.state === "quiet") return "working";
-  return view.landed ? "finished" : "waiting";
-}
-
-const SECTION_ORDER = new Map<Section, number>([
-  ["needs-you", 0],
-  ["working", 1],
-  ["waiting", 2],
-  ["finished", 3],
-]);
-const STATE_RANK = new Map(STATE_ORDER.map((state, at) => [state, at]));
-
-/**
- * The board's order: the three sections, then the state order inside each, then whatever
- * changed last. Nothing else is ranked — a board that reordered itself on every tick is
- * one a human cannot point at.
- */
-export function sortBoard(views: ReadonlyArray<TaskView>): TaskView[] {
-  return [...views].sort(
-    (a, b) =>
-      SECTION_ORDER.get(sectionOf(a))! - SECTION_ORDER.get(sectionOf(b))! ||
-      (sectionOf(a) === "needs-you" ? STATE_RANK.get(a.state)! - STATE_RANK.get(b.state)! : 0) ||
-      // What moved last is at the top: in Working what is doing something, in Waiting on
-      // you what you were just doing.
-      (b.ended ?? b.at) - (a.ended ?? a.at),
-  );
 }
 
 const STEP_STATE: Readonly<Record<RunState, StepState>> = {
@@ -614,6 +468,89 @@ function agentsOf(
   return [...found.values()];
 }
 
+/** A Run parked at its evidence gate, with the checks its checkout and config would approve. */
+const gateOf = Effect.fn("Board.gateOf")(function* (run: RunFacts, userDir: string) {
+  if (run.parked !== nothingApproved(run.id)) return null;
+  const offered = yield* approvedFrom({ cwd: run.cwd, userDir }).pipe(
+    Effect.orElseSucceed((): ReadonlyArray<VerifySpec> => []),
+  );
+  return {
+    kind: "gate",
+    run: run.id,
+    id: EVIDENCE_GATE,
+    // Words, not the workflow's id: the sentence reads "Holding at the evidence gate".
+    step: "evidence",
+    verifications: offered.map((spec) => spec.name),
+  } satisfies Gate;
+});
+
+/** Who set the hold that stands, and why, as the Run's audit trail recorded it. */
+const holderOf = Effect.fn("Board.holderOf")(function* (run: RunFacts) {
+  const lines = yield* readAudit(run.dir).pipe(Effect.orElseSucceed(() => []));
+  const last = lines.findLast((line) => line.operation === "hold" || line.operation === "unhold");
+  return last?.operation === "hold" ? { by: last.actor.origin, reason: last.reason ?? "" } : null;
+});
+
+/** The answer a Run carried on with, while nothing has been launched since it was given. */
+const resumedWith = Effect.fn("Board.resumedWith")(function* (stateDir: string, run: RunFacts) {
+  const last = (yield* readAudit(run.dir).pipe(Effect.orElseSucceed(() => []))).at(-1);
+  if (last?.operation !== "answer") return null;
+  const launched = yield* (yield* FileSystem.FileSystem).stat(launchesOf(stateDir, run.id)).pipe(
+    Effect.map((info) =>
+      Option.match(info.mtime, { onNone: () => 0, onSome: (at) => at.getTime() }),
+    ),
+    Effect.orElseSucceed(() => 0),
+  );
+  if (launched > Date.parse(last.at)) return null;
+  const answered = Schema.decodeUnknownOption(Answered)(last.result);
+  return Option.isSome(answered) ? answered.value.value : null;
+});
+
+/**
+ * A fan-out's Repo runs as a card lists them, every repository its plan names, and the
+ * wave it has got to. Without a readable plan, the Repo runs it has are the one wave.
+ */
+const fanOf = Effect.fn("Board.fanOf")(function* (
+  parent: RunFacts,
+  children: ReadonlyArray<RunFacts>,
+) {
+  const planDir = yield* planDirOf(parent).pipe(Effect.orElseSucceed(() => null));
+  const plan =
+    planDir === null
+      ? null
+      : yield* planReposOf(planDir, parent.cwd).pipe(Effect.orElseSucceed(() => null));
+  // Newest first, so a repository retried is shown by its newest Run.
+  const started = new Map<string, RunFacts>();
+  for (const child of children)
+    if (!started.has(child.repo ?? "")) started.set(child.repo ?? "", child);
+  const planned = plan === null || plan.refusal !== null ? [] : plan.waves;
+  const unplanned = [...started.keys()].filter((repo) => !planned.flat().includes(repo));
+  const waves = unplanned.length === 0 ? planned : [...planned, unplanned];
+  const rows = waves.flat().map((repo): BoardChild => {
+    const run = started.get(repo);
+    return {
+      repo,
+      run: run?.id ?? null,
+      state: run === undefined ? "todo" : STEP_STATE[run.state],
+      mr: run === undefined ? null : mrOf(run),
+    };
+  });
+  const reached = waves.findLastIndex((wave) => wave.some((repo) => started.has(repo)));
+  const where = (state: StepState) =>
+    rows.filter((row) => row.state === state).map((row) => row.repo);
+  return {
+    children: rows,
+    wave: {
+      at: reached + 1,
+      of: waves.length,
+      landed: where("done"),
+      building: [...where("active"), ...where("blocked")],
+      stopped: where("failed"),
+      next: where("todo"),
+    },
+  };
+});
+
 /** The Run a card is about: the newest still going, else the newest. */
 function leaderOf(runs: ReadonlyArray<RunFacts>): RunFacts {
   return runs.find((run) => !ended(run)) ?? runs[0]!;
@@ -623,14 +560,11 @@ function leaderOf(runs: ReadonlyArray<RunFacts>): RunFacts {
     in the morning — midnight is not when a human stops calling it today. */
 const FINISHED_FOR_MS = 24 * 60 * 60 * 1000;
 
-/** Waiting on you shows a week open; what is older folds into one counted line. */
-export const WAIT_FOLD_MS = 7 * 24 * 60 * 60 * 1000;
-
 /**
  * When anything in this directory was last written, as `touchedDirAt` measures it but
- * without the one file Collie writes about a Run from outside: a disposition recorded by
- * a human or by the merge watch is bookkeeping, and must not make a dead Run look alive
- * for another minute.
+ * without the files Collie writes about a Run from outside: a disposition, the diff kept
+ * for its drawer and the trail of who asked for what are bookkeeping, and must not make
+ * a dead Run look alive or ended just now.
  */
 const writtenIn = Effect.fn("Board.writtenIn")(function* (dir: string) {
   const fs = yield* FileSystem.FileSystem;
@@ -642,6 +576,7 @@ const writtenIn = Effect.fn("Board.writtenIn")(function* (dir: string) {
     );
   let newest = 0;
   for (const name of yield* fs.readDirectory(dir).pipe(Effect.catch(() => Effect.succeed([])))) {
+    if (name === FINAL_DIFF || name === AUDIT_FILE) continue;
     if (name !== "steering") {
       newest = Math.max(newest, yield* at(path.join(dir, name)));
       continue;
@@ -673,7 +608,7 @@ const isMrTarget = (target: string | null): target is string =>
   target !== null && target.startsWith("mr:");
 
 /** The merge request this Run opened, or the one it was pointed at; null for neither. */
-function mrOf(run: RunFacts): string | null {
+export function mrOf(run: RunFacts): string | null {
   const target = diffTargetOf(run.settled)?.value ?? null;
   return run.mr ?? (isMrTarget(target) ? target : null);
 }
@@ -711,15 +646,9 @@ function asProposal(line: Extract<ProposalLine, { kind: "proposal" }>): Proposal
   };
 }
 
-/** The Herd's proposals journal, or none where there is no herdr to name the Herd. */
-const proposalsOf = Effect.fn("Board.proposalsOf")(function* (
-  stateDir: string,
-  socketPath: string | null,
-) {
-  const key = yield* herdOf(socketPath).pipe(Effect.catch(() => Effect.succeed(null)));
-  if (key === null) return [];
-  return yield* readProposals(yield* proposalsPath(stateDir, key));
-});
+/** Every Herd's proposals: the host serves every Herd on its Machine, not the one it came from. */
+const proposalsOf = (stateDir: string) =>
+  everyJournal(stateDir).pipe(Effect.map((journals) => journals.flatMap(({ lines }) => lines)));
 
 /** How long a Run has been going by default before silence is worth saying. */
 const DEFAULT_QUIET_MS = 5 * 60_000;
@@ -747,15 +676,15 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
   /** What a Run offers now; the host is asked where this is not given. */
   offers?: (runId: string) => Effect.Effect<ReadonlyArray<OfferView>>;
 }) {
-  const { stateDir, socketPath } = opts.env;
+  const { stateDir } = opts.env;
   const now = opts.now ?? (yield* Clock.currentTimeMillis);
   const quietMs = opts.quietMs ?? DEFAULT_QUIET_MS;
-  const all = opts.runs ?? (yield* listRuns(opts.env));
+  const all = newestFirst(opts.runs ?? (yield* listRuns(opts.env)));
   const tasks = new Map(
     (opts.tasks ?? (yield* listTasks(stateDir))).map((task) => [task.id, task]),
   );
   const registered = opts.registered ?? (yield* everyRegistered(stateDir));
-  const proposals = opts.proposals ?? (yield* proposalsOf(stateDir, socketPath));
+  const proposals = opts.proposals ?? (yield* proposalsOf(stateDir));
   const mrStates = opts.mrStates ?? (yield* readMrStates(stateDir));
   const live = new Map((opts.alive ?? []).map((agent) => [agent.name, agent]));
   const offersOfRun =
@@ -766,17 +695,27 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
         Effect.orElseSucceed((): ReadonlyArray<OfferView> => []),
       ));
 
+  // A Repo run is its fan-out's card's child rather than a card of its own.
+  const present = new Set(all.map((run) => run.id));
+  const repoRunsOf = new Map<string, RunFacts[]>();
+  for (const run of all)
+    if (run.repo !== null && run.parent !== null && present.has(run.parent))
+      repoRunsOf.set(run.parent, [...(repoRunsOf.get(run.parent) ?? []), run]);
   const groups = new Map<string, RunFacts[]>();
   for (const run of all) {
+    if (run.parent !== null && repoRunsOf.get(run.parent)?.includes(run)) continue;
     const key = run.task ?? run.id;
     groups.set(key, [...(groups.get(key) ?? []), run]);
   }
 
   const views: TaskView[] = [];
   for (const [id, runs] of groups) {
-    const pending = runs.flatMap((run) => pendingFor(proposals, run.id, now));
+    const children = runs.flatMap((run) => repoRunsOf.get(run.id) ?? []);
+    // What a card answers for and who works on it includes its Repo runs'.
+    const everyRun = [...runs, ...children];
+    const pending = everyRun.flatMap((run) => pendingFor(proposals, run.id, now));
     const touched = new Map<string, number>();
-    for (const run of runs) touched.set(run.id, yield* lastActivityAt(stateDir, run));
+    for (const run of everyRun) touched.set(run.id, yield* lastActivityAt(stateDir, run));
     // A Run records no end of its own: its last activity is when it ended, and a Run
     // that wrote nothing ended no later than it began.
     const endedAt = (run: RunFacts) =>
@@ -795,16 +734,21 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
       continue;
     const leader = leaderOf(runs);
     const proposed = pending[0];
-    const decision: Decision | null = proposed ? asProposal(proposed) : questionOf(runs);
+    const decision: Decision | null = proposed
+      ? asProposal(proposed)
+      : (questionOf(everyRun) ?? (yield* gateOf(leader, opts.env.userDir)));
 
     const status = leader.state;
-    const at = touched.get(leader.id) ?? 0;
-    const agents = agentsOf(runs, registered, live);
+    // A fan-out waiting on its Repo runs writes nothing itself: their work is its work.
+    const working = [leader, ...children];
+    const ownsAgent = (agent: { readonly run: string }) =>
+      working.some((run) => run.id === agent.run);
+    const at = Math.max(...working.map((run) => touched.get(run.id) ?? 0));
+    const agents = agentsOf(everyRun, registered, live);
     const checking = yield* verifyingIn(leader.dir);
     // An agent mid-turn or a check Collie is running is work, however little it writes.
     const busy =
-      checking !== "" ||
-      agents.some((agent) => agent.run === leader.id && agent.status === "working");
+      checking !== "" || agents.some((agent) => ownsAgent(agent) && agent.status === "working");
     const going = !ended(leader);
     const silentFor = going && !busy && at > 0 ? now - at : 0;
     // Under a minute has no span to name, and is not silence worth a card saying.
@@ -819,10 +763,16 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
     const stalled =
       (blocked ? `${blocked.name}'s pane` : null) ??
       (leader.state === "waiting" && leader.asking.length === 0 ? "its pane" : null);
-    const state = stateOf(status, silent !== null, decision, stalled !== null);
+    // Nothing drives it and nobody works on it: the host could not take it up again. A
+    // Decision outranks it, because answering is still what moves the work.
+    const abandoned = decision === null && going && leader.undriven && !agents.some(ownsAgent);
+    const state = abandoned
+      ? "abandoned"
+      : stateOf(status, silent !== null, decision, stalled !== null);
 
-    const holding = runs.some((run) => run.held);
-    const settledNow = state === "done" || state === "failed" || state === "stopped";
+    const held = runs.find((run) => run.held);
+    const settledNow =
+      state === "done" || state === "failed" || state === "stopped" || state === "abandoned";
     // Read whatever the state: a merge GitLab reported lands the work even while the Run
     // is still going, and the card must say so.
     const disposition = latest(
@@ -860,7 +810,9 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
       asking: decision !== null,
     });
     const finishedAt = settledNow ? endedAt(leader) : 0;
-    views.push({
+    const fanned = runs.find((run) => repoRunsOf.has(run.id));
+    const fan = fanned === undefined ? null : yield* fanOf(fanned, repoRunsOf.get(fanned.id)!);
+    const view: TaskView = {
       id,
       name,
       project,
@@ -870,17 +822,17 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
         mr,
         mrState,
         planReady,
-        abandoned: null,
+        abandoned: abandoned && at > 0 ? agoMs(at, now) : null,
         state,
         decision,
         step: doing?.step ?? null,
         // Never the pane's title: a terminal names its harness or file, not the work.
         verb: checkingOf(checking) ?? doing?.verb ?? null,
         silent,
-        wave: null,
+        wave: fan !== null && fanned === leader ? fan.wave : null,
         failure,
         note: leader.note,
-        resumed: null,
+        resumed: going ? yield* resumedWith(stateDir, leader) : null,
         stalled,
         disposition:
           disposition === null
@@ -900,11 +852,11 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
         open.length === 0
           ? null
           : `${open[0]!.constraint}${open.length > 1 ? ` (and ${open.length - 1} more)` : ""}`,
-      held: holding ? heldLine(null) : null,
-      heldBy: null,
+      held: held === undefined ? null : heldLine(null),
+      heldBy: held === undefined ? null : yield* holderOf(held),
       decision,
       agents,
-      children: [],
+      children: fan?.children ?? [],
       mr,
       branch,
       disposition:
@@ -922,7 +874,8 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
       run: leader.id,
       runs: runs.map((run) => run.id),
       at: at === 0 ? first : at,
-    });
+    };
+    views.push(task?.herd ? { ...view, herd: task.herd } : view);
   }
   return sortBoard(views);
 });
@@ -932,81 +885,6 @@ const primaryOf = (offers: ReadonlyArray<OfferView>): BoardOffer | null => {
   const first = offers.find((one) => one.primary && one.unavailable === null);
   return first === undefined ? null : { id: first.id, title: first.title };
 };
-
-export interface Sections {
-  needs: TaskView[];
-  working: TaskView[];
-  waiting: TaskView[];
-  finished: TaskView[];
-}
-
-/** Waiting on you, split at a week: what is older folds into one counted line. */
-export function foldWaiting(waiting: ReadonlyArray<TaskView>, now: number) {
-  const recent = waiting.filter((view) => (view.ended ?? view.at) >= now - WAIT_FOLD_MS);
-  const older = waiting.filter((view) => (view.ended ?? view.at) < now - WAIT_FOLD_MS);
-  return { recent, older };
-}
-
-/** What a search is matched against: what a human remembers about a Task, and no ids. */
-function haystack(view: TaskView): string {
-  return [
-    view.name,
-    view.project,
-    view.branch ?? "",
-    ...view.agents.flatMap((agent) => [agent.name, agent.now ?? ""]),
-  ]
-    .join(" ")
-    .toLowerCase();
-}
-
-export function matchesTask(view: TaskView, query: string): boolean {
-  const wanted = query.trim().toLowerCase();
-  return wanted === "" || haystack(view).includes(wanted);
-}
-
-/**
- * The three sections, in the order the board draws them, from a list already in the
- * board's own order. The search narrows all three the same way: a Task hidden from one
- * section must not be visible in another.
- */
-export function sectionsOf(views: ReadonlyArray<TaskView>, query: string): Sections {
-  const found = views.filter((view) => matchesTask(view, query));
-  return {
-    needs: found.filter((view) => sectionOf(view) === "needs-you"),
-    working: found.filter((view) => sectionOf(view) === "working"),
-    waiting: found.filter((view) => sectionOf(view) === "waiting"),
-    finished: found.filter((view) => sectionOf(view) === "finished"),
-  };
-}
-
-/** The one sentence over the board, and whether anything in it wants a human. */
-export interface HeaderSentence {
-  text: string;
-  urgent: boolean;
-}
-
-/**
- * Counted over every Task: a decision the search is hiding is still waiting. Waiting on
- * you counts the week's endings; what the fold holds is counted on the fold's own line,
- * because a header that says 56 over four cards worth a look reads as 56 obligations.
- */
-export function headerSentence(views: ReadonlyArray<TaskView>, now?: number): HeaderSentence {
-  const needs = views.filter((view) => sectionOf(view) === "needs-you").length;
-  const working = views.filter((view) => sectionOf(view) === "working");
-  const quiet = working.filter((view) => view.state === "quiet").length;
-  const opening =
-    needs === 0
-      ? "Nothing needs you."
-      : // Not "decisions": an agent at its harness's own dialog is counted here too, and
-        // it is a pane to go to rather than anything this board can answer.
-        `${needs === 1 ? "One task is" : `${needs} tasks are`} waiting on you.`;
-  const gone = quiet === 0 ? "" : `, ${quiet} gone quiet`;
-  const waitingAll = views.filter((view) => sectionOf(view) === "waiting");
-  const waiting =
-    now === undefined ? waitingAll.length : foldWaiting(waitingAll, now).recent.length;
-  const held = waiting === 0 ? "" : ` ${waiting} waiting on you.`;
-  return { text: `${opening} ${working.length} working${gone}.${held}`, urgent: needs > 0 };
-}
 
 export function waitingLabel(waiting: ReadonlyArray<TaskView>): string {
   return `Waiting on you · ${waiting.length}`;

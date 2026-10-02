@@ -11,24 +11,10 @@
 // Run's work; a person says so, and the record says who and when.
 
 import { Effect, Path, Schema } from "effect";
+import { Disposition } from "./board-model";
 import { appendJournal, readJournal } from "./journal";
 
-/**
- * `merged` is the work landed by some other route. `abandoned` is a decision not to land
- * it. `superseded` names the Run that carried the work instead. There is deliberately no
- * value meaning "actually it succeeded": the execution record is not editable from here.
- */
-const KindSchema = Schema.Literals(["merged", "abandoned", "superseded"]);
-const RecordSchema = Schema.Struct({
-  at: Schema.String,
-  by: Schema.String,
-  kind: KindSchema,
-  /** What backs it up: a merge request, a commit, or the Run that took the work over. */
-  ref: Schema.String,
-  note: Schema.NullOr(Schema.String),
-});
-export type Disposition = Schema.Schema.Type<typeof RecordSchema>;
-const RecordJson = Schema.fromJsonString(RecordSchema);
+const RecordJson = Schema.fromJsonString(Disposition);
 
 export const dispositionPath = Effect.fn("Disposition.path")(function* (runDir: string) {
   const path = yield* Path.Path;
