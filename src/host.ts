@@ -450,13 +450,12 @@ const frontDoorHandlers = (
       type Carrying = ReturnType<typeof carryOut>;
       /** Each carry-out still running, so a retry of its confirm answers what it came to. */
       type Carried = Exit.Exit<Effect.Success<Carrying>, Effect.Error<Carrying>>;
-      const carrying = new Map<
-        string,
-        { readonly request: string; readonly done: Deferred.Deferred<Carried> }
-      >();
+      const carrying = new Map<string, Deferred.Deferred<Carried>>();
+      const carryingKey = (proposal: string, request: string) =>
+        JSON.stringify([proposal, request]);
       const carriedBy = (proposal: string, request: string) => {
-        const running = carrying.get(proposal);
-        return running?.request === request ? Effect.flatten(Deferred.await(running.done)) : null;
+        const running = carrying.get(carryingKey(proposal, request));
+        return running === undefined ? null : Effect.flatten(Deferred.await(running));
       };
       // ponytail: one entry per connection, never removed, as `declared`.
       const sessions = new Map<number, string>();
@@ -734,14 +733,14 @@ const frontDoorHandlers = (
                     const running = carriedBy(proposal, request);
                     if (running !== null) return yield* running;
                     const done = yield* Deferred.make<Carried>();
-                    carrying.set(proposal, { request, done });
+                    carrying.set(carryingKey(proposal, request), done);
                     const exit = yield* Effect.exit(
                       carryOut(askerEnv(client), proposal, hash, {
                         origin: doorOf(client),
                         requestId: request,
                       }),
                     );
-                    carrying.delete(proposal);
+                    carrying.delete(carryingKey(proposal, request));
                     yield* Deferred.succeed(done, exit);
                     return yield* exit;
                   }),

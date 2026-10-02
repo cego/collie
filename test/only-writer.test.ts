@@ -124,6 +124,55 @@ test(
 );
 
 test(
+  "a confirm under another request leaves the running carry-out to its own retry",
+  () =>
+    proves(
+      "collie-writer-inflight-other-",
+      (world) =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const hold = `${world.state}/hold-pane-list`;
+          yield* fs.writeFileString(hold, "");
+          Bun.env.FAKE_HERDR_HOLD_PANE_LIST = hold;
+          yield* Effect.addFinalizer(() =>
+            Effect.sync(() => delete Bun.env.FAKE_HERDR_HOLD_PANE_LIST),
+          );
+          const file = yield* proposalsPath(world.state, "some-herd");
+          const proposal = yield* recordProposal(file, {
+            interpretation: "tidy the Home",
+            targets: [],
+            actions: [{ kind: "home_cleanup" }],
+            allowedNow: [],
+            intentVersions: {},
+            by: "evaluator:e-1",
+          });
+          const yes = { proposal: proposal.id, hash: proposal.content_hash, request: "r-1" };
+          const first = yield* Effect.forkChild(
+            Effect.scoped(Effect.flatMap(connect(world.state), (client) => client.confirm(yes))),
+          );
+          yield* until(
+            () => readProposals(file),
+            (lines) => lines.some((line) => line.kind === "step" && line.state === "started"),
+          );
+          yield* Fiber.interrupt(first);
+          const client = yield* connect(world.state);
+          const other = yield* client.confirm({ ...yes, request: "r-2" }).pipe(Effect.flip);
+          expect(other).toMatchObject({ _tag: "ProposalRefused", refused: "not_pending" });
+          const retried = yield* Effect.forkChild(client.confirm(yes));
+          yield* Effect.sleep("1 second");
+          yield* fs.remove(hold);
+          const answered = yield* Fiber.join(retried);
+          expect(answered.results).toMatchObject([
+            { index: 0, kind: "home_cleanup", state: "applied" },
+          ]);
+          yield* stopHost(world.state);
+        }).pipe(Effect.orDie),
+      [],
+    ),
+  120_000,
+);
+
+test(
   "what chat asks for is recorded and carried out by the host, once per request",
   () =>
     proves(
