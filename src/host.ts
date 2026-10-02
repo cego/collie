@@ -558,10 +558,21 @@ export const ownerOf = (
 const ensureRunning = Effect.fn("Host.ensureRunning")(function* (dir: string) {
   const first = yield* ask(dir).pipe(Effect.result);
   if (first._tag === "Success") return first.success;
-  yield* spawnHost(dir);
-  return yield* ask(dir).pipe(
-    Effect.retry({ times: 100, schedule: Schedule.spaced("100 millis") }),
-    Effect.catch(() => diagnose(dir)),
+  return yield* Effect.scoped(
+    Effect.gen(function* () {
+      const started = yield* spawnHost(dir);
+      // The host this started has ended and nothing owns the directory: no answer is
+      // coming, so it is said now rather than after every retry. A host that lost the
+      // race to another starter ends too, but then the winner owns the lock.
+      const coming = Effect.all([
+        started.isRunning.pipe(Effect.orElseSucceed(() => true)),
+        ownerOf(dir),
+      ]).pipe(Effect.map(([running, owner]) => running || owner !== null));
+      return yield* ask(dir).pipe(
+        Effect.retry({ times: 100, schedule: Schedule.spaced("100 millis"), while: () => coming }),
+        Effect.catch(() => diagnose(dir)),
+      );
+    }),
   );
 });
 
@@ -592,23 +603,22 @@ const spawnHost = Effect.fn("Host.spawn")(function* (dir: string) {
   // Which installation's workflows this host serves, decided by the client that needed
   // it rather than guessed from wherever the host process happens to start.
   const install = (yield* currentEnv.pipe(Effect.orDie)).pluginRoot;
-  yield* Effect.scoped(
-    Effect.gen(function* () {
-      const handle = yield* spawner.spawn(
-        ChildProcess.make(command[0] ?? "collie", [...command.slice(1), "host", "--dir", dir], {
-          env: { HERDR_PLUGIN_ROOT: install },
-          extendEnv: true,
-          detached: true,
-          stdin: "ignore",
-          stdout: "ignore",
-          stderr: "ignore",
-        }),
-      );
-      // Unreferenced before this scope closes, or the spawner's finalizer kills the host
-      // it has just started: it leaves a child alone only once it is unreferenced.
-      yield* Effect.asVoid(handle.unref);
-    }),
-  ).pipe(Effect.catch((cause) => unavailable(dir, String(cause))));
+  return yield* Effect.gen(function* () {
+    const handle = yield* spawner.spawn(
+      ChildProcess.make(command[0] ?? "collie", [...command.slice(1), "host", "--dir", dir], {
+        env: { HERDR_PLUGIN_ROOT: install },
+        extendEnv: true,
+        detached: true,
+        stdin: "ignore",
+        stdout: "ignore",
+        stderr: "ignore",
+      }),
+    );
+    // Unreferenced before the caller's scope closes, or the spawner's finalizer kills the
+    // host it has just started: it leaves a child alone only once it is unreferenced.
+    yield* Effect.asVoid(handle.unref);
+    return handle;
+  }).pipe(Effect.catch((cause) => unavailable(dir, String(cause))));
 });
 
 const CommandJson = Schema.fromJsonString(Schema.Array(Schema.String));
