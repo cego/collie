@@ -9,6 +9,7 @@
 // Effect's. Nothing here copies the second into the first.
 
 import {
+  Cause,
   Deferred,
   Effect,
   Fiber,
@@ -56,6 +57,7 @@ import { projectHere, shell } from "./mr";
 import { defaultsPath, readDefaults, readIntent, type IntentSeed } from "./intent";
 import { scopeFor, scopeKey } from "./registry";
 import { PROJECTS_ROOT_OPTION, projectsRoot } from "./projects";
+import { reason } from "./naming";
 
 export { savedModules } from "./discovery";
 
@@ -368,6 +370,7 @@ export const followBoard = Effect.fn("Lifecycle.followBoard")(function* (env: Pl
   let waited = false;
   /** False between a dropped stream and the fresh snapshot after it. */
   let live = false;
+  let lost: string | null = null;
   const apply = (message: BoardMessage) =>
     Effect.suspend(() => {
       switch (message._tag) {
@@ -375,6 +378,7 @@ export const followBoard = Effect.fn("Lifecycle.followBoard")(function* (env: Pl
           tasks.clear();
           for (const task of message.tasks) tasks.set(task.id, task);
           live = true;
+          lost = null;
           return Deferred.succeed(first, undefined);
         case "Upsert":
           tasks.set(message.task.id, message.task);
@@ -389,7 +393,11 @@ export const followBoard = Effect.fn("Lifecycle.followBoard")(function* (env: Pl
   const follow = Effect.scoped(
     Effect.flatMap(boardStream(env), (stream) => Stream.runForEach(stream, apply)),
   ).pipe(
-    Effect.catchCause(() => Effect.void),
+    Effect.catchCause((cause) =>
+      Effect.sync(() => {
+        lost = reason(Cause.squash(cause)).split("\n")[0]!;
+      }),
+    ),
     Effect.ensuring(
       Effect.sync(() => {
         live = false;
@@ -402,14 +410,15 @@ export const followBoard = Effect.fn("Lifecycle.followBoard")(function* (env: Pl
       Effect.timeoutOption(waited ? 0 : FIRST_BOARD_WAIT),
       Effect.map((arrived) => {
         waited = true;
+        const why = lost === null ? "" : ` (${lost})`;
         return {
           tasks: sortBoard([...tasks.values()]),
           unreadable:
             arrived._tag === "None"
-              ? "the workflow host has not sent its board"
+              ? `the workflow host has not sent its board${why}`
               : live
                 ? null
-                : "reconnecting to the workflow host; these cards may be out of date",
+                : `reconnecting to the workflow host${why}; these cards may be out of date`,
         };
       }),
     );

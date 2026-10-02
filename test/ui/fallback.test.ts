@@ -137,8 +137,20 @@ test(
               times: 50,
             }),
           );
-          yield* stopHost(world.state);
           expect(after.tasks[0]?.disposition).toBe("merged");
+
+          // A host gone away is said, and the cards it last sent are not passed off as live.
+          yield* stopHost(world.state);
+          const away = yield* app.load(focus()).pipe(
+            Effect.repeat({
+              until: (state) => state.note !== null,
+              schedule: Schedule.spaced("50 millis"),
+              times: 100,
+            }),
+          );
+          expect(away.note).toContain("reconnecting to the workflow host");
+          expect(away.tasks[0]?.disposition).toBe("merged");
+          yield* stopHost(world.state);
         }),
       ["plain.workflow.ts"],
     ),

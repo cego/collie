@@ -1479,8 +1479,15 @@ const textBoard = Effect.fn("Flows.textBoard")(function* (
    * The same reads the app makes, so this view says no less about a Run than the app
    * does — a pane too narrow for the renderer must not be a quieter board.
    */
+  let unreadable: string | null = null;
   /** The board's own Tasks, so the text view and the pane draw the same three sections. */
-  const tasksOf = () => boardRead(session, env).pipe(Effect.map((read) => read.tasks));
+  const tasksOf = () =>
+    boardRead(session, env).pipe(
+      Effect.map((read) => {
+        unreadable = read.unreadable;
+        return read.tasks;
+      }),
+    );
 
   const steeringOf = Effect.fn("Flows.textBoard.steering")(function* (view: WorkspaceView) {
     const rows = [...view.active, ...view.recent];
@@ -1506,7 +1513,7 @@ const textBoard = Effect.fn("Flows.textBoard")(function* (
   // and the entrypoint ends rather than spinning on a `takeKey` that can never answer.
   if (!process.stdin.isTTY) {
     const view = yield* boardOf(session, yield* scan(env, session.runsOf));
-    const once = renderWorkspace(view, why, undefined, yield* steeringOf(view));
+    const once = renderWorkspace(view, unreadable ?? why, undefined, yield* steeringOf(view));
     process.stdout.write(`${once}\n`);
     return 0;
   }
@@ -1529,7 +1536,12 @@ const textBoard = Effect.fn("Flows.textBoard")(function* (
     }
     if (!waiting) answering = null;
 
-    const text = renderWorkspace(view, note ?? undefined, asking, yield* steeringOf(view));
+    const text = renderWorkspace(
+      view,
+      unreadable ?? note ?? undefined,
+      asking,
+      yield* steeringOf(view),
+    );
     if (text !== drawn) {
       process.stdout.write(`${CLEAR}${text.replace(/\n/g, "\r\n")}\r\n`);
       drawn = text;
