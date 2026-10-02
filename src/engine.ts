@@ -1487,11 +1487,11 @@ const sourcesIn = Effect.fn("Engine.sourcesIn")(function* (dir: string) {
 export const revisionOf: (dir: string) => Effect.Effect<string, never, FileSystem.FileSystem> =
   Effect.fn("Engine.revisionOf")(function* (dir: string) {
     const fs = yield* FileSystem.FileSystem;
-    // An installed dependency counts by its name alone: the toolchain a module is
-    // typechecked against lives here too, and its thousands of files cost more to list
-    // than every start it is on the way of.
+    // An installed dependency counts by its names alone: the toolchain a module is
+    // typechecked against lives here too, and reading all of it would cost more than
+    // every start it is on the way of.
     const installed = yield* fs
-      .readDirectory(`${dir}/node_modules`)
+      .readDirectory(`${dir}/node_modules`, { recursive: true })
       .pipe(Effect.orElseSucceed((): Array<string> => []));
     let read = installed
       .sort()
