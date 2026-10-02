@@ -17,7 +17,9 @@
 //     that works, and it needs the model to summarize with.
 
 import { Data, Effect, Schema } from "effect";
-import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http";
+import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
+import * as HttpClient from "effect/unstable/http/HttpClient";
+import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
 import { reason } from "./naming";
 
 export class OpenCodeError extends Data.TaggedError("OpenCodeError")<{

@@ -33,12 +33,10 @@ import {
   Semaphore,
   Stream,
 } from "effect";
-import * as ClusterWorkflowEngine from "effect/unstable/cluster/ClusterWorkflowEngine";
-import * as SingleRunner from "effect/unstable/cluster/SingleRunner";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import type { ConfigError } from "effect/Config";
 import type { PlatformError } from "effect/PlatformError";
-import { FetchHttpClient } from "effect/unstable/http";
+import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
 import * as Reactivity from "effect/unstable/reactivity/Reactivity";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as DurableDeferred from "effect/unstable/workflow/DurableDeferred";
@@ -1659,18 +1657,32 @@ export function engineLayer(options: {
   const sql = SqliteClient.layer({ filename: `${options.dir}/host.db` }).pipe(
     Layer.provideMerge(Reactivity.layer),
   );
-  const cluster = SingleRunner.layer({
-    shardingConfig: {
-      // A host told to stop must not take a running workflow down with it: the work
-      // finishes its step, and what is left is picked up by the next host.
-      preemptiveShutdown: false,
-      // A workflow whose module is missing has no entity to receive its messages. The
-      // default marks them failed after a minute, which turns "the file is not there
-      // yet" into a terminal result; waiting is what lets a repair recover the work.
-      entityRegistrationTimeout: Duration.infinity,
-    },
-  }).pipe(Layer.provide([sql, BunCrypto.layer]));
-  return ClusterWorkflowEngine.layer.pipe(Layer.provide(cluster), Layer.provideMerge(sql));
+  // Loaded when a host builds it, not when anything imports this file: the cluster is
+  // the heaviest thing here, and every other command the binary runs is a client.
+  const engine = Layer.unwrap(
+    Effect.promise(() =>
+      Promise.all([
+        import("effect/unstable/cluster/SingleRunner"),
+        import("effect/unstable/cluster/ClusterWorkflowEngine"),
+      ]),
+    ).pipe(
+      Effect.map(([SingleRunner, ClusterWorkflowEngine]) => {
+        const cluster = SingleRunner.layer({
+          shardingConfig: {
+            // A host told to stop must not take a running workflow down with it: the work
+            // finishes its step, and what is left is picked up by the next host.
+            preemptiveShutdown: false,
+            // A workflow whose module is missing has no entity to receive its messages. The
+            // default marks them failed after a minute, which turns "the file is not there
+            // yet" into a terminal result; waiting is what lets a repair recover the work.
+            entityRegistrationTimeout: Duration.infinity,
+          },
+        }).pipe(Layer.provide([sql, BunCrypto.layer]));
+        return ClusterWorkflowEngine.layer.pipe(Layer.provide(cluster));
+      }),
+    ),
+  );
+  return engine.pipe(Layer.provideMerge(sql));
 }
 
 export const HOLD = "hold";
