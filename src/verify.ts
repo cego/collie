@@ -78,12 +78,17 @@ const git = (args: string[], cwd: string) => shell("git", args, cwd);
 export const fingerprint = Effect.fn("Verify.fingerprint")(function* (cwd: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const head = yield* git(["rev-parse", "HEAD"], cwd);
+  // Four reads of one tree, none waiting on another.
+  const [head, status, diff, others] = yield* Effect.all(
+    [
+      git(["rev-parse", "HEAD"], cwd),
+      git(["status", "--porcelain=v2", "-z"], cwd),
+      git(["diff", "HEAD", "--binary"], cwd),
+      git(["ls-files", "--others", "--exclude-standard", "-z"], cwd),
+    ],
+    { concurrency: "unbounded" },
+  );
   const head_sha = head.code === 0 ? head.stdout.trim() : "";
-
-  const status = yield* git(["status", "--porcelain=v2", "-z"], cwd);
-  const diff = yield* git(["diff", "HEAD", "--binary"], cwd);
-  const others = yield* git(["ls-files", "--others", "--exclude-standard", "-z"], cwd);
 
   const parts = [status.stdout, Bun.hash(diff.stdout).toString(16)];
   let bytes = status.stdout.length + diff.stdout.length;

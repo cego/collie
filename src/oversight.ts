@@ -139,17 +139,31 @@ export const writeCard = Effect.fn("Oversight.writeCard")(function* (
     readonly claims: ReadonlyArray<string>;
   },
 ): Effect.fn.Return<Card, never, Services> {
-  const base = yield* baseOf(at.cwd);
-  const snapshot = yield* fingerprint(at.cwd).pipe(
-    Effect.orElseSucceed(() => ({ head_sha: "", fingerprint: "" })),
+  // Every read of the checkout at once: only the two that name the base wait for it.
+  const facts = baseOf(at.cwd).pipe(
+    Effect.flatMap((base) =>
+      Effect.all(
+        [
+          Effect.succeed(base),
+          shell("git", ["diff", "--name-only", `${base}..HEAD`], at.cwd),
+          shell("git", ["log", "--oneline", `${base}..HEAD`], at.cwd),
+        ],
+        { concurrency: "unbounded" },
+      ),
+    ),
+  );
+  const [[base, files, commits], snapshot, dirty, branch] = yield* Effect.all(
+    [
+      facts,
+      fingerprint(at.cwd).pipe(Effect.orElseSucceed(() => ({ head_sha: "", fingerprint: "" }))),
+      shell("git", ["status", "--porcelain"], at.cwd),
+      shell("git", ["rev-parse", "--abbrev-ref", "HEAD"], at.cwd),
+    ],
+    { concurrency: "unbounded" },
   );
   const intent = yield* readIntent(at.runDir).pipe(Effect.orElseSucceed(() => null));
   const drift = yield* readDrift(at.runDir).pipe(Effect.orElseSucceed(() => []));
   const open = openReports(drift);
-  const files = yield* shell("git", ["diff", "--name-only", `${base}..HEAD`], at.cwd);
-  const commits = yield* shell("git", ["log", "--oneline", `${base}..HEAD`], at.cwd);
-  const dirty = yield* shell("git", ["status", "--porcelain"], at.cwd);
-  const branch = yield* shell("git", ["rev-parse", "--abbrev-ref", "HEAD"], at.cwd);
   const verifications = yield* readVerifications(at.evidenceDir).pipe(
     Effect.orElseSucceed(() => []),
   );
