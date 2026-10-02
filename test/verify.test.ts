@@ -80,12 +80,13 @@ test("the fingerprint moves for anything that changes what a command would see",
       const withUntracked = yield* fingerprint(repo);
       expect(withUntracked.fingerprint).not.toBe(back.fingerprint);
       yield* fs.writeFileString(path.join(repo, "scratch.txt"), "b\n");
-      expect((yield* fingerprint(repo)).fingerprint).not.toBe(withUntracked.fingerprint);
+      const changed = yield* fingerprint(repo);
+      expect(changed.fingerprint).not.toBe(withUntracked.fingerprint);
 
       // Ignored files are not part of what a command sees under version control.
       yield* fs.makeDirectory(path.join(repo, "ignored"), { recursive: true });
       yield* fs.writeFileString(path.join(repo, "ignored", "big"), "noise\n");
-      expect((yield* fingerprint(repo)).fingerprint).toBe((yield* fingerprint(repo)).fingerprint);
+      expect((yield* fingerprint(repo)).fingerprint).toBe(changed.fingerprint);
     }),
   ));
 

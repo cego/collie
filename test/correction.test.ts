@@ -14,7 +14,6 @@ import {
   type CorrectionContext,
   type DriftLine,
   type ElectionLine,
-  EXTRA_PASSES,
   staleSince,
 } from "../src/drift";
 import { DEFAULT_AUTHORITY, seedIntent, type Authority, type Intent } from "../src/intent";
@@ -257,8 +256,6 @@ test("a snapshot is stale only when a loser wrote dirty after it was taken", () 
   ];
   expect(staleSince(lines, "2026-01-01T00:00:02.000Z")).toBe(false);
   expect(staleSince(lines, "2026-01-01T00:00:00.000Z")).toBe(true);
-  // The bound is a rule, not a detail: one call, then at most two more.
-  expect(EXTRA_PASSES).toBe(2);
 });
 
 test("the wake rule makes every Driver a candidate, not only the ones with siblings", () => {

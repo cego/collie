@@ -952,7 +952,9 @@ onMachineWith("claude")(
         yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
         yield* session(started("r1"), { compactAtTokens: 300_000 });
         // Extra arguments to the same launch, so the agent keeps its ordinary interface.
-        expect(launchArgs(yield* rig.calls()).length).toBeGreaterThan(5);
+        const args = launchArgs(yield* rig.calls());
+        expect(args.slice(0, 2)).toEqual(["--model", "opus"]);
+        expect(args[args.indexOf("--settings") + 1]).toEndWith("/settings.json");
       }),
     ),
   60_000,
