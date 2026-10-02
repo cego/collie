@@ -160,7 +160,7 @@ test("invalid input is one envelope on stdout, its reason on stderr, and exit 2"
     }),
   ));
 
-test("a hold takes a reason the board's heldBy reads, but no time to lift at, which nothing would", () =>
+test("a hold takes no time to lift at, and a release no reason, which nothing would read", () =>
   runEffect(
     Effect.gen(function* () {
       const released = yield* cli(["--json", "run", "release", "r1", "--reason", "lunch"]);

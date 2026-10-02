@@ -94,6 +94,35 @@ test(
 );
 
 test(
+  "a hold from the command line carries its reason onto the record the board reads",
+  () =>
+    proves(
+      "collie-actor-hold-",
+      (world) =>
+        Effect.gen(function* () {
+          const host = yield* connect(world.state);
+          const { runId } = yield* host.start({
+            project: world.project,
+            id: "proof",
+            request: "start-1",
+            input: { note: "why" },
+          });
+          yield* until(
+            () => host.status({ runId }),
+            (status) => status.status === "suspended",
+          );
+          const held = yield* collie(world, ["run", "hold", runId, "--reason", "lunch"]);
+          expect(held.envelope.ok).toBe(true);
+          const lines = yield* readAudit(runDir(world.state, runId));
+          expect(lines.find((line) => line.operation === "hold")?.reason).toBe("lunch");
+          yield* stopHost(world.state);
+        }).pipe(Effect.orDie),
+      ["proof.workflow.ts", "helper.ts", "notes.md"],
+    ),
+  120_000,
+);
+
+test(
   "a channel that declares nothing is never a human's, and an offer is recorded on the Run it came from",
   () =>
     proves(
