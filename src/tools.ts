@@ -46,14 +46,7 @@ import {
 } from "./proposals";
 import { recordDisposition, statusLine } from "./disposition";
 import { Herdr } from "./herdr";
-import {
-  buildBoard,
-  headerSentence,
-  mrLabel,
-  sectionOf,
-  type Section,
-  type TaskView,
-} from "./board";
+import { buildBoard, headerSentence, mrLabel, sectionOf, SECTIONS, type TaskView } from "./board";
 import { loadDefaults } from "./config";
 import {
   asText as newsText,
@@ -546,12 +539,6 @@ const settle = Effect.fn("Tools.settle")(function* (env: PluginEnv, action: Sett
 
 /** Cards per answer. Sections come in the board's order, so Finished is what gets cut. */
 const HERD_CARDS = 40;
-const SECTIONS: ReadonlyArray<readonly [Section, string]> = [
-  ["needs-you", "Needs you"],
-  ["working", "Working"],
-  ["waiting", "Waiting on you"],
-  ["finished", "Finished"],
-];
 
 /** One card as chat reads it: what the human sees on it, plus the id an action needs. */
 function cardLine(view: TaskView): string {
@@ -577,6 +564,11 @@ const boardFacts = Effect.fn("Tools.boardFacts")(function* (env: PluginEnv) {
     now,
     quietMs: (yield* loadDefaults(env.userDir)).boardQuietMs,
   });
+  return herdLines(views, now);
+});
+
+/** The board as chat reads it: the header, then each section's cards in the board's order. */
+export function herdLines(views: ReadonlyArray<TaskView>, now: number): string {
   if (views.length === 0) return "- (no Runs in this Herd)";
   const lines = [headerSentence(views, now).text];
   let room = HERD_CARDS;
@@ -589,7 +581,7 @@ const boardFacts = Effect.fn("Tools.boardFacts")(function* (env: PluginEnv) {
   const left = views.length - HERD_CARDS;
   if (left > 0) lines.push("", `- (${left} more card(s) not listed here)`);
   return lines.join("\n");
-});
+}
 
 /** The action kinds that are not about one Run, so the selection never stands in for theirs. */
 const UNSCOPED_KINDS: ReadonlyArray<string> = ["start", "confirm", "decline"];

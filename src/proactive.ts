@@ -51,6 +51,8 @@ export function eventsIn(
    * from. Read from the drift journal by the caller, which already reads it to mark rows.
    */
   drifting: ReadonlyMap<string, string> = new Map(),
+  /** Runs whose card is Ready to release: the revision its checks passed at, and its sentence. */
+  ready: ReadonlyMap<string, { at: string; sentence: string }> = new Map(),
 ): Event[] {
   const out: Event[] = [];
   for (const run of runs) {
@@ -78,6 +80,15 @@ export function eventsIn(
         run: run.id,
         key: `${run.id}:parked:${run.note ?? ""}`,
         text: `Run ${run.id} (${about}) parked its work${run.note === null ? "" : `: ${run.note}`}. What does it need, and from whom?`,
+      });
+      continue;
+    }
+    const shippable = ready.get(run.id);
+    if (shippable !== undefined) {
+      out.push({
+        run: run.id,
+        key: `${run.id}:ready:${shippable.at}`,
+        text: `Run ${run.id} (${about}): ${shippable.sentence}`,
       });
       continue;
     }

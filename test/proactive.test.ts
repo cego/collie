@@ -176,3 +176,24 @@ test("noticing something costs a file append, and noticing nothing costs nothing
       expect(pendingNews(yield* readNews(file)).items).toHaveLength(1);
     }),
   ));
+
+test("a Run ready to release when it ends is said once as ready, never as ended", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const file = yield* newsPath(stateDir, "herd-abc");
+      const sentence =
+        "Ready to release: cego/collie#30 is open and its checks passed at 1a2b3c4. Next: merge it.";
+      const ready = new Map([["r1", { at: "1a2b3c4d", sentence }]]);
+      const ended = [record({ id: "r1", state: "succeeded" })];
+
+      const events = eventsIn(ended, new Map(), ready);
+      expect(events).toEqual([
+        { run: "r1", key: "r1:ready:1a2b3c4d", text: `Run r1 (Implement): ${sentence}` },
+      ]);
+      for (let tick = 0; tick < 20; tick++)
+        for (const event of eventsIn(ended, new Map(), ready)) yield* appendNews(file, event);
+      expect(pendingNews(yield* readNews(file)).items.map((item) => item.key)).toEqual([
+        "r1:ready:1a2b3c4d",
+      ]);
+    }),
+  ));

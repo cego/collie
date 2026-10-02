@@ -24,6 +24,7 @@ import { readVerifications, verifyingIn, type Verification } from "./verify";
 import { readMrStates } from "./merges";
 import { filed, standingOf } from "./standing";
 import { offersOf } from "./lifecycle";
+import { shell } from "./mr";
 import type { OfferView } from "./engine";
 
 /** How a card reads, and the order Tasks take inside a section. */
@@ -176,6 +177,10 @@ export interface TaskView {
   ended: number | null;
   /** What GitLab last said about the merge request, where Collie has asked. */
   mrState: MrState | null;
+  /** What checked the open merge request's branch, or null where no merge request waits. */
+  checks: Checks | null;
+  /** Ready to release: the leading Run succeeded, its merge request is open and its checks passed. */
+  ready: boolean;
   /** A plan that finished and nobody has implemented: its card's first action starts that. */
   planReady: boolean;
   /** That action: the Run's primary offer as its module declares it now, or null for none. */
@@ -198,6 +203,13 @@ export interface BoardOffer {
 export type MrState = "open" | "merged" | "closed" | "on-stage" | "in-prod";
 const LANDED_STATES: ReadonlySet<MrState> = new Set(["merged", "on-stage", "in-prod"]);
 const DEPLOYED = { "on-stage": " On stage.", "in-prod": " In production." } as const;
+
+/** What checked an open merge request's branch, at the revision named. */
+export type Checks =
+  | { readonly state: "passed"; readonly at: string }
+  | { readonly state: "failed"; readonly name: string; readonly at: string }
+  | { readonly state: "running" }
+  | { readonly state: "unchecked" };
 
 /** Everything the sentence is made of, apart from the TaskView so the formatter is pure. */
 export interface Sentence {
@@ -232,6 +244,10 @@ export interface Sentence {
   disposition: { kind: string; ref: string; ago: string; by: string } | null;
   /** The merge request the work opened or was pointed at, where there is one. */
   mr: string | null;
+  /** What checked that merge request, where it is open; null reads as unchecked. */
+  checks: Checks | null;
+  /** A live agent of the Run's, which the next move can be handed to. */
+  agent: string | null;
   /**
    * Where a human is being waited for, when no Decision says: the pane of the agent
    * herdr will not prompt, or the step the Driver recorded itself waiting on. Null
@@ -355,17 +371,38 @@ function decisionSentence(decision: Decision): string {
   }
 }
 
+const short = (sha: string) => sha.slice(0, 7);
+
+/** An open merge request: whether it is ready, and the human's next move. */
+function openSentence(mr: string, checks: Checks | null, agent: string | null): string {
+  const label = mrLabel(mr);
+  const handed = agent === null ? "" : `, or tell ${agent} to`;
+  const seen: Checks = checks ?? { state: "unchecked" };
+  switch (seen.state) {
+    case "passed":
+      return `Ready to release: ${label} is open and its checks passed at ${short(seen.at)}. Next: merge it${handed}.`;
+    case "failed":
+      return `${label} is open, but ${seen.name} failed at ${short(seen.at)}. Next: fix ${seen.name}${handed}.`;
+    case "running":
+      return `${label} is open; its pipeline is still running.`;
+    case "unchecked":
+      return `${label} is open; nothing has checked it.`;
+  }
+}
+
 function doneSentence(
   disposition: Sentence["disposition"],
   mr: string | null = null,
   mrState: MrState | null = null,
   planReady = false,
+  checks: Checks | null = null,
+  agent: string | null = null,
 ): string {
   if (disposition === null) {
     if (planReady) return "Plan ready to implement.";
     if (mr === null) return "Finished; nothing merged yet.";
     if (mrState === "closed") return `Merge request ${mrLabel(mr)} closed without merging.`;
-    return `Finished; ${mrLabel(mr)} is open.`;
+    return openSentence(mr, checks, agent);
   }
   switch (disposition.kind) {
     case "merged": {
@@ -419,7 +456,14 @@ export function sentenceFor(facts: Sentence): string {
   if (facts.decision !== null) return decisionSentence(facts.decision);
   switch (facts.state) {
     case "done":
-      return doneSentence(facts.disposition, facts.mr, facts.mrState, facts.planReady);
+      return doneSentence(
+        facts.disposition,
+        facts.mr,
+        facts.mrState,
+        facts.planReady,
+        facts.checks,
+        facts.agent,
+      );
     case "failed":
       return alsoBecame(failedSentence(facts), facts.disposition);
     case "stopped":
@@ -443,10 +487,15 @@ function alsoBecame(sentence: string, disposition: Sentence["disposition"]): str
   return disposition === null ? sentence : `${sentence} ${doneSentence(disposition)}`;
 }
 
-/** `group/project!42` from a GitLab URL or an `mr:` target; anything else as it is. */
+/**
+ * `group/project!42` from a GitLab URL or an `mr:` target, `owner/repo#30` from a GitHub
+ * pull request URL; anything else as it is.
+ */
 export function mrLabel(mr: string): string {
   const url = /^https?:\/\/[^/]+\/(.+?)\/-\/merge_requests\/(\d+)/.exec(mr);
   if (url) return `${url[1]}!${url[2]}`;
+  const pull = /^https?:\/\/github\.com\/([^/]+\/[^/]+)\/pull\/(\d+)/.exec(mr);
+  if (pull) return `${pull[1]}#${pull[2]}`;
   const bare = mr.startsWith("mr:") ? mr.slice(3) : mr;
   // `host/group/project!42` reads as `group/project!42`: the host is where, not what.
   const host = /^[^/!]+\.[^/!]+\/(.+)$/.exec(bare);
@@ -473,24 +522,27 @@ export function sectionOf(view: Pick<TaskView, "state" | "landed">): Section {
   return view.landed ? "finished" : "waiting";
 }
 
-const SECTION_ORDER = new Map<Section, number>([
-  ["needs-you", 0],
-  ["working", 1],
-  ["waiting", 2],
-  ["finished", 3],
-]);
+/** The order every board draws its sections in, and what each is called. */
+export const SECTIONS: ReadonlyArray<readonly [Section, string]> = [
+  ["needs-you", "Needs you"],
+  ["waiting", "Waiting on you"],
+  ["working", "Working"],
+  ["finished", "Finished"],
+];
+const SECTION_ORDER = new Map(SECTIONS.map(([section], at) => [section, at]));
 const STATE_RANK = new Map(STATE_ORDER.map((state, at) => [state, at]));
 
 /**
- * The board's order: the three sections, then the state order inside each, then whatever
- * changed last. Nothing else is ranked — a board that reordered itself on every tick is
- * one a human cannot point at.
+ * The board's order: the sections, then the state order inside Needs you and what is
+ * ready to release inside Waiting on you, then whatever changed last. Nothing else is
+ * ranked — a board that reordered itself on every tick is one a human cannot point at.
  */
 export function sortBoard(views: ReadonlyArray<TaskView>): TaskView[] {
   return [...views].sort(
     (a, b) =>
       SECTION_ORDER.get(sectionOf(a))! - SECTION_ORDER.get(sectionOf(b))! ||
       (sectionOf(a) === "needs-you" ? STATE_RANK.get(a.state)! - STATE_RANK.get(b.state)! : 0) ||
+      Number(b.ready) - Number(a.ready) ||
       // What moved last is at the top: in Working what is doing something, in Waiting on
       // you what you were just doing.
       (b.ended ?? b.at) - (a.ended ?? a.at),
@@ -564,6 +616,33 @@ export function lastFailure(
   }
   return { name: last.name, times };
 }
+
+/**
+ * What Collie's own checks say at one revision: the branch's head where it could be read,
+ * else the newest revision Collie checked. An agent's record is a claim and never counts.
+ */
+export function checksAt(records: ReadonlyArray<Verification>, head: string | null): Checks {
+  const collie = records.filter((record) => record.by === "collie");
+  const at = head ?? collie.at(-1)?.end.head_sha ?? "";
+  const newest = new Map<string, Verification>();
+  for (const record of collie)
+    if (at !== "" && record.end.head_sha === at) newest.set(record.name, record);
+  if (newest.size === 0) return { state: "unchecked" };
+  const red = [...newest.values()].find((record) => record.result !== record.expect);
+  return red === undefined ? { state: "passed", at } : { state: "failed", name: red.name, at };
+}
+
+/** The commit the Run's branch is at now in its checkout, or null where that cannot be read. */
+const branchHead = Effect.fn("Board.branchHead")(function* (run: RunFacts) {
+  if (run.branch === null) return null;
+  const read = yield* shell(
+    "git",
+    ["rev-parse", "--verify", "--quiet", `${run.branch}^{commit}`],
+    run.cwd,
+  );
+  const sha = read.stdout.trim();
+  return read.code === 0 && sha !== "" ? sha : null;
+});
 
 /** An absolute path, wherever one sits in a name, read as what it points at. */
 function withoutPaths(text: string): string {
@@ -859,6 +938,18 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
       disposed: disposition !== null,
       asking: decision !== null,
     });
+    const awaitingMerge =
+      state === "done" &&
+      mr !== null &&
+      disposition === null &&
+      !landed &&
+      (mrState === null || mrState === "open");
+    const checks = awaitingMerge
+      ? checksAt(
+          yield* readVerifications(leader.evidence).pipe(Effect.catch(() => Effect.succeed([]))),
+          yield* branchHead(leader),
+        )
+      : null;
     const finishedAt = settledNow ? endedAt(leader) : 0;
     views.push({
       id,
@@ -869,6 +960,8 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
       sentence: sentenceFor({
         mr,
         mrState,
+        checks,
+        agent: agents.find((one) => one.run === leader.id)?.name ?? null,
         planReady,
         abandoned: null,
         state,
@@ -916,6 +1009,8 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
       landed,
       ended: finishedAt > 0 ? finishedAt : null,
       mrState,
+      checks,
+      ready: checks?.state === "passed",
       planReady,
       // Only a ready plan's first action is an offer; asking every card would ask every refresh.
       offer: planReady ? primaryOf(yield* offersOfRun(leader.id)) : null,
@@ -926,6 +1021,19 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
   }
   return sortBoard(views);
 });
+
+/** Each Ready to release card's Run, with the revision its checks passed at and its sentence. */
+export function readyRuns(
+  views: ReadonlyArray<TaskView>,
+): ReadonlyMap<string, { at: string; sentence: string }> {
+  return new Map(
+    views.flatMap((view) =>
+      view.ready && view.checks?.state === "passed"
+        ? [[view.run, { at: view.checks.at, sentence: view.sentence }] as const]
+        : [],
+    ),
+  );
+}
 
 /** The offer a card presents first: the one its module marks primary and can make now. */
 const primaryOf = (offers: ReadonlyArray<OfferView>): BoardOffer | null => {
@@ -1002,10 +1110,14 @@ export function headerSentence(views: ReadonlyArray<TaskView>, now?: number): He
         `${needs === 1 ? "One task is" : `${needs} tasks are`} waiting on you.`;
   const gone = quiet === 0 ? "" : `, ${quiet} gone quiet`;
   const waitingAll = views.filter((view) => sectionOf(view) === "waiting");
-  const waiting =
-    now === undefined ? waitingAll.length : foldWaiting(waitingAll, now).recent.length;
-  const held = waiting === 0 ? "" : ` ${waiting} waiting on you.`;
-  return { text: `${opening} ${working.length} working${gone}.${held}`, urgent: needs > 0 };
+  const waiting = now === undefined ? waitingAll : foldWaiting(waitingAll, now).recent;
+  const ready = waiting.filter((view) => view.ready).length;
+  const held = [
+    ...(ready === 0 ? [] : [`${ready} ready to release`]),
+    ...(waiting.length === ready ? [] : [`${waiting.length - ready} waiting on you`]),
+  ];
+  const inHand = held.length === 0 ? "" : ` ${held.join(", ")}.`;
+  return { text: `${opening}${inHand} ${working.length} working${gone}.`, urgent: needs > 0 };
 }
 
 export function waitingLabel(waiting: ReadonlyArray<TaskView>): string {
@@ -1063,14 +1175,17 @@ export function boardLines(
   /** Lines to put under one Task's own: the question a dumb terminal answers in place. */
   under: { run: string; lines: ReadonlyArray<string> } | null = null,
 ): string[] {
-  const { needs, working, waiting, finished } = sectionsOf(views, "");
-  const section = (label: string, rows: ReadonlyArray<TaskView>) => textSection(label, rows, under);
-  return [
-    ...section("Needs you", needs),
-    ...section(workingLabel(working), working),
-    ...(waiting.length === 0 ? [] : section(waitingLabel(waiting), waiting)),
-    ...(finished.length === 0 ? [] : section(finishedLabel(finished, true), finished)),
-  ];
+  const label: Record<Section, (rows: ReadonlyArray<TaskView>) => string> = {
+    "needs-you": () => "Needs you",
+    waiting: waitingLabel,
+    working: workingLabel,
+    finished: (rows) => finishedLabel(rows, true),
+  };
+  return SECTIONS.flatMap(([section]) => {
+    const rows = views.filter((view) => sectionOf(view) === section);
+    const always = section === "needs-you" || section === "working";
+    return rows.length === 0 && !always ? [] : textSection(label[section](rows), rows, under);
+  });
 }
 
 function textSection(

@@ -30,7 +30,9 @@ import { registeredKinds, resetExecutors } from "../src/executors";
 import { registerRunExecutors } from "../src/operations";
 import { readEnv } from "../src/env";
 import type { JsonObject } from "../src/schema";
-import { TOOLS, toolNamed } from "../src/tools";
+import { herdLines, TOOLS, toolNamed } from "../src/tools";
+import { boardLines, SECTIONS, sortBoard } from "../src/board";
+import { task } from "./support/task";
 import { runEffect } from "./support/effect";
 
 const encodeJson = Schema.encodeUnknownSync(Schema.fromJsonString(Schema.Any));
@@ -379,4 +381,18 @@ test("every tool chat is given is a route somebody named", () => {
   expect(TOOLS.map((tool) => tool.name).filter((name) => !routed.has(name))).toEqual([
     "collie_propose",
   ]);
+});
+
+test("chat and the text board list the sections in the board's one order", () => {
+  const views = sortBoard([
+    task({ id: "done", name: "Landed", state: "done" }),
+    task({ id: "working", name: "Building" }),
+    task({ id: "waiting", name: "Shippable", state: "done", landed: false }),
+    task({ id: "blocked", name: "Asking", state: "blocked" }),
+  ]);
+  const order = SECTIONS.map(([, title]) => title);
+  const titled = (lines: ReadonlyArray<string>) =>
+    lines.flatMap((line) => order.filter((title) => line.replace(/^## /, "").startsWith(title)));
+  expect(titled(herdLines(views, 0).split("\n"))).toEqual(order);
+  expect(titled(boardLines(views))).toEqual(order);
 });

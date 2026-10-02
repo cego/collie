@@ -47,7 +47,7 @@ test("a merge GitLab reports lands the work: a disposition by gitlab, and the ca
     Effect.gen(function* () {
       const { stateDir, run, board: boardOf } = yield* seeded();
       const before = yield* boardOf({ mrStates: new Map() });
-      expect(before[0]!.sentence).toBe("Finished; mk/collie!65 is open.");
+      expect(before[0]!.sentence).toBe("mk/collie!65 is open; nothing has checked it.");
 
       const states = new Map();
       yield* settleMerges({

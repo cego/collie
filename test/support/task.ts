@@ -31,6 +31,8 @@ export function task(over: Partial<TaskView> = {}): TaskView {
     landed: (over.state ?? "active") === "done",
     ended: null,
     mrState: null,
+    checks: null,
+    ready: false,
     planReady: false,
     offer: null,
     run: "r1",

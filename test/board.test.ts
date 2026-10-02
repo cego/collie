@@ -11,6 +11,9 @@ import {
   finishedLabel,
   headerSentence,
   foldWaiting,
+  mrLabel,
+  SECTIONS,
+  sortBoard,
   heldLine,
   matchesTask,
   sectionOf,
@@ -22,6 +25,7 @@ import {
   type TaskView,
 } from "../src/board";
 import { recordDisposition } from "../src/disposition";
+import { appendVerification, type Verification } from "../src/verify";
 import { readEnv } from "../src/env";
 import type { AgentInfo } from "../src/herdr";
 import type { ProposalLine } from "../src/proposals";
@@ -49,6 +53,8 @@ function facts(over: Partial<Sentence> = {}): Sentence {
     abandoned: null,
     planReady: false,
     mrState: null,
+    checks: null,
+    agent: null,
     stalled: null,
     ...over,
   };
@@ -148,7 +154,7 @@ const FORMS: Array<[string, Sentence, string]> = [
   [
     "done with a merge request open",
     facts({ state: "done", mr: "https://gitlab.cego.dk/mk/collie/-/merge_requests/65" }),
-    "Finished; mk/collie!65 is open.",
+    "mk/collie!65 is open; nothing has checked it.",
   ],
   [
     "done and abandoned",
@@ -215,6 +221,8 @@ function task(over: Partial<TaskView> = {}): TaskView {
     landed: (over.state ?? "active") === "done",
     ended: null,
     mrState: null,
+    checks: null,
+    ready: false,
     planReady: false,
     offer: null,
     run: "r1",
@@ -301,8 +309,8 @@ test("the header counts what is waiting on you this week, and the fold counts th
   ];
   // Given the clock, the header counts the week's endings; the fold's own line counts the
   // rest. Without it — a test's bare call — it counts them all.
-  expect(headerSentence(views, now).text).toBe("Nothing needs you. 1 working. 1 waiting on you.");
-  expect(headerSentence(views).text).toBe("Nothing needs you. 1 working. 2 waiting on you.");
+  expect(headerSentence(views, now).text).toBe("Nothing needs you. 1 waiting on you. 1 working.");
+  expect(headerSentence(views).text).toBe("Nothing needs you. 2 waiting on you. 1 working.");
   const { recent, older } = foldWaiting(sectionsOf(views, "").waiting, now);
   expect(recent.map((t) => t.id)).toEqual(["recent"]);
   expect(older.map((t) => t.id)).toEqual(["old"]);
@@ -753,7 +761,7 @@ test("what became of the work is the disposition's answer and nobody else's", ()
       const now = Date.parse("2026-09-14T10:00:00Z");
       const before = yield* board(env, [run], { now });
       // A merge request nobody has said landed is not a merge, but it is news.
-      expect(before[0]!.sentence).toBe("Finished; content!1 is open.");
+      expect(before[0]!.sentence).toBe("content!1 is open; nothing has checked it.");
 
       yield* recordDisposition(run.dir, {
         at: "2026-09-14T09:00:00Z",
@@ -982,3 +990,179 @@ test(
     ),
   60_000,
 );
+
+// Ready to release: a succeeded Run's open merge request, and what checked it.
+
+test("the sections come out in the board's order, and ready work leads Waiting on you", () => {
+  const views = sortBoard([
+    task({ id: "done", state: "done" }),
+    task({ id: "working" }),
+    task({
+      id: "older-ready",
+      state: "done",
+      landed: false,
+      ready: true,
+      ended: 1,
+    }),
+    task({ id: "recent", state: "done", landed: false, ended: 2 }),
+    task({ id: "blocked", state: "blocked", decision: QUESTION }),
+  ]);
+  expect(views.map((view) => view.id)).toEqual([
+    "blocked",
+    "older-ready",
+    "recent",
+    "working",
+    "done",
+  ]);
+  expect(SECTIONS.map(([section]) => section)).toEqual([
+    "needs-you",
+    "waiting",
+    "working",
+    "finished",
+  ]);
+});
+
+const PR = "https://github.com/cego/collie/pull/30";
+
+test("an open merge request says whether it is ready, what failed, and the next move", () => {
+  const open = (over: Partial<Sentence>) => sentenceFor(facts({ state: "done", mr: PR, ...over }));
+  expect(open({ checks: { state: "passed", at: "1a2b3c4d5e" }, agent: "builder" })).toBe(
+    "Ready to release: cego/collie#30 is open and its checks passed at 1a2b3c4. Next: merge it, or tell builder to.",
+  );
+  expect(open({ checks: { state: "passed", at: "1a2b3c4d5e" } })).toBe(
+    "Ready to release: cego/collie#30 is open and its checks passed at 1a2b3c4. Next: merge it.",
+  );
+  expect(
+    open({
+      checks: { state: "failed", name: "lint", at: "1a2b3c4d5e" },
+      agent: "builder",
+    }),
+  ).toBe("cego/collie#30 is open, but lint failed at 1a2b3c4. Next: fix lint, or tell builder to.");
+  expect(open({ checks: { state: "unchecked" } })).toBe(
+    "cego/collie#30 is open; nothing has checked it.",
+  );
+});
+
+test("a GitHub pull request reads as owner/repo#N, and GitLab labels are unchanged", () => {
+  expect(mrLabel(PR)).toBe("cego/collie#30");
+  expect(mrLabel("https://gitlab.cego.dk/mk/collie/-/merge_requests/65")).toBe("mk/collie!65");
+  expect(mrLabel("mr:gitlab.cego.dk/mk/collie!65")).toBe("mk/collie!65");
+});
+
+test("the header names what is ready to release before what else waits on you", () => {
+  const views = [
+    task({ id: "ready", state: "done", landed: false, ready: true }),
+    task({ id: "w1", state: "failed" }),
+    task({ id: "w2", state: "done", landed: false }),
+    task({ id: "a1" }),
+    task({ id: "a2" }),
+    task({ id: "a3" }),
+  ];
+  expect(headerSentence(views).text).toBe(
+    "Nothing needs you. 1 ready to release, 2 waiting on you. 3 working.",
+  );
+  expect(headerSentence([views[0]!]).text).toBe(
+    "Nothing needs you. 1 ready to release. 0 working.",
+  );
+});
+
+/** A Collie-collected check of `name` at `head`. */
+const checked = (name: string, head: string, result: "pass" | "fail" = "pass"): Verification => ({
+  id: `v-${name}-${head}`,
+  run: "r1",
+  name,
+  executable: "/usr/bin/true",
+  argv: [],
+  cwd: "/project",
+  start: { head_sha: head, fingerprint: "f" },
+  end: { head_sha: head, fingerprint: "f" },
+  exit: result === "pass" ? 0 : 1,
+  seconds: 1,
+  expect: "pass",
+  tail: { stdout: "", stderr: "" },
+  result,
+  at: "2026-09-14T09:00:00Z",
+  by: "collie",
+});
+
+/** A checkout with `branch` at a commit of its own, and that commit's sha. */
+const checkout = Effect.fn("board.checkout")(function* (branch: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const repo = yield* fs.makeTempDirectory({ prefix: "collie-board-repo-" });
+  const git = (...args: string[]) =>
+    Effect.promise(() => Bun.$`git ${args}`.cwd(repo).quiet().text());
+  yield* git("init", "-q", "-b", branch);
+  yield* git(
+    "-c",
+    "user.email=t@t",
+    "-c",
+    "user.name=t",
+    "commit",
+    "-q",
+    "--allow-empty",
+    "-m",
+    "one",
+  );
+  return { repo, head: (yield* git("rev-parse", "HEAD")).trim() };
+});
+
+test("a succeeded Run's open merge request is ready only on checks at its branch's head", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const { repo, head } = yield* checkout("mk/ship");
+      const run = yield* madeRun(dir, {
+        task: "task-1",
+        state: "succeeded",
+        branch: "mk/ship",
+        cwd: repo,
+        mr: PR,
+        finished: "2026-09-14T09:30:00Z",
+      });
+      const view = Effect.map(board(env, [run]), (views) => views[0]!);
+
+      expect((yield* view).sentence).toBe("cego/collie#30 is open; nothing has checked it.");
+
+      // Green, but on a tree the branch has moved past: not evidence about this one.
+      yield* appendVerification(run.evidence, checked("test", "0000000older"));
+      expect((yield* view).checks).toEqual({ state: "unchecked" });
+      expect((yield* view).ready).toBe(false);
+
+      yield* appendVerification(run.evidence, checked("test", head));
+      yield* appendVerification(run.evidence, checked("lint", head, "fail"));
+      const red = yield* view;
+      expect(red.checks).toEqual({ state: "failed", name: "lint", at: head });
+      expect(red.sentence).toBe(
+        `cego/collie#30 is open, but lint failed at ${head.slice(0, 7)}. Next: fix lint.`,
+      );
+
+      yield* appendVerification(run.evidence, checked("lint", head));
+      const green = yield* board(env, [run], {
+        alive: [agent("builder", "idle")],
+        registered: [registered("builder", run.id)],
+      });
+      expect(green[0]!.ready).toBe(true);
+      expect(sectionOf(green[0]!)).toBe("waiting");
+      expect(green[0]!.sentence).toBe(
+        `Ready to release: cego/collie#30 is open and its checks passed at ${head.slice(0, 7)}. Next: merge it, or tell builder to.`,
+      );
+    }),
+  ));
+
+test("where the branch cannot be read, the newest revision Collie checked counts", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const run = yield* madeRun(dir, {
+        state: "succeeded",
+        branch: "mk/gone",
+        cwd: `${dir}/no-such-checkout`,
+        mr: PR,
+      });
+      yield* appendVerification(run.evidence, checked("test", "aaaaaaaold", "fail"));
+      yield* appendVerification(run.evidence, checked("test", "bbbbbbbnew"));
+      const [view] = yield* board(env, [run]);
+      expect(view!.checks).toEqual({ state: "passed", at: "bbbbbbbnew" });
+      expect(view!.sentence).toContain("passed at bbbbbbb.");
+    }),
+  ));

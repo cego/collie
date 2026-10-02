@@ -164,22 +164,6 @@ export function Board(props: BoardProps) {
           </Section>
         </Show>
 
-        <Show when={props.sections.working.length > 0}>
-          <Section label={workingLabel(props.sections.working)}>
-            <Grid
-              views={props.sections.working}
-              columns={props.columns}
-              width={props.width - 2 * SIDE}
-              open={props.open}
-              onOpen={props.onOpen}
-              onMenu={props.onMenu}
-              onAct={props.onAct}
-              decide={props.decide}
-              batch={props.batch}
-            />
-          </Section>
-        </Show>
-
         {/* Work that ended without landing, and that nobody has asked you about. A week
             open; the rest behind one counted line, never hidden from the header's count. */}
         <Show when={props.sections.waiting.length > 0}>
@@ -217,6 +201,22 @@ export function Board(props: BoardProps) {
                 />
               </Show>
             </Show>
+          </Section>
+        </Show>
+
+        <Show when={props.sections.working.length > 0}>
+          <Section label={workingLabel(props.sections.working)}>
+            <Grid
+              views={props.sections.working}
+              columns={props.columns}
+              width={props.width - 2 * SIDE}
+              open={props.open}
+              onOpen={props.onOpen}
+              onMenu={props.onMenu}
+              onAct={props.onAct}
+              decide={props.decide}
+              batch={props.batch}
+            />
           </Section>
         </Show>
 

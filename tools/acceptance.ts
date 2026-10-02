@@ -73,9 +73,23 @@ const NATIVE = "native-collie-control-panel (this MR)";
 const OPERATOR = "operator";
 const MODULES = "workflow modules (this MR)";
 const LAUNCH = "launch flow places human starts (this MR)";
+const RELEASE = "ready to release and checks you can see (this MR)";
 
 /** What the front door owes a person, and cannot be settled below the front door. */
 const FRONT_DOOR: readonly Check[] = [
+  {
+    id: "front-door/a-ready-card-says-it-is-ready",
+    statement:
+      "A succeeded Run whose merge request is open and whose checks passed at its branch's head leads Waiting on you, and its card says it is ready to release, where, the revision its checks passed at and the next move, naming its live agent.",
+    owner: RELEASE,
+    needs: "ui",
+    proof: {
+      kind: "test",
+      layer: "ui",
+      file: "test/board.test.ts",
+      name: "a succeeded Run's open merge request is ready only on checks at its branch's head",
+    },
+  },
   {
     id: "front-door/no-checkout-is-asked-for-from-the-home",
     statement:

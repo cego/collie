@@ -19,7 +19,7 @@ import { diffTargetOf, EXCLUSIVE_STRATEGIES, strategyMeaning } from "./strategie
 import { PROJECTS_ROOT_OPTION, projectsRoot } from "./projects";
 import { insideCheckout } from "./agent-start";
 import { placeableUnder, placedByUrl, routed, routerDeps } from "./route";
-import { buildBoard, type MrState, type TaskView } from "./board";
+import { buildBoard, readyRuns, type MrState, type TaskView } from "./board";
 import { settleMerges } from "./merges";
 import { nowIso } from "./time";
 import {
@@ -1013,6 +1013,7 @@ const escalatedDrift = Effect.fn("Flows.escalatedDrift")(function* (runs: Readon
 const sayWhatHappened = Effect.fn("Flows.sayWhatHappened")(function* (
   env: PluginEnv,
   runs: ReadonlyArray<RunFacts>,
+  views: ReadonlyArray<TaskView>,
 ) {
   if (!(yield* loadDefaults(env.userDir)).proactive) return;
   const key = yield* herdOf(env.socketPath).pipe(Effect.catch(() => Effect.succeed(null)));
@@ -1020,7 +1021,7 @@ const sayWhatHappened = Effect.fn("Flows.sayWhatHappened")(function* (
   const dir = yield* herdDir(env.stateDir, key);
   const said = yield* readSaid(dir);
   const file = yield* newsPath(env.stateDir, key);
-  for (const event of eventsIn(runs, yield* escalatedDrift(runs))) {
+  for (const event of eventsIn(runs, yield* escalatedDrift(runs), readyRuns(views))) {
     if (said.has(event.key)) continue;
     // Remembered only once it is in the journal. The journal deduplicates by unread key,
     // so a failed write costs a retry on the next tick — where remembering first would
@@ -1135,24 +1136,6 @@ export function appState(
     // One read of the register and the workspace list for both boards: a wide tick
     // costs the local board's calls plus nothing, and the two boards cannot reconcile
     // a tab label from two different answers about the same agent.
-    // A meaningful change in what this read already looked at, said out loud. Never a
-    // second scan and never a timer: the board recomputes this to draw it, and a
-    // transition in it is the whole trigger. Best effort — a Herd nobody can talk to
-    // still has a board. No model is called: what this does is write a fact down, so a
-    // board that redraws over unchanged state finds no events and does nothing at all.
-    if (runs !== undefined && !speaking) {
-      speaking = true;
-      yield* Effect.forkDetach(
-        sayWhatHappened(env, runs).pipe(
-          Effect.ignore,
-          Effect.ensuring(
-            Effect.sync(() => {
-              speaking = false;
-            }),
-          ),
-        ),
-      );
-    }
     const live = reuse ? undefined : yield* liveOf(session);
     const board = reuse ? reuse.state.board : yield* boardOf(session, scanned!, live);
     // Read only while the Runs view is showing it: a local board, and every other View,
@@ -1254,6 +1237,24 @@ export function appState(
           mrStates,
         });
     if (!reuse) yield* settleInBackground(tasksBuilt, yield* Clock.currentTimeMillis);
+    // A meaningful change in what this read already looked at, said out loud. Never a
+    // second scan and never a timer: the board recomputes this to draw it, and a
+    // transition in it is the whole trigger. Best effort — a Herd nobody can talk to
+    // still has a board. No model is called: what this does is write a fact down, so a
+    // board that redraws over unchanged state finds no events and does nothing at all.
+    if (runs !== undefined && !speaking) {
+      speaking = true;
+      yield* Effect.forkDetach(
+        sayWhatHappened(env, runs, tasksBuilt).pipe(
+          Effect.ignore,
+          Effect.ensuring(
+            Effect.sync(() => {
+              speaking = false;
+            }),
+          ),
+        ),
+      );
+    }
     const state = {
       view: focus.view,
       filter: focus.filter,
