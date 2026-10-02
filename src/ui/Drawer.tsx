@@ -34,6 +34,9 @@ import {
 } from "./state";
 import { C, stateGlyph, stepGlyph } from "./sections";
 
+/** How many of a running check's last lines the Summary shows. */
+const DRAWER_LINES = 8;
+
 /** What the record is being read for. One at a time, and Summary is where it opens. */
 export type Tab = "summary" | "review" | "plan" | "cards" | "log";
 export const TABS: ReadonlyArray<{ tab: Tab; label: string }> = [
@@ -211,6 +214,14 @@ export function Drawer(props: DrawerProps) {
       <text fg={C.muted} style={{ marginTop: 1, flexShrink: 0 }}>
         {props.view.sentence}
       </text>
+      {/* What the check Collie is running has written last; the menu opens the rest live. */}
+      <Show when={(props.view.check?.lastLines.length ?? 0) > 0}>
+        <box style={{ flexDirection: "column", flexShrink: 0, marginTop: 1 }}>
+          <For each={props.view.check!.lastLines.slice(-DRAWER_LINES)}>
+            {(line) => <text fg={C.dim}>{line}</text>}
+          </For>
+        </box>
+      </Show>
 
       <box
         style={{ flexDirection: "row", flexWrap: "wrap", flexShrink: 0, marginTop: 1, rowGap: 1 }}

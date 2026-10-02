@@ -10,6 +10,8 @@ import {
   PlatformError,
   Ref,
   Schema,
+  Stdio,
+  Stream,
 } from "effect";
 import type { BunServices } from "@effect/platform-bun/BunServices";
 import { Argument, Command, Flag } from "effect/unstable/cli";
@@ -17,7 +19,7 @@ import { clearOverride, err, type Failure } from "../operations";
 import { withDirLock } from "../lock";
 import { GIVEN, INFERRED, evidenceDir, runDir } from "../engine";
 import { listRuns, textOf } from "../runs";
-import { donePasses, markersOf, runningCheck } from "../checks";
+import { donePasses, followLog, markersOf, runningCheck } from "../checks";
 import { Herdr } from "../herdr";
 import {
   describeWaiting,
@@ -535,49 +537,83 @@ const runMetrics = Command.make(
   ),
 );
 
-const runChecks = Command.make("checks", { runId: runIdArg }, ({ runId }) =>
-  Effect.gen(function* () {
-    const global = yield* root;
-    yield* attempt(
-      Effect.gen(function* () {
-        const resolved = yield* context(global, false);
-        if (resolved._tag === "ContextFailure") return resolved.result;
-        const runs = yield* listRuns(resolved.env);
-        const run = runs.find((one) => one.id === runId);
-        if (run === undefined)
-          return err("run_not_found", `Run "${runId}" was not found.`, { run: runId });
-        const running = yield* runningCheck(
-          run,
-          runs,
-          yield* markersOf(runs),
-          yield* Clock.currentTimeMillis,
+const runChecks = Command.make(
+  "checks",
+  {
+    runId: runIdArg,
+    follow: Flag.Boolean("follow").pipe(
+      Flag.withDescription("Print the running check's output as it is written, until it ends"),
+      Flag.withDefault(false),
+    ),
+  },
+  ({ runId, follow }) =>
+    Effect.gen(function* () {
+      const global = yield* root;
+      const stdio = yield* Stdio.Stdio;
+      // Under --json the envelope is stdout's, so the output goes to stderr.
+      const say = (text: string) =>
+        Stream.make(text).pipe(
+          Stream.run(stdio[global.json ? "stderr" : "stdout"]({ endOnDone: false })),
+          Effect.ignore,
         );
-        const done = yield* donePasses(run);
-        const passOf = (pass: string, round: number | null) =>
-          round === null ? pass : `${pass} ${round}`;
-        const human = [
-          ...(running === null
-            ? []
-            : [
-                `running\t${passOf(running.pass, running.round)}\t${running.name}\t${running.sentence}`,
-              ]),
-          ...done.map(
-            (one) =>
-              `${one.result}\t${passOf(one.pass, one.round)}\t${one.name}\t${Math.round(one.seconds)}s\t${one.revision.slice(0, 12)}`,
-          ),
-        ];
-        return {
-          ok: true as const,
-          data: { run: runId, running, done },
-          human: human.length === 0 ? `Collie has run no checks for ${runId}.` : human.join("\n"),
-        };
-      }),
-      global.json,
-    );
-  }),
+      yield* attempt(
+        Effect.gen(function* () {
+          const resolved = yield* context(global, false);
+          if (resolved._tag === "ContextFailure") return resolved.result;
+          const runs = yield* listRuns(resolved.env);
+          const run = runs.find((one) => one.id === runId);
+          if (run === undefined)
+            return err("run_not_found", `Run "${runId}" was not found.`, { run: runId });
+          const running = yield* runningCheck(
+            run,
+            runs,
+            yield* markersOf(runs),
+            yield* Clock.currentTimeMillis,
+          );
+          if (follow) {
+            if (running?.log == null)
+              return {
+                ok: true as const,
+                data: { run: runId, ended: null },
+                human: `No check is running for ${runId}.`,
+              };
+            yield* say(`${running.sentence}\n`);
+            const ended = yield* followLog(run, running.log, say);
+            return {
+              ok: true as const,
+              data: { run: runId, ended },
+              human:
+                ended === null
+                  ? `${running.name} ended without a record: it was refused or interrupted.`
+                  : `${ended.name} ended ${ended.result} (exit ${ended.exit}) after ${Math.round(ended.seconds)}s.`,
+            };
+          }
+          const done = yield* donePasses(run);
+          const passOf = (pass: string, round: number | null) =>
+            round === null ? pass : `${pass} ${round}`;
+          const human = [
+            ...(running === null
+              ? []
+              : [
+                  `running\t${passOf(running.pass, running.round)}\t${running.name}\t${running.sentence}`,
+                ]),
+            ...done.map(
+              (one) =>
+                `${one.result}\t${passOf(one.pass, one.round)}\t${one.name}\t${Math.round(one.seconds)}s\t${one.revision.slice(0, 12)}`,
+            ),
+          ];
+          return {
+            ok: true as const,
+            data: { run: runId, running, done },
+            human: human.length === 0 ? `Collie has run no checks for ${runId}.` : human.join("\n"),
+          };
+        }),
+        global.json,
+      );
+    }),
 ).pipe(
   Command.withDescription(
-    "The checks Collie has run for a Run, and the one it is running: each pass, why, and how long",
+    "The checks Collie has run for a Run, and the one it is running: each pass, why, and how long; --follow prints its output live",
   ),
 );
 

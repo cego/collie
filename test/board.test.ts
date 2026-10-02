@@ -4,7 +4,7 @@
 // human reads on a card — a form nobody has a case for is a form nobody can trust.
 
 import { expect, test } from "bun:test";
-import { DateTime, Effect, FileSystem, Schema } from "effect";
+import { DateTime, Effect, Fiber, FileSystem, Schema } from "effect";
 import {
   boardLines,
   buildBoard,
@@ -1546,3 +1546,64 @@ test("a steer sent before the Run finished does not reopen it", () =>
       expect(sectionOf(card)).toBe("waiting");
     }),
   ));
+
+test(
+  "`collie run checks --follow` prints a running check's output as it is written, and how it ended",
+  () =>
+    proves(
+      "collie-run-checks-follow-",
+      (world) =>
+        Effect.gen(function* () {
+          const started = yield* collie(world, ["run", "start", "plain", "--input", "note=hi"]);
+          const runId = Schema.decodeUnknownSync(Schema.Struct({ runId: Schema.String }))(
+            started.envelope.data,
+          ).runId;
+          const fs = yield* FileSystem.FileSystem;
+          const run = yield* madeRun(world.state, { id: runId });
+          const log = `${run.evidence}/checks/unit.log`;
+          yield* fs.makeDirectory(`${run.evidence}/checks`, { recursive: true });
+          yield* fs.writeFileString(log, "compiling\n");
+          const marker = `${run.dir}/verifying`;
+          yield* fs.writeFileString(
+            marker,
+            encodeVerifying({
+              name: "unit",
+              executable: "bun",
+              argv: ["test"],
+              pass: "gate",
+              round: null,
+              revision: "abc",
+              base: null,
+              started: "2026-09-14T10:00:00Z",
+              log,
+            }),
+          );
+
+          const following = yield* Effect.forkChild(
+            collie(world, ["run", "checks", runId, "--follow"]),
+          );
+          yield* Effect.sleep("1 second");
+          yield* fs.writeFileString(log, "1 pass\n", { flag: "a" });
+          yield* Effect.sleep("1 second");
+          yield* appendVerification(run.evidence, {
+            ...checked("unit", "abc"),
+            run: runId,
+            log,
+          });
+          yield* fs.remove(marker);
+          const followed = yield* Fiber.join(following);
+
+          const none = yield* collie(world, ["run", "checks", runId, "--follow"]);
+          yield* stopHost(world.state);
+          // Under --json the output is stderr's: stdout is the one envelope.
+          expect(followed.stderr).toContain("Running unit on the branch");
+          expect(followed.stderr.indexOf("compiling")).toBeLessThan(
+            followed.stderr.indexOf("1 pass"),
+          );
+          expect(followed.envelope.data).toMatchObject({ ended: { name: "unit", result: "pass" } });
+          expect(none.envelope.data).toEqual({ run: runId, ended: null });
+        }),
+      ["plain.workflow.ts"],
+    ),
+  60_000,
+);

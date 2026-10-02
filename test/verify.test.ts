@@ -2,9 +2,10 @@
 // the refusals: a tree that moved under the command, a tree too big to have been looked
 // at, a directory that is not the Run's, and a command that is not the approved one.
 
-import { Effect, FileSystem, Path } from "effect";
+import { Effect, Fiber, FileSystem, Path } from "effect";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import {
+  LOG_BYTES,
   TOO_LARGE,
   collect,
   fingerprint,
@@ -17,6 +18,7 @@ import {
 } from "../src/verify";
 import type { VerifySpec } from "../src/intent";
 import { runEffect } from "./support/effect";
+import { until } from "./support/host";
 
 let repo: string;
 
@@ -346,5 +348,63 @@ test("Collie's own run carries the expectation it was approved with", () =>
       expect(record.result).toBe("pass");
       expect(record.by).toBe("collie");
       expect(record.expect).toBe("fail");
+    }),
+  ));
+
+test("both streams go to the log as they arrive, readable while the command runs", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const tmp = yield* fs.makeTempDirectory({ prefix: "hw-verify-log-" });
+      const runDir = path.join(tmp, ".run");
+      const log = path.join(tmp, "checks", "unit.log");
+      const running = yield* Effect.forkChild(
+        collect(runDir, {
+          run: "r1",
+          name: "unit",
+          executable: "sh",
+          argv: ["-c", "echo one; sleep 0.2; echo two >&2; sleep 0.2; echo three; sleep 1"],
+          cwd: repo,
+          by: "collie",
+          log,
+        }),
+      );
+      // Before it ends: what it has said so far, in the order it said it.
+      const early = yield* until(
+        () => fs.readFileString(log).pipe(Effect.orElseSucceed(() => "")),
+        (text) => text.includes("three"),
+      );
+      expect(early).toBe("one\ntwo\nthree\n");
+      const record = yield* Fiber.join(running);
+      expect(record.log).toBe(log);
+      expect(yield* fs.readFileString(log)).toBe("one\ntwo\nthree\n");
+    }),
+  ));
+
+test("a log past its bound is cut, and says it was", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const tmp = yield* fs.makeTempDirectory({ prefix: "hw-verify-log-" });
+      const log = path.join(tmp, "checks", "loud.log");
+      yield* collect(path.join(tmp, ".run"), {
+        run: "r1",
+        name: "loud",
+        executable: "sh",
+        argv: ["-c", `head -c ${LOG_BYTES + 4096} /dev/zero | tr '\\0' a`],
+        cwd: repo,
+        by: "collie",
+        log,
+      });
+      const text = yield* fs.readFileString(log);
+      expect(
+        text.endsWith(
+          `[collie: the output was cut at ${LOG_BYTES} bytes; the rest was not kept]\n`,
+        ),
+      ).toBe(true);
+      expect(text.startsWith("a".repeat(LOG_BYTES))).toBe(true);
+      expect(text.length).toBeLessThan(LOG_BYTES + 200);
     }),
   ));

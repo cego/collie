@@ -224,6 +224,8 @@ export type Command =
   /** Take back every stop still inside its grace. The bridge answers it. */
   | { _tag: "UndoStop" }
   | { _tag: "OpenLog"; runId: string }
+  /** A pane in the Task's workspace following the check Collie is running for the Run. */
+  | { _tag: "OpenCheckOutput"; runId: string }
   /**
    * Answer the Choice the board drew, named by its id. The id is what makes it that
    * Choice: a question replaced between the refresh that drew it and the key that
@@ -1163,6 +1165,13 @@ export function menuFor(view: TaskView): MenuItem[] {
       key: "i",
       label: view.offer.title,
       command: { _tag: "InvokeOffer", runId, offer: view.offer.id },
+    });
+  }
+  if (view.check !== null) {
+    items.push({
+      key: "c",
+      label: "Open check output",
+      command: { _tag: "OpenCheckOutput", runId },
     });
   }
   items.push({ key: "o", label: "What it offers…", command: { _tag: "ChooseOffer", runId } });

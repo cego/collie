@@ -3,6 +3,7 @@
 // none of them can say a different thing about the same check.
 
 import { Effect } from "effect";
+import { Buffer } from "node:buffer";
 import type { RunFacts } from "./runs";
 import {
   readVerifications,
@@ -26,6 +27,10 @@ export interface RunningCheck {
   /** Other checks this host is running now. */
   readonly others: number;
   readonly sentence: string;
+  /** Where its output is being written, or null for a marker that does not say. */
+  readonly log: string | null;
+  /** The last lines it has written, oldest first. */
+  readonly lastLines: ReadonlyArray<string>;
 }
 
 /** One pass Collie ran and finished. */
@@ -37,10 +42,32 @@ export interface DonePass {
   readonly seconds: number;
   readonly revision: string;
   readonly at: string;
+  /** Its output as it ran, up to the log's bound, or null for a record that kept none. */
+  readonly log: string | null;
 }
 
 /** How many earlier runs "usually" is the median of. */
 const USUAL_OF = 5;
+
+/** How many of a running check's last lines every door shows. */
+export const LAST_LINES = 40;
+
+/** How much of a log's end is read for its last lines: never the whole bounded file. */
+const TAIL_READ = 16 * 1024;
+
+/** The last lines a check's log holds, read from its end only. */
+export const lastLinesOf = (log: string | null, count = LAST_LINES) =>
+  log === null
+    ? Effect.succeed<ReadonlyArray<string>>([])
+    : Effect.tryPromise(() => Bun.file(log).slice(-TAIL_READ).text()).pipe(
+        Effect.map((text) =>
+          text
+            .split("\n")
+            .filter((line) => line !== "")
+            .slice(-count),
+        ),
+        Effect.orElseSucceed((): ReadonlyArray<string> => []),
+      );
 
 /** Every Run's marker, read once for a whole board. */
 export const markersOf = Effect.fn("Checks.markersOf")(function* (runs: ReadonlyArray<RunFacts>) {
@@ -104,7 +131,53 @@ export const runningCheck = Effect.fn("Checks.running")(function* (
     usualMs: yield* usualOf(run, runs, marker),
     others: [...markers.keys()].filter((id) => id !== run.id).length,
   };
-  return { ...facts, sentence: checkSentence(facts) } satisfies RunningCheck;
+  const log = marker.log ?? null;
+  return {
+    ...facts,
+    sentence: checkSentence(facts),
+    log,
+    lastLines: yield* lastLinesOf(log),
+  } satisfies RunningCheck;
+});
+
+/** How often `--follow` looks at the log again. */
+const FOLLOW_EVERY = "250 millis";
+
+const bytesFrom = (log: string, offset: number) =>
+  Effect.tryPromise(() => Bun.file(log).slice(offset).arrayBuffer()).pipe(
+    Effect.map((buffer) => Buffer.from(buffer)),
+    Effect.orElseSucceed(() => Buffer.alloc(0)),
+  );
+
+/**
+ * Hands a running check's output to `say` as it is written, until the Run's marker no longer
+ * names this log, then says what was left. Bytes, not characters, so a cut never splits one.
+ */
+export const followLog = Effect.fn("Checks.followLog")(function* (
+  run: RunFacts,
+  log: string,
+  say: (text: string) => Effect.Effect<void>,
+) {
+  let offset = 0;
+  let pending = Buffer.alloc(0);
+  const drain = Effect.gen(function* () {
+    const read = yield* bytesFrom(log, offset);
+    offset += read.length;
+    pending = Buffer.concat([pending, read]);
+    // Up to the last newline: a line half-written is said when it is whole.
+    const end = pending.lastIndexOf(10) + 1;
+    if (end > 0) {
+      yield* say(pending.subarray(0, end).toString("utf8"));
+      pending = pending.subarray(end);
+    }
+  });
+  while ((yield* verifyingIn(run.dir))?.log === log) {
+    yield* drain;
+    yield* Effect.sleep(FOLLOW_EVERY);
+  }
+  yield* drain;
+  if (pending.length > 0) yield* say(`${pending.toString("utf8")}\n`);
+  return (yield* readOrNone(run)).findLast((record) => record.log === log) ?? null;
 });
 
 /** Every pass Collie finished for this Run, oldest first. */
@@ -119,6 +192,7 @@ export const donePasses = Effect.fn("Checks.done")(function* (run: RunFacts) {
       seconds: record.seconds,
       revision: record.end.head_sha,
       at: record.at,
+      log: record.log ?? null,
     }));
 });
 

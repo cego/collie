@@ -55,7 +55,7 @@ import { liveFor, markedOf, type Live } from "./live";
 import type { IntentUnreadable } from "./intent";
 import { ProposalsBusy, type Actor } from "./proposals";
 import { isStale, layers, loadDefinitions, type Definitions, type Provenance } from "./definitions";
-import type { PluginEnv } from "./env";
+import { selfCommand, type PluginEnv } from "./env";
 import { Herdr, type AgentInfo, type WorkspaceInfo } from "./herdr";
 import { inferInput, type InputPrompts, type PickItem } from "./inputs";
 import type { Found } from "./discovery";
@@ -70,7 +70,7 @@ import {
 } from "./lifecycle";
 import { releaseKeyboard, startKeyboard, takeKey } from "./keys";
 import { forkResolvedDefinition, type DefinitionKind } from "./fork";
-import { COLLIE_TAB, reason, runTitle } from "./naming";
+import { COLLIE_TAB, reason, runTitle, shellQuote } from "./naming";
 import { listRuns, settled, type RunFacts } from "./runs";
 import { everyRegistered, type AgentEntry } from "./registry";
 import { pruneWorktrees } from "./worktree";
@@ -1387,6 +1387,35 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
     }
     case "OpenLog":
       return "a Run keeps no log of its own: its agents' panes are the record";
+    case "OpenCheckOutput": {
+      const run = yield* runOf(command.runId);
+      if (!run) return `${command.runId} has gone`;
+      const workspace =
+        run.workspace ??
+        (run.task === null
+          ? null
+          : ((yield* listTasks(env.stateDir)).find((task) => task.id === run.task)?.workspace ??
+            null));
+      // The same state directory as this board's, whatever the pane's shell would default to.
+      const follow = [
+        "env",
+        `HERDR_PLUGIN_STATE_DIR=${env.stateDir}`,
+        ...selfCommand(),
+        "run",
+        "checks",
+        run.id,
+        "--follow",
+      ]
+        .map(shellQuote)
+        .join(" ");
+      return yield* session.herdr
+        .tabCreate({ label: "check output", cwd: run.cwd, focus: true, workspace })
+        .pipe(
+          Effect.flatMap((tab) => session.herdr.paneRun(tab.paneId, follow)),
+          Effect.as(`following ${run.id}'s check`),
+          Effect.catch((cause) => Effect.succeed(`${run.id}'s check output: ${reason(cause)}`)),
+        );
+    }
     case "Answer": {
       const answered = yield* answerRun(env, {
         runId: command.runId,

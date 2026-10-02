@@ -1979,6 +1979,9 @@ export const hostLayer = (options: {
             const verified = (base: string | null) =>
               Effect.gen(function* () {
                 const head = yield* runShell("git", ["rev-parse", "HEAD"], asked.cwd);
+                const started = yield* nowIso();
+                // A file per run of the check, beside the journal its record goes to.
+                const log = `${journal}/checks/${started.replace(/[:.]/g, "-")}-${spec.name.replace(/[^\w.-]/g, "_")}.log`;
                 yield* fs
                   .writeFileString(
                     marker,
@@ -1990,7 +1993,8 @@ export const hostLayer = (options: {
                       round: recorded.round ?? null,
                       revision: head.code === 0 ? head.stdout.trim() : "",
                       base,
-                      started: yield* nowIso(),
+                      started,
+                      log,
                     }),
                   )
                   .pipe(Effect.ignore);
@@ -2001,6 +2005,7 @@ export const hostLayer = (options: {
                   spec,
                   asked.expect ?? "pass",
                   recorded,
+                  log,
                 ).pipe(
                   Effect.tap((record) => noteVerification(journal, record)),
                   Effect.mapError((refused) => new WorkflowError({ reason: refused.why })),

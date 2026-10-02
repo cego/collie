@@ -981,6 +981,20 @@ three runs of the same suite read as what each was for.
 | `running` | The check running now, or `null`: `name`, `pass`, `round`, the `revision` it runs at, `elapsedMs`, `usualMs` (the median of its last five runs in this repository, `null` for none), `others` (checks this host is running beside it) and the `sentence` the card says. |
 | `done[]`  | Each finished one: `name`, `pass`, `round`, `result`, `seconds` and the `revision` it ended on.                                                                                                                                                                         |
 
+Each check's output is written to a log in the Run's evidence directory as it arrives —
+both streams, in the order they came — and kept after it ends, up to 8 MiB; past that the
+log says it was cut. `running.log`, `running.lastLines` (its last 40) and each `done[].log`
+say where it is.
+
+```sh
+collie run checks <run-id> --follow
+```
+
+`--follow` prints the running check's output as it is written and exits when the check
+ends, with a line saying how it ended; with no check running it says so and exits. Under
+`--json` the output goes to stderr and the envelope carries what the check ended as. The
+board's **Open check output** opens a pane in the Task's workspace running exactly this.
+
 ## Report
 
 ```sh

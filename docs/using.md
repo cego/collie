@@ -452,7 +452,10 @@ runs in this repository, and how many other checks this host is running —
 min of a usual 20. 3 other checks are running.` With nothing to compare against it says
 only how long; over the usual it says `longer than the usual 20`. The drawer, `collie_run`,
 `collie_herd` and `collie run checks` say the same
-([ADR-0039](adr/0039-a-check-collie-runs-is-seen-while-it-runs.md)). A finished Run is
+([ADR-0039](adr/0039-a-check-collie-runs-is-seen-while-it-runs.md)). The check's output is
+written to a log as it arrives: the drawer's Summary shows its last lines under the
+sentence, and **Open check output** in the card's menu opens a pane in the Task's workspace
+following it live (`collie run checks <run> --follow`) until the check ends. A finished Run is
 **Reopened** when one of its agents took something you told it after the Run ended
 ([ADR-0038](adr/0038-a-finished-run-still-takes-steering.md)): while herdr says that agent
 is working, its card is in Working with `Working on what you told builder: “merge and tag

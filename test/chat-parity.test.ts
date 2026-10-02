@@ -30,7 +30,7 @@ import { registeredKinds, resetExecutors } from "../src/executors";
 import { registerRunExecutors } from "../src/operations";
 import { readEnv } from "../src/env";
 import type { JsonObject } from "../src/schema";
-import { checkLine, herdLines, TOOLS, toolNamed } from "../src/tools";
+import { checkLines, herdLines, TOOLS, toolNamed } from "../src/tools";
 import { boardLines, buildBoard, SECTIONS, sortBoard } from "../src/board";
 import { encodeVerifying } from "../src/verify";
 import { madeRun } from "./support/records";
@@ -432,7 +432,42 @@ test("collie_run and collie_herd say what a running check's card says", () =>
       expect(card!.sentence).toBe(
         "Running test again on the same tree to rule out a flake, 12 min.",
       );
-      expect(yield* checkLine(run, [run], now)).toBe(`Check running: ${card!.sentence}`);
+      expect((yield* checkLines(run, [run], now))[0]).toBe(`Check running: ${card!.sentence}`);
       expect(herdLines([card!], now)).toContain(card!.sentence);
+    }),
+  ));
+
+test("collie_run gives a running check's last forty lines under the card's sentence", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const stateDir = yield* fs.makeTempDirectory({ prefix: "collie-parity-lines-" });
+      const run = yield* madeRun(stateDir, { id: "r-lines" });
+      const log = `${run.evidence}/checks/test.log`;
+      yield* fs.makeDirectory(`${run.evidence}/checks`, { recursive: true });
+      yield* fs.writeFileString(
+        log,
+        Array.from({ length: 45 }, (_, at) => `line ${at + 1}`).join("\n") + "\n",
+      );
+      yield* fs.writeFileString(
+        `${run.dir}/verifying`,
+        encodeVerifying({
+          name: "test",
+          executable: "bun",
+          argv: ["test"],
+          pass: "gate",
+          round: null,
+          revision: "abc",
+          base: null,
+          started: "2026-09-14T10:00:00Z",
+          log,
+        }),
+      );
+      const lines = yield* checkLines(run, [run], Date.parse("2026-09-14T10:04:00Z"));
+      expect(lines.slice(0, 2)).toEqual([
+        "Check running: Running test on the branch, 4 min.",
+        "Its last lines:",
+      ]);
+      expect(lines.slice(2)).toEqual(Array.from({ length: 40 }, (_, at) => `  line ${at + 6}`));
     }),
   ));

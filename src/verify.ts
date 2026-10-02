@@ -22,6 +22,9 @@ export const FINGERPRINT_MAX_BYTES = 50 * 1024 * 1024;
 /** How much of each stream is kept: enough to see what failed, not a transcript. */
 const TAIL_BYTES = 4 * 1024;
 
+/** How much of a check's output its log keeps; what comes after is cut, and the log says so. */
+export const LOG_BYTES = 8 * 1024 * 1024;
+
 /**
  * A tree too large to fingerprint. Two of these are **not** equality: they say the same
  * thing about two trees nobody looked at, and treating them as equal would turn every
@@ -75,6 +78,8 @@ const VerificationSchema = Schema.Struct({
   /** Why Collie ran it; absent on an agent's and on records written before passes were. */
   pass: Schema.optionalKey(PassSchema),
   round: Schema.optionalKey(Schema.Int),
+  /** Where both streams were written as they arrived, up to `LOG_BYTES`. */
+  log: Schema.optionalKey(Schema.String),
 });
 export type Verification = Schema.Schema.Type<typeof VerificationSchema>;
 const VerificationJson = Schema.fromJsonString(VerificationSchema);
@@ -270,6 +275,8 @@ export interface Collected {
   readonly by: "agent" | "collie";
   readonly expect?: "pass" | "fail";
   readonly pass?: CheckPass;
+  /** Where both streams are appended as they arrive, so the output can be read while it runs. */
+  readonly log?: string;
 }
 
 /**
@@ -289,6 +296,25 @@ export const collect = Effect.fn("Verify.collect")(function* (
 
   const start = yield* fingerprint(what.cwd);
   const began = yield* nowIso();
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  let logged = 0;
+  if (what.log !== undefined) {
+    yield* fs.makeDirectory(path.dirname(what.log), { recursive: true }).pipe(Effect.orDie);
+    yield* fs.writeFileString(what.log, "").pipe(Effect.orDie);
+  }
+  /** One chunk into the log, in the order the two streams delivered them. */
+  const toLog = (chunk: string): Effect.Effect<void> => {
+    if (what.log === undefined || logged > LOG_BYTES) return Effect.void;
+    const bytes = Buffer.byteLength(chunk, "utf8");
+    const room = LOG_BYTES - logged;
+    logged += bytes;
+    const text =
+      bytes <= room
+        ? chunk
+        : `${Buffer.from(chunk, "utf8").subarray(0, room).toString("utf8")}\n[collie: the output was cut at ${LOG_BYTES} bytes; the rest was not kept]\n`;
+    return fs.writeFileString(what.log, text, { flag: "a" }).pipe(Effect.ignore);
+  };
   // No shell, and the argument list whole: a verification's value is that what ran is
   // what was written down, and a shell string is a second language in between.
   const [stdout, stderr, exit] = yield* Effect.gen(function* () {
@@ -306,6 +332,7 @@ export const collect = Effect.fn("Verify.collect")(function* (
     const drain = (stream: typeof handle.stdout, shown?: (text: string) => Effect.Effect<void>) =>
       stream.pipe(
         Stream.decodeText(),
+        Stream.tap((chunk) => toLog(chunk)),
         Stream.tap((chunk) => (shown === undefined ? Effect.void : shown(chunk))),
         Stream.runFold(
           () => "",
@@ -340,8 +367,9 @@ export const collect = Effect.fn("Verify.collect")(function* (
     by: what.by,
     ...passFields(what.pass),
   };
-  yield* appendVerification(runDir, record).pipe(Effect.orDie);
-  return record;
+  const kept: Verification = what.log === undefined ? record : { ...record, log: what.log };
+  yield* appendVerification(runDir, kept).pipe(Effect.orDie);
+  return kept;
 });
 
 /** The pass and round a record keeps, with nothing where no pass was given. */
@@ -366,6 +394,7 @@ export const runApproved = Effect.fn("Verify.runApproved")(function* (
   spec: VerifySpec,
   expect: "pass" | "fail" = "pass",
   pass?: CheckPass,
+  log?: string,
 ): Effect.fn.Return<Verification, VerifyRefused, Services> {
   const match = approved.find(
     (entry) =>
@@ -392,5 +421,6 @@ export const runApproved = Effect.fn("Verify.runApproved")(function* (
     by: "collie",
     expect,
     pass,
+    log,
   });
 });

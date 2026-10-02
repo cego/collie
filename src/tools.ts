@@ -56,7 +56,7 @@ import {
   settle as settleNews,
 } from "./news";
 import { findRun, listRuns, type RunFacts } from "./runs";
-import { markersOf, runningCheck } from "./checks";
+import { donePasses, markersOf, runningCheck } from "./checks";
 import { nowIso } from "./time";
 import { deliveriesOf, herdOf } from "./steering";
 import { loadDefinitions, layers } from "./definitions";
@@ -556,21 +556,40 @@ function cardLine(view: TaskView): string {
   return `- run ${view.run}: ${view.name}${project}, ${view.state}${where}${agents}. ${view.sentence}`;
 }
 
-/** The line `collie_run` leads with while Collie runs a check for the Run, in the card's words. */
-export const checkLine = Effect.fn("Tools.checkLine")(function* (
+/**
+ * What `collie_run` leads with while Collie runs a check for the Run: the card's sentence,
+ * then the last lines the check has written.
+ */
+export const checkLines = Effect.fn("Tools.checkLines")(function* (
   run: RunFacts,
   runs: ReadonlyArray<RunFacts>,
   now: number,
 ) {
   const check = yield* runningCheck(run, runs, yield* markersOf(runs), now);
-  return check === null ? null : `Check running: ${check.sentence}`;
+  if (check === null) return [];
+  return [
+    `Check running: ${check.sentence}`,
+    ...(check.lastLines.length === 0
+      ? []
+      : ["Its last lines:", ...check.lastLines.map((line) => `  ${line}`)]),
+  ];
 });
 
-/** One Run in detail, led by the check Collie is running for it. */
+/** One Run in detail, led by the check Collie is running for it, then where each finished one's output is. */
 const runAnswer = Effect.fn("Tools.runAnswer")(function* (env: PluginEnv, run: RunFacts) {
   const facts = yield* runFacts(run);
-  const line = yield* checkLine(run, yield* listRuns(env), yield* Clock.currentTimeMillis);
-  return line === null ? facts : `${line}\n${facts}`;
+  const running = yield* checkLines(run, yield* listRuns(env), yield* Clock.currentTimeMillis);
+  const kept = (yield* donePasses(run)).filter((one) => one.log !== null);
+  const done =
+    kept.length === 0
+      ? []
+      : [
+          "",
+          "### Checks run",
+          "",
+          ...kept.map((one) => `- ${one.name} (${one.pass}) ${one.result}: ${one.log}`),
+        ];
+  return [...running, facts, ...done].join("\n");
 });
 
 /** What `collie_herd` answers with: the board, so chat and board can never disagree about a card. */
