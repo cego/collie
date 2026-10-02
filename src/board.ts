@@ -715,7 +715,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
     const everyRun = [...runs, ...children];
     const pending = everyRun.flatMap((run) => pendingFor(proposals, run.id, now));
     const touched = new Map<string, number>();
-    for (const run of runs) touched.set(run.id, yield* lastActivityAt(stateDir, run));
+    for (const run of everyRun) touched.set(run.id, yield* lastActivityAt(stateDir, run));
     // A Run records no end of its own: its last activity is when it ended, and a Run
     // that wrote nothing ended no later than it began.
     const endedAt = (run: RunFacts) =>
@@ -739,13 +739,16 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
       : (questionOf(everyRun) ?? (yield* gateOf(leader, opts.env.userDir)));
 
     const status = leader.state;
-    const at = touched.get(leader.id) ?? 0;
+    // A fan-out waiting on its Repo runs writes nothing itself: their work is its work.
+    const working = [leader, ...children];
+    const ownsAgent = (agent: { readonly run: string }) =>
+      working.some((run) => run.id === agent.run);
+    const at = Math.max(...working.map((run) => touched.get(run.id) ?? 0));
     const agents = agentsOf(everyRun, registered, live);
     const checking = yield* verifyingIn(leader.dir);
     // An agent mid-turn or a check Collie is running is work, however little it writes.
     const busy =
-      checking !== "" ||
-      agents.some((agent) => agent.run === leader.id && agent.status === "working");
+      checking !== "" || agents.some((agent) => ownsAgent(agent) && agent.status === "working");
     const going = !ended(leader);
     const silentFor = going && !busy && at > 0 ? now - at : 0;
     // Under a minute has no span to name, and is not silence worth a card saying.
@@ -762,11 +765,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
       (leader.state === "waiting" && leader.asking.length === 0 ? "its pane" : null);
     // Nothing drives it and nobody works on it: the host could not take it up again. A
     // Decision outranks it, because answering is still what moves the work.
-    const abandoned =
-      decision === null &&
-      going &&
-      leader.undriven &&
-      !agents.some((agent) => agent.run === leader.id);
+    const abandoned = decision === null && going && leader.undriven && !agents.some(ownsAgent);
     const state = abandoned
       ? "abandoned"
       : stateOf(status, silent !== null, decision, stalled !== null);

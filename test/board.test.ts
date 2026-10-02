@@ -1112,6 +1112,43 @@ test("a fan-out's card lists its Repo runs and every repository still to come, b
     }),
   ));
 
+test("a fan-out is not quiet while one of its Repo runs works or writes", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const fs = yield* FileSystem.FileSystem;
+      const old = "2026-09-14T09:00:00Z";
+      const root = `${dir}/root`;
+      const parent = yield* madeRun(dir, { id: "r-fan", task: "task-1", cwd: root });
+      yield* threeRepoPlan(parent.dir, root);
+      const web = yield* madeRun(dir, {
+        id: "r-web",
+        task: "task-1",
+        parent: "r-fan",
+        repo: "web",
+      });
+      const then = DateTime.toDateUtc(DateTime.makeUnsafe(old));
+      yield* fs.utimes(`${parent.dir}/plan`, then, then);
+      for (const run of [parent, web]) {
+        yield* launched(dir, run.id, ["build"]);
+        yield* writtenAt(`${run.dir}/log`, old);
+        yield* fs.utimes(`${dir}/agents/${run.id}/launches`, then, then);
+      }
+      const stateOf = (over: Partial<Parameters<typeof buildBoard>[0]>) =>
+        board(env, [web, parent], over).pipe(Effect.map((views) => views[0]!.state));
+
+      expect(yield* stateOf({})).toBe("quiet");
+      expect(
+        yield* stateOf({
+          alive: [agent("impl-web", "working")],
+          registered: [registered("impl-web", web.id)],
+        }),
+      ).toBe("active");
+      yield* writtenAt(`${dir}/agents/${web.id}/build.prompt.md`, "2026-09-14T10:04:00Z");
+      expect(yield* stateOf({})).toBe("active");
+    }),
+  ));
+
 test("a held card names who held it and why, from the hold its trail recorded", () =>
   runEffect(
     Effect.gen(function* () {
