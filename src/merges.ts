@@ -38,7 +38,7 @@ export const watchedMr = Effect.fn("Merges.watchedMr")(function* <R>(opts: {
   return panel;
 });
 
-/** Where the CLI's board reads what the pane's watch last learned. */
+/** Where the host keeps what its merge watch last learned. */
 export const MR_STATES_FILE = "board/mr-states.json";
 
 const StatesJson = Schema.fromJsonString(
@@ -78,7 +78,7 @@ export const settleMerges = Effect.fn("Merges.settle")(function* <R>(opts: {
   /** Where each panel read is kept, for the drawer of the Run it belongs to. */
   panels: MrPanels;
 }) {
-  // What earlier panes learned, under this pane's own answers: a new pane's empty memory
+  // What an earlier host learned, under this one's own answers: a fresh host's empty memory
   // must not ask production again about what an earlier one already saw land there.
   for (const [label, state] of yield* readMrStates(opts.stateDir))
     if (!opts.states.has(label)) opts.states.set(label, state);
@@ -140,7 +140,7 @@ export const writeMrStates = Effect.fn("Merges.write")(function* (
   yield* fs.writeFileString(file, `${Schema.encodeSync(StatesJson)(Object.fromEntries(merged))}\n`);
 });
 
-/** What the last watch wrote, or nothing: a board with no pane has never asked GitLab. */
+/** What the last watch wrote, or nothing: a host that never watched has never asked GitLab. */
 export const readMrStates = Effect.fn("Merges.read")(function* (stateDir: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;

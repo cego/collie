@@ -49,7 +49,7 @@ export const Question = Schema.Struct({
 });
 export type Question = typeof Question.Type;
 
-/** A correction Collie proposes, which only a human may confirm. */
+/** A correction Collie proposes, which waits for someone to confirm it. */
 export const Proposal = Schema.Struct({
   kind: Schema.Literal("proposal"),
   id: Schema.String,

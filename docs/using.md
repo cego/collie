@@ -353,8 +353,7 @@ look at what it built. It is removed only once **settled** — the tree is clean
 no commit that is not on the remote already, nothing is working in it or could be resumed
 in it, and its merge request is merged or closed (or its remote branch is gone). A
 `renovate` checkout has no branch to ask either question about, so a clean one nothing is
-working in is settled, and there is no branch to delete with it. Pruning happens at every run start —
-which never touches the checkout that run is about to work in — and every 3 minutes in the
+working in is settled, and there is no branch to delete with it. Pruning happens every 3 minutes in the
 host, whether or not a pane is open. The board says both what went and what is being held on to, with
 the reason:
 

@@ -1494,10 +1494,8 @@ const removeWorktree = Effect.fn("worktree.removeWorktree")(function* (
 });
 
 /**
- * Removes what is settled and answers with what it did — never with a failure. Both
- * moments Collie prunes at are doing something else at the time: a Run start and a
- * board refresh have no use for a state file that would not read, and neither would
- * stop for one.
+ * Removes what is settled and answers with what it did — never with a failure: the host's
+ * sweep has no use for a state file that would not read, and would not stop for one.
  *
  * One pruner at a time, under the same pid lock the run records use. Two run starts
  * at once would otherwise read the same verdicts, decide separately and write over

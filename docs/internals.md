@@ -165,7 +165,7 @@ manager removes it: git's refusals are the last guard, so a wrong judgement here
 fail to clean, never delete work. Only paths some run recorded with `created_by_collie`
 are candidates.
 
-Pruning runs at `run start` and every 3 minutes in the host, beside its merge watch and
+Pruning runs every 3 minutes in the host, beside its merge watch and
 News, so it happens with no pane open. A board shows what the last sweep said, read from
 `worktrees.json`, and never sweeps itself. One sweep runs at a time, and its clock starts
 when it finishes. Each

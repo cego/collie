@@ -19,8 +19,6 @@ import {
   type WorkspaceInfo,
 } from "./herdr";
 import { carryOutProposal } from "./run-actions";
-// Carrying an action out belongs to `run-actions`, which asks the host; it is re-exported
-// here so a front door still has one import for "what a human asked Collie to do".
 export { carryOutProposal, registerRunExecutors } from "./run-actions";
 import { shell, type Runner } from "./mr";
 import { installation, RELEASE_TAG } from "./release";
