@@ -7,6 +7,7 @@
 import { Config, ConfigProvider, Effect, FileSystem, Option, Schema, Scope } from "effect";
 import type { BunServices } from "@effect/platform-bun/BunServices";
 import { runEffect, watchedBy } from "./effect";
+import { fakeHerdrCommand } from "./fake-herdr-core";
 import { fixtures, root } from "./host";
 
 export interface World {
@@ -93,7 +94,7 @@ const fakeHerdrIn = Effect.fn("World.fakeHerdrIn")(function* (dir: string) {
   const fake = `${root}test/support/fake-herdr.ts`;
   const bin = `${dir}/herdr`;
   yield* fs
-    .writeFileString(bin, `#!/bin/sh\nexec ${process.execPath} ${fake} "$@"\n`, { mode: 0o755 })
+    .writeFileString(bin, `#!/bin/sh\nexec ${fakeHerdrCommand(fake)} "$@"\n`, { mode: 0o755 })
     .pipe(Effect.orDie);
   const set = { HERDR_BIN_PATH: bin, FAKE_HERDR_LOG: `${dir}/herdr-calls.jsonl` };
   yield* Effect.acquireRelease(

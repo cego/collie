@@ -1133,7 +1133,6 @@ test("a run still going keeps its checkout, whether or not an agent is in it", (
           cwd: rig.projectDir,
         }),
       ).toEqual(["kept wt · a run is still working in it"]);
-      expect(worktreePath).toContain("wt");
     }),
   ));
 

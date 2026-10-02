@@ -6,6 +6,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect } from "effect";
 import { testRender } from "@opentui/solid";
 import { runEffect } from "../support/effect";
+import { until } from "../support/host";
 import { Rig } from "../support/recorder";
 import { task } from "../support/task";
 import { App } from "../../src/ui/App";
@@ -98,6 +99,9 @@ const mount = Effect.fn("selection.mount")(function* (state: AppState) {
         settle,
       ),
     selected: () => readSelection(file),
+    /** The record once `wanted` holds of it: it is written after a frame, not with it. */
+    selectedWhen: (wanted: (record: Effect.Success<ReturnType<typeof readSelection>>) => boolean) =>
+      until(() => readSelection(file), wanted),
     lineOf(text: string) {
       const y = t
         .captureCharFrame()
@@ -130,7 +134,7 @@ test("selecting a card writes what chat needs about it, and closing it clears th
 
         yield* app.click(6, app.lineOf("Strapi prod seeder"));
 
-        expect(yield* app.selected()).toEqual({
+        expect(yield* app.selectedWhen((record) => record !== null)).toEqual({
           task: "t1",
           run: "r1",
           name: "Strapi prod seeder",
@@ -138,7 +142,7 @@ test("selecting a card writes what chat needs about it, and closing it clears th
 
         yield* app.escape;
 
-        expect(yield* app.selected()).toBe(null);
+        expect(yield* app.selectedWhen((record) => record === null)).toBe(null);
       }),
     ),
   ));
@@ -149,13 +153,13 @@ test("closing the board leaves nothing selected behind it", () =>
       Effect.gen(function* () {
         const app = yield* mount(appState({ tasks: [task()] }));
         yield* app.click(6, app.lineOf("Strapi prod seeder"));
-        expect(yield* app.selected()).not.toBe(null);
+        expect(yield* app.selectedWhen((record) => record !== null)).not.toBe(null);
 
         // A board nobody has open selects nothing, and chat must not answer about a card
         // that was on screen when the tab was closed.
         yield* app.dispatch({ _tag: "Quit" });
 
-        expect(yield* app.selected()).toBe(null);
+        expect(yield* app.selectedWhen((record) => record === null)).toBe(null);
       }),
     ),
   ));

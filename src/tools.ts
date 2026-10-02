@@ -211,22 +211,31 @@ const refusedActions = (tool: string, input: JsonObject, why: string, takes: str
   return refused(tool, wrong.length > 0 ? wrong.join("; ") : why, takes);
 };
 
-function askedSchema(): JsonObject {
+/**
+ * Drawn the first time a tool list is read rather than when this file loads: every
+ * command the binary runs imports it, and few of them ever describe a tool.
+ */
+const once = (draw: () => JsonObject) => {
+  let drawn: JsonObject | undefined;
+  return () => (drawn ??= draw());
+};
+
+const askedSchema = once(() => {
   const document = Schema.toJsonSchemaDocument(AskedInput);
   // SAFETY: a JSON Schema document is JSON, which is what JsonObject says.
   return { ...document.schema, $defs: document.definitions } as JsonObject;
-}
+});
 
 /**
  * The JSON Schema the harnesses are given for `collie_propose`, generated from the same
  * closed union the decoder uses. Generated rather than written out, so a kind this build
  * cannot carry out is not a kind a model is invited to ask for.
  */
-function proposeSchema(): JsonObject {
+const proposeSchema = once(() => {
   const document = Schema.toJsonSchemaDocument(ProposeInput);
   // SAFETY: a JSON Schema document is JSON, which is what JsonObject says.
   return { ...document.schema, $defs: document.definitions } as JsonObject;
-}
+});
 
 export const TOOLS: ReadonlyArray<Tool> = [
   {
@@ -390,7 +399,9 @@ export const TOOLS: ReadonlyArray<Tool> = [
       "which the answer then names. What is not here is what you would be asking for yourself — " +
       "amending an Intent, forking a definition, changing the defaults, upgrading, " +
       "cleaning up — and that is `collie_propose`.",
-    input: askedSchema(),
+    get input() {
+      return askedSchema();
+    },
     call: (env, input) => said(carryOut(env, input)),
   },
   {
@@ -406,7 +417,9 @@ export const TOOLS: ReadonlyArray<Tool> = [
       "Name every Run by the id `collie_herd` lists — a Run that does not exist is refused " +
       "rather than guessed at, and if you are not sure which the human meant, ask them " +
       "instead of proposing. `interpretation` is what you understood, in their words.",
-    input: proposeSchema(),
+    get input() {
+      return proposeSchema();
+    },
     call: (env, input) =>
       said(
         Effect.gen(function* () {

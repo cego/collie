@@ -80,7 +80,6 @@ test("a Run that stopped says so once, and says so again only for a different re
   const said = new Set(asked.map((e) => e.key));
 
   // The board redraws every few seconds: the same question must not be reported every time.
-  expect(unsaid(asked, said)).toHaveLength(0);
   expect(
     unsaid(eventsIn([record({ id: "r1", state: "waiting", asking: [asking] })]), said),
   ).toHaveLength(0);

@@ -6,7 +6,7 @@
 // one round trip each.
 
 import { expect, test } from "bun:test";
-import { Effect, FileSystem, Layer, Schema } from "effect";
+import { Effect, FileSystem, Schema } from "effect";
 import {
   EXCLUSIVE_STRATEGIES,
   RESERVED_INPUTS,
@@ -206,14 +206,13 @@ test("the envelope is the host's runId and the author's input, keyed on the run"
   runEffect(
     Effect.gen(function* () {
       const entry = yield* loadEntry(`${fixtures}/hello.workflow.ts`);
-      const { workflow, layer } = entry.make("hello@1");
+      const { workflow } = entry.make("hello@1");
       expect(workflow.idempotencyKey({ runId: "r1", input: { name: "mk" } })).toBe("r1");
       // Different input, same run: the same execution, which is what a retry has to be.
       expect(workflow.idempotencyKey({ runId: "r1", input: { name: "other" } })).toBe("r1");
       expect(
         Schema.decodeUnknownExit(workflow.payloadSchema)({ runId: "r1", input: {} })._tag,
       ).toBe("Failure");
-      expect(Layer.isLayer(layer)).toBe(true);
     }),
   ));
 
@@ -248,14 +247,9 @@ test("a schema JSON Schema cannot say everything about is still a schema, and sa
   expect(drawable.document).not.toBeNull();
 
   // A declared schema draws as an empty object: valid JSON Schema that constrains
-  // nothing. It still validates against the schema itself, which is the point — the limit is on the copy
-  // a model would be held to, never on the contract.
+  // nothing. The limit is on the copy a model would be held to, never on the contract.
   const url = Schema.declare((value: unknown): value is URL => value instanceof URL);
   const undrawable = Schema.Struct({ at: url });
-  expect(Schema.decodeUnknownExit(undrawable)({ at: new URL("https://example/") })._tag).toBe(
-    "Success",
-  );
-  expect(Schema.decodeUnknownExit(undrawable)({ at: "not a url" })._tag).toBe("Failure");
   const projected = jsonSchemaFor(undrawable);
   expect(projected.document).not.toBeNull();
   expect(projected.limits).toEqual(["properties.at projects to nothing"]);

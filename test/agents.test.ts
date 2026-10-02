@@ -10,10 +10,12 @@
 // second engine on the same file rather than a second map.
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
+import type { BunServices } from "@effect/platform-bun";
 import { Duration, Effect, FileSystem, Layer, Schema } from "effect";
+import { TestClock } from "effect/testing";
 import * as WorkflowEngine from "effect/unstable/workflow/WorkflowEngine";
 import { Rig, FakeHerdr, type Call } from "./support/recorder";
-import { runEffect } from "./support/effect";
+import { fastForward, runEffect as runLive } from "./support/effect";
 import { onMachineWith } from "./support/live";
 import {
   Agents,
@@ -102,9 +104,13 @@ const hostOf = (): AgentHost => ({
   collectMs: 400,
 });
 
+/** Every wait in here is on a clock that moves many times faster than the wall's. */
+const runEffect = <A, E>(effect: Effect.Effect<A, E, BunServices.BunServices>) =>
+  runLive(fastForward(effect));
+
 /** One host's lifetime: a fresh engine on the same directory is what a restart is. */
 const session = <A, E>(
-  run: Effect.Effect<A, E, WorkflowEngine.WorkflowEngine | Agents>,
+  run: Effect.Effect<A, E, WorkflowEngine.WorkflowEngine | Agents | FileSystem.FileSystem>,
   over?: Partial<AgentHost>,
 ) =>
   run.pipe(
@@ -355,7 +361,7 @@ test(
           }),
         );
         yield* rig.queueOutputs([{ verdict: "clean", note: "resumed" }]);
-        yield* interrupted("r1", 1_500, {
+        yield* interrupted("r1", suspended("r1"), {
           herdr: busyPane(),
           patience: { firstMs: 10, maxMs: 20, forMs: 100 },
         });
@@ -381,16 +387,55 @@ test("work the workflow skips opens no tab and starts no agent", () =>
     }),
   ));
 
+/** How far a piece of work has got, as the session running it can see. */
+type Reached = Effect.Effect<boolean, never, WorkflowEngine.WorkflowEngine | FileSystem.FileSystem>;
+
+/** The run has parked or otherwise stopped where it is, and the engine knows it. */
+const suspended = (runId: string): Reached =>
+  Effect.gen(function* () {
+    const engine = yield* WorkflowEngine.WorkflowEngine;
+    const id = yield* work.executionId({ runId, input: { skip: false } });
+    return pollStatus(yield* engine.poll(work, id), "agent-work").status === "suspended";
+  });
+
+/** The run has said why it parked, which it does before its step lets go of the work. */
+const parked = (runId: string): Reached =>
+  FileSystem.FileSystem.pipe(
+    Effect.flatMap((fs) => fs.exists(controlPath(dir, PARKED, runId))),
+    Effect.orElseSucceed(() => false),
+  );
+
+/** An agent has been sent a prompt about this, `times` times. */
+const prompted = (about: string, times = 1): Reached =>
+  rig.calls().pipe(
+    Effect.map((calls) => sent(calls, about) >= times),
+    Effect.orElseSucceed(() => false),
+  );
+
+/** The agent's Output says this. */
+const wrote = (runId: string, about: string): Reached =>
+  FileSystem.FileSystem.pipe(
+    Effect.flatMap((fs) => fs.readFileString(outputPath(runId))),
+    Effect.map((text) => text.includes(about)),
+    Effect.orElseSucceed(() => false),
+  );
+
 /**
- * A host that goes while a collection is still out. The work is submitted rather than
- * awaited, so closing the session leaves the engine's journal with a launch in it and no
- * result — which is the window a replay must not fill with a second agent.
+ * A host that goes once its work has got as far as `reached` says, with whatever it is
+ * waiting on still out. The work is submitted rather than awaited, so closing the session
+ * leaves the engine's journal with a launch in it and no result — which is the window a
+ * replay must not fill with a second agent. Watched in real time: getting there is IO,
+ * whatever the clock the work runs on says.
  */
-const interrupted = (runId: string, waitMs: number, over?: Partial<AgentHost>) =>
+const interrupted = (runId: string, reached: Reached, over?: Partial<AgentHost>) =>
   session(
-    work
-      .execute({ runId, input: { skip: false } }, { discard: true })
-      .pipe(Effect.andThen(Effect.sleep(Duration.millis(waitMs)))),
+    Effect.gen(function* () {
+      yield* work.execute({ runId, input: { skip: false } }, { discard: true });
+      for (let tries = 0; !(yield* reached); tries++) {
+        if (tries === 3_000) return yield* Effect.die(new Error(`${runId} never got that far`));
+        yield* TestClock.withLive(Effect.sleep("10 millis"));
+      }
+    }),
     { collectMs: 30_000, ...over },
   );
 
@@ -402,7 +447,7 @@ test(
         const fs = yield* FileSystem.FileSystem;
         // Nothing written for the first prompt, so the collection is still out.
         yield* rig.queueOutputs([null]);
-        yield* interrupted("r1", 600);
+        yield* interrupted("r1", prompted("Your task for this step"));
         expect((yield* rig.cmds()).filter((cmd) => cmd === "agent start")).toHaveLength(1);
 
         // A second engine on the same SQLite file picks the work up where it was.
@@ -425,7 +470,7 @@ test(
         const fs = yield* FileSystem.FileSystem;
         // Nothing within the budget: a long build still working, not one that did nothing.
         yield* rig.queueOutputs([null]);
-        yield* interrupted("r1", 1200, { collectMs: 400 });
+        yield* interrupted("r1", parked("r1"), { collectMs: 400 });
 
         yield* fs.writeFileString(outputPath("r1"), `{"verdict":"clean","note":"late"}`);
         const result = yield* releasedInto("r1");
@@ -445,7 +490,7 @@ test(
         // The first Output is unusable and nothing answers the repair, so the host goes
         // with the repair's own collection still out.
         yield* rig.queueOutputs([{ verdict: "maybe" }, null]);
-        yield* interrupted("r1", 1200);
+        yield* interrupted("r1", prompted("not usable"));
         expect(sent(yield* rig.calls(), "not usable")).toBe(1);
 
         yield* fs.writeFileString(outputPath("r1"), `{"verdict":"clean","note":"eventually"}`);
@@ -508,7 +553,7 @@ test(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         yield* rig.queueOutputs([{ verdict: "clean", note: "resumed" }]);
-        yield* interrupted("r1", 1_500, {
+        yield* interrupted("r1", suspended("r1"), {
           herdr: busyPane(),
           patience: { firstMs: 10, maxMs: 20, forMs: 100 },
         });
@@ -597,7 +642,7 @@ test(
         yield* fs.makeDirectory(personas, { recursive: true });
         yield* fs.writeFileString(`${personas}/reviewer.md`, "Review {{inputs.target}}.\n");
         yield* rig.queueOutputs([{ verdict: "clean", note: "resumed" }]);
-        yield* interrupted("r1", 1_500);
+        yield* interrupted("r1", suspended("r1"));
 
         expect(yield* statusNow("r1")).toBe("suspended");
         expect(yield* read(controlPath(dir, PARKED, "r1"))).toContain(
@@ -731,7 +776,7 @@ test(
     runEffect(
       Effect.gen(function* () {
         yield* rig.queueOutputs([null, { verdict: "clean", note: "back" }]);
-        yield* interrupted("r1", 600);
+        yield* interrupted("r1", prompted("Your task for this step"));
         // The halting host recovers the work too, and must not give up its wait while the
         // agent it is halting is still there to be seen.
         yield* session(halted("r1"), { collectMs: 30_000 });
@@ -907,7 +952,9 @@ onMachineWith("claude")(
         yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
         yield* session(started("r1"), { compactAtTokens: 300_000 });
         // Extra arguments to the same launch, so the agent keeps its ordinary interface.
-        expect(launchArgs(yield* rig.calls()).length).toBeGreaterThan(5);
+        const args = launchArgs(yield* rig.calls());
+        expect(args.slice(0, 2)).toEqual(["--model", "opus"]);
+        expect(args[args.indexOf("--settings") + 1]).toEndWith("/settings.json");
       }),
     ),
   60_000,
@@ -1351,7 +1398,7 @@ test(
         yield* control("hold", "r1", true);
         yield* rig.queueOutputs([{ verdict: "clean", note: "after the hold" }]);
         // Submitted rather than awaited: held work parks, so there is nothing to wait for.
-        yield* interrupted("r1", 400);
+        yield* interrupted("r1", suspended("r1"));
         expect((yield* rig.cmds()).filter((cmd) => cmd === "agent start")).toHaveLength(0);
 
         yield* control("hold", "r1", false);
@@ -1372,7 +1419,7 @@ test(
         // Nothing written, so the collection is still out when the stop arrives.
         yield* rig.queueOutputs([null]);
         yield* control("stop", "r1", true);
-        yield* interrupted("r1", 900);
+        yield* interrupted("r1", suspended("r1"));
         // The agent was launched and is still holding the work: stopping a Run is not
         // halting its agent, which is its own action.
         expect((yield* rig.cmds()).filter((cmd) => cmd === "agent start")).toHaveLength(1);
@@ -1402,10 +1449,14 @@ test(
     runEffect(
       Effect.gen(function* () {
         yield* rig.queueOutputs([{ verdict: "maybe" }, null, { verdict: "clean", note: "again" }]);
-        yield* interrupted("r1", 1500, {
-          herdr: new StopsAtRepair(rig.pluginEnv()),
-          collectMs: 900,
-        });
+        yield* interrupted(
+          "r1",
+          Effect.zipWith(prompted("not usable"), suspended("r1"), (one, other) => one && other),
+          {
+            herdr: new StopsAtRepair(rig.pluginEnv()),
+            collectMs: 900,
+          },
+        );
         expect(sent(yield* rig.calls(), "not usable")).toBe(1);
         yield* session(halted("r1"), { collectMs: 30_000 });
 
@@ -1444,7 +1495,7 @@ test(
           { verdict: "maybe" },
           { verdict: "clean", note: "after the stop" },
         ]);
-        yield* interrupted("r1", 1500, {
+        yield* interrupted("r1", suspended("r1"), {
           herdr: new ClosedAtRepair(rig.pluginEnv()),
           patience: { firstMs: 10, maxMs: 20, forMs: 30_000 },
         });
@@ -1470,7 +1521,7 @@ test(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         yield* rig.queueOutputs([{ verdict: "maybe" }]);
-        yield* interrupted("r1", 1500, {
+        yield* interrupted("r1", suspended("r1"), {
           herdr: new ClosedAtRepair(rig.pluginEnv()),
           patience: { firstMs: 10, maxMs: 20, forMs: 30_000 },
         });
@@ -1998,7 +2049,7 @@ test(
     runEffect(
       Effect.gen(function* () {
         yield* rig.queueOutputs([{ verdict: "clean", note: "never" }]);
-        yield* interrupted("r1", 1_500, {
+        yield* interrupted("r1", suspended("r1"), {
           compactAtTokens: 1000,
           ports: claudeControls(),
           herdr: new FakeHerdr(rig.pluginEnv({ FAKE_HERDR_HARNESS_SILENT: "1" })),
@@ -2055,7 +2106,10 @@ test(
     runEffect(
       Effect.gen(function* () {
         yield* rig.queueOutputs([{ verdict: "clean", note: "after the Enter" }]);
-        yield* interrupted("r1", 8_000, { herdr: promptNotTaken("enter"), confirmGraceMs: 300 });
+        yield* interrupted("r1", wrote("r1", "after the Enter"), {
+          herdr: promptNotTaken("enter"),
+          confirmGraceMs: 300,
+        });
         expect(yield* read(outputPath("r1"))).toContain("after the Enter");
         const calls = yield* rig.calls();
         expect(sent(calls, "Your task for this step")).toBe(1);
@@ -2071,7 +2125,10 @@ test(
     runEffect(
       Effect.gen(function* () {
         yield* rig.queueOutputs([{ verdict: "clean", note: "never" }]);
-        yield* interrupted("r1", 8_000, { herdr: promptNotTaken("text"), confirmGraceMs: 300 });
+        yield* interrupted("r1", parked("r1"), {
+          herdr: promptNotTaken("text"),
+          confirmGraceMs: 300,
+        });
         const why = yield* read(controlPath(dir, PARKED, "r1"));
         const [step] = yield* steps("r1");
         expect(why).toContain(step!.delivery.id);
@@ -2101,7 +2158,10 @@ test(
     runEffect(
       Effect.gen(function* () {
         yield* rig.queueOutputs([{ verdict: "clean", note: "never" }]);
-        yield* interrupted("r1", 8_000, { herdr: promptNotTaken("text"), confirmGraceMs: 300 });
+        yield* interrupted("r1", parked("r1"), {
+          herdr: promptNotTaken("text"),
+          confirmGraceMs: 300,
+        });
         yield* reconciled("r1", "not-sent");
 
         yield* rig.queueOutputs([{ verdict: "clean", note: "sent again" }]);
@@ -2120,7 +2180,10 @@ test(
     runEffect(
       Effect.gen(function* () {
         yield* rig.queueOutputs([{ verdict: "clean", note: "never" }]);
-        yield* interrupted("r1", 8_000, { herdr: promptNotTaken("text"), confirmGraceMs: 300 });
+        yield* interrupted("r1", parked("r1"), {
+          herdr: promptNotTaken("text"),
+          confirmGraceMs: 300,
+        });
         yield* reconciled("r1", "not-sent");
 
         // herdr answers `no agent` for every prompt from the second on: the resend.
@@ -2152,7 +2215,10 @@ test(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         yield* rig.queueOutputs([{ verdict: "clean", note: "never" }]);
-        yield* interrupted("r1", 8_000, { herdr: promptNotTaken("text"), confirmGraceMs: 300 });
+        yield* interrupted("r1", parked("r1"), {
+          herdr: promptNotTaken("text"),
+          confirmGraceMs: 300,
+        });
         yield* reconciled("r1", "sent");
 
         yield* fs.writeFileString(outputPath("r1"), `{"verdict":"clean","note":"typed by hand"}`);

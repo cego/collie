@@ -33,12 +33,10 @@ import {
   Semaphore,
   Stream,
 } from "effect";
-import * as ClusterWorkflowEngine from "effect/unstable/cluster/ClusterWorkflowEngine";
-import * as SingleRunner from "effect/unstable/cluster/SingleRunner";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import type { ConfigError } from "effect/Config";
 import type { PlatformError } from "effect/PlatformError";
-import { FetchHttpClient } from "effect/unstable/http";
+import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
 import * as Reactivity from "effect/unstable/reactivity/Reactivity";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as DurableDeferred from "effect/unstable/workflow/DurableDeferred";
@@ -1250,13 +1248,15 @@ export function installSdk(): void {
  */
 export const loadEntry: (
   file: string,
+  /** Its directory's `revisionOf`, where a caller reading every entry in it has it already. */
+  revision?: string,
 ) => Effect.Effect<WorkflowEntry, EntryError, FileSystem.FileSystem> = Effect.fn(
   "Engine.loadEntry",
-)(function* (file: string) {
+)(function* (file: string, revision?: string) {
   installSdk();
   // Bun's module registry has no invalidation, so an entry or a helper read twice at one
   // path is the first read both times. Each read is of a copy of what is there now.
-  const staged = yield* stagedEntry(file);
+  const staged = yield* stagedEntry(file, revision);
   const loaded = yield* Effect.tryPromise({
     try: () => import(staged.file),
     catch: (cause) => new EntryError({ file, message: String(cause).replaceAll(staged.root, "") }),
@@ -1417,11 +1417,11 @@ const entriesRoot = Effect.fn("Engine.entriesRoot")(function* (file: string) {
  * reads it. Staged under a name of its own and renamed into place, so nobody imports a
  * copy another process is still writing.
  */
-const stagedEntry = Effect.fn("Engine.stagedEntry")(function* (file: string) {
+const stagedEntry = Effect.fn("Engine.stagedEntry")(function* (file: string, revision?: string) {
   const fs = yield* FileSystem.FileSystem;
   const entries = yield* entriesRoot(file);
   const dir = directoryOf(file);
-  const name = `${Bun.hash(dir).toString(16)}-${yield* revisionOf(dir)}`;
+  const name = `${Bun.hash(dir).toString(16)}-${revision ?? (yield* revisionOf(dir))}`;
   const root = `${entries}/generations/${name}`;
   const staged = { root, file: `${root}${file}` };
   if (yield* fs.exists(staged.file).pipe(Effect.orElseSucceed(() => false))) return staged;
@@ -1438,6 +1438,39 @@ const stagedEntry = Effect.fn("Engine.stagedEntry")(function* (file: string) {
 });
 
 /**
+ * What beside an entry is not its code: the installed toolchain, linked rather than copied,
+ * and the project file a typecheck writes for itself and removes again.
+ */
+const unstaged = (name: string) => name === "node_modules" || name.startsWith(CHECK_PROJECT);
+const CHECK_PROJECT = ".collie-check";
+
+/**
+ * Every path under `dir` a recursive listing names, but none of what is `unstaged`: a
+ * provisioned toolchain is thousands of files, and every load of every entry beside it
+ * listed them all.
+ */
+const sourcesIn = Effect.fn("Engine.sourcesIn")(function* (dir: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const names: Array<string> = [];
+  const top = yield* fs.readDirectory(dir).pipe(Effect.orElseSucceed((): Array<string> => []));
+  for (const name of top) {
+    if (unstaged(name)) continue;
+    names.push(name);
+    // A link is named and not followed, as a recursive listing treats it.
+    const link = yield* fs.readLink(`${dir}/${name}`).pipe(
+      Effect.as(true),
+      Effect.orElseSucceed(() => false),
+    );
+    if (link) continue;
+    const below = yield* fs
+      .readDirectory(`${dir}/${name}`, { recursive: true })
+      .pipe(Effect.orElseSucceed((): Array<string> => []));
+    names.push(...below.map((one) => `${name}/${one}`));
+  }
+  return names;
+});
+
+/**
  * What a generation of an entry would be staged from, as one value. A generation is a copy
  * of the whole directory and of what it imports from outside it, so an edited helper or
  * Markdown prompt is as much a change as an edited entry — and nothing touched is the same
@@ -1446,18 +1479,22 @@ const stagedEntry = Effect.fn("Engine.stagedEntry")(function* (file: string) {
 export const revisionOf: (dir: string) => Effect.Effect<string, never, FileSystem.FileSystem> =
   Effect.fn("Engine.revisionOf")(function* (dir: string) {
     const fs = yield* FileSystem.FileSystem;
-    const names = yield* fs
-      .readDirectory(dir, { recursive: true })
+    // An installed dependency counts by its names alone: the toolchain a module is
+    // typechecked against lives here too, and reading all of it would cost more than
+    // every start it is on the way of.
+    const installed = yield* fs
+      .readDirectory(`${dir}/node_modules`, { recursive: true })
       .pipe(Effect.orElseSucceed((): Array<string> => []));
-    let read = "";
-    for (const name of names.sort()) {
+    let read = installed
+      .sort()
+      .map((name) => `node_modules/${name}\n`)
+      .join("");
+    for (const name of (yield* sourcesIn(dir)).sort()) {
       // A directory reads as nothing, and what is inside it is in the list under a name
-      // of its own. An installed dependency counts by its name alone: the toolchain a
-      // module is typechecked against lives here too, and reading all of it would cost
-      // more than every start it is on the way of.
-      const content = name.startsWith("node_modules/")
-        ? ""
-        : yield* fs.readFileString(`${dir}/${name}`).pipe(Effect.orElseSucceed(() => ""));
+      // of its own.
+      const content = yield* fs
+        .readFileString(`${dir}/${name}`)
+        .pipe(Effect.orElseSucceed(() => ""));
       read += `${name}:${Bun.hash(content).toString(16)}\n`;
     }
     for (const file of yield* outsideOf(dir)) {
@@ -1473,12 +1510,7 @@ export const revisionOf: (dir: string) => Effect.Effect<string, never, FileSyste
  */
 const outsideOf = Effect.fn("Engine.outsideOf")(function* (dir: string) {
   const fs = yield* FileSystem.FileSystem;
-  const names = yield* fs
-    .readDirectory(dir, { recursive: true })
-    .pipe(Effect.orElseSucceed((): Array<string> => []));
-  const pending = names
-    .filter((name) => !name.startsWith("node_modules/"))
-    .map((name) => `${dir}/${name}`);
+  const pending = (yield* sourcesIn(dir)).map((name) => `${dir}/${name}`);
   const outside = new Set<string>();
   const looked = new Set<string>();
   for (let file = pending.pop(); file !== undefined; file = pending.pop()) {
@@ -1557,7 +1589,7 @@ export const stageGeneration: (options: {
     new EntryError({ file: options.entry, message: String(cause) });
   yield* fs.makeDirectory(staged(from), { recursive: true }).pipe(Effect.mapError(failed));
   for (const name of yield* fs.readDirectory(from).pipe(Effect.mapError(failed))) {
-    if (name === "node_modules") continue;
+    if (unstaged(name)) continue;
     yield* fs
       .copy(path.join(from, name), staged(path.join(from, name)), { overwrite: true })
       .pipe(Effect.mapError(failed));
@@ -1619,18 +1651,32 @@ export function engineLayer(options: {
   const sql = SqliteClient.layer({ filename: `${options.dir}/host.db` }).pipe(
     Layer.provideMerge(Reactivity.layer),
   );
-  const cluster = SingleRunner.layer({
-    shardingConfig: {
-      // A host told to stop must not take a running workflow down with it: the work
-      // finishes its step, and what is left is picked up by the next host.
-      preemptiveShutdown: false,
-      // A workflow whose module is missing has no entity to receive its messages. The
-      // default marks them failed after a minute, which turns "the file is not there
-      // yet" into a terminal result; waiting is what lets a repair recover the work.
-      entityRegistrationTimeout: Duration.infinity,
-    },
-  }).pipe(Layer.provide([sql, BunCrypto.layer]));
-  return ClusterWorkflowEngine.layer.pipe(Layer.provide(cluster), Layer.provideMerge(sql));
+  // Loaded when a host builds it, not when anything imports this file: the cluster is
+  // the heaviest thing here, and every other command the binary runs is a client.
+  const engine = Layer.unwrap(
+    Effect.promise(() =>
+      Promise.all([
+        import("effect/unstable/cluster/SingleRunner"),
+        import("effect/unstable/cluster/ClusterWorkflowEngine"),
+      ]),
+    ).pipe(
+      Effect.map(([SingleRunner, ClusterWorkflowEngine]) => {
+        const cluster = SingleRunner.layer({
+          shardingConfig: {
+            // A host told to stop must not take a running workflow down with it: the work
+            // finishes its step, and what is left is picked up by the next host.
+            preemptiveShutdown: false,
+            // A workflow whose module is missing has no entity to receive its messages. The
+            // default marks them failed after a minute, which turns "the file is not there
+            // yet" into a terminal result; waiting is what lets a repair recover the work.
+            entityRegistrationTimeout: Duration.infinity,
+          },
+        }).pipe(Layer.provide([sql, BunCrypto.layer]));
+        return ClusterWorkflowEngine.layer.pipe(Layer.provide(cluster));
+      }),
+    ),
+  );
+  return engine.pipe(Layer.provideMerge(sql));
 }
 
 export const HOLD = "hold";
@@ -4814,7 +4860,8 @@ export const typecheckEntry: (options: {
   // One file at a time, through a project that extends the author's settings. Naming a
   // file on tsc's command line makes it ignore the tsconfig beside it, which would check
   // the module against defaults nobody wrote and report nothing useful.
-  const project = `${options.dir}/.collie-check.json`;
+  // A project of its own, so two checks in one directory never compile each other's file.
+  const project = `${options.dir}/${CHECK_PROJECT}-${Bun.hash(options.file).toString(16)}.json`;
   yield* fs
     .writeFileString(
       project,
@@ -4830,7 +4877,7 @@ export const typecheckEntry: (options: {
     "false",
     "-p",
     project,
-  ]).pipe(Effect.mapError(unavailable));
+  ]).pipe(Effect.mapError(unavailable), Effect.ensuring(fs.remove(project).pipe(Effect.ignore)));
   if (ran.code === 0) return [];
   const diagnostics = ran.output.split("\n").filter((line) => /\(\d+,\d+\): error /.test(line));
   // tsc exits non-zero for the diagnostics it printed; a failure that printed none is the

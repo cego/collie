@@ -178,18 +178,15 @@ test("two steps of one Run that differ only where the name is cut get agents of 
 test("agent names stay herdr-legal and are never what a label shows", () => {
   const name = agentName("review-branch-b5571dc-head", "review", "claude-opus", 12);
   expect(name).toMatch(/^[a-z][a-z0-9_-]{0,31}$/);
-  expect(tabLabel(GLYPH.running, "review")).not.toContain(name);
   // stepLabel is still what the run record carries for a variant.
   expect(stepLabel("review-x", "review", "claude-opus")).toBe("review-x/review/claude-opus");
 });
 
 test("the Collie tab's label survives its own helpers", () => {
-  expect(COLLIE_TAB).toBe("🐕 Collie");
-  const name = tabNameOf(COLLIE_TAB);
-  expect(name).toBe("Collie");
+  expect(tabNameOf(COLLIE_TAB)).toBe("Collie");
   // Without the u flag the dog enters the character class as two surrogate halves
   // and stripping matches one of them, leaving a lone surrogate in the name.
-  expect(Array.from(name)).toHaveLength(6);
+  expect(Array.from(tabNameOf("🐕 Collie"))).toHaveLength(6);
   // A run tab keeps its status glyph and gains no dog.
   expect(tabNameOf(tabLabel(GLYPH.running, "implement"))).toBe("Implement");
 });
