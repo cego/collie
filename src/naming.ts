@@ -6,6 +6,7 @@ import { parseMrTarget } from "./mr";
 import { diffTargetOf, type Settled } from "./strategies";
 
 const MAX = 32;
+const DIGEST = 6;
 
 function sanitize(text: string): string {
   return text
@@ -21,7 +22,8 @@ function sanitize(text: string): string {
  * (`openai-codex/gpt-5.6-sol`) is long enough to have truncated it away, and two
  * runs then picked the same name and herdr refused the second with
  * `agent_name_taken`. The step and the variant take what is left, and the run's
- * slug only what is left after that.
+ * slug only what is left after that. A name anything was cut from carries a digest
+ * of all three, so two that differ only in what was cut stay apart.
  */
 export function agentName(
   slug: string,
@@ -29,17 +31,27 @@ export function agentName(
   variantKey: string | null,
   seq: number,
 ): string {
-  const suffix = `r${seq}`;
+  const whole = layout(slug, stepId, variantKey, `r${seq}`);
+  if (!whole.cut) return whole.name;
+  const sum = Bun.hash(JSON.stringify([slug, stepId, variantKey]))
+    .toString(36)
+    .slice(-DIGEST);
+  return layout(slug, stepId, variantKey, `${sum}-r${seq}`).name;
+}
+
+function layout(slug: string, stepId: string, variantKey: string | null, suffix: string) {
   const trim = (text: string, room: number) => text.slice(0, Math.max(0, room)).replace(/-+$/g, "");
-  const core = trim(
-    sanitize([stepId, variantKey].filter((p) => p).join("-")),
-    MAX - suffix.length - 1,
-  );
+  const step = sanitize([stepId, variantKey].filter((p) => p).join("-"));
+  const core = trim(step, MAX - suffix.length - 1);
   const tail = core ? `${core}-${suffix}` : suffix;
   const room = MAX - tail.length - 1;
-  const head = room > 0 ? trim(sanitize(slug), room) : "";
+  const clean = sanitize(slug);
+  const head = room > 0 ? trim(clean, room) : "";
   const name = head ? `${head}-${tail}` : tail;
-  return (/^[a-z]/.test(name) ? name : `w${name}`).slice(0, MAX);
+  return {
+    name: (/^[a-z]/.test(name) ? name : `w${name}`).slice(0, MAX),
+    cut: core !== step || head !== clean,
+  };
 }
 
 /** The readable name for a tab or pane. */

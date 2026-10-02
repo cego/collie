@@ -11,6 +11,7 @@ import { Effect, FileSystem, Schema } from "effect";
 import { recordDisposition } from "../src/disposition";
 import { currentEnv } from "../src/env";
 import { makeOffer, type FlowPrompts } from "../src/flows";
+import { carryOutAsked, followUpField } from "../src/run-actions";
 import { connect, type HostClient } from "../src/host";
 import { factsOfView } from "../src/runs";
 import { stopHost, until } from "./support/host";
@@ -23,6 +24,7 @@ const MODULES = [
   "offered.workflow.ts",
   "graded.workflow.ts",
   "retains.workflow.ts",
+  "lingers.workflow.ts",
   "capability.ts",
   "house.ts",
 ] as const;
@@ -129,6 +131,38 @@ test(
 );
 
 test(
+  "the board's follow-up words reach the follow-up's own input, whatever it is called",
+  () =>
+    proves(
+      "collie-actions-followup-",
+      (world) =>
+        Effect.gen(function* () {
+          const project = yield* projectOf(world);
+          const client = yield* connect(world.state).pipe(Effect.orDie);
+          const runId = yield* finished(client, project).pipe(Effect.orDie);
+
+          const [done] = yield* carryOutAsked(
+            yield* currentEnv,
+            [{ kind: "followup", run: runId, text: "the other half" }],
+            { origin: "board", requestId: "board-1" },
+          );
+          expect(done).toMatchObject({ state: "applied" });
+          const child = yield* until(
+            () => client.runs({ task: null }).pipe(Effect.orDie),
+            (rows) => rows.some((row) => row.parent === runId),
+          );
+          expect(child.find((row) => row.parent === runId)?.workflow).toBe("offered");
+          expect(child.find((row) => row.parent === runId)?.input).toEqual({
+            note: "the other half",
+          });
+          yield* stopHost(world.state);
+        }),
+      [],
+    ),
+  300_000,
+);
+
+test(
   "a Run that failed holding the shared claim says so, where it failed, and offers to recover",
   () =>
     proves(
@@ -172,6 +206,58 @@ test(
             .pipe(Effect.orDie);
           const again = yield* client.run({ runId: recovering.runId }).pipe(Effect.orDie);
           expect(again?.input).toEqual({ note: "half-merged" });
+          yield* stopHost(world.state);
+        }),
+      [],
+    ),
+  300_000,
+);
+
+test("the board's follow-up words go to the one input a follow-up still needs", () => {
+  const text = { type: "string" };
+  expect(followUpField({ properties: { plan: text, risks: text }, required: ["plan"] })).toEqual({
+    field: "plan",
+  });
+  expect(followUpField({ properties: { note: text } })).toEqual({ field: "note" });
+  expect(followUpField({ properties: { a: text, b: text }, required: ["a", "b"] })).toEqual({
+    refused: "takes a, b rather than one piece of text",
+  });
+  expect(followUpField(null)).toEqual({ refused: "takes nothing rather than one piece of text" });
+});
+
+test(
+  "a follow-up of a Run still going is not offered and starts nothing, and a stop ends the Run for it",
+  () =>
+    proves(
+      "collie-actions-going-",
+      (world) =>
+        Effect.gen(function* () {
+          const project = yield* projectOf(world);
+          const client = yield* connect(world.state).pipe(Effect.orDie);
+          const { runId } = yield* client
+            .start({ project, id: "lingers", request: "req-1", input: { note: "wait" } })
+            .pipe(Effect.orDie);
+          yield* until(
+            () => client.run({ runId }),
+            (view) => view?.status.status === "suspended",
+          ).pipe(Effect.orDie);
+
+          const listed = yield* client.offers({ runId }).pipe(Effect.orDie);
+          expect(listed[0]?.unavailable).toContain("is still going");
+          const refused = yield* client
+            .invoke({ runId, offer: "carry-on", input: {}, request: "act-1" })
+            .pipe(Effect.flip, Effect.orDie);
+          expect(refused.reason).toContain("is still going");
+          const runs = yield* client.runs({ task: null }).pipe(Effect.orDie);
+          expect(runs.map((row) => row.runId)).toEqual([runId]);
+
+          yield* client.control({ runId, control: "stop", set: true }).pipe(Effect.orDie);
+          expect((yield* client.offers({ runId }).pipe(Effect.orDie))[0]?.unavailable).toBeNull();
+          const carried = yield* client
+            .invoke({ runId, offer: "carry-on", input: {}, request: "act-2" })
+            .pipe(Effect.orDie);
+          const child = yield* client.run({ runId: carried.runId }).pipe(Effect.orDie);
+          expect(child?.parent).toBe(runId);
           yield* stopHost(world.state);
         }),
       [],
