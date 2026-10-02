@@ -241,6 +241,10 @@ export const fetchRef = Effect.fn("RunDetail.fetchRef")(function* (
   HostRefused,
   FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
 > {
+  const part = {
+    offset: Math.max(0, range.offset),
+    length: Math.min(Math.max(0, range.length), RUN_FILE_BYTES),
+  };
   const fs = yield* FileSystem.FileSystem;
   // A part of a text is bytes too: a character across the seam is whole once the parts are joined.
   const asked = (bytes: Uint8Array, size: number, file: string | null): RunFile =>
@@ -249,7 +253,7 @@ export const fetchRef = Effect.fn("RunDetail.fetchRef")(function* (
       : { ref, encoding: "base64", content: Encoding.encodeBase64(bytes), size };
   const text = (content: string): RunFile => {
     const bytes = new TextEncoder().encode(content);
-    return asked(bytes.subarray(range.offset, range.offset + range.length), bytes.length, null);
+    return asked(bytes.subarray(part.offset, part.offset + part.length), bytes.length, null);
   };
   // Only the part asked for, and only from a regular file: a FIFO or device never answers.
   const read = (file: string) =>
@@ -259,9 +263,9 @@ export const fetchRef = Effect.fn("RunDetail.fetchRef")(function* (
         if (info.type !== "File") return yield* refused(`${ref} is not a file`);
         const size = Number(info.size);
         const handle = yield* fs.open(file, { flag: "r" });
-        yield* handle.seek(BigInt(range.offset), "start");
+        yield* handle.seek(BigInt(part.offset), "start");
         const bytes = yield* handle.readAlloc(
-          Math.max(0, Math.min(range.length, size - range.offset)),
+          Math.max(0, Math.min(part.length, size - part.offset)),
         );
         return asked(
           Option.getOrElse(bytes, () => new Uint8Array()),

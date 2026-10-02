@@ -706,7 +706,7 @@ export const FrontDoorRpcs = RpcGroup.make(
       ref: Schema.String,
       /** Where in the item to start, in bytes. */
       offset: Schema.optional(Schema.Int),
-      /** How many bytes from there; `RUN_FILE_BYTES` when not given. */
+      /** How many bytes from there: `RUN_FILE_BYTES` when not given, and at most. */
       length: Schema.optional(Schema.Int),
     },
     success: RunFile,
