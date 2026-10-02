@@ -61,9 +61,11 @@ import { nowIso } from "./time";
 import {
   actorName,
   admit,
+  answeredBy,
   confirm as confirmProposal,
   journalOf,
   read as readProposals,
+  stepResults,
   stepSettled,
   stepStarted,
   type Actor,
@@ -564,6 +566,18 @@ export const carryOutProposal = (
       Effect.succeed(err("invalid_input", refused.detail, { reason: refused.refused })),
     ),
   );
+
+/** What the proposal this request already confirmed came to, or null where it confirmed none. */
+export const carriedBefore = Effect.fn("runActions.carriedBefore")(function* (
+  file: string,
+  request: string,
+) {
+  const lines = yield* readProposals(file);
+  const prior = answeredBy(lines, request);
+  return prior?.kind === "confirmed"
+    ? carriedResult({ proposal: prior.id, results: stepResults(lines, prior.id) })
+    : null;
+});
 
 /** One step's own request, so carrying the same request out again is one operation per step. */
 const stepOf = (actor: Actor, step: string | number): Actor => ({

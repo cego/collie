@@ -18,7 +18,7 @@ import {
   type TabInfo,
   type WorkspaceInfo,
 } from "./herdr";
-import { carryOutProposal } from "./run-actions";
+import { carriedBefore, carryOutProposal } from "./run-actions";
 export { carryOutProposal, registerRunExecutors } from "./run-actions";
 import { shell, type Runner } from "./mr";
 import { installation, RELEASE_TAG } from "./release";
@@ -696,6 +696,14 @@ export const steer = Effect.fn("operations.steer")(function* (
       code: "target_required",
     });
   if (run === null) return err("run_not_found", `No Run "${target}".`, { run: target });
+  // A retry asks nobody again: a second answer could order the same actions differently.
+  if (options.dryRun !== true && options.asked !== "event") {
+    const before = yield* carriedBefore(
+      yield* proposalsPath(env.stateDir, deps.herdKey),
+      options.requestId,
+    );
+    if (before !== null) return before;
+  }
 
   const journal = yield* conversationPath(env.stateDir, deps.herdKey);
   const roots = known.map((r) => r.dir);
