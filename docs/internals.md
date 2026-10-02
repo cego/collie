@@ -341,7 +341,9 @@ installed, are refused before an agent's tab opens.
 `trust.ts` handles a harness's own "may I work in this directory" question, answering it
 where that harness looks for the answer rather than driving its dialog. For claude that is a
 read-modify-write of `~/.claude.json`, a file claude owns — which is why it is done once per
-directory, atomically, and with a backup. What the user sees and how they configure it:
+directory, atomically, and with a backup. `start` in `agents.ts` calls it before each
+agent's harness starts, for the agent's own directory, and only once per directory and
+harness in a Run. What the user sees and how they configure it:
 [Using Collie](using.md#trust-the-first-run-in-a-repo).
 
 ## Compaction at a work boundary
@@ -569,6 +571,14 @@ Every host a test starts ends with that test. `test/support/hosts.ts`, a preload
 each test file a temporary root of its own and tells every host started under it
 (`COLLIE_HOST_WATCH_PID`) to live no longer than the test process; after each test, a host
 still holding a directory under that root is killed and fails the test that left it.
+
+The same preload keeps the suite out of the operator's herd. Before any test file loads it
+drops `COLLIE_USER_DIR`, `COLLIE_CWD` and every `HERDR_*` variable but `HERDR_API_SCHEMA`,
+which the contract check is given on purpose, and sets `HOME` to a directory under that
+root. So a suite run from a herdr pane neither reaches the live session's socket nor
+resolves the default state directory under the real home. A host a test starts inherits
+that environment. A test that needs herdr sets up the fake under `test/support/`;
+`test/isolation.test.ts` fails if the live socket or home gets through.
 
 `bun run test` uses [Bun's process-parallel runner](https://bun.com/docs/test/parallel)
 with four workers and a fresh global per file. Tests within each file stay sequential:
