@@ -21,7 +21,8 @@ export type AuditLine = typeof AuditLine.Type;
 
 const AuditJson = Schema.fromJsonString(AuditLine);
 const sameJson = Schema.toEquivalence(Schema.Json);
-const fileOf = (runDir: string) => `${runDir}/operations.jsonl`;
+export const AUDIT_FILE = "operations.jsonl";
+const fileOf = (runDir: string) => `${runDir}/${AUDIT_FILE}`;
 
 export const readAudit = (runDir: string) => readJournal(fileOf(runDir), AuditJson);
 

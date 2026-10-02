@@ -759,6 +759,22 @@ test("a Run is not quiet while its agent works, a check runs, or its agents writ
     }),
   ));
 
+test("what the host writes about a finished Run does not move when it ended", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const old = "2026-09-13T09:00:00Z";
+      const run = yield* madeRun(dir, { state: "failed", branch: "mk/old-work" });
+      yield* writtenAt(`${run.dir}/log`, old);
+      // The diff kept for its drawer and the trail of who disposed of it.
+      yield* writtenAt(`${run.dir}/diff.json`, "2026-09-14T10:04:00Z");
+      yield* writtenAt(`${run.dir}/operations.jsonl`, "2026-09-14T10:04:00Z");
+
+      const [view] = yield* board(env, [run]);
+      expect(view!.ended).toBe(Date.parse(old));
+    }),
+  ));
+
 test("a hold is held, not a question: nothing is waiting for an answer", () =>
   runEffect(
     Effect.gen(function* () {

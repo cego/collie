@@ -142,7 +142,7 @@ const KeptJson = Schema.fromJsonString(
     patches: Schema.Record(Schema.String, Schema.String),
   }),
 );
-const FINAL_DIFF = "diff.json";
+export const FINAL_DIFF = "diff.json";
 
 /** Paths taken as written: a name with `[` or `*` in it is no glob. */
 const literally = (root: string, args: ReadonlyArray<string>) =>

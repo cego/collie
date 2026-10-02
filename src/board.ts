@@ -5,9 +5,9 @@
 // request has not been merged by anyone.
 
 import { Clock, Effect, FileSystem, Option, Path, Schema } from "effect";
-import { readAudit } from "./audit";
+import { AUDIT_FILE, readAudit } from "./audit";
 import { nothingApproved } from "./outcome";
-import { planDirOf } from "./run-detail";
+import { FINAL_DIFF, planDirOf } from "./run-detail";
 import { approvedFrom, type VerifySpec } from "./verify-spec";
 import { openReports, readDrift } from "./drift";
 import { describeAction } from "./lines";
@@ -562,9 +562,9 @@ const FINISHED_FOR_MS = 24 * 60 * 60 * 1000;
 
 /**
  * When anything in this directory was last written, as `touchedDirAt` measures it but
- * without the one file Collie writes about a Run from outside: a disposition recorded by
- * a human or by the merge watch is bookkeeping, and must not make a dead Run look alive
- * for another minute.
+ * without the files Collie writes about a Run from outside: a disposition, the diff kept
+ * for its drawer and the trail of who asked for what are bookkeeping, and must not make
+ * a dead Run look alive or ended just now.
  */
 const writtenIn = Effect.fn("Board.writtenIn")(function* (dir: string) {
   const fs = yield* FileSystem.FileSystem;
@@ -576,6 +576,7 @@ const writtenIn = Effect.fn("Board.writtenIn")(function* (dir: string) {
     );
   let newest = 0;
   for (const name of yield* fs.readDirectory(dir).pipe(Effect.catch(() => Effect.succeed([])))) {
+    if (name === FINAL_DIFF || name === AUDIT_FILE) continue;
     if (name !== "steering") {
       newest = Math.max(newest, yield* at(path.join(dir, name)));
       continue;
