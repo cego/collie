@@ -247,6 +247,7 @@ const INVENTORY: ReadonlyArray<readonly [string, Route]> = [
   // The line under the human's own prompt; chat is told the same fact at each prompt.
   ["chat status-line", { route: "shell" }],
   ["chat context", { route: "shell" }],
+  ["chat heard", { route: "shell" }],
   ["tools list", { route: "shell" }],
   ["tools call", { route: "shell" }],
   ["mcp", { route: "shell" }],

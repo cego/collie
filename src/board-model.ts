@@ -698,6 +698,9 @@ export const FrontDoorRpcs = RpcGroup.make(
       frontDoor: FrontDoor,
       /** The herdr session socket it runs in, where what it asks names workspaces and panes. */
       session: Schema.optionalKey(Schema.NullOr(Schema.String)),
+      /** A chat's conversation, and the human's message that turn, as its tool host heard it. */
+      conversation: Schema.optionalKey(Schema.String),
+      said: Schema.optionalKey(Schema.String),
     },
     error: HostRefused,
   }),

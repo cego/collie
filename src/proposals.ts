@@ -54,6 +54,8 @@ const SettledSchema = Schema.Struct({
   id: Schema.String,
   at: Schema.String,
   by: Schema.String,
+  conversation: Schema.optionalKey(Schema.String),
+  said: Schema.optionalKey(Schema.String),
 });
 
 /**
@@ -194,9 +196,21 @@ export const record = Effect.fn("Proposals.record")(function* (file: string, wha
  * asked for in chat is carried out as theirs, and what Collie wants of its own accord is
  * a proposal because of where it came from, never because of who confirms it.
  */
-export interface Actor {
+export interface Actor extends Voice {
   readonly origin: FrontDoor;
   readonly requestId: string;
+}
+
+/** Where a chat acted, and what the human said that turn: attached by the tool host, never the model. */
+export interface Voice {
+  readonly conversation?: string;
+  readonly said?: string;
+}
+
+/** Just the voice of anything that carries one, with no key for what it lacks. */
+export function voiceOf({ conversation, said }: Voice): Voice {
+  if (conversation === undefined) return said === undefined ? {} : { said };
+  return said === undefined ? { conversation } : { conversation, said };
 }
 
 export function isHuman(actor: Actor): boolean {
@@ -352,7 +366,7 @@ export const confirm = Effect.fn("Proposals.confirm")(function* (
         currentVersions,
       );
       if ("refused" in judged) return judged;
-      yield* append(file, { kind: "confirmed", id, at, by: actorName(actor) });
+      yield* append(file, { kind: "confirmed", id, at, by: actorName(actor), ...voiceOf(actor) });
       return judged;
     }),
   );
@@ -391,7 +405,7 @@ export const decline = Effect.fn("Proposals.decline")(function* (
         (line) => (line.kind === "confirmed" || line.kind === "declined") && line.id === id,
       );
       if (settled) return settledAs("not_pending", `"${id}" is already ${settled.kind}`, id);
-      yield* append(file, { kind: "declined", id, at, by: actorName(actor) });
+      yield* append(file, { kind: "declined", id, at, by: actorName(actor), ...voiceOf(actor) });
       return settledAs(null, "", id);
     }),
   );

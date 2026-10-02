@@ -290,6 +290,11 @@ test("both adapters are told about the same Collie, in one place", () =>
       };
       const command = hook.hooks.UserPromptSubmit[0]!.hooks[0]!.command;
       expect(command).toEndWith("'/bin/collie' chat context");
+      // And every prompt is handed to the tool host, so a chat's actions carry its words.
+      const heard = hook.hooks.UserPromptSubmit[0]!.hooks[1]!.command;
+      expect(heard).toEndWith("'/bin/collie' chat heard");
+      for (const [key, value] of Object.entries(serverEnv))
+        expect(heard).toContain(`${key}='${value}'`);
       for (const [key, value] of Object.entries(serverEnv))
         expect(command).toContain(`${key}='${value}'`);
       for (const [key, value] of Object.entries(serverEnv)) {

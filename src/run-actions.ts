@@ -124,7 +124,7 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
   ) =>
     carry(
       controlRun(env, {
-        door: by.origin,
+        door: by,
         runId,
         control: which,
         set,
@@ -134,13 +134,13 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
     );
   registerExecutor("stop", (action, by, env) => control(env, by, action.run, "stop", true));
   registerExecutor("resume", (action, by, env) =>
-    carry(resumeRun(env, { door: by.origin, runId: action.run, request: by.requestId })),
+    carry(resumeRun(env, { door: by, runId: action.run, request: by.requestId })),
   );
   registerExecutor("answer", (action, by, env) =>
     carry(
       Effect.gen(function* () {
         return yield* answerRun(env, {
-          door: by.origin,
+          door: by,
           runId: action.run,
           // The question as the board named it, so an answer that arrives after it was
           // replaced lands on the one it was given rather than on whatever is open now.
@@ -167,7 +167,7 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
           text: action.text,
           request: by.requestId,
           mode: action.mode,
-          door: by.origin,
+          door: by,
         });
       }),
     ),
@@ -238,7 +238,7 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
         name: action.name,
         command,
         request: by.requestId,
-        door: by.origin,
+        door: by,
       });
       if (!granted.ok) return failed(granted.error.message);
       const dir = runDir(env.stateDir, action.run);
@@ -286,7 +286,7 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
   registerExecutor("followup", (action, by, env) =>
     carry(
       followUpRun(env, {
-        door: by.origin,
+        door: by,
         runId: action.run,
         text: action.text,
         request: by.requestId,
@@ -315,7 +315,7 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
         if (refused !== null) return failed(refused.error.message);
       }
       const started = yield* startRun(rooted, {
-        door: by.origin,
+        door: by,
         id: action.workflow,
         request: by.requestId,
         // Text, as the action carries it: the module's own schema is what turns it into

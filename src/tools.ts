@@ -37,6 +37,7 @@ import {
   runViews,
   isSettled,
   settleNewsFor,
+  type Door,
 } from "./lifecycle";
 import { taskOfWorkspace } from "./task";
 import { pendingFor, proposalsPath, read as readProposals } from "./proposals";
@@ -49,7 +50,7 @@ import { findRun, listRuns, type RunFacts } from "./runs";
 import { donePasses, markersOf, runningCheck } from "./checks";
 import { deliveriesOf, herdOf } from "./steering";
 import { loadDefinitions, layers } from "./definitions";
-import { chatHarnessOf, chatPath, pushable, readChat, whyUnavailable } from "./chat";
+import { chatHarnessOf, chatPath, heardVoice, pushable, readChat, whyUnavailable } from "./chat";
 import { closable, decide, homePath, readHome, UNREADABLE } from "./home";
 import { doctor } from "./doctor";
 import { defaultsPath, describeDefaults, EMPTY_DEFAULTS, readDefaults } from "./intent";
@@ -518,14 +519,15 @@ const carryOut = Effect.fn("Tools.carryOut")(function* (env: PluginEnv, input: J
   if (wrong.length > 0)
     return `collie_do does not carry out ${[...new Set(wrong.map((a) => a.kind))].join(", ")}: that is collie_propose's, which carries it out in the same call.`;
   const requestId = yield* (yield* Crypto.Crypto).randomUUIDv4;
+  const door: Door = { origin: "chat", ...(yield* heardVoice(env)) };
   const said: string[] =
     selected.on === null
       ? []
       : [`On the board's selection, "${selected.on.name}" (${selected.on.run}):`];
   for (const [index, action] of actions.entries()) {
     const done = yield* isSettle(action)
-      ? settle(env, action, `${requestId}-${index}`)
-      : actAsked(env, { door: "chat", actions: [action], request: `${requestId}-${index}` }).pipe(
+      ? settle(env, door, action, `${requestId}-${index}`)
+      : actAsked(env, { door, actions: [action], request: `${requestId}-${index}` }).pipe(
           Effect.map((results) => results[0]!),
         );
     said.push(`${done.kind}: ${done.state}${done.note ? ` — ${done.note}` : ""}`);
@@ -538,6 +540,7 @@ const carryOut = Effect.fn("Tools.carryOut")(function* (env: PluginEnv, input: J
 /** A decision of the board's, taken where the human said it, by the host. */
 const settle = Effect.fn("Tools.settle")(function* (
   env: PluginEnv,
+  door: Door,
   action: Settle,
   request: string,
 ) {
@@ -545,7 +548,7 @@ const settle = Effect.fn("Tools.settle")(function* (
     const run = yield* findRun(env, action.run);
     if (run === null) return { kind: action.kind, state: "failed", note: `no Run "${action.run}"` };
     const done = yield* disposeRun(env, {
-      door: "chat",
+      door,
       runId: run.id,
       kind: action.became,
       ref: action.ref ?? "",

@@ -13,6 +13,7 @@ import {
   chatHarnessOf,
   chatPath,
   DEFAULT_CHAT_HARNESS,
+  hear,
   isChatHarness,
   pushable,
   readChat,
@@ -33,7 +34,7 @@ import { settleNewsFor } from "../lifecycle";
 import { herdOf } from "../steering";
 import { isJsonObject } from "../schema";
 import { TOOLS, toolNamed } from "../tools";
-import { UnknownJson, answering, requestIdFlag } from "./shared";
+import { UnknownJson, answering, requestIdFlag, stdinText } from "./shared";
 import { mutation } from "../envelope";
 
 /**
@@ -209,6 +210,19 @@ const context = Command.make("context", {}, () =>
   ),
 ).pipe(Command.withDescription("The board's selection, as a chat prompt's context"));
 
+/**
+ * What Claude Code's other `UserPromptSubmit` hook runs: the prompt, from the hook's input
+ * on stdin, handed to the tool host so what chat does this turn carries the human's words.
+ */
+const heard = Command.make("heard", {}, () =>
+  answering((env) =>
+    Effect.gen(function* () {
+      yield* hear(env, yield* stdinText);
+      return { ok: true as const, data: {}, human: "" };
+    }),
+  ),
+).pipe(Command.withDescription("Keep this turn's prompt for chat's actions (Claude's hook)"));
+
 const list = Command.make("list", {}, () =>
   answering(() =>
     Effect.succeed({
@@ -263,7 +277,7 @@ export const tools = Command.make("tools").pipe(
 
 export const chat = Command.make("chat").pipe(
   Command.withDescription(`The Home's native conversation (default ${DEFAULT_CHAT_HARNESS})`),
-  Command.withSubcommands([status, harness, news, statusLine, context]),
+  Command.withSubcommands([status, harness, news, statusLine, context, heard]),
 );
 
 /**
