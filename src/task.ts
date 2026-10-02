@@ -53,7 +53,10 @@ const tasksDir = Effect.fn("task.tasksDir")(function* (stateDir: string) {
   return (yield* Path.Path).join(stateDir, "tasks");
 });
 
-const taskFile = Effect.fn("task.taskFile")(function* (stateDir: string, id: string) {
+const taskFile = Effect.fn("task.taskFile")(function* (
+  stateDir: string,
+  id: string,
+) {
   return (yield* Path.Path).join(yield* tasksDir(stateDir), `${id}.json`);
 });
 
@@ -62,7 +65,10 @@ const taskFile = Effect.fn("task.taskFile")(function* (stateDir: string, id: str
  * the Run store applies to a Run id applies here: a `../` id must not read a file
  * outside the state directory.
  */
-export const readTask = Effect.fn("task.readTask")(function* (stateDir: string, id: string) {
+export const readTask = Effect.fn("task.readTask")(function* (
+  stateDir: string,
+  id: string,
+) {
   const fs = yield* FileSystem.FileSystem;
   if (unsafePathComponent(id)) return null;
   const file = yield* taskFile(stateDir, id);
@@ -73,7 +79,9 @@ export const readTask = Effect.fn("task.readTask")(function* (stateDir: string, 
   );
 });
 
-export const listTasks = Effect.fn("task.listTasks")(function* (stateDir: string) {
+export const listTasks = Effect.fn("task.listTasks")(function* (
+  stateDir: string,
+) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const dir = yield* tasksDir(stateDir);
@@ -96,21 +104,34 @@ export const taskOfWorkspace = Effect.fn("task.taskOfWorkspace")(function* (
   workspaceId: string | null,
 ) {
   if (!workspaceId) return null;
-  return (yield* listTasks(stateDir)).find((task) => task.workspace === workspaceId) ?? null;
+  return (
+    (yield* listTasks(stateDir)).find(
+      (task) => task.workspace === workspaceId,
+    ) ?? null
+  );
 });
 
+let taskWrites = 0;
+
+/** Written aside and renamed in, so a reader never meets a half-written Task. */
 export const writeTask = Effect.fn("task.writeTask")(function* (
   stateDir: string,
   task: TaskRecord,
 ) {
   const fs = yield* FileSystem.FileSystem;
   yield* fs.makeDirectory(yield* tasksDir(stateDir), { recursive: true });
-  yield* fs.writeFileString(yield* taskFile(stateDir, task.id), `${encodeTask(task)}\n`);
+  const file = yield* taskFile(stateDir, task.id);
+  const tmp = `${file}.${process.pid}.${++taskWrites}.tmp`;
+  yield* fs.writeFileString(tmp, `${encodeTask(task)}\n`);
+  yield* fs.rename(tmp, file);
   return task;
 });
 
 /** Forgets the Task; its Runs' records are the store's and are left alone. */
-export const removeTask = Effect.fn("task.removeTask")(function* (stateDir: string, id: string) {
+export const removeTask = Effect.fn("task.removeTask")(function* (
+  stateDir: string,
+  id: string,
+) {
   const fs = yield* FileSystem.FileSystem;
   if (unsafePathComponent(id)) return;
   yield* fs.remove(yield* taskFile(stateDir, id), { force: true });
@@ -130,7 +151,12 @@ export const withTaskLock = <A, E, R>(
   Effect.gen(function* () {
     const file = yield* taskFile(stateDir, id);
     yield* ensureLockDir(file);
-    return yield* withLock(`${file}.lock`, new TaskBusy({ id }), effect, TASK_LOCK_CLAIMS);
+    return yield* withLock(
+      `${file}.lock`,
+      new TaskBusy({ id }),
+      effect,
+      TASK_LOCK_CLAIMS,
+    );
   });
 
 export const newTask = Effect.fn("task.newTask")(function* (opts: {

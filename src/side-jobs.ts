@@ -54,8 +54,9 @@ const sayWhatHappened = Effect.fn("SideJobs.sayWhatHappened")(function* (
   const drifting = yield* escalatedDrift(runs);
   const ready = readyRuns(views);
   const gone = retired(yield* readNews(file));
+  const held = holding(runs, drifting, yield* disposed(runs), ready, done);
   for (const event of eventsIn(runs, drifting, ready, done)) {
-    if (said.has(event.key) && !gone.has(event.key)) continue;
+    if (!held.has(event.key) || (said.has(event.key) && !gone.has(event.key))) continue;
     // Remembered only once it is in the journal, so a failed write is retried next round.
     const queued = yield* appendNews(file, {
       key: event.key,
@@ -64,7 +65,6 @@ const sayWhatHappened = Effect.fn("SideJobs.sayWhatHappened")(function* (
     }).pipe(Effect.catchCause(() => Effect.succeed(null)));
     if (queued !== null) yield* remember(dir, event.key, yield* nowIso());
   }
-  const held = holding(runs, drifting, yield* disposed(runs), ready, done);
   yield* supersede(file, (item) => held.has(item.key));
 });
 

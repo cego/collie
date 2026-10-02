@@ -434,13 +434,13 @@ const sideJobsLayer = (dir: string, panels: MrPanels) =>
     }),
   );
 
+/** A Herd's key names one directory under the state directory, and nothing above it. */
+const isHerdName = (herd: string) => herd !== "." && herd !== ".." && /^[^/\\]+$/.test(herd);
+
 /**
  * The board, built here for every front door. Anything written under the state
  * directory, by this host or anyone else, is a reason to look again.
  */
-/** A Herd's key names one directory under the state directory, and nothing above it. */
-const isHerdName = (herd: string) => herd !== "." && herd !== ".." && /^[^/\\]+$/.test(herd);
-
 const frontDoorHandlers = (
   dir: string,
   installation: string,
