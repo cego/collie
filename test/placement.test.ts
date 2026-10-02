@@ -661,7 +661,8 @@ test(
                     .readFileString(`${evidenceDir(dir(), `${runId}.implement-api`)}/approved.json`)
                     .pipe(Effect.orElseSucceed(() => null)),
                 ]),
-              ([view, read]) => view?.branch != null && read !== null,
+              // Written in place, so a read can land between the open and the write.
+              ([view, read]) => view?.branch != null && (read ?? "").trim() !== "",
             );
             return {
               runId,

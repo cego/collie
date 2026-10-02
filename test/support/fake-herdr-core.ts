@@ -3,6 +3,10 @@
 
 import { Cause, Clock, Config, Effect, FileSystem, Option, Path, Schema, Semaphore } from "effect";
 
+/** How a shim runs the fake: what `bun run test` compiled of it, or else its source. */
+export const fakeHerdrCommand = (source: string) =>
+  Bun.env.COLLIE_TEST_FAKE_HERDR ?? `${process.execPath} ${source}`;
+
 interface FakeTab {
   tab_id: string;
   label: string;
