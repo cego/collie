@@ -1480,7 +1480,7 @@ const textBoard = Effect.fn("Flows.textBoard")(function* (
    * does — a pane too narrow for the renderer must not be a quieter board.
    */
   let unreadable: string | null = null;
-  /** The board's own Tasks, so the text view and the pane draw the same three sections. */
+  /** The board's own Tasks, so the text view and the pane draw the same sections. */
   const tasksOf = () =>
     boardRead(session, env).pipe(
       Effect.map((read) => {

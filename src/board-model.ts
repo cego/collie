@@ -882,8 +882,8 @@ export function matchesTask(view: TaskView, query: string): boolean {
 }
 
 /**
- * The three sections, in the order the board draws them, from a list already in the
- * board's own order. The search narrows all three the same way: a Task hidden from one
+ * The four sections, in the order the board draws them, from a list already in the
+ * board's own order. The search narrows them all the same way: a Task hidden from one
  * section must not be visible in another.
  */
 export function sectionsOf(views: ReadonlyArray<TaskView>, query: string): Sections {

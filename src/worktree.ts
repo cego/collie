@@ -1240,10 +1240,9 @@ function fromRuns(runs: ReadonlyArray<RunFacts>, registered: ReadonlyArray<Agent
 
 /**
  * Removes the worktrees this repository has that are settled, and reports what it did
- * and what it is holding — one line each, so nothing is silent. Runs where Collie
- * already wakes up: at every `run start` and every Control Plane refresh, with each
- * worktree's verdict standing for a few minutes so a 1.5-second refresh does not
- * shell out to git and glab over and over.
+ * and what it is holding — one line each, so nothing is silent. The host's sweep runs
+ * it, with each worktree's verdict standing for a few minutes so a sweep does not shell
+ * out to git and glab for every checkout every time.
  */
 interface PruneOptions {
   herdr: Herdr;
@@ -1376,9 +1375,8 @@ const prune = Effect.fn("worktree.prune")(function* (
 
 /**
  * How every round ends, whether it judged anything or not: what moved is written down,
- * and what the board should say is answered. Only when something actually moved —
- * this runs on a board refresh, and rewriting the same bytes on every one of those is
- * a disk write nobody asked for.
+ * and what the board should say is answered. Only when something actually moved:
+ * rewriting the same bytes every sweep is a disk write nobody asked for.
  */
 const conclude = Effect.fn("worktree.conclude")(function* (opts: {
   state: PruneState;
@@ -1497,7 +1495,7 @@ const removeWorktree = Effect.fn("worktree.removeWorktree")(function* (
  * Removes what is settled and answers with what it did — never with a failure: the host's
  * sweep has no use for a state file that would not read, and would not stop for one.
  *
- * One pruner at a time, under the same pid lock the run records use. Two run starts
+ * One pruner at a time, under the same pid lock the run records use. Two pruners
  * at once would otherwise read the same verdicts, decide separately and write over
  * each other, and could ask git to remove one checkout twice. A contended lock means
  * somebody else is already doing this, so there is nothing to say and nothing to wait
