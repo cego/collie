@@ -289,6 +289,9 @@ test(
         yield* hostOne.ask({ op: "start", id: "proof", runId: "shared", input: { note: "one" } });
         const elsewhere = yield* hostTwo.ask({ op: "poll", id: "proof", runId: "shared" });
         expect(elsewhere.ok).toBe(false);
+        // Stopped once it waits: a host stopped mid-step gives the step upstream's fifteen
+        // seconds to end, and this test is not about that.
+        yield* hostOne.until({ op: "poll", id: "proof", runId: "shared" }, suspended);
         yield* hostOne.stop;
         yield* hostTwo.stop;
       }).pipe(Effect.scoped),
@@ -297,7 +300,7 @@ test(
 );
 
 test(
-  "the provisioned toolchain typechecks a module, and says where a broken one is wrong",
+  "the provisioned toolchain typechecks every module against the declarations an author is given, and says where a broken one is wrong",
   () =>
     runEffect(
       Effect.gen(function* () {
@@ -322,9 +325,38 @@ test(
         expect(clean.diagnostics).toEqual([]);
 
         // One module's error says nothing about another's: the broken one names its own
-        // file and line, and the entries beside it still check clean — a definition among
-        // them, typechecked against the same declarations authors are given.
-        const beside = ["plain", "hello", "quiet", "branches", "delegates", "declines"];
+        // file and line, and the entries beside it still check clean.
+        const beside = [
+          "plain",
+          // Definitions, typechecked against the same declarations authors are given.
+          "hello",
+          "quiet",
+          "branches",
+          "delegates",
+          "declines",
+          // The examples an author is given.
+          "echo",
+          "unwired",
+          "agent",
+          "rally",
+          "reviewed",
+          "graded",
+          "roster",
+          "sweep",
+          "spread",
+          "share",
+          "offered",
+          "planned",
+          // A fork of a shipped workflow, which is code an author writes the same way.
+          "landing",
+          // The shipped five, held to the same declarations: a workflow Collie ships is
+          // a module an author could have written, or the contract is two contracts.
+          "plan",
+          "review",
+          "architecture",
+          "implement",
+          "renovate",
+        ];
         const checked = yield* host.ask({
           op: "checks",
           entries: ["broken", ...beside].map((name) => `${wf}/${name}.workflow.ts`),
@@ -604,51 +636,4 @@ test(
       }).pipe(Effect.scoped),
     ),
   120_000,
-);
-
-test(
-  "the example module typechecks against the declarations an author is given",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const { wf, state } = yield* workspace("collie-engine-sdk-types-");
-        const host = yield* openHost(state);
-        expect((yield* host.ask({ op: "provision", dir: wf })).ok).toBe(true);
-        const entries = [
-          "echo.workflow.ts",
-          "unwired.workflow.ts",
-          "proof.workflow.ts",
-          "agent.workflow.ts",
-          "rally.workflow.ts",
-          "reviewed.workflow.ts",
-          "graded.workflow.ts",
-          "roster.workflow.ts",
-          "sweep.workflow.ts",
-          "spread.workflow.ts",
-          "share.workflow.ts",
-          "offered.workflow.ts",
-          "planned.workflow.ts",
-          // A fork of a shipped workflow, which is code an author writes the same way.
-          "landing.workflow.ts",
-          // The shipped five, held to the same declarations: a workflow Collie ships is
-          // a module an author could have written, or the contract is two contracts.
-          "plan.workflow.ts",
-          "review.workflow.ts",
-          "architecture.workflow.ts",
-          "implement.workflow.ts",
-          "renovate.workflow.ts",
-        ];
-        const checked = yield* host.ask({
-          op: "checks",
-          entries: entries.map((entry) => `${wf}/${entry}`),
-        });
-        expect(checked.ok).toBe(true);
-        const problems = Schema.decodeUnknownSync(Problems)(checked.value);
-        for (const entry of entries) {
-          expect([entry, problems[`${wf}/${entry}`]]).toEqual([entry, []]);
-        }
-        yield* host.stop;
-      }).pipe(Effect.scoped),
-    ),
-  300_000,
 );
