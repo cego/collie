@@ -37,3 +37,8 @@ own. A front door names no Herd.
   the board puts the target on screen itself once the host says it applied.
 - The CLI's own receipts are still written by the CLI: they are its record of a command,
   not the Machine's state.
+- Two CLI commands still write a Run's state themselves, so only a Collie on the same
+  computer can make them: `collie run intent …` amends `intent.json` (and, with
+  `--propagate`, its children's), and `collie run clear-override` appends to an agent's
+  ledger. Confirmed or asked through the host as `update_intent`, `set_verification` and
+  `clear_override`, the same changes are the host's.

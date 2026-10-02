@@ -1,6 +1,6 @@
-// The host is the only writer of its state directory: a yes or a no to a proposal, what
-// became of a Run's work, a steer and a follow-up are each its operations, under the front
-// door that asked, and the same request twice is one operation.
+// A yes or a no to a proposal, what became of a Run's work, a steer and a follow-up are
+// each the host's operations, under the front door that asked, and the same request twice
+// is one operation.
 
 import { expect, test } from "bun:test";
 import { Effect, FileSystem, Schema } from "effect";
