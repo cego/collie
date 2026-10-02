@@ -368,6 +368,7 @@ scenario(
         const body = yield* persona("r-arch", "architecture");
         expect(body).toContain("You are an architect");
         expect(body).toContain("improve-codebase-architecture/SKILL.md");
+        expect((yield* launched())[0]?.args).toContain("--model opus --effort xhigh");
       }),
     ),
   120_000,
@@ -530,6 +531,7 @@ scenario(
           `Write the spec to \`${runDir(dir, "r-plan")}/plan/SPEC.md\``,
         );
         expect(yield* persona("r-plan", "grill")).toContain("You are a planner");
+        expect((yield* launched())[0]?.args).toContain("--model opus --effort xhigh");
       }),
     ),
   120_000,

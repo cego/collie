@@ -131,11 +131,11 @@ export default defineWorkflow({
   input: Schema.Struct({ goal: Schema.String }),
   output: Schema.String,
   // The planner's own, which a Run's --model or a scope around it can still change, and a
-  // second opinion's: another model than the one that wrote the plan.
+  // second opinion's: a fresh agent with its own context.
   agents: {
     harness: "claude",
-    model: "fable",
-    effort: "high",
+    model: "opus",
+    effort: "xhigh",
     roles: { reviewer: { harness: "claude", model: "opus", effort: "xhigh" } },
   },
   hints: { goal: "goal" },

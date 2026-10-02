@@ -70,7 +70,7 @@ export default defineWorkflow({
   hints: { goal: "goal" },
   output: Schema.String,
   // Design, like planning: the planner's model and effort.
-  agents: { harness: "claude", model: "fable", effort: "high" },
+  agents: { harness: "claude", model: "opus", effort: "xhigh" },
   run: ({ input: asked }) =>
     Effect.gen(function* () {
       const host = yield* Host;
