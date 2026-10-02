@@ -1,12 +1,12 @@
 {
-  "name": "Collie · The personalized companion",
+  "name": "Collie · Luma in black and white",
   "colors": {
-    "forest": "#1C5145",
-    "deep": "#142E27",
-    "meadow": "#D9F28F",
-    "mist": "#E8F1EB",
-    "chalk": "#F7F9F5",
-    "ink": "#202B26"
+    "black": "#171717",
+    "deep": "#101010",
+    "silver": "#dedede",
+    "mist": "#ededed",
+    "chalk": "#fafafa",
+    "ink": "#262626"
   },
   "typography": {
     "wordmark": {

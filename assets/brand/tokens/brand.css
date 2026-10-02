@@ -1,10 +1,10 @@
 :root {
-  --collie-forest: #1C5145;
-  --collie-deep: #142E27;
-  --collie-meadow: #D9F28F;
-  --collie-mist: #E8F1EB;
-  --collie-chalk: #F7F9F5;
-  --collie-ink: #202B26;
+  --collie-black: #171717;
+  --collie-deep: #101010;
+  --collie-silver: #dedede;
+  --collie-mist: #ededed;
+  --collie-chalk: #fafafa;
+  --collie-ink: #262626;
   --collie-font: "DM Sans", sans-serif;
   --collie-wordmark-font: "Nunito Sans", sans-serif;
   --collie-radius: 12px;
