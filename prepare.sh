@@ -143,17 +143,18 @@ skills_skipped() { # output, what went wrong
   step skills "skipped — $2; run \`collie upgrade\` to try again"
 }
 
-# Non-fatal on purpose: this step needs the network and a Node runtime, and neither
-# is a reason to leave a machine without a runner. What it cannot do, it says.
+# The runner is Bun, so `BUN_BE_BUN=1` makes it run the CLI as `bun x` would: no Node
+# needed. Non-fatal on purpose: this step needs the network, which is no reason to leave
+# a machine without a runner.
+skills_cli() {
+  BUN_BE_BUN=1 "$ROOT/bin/collie" x "$SKILLS_CLI" "$@" </dev/null 2>&1
+}
+
 skills_step() {
-  if ! command -v npx >/dev/null 2>&1; then
-    step skills "skipped — no npx on PATH; install Node, then run \`collie upgrade\`"
-    return 0
-  fi
   before=$(skills_here)
   if [ "$(cat "$SKILL_STAMP" 2>/dev/null || true)" != "$before" ]; then
     for source in $SKILL_SOURCES; do
-      if ! out=$(npx -y "$SKILLS_CLI" add "$source" -g -y --skill '*' --agent universal claude-code </dev/null 2>&1); then
+      if ! out=$(skills_cli add "$source" -g -y --skill '*' --agent universal claude-code); then
         skills_skipped "$out" "could not add $source"
         return 0
       fi
@@ -163,7 +164,7 @@ skills_step() {
     # three of these again on every upgrade from here on.
     stamp_now
   fi
-  if ! out=$(npx -y "$SKILLS_CLI" update -g -y </dev/null 2>&1); then
+  if ! out=$(skills_cli update -g -y); then
     skills_skipped "$out" "could not update the skills"
     return 0
   fi

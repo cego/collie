@@ -17,7 +17,7 @@ import type { YamlMap } from "../yaml";
 const InputsJson = Schema.fromJsonString(Schema.Record(Schema.String, Schema.Json));
 
 /** Everything on stdin, for `--inputs-json -`, through the Stdio service. */
-const stdinText = Effect.gen(function* () {
+export const stdinText = Effect.gen(function* () {
   const stdio = yield* Stdio.Stdio;
   return yield* stdio.stdin.pipe(
     Stream.decodeText(),

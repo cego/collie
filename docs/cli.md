@@ -1095,9 +1095,10 @@ overwritten. See [Authoring](authoring.md) for what the resulting file means.
 
 With `--json`, every command prints exactly one line: a success or a failure envelope. That
 holds for a crash too — a defect is caught and reported as `operation_failed` rather than
-leaving you an empty stream and an exit status. The one exception is
+leaving you an empty stream and an exit status. The exceptions are
 [`run wait --follow`](#watch-a-run), which streams events and ends without an envelope when
-the run finishes. The examples on this page are indented for reading; Collie writes each on
+the run finishes, and [`onboard`](#onboarding-a-machine), which prints a line per step
+before its envelope. The examples on this page are indented for reading; Collie writes each on
 one line.
 
 Success:
@@ -1132,20 +1133,20 @@ human line and a failure prints `error.message`.
 
 ### Error codes
 
-| Code                  | When                                                                                                  |
-| --------------------- | ----------------------------------------------------------------------------------------------------- |
-| `workspace_required`  | The command needs a workspace and none could be determined.                                           |
-| `workspace_not_found` | The `--workspace` id is not a workspace herdr has.                                                    |
-| `workflow_not_found`  | No layer defines that workflow.                                                                       |
-| `persona_not_found`   | No layer defines that persona.                                                                        |
-| `run_not_found`       | No run with that id, or none by that id in the Task this command is scoped to.                        |
-| `task_not_found`      | `--task` named a Task that does not exist.                                                            |
-| `target_exists`       | A fork would overwrite a file that is already there.                                                  |
-| `needs_input`         | Inputs are missing; `details.inputs` says which, with their questions.                                |
-| `timeout`             | `run wait --timeout` gave up.                                                                         |
-| `invalid_state`       | The run is not in a state where that makes sense — resuming one that already succeeded, for instance. |
-| `invalid_input`       | A flag or argument was wrong.                                                                         |
-| `operation_failed`    | Anything else, including a caught defect.                                                             |
+| Code                  | When                                                                                                                                                       |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `workspace_required`  | The command needs a workspace and none could be determined.                                                                                                |
+| `workspace_not_found` | The `--workspace` id is not a workspace herdr has.                                                                                                         |
+| `workflow_not_found`  | No layer defines that workflow.                                                                                                                            |
+| `persona_not_found`   | No layer defines that persona.                                                                                                                             |
+| `run_not_found`       | No run with that id, or none by that id in the Task this command is scoped to.                                                                             |
+| `task_not_found`      | `--task` named a Task that does not exist.                                                                                                                 |
+| `target_exists`       | A fork would overwrite a file that is already there.                                                                                                       |
+| `needs_input`         | Inputs are missing; `details.inputs` says which, with their questions.                                                                                     |
+| `timeout`             | `run wait --timeout` gave up.                                                                                                                              |
+| `invalid_state`       | The run, or the installation, is not in a state where that makes sense — resuming one that already succeeded, or `upgrade --to` on a development checkout. |
+| `invalid_input`       | A flag or argument was wrong.                                                                                                                              |
+| `operation_failed`    | Anything else, including a caught defect.                                                                                                                  |
 
 ## Retrying safely
 
@@ -1186,13 +1187,91 @@ collie upgrade
 Pulls first where the installation is a checkout (`--ff-only`), then runs `prepare.sh` —
 the one routine every entry point ends in, so this brings the plugin link, the runner and
 shim, the operator skill and the skills up to date together rather than replacing the
-runner alone. A pull it cannot do is reported rather than installed over.
+runner alone. A pull it cannot do is reported rather than installed over. A runner
+`install.sh` downloads replaces the one there only once its signature checks out
+([Build and release](internals.md)). Otherwise an install with bun builds the runner from
+source, and one without keeps the runner already there and the `runner` step fails.
 
 The report names what moved: the commit range where the checkout advanced, and one line
 per preparation step saying whether it was done, was already in place, or was skipped —
 so "nothing to do" reads differently from "the runner updated but the skills step could
 not run". A skipped step is not a failure: `upgrade` still succeeds. Under `--json` the
 same steps are in `data.steps`.
+
+```sh
+collie upgrade --to 0.27.0
+```
+
+Moves a released install to exactly that version (fetching tags, then resetting to the
+tag), and reports the same way, with `data.version`. A development checkout — on a branch
+other than `master`, detached on a commit that is not a release, with uncommitted changes,
+or ahead of its remote — is refused as `invalid_state` with the reason, and its checkout is left as it was.
+A host's `identity` names such a checkout's build as `development: "<version>+<sha>"`.
+
+## Onboarding a Machine
+
+```sh
+collie onboard [--to 0.27.0] [--secrets-stdin] [--skip helle] [--skip linear]
+```
+
+Takes a Machine from bare to a working Collie host, and repairs a half-onboarded one: every
+step looks before it acts, so running it again does only what is missing. `--to` is the
+release to install, this runner's own version when it is not given. Nothing runs sudo.
+
+| Step           | What it does                                                                                                                                                                                                                                                                                                                                                              |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `system`       | Checks for `git`, `curl` and an OpenSSL 3.0 or later (which checks a downloaded runner's signature; LibreSSL and 1.1 cannot). Any missing stops here with `needs_root` and the exact command; an older OpenSSL gets one only where a package gives OpenSSL 3 (EPEL's `openssl3` with dnf, `brew install openssl`), and otherwise needs OpenSSL 3 or bun installed by hand |
+| `collie`       | Clones `https://github.com/cego/collie.git` (or `COLLIE_REPO`) into `~/.collie` (or `COLLIE_DIR`) and resets `master` to the tag, so a plain `collie upgrade` can still pull; or moves a released checkout to the tag as `upgrade --to` does                                                                                                                              |
+| `herdr`        | `curl -fsSL https://herdr.dev/install.sh \| sh`, if there is no `herdr`                                                                                                                                                                                                                                                                                                   |
+| `claude`       | Anthropic's user-level installer, `curl -fsSL https://claude.ai/install.sh \| bash`, if there is no `claude`                                                                                                                                                                                                                                                              |
+| `path`         | Adds `~/.local/bin` (and `COLLIE_BIN_DIR`) to PATH in the shell's profile (`~/.bashrc`, `~/.zshrc` or `~/.profile`)                                                                                                                                                                                                                                                       |
+| `plugin`       | `prepare.sh`: the plugin link, the runner and shim, the operator skill and the skills. A runner `install.sh` downloads is installed only once the release key's signature (`<asset>.sig`) checks out                                                                                                                                                                      |
+| `claude-login` | `claude auth login` in this terminal, if `claude auth status --json` says Claude Code is not logged in; without a terminal, `needs_human` with that command                                                                                                                                                                                                               |
+| `gitlab`       | `glab auth login --hostname gitlab.cego.dk --stdin` (or `GITLAB_HOST`) with `GITLAB_TOKEN`, if glab is not already logged in there. Without a token: `needs_human`, with the token page and its `api` and `write_repository` scopes as `url`                                                                                                                              |
+| `push`         | Generates `~/.ssh/id_ed25519` if there is none and registers it with `glab ssh-key add`, unless the Machine can already push (over HTTPS with glab's login, or with its own key). GitLab's host key is trusted on first use, and a key GitLab already has counts as registered                                                                                            |
+| `helle`        | Writes `HELLE_API_URL` and `HELLE_API_TOKEN` to Helle's credentials file, owner-only; with neither given and no file, `needs_human`                                                                                                                                                                                                                                       |
+| `linear`       | `claude mcp add --transport http --scope user linear-server https://mcp.linear.app/mcp`, then `claude mcp login linear-server` in a terminal of its own, whose URL is streamed                                                                                                                                                                                            |
+| `doctor`       | [`collie doctor`](#checking-an-installation); onboarded means it is ready                                                                                                                                                                                                                                                                                                 |
+
+A development checkout — the one this runner belongs to when that is a checkout, or
+`COLLIE_DIR` — is judged as [`upgrade --to`](#upgrading) judges one, and gets the checks
+only and the logins: nothing is installed and its checkout is not moved.
+
+Secrets are never arguments. `--secrets-stdin` reads `KEY=value` lines from stdin —
+`GITLAB_TOKEN`, `HELLE_API_URL` and `HELLE_API_TOKEN` — and the token reaches glab on its
+stdin too. Helle and Linear count toward onboarded unless `--skip` names them; a skipped
+step reports `skipped`. Doctor's own checks for them stay optional.
+
+Each step prints a line when it starts and one when it ends. Under `--json` each is a JSON
+line, then the envelope:
+
+```json
+{"event":"start","step":"system","title":"Checking for git, curl and openssl"}
+{"event":"result","step":"system","status":"needs_root","detail":"git must be installed as root; run the command, then onboard again","command":"sudo apt-get install -y git"}
+```
+
+A step that needs the human in the middle of it streams a `human` line first, as the Linear
+login does with its URL and the local port its redirect comes back to:
+
+```json
+{
+  "event": "human",
+  "step": "linear",
+  "detail": "open this to let Claude Code reach Linear",
+  "url": "https://mcp.linear.app/authorize?…",
+  "port": 62074
+}
+```
+
+In a terminal the login also takes a pasted redirect URL. Chat can propose an onboarding
+too (the `onboard` action, with an optional `skip`); nobody is watching that stream, so its
+logins are left as `needs_human` steps rather than started.
+
+`status` is `done`, `in_place`, `skipped`, `needs_root`, `needs_human` or `failed`; a
+result may carry the `command` to run by hand and the `url` to open. The envelope's
+`data.ready` is true only when every step ended `done`, `in_place` or `skipped`, and
+`data.steps` repeats every result; otherwise it is an `operation_failed` that lists what is
+left, and the exit status is 1. Re-running is the retry.
 
 ## Checking an installation
 
@@ -1204,10 +1283,16 @@ collie doctor --json
 Every prerequisite in one pass, each with the command that fixes it: herdr present and at
 least the `min_herdr_version` the plugin manifest declares; the plugin linked from this
 installation; the runner built and the `collie` shim on PATH (installed-but-not-on-PATH is
-its own reported state); a Node runtime for the skills CLI; every skill and every harness
+its own reported state); every skill and every harness
 the loaded workflows and personas name; whether the checkout is behind its remote; the
 Projects root and its source — `projects.root`, `GITTE_CWD`, or the home directory, the last
-a `!` warning that never fails the run; and `glab` present and logged in.
+a `!` warning that never fails the run; `glab` present and logged in; Claude Code logged
+in, from `claude auth status --json`, where `claude` is on PATH; for each GitLab host glab
+is logged in to, its token's expiry, a `!` warning within 14 days of it and a failure once
+it has passed; and whether this Machine can push to each of those hosts — over SSH with its
+own key, or over HTTPS where glab configured git to use it. An agent sshd forwarded into the
+session does not count, since it goes when the computer it came from sleeps. With more than
+one host, each of those two checks is named with its host.
 
 Two more are optional, and reported rather than required. **Helle**, where a loaded
 workflow waits on it (`renovate` does): the credentials file the Helle MCP wrapper sources,
@@ -1291,7 +1376,8 @@ It says which build it is, and which installation it serves. A client newer than
 from the same installation (after `collie upgrade`), stops it and starts itself in its
 place. Any other client of another build is told which build is running and which pid to
 stop, and sends nothing else. That includes a checkout under development, which is pointed
-at a state directory of its own rather than replacing the installed host.
+at a state directory of its own rather than replacing the installed host. Such a
+checkout's host also says `development: "<version>+<sha>"`; a release's does not.
 A host that cannot be started at all is `HostUnavailable`, with whether anything owns the
 directory. [ADR-0015](adr/0015-one-local-host-owns-a-state-directory.md) is why each of
 those is the way it is.

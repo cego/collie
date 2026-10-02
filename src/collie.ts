@@ -9,6 +9,7 @@ import { task } from "./commands/task";
 import { root } from "./commands/shared";
 import { doctor } from "./commands/doctor";
 import { upgrade } from "./commands/upgrade";
+import { onboard } from "./commands/onboard";
 import { verify } from "./commands/verify";
 import { confirm, decline, proposal, steer } from "./commands/steer";
 import { chat, mcp, tools } from "./commands/chat";
@@ -36,6 +37,7 @@ export const app = root.pipe(
     tools,
     mcp,
     upgrade,
+    onboard,
     doctor,
     host,
   ]),

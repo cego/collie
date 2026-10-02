@@ -62,6 +62,8 @@ import { layers, loadDefinitions } from "./definitions";
 import { closable } from "./home";
 import { forkResolvedDefinition } from "./fork";
 import { upgrade } from "./operations";
+import { onboard } from "./onboard";
+import manifest from "../herdr-plugin.toml";
 import { nowIso } from "./time";
 import {
   actorName,
@@ -427,6 +429,21 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
     upgrade(env).pipe(
       Effect.map(settled),
       Effect.catch((cause) => Effect.succeed(failed(String(cause)))),
+    ),
+  );
+  // Unattended: nobody sees a login's URL from here, so a login is left as a step to do.
+  registerExecutor("onboard", (action) =>
+    onboard(
+      env,
+      {
+        to: manifest.version,
+        skip: action.skip ?? [],
+        attended: false,
+      },
+      () => Effect.void,
+    ).pipe(
+      Effect.map(settled),
+      Effect.catch((cause) => Effect.succeed(failed(reason(cause)))),
     ),
   );
   yield* Effect.void;

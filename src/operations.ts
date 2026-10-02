@@ -22,6 +22,8 @@ import { carryOutProposal } from "./run-actions";
 // here so a front door still has one import for "what a human asked Collie to do".
 export { carryOutAsked, carryOutProposal, registerRunExecutors } from "./run-actions";
 import { shell, type Runner } from "./mr";
+import { installation, RELEASE_TAG } from "./release";
+import manifest from "../herdr-plugin.toml";
 import { everyRegistered, type AgentEntry } from "./registry";
 import { listRuns, type RunFacts } from "./runs";
 import { newTask, taskOfWorkspace, writeTask, type TaskChoice, type TaskRecord } from "./task";
@@ -229,6 +231,45 @@ export function workspaceCwdFromPanes(
   return panes.find((pane) => pane.workspaceId === workspaceId && pane.cwd)?.cwd ?? "";
 }
 
+/** Moves a released checkout to the release `to`, or says why it did not: nothing else changes. */
+export const moveToRelease = Effect.fn("operations.moveToRelease")(function* (
+  root: string,
+  to: string,
+  run: Runner<ChildProcessSpawner.ChildProcessSpawner>,
+) {
+  const fetched = yield* run("git", ["fetch", "--quiet", "--tags"], root);
+  if (fetched.code !== 0) {
+    return err("operation_failed", `Could not fetch releases into ${root}.`, {
+      root,
+      output: fetched.stdout.trim(),
+    });
+  }
+  // After the fetch, so "ahead of its remote" is judged against the remote as it is now.
+  const current = yield* installation(root, manifest.version, run);
+  if (!current.release) {
+    return err(
+      "invalid_state",
+      `${root} is a development build (${current.build}): ${current.reason}, so it is never upgraded.`,
+      { root, build: current.build },
+    );
+  }
+  const tag = `refs/tags/${to}`;
+  if (
+    (yield* run("git", ["rev-parse", "--verify", "--quiet", `${tag}^{commit}`], root)).code !== 0
+  ) {
+    return err("invalid_input", `There is no release ${to}.`, { to });
+  }
+  // Safe to reset: the checkout is clean and holds no commit its remote lacks.
+  const moved = yield* run("git", ["reset", "--quiet", "--hard", tag], root);
+  if (moved.code !== 0) {
+    return err("operation_failed", `Could not move ${root} to ${to}.`, {
+      root,
+      output: moved.stdout.trim(),
+    });
+  }
+  return null;
+});
+
 /**
  * Everything a start needs before anyone is asked anything: the Workflow resolved,
  * proven runnable, and its Inputs inferred. What fills the gaps afterwards — prompts
@@ -236,16 +277,31 @@ export function workspaceCwdFromPanes(
  */
 export const upgrade = Effect.fn("operations.upgrade")(function* (
   env: PluginEnv,
+  options: { readonly to?: string } = {},
   run: Runner<ChildProcessSpawner.ChildProcessSpawner> = (cmd, args, cwd) =>
     shell(cmd, args, cwd, "say"),
 ) {
   const root = env.pluginRoot;
   const head = () => run("git", ["rev-parse", "--short", "HEAD"], root).pipe(Effect.map(short));
   const checkout = (yield* run("git", ["rev-parse", "--git-dir"], root)).code === 0;
+  const { to } = options;
 
   let before = "";
   let after = "";
-  if (checkout) {
+  if (to !== undefined) {
+    if (!RELEASE_TAG.test(to)) {
+      return err("invalid_input", `"${to}" is not a Collie version, such as 0.27.0.`, { to });
+    }
+    if (!checkout) {
+      return err("invalid_state", `${root} is not a checkout, so it cannot be moved to ${to}.`, {
+        root,
+      });
+    }
+    before = yield* head();
+    const refused = yield* moveToRelease(root, to, run);
+    if (refused) return refused;
+    after = yield* head();
+  } else if (checkout) {
     before = yield* head();
     // `--ff-only`: an upgrade that quietly merged or rebased someone's local work
     // would be a surprise nobody asked this command for.
@@ -271,7 +327,7 @@ export const upgrade = Effect.fn("operations.upgrade")(function* (
   const steps = prepareSteps(installed.stdout);
   return {
     ok: true as const,
-    data: { root, checkout, before, after, updated: moved, steps },
+    data: { root, checkout, before, after, updated: moved, steps, ...(to && { version: to }) },
     human: [
       checkout
         ? moved

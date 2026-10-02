@@ -165,6 +165,11 @@ export const ActionSchema = Schema.Union([
   }),
   Schema.Struct({ kind: Schema.Literal("home_cleanup") }),
   Schema.Struct({ kind: Schema.Literal("upgrade") }),
+  Schema.Struct({
+    kind: Schema.Literal("onboard"),
+    /** The default steps this Machine goes without. */
+    skip: Schema.optionalKey(Schema.Array(Schema.Literals(["helle", "linear"]))),
+  }),
   Schema.Struct({ kind: Schema.Literal("ask_human"), question: Schema.String }),
   Schema.Struct({ kind: Schema.Literal("none"), why: Schema.String }),
 ]);

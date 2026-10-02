@@ -51,8 +51,11 @@ Runner source (Bun/TypeScript). Compiled to `bin/collie` per platform; see ADR-0
 | `discovery.ts`     | Where a workflow module is looked for, which layer wins, and what counts as an edit      |
 | `authoring.ts`     | What a module says about itself, how it is checked, and the file an author starts from   |
 | `store.ts`         | Rows beside Effect's: request claims, run identity, generations, questions               |
+| `release.ts`       | Whether an installation is a release `upgrade --to` may move, or a development checkout  |
+| `onboard.ts`       | A Machine from bare to a working host, one streamed step at a time, never with sudo      |
 | `run-actions.ts`   | What a confirmed action does to a Run, and the one place each kind is carried out        |
 | `lifecycle.ts`     | A Run from both front doors: start it, watch it, and pick it up again                    |
+| `signing.ts`       | The release key: signing a runner binary in CI, and the one check before installing one  |
 | `sdk.ts`           | `collie`: what a module exports, declares, waits on, and starts as a child               |
 | `agents.ts`        | What a workflow does with an agent: one launch, one collection, one repair               |
 | `proactive.ts`     | What is worth Collie starting a turn about, and what it has already said                 |

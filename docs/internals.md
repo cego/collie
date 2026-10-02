@@ -538,6 +538,23 @@ borrows the token `glab` or `gh` already holds for the release host — see
 with a sign-in page and HTTP 200, so the install checks the first bytes for an ELF or
 Mach-O header instead of trusting `curl -f`.
 
+Each runner binary is published with a detached ed25519 signature beside it, `<asset>.sig`.
+The release job signs with `tools/sign.ts`, which reads the private key from the
+`COLLIE_SIGNING_KEY` secret (PKCS#8 PEM). It refuses to run without that key, and refuses a
+key that does not match the public key built into `src/signing.ts`. The public key is
+`release.pub`, which `src/signing.ts` imports. Desktop checks a runner it downloads with
+`verifyRelease`, and `install.sh` checks one with `openssl pkeyutl` against the same file,
+fetching `<asset>.sig` with the same token as the asset, before it replaces `bin/collie`. A
+download that is unsigned, does not match, or whose signature cannot be fetched is never
+installed or run, and the runner already there stays. Checking needs OpenSSL 3.0 or later,
+found on PATH as `openssl` or `openssl3`, or in Homebrew's `openssl@3` (`COLLIE_OPENSSL` names the only one to try); without one, or with
+an OpenSSL that cannot do it, the download is refused as unchecked rather than mismatched.
+So a Machine without bun can install a release only once it is signed. The check is the
+target release's own `install.sh`, so `upgrade --to` or `onboard --to` a release from before
+it installs that release's runner unchecked. Rotating the key means changing both the secret and
+`release.pub`, and
+releases signed with the old key stop verifying.
+
 `bun run build` compiles beside the binary and renames over it, because replacing a running
 runner's own file kills the process executing it. In a git checkout `install.sh` builds from
 source rather than fetching a release, because that machine's own source is what a release
