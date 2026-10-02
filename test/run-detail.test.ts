@@ -251,6 +251,13 @@ test("an ended Run keeps its diff once its checkout has gone, file by file", () 
         expect(kept.content).not.toContain("new.txt");
         // A name git quotes in a patch header is still found by the name it has on disk.
         expect((yield* fetchRef(pruned, "diff:tab\there.txt")).content).toContain("+odd");
+
+        // A patch read in parts is built once: the later parts are cut from the first's.
+        const head = yield* fetchRef(pruned, "diff:kept.txt", { offset: 0, length: 10 });
+        yield* fs.remove(`${run.dir}/diff.json`);
+        const tail = yield* fetchRef(pruned, "diff:kept.txt", { offset: 10, length: 1 << 20 });
+        const joined = Buffer.concat([head, tail].map((one) => Buffer.from(one.content, "base64")));
+        expect(joined.toString()).toBe(kept.content);
       }),
     ),
   ));

@@ -144,6 +144,10 @@ const KeptJson = Schema.fromJsonString(
 );
 export const FINAL_DIFF = "diff.json";
 
+/** The patch the first part of a `diff:` item was cut from, so its later parts reuse it. */
+// ponytail: the last one only; key by front door if two drawers page large diffs at once.
+let lastPatch: { readonly key: string; readonly text: string } | null = null;
+
 /** Paths taken as written: a name with `[` or `*` in it is no glob. */
 const literally = (root: string, args: ReadonlyArray<string>) =>
   git(root, ["--literal-pathspecs", ...args]);
@@ -290,20 +294,26 @@ export const fetchRef = Effect.fn("RunDetail.fetchRef")(function* (
         Effect.catch(() => Effect.succeed(text(""))),
       );
     case "diff": {
+      const key = `${run.id}|${name}`;
+      if (part.offset > 0 && lastPatch?.key === key) return text(lastPatch.text);
+      const patch = (content: string) => {
+        lastPatch = { key, text: content };
+        return text(content);
+      };
       const diff = yield* diffOf(run);
       const file = diff?.files.find((one) => one.path === name);
       if (diff === null || file === undefined)
         return yield* refused(`${name} is not in ${run.id}'s diff`);
       if (!diff.live) {
         const kept = yield* readKept(run.dir);
-        return text(kept._tag === "Some" ? (kept.value.patches[name] ?? "") : "");
+        return patch(kept._tag === "Some" ? (kept.value.patches[name] ?? "") : "");
       }
       const root = (yield* rootOf(run.cwd)) ?? run.cwd;
       const shown =
         file.status === "added"
           ? yield* git(root, ["diff", "--no-index", "--", "/dev/null", name])
           : yield* literally(root, ["diff", "--no-renames", diff.base, "--", name]);
-      return text(shown.stdout);
+      return patch(shown.stdout);
     }
     case "evidence":
       return yield* under(run.evidence, name, "evidence called");
