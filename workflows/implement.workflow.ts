@@ -364,7 +364,11 @@ export default defineWorkflow({
       let passes = 0;
       let passed: ReadonlyArray<string> = [];
       let baseline: ReadonlyArray<{ readonly name: string; readonly at: string }> = [];
-      const gapsNow = Effect.gen(function* () {
+      // Why each pass runs, which every door shows while it does (ADR-0039).
+      const gapsNow = Effect.fn("implement.gapsNow")(function* (why: {
+        readonly pass: "gate" | "recheck" | "fix";
+        readonly round?: number;
+      }) {
         passes += 1;
         const pass = yield* Activity.make({
           name: `gate.${passes}`,
@@ -378,7 +382,7 @@ export default defineWorkflow({
             const now = [...passed];
             for (const spec of granted) {
               if (now.includes(spec.name)) continue;
-              const ran = yield* host.verify({ runId, name: spec.name, cwd });
+              const ran = yield* host.verify({ runId, name: spec.name, cwd, ...why });
               if (ran.result === "pass") now.push(spec.name);
             }
             const asked = {
@@ -399,7 +403,7 @@ export default defineWorkflow({
         passed = pass.passed;
         return { gaps: pass.gaps, fixable: pass.fixable ?? pass.gaps };
       });
-      let gaps = yield* gapsNow;
+      let gaps = yield* gapsNow({ pass: "gate" });
       if (gaps.fixable.length > 0) {
         // A check that failed is run once where this branch left the default branch. One
         // that fails there too was never this Run's to fix, and the merge request says so.
@@ -423,7 +427,7 @@ export default defineWorkflow({
         });
         // Once more before a fix: a check that fails and then passes on the same tree is a
         // flake, and a Run that ends on one has proved nothing about the change.
-        gaps = yield* gapsNow;
+        gaps = yield* gapsNow({ pass: "recheck" });
       }
       // A gate fix lands after the last review, so the merge request says it was not re-reviewed.
       let unreviewed = rallied.unreviewed;
@@ -452,7 +456,7 @@ export default defineWorkflow({
           },
           output: FixOutputSchema,
         });
-        gaps = yield* gapsNow;
+        gaps = yield* gapsNow({ pass: "fix", round: at });
         const settled = settleFinalFix(findings, fixed, yield* host.evidence(runId, cwd));
         unreviewed = [
           unreviewed,

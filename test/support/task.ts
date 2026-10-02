@@ -33,6 +33,7 @@ export function task(over: Partial<TaskView> = {}): TaskView {
     mrState: null,
     checks: null,
     ready: false,
+    check: null,
     planReady: false,
     offer: null,
     run: "r1",

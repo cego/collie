@@ -1,0 +1,175 @@
+// The checks Collie runs for a Run, as every door reads them (ADR-0039 D5): the card, the
+// drawer, `collie_run`, `collie_herd` and `collie run checks` all come through here, so
+// none of them can say a different thing about the same check.
+
+import { Effect } from "effect";
+import type { RunFacts } from "./runs";
+import {
+  readVerifications,
+  verifyingIn,
+  type Pass,
+  type Verification,
+  type Verifying,
+} from "./verify";
+
+/** A check running now, and what it is measured against. */
+export interface RunningCheck {
+  readonly name: string;
+  readonly pass: Pass;
+  readonly round: number | null;
+  readonly revision: string;
+  readonly base: string | null;
+  /** How long it has run, or null where the marker does not say when it started. */
+  readonly elapsedMs: number | null;
+  /** The median of its last five completed runs in this repository, or null for none. */
+  readonly usualMs: number | null;
+  /** Other checks this host is running now. */
+  readonly others: number;
+  readonly sentence: string;
+}
+
+/** One pass Collie ran and finished. */
+export interface DonePass {
+  readonly name: string;
+  readonly pass: Pass;
+  readonly round: number | null;
+  readonly result: Verification["result"];
+  readonly seconds: number;
+  readonly revision: string;
+  readonly at: string;
+}
+
+/** How many earlier runs "usually" is the median of. */
+const USUAL_OF = 5;
+
+/** Every Run's marker, read once for a whole board. */
+export const markersOf = Effect.fn("Checks.markersOf")(function* (runs: ReadonlyArray<RunFacts>) {
+  const found = new Map<string, Verifying>();
+  for (const run of runs) {
+    const marker = yield* verifyingIn(run.dir);
+    if (marker !== null) found.set(run.id, marker);
+  }
+  return found;
+});
+
+const readOrNone = (run: RunFacts) =>
+  readVerifications(run.evidence).pipe(Effect.orElseSucceed((): ReadonlyArray<Verification> => []));
+
+/** The median time of the last few completed runs of this name and arguments in this repository. */
+const usualOf = Effect.fn("Checks.usualOf")(function* (
+  run: RunFacts,
+  runs: ReadonlyArray<RunFacts>,
+  marker: Verifying,
+) {
+  const same: Verification[] = [];
+  // ponytail: reads every same-repository Run's journal per running check; index it if boards get slow.
+  for (const other of runs) {
+    if (other.project !== run.project) continue;
+    for (const record of yield* readOrNone(other))
+      if (
+        record.by === "collie" &&
+        record.name === marker.name &&
+        record.argv.length === marker.argv.length &&
+        record.argv.every((word, at) => word === marker.argv[at])
+      )
+        same.push(record);
+  }
+  const last = same
+    .sort((a, b) => a.at.localeCompare(b.at))
+    .slice(-USUAL_OF)
+    .map((record) => record.seconds * 1000)
+    .sort((a, b) => a - b);
+  if (last.length === 0) return null;
+  const mid = Math.floor(last.length / 2);
+  return last.length % 2 === 1 ? last[mid]! : (last[mid - 1]! + last[mid]!) / 2;
+});
+
+/** The check running for `run` now, or null where none is. */
+export const runningCheck = Effect.fn("Checks.running")(function* (
+  run: RunFacts,
+  runs: ReadonlyArray<RunFacts>,
+  markers: ReadonlyMap<string, Verifying>,
+  now: number,
+) {
+  const marker = markers.get(run.id);
+  if (marker === undefined) return null;
+  const started = Date.parse(marker.started);
+  const facts = {
+    name: marker.name,
+    pass: marker.pass,
+    round: marker.round,
+    revision: marker.revision,
+    base: marker.base,
+    elapsedMs: Number.isFinite(started) ? Math.max(0, now - started) : null,
+    usualMs: yield* usualOf(run, runs, marker),
+    others: [...markers.keys()].filter((id) => id !== run.id).length,
+  };
+  return { ...facts, sentence: checkSentence(facts) } satisfies RunningCheck;
+});
+
+/** Every pass Collie finished for this Run, oldest first. */
+export const donePasses = Effect.fn("Checks.done")(function* (run: RunFacts) {
+  return (yield* readOrNone(run))
+    .filter((record) => record.by === "collie")
+    .map((record): DonePass => ({
+      name: record.name,
+      pass: record.pass ?? "check",
+      round: record.round ?? null,
+      result: record.result,
+      seconds: record.seconds,
+      revision: record.end.head_sha,
+      at: record.at,
+    }));
+});
+
+/** What the pass is for, in words. */
+function doing(check: Pick<RunningCheck, "name" | "pass" | "round" | "base">): string {
+  const running = `Running ${check.name}`;
+  switch (check.pass) {
+    case "gate":
+      return `${running} on the branch`;
+    case "baseline":
+      return `${running} where the branch left ${check.base ?? "the default branch"}, to see whether it failed before this Run`;
+    case "recheck":
+      return `${running} again on the same tree to rule out a flake`;
+    case "fix":
+      return check.round === null
+        ? `${running} after a gate fix`
+        : `${running} after gate fix ${check.round}`;
+    case "finish":
+      return `${running} as the Run finishes`;
+    case "check":
+      return running;
+  }
+}
+
+const inMinutes = (ms: number) => ms >= 60_000;
+const amount = (ms: number) =>
+  inMinutes(ms) ? `${Math.round(ms / 60_000)}` : `${Math.round(ms / 1000)}`;
+const unit = (ms: number) => (inMinutes(ms) ? "min" : "s");
+
+/** How long it has run, against how long it usually takes. */
+function timing(elapsed: number, usual: number | null): string {
+  const ran = `${amount(elapsed)} ${unit(elapsed)}`;
+  if (usual === null) return ran;
+  // The usual time is bare where it shares the elapsed time's unit: "4 min of a usual 20".
+  const usually = unit(usual) === unit(elapsed) ? amount(usual) : `${amount(usual)} ${unit(usual)}`;
+  return elapsed > usual
+    ? `${ran}, longer than the usual ${usually}`
+    : `${ran} of a usual ${usually}`;
+}
+
+/** The one sentence about a running check: which, which pass and why, how long, and contention. */
+export function checkSentence(
+  check: Pick<
+    RunningCheck,
+    "name" | "pass" | "round" | "base" | "elapsedMs" | "usualMs" | "others"
+  >,
+): string {
+  const when = check.elapsedMs === null ? "" : `, ${timing(check.elapsedMs, check.usualMs)}`;
+  const others =
+    check.others === 0
+      ? ""
+      : ` ${check.others} other ${check.others === 1 ? "check is" : "checks are"} running.`;
+  return `${doing(check)}${when}.${others}`;
+}

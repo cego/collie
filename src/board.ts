@@ -20,7 +20,8 @@ import type { PluginEnv } from "./env";
 import { herdOf } from "./steering";
 import { listTasks, type TaskRecord } from "./task";
 import { ago, agoShort, spanned } from "./time";
-import { readVerifications, verifyingIn, type Verification } from "./verify";
+import { readVerifications, type Verification } from "./verify";
+import { markersOf, runningCheck, type RunningCheck } from "./checks";
 import { readMrStates } from "./merges";
 import { filed, standingOf } from "./standing";
 import { offersOf } from "./lifecycle";
@@ -181,6 +182,8 @@ export interface TaskView {
   checks: Checks | null;
   /** Ready to release: the leading Run succeeded, its merge request is open and its checks passed. */
   ready: boolean;
+  /** The check Collie is running for the leading Run now, or null for none. */
+  check: RunningCheck | null;
   /** A plan that finished and nobody has implemented: its card's first action starts that. */
   planReady: boolean;
   /** That action: the Run's primary offer as its module declares it now, or null for none. */
@@ -219,6 +222,8 @@ export interface Sentence {
   step: { id: string; round: { at: number; of: number | null } | null } | null;
   /** The step's own verb, where the definition gives one. */
   verb: string | null;
+  /** What a check Collie is running says about itself, which outranks the step. */
+  checking: string | null;
   /** How long it has written nothing, where it has gone quiet. */
   silent: string | null;
   /** How long ago its Driver died, for a Run nothing drives and no agent works on. */
@@ -281,9 +286,6 @@ const VERBS = new Map(
     record: "Recording what happened",
   }),
 );
-
-/** What a card says while Collie runs one of the Run's checks itself. */
-const checkingOf = (name: string) => (name === "" ? null : `Running the ${name} check`);
 
 /** An embedded workflow's step is that workflow's: `review.synthesize` is a synthesis. */
 function verbOf(facts: Sentence): string {
@@ -438,6 +440,7 @@ function stalledSentence(facts: Sentence): string {
 }
 
 function workingSentence(facts: Sentence): string {
+  if (facts.checking !== null) return facts.checking;
   if (facts.resumed !== null) return `Resumed with “${facts.resumed}”.`;
   if (facts.wave !== null) {
     const wave = waveSentence(facts.wave);
@@ -837,6 +840,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
   const proposals = opts.proposals ?? (yield* proposalsOf(stateDir, socketPath));
   const mrStates = opts.mrStates ?? (yield* readMrStates(stateDir));
   const live = new Map((opts.alive ?? []).map((agent) => [agent.name, agent]));
+  const markers = yield* markersOf(all);
   const offersOfRun =
     opts.offers ??
     ((runId: string) =>
@@ -879,10 +883,10 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
     const status = leader.state;
     const at = touched.get(leader.id) ?? 0;
     const agents = agentsOf(runs, registered, live);
-    const checking = yield* verifyingIn(leader.dir);
+    const check = yield* runningCheck(leader, all, markers, now);
     // An agent mid-turn or a check Collie is running is work, however little it writes.
     const busy =
-      checking !== "" ||
+      check !== null ||
       agents.some((agent) => agent.run === leader.id && agent.status === "working");
     const going = !ended(leader);
     const silentFor = going && !busy && at > 0 ? now - at : 0;
@@ -968,7 +972,8 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
         decision,
         step: doing?.step ?? null,
         // Never the pane's title: a terminal names its harness or file, not the work.
-        verb: checkingOf(checking) ?? doing?.verb ?? null,
+        verb: doing?.verb ?? null,
+        checking: check?.sentence ?? null,
         silent,
         wave: null,
         failure,
@@ -1011,6 +1016,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
       mrState,
       checks,
       ready: checks?.state === "passed",
+      check,
       planReady,
       // Only a ready plan's first action is an offer; asking every card would ask every refresh.
       offer: planReady ? primaryOf(yield* offersOfRun(leader.id)) : null,

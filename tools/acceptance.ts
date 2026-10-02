@@ -78,6 +78,19 @@ const RELEASE = "ready to release and checks you can see (this MR)";
 /** What the front door owes a person, and cannot be settled below the front door. */
 const FRONT_DOOR: readonly Check[] = [
   {
+    id: "front-door/a-running-check-says-its-pass-reason-and-timing",
+    statement:
+      "While Collie runs one of a Run's checks, its card names the check and its pass in words — on the branch, where the branch left the default branch and why, again for a flake, after gate fix N — how long it has run against how long it usually takes, and how many other checks are running, never an agent operation's round.",
+    owner: RELEASE,
+    needs: "ui",
+    proof: {
+      kind: "test",
+      layer: "ui",
+      file: "test/board.test.ts",
+      name: "a running check never borrows the round of the agent operation before it",
+    },
+  },
+  {
     id: "front-door/a-ready-card-says-it-is-ready",
     statement:
       "A succeeded Run whose merge request is open and whose checks passed at its branch's head leads Waiting on you, and its card says it is ready to release, where, the revision its checks passed at and the next move, naming its live agent.",

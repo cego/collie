@@ -1,5 +1,6 @@
 import {
   Cause,
+  Clock,
   Duration,
   Effect,
   Exit,
@@ -15,7 +16,8 @@ import { Argument, Command, Flag } from "effect/unstable/cli";
 import { clearOverride, err, type Failure } from "../operations";
 import { withDirLock } from "../lock";
 import { GIVEN, INFERRED, evidenceDir, runDir } from "../engine";
-import { textOf } from "../runs";
+import { listRuns, textOf } from "../runs";
+import { donePasses, markersOf, runningCheck } from "../checks";
 import { Herdr } from "../herdr";
 import {
   describeWaiting,
@@ -530,6 +532,52 @@ const runMetrics = Command.make(
 ).pipe(
   Command.withDescription(
     "What a Run actually did: evidence, slices, rework and context — not pane activity",
+  ),
+);
+
+const runChecks = Command.make("checks", { runId: runIdArg }, ({ runId }) =>
+  Effect.gen(function* () {
+    const global = yield* root;
+    yield* attempt(
+      Effect.gen(function* () {
+        const resolved = yield* context(global, false);
+        if (resolved._tag === "ContextFailure") return resolved.result;
+        const runs = yield* listRuns(resolved.env);
+        const run = runs.find((one) => one.id === runId);
+        if (run === undefined)
+          return err("run_not_found", `Run "${runId}" was not found.`, { run: runId });
+        const running = yield* runningCheck(
+          run,
+          runs,
+          yield* markersOf(runs),
+          yield* Clock.currentTimeMillis,
+        );
+        const done = yield* donePasses(run);
+        const passOf = (pass: string, round: number | null) =>
+          round === null ? pass : `${pass} ${round}`;
+        const human = [
+          ...(running === null
+            ? []
+            : [
+                `running\t${passOf(running.pass, running.round)}\t${running.name}\t${running.sentence}`,
+              ]),
+          ...done.map(
+            (one) =>
+              `${one.result}\t${passOf(one.pass, one.round)}\t${one.name}\t${Math.round(one.seconds)}s\t${one.revision.slice(0, 12)}`,
+          ),
+        ];
+        return {
+          ok: true as const,
+          data: { run: runId, running, done },
+          human: human.length === 0 ? `Collie has run no checks for ${runId}.` : human.join("\n"),
+        };
+      }),
+      global.json,
+    );
+  }),
+).pipe(
+  Command.withDescription(
+    "The checks Collie has run for a Run, and the one it is running: each pass, why, and how long",
   ),
 );
 
@@ -1684,6 +1732,7 @@ export const run = Command.make("run").pipe(
     runDeliveries,
     runDisposition,
     runMetrics,
+    runChecks,
     runReport,
     runDrift,
     runCards,

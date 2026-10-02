@@ -522,9 +522,17 @@ export interface HostApi {
     readonly expect?: "pass" | "fail";
     /**
      * Run it at the merge-base of this checkout and the default branch, in the same
-     * checkout, then put it back. Refused on a checkout with changes of its own.
+     * checkout, then put it back. Refused on a checkout with changes of its own. This is
+     * the `baseline` pass, whatever `pass` says.
      */
     readonly at?: "default-base";
+    /**
+     * Why it is run, which every door shows while it runs (ADR-0039): `gate` on the branch,
+     * `recheck` on the same tree for a flake, or `fix` after gate fix `round`. Absent is a
+     * plain `check`.
+     */
+    readonly pass?: "gate" | "recheck" | "fix";
+    readonly round?: number;
   }) => Effect.Effect<Verification, WorkflowError>;
   /**
    * What this Run may have Collie run for it. A prompt names them so an agent knows what

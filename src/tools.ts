@@ -55,7 +55,8 @@ import {
   read as readNews,
   settle as settleNews,
 } from "./news";
-import { findRun, type RunFacts } from "./runs";
+import { findRun, listRuns, type RunFacts } from "./runs";
+import { markersOf, runningCheck } from "./checks";
 import { nowIso } from "./time";
 import { deliveriesOf, herdOf } from "./steering";
 import { loadDefinitions, layers } from "./definitions";
@@ -286,7 +287,8 @@ export const TOOLS: ReadonlyArray<Tool> = [
       },
       additionalProperties: false,
     },
-    call: (env, input) => onSelectedRun(env, input, "collie_run", (run) => said(runFacts(run))),
+    call: (env, input) =>
+      onSelectedRun(env, input, "collie_run", (run) => said(runAnswer(env, run))),
   },
   {
     name: "collie_workspaces",
@@ -553,6 +555,23 @@ function cardLine(view: TaskView): string {
     view.agents.length === 0 ? "" : `, agents ${view.agents.map((agent) => agent.name).join(", ")}`;
   return `- run ${view.run}: ${view.name}${project}, ${view.state}${where}${agents}. ${view.sentence}`;
 }
+
+/** The line `collie_run` leads with while Collie runs a check for the Run, in the card's words. */
+export const checkLine = Effect.fn("Tools.checkLine")(function* (
+  run: RunFacts,
+  runs: ReadonlyArray<RunFacts>,
+  now: number,
+) {
+  const check = yield* runningCheck(run, runs, yield* markersOf(runs), now);
+  return check === null ? null : `Check running: ${check.sentence}`;
+});
+
+/** One Run in detail, led by the check Collie is running for it. */
+const runAnswer = Effect.fn("Tools.runAnswer")(function* (env: PluginEnv, run: RunFacts) {
+  const facts = yield* runFacts(run);
+  const line = yield* checkLine(run, yield* listRuns(env), yield* Clock.currentTimeMillis);
+  return line === null ? facts : `${line}\n${facts}`;
+});
 
 /** What `collie_herd` answers with: the board, so chat and board can never disagree about a card. */
 const boardFacts = Effect.fn("Tools.boardFacts")(function* (env: PluginEnv) {

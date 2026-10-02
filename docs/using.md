@@ -444,7 +444,15 @@ drifted, the step glyphs, where it has got to, how many agents are on it and how
 has been going. The sentence names the step the Run last launched an agent for, with its
 round (`Fixing the review findings, round 1.`, `Building ticket 02.`). Silence past
 `board_quiet_ms` reads `…but silent for 14 minutes` and moves nothing; a Run whose agent
-herdr reports working, or whose check Collie is running, is never silent. **Waiting on you** is work that ended without landing, and that nobody has
+herdr reports working, or whose check Collie is running, is never silent. While Collie runs
+one of the Run's checks itself, the sentence is about that check rather than the last step:
+which check, which pass and why, how long it has run against the median of its last five
+runs in this repository, and how many other checks this host is running —
+`Running test where the branch left master, to see whether it failed before this Run, 12
+min of a usual 20. 3 other checks are running.` With nothing to compare against it says
+only how long; over the usual it says `longer than the usual 20`. The drawer, `collie_run`,
+`collie_herd` and `collie run checks` say the same
+([ADR-0039](adr/0039-a-check-collie-runs-is-seen-while-it-runs.md)). **Waiting on you** is work that ended without landing, and that nobody has
 asked you about: an implement that succeeded and whose merge request is open, a plan that
 is ready to implement, a Run that failed, was stopped or was abandoned with a branch or a
 merge request behind it and has neither been resumed nor disposed of. An implement whose

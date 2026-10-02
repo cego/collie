@@ -965,6 +965,22 @@ the agent can change approach rather than repeat itself. It is a sentence, not a
 counter reaching a number is not evidence that work cannot be done, and what prevents a
 false claim of success is the evidence gate reading collected results.
 
+## Checks
+
+```sh
+collie --json run checks <run-id>
+```
+
+Every check Collie ran for the Run, oldest first, and the one it is running now
+([ADR-0039](adr/0039-a-check-collie-runs-is-seen-while-it-runs.md)). Each says its pass —
+`gate`, `baseline`, `recheck`, `fix` with its round, `finish`, or a plain `check` — so
+three runs of the same suite read as what each was for.
+
+| Field     | What it says                                                                                                                                                                                                                                                            |
+| --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `running` | The check running now, or `null`: `name`, `pass`, `round`, the `revision` it runs at, `elapsedMs`, `usualMs` (the median of its last five runs in this repository, `null` for none), `others` (checks this host is running beside it) and the `sentence` the card says. |
+| `done[]`  | Each finished one: `name`, `pass`, `round`, `result`, `seconds` and the `revision` it ended on.                                                                                                                                                                         |
+
 ## Report
 
 ```sh

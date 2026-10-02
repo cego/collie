@@ -32,6 +32,21 @@ export const TOO_LARGE = "unstable:too-large";
 const SnapshotSchema = Schema.Struct({ head_sha: Schema.String, fingerprint: Schema.String });
 export type Snapshot = Schema.Schema.Type<typeof SnapshotSchema>;
 
+/**
+ * Why a check was run (ADR-0039): the gate on the branch, a recheck of the same tree for a
+ * flake, a fix after gate fix N, the default branch's base, the finish's own, or a plain
+ * check where nobody said.
+ */
+export const PASSES = ["gate", "recheck", "fix", "baseline", "finish", "check"] as const;
+export type Pass = (typeof PASSES)[number];
+const PassSchema = Schema.Literals(PASSES);
+
+/** A pass, and the gate fix it follows where it is a `fix`. */
+export interface CheckPass {
+  readonly pass: Pass;
+  readonly round?: number;
+}
+
 const VerificationSchema = Schema.Struct({
   id: Schema.String,
   run: Schema.String,
@@ -57,6 +72,9 @@ const VerificationSchema = Schema.Struct({
   at: Schema.String,
   /** Who collected it. An agent may run one; only Collie may run an approved spec. */
   by: Schema.Literals(["agent", "collie"]),
+  /** Why Collie ran it; absent on an agent's and on records written before passes were. */
+  pass: Schema.optionalKey(PassSchema),
+  round: Schema.optionalKey(Schema.Int),
 });
 export type Verification = Schema.Schema.Type<typeof VerificationSchema>;
 const VerificationJson = Schema.fromJsonString(VerificationSchema);
@@ -148,12 +166,51 @@ export const appendVerification = Effect.fn("Verify.append")(function* (
  */
 export const VERIFYING_FILE = "verifying";
 
-/** The name of the check running for the Run in `dir`, or "" when none is. */
-export const verifyingIn = (dir: string) =>
+const VerifyingSchema = Schema.Struct({
+  name: Schema.String,
+  executable: Schema.String,
+  argv: Schema.Array(Schema.String),
+  pass: PassSchema,
+  round: Schema.NullOr(Schema.Int),
+  /** The commit it runs at, which for `baseline` is where the branch left the default one. */
+  revision: Schema.String,
+  /** The default branch a `baseline` runs where the branch left; null for every other pass. */
+  base: Schema.NullOr(Schema.String),
+  started: Schema.String,
+  /** Where its output is being written, where it is. */
+  log: Schema.optionalKey(Schema.String),
+});
+export type Verifying = typeof VerifyingSchema.Type;
+const VerifyingJson = Schema.fromJsonString(VerifyingSchema);
+export const encodeVerifying = Schema.encodeSync(VerifyingJson);
+
+/**
+ * The check running for the Run in `dir`, or null when none is. A marker in the old
+ * one-line shape reads as its name alone, a plain `check` nothing else is known about.
+ */
+export const verifyingIn = (
+  dir: string,
+): Effect.Effect<Verifying | null, never, FileSystem.FileSystem> =>
   FileSystem.FileSystem.pipe(
     Effect.flatMap((fs) => fs.readFileString(`${dir}/${VERIFYING_FILE}`)),
-    Effect.map((text) => text.trim()),
-    Effect.orElseSucceed(() => ""),
+    Effect.map((text): Verifying | null => {
+      const decoded = Schema.decodeUnknownOption(VerifyingJson)(text);
+      if (decoded._tag === "Some") return decoded.value;
+      const name = text.trim();
+      return name === ""
+        ? null
+        : {
+            name,
+            executable: "",
+            argv: [],
+            pass: "check",
+            round: null,
+            revision: "",
+            base: null,
+            started: "",
+          };
+    }),
+    Effect.orElseSucceed(() => null),
   );
 
 export const readVerifications = Effect.fn("Verify.read")(function* (runDir: string) {
@@ -212,6 +269,7 @@ export interface Collected {
   readonly cwd: string;
   readonly by: "agent" | "collie";
   readonly expect?: "pass" | "fail";
+  readonly pass?: CheckPass;
 }
 
 /**
@@ -280,10 +338,18 @@ export const collect = Effect.fn("Verify.collect")(function* (
     result: resultOf(start, end, Number(exit), what.expect ?? "pass"),
     at,
     by: what.by,
+    ...passFields(what.pass),
   };
   yield* appendVerification(runDir, record).pipe(Effect.orDie);
   return record;
 });
+
+/** The pass and round a record keeps, with nothing where no pass was given. */
+function passFields(given: CheckPass | undefined): Pick<Verification, "pass" | "round"> {
+  if (given === undefined) return {};
+  if (given.round === undefined) return { pass: given.pass };
+  return { pass: given.pass, round: given.round };
+}
 
 /**
  * A verification Collie runs itself, which it may do only for a command in the Run's
@@ -299,6 +365,7 @@ export const runApproved = Effect.fn("Verify.runApproved")(function* (
   approved: ReadonlyArray<VerifySpec>,
   spec: VerifySpec,
   expect: "pass" | "fail" = "pass",
+  pass?: CheckPass,
 ): Effect.fn.Return<Verification, VerifyRefused, Services> {
   const match = approved.find(
     (entry) =>
@@ -324,5 +391,6 @@ export const runApproved = Effect.fn("Verify.runApproved")(function* (
     cwd,
     by: "collie",
     expect,
+    pass,
   });
 });

@@ -25,7 +25,13 @@ import {
   type TaskView,
 } from "../src/board";
 import { recordDisposition } from "../src/disposition";
-import { appendVerification, type Verification } from "../src/verify";
+import {
+  appendVerification,
+  encodeVerifying,
+  readVerifications,
+  type Verification,
+} from "../src/verify";
+import { checkSentence } from "../src/checks";
 import { readEnv } from "../src/env";
 import type { AgentInfo } from "../src/herdr";
 import type { ProposalLine } from "../src/proposals";
@@ -43,6 +49,7 @@ function facts(over: Partial<Sentence> = {}): Sentence {
     decision: null,
     step: { id: "build", round: null },
     verb: null,
+    checking: null,
     silent: null,
     wave: null,
     failure: null,
@@ -223,6 +230,7 @@ function task(over: Partial<TaskView> = {}): TaskView {
     mrState: null,
     checks: null,
     ready: false,
+    check: null,
     planReady: false,
     offer: null,
     run: "r1",
@@ -648,7 +656,8 @@ test("a check Collie is running outranks what an idle agent last said", () =>
         registered: [registered("impl-1", run.id)],
       });
 
-      expect(view!.sentence).toBe("Running the typecheck-spilnu check.");
+      // A marker in the old one-line shape still reads, as a name and nothing more.
+      expect(view!.sentence).toBe("Running typecheck-spilnu.");
     }),
   ));
 
@@ -1166,3 +1175,277 @@ test("where the branch cannot be read, the newest revision Collie checked counts
       expect(view!.sentence).toContain("passed at bbbbbbb.");
     }),
   ));
+
+// A check Collie is running: which pass, why, and how long against how long it usually takes.
+
+const PASS_SENTENCES: Array<[string, Parameters<typeof checkSentence>[0], string]> = [
+  [
+    "the gate",
+    {
+      name: "test",
+      pass: "gate",
+      round: null,
+      base: null,
+      elapsedMs: 4 * 60_000,
+      usualMs: 20 * 60_000,
+      others: 0,
+    },
+    "Running test on the branch, 4 min of a usual 20.",
+  ],
+  [
+    "the baseline, with contention",
+    {
+      name: "test",
+      pass: "baseline",
+      round: null,
+      base: "master",
+      elapsedMs: 12 * 60_000,
+      usualMs: 20 * 60_000,
+      others: 3,
+    },
+    "Running test where the branch left master, to see whether it failed before this Run, 12 min of a usual 20. 3 other checks are running.",
+  ],
+  [
+    "a recheck over its usual time",
+    {
+      name: "test",
+      pass: "recheck",
+      round: null,
+      base: null,
+      elapsedMs: 25 * 60_000,
+      usualMs: 20 * 60_000,
+      others: 1,
+    },
+    "Running test again on the same tree to rule out a flake, 25 min, longer than the usual 20. 1 other check is running.",
+  ],
+  [
+    "a fix, with nothing to compare against",
+    {
+      name: "lint",
+      pass: "fix",
+      round: 1,
+      base: null,
+      elapsedMs: 30_000,
+      usualMs: null,
+      others: 0,
+    },
+    "Running lint after gate fix 1, 30 s.",
+  ],
+  [
+    "the finish",
+    {
+      name: "test",
+      pass: "finish",
+      round: null,
+      base: null,
+      elapsedMs: 90_000,
+      usualMs: 40_000,
+      others: 0,
+    },
+    "Running test as the Run finishes, 2 min, longer than the usual 40 s.",
+  ],
+  [
+    "a plain check",
+    {
+      name: "test",
+      pass: "check",
+      round: null,
+      base: null,
+      elapsedMs: null,
+      usualMs: null,
+      others: 0,
+    },
+    "Running test.",
+  ],
+];
+
+for (const [form, given, expected] of PASS_SENTENCES) {
+  test(`a running check's sentence for ${form}`, () => {
+    expect(checkSentence(given)).toBe(expected);
+  });
+}
+
+/** A marker as the host writes one while a check runs. */
+const marking = Effect.fn("board.marking")(function* (
+  run: RunFacts,
+  over: Partial<Parameters<typeof encodeVerifying>[0]> = {},
+) {
+  const fs = yield* FileSystem.FileSystem;
+  yield* fs.writeFileString(
+    `${run.dir}/verifying`,
+    encodeVerifying({
+      name: "test",
+      executable: "bun",
+      argv: ["test"],
+      pass: "gate",
+      round: null,
+      revision: "abc",
+      base: null,
+      started: "2026-09-14T10:01:00Z",
+      ...over,
+    }),
+  );
+});
+
+/** A finished Collie run of `bun test` in `run`'s evidence that took `minutes`. */
+const took = (run: RunFacts, minutes: number, at: string) =>
+  appendVerification(run.evidence, {
+    ...checked("test", "abc"),
+    id: `v-${run.id}-${at}`,
+    run: run.id,
+    executable: "/usr/bin/bun",
+    argv: ["test"],
+    seconds: minutes * 60,
+    at,
+  });
+
+test("a running check never borrows the round of the agent operation before it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const run = yield* madeRun(dir, { task: "task-1" });
+      const fs = yield* FileSystem.FileSystem;
+      yield* fs.makeDirectory(`${dir}/agents/${run.id}`, { recursive: true });
+      yield* fs.writeFileString(`${dir}/agents/${run.id}/launches`, "fix-1\n");
+      yield* marking(run, { pass: "recheck" });
+
+      const [view] = yield* board(env, [run]);
+      expect(view!.sentence).toBe(
+        "Running test again on the same tree to rule out a flake, 4 min.",
+      );
+      expect(view!.sentence).not.toContain("round");
+      expect(view!.check?.pass).toBe("recheck");
+    }),
+  ));
+
+test("usually is the median of the last five runs of that check in the same repository", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const run = yield* madeRun(dir, { task: "task-1" });
+      const before = yield* madeRun(dir, {
+        id: "r-before",
+        state: "succeeded",
+        created: "2026-09-13T10:00:00Z",
+      });
+      const elsewhere = yield* madeRun(dir, {
+        id: "r-elsewhere",
+        state: "succeeded",
+        project: "/elsewhere",
+      });
+      yield* marking(run);
+      const at = (n: number) => `2026-09-13T1${n}:00:00Z`;
+      // Six earlier: the oldest falls out, and the last five's median is 3 minutes.
+      for (const [n, minutes] of [
+        [0, 90],
+        [1, 1],
+        [2, 2],
+        [3, 3],
+        [4, 4],
+        [5, 5],
+      ] as const)
+        yield* took(before, minutes, at(n));
+      // Another repository's runs of the same command are not this one's usual.
+      yield* took(elsewhere, 60, at(6));
+
+      const view = (yield* board(env, [run, before, elsewhere])).find((one) => one.run === run.id);
+      expect(view!.sentence).toBe("Running test on the branch, 4 min, longer than the usual 3.");
+    }),
+  ));
+
+test("with nothing to compare against, a running check says only how long it has run", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const run = yield* madeRun(dir, { task: "task-1" });
+      yield* marking(run);
+      const [view] = yield* board(env, [run]);
+      expect(view!.sentence).toBe("Running test on the branch, 4 min.");
+    }),
+  ));
+
+test("a running check counts the other checks this host is running", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const run = yield* madeRun(dir, { task: "task-1" });
+      const a = yield* madeRun(dir, { id: "r-a", task: "t-a" });
+      const b = yield* madeRun(dir, { id: "r-b", task: "t-b" });
+      for (const one of [run, a, b]) yield* marking(one);
+      const view = (yield* board(env, [run, a, b])).find((one) => one.run === run.id);
+      expect(view!.sentence).toBe("Running test on the branch, 4 min. 2 other checks are running.");
+    }),
+  ));
+
+test("a Verification recorded before passes were still reads, as a plain check", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir } = yield* scratch();
+      const run = yield* madeRun(dir);
+      const fs = yield* FileSystem.FileSystem;
+      const {
+        pass: _pass,
+        round: _round,
+        ...old
+      } = { ...checked("test", "abc"), pass: "gate", round: 1 };
+      yield* fs.makeDirectory(`${run.evidence}/steering`, { recursive: true });
+      yield* fs.writeFileString(
+        `${run.evidence}/steering/verifications.jsonl`,
+        `${Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))(old)}\n`,
+      );
+      const [read] = yield* readVerifications(run.evidence);
+      expect(read?.name).toBe("test");
+      expect(read?.pass).toBeUndefined();
+    }),
+  ));
+
+test(
+  "`collie --json run checks` lists the running pass and the finished ones",
+  () =>
+    proves(
+      "collie-run-checks-cli-",
+      (world) =>
+        Effect.gen(function* () {
+          const started = yield* collie(world, ["run", "start", "plain", "--input", "note=hi"]);
+          const runId = Schema.decodeUnknownSync(Schema.Struct({ runId: Schema.String }))(
+            started.envelope.data,
+          ).runId;
+          const fs = yield* FileSystem.FileSystem;
+          const run = yield* madeRun(world.state, { id: runId });
+          yield* appendVerification(run.evidence, {
+            ...checked("lint", "abc"),
+            run: runId,
+            pass: "gate",
+          });
+          yield* fs.writeFileString(
+            `${run.dir}/verifying`,
+            encodeVerifying({
+              name: "test",
+              executable: "bun",
+              argv: ["test"],
+              pass: "fix",
+              round: 1,
+              revision: "abc",
+              base: null,
+              started: "2026-09-14T10:00:00Z",
+            }),
+          );
+
+          const listed = yield* collie(world, ["run", "checks", runId]);
+          yield* stopHost(world.state);
+          expect(listed.envelope.ok).toBe(true);
+          expect(listed.envelope.data).toMatchObject({
+            run: runId,
+            running: { name: "test", pass: "fix", round: 1 },
+            done: [{ name: "lint", pass: "gate", result: "pass", revision: "abc" }],
+          });
+          expect(
+            Schema.decodeUnknownSync(
+              Schema.Struct({ running: Schema.Struct({ sentence: Schema.String }) }),
+            )(listed.envelope.data).running.sentence,
+          ).toStartWith("Running test after gate fix 1, ");
+        }),
+      ["plain.workflow.ts"],
+    ),
+  60_000,
+);
