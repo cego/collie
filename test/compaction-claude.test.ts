@@ -387,8 +387,15 @@ onMachineWith("claude")(
   () =>
     runEffect(
       Effect.gen(function* () {
+        // The flag the adapter launches with, from the adapter, so the two cannot drift.
+        const [flag = ""] = (yield* claude.install({
+          agent: "r1",
+          harness: "claude",
+          cwd: rig.projectDir,
+          dir,
+        })).args;
         const help = yield* Effect.promise(() => Bun.$`claude --help`.text());
-        expect(help).toContain("--settings");
+        expect(help).toMatch(new RegExp(`(^|[\\s,])${flag}([\\s,=]|$)`, "m"));
       }),
     ),
   { timeout: 30_000 },

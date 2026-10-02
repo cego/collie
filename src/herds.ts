@@ -16,7 +16,7 @@ export interface LiveHerd {
 }
 
 /** What herdr is subscribed to: a pane coming or going, and each agent pane's status. */
-const PANE_EVENTS = [
+export const PANE_EVENTS = [
   { type: "pane.created" },
   { type: "pane.closed" },
   { type: "pane.agent_detected" },
