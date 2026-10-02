@@ -743,7 +743,7 @@ export const carriedResult = ({ proposal, results }: ProposalCarried): OpResult 
   const message = results
     .map((r) => `${r.index} ${r.kind}: ${r.state}${r.note ? ` — ${r.note}` : ""}`)
     .join("\n");
-  if (results.some((r) => r.state === "failed" || r.state === "skipped")) {
+  if (results.some((r) => r.state !== "applied")) {
     const changed = results.some((r) => r.state === "applied" && r.kind !== "none");
     // needs_input is retryable without a receipt only when nothing has happened yet.
     const code =

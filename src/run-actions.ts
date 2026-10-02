@@ -543,7 +543,8 @@ export const carryOut = Effect.fn("runActions.carryOut")(function* (
       expectedVersions[action.run] = action.base_version + 1;
   }
   return { proposal: proposalId, results } satisfies ProposalCarried;
-});
+  // A client that hangs up must not cut the steps off from their record.
+}, Effect.uninterruptible);
 
 /** `carryOut` as a front door prints it. */
 export const carryOutProposal = (

@@ -409,25 +409,38 @@ export function answeredBy(
   );
 }
 
-/** What each action of a confirmed proposal came to, as its journal last says. */
+/**
+ * What each action of a confirmed proposal came to, as its journal last says. One that
+ * started and never settled is `unknown`; one never reached is `skipped` as `not_run`,
+ * except after the `ask_human` a carry-out stops at.
+ */
 export function stepResults(lines: ReadonlyArray<ProposalLine>, id: string) {
   const proposal = lines.find(
     (line): line is ProposalRecord => line.kind === "proposal" && line.id === id,
   );
   const last = new Map<number, Schema.Schema.Type<typeof StepSchema>>();
   for (const line of lines)
-    if (line.kind === "step" && line.proposal === id && line.state !== "started")
-      last.set(line.index, line);
-  return [...last.values()].map((step) => {
-    const action = proposal?.actions[step.index];
-    return {
-      index: step.index,
-      kind: action?.kind ?? "",
-      state: step.state,
-      note: step.note ?? "",
-      run: action !== undefined && "run" in action ? action.run : null,
-    };
-  });
+    if (line.kind === "step" && line.proposal === id) last.set(line.index, line);
+  const results = [];
+  for (const [index, action] of (proposal?.actions ?? []).entries()) {
+    const step = last.get(index);
+    const asked = results.at(-1)?.kind === "ask_human";
+    if (step === undefined && asked) break;
+    const [state, note] =
+      step === undefined
+        ? (["skipped", "not_run"] as const)
+        : step.state === "started"
+          ? (["unknown", "started and never settled, so it may have run"] as const)
+          : ([step.state, step.note ?? ""] as const);
+    results.push({
+      index,
+      kind: action.kind,
+      state,
+      note,
+      run: "run" in action ? action.run : null,
+    });
+  }
+  return results;
 }
 
 /** Written before an action runs, so a crash leaves a record that it may have. */
