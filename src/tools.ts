@@ -383,7 +383,7 @@ export const TOOLS: ReadonlyArray<Tool> = [
       "Carry out, at once, anything the board does: its own actions " +
       `on a named Run (${ASKED_KINDS.join(", ")}), and its decisions — ` +
       "`confirm` a waiting proposal by its id and the hash `collie_receipts` lists beside " +
-      "it, `decline` one, and `disposition` to record what became of a finished Run's " +
+      "it, `decline` one by the same two, and `disposition` to record what became of a finished Run's " +
       "work. This is not a proposal: it is done, and the board shows the result. Do not " +
       "send the human to the board for one of these. Name a Run by the id " +
       "`collie_herd` lists, or leave `run` out to act on the card the board has open, " +
