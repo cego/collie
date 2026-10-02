@@ -776,6 +776,8 @@ const frontDoorHandlers = (
               return outcomeOf(
                 err("invalid_input", "An action is not one of the kinds Collie takes."),
               );
+            if (herd !== null && (herd === "." || herd === ".." || !/^[^/\\]+$/.test(herd)))
+              return outcomeOf(err("invalid_input", `"${herd}" is not a Herd.`));
             const key =
               herd ??
               (yield* herdOf(asker.socketPath).pipe(Effect.catch(() => Effect.succeed(null))));

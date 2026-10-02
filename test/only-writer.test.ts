@@ -181,6 +181,7 @@ test(
       "collie-writer-propose-",
       (world) =>
         Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
           const file = yield* proposalsPath(world.state, "some-herd");
           const client = yield* connect(world.state);
           yield* client.declare({ frontDoor: "chat" });
@@ -206,6 +207,9 @@ test(
             request: "q-2",
           });
           expect(unknown).toMatchObject({ ok: false, code: "invalid_input" });
+          const escaped = yield* client.propose({ ...asked, herd: "../../x", request: "q-6" });
+          expect(escaped).toMatchObject({ ok: false, code: "invalid_input" });
+          expect(yield* fs.exists(`${world.state}/../x`)).toBe(false);
           const acted = yield* client
             .act({ actions: [{ kind: "rm-rf" }], request: "q-3" })
             .pipe(Effect.flip);
