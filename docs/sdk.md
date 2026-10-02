@@ -756,7 +756,7 @@ Say why a check runs with `pass`: `"gate"` on the branch, `"recheck"` on the sam
 rule out a flake, or `"fix"` with `round: N` after gate fix N. Every door shows it while
 the check runs — the card says `Running test again on the same tree to rule out a flake,
 12 min of a usual 20.` — and the record keeps it after
-([ADR-0039](adr/0039-a-check-collie-runs-is-seen-while-it-runs.md)). A check at
+([ADR-0042](adr/0042-a-check-collie-runs-is-seen-while-it-runs.md)). A check at
 `"default-base"` is the `baseline` pass whatever you say, the checks Collie runs as a Run
 finishes are its `finish` pass, and a check asked for with no pass is a plain `check`.
 Collie never works a pass out from your workflow's id.
@@ -892,6 +892,10 @@ export default defineWorkflow({
   workflow's name, and `facts.claim` is the shared claim a Run still holds. A follow-up says `when` — `succeeded`, `failed` or
   `always` — and may add an `eligible` of its own where how it ended is not the whole of
   it: an offer to carry on with a branch is not an offer where there is no branch. A
+  follow-up runs on its Run's branch, in the checkout that branch already has, so it carries
+  the work on rather than starting it again. It is started only once its Run has finished; a
+  stopped Run counts only where it has no branch, since resuming it would work in the same
+  checkout. A
   follow-up declares no `arguments`: it takes whatever inputs its workflow has that
   `inputs` does not fill, and a front door asks for those.
 

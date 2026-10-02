@@ -9,7 +9,7 @@ vocabulary — Run, operation, host, Choice, Hand-off — see [`CONTEXT.md`](../
 One command, safe to re-run:
 
 ```sh
-git clone git@github.com:cego/collie.git ~/.collie && ~/.collie/setup.sh
+git clone https://github.com/cego/collie.git ~/.collie && ~/.collie/setup.sh
 ```
 
 `setup.sh` does its own work — clone the checkout or pull it, add the four keybindings
@@ -35,11 +35,14 @@ plugin rebuild may do as a side effect, so `setup.sh` alone adds them.
 its status, so an install's last word is either that everything is ready or what is missing
 with the fix for each.
 
-Collie is internal, so downloading a release asset needs a token. An unauthenticated
-request gets a sign-in page rather than a binary — with HTTP 200, which is why the install
-checks that what arrived is a program rather than trusting the status code.
+Collie's releases are public, so the install needs no token. A project that is not public — a
+fork, or a mirror — answers an unauthenticated download with a sign-in page rather than a binary — with HTTP 200, which is why the install
+checks that what arrived is a program rather than trusting the status code. A downloaded
+runner is installed only once its signature from Collie's release key checks out, which
+needs OpenSSL 3.0 or later: macOS's own LibreSSL and OpenSSL 1.1 cannot check it, so a Mac
+needs `brew install openssl` and a RHEL 8 Machine EPEL's `openssl3`.
 
-The install finds a token in this order:
+For one of those, the install finds a token in this order:
 
 1. `COLLIE_TOKEN`, if you set it — a token that can read the repository:
 
@@ -67,6 +70,20 @@ checkout (`--ff-only`, so it never quietly merges local work), then runs the sam
 rather than installed over. The Control Plane says when this installation is behind its
 remote, so you upgrade because you know you are stale rather than because you remembered
 to.
+
+### Onboarding a Machine
+
+`collie onboard` installs everything instead, herdr and Claude Code included, from a runner
+alone: it clones Collie at the runner's own release (or `--to`) over HTTPS, prepares it the
+way `setup.sh` does, puts `~/.local/bin` on PATH in your shell profile. It never runs sudo: a missing `git`, `curl` or `openssl` stops it with the command to run.
+It then sets up what a Machine needs to work unattended: Claude Code logged in, glab logged in with a GitLab
+token, a key of the Machine's own for pushing unless it can already push, Helle's
+credentials and the Linear MCP — the last two unless `--skip` names them. Secrets come on
+stdin (`collie onboard --secrets-stdin < secrets.env`), never as arguments. It ends in
+`collie doctor`, and onboarded means doctor is ready. Re-running it
+repairs only what is missing, and a development checkout gets the checks and the logins
+alone. It adds no keybindings; the steps and their `--json` stream are in
+[the CLI reference](cli.md#onboarding-a-machine).
 
 ### The skills
 
@@ -104,9 +121,10 @@ skill writes can break a workflow with no change on our side. The symptom is a s
 output cannot be read, and upstream is the first place to look. The reasoning is
 [ADR 0005](adr/0005-skills-float-and-are-not-pinned.md).
 
-The step needs the network and a Node runtime, and neither is a reason to leave you without
-a runner. If either is missing the step says so in one line, the rest of the install
-completes, and `collie upgrade` picks it up next time.
+The CLI runs on the runner's own Bun (`BUN_BE_BUN=1 bin/collie x skills@…`), so no Node is
+needed. The step needs the network, which is no reason to leave you without a runner: if it
+cannot reach a source it says so in one line, the rest of the install completes, and
+`collie upgrade` picks it up next time.
 
 ### Optional integrations
 
@@ -335,10 +353,8 @@ look at what it built. It is removed only once **settled** — the tree is clean
 no commit that is not on the remote already, nothing is working in it or could be resumed
 in it, and its merge request is merged or closed (or its remote branch is gone). A
 `renovate` checkout has no branch to ask either question about, so a clean one nothing is
-working in is settled, and there is no branch to delete with it. Pruning happens when Collie is already awake: at every run start —
-which never touches the checkout that run is about to work in — and every few minutes
-while a Control Plane is open, including for the worktree whose own board you are looking
-at, which closes with it. The board says both what went and what is being held on to, with
+working in is settled, and there is no branch to delete with it. Pruning happens every 3 minutes in the
+host, whether or not a pane is open. The board says both what went and what is being held on to, with
 the reason:
 
 ```
@@ -364,7 +380,10 @@ is left.
 ([ADR-0009](adr/0009-the-collie-tab-is-the-herds.md)). One herdr session is one **Herd**,
 and one Herd has one board: two boards would be two views disagreeing about the same Runs.
 There is no per-workspace board and no view to switch to: one workspace's work is its own
-cards on this one, and the search is what narrows to it. Your work stays where it is — a
+cards on this one, and the search is what narrows to it. The host builds the board and the
+Home follows what it serves, as the text view, chat and `collie --json board` do
+([ADR-0038](adr/0038-the-host-builds-and-serves-the-board.md)), so none of them can show a
+card the others do not. Your work stays where it is — a
 Run still runs in the workspace it was started from, and so do its worktrees, its agents
 and its hand-offs.
 
@@ -452,12 +471,12 @@ runs in this repository, and how many other checks this host is running —
 min of a usual 20. 3 other checks are running.` With nothing to compare against it says
 only how long; over the usual it says `longer than the usual 20`. The drawer, `collie_run`,
 `collie_herd` and `collie run checks` say the same
-([ADR-0039](adr/0039-a-check-collie-runs-is-seen-while-it-runs.md)). The check's output is
+([ADR-0042](adr/0042-a-check-collie-runs-is-seen-while-it-runs.md)). The check's output is
 written to a log as it arrives: the drawer's Summary shows its last lines under the
 sentence, and **Open check output** in the card's menu opens a pane in the Task's workspace
 following it live (`collie run checks <run> --follow`) until the check ends. A finished Run is
 **Reopened** when one of its agents took something you told it after the Run ended
-([ADR-0038](adr/0038-a-finished-run-still-takes-steering.md)): while herdr says that agent
+([ADR-0041](adr/0041-a-finished-run-still-takes-steering.md)): while herdr says that agent
 is working, its card is in Working with `Working on what you told builder: “merge and tag
 it”.`; while it is blocked, the card is in Needs you naming its pane; once it is idle, the
 card stands on its own facts again — Ready to release, Waiting on you or Finished — and
@@ -489,24 +508,24 @@ land, such as a review, or it ended with nothing to file — as one line, `3 fin
 1 failed`, until you click it open; anything older than a day is behind `older…`, which
 reads it from this checkout's history rather than carding every Run Collie has ever kept.
 
-Collie learns a merge by itself. In the background, every few minutes and never on a
-redraw, it asks GitLab (`glab`) or GitHub (`gh`) about each merge request in Waiting on you;
-one that merged gets its `merged` disposition recorded as that forge's word and its card
-moves to Finished. One that was closed without merging only changes its card's sentence:
-closing can mean superseded as easily as abandoned, and only you know which. The same
-answer carries the forge's own checks — GitLab's head pipeline, GitHub's check rollup —
-and the revision they ran at, which is the one Collie's own checks are counted at too: a
-failing one names itself (`cego/collie#30 is open, but lint failed at 1a2b3c4.`), a pending
-one reads `cego/collie#30 is open; its pipeline is still running.`, and Ready to release
-needs every check the card knows of to have passed. No `gh`, or one nobody logged in to,
-leaves the card `nothing has checked it` and says nothing about why.
+Collie learns a merge by itself, whether or not a pane is open: the host asks GitLab
+(`glab`) or GitHub (`gh`) about each merge request in Waiting on you every 5 minutes; one
+that merged gets its `merged` disposition recorded as that forge's word and its card moves
+to Finished. One that was closed without merging only changes its card's sentence: closing
+can mean superseded as easily as abandoned, and only you know which. The same answer
+carries the forge's own checks — GitLab's head pipeline, GitHub's check rollup — and the
+revision they ran at, which is the one Collie's own checks are counted at too: a failing
+one names itself (`cego/collie#30 is open, but lint failed at 1a2b3c4.`), a pending one
+reads `cego/collie#30 is open; its pipeline is still running.`, and Ready to release needs
+every check the card knows of to have passed. No `gh`, or one nobody logged in to, leaves
+the card `nothing has checked it` and says nothing about why.
 
 The header sentence counts the whole Herd, not what the search left: `One task is
 waiting on you. 1 ready to release, 2 waiting on you. 4 working, 1 gone quiet.` — the
 middle counts being this week's endings, the older ones sitting behind the fold — amber while anything needs
 you and muted otherwise. Beside it, a search field (`/`) matching a task's name, its project, its branch
 and what its agents are called and are doing, and **New run**. At the left, the brand
-signature — Luma and the lettering, drawn as a picture over the Kitty graphics protocol —
+signature — the mascot and the lettering, drawn as a picture over the Kitty graphics protocol —
 appears when every terminal attached to herdr paints such pictures (Ghostty, kitty,
 WezTerm; not Alacritty); otherwise the plain `collie` wordmark stands there instead. herdr answers the protocol's handshake on its own, so the board reads the
 attached clients' `TERM` instead, and draws no mark rather than a blank when unsure.
@@ -552,12 +571,12 @@ does not, with the proposal's id and hash beside **Confirm** — your yes is con
 payload, and nothing else on the card can give it. **Decline** declines it. Either way the
 card leaves Needs you and the header recounts.
 
-A run holding at its [evidence gate](cli.md#outcomes) is a decision card too, and says
-which verifications it would be held to. **Approve** takes the list as it stands, **Skip**
-opens the merge request without checking any of it, and **Edit the list** opens the record
-with the names to tick off — `Approve the list` holds the run to what is left, and nothing
-left is Skip by another name, which the gate refuses. The answer goes on the record, so a
-skipped gate is a decision somebody took rather than a check that quietly did not run.
+A run holding at its [evidence gate](cli.md#outcomes), parked because nothing is approved
+for Collie to run, is a decision card too, and says which checks its checkout's
+`.collie/verify.json` offers. **Approve** grants the list as it stands and takes the run up
+again, and **Edit the list** opens the record with the names to tick off — `Approve the
+list` grants what is left. There is no Skip: with nothing approved, no check could prove
+the run. The answer goes on the record under whoever gave it.
 
 The sentence is the step's own words where its workflow gives it a `summary`
 (the module says what it is doing), and the step kind's own verb where it does not. A
@@ -577,7 +596,9 @@ selection back immediately.
 **Click a card** and its whole record slides over the board as a drawer — intent, the steps
 with their durations, the agents, the branch and merge request, and the latest card — with
 `close` and Esc to dismiss it. It is an overlay: the board behind it keeps every other card
-where it was, so reading one Task never costs you the overview.
+where it was, so reading one Task never costs you the overview. Everything in it comes from
+the host and follows the Run while the drawer is open, the log tail included; the merge
+request is what the host's merge watch last read, and `R` asks it again.
 
 **Point at a card** and, where its age was, `go to tab` and `⋯` appear; the card does not
 move or grow. `⋯` opens that Task's menu, and so does a right-click anywhere on the card —
@@ -679,10 +700,10 @@ is showing at a time:
   read only while this tab is showing it, because a log can be any size.
 
 The review and the plan's spec are capped and paged: `… truncated` says so, and `m` reads
-another cap of it. They are rendered a line at a time — headings in accent and bold, list
-markers dim, fenced code dim, everything else plain. Line-level and no markdown dependency:
-inline emphasis is left exactly as the agent wrote it, because rewriting the text is how a
-review stops saying what it said.
+another cap of it. They are markdown, drawn through [Comark](https://comark.dev)'s
+terminal renderer: headings, emphasis, lists, tables and fenced code are styled, and
+Comark's security plugin drops scripts and embedded content first, because what an agent
+writes is untrusted. Tables and rules are drawn to the drawer's width. The log is shown as plain text.
 
 The record scrolls with the wheel wherever the pointer is over it, and a new record — or a
 new tab — starts at the top, because how far the last one had been scrolled says nothing
@@ -858,7 +879,7 @@ Which of two things it does with one depends on **who wanted it**
   builder merge and tag it" is a `deliver`, with a receipt, and comes back `applied` only
   when it was sent; chat never types into a Collie agent's pane itself. When that agent is
   gone the `deliver` fails and names the follow-up that carries it on
-  ([ADR-0038](adr/0038-a-finished-run-still-takes-steering.md)).
+  ([ADR-0041](adr/0041-a-finished-run-still-takes-steering.md)).
 - **Collie wanted it, so it waits.** Drift the evaluator noticed, a correction it wants
   to send: the board draws the proposal, and it is confirmed against its id and the hash
   of exactly those actions — by you on the board, or by chat — or declined, and nothing
@@ -910,9 +931,10 @@ Ready to release is one item, keyed by the Run and the revision its checks passe
 saying the card's sentence; a Run ready when it ends is not also reported as ended. Turn it off with
 `"proactive": false` in `config.json`.
 
-What it does **not** do is call a model to find that out. The board already recomputes
-this to draw it, and a transition in it is the whole trigger; noticing nothing writes
-nothing, so a board redrawing over unchanged state costs exactly nothing. Output arriving,
+What it does **not** do is call a model to find that out. The host looks at each Herd's
+Runs every few seconds, whether or not a pane is open, and writes each Run's news to the
+Herd its Task is in, or to the host's own Herd for a Task from before Herds were recorded; noticing nothing writes nothing, so an unchanged Herd costs exactly
+nothing. Output arriving,
 a commit, a step starting, a pane changing and time passing are not on the list, and never
 were — a changing pane is not progress.
 
@@ -1261,13 +1283,19 @@ installed releases turned out not to support:
 ## Trust: the first run in a repo
 
 Starting a Run selects its directory; Collie does not ask you to approve that selection
-again. By default, it writes `hasTrustDialogAccepted` for that directory into `~/.claude.json`,
+again. Before an agent's harness starts, Collie checks whether that harness trusts the
+directory the agent will work in, once per directory and harness in a Run. If it does not,
+Collie writes `hasTrustDialogAccepted` for that directory into `~/.claude.json`,
 which is where claude keeps the answer to its own dialog. The previous file is copied to
 `claude.json.bak` in the Collie state dir first, every other project and setting is carried
 over as it was, and the new file is renamed into place with the old one's permissions, so
 no reader ever sees it half-written. It is still a read-modify-write of a file claude owns:
 if a claude session saves in the same instant, that save is the one that loses. It happens
 once per directory, so the window is opened once.
+
+A grant, or the reason nothing was granted, is a `trust claude:` line in the Run's
+`agents.log`. A `~/.claude.json` Collie cannot read is left alone, and a grant that fails never stops the launch: claude asks in
+its own pane instead.
 
 `trust` defaults to `auto`. `never` leaves trust to Claude's own dialog. The old `ask`
 setting is accepted as `auto`; Collie's duplicate trust menu has been removed.
@@ -1332,7 +1360,7 @@ the new build added or renamed needs the chat's `/mcp` to reconnect before it sh
 
 **Something is missing and you would rather not find out mid-run.** `collie doctor` checks
 every prerequisite at once — herdr and its minimum version, the plugin link, the runner and
-the shim's directory on PATH, a Node runtime, the skills and harnesses your workflows name,
+the shim's directory on PATH, the skills and harnesses your workflows name,
 whether this checkout is behind its remote, which Projects root a Run started from the Home
 is rooted at and where that came from (`projects.root` in `config.json`, else `GITTE_CWD`,
 else your home directory, which is shown as `!` with the fix of setting `projects.root`),

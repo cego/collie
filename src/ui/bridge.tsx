@@ -209,6 +209,8 @@ export function driveBridge<E, R>(
     const [state, setState] = createSignal<AppState>(
       yield* bridge.load(yield* SubscriptionRef.get(focus)),
     );
+    /** The note the last load gave, so the next can take it back without a command's. */
+    let loadNote = state().note;
 
     /** What has been marked and not yet sent, by Run, with the fiber counting it down. */
     const waiting = new Map<string, Fiber.Fiber<unknown, unknown>>();
@@ -252,14 +254,16 @@ export function driveBridge<E, R>(
         Stream.switchMap((at) => Stream.fromEffect(stated(bridge.load(at)))),
         Stream.runForEach((next) =>
           Effect.sync(() => {
-            // The note and the marks are the bridge's own: a load knows nothing about
-            // either, and taking its word for them would wipe both every three seconds.
-            if (next.ok)
-              setState((previous) => ({
-                ...next.value,
-                note: previous.note,
-                stopping: previous.stopping,
-              }));
+            // The marks are the bridge's own, and so is a command's note: a load that has
+            // nothing to say leaves the note alone unless it was the last load's.
+            if (!next.ok) return;
+            const said = next.value.note;
+            setState((previous) => ({
+              ...next.value,
+              note: said ?? (previous.note === loadNote ? null : previous.note),
+              stopping: previous.stopping,
+            }));
+            loadNote = said;
           }),
         ),
       ),

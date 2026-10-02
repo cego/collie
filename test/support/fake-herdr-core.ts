@@ -142,6 +142,11 @@ const StateJson = Schema.fromJsonString(
     worktreeSource: Schema.optionalKey(Schema.String),
   }),
 );
+/** `FAKE_HERDR_SESSIONS`: the running sessions `session list` names. */
+const SessionsJson = Schema.fromJsonString(
+  Schema.Array(Schema.Struct({ name: Schema.String, socket_path: Schema.String })),
+);
+
 const FailuresJson = Schema.fromJsonString(Schema.Record(Schema.String, Schema.String));
 const QueuedOutputJson = Schema.Union([Schema.String, Schema.Null, Schema.JsonObject]);
 const QueueJson = Schema.fromJsonString(Schema.Array(QueuedOutputJson));
@@ -289,6 +294,19 @@ function handle(
       if (failTimes <= 0 || seen <= failTimes) {
         return { code: 1, stdout: "", stderr: `${failure}\n` };
       }
+    }
+
+    // Unset is a herdr from before `session list`, whose answer is no list at all.
+    const sessions = yield* envString("FAKE_HERDR_SESSIONS");
+    if (cmd === "session list" && sessions !== "") {
+      const listed = Schema.decodeUnknownSync(SessionsJson)(sessions).map((one) => ({
+        name: one.name,
+        default: false,
+        running: true,
+        session_dir: path.dirname(one.socket_path),
+        socket_path: one.socket_path,
+      }));
+      return { code: 0, stdout: `${encodeJson({ sessions: listed })}\n`, stderr: "" };
     }
 
     const state = yield* readState(statePath);
@@ -665,9 +683,14 @@ function handle(
           (yield* envString("FAKE_HERDR_AGENTS_GONE")).split(",").filter((n) => n),
         );
         const status = yield* envString("FAKE_HERDR_AGENT_STATUS", "idle");
+        // The one session the agents are in, where a test spreads herdr over several; a
+        // call that names no socket reaches that session too.
+        const agentsIn = yield* envString("FAKE_HERDR_AGENTS_IN");
+        const socket = yield* envString("HERDR_SOCKET_PATH");
+        const here = agentsIn === "" || socket === "" || socket === agentsIn;
         result = {
           type: "agent_list",
-          agents: state.agents
+          agents: (here ? state.agents : [])
             .filter((a) => !gone.has(a.name))
             .map((a) => ({
               ...a,

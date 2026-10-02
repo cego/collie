@@ -364,7 +364,7 @@ export default defineWorkflow({
       let passes = 0;
       let passed: ReadonlyArray<string> = [];
       let baseline: ReadonlyArray<{ readonly name: string; readonly at: string }> = [];
-      // Why each pass runs, which every door shows while it does (ADR-0039).
+      // Why each pass runs, which every door shows while it does (ADR-0042).
       const gapsNow = Effect.fn("implement.gapsNow")(function* (why: {
         readonly pass: "gate" | "recheck" | "fix";
         readonly round?: number;

@@ -147,6 +147,32 @@ test("a steer executes the requested change without a confirmation hop", () =>
     }),
   ));
 
+test("a steer retried under its request reports what it did, and asks nobody again", () =>
+  inWorld(
+    Effect.gen(function* () {
+      const run = yield* aRun();
+      yield* setReply(
+        envelope({
+          result: {
+            interpretation: "nothing needs changing",
+            targets: [{ run: run.id }],
+            actions: [{ kind: "none", why: "nothing needs changing" }],
+            confidence: 0.5,
+          },
+        }),
+      );
+      const asked = { text: "slow down", target: run.id, requestId: "req-again" };
+      const first = yield* steer(env, deps(stateDir), asked);
+      const again = yield* steer(env, deps(stateDir), asked);
+
+      expect(again).toEqual(first);
+      const proposals = yield* readProposals(yield* proposalsPath(stateDir, herdKey));
+      expect(proposals.filter((line) => line.kind === "proposal")).toHaveLength(1);
+      const spent = yield* readBudget(yield* budgetPath(stateDir, herdKey));
+      expect(spent.filter((line) => line.kind === "reserve")).toHaveLength(1);
+    }),
+  ));
+
 test("a steer with no target is refused before anything is spent", () =>
   inWorld(
     Effect.gen(function* () {

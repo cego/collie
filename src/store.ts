@@ -16,18 +16,8 @@ import * as Migrator from "effect/unstable/sql/Migrator";
 import * as Reactivity from "effect/unstable/reactivity/Reactivity";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
+import { RequestConflict } from "./board-model";
 import { nowIso } from "./time";
-
-/**
- * A request id that was accepted for other arguments. Schema-backed, so a host can fail a
- * client with this value rather than a sentence about it: the caller is retrying something
- * it has changed its mind about, and changing an accepted request silently is the one
- * thing an idempotency key must never do.
- */
-export class RequestConflict extends Schema.TaggedError<RequestConflict>()("RequestConflict", {
-  request: Schema.String,
-  reason: Schema.String,
-}) {}
 
 /** A run as it was admitted: the claim, the arguments and the execution it became. */
 const Run = Schema.Struct({

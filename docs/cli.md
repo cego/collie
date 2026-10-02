@@ -305,7 +305,8 @@ branch. A task workspace groups the work; it does not isolate files or branches.
 `--input branch=<name>` is the one input no workflow declares, and `workflow show` lists it
 beside every module's own inputs as one of the names the host settles. It names the branch the run works on, and so which worktree it gets. Nobody is ever asked for one: a branch nobody named is resolved in this order:
 
-1. `--input branch=<name>`, which wins over everything below.
+1. `--input branch=<name>`, which wins over everything below. A follow-up is given its
+   parent's branch this way.
 2. The branch the reviewed work is already on, for a run fixing a review.
 3. The `<name>` of a `branch:<base>...<name>` target **you gave** (`--input target=` takes a
    bare ref too, and turns it into one) — so the checkout and the review target agree. A
@@ -474,10 +475,11 @@ whether `type` is present.
 collie --json board
 ```
 
-Every Task on this Herd's board, in the order the Home draws them: **Needs you** first,
-then **Waiting on you**, then **Working**, then **Finished**. Inside Needs you the state
-order `blocked`, `active`, `quiet`, `failed`, `stopped`, `done` comes first; inside Waiting
-on you, what is `ready` to release comes first; then whatever changed last. `state: blocked` is what puts a Task in Needs you,
+The first snapshot of the board the host serves
+([ADR-0038](adr/0038-the-host-builds-and-serves-the-board.md)): every Task on this Herd's
+board, in the order the Home draws them: **Needs you** first, then **Waiting on you** (work
+that ended and has not landed, what is `ready` to release first), then **Working** (`active`
+and `quiet`), then **Finished** (landed), and inside each whatever changed last first. `state: blocked` is what puts a Task in Needs you,
 and it means one of two things: a `decision` to answer, or an agent waiting for you in its
 own pane — a harness dialog herdr will not answer, or a run that parked because its agent's
 pane would not take a prompt. The `sentence` says which, and for the second kind it says which pane. It is the same model the pane renders, so an agent
@@ -486,26 +488,37 @@ Task.
 
 Herd-wide, and never narrowed by which workspace you typed it in: one board per Herd
 ([ADR-0009](adr/0009-the-collie-tab-is-the-herds.md)). A Run belonging to no Task is a
-Task of its own; a child Run is its parent's `children` rather than a Task beside it.
+Task of its own; a Repo run of a fan-out is its parent's `children` rather than a Task beside it.
 
-| Field                    | What it says                                                                                                                                         |
-| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `id`                     | The Task, or the Run's own id where it belongs to no Task.                                                                                           |
-| `name`, `project`        | The two halves of the task workspace's label. No herdr ids.                                                                                          |
-| `state`                  | `blocked`, `active`, `quiet`, `failed`, `stopped` or `done`.                                                                                         |
-| `steps[]`                | The pipeline across the Task's Runs, each `done`, `active`, `blocked`, `failed` or `todo`. A step that loops is one entry.                           |
-| `sentence`               | What is happening, in one plain sentence — no step names, counters or glyph codes.                                                                   |
-| `age`, `at`              | How long it has been going, and when it last changed.                                                                                                |
-| `drift`, `held`          | The one line each carries, or `null`.                                                                                                                |
-| `decision`               | The question, proposal or gate waiting on you, or `null`. One of the two ways into Needs you.                                                        |
-| `agents[]`, `children[]` | The live agents on it, and the child Runs it started.                                                                                                |
-| `mr`, `branch`           | What it is building, where it can be read.                                                                                                           |
-| `disposition`            | What became of the work, where a person recorded it — never inferred from a merge request.                                                           |
-| `checks`                 | What checked an open merge request: `passed` or `failed` (with `name`) at revision `at`, `running`, or `unchecked`; else `null`.                     |
-| `ready`                  | Ready to release: the leading Run succeeded, its merge request is open, and its `checks` passed.                                                     |
-| `check`                  | The check Collie is running for the leading Run, as `collie run checks` gives `running` (with its `log` and `lastLines`), or `null`.                 |
-| `reopened`               | A finished Run whose agent took a steer after it ended: the `delivery`, the `agent`, the first line it was `told` and its `status` now; else `null`. |
-| `run`, `runs[]`          | The Run a card acts on, and every Run of the Task.                                                                                                   |
+| Field                     | What it says                                                                                                                                                    |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`                      | The Task, or the Run's own id where it belongs to no Task.                                                                                                      |
+| `name`, `project`         | The two halves of the task workspace's label. No herdr ids.                                                                                                     |
+| `herd`                    | The Herd the Task's workspace is in: an `id` in `herds` while that session runs. Absent for a Task recorded before it was kept.                                 |
+| `state`                   | `blocked`, `active`, `quiet`, `failed`, `stopped`, `abandoned` (a Run nothing drives and no agent works on) or `done`.                                          |
+| `steps[]`                 | The pipeline across the Task's Runs, each `done`, `active`, `blocked`, `failed` or `todo`. A step that loops is one entry.                                      |
+| `sentence`                | What is happening, in one plain sentence — no step names, counters or glyph codes. It names the round, the wave and the answer it resumed with.                 |
+| `age`, `at`               | How long it has been going, and when it last changed.                                                                                                           |
+| `drift`, `held`           | The one line each carries, or `null`.                                                                                                                           |
+| `heldBy`                  | Who set the hold that stands — the front door it came through — and the reason given with it, or `null`.                                                        |
+| `decision`                | The question, proposal or gate waiting on you, or `null`. One of the two ways into Needs you.                                                                   |
+| `agents[]`                | The live agents on it, its Repo runs' included.                                                                                                                 |
+| `children[]`              | A fan-out's repositories in wave order: `repo`, its `run` (`null` until it starts), its `state` (`done`, `active`, `blocked`, `failed` or `todo`) and its `mr`. |
+| `mr`, `mrState`, `branch` | What it is building, where it can be read, and what the forge last said about the merge request.                                                                |
+| `disposition`, `landed`   | What became of the work, where a person recorded it — never inferred from a merge request — and whether it needs nothing more, which is Finished.               |
+| `ended`                   | When the leading Run ended, or `null` while it has not.                                                                                                         |
+| `planReady`, `offer`      | A finished plan nobody has implemented, and the offer its card's first action invokes.                                                                          |
+| `checks`                  | What checked an open merge request: `passed` or `failed` (with `name`) at revision `at`, `running`, or `unchecked`; else `null`.                                |
+| `ready`                   | Ready to release: the leading Run succeeded, its merge request is open, and its `checks` passed.                                                                |
+| `check`                   | The check Collie is running for the leading Run, as `collie run checks` gives `running` (with its `log` and `lastLines`), or `null`.                            |
+| `reopened`                | A finished Run whose agent took a steer after it ended: the `delivery`, the `agent`, the first line it was `told` and its `status` now; else `null`.            |
+| `run`, `runs[]`           | The Run a card acts on, and every Run of the Task.                                                                                                              |
+
+A `gate` is a Run parked at its evidence gate with nothing approved, listing the checks its
+checkout's `.collie/verify.json` (or your config's `verify.json`) offers. Answer it with
+`collie run answer <run-id> approve --decision evidence-gate`, or `approve:<name>,<name>`
+for part of the list: the host grants those, as `run intent verification` does, and takes
+the Run up again. It is not skipped, since with nothing approved no check could prove it.
 
 ## Answer a question
 
@@ -708,7 +721,7 @@ comes through these: the evaluator's proposals wait on the board, and chat asks 
 `answer`, `deliver`, `followup` and `start` — through the same closed union, the same
 last-moment admission check and the same executors a confirmation runs. It also takes the
 board's decisions, which are not actions on a run: `confirm` a waiting proposal by its id
-and the hash `collie_receipts` lists beside it, `decline` one, and `disposition` to record
+and the hash `collie_receipts` lists beside it, `decline` one by the same two, and `disposition` to record
 what became of a finished run's work. It answers a line per action saying what each one
 came to. A kind outside that set is refused with the name of the tool that does take it:
 amending an Intent, forking a definition, changing the defaults, keeping a run's checks for
@@ -750,8 +763,9 @@ does not have comes back as a question for you rather than being dropped. `start
 `workspace`, so a launch asked for from the Home lands in the repository it is about
 rather than in Collie's own namespace directory — and it needs no existing run.
 
-Requests retain their origin (`chat:`, `cli:`, or the board). Attribution is an audit
-record, not an approval requirement. Launches into Collie's Home state directory return
+Requests retain their origin (`chat:`, `cli:`, or the board). A `collie` command is a
+human's (`cli-tty`) only at a terminal, in a pane herdr does not report as an agent's or
+outside herdr; anywhere else it is `cli`. Attribution is an audit record, not an approval requirement. Launches into Collie's Home state directory return
 `needs_input`: choose the project with `--workspace` or `COLLIE_CWD` before starting work.
 Legacy Runs rooted there cannot be resumed into the state directory; start a new Run
 against the project instead.
@@ -778,8 +792,8 @@ collie --json decline <proposal-id>
 collie --json proposal reconcile <proposal-id> <index> --as applied|not-applied
 ```
 
-`confirm` executes an existing proposal. Optional `--hash <content-hash>` checks that you
-are addressing those exact contents. Expired or stale-target proposals are still rejected.
+`confirm` executes an existing proposal and `decline` refuses one. Optional
+`--hash <content-hash>` checks that you are addressing those exact contents. Expired or stale-target proposals are still rejected.
 Ordinary chat requests and steers do not need this command.
 
 Actions run in order, each one re-checked immediately before it runs and journalled on
@@ -807,15 +821,21 @@ more by `run resume` — see
 
 A finished run's status is never rewritten and its Workflow is never re-entered, but its
 live agents still take `run steer` and `run stop`
-([ADR-0038](adr/0038-a-finished-run-still-takes-steering.md)). New work with steps of
+([ADR-0041](adr/0041-a-finished-run-still-takes-steering.md)). New work with steps of
 its own is a follow-up, and so is a request to an agent whose pane is gone: a steer to one
 fails and names this route. What a Run offers to do next is its own declaration, so
 carrying on is one of its offers:
 
 ```sh
 collie --json run actions <run-id>
-collie --json run action <run-id> follow-up --input text="the docs change is still outside src/"
+collie --json run action <run-id> follow-up --input plan="the docs change is still outside src/"
 ```
+
+A follow-up carries on its parent's work, so it runs on the parent's branch — in the
+worktree that branch already has — and updates the parent's merge request rather than
+opening another. `--input` is only what is left to say, under whatever name the follow-up's
+workflow gives it (`plan` for implement); the board's **Follow up** asks for those words and
+sends them there.
 
 ## What became of the work
 
@@ -974,7 +994,7 @@ collie --json run checks <run-id>
 ```
 
 Every check Collie ran for the Run, oldest first, and the one it is running now
-([ADR-0039](adr/0039-a-check-collie-runs-is-seen-while-it-runs.md)). Each says its pass —
+([ADR-0042](adr/0042-a-check-collie-runs-is-seen-while-it-runs.md)). Each says its pass —
 `gate`, `baseline`, `recheck`, `fix` with its round, `finish`, or a plain `check` — so
 three runs of the same suite read as what each was for.
 
@@ -1106,7 +1126,8 @@ nothing lifts a hold at a time.
 
 `--workspace` holds every unfinished run of the Task that workspace belongs to instead of a
 single run. Each run takes its own hold, so releasing one lifts that one and leaves the
-rest held.
+rest held. `--reason "<why>"` is recorded with the hold, and the board's `heldBy` says it
+beside who held it.
 
 ## Fork a workflow or a persona
 
@@ -1131,9 +1152,10 @@ overwritten. See [Authoring](authoring.md) for what the resulting file means.
 
 With `--json`, every command prints exactly one line: a success or a failure envelope. That
 holds for a crash too — a defect is caught and reported as `operation_failed` rather than
-leaving you an empty stream and an exit status. The one exception is
+leaving you an empty stream and an exit status. The exceptions are
 [`run wait --follow`](#watch-a-run), which streams events and ends without an envelope when
-the run finishes. The examples on this page are indented for reading; Collie writes each on
+the run finishes, and [`onboard`](#onboarding-a-machine), which prints a line per step
+before its envelope. The examples on this page are indented for reading; Collie writes each on
 one line.
 
 Success:
@@ -1168,20 +1190,20 @@ human line and a failure prints `error.message`.
 
 ### Error codes
 
-| Code                  | When                                                                                                  |
-| --------------------- | ----------------------------------------------------------------------------------------------------- |
-| `workspace_required`  | The command needs a workspace and none could be determined.                                           |
-| `workspace_not_found` | The `--workspace` id is not a workspace herdr has.                                                    |
-| `workflow_not_found`  | No layer defines that workflow.                                                                       |
-| `persona_not_found`   | No layer defines that persona.                                                                        |
-| `run_not_found`       | No run with that id, or none by that id in the Task this command is scoped to.                        |
-| `task_not_found`      | `--task` named a Task that does not exist.                                                            |
-| `target_exists`       | A fork would overwrite a file that is already there.                                                  |
-| `needs_input`         | Inputs are missing; `details.inputs` says which, with their questions.                                |
-| `timeout`             | `run wait --timeout` gave up.                                                                         |
-| `invalid_state`       | The run is not in a state where that makes sense — resuming one that already succeeded, for instance. |
-| `invalid_input`       | A flag or argument was wrong.                                                                         |
-| `operation_failed`    | Anything else, including a caught defect.                                                             |
+| Code                  | When                                                                                                                                                       |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `workspace_required`  | The command needs a workspace and none could be determined.                                                                                                |
+| `workspace_not_found` | The `--workspace` id is not a workspace herdr has.                                                                                                         |
+| `workflow_not_found`  | No layer defines that workflow.                                                                                                                            |
+| `persona_not_found`   | No layer defines that persona.                                                                                                                             |
+| `run_not_found`       | No run with that id, or none by that id in the Task this command is scoped to.                                                                             |
+| `task_not_found`      | `--task` named a Task that does not exist.                                                                                                                 |
+| `target_exists`       | A fork would overwrite a file that is already there.                                                                                                       |
+| `needs_input`         | Inputs are missing; `details.inputs` says which, with their questions.                                                                                     |
+| `timeout`             | `run wait --timeout` gave up.                                                                                                                              |
+| `invalid_state`       | The run, or the installation, is not in a state where that makes sense — resuming one that already succeeded, or `upgrade --to` on a development checkout. |
+| `invalid_input`       | A flag or argument was wrong.                                                                                                                              |
+| `operation_failed`    | Anything else, including a caught defect.                                                                                                                  |
 
 ## Retrying safely
 
@@ -1222,13 +1244,91 @@ collie upgrade
 Pulls first where the installation is a checkout (`--ff-only`), then runs `prepare.sh` —
 the one routine every entry point ends in, so this brings the plugin link, the runner and
 shim, the operator skill and the skills up to date together rather than replacing the
-runner alone. A pull it cannot do is reported rather than installed over.
+runner alone. A pull it cannot do is reported rather than installed over. A runner
+`install.sh` downloads replaces the one there only once its signature checks out
+([Build and release](internals.md)). Otherwise an install with bun builds the runner from
+source, and one without keeps the runner already there and the `runner` step fails.
 
 The report names what moved: the commit range where the checkout advanced, and one line
 per preparation step saying whether it was done, was already in place, or was skipped —
 so "nothing to do" reads differently from "the runner updated but the skills step could
 not run". A skipped step is not a failure: `upgrade` still succeeds. Under `--json` the
 same steps are in `data.steps`.
+
+```sh
+collie upgrade --to 0.27.0
+```
+
+Moves a released install to exactly that version (fetching tags, then resetting to the
+tag), and reports the same way, with `data.version`. A development checkout — on a branch
+other than `master`, detached on a commit that is not a release, with uncommitted changes,
+or ahead of its remote — is refused as `invalid_state` with the reason, and its checkout is left as it was.
+A host's `identity` names such a checkout's build as `development: "<version>+<sha>"`.
+
+## Onboarding a Machine
+
+```sh
+collie onboard [--to 0.27.0] [--secrets-stdin] [--skip helle] [--skip linear]
+```
+
+Takes a Machine from bare to a working Collie host, and repairs a half-onboarded one: every
+step looks before it acts, so running it again does only what is missing. `--to` is the
+release to install, this runner's own version when it is not given. Nothing runs sudo.
+
+| Step           | What it does                                                                                                                                                                                                                                                                                                                                                              |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `system`       | Checks for `git`, `curl` and an OpenSSL 3.0 or later (which checks a downloaded runner's signature; LibreSSL and 1.1 cannot). Any missing stops here with `needs_root` and the exact command; an older OpenSSL gets one only where a package gives OpenSSL 3 (EPEL's `openssl3` with dnf, `brew install openssl`), and otherwise needs OpenSSL 3 or bun installed by hand |
+| `collie`       | Clones `https://github.com/cego/collie.git` (or `COLLIE_REPO`) into `~/.collie` (or `COLLIE_DIR`) and resets `master` to the tag, so a plain `collie upgrade` can still pull; or moves a released checkout to the tag as `upgrade --to` does                                                                                                                              |
+| `herdr`        | `curl -fsSL https://herdr.dev/install.sh \| sh`, if there is no `herdr`                                                                                                                                                                                                                                                                                                   |
+| `claude`       | Anthropic's user-level installer, `curl -fsSL https://claude.ai/install.sh \| bash`, if there is no `claude`                                                                                                                                                                                                                                                              |
+| `path`         | Adds `~/.local/bin` (and `COLLIE_BIN_DIR`) to PATH in the shell's profile (`~/.bashrc`, `~/.zshrc` or `~/.profile`)                                                                                                                                                                                                                                                       |
+| `plugin`       | `prepare.sh`: the plugin link, the runner and shim, the operator skill and the skills. A runner `install.sh` downloads is installed only once the release key's signature (`<asset>.sig`) checks out                                                                                                                                                                      |
+| `claude-login` | `claude auth login` in this terminal, if `claude auth status --json` says Claude Code is not logged in; without a terminal, `needs_human` with that command                                                                                                                                                                                                               |
+| `gitlab`       | `glab auth login --hostname gitlab.cego.dk --stdin` (or `GITLAB_HOST`) with `GITLAB_TOKEN`, if glab is not already logged in there. Without a token: `needs_human`, with the token page and its `api` and `write_repository` scopes as `url`                                                                                                                              |
+| `push`         | Generates `~/.ssh/id_ed25519` if there is none and registers it with `glab ssh-key add`, unless the Machine can already push (over HTTPS with glab's login, or with its own key). GitLab's host key is trusted on first use, and a key GitLab already has counts as registered                                                                                            |
+| `helle`        | Writes `HELLE_API_URL` and `HELLE_API_TOKEN` to Helle's credentials file, owner-only; with neither given and no file, `needs_human`                                                                                                                                                                                                                                       |
+| `linear`       | `claude mcp add --transport http --scope user linear-server https://mcp.linear.app/mcp`, then `claude mcp login linear-server` in a terminal of its own, whose URL is streamed                                                                                                                                                                                            |
+| `doctor`       | [`collie doctor`](#checking-an-installation); onboarded means it is ready                                                                                                                                                                                                                                                                                                 |
+
+A development checkout — the one this runner belongs to when that is a checkout, or
+`COLLIE_DIR` — is judged as [`upgrade --to`](#upgrading) judges one, and gets the checks
+only and the logins: nothing is installed and its checkout is not moved.
+
+Secrets are never arguments. `--secrets-stdin` reads `KEY=value` lines from stdin —
+`GITLAB_TOKEN`, `HELLE_API_URL` and `HELLE_API_TOKEN` — and the token reaches glab on its
+stdin too. Helle and Linear count toward onboarded unless `--skip` names them; a skipped
+step reports `skipped`. Doctor's own checks for them stay optional.
+
+Each step prints a line when it starts and one when it ends. Under `--json` each is a JSON
+line, then the envelope:
+
+```json
+{"event":"start","step":"system","title":"Checking for git, curl and openssl"}
+{"event":"result","step":"system","status":"needs_root","detail":"git must be installed as root; run the command, then onboard again","command":"sudo apt-get install -y git"}
+```
+
+A step that needs the human in the middle of it streams a `human` line first, as the Linear
+login does with its URL and the local port its redirect comes back to:
+
+```json
+{
+  "event": "human",
+  "step": "linear",
+  "detail": "open this to let Claude Code reach Linear",
+  "url": "https://mcp.linear.app/authorize?…",
+  "port": 62074
+}
+```
+
+In a terminal the login also takes a pasted redirect URL. Chat can propose an onboarding
+too (the `onboard` action, with an optional `skip`); nobody is watching that stream, so its
+logins are left as `needs_human` steps rather than started.
+
+`status` is `done`, `in_place`, `skipped`, `needs_root`, `needs_human` or `failed`; a
+result may carry the `command` to run by hand and the `url` to open. The envelope's
+`data.ready` is true only when every step ended `done`, `in_place` or `skipped`, and
+`data.steps` repeats every result; otherwise it is an `operation_failed` that lists what is
+left, and the exit status is 1. Re-running is the retry.
 
 ## Checking an installation
 
@@ -1240,10 +1340,16 @@ collie doctor --json
 Every prerequisite in one pass, each with the command that fixes it: herdr present and at
 least the `min_herdr_version` the plugin manifest declares; the plugin linked from this
 installation; the runner built and the `collie` shim on PATH (installed-but-not-on-PATH is
-its own reported state); a Node runtime for the skills CLI; every skill and every harness
+its own reported state); every skill and every harness
 the loaded workflows and personas name; whether the checkout is behind its remote; the
 Projects root and its source — `projects.root`, `GITTE_CWD`, or the home directory, the last
-a `!` warning that never fails the run; and `glab` present and logged in.
+a `!` warning that never fails the run; `glab` present and logged in; Claude Code logged
+in, from `claude auth status --json`, where `claude` is on PATH; for each GitLab host glab
+is logged in to, its token's expiry, a `!` warning within 14 days of it and a failure once
+it has passed; and whether this Machine can push to each of those hosts — over SSH with its
+own key, or over HTTPS where glab configured git to use it. An agent sshd forwarded into the
+session does not count, since it goes when the computer it came from sleeps. With more than
+one host, each of those two checks is named with its host.
 
 Two more are optional, and reported rather than required. **Helle**, where a loaded
 workflow waits on it (`renovate` does): the credentials file the Helle MCP wrapper sources,
@@ -1290,16 +1396,79 @@ never adopted and never signalled.
 
 Clients talk to it over a unix socket in that same directory, with Effect's own RPC: the
 same schemas at both ends, and nothing listening off this machine. It answers `identity`,
-`discover`, `load`, `registrations`, `start`, `status`, `run`, `runs`, `watch`, `recover`, `answer`, `offers`, `invoke`, `control`, `grant` and `steer` — one
+`discover`, `load`, `registrations`, `status`, `run`, `runs`, `watch`, `recover`, `offers`, `grant` and `steer` — one
 registry, in front of as many clients as ask. `run` and `runs` are the read model the front
 doors show; `watch` streams it, current state first and a whole state each time; `recover`
-registers what current files now allow and hands over what is outstanding; `control` sets
-or clears a hold or a stop on one run, and every watcher hears about it. One fiber in the
+registers what current files now allow and hands over what is outstanding. One fiber in the
 host asks the engine about the work it has not finished, on a schedule every client shares,
 and speaks up when anything a run shows has changed, so watching costs the same whether one
 client is looking or the whole board is. Closing a client cancels nothing it started;
 stopping the host with `kill` leaves suspended work suspended, and the next client starts a
 host that picks it up.
+
+The operations above are `HostRpcs`: internal, and a Collie client of another build stops
+before sending them anything. Beside them on the same socket is `FrontDoorRpcs`, the door
+any front door uses whatever its build or computer, declared with its Schemas in
+`src/board-model.ts`. `board` streams the board: a `Snapshot` (the state directory's
+`installation` id, `build`, `protocol`, the `herds` — every running herdr session, by Herd
+`id` and herdr's `name` — and every TaskView), then an `Upsert` or a `Remove` keyed by Task
+id for each change, each with a `seq` higher than the last. A client that reconnects gets a
+fresh snapshot. The host builds again when anything under its state directory is written,
+when herdr pushes an event from any of its sessions (a pane opening or closing, or an
+agent's status changing), and every five seconds. The installation id is written once, by
+the first host to own the directory, and survives restarts and upgrades.
+
+The host also runs what nobody has to have a pane open for: the merge watch, which asks
+GitLab about each waiting merge request every 5 minutes and records a merge; each Herd's
+News; and worktree pruning, every 3 minutes.
+
+The operations that change a Run are on `FrontDoorRpcs` too: `start`, `answer`, `control`
+(a hold or a stop, set or cleared, and every watcher hears about it), `resume` and
+`invoke` (an offer). `grant` and `steer` stay on `HostRpcs`. Each takes a request id, and the same id twice is one operation. A
+channel first sends `declare` with its front door, and the host stamps every operation on
+it with that, as a line in the Run's `operations.jsonl`: the operation, the request, the
+Actor and what came of it ([ADR-0039](adr/0039-every-operation-records-who-asked.md)). A
+channel that declares nothing is `cli`. `declare` may also carry `session`, the herdr
+session socket the front door runs in: a confirmed, asked or proposed action looks its
+workspaces, panes and Herd up there. A channel that names none has them looked up in the
+session the host was started from.
+
+So are the ones that write anything else: `confirm` (a proposal's id and content hash) and
+`decline` (its id and content hash too), recorded in its Herd's proposals journal under the Actor; `dispose`,
+what became of a Run's work; `steerAbout`, which has the evaluator turn free words about a
+Run into actions and carries them out; `followUp`, which starts the follow-up the Run's
+Workflow declares; `propose`, which records what chat was asked for as a proposal and
+carries it out; `act`, which carries out the board's own actions on a Run (`stop`, `resume`,
+`release`, `hold`, `answer`, `deliver`, `followup`, `start`) with no proposal, anything else
+being refused as `propose`'s; `reconcile`, which settles a proposal step nobody can account
+for; and `settleDelivery`, which does the same for a message to an agent. Actions travel as
+JSON and the host decodes them. `collie confirm`, `decline`, `steer`, `run disposition`,
+`proposal reconcile` and `run deliveries --reconcile`, the board and chat's tools all go
+through these, so the host is the only writer of what they record
+([ADR-0040](adr/0040-the-host-is-the-only-writer.md)).
+
+`runDetail` streams one Run's details while a drawer is open — intent, plan, review,
+log tail, verifications, metrics, steering cards, the files it kept as evidence, its diff
+and its merge request — current first, then again whenever they change. The diff is the
+Run's branch against its merge base with the default branch, per file: the checkout as it
+is while the Run works, the branch's commits once it has ended. The host keeps that in the
+Run's directory as soon as the Run ends, with the branch head it was taken at, so a merged
+branch or a pruned checkout does not lose it and a resumed Run that committed more is read
+again. An untracked file reached through a link, or that is not a regular file, is listed
+without being read. The review's findings come as
+a list. The merge request is what the merge watch last read, asked again after 5 minutes or
+when `refreshMr` is set. Large items are fetched by reference with `runFile`: `log`,
+`diff:<path>`, `evidence:<name>`, `verification:<id>`, `plan:<file>` and `file:<path>` (read
+only, from the Run's checkout), text as it is and anything else as base64. Each answer is
+at most 4 MiB from `offset` (or `length` bytes where asked) and says the item's whole
+`size`, so a long log or a video is read in parts. A part of an item is base64 whatever it
+is, so a character split across two parts is whole once they are joined. A reference is refused where it leaves
+the directory it belongs to, links followed, or where it is not a regular file.
+
+`protocol` is an integer, also in `identity`. An optional field, a new operation or a new
+kind of message does not change it, and a client reads a kind it does not know as
+`Unknown` and skips it. A removal or a change of meaning bumps it, and from then on the
+host serves its current version and the one before; version 1 has none before it.
 
 `discover` and `start` name the project asking, because one host serves the machine and a
 project's own `.collie/workflows` is its own: two projects can run different implementations
@@ -1327,7 +1496,8 @@ It says which build it is, and which installation it serves. A client newer than
 from the same installation (after `collie upgrade`), stops it and starts itself in its
 place. Any other client of another build is told which build is running and which pid to
 stop, and sends nothing else. That includes a checkout under development, which is pointed
-at a state directory of its own rather than replacing the installed host.
+at a state directory of its own rather than replacing the installed host. Such a
+checkout's host also says `development: "<version>+<sha>"`; a release's does not.
 A host that cannot be started at all is `HostUnavailable`, with whether anything owns the
 directory. [ADR-0015](adr/0015-one-local-host-owns-a-state-directory.md) is why each of
 those is the way it is.

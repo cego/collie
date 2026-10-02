@@ -1,5 +1,5 @@
 // One agent does the work and the Run succeeds, leaving that agent alive: what a human
-// still tells to merge or tag after the steps are done (ADR-0038).
+// still tells to merge or tag after the steps are done (ADR-0041).
 
 import { agentWork, defineWorkflow } from "collie";
 import { Effect, Schema } from "effect";

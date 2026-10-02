@@ -135,7 +135,7 @@ test("the Tasks a Run can be started into are something chat can read", () =>
       // `collie task list` is an operation a human has, so chat has to have one too —
       // and a Task with no Run yet is invisible in the Herd, which is the whole reason
       // this is not answered from the Run list.
-      const task = yield* newTask({ workspace: "w1", label: "picker", cwd: project });
+      const task = yield* newTask({ workspace: "w1", label: "picker", cwd: project, herd: null });
       yield* writeTask(stateDir, task);
       const said = yield* call("collie_workspaces");
       expect(said).toContain(task.id);
@@ -800,7 +800,9 @@ test("collie_do settles a proposal the human said yes to in chat", () =>
       const second = (yield* readProposals(yield* proposalsPath(stateDir, KEY)))
         .filter((line): line is ProposalRecord => line.kind === "proposal")
         .find((line) => line.id !== proposal.id)!;
-      yield* call("collie_do", { actions: [{ kind: "decline", proposal: second.id }] });
+      yield* call("collie_do", {
+        actions: [{ kind: "decline", proposal: second.id, hash: second.content_hash }],
+      });
       expect(
         (yield* readProposals(yield* proposalsPath(stateDir, KEY))).some(
           (line) => line.kind === "declined" && line.id === second.id,

@@ -20,7 +20,7 @@ import {
   type Row,
   type ViewName,
 } from "./state";
-import { headerSentence, sectionsOf, type Question, type TaskView } from "../board";
+import { headerSentence, sectionsOf, type Question, type TaskView } from "../board-model";
 import { truncated } from "../views";
 import { columnsFor, C } from "./sections";
 import { Board, Button, CardMenu, KeyHelp, type Batch, type Decide, type Where } from "./Board";
@@ -272,7 +272,8 @@ export function App(props: AppProps) {
     },
     confirm: (proposal) =>
       props.dispatch({ _tag: "ConfirmProposal", id: proposal.id, hash: proposal.hash }),
-    decline: (proposal) => props.dispatch({ _tag: "DeclineProposal", id: proposal.id }),
+    decline: (proposal) =>
+      props.dispatch({ _tag: "DeclineProposal", id: proposal.id, hash: proposal.hash }),
     approve: (gate, verifications) => {
       setCutting(null);
       props.dispatch({
@@ -281,10 +282,6 @@ export function App(props: AppProps) {
         choiceId: gate.id,
         value: verifications === null ? "approve" : `approve:${verifications.join(",")}`,
       });
-    },
-    skip: (gate) => {
-      setCutting(null);
-      props.dispatch({ _tag: "Answer", runId: gate.run, choiceId: gate.id, value: "skip" });
     },
     edit: (gate) => {
       const holding = tasks().find(
@@ -434,7 +431,11 @@ export function App(props: AppProps) {
         });
       }
       if (key.name === "escape")
-        return props.dispatch({ _tag: "DeclineProposal", id: proposal.id });
+        return props.dispatch({
+          _tag: "DeclineProposal",
+          id: proposal.id,
+          hash: proposal.content_hash,
+        });
       return;
     }
     // A menu is a question about what to do next: the keys beside its items are the

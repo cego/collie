@@ -21,33 +21,27 @@
 // means a person" shortcut would read it as human. Attribution, never a gate.
 
 import type { BunServices } from "@effect/platform-bun/BunServices";
-import { Clock, Crypto, Effect, Option, Result, Schema } from "effect";
+import { Clock, Crypto, Effect, Result, Schema } from "effect";
 import { ChildProcessSpawner } from "effect/unstable/process";
 import type { PluginEnv } from "./env";
-import { mutation } from "./envelope";
-import {
-  carryOutAsked,
-  carryOutProposal,
-  declineProposal,
-  newRequestId,
-  request,
-  runFacts,
-  workspaceCwdFromPanes,
-} from "./operations";
+import { newRequestId, runFacts, workspaceCwdFromPanes } from "./operations";
 import { ActionSchema, type Action } from "./evaluator";
-import { runViews, isSettled } from "./lifecycle";
-import { taskOfWorkspace } from "./task";
 import {
-  actorName,
-  pendingFor,
-  proposalsPath,
-  read as readProposals,
-  type Actor,
-} from "./proposals";
-import { recordDisposition, statusLine } from "./disposition";
+  boardSnapshot,
+  confirmProposed,
+  declineProposed,
+  actAsked,
+  disposeRun,
+  proposeActions,
+  runViews,
+  isSettled,
+} from "./lifecycle";
+import { taskOfWorkspace } from "./task";
+import { pendingFor, proposalsPath, read as readProposals } from "./proposals";
+import { statusLine } from "./disposition";
 import { Herdr } from "./herdr";
-import { buildBoard, headerSentence, mrLabel, sectionOf, SECTIONS, type TaskView } from "./board";
-import { loadDefaults } from "./config";
+import { mrLabel } from "./board";
+import { ASKED_KINDS, headerSentence, sectionOf, SECTIONS, type TaskView } from "./board-model";
 import {
   asText as newsText,
   newsPath,
@@ -57,7 +51,6 @@ import {
 } from "./news";
 import { findRun, listRuns, type RunFacts } from "./runs";
 import { donePasses, markersOf, runningCheck } from "./checks";
-import { nowIso } from "./time";
 import { deliveriesOf, herdOf } from "./steering";
 import { loadDefinitions, layers } from "./definitions";
 import { chatHarnessOf, chatPath, pushable, readChat, whyUnavailable } from "./chat";
@@ -142,22 +135,6 @@ const ProposeInput = Schema.Struct({
 const decodePropose = decodeStrict(ProposeInput);
 
 /**
- * What the human can ask for and have done: the board's own actions on a named Run, plus
- * starting one. A closed subset of the same union — amending an Intent, forking a
- * definition and changing what a workspace's Runs begin with are collie_propose's, which
- * carries them out in the same call.
- */
-const ASKED_KINDS = [
-  "stop",
-  "resume",
-  "release",
-  "answer",
-  "deliver",
-  "followup",
-  "start",
-] as const;
-
-/**
  * The board's decisions, which are not actions on a Run: a yes to a proposal, a no, and
  * what became of finished work. Chat takes them as the human takes them on the board.
  */
@@ -168,7 +145,7 @@ const SettleSchema = Schema.Union([
     /** The hash of exactly those actions, as `collie_receipts` lists it beside the id. */
     hash: Schema.String,
   }),
-  Schema.Struct({ kind: Schema.Literal("decline"), proposal: Schema.String }),
+  Schema.Struct({ kind: Schema.Literal("decline"), proposal: Schema.String, hash: Schema.String }),
   Schema.Struct({
     kind: Schema.Literal("disposition"),
     run: Schema.String,
@@ -374,7 +351,7 @@ export const TOOLS: ReadonlyArray<Tool> = [
       "which workspace this Herd's Home is and what proves it, the panes an older " +
       "release left that a cleanup would close, the constraints every new Run begins " +
       "with, and which harness this conversation is running in. Read this before " +
-      "proposing an upgrade, a cleanup or a change to the defaults.",
+      "proposing an upgrade, an onboarding, a cleanup or a change to the defaults.",
     input: NO_INPUT,
     call: (env) => said(installationFacts(env)),
   },
@@ -408,7 +385,7 @@ export const TOOLS: ReadonlyArray<Tool> = [
       "Carry out, at once, anything the board does: its own actions " +
       `on a named Run (${ASKED_KINDS.join(", ")}), and its decisions — ` +
       "`confirm` a waiting proposal by its id and the hash `collie_receipts` lists beside " +
-      "it, `decline` one, and `disposition` to record what became of a finished Run's " +
+      "it, `decline` one by the same two, and `disposition` to record what became of a finished Run's " +
       "work. This is not a proposal: it is done, and the board shows the result. Do not " +
       "send the human to the board for one of these. Name a Run by the id " +
       "`collie_herd` lists, or leave `run` out to act on the card the board has open, " +
@@ -425,7 +402,8 @@ export const TOOLS: ReadonlyArray<Tool> = [
     description:
       "Carry out the human's requested actions and return their results, including the " +
       "kinds `collie_do` does not take: amending an Intent, forking a definition, changing " +
-      "a workspace's defaults, a cleanup, an upgrade. No separate confirmation: they asked. " +
+      "a workspace's defaults, a cleanup, an upgrade, onboarding this Machine. No separate " +
+      "confirmation: they asked. " +
       "Reuse request_id when retrying the same request. Use reads for questions, not this. " +
       "Name every Run by the id `collie_herd` lists — a Run that does not exist is refused " +
       "rather than guessed at, and if you are not sure which the human meant, ask them " +
@@ -442,19 +420,15 @@ export const TOOLS: ReadonlyArray<Tool> = [
               decoded.failure,
               'It takes {"interpretation": "...", "actions": [...]}, and every action has to be one of the kinds in the schema.',
             );
-          const key = yield* herdOf(env.socketPath).pipe(Effect.catch(() => Effect.succeed(null)));
-          if (key === null)
-            return "Collie cannot reach herdr, so there is nothing to propose against.";
+          const herd = yield* herdOf(env.socketPath).pipe(Effect.catch(() => Effect.succeed(null)));
           const requestId = decoded.success.request_id ?? (yield* newRequestId());
-          const answer = yield* said(
-            mutation(env, "chat-request", Option.some(requestId), (id) =>
-              request(env, key, {
-                interpretation: decoded.success.interpretation,
-                actions: decoded.success.actions,
-                actor: { origin: "chat", requestId: id },
-              }),
-            ).pipe(Effect.map((result) => (result.ok ? result.human : result.error.message))),
-          );
+          const answer = yield* proposeActions(env, {
+            door: "chat",
+            herd,
+            interpretation: decoded.success.interpretation,
+            actions: decoded.success.actions,
+            request: requestId,
+          }).pipe(Effect.map((result) => (result.ok ? result.human : result.error.message)));
           return `Request: ${requestId}\n${answer}`;
         }),
       ),
@@ -494,15 +468,16 @@ const carryOut = Effect.fn("Tools.carryOut")(function* (env: PluginEnv, input: J
   if (wrong.length > 0)
     return `collie_do does not carry out ${[...new Set(wrong.map((a) => a.kind))].join(", ")}: that is collie_propose's, which carries it out in the same call.`;
   const requestId = yield* (yield* Crypto.Crypto).randomUUIDv4;
-  const actor: Actor = { origin: "chat", requestId };
   const said: string[] =
     selected.on === null
       ? []
       : [`On the board's selection, "${selected.on.name}" (${selected.on.run}):`];
-  for (const action of actions) {
+  for (const [index, action] of actions.entries()) {
     const done = yield* isSettle(action)
-      ? settle(env, action, actor)
-      : carryOutAsked(env, [action], actor).pipe(Effect.map((results) => results[0]!));
+      ? settle(env, action, `${requestId}-${index}`)
+      : actAsked(env, { door: "chat", actions: [action], request: `${requestId}-${index}` }).pipe(
+          Effect.map((results) => results[0]!),
+        );
     said.push(`${done.kind}: ${done.state}${done.note ? ` — ${done.note}` : ""}`);
     // What follows a failure was asked for on the assumption that it did not happen.
     if (done.state === "failed") break;
@@ -510,33 +485,45 @@ const carryOut = Effect.fn("Tools.carryOut")(function* (env: PluginEnv, input: J
   return said.join("\n");
 });
 
-/** A decision of the board's, taken where the human said it. */
-const settle = Effect.fn("Tools.settle")(function* (env: PluginEnv, action: Settle, actor: Actor) {
+/** A decision of the board's, taken where the human said it, by the host. */
+const settle = Effect.fn("Tools.settle")(function* (
+  env: PluginEnv,
+  action: Settle,
+  request: string,
+) {
   if (action.kind === "disposition") {
     const run = yield* findRun(env, action.run);
     if (run === null) return { kind: action.kind, state: "failed", note: `no Run "${action.run}"` };
-    const line = {
-      at: yield* nowIso(),
-      by: actorName(actor),
+    const done = yield* disposeRun(env, {
+      door: "chat",
+      runId: run.id,
       kind: action.became,
       ref: action.ref ?? "",
       note: null,
-    };
-    yield* recordDisposition(run.dir, line);
-    return { kind: action.kind, state: "applied", note: statusLine(run.state, line) };
+      request,
+    });
+    return done.ok
+      ? { kind: action.kind, state: "applied", note: statusLine(run.state, done.value) }
+      : { kind: action.kind, state: "failed", note: done.error.message };
   }
   const done =
     action.kind === "confirm"
-      ? yield* carryOutProposal(env, action.proposal, action.hash, actor)
-      : yield* declineProposal(env, action.proposal, actor);
-  if (!done.ok) return { kind: action.kind, state: "failed", note: done.error.message };
-  // A settled proposal is not a proposal that ran: whether its actions did is in their
-  // own results, and what was asked for after this assumed they had.
-  const ran =
-    "results" in done.data && done.data.results.some((result) => result.state === "failed")
-      ? "failed"
-      : "applied";
-  return { kind: action.kind, state: ran, note: done.human };
+      ? yield* confirmProposed(env, {
+          door: "chat",
+          proposal: action.proposal,
+          hash: action.hash,
+          request,
+        })
+      : yield* declineProposed(env, {
+          door: "chat",
+          proposal: action.proposal,
+          hash: action.hash,
+          request,
+        });
+  // A confirmation whose actions did not all apply is a failure, with each one's result in it.
+  return done.ok
+    ? { kind: action.kind, state: "applied", note: done.human }
+    : { kind: action.kind, state: "failed", note: done.error.message };
 });
 
 /** Cards per answer. Sections come in the board's order, so Finished is what gets cut. */
@@ -594,14 +581,10 @@ const runAnswer = Effect.fn("Tools.runAnswer")(function* (env: PluginEnv, run: R
 
 /** What `collie_herd` answers with: the board, so chat and board can never disagree about a card. */
 const boardFacts = Effect.fn("Tools.boardFacts")(function* (env: PluginEnv) {
-  const alive = yield* new Herdr(env).agentList().pipe(Effect.catch(() => Effect.succeed([])));
+  const read = yield* boardSnapshot(env);
+  if (!read.ok) return `- (the board could not be read: ${read.error.message})`;
+  const views = read.value.tasks;
   const now = yield* Clock.currentTimeMillis;
-  const views = yield* buildBoard({
-    env,
-    alive,
-    now,
-    quietMs: (yield* loadDefaults(env.userDir)).boardQuietMs,
-  });
   return herdLines(views, now);
 });
 
@@ -709,12 +692,12 @@ const hold = Effect.fn("Tools.hold")(function* (env: PluginEnv, input: JsonObjec
 
   // One channel for every control, so what chat can do to a Run is exactly what the
   // board and the CLI can do to it — including which Runs there are to do it to.
-  const oneRun: Action = { kind: "hold", run: run! };
-  const held = yield* carryOutAsked(
-    env,
-    workspace === undefined ? [oneRun] : yield* holdsFor(env, workspace),
-    { origin: "chat", requestId },
-  );
+  const oneRun: Action = { kind: "hold", run: run!, reason: why };
+  const held = yield* actAsked(env, {
+    door: "chat",
+    actions: workspace === undefined ? [oneRun] : yield* holdsFor(env, workspace, why),
+    request: requestId,
+  });
   const about = on === null ? "" : `On the board's selection, "${on.name}": `;
   return (
     about +
@@ -725,11 +708,15 @@ const hold = Effect.fn("Tools.hold")(function* (env: PluginEnv, input: JsonObjec
 });
 
 /** Every Run of the Task this workspace belongs to, as one hold each. */
-const holdsFor = Effect.fn("Tools.holdsFor")(function* (env: PluginEnv, workspace: string) {
+const holdsFor = Effect.fn("Tools.holdsFor")(function* (
+  env: PluginEnv,
+  workspace: string,
+  reason: string,
+) {
   const task = yield* taskOfWorkspace(env.stateDir, workspace);
   if (task === null) return [];
   const runs = (yield* runViews(env, task.id)).runs.filter((view) => !isSettled(view));
-  return runs.map((view) => ({ kind: "hold" as const, run: view.runId }));
+  return runs.map((view) => ({ kind: "hold" as const, run: view.runId, reason }));
 });
 
 /** What `collie_workspaces` answers with: where a Run could go, and what could start. */

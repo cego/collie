@@ -42,6 +42,19 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           merge-multiple: true
+      # Signed after the build matrix, in the one job that holds the secret.
+      - uses: actions/checkout@v4
+        with:
+          path: repo
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4"
+      - run: bun install --frozen-lockfile
+        working-directory: repo
+      - run: bun run tools/sign.ts ../collie-*
+        working-directory: repo
+        env:
+          COLLIE_SIGNING_KEY: ${{ secrets.COLLIE_SIGNING_KEY }}
       - run: gh release create "$GITHUB_REF_NAME" collie-* --repo "$GITHUB_REPOSITORY" --title "Collie $GITHUB_REF_NAME" --notes "Collie $GITHUB_REF_NAME"
         env:
           GH_TOKEN: ${{ github.token }}

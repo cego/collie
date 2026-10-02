@@ -4,24 +4,20 @@
 
 import { For, Show, type JSX } from "solid-js";
 import { TextAttributes, type MouseEvent } from "@opentui/core";
+import { agentCount, finishedLabel, whereItIs, workingLabel, waitingLabel } from "../board";
 import {
-  agentCount,
-  finishedLabel,
+  foldWaiting,
+  sectionOf,
   type Decision,
   type Gate,
   type HeaderSentence,
   type Proposal,
   type Question,
-  whereItIs,
-  workingLabel,
   type Sections,
   type TaskView,
-  foldWaiting,
-  sectionOf,
-  waitingLabel,
   SECTIONS,
   type Section as SectionId,
-} from "../board";
+} from "../board-model";
 import { ALL_KEYS, type Command, type MenuItem, type Older, primaryFor } from "./state";
 import { C, cardEdge, sentenceColour, stateGlyph, stepGlyph } from "./sections";
 
@@ -35,7 +31,6 @@ export interface Decide {
   decline: (proposal: Proposal) => void;
   /** A gate: the list as it stands, or `null` for the whole of it. */
   approve: (gate: Gate, verifications: ReadonlyArray<string> | null) => void;
-  skip: (gate: Gate) => void;
   /** Opens the record on the list, which is the only place it can be cut down. */
   edit: (gate: Gate) => void;
   /** What has been typed into this question and not sent. */
@@ -576,7 +571,6 @@ function Gated(props: { gate: Gate; decide: Decide }) {
       <box style={{ flexDirection: "row", flexWrap: "wrap" }}>
         <Button label="Approve" primary onPress={() => props.decide.approve(props.gate, null)} />
         <Button label="Edit the list" onPress={() => props.decide.edit(props.gate)} />
-        <Button label="Skip" onPress={() => props.decide.skip(props.gate)} />
       </box>
     </box>
   );
@@ -750,7 +744,7 @@ const RIGHT_BUTTON = 2;
     aiming at Confirm is not asking for. */
 /** The header's buttons: three rows, the height of the field beside them. */
 /**
- * The brand signature — Luma and the lettering, the light version for dark ground — where
+ * The brand signature — the mascot and the lettering, the light version for dark ground — where
  * there is one to draw: the bitmap itself over the Kitty graphics protocol, three rows
  * tall like the controls beside it. The caller decides whether
  * every human looking at this pane can see a picture (`outer.ts`); a board that cannot

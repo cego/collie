@@ -4,14 +4,8 @@
 // forge's own checks are kept beside the state, for the card to say whether it is ready.
 
 import { Effect, FileSystem, Option, Path, Schema } from "effect";
-import {
-  mrLabel,
-  sectionOf,
-  type ForgeChecks,
-  type ForgeFacts,
-  type MrState,
-  type TaskView,
-} from "./board";
+import { mrLabel, type ForgeChecks, type ForgeFacts } from "./board";
+import { sectionOf, type MrPanel, type MrState, type TaskView } from "./board-model";
 import { latest, readDispositions, recordDisposition } from "./disposition";
 import { liveTier, mrDetails, parseMrTarget, type MrRef, type Runner } from "./mr";
 import { runDir } from "./engine";
@@ -20,7 +14,32 @@ import { nowIso } from "./time";
 /** How long one merge request's answer stands before GitLab is asked again. */
 export const MERGE_POLL_MS = 5 * 60_000;
 
-/** Where the CLI's board reads what the pane's watch last learned. */
+/** What the merge watch last read of each merge request, by label, and when. */
+export type MrPanels = Map<string, { readonly at: number; readonly panel: MrPanel }>;
+
+/**
+ * A merge request's panel as the watch last read it, read again only once that is
+ * `MERGE_POLL_MS` old or a front door asked for it fresh.
+ */
+export const watchedMr = Effect.fn("Merges.watchedMr")(function* <R>(opts: {
+  readonly panels: MrPanels;
+  readonly target: string;
+  readonly cwd: string;
+  readonly run: Runner<R>;
+  readonly now: number;
+  readonly fresh: boolean;
+}) {
+  const ref = mrRefOf(opts.target);
+  if (ref === null) return null;
+  const label = mrLabel(opts.target);
+  const known = opts.panels.get(label);
+  if (known !== undefined && !opts.fresh && known.at + MERGE_POLL_MS > opts.now) return known.panel;
+  const panel = yield* mrDetails(ref, opts.cwd, opts.run);
+  opts.panels.set(label, { at: opts.now, panel });
+  return panel;
+});
+
+/** Where the host keeps what its merge watch last learned. */
 export const MR_STATES_FILE = "board/mr-states.json";
 
 const StateSchema = Schema.Literals(["open", "merged", "closed", "on-stage", "in-prod"]);
@@ -157,8 +176,10 @@ export const settleMerges = Effect.fn("Merges.settle")(function* <R>(opts: {
   now: number;
   checked: Map<string, number>;
   states: Map<string, MrState>;
+  /** Where each panel read is kept, for the drawer of the Run it belongs to. */
+  panels: MrPanels;
 }) {
-  // What earlier panes learned, under this pane's own answers: a new pane's empty memory
+  // What an earlier host learned, under this one's own answers: a fresh host's empty memory
   // must not ask production again about what an earlier one already saw land there.
   for (const [label, state] of yield* readMrStates(opts.stateDir))
     if (!opts.states.has(label)) opts.states.set(label, state);
@@ -177,7 +198,9 @@ export const settleMerges = Effect.fn("Merges.settle")(function* <R>(opts: {
     if (pullOf(view.mr) === null && mrRefOf(view.mr) === null) continue;
     // Stamped before asking: a forge that cannot be asked is not asked again every tick.
     opts.checked.set(label, opts.now);
-    const answered = yield* forgeAnswer(view.mr, opts.cwd, opts.run);
+    const answered = yield* forgeAnswer(view.mr, opts.cwd, opts.run, (panel) =>
+      opts.panels.set(label, { at: opts.now, panel }),
+    );
     if (answered === null) continue;
     const { state, facts, by } = answered;
     const before = forge.get(label);
@@ -215,6 +238,8 @@ const forgeAnswer = Effect.fn("Merges.forgeAnswer")(function* <R>(
   mr: string,
   cwd: string,
   run: Runner<R>,
+  /** Keeps a GitLab panel read, for the drawer of the Run it belongs to. */
+  remember: (panel: MrPanel) => void,
 ) {
   const pull = pullOf(mr);
   if (pull !== null) {
@@ -229,6 +254,7 @@ const forgeAnswer = Effect.fn("Merges.forgeAnswer")(function* <R>(
   const ref = mrRefOf(mr);
   if (ref === null) return null;
   const panel = yield* mrDetails(ref, cwd, run);
+  remember(panel);
   if (panel._tag !== "Details") return null;
   let state = stateOf(panel.state);
   if (state === "merged") {
@@ -237,7 +263,10 @@ const forgeAnswer = Effect.fn("Merges.forgeAnswer")(function* <R>(
   }
   return {
     state,
-    facts: { checks: pipelineChecks(panel.pipeline), head: panel.head === "" ? null : panel.head },
+    facts: {
+      checks: pipelineChecks(panel.pipeline),
+      head: (panel.head ?? "") === "" ? null : panel.head!,
+    },
     by: "gitlab",
   };
 });
@@ -270,7 +299,7 @@ export const writeMrStates = Effect.fn("Merges.write")(function* (
   );
 });
 
-/** What the last watch wrote, or nothing: a board with no pane has never asked a forge. */
+/** What the last watch wrote, or nothing: a host that never watched has never asked a forge. */
 const readEntries = Effect.fn("Merges.readEntries")(function* (stateDir: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;

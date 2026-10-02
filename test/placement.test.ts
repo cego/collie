@@ -358,6 +358,89 @@ test(
 );
 
 test(
+  "a follow-up builds on its parent's branch, in its parent's worktree",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* rig.queueOutputs([{ verdict: "clean" }, { verdict: "clean" }]);
+        const seen = yield* hosted(
+          Effect.gen(function* () {
+            const registry = yield* Registry;
+            const [builds] = yield* loaded(registry, [`${fixtures}/builds.workflow.ts`]);
+            const started = yield* start(builds!, {
+              request: "r1",
+              text: { work: "Add a picker" },
+              taskLabel: "Project | Picker",
+            });
+            if (started._tag === "Failure") return yield* Effect.die(started.failure);
+            const parent = yield* finished(started.success.runId);
+            const child = yield* registry
+              .invoke({
+                runId: started.success.runId,
+                offer: "keep-going",
+                input: { work: "Also sort it" },
+                request: "r2",
+              })
+              .pipe(Effect.orDie);
+            return { parent, child: yield* finished(child.runId) };
+          }),
+        );
+
+        expect(seen.parent).toMatchObject({
+          branch: `${LOGIN}/add-a-picker`,
+          cwd: worktreeOf("add-a-picker"),
+        });
+        expect(seen.child).toMatchObject({
+          branch: seen.parent?.branch,
+          cwd: seen.parent?.cwd,
+          task: seen.parent?.task,
+        });
+      }),
+    ),
+  120_000,
+);
+
+test(
+  "a stopped Run on a branch offers no follow-up, since it could be resumed in that checkout",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const seen = yield* hosted(
+          Effect.gen(function* () {
+            const registry = yield* Registry;
+            const store = yield* Store;
+            const [waits] = yield* loaded(registry, [`${fixtures}/waits.workflow.ts`]);
+            const started = yield* start(waits!, {
+              request: "r1",
+              text: { work: "Add a picker" },
+              taskLabel: "Project | Picker",
+            });
+            if (started._tag === "Failure") return yield* Effect.die(started.failure);
+            const runId = started.success.runId;
+            yield* until(
+              () => store.asked(runId),
+              (rows) => rows.length > 0,
+            );
+            yield* registry.control({ runId, control: "stop", set: true });
+            return {
+              offers: yield* registry.offers(runId),
+              invoked: yield* registry
+                .invoke({ runId, offer: "carry-on", input: { work: "more" }, request: "r2" })
+                .pipe(Effect.result),
+              rows: yield* store.runs,
+            };
+          }),
+        );
+
+        expect(seen.offers[0]?.unavailable).toContain("could be resumed");
+        expect(refusedWith(seen.invoked)).toContain("could be resumed");
+        expect(seen.rows).toHaveLength(1);
+      }),
+    ),
+  120_000,
+);
+
+test(
   "a fresh Task's workspace is rooted at the checkout its first Run was given",
   () =>
     runEffect(

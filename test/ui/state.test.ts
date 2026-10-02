@@ -8,7 +8,6 @@ import {
   ALL_KEYS,
   footerKeys,
   keyIntent,
-  markdownLines,
   needsYouStatus,
   nextQuestionId,
   runIdOf,
@@ -1002,52 +1001,6 @@ test("the help overlay lists every key the board handles, each with what it does
   expect(ALL_KEYS.every((k) => k.what !== "")).toBe(true);
 });
 
-test("markdown lines carry the one thing that makes a long review skimmable", () => {
-  const lines = markdownLines(
-    [
-      "# Review",
-      "",
-      "Summary of it.",
-      "- [strong] a real one",
-      "  * nested",
-      "```ts",
-      "# not a heading",
-      "```",
-      "after",
-    ].join("\n"),
-  );
-
-  expect(lines.map((l) => l.style)).toEqual([
-    "heading",
-    "plain",
-    "plain",
-    "list",
-    "list",
-    "code",
-    "code",
-    "code",
-    "plain",
-  ]);
-  // The text is untouched: this decides how a line is drawn, never what it says.
-  expect(lines.map((l) => l.text)).toEqual([
-    "# Review",
-    "",
-    "Summary of it.",
-    "- [strong] a real one",
-    "  * nested",
-    "```ts",
-    "# not a heading",
-    "```",
-    "after",
-  ]);
-
-  // Every heading level, and a fence left open to the end of the file.
-  expect(markdownLines("### Findings").map((l) => l.style)).toEqual(["heading"]);
-  expect(markdownLines("```\nstill code").map((l) => l.style)).toEqual(["code", "code"]);
-  // A hash with no space is a comment in whatever the agent pasted, not a heading.
-  expect(markdownLines("#!/bin/sh").map((l) => l.style)).toEqual(["plain"]);
-});
-
 /** The two boards the Session-local keys distinguish: this workspace's, and the Herd's. */
 const HERE: Filter = { kind: "workspace", id: "w1" };
 const EVERYWHERE: Filter = { kind: "all" };
@@ -1525,7 +1478,7 @@ test("a proposal on screen takes Enter and Esc, and nothing else", () => {
   });
   expect(keyIntent(previewing, press("\x1b", { name: "escape" }))).toEqual({
     _tag: "Do",
-    command: { _tag: "DeclineProposal", id: "p1" },
+    command: { _tag: "DeclineProposal", id: "p1", hash: "deadbeef" },
   });
   expect(keyIntent(previewing, press("k"))).toBeNull();
 });

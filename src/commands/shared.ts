@@ -17,7 +17,7 @@ import type { YamlMap } from "../yaml";
 const InputsJson = Schema.fromJsonString(Schema.Record(Schema.String, Schema.Json));
 
 /** Everything on stdin, for `--inputs-json -`, through the Stdio service. */
-const stdinText = Effect.gen(function* () {
+export const stdinText = Effect.gen(function* () {
   const stdio = yield* Stdio.Stdio;
   return yield* stdio.stdin.pipe(
     Stream.decodeText(),
@@ -311,14 +311,40 @@ export function mutating(
 }
 
 /**
- * Attribution only: a piped command is still a CLI request, not a Driver.
+ * A human's only at a terminal in a pane herdr does not report as an agent's: an agent's
+ * harness has a terminal too. `agentPanes` is null where herdr could not say.
+ */
+export function cliOrigin(at: {
+  readonly terminal: boolean;
+  readonly pane: string | null;
+  readonly agentPanes: ReadonlyArray<string> | null;
+}): "cli" | "cli-tty" {
+  if (!at.terminal) return "cli";
+  if (at.pane === null) return "cli-tty";
+  return at.agentPanes !== null && !at.agentPanes.includes(at.pane) ? "cli-tty" : "cli";
+}
+
+/**
+ * Which front door this command is. A piped command is still a CLI request, not a Driver.
  *
  * All three streams, not stdout alone: `collie --json confirm … > out.json` is a person
  * at a terminal, and a Driver has a pipe on every one of them.
  */
-export function actorNow(requestId: string): Actor {
-  const terminal = process.stdin.isTTY || process.stdout.isTTY || process.stderr.isTTY;
-  return { origin: terminal ? "cli-tty" : "cli", requestId };
-}
+export const cliDoor = Effect.fn("Shared.cliDoor")(function* (env: PluginEnv) {
+  const terminal = Boolean(process.stdin.isTTY || process.stdout.isTTY || process.stderr.isTTY);
+  const agentPanes =
+    !terminal || env.paneId === null
+      ? []
+      : yield* new Herdr(env).agentList().pipe(
+          Effect.map((agents) => agents.map((agent) => agent.paneId)),
+          Effect.orElseSucceed(() => null),
+        );
+  return cliOrigin({ terminal, pane: env.paneId, agentPanes });
+});
+
+/** Who is asking, for an operation of this command's own. */
+export const actorNow = Effect.fn("Shared.actorNow")(function* (env: PluginEnv, requestId: string) {
+  return { origin: yield* cliDoor(env), requestId } satisfies Actor;
+});
 
 export { actorName };

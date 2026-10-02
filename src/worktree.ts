@@ -1043,6 +1043,8 @@ interface InUse {
  */
 const inUse = Effect.fn("worktree.inUse")(function* (
   herdr: Herdr,
+  /** The Machine's other sessions, whose agents may work in a checkout too. */
+  sessions: ReadonlyArray<Herdr>,
   opts: {
     paths: ReadonlyMap<string, string>;
     keep?: string | undefined;
@@ -1052,9 +1054,15 @@ const inUse = Effect.fn("worktree.inUse")(function* (
 ) {
   const panes = yield* Effect.result(herdr.paneList());
   if (panes._tag === "Failure") return null;
+  const elsewhere: PaneInfo[] = [];
+  for (const session of sessions) {
+    const theirs = yield* Effect.result(session.paneList());
+    if (theirs._tag === "Failure") return null;
+    elsewhere.push(...theirs.success);
+  }
   const paths = new Map(opts.paths);
   const workspaces = new Map<string, string>();
-  for (const pane of panes.success) {
+  for (const pane of [...panes.success, ...elsewhere]) {
     if (!pane.agent) continue;
     // A Run's own agent, idle in the tab it left behind, is what the removal closes —
     // counting it as work in progress kept every finished Run's checkout forever.
@@ -1232,13 +1240,14 @@ function fromRuns(runs: ReadonlyArray<RunFacts>, registered: ReadonlyArray<Agent
 
 /**
  * Removes the worktrees this repository has that are settled, and reports what it did
- * and what it is holding — one line each, so nothing is silent. Runs where Collie
- * already wakes up: at every `run start` and every Control Plane refresh, with each
- * worktree's verdict standing for a few minutes so a 1.5-second refresh does not
- * shell out to git and glab over and over.
+ * and what it is holding — one line each, so nothing is silent. The host's sweep runs
+ * it, with each worktree's verdict standing for a few minutes so a sweep does not shell
+ * out to git and glab for every checkout every time.
  */
 interface PruneOptions {
   herdr: Herdr;
+  /** The Machine's other herdr sessions, whose agents may work in a checkout too. */
+  sessions?: ReadonlyArray<Herdr>;
   stateDir: string;
   /** Every Run there is, which says which checkouts Collie made and which are in use. */
   runs: ReadonlyArray<RunFacts>;
@@ -1324,7 +1333,11 @@ const prune = Effect.fn("worktree.prune")(function* (
   // candidate being held, and nothing is written down: an unverified round is not a
   // verdict, so the next refresh asks again rather than waiting out the debounce.
   const leftovers = new Set([...panes.values()].flatMap((left) => [...left]));
-  const use = yield* inUse(opts.herdr, { paths, keep: opts.keep, leftovers });
+  const use = yield* inUse(opts.herdr, opts.sessions ?? [], {
+    paths,
+    keep: opts.keep,
+    leftovers,
+  });
   if (!use) {
     const standing = yield* conclude(round);
     return [
@@ -1362,9 +1375,8 @@ const prune = Effect.fn("worktree.prune")(function* (
 
 /**
  * How every round ends, whether it judged anything or not: what moved is written down,
- * and what the board should say is answered. Only when something actually moved —
- * this runs on a board refresh, and rewriting the same bytes on every one of those is
- * a disk write nobody asked for.
+ * and what the board should say is answered. Only when something actually moved:
+ * rewriting the same bytes every sweep is a disk write nobody asked for.
  */
 const conclude = Effect.fn("worktree.conclude")(function* (opts: {
   state: PruneState;
@@ -1383,13 +1395,15 @@ const conclude = Effect.fn("worktree.conclude")(function* (opts: {
 });
 
 /**
- * What is worth putting on this repository's board: everything it is holding, and a
- * removal while it is still news. Another repository's verdicts are on its own board.
+ * What is worth putting on a board: everything held, and a removal while it is still
+ * news. Only `repo`'s, where one is named.
  */
-function reported(state: PruneState, now: number, repo: string): string[] {
+function reported(state: PruneState, now: number, repo?: string): string[] {
   return Object.values(state)
     .filter(
-      (entry) => entry.repo === repo && (!entry.removed || now - entry.checked_at <= REPORT_MS),
+      (entry) =>
+        (repo === undefined || entry.repo === repo) &&
+        (!entry.removed || now - entry.checked_at <= REPORT_MS),
     )
     .map((entry) => entry.line);
 }
@@ -1478,12 +1492,10 @@ const removeWorktree = Effect.fn("worktree.removeWorktree")(function* (
 });
 
 /**
- * Removes what is settled and answers with what it did — never with a failure. Both
- * moments Collie prunes at are doing something else at the time: a Run start and a
- * board refresh have no use for a state file that would not read, and neither would
- * stop for one.
+ * Removes what is settled and answers with what it did — never with a failure: the host's
+ * sweep has no use for a state file that would not read, and would not stop for one.
  *
- * One pruner at a time, under the same pid lock the run records use. Two run starts
+ * One pruner at a time, under the same pid lock the run records use. Two pruners
  * at once would otherwise read the same verdicts, decide separately and write over
  * each other, and could ask git to remove one checkout twice. A contended lock means
  * somebody else is already doing this, so there is nothing to say and nothing to wait
@@ -1495,6 +1507,20 @@ export const pruneWorktrees = (opts: PruneOptions) =>
     const lock = path.join(opts.stateDir, `${PRUNE_FILE}.lock`);
     return yield* withLock(lock, Effect.succeed<string[]>([]), sweep(opts));
   }).pipe(Effect.catch(() => Effect.succeed<string[]>([])));
+
+/** What the host's sweeps last said, for a board to show without sweeping itself. */
+export const reportedWorktrees = Effect.fn("worktree.reportedWorktrees")(function* (
+  stateDir: string,
+) {
+  const path = yield* Path.Path;
+  const state = yield* (yield* FileSystem.FileSystem)
+    .readFileString(path.join(stateDir, PRUNE_FILE))
+    .pipe(
+      Effect.flatMap(Schema.decodeUnknownEffect(PruneStateJson)),
+      Effect.orElseSucceed((): PruneState => ({})),
+    );
+  return reported(state, yield* Clock.currentTimeMillis);
+});
 
 /**
  * Every repository the recorded checkouts belong to, each asked from one of its own

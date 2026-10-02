@@ -527,7 +527,7 @@ export interface HostApi {
      */
     readonly at?: "default-base";
     /**
-     * Why it is run, which every door shows while it runs (ADR-0039): `gate` on the branch,
+     * Why it is run, which every door shows while it runs (ADR-0042): `gate` on the branch,
      * `recheck` on the same tree for a flake, or `fix` after gate fix `round`. Absent is a
      * plain `check`.
      */

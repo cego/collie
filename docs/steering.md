@@ -329,13 +329,13 @@ A finished run's status is history, so `finish` settles rather than acts:
 
 None of this runs again for a finished Run its agents are later steered on: what a steered
 agent does after the Run finished is not re-judged, and no drift correction is sent to it
-([ADR-0038](adr/0038-a-finished-run-still-takes-steering.md)).
+([ADR-0041](adr/0041-a-finished-run-still-takes-steering.md)).
 
 ## Follow-ups
 
 A finished Run's status is never rewritten, and its Workflow is never re-entered. Its
 live agents still take steering
-([ADR-0038](adr/0038-a-finished-run-still-takes-steering.md)): a `deliver` reaches them
+([ADR-0041](adr/0041-a-finished-run-still-takes-steering.md)): a `deliver` reaches them
 through the Dispatcher with the delivery token, the ledger line and the receipt a running
 Run's agent gets, and comes back `applied` only when the text was sent. `answer` is
 refused because a finished Run asks nothing; `update_intent` and `clear_override` work as

@@ -3,21 +3,29 @@
 // which command went out — never about a component's own state.
 
 import { expect, test } from "bun:test";
-import { Effect } from "effect";
+import { Effect, Schedule } from "effect";
 import { createSignal } from "solid-js";
 import { testRender } from "@opentui/solid";
+import { TextAttributes } from "@opentui/core";
 import { runEffect } from "../support/effect";
 import { task } from "../support/task";
 import { App } from "../../src/ui/App";
 import type { AppState, Command } from "../../src/ui/state";
 import type { Ask, Pending } from "../../src/ui/prompts";
-import { SECTIONS, type TaskView } from "../../src/board";
-import type { RunDetail } from "../../src/views";
+import { SECTIONS, type RunDetail, type TaskView } from "../../src/board-model";
 import { NO_RUN_OUTCOME } from "../../src/views";
 import type { Live } from "../../src/live";
 import type { Card } from "../../src/cards";
 import type { Delivery } from "../../src/steering";
 import { NO_OUTCOME, type WorkspaceView } from "../../src/workspace";
+import { currentEnv } from "../../src/env";
+import { appState as homeState } from "../../src/flows";
+import { Herdr } from "../../src/herdr";
+import { followBoard } from "../../src/lifecycle";
+import { scopeFor } from "../../src/registry";
+import { focus } from "../support/focus";
+import { stopHost } from "../support/host";
+import { collie, proves } from "../support/world";
 
 const NOW = Date.parse("2026-09-16T12:00:00.000Z");
 
@@ -150,6 +158,21 @@ const mount = Effect.fn("board.mount")(function* (
       }
       throw new Error(`nothing drawn containing ${JSON.stringify(text)}`);
     },
+    attributesOf(text: string) {
+      for (const line of t.captureSpans().lines) {
+        for (const span of line.spans) if (span.text.includes(text)) return span.attributes;
+      }
+      throw new Error(`nothing drawn containing ${JSON.stringify(text)}`);
+    },
+    /** Flushes until the frame says `text`: Comark renders a document asynchronously. */
+    until: (text: string) =>
+      flush.pipe(
+        Effect.repeat({
+          until: () => t.captureCharFrame().includes(text),
+          schedule: Schedule.spaced("20 millis"),
+          times: 100,
+        }),
+      ),
     setState: (next: AppState) =>
       Effect.andThen(
         Effect.sync(() => setState(next)),
@@ -583,7 +606,7 @@ test("declining a proposal declines it, and the card leaves Needs you", () =>
       );
 
       yield* app.clickOn("Decline");
-      expect(app.acted()).toEqual([{ _tag: "DeclineProposal", id: "p1" }]);
+      expect(app.acted()).toEqual([{ _tag: "DeclineProposal", id: "p1", hash: "deadbeef" }]);
 
       yield* app.setState(appState({ tasks: [task({ id: "tp", name: "Slow down" })] }));
       const after = app.said();
@@ -1012,6 +1035,11 @@ function record(over: Partial<RunDetail> = {}): RunDetail {
     outcome: NO_RUN_OUTCOME,
     finishedAt: 0,
     mr: MR_PANEL,
+    findings: [],
+    verifications: [],
+    steering: [],
+    evidence: [],
+    diff: null,
     ...over,
   };
 }
@@ -1103,6 +1131,62 @@ test("Review shows the verdict and findings, and says when it was cut short", ()
     }),
   ));
 
+test("Review lists the findings, the files the Run changed and its verifications", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const app = yield* opened(
+        appState({
+          tasks: [task()],
+          detail: record({
+            findings: [
+              { severity: "major", title: "Seeds twice", file: "seed.ts", line: 12, detail: null },
+            ],
+            diff: {
+              base: "abc",
+              live: false,
+              files: [
+                { path: "seed.ts", status: "modified", added: 3, removed: 1 },
+                { path: "logo.png", status: "added", added: null, removed: null },
+              ],
+            },
+            verifications: [
+              {
+                id: "v1",
+                name: "seeder-tests",
+                result: "fail",
+                expect: "pass",
+                exit: 1,
+                at: "2026-10-01T10:00:00Z",
+                by: "collie",
+              },
+            ],
+          }),
+        }),
+      );
+
+      yield* app.clickOn("Review");
+
+      const said = app.said();
+      expect(said).toContain("Seeds twice");
+      expect(said).toContain("seed.ts:12");
+      expect(said).toContain("+3 -1");
+      expect(said).toContain("logo.png");
+      expect(said).toContain("binary");
+      expect(said).toContain("✗ seeder-tests");
+    }),
+  ));
+
+test("a hold given no reason names who held it, with nothing after", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const held = task({ held: "⏸ Held.", heldBy: { by: "board", reason: "" } });
+      const app = yield* opened(appState({ tasks: [held], detail: record() }));
+
+      expect(app.said()).toContain("⏸ Held. board ");
+      expect(app.said()).not.toContain("board:");
+    }),
+  ));
+
 test("Plan shows the spec and its tickets, ticked where they are done", () =>
   runEffect(
     Effect.gen(function* () {
@@ -1114,6 +1198,45 @@ test("Plan shows the spec and its tickets, ticked where they are done", () =>
       expect(said).toContain("One command seeds every brand");
       expect(said).toContain("✓ The loader");
       expect(said).toContain("· Brands per environment");
+    }),
+  ));
+
+const PLAN_SPEC = [
+  "# The seeder",
+  "",
+  "| brand | env |",
+  "| --- | --- |",
+  "| alpha | prod |",
+  "",
+  "```ts",
+  "seed(brands);",
+  "```",
+  "",
+  "<script>steal()</script>",
+].join("\n");
+
+test("Plan renders its spec through Comark: headings, a table and a code block, sanitised", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const app = yield* opened(
+        appState({
+          tasks: [task()],
+          detail: record({
+            plan: { spec: { _tag: "Text", text: PLAN_SPEC, truncated: false }, tickets: [] },
+          }),
+        }),
+      );
+
+      yield* app.clickOn("Plan");
+      yield* app.until("┬");
+
+      const frame = app.frame();
+      expect(frame).toMatch(/│ *brand *│ *env *│/);
+      expect(frame).toMatch(/│ *alpha *│ *prod *│/);
+      expect(frame).not.toContain("| --- |");
+      expect(frame).toContain("seed(brands);");
+      expect(app.attributesOf("The seeder") & TextAttributes.BOLD).toBe(TextAttributes.BOLD);
+      expect(frame).not.toContain("steal()");
     }),
   ));
 
@@ -1273,16 +1396,6 @@ test("a gate card lists what would prove the run, and answers on the card", () =
       expect(app.acted()).toEqual([
         { _tag: "Answer", runId: "rg", choiceId: "g1", value: "approve" },
       ]);
-    }),
-  ));
-
-test("Skip takes the run past the gate", () =>
-  runEffect(
-    Effect.gen(function* () {
-      const app = yield* mount(appState({ tasks: [HOLDING] }));
-
-      yield* app.clickOn("Skip");
-      expect(app.acted()).toEqual([{ _tag: "Answer", runId: "rg", choiceId: "g1", value: "skip" }]);
     }),
   ));
 
@@ -1548,3 +1661,58 @@ test("the Home board draws its sections in the board's one order", () =>
       ]);
     }),
   ));
+
+test(
+  "the Home draws a card the host serves, with no board built here",
+  () =>
+    proves(
+      "collie-home-drawn-",
+      (world) =>
+        Effect.gen(function* () {
+          const started = yield* collie(
+            world,
+            [
+              "run",
+              "start",
+              "agent",
+              "--input",
+              "target=worktree",
+              "--input",
+              `cwd=${world.project}`,
+              "--input",
+              "skip=false",
+            ],
+            { FAKE_HERDR_AGENT_STATUS: "blocked" },
+          );
+          expect(started.envelope.ok).toBe(true);
+          const env = yield* currentEnv.pipe(Effect.orDie);
+          const home = homeState(
+            {
+              herdr: new Herdr(env),
+              ...scopeFor(env, env.cwd),
+              stateDir: env.stateDir,
+              userDir: env.userDir,
+              paneId: env.paneId,
+              pluginRoot: env.pluginRoot,
+              tasksOf: yield* followBoard(env),
+            },
+            env,
+          );
+          const state = yield* home.load(focus()).pipe(
+            Effect.repeat({
+              until: (loaded) => loaded.tasks[0]?.state === "blocked",
+              schedule: Schedule.spaced("250 millis"),
+              times: 40,
+            }),
+          );
+          yield* stopHost(world.state);
+          const app = yield* mount(state);
+          const said = app.said();
+          expect(said).toContain("One task is waiting on you.");
+          expect(said).toContain("Needs you");
+          expect(said).toContain("Waiting for you in");
+        }),
+      ["agent.workflow.ts", "notes.md"],
+    ),
+  120_000,
+);

@@ -101,6 +101,39 @@ release_token() {
   esac
 }
 
+# An OpenSSL that can check an Ed25519 signature: 3.0 or later. LibreSSL (macOS's
+# /usr/bin/openssl) and OpenSSL 1.1.1 cannot, and Homebrew's and EPEL's sit beside them.
+# COLLIE_OPENSSL names the only one to try.
+verifier() {
+  for candidate in ${COLLIE_OPENSSL:-openssl openssl3 /opt/homebrew/opt/openssl@3/bin/openssl /usr/local/opt/openssl@3/bin/openssl}; do
+    case "$("$candidate" version 2>/dev/null)" in
+      "OpenSSL "[3-9]* | "OpenSSL "[1-9][0-9]*) echo "$candidate"; return 0 ;;
+    esac
+  done
+  return 1
+}
+
+# Whether Collie's release key signed the download, by `release.pub`: the key the runner
+# itself verifies with. Before the download replaces anything, so a refused one never runs.
+signed() { # file, curl config
+  if ! printf '%s\n' "$2" | curl -fsSL --config - "${BASE}/${ASSET}.sig" -o "$1.sig" 2>/dev/null; then
+    echo "could not fetch ${BASE}/${ASSET}.sig to check the download" >&2
+    return 1
+  fi
+  if ! openssl=$(verifier); then
+    echo "no OpenSSL 3.0 or later to check ${ASSET}'s signature with (LibreSSL and OpenSSL 1.1 cannot)" >&2
+    return 1
+  fi
+  "$openssl" base64 -d -A -in "$1.sig" -out "$1.sig.bin" 2>/dev/null || : >"$1.sig.bin"
+  if ! said=$("$openssl" pkeyutl -verify -pubin -inkey "$ROOT/release.pub" -rawin -in "$1" -sigfile "$1.sig.bin" 2>&1); then
+    case "$said" in
+      *"Signature Verification Failure"*) echo "${BASE}/${ASSET} does not match its signature from Collie's release key" >&2 ;;
+      *) echo "$openssl could not check ${ASSET}'s signature: $said" >&2 ;;
+    esac
+    return 1
+  fi
+}
+
 fetch_release() {
   # A project that is not public answers an unauthenticated download with the login page
   # above, so send a token wherever one can be had.
@@ -130,6 +163,12 @@ fetch_release() {
     fi
     return 1
   fi
+  if ! signed bin/collie.new "$config"; then
+    rm -f bin/collie.new bin/collie.new.sig bin/collie.new.sig.bin
+    unavailable="the download from ${BASE} was refused"
+    return 1
+  fi
+  rm -f bin/collie.new.sig bin/collie.new.sig.bin
   mv bin/collie.new bin/collie
   chmod +x bin/collie
 }
@@ -156,6 +195,7 @@ EOF
 }
 
 mkdir -p bin
+unavailable="no release asset at ${BASE}/${ASSET}"
 if [ -d .git ] && command -v bun >/dev/null 2>&1; then
   if needs_build; then
     echo "building from source: $ROOT is a checkout, and its source is what a release is cut from"
@@ -166,10 +206,10 @@ if [ -d .git ] && command -v bun >/dev/null 2>&1; then
 elif fetch_release; then
   echo "installed ${ASSET} from ${BASE}"
 elif command -v bun >/dev/null 2>&1; then
-  echo "no release asset at ${BASE}/${ASSET}; building from source with bun"
+  echo "${unavailable}; building from source with bun"
   build_from_source
 else
-  echo "cannot install: no ${ASSET} at ${BASE} and no bun to build from source" >&2
+  echo "cannot install: ${unavailable}, and there is no bun to build from source" >&2
   exit 1
 fi
 

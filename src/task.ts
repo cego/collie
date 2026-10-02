@@ -29,6 +29,8 @@ const TaskSchema = Schema.Struct({
    * not make the workspace.
    */
   root_pane: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  /** The Herd its workspace is in. Absent from a record older than the field. */
+  herd: Schema.optionalKey(Schema.NullOr(Schema.String)),
   created_at: Schema.String,
 });
 export type TaskRecord = Schema.Schema.Type<typeof TaskSchema>;
@@ -136,6 +138,7 @@ export const newTask = Effect.fn("task.newTask")(function* (opts: {
   readonly label: string;
   readonly cwd: string;
   readonly rootPane?: string | null;
+  readonly herd: string | null;
 }) {
   return {
     id: `task-${(yield* (yield* Crypto.Crypto).randomUUIDv4).slice(0, 8)}`,
@@ -143,6 +146,7 @@ export const newTask = Effect.fn("task.newTask")(function* (opts: {
     label: opts.label,
     cwd: opts.cwd,
     root_pane: opts.rootPane ?? null,
+    herd: opts.herd,
     created_at: yield* nowIso(),
   } satisfies TaskRecord;
 });

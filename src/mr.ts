@@ -8,6 +8,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import type { YamlValue } from "./yaml";
 import { isString } from "./schema";
 import { targetKind, workSourceOf, type Settled } from "./strategies";
+import type { MrDetails, MrPanel, MrUnavailable } from "./board-model";
 
 export type Runner<R = never> = (
   cmd: string,
@@ -287,53 +288,6 @@ const MrDetailsJson = Schema.fromJsonString(
     approvals_left: optionalCount,
   }),
 );
-
-/**
- * The merge request behind a review, as the app's panel shows it. Every field but the
- * iid is optional on the wire — glab's shape varies with the GitLab version and what
- * the token may see — so a field nobody answered renders as unknown rather than
- * taking the panel down.
- */
-export interface MrDetails {
-  _tag: "Details";
-  iid: string;
-  project: string | null;
-  title: string;
-  /** `opened`, `merged`, `closed`, or `draft` where the MR says it is one. */
-  state: string;
-  author: string;
-  /**
-   * Who has to get this merged, by username. Empty where GitLab named nobody — which is
-   * a merge request waiting for someone, not one that is mine.
-   */
-  assignees: readonly string[];
-  sourceBranch: string;
-  targetBranch: string;
-  /** The head pipeline's status, or `""` when there is no pipeline to report. */
-  pipeline: string;
-  /** Phrased, because "2" alone does not say whether that is good. */
-  approvals: string;
-  /** Whether a discussion is still blocking, which is the one a reviewer chases. */
-  unresolved: boolean;
-  notes: number;
-  /** Seven characters: enough to tell two heads apart, short enough to read. */
-  headSha: string;
-  /** The head revision in full, which evidence is matched against, or "" where unsaid. */
-  head: string;
-  /** The commit the merge put on the target branch, in full, or "" while it is not merged. */
-  mergedSha: string;
-  /** When GitLab last saw it change, in epoch milliseconds, or 0 when it did not say. */
-  updatedAt: number;
-  url: string;
-}
-
-/** Why the panel has nothing to show — one line, and nothing else in the panel breaks. */
-export interface MrUnavailable {
-  _tag: "Unavailable";
-  reason: string;
-}
-
-export type MrPanel = MrDetails | MrUnavailable;
 
 /**
  * One merge request, in one `glab mr view` call. `gitlabForProject` first, because "no

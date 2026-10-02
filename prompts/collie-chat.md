@@ -41,7 +41,7 @@ the shell. "I have no access" is never an answer here; find the way.
 - `collie_hold`, `collie_do`, `collie_propose` — act: hold, stop, resume, release,
   answer a Choice, deliver a message to an agent, follow up, start a workflow, confirm or
   decline a waiting proposal, record a disposition, amend an Intent, fork a definition,
-  change a workspace's defaults, clean up, upgrade. All of it runs at once. Pass the same
+  change a workspace's defaults, clean up, upgrade, onboard this Machine. All of it runs at once. Pass the same
   `request_id` on a retry.
 
 ## How you work

@@ -15,6 +15,7 @@ import type { VerifySpec } from "./intent";
 import { appendJournal, readJournal } from "./journal";
 import { shell } from "./mr";
 import { nowIso } from "./time";
+import { Pass } from "./board-model";
 
 /** Over this many bytes of working-tree content, the tree is not fingerprinted at all. */
 export const FINGERPRINT_MAX_BYTES = 50 * 1024 * 1024;
@@ -35,14 +36,7 @@ export const TOO_LARGE = "unstable:too-large";
 const SnapshotSchema = Schema.Struct({ head_sha: Schema.String, fingerprint: Schema.String });
 export type Snapshot = Schema.Schema.Type<typeof SnapshotSchema>;
 
-/**
- * Why a check was run (ADR-0039): the gate on the branch, a recheck of the same tree for a
- * flake, a fix after gate fix N, the default branch's base, the finish's own, or a plain
- * check where nobody said.
- */
-export const PASSES = ["gate", "recheck", "fix", "baseline", "finish", "check"] as const;
-export type Pass = (typeof PASSES)[number];
-const PassSchema = Schema.Literals(PASSES);
+export { PASSES, Pass } from "./board-model";
 
 /** A pass, and the gate fix it follows where it is a `fix`. */
 export interface CheckPass {
@@ -76,7 +70,7 @@ const VerificationSchema = Schema.Struct({
   /** Who collected it. An agent may run one; only Collie may run an approved spec. */
   by: Schema.Literals(["agent", "collie"]),
   /** Why Collie ran it; absent on an agent's and on records written before passes were. */
-  pass: Schema.optionalKey(PassSchema),
+  pass: Schema.optionalKey(Pass),
   round: Schema.optionalKey(Schema.Int),
   /** Where both streams were written as they arrived, up to `LOG_BYTES`. */
   log: Schema.optionalKey(Schema.String),
@@ -175,7 +169,7 @@ const VerifyingSchema = Schema.Struct({
   name: Schema.String,
   executable: Schema.String,
   argv: Schema.Array(Schema.String),
-  pass: PassSchema,
+  pass: Pass,
   round: Schema.NullOr(Schema.Int),
   /** The commit it runs at, which for `baseline` is where the branch left the default one. */
   revision: Schema.String,

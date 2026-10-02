@@ -1,10 +1,11 @@
-// The checks Collie runs for a Run, as every door reads them (ADR-0039 D5): the card, the
+// The checks Collie runs for a Run, as every door reads them (ADR-0042 D5): the card, the
 // drawer, `collie_run`, `collie_herd` and `collie run checks` all come through here, so
 // none of them can say a different thing about the same check.
 
 import { Effect } from "effect";
 import { Buffer } from "node:buffer";
 import type { RunFacts } from "./runs";
+import type { RunningCheck } from "./board-model";
 import {
   readVerifications,
   verifyingIn,
@@ -12,26 +13,6 @@ import {
   type Verification,
   type Verifying,
 } from "./verify";
-
-/** A check running now, and what it is measured against. */
-export interface RunningCheck {
-  readonly name: string;
-  readonly pass: Pass;
-  readonly round: number | null;
-  readonly revision: string;
-  readonly base: string | null;
-  /** How long it has run, or null where the marker does not say when it started. */
-  readonly elapsedMs: number | null;
-  /** The median of its last five completed runs in this repository, or null for none. */
-  readonly usualMs: number | null;
-  /** Other checks this host is running now. */
-  readonly others: number;
-  readonly sentence: string;
-  /** Where its output is being written, or null for a marker that does not say. */
-  readonly log: string | null;
-  /** The last lines it has written, oldest first. */
-  readonly lastLines: ReadonlyArray<string>;
-}
 
 /** One pass Collie ran and finished. */
 export interface DonePass {

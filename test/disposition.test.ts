@@ -14,8 +14,8 @@ import {
   readDispositions,
   recordDisposition,
   statusLine,
-  type Disposition,
 } from "../src/disposition";
+import type { Disposition } from "../src/board-model";
 import { hosted, settledRun } from "./support/hosted";
 import { runEffect, watchedBy } from "./support/effect";
 

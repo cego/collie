@@ -8,20 +8,19 @@
 
 import { Effect, Option } from "effect";
 import { Argument, Command, Flag } from "effect/unstable/cli";
-import { carryOutProposal, declineProposal, err, steer as steerRun } from "../operations";
-import { evaluationDeps } from "../evaluator";
-import { findRun } from "../runs";
-import { proposalsPath, reconcileStep } from "../proposals";
+import { err } from "../operations";
 import {
-  deliveriesOf,
-  herdOf,
-  readLedger,
-  reconcile as reconcileDelivery,
-  appendLine,
-} from "../steering";
+  confirmProposed,
+  declineProposed,
+  reconcileDelivered,
+  reconcileProposed,
+  steerAbout,
+} from "../lifecycle";
+import { findRun } from "../runs";
+import { journalOf, read as readProposals, type ProposalRecord } from "../proposals";
+import { deliveriesOf } from "../steering";
 import { mutation } from "../envelope";
-import { actorName, actorNow, answering, mutating, runIdArg, requestIdFlag } from "./shared";
-import { nowIso } from "../time";
+import { answering, cliDoor, mutating, runIdArg, requestIdFlag } from "./shared";
 
 export const steer = Command.make(
   "steer",
@@ -46,16 +45,16 @@ export const steer = Command.make(
         const run = target.replace(/^run:/, "");
         if (run === "") return err("invalid_input", "--target is `run:<id>`.");
         return yield* mutation(env, "steer", requestId, (id) =>
-          Effect.gen(function* () {
-            const deps = yield* evaluationDeps(env);
-            return yield* steerRun(env, deps, {
+          Effect.flatMap(cliDoor(env), (door) =>
+            steerAbout(env, {
+              door,
+              runId: run,
               text,
-              target: run,
               from: Option.getOrNull(from),
               dryRun,
-              requestId: id,
-            });
-          }),
+              request: id,
+            }),
+          ),
         );
       }),
     ),
@@ -70,6 +69,16 @@ const proposalIdArg = Argument.String("proposal-id").pipe(
   Argument.withDescription("The proposal, as `steer` printed it"),
 );
 
+/** The proposal's own hash, for a yes that names only its id: the host still checks one. */
+const hashOf = Effect.fn("Steer.hashOf")(function* (stateDir: string, id: string) {
+  const file = yield* journalOf(stateDir, id);
+  const found = file === null ? [] : yield* readProposals(file);
+  return (
+    found.find((line): line is ProposalRecord => line.kind === "proposal" && line.id === id)
+      ?.content_hash ?? ""
+  );
+});
+
 /**
  * Carry out a confirmed proposal, action by action, in order. Each one is admitted again
  * immediately before it runs and journalled on both sides of running, so a crash leaves a
@@ -81,15 +90,31 @@ export const confirm = Command.make(
   { proposalId: proposalIdArg, hash: hashFlag, requestId: requestIdFlag },
   ({ proposalId, hash, requestId }) =>
     mutating("confirm", requestId, (env, id) =>
-      carryOutProposal(env, proposalId, Option.getOrUndefined(hash), actorNow(id)),
+      Effect.gen(function* () {
+        return yield* confirmProposed(env, {
+          door: yield* cliDoor(env),
+          proposal: proposalId,
+          hash: Option.isSome(hash) ? hash.value : yield* hashOf(env.stateDir, proposalId),
+          request: id,
+        });
+      }),
     ),
 ).pipe(Command.withDescription("Carry out a proposal, naming it and its exact contents"));
 
 export const decline = Command.make(
   "decline",
-  { proposalId: proposalIdArg, requestId: requestIdFlag },
-  ({ proposalId, requestId }) =>
-    mutating("decline", requestId, (env, id) => declineProposal(env, proposalId, actorNow(id))),
+  { proposalId: proposalIdArg, hash: hashFlag, requestId: requestIdFlag },
+  ({ proposalId, hash, requestId }) =>
+    mutating("decline", requestId, (env, id) =>
+      Effect.gen(function* () {
+        return yield* declineProposed(env, {
+          door: yield* cliDoor(env),
+          proposal: proposalId,
+          hash: Option.isSome(hash) ? hash.value : yield* hashOf(env.stateDir, proposalId),
+          request: id,
+        });
+      }),
+    ),
 ).pipe(Command.withDescription("Say no to a proposal, so it stops being pending"));
 
 /**
@@ -136,27 +161,11 @@ export const runDeliveries = Command.make(
         const how = Option.getOrNull(as);
         if (how !== "sent" && how !== "not-sent")
           return err("invalid_input", "--as is `sent` or `not-sent`.");
-        const found = mine.find((entry) => entry.delivery.id === settleId);
-        if (!found) return err("invalid_input", `No delivery "${settleId}" for this Run.`);
+        if (!mine.some((entry) => entry.delivery.id === settleId))
+          return err("invalid_input", `No delivery "${settleId}" for this Run.`);
+        const door = yield* cliDoor(env);
         return yield* mutation(env, "run-deliveries-reconcile", requestId, (id) =>
-          Effect.gen(function* () {
-            const lines = yield* readLedger(found.file);
-            // Keep the actual caller in the delivery's audit trail.
-            const settled = reconcileDelivery(
-              lines,
-              settleId,
-              how,
-              actorName(actorNow(id)),
-              yield* nowIso(),
-            );
-            if ("error" in settled) return err("invalid_input", settled.error);
-            yield* appendLine(found.file, settled);
-            return {
-              ok: true as const,
-              data: { delivery: settled },
-              human: `Reconciled ${settleId} as ${how}.`,
-            };
-          }),
+          reconcileDelivered(env, { door, runId, delivery: settleId, as: how, request: id }),
         );
       }),
     ),
@@ -186,18 +195,9 @@ export const proposal = Command.make("proposal").pipe(
               return err("invalid_input", "The index is a whole number.");
             if (as !== "applied" && as !== "not-applied")
               return err("invalid_input", "--as is `applied` or `not-applied`.");
+            const door = yield* cliDoor(env);
             return yield* mutation(env, "proposal-reconcile", requestId, (id) =>
-              Effect.gen(function* () {
-                const file = yield* proposalsPath(env.stateDir, yield* herdOf(env.socketPath));
-                const done = yield* reconcileStep(file, proposalId, at, as, actorNow(id));
-                return done.refused === null
-                  ? {
-                      ok: true as const,
-                      data: { proposal: proposalId, index: at, as },
-                      human: `Settled action ${at} as ${as}.`,
-                    }
-                  : err("invalid_input", done.detail, { reason: done.refused });
-              }),
+              reconcileProposed(env, { door, proposal: proposalId, index: at, as, request: id }),
             );
           }),
         ),

@@ -165,11 +165,10 @@ manager removes it: git's refusals are the last guard, so a wrong judgement here
 fail to clean, never delete work. Only paths some run recorded with `created_by_collie`
 are candidates.
 
-There is no daemon and no cron: pruning runs at `run start` and, at most every few
-minutes, on the Control Plane's refresh — forked, never awaited, because the board redraws
-on every keypress and a sweep walks every due checkout with git and glab. The frame goes
-out with what the last sweep said; one sweep runs at a time, and its clock starts when it
-finishes. Each
+Pruning runs every 3 minutes in the host, beside its merge watch and
+News, so it happens with no pane open. A board shows what the last sweep said, read from
+`worktrees.json`, and never sweeps itself. One sweep runs at a time, and its clock starts
+when it finishes. Each
 worktree's verdict is also kept for a few minutes in `worktrees.json` in the state
 directory, so a due check is the only thing that shells out to git and glab, and the state
 file is rewritten only when something moved.
@@ -210,6 +209,14 @@ the `prompt_box_body` rule's `evidence.region_preview`; the pinned 0.8.2 and 0.9
 answer it (`herdr agent explain --file <screen> --agent claude --json` checks a binary
 without a server), and a reply without it reads as a box nobody can see, which asks a
 human rather than pressing Enter.
+
+`session list --json` is the second: it answers with a bare `{ sessions }` rather than an
+envelope, so it is not in the socket schema either. The host reads it to find every running
+session on the Machine (0.9.1 has the command; whether the pinned 0.8.2 does is not
+checked), and an answer it cannot decode reads as the one session the host inherited. Each
+session's agents come from `agent list` with that session's `HERDR_SOCKET_PATH`, and its
+changes from `events.subscribe` on its socket: pane lifecycle events and each agent pane's
+status, subscribed again after every event so a new pane is watched too.
 
 The version Collie is verified against is `herdr-pin.json`, with the schema that version
 prints committed beside it as `herdr-api-schema.json`, and `min_herdr_version` in
@@ -341,7 +348,9 @@ installed, are refused before an agent's tab opens.
 `trust.ts` handles a harness's own "may I work in this directory" question, answering it
 where that harness looks for the answer rather than driving its dialog. For claude that is a
 read-modify-write of `~/.claude.json`, a file claude owns — which is why it is done once per
-directory, atomically, and with a backup. What the user sees and how they configure it:
+directory, atomically, and with a backup. `start` in `agents.ts` calls it before each
+agent's harness starts, for the agent's own directory, and only once per directory and
+harness in a Run. What the user sees and how they configure it:
 [Using Collie](using.md#trust-the-first-run-in-a-repo).
 
 ## Compaction at a work boundary
@@ -536,6 +545,23 @@ borrows the token `glab` or `gh` already holds for the release host — see
 with a sign-in page and HTTP 200, so the install checks the first bytes for an ELF or
 Mach-O header instead of trusting `curl -f`.
 
+Each runner binary is published with a detached ed25519 signature beside it, `<asset>.sig`.
+The release job signs with `tools/sign.ts`, which reads the private key from the
+`COLLIE_SIGNING_KEY` secret (PKCS#8 PEM). It refuses to run without that key, and refuses a
+key that does not match the public key built into `src/signing.ts`. The public key is
+`release.pub`, which `src/signing.ts` imports. Desktop checks a runner it downloads with
+`verifyRelease`, and `install.sh` checks one with `openssl pkeyutl` against the same file,
+fetching `<asset>.sig` with the same token as the asset, before it replaces `bin/collie`. A
+download that is unsigned, does not match, or whose signature cannot be fetched is never
+installed or run, and the runner already there stays. Checking needs OpenSSL 3.0 or later,
+found on PATH as `openssl` or `openssl3`, or in Homebrew's `openssl@3` (`COLLIE_OPENSSL` names the only one to try); without one, or with
+an OpenSSL that cannot do it, the download is refused as unchecked rather than mismatched.
+So a Machine without bun can install a release only once it is signed. The check is the
+target release's own `install.sh`, so `upgrade --to` or `onboard --to` a release from before
+it installs that release's runner unchecked. Rotating the key means changing both the secret and
+`release.pub`, and
+releases signed with the old key stop verifying.
+
 `bun run build` compiles beside the binary and renames over it, because replacing a running
 runner's own file kills the process executing it. In a git checkout `install.sh` builds from
 source rather than fetching a release, because that machine's own source is what a release
@@ -569,6 +595,14 @@ Every host a test starts ends with that test. `test/support/hosts.ts`, a preload
 each test file a temporary root of its own and tells every host started under it
 (`COLLIE_HOST_WATCH_PID`) to live no longer than the test process; after each test, a host
 still holding a directory under that root is killed and fails the test that left it.
+
+The same preload keeps the suite out of the operator's herd. Before any test file loads it
+drops `COLLIE_USER_DIR`, `COLLIE_CWD` and every `HERDR_*` variable but `HERDR_API_SCHEMA`,
+which the contract check is given on purpose, and sets `HOME` to a directory under that
+root. So a suite run from a herdr pane neither reaches the live session's socket nor
+resolves the default state directory under the real home. A host a test starts inherits
+that environment. A test that needs herdr sets up the fake under `test/support/`;
+`test/isolation.test.ts` fails if the live socket or home gets through.
 
 `bun run test` uses [Bun's process-parallel runner](https://bun.com/docs/test/parallel)
 with four workers and a fresh global per file. Tests within each file stay sequential:

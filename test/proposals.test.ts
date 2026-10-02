@@ -20,6 +20,7 @@ import {
   reconcileStep,
   record,
   stepSettled,
+  stepResults,
   stepStarted,
   type Actor,
   type AdmissionContext,
@@ -58,8 +59,6 @@ beforeEach(() =>
       const fs = yield* FileSystem.FileSystem;
       stateDir = yield* fs.makeTempDirectory({ prefix: "hw-proposals-" });
       file = yield* proposalsPath(stateDir, "herd-1");
-      // The executors register once per process and close over the environment they were
-      // given, so without this a test carries out its actions in the first test's.
       resetExecutors();
     }),
   ),
@@ -192,6 +191,21 @@ test("automation can execute and decline proposals without a terminal", () =>
     }),
   ));
 
+test("a carry-out cut off partway is read back as unsettled and unrun, not as done", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const proposal = yield* written();
+      yield* confirm(file, proposal.id, proposal.content_hash, human, versions);
+      yield* stepStarted(file, proposal.id, 0);
+      // Cut off here: action 0 never settled and action 1 never ran.
+
+      expect(stepResults(yield* read(file), proposal.id)).toMatchObject([
+        { index: 0, kind: "deliver", state: "unknown" },
+        { index: 1, kind: "hold", state: "skipped", note: "not_run" },
+      ]);
+    }),
+  ));
+
 test("an action that started and never settled stops the next confirmation", () =>
   runEffect(
     Effect.gen(function* () {
@@ -317,7 +331,7 @@ const NO_STEP = "a finished Run has no step left to hold; stop closes its agents
 const COLLECTED =
   "its checks were collected when it finished; remember_verification keeps them for the next Run";
 
-/** Every Run-scoped action kind, and what a finished Run's admission says to it (ADR-0038 D2). */
+/** Every Run-scoped action kind, and what a finished Run's admission says to it (ADR-0041 D2). */
 const ON_A_FINISHED_RUN: ReadonlyArray<readonly [Action, string | null]> = [
   [{ kind: "deliver", run: "r1", agent: "impl-1", text: "merge it", mode: "now" }, null],
   [{ kind: "answer", run: "r1", choiceId: "c1", answer: "yes" }, "the run is not asking a Choice"],

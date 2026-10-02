@@ -6,7 +6,7 @@
 
 **Operation** — One piece of agent work inside a Run, named by the Workflow that asks for it. The name is its identity: the agent's name, its prompt and Output files and the Activities that make it durable come from it, so it is stable within a Run and differs from every other. It has a role, injected as a Persona, a Harness, a Model, optionally the Skill it starts, and the schema its Output must decode against. An agent it starts gets a Tab of its own in its Task's workspace, labelled with its role; an operation that reuses an agent opens nothing.
 
-**Trust** — A Harness's own answer to "may I work in this directory". Starting a Run grants it for the selected directory by default, without a duplicate Collie question. `never` leaves the question to the harness.
+**Trust** — A Harness's own answer to "may I work in this directory". Collie grants it for an agent's directory before that agent's harness starts, by default, without a duplicate Collie question. `never` leaves the question to the harness.
 
 **Permissions** — Who decides whether an agent's tool call runs: the harness's own automatic review (`auto`, the default, which starts each agent in its harness's auto mode), no one (`bypass`, which an operator opts into, and which is auto mode wherever the harness's managed settings forbid it), or the harness's prompt in the agent's own pane (`harness`). Trust is answered once per directory; this is decided per agent start, and an operation may name its own mode. Trust is about the directory, Permissions about the calls made inside it.
 
@@ -26,8 +26,14 @@
 
 **Herd** — One herdr session: every workspace in it. The scope of the Collie tab, the
 conversation, proposals, the budget and elections. Keyed by the canonical path of the
-session's socket, never by a directory. **Session** keeps its own meaning below — one
+session's socket, never by a directory. A Task records the Herd its workspace is in, and a
+Machine's host reads every Herd on it. **Session** keeps its own meaning below — one
 workspace — and is not the Herd.
+
+**Machine** — One computer's Collie: one state directory, its one host, and every Herd on
+that computer. Known by its **installation id**, which the first host to own the state
+directory writes into it and every later host keeps, so two routes to one state directory
+are one Machine. Not the plugin installation a host serves, which `identity` calls `root`.
 
 **Home** — The Herd's dedicated Collie workspace, owned by a record plus proof: a live
 `collie_home` token, or the recorded pane still carrying its recorded `terminal_id`. A
@@ -78,6 +84,12 @@ is required. Questions about the flock are Native chat's.
 
 **Proposal** — A durable, hash-bound set of actions. Explicit requests execute through
 this record immediately. Unsolicited background suggestions remain pending.
+
+**Actor** — Who asked for an operation: the front door its channel declared (`board`,
+`cli-tty`, `cli`, `chat`, …) and the request id. The host records it in the Run's audit
+trail with every start, answer, hold, stop, resume, offer invoked, grant, steer,
+disposition and follow-up. `board` and
+`cli-tty` are a human; `cli-tty` needs a terminal outside any agent's pane.
 
 **Confirmation** — A command naming a Proposal's id **and** its content hash. A yes to a
 summary is not consent to a payload nobody read. Anyone may give one — a human at a
@@ -132,7 +144,7 @@ never a worker transcript.
 **Follow-up Run** — A child Run started from a finished one to act on its outcome, reusing
 its worktree under guards. It is how new steps start: a Workflow of its own, with its own
 Intent and evidence. Telling a finished Run's live agent something is steering, not a
-follow-up (see **Reopened**, ADR-0038).
+follow-up (see **Reopened**, ADR-0041).
 
 **Intent** — A Run's goal, the Constraints its work must respect, and the Authority delegated to Collie over it. Versioned; v1 is written at start from the workspace's defaults, the work source's own text and what was named at launch, and amended by an explicit request, and, in a Run on a worktree of its own, by its own `plan/SPEC.md` as its constraints change (ADR-0036). Everything Collie says about drift is a comparison against it; what imported Runs recorded stays readable.
 
@@ -206,7 +218,7 @@ finished. Not a status: the Run still reads `succeeded`, `failed` or `stopped`, 
 that is how its steps ended. Derived from the delivery ledger and herdr's agent state, so
 nothing records it. Its card is in Working while that agent works and in Needs you while
 it is blocked, then stands on its own facts again. Steering reaches a finished Run's
-agents for as long as one is alive; a gone pane is the Follow-up Run's job (ADR-0038).
+agents for as long as one is alive; a gone pane is the Follow-up Run's job (ADR-0041).
 
 **Landed** — What a Task's work has done once it needs nothing more from anyone: a
 **Disposition** was recorded — merged, abandoned or superseded — the Run succeeded at a
@@ -323,7 +335,7 @@ Run's branch, `baseline` where the branch left the default branch, `recheck` on 
 tree to rule out a flake, `fix` after gate fix N, `finish` at the Run's end, or a plain
 `check`. The pass is the Workflow's declaration, never read off its id. While it runs, the
 card and chat say the check, the pass, how long it has run against how long it usually
-takes, and where its output is being written (ADR-0039).
+takes, and where its output is being written (ADR-0042).
 
 **Obstacle** — What is identifiably in a Run's way, in one sentence: a command failing several times in a row the same way. It is shown to the human and given to the next prompt so the approach can change. It stops nothing.
 
@@ -415,7 +427,7 @@ does with each outcome, and what a five-minute unresolved attempt stops:
 
 **Notification** — The only channel from an unattended Run to the person who started it, so what is not worth interrupting for is not sent at all. One title shape — `<repo> · <slug> <what happened>` — one taxonomy in `src/notify.ts`, once per `(run, kind, step)`, and never a reason for a Run to fail.
 
-**Host** — The one background process that runs work for a state directory. CLI, board and chat all reach it over the same local RPC, and closing any of them leaves its work running. It owns the directory under `host.lock`, keeps its Runs in SQLite, and on restart hands every accepted Run back to the engine, so completed work is reused rather than repeated. A client of another build is told to restart it, not served (ADR-0015).
+**Host** — The one background process that runs work for a state directory. CLI, board and chat all reach it over the same local RPC, and closing any of them leaves its work running. It owns the directory under `host.lock`, keeps its Runs in SQLite, and on restart hands every accepted Run back to the engine, so completed work is reused rather than repeated. A client of another build is told to restart it before `HostRpcs` (ADR-0015); `FrontDoorRpcs` serves any build (ADR-0038).
 
 **Ownership** — Who holds something that must have one owner. A claim stands while its process answers and is still the one that wrote it, and one whose process answers but whose identity cannot be read stands too: "I could not tell" is not permission to take over. It decides which process may be the host for a state directory; canonical in `src/lock.ts`.
 

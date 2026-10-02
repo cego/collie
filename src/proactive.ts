@@ -19,7 +19,7 @@ import { Effect, Path, Schema } from "effect";
 import { appendJournal, readJournal } from "./journal";
 import { runTitle } from "./naming";
 import { settled, type RunFacts } from "./runs";
-import type { Reopened, TaskView } from "./board";
+import type { Reopened, TaskView } from "./board-model";
 
 const SaidSchema = Schema.Struct({ at: Schema.String, key: Schema.String });
 const SaidJson = Schema.fromJsonString(SaidSchema);
@@ -126,7 +126,7 @@ export function idleAgain(
 ): Map<string, Reopened> {
   const idle = new Map<string, Reopened>();
   for (const view of views) {
-    const reopened = view.reopened;
+    const reopened = view.reopened ?? null;
     if (reopened === null) continue;
     if (reopened.status === "working") seen.add(reopened.delivery);
     else if (reopened.status !== "blocked" && seen.delete(reopened.delivery))

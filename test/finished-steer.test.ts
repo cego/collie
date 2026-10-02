@@ -1,4 +1,4 @@
-// A finished Run's live agents still take steering (ADR-0038), through the host an
+// A finished Run's live agents still take steering (ADR-0041), through the host an
 // installation runs: the Dispatcher, the ledger and the receipt a running Run gets, and a
 // status nothing rewrites.
 
@@ -62,7 +62,9 @@ const deliver = (runId: string, agent: string, text: string) => ({
   mode: "now" as const,
 });
 
-const chat = { origin: "chat" as const, requestId: "req-chat" };
+let asked = 0;
+/** Chat, under a request id of each call's own: one id twice is one operation. */
+const chat = () => ({ origin: "chat" as const, requestId: `req-chat-${++asked}` });
 
 /** A world whose fake agent answers its one prompt with an Output, and is then left alive. */
 const steerable = <A, E>(
@@ -110,7 +112,7 @@ test(
       Effect.gen(function* () {
         const { env, runId, agent } = yield* finishedWithAgent(world);
 
-        const [done] = yield* carryOutAsked(env, [deliver(runId, agent.name, "merge it")], chat);
+        const [done] = yield* carryOutAsked(env, [deliver(runId, agent.name, "merge it")], chat());
         expect(done).toMatchObject({ kind: "deliver", state: "applied" });
 
         const steered = (yield* deliveriesOf(world.state, runId)).filter(
@@ -142,7 +144,7 @@ test(
           Bun.$`${Bun.env.HERDR_BIN_PATH!} pane close ${agent.pane_id}`.quiet(),
         );
 
-        const [done] = yield* carryOutAsked(env, [deliver(runId, agent.name, "tag it")], chat);
+        const [done] = yield* carryOutAsked(env, [deliver(runId, agent.name, "tag it")], chat());
         expect(done?.state).toBe("failed");
         expect(done?.note).toContain('follow-up offer "carry-on"');
         expect(done?.note).toContain("giving the message as its input");
@@ -158,7 +160,7 @@ test(
       Effect.gen(function* () {
         const { env, client, runId, agent } = yield* finishedWithAgent(world);
 
-        const [done] = yield* carryOutAsked(env, [{ kind: "stop", run: runId }], chat);
+        const [done] = yield* carryOutAsked(env, [{ kind: "stop", run: runId }], chat());
         expect(done).toMatchObject({ kind: "stop", state: "applied" });
         expect(done?.note).toContain(`Closed ${agent.name}`);
         const fs = yield* FileSystem.FileSystem;
@@ -171,7 +173,7 @@ test(
         expect(view?.status.status).toBe("complete");
         expect(view?.controls).toEqual([]);
 
-        const again = yield* carryOutAsked(env, [{ kind: "stop", run: runId }], chat);
+        const again = yield* carryOutAsked(env, [{ kind: "stop", run: runId }], chat());
         expect(again[0]?.note).toBe(`Nothing of ${runId} was running.`);
       }),
     ),
@@ -189,7 +191,7 @@ test(
         // A host started again finds no module to register the Run's generation under.
         yield* stopHost(world.state);
 
-        const [done] = yield* carryOutAsked(env, [deliver(runId, agent.name, "merge it")], chat);
+        const [done] = yield* carryOutAsked(env, [deliver(runId, agent.name, "merge it")], chat());
         expect(done).toMatchObject({ kind: "deliver", state: "applied" });
       }),
     ),
@@ -202,7 +204,7 @@ test(
     hosted("collie-running-undelivered-", ({ world, env }) =>
       Effect.gen(function* () {
         const run = yield* hostedRun(world, "add a picker");
-        const [done] = yield* carryOutAsked(env, [deliver(run.id, "nobody", "hurry up")], chat);
+        const [done] = yield* carryOutAsked(env, [deliver(run.id, "nobody", "hurry up")], chat());
         expect(done?.state).toBe("failed");
         expect(done?.note).toContain("Nothing was delivered");
       }),
@@ -222,11 +224,11 @@ test(
         yield* fs.remove(module).pipe(Effect.orDie);
         yield* stopHost(world.state);
 
-        const [stopped] = yield* carryOutAsked(env, [{ kind: "stop", run: runId }], chat);
+        const [stopped] = yield* carryOutAsked(env, [{ kind: "stop", run: runId }], chat());
         expect(stopped).toMatchObject({ kind: "stop", state: "applied" });
         expect(stopped?.note).toContain(`Closed ${agent.name}`);
 
-        const [told] = yield* carryOutAsked(env, [deliver(runId, agent.name, "tag it")], chat);
+        const [told] = yield* carryOutAsked(env, [deliver(runId, agent.name, "tag it")], chat());
         expect(told?.state).toBe("failed");
         expect(told?.note).toContain("has finished and its agent is gone");
 
@@ -295,10 +297,10 @@ test(
           );
           const agent = herdr.agents[0]!;
 
-          const [stopped] = yield* carryOutAsked(env, [{ kind: "stop", run: runId }], chat);
+          const [stopped] = yield* carryOutAsked(env, [{ kind: "stop", run: runId }], chat());
           expect(stopped?.state).toBe("applied");
 
-          const [told] = yield* carryOutAsked(env, [deliver(runId, agent.name, "tag it")], chat);
+          const [told] = yield* carryOutAsked(env, [deliver(runId, agent.name, "tag it")], chat());
           expect(told?.state).toBe("failed");
           expect(told?.note).toContain("has finished and its agent is gone");
 

@@ -432,3 +432,57 @@ test(
     ),
   120_000,
 );
+
+/** A host started for the installation at `pluginRoot`. */
+const hostFor = (pluginRoot: string) =>
+  Effect.map(Config.option(Config.String("COLLIE_TEST_BINARY")), (binary) =>
+    starts([
+      "env",
+      `HERDR_PLUGIN_ROOT=${pluginRoot}`,
+      ...(Option.isSome(binary) ? [binary.value] : [process.execPath, `${root}src/main.ts`]),
+    ]),
+  );
+
+const identityAt = (pluginRoot: string) =>
+  Effect.gen(function* () {
+    const { state } = yield* workspace("collie-host-build-");
+    const who = yield* Effect.scoped(
+      connect(state).pipe(Effect.flatMap((client) => client.identity())),
+    ).pipe(Effect.orDie, Effect.provide(yield* hostFor(pluginRoot)));
+    yield* stopHost(state);
+    return who;
+  });
+
+test(
+  "a host on a development checkout names its build, and one on a release does not",
+  () =>
+    proves(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const checkout = yield* fs.makeTempDirectoryScoped({ prefix: "collie-host-checkout-" });
+        const git = (...args: string[]) =>
+          Bun.spawnSync(["git", "-C", checkout, ...args], {
+            env: {
+              PATH: "/usr/bin:/bin",
+              GIT_AUTHOR_NAME: "t",
+              GIT_AUTHOR_EMAIL: "t@example.com",
+              GIT_COMMITTER_NAME: "t",
+              GIT_COMMITTER_EMAIL: "t@example.com",
+            },
+          })
+            .stdout.toString()
+            .trim();
+        git("init", "--quiet", "-b", "feature");
+        git("commit", "--quiet", "--allow-empty", "-m", "work");
+        const sha = git("rev-parse", "--short", "HEAD");
+        const release = yield* fs.makeTempDirectoryScoped({ prefix: "collie-host-release-" });
+
+        const development = yield* identityAt(checkout);
+        const released = yield* identityAt(release);
+
+        expect(development.development).toBe(`${development.build}+${sha}`);
+        expect(released.development).toBeUndefined();
+      }),
+    ),
+  120_000,
+);

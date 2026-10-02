@@ -1,4 +1,4 @@
-<img src="assets/brand/logos/collie-horizontal-light-1024.png" alt="Collie with Luma, its green and white dog logo" width="360" />
+<img src="assets/brand/logos/collie-horizontal-light-1024.png" alt="Collie with its black and white dog logo" width="360" />
 
 Running several coding agents at once turns into babysitting: one tab per agent, each
 waiting on you at a different moment, and no single place that says what needs a decision.
@@ -7,7 +7,7 @@ Collie opens the tabs, runs the agents, reviews their work, and brings you back 
 decisions that are yours. One board shows every task in the session: what needs you, what
 is working, what finished.
 
-https://github.com/user-attachments/assets/2a42a576-e263-4412-bf00-2dec314f38b5
+[![Watch the Collie launch film in black and white](assets/video/collie-launch-poster.jpg)](assets/video/collie-launch.mp4)
 
 ## Install
 
@@ -15,17 +15,18 @@ Run one command. It's safe to run again, and it ends by telling you whether you'
 what's still missing and how to fix it:
 
 ```sh
-git clone git@github.com:cego/collie.git ~/.collie && ~/.collie/setup.sh
+git clone https://github.com/cego/collie.git ~/.collie && ~/.collie/setup.sh
 ```
 
 Before you run it, you need:
 
 - **herdr** installed and started once. See the [herdr install guide](https://herdr.dev/docs/install/).
-- **A GitHub login**: an SSH key for the clone, and `gh auth login`, so the install can
-  download the runner. **A `glab auth login` to `gitlab.cego.dk`**, so the workflows can open
-  merge requests there.
-- **Node**, so the install can fetch the skills the workflows use.
+- **A `glab auth login` to `gitlab.cego.dk`**, so the workflows can open merge requests there.
 - **Claude Code**, logged in. The bundled workflows run their agents on it.
+
+Nothing from GitHub: the repository and its releases are public. `collie onboard` installs
+herdr, Claude Code and Collie at a release instead, one reported step at a time; see
+[Onboarding a Machine](docs/using.md#onboarding-a-machine).
 
 The install links the plugin, puts `collie` on your PATH, adds four keybindings, installs
 the required skills, and runs `collie doctor`. Later, `collie upgrade` brings all of it up

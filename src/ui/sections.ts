@@ -1,8 +1,10 @@
 // How the board is drawn: the palette, a state's colour, a card's edge, and how many
-// cards fit across. What the board *is* — its sections, labels and sentences — is
-// `src/board.ts`, which the CLI and the text view read too.
+// cards fit across. What the board *is* — its sections and header in
+// `src/board-model.ts`, its labels and sentences in `src/board.ts` — the CLI and the text
+// view read too.
 
-import { GLYPH_FOR, STEP_GLYPH_FOR, type StepState, type TaskState, type TaskView } from "../board";
+import { GLYPH_FOR, STEP_GLYPH_FOR } from "../board";
+import type { StepState, TaskState, TaskView } from "../board-model";
 import type { Density } from "../config";
 
 /** Below this two columns are two unreadable half-cards rather than one readable one. */

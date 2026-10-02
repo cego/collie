@@ -239,7 +239,12 @@ test(
                   view?.status.status === "suspended" &&
                   view.waiting.some((one) => one.name === "sign-off"),
               );
-              yield* client.control({ runId: started.runId, control: "hold", set: true });
+              yield* client.control({
+                runId: started.runId,
+                control: "hold",
+                set: true,
+                request: "hold-child",
+              });
               return started.runId;
             }),
           ).pipe(Effect.orDie);
@@ -261,7 +266,9 @@ test(
             status: "suspended",
           });
           // Two replays later there are still two children, each having graded once.
-          yield* client.control({ runId, control: "hold", set: false }).pipe(Effect.orDie);
+          yield* client
+            .control({ runId, control: "hold", set: false, request: "release-child" })
+            .pipe(Effect.orDie);
           const done = yield* until(
             () => client.run({ runId }).pipe(Effect.orDie),
             (view) => view?.status.status === "complete",

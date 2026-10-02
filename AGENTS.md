@@ -41,7 +41,7 @@ herdr actions, and the `collie` CLI.
   `src/steering-caps.ts`. A capability moves to `proven` only from a recorded live result
   in the Run's `CAPABILITIES.md`.
 - **Changing whether a finished Run takes steering, or what reopening one means** →
-  [ADR-0038](docs/adr/0038-a-finished-run-still-takes-steering.md), alongside `admit` in
+  [ADR-0041](docs/adr/0041-a-finished-run-still-takes-steering.md), alongside `admit` in
   `src/proposals.ts`, the host's steer and stop in `src/engine.ts`, `steerRun` in
   `src/lifecycle.ts` and `test/finished-steer.test.ts`. A Run's status is history; its
   agents take steering while one is alive.
@@ -51,9 +51,10 @@ herdr actions, and the `collie` CLI.
   is asked, and the rule that live labels are data) and `src/naming.ts` (the labels
   themselves, and which of them are still Collie's to write).
 - **Changing what the board draws, what it is a board of, or which workspace owns it** →
-  [`docs/using.md`](docs/using.md#the-control-plane), alongside `src/board.ts` (the TaskView
-  model and the sentence), `src/ui/Board.tsx` and `src/ui/Drawer.tsx` (the cards and the
-  record) and `src/home.ts` (ownership). One board per Herd, in the Home
+  [`docs/using.md`](docs/using.md#the-control-plane), alongside `src/board-model.ts` (the
+  board's and drawer's Schemas), `src/board.ts` (building it, and the sentence),
+  `src/ui/Board.tsx` and `src/ui/Drawer.tsx` (the cards and the record) and `src/home.ts`
+  (ownership). One board per Herd, in the Home
   ([ADR-0009](docs/adr/0009-the-collie-tab-is-the-herds.md)), and it is one card per Task
   rather than a table of Runs
   ([ADR-0013](docs/adr/0013-the-board-is-cards-of-tasks.md), which supersedes what
@@ -65,7 +66,7 @@ herdr actions, and the `collie` CLI.
   and `src/metrics.ts` (what a Run produced). Evidence is collected at a revision; an
   Output field is a claim.
 - **Changing what a human sees of a check Collie runs — its pass, its timing, its live
-  output** → [ADR-0039](docs/adr/0039-a-check-collie-runs-is-seen-while-it-runs.md),
+  output** → [ADR-0042](docs/adr/0042-a-check-collie-runs-is-seen-while-it-runs.md),
   alongside `src/checks.ts` (the one reading every door uses), `src/verify.ts` (the marker,
   the pass on a record and the bounded log) and `collie run checks` in
   `src/commands/run.ts`. A pass is the Workflow's declaration, never inferred from its id.
@@ -107,6 +108,16 @@ herdr actions, and the `collie` CLI.
   [`docs/cli.md`](docs/cli.md#the-local-workflow-host), alongside `src/host.ts` and
   `test/host.test.ts`. The lock is `src/lock.ts`'s, so ownership is decided the same way
   wherever Collie needs exactly one owner.
+- **Changing what the host serves a front door, or the board protocol's version** →
+  [ADR-0038](docs/adr/0038-the-host-builds-and-serves-the-board.md) and
+  [`docs/cli.md`](docs/cli.md#the-local-workflow-host), alongside `FrontDoorRpcs` in
+  `src/board-model.ts`, `src/board-stream.ts` and `test/board-stream.test.ts`. An additive
+  change keeps `PROTOCOL`; a removal or a change of meaning bumps it. Who an operation
+  is recorded as is [ADR-0039](docs/adr/0039-every-operation-records-who-asked.md), with
+  `src/audit.ts` and `test/actor.test.ts`. Which writes a front door leaves to the host, and the two it
+  still makes itself, are [ADR-0040](docs/adr/0040-the-host-is-the-only-writer.md), with
+  `test/only-writer.test.ts`.
+  A drawer's details are `src/run-detail.ts` and `test/run-detail.test.ts`.
 - **Changing how a start is claimed, what a host records about a run, or how an
   interrupted start recovers** →
   [ADR-0017](docs/adr/0017-one-request-is-one-run.md) and

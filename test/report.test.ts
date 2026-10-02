@@ -2,7 +2,7 @@
 
 import { expect, test } from "bun:test";
 import { HOLD, STOP, type RunView } from "../src/engine";
-import type { Metrics } from "../src/metrics";
+import type { Metrics } from "../src/board-model";
 import { reportOf } from "../src/report";
 
 const view = (over: Partial<RunView> & { runId: string }): RunView => ({

@@ -18,15 +18,21 @@ import * as BunSocket from "@effect/platform-bun/BunSocket";
 import type { BunServices } from "@effect/platform-bun/BunServices";
 import * as BunSocketServer from "@effect/platform-bun/BunSocketServer";
 import {
+  Clock,
   Config,
+  Crypto,
   Data,
+  Deferred,
   Effect,
+  Exit,
   FileSystem,
   Layer,
   Option,
+  Path,
   Schedule,
   Schema,
   Scope,
+  Stream,
   Struct,
 } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
@@ -38,11 +44,9 @@ import * as RpcSerialization from "effect/unstable/rpc/RpcSerialization";
 import * as RpcServer from "effect/unstable/rpc/RpcServer";
 import manifest from "../herdr-plugin.toml";
 import {
-  Answered,
-  Controlled,
-  HostRefused,
   EntryError,
   OfferView,
+  REFUSED_INPUT,
   Registrations,
   RunStatus,
   RunView,
@@ -50,15 +54,73 @@ import {
   foundationLayer,
   registryLayer,
   Registry,
+  runDir,
+  type HostServices,
   type Locate,
 } from "./engine";
 import { configuredAgents } from "./agents";
 import { Catalogue, discover, searchPath } from "./discovery";
-import { RequestConflict } from "./store";
-import { VerifySpecSchema } from "./verify-spec";
-import { IntentSeedSchema } from "./intent";
+import { sideJobs } from "./side-jobs";
+import { once, recordAudit } from "./audit";
 import { currentEnv } from "./env";
-import { Herdr } from "./herdr";
+import { installation as installedRelease } from "./release";
+import { Herdr, type AgentInfo } from "./herdr";
+import { buildBoard, mrOf } from "./board";
+import { watchedMr, type MrPanels } from "./merges";
+import { shell } from "./mr";
+import { fetchRef, followDetail } from "./run-detail";
+import { buildRunDetail } from "./views";
+import {
+  Answered,
+  ASKED_KINDS,
+  Controlled,
+  Disposition,
+  EVIDENCE_GATE,
+  FrontDoorRpcs,
+  HostRefused,
+  PROTOCOL,
+  ProposalRefused,
+  RUN_FILE_BYTES,
+  RequestConflict,
+  Started,
+  SteerOutcome,
+  type FrontDoor,
+  type PlanPanel,
+} from "./board-model";
+import { boardMessages } from "./board-stream";
+import { recordDisposition } from "./disposition";
+import { ActionSchema, evaluationDeps } from "./evaluator";
+import { err, request, steer, type OpResult } from "./operations";
+import { REJECTED } from "./envelope";
+import {
+  appendLine,
+  deliveriesOf,
+  herdDir,
+  herdOf,
+  readLedger,
+  reconcile as reconcileDelivery,
+} from "./steering";
+import {
+  actorName,
+  answeredBy,
+  decline,
+  journalOf,
+  read as readProposals,
+  reconcileStep,
+  stepResults,
+  type ProposalLine,
+  type Actor,
+  type ProposalRecord,
+} from "./proposals";
+import { carryOut, carryOutAsked, followUpField } from "./run-actions";
+import { nothingApproved } from "./outcome";
+import { approvedFrom, VerifySpecSchema, type VerifySpec } from "./verify-spec";
+import { readTask } from "./task";
+import { nowIso } from "./time";
+import { reason } from "./naming";
+import { loadDefaults } from "./config";
+import { factsOfView, settled } from "./runs";
+import { aliveIn, herdChanges, liveHerds } from "./herds";
 import { currentPid, ensureLockDir, lockHolder, withLock, type LockHolder } from "./lock";
 
 /** What a host says it is. A client that is not this stops rather than guessing. */
@@ -92,20 +154,18 @@ const Identity = Schema.Struct({
   dir: Schema.String,
   /** The installation it serves; absent from a host older than the field. */
   root: Schema.optionalKey(Schema.String),
+  /** `<version>+<sha>` for a development checkout; absent for a release. */
+  development: Schema.optionalKey(Schema.String),
+  /** The board protocol it speaks; absent from a host older than the field. */
+  protocol: Schema.optionalKey(Schema.Int),
+  /** The state directory's own id; absent from a host older than the field. */
+  installation: Schema.optionalKey(Schema.String),
 });
 
 const Loaded = Schema.Struct({
   id: Schema.String,
   registration: Schema.String,
   title: Schema.String,
-});
-
-/** What a start became: the run it is, and whether this call is what made it. */
-const Started = Schema.Struct({
-  runId: Schema.String,
-  registration: Schema.String,
-  execution: Schema.String,
-  fresh: Schema.Boolean,
 });
 
 /**
@@ -123,35 +183,6 @@ export const HostRpcs = RpcGroup.make(
   // Which project is asking, because the answer differs: an override is one project's
   // and the host serves them all.
   Rpc.make("discover", { payload: { project: Schema.String }, success: Catalogue }),
-  // The request id is the caller's claim on this work: sending it twice is one run, and
-  // sending it with other arguments is refused rather than quietly becoming something else.
-  Rpc.make("start", {
-    payload: {
-      project: Schema.String,
-      id: Schema.String,
-      request: Schema.String,
-      /** Values that already have a type, and values as a human typed them. */
-      input: Schema.Record(Schema.String, Schema.Json),
-      text: Schema.optional(Schema.Record(Schema.String, Schema.String)),
-      /** The names among those a front door worked out rather than was told. */
-      inferred: Schema.optional(Schema.Array(Schema.String)),
-      /** The Projects root the front door resolved, which `workspace=projects-root` names. */
-      root: Schema.optional(Schema.String),
-      /** The host's own launch options, which never reach the author's payload. */
-      options: Schema.optional(Schema.Record(Schema.String, Schema.String)),
-      // What this work belongs to, which is the caller's to know and the host's to keep.
-      // Left out by a caller that is neither continuing a Task nor inside another run.
-      task: Schema.optional(Schema.String),
-      /** A new Task to open for it under this label, once its checkout is known. */
-      taskLabel: Schema.optional(Schema.String),
-      parent: Schema.optional(Schema.String),
-      intent: Schema.optional(IntentSeedSchema),
-      /** The approved set given with the start, over the project's and the user's files. */
-      verify: Schema.optional(Schema.Array(VerifySpecSchema)),
-    },
-    success: Started,
-    error: Schema.Union([HostRefused, RequestConflict]),
-  }),
   Rpc.make("status", {
     payload: { runId: Schema.String },
     success: RunStatus,
@@ -173,45 +204,12 @@ export const HostRpcs = RpcGroup.make(
   }),
   /** Registers what current files now allow and hands over what is outstanding. */
   Rpc.make("recover", { success: Registrations }),
-  // The decision is named where a caller knows which question it is answering, and null
-  // where it means "the one this run is waiting on" — refused where that is not one.
-  // The request is the claim: the same one twice is one answer, not a second.
-  Rpc.make("answer", {
-    payload: {
-      runId: Schema.String,
-      decision: Schema.NullOr(Schema.String),
-      value: Schema.String,
-      request: Schema.String,
-    },
-    success: Answered,
-    error: HostRefused,
-  }),
-  // What a finished Run offers to do next, and carrying one out. Both go through the
-  // host because only it holds the module that declared them: an offer is decided by the
-  // author's own code against the facts as they are now, never by a card's memory of it.
+  // What a finished Run offers to do next. Through the host because only it holds the
+  // module that declared them: an offer is decided by the author's own code against the
+  // facts as they are now, never by a card's memory of it.
   Rpc.make("offers", {
     payload: { runId: Schema.String },
     success: Schema.Array(OfferView),
-    error: HostRefused,
-  }),
-  Rpc.make("invoke", {
-    payload: {
-      runId: Schema.String,
-      offer: Schema.String,
-      input: Schema.Record(Schema.String, Schema.Json),
-      request: Schema.String,
-    },
-    success: Started,
-    error: Schema.Union([HostRefused, RequestConflict]),
-  }),
-  /** A hold or a stop over one run, set or cleared. It reaches no other run and no host. */
-  Rpc.make("control", {
-    payload: {
-      runId: Schema.String,
-      control: Schema.Literals(["hold", "stop"]),
-      set: Schema.Boolean,
-    },
-    success: Controlled,
     error: HostRefused,
   }),
   /** One command Collie may run for a run, granted or, with no command, withdrawn. */
@@ -220,9 +218,10 @@ export const HostRpcs = RpcGroup.make(
       runId: Schema.String,
       name: Schema.String,
       command: Schema.NullOr(VerifySpecSchema.mapFields(Struct.omit(["name"]))),
+      request: Schema.String,
     },
     success: Schema.Array(VerifySpecSchema),
-    error: HostRefused,
+    error: Schema.Union([HostRefused, RequestConflict]),
   }),
   /** A human's own words to the agent this run has, through the one sender. */
   Rpc.make("steer", {
@@ -235,34 +234,55 @@ export const HostRpcs = RpcGroup.make(
       mode: Schema.optional(Schema.Literals(["boundary", "now", "interrupt"])),
     },
     success: Steered,
-    error: HostRefused,
+    error: Schema.Union([HostRefused, RequestConflict]),
   }),
 );
 
+/** Everything this build serves; a client of another build uses `FrontDoorRpcs` alone. */
+const AllRpcs = HostRpcs.merge(FrontDoorRpcs);
+
 export type HostClient = RpcClient.RpcClient<
-  RpcGroup.Rpcs<typeof HostRpcs>,
+  RpcGroup.Rpcs<typeof AllRpcs>,
   RpcClientError.RpcClientError
 >;
 
 const serialization = RpcSerialization.layerNdjson;
+
+/** The front door each connection declared, which every operation it asks is recorded under. */
+// ponytail: one entry per connection, never removed; prune on disconnect if hosts live for months.
+type Declared = Map<number, FrontDoor>;
 
 /**
  * The handlers, and with them the registry: built in this layer's scope, which is the
  * host's. A client's connection is a scope of its own under it, so a client that goes
  * takes nothing with it — not a registration, not an execution, not another client.
  */
-const handlers = (dir: string) =>
+const handlers = (dir: string, installation: string, declared: Declared) =>
   HostRpcs.toLayer(
     Effect.gen(function* () {
       const registry = yield* Registry;
+      const bun = yield* Effect.context<BunServices>();
       const pid = yield* currentPid;
       // The installation this host belongs to, which the client that started it named.
       const env = yield* currentEnv.pipe(Effect.orDie);
       const catalogue = (project: string) =>
         discover(searchPath({ pluginRoot: env.pluginRoot, userDir: env.userDir, project }));
 
+      // Checked when the host starts.
+      const installed = yield* installedRelease(env.pluginRoot, BUILD);
+      const development = installed.release ? {} : { development: installed.build };
+
       return HostRpcs.of({
-        identity: () => Effect.succeed({ build: BUILD, pid, dir, root: env.pluginRoot }),
+        identity: () =>
+          Effect.succeed({
+            build: BUILD,
+            pid,
+            dir,
+            root: env.pluginRoot,
+            ...development,
+            protocol: PROTOCOL,
+            installation,
+          }),
         load: ({ entry }) =>
           registry.load(entry).pipe(
             Effect.map((loaded) => ({
@@ -290,57 +310,795 @@ const handlers = (dir: string) =>
               problems: found.problems,
             })),
           ),
-        start: ({
-          project,
-          id,
-          request,
-          input,
-          text,
-          inferred,
-          root,
-          options,
-          task,
-          taskLabel,
-          parent,
-          intent,
-          verify,
-        }) =>
-          registry.resolve({ project, id }).pipe(
-            Effect.flatMap((generation) =>
-              registry.start({
-                generation,
-                project,
-                request,
-                input,
-                text,
-                inferred,
-                root,
-                options,
-                task,
-                taskLabel,
-                parent,
-                intent,
-                verify,
-              }),
-            ),
-          ),
         status: ({ runId }) => registry.status(runId),
         run: ({ runId }) => registry.view(runId),
         runs: ({ task }) => registry.views(task),
         watch: ({ runId }) => registry.watch(runId),
         recover: () => registry.recover,
         offers: ({ runId }) => registry.offers(runId),
-        invoke: ({ runId, offer, input, request }) =>
-          registry.invoke({ runId, offer, input, request }),
-        answer: ({ runId, decision, value, request }) =>
-          registry.answer({ runId, decision, value, request }),
-        control: ({ runId, control, set }) => registry.control({ runId, control, set }),
-        grant: ({ runId, name, command }) => registry.grant({ runId, name, command }),
-        steer: ({ runId, text, request, operation, agent, mode }) =>
-          registry.steer({ runId, text, request, operation, agent, mode }),
+        grant: ({ runId, name, command, request }, { client }) =>
+          once(
+            runDir(dir, runId),
+            {
+              operation: "grant",
+              request,
+              origin: declared.get(client.id) ?? "cli",
+              asked: { name, command: fromText(toText(command)) },
+              result: Schema.Array(VerifySpecSchema),
+            },
+            registry.grant({ runId, name, command }),
+          ).pipe(Effect.provideContext(bun)),
+        steer: ({ runId, text, request, operation, agent, mode }, { client }) =>
+          once(
+            runDir(dir, runId),
+            {
+              operation: "deliver",
+              request,
+              origin: declared.get(client.id) ?? "cli",
+              asked: {
+                text,
+                operation: operation ?? null,
+                agent: agent ?? null,
+                mode: mode ?? null,
+              },
+              result: Steered,
+            },
+            registry.steer({ runId, text, request, operation, agent, mode }),
+          ).pipe(Effect.provideContext(bun)),
       });
     }),
   );
+
+/** A steer that came to nothing, which is told to the caller but not kept as its request's answer. */
+class SteerUnanswered extends Schema.TaggedError<SteerUnanswered>()("SteerUnanswered", {
+  outcome: SteerOutcome,
+}) {}
+
+/** What `act` carries out with no proposal: what the human asks for by name, and chat's hold. */
+const ACTED_KINDS = new Set<string>([...ASKED_KINDS, "hold"]);
+
+/** An operation's result as the front doors print it: a failure carries its code. */
+const outcomeOf = (result: OpResult): SteerOutcome =>
+  result.ok
+    ? { ok: true, code: null, human: result.human, data: fromText(toText(result.data)) }
+    : {
+        ok: false,
+        code: result.error.code,
+        human: result.error.message,
+        data: fromText(toText(result.error.details ?? {})),
+      };
+
+/** Through JSON text, so a field left undefined is dropped rather than refused. */
+const toText = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const fromText = Schema.decodeSync(Schema.fromJsonString(Schema.Json));
+
+/** How often a board is built again with nothing written, so "silent for" stays true. */
+const BOARD_TICK = "5 seconds";
+
+/** This process's env, for the state directory it serves rather than the one it inherited. */
+const servingEnv = (dir: string) =>
+  currentEnv.pipe(
+    Effect.orDie,
+    Effect.map((env) => ({ ...env, stateDir: dir })),
+  );
+
+/** Every Run the host knows, and the board built from them, for this host's own env. */
+const hostBoard = (dir: string) =>
+  Effect.gen(function* () {
+    const registry = yield* Registry;
+    const bun = yield* Effect.context<BunServices>();
+    const hosted = yield* Effect.context<HostServices>();
+    const env = yield* servingEnv(dir);
+    const herdr = new Herdr(env);
+    const runs = registry
+      .views(null)
+      .pipe(Effect.map((views) => views.map((view) => factsOfView(env.stateDir, view))));
+    const boardOf = (alive: ReadonlyArray<AgentInfo>) =>
+      Effect.gen(function* () {
+        return yield* buildBoard({
+          env,
+          runs: yield* runs,
+          alive,
+          quietMs: (yield* loadDefaults(env.userDir)).boardQuietMs,
+          offers: (runId) =>
+            registry.offers(runId).pipe(
+              Effect.provideContext(hosted),
+              Effect.orElseSucceed(() => []),
+            ),
+        });
+      }).pipe(Effect.provideContext(bun));
+    const build = Effect.flatMap(
+      Effect.flatMap(liveHerds(herdr, env), aliveIn).pipe(Effect.provideContext(bun)),
+      boardOf,
+    );
+    // What ended and what it opened needs no herdr: the merge watch asks nobody's panes.
+    const unattended = boardOf([]);
+    return { env, herdr, bun, runs, build, unattended };
+  });
+
+/** The merge watch, News and pruning, for as long as this host runs. */
+const sideJobsLayer = (dir: string, panels: MrPanels) =>
+  Layer.effectDiscard(
+    Effect.gen(function* () {
+      const { env, herdr, bun, runs, build, unattended } = yield* hostBoard(dir);
+      yield* Effect.forkScoped(
+        sideJobs({ env, herdr, runs, board: unattended, liveBoard: build, panels }).pipe(
+          Effect.provideContext(bun),
+        ),
+      );
+    }),
+  );
+
+/**
+ * The board, built here for every front door. Anything written under the state
+ * directory, by this host or anyone else, is a reason to look again.
+ */
+const frontDoorHandlers = (
+  dir: string,
+  installation: string,
+  panels: MrPanels,
+  declared: Declared,
+) =>
+  FrontDoorRpcs.toLayer(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const registry = yield* Registry;
+      const hosted = yield* Effect.context<HostServices>();
+      const { env, herdr, bun, build } = yield* hostBoard(dir);
+      // A finished Run's plan cannot change, so every drawer on it shares one read.
+      // ponytail: kept for the host's life; evict by age if a host lives for months.
+      const plans = new Map<string, PlanPanel | null>();
+      const doorOf = (client: { readonly id: number }) => declared.get(client.id) ?? "cli";
+      type Carrying = ReturnType<typeof carryOut>;
+      /** Each carry-out still running, so a retry of its confirm answers what it came to. */
+      type Carried = Exit.Exit<Effect.Success<Carrying>, Effect.Error<Carrying>>;
+      const carrying = new Map<string, Deferred.Deferred<Carried>>();
+      const carryingKey = (proposal: string, request: string) =>
+        JSON.stringify([proposal, request]);
+      const carriedBy = (proposal: string, request: string) => {
+        const running = carrying.get(carryingKey(proposal, request));
+        return running === undefined ? null : Effect.flatten(Deferred.await(running));
+      };
+      // ponytail: one entry per connection, never removed, as `declared`.
+      const sessions = new Map<number, string>();
+      /** The serving env in the herdr session the asking channel declared, where it named one. */
+      const askerEnv = (client: { readonly id: number }) => {
+        const session = sessions.get(client.id);
+        return session === undefined ? env : { ...env, socketPath: session };
+      };
+      const trail = (runId: string) => runDir(env.stateDir, runId);
+      /** An operation that is idempotent by itself, recorded the first time it does anything. */
+      // ponytail: a host that dies between acting and recording leaves that one unrecorded.
+      const fresh = <A extends { readonly fresh: boolean }, I extends Schema.Json, E>(
+        runId: (value: A) => string,
+        line: {
+          readonly operation: string;
+          readonly request: string;
+          readonly origin: FrontDoor;
+          readonly result: Schema.Codec<A, I>;
+        },
+        act: Effect.Effect<A, E, HostServices>,
+      ) =>
+        act.pipe(
+          Effect.tap((value) =>
+            value.fresh
+              ? recordAudit(trail(runId(value)), { ...line, value }).pipe(Effect.orDie)
+              : Effect.void,
+          ),
+          Effect.provideContext(hosted),
+        );
+      const known = (runId: string) =>
+        registry
+          .view(runId)
+          .pipe(
+            Effect.flatMap((view) =>
+              view === null
+                ? Effect.fail(new HostRefused({ reason: `no Run ${runId}` }))
+                : Effect.succeed(view),
+            ),
+          );
+      const auditedControl =
+        (runId: string, operation: string, request: string, origin: FrontDoor, reason?: string) =>
+        <E>(act: Effect.Effect<typeof Controlled.Type, E, HostServices>) =>
+          Effect.andThen(
+            known(runId),
+            once(
+              trail(runId),
+              {
+                operation,
+                request,
+                origin,
+                reason,
+                asked: { reason: reason ?? null },
+                result: Controlled,
+              },
+              act,
+            ),
+          ).pipe(Effect.provideContext(hosted));
+      /** Only the refusals a front door can act on keep their shape; anything else is said in a sentence. */
+      const plainly = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+        effect.pipe(
+          Effect.mapError((cause) =>
+            Schema.is(ProposalRefused)(cause) ||
+            Schema.is(RequestConflict)(cause) ||
+            Schema.is(HostRefused)(cause)
+              ? cause
+              : new HostRefused({ reason: reason(cause) }),
+          ),
+          Effect.provideContext(bun),
+          Effect.provideContext(hosted),
+        );
+      /**
+       * A yes or a no, given once per request. The journal records who gave it; a request it
+       * already holds gets back what it did then, handed the journal's lines rather than null.
+       */
+      const answeredOnce = <A, E, R>(
+        proposal: string,
+        hash: string,
+        request: string,
+        kind: "confirmed" | "declined",
+        act: (
+          file: string,
+          lines: ReadonlyArray<ProposalLine> | null,
+        ) => Effect.Effect<A, E | ProposalRefused | RequestConflict, R>,
+      ) =>
+        Effect.gen(function* () {
+          const file = yield* journalOf(env.stateDir, proposal);
+          if (file === null)
+            return yield* new ProposalRefused({
+              refused: "not_found",
+              detail: `no proposal "${proposal}"`,
+            });
+          const lines = yield* readProposals(file);
+          const found = lines.find(
+            (line): line is ProposalRecord => line.kind === "proposal" && line.id === proposal,
+          );
+          if (found?.content_hash !== hash)
+            return yield* new ProposalRefused({
+              refused: "hash_mismatch",
+              detail: `"${proposal}" is ${found?.content_hash}, not ${hash}`,
+            });
+          const prior = answeredBy(lines, request);
+          if (prior === undefined) return yield* act(file, null);
+          if (prior.kind !== kind || prior.id !== proposal)
+            return yield* new RequestConflict({
+              request,
+              reason: `request "${request}" already ${prior.kind} ${prior.id}`,
+            });
+          return yield* act(file, lines);
+        }).pipe(plainly);
+      /** A Run picked up again: what current files allow is registered, then its stop cleared. */
+      const takeUp = (runId: string) =>
+        registry.recover.pipe(
+          Effect.andThen(registry.control({ runId, control: "stop", set: false })),
+        );
+      /**
+       * A gate answered: the checks named, or every one the checkout and config offer, are
+       * granted as `set_verification` grants them, then the Run is taken up again.
+       */
+      const passGate = (runId: string, value: string, actor: Actor) =>
+        Effect.gen(function* () {
+          const run = factsOfView(env.stateDir, yield* known(runId));
+          if (run.parked !== nothingApproved(runId))
+            return yield* new HostRefused({
+              reason: `${runId} is not holding at its evidence gate`,
+            });
+          if (value !== "approve" && !value.startsWith("approve:"))
+            return yield* new HostRefused({
+              reason: `${REFUSED_INPUT}: the gate is answered with approve or approve:<name>,<name>; with nothing approved no check could prove this Run, so it is not skipped`,
+            });
+          const offered = yield* approvedFrom({ cwd: run.cwd, userDir: env.userDir }).pipe(
+            Effect.orElseSucceed((): ReadonlyArray<VerifySpec> => []),
+          );
+          const named =
+            value === "approve"
+              ? null
+              : value
+                  .slice("approve:".length)
+                  .split(",")
+                  .map((one) => one.trim());
+          const unknown = (named ?? []).filter(
+            (name) => !offered.some((spec) => spec.name === name),
+          );
+          if (unknown.length > 0)
+            return yield* new HostRefused({
+              reason: `${REFUSED_INPUT}: the gate offers no check called ${unknown.join(", ")}`,
+            });
+          const chosen = offered.filter((spec) => named === null || named.includes(spec.name));
+          if (chosen.length === 0)
+            return yield* new HostRefused({
+              reason: `${REFUSED_INPUT}: ${nothingApproved(runId)}`,
+            });
+          const granted = yield* carryOutAsked(
+            env,
+            chosen.map(({ name, ...command }) => ({
+              kind: "set_verification" as const,
+              run: runId,
+              name,
+              command,
+            })),
+            actor,
+          );
+          const failed = granted.find((one) => one.state !== "applied");
+          if (failed !== undefined) return yield* new HostRefused({ reason: failed.note });
+          yield* takeUp(runId);
+          return { runId, decision: EVIDENCE_GATE, value, fresh: true };
+        });
+      // Debounced apart from the tick, so a burst of writes cannot hold the tick back.
+      // Shared, so every subscriber rides one recursive watch: setting one up walks the tree.
+      const changed = yield* Stream.mergeAll(
+        [
+          fs.watch(dir, { recursive: true }).pipe(
+            Stream.catch(() => Stream.empty),
+            Stream.debounce("200 millis"),
+            Stream.map(() => undefined),
+          ),
+          Stream.tick(BOARD_TICK),
+          herdChanges(herdr, env).pipe(
+            Stream.provideContext(bun),
+            Stream.catch(() => Stream.empty),
+          ),
+        ],
+        { concurrency: "unbounded" },
+      ).pipe(Stream.share({ capacity: 1, strategy: "sliding" }));
+      return FrontDoorRpcs.of({
+        declare: ({ frontDoor, session }, { client }) => {
+          const already = declared.get(client.id);
+          if (already !== undefined && already !== frontDoor) {
+            return Effect.fail(new HostRefused({ reason: `this channel is already ${already}` }));
+          }
+          return Effect.sync(() => {
+            declared.set(client.id, frontDoor);
+            if (session !== undefined && session !== null) sessions.set(client.id, session);
+          });
+        },
+        start: (
+          {
+            project,
+            id,
+            request,
+            input,
+            text,
+            inferred,
+            root,
+            options,
+            task,
+            taskLabel,
+            parent,
+            intent,
+            verify,
+          },
+          { client },
+        ) =>
+          fresh(
+            (started) => started.runId,
+            { operation: "start", request, origin: doorOf(client), result: Started },
+            registry.resolve({ project, id }).pipe(
+              Effect.flatMap((generation) =>
+                registry.start({
+                  generation,
+                  project,
+                  request,
+                  input,
+                  text,
+                  inferred,
+                  root,
+                  options,
+                  task,
+                  taskLabel,
+                  parent,
+                  intent,
+                  verify,
+                }),
+              ),
+            ),
+          ),
+        answer: ({ runId, decision, value, request }, { client }) =>
+          decision === EVIDENCE_GATE
+            ? once(
+                trail(runId),
+                {
+                  operation: "answer",
+                  request,
+                  origin: doorOf(client),
+                  asked: { value },
+                  result: Answered,
+                },
+                passGate(runId, value, { origin: doorOf(client), requestId: request }),
+              ).pipe(plainly)
+            : fresh(
+                () => runId,
+                { operation: "answer", request, origin: doorOf(client), result: Answered },
+                registry.answer({ runId, decision, value, request }),
+              ),
+        control: ({ runId, control, set, request, reason }, { client }) =>
+          auditedControl(
+            runId,
+            `${set ? "" : "un"}${control}`,
+            request,
+            doorOf(client),
+            reason,
+          )(registry.control({ runId, control, set })),
+        resume: ({ runId, request }, { client }) =>
+          auditedControl(runId, "resume", request, doorOf(client))(takeUp(runId)),
+        invoke: ({ runId, offer, input, request }, { client }) =>
+          fresh(
+            () => runId,
+            { operation: "invoke", request, origin: doorOf(client), result: Started },
+            registry.invoke({ runId, offer, input, request }),
+          ),
+        confirm: ({ proposal, hash, request }, { client }) =>
+          answeredOnce(proposal, hash, request, "confirmed", (file, lines) =>
+            lines === null
+              ? Effect.uninterruptible(
+                  Effect.gen(function* () {
+                    // The same request twice at once: the second waits for the first.
+                    const running = carriedBy(proposal, request);
+                    if (running !== null) return yield* running;
+                    const done = yield* Deferred.make<Carried>();
+                    carrying.set(carryingKey(proposal, request), done);
+                    const exit = yield* Effect.exit(
+                      carryOut(askerEnv(client), proposal, hash, {
+                        origin: doorOf(client),
+                        requestId: request,
+                      }),
+                    );
+                    carrying.delete(carryingKey(proposal, request));
+                    yield* Deferred.succeed(done, exit);
+                    return yield* exit;
+                  }),
+                )
+              : Effect.suspend(
+                  () =>
+                    carriedBy(proposal, request) ??
+                    readProposals(file).pipe(
+                      Effect.map((now) => ({ proposal, results: stepResults(now, proposal) })),
+                    ),
+                ),
+          ),
+        decline: ({ proposal, hash, request }, { client }) =>
+          answeredOnce(proposal, hash, request, "declined", (file, lines) =>
+            lines === null
+              ? decline(file, proposal, { origin: doorOf(client), requestId: request }).pipe(
+                  Effect.flatMap((done) =>
+                    done.refused === null
+                      ? Effect.succeed({ proposal })
+                      : Effect.fail(
+                          new ProposalRefused({ refused: done.refused, detail: done.detail }),
+                        ),
+                  ),
+                )
+              : Effect.succeed({ proposal }),
+          ),
+        propose: ({ herd, interpretation, actions, request: requestId }, { client }) =>
+          Effect.gen(function* () {
+            const asker = askerEnv(client);
+            const decoded = Schema.decodeUnknownOption(Schema.Array(ActionSchema))(actions);
+            if (Option.isNone(decoded))
+              return outcomeOf(
+                err("invalid_input", "An action is not one of the kinds Collie takes."),
+              );
+            if (herd !== null && (herd === "." || herd === ".." || !/^[^/\\]+$/.test(herd)))
+              return outcomeOf(err("invalid_input", `"${herd}" is not a Herd.`));
+            const key =
+              herd ??
+              (yield* herdOf(asker.socketPath).pipe(Effect.catch(() => Effect.succeed(null))));
+            if (key === null)
+              return outcomeOf(err("invalid_state", "No Herd to keep the request in."));
+            const actor = { origin: doorOf(client), requestId };
+            return yield* once(
+              yield* herdDir(env.stateDir, key),
+              {
+                operation: "propose",
+                request: requestId,
+                origin: actor.origin,
+                asked: { interpretation, actions },
+                result: SteerOutcome,
+              },
+              // A refusal is not kept against its request, so it can be asked again corrected.
+              request(asker, key, { interpretation, actions: decoded.value, actor }).pipe(
+                Effect.flatMap((result) =>
+                  !result.ok && REJECTED.includes(result.error.code)
+                    ? Effect.fail(new SteerUnanswered({ outcome: outcomeOf(result) }))
+                    : Effect.succeed(outcomeOf(result)),
+                ),
+              ),
+            );
+          }).pipe(
+            Effect.catch((cause) =>
+              Effect.succeed(
+                Schema.is(SteerUnanswered)(cause)
+                  ? cause.outcome
+                  : Schema.is(RequestConflict)(cause)
+                    ? outcomeOf(err("invalid_input", cause.reason))
+                    : outcomeOf(
+                        err("operation_failed", `Collie could not do it: ${reason(cause)}.`),
+                      ),
+              ),
+            ),
+            Effect.provideContext(bun),
+            Effect.provideContext(hosted),
+          ),
+        act: ({ actions, request }, { client }) =>
+          plainly(
+            Schema.decodeUnknownEffect(Schema.Array(ActionSchema))(actions).pipe(
+              Effect.mapError(
+                () =>
+                  new HostRefused({
+                    reason: `${REFUSED_INPUT}: an action is not one of the kinds Collie takes`,
+                  }),
+              ),
+              Effect.flatMap((decoded) => {
+                const proposed = decoded.filter((action) => !ACTED_KINDS.has(action.kind));
+                return proposed.length > 0
+                  ? Effect.fail(
+                      new HostRefused({
+                        reason: `${REFUSED_INPUT}: ${[...new Set(proposed.map((a) => a.kind))].join(", ")} is carried out through propose, so it is on the record as asked for`,
+                      }),
+                    )
+                  : carryOutAsked(askerEnv(client), decoded, {
+                      origin: doorOf(client),
+                      requestId: request,
+                    });
+              }),
+            ),
+          ),
+        reconcile: ({ proposal, index, as, request }, { client }) =>
+          plainly(
+            Effect.gen(function* () {
+              const file = yield* journalOf(env.stateDir, proposal);
+              if (file === null)
+                return yield* new ProposalRefused({
+                  refused: "not_found",
+                  detail: `no proposal "${proposal}"`,
+                });
+              const path = yield* Path.Path;
+              return yield* once(
+                path.dirname(file),
+                {
+                  operation: "reconcile",
+                  request,
+                  origin: doorOf(client),
+                  asked: { proposal, index, as },
+                  result: Schema.Struct({ proposal: Schema.String }),
+                },
+                Effect.gen(function* () {
+                  const done = yield* reconcileStep(file, proposal, index, as, {
+                    origin: doorOf(client),
+                    requestId: request,
+                  });
+                  if (done.refused !== null)
+                    return yield* new ProposalRefused({
+                      refused: done.refused,
+                      detail: done.detail,
+                    });
+                  return { proposal };
+                }),
+              );
+            }),
+          ),
+        settleDelivery: ({ runId, delivery, as, request }, { client }) =>
+          plainly(
+            once(
+              trail(runId),
+              {
+                operation: "settle-delivery",
+                request,
+                origin: doorOf(client),
+                asked: { delivery, as },
+                result: Schema.Json,
+              },
+              Effect.gen(function* () {
+                const found = (yield* deliveriesOf(env.stateDir, runId)).find(
+                  (entry) => entry.delivery.id === delivery,
+                );
+                if (!found)
+                  return yield* new HostRefused({
+                    reason: `${REFUSED_INPUT}: no delivery "${delivery}" for this Run`,
+                  });
+                const settled = reconcileDelivery(
+                  yield* readLedger(found.file),
+                  delivery,
+                  as,
+                  actorName({ origin: doorOf(client), requestId: request }),
+                  yield* nowIso(),
+                );
+                if ("error" in settled)
+                  return yield* new HostRefused({ reason: `${REFUSED_INPUT}: ${settled.error}` });
+                yield* appendLine(found.file, settled);
+                return fromText(toText(settled));
+              }),
+            ),
+          ),
+        dispose: ({ runId, kind, ref, note, request }, { client }) =>
+          known(runId).pipe(
+            Effect.andThen(
+              once(
+                trail(runId),
+                {
+                  operation: "disposition",
+                  request,
+                  origin: doorOf(client),
+                  asked: { kind, ref, note },
+                  result: Disposition,
+                },
+                Effect.gen(function* () {
+                  const line = {
+                    at: yield* nowIso(),
+                    by: actorName({ origin: doorOf(client), requestId: request }),
+                    kind,
+                    ref,
+                    note,
+                  };
+                  yield* recordDisposition(trail(runId), line);
+                  return line;
+                }),
+              ),
+            ),
+            plainly,
+          ),
+        steerAbout: ({ runId, text, from, dryRun, request }, { client }) =>
+          Effect.gen(function* () {
+            const view = yield* registry.view(runId);
+            if (view === null)
+              return { ok: false, code: "run_not_found", human: `No Run "${runId}".`, data: {} };
+            const task = view.task === null ? null : yield* readTask(env.stateDir, view.task);
+            // Only an answer is kept against its request: a failure is retried under the same one.
+            return yield* once(
+              trail(runId),
+              {
+                operation: "steer",
+                request,
+                origin: doorOf(client),
+                asked: { text, from, dryRun },
+                result: SteerOutcome,
+              },
+              Effect.gen(function* () {
+                const asker = askerEnv(client);
+                const deps = yield* evaluationDeps({ ...asker, herdKey: task?.herd ?? undefined });
+                const said = yield* steer(asker, deps, {
+                  text,
+                  target: runId,
+                  from,
+                  dryRun,
+                  requestId: request,
+                  origin: doorOf(client),
+                });
+                if (!said.ok)
+                  return yield* new SteerUnanswered({
+                    outcome: {
+                      ok: false,
+                      code: said.error.code,
+                      human: said.error.message,
+                      data: fromText(toText(said.error.details)),
+                    },
+                  });
+                return {
+                  ok: true,
+                  code: null,
+                  human: said.human,
+                  data: fromText(toText(said.data)),
+                };
+              }),
+            );
+          }).pipe(
+            Effect.catch((cause) =>
+              Effect.succeed(
+                Schema.is(SteerUnanswered)(cause)
+                  ? cause.outcome
+                  : Schema.is(RequestConflict)(cause)
+                    ? { ok: false, code: "invalid_input", human: cause.reason, data: {} }
+                    : {
+                        ok: false,
+                        code: "operation_failed",
+                        human: `Collie could not answer: ${reason(cause)}.`,
+                        data: {},
+                      },
+              ),
+            ),
+            Effect.provideContext(bun),
+          ),
+        followUp: ({ runId, text, request }, { client }) =>
+          fresh(
+            () => runId,
+            { operation: "followup", request, origin: doorOf(client), result: Started },
+            Effect.gen(function* () {
+              const view = yield* known(runId);
+              if (!settled(factsOfView(env.stateDir, view)))
+                return yield* new HostRefused({
+                  reason: "a follow-up is a child of a finished run, and this one is still going",
+                });
+              const offered = (yield* registry.offers(runId)).find(
+                (one) => one.kind === "follow-up",
+              );
+              if (offered === undefined)
+                return yield* new HostRefused({
+                  reason: `${runId} declares no follow-up, so there is nothing to carry on with`,
+                });
+              const into = followUpField(offered.arguments);
+              if ("refused" in into)
+                return yield* new HostRefused({
+                  reason: `${runId}'s follow-up "${offered.id}" ${into.refused}`,
+                });
+              return yield* registry.invoke({
+                runId,
+                offer: offered.id,
+                input: { [into.field]: text },
+                request,
+              });
+            }),
+          ),
+        runDetail: ({ runId, tail, pages, refreshMr }) => {
+          let fresh = refreshMr;
+          const detail = Effect.gen(function* () {
+            const view = yield* registry.view(runId);
+            if (view === null) return null;
+            const run = factsOfView(env.stateDir, view);
+            const target = mrOf(run);
+            const mr =
+              target === null
+                ? null
+                : yield* watchedMr({
+                    panels,
+                    target,
+                    cwd: env.cwd,
+                    run: shell,
+                    now: yield* Clock.currentTimeMillis,
+                    fresh,
+                  });
+            fresh = false;
+            return yield* buildRunDetail({ env, runId, runs: [run], mr, tail, pages, plans });
+          }).pipe(Effect.provideContext(bun));
+          return followDetail(detail, changed).pipe(Stream.orDie);
+        },
+        runFile: ({ runId, ref, offset, length }) =>
+          registry.view(runId).pipe(
+            Effect.flatMap((view) =>
+              view === null
+                ? Effect.fail(new HostRefused({ reason: `no Run ${runId}` }))
+                : fetchRef(factsOfView(env.stateDir, view), ref, {
+                    offset: offset ?? 0,
+                    length: length ?? RUN_FILE_BYTES,
+                  }),
+            ),
+            Effect.provideContext(bun),
+          ),
+        board: () =>
+          Stream.unwrap(
+            liveHerds(herdr, env).pipe(
+              Effect.map((sessions) =>
+                boardMessages({
+                  head: {
+                    installation,
+                    build: BUILD,
+                    protocol: PROTOCOL,
+                    herds: sessions.flatMap(({ herd, name }) =>
+                      herd === null ? [] : [name === undefined ? { id: herd } : { id: herd, name }],
+                    ),
+                  },
+                  build,
+                  changed,
+                }),
+              ),
+              Effect.provideContext(bun),
+            ),
+          ).pipe(Stream.orDie),
+      });
+    }),
+  );
+
+/** The state directory's own id, made the first time a host owns it and kept from then on. */
+const installationOf = Effect.fn("Host.installationOf")(function* (dir: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const file = `${dir}/installation`;
+  const known = (yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => ""))).trim();
+  if (known !== "") return known;
+  const made = yield* (yield* Crypto.Crypto).randomUUIDv4;
+  // Renamed into place, so a host that dies mid-write leaves no half an id.
+  yield* fs.writeFileString(`${file}.new`, `${made}\n`);
+  yield* fs.rename(`${file}.new`, file);
+  return made;
+});
 
 /**
  * One host, for as long as it owns this directory. It runs until it is interrupted:
@@ -435,10 +1193,17 @@ const own = (dir: string) =>
     // Under the lock, so anything at this path belongs to a host that is gone: a unix
     // socket cannot be bound while its file is there, and a dead host's is still there.
     yield* fs.remove(socketOf(dir), { force: true }).pipe(Effect.orDie);
+    const installation = yield* installationOf(dir).pipe(Effect.orDie);
+    const panels: MrPanels = new Map();
+    const declared: Declared = new Map();
     return yield* Layer.launch(
-      RpcServer.layer(HostRpcs).pipe(
+      RpcServer.layer(AllRpcs).pipe(
         Layer.provide(
-          handlers(dir).pipe(
+          Layer.mergeAll(
+            handlers(dir, installation, declared),
+            frontDoorHandlers(dir, installation, panels, declared),
+            sideJobsLayer(dir, panels),
+          ).pipe(
             Layer.provide(
               registryLayer(dir, {
                 locate: locateIn(env),
@@ -529,7 +1294,7 @@ const stopOwner = Effect.fn("Host.stopOwner")(function* (dir: string, pid: numbe
 });
 
 /** One connection, in the caller's scope: theirs to keep, and theirs to close. */
-const open = (dir: string) =>
+const openGroup = <Rpcs extends Rpc.Any>(dir: string, group: RpcGroup.RpcGroup<Rpcs>) =>
   Effect.gen(function* () {
     const context = yield* Layer.build(
       RpcClient.layerProtocolSocket().pipe(
@@ -537,8 +1302,16 @@ const open = (dir: string) =>
         Layer.provide(serialization),
       ),
     );
-    return yield* RpcClient.make(HostRpcs).pipe(Effect.provideContext(context));
+    return yield* RpcClient.make(group).pipe(Effect.provideContext(context));
   }).pipe(Effect.mapError((cause) => unavailable(dir, String(cause))));
+
+const open = (dir: string) => openGroup(dir, AllRpcs);
+
+/**
+ * The public door of the host already answering at `dir`. Nothing is started or stopped
+ * from here, so a client on another Machine can never reach for a process of its own.
+ */
+export const frontDoor = (dir: string) => openGroup(dir, FrontDoorRpcs);
 
 const unavailable = (dir: string, reason: string) => new HostUnavailable({ dir, reason });
 
