@@ -1,6 +1,6 @@
 # Collie brand kit
 
-Collie's black-and-white companion identity is based on Luma, the owner's dog, and uses her real black-and-white coloring in the same friendly graphic style. Luma's floppy ears, broad muzzle, and continuous white stripe from forehead to nose define the mark. This kit contains the exact artwork shown in the brand showcase.
+Collie's black-and-white companion identity uses a friendly graphic style. The mascot's floppy ears, broad muzzle, and continuous white stripe from forehead to nose define the mark. This kit contains the exact artwork shown in the brand showcase.
 
 ## Choose the right asset
 

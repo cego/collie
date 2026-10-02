@@ -1,9 +1,9 @@
 {
   "version": 1,
-  "concept": "02 \u00b7 Luma in black and white",
+  "concept": "02 \u00b7 Black and white",
   "assets": [
     {
-      "file": "comparison/luma-green.png",
+      "file": "comparison/collie-green.png",
       "bytes": 190601,
       "sha256": "1671ee39e6406a56ebc230a6d7d4849f72f8d1e3aa574fc87846c4594312455a",
       "width": 512,
@@ -197,8 +197,8 @@
     },
     {
       "file": "source/generation.json",
-      "bytes": 6888,
-      "sha256": "555d5e02e42eb3361525ef95ee60142fc6407c2c39e98a8c7f3e6aef9dab9a5d"
+      "bytes": 6990,
+      "sha256": "b4ee92207f1293ad702c54070a2ee2d2e7ad368592f0797e1c9a7e79feddee31"
     },
     {
       "file": "tokens/brand.css",
@@ -207,8 +207,8 @@
     },
     {
       "file": "tokens/brand.json",
-      "bytes": 707,
-      "sha256": "6b2f9054bdd60efda756a35258f1d49021699408cf2f8888968f56ccd59672d5"
+      "bytes": 699,
+      "sha256": "b29710dcfe5e3a048c83162a31924f08a31e7c36d4e278bf3626548e96207c3c"
     },
     {
       "file": "web/head.html",

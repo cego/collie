@@ -1,4 +1,4 @@
-<img src="assets/brand/logos/collie-horizontal-light-1024.png" alt="Collie with Luma, its black and white dog logo" width="360" />
+<img src="assets/brand/logos/collie-horizontal-light-1024.png" alt="Collie with its black and white dog logo" width="360" />
 
 Running several coding agents at once turns into babysitting: one tab per agent, each
 waiting on you at a different moment, and no single place that says what needs a decision.
