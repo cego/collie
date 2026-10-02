@@ -473,21 +473,6 @@ const frontDoorHandlers = (
           ),
           Effect.provideContext(hosted),
         );
-      const auditedControl =
-        (runId: string, operation: string, request: string, origin: FrontDoor, reason?: string) =>
-        <E>(act: Effect.Effect<typeof Controlled.Type, E, HostServices>) =>
-          once(
-            trail(runId),
-            {
-              operation,
-              request,
-              origin,
-              reason,
-              asked: { reason: reason ?? null },
-              result: Controlled,
-            },
-            act,
-          ).pipe(Effect.provideContext(hosted));
       const known = (runId: string) =>
         registry
           .view(runId)
@@ -498,6 +483,24 @@ const frontDoorHandlers = (
                 : Effect.succeed(view),
             ),
           );
+      const auditedControl =
+        (runId: string, operation: string, request: string, origin: FrontDoor, reason?: string) =>
+        <E>(act: Effect.Effect<typeof Controlled.Type, E, HostServices>) =>
+          Effect.andThen(
+            known(runId),
+            once(
+              trail(runId),
+              {
+                operation,
+                request,
+                origin,
+                reason,
+                asked: { reason: reason ?? null },
+                result: Controlled,
+              },
+              act,
+            ),
+          ).pipe(Effect.provideContext(hosted));
       /** Only the refusals a front door can act on keep their shape; anything else is said in a sentence. */
       const plainly = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
         effect.pipe(

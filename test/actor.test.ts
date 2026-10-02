@@ -75,6 +75,17 @@ test(
             ["answer", "board", "answer-1"],
           ]);
           expect(yield* fs.exists(`${runDir(world.state, runId)}/operations.jsonl`)).toBe(true);
+          // A Run nobody has is refused, and nothing is audited for it, inside or outside.
+          for (const unknown of ["r-nobody", "../../escaped"]) {
+            const refused = yield* door
+              .control({ runId: unknown, control: "hold", set: true, request: "hold-x" })
+              .pipe(Effect.flip);
+            expect(refused.reason).toBe(`no Run ${unknown}`);
+            expect(
+              (yield* door.resume({ runId: unknown, request: "r-x" }).pipe(Effect.flip)).reason,
+            ).toBe(`no Run ${unknown}`);
+            expect(yield* fs.exists(runDir(world.state, unknown))).toBe(false);
+          }
           yield* stopHost(world.state);
         }).pipe(Effect.orDie),
       ["proof.workflow.ts", "helper.ts", "notes.md"],
