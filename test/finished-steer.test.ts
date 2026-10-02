@@ -68,6 +68,8 @@ const chat = { origin: "chat" as const, requestId: "req-chat" };
 const steerable = <A, E>(
   prefix: string,
   body: (world: World) => Effect.Effect<A, E, BunServices | Scope.Scope>,
+  /** What the fake agent answers its prompts with; none leaves it working for good. */
+  answers: ReadonlyArray<{ readonly verdict: string }> = [{ verdict: "built" }],
 ) =>
   proves(
     prefix,
@@ -75,7 +77,7 @@ const steerable = <A, E>(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const outputs = `${world.home}/outputs.json`;
-        yield* fs.writeFileString(outputs, encode([{ verdict: "built" }])).pipe(Effect.orDie);
+        yield* fs.writeFileString(outputs, encode(answers)).pipe(Effect.orDie);
         // The host a client spawns inherits this process's environment: it has to own this
         // world's state, never the operator's.
         const set = {
@@ -257,6 +259,53 @@ test(
           );
         }
       }),
+    ),
+  120_000,
+);
+
+test(
+  "a stopped Run's closed agent is not told, and the request is routed on",
+  () =>
+    steerable(
+      "collie-stopped-gone-",
+      (world) =>
+        Effect.gen(function* () {
+          resetExecutors();
+          const env = readEnv({
+            HERDR_PLUGIN_ROOT: world.install,
+            HERDR_PLUGIN_STATE_DIR: world.state,
+            COLLIE_USER_DIR: world.config,
+            HOME: world.home,
+            COLLIE_CWD: world.project,
+          });
+          const client = yield* connect(world.state).pipe(Effect.orDie);
+          const request = yield* (yield* Crypto.Crypto).randomUUIDv4;
+          const { runId } = yield* client
+            .start({ project: world.project, id: "told", request, input: { work: "the picker" } })
+            .pipe(Effect.orDie);
+          const fs = yield* FileSystem.FileSystem;
+          // Its one agent is up and working, and nothing will ever come of it.
+          const herdr = yield* until(
+            () =>
+              fs.readFileString(`${Bun.env.FAKE_HERDR_LOG}.state.json`).pipe(
+                Effect.map((text) => Schema.decodeUnknownSync(FakeState)(text)),
+                Effect.orElseSucceed(() => ({ agents: [] })),
+              ),
+            (state) => state.agents.length > 0,
+          );
+          const agent = herdr.agents[0]!;
+
+          const [stopped] = yield* carryOutAsked(env, [{ kind: "stop", run: runId }], chat);
+          expect(stopped?.state).toBe("applied");
+
+          const [told] = yield* carryOutAsked(env, [deliver(runId, agent.name, "tag it")], chat);
+          expect(told?.state).toBe("failed");
+          expect(told?.note).toContain("has finished and its agent is gone");
+
+          const held = yield* collie(world, ["run", "hold", runId]);
+          expect(held.envelope.error?.message).toContain("a finished Run has no step left to hold");
+        }),
+      [],
     ),
   120_000,
 );

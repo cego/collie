@@ -4194,8 +4194,15 @@ const makeRegistry: (
     return { generation, execution: row.execution };
   });
 
-  /** Whether a Run's Workflow has ended: what a stop must not rewrite. */
+  /** Whether a Run has ended, a stop included: no step is left to hold, and a gone agent's work goes on elsewhere. */
   const hasEnded = Effect.fn("Engine.hasEnded")(function* (runId: string) {
+    // A stopped Run writes no final card; its stop is the record.
+    if ((yield* controlsOf(runId)).includes(STOP)) return true;
+    return yield* workflowEnded(runId);
+  });
+
+  /** Whether a Run's Workflow ran to its end: the status a stop must not rewrite. */
+  const workflowEnded = Effect.fn("Engine.workflowEnded")(function* (runId: string) {
     const found = yield* routed(runId).pipe(Effect.option);
     // With its module gone the engine cannot be asked, and the finish's record answers.
     if (Option.isNone(found)) return (yield* finishedOnRecord(runDir(dir, runId))) !== null;
@@ -4655,7 +4662,7 @@ const makeRegistry: (
           reason: "a finished Run has no step left to hold; stop closes its agents",
         });
       // A finished Run's status is history: a stop closes its live agents and sets nothing.
-      if (options.control === STOP && options.set && (yield* hasEnded(options.runId))) {
+      if (options.control === STOP && options.set && (yield* workflowEnded(options.runId))) {
         const halted = yield* (yield* Agents).halt(options.runId);
         return {
           runId: options.runId,

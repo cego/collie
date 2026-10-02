@@ -1703,3 +1703,20 @@ test("the told line the agents write is the one a Reopened card reads back", () 
   expect(toldIn(log, "builder")).toBe("merge and tag it");
   expect(toldIn(log, "nobody")).toBeNull();
 });
+
+test("a hold left on a Run that ended is not drawn: it holds nothing now", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const going = yield* madeRun(dir, { id: "r-going", task: "t-going", held: true });
+      const ended = yield* madeRun(dir, {
+        id: "r-ended",
+        task: "t-ended",
+        held: true,
+        state: "succeeded",
+      });
+      const views = yield* board(env, [going, ended]);
+      expect(views.find((one) => one.run === "r-going")!.held).toBe("⏸ Held.");
+      expect(views.find((one) => one.run === "r-ended")!.held).toBeNull();
+    }),
+  ));

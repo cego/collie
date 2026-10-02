@@ -1022,7 +1022,8 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
           ? "blocked"
           : stateOf(status, silent !== null, decision, stalled !== null);
 
-    const holding = runs.some((run) => run.held);
+    // A hold left on a Run that ended holds nothing, and a finished Run refuses its release.
+    const holding = runs.some((run) => run.held && !ended(run));
     const settledNow = state === "done" || state === "failed" || state === "stopped";
     // Read whatever the state: a merge GitLab reported lands the work even while the Run
     // is still going, and the card must say so.
