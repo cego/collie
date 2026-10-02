@@ -6,8 +6,19 @@
 
 import { Effect, FileSystem } from "effect";
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { BATCH, append, asText, newsPath, pending, read, settle, uncertain } from "../src/news";
-import { eventsIn } from "../src/proactive";
+import {
+  BATCH,
+  NATIVE,
+  append,
+  asText,
+  newsPath,
+  pending,
+  read,
+  settle,
+  supersede,
+  uncertain,
+} from "../src/news";
+import { eventsIn, holding } from "../src/proactive";
 import { runFacts as record } from "./support/records";
 import { runEffect } from "./support/effect";
 
@@ -77,10 +88,10 @@ test("submitted is not read, and only reading settles anything", () =>
     Effect.gen(function* () {
       yield* append(file, { key: "r1:ended", run: "r1", text: "r1 ended." });
       // A transport accepted it. That is a fact about the transport.
-      yield* settle(file, "r1:ended", "sent");
+      yield* settle(file, "r1:ended", "sent", NATIVE);
       expect(pending(yield* read(file)).items).toHaveLength(1);
       // The conversation took it. That is the receipt.
-      yield* settle(file, "r1:ended", "read");
+      yield* settle(file, "r1:ended", "read", NATIVE);
       expect(pending(yield* read(file)).items).toEqual([]);
     }),
   ));
@@ -89,14 +100,14 @@ test("a send nobody can account for stays a human's, and is never sent again by 
   runEffect(
     Effect.gen(function* () {
       yield* append(file, { key: "r1:ended", run: "r1", text: "r1 ended." });
-      yield* settle(file, "r1:ended", "uncertain", "the process went away mid-send");
+      yield* settle(file, "r1:ended", "uncertain", NATIVE, "the process went away mid-send");
       const lines = yield* read(file);
       // Still pending — nothing pretends it arrived — and visibly uncertain, which is a
       // different thing from "not yet sent" and is what a human has to settle.
       expect(pending(lines).items).toHaveLength(1);
       expect(uncertain(lines)).toEqual(["r1:ended"]);
       // Reading it is what ends the doubt.
-      yield* settle(file, "r1:ended", "read");
+      yield* settle(file, "r1:ended", "read", NATIVE);
       expect(uncertain(yield* read(file))).toEqual([]);
     }),
   ));
@@ -117,4 +128,66 @@ test("every approved trigger is news, and activity alone is not", () => {
   // working is a Run nobody needs to be told about.
   for (const busy of [record({ state: "running" }), record({ held: true })])
     expect(eventsIn([busy])).toEqual([]);
+});
+
+test("what one conversation read is still news to another", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* append(file, { key: "r1:ended", run: "r1", text: "r1 ended." });
+      yield* settle(file, "r1:ended", "read", NATIVE);
+      yield* settle(file, "r1:ended", "uncertain", NATIVE, "the pane went away");
+      const lines = yield* read(file);
+      expect(pending(lines, NATIVE).items).toEqual([]);
+      expect(pending(lines, "flock@pc").items.map((item) => item.key)).toEqual(["r1:ended"]);
+      expect(uncertain(lines, "flock@pc")).toEqual([]);
+      // Already news for one conversation, so noticing it again queues nothing new.
+      expect(yield* append(file, { key: "r1:ended", run: "r1", text: "r1 ended." })).toBe(false);
+    }),
+  ));
+
+test("news whose cause has gone drops out of every batch and stays in the journal", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* append(file, { key: "r1:parked:x", run: "r1", text: "r1 parked." });
+      yield* append(file, { key: "r2:ended:failed", run: "r2", text: "r2 failed." });
+      yield* settle(file, "r1:parked:x", "uncertain", NATIVE);
+      expect(yield* supersede(file, (item) => item.key !== "r1:parked:x")).toBe(1);
+      // Once is enough: it is not superseded again on the next look.
+      expect(yield* supersede(file, (item) => item.key !== "r1:parked:x")).toBe(0);
+      const lines = yield* read(file);
+      for (const conversation of [NATIVE, "flock@pc"])
+        expect(pending(lines, conversation).items.map((item) => item.key)).toEqual([
+          "r2:ended:failed",
+        ]);
+      expect(uncertain(lines, NATIVE)).toEqual([]);
+      expect(lines.some((line) => line.kind === "item" && line.key === "r1:parked:x")).toBe(true);
+      // The same cause arising again later is news again.
+      expect(yield* append(file, { key: "r1:parked:x", run: "r1", text: "r1 parked." })).toBe(true);
+      expect(pending(yield* read(file), "flock@pc").items).toHaveLength(2);
+    }),
+  ));
+
+test("a resumed halt, an answered question and a disposed finished Run no longer hold", () => {
+  const before = [
+    record({ id: "r1", state: "waiting", note: "out of budget" }),
+    record({ id: "r2", state: "waiting", asking: [{ name: "scope", prompt: "?", options: [] }] }),
+    record({ id: "r3", state: "succeeded" }),
+  ];
+  const keys = eventsIn(before).map((event) => event.key);
+  expect([...holding(before)].sort()).toEqual([...keys].sort());
+  const after = [
+    record({ id: "r1", state: "running" }),
+    record({ id: "r2", state: "running" }),
+    record({ id: "r3", state: "succeeded" }),
+  ];
+  const now = holding(after, new Map(), new Set(["r3"]));
+  for (const key of keys) expect([key, now.has(key)]).toEqual([key, false]);
+  // Until its work has a disposition, a finished Run's outcome is still true.
+  expect(holding(after).has("r3:ended:succeeded")).toBe(true);
+});
+
+test("a cause masked by a more pressing one still holds", () => {
+  // Drift escalated before the Run asked a question is still drift.
+  const run = record({ id: "r1", asking: [{ name: "scope", prompt: "?", options: [] }] });
+  expect(holding([run], new Map([["r1", "stay in src"]])).has("r1:drift:stay in src")).toBe(true);
 });

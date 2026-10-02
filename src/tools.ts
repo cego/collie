@@ -36,6 +36,7 @@ import {
   proposeActions,
   runViews,
   isSettled,
+  settleNewsFor,
 } from "./lifecycle";
 import { taskOfWorkspace } from "./task";
 import { pendingFor, proposalsPath, read as readProposals } from "./proposals";
@@ -43,13 +44,7 @@ import { statusLine } from "./disposition";
 import { Herdr } from "./herdr";
 import { mrLabel } from "./board";
 import { ASKED_KINDS, headerSentence, sectionOf, SECTIONS, type TaskView } from "./board-model";
-import {
-  asText as newsText,
-  newsPath,
-  pending as pendingNews,
-  read as readNews,
-  settle as settleNews,
-} from "./news";
+import { asText as newsText, NATIVE } from "./news";
 import { findRun, listRuns, type RunFacts } from "./runs";
 import { donePasses, markersOf, runningCheck } from "./checks";
 import { deliveriesOf, herdOf } from "./steering";
@@ -802,10 +797,14 @@ const workspaceFacts = Effect.fn("Tools.workspaces")(function* (env: PluginEnv) 
 const newsFacts = Effect.fn("Tools.news")(function* (env: PluginEnv) {
   const key = yield* herdOf(env.socketPath).pipe(Effect.catch(() => Effect.succeed(null)));
   if (key === null) return "Collie cannot reach herdr, so it has nothing to report.";
-  const file = yield* newsPath(env.stateDir, key);
-  const batch = pendingNews(yield* readNews(file));
-  for (const item of batch.items) yield* settleNews(file, item.key, "read");
-  return newsText(batch);
+  const read = yield* settleNewsFor(env, {
+    door: "chat",
+    herd: key,
+    conversation: NATIVE,
+    as: "read",
+    request: yield* newRequestId(),
+  });
+  return read.ok ? newsText(read.value) : `Collie could not read the news: ${read.error.message}`;
 });
 
 /** What `collie_receipts` answers with: what is waiting, and what each send actually reached. */

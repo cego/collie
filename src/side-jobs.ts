@@ -11,8 +11,9 @@ import type { Herdr } from "./herdr";
 import { liveHerds } from "./herds";
 import { settleMerges, type MrPanels } from "./merges";
 import { shell } from "./mr";
-import { append as appendNews, newsPath } from "./news";
-import { eventsIn, idleAgain, readSaid, remember } from "./proactive";
+import { append as appendNews, newsPath, supersede } from "./news";
+import { eventsIn, holding, idleAgain, readSaid, remember } from "./proactive";
+import { latest, readDispositions } from "./disposition";
 import { everyRegistered } from "./registry";
 import { settled, type RunFacts } from "./runs";
 import { herdDir, herdOf } from "./steering";
@@ -50,7 +51,9 @@ const sayWhatHappened = Effect.fn("SideJobs.sayWhatHappened")(function* (
   const dir = yield* herdDir(stateDir, key);
   const said = yield* readSaid(dir);
   const file = yield* newsPath(stateDir, key);
-  for (const event of eventsIn(runs, yield* escalatedDrift(runs), readyRuns(views), done)) {
+  const drifting = yield* escalatedDrift(runs);
+  const ready = readyRuns(views);
+  for (const event of eventsIn(runs, drifting, ready, done)) {
     if (said.has(event.key)) continue;
     // Remembered only once it is in the journal, so a failed write is retried next round.
     const queued = yield* appendNews(file, {
@@ -60,6 +63,19 @@ const sayWhatHappened = Effect.fn("SideJobs.sayWhatHappened")(function* (
     }).pipe(Effect.catchCause(() => Effect.succeed(null)));
     if (queued !== null) yield* remember(dir, event.key, yield* nowIso());
   }
+  const held = holding(runs, drifting, yield* disposed(runs), ready, done);
+  yield* supersede(file, (item) => held.has(item.key));
+});
+
+/** The finished Runs whose work has a disposition. */
+const disposed = Effect.fn("SideJobs.disposed")(function* (runs: ReadonlyArray<RunFacts>) {
+  const out = new Set<string>();
+  for (const run of runs) {
+    if (!settled(run)) continue;
+    const lines = yield* readDispositions(run.dir).pipe(Effect.orElseSucceed(() => []));
+    if (latest(lines) !== null) out.add(run.id);
+  }
+  return out;
 });
 
 /** Each Herd's News from its own Runs; a Run whose Task records no Herd is the host's own Herd's. */

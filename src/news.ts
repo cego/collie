@@ -21,6 +21,10 @@
 // **Submitted is not delivered.** Writing a notification is not evidence anybody read it.
 // An item stays `pending` until the conversation itself says otherwise, and an item whose
 // fate nobody can establish stays `uncertain` rather than being quietly called done.
+//
+// **Each conversation has its own receipts.** One journal per Herd, read by every
+// conversation about it: what one conversation read is still news to another. An item
+// whose cause no longer holds is `superseded` for all of them, and kept.
 
 import { Effect, FileSystem, Path, Schema } from "effect";
 import { appendJournal, readJournal } from "./journal";
@@ -35,6 +39,9 @@ export const BATCH = 10;
 
 /** How many items the journal keeps. Old news nobody read is still not worth unbounded disk. */
 export const KEEP = 200;
+
+/** The Herd's Native chat, in its Home. A receipt written before conversations had names is its. */
+export const NATIVE = "native";
 
 const ItemSchema = Schema.Struct({
   /** What makes this news this news. `proactive.ts` mints it; a repeat is the same key. */
@@ -57,9 +64,13 @@ const LineSchema = Schema.Union([
   Schema.Struct({
     kind: Schema.Literals(["sent", "read", "uncertain"]),
     key: Schema.String,
+    /** Whose receipt: `NATIVE`, or a Flock conversation such as `flock@pc`. */
+    conversation: Schema.String.pipe(Schema.withDecodingDefaultKey(Effect.succeed(NATIVE))),
     at: Schema.String,
     note: Schema.optionalKey(Schema.String),
   }),
+  /** Its cause no longer holds, so it is nobody's news any more. */
+  Schema.Struct({ kind: Schema.Literal("superseded"), key: Schema.String, at: Schema.String }),
 ]);
 type Line = Schema.Schema.Type<typeof LineSchema>;
 const LineJson = Schema.fromJsonString(LineSchema);
@@ -87,31 +98,50 @@ export interface Batch {
  * a conversation received it, and the one thing this must not do is call something
  * delivered because it was handed over.
  */
-export function pending(lines: ReadonlyArray<Line>): Batch {
-  const all = unread(lines);
+export function pending(lines: ReadonlyArray<Line>, conversation = NATIVE): Batch {
+  const all = live(lines)
+    .filter((entry) => !entry.read.has(conversation))
+    .map((entry) => entry.item);
   return { items: all.slice(-BATCH), omitted: Math.max(0, all.length - BATCH) };
 }
 
-/** Every item nobody has read, newest last — the batch before it is bounded. */
-function unread(lines: ReadonlyArray<Line>): ReadonlyArray<Item> {
-  const readKeys = new Set(lines.flatMap((line) => (line.kind === "read" ? [line.key] : [])));
-  const items = new Map<string, Item>();
-  for (const line of lines)
-    if (line.kind === "item" && !readKeys.has(line.key))
-      items.set(line.key, { key: line.key, run: line.run, text: line.text, at: line.at });
-  return [...items.values()];
+interface Entry {
+  readonly item: Item;
+  /** The conversations that read it, and those whose send of it nobody can account for. */
+  readonly read: Set<string>;
+  readonly uncertain: Set<string>;
+}
+
+/**
+ * Every item not superseded, newest last, with its receipts. A key written again after it
+ * was superseded is a new item with none.
+ */
+function live(lines: ReadonlyArray<Line>): ReadonlyArray<Entry> {
+  const entries = new Map<string, Entry>();
+  for (const line of lines) {
+    if (line.kind === "item") {
+      const item = { key: line.key, run: line.run, text: line.text, at: line.at };
+      entries.delete(line.key);
+      entries.set(line.key, { item, read: new Set(), uncertain: new Set() });
+      continue;
+    }
+    const entry = entries.get(line.key);
+    if (entry === undefined) continue;
+    if (line.kind === "superseded") entries.delete(line.key);
+    else if (line.kind === "read") entry.read.add(line.conversation);
+    else if (line.kind === "uncertain") entry.uncertain.add(line.conversation);
+  }
+  return [...entries.values()];
 }
 
 /** Items a send could not be accounted for, which stay a human's to look at. */
-export function uncertain(lines: ReadonlyArray<Line>): ReadonlyArray<string> {
-  const settled = new Set(lines.flatMap((line) => (line.kind === "read" ? [line.key] : [])));
-  return [
-    ...new Set(
-      lines.flatMap((line) =>
-        line.kind === "uncertain" && !settled.has(line.key) ? [line.key] : [],
-      ),
-    ),
-  ];
+export function uncertain(
+  lines: ReadonlyArray<Line>,
+  conversation = NATIVE,
+): ReadonlyArray<string> {
+  return live(lines).flatMap((entry) =>
+    entry.uncertain.has(conversation) && !entry.read.has(conversation) ? [entry.item.key] : [],
+  );
 }
 
 /**
@@ -123,7 +153,7 @@ export function uncertain(lines: ReadonlyArray<Line>): ReadonlyArray<string> {
  */
 export const append = Effect.fn("News.append")(function* (file: string, item: Omit<Item, "at">) {
   const lines = yield* read(file);
-  if (unread(lines).some((known) => known.key === item.key)) return false;
+  if (live(lines).some((known) => known.item.key === item.key)) return false;
   yield* appendJournal(file, LineJson, { kind: "item", ...item, at: yield* nowIso() }).pipe(
     Effect.orDie,
   );
@@ -136,11 +166,30 @@ export const settle = Effect.fn("News.settle")(function* (
   file: string,
   key: string,
   as: "sent" | "read" | "uncertain",
+  conversation: string,
   note?: string,
 ) {
   const at = yield* nowIso();
-  const line: Line = note === undefined ? { kind: as, key, at } : { kind: as, key, at, note };
+  const line: Line =
+    note === undefined
+      ? { kind: as, key, conversation, at }
+      : { kind: as, key, conversation, at, note };
   yield* appendJournal(file, LineJson, line).pipe(Effect.orDie);
+});
+
+/** Retires every live item whose cause no longer holds, for every conversation; how many. */
+export const supersede = Effect.fn("News.supersede")(function* (
+  file: string,
+  holds: (item: Item) => boolean,
+) {
+  const gone = live(yield* read(file)).filter((entry) => !holds(entry.item));
+  for (const { item } of gone)
+    yield* appendJournal(file, LineJson, {
+      kind: "superseded",
+      key: item.key,
+      at: yield* nowIso(),
+    }).pipe(Effect.orDie);
+  return gone.length;
 });
 
 /** Kept bounded on write, because there is no daemon to sweep with. */

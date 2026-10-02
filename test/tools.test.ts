@@ -15,6 +15,7 @@ import { CollieTools, TOOLS, toolNamed } from "../src/tools";
 import { mutation } from "../src/envelope";
 import {
   append as appendNews,
+  NATIVE,
   newsPath,
   pending as pendingNews,
   read as readNews,
@@ -716,6 +717,18 @@ test("reading the news is what settles it, and it settles once", () =>
       // get the same news twice, and neither does the next turn.
       expect(yield* call("collie_news")).toBe("Nothing has happened that you have not seen.");
       expect(pendingNews(yield* readNews(file)).items).toEqual([]);
+    }),
+  ));
+
+test("what Native chat read is still news to another conversation", () =>
+  inWorld(
+    Effect.gen(function* () {
+      const file = yield* newsPath(stateDir, KEY);
+      yield* appendNews(file, { key: "r1:ended", run: "r1", text: "Run r1 ended done." });
+      expect(yield* call("collie_news")).toContain("Run r1 ended done.");
+      const lines = yield* readNews(file);
+      expect(pendingNews(lines, NATIVE).items).toEqual([]);
+      expect(pendingNews(lines, "flock@pc").items.map((item) => item.key)).toEqual(["r1:ended"]);
     }),
   ));
 

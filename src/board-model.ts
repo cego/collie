@@ -670,6 +670,19 @@ export const FrontDoor = Schema.Literals([
 ]);
 export type FrontDoor = typeof FrontDoor.Type;
 
+/** A conversation's News, as the host handed it over: the newest items and how many it left. */
+export const NewsBatch = Schema.Struct({
+  items: Schema.Array(
+    Schema.Struct({
+      key: Schema.String,
+      run: Schema.String,
+      text: Schema.String,
+      at: Schema.String,
+    }),
+  ),
+  omitted: Schema.Int,
+});
+
 /**
  * What any front door, on this computer or another, may ask a host. Every operation takes
  * a request id: the same one twice is one operation, and with other arguments is refused.
@@ -855,6 +868,21 @@ export const FrontDoorRpcs = RpcGroup.make(
   Rpc.make("followUp", {
     payload: { runId: Schema.String, text: Schema.String, request: Schema.String },
     success: Started,
+    error: Schema.Union([HostRefused, RequestConflict]),
+  }),
+  /**
+   * A conversation's pending News, settled as `as` for that conversation alone. `read` is
+   * the conversation having taken it; `sent` and `uncertain` are facts about a transport.
+   */
+  Rpc.make("news", {
+    payload: {
+      /** The Herd whose journal it is; the asker's own where null. */
+      herd: Schema.NullOr(Schema.String),
+      conversation: Schema.String,
+      as: Schema.Literals(["read", "sent", "uncertain"]),
+      request: Schema.String,
+    },
+    success: NewsBatch,
     error: Schema.Union([HostRefused, RequestConflict]),
   }),
   /** Carries out what a finished Run offers, as a Run of its own. */

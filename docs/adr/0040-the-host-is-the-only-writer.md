@@ -17,7 +17,8 @@ evaluator turn free words about one Run into actions and carries them out, and `
 starts the follow-up a finished Run's Workflow declares. `propose` records and carries out
 what chat's `collie_propose` was asked for, `act` carries out `collie_do`'s and
 `collie_hold`'s board actions, and `reconcile` and `settleDelivery` settle a proposal step or
-a delivery nobody can account for. Actions travel as JSON and the host decodes them, so the
+a delivery nobody can account for, and `news` records a conversation's News receipts.
+Actions travel as JSON and the host decodes them, so the
 group keeps no schema a browser bundle cannot import. All are on `FrontDoorRpcs`
 ([ADR-0038](0038-the-host-builds-and-serves-the-board.md)) and take a request id.
 

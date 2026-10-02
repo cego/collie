@@ -1063,6 +1063,29 @@ export const proposeActions = (
     options.door,
   ).pipe(Effect.map((answered) => (answered.ok ? opResultOf(answered.value) : answered)));
 
+/** A conversation's pending News, settled for it by the host. */
+export const settleNewsFor = (
+  env: PluginEnv,
+  options: {
+    readonly door: FrontDoor;
+    readonly herd: string | null;
+    readonly conversation: string;
+    readonly as: "read" | "sent" | "uncertain";
+    readonly request: string;
+  },
+) =>
+  asks(
+    env,
+    (client) =>
+      client.news({
+        herd: options.herd,
+        conversation: options.conversation,
+        as: options.as,
+        request: options.request,
+      }),
+    options.door,
+  );
+
 /** The board's own actions, asked for by name and carried out by the host. */
 export const actAsked = (
   env: PluginEnv,

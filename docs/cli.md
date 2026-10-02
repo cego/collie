@@ -1420,7 +1420,8 @@ the first host to own the directory, and survives restarts and upgrades.
 
 The host also runs what nobody has to have a pane open for: the merge watch, which asks
 GitLab about each waiting merge request every 5 minutes and records a merge; each Herd's
-News; and worktree pruning, every 3 minutes.
+News, which it also supersedes once an item's cause no longer holds; and worktree
+pruning, every 3 minutes.
 
 The operations that change a Run are on `FrontDoorRpcs` too: `start`, `answer`, `control`
 (a hold or a stop, set or cleared, and every watcher hears about it), `resume` and
@@ -1441,10 +1442,12 @@ Workflow declares; `propose`, which records what chat was asked for as a proposa
 carries it out; `act`, which carries out the board's own actions on a Run (`stop`, `resume`,
 `release`, `hold`, `answer`, `deliver`, `followup`, `start`) with no proposal, anything else
 being refused as `propose`'s; `reconcile`, which settles a proposal step nobody can account
-for; and `settleDelivery`, which does the same for a message to an agent. Actions travel as
+for; `settleDelivery`, which does the same for a message to an agent; and `news`, which
+hands one conversation its Herd's pending News and records it `read`, `sent` or
+`uncertain` for that conversation alone. Actions travel as
 JSON and the host decodes them. `collie confirm`, `decline`, `steer`, `run disposition`,
-`proposal reconcile` and `run deliveries --reconcile`, the board and chat's tools all go
-through these, so the host is the only writer of what they record
+`proposal reconcile`, `run deliveries --reconcile` and `chat news --sent`, the board and
+chat's tools all go through these, so the host is the only writer of what they record
 ([ADR-0040](adr/0040-the-host-is-the-only-writer.md)).
 
 `runDetail` streams one Run's details while a drawer is open — intent, plan, review,

@@ -78,6 +78,7 @@ import {
   EVIDENCE_GATE,
   FrontDoorRpcs,
   HostRefused,
+  NewsBatch,
   PROTOCOL,
   ProposalRefused,
   RUN_FILE_BYTES,
@@ -89,6 +90,7 @@ import {
 } from "./board-model";
 import { boardMessages } from "./board-stream";
 import { recordDisposition } from "./disposition";
+import { newsPath, pending as pendingNews, read as readNews, settle as settleNews } from "./news";
 import { ActionSchema, evaluationDeps } from "./evaluator";
 import { err, request, steer, type OpResult } from "./operations";
 import { REJECTED } from "./envelope";
@@ -909,6 +911,41 @@ const frontDoorHandlers = (
                 return fromText(toText(settled));
               }),
             ),
+          ),
+        news: ({ herd, conversation, as, request }, { client }) =>
+          plainly(
+            Effect.gen(function* () {
+              if (herd !== null && (herd === "." || herd === ".." || !/^[^/\\]+$/.test(herd)))
+                return yield* new HostRefused({
+                  reason: `${REFUSED_INPUT}: "${herd}" is not a Herd`,
+                });
+              const key =
+                herd ??
+                (yield* herdOf(askerEnv(client).socketPath).pipe(
+                  Effect.catch(() => Effect.succeed(null)),
+                ));
+              if (key === null)
+                return yield* new HostRefused({
+                  reason: "invalid_state: no Herd to read News for",
+                });
+              return yield* once(
+                yield* herdDir(env.stateDir, key),
+                {
+                  operation: "news",
+                  request,
+                  origin: doorOf(client),
+                  asked: { conversation, as },
+                  result: NewsBatch,
+                },
+                Effect.gen(function* () {
+                  const file = yield* newsPath(env.stateDir, key);
+                  const batch = pendingNews(yield* readNews(file), conversation);
+                  for (const item of batch.items)
+                    yield* settleNews(file, item.key, as, conversation);
+                  return batch;
+                }),
+              );
+            }),
           ),
         dispose: ({ runId, kind, ref, note, request }, { client }) =>
           known(runId).pipe(

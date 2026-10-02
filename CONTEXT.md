@@ -58,9 +58,14 @@ history; nothing is carried between them.
 triggers only — terminal outcomes, halts, pending Choices, evidence gaps, repeated-failure
 obstacles and unresolved drift. Written from the Run's own record with no model in the
 path, so an unchanged Herd costs nothing; deduplicated by causal key, bounded into one
-batch that says what it left out. **Sent** is a transport having accepted it and **read**
+batch that says what it left out. Each Herd keeps one journal of it, and every
+conversation keeps its own receipts on it, recorded by the host: what one conversation
+read is still news to another. **Sent** is a transport having accepted it and **read**
 is the conversation having taken it — only the second settles an item, and a send nobody
-can account for stays `uncertain` for a human rather than being retried.
+can account for stays `uncertain` for a human rather than being retried. **Superseded**
+is an item whose cause no longer holds — a halt resumed, a question answered, a finished
+Run whose work has a disposition — settled by the host for every conversation that has
+not read it; it drops out of batches and stays in the journal.
 
 **Collie tools** — The whole of what native chat may reach, over Collie's own shared
 operations. Most read — `collie_herd`, `collie_run`, `collie_workspaces`,
