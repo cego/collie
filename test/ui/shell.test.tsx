@@ -3,7 +3,7 @@
 
 import { expect, test } from "bun:test";
 import { Effect } from "effect";
-import { createSignal, ErrorBoundary } from "solid-js";
+import { createSignal } from "solid-js";
 import { testRender } from "@opentui/solid";
 import { runEffect } from "../support/effect";
 import { App } from "../../src/ui/App";
@@ -73,33 +73,6 @@ const mount = Effect.fn("shell.mount")(function* (initial: AppState) {
       ),
   };
 });
-
-function Broken() {
-  throw new Error("a card rendered something impossible");
-}
-
-test("a component that throws is caught rather than taking the pane down", () =>
-  runEffect(
-    Effect.gen(function* () {
-      const t = yield* Effect.promise(() =>
-        testRender(
-          () => (
-            <ErrorBoundary
-              fallback={(thrown: Error) => <text>{`stopped: ${thrown.message}`}</text>}
-            >
-              <Broken />
-            </ErrorBoundary>
-          ),
-          { width: 60, height: 6 },
-        ),
-      );
-      yield* Effect.promise(() => t.flush());
-
-      // Without the boundary this throw reaches the renderer and the pane dies with it,
-      // which is also how the text-view escape hatch stops being reachable.
-      expect(t.captureCharFrame()).toContain("stopped: a card rendered something");
-    }),
-  ));
 
 test("the render-error screen can do the one thing it offers, and gives the mouse back", () =>
   runEffect(

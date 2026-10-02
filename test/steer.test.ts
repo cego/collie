@@ -346,6 +346,17 @@ test("the pack names the runs and the target's own intent, and no pane text", ()
         }),
       );
 
+      // Something on screen to find, were the pack ever built from a pane read.
+      const onScreen = "PANE TEXT NOBODY SHOULD QUOTE";
+      yield* Effect.acquireRelease(
+        Effect.sync(() => {
+          Bun.env.FAKE_HERDR_PANE_TEXT = onScreen;
+        }),
+        () =>
+          Effect.sync(() => {
+            delete Bun.env.FAKE_HERDR_PANE_TEXT;
+          }),
+      );
       yield* steer(env, deps(stateDir), {
         text: "what is this run for?",
         target: run.id,
@@ -360,7 +371,7 @@ test("the pack names the runs and the target's own intent, and no pane text", ()
       expect(pack).toContain("Intent version: 1");
       // What an agent is doing reaches this as herdr's own status, and no further: there
       // is no pane read anywhere in the pack's construction.
-      expect(pack).not.toContain("paneRead");
+      expect(pack).not.toContain(onScreen);
     }),
   ));
 

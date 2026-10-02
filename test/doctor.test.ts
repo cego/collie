@@ -126,7 +126,6 @@ test("a healthy machine passes every check and says so", () =>
       const result = yield* report();
 
       if (!result.ok) throw new Error(result.error.message);
-      expect(result.ok).toBe(true);
       expect(result.ok && result.human).toContain("ready");
       const checks = reported(result);
       expect(checks.every((c) => c.ok)).toBe(true);
