@@ -47,6 +47,7 @@ import {
   type ActionResult,
   type SteerOutcome,
   type TaskView,
+  type NewsReceipt,
 } from "./board-model";
 import type { Action } from "./evaluator";
 import { REFUSED_INPUT, runDir, type Given, type OfferView, type RunView } from "./engine";
@@ -1070,7 +1071,7 @@ export const settleNewsFor = (
     readonly door: FrontDoor;
     readonly herd: string | null;
     readonly conversation: string;
-    readonly as: "read" | "sent" | "uncertain";
+    readonly as: typeof NewsReceipt.Type;
     readonly request: string;
   },
 ) =>

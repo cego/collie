@@ -65,7 +65,8 @@ is the conversation having taken it — only the second settles an item, and a s
 can account for stays `uncertain` for a human rather than being retried. **Superseded**
 is an item whose cause no longer holds — a halt resumed, a question answered, a finished
 Run whose work has a disposition — settled by the host for every conversation that has
-not read it; it drops out of batches and stays in the journal.
+not read it; it drops out of batches, an `uncertain` send of it included, and stays in the
+journal. A cause that holds again later is news again.
 
 **Collie tools** — The whole of what native chat may reach, over Collie's own shared
 operations. Most read — `collie_herd`, `collie_run`, `collie_workspaces`,

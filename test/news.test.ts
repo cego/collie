@@ -15,6 +15,7 @@ import {
   pending,
   read,
   settle,
+  retired,
   supersede,
   uncertain,
 } from "../src/news";
@@ -191,3 +192,29 @@ test("a cause masked by a more pressing one still holds", () => {
   const run = record({ id: "r1", asking: [{ name: "scope", prompt: "?", options: [] }] });
   expect(holding([run], new Map([["r1", "stay in src"]])).has("r1:drift:stay in src")).toBe(true);
 });
+
+test("a superseded cause that holds again is news again", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* append(file, { key: "r1:parked:x", run: "r1", text: "r1 parked." });
+      yield* supersede(file, () => false);
+      expect([...retired(yield* read(file))]).toEqual(["r1:parked:x"]);
+      yield* append(file, { key: "r1:parked:x", run: "r1", text: "r1 parked." });
+      expect([...retired(yield* read(file))]).toEqual([]);
+    }),
+  ));
+
+test("a receipt written before conversations had names is Native chat's", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* append(file, { key: "r1:ended", run: "r1", text: "r1 ended." });
+      const fs = yield* FileSystem.FileSystem;
+      yield* fs.writeFileString(
+        file,
+        `${yield* fs.readFileString(file)}{"kind":"read","key":"r1:ended","at":"2026-09-01T00:00:00Z"}\n`,
+      );
+      const lines = yield* read(file);
+      expect(pending(lines, NATIVE).items).toEqual([]);
+      expect(pending(lines, "flock@pc").items).toHaveLength(1);
+    }),
+  ));

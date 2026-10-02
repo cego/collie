@@ -435,6 +435,9 @@ const sideJobsLayer = (dir: string, panels: MrPanels) =>
  * The board, built here for every front door. Anything written under the state
  * directory, by this host or anyone else, is a reason to look again.
  */
+/** A Herd's key names one directory under the state directory, and nothing above it. */
+const isHerdName = (herd: string) => herd !== "." && herd !== ".." && /^[^/\\]+$/.test(herd);
+
 const frontDoorHandlers = (
   dir: string,
   installation: string,
@@ -469,6 +472,9 @@ const frontDoorHandlers = (
         return session === undefined ? env : { ...env, socketPath: session };
       };
       const trail = (runId: string) => runDir(env.stateDir, runId);
+      /** The Herd of the session the asker runs in, where it names none. */
+      const askersHerd = (client: { readonly id: number }) =>
+        herdOf(askerEnv(client).socketPath).pipe(Effect.catch(() => Effect.succeed(null)));
       /** An operation that is idempotent by itself, recorded the first time it does anything. */
       // ponytail: a host that dies between acting and recording leaves that one unrecorded.
       const fresh = <A extends { readonly fresh: boolean }, I extends Schema.Json, E>(
@@ -780,11 +786,9 @@ const frontDoorHandlers = (
               return outcomeOf(
                 err("invalid_input", "An action is not one of the kinds Collie takes."),
               );
-            if (herd !== null && (herd === "." || herd === ".." || !/^[^/\\]+$/.test(herd)))
+            if (herd !== null && !isHerdName(herd))
               return outcomeOf(err("invalid_input", `"${herd}" is not a Herd.`));
-            const key =
-              herd ??
-              (yield* herdOf(asker.socketPath).pipe(Effect.catch(() => Effect.succeed(null))));
+            const key = herd ?? (yield* askersHerd(client));
             if (key === null)
               return outcomeOf(err("invalid_state", "No Herd to keep the request in."));
             const actor = { origin: doorOf(client), requestId };
@@ -915,15 +919,11 @@ const frontDoorHandlers = (
         news: ({ herd, conversation, as, request }, { client }) =>
           plainly(
             Effect.gen(function* () {
-              if (herd !== null && (herd === "." || herd === ".." || !/^[^/\\]+$/.test(herd)))
+              if (herd !== null && !isHerdName(herd))
                 return yield* new HostRefused({
                   reason: `${REFUSED_INPUT}: "${herd}" is not a Herd`,
                 });
-              const key =
-                herd ??
-                (yield* herdOf(askerEnv(client).socketPath).pipe(
-                  Effect.catch(() => Effect.succeed(null)),
-                ));
+              const key = herd ?? (yield* askersHerd(client));
               if (key === null)
                 return yield* new HostRefused({
                   reason: "invalid_state: no Herd to read News for",

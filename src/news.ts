@@ -27,6 +27,7 @@
 // whose cause no longer holds is `superseded` for all of them, and kept.
 
 import { Effect, FileSystem, Path, Schema } from "effect";
+import { NewsReceipt } from "./board-model";
 import { appendJournal, readJournal } from "./journal";
 import { herdDir } from "./steering";
 import { nowIso } from "./time";
@@ -40,7 +41,7 @@ export const BATCH = 10;
 /** How many items the journal keeps. Old news nobody read is still not worth unbounded disk. */
 export const KEEP = 200;
 
-/** The Herd's Native chat, in its Home. A receipt written before conversations had names is its. */
+/** The Herd's Native chat, in its Home. */
 export const NATIVE = "native";
 
 const ItemSchema = Schema.Struct({
@@ -62,9 +63,9 @@ const LineSchema = Schema.Union([
    * kept rather than retried: an ambiguous delivery repeated is the same news twice.
    */
   Schema.Struct({
-    kind: Schema.Literals(["sent", "read", "uncertain"]),
+    kind: NewsReceipt,
     key: Schema.String,
-    /** Whose receipt: `NATIVE`, or a Flock conversation such as `flock@pc`. */
+    /** Whose receipt: `NATIVE`, or another conversation such as `flock@pc`. */
     conversation: Schema.String.pipe(Schema.withDecodingDefaultKey(Effect.succeed(NATIVE))),
     at: Schema.String,
     note: Schema.optionalKey(Schema.String),
@@ -134,6 +135,17 @@ function live(lines: ReadonlyArray<Line>): ReadonlyArray<Entry> {
   return [...entries.values()];
 }
 
+/**
+ * Keys whose last item was superseded: a cause that holds again under one of these is
+ * new news, whatever has been said before.
+ */
+export function retired(lines: ReadonlyArray<Line>): ReadonlySet<string> {
+  const alive = new Set(live(lines).map((entry) => entry.item.key));
+  return new Set(
+    lines.flatMap((line) => (line.kind === "superseded" && !alive.has(line.key) ? [line.key] : [])),
+  );
+}
+
 /** Items a send could not be accounted for, which stay a human's to look at. */
 export function uncertain(
   lines: ReadonlyArray<Line>,
@@ -165,7 +177,7 @@ export const append = Effect.fn("News.append")(function* (file: string, item: Om
 export const settle = Effect.fn("News.settle")(function* (
   file: string,
   key: string,
-  as: "sent" | "read" | "uncertain",
+  as: typeof NewsReceipt.Type,
   conversation: string,
   note?: string,
 ) {

@@ -670,6 +670,9 @@ export const FrontDoor = Schema.Literals([
 ]);
 export type FrontDoor = typeof FrontDoor.Type;
 
+/** What became of a News item in one conversation. */
+export const NewsReceipt = Schema.Literals(["read", "sent", "uncertain"]);
+
 /** A conversation's News, as the host handed it over: the newest items and how many it left. */
 export const NewsBatch = Schema.Struct({
   items: Schema.Array(
@@ -879,7 +882,7 @@ export const FrontDoorRpcs = RpcGroup.make(
       /** The Herd whose journal it is; the asker's own where null. */
       herd: Schema.NullOr(Schema.String),
       conversation: Schema.String,
-      as: Schema.Literals(["read", "sent", "uncertain"]),
+      as: NewsReceipt,
       request: Schema.String,
     },
     success: NewsBatch,
