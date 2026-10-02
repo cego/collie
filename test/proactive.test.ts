@@ -4,7 +4,8 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
 import { runEffect } from "./support/effect";
-import { eventsIn, readSaid, remember, type Event } from "../src/proactive";
+import { eventsIn, idleAgain, readSaid, remember, type Event } from "../src/proactive";
+import { task } from "./support/task";
 import {
   append as appendNews,
   newsPath,
@@ -197,3 +198,32 @@ test("a Run ready to release when it ends is said once as ready, never as ended"
       ]);
     }),
   ));
+
+test("a Reopened agent finishing what it was told is said once, and not while it works", () => {
+  const card = (status: string) =>
+    task({
+      run: "r1",
+      state: status === "working" ? "active" : "done",
+      reopened: { delivery: "d-1", agent: "builder", told: "merge and tag it", status },
+    });
+  const seen = new Set<string>();
+  const ended = [record({ id: "r1", state: "succeeded" })];
+  const said = (status: string) =>
+    eventsIn(ended, new Map(), new Map(), idleAgain([card(status)], seen)).filter((event) =>
+      event.key.includes(":reopened:"),
+    );
+
+  // Idle before anyone saw it work: nothing it was told has finished yet.
+  expect(said("idle")).toEqual([]);
+  expect(said("working")).toEqual([]);
+  expect(said("working")).toEqual([]);
+  expect(said("idle")).toEqual([
+    {
+      run: "r1",
+      key: "r1:reopened:d-1",
+      text: "Run r1 (Implement): builder has finished what it was told after the Run ended (“merge and tag it”). What came of it?",
+    },
+  ]);
+  // Once per Delivery: idle again is not finishing again.
+  expect(said("idle")).toEqual([]);
+});

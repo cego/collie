@@ -19,7 +19,7 @@ import { diffTargetOf, EXCLUSIVE_STRATEGIES, strategyMeaning } from "./strategie
 import { PROJECTS_ROOT_OPTION, projectsRoot } from "./projects";
 import { insideCheckout } from "./agent-start";
 import { placeableUnder, placedByUrl, routed, routerDeps } from "./route";
-import { buildBoard, readyRuns, type MrState, type TaskView } from "./board";
+import { buildBoard, readyRuns, type MrState, type Reopened, type TaskView } from "./board";
 import { settleMerges } from "./merges";
 import { nowIso } from "./time";
 import {
@@ -39,7 +39,7 @@ import { COMPACTION_OFF, validThreshold } from "./compaction";
 import { herdDir, herdOf, HerdrUnreachable } from "./steering";
 import { chatHarnessOf, ensureChatFor } from "./chat";
 import { append as appendNews, newsPath } from "./news";
-import { eventsIn, readSaid, remember } from "./proactive";
+import { eventsIn, idleAgain, readSaid, remember } from "./proactive";
 import {
   ensureHomeFor,
   homePath,
@@ -1014,6 +1014,8 @@ const sayWhatHappened = Effect.fn("Flows.sayWhatHappened")(function* (
   env: PluginEnv,
   runs: ReadonlyArray<RunFacts>,
   views: ReadonlyArray<TaskView>,
+  /** Reopened Runs whose agent has finished what it was told, by Run. */
+  done: ReadonlyMap<string, Reopened>,
 ) {
   if (!(yield* loadDefaults(env.userDir)).proactive) return;
   const key = yield* herdOf(env.socketPath).pipe(Effect.catch(() => Effect.succeed(null)));
@@ -1021,7 +1023,7 @@ const sayWhatHappened = Effect.fn("Flows.sayWhatHappened")(function* (
   const dir = yield* herdDir(env.stateDir, key);
   const said = yield* readSaid(dir);
   const file = yield* newsPath(env.stateDir, key);
-  for (const event of eventsIn(runs, yield* escalatedDrift(runs), readyRuns(views))) {
+  for (const event of eventsIn(runs, yield* escalatedDrift(runs), readyRuns(views), done)) {
     if (said.has(event.key)) continue;
     // Remembered only once it is in the journal. The journal deduplicates by unread key,
     // so a failed write costs a retry on the next tick — where remembering first would
@@ -1120,6 +1122,9 @@ export function appState(
    * first, and — the reason it is a flag and not an await — the board never waits for it.
    */
   let speaking = false;
+  /** Steers to Reopened Runs seen being worked on, and those since finished; the said journal keeps each to one item. */
+  const workedOn = new Set<string>();
+  const finishedTold = new Map<string, Reopened>();
 
   /** One row per Run: a Run on the local board is on the wide one too. */
   const dedupe = (rows: ReadonlyArray<{ id: string; dir: string }>) => [
@@ -1237,6 +1242,8 @@ export function appState(
           mrStates,
         });
     if (!reuse) yield* settleInBackground(tasksBuilt, yield* Clock.currentTimeMillis);
+    if (!reuse)
+      for (const [run, done] of idleAgain(tasksBuilt, workedOn)) finishedTold.set(run, done);
     // A meaningful change in what this read already looked at, said out loud. Never a
     // second scan and never a timer: the board recomputes this to draw it, and a
     // transition in it is the whole trigger. Best effort — a Herd nobody can talk to
@@ -1245,7 +1252,7 @@ export function appState(
     if (runs !== undefined && !speaking) {
       speaking = true;
       yield* Effect.forkDetach(
-        sayWhatHappened(env, runs, tasksBuilt).pipe(
+        sayWhatHappened(env, runs, tasksBuilt, new Map(finishedTold)).pipe(
           Effect.ignore,
           Effect.ensuring(
             Effect.sync(() => {

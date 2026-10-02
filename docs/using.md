@@ -452,7 +452,15 @@ runs in this repository, and how many other checks this host is running —
 min of a usual 20. 3 other checks are running.` With nothing to compare against it says
 only how long; over the usual it says `longer than the usual 20`. The drawer, `collie_run`,
 `collie_herd` and `collie run checks` say the same
-([ADR-0039](adr/0039-a-check-collie-runs-is-seen-while-it-runs.md)). **Waiting on you** is work that ended without landing, and that nobody has
+([ADR-0039](adr/0039-a-check-collie-runs-is-seen-while-it-runs.md)). A finished Run is
+**Reopened** when one of its agents took something you told it after the Run ended
+([ADR-0038](adr/0038-a-finished-run-still-takes-steering.md)): while herdr says that agent
+is working, its card is in Working with `Working on what you told builder: “merge and tag
+it”.`; while it is blocked, the card is in Needs you naming its pane; once it is idle, the
+card stands on its own facts again — Ready to release, Waiting on you or Finished — and
+chat is told once that it finished what it was told. Nothing records it: the delivery
+ledger says what was sent and when, herdr says what the agent is doing, the step glyphs
+still show the Workflow's steps as they ended, and `run show` still says `succeeded`. **Waiting on you** is work that ended without landing, and that nobody has
 asked you about: an implement that succeeded and whose merge request is open, a plan that
 is ready to implement, a Run that failed, was stopped or was abandoned with a branch or a
 merge request behind it and has neither been resumed nor disposed of. An implement whose

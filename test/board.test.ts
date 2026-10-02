@@ -34,6 +34,8 @@ import {
 import { checkSentence } from "../src/checks";
 import { readEnv } from "../src/env";
 import type { AgentInfo } from "../src/herdr";
+import type { Delivery } from "../src/steering";
+import { herdLines } from "../src/tools";
 import type { ProposalLine } from "../src/proposals";
 import type { AgentEntry } from "../src/registry";
 import type { RunFacts } from "../src/runs";
@@ -50,6 +52,7 @@ function facts(over: Partial<Sentence> = {}): Sentence {
     step: { id: "build", round: null },
     verb: null,
     checking: null,
+    reopened: null,
     silent: null,
     wave: null,
     failure: null,
@@ -231,6 +234,7 @@ function task(over: Partial<TaskView> = {}): TaskView {
     checks: null,
     ready: false,
     check: null,
+    reopened: null,
     planReady: false,
     offer: null,
     run: "r1",
@@ -1449,3 +1453,96 @@ test(
     ),
   60_000,
 );
+
+// A finished Run Reopened by a steer to its live agent (ADR-0038 D5): derived from the
+// ledger and herdr's word on the agent, never stored.
+
+const steerAt = (at: string, state: Delivery["state"] = "submitted"): Delivery => ({
+  id: `d-${at}`,
+  at,
+  run: "r1",
+  incarnation: "term-builder",
+  agent: "builder",
+  causal_key: "steer:req-1",
+  request_id: "req-1",
+  cause: { kind: "steer", ref: "req-1" },
+  mode: "now",
+  text_hash: "h",
+  intent_version: 1,
+  attempt: 1,
+  state,
+});
+
+/** A succeeded Run whose builder was told "merge and tag it", with herdr saying `status`. */
+const reopened = Effect.fn("board.reopened")(function* (
+  status: AgentInfo["status"],
+  steeredAt = "2026-09-14T10:02:00Z",
+  over: Partial<Parameters<typeof buildBoard>[0]> = {},
+) {
+  const { dir, env } = yield* scratch();
+  const run = yield* madeRun(dir, {
+    task: "task-1",
+    state: "succeeded",
+    mr: "https://github.com/cego/collie/pull/30",
+    finished: "2026-09-14T10:00:00Z",
+  });
+  const fs = yield* FileSystem.FileSystem;
+  yield* fs.makeDirectory(`${dir}/agents/${run.id}`, { recursive: true });
+  yield* fs.writeFileString(
+    `${dir}/agents/${run.id}/agents.log`,
+    'builder: told "merge and tag it"\n',
+  );
+  const views = yield* board(env, [run], {
+    alive: [agent("builder", status)],
+    registered: [registered("builder", run.id)],
+    deliveries: [steerAt(steeredAt)],
+    ...over,
+  });
+  return views[0]!;
+});
+
+test("a succeeded Run whose agent works on what it was told after it ended is Working", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const card = yield* reopened("working");
+      expect(sectionOf(card)).toBe("working");
+      expect(card.sentence).toBe("Working on what you told builder: “merge and tag it”.");
+      // The Workflow's steps are as they ended.
+      expect(card.steps).toEqual([{ name: "implement", state: "done" }]);
+      expect(card.reopened).toMatchObject({ agent: "builder", status: "working" });
+      // Chat reads the same card, in the same section.
+      const said = herdLines([card], Date.parse("2026-09-14T10:05:00Z"));
+      expect(said).toContain("## Working · 1");
+      expect(said).toContain(card.sentence);
+    }),
+  ));
+
+test("a Reopened Run whose agent is blocked needs you, in that agent's pane", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const card = yield* reopened("blocked");
+      expect(sectionOf(card)).toBe("needs-you");
+      expect(card.sentence).toBe("Waiting for you in builder's pane.");
+    }),
+  ));
+
+test("a Reopened Run whose agent is idle again stands on its own facts", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const card = yield* reopened("idle", "2026-09-14T10:02:00Z", {
+        forge: new Map([["cego/collie#30", { checks: { state: "passed" }, head: "abc1234def" }]]),
+      });
+      expect(sectionOf(card)).toBe("waiting");
+      expect(card.ready).toBe(true);
+      expect(card.sentence).toStartWith("Ready to release: cego/collie#30");
+    }),
+  ));
+
+test("a steer sent before the Run finished does not reopen it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const card = yield* reopened("working", "2026-09-14T09:58:00Z");
+      expect(card.reopened).toBeNull();
+      expect(sectionOf(card)).toBe("waiting");
+    }),
+  ));

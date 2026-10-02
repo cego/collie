@@ -34,6 +34,7 @@ export function task(over: Partial<TaskView> = {}): TaskView {
     checks: null,
     ready: false,
     check: null,
+    reopened: null,
     planReady: false,
     offer: null,
     run: "r1",

@@ -27,6 +27,8 @@ import { filed, standingOf } from "./standing";
 import { offersOf } from "./lifecycle";
 import { shell } from "./mr";
 import type { OfferView } from "./engine";
+import { everyDelivery, type Delivery } from "./steering";
+import { readCards } from "./cards";
 
 /** How a card reads, and the order Tasks take inside a section. */
 export type TaskState =
@@ -184,6 +186,8 @@ export interface TaskView {
   ready: boolean;
   /** The check Collie is running for the leading Run now, or null for none. */
   check: RunningCheck | null;
+  /** A finished Run whose agent was told something after it ended, or null (ADR-0038 D5). */
+  reopened: Reopened | null;
   /** A plan that finished and nobody has implemented: its card's first action starts that. */
   planReady: boolean;
   /** That action: the Run's primary offer as its module declares it now, or null for none. */
@@ -213,6 +217,72 @@ export type Checks =
   | { readonly state: "failed"; readonly name: string; readonly at: string }
   | { readonly state: "running" }
   | { readonly state: "unchecked" };
+
+/** A steer a finished Run's agent took after the Run ended, and what herdr says it is doing. */
+export interface Reopened {
+  readonly delivery: string;
+  readonly agent: string;
+  /** The first line of what it was told, as the Run's log recorded it, or null for none. */
+  readonly told: string | null;
+  readonly status: string;
+}
+
+/** Delivery states that say herdr took the text: a steer in one of these reached the agent. */
+const SENT: ReadonlySet<string> = new Set(["submitted", "acknowledged", "verified"]);
+
+/** When a Run ended: its own record, else the final card its finish wrote. Null for neither. */
+const finishedAt = Effect.fn("Board.finishedAt")(function* (run: RunFacts) {
+  if (run.finished !== null) return Date.parse(run.finished);
+  const cards = yield* readCards(run.dir).pipe(Effect.orElseSucceed(() => []));
+  const final = cards.findLast((card) => card.kind === "final");
+  return final === undefined ? null : Date.parse(final.at);
+});
+
+/** The first line the Run's log recorded telling `agent` something, the newest such. */
+const toldIn = Effect.fn("Board.toldIn")(function* (
+  stateDir: string,
+  runId: string,
+  agent: string,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const log = yield* fs
+    .readFileString(`${stateDir}/agents/${runId}/agents.log`)
+    .pipe(Effect.orElseSucceed(() => ""));
+  const prefix = `${agent}: told "`;
+  const line = log.split("\n").findLast((one) => one.startsWith(prefix) && one.endsWith('"'));
+  return line === undefined ? null : line.slice(prefix.length, -1);
+});
+
+/**
+ * A finished Run is Reopened by a steer Delivery to one of its agents, dated after it
+ * ended and taken by herdr. Derived, never stored: the ledger says what was sent and when.
+ */
+const reopenedOf = Effect.fn("Board.reopenedOf")(function* (
+  stateDir: string,
+  run: RunFacts,
+  deliveries: ReadonlyArray<Delivery>,
+  live: ReadonlyMap<string, AgentInfo>,
+) {
+  const ended = yield* finishedAt(run);
+  if (ended === null) return null;
+  const steer = deliveries
+    .filter(
+      (one) =>
+        one.run === run.id &&
+        one.cause.kind === "steer" &&
+        SENT.has(one.state) &&
+        Date.parse(one.at) > ended,
+    )
+    .sort((a, b) => a.at.localeCompare(b.at))
+    .at(-1);
+  if (steer === undefined) return null;
+  return {
+    delivery: steer.id,
+    agent: steer.agent,
+    told: yield* toldIn(stateDir, run.id, steer.agent),
+    status: live.get(steer.agent)?.status ?? "gone",
+  } satisfies Reopened;
+});
 
 /** What the forge said of a merge request's own checks: a pipeline or a check rollup. */
 export type ForgeChecks =
@@ -249,6 +319,8 @@ export interface Sentence {
   verb: string | null;
   /** What a check Collie is running says about itself, which outranks the step. */
   checking: string | null;
+  /** A Reopened Run's agent at work on what it was told after the Run ended. */
+  reopened: Pick<Reopened, "agent" | "told"> | null;
   /** How long it has written nothing, where it has gone quiet. */
   silent: string | null;
   /** How long ago its Driver died, for a Run nothing drives and no agent works on. */
@@ -466,6 +538,10 @@ function stalledSentence(facts: Sentence): string {
 
 function workingSentence(facts: Sentence): string {
   if (facts.checking !== null) return facts.checking;
+  if (facts.reopened !== null)
+    return facts.reopened.told === null
+      ? `Working on what you told ${facts.reopened.agent}.`
+      : `Working on what you told ${facts.reopened.agent}: “${facts.reopened.told}”.`;
   if (facts.resumed !== null) return `Resumed with “${facts.resumed}”.`;
   if (facts.wave !== null) {
     const wave = waveSentence(facts.wave);
@@ -853,6 +929,8 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
   mrStates?: ReadonlyMap<string, MrState>;
   /** What the forge last said about each merge request's checks, by its label. */
   forge?: ReadonlyMap<string, ForgeFacts>;
+  /** Every steer and step Delivery the ledgers hold; read from them where not given. */
+  deliveries?: ReadonlyArray<Delivery>;
   /** What a Run offers now; the host is asked where this is not given. */
   offers?: (runId: string) => Effect.Effect<ReadonlyArray<OfferView>>;
 }) {
@@ -869,6 +947,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
   const forge = opts.forge ?? (yield* readForge(stateDir));
   const live = new Map((opts.alive ?? []).map((agent) => [agent.name, agent]));
   const markers = yield* markersOf(all);
+  const deliveries = opts.deliveries ?? (yield* everyDelivery(stateDir));
   const offersOfRun =
     opts.offers ??
     ((runId: string) =>
@@ -930,7 +1009,14 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
     const stalled =
       (blocked ? `${blocked.name}'s pane` : null) ??
       (leader.state === "waiting" && leader.asking.length === 0 ? "its pane" : null);
-    const state = stateOf(status, silent !== null, decision, stalled !== null);
+    const reopened = ended(leader) ? yield* reopenedOf(stateDir, leader, deliveries, live) : null;
+    // A Reopened Run is the work its agent is doing now, while it does it; then its facts.
+    const state =
+      decision === null && reopened?.status === "working"
+        ? "active"
+        : decision === null && reopened?.status === "blocked"
+          ? "blocked"
+          : stateOf(status, silent !== null, decision, stalled !== null);
 
     const holding = runs.some((run) => run.held);
     const settledNow = state === "done" || state === "failed" || state === "stopped";
@@ -1007,6 +1093,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
         // Never the pane's title: a terminal names its harness or file, not the work.
         verb: doing?.verb ?? null,
         checking: check?.sentence ?? null,
+        reopened: state === "active" ? reopened : null,
         silent,
         wave: null,
         failure,
@@ -1050,6 +1137,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
       checks,
       ready: checks?.state === "passed",
       check,
+      reopened,
       planReady,
       // Only a ready plan's first action is an offer; asking every card would ask every refresh.
       offer: planReady ? primaryOf(yield* offersOfRun(leader.id)) : null,

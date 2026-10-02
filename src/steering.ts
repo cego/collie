@@ -201,6 +201,16 @@ export const deliveriesOf = Effect.fn("Steering.deliveriesOf")(function* (
   return found;
 });
 
+/** Every delivery this state directory's ledgers hold, newest state each, read once for a board. */
+export const everyDelivery = Effect.fn("Steering.everyDelivery")(function* (stateDir: string) {
+  const found: Delivery[] = [];
+  for (const file of yield* ledgerFiles(stateDir))
+    found.push(
+      ...newestById(yield* readLedger(file).pipe(Effect.orElseSucceed(() => []))).values(),
+    );
+  return found;
+});
+
 /**
  * The delivery, if any, that stops new work with this causal key going out: one still in
  * flight, or one nobody can say the fate of. An `unknown` blocks until a human says what
