@@ -251,7 +251,9 @@ test(
           const runs = yield* client.runs({ task: null }).pipe(Effect.orDie);
           expect(runs.map((row) => row.runId)).toEqual([runId]);
 
-          yield* client.control({ runId, control: "stop", set: true }).pipe(Effect.orDie);
+          yield* client
+            .control({ runId, control: "stop", set: true, request: "stop-1" })
+            .pipe(Effect.orDie);
           expect((yield* client.offers({ runId }).pipe(Effect.orDie))[0]?.unavailable).toBeNull();
           const carried = yield* client
             .invoke({ runId, offer: "carry-on", input: {}, request: "act-2" })
