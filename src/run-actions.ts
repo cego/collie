@@ -426,7 +426,7 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
     ),
   );
   // Unattended: nobody sees a login's URL from here, so a login is left as a step to do.
-  registerExecutor("onboard", (action) =>
+  registerExecutor("onboard", (action, _by, env) =>
     onboard(
       env,
       {
