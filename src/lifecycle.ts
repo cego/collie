@@ -459,8 +459,13 @@ export const followRunDetail = Effect.fn("Lifecycle.followRunDetail")(function* 
     readonly fiber: Fiber.Fiber<unknown>;
     latest: RunDetail | null;
   } | null = null;
-  return (key: DetailKey): Effect.Effect<RunDetail | null> =>
+  return (key: DetailKey | null): Effect.Effect<RunDetail | null> =>
     Effect.gen(function* () {
+      if (key === null) {
+        if (open !== null) yield* Fiber.interrupt(open.fiber);
+        open = null;
+        return null;
+      }
       const showingKey = `${key.runId}|${key.tail}|${key.pages}`;
       if (open === null || open.key !== showingKey || key.refreshMr) {
         if (open !== null) yield* Fiber.interrupt(open.fiber);

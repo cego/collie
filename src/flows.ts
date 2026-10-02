@@ -132,8 +132,8 @@ export interface ControlSession extends BoardSession {
   runsOf?: RunsOf;
   /** Where the board's Tasks come from: one read of the host's board, unless followed. */
   tasksOf?: () => Effect.Effect<BoardRead>;
-  /** Where the drawer's details come from: one read of the host's, unless followed. */
-  detailOf?: (key: DetailKey) => Effect.Effect<RunDetail | null>;
+  /** Where the drawer's details come from: one read of the host's, unless followed; null closes it. */
+  detailOf?: (key: DetailKey | null) => Effect.Effect<RunDetail | null>;
   /** Where the defaults live. */
   userDir: string;
 }
@@ -1112,7 +1112,7 @@ export function appState(
             pages: focus.reviewPages,
             refreshMr: again.forceMr,
           })
-        : null,
+        : yield* session.detailOf?.(null) ?? Effect.succeed(null),
     } satisfies AppState;
     last = { focus, state };
     return state;
