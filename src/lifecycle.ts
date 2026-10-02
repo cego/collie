@@ -166,7 +166,9 @@ const asks = <A>(
   Effect.scoped(
     connect(env.stateDir).pipe(
       Effect.tap((client) =>
-        door === undefined ? Effect.void : client.declare({ frontDoor: door }),
+        door === undefined
+          ? Effect.void
+          : client.declare({ frontDoor: door, session: env.socketPath }),
       ),
       Effect.flatMap(question),
       Effect.map((value) => ({ ok: true as const, value })),

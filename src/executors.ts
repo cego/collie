@@ -9,6 +9,7 @@ import type { BunServices } from "@effect/platform-bun/BunServices";
 import type { Effect } from "effect";
 import type { Action, ActionKind } from "./evaluator";
 import type { Actor } from "./proposals";
+import type { PluginEnv } from "./env";
 
 /** What running one action reports back. A failure is a result here, never a throw. */
 export type ExecutionResult =
@@ -23,12 +24,15 @@ export type Executor<K extends ActionKind> = (
    * says nothing about who consented.
    */
   by: Actor,
+  /** The asker's, so a workspace or pane is looked up in the herdr session it is in. */
+  env: PluginEnv,
 ) => Effect.Effect<ExecutionResult, never, BunServices>;
 
 /** What the registry holds: an action of any kind, narrowed by the kind it was filed under. */
 type AnyExecutor = (
   action: Action,
   by: Actor,
+  env: PluginEnv,
 ) => Effect.Effect<ExecutionResult, never, BunServices>;
 
 const registry = new Map<ActionKind, AnyExecutor>();
@@ -40,10 +44,10 @@ const registry = new Map<ActionKind, AnyExecutor>();
  */
 export function registerExecutor<K extends ActionKind>(kind: K, run: Executor<K>): void {
   if (registry.has(kind)) throw new Error(`two executors registered for "${kind}"`);
-  registry.set(kind, (action, by) => {
+  registry.set(kind, (action, by, env) => {
     // SAFETY: `executorFor` is only ever asked for the kind an action carries, so the
     // action reaching this executor is the one variant it was registered for.
-    return run(action as Extract<Action, { kind: K }>, by);
+    return run(action as Extract<Action, { kind: K }>, by, env);
   });
 }
 
@@ -56,12 +60,7 @@ export function registeredKinds(): ActionKind[] {
   return [...registry.keys()].sort();
 }
 
-/**
- * Empty it. Registration is once per process and the first caller's environment is the
- * one every executor closes over, which is exactly right for a front door — a process is
- * one front door — and exactly wrong for a test file that shares a process with another
- * one. A test that registers puts this back so the next file registers its own.
- */
+/** Empty it, so a test that registers its own executors leaves none for the next file. */
 export function resetExecutors(): void {
   registry.clear();
 }

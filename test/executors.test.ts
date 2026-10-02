@@ -70,15 +70,18 @@ const defaultsOfW1 = Effect.fn("test.defaultsOfW1")(function* () {
   );
 });
 
-const carry = (action: Parameters<NonNullable<ReturnType<typeof executorFor>>>[0]) =>
-  Effect.suspend(() => executorFor(action.kind)!(action, { origin: "cli-tty", requestId: "h-1" }));
+const carry = (
+  action: Parameters<NonNullable<ReturnType<typeof executorFor>>>[0],
+  asker: PluginEnv = env,
+) =>
+  Effect.suspend(() =>
+    executorFor(action.kind)!(action, { origin: "cli-tty", requestId: "h-1" }, asker),
+  );
 
 beforeEach(() =>
   runEffect(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      // Executors register once per process and close over the registering caller's
-      // state directory, so the registry is emptied with it.
       resetExecutors();
       stateDir = yield* fs.makeTempDirectory({ prefix: "hw-executors-" });
       // The baseline layer is the repository's own definitions, so there is a Workflow to
@@ -99,7 +102,7 @@ beforeEach(() =>
         COLLIE_CWD: stateDir,
         FAKE_HERDR_LOG: logPath,
       });
-      yield* registerRunExecutors(env);
+      yield* registerRunExecutors();
     }),
   ),
 );
@@ -135,6 +138,24 @@ test("a default constraint is written where the workspace's own Runs read it", (
       const written = yield* readDefaults(yield* defaultsOfW1());
       expect(written?.constraints.map((c) => c.text)).toEqual(["no force pushes"]);
       expect(written?.constraints.at(0)?.source).toBe("workspace-default");
+    }),
+  ));
+
+test("a default lands in the asker's herdr session, not the one the executors were registered in", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const other = `${stateDir}/other.sock`;
+      const done = yield* carry(
+        { kind: "update_defaults", change: "add-constraint", workspace: "w1", text: "no rebase" },
+        { ...env, socketPath: other },
+      );
+      expect(done.state).toBe("applied");
+      const theirs = yield* defaultsPath(
+        stateDir,
+        scopeKey({ session: other, workspaceId: "w1", cwd: stateDir }),
+      );
+      expect((yield* readDefaults(theirs))?.constraints.map((c) => c.text)).toEqual(["no rebase"]);
+      expect(yield* readDefaults(yield* defaultsOfW1())).toBeNull();
     }),
   ));
 
@@ -265,9 +286,7 @@ test("an upgrade that cannot run reports a failure rather than taking the confir
       // Its own plugin root, empty: no checkout to pull and no `prepare.sh` to run, so
       // this asks nothing of the network and of nobody's repository. A confirmation
       // carrying out a sequence has to be told the step failed, not die inside it.
-      resetExecutors();
-      yield* registerRunExecutors({ ...env, pluginRoot: stateDir });
-      const done = yield* carry({ kind: "upgrade" });
+      const done = yield* carry({ kind: "upgrade" }, { ...env, pluginRoot: stateDir });
       expect(done.state).toBe("failed");
       expect(done.note).toContain(stateDir);
     }),

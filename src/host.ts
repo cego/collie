@@ -445,6 +445,13 @@ const frontDoorHandlers = (
       // ponytail: kept for the host's life; evict by age if a host lives for months.
       const plans = new Map<string, PlanPanel | null>();
       const doorOf = (client: { readonly id: number }) => declared.get(client.id) ?? "cli";
+      // ponytail: one entry per connection, never removed, as `declared`.
+      const sessions = new Map<number, string>();
+      /** The serving env in the herdr session the asking channel declared, where it named one. */
+      const askerEnv = (client: { readonly id: number }) => {
+        const session = sessions.get(client.id);
+        return session === undefined ? env : { ...env, socketPath: session };
+      };
       const trail = (runId: string) => runDir(env.stateDir, runId);
       /** An operation that is idempotent by itself, recorded the first time it does anything. */
       // ponytail: a host that dies between acting and recording leaves that one unrecorded.
@@ -617,13 +624,14 @@ const frontDoorHandlers = (
         { concurrency: "unbounded" },
       );
       return FrontDoorRpcs.of({
-        declare: ({ frontDoor }, { client }) => {
+        declare: ({ frontDoor, session }, { client }) => {
           const already = declared.get(client.id);
           if (already !== undefined && already !== frontDoor) {
             return Effect.fail(new HostRefused({ reason: `this channel is already ${already}` }));
           }
           return Effect.sync(() => {
             declared.set(client.id, frontDoor);
+            if (session !== undefined && session !== null) sessions.set(client.id, session);
           });
         },
         start: (
@@ -704,7 +712,10 @@ const frontDoorHandlers = (
         confirm: ({ proposal, hash, request }, { client }) =>
           answeredOnce(proposal, hash, request, "confirmed", (file, lines) =>
             lines === null
-              ? carryOut(env, proposal, hash, { origin: doorOf(client), requestId: request })
+              ? carryOut(askerEnv(client), proposal, hash, {
+                  origin: doorOf(client),
+                  requestId: request,
+                })
               : Effect.succeed({ proposal, results: stepResults(lines, proposal) }),
           ),
         decline: ({ proposal, hash, request }, { client }) =>
@@ -723,6 +734,7 @@ const frontDoorHandlers = (
           ),
         propose: ({ herd, interpretation, actions, request: requestId }, { client }) =>
           Effect.gen(function* () {
+            const asker = askerEnv(client);
             const decoded = Schema.decodeUnknownOption(Schema.Array(ActionSchema))(actions);
             if (Option.isNone(decoded))
               return outcomeOf(
@@ -730,7 +742,7 @@ const frontDoorHandlers = (
               );
             const key =
               herd ??
-              (yield* herdOf(env.socketPath).pipe(Effect.catch(() => Effect.succeed(null))));
+              (yield* herdOf(asker.socketPath).pipe(Effect.catch(() => Effect.succeed(null))));
             if (key === null)
               return outcomeOf(err("invalid_state", "No Herd to keep the request in."));
             const actor = { origin: doorOf(client), requestId };
@@ -744,7 +756,7 @@ const frontDoorHandlers = (
                 result: SteerOutcome,
               },
               // A refusal is not kept against its request, so it can be asked again corrected.
-              request(env, key, { interpretation, actions: decoded.value, actor }).pipe(
+              request(asker, key, { interpretation, actions: decoded.value, actor }).pipe(
                 Effect.flatMap((result) =>
                   !result.ok && REJECTED.includes(result.error.code)
                     ? Effect.fail(new SteerUnanswered({ outcome: outcomeOf(result) }))
@@ -784,7 +796,10 @@ const frontDoorHandlers = (
                         reason: `${REFUSED_INPUT}: ${[...new Set(proposed.map((a) => a.kind))].join(", ")} is carried out through propose, so it is on the record as asked for`,
                       }),
                     )
-                  : carryOutAsked(env, decoded, { origin: doorOf(client), requestId: request });
+                  : carryOutAsked(askerEnv(client), decoded, {
+                      origin: doorOf(client),
+                      requestId: request,
+                    });
               }),
             ),
           ),

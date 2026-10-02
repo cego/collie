@@ -99,7 +99,7 @@ export function followUpField(drawn: Schema.Json | null): { field: string } | { 
  * Every action kind this build can carry out, against the host that owns the work.
  * Called once per process by whichever front door is about to look an executor up.
  */
-export const registerRunExecutors = Effect.fn("runActions.register")(function* (env: PluginEnv) {
+export const registerRunExecutors = Effect.fn("runActions.register")(function* () {
   // Once per process. A front door calls this before it looks an executor up, and two
   // calls in one process would be the same module claiming an action kind twice.
   if (registeredKinds().length > 0) return;
@@ -113,6 +113,7 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
     );
 
   const control = (
+    env: PluginEnv,
     by: Actor,
     runId: string,
     which: "hold" | "stop",
@@ -129,11 +130,11 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
         reason,
       }),
     );
-  registerExecutor("stop", (action, by) => control(by, action.run, "stop", true));
-  registerExecutor("resume", (action, by) =>
+  registerExecutor("stop", (action, by, env) => control(env, by, action.run, "stop", true));
+  registerExecutor("resume", (action, by, env) =>
     carry(resumeRun(env, { door: by.origin, runId: action.run, request: by.requestId })),
   );
-  registerExecutor("answer", (action, by) =>
+  registerExecutor("answer", (action, by, env) =>
     carry(
       Effect.gen(function* () {
         return yield* answerRun(env, {
@@ -148,12 +149,14 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
       }),
     ),
   );
-  registerExecutor("hold", (action, by) => control(by, action.run, "hold", true, action.reason));
-  registerExecutor("release", (action, by) => control(by, action.run, "hold", false));
-  registerExecutor("clear_override", (action, by) =>
+  registerExecutor("hold", (action, by, env) =>
+    control(env, by, action.run, "hold", true, action.reason),
+  );
+  registerExecutor("release", (action, by, env) => control(env, by, action.run, "hold", false));
+  registerExecutor("clear_override", (action, by, env) =>
     carry(clearOverride(env.stateDir, new Herdr(env), action.run, action.agent, actorName(by))),
   );
-  registerExecutor("deliver", (action, by) =>
+  registerExecutor("deliver", (action, by, env) =>
     carry(
       Effect.gen(function* () {
         return yield* steerRun(env, {
@@ -167,13 +170,13 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
       }),
     ),
   );
-  registerExecutor("navigate", (action) =>
+  registerExecutor("navigate", (action, _by, env) =>
     Effect.sync(() => {
       const where = [action.run, action.agent].filter((part) => part !== undefined).join(" · ");
       return { state: "applied" as const, note: where };
     }),
   );
-  registerExecutor("update_intent", (action, by) =>
+  registerExecutor("update_intent", (action, by, env) =>
     Effect.gen(function* () {
       const dir = runDir(env.stateDir, action.run);
       // The version check and the write under one lock: read outside it, two
@@ -225,7 +228,7 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
   );
   // Through the same host grant as `run intent verification`, and the same Intent amendment,
   // so what `intent show` lists is what the gate will run.
-  registerExecutor("set_verification", (action, by) =>
+  registerExecutor("set_verification", (action, by, env) =>
     Effect.gen(function* () {
       const command = action.command ?? null;
       const granted = yield* grantRun(env, {
@@ -264,7 +267,7 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
     }).pipe(Effect.catch((cause) => Effect.succeed(failed(String(cause))))),
   );
   // A finished Run is the usual one: its checks were granted while it ran.
-  registerExecutor("remember_verification", (action) =>
+  registerExecutor("remember_verification", (action, _by, env) =>
     Effect.gen(function* () {
       const run = yield* findRun(env, action.run);
       if (run === null) return failed(`no run "${action.run}"`);
@@ -278,7 +281,7 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
         : failed(remembered.error.message);
     }).pipe(Effect.catch((cause) => Effect.succeed(failed(String(cause))))),
   );
-  registerExecutor("followup", (action, by) =>
+  registerExecutor("followup", (action, by, env) =>
     carry(
       followUpRun(env, {
         door: by.origin,
@@ -291,7 +294,7 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
   // Through the same door `run start` takes, so a confirmed proposal and a typed command
   // settle Inputs the same way. Nothing is inferred: the action names its checkout and
   // every Input, and a gap is refused with what would fill it (ADR-0033).
-  registerExecutor("start", (action, by) =>
+  registerExecutor("start", (action, by, env) =>
     Effect.gen(function* () {
       const atRoot = action.workspace?.trim() === PROJECTS_ROOT_OPTION;
       const where = atRoot ? null : yield* workspaceNamed(env, action.workspace);
@@ -325,7 +328,7 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
         : failed(started.error.message);
     }).pipe(Effect.catch((cause) => Effect.succeed(failed(String(cause))))),
   );
-  registerExecutor("update_defaults", (action) =>
+  registerExecutor("update_defaults", (action, _by, env) =>
     Effect.gen(function* () {
       // The named workspace's scope, never this process's. A Run reads its defaults under
       // the workspace it was started in; the board confirming a proposal is in the Home,
@@ -369,7 +372,7 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
   );
   // A persona is Markdown and is forked by copying it. A workflow is a module, and
   // `collie workflow fork` writes one that imports what it keeps — which is not this.
-  registerExecutor("fork_definition", (action) =>
+  registerExecutor("fork_definition", (action, _by, env) =>
     Effect.gen(function* () {
       if (action.what !== "persona")
         return failed("a workflow is forked with `collie workflow fork`, which writes a module");
@@ -387,7 +390,7 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
         : failed(result.message);
     }).pipe(Effect.catch((cause) => Effect.succeed(failed(String(cause))))),
   );
-  registerExecutor("home_cleanup", () =>
+  registerExecutor("home_cleanup", (_action, _by, env) =>
     Effect.gen(function* () {
       const herdr = new Herdr(env);
       const panes = yield* herdr.paneList();
@@ -414,7 +417,7 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
       };
     }).pipe(Effect.catch((cause) => Effect.succeed(failed(String(cause))))),
   );
-  registerExecutor("upgrade", () =>
+  registerExecutor("upgrade", (_action, _by, env) =>
     upgrade(env).pipe(
       Effect.map(settled),
       Effect.catch((cause) => Effect.succeed(failed(String(cause)))),
@@ -450,7 +453,7 @@ export const carryOut = Effect.fn("runActions.carryOut")(function* (
   // The operations register what they can carry out; without this the registry is empty
   // and every action is refused as `executor_missing`, which would be a lie about this
   // build rather than a fact about it.
-  yield* registerRunExecutors(env);
+  yield* registerRunExecutors();
   const file = yield* journalOf(env.stateDir, proposalId);
   if (file === null)
     return yield* new ProposalRefused({
@@ -536,6 +539,7 @@ export const carryOut = Effect.fn("runActions.carryOut")(function* (
     const outcome = yield* executor(
       action,
       stepOf(actor, ownRequest ? index : `${proposalId}:${index}`),
+      env,
     );
     yield* settle(index, outcome.state, outcome.note);
     if (outcome.state === "failed" && "run" in action) failedRuns.add(action.run);
@@ -578,7 +582,7 @@ export const carryOutAsked = Effect.fn("runActions.carryOutAsked")(function* (
   actions: ReadonlyArray<Action>,
   actor: Actor,
 ) {
-  yield* registerRunExecutors(env);
+  yield* registerRunExecutors();
   const results: Array<{ kind: string; state: string; note: string }> = [];
   for (const [index, action] of actions.entries()) {
     const executor = executorFor(action.kind);
@@ -591,7 +595,7 @@ export const carryOutAsked = Effect.fn("runActions.carryOutAsked")(function* (
       results.push({ kind: action.kind, state: "skipped", note: refusal });
       continue;
     }
-    const outcome = yield* executor(action, stepOf(actor, index));
+    const outcome = yield* executor(action, stepOf(actor, index), env);
     results.push({ kind: action.kind, state: outcome.state, note: outcome.note ?? "" });
     // What follows a failure was asked for on the assumption that it did not happen.
     if (outcome.state === "failed") break;

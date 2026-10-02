@@ -616,7 +616,14 @@ export type FrontDoor = typeof FrontDoor.Type;
 export const FrontDoorRpcs = RpcGroup.make(
   Rpc.make("board", { success: BoardMessage, stream: true }),
   /** Once per channel, for good; a channel that never declares is stamped `cli`, never a human. */
-  Rpc.make("declare", { payload: { frontDoor: FrontDoor }, error: HostRefused }),
+  Rpc.make("declare", {
+    payload: {
+      frontDoor: FrontDoor,
+      /** The herdr session socket it runs in, where what it asks names workspaces and panes. */
+      session: Schema.optionalKey(Schema.NullOr(Schema.String)),
+    },
+    error: HostRefused,
+  }),
   Rpc.make("start", {
     payload: {
       project: Schema.String,
