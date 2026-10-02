@@ -39,8 +39,10 @@ reopens into somebody else's.
 reopening the Home reopens only a pane that has actually gone — so a divider a human
 dragged stays where they put it, and a lost chat pane does not cost them the board.
 
-**One contract, three ways in.** `src/tools.ts` is the whole of what chat may ask:
-bounded, Herd-wide, and built from the same shared operations the board draws itself from.
+**One contract, three ways in.** `src/tools.ts` is the whole of what chat may ask: one
+Effect `Toolkit`, `CollieTools`, whose tools state their Effect Schema parameters, that
+they answer failures as sentences (`failureMode: "return"`) and that they need no approval.
+It is bounded, Herd-wide, and built from the same shared operations the board draws itself from.
 Five of its tools read; `collie_installation` also reads, and says it is not read-only
 because the installation checks fetch this checkout's refs. No second interpretation: the
 native agent expressed the request structurally, so nothing pays a model to re-read it.

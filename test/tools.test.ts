@@ -11,7 +11,7 @@ import { readIntent } from "../src/intent";
 import { runView } from "../src/lifecycle";
 import { listRuns } from "../src/runs";
 import { latest, readDispositions } from "../src/disposition";
-import { TOOLS, toolNamed } from "../src/tools";
+import { CollieTools, TOOLS, toolNamed } from "../src/tools";
 import { mutation } from "../src/envelope";
 import {
   append as appendNews,
@@ -99,6 +99,15 @@ test("the tools are the whole of the model's reach, and only one of them asks fo
   for (const kind of ["stop", "resume", "answer", "confirm", "decline", "disposition"])
     expect(does).toContain(`"${kind}"`);
   expect(does).not.toContain('"shell"');
+});
+
+test("the tools are one Toolkit, each saying how it fails and that it needs no approval", () => {
+  // The Flock chat serves the same Toolkit, so what a model may do is decided here once.
+  expect(Object.keys(CollieTools.tools).sort()).toEqual(TOOLS.map((tool) => tool.name).sort());
+  for (const tool of Object.values(CollieTools.tools)) {
+    expect([tool.name, tool.failureMode]).toEqual([tool.name, "return"]);
+    expect([tool.name, tool.needsApproval]).toEqual([tool.name, false]);
+  }
 });
 
 test("a tool that writes does not tell a client it only reads", () => {
