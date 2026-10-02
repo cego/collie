@@ -395,7 +395,7 @@ export const followBoard = Effect.fn("Lifecycle.followBoard")(function* (env: Pl
   ).pipe(
     Effect.catchCause((cause) =>
       Effect.sync(() => {
-        lost = reason(Cause.squash(cause)).split("\n")[0]!;
+        lost = Cause.hasInterruptsOnly(cause) ? null : reason(Cause.squash(cause)).split("\n")[0]!;
       }),
     ),
     Effect.ensuring(

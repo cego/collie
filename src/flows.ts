@@ -1086,7 +1086,8 @@ export function appState(
       density: defaults.density,
       wide,
       board,
-      note: read?.unreadable ?? null,
+      // A reuse read the board not at all, so what it said last still holds.
+      note: read === null ? reuse!.state.note : read.unreadable,
       history,
       definitions: reuse
         ? reuse.state.definitions
@@ -1513,7 +1514,8 @@ const textBoard = Effect.fn("Flows.textBoard")(function* (
   // and the entrypoint ends rather than spinning on a `takeKey` that can never answer.
   if (!process.stdin.isTTY) {
     const view = yield* boardOf(session, yield* scan(env, session.runsOf));
-    const once = renderWorkspace(view, unreadable ?? why, undefined, yield* steeringOf(view));
+    const steering = yield* steeringOf(view);
+    const once = renderWorkspace(view, unreadable ?? why, undefined, steering);
     process.stdout.write(`${once}\n`);
     return 0;
   }
@@ -1536,12 +1538,8 @@ const textBoard = Effect.fn("Flows.textBoard")(function* (
     }
     if (!waiting) answering = null;
 
-    const text = renderWorkspace(
-      view,
-      unreadable ?? note ?? undefined,
-      asking,
-      yield* steeringOf(view),
-    );
+    const steering = yield* steeringOf(view);
+    const text = renderWorkspace(view, unreadable ?? note ?? undefined, asking, steering);
     if (text !== drawn) {
       process.stdout.write(`${CLEAR}${text.replace(/\n/g, "\r\n")}\r\n`);
       drawn = text;

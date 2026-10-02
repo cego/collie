@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { Effect, Schedule } from "effect";
+import { ConfigProvider, Effect, Schedule } from "effect";
 import { recordDisposition } from "../../src/disposition";
 import { currentEnv } from "../../src/env";
 import { appState, workspaceFlow } from "../../src/flows";
@@ -50,6 +50,28 @@ test(
           // The reason is on screen too: a pane that fell back says why it did.
           expect(board).toContain("no terminal on this pane");
           expect(board).toContain("p run a workflow");
+        }),
+      [],
+    ),
+  60_000,
+);
+
+test(
+  "the text board says the host could not be read, rather than that nothing needs you",
+  () =>
+    proves(
+      "collie-fallback-no-host-",
+      () =>
+        Effect.gen(function* () {
+          // A host too broken to start.
+          const { board } = yield* printed.pipe(
+            Effect.provide(
+              ConfigProvider.layerAdd(ConfigProvider.fromUnknown({ COLLIE_HOST: "/bin/false" }), {
+                asPrimary: true,
+              }),
+            ),
+          );
+          expect(board).toContain("the workflow host has not sent its board");
         }),
       [],
     ),
@@ -150,6 +172,9 @@ test(
           );
           expect(away.note).toContain("reconnecting to the workflow host");
           expect(away.tasks[0]?.disposition).toBe("merged");
+          // Moving the cursor reads nothing, and says what the last read said.
+          const moved = yield* app.load(focus({ selected: away.tasks[0]!.id }));
+          expect(moved.note).toBe(away.note);
           yield* stopHost(world.state);
         }),
       ["plain.workflow.ts"],
