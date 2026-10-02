@@ -41,8 +41,10 @@ herdr actions, and the `collie` CLI.
   `src/steering-caps.ts`. A capability moves to `proven` only from a recorded live result
   in the Run's `CAPABILITIES.md`.
 - **Changing whether a finished Run takes steering, or what reopening one means** →
-  [ADR-0038](docs/adr/0038-a-finished-run-still-takes-steering.md). A Run's status is
-  history; its agents take steering while one is alive.
+  [ADR-0038](docs/adr/0038-a-finished-run-still-takes-steering.md), alongside `admit` in
+  `src/proposals.ts`, the host's steer and stop in `src/engine.ts`, `steerRun` in
+  `src/lifecycle.ts` and `test/finished-steer.test.ts`. A Run's status is history; its
+  agents take steering while one is alive.
 - **Changing how a Task is named, or what a tab or pane label says** →
   [`docs/using.md`](docs/using.md#what-a-task-workspace-is-called), alongside
   `src/tasknames.ts` (the inference and its stand-in), `prompts/namer.md` (what the model

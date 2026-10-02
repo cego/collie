@@ -694,7 +694,7 @@ test("an unavailable action fails immediately instead of waiting for confirmatio
         interpretation: "hold it",
         actions: [{ kind: "hold", run: id }],
       });
-      expect(said).toContain("the run is succeeded");
+      expect(said).toContain("a finished Run has no step left to hold");
       expect(said).not.toContain("collie confirm");
     }),
   ));

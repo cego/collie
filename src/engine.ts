@@ -2964,6 +2964,8 @@ export const Controlled = Schema.Struct({
   detail: Schema.String,
   /** The agents a stop could not close, which may still be changing the workspace. */
   left: Schema.Array(Schema.String),
+  /** A stop of a finished Run: the agents it closed, with no control set and no status changed. */
+  closed: Schema.optionalKey(Schema.Array(Schema.String)),
 });
 
 /** What became of one delivery to a run's agent. */
@@ -4142,6 +4144,21 @@ const makeRegistry: (
     return { generation, execution: row.execution };
   });
 
+  /** Whether a Run's Workflow has ended, as the engine says: what a stop must not rewrite. */
+  const hasEnded = Effect.fn("Engine.hasEnded")(function* (runId: string) {
+    const found = yield* routed(runId).pipe(Effect.option);
+    if (Option.isNone(found)) return false;
+    const { generation, execution } = found.value;
+    const workflow = generation.registration.workflow;
+    const status = pollStatus(
+      yield* engine.poll(workflow, execution),
+      generation.entry,
+      workflow.successSchema,
+      workflow.errorSchema,
+    ).status;
+    return status === "complete" || status === "failed";
+  });
+
   /** Sets a control, and a stop over every child the Run started, then wakes what must look again. */
   const applyControl = Effect.fn("Engine.applyControl")(function* (
     runId: string,
@@ -4582,6 +4599,19 @@ const makeRegistry: (
       readonly control: string;
       readonly set: boolean;
     }) {
+      // A finished Run's status is history: a stop closes its live agents and sets nothing.
+      if (options.control === STOP && options.set && (yield* hasEnded(options.runId))) {
+        const halted = yield* (yield* Agents).halt(options.runId);
+        return {
+          runId: options.runId,
+          control: options.control,
+          set: options.set,
+          left: halted.left,
+          closed: halted.stopped,
+          applied: true,
+          detail: "",
+        };
+      }
       const found = yield* routed(options.runId).pipe(Effect.result);
       const left =
         options.control === STOP && options.set
@@ -4624,8 +4654,10 @@ const makeRegistry: (
       readonly agent?: string;
       readonly mode?: AgentsSdk.DeliveryMode;
     }) {
-      // Routed first: a run this host is not holding has no agent it can vouch for.
-      yield* routed(options.runId);
+      // A row is enough: a finished Run's agents need its launch journal, not its module.
+      if ((yield* store.run(options.runId)) === null) {
+        return yield* new HostRefused({ reason: `no run "${options.runId}" was started here` });
+      }
       const agents = yield* Agents;
       return yield* agents.steer(options);
     }),

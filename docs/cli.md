@@ -229,7 +229,9 @@ collie --json run steer <run-id> "check the migration too" --request-id "$(uuidg
   rather than reporting a success nothing can stand behind.
 - **`run stop` parks the Run and stops its agents.** Their panes are closed, and those of
   the Runs it started; the workspace keeps its own tab. `run resume` clears the stop and
-  picks the Run up again, giving work whose agent has gone to a new one.
+  picks the Run up again, giving work whose agent has gone to a new one. On a Run that has
+  already finished, a stop only closes its live agents' panes: no control is set, the
+  status stays what it finished with, and with nothing alive it says nothing was running.
 - **A Run parks itself when its agent's pane will not take a prompt.** herdr answering
   `agent_blocked` for ten minutes leaves the Run `suspended`, with `parked` in its view —
   and in `run show` — saying what held, for how long, and where the prompt is. `run resume`
@@ -245,7 +247,9 @@ collie --json run steer <run-id> "check the migration too" --request-id "$(uuidg
   says so.
 - **`run steer` says something to the Run's agent** through the one sender, with the same
   incarnation and harness-capability checks as every other delivery, and tells you whether
-  it was delivered rather than that it was accepted for sending. It carries out nothing:
+  it was delivered rather than that it was accepted for sending: anything not sent is
+  `operation_failed`, with why. A finished Run's live agent takes one as a running Run's
+  does, whether or not its module is still loaded. It carries out nothing:
   `collie steer` is still the only thing that proposes an action, and a proposal still
   names its exact payload to be confirmed.
 
@@ -799,8 +803,12 @@ more by `run resume` — see
 
 ## Carry on from a finished run
 
-A finished run is immutable — there is no mode that reopens one. What it offers to do next
-is its own declaration, so carrying on is one of its offers:
+A finished run's status is never rewritten and its Workflow is never re-entered, but its
+live agents still take `run steer` and `run stop`
+([ADR-0038](adr/0038-a-finished-run-still-takes-steering.md)). New work with steps of
+its own is a follow-up, and so is a request to an agent whose pane is gone: a steer to one
+fails and names this route. What a Run offers to do next is its own declaration, so
+carrying on is one of its offers:
 
 ```sh
 collie --json run actions <run-id>

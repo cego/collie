@@ -363,6 +363,26 @@ export const controlRun = (
     Effect.map((answered) => {
       if (!answered.ok) return answered;
       const done = answered.value;
+      if (done.closed !== undefined) {
+        const names = done.closed.join(", ");
+        if (done.left.length > 0)
+          return err(
+            "operation_failed",
+            `${done.runId} has finished, but ${done.left.join("; ")}.`,
+            {
+              run: done.runId,
+              left: [...done.left],
+            },
+          );
+        return {
+          ok: true as const,
+          data: { run: done.runId, ...done },
+          human:
+            done.closed.length === 0
+              ? `Nothing of ${done.runId} was running.`
+              : `Closed ${names}; ${done.runId} keeps the status it finished with.`,
+        };
+      }
       const what = `${done.set ? done.control : `un${done.control}`} ${done.runId}`;
       if (done.left.length > 0) {
         return err("operation_failed", `Recorded ${what}, but ${done.left.join("; ")}.`, {
@@ -479,21 +499,49 @@ export const steerRun = (
     readonly mode?: "boundary" | "now" | "interrupt";
   },
 ): Effect.Effect<OpResult, never, Client> =>
-  asks(env, (client) => client.steer(options)).pipe(
+  asks(env, (client) =>
+    Effect.gen(function* () {
+      const sent = yield* client.steer(options);
+      return { sent, route: sent.delivered ? null : yield* followUpRoute(client, options) };
+    }),
+  ).pipe(
     Effect.map((answered) => {
       if (!answered.ok) return answered;
-      const sent = answered.value;
-      // Not delivered is not a failure of the command: it is what is known about the
-      // delivery, and the caller is told rather than left to assume it landed.
-      return {
-        ok: true as const,
-        data: { run: options.runId, ...sent },
-        human: sent.delivered
-          ? `Told ${sent.agent}.`
-          : `Nothing was delivered: ${sent.detail || "no agent to tell"}.`,
-      };
+      const { sent, route } = answered.value;
+      const data = { run: options.runId, ...sent };
+      if (sent.delivered) return { ok: true as const, data, human: `Told ${sent.agent}.` };
+      // A receipt that read as delivered when nothing was sent is the failure ADR-0038 ends.
+      const why = `Nothing was delivered: ${sent.detail || "no agent to tell"}.`;
+      return err("operation_failed", route === null ? why : `${why} ${route}`, data);
     }),
   );
+
+/**
+ * What carries a request on to a finished Run whose agent is gone: its follow-up offer
+ * with the message as its input, else a new Run on its branch. Null for a Run still going.
+ * Collie starts neither.
+ */
+const followUpRoute = (
+  client: HostClient,
+  options: { readonly runId: string; readonly text: string },
+): Effect.Effect<string | null> =>
+  Effect.gen(function* () {
+    const view = yield* client.run({ runId: options.runId });
+    if (view === null || !finished(view)) return null;
+    const offers = yield* client
+      .offers({ runId: options.runId })
+      .pipe(Effect.orElseSucceed((): ReadonlyArray<OfferView> => []));
+    const offered = offers.find((one) => one.kind === "follow-up");
+    if (offered !== undefined)
+      return `${options.runId} has finished and its agent is gone: carry this on with its follow-up offer "${offered.id}", giving the message as its input.`;
+    return `${options.runId} has finished and its agent is gone, and it offers no follow-up: start a new Run on ${view.branch === null ? "its branch" : `its branch ${view.branch}`}.`;
+  }).pipe(Effect.orElseSucceed(() => null));
+
+/** Whether a Run's steps have ended, which is what a steer to its gone agent cannot revive. */
+const finished = (view: RunView): boolean =>
+  view.status.status === "complete" ||
+  view.status.status === "failed" ||
+  view.controls.includes("stop");
 
 const capitalised = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
 

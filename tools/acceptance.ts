@@ -675,6 +675,17 @@ const WORKFLOWS: readonly Check[] = [
 /** What only a person at a terminal can settle. */
 const OPERATOR_CHECKS: readonly Check[] = [
   {
+    id: "steering/a-finished-runs-live-agent-takes-a-delivery",
+    statement:
+      "A succeeded Run's idle agent, told through chat's `collie_do deliver` to do something more, receives the text with Collie's delivery token and acts on it without asking the human to confirm; the result is `applied`, the ledger has the Delivery, and `run show` still says `succeeded`.",
+    owner: RELEASE,
+    needs: "operator",
+    proof: {
+      kind: "operator",
+      how: "With HERDR_PLUGIN_STATE_DIR pointed at a scratch directory and herdr on a disposable Herd, never the live one: start one Run whose one agent succeeds, deliver one message to that agent through `collie_do`, and record the result, the `collie run deliveries` line, what the agent's pane shows it did, and `run show`'s status, with the revision.",
+    },
+  },
+  {
     id: "lifecycle/goal-activation-observed",
     statement:
       "A `/goal` submitted to an agent is only reported as started once the goal is in force in that agent — its own goal or Stop-hook state names it. Submission, queueing, a suggestion sitting in a composer, and a `working` badge are none of them activation: an agent already working shows `working` for the turn it was already in.",

@@ -829,7 +829,11 @@ Which of two things it does with one depends on **who wanted it**
   is `collie_hold`; stopping, resuming, releasing, answering a question, steering an agent,
   following up a finished run and starting one are `collie_do`, and so are the board's
   decisions — saying yes or no to a proposal, and marking what became of finished work.
-  Each says what it came to.
+  Each says what it came to. Steering reaches a finished run's live agent too — "have
+  builder merge and tag it" is a `deliver`, with a receipt, and comes back `applied` only
+  when it was sent; chat never types into a Collie agent's pane itself. When that agent is
+  gone the `deliver` fails and names the follow-up that carries it on
+  ([ADR-0038](adr/0038-a-finished-run-still-takes-steering.md)).
 - **Collie wanted it, so it waits.** Drift the evaluator noticed, a correction it wants
   to send: the board draws the proposal, and it is confirmed against its id and the hash
   of exactly those actions — by you on the board, or by chat — or declined, and nothing
