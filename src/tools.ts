@@ -562,13 +562,13 @@ const settle = Effect.fn("Tools.settle")(function* (
   const done =
     action.kind === "confirm"
       ? yield* confirmProposed(env, {
-          door: "chat",
+          door,
           proposal: action.proposal,
           hash: action.hash,
           request,
         })
       : yield* declineProposed(env, {
-          door: "chat",
+          door,
           proposal: action.proposal,
           hash: action.hash,
           request,

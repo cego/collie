@@ -207,6 +207,9 @@ export interface Voice {
   readonly said?: string;
 }
 
+/** Who asks, as a channel declares it: a front door and, for a chat, its voice. */
+export type Asker = Omit<Actor, "requestId">;
+
 /** Just the voice of anything that carries one, with no key for what it lacks. */
 export function voiceOf({ conversation, said }: Voice): Voice {
   if (conversation === undefined) return said === undefined ? {} : { said };

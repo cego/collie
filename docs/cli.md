@@ -686,7 +686,8 @@ opened somewhere else carries no line about a board it is nowhere near.
 and nothing at all while none is open. You never type it, and it is wired per launch —
 nothing in your own Claude Code settings changes. A second hook beside it, `chat heard`,
 hands each message you send to Collie's tool host, so what `collie_do` carries out that
-turn is recorded with your words; a message from any other Claude session is not used.
+turn is recorded with your words; the same command on Claude's `Stop` hook forgets them
+when the turn ends, and a message from any other Claude session is not used.
 
 `tools` is the same contract native chat is given, and it is the whole of what chat can
 reach. Claude gets it over a local MCP server (`collie mcp`, which you never type) and Pi
@@ -1434,7 +1435,7 @@ Actor and what came of it ([ADR-0039](adr/0039-every-operation-records-who-asked
 channel that declares nothing is `cli`. `declare` may also carry `session`, the herdr
 session socket the front door runs in: a confirmed, asked or proposed action looks its
 workspaces, panes and Herd up there. A channel that names none has them looked up in the
-session the host was started from. A chat's channel may carry `conversation` and `said`,
+session the host was started from. A `chat` channel may carry `conversation` and `said`,
 the human's message that turn as its tool host heard it; the host puts both in the Actor of
 everything done on that channel, the executors' own operations included.
 

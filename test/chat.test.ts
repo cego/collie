@@ -286,13 +286,18 @@ test("both adapters are told about the same Collie, in one place", () =>
       // spelled out on its command line rather than inherited from the pane.
       // SAFETY: the file was written by `claudeSettings` two lines above, whose one shape this names.
       const hook = decodeJson(yield* fs.readFileString(files.settings)) as {
-        hooks: { UserPromptSubmit: Array<{ hooks: Array<{ command: string }> }> };
+        hooks: {
+          UserPromptSubmit: Array<{ hooks: Array<{ command: string }> }>;
+          Stop: Array<{ hooks: Array<{ command: string }> }>;
+        };
       };
       const command = hook.hooks.UserPromptSubmit[0]!.hooks[0]!.command;
       expect(command).toEndWith("'/bin/collie' chat context");
-      // And every prompt is handed to the tool host, so a chat's actions carry its words.
+      // And every prompt is handed to the tool host until the turn ends, so a chat's
+      // actions carry the words of the turn they were taken in.
       const heard = hook.hooks.UserPromptSubmit[0]!.hooks[1]!.command;
       expect(heard).toEndWith("'/bin/collie' chat heard");
+      expect(hook.hooks.Stop[0]!.hooks[0]!.command).toBe(heard);
       for (const [key, value] of Object.entries(serverEnv))
         expect(heard).toContain(`${key}='${value}'`);
       for (const [key, value] of Object.entries(serverEnv))

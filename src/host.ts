@@ -114,6 +114,7 @@ import {
   type Actor,
   type ProposalRecord,
   voiceOf,
+  type Asker,
   type Voice,
 } from "./proposals";
 import { carryOut, carryOutAsked, followUpField } from "./run-actions";
@@ -457,7 +458,7 @@ const frontDoorHandlers = (
       const plans = new Map<string, PlanPanel | null>();
       const doorOf = (client: { readonly id: number }) => declared.get(client.id) ?? "cli";
       /** Who a channel's operations are recorded as: its front door, and a chat's voice. */
-      const whoOf = (client: { readonly id: number }): Voice & { readonly origin: FrontDoor } => ({
+      const whoOf = (client: { readonly id: number }): Asker => ({
         origin: doorOf(client),
         ...voices.get(client.id),
       });
@@ -514,13 +515,7 @@ const frontDoorHandlers = (
             ),
           );
       const auditedControl =
-        (
-          runId: string,
-          operation: string,
-          request: string,
-          who: Voice & { readonly origin: FrontDoor },
-          reason?: string,
-        ) =>
+        (runId: string, operation: string, request: string, who: Asker, reason?: string) =>
         <E>(act: Effect.Effect<typeof Controlled.Type, E, HostServices>) =>
           Effect.andThen(
             known(runId),
@@ -672,7 +667,8 @@ const frontDoorHandlers = (
           return Effect.sync(() => {
             declared.set(client.id, frontDoor);
             if (session !== undefined && session !== null) sessions.set(client.id, session);
-            voices.set(client.id, voiceOf(voice));
+            // Only a chat speaks for the human it is talking to.
+            if (frontDoor === "chat") voices.set(client.id, voiceOf(voice));
           });
         },
         start: (
@@ -812,7 +808,7 @@ const frontDoorHandlers = (
               {
                 operation: "propose",
                 request: requestId,
-                origin: actor.origin,
+                ...whoOf(client),
                 asked: { interpretation, actions },
                 result: SteerOutcome,
               },

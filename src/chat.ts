@@ -439,16 +439,18 @@ export function claudeSettings(
       "chat",
       sub,
     ].join(" ");
-  const hooks = [
-    { type: "command", command: run("context") },
-    { type: "command", command: run("heard") },
-  ];
-  return `${JSON.stringify({ hooks: { UserPromptSubmit: [{ hooks }] } }, null, 2)}\n`;
+  const heard = { type: "command", command: run("heard") };
+  const hooks = {
+    UserPromptSubmit: [{ hooks: [{ type: "command", command: run("context") }, heard] }],
+    // A turn's words end with it, so a turn nobody prompted carries none.
+    Stop: [{ hooks: [heard] }],
+  };
+  return `${JSON.stringify({ hooks }, null, 2)}\n`;
 }
 
-/** What Claude's `UserPromptSubmit` hook is given, as far as Collie reads it. */
+/** What Claude's hooks are given, as far as Collie reads it: only `UserPromptSubmit` has a prompt. */
 const HookInput = Schema.fromJsonString(
-  Schema.Struct({ session_id: Schema.String, prompt: Schema.String }),
+  Schema.Struct({ session_id: Schema.String, prompt: Schema.optionalKey(Schema.String) }),
 );
 
 const HeardSchema = Schema.Struct({ session: Schema.String, said: Schema.String });
@@ -459,13 +461,24 @@ const heardPath = Effect.fn("Chat.heardPath")(function* (stateDir: string, key: 
   return path.join(yield* chatDir(stateDir, key), "heard.json");
 });
 
-/** The human's prompt this turn, kept for the tool host; input that is not a prompt is ignored. */
+/**
+ * The human's prompt this turn, kept for the tool host, and forgotten when that session's
+ * turn ends. Input that is not a hook's is ignored.
+ */
 export const hear = Effect.fn("Chat.hear")(function* (env: PluginEnv, input: string) {
   const key = yield* herdOf(env.socketPath).pipe(Effect.catch(() => Effect.succeed(null)));
   const given = Schema.decodeUnknownOption(HookInput)(input);
   if (key === null || given._tag === "None") return;
   const fs = yield* FileSystem.FileSystem;
   const file = yield* heardPath(env.stateDir, key);
+  if (given.value.prompt === undefined) {
+    const kept = Schema.decodeUnknownOption(HeardJson)(
+      yield* fs.readFileString(file).pipe(Effect.catch(() => Effect.succeed(""))),
+    );
+    if (kept._tag === "Some" && kept.value.session === given.value.session_id)
+      yield* fs.remove(file, { force: true });
+    return;
+  }
   const path = yield* Path.Path;
   yield* fs.makeDirectory(path.dirname(file), { recursive: true });
   const tmp = `${file}.${process.pid}.tmp`;

@@ -960,6 +960,7 @@ const chatting = Effect.fn("test.chatting")(function* () {
 
 const hookInput = (session: string, prompt: string) =>
   encodeJson({ session_id: session, hook_event_name: "UserPromptSubmit", prompt });
+const stopInput = (session: string) => encodeJson({ session_id: session, hook_event_name: "Stop" });
 
 test("what collie_do does is recorded with the human's words from that turn", () =>
   inWorld(
@@ -1000,6 +1001,13 @@ test("the words are the tool host's to attach, never the model's", () =>
         said: "the human told me to",
       });
       expect(forged).toContain("refused the request (InvalidInput)");
+      // A turn's words end with it.
+      yield* hear(env, hookInput("s-1", "abandon it"));
+      yield* hear(env, stopInput("s-1"));
+      yield* call("collie_do", {
+        actions: [{ kind: "disposition", run: run.id, became: "abandoned" }],
+      });
+      expect((yield* readAudit(run.dir)).at(-1)!.actor.said).toBeUndefined();
       // A prompt from a session that is not the one chat is running is nobody's words here.
       yield* hear(env, hookInput("s-old", "abandon everything"));
       yield* call("collie_do", {
@@ -1009,5 +1017,29 @@ test("the words are the tool host's to attach, never the model's", () =>
       expect(actor.origin).toBe("chat");
       expect(actor.conversation).toBe(KEY);
       expect(actor.said).toBeUndefined();
+    }),
+  ));
+
+test("a proposal chat settles carries the words it was settled with", () =>
+  inWorld(
+    Effect.gen(function* () {
+      yield* chatting();
+      const file = yield* proposalsPath(stateDir, KEY);
+      const proposal = yield* recordProposal(file, {
+        interpretation: "nothing to do",
+        targets: [],
+        actions: [{ kind: "none", why: "nothing to do" }],
+        allowedNow: [],
+        intentVersions: {},
+        by: "evaluator:e-1",
+      });
+      yield* hear(env, hookInput("s-1", "no, drop that"));
+      expect(
+        yield* call("collie_do", {
+          actions: [{ kind: "decline", proposal: proposal.id, hash: proposal.content_hash }],
+        }),
+      ).toContain("decline: applied");
+      const declined = (yield* readProposals(file)).find((line) => line.kind === "declined");
+      expect(declined).toMatchObject({ conversation: KEY, said: "no, drop that" });
     }),
   ));

@@ -52,8 +52,7 @@ import {
 import type { Action } from "./evaluator";
 import { REFUSED_INPUT, runDir, type Given, type OfferView, type RunView } from "./engine";
 import { err, ExpectedError, taskFor, type Failure, type OpResult } from "./operations";
-import { voiceOf, type Voice } from "./proposals";
-const isFrontDoor = Schema.is(FrontDoor);
+import { voiceOf, type Asker } from "./proposals";
 import type { TaskChoice } from "./task";
 import { encodeApprovedFile, rememberedFile, renderApproved, type VerifySpec } from "./verify-spec";
 import { projectHere, shell } from "./mr";
@@ -159,18 +158,20 @@ const refusal = (cause: HostFailure): Failure => {
   }
 };
 
-/**
- * One question to the host that owns this state directory, asked on its own connection.
- * An operation names the front door asking, which the channel declares before anything else.
- */
 /** Who is asking: a front door, or an Actor whose voice a nested operation carries on. */
-export type Door = FrontDoor | (Voice & { readonly origin: FrontDoor });
+export type Door = FrontDoor | Asker;
+
+const isFrontDoor = Schema.is(FrontDoor);
 
 const declaring = (door: Door, session: string | null) =>
   isFrontDoor(door)
     ? { frontDoor: door, session }
     : { frontDoor: door.origin, session, ...voiceOf(door) };
 
+/**
+ * One question to the host that owns this state directory, asked on its own connection.
+ * An operation names the front door asking, which the channel declares before anything else.
+ */
 const asks = <A>(
   env: PluginEnv,
   question: (client: HostClient) => Effect.Effect<A, HostFailure>,
