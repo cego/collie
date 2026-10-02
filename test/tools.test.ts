@@ -102,7 +102,7 @@ test("the tools are the whole of the model's reach, and only one of them asks fo
 });
 
 test("the tools are one Toolkit, each saying how it fails and that it needs no approval", () => {
-  // The Flock chat serves the same Toolkit, so what a model may do is decided here once.
+  // Every chat given this Toolkit is held to these, so they are decided here once.
   expect(Object.keys(CollieTools.tools).sort()).toEqual(TOOLS.map((tool) => tool.name).sort());
   for (const tool of Object.values(CollieTools.tools)) {
     expect([tool.name, tool.failureMode]).toEqual([tool.name, "return"]);

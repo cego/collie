@@ -459,7 +459,7 @@ export const callTool = Effect.fn("Tools.call")(
         : result.message;
     return refusedActions(name, input, why, TAKES[name]);
   },
-  Effect.orElseSucceed(() => ""),
+  Effect.catch((cause) => Effect.succeed(`Collie could not answer: ${String(cause)}`)),
 );
 
 /** The JSON Schema a harness is given, generated from the schema the call is decoded with. */
