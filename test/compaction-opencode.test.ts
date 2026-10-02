@@ -569,11 +569,20 @@ onMachineWith("opencode")(
         });
         expect(doc, "opencode serve did not answer /doc").toStartWith("{");
 
-        // What the adapter calls.
-        expect(doc).toContain(`"/session"`);
-        expect(doc).toContain(`"/session/{sessionID}"`);
-        expect(doc).toContain(`"/session/{sessionID}/message"`);
-        expect(doc).toContain(`"/session/{sessionID}/summarize"`);
+        // What the adapter calls, read from the adapter: an endpoint it starts calling is
+        // one this checks, under the name OpenCode's document gives its parameter.
+        const adapter = yield* (yield* FileSystem.FileSystem).readFileString(
+          new URL("../src/opencode.ts", import.meta.url).pathname,
+        );
+        const endpoints = new Set(
+          Array.from(adapter.matchAll(/`\$\{base\}(\/[^`?]*)`/g), (m) =>
+            (m[1] ?? "").replaceAll("${session}", "{sessionID}"),
+          ),
+        );
+        expect(endpoints.size).toBeGreaterThan(3);
+        for (const endpoint of endpoints) {
+          expect(doc, `${endpoint} is gone from the API`).toContain(`"${endpoint}"`);
+        }
         // The accounting the native overflow predicate reads.
         expect(doc).toContain(`"reasoning"`);
         expect(doc).toContain(`"cache"`);

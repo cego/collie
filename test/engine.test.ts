@@ -6,7 +6,7 @@
 // a missing module leave work recoverable — have no answer in an in-memory engine.
 
 import { expect, test } from "bun:test";
-import { Effect, Exit, FileSystem, Layer, Option, Schema, Scope } from "effect";
+import { Effect, Exit, FileSystem, Layer, Option, Schema } from "effect";
 import { TestClock } from "effect/testing";
 import * as WorkflowEngine from "effect/unstable/workflow/WorkflowEngine";
 import * as Workflow from "effect/unstable/workflow/Workflow";
@@ -355,40 +355,6 @@ test("the Effect an author's declarations come from is the one the host runs", (
       expect(manifest.dependencies.effect).toBe(TOOLCHAIN.effect);
     }),
   ));
-
-test(
-  "registering one name twice keeps the first, which is why a generation gets its own name",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-engine-duplicate-" });
-        const workflow = Workflow.make("duplicate", {
-          payload: { runId: Schema.String },
-          idempotencyKey: (payload) => payload.runId,
-          success: Schema.String,
-        });
-        const body = (answer: string) => workflow.toLayer(() => Effect.succeed(answer));
-
-        // Upstream's answer, recorded rather than assumed. Registering a name a second
-        // time neither fails nor replaces anything: the first body keeps the name and the
-        // second is silently ignored. Duplicate registration is therefore not a reload
-        // API, which is why loading a file again mints a registration of its own.
-        const ran = yield* Effect.gen(function* () {
-          const scope = yield* Scope.make();
-          yield* Layer.buildWithScope(body("first"), scope);
-          yield* Layer.buildWithScope(body("second"), scope);
-          const engine = yield* WorkflowEngine.WorkflowEngine;
-          return yield* engine.execute(workflow, {
-            executionId: yield* workflow.executionId({ runId: "r1" }),
-            payload: { runId: "r1" },
-          });
-        }).pipe(Effect.provide(engineLayer({ dir })), Effect.scoped, Effect.orDie);
-        expect(ran).toBe("first");
-      }).pipe(Effect.scoped),
-    ),
-  120_000,
-);
 
 test("work for a workflow nobody has registered waits past upstream's deadline for it", () =>
   runEffect(

@@ -390,20 +390,21 @@ onMachineWith("codex")(
         const read = (file: string) => fs.readFileString(path.join(out, file));
 
         const requests = yield* read("ClientRequest.json");
-        for (const method of [
-          "initialize",
-          "thread/loaded/list",
-          "thread/read",
-          "thread/resume",
-          "thread/items/list",
-          "thread/turns/list",
-          "thread/compact/start",
-        ]) {
-          expect(requests, `${method} is gone from the protocol`).toContain(`"${method}"`);
-        }
-
         const notifications = yield* read("ServerNotification.json");
-        expect(notifications).toContain(`"thread/tokenUsage/updated"`);
+        // Every method and notification the adapter names, read from the adapter: a name
+        // it starts using is a name this checks, and none is checked that it has dropped.
+        const adapter = yield* fs.readFileString(
+          new URL("../src/codex.ts", import.meta.url).pathname,
+        );
+        const names = new Set(
+          Array.from(adapter.matchAll(/"(initialize|thread\/[\w/]+)"/g), (m) => m[1]),
+        );
+        expect(names.size).toBeGreaterThan(5);
+        for (const name of names) {
+          expect(`${requests}${notifications}`, `${name} is gone from the protocol`).toContain(
+            `"${name}"`,
+          );
+        }
         // The accounting: `last` beside `total`, and the total that is used as it stands.
         expect(notifications).toContain(`"last"`);
         expect(notifications).toContain(`"totalTokens"`);

@@ -4,8 +4,10 @@
 
 import { describe, expect, test } from "bun:test";
 import { Effect, Schema } from "effect";
-import type { SocketMethod } from "../src/herdr";
-import { replySchemas, SOCKET_METHODS } from "../src/herdr";
+import type { BunServices } from "@effect/platform-bun/BunServices";
+import { readEnv } from "../src/env";
+import type { HerdrError, SocketMethod } from "../src/herdr";
+import { Herdr, replySchemas, SOCKET_METHODS } from "../src/herdr";
 import type { ReplyLocation } from "./support/contract";
 import { loadContract } from "./support/contract";
 import { runEffect } from "./support/effect";
@@ -57,35 +59,42 @@ const replies = {
   },
 } satisfies Record<string, { of: Schema.Top; at: ReplyLocation }>;
 
+/** A herdr whose socket is a list: what lands in it is what `src/herdr.ts` builds. */
+class Capturing extends Herdr {
+  readonly sent: Array<{ readonly method: SocketMethod; readonly params: Schema.JsonObject }> = [];
+  override rpc(method: SocketMethod, params: Schema.JsonObject = {}) {
+    this.sent.push({ method, params });
+    return Effect.succeed(undefined);
+  }
+}
+
 /**
- * The params each socket method in `src/herdr.ts` actually sends. Keyed by
+ * One call per socket method, through the method of `Herdr` that sends it. Keyed by
  * `SocketMethod`, so a method added to `SOCKET_METHODS` without a row here does not
  * compile — and `rpc` takes nothing that is not in that list.
  */
-const requests = {
-  "workspace.focus": { workspace_id: "w28" },
-  "tab.move": { tab_id: "1:2", insert_index: 0 },
-  "agent.view.set": {
-    source: "cego.collie",
-    label: "plan/goal",
-    filter: { op: "in", field: "pane_id", values: ["1-1", "1-2"] },
-  },
-  "agent.view.clear": { source: "cego.collie" },
-  "agent.send_keys": { target: "impl-1", keys: ["Escape"] },
-  "workspace.report_metadata": {
-    workspace_id: "w28",
-    source: "cego.collie",
-    tokens: { collie_home: "abc123" },
-    ttl_ms: 86_400_000,
-  },
-  "pane.report_metadata": {
-    pane_id: "1-2",
-    source: "cego.collie",
-    tokens: { collie_home: "abc123" },
-    ttl_ms: 86_400_000,
-  },
-  "popup.close": {},
-} satisfies Record<SocketMethod, Schema.JsonObject>;
+const calls = {
+  "workspace.focus": (herdr: Herdr) => herdr.workspaceFocus("w28"),
+  "tab.move": (herdr: Herdr) => herdr.tabMove("1:2", 0),
+  "agent.view.set": (herdr: Herdr) =>
+    herdr.agentViewSet("cego.collie", "plan/goal", ["1-1", "1-2"]),
+  "agent.view.clear": (herdr: Herdr) => herdr.agentViewClear("cego.collie"),
+  "agent.send_keys": (herdr: Herdr) => herdr.agentSendKeys("impl-1", ["Escape"]),
+  "workspace.report_metadata": (herdr: Herdr) =>
+    herdr.workspaceReportMetadata("w28", { collie_home: "abc123" }, 86_400_000),
+  "pane.report_metadata": (herdr: Herdr) =>
+    herdr.paneReportMetadata("1-2", { collie_home: "abc123" }, 86_400_000),
+  "popup.close": (herdr: Herdr) => herdr.popupClose(),
+} satisfies Record<SocketMethod, (herdr: Herdr) => Effect.Effect<void, HerdrError, BunServices>>;
+
+/** What each call sent, as the socket would have been given it. */
+const sentBy = (method: SocketMethod) =>
+  Effect.gen(function* () {
+    const herdr = new Capturing(readEnv({}, null));
+    yield* calls[method](herdr);
+    expect(herdr.sent.map((one) => one.method)).toEqual([method]);
+    return herdr.sent[0]!.params;
+  });
 
 // Only meaningful for the committed snapshot; a fresh schema printed by some other
 // herdr legitimately carries another protocol.
@@ -99,7 +108,7 @@ test("every reply herdr.ts decodes has a row above", () => {
 });
 
 test("every socket method herdr.ts calls has a row above", () => {
-  expect(SOCKET_METHODS.filter((method) => !(method in requests))).toEqual([]);
+  expect(SOCKET_METHODS.filter((method) => !(method in calls))).toEqual([]);
 });
 
 describe("reply structs accept everything herdr may send", () => {
@@ -111,10 +120,14 @@ describe("reply structs accept everything herdr may send", () => {
 });
 
 describe("socket requests satisfy herdr's request schema", () => {
-  for (const [method, params] of Object.entries(requests)) {
-    test(method, () => {
-      expect(contract.requestFindings(method, params)).toEqual([]);
-    });
+  for (const method of SOCKET_METHODS) {
+    test(method, () =>
+      runEffect(
+        Effect.gen(function* () {
+          expect(contract.requestFindings(method, yield* sentBy(method))).toEqual([]);
+        }),
+      ),
+    );
   }
 });
 

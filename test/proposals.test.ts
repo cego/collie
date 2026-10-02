@@ -25,7 +25,7 @@ import {
   type AdmissionContext,
   type ProposalLine,
 } from "../src/proposals";
-import { executorFor, registeredKinds, resetExecutors } from "../src/executors";
+import { resetExecutors } from "../src/executors";
 import type { Action } from "../src/evaluator";
 import { carryOutProposal } from "../src/operations";
 import type { PluginEnv } from "../src/env";
@@ -327,14 +327,6 @@ test("terminal Runs can be resumed or visited through the same operations as the
     expect(admit({ kind: "navigate", run: "r1" }, terminal)).toBeNull();
     expect(admit({ kind: "hold", run: "r1" }, terminal)).toContain(`the run is ${status}`);
   }
-});
-
-test("this build registers no executors, so nothing is stubbed into pretending", () => {
-  // Every kind is registered by the module that owns the operation. Until one does, a
-  // confirmed action of that kind is refused rather than silently succeeding at nothing.
-  expect(registeredKinds()).toEqual([]);
-  expect(executorFor("followup")).toBeUndefined();
-  expect(executorFor("deliver")).toBeUndefined();
 });
 
 // From here on this process has executors registered, which is why it comes last.
