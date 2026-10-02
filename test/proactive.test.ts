@@ -227,3 +227,16 @@ test("a Reopened agent finishing what it was told is said once, and not while it
   // Once per Delivery: idle again is not finishing again.
   expect(said("idle")).toEqual([]);
 });
+
+test("a Reopened agent that goes from working to blocked has not finished what it was told", () => {
+  const card = (status: string) =>
+    task({
+      run: "r1",
+      reopened: { delivery: "d-1", agent: "builder", told: "merge it", status },
+    });
+  const seen = new Set<string>();
+  expect(idleAgain([card("working")], seen).size).toBe(0);
+  expect(idleAgain([card("blocked")], seen).size).toBe(0);
+  // Still remembered as worked on: once it is idle, it has finished.
+  expect([...idleAgain([card("idle")], seen).keys()]).toEqual(["r1"]);
+});

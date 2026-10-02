@@ -488,22 +488,24 @@ Herd-wide, and never narrowed by which workspace you typed it in: one board per 
 ([ADR-0009](adr/0009-the-collie-tab-is-the-herds.md)). A Run belonging to no Task is a
 Task of its own; a child Run is its parent's `children` rather than a Task beside it.
 
-| Field                    | What it says                                                                                                                     |
-| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------- |
-| `id`                     | The Task, or the Run's own id where it belongs to no Task.                                                                       |
-| `name`, `project`        | The two halves of the task workspace's label. No herdr ids.                                                                      |
-| `state`                  | `blocked`, `active`, `quiet`, `failed`, `stopped` or `done`.                                                                     |
-| `steps[]`                | The pipeline across the Task's Runs, each `done`, `active`, `blocked`, `failed` or `todo`. A step that loops is one entry.       |
-| `sentence`               | What is happening, in one plain sentence — no step names, counters or glyph codes.                                               |
-| `age`, `at`              | How long it has been going, and when it last changed.                                                                            |
-| `drift`, `held`          | The one line each carries, or `null`.                                                                                            |
-| `decision`               | The question, proposal or gate waiting on you, or `null`. One of the two ways into Needs you.                                    |
-| `agents[]`, `children[]` | The live agents on it, and the child Runs it started.                                                                            |
-| `mr`, `branch`           | What it is building, where it can be read.                                                                                       |
-| `disposition`            | What became of the work, where a person recorded it — never inferred from a merge request.                                       |
-| `checks`                 | What checked an open merge request: `passed` or `failed` (with `name`) at revision `at`, `running`, or `unchecked`; else `null`. |
-| `ready`                  | Ready to release: the leading Run succeeded, its merge request is open, and its `checks` passed.                                 |
-| `run`, `runs[]`          | The Run a card acts on, and every Run of the Task.                                                                               |
+| Field                    | What it says                                                                                                                                         |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`                     | The Task, or the Run's own id where it belongs to no Task.                                                                                           |
+| `name`, `project`        | The two halves of the task workspace's label. No herdr ids.                                                                                          |
+| `state`                  | `blocked`, `active`, `quiet`, `failed`, `stopped` or `done`.                                                                                         |
+| `steps[]`                | The pipeline across the Task's Runs, each `done`, `active`, `blocked`, `failed` or `todo`. A step that loops is one entry.                           |
+| `sentence`               | What is happening, in one plain sentence — no step names, counters or glyph codes.                                                                   |
+| `age`, `at`              | How long it has been going, and when it last changed.                                                                                                |
+| `drift`, `held`          | The one line each carries, or `null`.                                                                                                                |
+| `decision`               | The question, proposal or gate waiting on you, or `null`. One of the two ways into Needs you.                                                        |
+| `agents[]`, `children[]` | The live agents on it, and the child Runs it started.                                                                                                |
+| `mr`, `branch`           | What it is building, where it can be read.                                                                                                           |
+| `disposition`            | What became of the work, where a person recorded it — never inferred from a merge request.                                                           |
+| `checks`                 | What checked an open merge request: `passed` or `failed` (with `name`) at revision `at`, `running`, or `unchecked`; else `null`.                     |
+| `ready`                  | Ready to release: the leading Run succeeded, its merge request is open, and its `checks` passed.                                                     |
+| `check`                  | The check Collie is running for the leading Run, as `collie run checks` gives `running` (with its `log` and `lastLines`), or `null`.                 |
+| `reopened`               | A finished Run whose agent took a steer after it ended: the `delivery`, the `agent`, the first line it was `told` and its `status` now; else `null`. |
+| `run`, `runs[]`          | The Run a card acts on, and every Run of the Task.                                                                                                   |
 
 ## Answer a question
 
@@ -976,10 +978,10 @@ Every check Collie ran for the Run, oldest first, and the one it is running now
 `gate`, `baseline`, `recheck`, `fix` with its round, `finish`, or a plain `check` — so
 three runs of the same suite read as what each was for.
 
-| Field     | What it says                                                                                                                                                                                                                                                            |
-| --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `running` | The check running now, or `null`: `name`, `pass`, `round`, the `revision` it runs at, `elapsedMs`, `usualMs` (the median of its last five runs in this repository, `null` for none), `others` (checks this host is running beside it) and the `sentence` the card says. |
-| `done[]`  | Each finished one: `name`, `pass`, `round`, `result`, `seconds` and the `revision` it ended on.                                                                                                                                                                         |
+| Field     | What it says                                                                                                                                                                                                                                                                                                                                                         |
+| --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `running` | The check running now, or `null`: `name`, `pass`, `round`, the `revision` it runs at, `elapsedMs`, `usualMs` (the median of its last five runs in this repository, `null` for none), `others` (checks this host is running beside it), `base` (the default branch a `baseline` runs where the branch left), the `sentence` the card says, its `log` and `lastLines`. |
+| `done[]`  | Each finished one: `name`, `pass`, `round`, `result`, `seconds`, the `revision` it ended on, when it ended (`at`) and its `log`.                                                                                                                                                                                                                                     |
 
 Each check's output is written to a log in the Run's evidence directory as it arrives —
 both streams, in the order they came — and kept after it ends, up to 8 MiB; past that the

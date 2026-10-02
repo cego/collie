@@ -182,7 +182,7 @@ const VerifyingSchema = Schema.Struct({
   /** The default branch a `baseline` runs where the branch left; null for every other pass. */
   base: Schema.NullOr(Schema.String),
   started: Schema.String,
-  /** Where its output is being written, where it is. */
+  /** Where its output is being written. */
   log: Schema.optionalKey(Schema.String),
 });
 export type Verifying = typeof VerifyingSchema.Type;

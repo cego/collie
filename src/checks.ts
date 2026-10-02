@@ -82,6 +82,9 @@ export const markersOf = Effect.fn("Checks.markersOf")(function* (runs: Readonly
 const readOrNone = (run: RunFacts) =>
   readVerifications(run.evidence).pipe(Effect.orElseSucceed((): ReadonlyArray<Verification> => []));
 
+/** A record keeps the executable as PATH resolved it, an approved spec as it was written. */
+const commandOf = (executable: string) => executable.split("/").at(-1) ?? executable;
+
 /** The median time of the last few completed runs of this name and arguments in this repository. */
 const usualOf = Effect.fn("Checks.usualOf")(function* (
   run: RunFacts,
@@ -89,13 +92,13 @@ const usualOf = Effect.fn("Checks.usualOf")(function* (
   marker: Verifying,
 ) {
   const same: Verification[] = [];
-  // ponytail: reads every same-repository Run's journal per running check; index it if boards get slow.
   for (const other of runs) {
     if (other.project !== run.project) continue;
     for (const record of yield* readOrNone(other))
       if (
         record.by === "collie" &&
         record.name === marker.name &&
+        commandOf(record.executable) === commandOf(marker.executable) &&
         record.argv.length === marker.argv.length &&
         record.argv.every((word, at) => word === marker.argv[at])
       )
@@ -110,6 +113,26 @@ const usualOf = Effect.fn("Checks.usualOf")(function* (
   const mid = Math.floor(last.length / 2);
   return last.length % 2 === 1 ? last[mid]! : (last[mid - 1]! + last[mid]!) / 2;
 });
+
+/**
+ * The usual time of a running check, read once per run of it: it changes only when a
+ * check finishes, and every board refresh would otherwise read every journal again.
+ */
+const usualRemembered = Effect.fn("Checks.usualRemembered")(function* (
+  run: RunFacts,
+  runs: ReadonlyArray<RunFacts>,
+  marker: Verifying,
+) {
+  const key = `${run.dir}\0${marker.name}\0${marker.started}`;
+  const known = usuals.get(key);
+  if (known !== undefined) return known;
+  const usual = yield* usualOf(run, runs, marker);
+  if (usuals.size >= USUALS_KEPT) usuals.clear();
+  usuals.set(key, usual);
+  return usual;
+});
+const USUALS_KEPT = 256;
+const usuals = new Map<string, number | null>();
 
 /** The check running for `run` now, or null where none is. */
 export const runningCheck = Effect.fn("Checks.running")(function* (
@@ -128,7 +151,7 @@ export const runningCheck = Effect.fn("Checks.running")(function* (
     revision: marker.revision,
     base: marker.base,
     elapsedMs: Number.isFinite(started) ? Math.max(0, now - started) : null,
-    usualMs: yield* usualOf(run, runs, marker),
+    usualMs: yield* usualRemembered(run, runs, marker),
     others: [...markers.keys()].filter((id) => id !== run.id).length,
   };
   const log = marker.log ?? null;

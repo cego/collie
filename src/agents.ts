@@ -75,7 +75,7 @@ import {
   type Projection,
   type Seat,
 } from "./sdk";
-import { causalKey, deliveriesOf } from "./steering";
+import { causalKey, deliveriesOf, SENT_STATES, toldLine } from "./steering";
 import { readTask, taskOfWorkspace, withTaskLock, writeTask } from "./task";
 import { malformedIn, renderTemplate, skillMention, skillsIn } from "./template";
 
@@ -269,6 +269,8 @@ export interface Steered {
   readonly agent: string;
   readonly delivered: boolean;
   readonly detail: string;
+  /** Not delivered because no incarnation of the agent is alive. */
+  readonly gone?: boolean;
 }
 
 /** What a stop closed, and what may still be running after it. */
@@ -1578,6 +1580,7 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
             agent: "",
             delivered: false,
             detail: `${options.runId} has launched no agent${about}`,
+            gone: true,
           };
         }
         const sent = yield* deliver(launched, options.text, {
@@ -1588,10 +1591,17 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
         yield* log(
           options.runId,
           sent.sent
-            ? `${launched.agent}: told "${firstLine(options.text)}"`
+            ? toldLine(launched.agent, options.text)
             : `${launched.agent}: could not be told "${firstLine(options.text)}" (${sent.why})`,
         );
-        return { agent: launched.agent, delivered: sent.sent, detail: sent.why };
+        if (sent.sent) return { agent: launched.agent, delivered: true, detail: "" };
+        const alive = yield* host.herdr.agentList().pipe(Effect.orElseSucceed(() => []));
+        return {
+          agent: launched.agent,
+          delivered: false,
+          detail: sent.why,
+          gone: !alive.some((one) => one.name === launched.agent),
+        };
       }).pipe(
         Effect.catch((cause) =>
           Effect.succeed({ agent: "", delivered: false, detail: reason(cause) }),
@@ -1671,7 +1681,6 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
 const LAUNCH_SUFFIX = ".launch.json";
 const stepPointer = (file: string) =>
   `Your task for this step is in ${file} — read it and follow it.`;
-const SENT_STATES: ReadonlySet<string> = new Set(["submitted", "acknowledged", "verified"]);
 const LaunchedJson = Schema.fromJsonString(Launched);
 const encodeLaunched = Schema.encodeSync(LaunchedJson);
 const decodeLaunched = Schema.decodeUnknownResult(LaunchedJson);

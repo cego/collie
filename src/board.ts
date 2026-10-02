@@ -17,17 +17,16 @@ import { pendingFor, proposalsPath, read as readProposals, type ProposalLine } f
 import { everyRegistered, type AgentEntry } from "./registry";
 import { listRuns, settled as ended, type RunFacts, type RunState } from "./runs";
 import type { PluginEnv } from "./env";
-import { herdOf } from "./steering";
 import { listTasks, type TaskRecord } from "./task";
 import { ago, agoShort, spanned } from "./time";
 import { readVerifications, type Verification } from "./verify";
 import { markersOf, runningCheck, type RunningCheck } from "./checks";
-import { readForge, readMrStates } from "./merges";
+import { pullOf, readForge, readMrStates } from "./merges";
 import { filed, standingOf } from "./standing";
 import { offersOf } from "./lifecycle";
 import { shell } from "./mr";
 import type { OfferView } from "./engine";
-import { everyDelivery, type Delivery } from "./steering";
+import { everyDelivery, herdOf, SENT_STATES, toldIn, type Delivery } from "./steering";
 import { readCards } from "./cards";
 
 /** How a card reads, and the order Tasks take inside a section. */
@@ -178,7 +177,7 @@ export interface TaskView {
   landed: boolean;
   /** When the leading Run ended, or null while it has not. Orders Waiting on you. */
   ended: number | null;
-  /** What GitLab last said about the merge request, where Collie has asked. */
+  /** What the forge last said about the merge request, where Collie has asked. */
   mrState: MrState | null;
   /** What checked the open merge request's branch, or null where no merge request waits. */
   checks: Checks | null;
@@ -227,9 +226,6 @@ export interface Reopened {
   readonly status: string;
 }
 
-/** Delivery states that say herdr took the text: a steer in one of these reached the agent. */
-const SENT: ReadonlySet<string> = new Set(["submitted", "acknowledged", "verified"]);
-
 /** When a Run ended: its own record, else the final card its finish wrote. Null for neither. */
 const finishedAt = Effect.fn("Board.finishedAt")(function* (run: RunFacts) {
   if (run.finished !== null) return Date.parse(run.finished);
@@ -239,7 +235,7 @@ const finishedAt = Effect.fn("Board.finishedAt")(function* (run: RunFacts) {
 });
 
 /** The first line the Run's log recorded telling `agent` something, the newest such. */
-const toldIn = Effect.fn("Board.toldIn")(function* (
+const toldBy = Effect.fn("Board.toldBy")(function* (
   stateDir: string,
   runId: string,
   agent: string,
@@ -248,9 +244,7 @@ const toldIn = Effect.fn("Board.toldIn")(function* (
   const log = yield* fs
     .readFileString(`${stateDir}/agents/${runId}/agents.log`)
     .pipe(Effect.orElseSucceed(() => ""));
-  const prefix = `${agent}: told "`;
-  const line = log.split("\n").findLast((one) => one.startsWith(prefix) && one.endsWith('"'));
-  return line === undefined ? null : line.slice(prefix.length, -1);
+  return toldIn(log, agent);
 });
 
 /**
@@ -270,7 +264,7 @@ const reopenedOf = Effect.fn("Board.reopenedOf")(function* (
       (one) =>
         one.run === run.id &&
         one.cause.kind === "steer" &&
-        SENT.has(one.state) &&
+        SENT_STATES.has(one.state) &&
         Date.parse(one.at) > ended,
     )
     .sort((a, b) => a.at.localeCompare(b.at))
@@ -279,7 +273,7 @@ const reopenedOf = Effect.fn("Board.reopenedOf")(function* (
   return {
     delivery: steer.id,
     agent: steer.agent,
-    told: yield* toldIn(stateDir, run.id, steer.agent),
+    told: yield* toldBy(stateDir, run.id, steer.agent),
     status: live.get(steer.agent)?.status ?? "gone",
   } satisfies Reopened;
 });
@@ -598,8 +592,8 @@ function alsoBecame(sentence: string, disposition: Sentence["disposition"]): str
 export function mrLabel(mr: string): string {
   const url = /^https?:\/\/[^/]+\/(.+?)\/-\/merge_requests\/(\d+)/.exec(mr);
   if (url) return `${url[1]}!${url[2]}`;
-  const pull = /^https?:\/\/github\.com\/([^/]+\/[^/]+)\/pull\/(\d+)/.exec(mr);
-  if (pull) return `${pull[1]}#${pull[2]}`;
+  const pull = pullOf(mr);
+  if (pull) return `${pull.repo}#${pull.number}`;
   const bare = mr.startsWith("mr:") ? mr.slice(3) : mr;
   // `host/group/project!42` reads as `group/project!42`: the host is where, not what.
   const host = /^[^/!]+\.[^/!]+\/(.+)$/.exec(bare);
@@ -737,16 +731,26 @@ export function checksAt(records: ReadonlyArray<Verification>, head: string | nu
 }
 
 /** The commit the Run's branch is at now in its checkout, or null where that cannot be read. */
-const branchHead = Effect.fn("Board.branchHead")(function* (run: RunFacts) {
+const branchHead = Effect.fn("Board.branchHead")(function* (run: RunFacts, now: number) {
   if (run.branch === null) return null;
+  const key = `${run.cwd}\0${run.branch}`;
+  const known = heads.get(key);
+  if (known !== undefined && now - known.at < HEAD_FOR_MS) return known.sha;
   const read = yield* shell(
     "git",
     ["rev-parse", "--verify", "--quiet", `${run.branch}^{commit}`],
     run.cwd,
   );
   const sha = read.stdout.trim();
-  return read.code === 0 && sha !== "" ? sha : null;
+  const head = read.code === 0 && sha !== "" ? sha : null;
+  heads.set(key, { at: now, sha: head });
+  return head;
 });
+
+/** How long a branch head read stands, so a board refresh does not spawn git per card. */
+const HEAD_FOR_MS = 60_000;
+// ponytail: one entry per checkout and branch for the process's life; prune if that grows.
+const heads = new Map<string, { readonly at: number; readonly sha: string | null }>();
 
 /** An absolute path, wherever one sits in a name, read as what it points at. */
 function withoutPaths(text: string): string {
@@ -925,7 +929,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
   now?: number;
   /** How long a Run may write nothing before its card says it has gone quiet. */
   quietMs?: number;
-  /** What GitLab last said about each merge request, by the reference the card carries. */
+  /** What the forge last said about each merge request, by the reference the card carries. */
   mrStates?: ReadonlyMap<string, MrState>;
   /** What the forge last said about each merge request's checks, by its label. */
   forge?: ReadonlyMap<string, ForgeFacts>;
@@ -1068,7 +1072,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
       ? withForge(
           checksAt(
             yield* readVerifications(leader.evidence).pipe(Effect.catch(() => Effect.succeed([]))),
-            forged?.head ?? (yield* branchHead(leader)),
+            forged?.head ?? (yield* branchHead(leader, now)),
           ),
           forged,
         )
@@ -1175,11 +1179,13 @@ export interface Sections {
   finished: TaskView[];
 }
 
-/** Waiting on you, split at a week: what is older folds into one counted line. */
+/**
+ * Waiting on you, split at a week: what is older folds into one counted line. Work ready
+ * to release is never folded, however long it has waited.
+ */
 export function foldWaiting(waiting: ReadonlyArray<TaskView>, now: number) {
-  const recent = waiting.filter((view) => (view.ended ?? view.at) >= now - WAIT_FOLD_MS);
-  const older = waiting.filter((view) => (view.ended ?? view.at) < now - WAIT_FOLD_MS);
-  return { recent, older };
+  const old = (view: TaskView) => !view.ready && (view.ended ?? view.at) < now - WAIT_FOLD_MS;
+  return { recent: waiting.filter((view) => !old(view)), older: waiting.filter(old) };
 }
 
 /** What a search is matched against: what a human remembers about a Task, and no ids. */

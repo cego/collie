@@ -502,7 +502,11 @@ export const steerRun = (
   asks(env, (client) =>
     Effect.gen(function* () {
       const sent = yield* client.steer(options);
-      return { sent, route: sent.delivered ? null : yield* followUpRoute(client, options) };
+      // Only an agent that is gone is carried on elsewhere: a refused send to a live one may
+      // still be working the text, and a follow-up beside it would be a second copy.
+      const route =
+        sent.gone === true && sent.finished === true ? yield* followUpRoute(client, options) : null;
+      return { sent, route };
     }),
   ).pipe(
     Effect.map((answered) => {
@@ -518,8 +522,7 @@ export const steerRun = (
 
 /**
  * What carries a request on to a finished Run whose agent is gone: its follow-up offer
- * with the message as its input, else a new Run on its branch. Null for a Run still going.
- * Collie starts neither.
+ * with the message as its input, else a new Run on its branch. Collie starts neither.
  */
 const followUpRoute = (
   client: HostClient,
@@ -527,7 +530,7 @@ const followUpRoute = (
 ): Effect.Effect<string | null> =>
   Effect.gen(function* () {
     const view = yield* client.run({ runId: options.runId });
-    if (view === null || !finished(view)) return null;
+    if (view === null) return null;
     const offers = yield* client
       .offers({ runId: options.runId })
       .pipe(Effect.orElseSucceed((): ReadonlyArray<OfferView> => []));
@@ -536,12 +539,6 @@ const followUpRoute = (
       return `${options.runId} has finished and its agent is gone: carry this on with its follow-up offer "${offered.id}", giving the message as its input.`;
     return `${options.runId} has finished and its agent is gone, and it offers no follow-up: start a new Run on ${view.branch === null ? "its branch" : `its branch ${view.branch}`}.`;
   }).pipe(Effect.orElseSucceed(() => null));
-
-/** Whether a Run's steps have ended, which is what a steer to its gone agent cannot revive. */
-const finished = (view: RunView): boolean =>
-  view.status.status === "complete" ||
-  view.status.status === "failed" ||
-  view.controls.includes("stop");
 
 const capitalised = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
 

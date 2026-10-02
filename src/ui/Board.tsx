@@ -19,6 +19,8 @@ import {
   foldWaiting,
   sectionOf,
   waitingLabel,
+  SECTIONS,
+  type Section as SectionId,
 } from "../board";
 import { ALL_KEYS, type Command, type MenuItem, type Older, primaryFor } from "./state";
 import { C, cardEdge, sentenceColour, stateGlyph, stepGlyph } from "./sections";
@@ -128,26 +130,10 @@ export function Board(props: BoardProps) {
   const earlier = () =>
     props.sections.finished.length > 0 || props.older.more || props.older.rows.length > 0;
 
-  return (
-    <box style={{ flexDirection: "column", flexGrow: 1 }}>
-      <Header
-        header={props.header}
-        logo={props.logo}
-        width={props.width}
-        query={props.query}
-        searching={props.searching}
-        onSearch={props.onSearch}
-        onNewRun={props.onNewRun}
-        onOverflow={props.onOverflow}
-      />
-      {/* Nothing in this column may shrink: yoga would otherwise fit a tall board into the
-          viewport by compressing every card, which drew sentences over names and folds
-          over borders the moment the content outgrew the pane. The scroll area is what
-          gives; the side padding is the board's own margin. */}
-      <scrollbox
-        style={{ flexGrow: 1 }}
-        contentOptions={{ flexDirection: "column", paddingLeft: SIDE, paddingRight: SIDE }}
-      >
+  // Drawn in the board model's one order, which the text board and chat read too.
+  const drawn: Record<SectionId, () => JSX.Element> = {
+    "needs-you": () => (
+      <>
         <Show when={props.sections.needs.length > 0}>
           <Section label="Needs you" fg={C.amber}>
             <Grid
@@ -163,7 +149,10 @@ export function Board(props: BoardProps) {
             />
           </Section>
         </Show>
-
+      </>
+    ),
+    waiting: () => (
+      <>
         {/* Work that ended without landing, and that nobody has asked you about. A week
             open; the rest behind one counted line, never hidden from the header's count. */}
         <Show when={props.sections.waiting.length > 0}>
@@ -203,7 +192,10 @@ export function Board(props: BoardProps) {
             </Show>
           </Section>
         </Show>
-
+      </>
+    ),
+    working: () => (
+      <>
         <Show when={props.sections.working.length > 0}>
           <Section label={workingLabel(props.sections.working)}>
             <Grid
@@ -219,7 +211,10 @@ export function Board(props: BoardProps) {
             />
           </Section>
         </Show>
-
+      </>
+    ),
+    finished: () => (
+      <>
         {/* One line until it is asked for: yesterday's success must not compete with
             today's problems for the top of the board. */}
         <Show when={earlier()}>
@@ -268,6 +263,31 @@ export function Board(props: BoardProps) {
             </Show>
           </box>
         </Show>
+      </>
+    ),
+  };
+
+  return (
+    <box style={{ flexDirection: "column", flexGrow: 1 }}>
+      <Header
+        header={props.header}
+        logo={props.logo}
+        width={props.width}
+        query={props.query}
+        searching={props.searching}
+        onSearch={props.onSearch}
+        onNewRun={props.onNewRun}
+        onOverflow={props.onOverflow}
+      />
+      {/* Nothing in this column may shrink: yoga would otherwise fit a tall board into the
+          viewport by compressing every card, which drew sentences over names and folds
+          over borders the moment the content outgrew the pane. The scroll area is what
+          gives; the side padding is the board's own margin. */}
+      <scrollbox
+        style={{ flexGrow: 1 }}
+        contentOptions={{ flexDirection: "column", paddingLeft: SIDE, paddingRight: SIDE }}
+      >
+        <For each={SECTIONS}>{([section]) => drawn[section]()}</For>
 
         <Show when={empty()}>
           <text fg={C.dim} onMouseDown={() => props.onClearQuery()}>

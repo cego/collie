@@ -117,7 +117,7 @@ import {
 import { evaluationDeps } from "./evaluator";
 import { budgetPath } from "./steering";
 import type { JudgementDeps } from "./drift";
-import type { Card } from "./cards";
+import { finishedOnRecord, type Card } from "./cards";
 import { reason } from "./naming";
 import {
   fromWorkSource,
@@ -1832,10 +1832,6 @@ const restoreCheckout = (cwd: string, away: string) =>
     yield* fs.remove(away).pipe(Effect.ignore);
   });
 
-/**
- * Runs `body` with the checkout at its merge-base with the default branch, then puts it
- * back. A checkout with changes of its own is refused: they would travel to the base.
- */
 /** The pass a workflow's verify asked for: at the default branch's base it is `baseline`. */
 const passAsked = (asked: Parameters<Sdk.HostApi["verify"]>[0]): CheckPass => {
   if (asked.at === "default-base") return { pass: "baseline" };
@@ -1843,6 +1839,10 @@ const passAsked = (asked: Parameters<Sdk.HostApi["verify"]>[0]): CheckPass => {
   return { pass: asked.pass ?? "check" };
 };
 
+/**
+ * Runs `body` with the checkout at its merge-base with the default branch, then puts it
+ * back. A checkout with changes of its own is refused: they would travel to the base.
+ */
 const atDefaultBase = <A, R>(
   cwd: string,
   away: string,
@@ -3020,6 +3020,10 @@ export const Steered = Schema.Struct({
   /** What could be got out of herdr about it, never "it was accepted for sending". */
   delivered: Schema.Boolean,
   detail: Schema.String,
+  /** Not delivered because no incarnation of the agent is alive, rather than refused. */
+  gone: Schema.optionalKey(Schema.Boolean),
+  /** The Run's Workflow has ended, so a gone agent's request is carried on by a new Run. */
+  finished: Schema.optionalKey(Schema.Boolean),
 });
 
 /** One offer as a front door shows it, over the wire. */
@@ -4190,10 +4194,11 @@ const makeRegistry: (
     return { generation, execution: row.execution };
   });
 
-  /** Whether a Run's Workflow has ended, as the engine says: what a stop must not rewrite. */
+  /** Whether a Run's Workflow has ended: what a stop must not rewrite. */
   const hasEnded = Effect.fn("Engine.hasEnded")(function* (runId: string) {
     const found = yield* routed(runId).pipe(Effect.option);
-    if (Option.isNone(found)) return false;
+    // With its module gone the engine cannot be asked, and the finish's record answers.
+    if (Option.isNone(found)) return (yield* finishedOnRecord(runDir(dir, runId))) !== null;
     const { generation, execution } = found.value;
     const workflow = generation.registration.workflow;
     const status = pollStatus(
@@ -4645,6 +4650,10 @@ const makeRegistry: (
       readonly control: string;
       readonly set: boolean;
     }) {
+      if (options.control === HOLD && (yield* hasEnded(options.runId)))
+        return yield* new HostRefused({
+          reason: "a finished Run has no step left to hold; stop closes its agents",
+        });
       // A finished Run's status is history: a stop closes its live agents and sets nothing.
       if (options.control === STOP && options.set && (yield* hasEnded(options.runId))) {
         const halted = yield* (yield* Agents).halt(options.runId);
@@ -4704,8 +4713,8 @@ const makeRegistry: (
       if ((yield* store.run(options.runId)) === null) {
         return yield* new HostRefused({ reason: `no run "${options.runId}" was started here` });
       }
-      const agents = yield* Agents;
-      return yield* agents.steer(options);
+      const sent = yield* (yield* Agents).steer(options);
+      return sent.gone === true ? { ...sent, finished: yield* hasEnded(options.runId) } : sent;
     }),
   } satisfies RegistryApi;
 });

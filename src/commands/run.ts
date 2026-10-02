@@ -595,11 +595,11 @@ const runChecks = Command.make(
             ...(running === null
               ? []
               : [
-                  `running\t${passOf(running.pass, running.round)}\t${running.name}\t${running.sentence}`,
+                  `running\t${passOf(running.pass, running.round)}\t${running.name}\t${running.sentence}\t${running.log ?? "no log"}`,
                 ]),
             ...done.map(
               (one) =>
-                `${one.result}\t${passOf(one.pass, one.round)}\t${one.name}\t${Math.round(one.seconds)}s\t${one.revision.slice(0, 12)}`,
+                `${one.result}\t${passOf(one.pass, one.round)}\t${one.name}\t${Math.round(one.seconds)}s\t${one.revision.slice(0, 12)}\t${one.log ?? "no log"}`,
             ),
           ];
           return {

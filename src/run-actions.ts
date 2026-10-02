@@ -570,8 +570,6 @@ const admissionFor = Effect.fn("runActions.admissionFor")(function* (
   const now = here === null ? null : `${here.head_sha}:${here.fingerprint}`;
   return admit(action, {
     run: { id: run.id, status: run.state },
-    // Found among the host's own Runs, so it has the row.
-    hostHolds: true,
     pendingChoice: run.asking[0]?.name ?? null,
     incarnation: agent === null ? null : (live.find((a) => a.name === agent)?.terminalId ?? null),
     proposedIncarnation: agent === null ? null : (proposal?.incarnations?.[agent] ?? null),
@@ -584,7 +582,6 @@ const admissionFor = Effect.fn("runActions.admissionFor")(function* (
 function emptyAdmission(): Parameters<typeof admit>[1] {
   return {
     run: null,
-    hostHolds: false,
     pendingChoice: null,
     incarnation: null,
     proposedIncarnation: null,

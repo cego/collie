@@ -8,6 +8,7 @@ import { DateTime, Effect, Fiber, FileSystem, Schema } from "effect";
 import {
   boardLines,
   buildBoard,
+  checksAt,
   finishedLabel,
   headerSentence,
   foldWaiting,
@@ -31,10 +32,10 @@ import {
   readVerifications,
   type Verification,
 } from "../src/verify";
-import { checkSentence } from "../src/checks";
+import { checkSentence, followLog } from "../src/checks";
 import { readEnv } from "../src/env";
 import type { AgentInfo } from "../src/herdr";
-import type { Delivery } from "../src/steering";
+import { toldIn, toldLine, type Delivery } from "../src/steering";
 import { herdLines } from "../src/tools";
 import type { ProposalLine } from "../src/proposals";
 import type { AgentEntry } from "../src/registry";
@@ -43,7 +44,7 @@ import type { TaskRecord } from "../src/task";
 import { runEffect } from "./support/effect";
 import { madeRun } from "./support/records";
 import { collie, proves } from "./support/world";
-import { stopHost } from "./support/host";
+import { stopHost, until } from "./support/host";
 
 function facts(over: Partial<Sentence> = {}): Sentence {
   return {
@@ -1351,6 +1352,25 @@ test("usually is the median of the last five runs of that check in the same repo
         yield* took(before, minutes, at(n));
       // Another repository's runs of the same command are not this one's usual.
       yield* took(elsewhere, 60, at(6));
+      // Nor are this repository's runs of it with other arguments, or of another command.
+      yield* appendVerification(before.evidence, {
+        ...checked("test", "abc"),
+        id: "v-other-args",
+        run: before.id,
+        executable: "/usr/bin/bun",
+        argv: ["test", "--bail"],
+        seconds: 90 * 60,
+        at: at(7),
+      });
+      yield* appendVerification(before.evidence, {
+        ...checked("test", "abc"),
+        id: "v-other-command",
+        run: before.id,
+        executable: "/usr/bin/npm",
+        argv: ["test"],
+        seconds: 90 * 60,
+        at: at(8),
+      });
 
       const view = (yield* board(env, [run, before, elsewhere])).find((one) => one.run === run.id);
       expect(view!.sentence).toBe("Running test on the branch, 4 min, longer than the usual 3.");
@@ -1607,3 +1627,79 @@ test(
     ),
   60_000,
 );
+
+test("work ready to release is never folded away, however long it has waited", () => {
+  const now = Date.parse("2026-09-16T12:00:00.000Z");
+  const week = 8 * 24 * 60 * 60 * 1000;
+  const views = [
+    task({ id: "ready", state: "done", landed: false, ready: true, ended: now - week }),
+    task({ id: "stale", state: "failed", ended: now - week }),
+  ];
+  const { recent, older } = foldWaiting(views, now);
+  expect(recent.map((view) => view.id)).toEqual(["ready"]);
+  expect(older.map((view) => view.id)).toEqual(["stale"]);
+  expect(headerSentence(views, now).text).toBe("Nothing needs you. 1 ready to release. 0 working.");
+});
+
+test("only a steer herdr took, dated after the Run ended, reopens it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const at = "2026-09-14T10:02:00Z";
+      for (const state of ["reserved", "deferred", "failed", "unknown"] as const) {
+        const card = yield* reopened("working", at, { deliveries: [steerAt(at, state)] });
+        expect([state, card.reopened]).toEqual([state, null]);
+      }
+      const step = { ...steerAt(at), cause: { kind: "step" as const, ref: "build" } };
+      expect((yield* reopened("working", at, { deliveries: [step] })).reopened).toBeNull();
+      expect(
+        (yield* reopened("working", at, { deliveries: [steerAt(at, "acknowledged")] })).reopened,
+      ).not.toBeNull();
+    }),
+  ));
+
+test("an agent's own record of a check never counts toward ready", () => {
+  const claimed = { ...checked("test", "abc"), by: "agent" as const };
+  expect(checksAt([claimed], "abc")).toEqual({ state: "unchecked" });
+  expect(checksAt([claimed, checked("test", "abc")], "abc")).toEqual({
+    state: "passed",
+    at: "abc",
+  });
+});
+
+test("following a check hands on each line while the check is still running", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir } = yield* scratch();
+      const run = yield* madeRun(dir);
+      const fs = yield* FileSystem.FileSystem;
+      const log = `${run.evidence}/checks/unit.log`;
+      yield* fs.makeDirectory(`${run.evidence}/checks`, { recursive: true });
+      yield* fs.writeFileString(log, "");
+      yield* marking(run, { log });
+      const said: string[] = [];
+      const following = yield* Effect.forkChild(
+        followLog(run, log, (text) => Effect.sync(() => void said.push(text))),
+      );
+
+      yield* fs.writeFileString(log, "1 pass\n", { flag: "a" });
+      // Said with the marker still there: the check has not ended.
+      yield* until(
+        () => Effect.succeed(said.join("")),
+        (text) => text.includes("1 pass"),
+      );
+      expect(yield* fs.exists(`${run.dir}/verifying`)).toBe(true);
+
+      yield* fs.remove(`${run.dir}/verifying`);
+      expect(yield* Fiber.join(following)).toBeNull();
+      expect(said.join("")).toBe("1 pass\n");
+    }),
+  ));
+
+test("the told line the agents write is the one a Reopened card reads back", () => {
+  const log = [
+    toldLine("builder", "merge and tag it\nthen release"),
+    toldLine("reviewer", "look"),
+  ].join("\n");
+  expect(toldIn(log, "builder")).toBe("merge and tag it");
+  expect(toldIn(log, "nobody")).toBeNull();
+});

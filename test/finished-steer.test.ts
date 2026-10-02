@@ -14,7 +14,7 @@ import { DELIVERY_TOKEN } from "../src/dispatcher";
 import { deliveriesOf } from "../src/steering";
 import { stopHost, until } from "./support/host";
 import { hosted, hostedRun } from "./support/hosted";
-import { proves, type World } from "./support/world";
+import { collie, proves, type World } from "./support/world";
 
 const encode = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const FakeState = Schema.fromJsonString(
@@ -203,6 +203,59 @@ test(
         const [done] = yield* carryOutAsked(env, [deliver(run.id, "nobody", "hurry up")], chat);
         expect(done?.state).toBe("failed");
         expect(done?.note).toContain("Nothing was delivered");
+      }),
+    ),
+  120_000,
+);
+
+test(
+  "with its module removed, a succeeded Run's stop sets nothing and its gone agent's request is routed on",
+  () =>
+    steerable("collie-finished-unregistered-stop-", (world) =>
+      Effect.gen(function* () {
+        const { env, runId, agent } = yield* finishedWithAgent(world);
+        const fs = yield* FileSystem.FileSystem;
+        const module = `${world.user}/told.workflow.ts`;
+        const saved = yield* fs.readFileString(module).pipe(Effect.orDie);
+        yield* fs.remove(module).pipe(Effect.orDie);
+        yield* stopHost(world.state);
+
+        const [stopped] = yield* carryOutAsked(env, [{ kind: "stop", run: runId }], chat);
+        expect(stopped).toMatchObject({ kind: "stop", state: "applied" });
+        expect(stopped?.note).toContain(`Closed ${agent.name}`);
+
+        const [told] = yield* carryOutAsked(env, [deliver(runId, agent.name, "tag it")], chat);
+        expect(told?.state).toBe("failed");
+        expect(told?.note).toContain("has finished and its agent is gone");
+
+        // Back with its module: still the status it finished with, under no control.
+        yield* fs.writeFileString(module, saved).pipe(Effect.orDie);
+        yield* stopHost(world.state);
+        const client = yield* connect(world.state).pipe(Effect.orDie);
+        const view = yield* until(
+          () => client.run({ runId }).pipe(Effect.orDie),
+          (one) => one !== null && one.diagnostic === null,
+        );
+        expect(view?.status.status).toBe("complete");
+        expect(view?.controls).toEqual([]);
+      }),
+    ),
+  120_000,
+);
+
+test(
+  "the CLI's hold and release on a finished Run are refused as chat's are",
+  () =>
+    steerable("collie-finished-hold-", (world) =>
+      Effect.gen(function* () {
+        const { runId } = yield* finishedWithAgent(world);
+        for (const verb of ["hold", "release"]) {
+          const said = yield* collie(world, ["run", verb, runId]);
+          expect(said.envelope.ok).toBe(false);
+          expect(said.envelope.error?.message).toContain(
+            "a finished Run has no step left to hold; stop closes its agents",
+          );
+        }
       }),
     ),
   120_000,

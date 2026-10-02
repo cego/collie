@@ -259,7 +259,6 @@ test("a confirmed proposal cannot then be declined", () =>
 
 const ctx = (over: Partial<AdmissionContext> = {}): AdmissionContext => ({
   run: { id: "r1", status: "running" },
-  hostHolds: true,
   pendingChoice: null,
   incarnation: "term-1",
   proposedIncarnation: "term-1",
@@ -285,7 +284,6 @@ test("admission asks again, immediately before the action runs", () => {
   };
   expect(admit(deliver, ctx())).toBeNull();
   expect(admit(deliver, ctx({ run: null }))).toBe("the run is gone");
-  expect(admit(deliver, ctx({ hostHolds: false }))).toContain("the host no longer holds the run");
   // The agent moved on between the proposal and the yes.
   expect(admit(deliver, ctx({ incarnation: "term-2" }))).toContain("not the one in that pane");
   expect(admit(deliver, ctx({ intentVersion: 3 }))).toContain("v2");

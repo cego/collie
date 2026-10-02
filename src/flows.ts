@@ -1122,8 +1122,9 @@ export function appState(
    * first, and — the reason it is a flag and not an await — the board never waits for it.
    */
   let speaking = false;
-  /** Steers to Reopened Runs seen being worked on, and those since finished; the said journal keeps each to one item. */
+  /** Steers to Reopened Runs this pane has seen being worked on. */
   const workedOn = new Set<string>();
+  /** Reopened Runs whose agent has since finished; the said journal keeps each to one item. */
   const finishedTold = new Map<string, Reopened>();
 
   /** One row per Run: a Run on the local board is on the wide one too. */

@@ -446,8 +446,6 @@ export const reconcileStep = Effect.fn("Proposals.reconcileStep")(function* (
 export interface AdmissionContext {
   /** The target Run as it is now, or null where it is gone. */
   readonly run: { readonly id: string; readonly status: string } | null;
-  /** Whether the host has the Run's row, which `hold` and `deliver` need. */
-  readonly hostHolds: boolean;
   /** The Choice the Run is asking, if any. */
   readonly pendingChoice: string | null;
   /** The target agent's incarnation now, where the action names an agent. */
@@ -492,8 +490,6 @@ export function admit(action: Action, ctx: AdmissionContext): string | null {
   if (terminal && action.kind === "set_verification")
     return "its checks were collected when it finished; remember_verification keeps them for the next Run";
 
-  if ((action.kind === "hold" || action.kind === "deliver") && !ctx.hostHolds)
-    return "the host no longer holds the run, so there is nothing to carry this out";
   if (action.kind === "hold" && action.until !== undefined)
     return "nothing lifts a hold at a time: hold it, and release it when it should go on";
   if (action.kind === "answer" && ctx.pendingChoice !== action.choiceId)
