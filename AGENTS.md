@@ -40,6 +40,9 @@ herdr actions, and the `collie` CLI.
   alongside `src/intent.ts`, `src/dispatcher.ts`, `src/steering.ts` and
   `src/steering-caps.ts`. A capability moves to `proven` only from a recorded live result
   in the Run's `CAPABILITIES.md`.
+- **Changing whether a finished Run takes steering, or what reopening one means** →
+  [ADR-0038](docs/adr/0038-a-finished-run-still-takes-steering.md). A Run's status is
+  history; its agents take steering while one is alive.
 - **Changing how a Task is named, or what a tab or pane label says** →
   [`docs/using.md`](docs/using.md#what-a-task-workspace-is-called), alongside
   `src/tasknames.ts` (the inference and its stand-in), `prompts/namer.md` (what the model
@@ -59,6 +62,9 @@ herdr actions, and the `collie` CLI.
   table), `src/verify.ts` and `src/verify-spec.ts` (collection and what Collie may run),
   and `src/metrics.ts` (what a Run produced). Evidence is collected at a revision; an
   Output field is a claim.
+- **Changing what a human sees of a check Collie runs — its pass, its timing, its live
+  output** → [ADR-0039](docs/adr/0039-a-check-collie-runs-is-seen-while-it-runs.md). A
+  pass is the Workflow's declaration, never inferred from its id.
 - **Changing the Home's panes, the chat harness, or what native chat may read** →
   [`docs/using.md`](docs/using.md#talking-to-collie-about-the-flock), alongside
   `src/chat.ts` (the harness and the session), `src/tools.ts` (the read contract) and

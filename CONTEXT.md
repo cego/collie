@@ -130,7 +130,9 @@ as the human's. Redacted for credential-shaped values, bounded to 500 turns and 
 never a worker transcript.
 
 **Follow-up Run** — A child Run started from a finished one to act on its outcome, reusing
-its worktree under guards. A finished Run is immutable; there is no mode that reopens one.
+its worktree under guards. It is how new steps start: a Workflow of its own, with its own
+Intent and evidence. Telling a finished Run's live agent something is steering, not a
+follow-up (see **Reopened**, ADR-0038).
 
 **Intent** — A Run's goal, the Constraints its work must respect, and the Authority delegated to Collie over it. Versioned; v1 is written at start from the workspace's defaults, the work source's own text and what was named at launch, and amended by an explicit request, and, in a Run on a worktree of its own, by its own `plan/SPEC.md` as its constraints change (ADR-0036). Everything Collie says about drift is a comparison against it; what imported Runs recorded stays readable.
 
@@ -179,15 +181,32 @@ not take a prompt. Either way the work has stopped, so the card says which pane 
 rather than what the step was doing.
 
 **Working** — A Task something is actually doing: a Run the host holds that has not
-settled, or an agent herdr still has.
+settled, or a **Reopened** Run whose agent herdr reports working. The board's third
+section, under Waiting on you.
 
 **Waiting on you** — A Task whose work has ended without **landing**, and which nobody has
 asked you about: an implement Run that succeeded and whose merge request is open, a plan
 that is ready to implement, a Run that failed or was stopped with a branch or merge
-request behind it and has neither been resumed nor disposed of. The board's third
-section. Not a **Decision**: a Decision is Collie asking; this is work in your hands that
+request behind it and has neither been resumed nor disposed of. The board's second
+section, under Needs you and over Working, because most of it is work a human can ship
+now; **Ready to release** leads it. Not a **Decision**: a Decision is Collie asking; this is work in your hands that
 has not been mentioned. A Run that ended with nothing to file — no branch, no merge
 request, no plan, no question — has **Landed** and is not waiting on anyone.
+
+**Ready to release** — A Waiting on you Task whose leading Run succeeded, whose merge
+request is open, and whose checks passed: every check Collie collected passed at the
+revision the merge request's branch is at, and the forge's pipeline, where Collie could
+read it, passed too, with nothing failing or still running. Its card says what is ready,
+where, that the checks passed and what the human does next. An open merge request whose
+checks failed, are running or were never run is still Waiting on you, and its card says
+which.
+
+**Reopened** — A finished Run one of whose agents was sent a steer Delivery after the Run
+finished. Not a status: the Run still reads `succeeded`, `failed` or `stopped`, because
+that is how its steps ended. Derived from the delivery ledger and herdr's agent state, so
+nothing records it. Its card is in Working while that agent works and in Needs you while
+it is blocked, then stands on its own facts again. Steering reaches a finished Run's
+agents for as long as one is alive; a gone pane is the Follow-up Run's job (ADR-0038).
 
 **Landed** — What a Task's work has done once it needs nothing more from anyone: a
 **Disposition** was recorded — merged, abandoned or superseded — the Run succeeded at a
@@ -298,6 +317,13 @@ What each is for, what it needs, and how they chain: `docs/workflows.md`.
 **Evidence** — A Verification collected at a revision. An Output field saying the tests pass is a claim, and is shown as one. The gate before a merge request reads evidence, never claims.
 
 **Baseline** — A check that failed at the gate, run once by Collie where the Run's branch leaves the default branch, in the Run's own checkout. One that fails there too, and still fails, is reported as failing before the Run's changes: never a pass, and never handed to the implementer to fix.
+
+**Check pass** — One run of an approved check by Collie, with why it runs: `gate` on the
+Run's branch, `baseline` where the branch left the default branch, `recheck` on the same
+tree to rule out a flake, `fix` after gate fix N, `finish` at the Run's end, or a plain
+`check`. The pass is the Workflow's declaration, never read off its id. While it runs, the
+card and chat say the check, the pass, how long it has run against how long it usually
+takes, and where its output is being written (ADR-0039).
 
 **Obstacle** — What is identifiably in a Run's way, in one sentence: a command failing several times in a row the same way. It is shown to the human and given to the next prompt so the approach can change. It stops nothing.
 
