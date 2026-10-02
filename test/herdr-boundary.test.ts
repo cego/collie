@@ -3,7 +3,7 @@ import { Effect, FileSystem, Path } from "effect";
 import { decodeAgentList, decodeWorkspaceList, Herdr } from "../src/herdr";
 import { workspaceCwdFromPanes } from "../src/operations";
 import { Rig } from "./support/recorder";
-import { runEffect } from "./support/effect";
+import { fastForward, runEffect } from "./support/effect";
 
 let rig: Rig;
 
@@ -613,13 +613,19 @@ test(
   "an agent that never says it is between turns is not pressed, and the submission is unobserved",
   () =>
     runEffect(
-      Effect.gen(function* () {
-        const herdr = new Herdr(
-          rig.pluginEnv({ FAKE_HERDR_PROMPT_ERROR: "timeout", FAKE_HERDR_AGENT_STATUS: "unknown" }),
-        );
-        expect(yield* herdr.agentPrompt("reviewer", "do the thing")).toBe("unobserved");
-        expect((yield* rig.cmds()).filter((cmd) => cmd === "agent send-keys")).toEqual([]);
-      }),
+      // What it waits out is the status wait, and that is the clock's.
+      fastForward(
+        Effect.gen(function* () {
+          const herdr = new Herdr(
+            rig.pluginEnv({
+              FAKE_HERDR_PROMPT_ERROR: "timeout",
+              FAKE_HERDR_AGENT_STATUS: "unknown",
+            }),
+          );
+          expect(yield* herdr.agentPrompt("reviewer", "do the thing")).toBe("unobserved");
+          expect((yield* rig.cmds()).filter((cmd) => cmd === "agent send-keys")).toEqual([]);
+        }),
+      ),
     ),
   30_000,
 );

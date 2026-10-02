@@ -146,7 +146,13 @@ test("the Tasks a Run can be started into are something chat can read", () =>
 test("a Herd too big for one answer says how much it left out", () =>
   inWorld(
     Effect.gen(function* () {
-      for (let n = 0; n < 42; n++) yield* aRun(`run ${n}`);
+      yield* Effect.forEach(
+        Array.from({ length: 42 }, (_, n) => `run ${n}`),
+        aRun,
+        {
+          concurrency: 8,
+        },
+      );
       expect(yield* call("collie_herd")).toMatch(/\(\d+ more card\(s\) not listed here\)/);
     }),
   ));

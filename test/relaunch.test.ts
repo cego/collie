@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { Effect, Fiber, FileSystem, Option } from "effect";
+import { Effect, Fiber, FileSystem, Option, Schedule } from "effect";
 import { replacedOnDisk } from "../src/flows";
 import { answering } from "../src/mcp";
 import { runEffect } from "./support/effect";
@@ -54,8 +54,15 @@ test("the MCP server answers here until its binary is renamed over, then through
 
         yield* fs.writeFileString(`${bin}.new`, "new");
         yield* fs.rename(`${bin}.new`, bin);
-        yield* Effect.sleep(100);
-        expect(yield* answer("collie_herd", {})).toBe("new collie_herd");
+        // Asked until it changes: the watch notices on its own schedule, not on the test's.
+        const after = yield* answer("collie_herd", {}).pipe(
+          Effect.repeat({
+            until: (said) => said !== "old collie_herd",
+            schedule: Schedule.spaced("10 millis"),
+          }),
+          Effect.timeout("10 seconds"),
+        );
+        expect(after).toBe("new collie_herd");
       }),
     ),
   ));
