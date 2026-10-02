@@ -55,18 +55,22 @@ test(
           ]);
           expect(started.envelope.ok).toBe(true);
 
+          const renamed = (message: BoardMessage) =>
+            message._tag === "Upsert" && message.task.name === "Renamed";
           const door = yield* frontDoor(world.state).pipe(Effect.orDie);
           const opened = yield* Deferred.make<BoardSnapshot>();
           const reading = yield* door.board().pipe(
             Stream.tap((message) =>
               message._tag === "Snapshot" ? Deferred.succeed(opened, message) : Effect.void,
             ),
-            Stream.takeUntil(
-              (message) => message._tag === "Upsert" && message.task.name === "Renamed",
-            ),
+            Stream.takeUntil(renamed),
             Stream.runCollect,
             Effect.forkScoped,
           );
+          // A second subscriber rides the same change stream and is told too.
+          const alongside = yield* (yield* frontDoor(world.state).pipe(Effect.orDie))
+            .board()
+            .pipe(Stream.filter(renamed), Stream.runHead, Effect.forkScoped);
           const snapshot = yield* Deferred.await(opened);
           expect(snapshot.protocol).toBe(PROTOCOL);
           expect(snapshot.build).toBe(BUILD);
@@ -87,6 +91,9 @@ test(
           );
 
           const messages = yield* Fiber.join(reading).pipe(Effect.timeout("20 seconds"));
+          expect((yield* Fiber.join(alongside).pipe(Effect.timeout("20 seconds")))._tag).toBe(
+            "Some",
+          );
           const changes = messages.slice(1).filter((message) => message._tag !== "Unknown");
           expect(changes.every((message) => message._tag !== "Snapshot")).toBe(true);
           const seqs = [snapshot.seq, ...changes.map((message) => message.seq)];

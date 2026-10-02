@@ -623,7 +623,8 @@ const frontDoorHandlers = (
           return { runId, decision: EVIDENCE_GATE, value, fresh: true };
         });
       // Debounced apart from the tick, so a burst of writes cannot hold the tick back.
-      const changed = Stream.mergeAll(
+      // Shared, so every subscriber rides one recursive watch: setting one up walks the tree.
+      const changed = yield* Stream.mergeAll(
         [
           fs.watch(dir, { recursive: true }).pipe(
             Stream.catch(() => Stream.empty),
@@ -637,7 +638,7 @@ const frontDoorHandlers = (
           ),
         ],
         { concurrency: "unbounded" },
-      );
+      ).pipe(Stream.share({ capacity: 1, strategy: "sliding" }));
       return FrontDoorRpcs.of({
         declare: ({ frontDoor, session }, { client }) => {
           const already = declared.get(client.id);
