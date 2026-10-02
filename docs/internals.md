@@ -580,12 +580,17 @@ resolves the default state directory under the real home. A host a test starts i
 that environment. A test that needs herdr sets up the fake under `test/support/`;
 `test/isolation.test.ts` fails if the live socket or home gets through.
 
-`bun run test` uses [Bun's process-parallel runner](https://bun.com/docs/test/parallel)
-with a worker for each idle core, never fewer than four, and a fresh global per file. Tests
-within each file stay sequential: fixtures change environment variables and prototypes, so
-`--concurrent` is not safe here. A test's default timeout is 30 seconds rather than Bun's
-five: a test that starts processes is slower on a busy machine, and that is not a hang.
-For debugging, `bun test ./test/engine.test.ts` runs one file without workers.
+`bun run test` (`tools/test.ts`) first compiles `collie` the way a release does, and the
+fake herdr the same way, into `.scratch/test-bin/`, and runs the suite with
+`COLLIE_TEST_BINARY` and `COLLIE_TEST_FAKE_HERDR` naming them: the suite starts well over a
+thousand hosts, commands and herdr calls, and a bytecode build starts in a fraction of the
+time the sources take to load. It uses [Bun's process-parallel
+runner](https://bun.com/docs/test/parallel) with a worker for each idle core, never fewer
+than four, and a fresh global per file. Tests within each file stay sequential: fixtures
+change environment variables and prototypes, so `--concurrent` is not safe here. A test's
+default timeout is 30 seconds rather than Bun's five: a test that starts processes is
+slower on a busy machine, and that is not a hang. For debugging, `bun test
+./test/engine.test.ts` runs one file against the sources, without workers.
 
 Bun records file durations in `.scratch/test-timings.json` and uses them to schedule slow
 files first next time. CI caches only that scheduling data, never test results. Missing or

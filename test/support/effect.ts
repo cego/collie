@@ -1,4 +1,4 @@
-import { BunServices } from "@effect/platform-bun";
+import * as BunServices from "@effect/platform-bun/BunServices";
 import { Clock, Config, Effect, ManagedRuntime } from "effect";
 import { TestClock } from "effect/testing";
 
