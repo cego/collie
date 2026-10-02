@@ -21,16 +21,7 @@
 // means a person" shortcut would read it as human. Attribution, never a gate.
 
 import type { BunServices } from "@effect/platform-bun/BunServices";
-import {
-  Clock,
-  Context,
-  Crypto,
-  Effect,
-  Option,
-  Result,
-  Schema,
-  Stream,
-} from "effect";
+import { Clock, Context, Crypto, Effect, Option, Result, Schema, Stream } from "effect";
 import { AiError, Tool, Toolkit } from "effect/unstable/ai";
 import { ChildProcessSpawner } from "effect/unstable/process";
 import type { PluginEnv } from "./env";
@@ -59,32 +50,15 @@ import { findRun, listRuns, type RunFacts } from "./runs";
 import { donePasses, markersOf, runningCheck } from "./checks";
 import { deliveriesOf, herdOf } from "./steering";
 import { loadDefinitions, layers } from "./definitions";
-import {
-  chatHarnessOf,
-  chatPath,
-  heardVoice,
-  pushable,
-  readChat,
-  whyUnavailable,
-} from "./chat";
+import { chatHarnessOf, chatPath, heardVoice, pushable, readChat, whyUnavailable } from "./chat";
 import { closable, decide, homePath, readHome, UNREADABLE } from "./home";
 import { doctor } from "./doctor";
-import {
-  defaultsPath,
-  describeDefaults,
-  EMPTY_DEFAULTS,
-  readDefaults,
-} from "./intent";
+import { defaultsPath, describeDefaults, EMPTY_DEFAULTS, readDefaults } from "./intent";
 import { scopeKey } from "./registry";
 import { readSelection, selectionPath } from "./selection";
 import { listTasks } from "./task";
 import { isString, type JsonObject } from "./schema";
-import {
-  checkModule,
-  readModule,
-  type Checked as ModuleCheck,
-  type Described,
-} from "./authoring";
+import { checkModule, readModule, type Checked as ModuleCheck, type Described } from "./authoring";
 import { savedModules } from "./discovery";
 
 /**
@@ -105,9 +79,7 @@ type ToolAnswer = Effect.Effect<
  */
 const STRICT = { onExcessProperty: "error", errors: "all" } as const;
 
-const decodeStrict = <S extends Schema.ConstraintDecoder<unknown, never>>(
-  schema: S,
-) => {
+const decodeStrict = <S extends Schema.ConstraintDecoder<unknown, never>>(schema: S) => {
   const decode = Schema.decodeUnknownResult(schema, STRICT);
   return (input: JsonObject): Result.Result<S["Type"], string> =>
     Result.mapError(decode(input), (error) => error.message);
@@ -115,9 +87,7 @@ const decodeStrict = <S extends Schema.ConstraintDecoder<unknown, never>>(
 
 const RunInput = Schema.Struct({ run: Schema.optionalKey(Schema.String) });
 const HoldInput = Schema.Struct({
-  run: Schema.optionalKey(
-    Schema.String.annotate({ description: "The Run to hold" }),
-  ),
+  run: Schema.optionalKey(Schema.String.annotate({ description: "The Run to hold" })),
   workspace: Schema.optionalKey(
     Schema.String.annotate({
       description: "Hold every unfinished Run in this workspace",
@@ -142,9 +112,7 @@ const refused = (tool: string, why: string, takes: string) =>
 
 const said = <E, R>(effect: Effect.Effect<string, E, R>) =>
   effect.pipe(
-    Effect.catch((cause) =>
-      Effect.succeed(`Collie could not read that: ${String(cause)}`),
-    ),
+    Effect.catch((cause) => Effect.succeed(`Collie could not read that: ${String(cause)}`)),
   );
 
 /** What a proposal's actions may be, decoded at this boundary and nowhere later. */
@@ -226,9 +194,7 @@ function wrongActions(input: JsonObject): string[] {
   const loose = decodeLoose(input);
   if (loose._tag === "None") return [];
   return loose.value.actions.flatMap((action, at) => {
-    const kind = isString(action["kind"])
-      ? action["kind"]
-      : JSON.stringify(action["kind"] ?? null);
+    const kind = isString(action["kind"]) ? action["kind"] : JSON.stringify(action["kind"] ?? null);
     const member = MEMBERS.get(kind);
     if (!member)
       return [
@@ -238,14 +204,10 @@ function wrongActions(input: JsonObject): string[] {
     const extra = Object.keys(action).filter((key) => !takes.includes(key));
     if (extra.length === 0) {
       const own = decodeStrict(member)(action);
-      return Result.isFailure(own)
-        ? [`actions[${at}] (kind "${kind}"): ${own.failure}`]
-        : [];
+      return Result.isFailure(own) ? [`actions[${at}] (kind "${kind}"): ${own.failure}`] : [];
     }
     const hints = [
-      extra.includes("goal")
-        ? 'a Run\'s goal is an Input: put it in "inputs"'
-        : null,
+      extra.includes("goal") ? 'a Run\'s goal is an Input: put it in "inputs"' : null,
       extra.includes("constraints") || extra.includes("constraint")
         ? "constraints are added with update_intent on the started Run, or update_defaults on the workspace before it starts"
         : null,
@@ -256,12 +218,7 @@ function wrongActions(input: JsonObject): string[] {
   });
 }
 
-const refusedActions = (
-  tool: string,
-  input: JsonObject,
-  why: string,
-  takes: string,
-) => {
+const refusedActions = (tool: string, input: JsonObject, why: string, takes: string) => {
   const wrong = wrongActions(input);
   return refused(tool, wrong.length > 0 ? wrong.join("; ") : why, takes);
 };
@@ -318,8 +275,7 @@ export const CollieTools = Toolkit.make(
       "says which that was.",
     parameters: RunInput.mapFields((fields) => ({
       run: fields.run.annotate({
-        description:
-          "The Run id, as collie_herd lists it; omit for the board's selection",
+        description: "The Run id, as collie_herd lists it; omit for the board's selection",
       }),
     })),
   }),
@@ -441,11 +397,9 @@ const TAKES: Record<ToolName, string> = {
   collie_workspaces: "It takes nothing.",
   collie_receipts: `It takes {"run": "<run id>"}, or nothing at all for the board's selection.`,
   collie_news: "It takes nothing.",
-  collie_definitions:
-    'It takes {"workflow": "<name>"} or {"persona": "<name>"}.',
+  collie_definitions: 'It takes {"workflow": "<name>"} or {"persona": "<name>"}.',
   collie_installation: "It takes nothing.",
-  collie_hold:
-    'It takes {"run": "..."} or {"workspace": "..."}, and optionally "reason".',
+  collie_hold: 'It takes {"run": "..."} or {"workspace": "..."}, and optionally "reason".',
   collie_do:
     'It takes {"actions": [...]}, and every action has to be one of the kinds in the schema. An action with no "run" acts on the board\'s selection, and the board has nothing open.',
   collie_propose:
@@ -453,15 +407,9 @@ const TAKES: Record<ToolName, string> = {
 };
 
 const handlersFor = Effect.fn("Tools.handlers")(function* (env: PluginEnv) {
-  const services = yield* Effect.context<
-    BunServices | ChildProcessSpawner.ChildProcessSpawner
-  >();
+  const services = yield* Effect.context<BunServices | ChildProcessSpawner.ChildProcessSpawner>();
   const answer = <E>(
-    effect: Effect.Effect<
-      string,
-      E,
-      BunServices | ChildProcessSpawner.ChildProcessSpawner
-    >,
+    effect: Effect.Effect<string, E, BunServices | ChildProcessSpawner.ChildProcessSpawner>,
   ) => said(effect).pipe(Effect.provideContext(services));
   return CollieTools.of({
     collie_herd: () => answer(boardFacts(env)),
@@ -470,9 +418,7 @@ const handlersFor = Effect.fn("Tools.handlers")(function* (env: PluginEnv) {
     collie_workspaces: () => answer(workspaceFacts(env)),
     collie_receipts: (input) =>
       answer(
-        onSelectedRun(env, input, "collie_receipts", (run) =>
-          said(receiptFacts(env, run.id)),
-        ),
+        onSelectedRun(env, input, "collie_receipts", (run) => said(receiptFacts(env, run.id))),
       ),
     collie_news: () => answer(newsFacts(env)),
     collie_definitions: (input) => answer(definitionFacts(env, input)),
@@ -482,9 +428,7 @@ const handlersFor = Effect.fn("Tools.handlers")(function* (env: PluginEnv) {
     collie_propose: (input) =>
       answer(
         Effect.gen(function* () {
-          const herd = yield* herdOf(env.socketPath).pipe(
-            Effect.catch(() => Effect.succeed(null)),
-          );
+          const herd = yield* herdOf(env.socketPath).pipe(Effect.catch(() => Effect.succeed(null)));
           const requestId = input.request_id ?? (yield* newRequestId());
           const done = yield* proposeActions(env, {
             door: { origin: "chat", ...(yield* heardVoice(env)) },
@@ -492,19 +436,14 @@ const handlersFor = Effect.fn("Tools.handlers")(function* (env: PluginEnv) {
             interpretation: input.interpretation,
             actions: input.actions,
             request: requestId,
-          }).pipe(
-            Effect.map((result) =>
-              result.ok ? result.human : result.error.message,
-            ),
-          );
+          }).pipe(Effect.map((result) => (result.ok ? result.human : result.error.message)));
           return `Request: ${requestId}\n${done}`;
         }),
       ),
   });
 });
 
-const isToolName = (name: string): name is ToolName =>
-  Object.hasOwn(CollieTools.tools, name);
+const isToolName = (name: string): name is ToolName => Object.hasOwn(CollieTools.tools, name);
 
 /**
  * One call to a Collie tool, decoded strictly by the Toolkit. Input it will not take is a
@@ -513,16 +452,9 @@ const isToolName = (name: string): name is ToolName =>
 export const callTool = Effect.fn("Tools.call")(
   function* (env: PluginEnv, name: string, input: JsonObject) {
     if (!isToolName(name)) return "";
-    const toolkit = yield* CollieTools.pipe(
-      Effect.provide(CollieTools.toLayer(handlersFor(env))),
-    );
+    const toolkit = yield* CollieTools.pipe(Effect.provide(CollieTools.toLayer(handlersFor(env))));
     // SAFETY: `handle` decodes it, which is what makes untrusted JSON a tool's parameters.
-    const results = yield* toolkit.handle(
-      name,
-      input as never,
-      undefined,
-      STRICT,
-    );
+    const results = yield* toolkit.handle(name, input as never, undefined, STRICT);
     const last = yield* Stream.runLast(results);
     if (Option.isNone(last)) return "";
     const { result } = last.value;
@@ -534,9 +466,7 @@ export const callTool = Effect.fn("Tools.call")(
         : result.message;
     return refusedActions(name, input, why, TAKES[name]);
   },
-  Effect.catch((cause) =>
-    Effect.succeed(`Collie could not answer: ${String(cause)}`),
-  ),
+  Effect.catch((cause) => Effect.succeed(`Collie could not answer: ${String(cause)}`)),
 );
 
 /** The JSON Schema a harness is given, generated from the schema the call is decoded with. */
@@ -577,9 +507,7 @@ export const TOOLS = Object.values(CollieTools.tools).map((tool) => {
  * Every caller treats those three the same way: nothing is selected.
  */
 const selectionOf = Effect.fn("Tools.selection")(function* (env: PluginEnv) {
-  const key = yield* herdOf(env.socketPath).pipe(
-    Effect.catch(() => Effect.succeed(null)),
-  );
+  const key = yield* herdOf(env.socketPath).pipe(Effect.catch(() => Effect.succeed(null)));
   if (key === null) return null;
   return yield* readSelection(yield* selectionPath(env.stateDir, key)).pipe(
     Effect.catch(() => Effect.succeed(null)),
@@ -590,22 +518,13 @@ const isSettle = (action: Action | Settle): action is Settle =>
   SETTLE_KINDS.some((kind) => kind === action.kind);
 
 /** The human's own instruction, carried out and reported a line per action. */
-const carryOut = Effect.fn("Tools.carryOut")(function* (
-  env: PluginEnv,
-  input: JsonObject,
-) {
+const carryOut = Effect.fn("Tools.carryOut")(function* (env: PluginEnv, input: JsonObject) {
   const selected = yield* onSelection(env, input);
   const decoded = decodeAsked(selected.input);
   if (Result.isFailure(decoded))
-    return refusedActions(
-      "collie_do",
-      selected.input,
-      decoded.failure,
-      TAKES.collie_do,
-    );
+    return refusedActions("collie_do", selected.input, decoded.failure, TAKES.collie_do);
   const actions = decoded.success.actions;
-  if (actions.length === 0)
-    return "collie_do needs an action. Ask which one they meant.";
+  if (actions.length === 0) return "collie_do needs an action. Ask which one they meant.";
   const asked: ReadonlyArray<string> = [...ASKED_KINDS, ...SETTLE_KINDS];
   const wrong = actions.filter((action) => !asked.includes(action.kind));
   if (wrong.length > 0)
@@ -615,9 +534,7 @@ const carryOut = Effect.fn("Tools.carryOut")(function* (
   const said: string[] =
     selected.on === null
       ? []
-      : [
-          `On the board's selection, "${selected.on.name}" (${selected.on.run}):`,
-        ];
+      : [`On the board's selection, "${selected.on.name}" (${selected.on.run}):`];
   for (const [index, action] of actions.entries()) {
     const done = yield* isSettle(action)
       ? settle(env, door, action, `${requestId}-${index}`)
@@ -626,9 +543,7 @@ const carryOut = Effect.fn("Tools.carryOut")(function* (
           actions: [action],
           request: `${requestId}-${index}`,
         }).pipe(Effect.map((results) => results[0]!));
-    said.push(
-      `${done.kind}: ${done.state}${done.note ? ` — ${done.note}` : ""}`,
-    );
+    said.push(`${done.kind}: ${done.state}${done.note ? ` — ${done.note}` : ""}`);
     // What follows a failure was asked for on the assumption that it did not happen.
     if (done.state === "failed") break;
   }
@@ -699,9 +614,7 @@ function cardLine(view: TaskView): string {
         ? `, branch ${view.branch}`
         : "";
   const agents =
-    view.agents.length === 0
-      ? ""
-      : `, agents ${view.agents.map((agent) => agent.name).join(", ")}`;
+    view.agents.length === 0 ? "" : `, agents ${view.agents.map((agent) => agent.name).join(", ")}`;
   return `- run ${view.run}: ${view.name}${project}, ${view.state}${where}${agents}. ${view.sentence}`;
 }
 
@@ -758,11 +671,7 @@ export function herdLines(views: ReadonlyArray<TaskView>, now: number): string {
   for (const [section, title] of SECTIONS) {
     const cards = views.filter((view) => sectionOf(view) === section);
     if (cards.length === 0) continue;
-    lines.push(
-      "",
-      `## ${title} · ${cards.length}`,
-      ...cards.slice(0, room).map(cardLine),
-    );
+    lines.push("", `## ${title} · ${cards.length}`, ...cards.slice(0, room).map(cardLine));
     room = Math.max(0, room - cards.length);
   }
   const left = views.length - HERD_CARDS;
@@ -780,24 +689,16 @@ const LooseActions = Schema.Struct({
 const decodeLoose = Schema.decodeUnknownOption(LooseActions);
 const wantsRun = (action: JsonObject) => {
   const kind = action["kind"];
-  return (
-    action["run"] === undefined &&
-    isString(kind) &&
-    !UNSCOPED_KINDS.includes(kind)
-  );
+  return action["run"] === undefined && isString(kind) && !UNSCOPED_KINDS.includes(kind);
 };
 
 /**
  * `collie_do`'s input with the board's selection standing in for every run-scoped action
  * that named no Run, and which selection that was — so the answer can say so (ADR-0012).
  */
-const onSelection = Effect.fn("Tools.onSelection")(function* (
-  env: PluginEnv,
-  input: JsonObject,
-) {
+const onSelection = Effect.fn("Tools.onSelection")(function* (env: PluginEnv, input: JsonObject) {
   const loose = decodeLoose(input);
-  if (loose._tag === "None" || !loose.value.actions.some(wantsRun))
-    return { input, on: null };
+  if (loose._tag === "None" || !loose.value.actions.some(wantsRun)) return { input, on: null };
   const on = yield* selectionOf(env);
   if (on === null) return { input, on: null };
   const filled = loose.value.actions.map((action) =>
@@ -840,15 +741,9 @@ const onSelectedRun = Effect.fn("Tools.onSelectedRun")(function* (
 /**
  * A hold, carried out. The actor is `chat` all the same: attribution, never a gate.
  */
-const hold = Effect.fn("Tools.hold")(function* (
-  env: PluginEnv,
-  input: typeof HoldInput.Type,
-) {
+const hold = Effect.fn("Tools.hold")(function* (env: PluginEnv, input: typeof HoldInput.Type) {
   const { workspace, reason } = input;
-  const on =
-    input.run === undefined && workspace === undefined
-      ? yield* selectionOf(env)
-      : null;
+  const on = input.run === undefined && workspace === undefined ? yield* selectionOf(env) : null;
   const run = input.run ?? on?.run;
   if (run === undefined && workspace === undefined)
     return "collie_hold needs a run or a workspace to hold, and the board has nothing open. Ask which one they meant.";
@@ -860,8 +755,7 @@ const hold = Effect.fn("Tools.hold")(function* (
   const oneRun: Action = { kind: "hold", run: run!, reason: why };
   const held = yield* actAsked(env, {
     door: { origin: "chat", ...(yield* heardVoice(env)) },
-    actions:
-      workspace === undefined ? [oneRun] : yield* holdsFor(env, workspace, why),
+    actions: workspace === undefined ? [oneRun] : yield* holdsFor(env, workspace, why),
     request: requestId,
   });
   const about = on === null ? "" : `On the board's selection, "${on.name}": `;
@@ -869,11 +763,7 @@ const hold = Effect.fn("Tools.hold")(function* (
     about +
     (held.length === 0
       ? `Nothing here is running${why === "" ? "" : ` (${why})`}.`
-      : held
-          .map((result) =>
-            `${result.kind}: ${result.state} ${result.note}`.trim(),
-          )
-          .join("\n"))
+      : held.map((result) => `${result.kind}: ${result.state} ${result.note}`.trim()).join("\n"))
   );
 });
 
@@ -885,9 +775,7 @@ const holdsFor = Effect.fn("Tools.holdsFor")(function* (
 ) {
   const task = yield* taskOfWorkspace(env.stateDir, workspace);
   if (task === null) return [];
-  const runs = (yield* runViews(env, task.id)).runs.filter(
-    (view) => !isSettled(view),
-  );
+  const runs = (yield* runViews(env, task.id)).runs.filter((view) => !isSettled(view));
   return runs.map((view) => ({
     kind: "hold" as const,
     run: view.runId,
@@ -896,36 +784,23 @@ const holdsFor = Effect.fn("Tools.holdsFor")(function* (
 });
 
 /** What `collie_workspaces` answers with: where a Run could go, and what could start. */
-const workspaceFacts = Effect.fn("Tools.workspaces")(function* (
-  env: PluginEnv,
-) {
+const workspaceFacts = Effect.fn("Tools.workspaces")(function* (env: PluginEnv) {
   const herdr = new Herdr(env);
-  const all = yield* herdr
-    .workspaceList()
-    .pipe(Effect.catch(() => Effect.succeed([])));
-  const panes = yield* herdr
-    .paneList()
-    .pipe(Effect.catch(() => Effect.succeed([])));
+  const all = yield* herdr.workspaceList().pipe(Effect.catch(() => Effect.succeed([])));
+  const panes = yield* herdr.paneList().pipe(Effect.catch(() => Effect.succeed([])));
   const saved = (yield* savedModules(env)).entries;
   const lines = all.map((workspace) => {
     const cwd =
-      workspace.cwd !== ""
-        ? workspace.cwd
-        : workspaceCwdFromPanes(workspace.workspaceId, panes);
+      workspace.cwd !== "" ? workspace.cwd : workspaceCwdFromPanes(workspace.workspaceId, panes);
     return `- workspace ${workspace.workspaceId} (${workspace.label}): ${cwd || "no directory"}`;
   });
   // The Tasks too: a Task with no Run yet is in no Herd listing, so this is the only
   // place a conversation can find out the work a new Run could join.
-  const tasks = yield* listTasks(env.stateDir).pipe(
-    Effect.catch(() => Effect.succeed([])),
-  );
+  const tasks = yield* listTasks(env.stateDir).pipe(Effect.catch(() => Effect.succeed([])));
   return [
     ...(lines.length > 0 ? lines : ["- (no workspaces)"]),
     "",
-    ...tasks.map(
-      (task) =>
-        `- task ${task.id} (${task.label}) in workspace ${task.workspace}`,
-    ),
+    ...tasks.map((task) => `- task ${task.id} (${task.label}) in workspace ${task.workspace}`),
     ...(tasks.length === 0 ? ["- (no Tasks)"] : []),
     "",
     `workflows: ${
@@ -949,11 +824,8 @@ const workspaceFacts = Effect.fn("Tools.workspaces")(function* (
  * the moment it demonstrably reached the model — it is in the answer.
  */
 const newsFacts = Effect.fn("Tools.news")(function* (env: PluginEnv) {
-  const key = yield* herdOf(env.socketPath).pipe(
-    Effect.catch(() => Effect.succeed(null)),
-  );
-  if (key === null)
-    return "Collie cannot reach herdr, so it has nothing to report.";
+  const key = yield* herdOf(env.socketPath).pipe(Effect.catch(() => Effect.succeed(null)));
+  if (key === null) return "Collie cannot reach herdr, so it has nothing to report.";
   const read = yield* settleNewsFor(env, {
     door: { origin: "chat", ...(yield* heardVoice(env)) },
     herd: key,
@@ -961,30 +833,19 @@ const newsFacts = Effect.fn("Tools.news")(function* (env: PluginEnv) {
     as: "read",
     request: yield* newRequestId(),
   });
-  return read.ok
-    ? newsText(read.value)
-    : `Collie could not read the news: ${read.error.message}`;
+  return read.ok ? newsText(read.value) : `Collie could not read the news: ${read.error.message}`;
 });
 
 /** What `collie_receipts` answers with: what is waiting, and what each send actually reached. */
-const receiptFacts = Effect.fn("Tools.receipts")(function* (
-  env: PluginEnv,
-  run: string,
-) {
+const receiptFacts = Effect.fn("Tools.receipts")(function* (env: PluginEnv, run: string) {
   const found = yield* findRun(env, run);
   if (found === null) return `No Run "${run}".`;
-  const key = yield* herdOf(env.socketPath).pipe(
-    Effect.catch(() => Effect.succeed(null)),
-  );
+  const key = yield* herdOf(env.socketPath).pipe(Effect.catch(() => Effect.succeed(null)));
   const now = yield* Clock.currentTimeMillis;
   const proposals =
     key === null
       ? []
-      : pendingFor(
-          yield* readProposals(yield* proposalsPath(env.stateDir, key)),
-          run,
-          now,
-        );
+      : pendingFor(yield* readProposals(yield* proposalsPath(env.stateDir, key)), run, now);
   const deliveries = yield* deliveriesOf(env.stateDir, run);
   // Every delivery is on the ledger now: the one sender writes there before it sends,
   // so there is no second place a steer can be sitting unrecorded.
@@ -995,8 +856,7 @@ const receiptFacts = Effect.fn("Tools.receipts")(function* (
     ...(proposals.length === 0
       ? ["- nothing"]
       : proposals.map(
-          (p) =>
-            `- ${p.id} (${p.content_hash}): ${p.interpretation} — expires ${p.expires_at}`,
+          (p) => `- ${p.id} (${p.content_hash}): ${p.interpretation} — expires ${p.expires_at}`,
         )),
     "",
     "### Sent to this Run's agents",
@@ -1028,8 +888,7 @@ const definitionFacts = Effect.fn("Tools.definitions")(function* (
     // A module is what its id runs, so it is what this answers with — the same reading
     // `workflow show` gives, and the same schemas a refusal asks an input for.
     const module = saved.entries.find((one) => one.id === asked.workflow);
-    if (module)
-      return moduleFacts(yield* readModule(module), yield* checkModule(module));
+    if (module) return moduleFacts(yield* readModule(module), yield* checkModule(module));
     const broken = saved.problems.find((one) => one.id === asked.workflow);
     if (broken) return `${broken.path} will not load: ${broken.message}`;
     return `No Workflow "${asked.workflow}".`;
@@ -1037,16 +896,9 @@ const definitionFacts = Effect.fn("Tools.definitions")(function* (
   return [
     "### Workflows",
     "",
-    ...saved.entries
-      .map((one) => `- ${one.id} (${one.layer}): ${one.description}`)
-      .sort(),
+    ...saved.entries.map((one) => `- ${one.id} (${one.layer}): ${one.description}`).sort(),
     ...(saved.problems.length > 0
-      ? [
-          "",
-          ...saved.problems.map(
-            (one) => `- ${one.id}: ${one.path} will not load`,
-          ),
-        ]
+      ? ["", ...saved.problems.map((one) => `- ${one.id}: ${one.path} will not load`)]
       : []),
     "",
     "### Personas",
@@ -1082,26 +934,14 @@ const moduleFacts = (one: Described, checked: ModuleCheck): string =>
   ].join("\n");
 
 /** What `collie_installation` answers with: everything that is not about a Run. */
-const installationFacts = Effect.fn("Tools.installation")(function* (
-  env: PluginEnv,
-) {
+const installationFacts = Effect.fn("Tools.installation")(function* (env: PluginEnv) {
   const herdr = new Herdr(env);
-  const key = yield* herdOf(env.socketPath).pipe(
-    Effect.catch(() => Effect.succeed(null)),
-  );
-  const panes = yield* herdr
-    .paneList()
-    .pipe(Effect.catch(() => Effect.succeed([])));
-  const workspaces = yield* herdr
-    .workspaceList()
-    .pipe(Effect.catch(() => Effect.succeed([])));
-  const health = yield* doctor(env).pipe(
-    Effect.catch(() => Effect.succeed(null)),
-  );
-  const record =
-    key === null ? null : yield* readHome(yield* homePath(env.stateDir, key));
-  const ownership =
-    key === null ? null : decide(record, workspaces, panes, key);
+  const key = yield* herdOf(env.socketPath).pipe(Effect.catch(() => Effect.succeed(null)));
+  const panes = yield* herdr.paneList().pipe(Effect.catch(() => Effect.succeed([])));
+  const workspaces = yield* herdr.workspaceList().pipe(Effect.catch(() => Effect.succeed([])));
+  const health = yield* doctor(env).pipe(Effect.catch(() => Effect.succeed(null)));
+  const record = key === null ? null : yield* readHome(yield* homePath(env.stateDir, key));
+  const ownership = key === null ? null : decide(record, workspaces, panes, key);
   const { close, listed } = closable(panes);
   // Per workspace, because that is how a Run reads them: what a new Run begins with is
   // the file under the workspace it was started in, never under whichever one this
@@ -1109,26 +949,21 @@ const installationFacts = Effect.fn("Tools.installation")(function* (
   const defaults = yield* Effect.forEach(workspaces, (workspace) =>
     Effect.gen(function* () {
       const cwd =
-        workspace.cwd !== ""
-          ? workspace.cwd
-          : workspaceCwdFromPanes(workspace.workspaceId, panes);
+        workspace.cwd !== "" ? workspace.cwd : workspaceCwdFromPanes(workspace.workspaceId, panes);
       const scope = {
         session: env.socketPath,
         workspaceId: workspace.workspaceId,
         cwd,
       };
       const found =
-        (yield* readDefaults(
-          yield* defaultsPath(env.stateDir, scopeKey(scope)),
-        )) ?? EMPTY_DEFAULTS;
+        (yield* readDefaults(yield* defaultsPath(env.stateDir, scopeKey(scope)))) ?? EMPTY_DEFAULTS;
       return `- ${workspace.workspaceId} (${workspace.label}): ${
         describeDefaults(found).replaceAll("\n", "; ") || "nothing"
       }`;
     }),
   );
   const harness = yield* chatHarnessOf(env.userDir);
-  const chat =
-    key === null ? null : yield* readChat(yield* chatPath(env.stateDir, key));
+  const chat = key === null ? null : yield* readChat(yield* chatPath(env.stateDir, key));
   return [
     `health: ${health === null ? "could not be checked" : health.ok ? health.human : health.error.message}`,
     "",

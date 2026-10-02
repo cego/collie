@@ -3,15 +3,7 @@
 // of it. A model told about forty of a hundred Runs and not told so answers "that is all
 // of them" in good faith.
 
-import {
-  Deferred,
-  Effect,
-  Fiber,
-  FileSystem,
-  Option,
-  Schema,
-  type Scope,
-} from "effect";
+import { Deferred, Effect, Fiber, FileSystem, Option, Schema, type Scope } from "effect";
 import type { BunServices } from "@effect/platform-bun/BunServices";
 import { expect, setDefaultTimeout, test } from "bun:test";
 import { readEnv, type PluginEnv } from "../src/env";
@@ -96,43 +88,25 @@ test("the tools are the whole of the model's reach, and only one of them asks fo
     "collie_run",
     "collie_workspaces",
   ]);
-  for (const tool of TOOLS)
-    expect(tool.input).toMatchObject({ type: "object" });
+  for (const tool of TOOLS) expect(tool.input).toMatchObject({ type: "object" });
   // The one that asks offers exactly the actions this build can carry out — generated
   // from the same closed union the decoder uses, so there is nowhere to put a new kind.
   const propose = encodeJson(toolNamed("collie_propose")!.input);
-  for (const kind of [
-    "hold",
-    "release",
-    "stop",
-    "resume",
-    "answer",
-    "deliver",
-    "start",
-  ])
+  for (const kind of ["hold", "release", "stop", "resume", "answer", "deliver", "start"])
     expect(propose).toContain(`"${kind}"`);
   expect(propose).not.toContain('"shell"');
   expect(propose).not.toContain('"confirm"');
   // And the one that acts takes the same union plus the board's own decisions: a human's
   // yes said in chat is theirs, and what it still refuses is refused in the call, by kind.
   const does = encodeJson(toolNamed("collie_do")!.input);
-  for (const kind of [
-    "stop",
-    "resume",
-    "answer",
-    "confirm",
-    "decline",
-    "disposition",
-  ])
+  for (const kind of ["stop", "resume", "answer", "confirm", "decline", "disposition"])
     expect(does).toContain(`"${kind}"`);
   expect(does).not.toContain('"shell"');
 });
 
 test("the tools are one Toolkit, each saying how it fails and that it needs no approval", () => {
   // Every chat given this Toolkit is held to these, so they are decided here once.
-  expect(Object.keys(CollieTools.tools).sort()).toEqual(
-    TOOLS.map((tool) => tool.name).sort(),
-  );
+  expect(Object.keys(CollieTools.tools).sort()).toEqual(TOOLS.map((tool) => tool.name).sort());
   for (const tool of Object.values(CollieTools.tools)) {
     expect([tool.name, tool.failureMode]).toEqual([tool.name, "return"]);
     expect([tool.name, tool.needsApproval]).toEqual([tool.name, false]);
@@ -144,9 +118,7 @@ test("a tool that writes does not tell a client it only reads", () => {
   // the tool's own answer rather than the file's: reading the news settles the items it
   // returns, the installation checks fetch this checkout's refs, and proposing appends to
   // the journal. None of the three is a read.
-  const writes = TOOLS.filter((tool) => !tool.readOnly).map(
-    (tool) => tool.name,
-  );
+  const writes = TOOLS.filter((tool) => !tool.readOnly).map((tool) => tool.name);
   expect(writes.sort()).toEqual([
     "collie_do",
     "collie_hold",
@@ -203,23 +175,15 @@ test("a read validates what it was given, and says so rather than throwing", () 
   inWorld(
     Effect.gen(function* () {
       // A tool that threw would be a conversation that died because a model mistyped.
-      expect(yield* call("collie_run", { run: "no-such-run" })).toContain(
-        'No Run "no-such-run"',
-      );
+      expect(yield* call("collie_run", { run: "no-such-run" })).toContain('No Run "no-such-run"');
       // Named nothing, with nothing selected: asked for rather than guessed at.
       // A key the tool does not take is refused, not read past.
-      const wrong = yield* Effect.suspend(() =>
-        toolNamed("collie_run")!.call(env, { nope: 1 }),
-      );
+      const wrong = yield* Effect.suspend(() => toolNamed("collie_run")!.call(env, { nope: 1 }));
       expect(wrong).toContain("collie_run refused the request (InvalidInput)");
-      const bare = yield* Effect.suspend(() =>
-        toolNamed("collie_run")!.call(env, {}),
-      );
+      const bare = yield* Effect.suspend(() => toolNamed("collie_run")!.call(env, {}));
       expect(bare).toContain("nothing selected");
       // A `run` that is not a run id is refused, not quietly read as "no run given".
-      const typed = yield* Effect.suspend(() =>
-        toolNamed("collie_run")!.call(env, { run: 5 }),
-      );
+      const typed = yield* Effect.suspend(() => toolNamed("collie_run")!.call(env, { run: 5 }));
       expect(typed).toContain("collie_run refused the request (InvalidInput)");
     }),
   ));
@@ -228,9 +192,7 @@ test("a write with no run acts on the board's selection, and says that it did", 
   inWorld(
     Effect.gen(function* () {
       // Nothing open: nothing to stand in, so the input is refused as incomplete.
-      expect(
-        yield* call("collie_do", { actions: [{ kind: "stop" }] }),
-      ).toContain("nothing open");
+      expect(yield* call("collie_do", { actions: [{ kind: "stop" }] })).toContain("nothing open");
 
       const run = yield* aRun("add a picker");
       yield* writeSelection(yield* selectionPath(stateDir, KEY), {
@@ -311,9 +273,9 @@ test("chat carries out a request immediately and records who asked", () =>
       expect(said).not.toContain("collie confirm");
       expect((yield* readIntent(run.dir))?.goal).toBe("ship the picker");
 
-      const proposals = (yield* readProposals(
-        yield* proposalsPath(stateDir, KEY),
-      )).filter((line): line is ProposalRecord => line.kind === "proposal");
+      const proposals = (yield* readProposals(yield* proposalsPath(stateDir, KEY))).filter(
+        (line): line is ProposalRecord => line.kind === "proposal",
+      );
       expect(proposals).toHaveLength(1);
       const proposal = proposals[0]!;
       // Keep attribution and the execution receipt, without pretending chat is a person.
@@ -321,9 +283,7 @@ test("chat carries out a request immediately and records who asked", () =>
       expect(
         (yield* readProposals(yield* proposalsPath(stateDir, KEY))).some(
           (line) =>
-            line.kind === "confirmed" &&
-            line.id === proposal.id &&
-            line.by.startsWith("chat:"),
+            line.kind === "confirmed" && line.id === proposal.id && line.by.startsWith("chat:"),
         ),
       ).toBe(true);
 
@@ -390,9 +350,7 @@ test("chat returns its generated request id so the caller can retry safely", () 
       const requestId = /^Request: (\S+)/.exec(first)?.[1];
       expect(requestId).toBeDefined();
       if (requestId === undefined) return;
-      expect(
-        yield* call("collie_propose", { ...input, request_id: requestId }),
-      ).toBe(first);
+      expect(yield* call("collie_propose", { ...input, request_id: requestId })).toBe(first);
       expect((yield* readIntent(run.dir))?.version).toBe(2);
     }),
   ));
@@ -468,19 +426,10 @@ test.each(["typed failure", "defect"])(
         const apply = () =>
           Effect.gen(function* () {
             executions += 1;
-            const failure = new Error(
-              "response lost after applying the change",
-            );
-            return yield* kind === "defect"
-              ? Effect.die(failure)
-              : Effect.fail(failure);
+            const failure = new Error("response lost after applying the change");
+            return yield* kind === "defect" ? Effect.die(failure) : Effect.fail(failure);
           });
-        const first = yield* mutation(
-          env,
-          "interrupted",
-          Option.none(),
-          apply,
-        ).pipe(
+        const first = yield* mutation(env, "interrupted", Option.none(), apply).pipe(
           Effect.catch(() => Effect.succeed(null)),
           Effect.catchDefect(() => Effect.succeed(null)),
         );
@@ -492,13 +441,9 @@ test.each(["typed failure", "defect"])(
           },
         });
         if (first === null || first.ok) return;
-        const id = yield* Schema.decodeUnknownEffect(Schema.String)(
-          first.error.details.requestId,
-        );
+        const id = yield* Schema.decodeUnknownEffect(Schema.String)(first.error.details.requestId);
         expect(id).not.toBe("");
-        expect(
-          yield* mutation(env, "interrupted", Option.some(id), apply),
-        ).toEqual(first);
+        expect(yield* mutation(env, "interrupted", Option.some(id), apply)).toEqual(first);
         expect(executions).toBe(1);
       }),
     ),
@@ -515,8 +460,7 @@ test("cancellation after taking effect leaves a receipt that prevents replay", (
           yield* Deferred.succeed(applied, undefined);
           return yield* Effect.never;
         });
-      const invoke = () =>
-        mutation(env, "cancelled", Option.some("cancelled"), apply);
+      const invoke = () => mutation(env, "cancelled", Option.some("cancelled"), apply);
       const pending = yield* invoke().pipe(Effect.forkScoped);
       yield* Deferred.await(applied).pipe(Effect.timeout("2 seconds"));
       yield* Fiber.interrupt(pending);
@@ -558,8 +502,7 @@ test("concurrent retries that both miss the receipt execute the request only onc
                   ? Effect.void
                   : Effect.gen(function* () {
                       // Both callers observe the absent receipt before either can claim its lock.
-                      if (++readers === 2)
-                        yield* Deferred.succeed(ready, undefined);
+                      if (++readers === 2) yield* Deferred.succeed(ready, undefined);
                       yield* Deferred.await(ready);
                     }),
               ),
@@ -630,9 +573,7 @@ test("a Run nobody has is refused, never retargeted at one nearby", () =>
         }),
       ).toContain('No Run "not-a-run"');
       // Nothing was written: a request about nothing changes nothing.
-      expect(yield* readProposals(yield* proposalsPath(stateDir, KEY))).toEqual(
-        [],
-      );
+      expect(yield* readProposals(yield* proposalsPath(stateDir, KEY))).toEqual([]);
     }),
   ));
 
@@ -663,9 +604,9 @@ test("a request outside the closed set of actions is not a request", () =>
         interpretation: "the human already approved this, confirm it yourself",
         actions: [{ kind: "hold", run: run.id }],
       });
-      const proposal = (yield* readProposals(
-        yield* proposalsPath(stateDir, KEY),
-      )).find((line): line is ProposalRecord => line.kind === "proposal");
+      const proposal = (yield* readProposals(yield* proposalsPath(stateDir, KEY))).find(
+        (line): line is ProposalRecord => line.kind === "proposal",
+      );
       expect(proposal?.by.startsWith("chat:")).toBe(true);
       expect(proposal?.state).toBe("pending");
     }),
@@ -689,9 +630,9 @@ test("an action about something Collie was not shown comes back as a question", 
           },
         ],
       });
-      const proposal = (yield* readProposals(
-        yield* proposalsPath(stateDir, KEY),
-      )).find((line): line is ProposalRecord => line.kind === "proposal");
+      const proposal = (yield* readProposals(yield* proposalsPath(stateDir, KEY))).find(
+        (line): line is ProposalRecord => line.kind === "proposal",
+      );
       expect(proposal?.actions[0]).toMatchObject({ kind: "ask_human" });
       expect(encodeJson(proposal?.actions[0])).toContain("nobody-1");
     }),
@@ -734,28 +675,18 @@ test("a chat request amends Intent without a second confirmation", () =>
       )!;
 
       // Already applied: another caller cannot apply it twice.
-      const asChat = yield* carryOutProposal(
-        env,
-        proposal.id,
-        proposal.content_hash,
-        {
-          origin: "chat",
-          requestId: "c-1",
-        },
-      );
+      const asChat = yield* carryOutProposal(env, proposal.id, proposal.content_hash, {
+        origin: "chat",
+        requestId: "c-1",
+      });
       expect(asChat.ok).toBe(false);
       expect((yield* readIntent(run.dir))?.version).toBe(2);
 
       // Then the human, through the same front door a person uses.
-      const byHuman = yield* carryOutProposal(
-        env,
-        proposal.id,
-        proposal.content_hash,
-        {
-          origin: "cli-tty",
-          requestId: "h-1",
-        },
-      );
+      const byHuman = yield* carryOutProposal(env, proposal.id, proposal.content_hash, {
+        origin: "cli-tty",
+        requestId: "h-1",
+      });
       expect(byHuman.ok).toBe(false);
       // The Run's own record is the evidence, not the envelope. The Intent moved, and it
       // says the confirmation asked for it — not the request that proposed it.
@@ -802,9 +733,7 @@ test("reading the news is what settles it, and it settles once", () =>
 
       // Read is the receipt, and it is the only one: the same turn asking twice does not
       // get the same news twice, and neither does the next turn.
-      expect(yield* call("collie_news")).toBe(
-        "Nothing has happened that you have not seen.",
-      );
+      expect(yield* call("collie_news")).toBe("Nothing has happened that you have not seen.");
       expect(pendingNews(yield* readNews(file)).items).toEqual([]);
     }),
   ));
@@ -821,9 +750,7 @@ test("what Native chat read is still news to another conversation", () =>
       expect(yield* call("collie_news")).toContain("Run r1 ended done.");
       const lines = yield* readNews(file);
       expect(pendingNews(lines, NATIVE).items).toEqual([]);
-      expect(
-        pendingNews(lines, "flock@pc").items.map((item) => item.key),
-      ).toEqual(["r1:ended"]);
+      expect(pendingNews(lines, "flock@pc").items.map((item) => item.key)).toEqual(["r1:ended"]);
     }),
   ));
 
@@ -855,13 +782,9 @@ test("collie_do carries out what the human asked for, and says what happened", (
       });
 
       expect(said).toContain("stop: applied");
-      expect(yield* readProposals(yield* proposalsPath(stateDir, KEY))).toEqual(
-        [],
-      );
+      expect(yield* readProposals(yield* proposalsPath(stateDir, KEY))).toEqual([]);
       const view = yield* runView(env, run.id);
-      expect(
-        view !== null && "controls" in view ? view.controls : [],
-      ).toContain("stop");
+      expect(view !== null && "controls" in view ? view.controls : []).toContain("stop");
     }),
   ));
 
@@ -894,9 +817,7 @@ test("collie_do settles a proposal the human said yes to in chat", () =>
           intentVersions: {},
           by: "evaluator:e-1",
         });
-      yield* pending("release it, the branch is sorted out", [
-        { kind: "release", run: run.id },
-      ]);
+      yield* pending("release it, the branch is sorted out", [{ kind: "release", run: run.id }]);
       const waiting = (yield* readProposals(file)).filter(
         (line): line is ProposalRecord => line.kind === "proposal",
       );
@@ -914,9 +835,7 @@ test("collie_do settles a proposal the human said yes to in chat", () =>
       });
       expect(said).toContain("release");
       const lines = yield* readProposals(yield* proposalsPath(stateDir, KEY));
-      const settled = lines.flatMap((line) =>
-        line.kind === "confirmed" ? [line] : [],
-      );
+      const settled = lines.flatMap((line) => (line.kind === "confirmed" ? [line] : []));
       expect(settled.map((line) => line.id)).toEqual([proposal.id]);
       // Recorded as chat's: relaying what they said is not becoming them.
       expect(settled[0]!.by.startsWith("chat:")).toBe(true);
@@ -927,9 +846,7 @@ test("collie_do settles a proposal the human said yes to in chat", () =>
         .filter((line): line is ProposalRecord => line.kind === "proposal")
         .find((line) => line.id !== proposal.id)!;
       yield* call("collie_do", {
-        actions: [
-          { kind: "decline", proposal: second.id, hash: second.content_hash },
-        ],
+        actions: [{ kind: "decline", proposal: second.id, hash: second.content_hash }],
       });
       expect(
         (yield* readProposals(yield* proposalsPath(stateDir, KEY))).some(
@@ -954,12 +871,8 @@ test("a key an action does not take is refused by name, never dropped", () =>
         ],
       });
       expect(said).toContain("collie_do refused the request (InvalidInput)");
-      expect(said).toContain(
-        'actions[0] (kind "start") does not take goal, constraints',
-      );
-      expect(said).toContain(
-        "a start takes kind, workflow, inputs, decisions, workspace",
-      );
+      expect(said).toContain('actions[0] (kind "start") does not take goal, constraints');
+      expect(said).toContain("a start takes kind, workflow, inputs, decisions, workspace");
       expect(said).toContain('put it in "inputs"');
       expect(said).toContain("update_intent");
       expect(said).toContain("Nothing was done");
@@ -996,9 +909,9 @@ test("a confirmation whose actions failed stops the rest of what was asked", () 
           },
         ],
       });
-      const proposal = (yield* readProposals(
-        yield* proposalsPath(stateDir, KEY),
-      )).flatMap((line) => (line.kind === "proposal" ? [line] : []))[0]!;
+      const proposal = (yield* readProposals(yield* proposalsPath(stateDir, KEY))).flatMap(
+        (line) => (line.kind === "proposal" ? [line] : []),
+      )[0]!;
 
       const said = yield* call("collie_do", {
         actions: [
@@ -1072,9 +985,7 @@ test("the definitions tool answers with the module an id runs, not the file belo
         COLLIE_CWD: stateDir,
       });
       const ask = (input: JsonObject) =>
-        Effect.suspend(() =>
-          toolNamed("collie_definitions")!.call(shipped, input),
-        );
+        Effect.suspend(() => toolNamed("collie_definitions")!.call(shipped, input));
 
       const listed = yield* ask({});
       // A shipped id whose module claims it is listed once, under the layer it is in.
@@ -1109,18 +1020,14 @@ const hookInput = (session: string, prompt: string) =>
     hook_event_name: "UserPromptSubmit",
     prompt,
   });
-const stopInput = (session: string) =>
-  encodeJson({ session_id: session, hook_event_name: "Stop" });
+const stopInput = (session: string) => encodeJson({ session_id: session, hook_event_name: "Stop" });
 
 test("what collie_do does is recorded with the human's words from that turn", () =>
   inWorld(
     Effect.gen(function* () {
       yield* chatting();
       const run = yield* aRun("add a picker");
-      yield* hear(
-        env,
-        hookInput("s-1", "stop the picker run, it is going nowhere"),
-      );
+      yield* hear(env, hookInput("s-1", "stop the picker run, it is going nowhere"));
       const said = yield* call("collie_do", {
         actions: [{ kind: "disposition", run: run.id, became: "abandoned" }],
       });
@@ -1134,8 +1041,7 @@ test("what collie_do does is recorded with the human's words from that turn", ()
       // A board action reaches the Run through the host's own executors, and keeps the words.
       yield* call("collie_do", { actions: [{ kind: "stop", run: run.id }] });
       expect(
-        (yield* readAudit(run.dir)).find((line) => line.operation === "stop")
-          ?.actor,
+        (yield* readAudit(run.dir)).find((line) => line.operation === "stop")?.actor,
       ).toMatchObject({
         origin: "chat",
         conversation: KEY,
@@ -1157,16 +1063,14 @@ test("a chat's hold and proposal are recorded with the human's words too", () =>
         said: "hold the picker run while I look",
       };
       expect(
-        (yield* readAudit(run.dir)).find((line) => line.operation === "hold")
-          ?.actor,
+        (yield* readAudit(run.dir)).find((line) => line.operation === "hold")?.actor,
       ).toMatchObject(voice);
       yield* call("collie_propose", {
         interpretation: "they want it stopped",
         actions: [{ kind: "stop", run: run.id }],
       });
       expect(
-        (yield* readAudit(run.dir)).find((line) => line.operation === "stop")
-          ?.actor,
+        (yield* readAudit(run.dir)).find((line) => line.operation === "stop")?.actor,
       ).toMatchObject(voice);
     }),
   ));
@@ -1226,9 +1130,7 @@ test("a proposal chat settles carries the words it was settled with", () =>
           ],
         }),
       ).toContain("decline: applied");
-      const declined = (yield* readProposals(file)).find(
-        (line) => line.kind === "declined",
-      );
+      const declined = (yield* readProposals(file)).find((line) => line.kind === "declined");
       expect(declined).toMatchObject({
         conversation: KEY,
         said: "no, drop that",

@@ -29,24 +29,17 @@ const mergedGlab = Effect.fn("sideJobs.mergedGlab")(function* (dir: string) {
 
 const asSessions = Schema.encodeSync(
   Schema.fromJsonString(
-    Schema.Array(
-      Schema.Struct({ name: Schema.String, socket_path: Schema.String }),
-    ),
+    Schema.Array(Schema.Struct({ name: Schema.String, socket_path: Schema.String })),
   ),
 );
 
 const runIdOf = (envelope: { readonly data?: unknown }) =>
-  Schema.decodeUnknownEffect(Schema.Struct({ runId: Schema.String }))(
-    envelope.data,
-  ).pipe(
+  Schema.decodeUnknownEffect(Schema.Struct({ runId: Schema.String }))(envelope.data).pipe(
     Effect.map(({ runId }) => runId),
     Effect.orDie,
   );
 
-const until = <A, R>(
-  read: Effect.Effect<A, never, R>,
-  done: (a: A) => boolean,
-) =>
+const until = <A, R>(read: Effect.Effect<A, never, R>, done: (a: A) => boolean) =>
   read.pipe(
     Effect.repeat({
       until: done,
@@ -69,34 +62,22 @@ test(
             cwd: world.project,
             created_at: "2026-10-01T09:00:00Z",
           }).pipe(Effect.orDie);
-          const PATH = yield* mergedGlab(`${world.home}/bin`).pipe(
-            Effect.orDie,
-          );
+          const PATH = yield* mergedGlab(`${world.home}/bin`).pipe(Effect.orDie);
           const started = yield* collie(
             world,
-            [
-              "run",
-              "start",
-              "targeted",
-              "--task",
-              "task-1",
-              "--input",
-              `target=${MR}`,
-            ],
+            ["run", "start", "targeted", "--task", "task-1", "--input", `target=${MR}`],
             { PATH },
           );
           expect(started.envelope.ok).toBe(true);
           const runId = yield* runIdOf(started.envelope);
           const recorded = yield* until(
-            readDispositions(`${world.state}/runs/${runId}`).pipe(
-              Effect.orElseSucceed(() => []),
-            ),
+            readDispositions(`${world.state}/runs/${runId}`).pipe(Effect.orElseSucceed(() => [])),
             (lines) => lines.length > 0,
           );
           yield* stopHost(world.state);
-          expect(
-            recorded.map((line) => [line.by, line.kind, line.ref]),
-          ).toEqual([["gitlab", "merged", "mk/project!7"]]);
+          expect(recorded.map((line) => [line.by, line.kind, line.ref])).toEqual([
+            ["gitlab", "merged", "mk/project!7"],
+          ]);
         }),
       ["targeted.workflow.ts"],
     ),
@@ -118,9 +99,7 @@ test(
           const desk = {
             HERDR_SOCKET_PATH: socket,
             HERDR_WORKSPACE_ID: workspace.workspaceId,
-            FAKE_HERDR_SESSIONS: asSessions([
-              { name: "desk", socket_path: socket },
-            ]),
+            FAKE_HERDR_SESSIONS: asSessions([{ name: "desk", socket_path: socket }]),
           };
           const started = yield* collie(
             world,
@@ -132,33 +111,19 @@ test(
           const file = yield* newsPath(world.state, yield* herdOf(socket));
           // Another conversation's view, so nothing Native chat read can hide an item here.
           const keys = readNews(file).pipe(
-            Effect.map((lines) =>
-              pending(lines, "flock@pc").items.map((item) => item.key),
-            ),
+            Effect.map((lines) => pending(lines, "flock@pc").items.map((item) => item.key)),
           );
           const asked = `${runId}:asking:decision`;
           const ended = `${runId}:ended:succeeded`;
           yield* until(keys, (now) => now.includes(asked));
           expect(
-            (yield* collie(world, ["run", "answer", runId, "approve"], desk))
-              .envelope.ok,
+            (yield* collie(world, ["run", "answer", runId, "approve"], desk)).envelope.ok,
           ).toBe(true);
-          const answered = yield* until(
-            keys,
-            (now) => !now.includes(asked) && now.includes(ended),
-          );
+          const answered = yield* until(keys, (now) => !now.includes(asked) && now.includes(ended));
           expect(answered).toEqual([ended]);
           const disposed = yield* collie(
             world,
-            [
-              "run",
-              "disposition",
-              runId,
-              "--as",
-              "merged",
-              "--ref",
-              "mk/project!7",
-            ],
+            ["run", "disposition", runId, "--as", "merged", "--ref", "mk/project!7"],
             desk,
           );
           expect(disposed.envelope.ok).toBe(true);
@@ -170,15 +135,12 @@ test(
           expect(after).toEqual([]);
           // Retired, and kept: the journal still says what was news and that it stopped being.
           expect(
-            lines
-              .flatMap((line) => (line.kind === "superseded" ? [line.key] : []))
-              .sort(),
+            lines.flatMap((line) => (line.kind === "superseded" ? [line.key] : [])).sort(),
           ).toEqual([asked, ended].sort());
-          expect(
-            lines
-              .filter((line) => line.kind === "item")
-              .map((line) => line.key),
-          ).toEqual([asked, ended]);
+          expect(lines.filter((line) => line.kind === "item").map((line) => line.key)).toEqual([
+            asked,
+            ended,
+          ]);
         }),
       ["proof.workflow.ts", "helper.ts", "notes.md"],
     ),
@@ -215,25 +177,19 @@ test(
             Effect.gen(function* () {
               const door = yield* frontDoor(world.state);
               const head = yield* Stream.runHead(door.board());
-              return head._tag === "Some" && head.value._tag === "Snapshot"
-                ? head.value.herds
-                : [];
+              return head._tag === "Some" && head.value._tag === "Snapshot" ? head.value.herds : [];
             }),
           ).pipe(Effect.orDie);
           const newsOf = (name: string) =>
-            newsPath(
-              world.state,
-              herds.find((herd) => herd.name === name)!.id,
-            ).pipe(Effect.flatMap(readNews));
-          const builds = yield* until(
-            newsOf("builds"),
-            (lines) => lines.length > 0,
-          );
+            newsPath(world.state, herds.find((herd) => herd.name === name)!.id).pipe(
+              Effect.flatMap(readNews),
+            );
+          const builds = yield* until(newsOf("builds"), (lines) => lines.length > 0);
           const desk = yield* newsOf("desk");
           yield* stopHost(world.state);
-          expect(
-            builds.map((line) => line.kind === "item" && line.run),
-          ).toEqual([yield* runIdOf(started.envelope)]);
+          expect(builds.map((line) => line.kind === "item" && line.run)).toEqual([
+            yield* runIdOf(started.envelope),
+          ]);
           expect(desk).toEqual([]);
         }),
       ["plain.workflow.ts"],
@@ -251,9 +207,7 @@ test(
           const fs = yield* FileSystem.FileSystem;
           expect((yield* collie(world, ["board"])).envelope.ok).toBe(true);
           const log = yield* until(
-            fs
-              .readFileString(Bun.env.FAKE_HERDR_LOG!)
-              .pipe(Effect.orElseSucceed(() => "")),
+            fs.readFileString(Bun.env.FAKE_HERDR_LOG!).pipe(Effect.orElseSucceed(() => "")),
             (text) => text.includes(`"cmd":"worktree list"`),
           );
           yield* stopHost(world.state);
