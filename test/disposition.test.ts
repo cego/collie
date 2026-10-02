@@ -6,7 +6,7 @@
 // it is made against a real Run, through the CLI a person actually types: its status
 // before and after, a repeated request id, and a read that reads.
 
-import { Effect, FileSystem, Schema } from "effect";
+import { Config, Effect, FileSystem, Option, Schema } from "effect";
 import { expect, test } from "bun:test";
 import {
   dispositionPath,
@@ -34,7 +34,11 @@ const parseEnvelope = Schema.decodeUnknownEffect(Envelope);
 /** The CLI as a person runs it, against a state directory that survives between calls. */
 const cli = Effect.fn("test.cli")(function* (args: string[], env: Record<string, string>) {
   const watch = yield* watchedBy;
-  const proc = Bun.spawn([Bun.argv[0] ?? "bun", join(root, "src/main.ts"), ...args], {
+  const binary = yield* Config.option(Config.String("COLLIE_TEST_BINARY"));
+  const command = Option.isSome(binary)
+    ? [binary.value]
+    : [Bun.argv[0] ?? "bun", join(root, "src/main.ts")];
+  const proc = Bun.spawn([...command, ...args], {
     cwd: root,
     env: {
       HERDR_PLUGIN_ROOT: root,

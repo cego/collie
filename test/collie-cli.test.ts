@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { Effect, FileSystem, Schema } from "effect";
+import { Config, Effect, FileSystem, Option, Schema } from "effect";
 import { runEffect, watchedBy } from "./support/effect";
 import { installFakeSkills } from "./support/defs";
 import { readIntent, seedIntent, writeIntent } from "../src/intent";
@@ -35,7 +35,11 @@ const cli = Effect.fn("test.cli")(function* (
   const dir = yield* fs.makeTempDirectory({ prefix: "collie-cli-" });
   yield* fs.makeDirectory(join(dir, "config"), { recursive: true });
   yield* installFakeSkills(dir);
-  const proc = Bun.spawn([Bun.argv[0] ?? "bun", join(root, "src/main.ts"), ...args], {
+  const binary = yield* Config.option(Config.String("COLLIE_TEST_BINARY"));
+  const command = Option.isSome(binary)
+    ? [binary.value]
+    : [Bun.argv[0] ?? "bun", join(root, "src/main.ts")];
+  const proc = Bun.spawn([...command, ...args], {
     cwd: root,
     env: {
       HERDR_PLUGIN_ROOT: root,
