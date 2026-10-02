@@ -172,7 +172,7 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
       }),
     ),
   );
-  registerExecutor("navigate", (action, _by, env) =>
+  registerExecutor("navigate", (action) =>
     Effect.sync(() => {
       const where = [action.run, action.agent].filter((part) => part !== undefined).join(" · ");
       return { state: "applied" as const, note: where };

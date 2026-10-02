@@ -17,7 +17,8 @@ import { pickFlow, type FlowPrompts } from "../src/flows";
 import { Herdr } from "../src/herdr";
 import { connect } from "../src/host";
 import { runView, runViews } from "../src/lifecycle";
-import type { RunView } from "../src/engine";
+import { runDir, type RunView } from "../src/engine";
+import { readAudit } from "../src/audit";
 import { events, stopHost, until } from "./support/host";
 import { collie, proves as provesWith, save, type World } from "./support/world";
 
@@ -496,7 +497,14 @@ test(
           // Granted after it finished, so nothing races the gate.
           const grant = (...args: ReadonlyArray<string>) =>
             collie(world, ["run", "intent", "verification", runId, ...args]);
-          expect((yield* grant("--name", "e2e", "--", "true")).envelope.ok).toBe(true);
+          const e2e = ["--name", "e2e", "--request-id", "g-e2e", "--", "true"];
+          expect((yield* grant(...e2e)).envelope.ok).toBe(true);
+          // A retry is the same grant, recorded once under the request it was given.
+          expect((yield* grant(...e2e)).envelope.ok).toBe(true);
+          const grants = (yield* readAudit(runDir(world.state, runId))).filter(
+            (one) => one.operation === "grant",
+          );
+          expect(grants.map((one) => one.request)).toEqual(["g-e2e"]);
           // Withdrawn by name, as a human who granted the wrong thing would.
           const withdrawn = yield* grant("--name", "lint", "--remove");
           expect(withdrawn.envelope.data).toMatchObject({

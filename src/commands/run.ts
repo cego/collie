@@ -12,7 +12,7 @@ import {
 } from "effect";
 import type { BunServices } from "@effect/platform-bun/BunServices";
 import { Argument, Command, Flag } from "effect/unstable/cli";
-import { clearOverride, err, newRequestId, type Failure } from "../operations";
+import { clearOverride, err, type Failure } from "../operations";
 import { withDirLock } from "../lock";
 import { GIVEN, INFERRED, evidenceDir, runDir } from "../engine";
 import { textOf } from "../runs";
@@ -1300,7 +1300,7 @@ function intentChange(
   options: {
     readonly propagate?: boolean;
     /** What a hosted Run does instead, where it keeps this outside an Intent. */
-    readonly hosted?: (env: PluginEnv) => Effect.Effect<Result, never, BunServices>;
+    readonly hosted?: (env: PluginEnv, id: string) => Effect.Effect<Result, never, BunServices>;
   } = {},
 ) {
   return Effect.gen(function* () {
@@ -1340,7 +1340,7 @@ function intentChange(
           );
         if (hosted !== undefined)
           return yield* mutation(resolved.env, operation, requestId, (id) =>
-            hosted(resolved.env).pipe(
+            hosted(resolved.env, id).pipe(
               // The host keeps what it acts on; the Intent says the same, so what `intent
               // show` and oversight read is what the gate will run, not an empty list.
               Effect.flatMap((result): Effect.Effect<Result, CollieError, BunServices> =>
@@ -1567,12 +1567,12 @@ const intentVerification = Command.make(
         !remove && granted === null ? missing : verificationGrant(intent, name, granted),
       {
         propagate: wants,
-        hosted: (env) =>
+        hosted: (env, request) =>
           !remove && granted === null
             ? Effect.succeed(missing)
-            : Effect.all([cliDoor(env), newRequestId()]).pipe(
+            : cliDoor(env).pipe(
                 Effect.orDie,
-                Effect.flatMap(([door, request]) =>
+                Effect.flatMap((door) =>
                   grantRun(env, { runId, name, command: granted, request, door }),
                 ),
               ),
