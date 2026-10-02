@@ -949,8 +949,9 @@ const frontDoorHandlers = (
                 result: SteerOutcome,
               },
               Effect.gen(function* () {
-                const deps = yield* evaluationDeps({ ...env, herdKey: task?.herd ?? undefined });
-                const said = yield* steer(env, deps, {
+                const asker = askerEnv(client);
+                const deps = yield* evaluationDeps({ ...asker, herdKey: task?.herd ?? undefined });
+                const said = yield* steer(asker, deps, {
                   text,
                   target: runId,
                   from,

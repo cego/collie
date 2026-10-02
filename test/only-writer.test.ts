@@ -11,6 +11,8 @@ import { EVIDENCE_GATE } from "../src/board-model";
 import { connect } from "../src/host";
 import { nothingApproved } from "../src/outcome";
 import { proposalsPath, read as readProposals, record as recordProposal } from "../src/proposals";
+import { defaultsPath, readDefaults } from "../src/intent";
+import { scopeKey } from "../src/registry";
 import { stopHost, until } from "./support/host";
 import { collie, proves } from "./support/world";
 
@@ -375,6 +377,28 @@ test(
           const herds = yield* fs.readDirectory(`${world.state}/herd`);
           const journal = yield* readProposals(`${world.state}/herd/${herds[0]}/proposals.jsonl`);
           expect(answers(journal)).toMatchObject([{ kind: "confirmed" }, { kind: "confirmed" }]);
+          // A steer from another herdr session is carried out in that session.
+          const other = `${world.state}/other.sock`;
+          const defaults = answer.replace(
+            '{"kind":"none","why":"it is fine"}',
+            '{"kind":"update_defaults","change":"add-constraint","workspace":"w1","text":"no rebase"}',
+          );
+          yield* fs.writeFileString(
+            `${bin}/claude`,
+            `#!/bin/sh\n[ "$1" = --help ] && echo '${CLAUDE_HELP}' && exit 0\ncat >/dev/null\necho '${defaults}'\n`,
+            { mode: 0o755 },
+          );
+          const elsewhere = yield* connect(world.state);
+          yield* elsewhere.declare({ frontDoor: "cli", session: other });
+          const steered = yield* elsewhere.steerAbout({ ...again, request: "st-2" });
+          expect(steered.ok).toBe(true);
+          const theirs = yield* defaultsPath(
+            world.state,
+            scopeKey({ session: other, workspaceId: "w1", cwd: world.project }),
+          );
+          expect((yield* readDefaults(theirs))?.constraints.map((c) => c.text)).toEqual([
+            "no rebase",
+          ]);
           yield* stopHost(world.state);
         }).pipe(Effect.orDie),
       ["plain.workflow.ts"],
