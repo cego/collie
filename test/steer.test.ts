@@ -418,7 +418,7 @@ test("the pack says when it is not listing the whole Herd", () =>
       const path = yield* Path.Path;
       // More Runs than the pack carries, so the cap is doing something.
       const run = yield* aRun();
-      for (let n = 0; n < 42; n++) yield* aRun();
+      yield* Effect.forEach(Array.from({ length: 42 }), () => aRun(), { concurrency: 8 });
       const packFile = path.join(stateDir, "pack.txt");
       yield* fs.writeFileString(
         path.join(stateDir, "bin", "claude"),
