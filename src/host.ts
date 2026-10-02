@@ -22,7 +22,9 @@ import {
   Config,
   Crypto,
   Data,
+  Deferred,
   Effect,
+  Exit,
   FileSystem,
   Layer,
   Option,
@@ -445,6 +447,17 @@ const frontDoorHandlers = (
       // ponytail: kept for the host's life; evict by age if a host lives for months.
       const plans = new Map<string, PlanPanel | null>();
       const doorOf = (client: { readonly id: number }) => declared.get(client.id) ?? "cli";
+      type Carrying = ReturnType<typeof carryOut>;
+      /** Each carry-out still running, so a retry of its confirm answers what it came to. */
+      type Carried = Exit.Exit<Effect.Success<Carrying>, Effect.Error<Carrying>>;
+      const carrying = new Map<
+        string,
+        { readonly request: string; readonly done: Deferred.Deferred<Carried> }
+      >();
+      const carriedBy = (proposal: string, request: string) => {
+        const running = carrying.get(proposal);
+        return running?.request === request ? Effect.flatten(Deferred.await(running.done)) : null;
+      };
       // ponytail: one entry per connection, never removed, as `declared`.
       const sessions = new Map<number, string>();
       /** The serving env in the herdr session the asking channel declared, where it named one. */
@@ -715,11 +728,31 @@ const frontDoorHandlers = (
         confirm: ({ proposal, hash, request }, { client }) =>
           answeredOnce(proposal, hash, request, "confirmed", (file, lines) =>
             lines === null
-              ? carryOut(askerEnv(client), proposal, hash, {
-                  origin: doorOf(client),
-                  requestId: request,
-                })
-              : Effect.succeed({ proposal, results: stepResults(lines, proposal) }),
+              ? Effect.uninterruptible(
+                  Effect.gen(function* () {
+                    // The same request twice at once: the second waits for the first.
+                    const running = carriedBy(proposal, request);
+                    if (running !== null) return yield* running;
+                    const done = yield* Deferred.make<Carried>();
+                    carrying.set(proposal, { request, done });
+                    const exit = yield* Effect.exit(
+                      carryOut(askerEnv(client), proposal, hash, {
+                        origin: doorOf(client),
+                        requestId: request,
+                      }),
+                    );
+                    carrying.delete(proposal);
+                    yield* Deferred.succeed(done, exit);
+                    return yield* exit;
+                  }),
+                )
+              : Effect.suspend(
+                  () =>
+                    carriedBy(proposal, request) ??
+                    readProposals(file).pipe(
+                      Effect.map((now) => ({ proposal, results: stepResults(now, proposal) })),
+                    ),
+                ),
           ),
         decline: ({ proposal, hash, request }, { client }) =>
           answeredOnce(proposal, hash, request, "declined", (file, lines) =>

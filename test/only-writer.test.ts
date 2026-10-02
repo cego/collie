@@ -3,7 +3,7 @@
 // is one operation.
 
 import { expect, test } from "bun:test";
-import { Effect, FileSystem, Schema } from "effect";
+import { Effect, Fiber, FileSystem, Schema } from "effect";
 import { readAudit } from "../src/audit";
 import { readDispositions } from "../src/disposition";
 import { runDir } from "../src/engine";
@@ -66,6 +66,56 @@ test(
             .decline({ proposal: "p-none", hash: "x", request: "r-3" })
             .pipe(Effect.flip);
           expect(missing).toMatchObject({ _tag: "ProposalRefused", refused: "not_found" });
+          yield* stopHost(world.state);
+        }).pipe(Effect.orDie),
+      [],
+    ),
+  120_000,
+);
+
+test(
+  "a confirm retried while its carry-out still runs answers what it came to",
+  () =>
+    proves(
+      "collie-writer-inflight-",
+      (world) =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const hold = `${world.state}/hold-pane-list`;
+          yield* fs.writeFileString(hold, "");
+          Bun.env.FAKE_HERDR_HOLD_PANE_LIST = hold;
+          yield* Effect.addFinalizer(() =>
+            Effect.sync(() => delete Bun.env.FAKE_HERDR_HOLD_PANE_LIST),
+          );
+          const file = yield* proposalsPath(world.state, "some-herd");
+          const proposal = yield* recordProposal(file, {
+            interpretation: "tidy the Home",
+            targets: [],
+            actions: [{ kind: "home_cleanup" }],
+            allowedNow: [],
+            intentVersions: {},
+            by: "evaluator:e-1",
+          });
+          const yes = { proposal: proposal.id, hash: proposal.content_hash, request: "r-1" };
+          // The first asker hangs up once its step has started.
+          const first = yield* Effect.forkChild(
+            Effect.scoped(Effect.flatMap(connect(world.state), (client) => client.confirm(yes))),
+          );
+          yield* until(
+            () => readProposals(file),
+            (lines) => lines.some((line) => line.kind === "step" && line.state === "started"),
+          );
+          yield* Fiber.interrupt(first);
+          const retried = yield* Effect.forkChild(
+            Effect.scoped(Effect.flatMap(connect(world.state), (client) => client.confirm(yes))),
+          );
+          // Long enough for the retry to reach the host while the step is still held.
+          yield* Effect.sleep("1 second");
+          yield* fs.remove(hold);
+          const answered = yield* Fiber.join(retried);
+          expect(answered.results).toMatchObject([
+            { index: 0, kind: "home_cleanup", state: "applied" },
+          ]);
           yield* stopHost(world.state);
         }).pipe(Effect.orDie),
       [],
