@@ -730,7 +730,7 @@ const RIGHT_BUTTON = 2;
     aiming at Confirm is not asking for. */
 /** The header's buttons: three rows, the height of the field beside them. */
 /**
- * The brand signature — Luma and the lettering, the light version for dark ground — where
+ * The brand signature — the mascot and the lettering, the light version for dark ground — where
  * there is one to draw: the bitmap itself over the Kitty graphics protocol, three rows
  * tall like the controls beside it. The caller decides whether
  * every human looking at this pane can see a picture (`outer.ts`); a board that cannot

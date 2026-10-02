@@ -1,4 +1,4 @@
-<img src="assets/brand/logos/collie-horizontal-light-1024.png" alt="Collie with Luma, its green and white dog logo" width="360" />
+<img src="assets/brand/logos/collie-horizontal-light-1024.png" alt="Collie with its black and white dog logo" width="360" />
 
 Running several coding agents at once turns into babysitting: one tab per agent, each
 waiting on you at a different moment, and no single place that says what needs a decision.
@@ -7,7 +7,7 @@ Collie opens the tabs, runs the agents, reviews their work, and brings you back 
 decisions that are yours. One board shows every task in the session: what needs you, what
 is working, what finished.
 
-https://github.com/user-attachments/assets/2a42a576-e263-4412-bf00-2dec314f38b5
+[![Watch the Collie launch film in black and white](assets/video/collie-launch-poster.jpg)](assets/video/collie-launch.mp4)
 
 ## Install
 

@@ -490,7 +490,7 @@ waiting on you. 4 working, 1 gone quiet. 3 waiting on you.` — the last count b
 week's endings, the older ones sitting behind the fold — amber while anything needs
 you and muted otherwise. Beside it, a search field (`/`) matching a task's name, its project, its branch
 and what its agents are called and are doing, and **New run**. At the left, the brand
-signature — Luma and the lettering, drawn as a picture over the Kitty graphics protocol —
+signature — the mascot and the lettering, drawn as a picture over the Kitty graphics protocol —
 appears when every terminal attached to herdr paints such pictures (Ghostty, kitty,
 WezTerm; not Alacritty); otherwise the plain `collie` wordmark stands there instead. herdr answers the protocol's handshake on its own, so the board reads the
 attached clients' `TERM` instead, and draws no mark rather than a blank when unsure.
