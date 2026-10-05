@@ -791,8 +791,16 @@ export const cardCheckpoints = Effect.fn("Oversight.cardCheckpoints")(function* 
   for (const { file, checkpoint } of done) {
     const key = `${file}@${checkpoint.at}`;
     if (carded.has(key)) continue;
-    yield* fs.writeFileString(cardedPath(at.runDir), `${key}\n`, { flag: "a" }).pipe(Effect.ignore);
-    written.push(yield* writeCard(at, { kind: "slice", step, claims: checkpoint.claims }));
+    // Together: a watch interrupted between the two would leave a ticket marked but never carded.
+    const card = yield* Effect.uninterruptible(
+      fs
+        .writeFileString(cardedPath(at.runDir), `${key}\n`, { flag: "a" })
+        .pipe(
+          Effect.ignore,
+          Effect.andThen(writeCard(at, { kind: "slice", step, claims: checkpoint.claims })),
+        ),
+    );
+    written.push(card);
   }
   return written;
 });
