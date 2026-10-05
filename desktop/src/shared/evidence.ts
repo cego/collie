@@ -2,10 +2,25 @@
 
 import type { EvidenceFile } from "../../../src/board-model";
 
-export const IMAGE = /\.(png|jpe?g|gif|webp|svg|avif)$/i;
-export const VIDEO = /\.(mp4|webm|mov|ogv)$/i;
-export const REPORT = /\.html?$/i;
-export const LOG = /\.(txt|log|out|json|jsonl|md|xml|csv|ya?ml|tap)$/i;
+const MEDIA = new Map([
+  ["png", "image/png"],
+  ["jpg", "image/jpeg"],
+  ["jpeg", "image/jpeg"],
+  ["gif", "image/gif"],
+  ["webp", "image/webp"],
+  ["svg", "image/svg+xml"],
+  ["avif", "image/avif"],
+  ["mp4", "video/mp4"],
+  ["webm", "video/webm"],
+  ["mov", "video/quicktime"],
+  ["ogv", "video/ogg"],
+]);
+
+/** An image's or a video's media type, by its extension; null for anything else. */
+export const mediaType = (name: string) =>
+  MEDIA.get(name.split(".").at(-1)?.toLowerCase() ?? "") ?? null;
+
+const REPORT = /\.html?$/i;
 
 /** One place in the gallery: a before/after pair, or a shot on its own. */
 export interface GalleryItem {
@@ -21,33 +36,27 @@ const SIDE = /(^|[._-])(before|after)(?=[._-]|$)/i;
 const byName = (a: EvidenceFile, b: EvidenceFile) => a.name.localeCompare(b.name);
 
 export const sortEvidence = (files: ReadonlyArray<EvidenceFile>) => {
-  const halves = new Map<string, { before?: EvidenceFile; after?: EvidenceFile }>();
+  const pairs = new Map<string, { before?: EvidenceFile; after?: EvidenceFile }>();
   const shots: GalleryItem[] = [];
-  for (const file of files.filter(({ name }) => IMAGE.test(name))) {
+  const alone = (file: EvidenceFile) => shots.push({ key: file.name, alone: file });
+  const kind = (file: EvidenceFile) => mediaType(file.name)?.split("/")[0];
+  for (const file of [...files].sort(byName).filter((one) => kind(one) === "image")) {
     const side = SIDE.exec(file.name);
-    if (side === null) {
-      shots.push({ key: file.name, alone: file });
-      continue;
-    }
     const key = file.name.replace(SIDE, "").replace(/^[._-]/, "");
-    const pair = halves.get(key) ?? {};
-    halves.set(key, { ...pair, [side[2]!.toLowerCase()]: file });
+    const which = side?.[2]!.toLowerCase() === "before" ? "before" : "after";
+    const pair = pairs.get(key) ?? {};
+    if (side === null || pair[which] !== undefined) alone(file);
+    else pairs.set(key, { ...pair, [which]: file });
   }
-  for (const [key, { before, after }] of halves) {
+  for (const [key, { before, after }] of pairs) {
     if (before !== undefined && after !== undefined) shots.push({ key, before, after });
-    else {
-      const alone = (before ?? after)!;
-      shots.push({ key: alone.name, alone });
-    }
+    else alone((before ?? after)!);
   }
-  const rest = files.filter(({ name }) => !IMAGE.test(name));
+  const rest = files.filter((file) => kind(file) !== "image");
   return {
     gallery: shots.sort((a, b) => a.key.localeCompare(b.key)),
-    videos: rest.filter(({ name }) => VIDEO.test(name)).sort(byName),
+    videos: rest.filter((file) => kind(file) === "video").sort(byName),
     reports: rest.filter(({ name }) => REPORT.test(name)).sort(byName),
-    logs: rest.filter(({ name }) => LOG.test(name)).sort(byName),
-    others: rest
-      .filter(({ name }) => !VIDEO.test(name) && !REPORT.test(name) && !LOG.test(name))
-      .sort(byName),
+    files: rest.filter((file) => kind(file) !== "video" && !REPORT.test(file.name)).sort(byName),
   };
 };

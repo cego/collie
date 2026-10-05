@@ -2,7 +2,8 @@
 import type { EvidenceFile } from "../../../../src/board-model";
 
 const props = defineProps<{ file: EvidenceFile; installation: string; runId: string }>();
-const { url, failed } = useEvidenceUrl(props.installation, props.runId, () => props.file.name);
+const { url, state, load } = useEvidenceUrl(props.installation, props.runId, props.file.name);
+load();
 </script>
 
 <template>
@@ -13,7 +14,9 @@ const { url, failed } = useEvidenceUrl(props.installation, props.runId, () => pr
       :alt="file.name"
       class="max-h-80 w-full rounded border border-default object-contain"
     />
-    <p v-else class="text-sm text-muted">{{ failed ? "Could not be read." : "Reading…" }}</p>
+    <p v-else class="text-sm text-muted">
+      {{ state === "failed" ? "Could not be read." : "Reading…" }}
+    </p>
     <figcaption class="truncate text-xs text-muted">{{ file.name }}</figcaption>
   </figure>
 </template>

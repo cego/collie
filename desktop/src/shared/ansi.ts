@@ -19,7 +19,9 @@ const colour256 = (n: number) => {
   return `rgb(${CUBE[Math.floor(at / 36)]}, ${CUBE[Math.floor(at / 6) % 6]}, ${CUBE[at % 6]})`;
 };
 
-const ESCAPE = /\x1b\[([\d;]*)([A-Za-z])/g;
+const ESCAPE = /\x1b\[([\d;?]*)([A-Za-z])/g;
+/** Operating-system commands, such as a link's, and character-set choices. */
+const OTHER = /\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[()][\w]/g;
 
 /** What each plain SGR code sets, or which keys it clears. */
 const SETS = new Map<number, readonly [string, string]>([
@@ -36,7 +38,8 @@ const CLEARS = new Map<number, ReadonlyArray<string>>([
   [49, ["backgroundColor"]],
 ]);
 
-export const ansiSpans = (text: string): ReadonlyArray<AnsiSpan> => {
+export const ansiSpans = (output: string): ReadonlyArray<AnsiSpan> => {
+  const text = output.replace(OTHER, "");
   const spans: AnsiSpan[] = [];
   let style: AnsiSpan["style"] = {};
   const set = (key: string, value: string) => (style = { ...style, [key]: value });

@@ -866,11 +866,13 @@ a comment spanning its lines is coloured on all of them. A file is read from the
 it is opened, and again when the Run changes it, with no line cap; a file with more than
 500 changed lines, or a binary one, starts collapsed. **Evidence** is the Run's
 verifications as a checklist, those that did not do what they were expected to first and
-already open with their output in its terminal colours; the logs it kept, each read when
-opened and searchable; its screenshots as a gallery, a `before` beside its `after` where
-their names pair them, twelve to a page; its videos, played inline; its HTML reports, such
-as Lighthouse or Playwright, in a sandboxed frame that runs their scripts but can reach
-neither Desktop nor the network; and its metrics as a table. **Log**
+already open with their output in its terminal colours; the logs and files it kept, each
+read when opened and searchable; its screenshots as a gallery, a `before` beside its
+`after` where their names pair them, twelve to a page; its videos, read and played when
+asked; its HTML reports, such as Lighthouse, in a sandboxed frame that runs their scripts
+in an origin of their own, with a policy that loads nothing from the network; and its
+metrics as a table. A report that keeps its attachments in files beside it shows without
+them. **Log**
 follows the end of the Run's log as it is written, with a search that keeps only the lines
 that match. **Merge request** shows what the host's merge watch last read — title, state,
 pipeline, approvals and comments — with Open in browser. **Facts** shows the Run's intent,

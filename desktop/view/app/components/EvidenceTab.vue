@@ -11,15 +11,22 @@ const failedCheck = (check: VerificationView) => check.result !== check.expect;
 const checks = computed(() =>
   [...props.detail.verifications].sort((a, b) => Number(failedCheck(b)) - Number(failedCheck(a))),
 );
-const RESULTS = {
-  pass: { icon: "i-lucide-circle-check", color: "text-success" },
-  fail: { icon: "i-lucide-circle-x", color: "text-error" },
-  unstable: { icon: "i-lucide-circle-alert", color: "text-warning" },
-} as const;
+/** Whether it did what it was expected to, which a check expected to fail can. */
+const verdictOf = (check: VerificationView) =>
+  check.result === "unstable"
+    ? { icon: "i-lucide-circle-alert", color: "text-warning", verdict: "unstable" }
+    : failedCheck(check)
+      ? { icon: "i-lucide-circle-x", color: "text-error", verdict: "failed" }
+      : { icon: "i-lucide-circle-check", color: "text-success", verdict: "met" };
 
 /** Shots per page, a before/after pair counting as one. */
 const PAGE = 12;
 const page = ref(1);
+// A Run whose evidence shrinks never leaves the gallery on a page past its end.
+watch(
+  () => Math.max(1, Math.ceil(sorted.value.gallery.length / PAGE)),
+  (last) => (page.value = Math.min(page.value, last)),
+);
 const shots = computed(() =>
   sorted.value.gallery.slice((page.value - 1) * PAGE, page.value * PAGE),
 );
@@ -27,7 +34,10 @@ const shots = computed(() =>
 const metrics = computed(() => {
   const m = props.detail.outcome.metrics;
   return [
-    ["Time to first evidence", m.timeToFirstEvidence === null ? "—" : `${m.timeToFirstEvidence}s`],
+    [
+      "Time to first evidence",
+      m.timeToFirstEvidence === null ? "—" : `${Math.round(m.timeToFirstEvidence)}s`,
+    ],
     [
       "Verifications",
       `${m.verifications.pass} pass · ${m.verifications.fail} fail · ${m.verifications.unstable} unstable · ${m.verifications.byCollie} by Collie`,
@@ -60,9 +70,9 @@ const metrics = computed(() => {
       >
         <template #leading>
           <UIcon
-            :name="RESULTS[check.result].icon"
-            :class="RESULTS[check.result].color"
-            :data-result="check.result"
+            :name="verdictOf(check).icon"
+            :class="verdictOf(check).color"
+            :data-verdict="verdictOf(check).verdict"
           />
         </template>
         <template #trailing>
@@ -77,7 +87,7 @@ const metrics = computed(() => {
     <section v-if="sorted.gallery.length > 0" class="flex flex-col gap-2" data-testid="gallery">
       <h3 class="font-semibold">Screenshots</h3>
       <div class="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-3">
-        <template v-for="shot in shots" :key="shot.key">
+        <template v-for="shot in shots" :key="`${shot.alone ? 'shot' : 'pair'}:${shot.key}`">
           <div
             v-if="shot.before && shot.after"
             class="col-span-full flex gap-3"
@@ -125,10 +135,10 @@ const metrics = computed(() => {
       />
     </section>
 
-    <section v-if="sorted.logs.length > 0" class="flex flex-col gap-2" data-testid="logs">
-      <h3 class="font-semibold">Logs</h3>
+    <section v-if="sorted.files.length > 0" class="flex flex-col gap-2" data-testid="files">
+      <h3 class="font-semibold">Logs and files</h3>
       <EvidenceText
-        v-for="file in sorted.logs"
+        v-for="file in sorted.files"
         :key="file.name"
         :data-testid="`file-${file.name}`"
         :title="file.name"
@@ -140,16 +150,6 @@ const metrics = computed(() => {
           <small class="text-muted">{{ file.bytes }} bytes</small>
         </template>
       </EvidenceText>
-    </section>
-
-    <section v-if="sorted.others.length > 0" data-testid="files">
-      <h3 class="mb-2 font-semibold">Other files</h3>
-      <ul>
-        <li v-for="file in sorted.others" :key="file.name" class="flex gap-2">
-          <code>{{ file.name }}</code>
-          <small class="text-muted">{{ file.bytes }} bytes</small>
-        </li>
-      </ul>
     </section>
 
     <section data-testid="metrics">

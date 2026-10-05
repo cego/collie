@@ -3,7 +3,7 @@
 
 import { expect, test } from "bun:test";
 import { ansiLines, ansiSpans } from "../src/shared/ansi";
-import { sortEvidence } from "../src/shared/evidence";
+import { mediaType, sortEvidence } from "../src/shared/evidence";
 
 test("terminal colours become styled spans, and a reset ends them", () => {
   expect(ansiSpans("ok \x1b[31;1mFAIL\x1b[0m done")).toEqual([
@@ -26,6 +26,12 @@ test("bright colours, and codes that are not colours, are understood or dropped"
     { text: "green", style: { color: "var(--ansi-10)" } },
     { text: "x", style: { color: "var(--ansi-10)", fontStyle: "italic" } },
     { text: "y", style: { color: "var(--ansi-10)", fontStyle: "italic" } },
+  ]);
+});
+
+test("escapes that are not colours, a link's or a charset's included, never reach the text", () => {
+  expect(ansiSpans("\x1b]8;;https://x.test\x07link\x1b]8;;\x07 \x1b(Bdone\x1b[2K")).toEqual([
+    { text: "link done", style: {} },
   ]);
 });
 
@@ -58,17 +64,33 @@ test("before and after shots of one view are paired, whatever side of the name s
   ]);
 });
 
-test("a half of a pair with no other half stands alone", () => {
-  const { gallery } = sortEvidence([file("login_before.png")]);
-  expect(gallery).toEqual([{ key: "login_before.png", alone: file("login_before.png") }]);
+test("a half of a pair with no other half, or a second shot of one side, stands alone", () => {
+  const { gallery } = sortEvidence(
+    ["login_before.png", "home.before.png", "home-before.png", "home.after.png"].map(file),
+  );
+  expect(
+    gallery.map((item) => item.alone?.name ?? `${item.before?.name}|${item.after?.name}`),
+  ).toEqual([
+    // The first by name takes the side; the second is a shot of its own.
+    "home.before.png",
+    "home-before.png|home.after.png",
+    "login_before.png",
+  ]);
 });
 
-test("videos, HTML reports, logs and everything else are kept apart", () => {
+test("videos, HTML reports, and every other file are kept apart", () => {
   const sorted = sortEvidence(
-    ["run.webm", "demo.MP4", "lighthouse.html", "suite.log", "data.bin", "junit.xml"].map(file),
+    ["run.webm", "demo.MP4", "lighthouse.html", "suite.log", "stdout", "junit.xml"].map(file),
   );
   expect(sorted.videos.map((one) => one.name)).toEqual(["demo.MP4", "run.webm"]);
   expect(sorted.reports.map((one) => one.name)).toEqual(["lighthouse.html"]);
-  expect(sorted.logs.map((one) => one.name)).toEqual(["junit.xml", "suite.log"]);
-  expect(sorted.others.map((one) => one.name)).toEqual(["data.bin"]);
+  expect(sorted.files.map((one) => one.name)).toEqual(["junit.xml", "stdout", "suite.log"]);
+});
+
+test("a media file's type is known by its extension", () => {
+  expect([mediaType("a.PNG"), mediaType("b.webm"), mediaType("c.log")]).toEqual([
+    "image/png",
+    "video/webm",
+    null,
+  ]);
 });

@@ -210,10 +210,12 @@ const PNG = {
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
 };
 const REPORT = [
-  "<!doctype html><html><head><title>Lighthouse</title></head><body>",
+  // No head of its own, and a header the policy must not be put in.
+  "<!doctype html><html><body><header>Lighthouse</header>",
   '<p id="score">Score 97</p>',
   "<script>",
   'document.getElementById("score").textContent += " (scripted)";',
+  'document.body.append(" " + document.compatMode);',
   'try { parent.document.title = "pwned"; } catch { document.body.append(" kept out"); }',
   'fetch("https://example.com/").then(() => document.body.append(" fetched"), () => document.body.append(" offline"));',
   "</script></body></html>",
@@ -616,6 +618,16 @@ test(
           checks.getByTestId("evidence-text-open").first().locator("span.flex-1"),
           "lint",
         );
+        const verdictOf = (name: string) =>
+          Effect.promise(() =>
+            checks
+              .getByTestId(`check-${name}`)
+              .locator("[data-verdict]")
+              .getAttribute("data-verdict"),
+          );
+        expect(yield* verdictOf("lint")).toBe("failed");
+        // Expected to fail, and it did: what it was meant to show.
+        expect(yield* verdictOf("regression")).toBe("met");
         const lint = checks.getByTestId("check-lint");
         const fail = lint.locator("[data-testid='ansi-lines'] span", { hasText: "FAIL" });
         expect(
@@ -717,7 +729,10 @@ test(
       Effect.gen(function* () {
         yield* opened;
         yield* Effect.promise(() => tab("Evidence").click());
-        const video = evidence().getByTestId("video-demo.webm").locator("video");
+        const player = evidence().getByTestId("video-demo.webm");
+        expect(yield* Effect.promise(() => player.locator("video").count())).toBe(0);
+        yield* Effect.promise(() => player.getByTestId("video-play").click());
+        const video = player.locator("video");
         yield* settled("the video", () =>
           video
             .getAttribute("src", { timeout: 1000 })
@@ -734,7 +749,9 @@ test(
           inside
             .innerText({ timeout: 1000 })
             .then((text) =>
-              ["Score 97 (scripted)", "kept out", "offline"].every((part) => text.includes(part))
+              ["Score 97 (scripted)", "CSS1Compat", "kept out", "offline"].every((part) =>
+                text.includes(part),
+              )
                 ? text
                 : undefined,
             ),

@@ -11,12 +11,17 @@ const { textOf } = useActions();
 const open = ref(props.initiallyOpen ?? false);
 const text = ref<string | null>(null);
 const failed = ref(false);
+let reading = false;
 watch(
   open,
-  async (now) => {
-    if (!now || text.value !== null) return;
-    text.value = await textOf(props.installation, props.runId, props.item);
-    failed.value = text.value === null;
+  (now) => {
+    if (!now || text.value !== null || reading) return;
+    reading = true;
+    void textOf(props.installation, props.runId, props.item).then((read) => {
+      reading = false;
+      text.value = read;
+      failed.value = read === null;
+    });
   },
   { immediate: true },
 );

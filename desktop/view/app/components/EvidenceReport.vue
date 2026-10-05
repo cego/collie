@@ -5,22 +5,31 @@ const props = defineProps<{ file: EvidenceFile; installation: string; runId: str
 const { textOf } = useActions();
 
 /**
- * Nothing it may fetch, and nothing of Desktop's it may reach: scripts run, as a report
- * needs them to, in an origin of their own.
+ * Nothing it may fetch, first in its head so it holds before any of the report's own
+ * scripts run; and, sandboxed, an origin of its own, so nothing of Desktop's is in reach.
  */
 const POLICY =
-  `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; ` +
-  `script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; ` +
-  `font-src data:; media-src data: blob:">`;
-const confined = (html: string) =>
-  /<head[^>]*>/i.test(html) ? html.replace(/<head[^>]*>/i, (head) => head + POLICY) : POLICY + html;
+  "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; " +
+  "img-src data: blob:; font-src data:; media-src data: blob:";
+const confined = (html: string) => {
+  const report = new DOMParser().parseFromString(html, "text/html");
+  const meta = report.createElement("meta");
+  meta.httpEquiv = "Content-Security-Policy";
+  meta.content = POLICY;
+  report.head.prepend(meta);
+  return `<!doctype html>${report.documentElement.outerHTML}`;
+};
 
 const open = ref(false);
 const html = ref<string | null>(null);
-watch(open, async (now) => {
-  if (!now || html.value !== null) return;
-  const text = await textOf(props.installation, props.runId, `evidence:${props.file.name}`);
-  if (text !== null) html.value = confined(text);
+let reading = false;
+watch(open, (now) => {
+  if (!now || html.value !== null || reading) return;
+  reading = true;
+  void textOf(props.installation, props.runId, `evidence:${props.file.name}`).then((text) => {
+    reading = false;
+    if (text !== null) html.value = confined(text);
+  });
 });
 </script>
 
