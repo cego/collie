@@ -32,10 +32,17 @@ const SPEC = [
   "",
   "![a pixel](https://example.com/pixel.png)",
   "",
+  '<img srcset="https://example.com/srcset.png 1x" alt="a far pixel">',
+  "",
+  '<div style="position:fixed;inset:0;background:url(https://example.com/style.png)">over all</div>',
+  "",
   "See [the brands ticket](issues/02-brands.md), and [a lost one](issues/99-lost.md).",
 ].join("\n");
 
-/** Over a thousand, every one of which is drawn. */
+/** Longer than the host's cap, so the drawer reads it whole by reference. */
+const REVIEW = "## Review\n\nLooks **right**, but see `src/seed.ts:3`.\n\nRead to the end.";
+
+/** A diff longer than a thousand lines, drawn whole. */
 const BIG_LINES = 1200;
 
 const LOG = ["starting", "loading brands", "seeded spilnu"];
@@ -49,9 +56,13 @@ const detail = (tail: ReadonlyArray<string>, seedAdded = 2): RunDetail => ({
   steps: [],
   handoffs: [],
   intent: { goal: "Seed every brand", constraints: ["no production writes"] },
-  review: { _tag: "Text", text: "## Review\n\nLooks **right**.", truncated: false },
+  review: {
+    _tag: "Text",
+    text: REVIEW.slice(0, 40),
+    truncated: true,
+  },
   plan: {
-    spec: { _tag: "Text", text: SPEC, truncated: false },
+    spec: { _tag: "Text", text: SPEC, truncated: true },
     tickets: [
       { file: "01-loader.md", title: "The loader", done: true },
       { file: "02-brands.md", title: "Brands per environment", done: false },
@@ -229,6 +240,7 @@ const REPORT = [
 ].join("");
 
 const FILES = {
+  "r-seed review": REVIEW,
   "r-seed verification:v-unit": "12 pass",
   "r-seed verification:v-lint":
     "\x1b[31mFAIL\x1b[0m src/seed.ts\n\x1b[32mok\x1b[0m src/load.ts\nfound 1 problem",
@@ -276,11 +288,14 @@ beforeAll(
   () =>
     run(
       Effect.gen(function* () {
-        app = yield* launch([], (flock) =>
-          serve(`${flock}/${LOCAL}`, "pc", [SEEDING], undefined, {
-            details: { "r-seed": detail(LOG) },
-            files: FILES,
-          }),
+        app = yield* launch(
+          [],
+          (flock) =>
+            serve(`${flock}/${LOCAL}`, "pc", [SEEDING], undefined, {
+              details: { "r-seed": detail(LOG) },
+              files: FILES,
+            }),
+          true,
         );
       }),
     ),
@@ -347,6 +362,11 @@ test(
             .count()
             .then((n) => n || undefined),
         );
+        // The rest of a cut spec is not on the scripted host, so the drawer says it is cut.
+        yield* reads(
+          plan.getByTestId("cut").first(),
+          "This is cut short, and the rest could not be read.",
+        );
         expect(yield* Effect.promise(() => plan.locator("script").count())).toBe(0);
         expect(yield* Effect.promise(() => plan.locator("[onerror]").count())).toBe(0);
         expect(yield* Effect.promise(() => plan.locator("img[src^='http']").count())).toBe(0);
@@ -398,6 +418,8 @@ test(
         const review = drawer().getByTestId("review");
         yield* reads(review.getByRole("heading"), "Review");
         yield* reads(review.locator("strong", { hasText: "right" }), "right");
+        yield* reads(review.getByText("Read to the end."), "Read to the end.");
+        expect(yield* Effect.promise(() => review.getByTestId("cut").count())).toBe(0);
         yield* reads(
           review.getByTestId("findings").getByTestId("finding-location").first(),
           "src/seed.ts:3",
@@ -807,21 +829,118 @@ test(
               .catch(() => "")
               .then((log) => log.split("\n").includes(what) || undefined),
           );
+        const fs = yield* FileSystem.FileSystem;
+        yield* fs.writeFileString(`${app!.flock}/browser`, "firefox.desktop\n");
         yield* Effect.promise(() => links.getByTestId("link-artifact").click());
         yield* asked("https://claude.ai/artifact/5eed");
 
-        const fs = yield* FileSystem.FileSystem;
         const applications = `${app!.flock}/share/applications`;
         yield* fs.makeDirectory(applications, { recursive: true });
         yield* fs.writeFileString(
           `${applications}/brave-browser.desktop`,
-          `[Desktop Entry]\nName=Brave\nExec=${app!.flock}/brave %U\n`,
+          `[Desktop Entry]\nName=Brave\nExec=${app!.flock}/browsers/brave %U\n`,
         );
         yield* fs.writeFileString(`${app!.flock}/browser`, "brave-browser.desktop\n");
         yield* Effect.promise(() =>
           links.getByTestId("link-link").filter({ hasText: "kibana" }).click(),
         );
         yield* asked("brave --app=https://kibana.cego.dk/app/seed");
+      }),
+    ),
+  30_000,
+);
+
+/** What the view's policy refused from now on, by directive and address. */
+const watchRefusals = () =>
+  app!.page.evaluate(() => {
+    const seen: Array<string> = [];
+    Reflect.set(window, "refused", seen);
+    document.addEventListener("securitypolicyviolation", (event) =>
+      seen.push(`${event.effectiveDirective} ${event.blockedURI}`),
+    );
+  });
+const refusals = () =>
+  app!.page.evaluate((): Array<string> => Reflect.get(window, "refused") ?? []);
+
+test(
+  "agent markdown fetches nothing from the network, and lays nothing over the window",
+  () =>
+    run(
+      Effect.gen(function* () {
+        yield* opened;
+        yield* Effect.promise(() => tab("Facts").click());
+        yield* Effect.promise(watchRefusals);
+        yield* Effect.promise(() => tab("Plan").click());
+        const plan = drawer().getByTestId("plan");
+        yield* reads(plan.getByText("over all"), "over all");
+        expect(
+          yield* Effect.promise(() => plan.getByText("over all").getAttribute("style")),
+        ).toBeNull();
+        expect(
+          yield* Effect.promise(() => plan.locator("[style*='fixed'], [style*='url(']").count()),
+        ).toBe(0);
+        const refused = yield* settled("the far pixel refused", () =>
+          refusals().then((seen) =>
+            seen.some((one) => one.startsWith("img-src https://example.com/srcset"))
+              ? seen
+              : undefined,
+          ),
+        );
+        const fetched = yield* Effect.promise(() =>
+          app!.page.evaluate(() =>
+            performance
+              .getEntriesByType("resource")
+              .map((entry) => entry.name)
+              .filter((name) => name.startsWith("http")),
+          ),
+        );
+        // Chromium lists a refused load among its resources too, so each must be a refusal.
+        const blocked = new Set(refused.map((one) => one.split(" ")[1]));
+        expect(fetched.filter((name) => !blocked.has(name))).toEqual([]);
+      }),
+    ),
+  30_000,
+);
+
+test(
+  "a report cannot navigate its own frame away",
+  () =>
+    run(
+      Effect.gen(function* () {
+        yield* opened;
+        yield* Effect.promise(() => tab("Evidence").click());
+        yield* Effect.promise(watchRefusals);
+        const report = evidence().getByTestId("report-lighthouse.html");
+        if (!(yield* Effect.promise(() => report.locator("iframe").isVisible())))
+          yield* Effect.promise(() => report.getByTestId("report-open").click());
+        yield* Effect.promise(() =>
+          report
+            .frameLocator("iframe")
+            .locator("body")
+            .evaluate(() => void (location.href = "https://example.com/leak")),
+        );
+        yield* settled("the navigation refused", () =>
+          refusals().then(
+            (seen) =>
+              seen.some((one) => one.startsWith("frame-src https://example.com")) || undefined,
+          ),
+        );
+      }),
+    ),
+  30_000,
+);
+
+test(
+  "a file:line in markdown jumps to that line",
+  () =>
+    run(
+      Effect.gen(function* () {
+        yield* opened;
+        yield* Effect.promise(() => tab("Review").click());
+        yield* Effect.promise(() =>
+          drawer().getByTestId("review").getByTestId("markdown").getByTestId("file-ref").click(),
+        );
+        yield* reads(seed().locator("[data-target]").locator("td").last(), "and again */");
       }),
     ),
   30_000,

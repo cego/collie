@@ -36,24 +36,24 @@ export const serve = (
 export const LOCAL = "local.json";
 
 /**
- * herdr's list; a default browser, Firefox unless `browser` names another, and two that
- * log what they were asked to open; a master that logs when it
- * opens and closes, and which `-O check` finds once it is open; and a passenger that runs its remote command as a Machine's login
- * shell would, with `collie` on PATH.
+ * herdr's list; under `browsers/`, the default browser that `browser` names and two that
+ * log what they were asked to open; a master that logs when it opens and closes, and which
+ * `-O check` finds once it is open; and a passenger that runs its remote command as a
+ * Machine's login shell would, with `collie` on PATH.
  */
 const scripts = (flock: string) => ({
   herdr: `#!/bin/sh
 [ "$*" = "machine list --json" ] || exit 2
 cat '${flock}/machines.json'
 `,
-  "xdg-open": `#!/bin/sh
+  "browsers/xdg-open": `#!/bin/sh
 echo "$1" >> '${flock}/opened.log'
 `,
-  "xdg-settings": `#!/bin/sh
-[ "$*" = "get default-web-browser" ] || exit 2
-cat '${flock}/browser' 2>/dev/null || echo firefox.desktop
+  "browsers/xdg-settings": `#!/bin/sh
+[ "$*" = "get default-web-browser" ] && exec cat '${flock}/browser'
+exit 2
 `,
-  brave: `#!/bin/sh
+  "browsers/brave": `#!/bin/sh
 echo "brave $*" >> '${flock}/opened.log'
 `,
   ssh: `#!/bin/bash
@@ -122,12 +122,15 @@ export interface App {
 export const launch = (
   machines: ReadonlyArray<Saved>,
   boards: (flock: string) => Effect.Effect<void, unknown, FileSystem.FileSystem>,
+  // Only where a test opens links: CEF runs these too, and a quit then leaves masters open.
+  browsers = false,
 ) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const scratch = yield* fs.makeTempDirectory({ prefix: "collie-desktop-" });
     const flock = `${scratch}/flock`;
     yield* fs.makeDirectory(`${flock}/remote`, { recursive: true });
+    yield* fs.makeDirectory(`${flock}/browsers`);
     for (const [name, script] of Object.entries(scripts(flock))) {
       yield* fs.writeFileString(`${flock}/${name}`, script);
       yield* fs.chmod(`${flock}/${name}`, 0o755);
@@ -151,8 +154,8 @@ export const launch = (
         ...Bun.env,
         // CEF keeps one profile per user, so a test's app must not find the operator's.
         HOME: scratch,
-        PATH: `${flock}:${Bun.env.PATH}`,
-        XDG_DATA_HOME: `${flock}/share`,
+        PATH: `${browsers ? `${flock}/browsers:` : ""}${flock}:${Bun.env.PATH}`,
+        ...(browsers ? { XDG_DATA_HOME: `${flock}/share` } : {}),
         COLLIE_DESKTOP_COLLIE: asCommand([process.execPath, HOST, `${flock}/${LOCAL}`]),
       },
       stdout: "ignore",

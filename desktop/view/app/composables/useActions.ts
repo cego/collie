@@ -2,7 +2,7 @@
 // said in a toast, in the host's own words when it said no.
 
 import { AtomRegistry, injectRegistry, useAtomSet } from "@effect/atom-vue";
-import { Cause, Effect, Encoding, Exit, Result } from "effect";
+import { Cause, Effect, Encoding, Exit, Result, Semaphore } from "effect";
 import type * as RpcClientError from "effect/unstable/rpc/RpcClientError";
 import type { ActionFailed, DesktopAction } from "../../../src/shared/flock";
 import { FlockClient } from "../flock";
@@ -13,6 +13,9 @@ const workflowsAtom = FlockClient.mutation("workflows");
 const openLinkAtom = FlockClient.mutation("openLink");
 
 type Failed = ActionFailed | RpcClientError.RpcClientError;
+
+/** Items read at once, since each diff read has its host run git again. */
+const reading = Semaphore.makeUnsafe(4);
 
 const joined = (parts: ReadonlyArray<Uint8Array>) => {
   const whole = new Uint8Array(parts.reduce((size, part) => size + part.length, 0));
@@ -65,7 +68,7 @@ export const useActions = () => {
         offset += bytes.length;
         if (offset >= part.size || bytes.length === 0) return { _tag: "Bytes", parts } as const;
       }
-    });
+    }).pipe(reading.withPermits(1));
 
   /** A failed read is said once, here; its caller gets nothing back. */
   const read = <A>(exit: Exit.Exit<A, Failed>) => {
@@ -73,6 +76,12 @@ export const useActions = () => {
     toast.add({ title: failureOf(exit.cause).reason, color: "error" });
     return null;
   };
+
+  /** A Run's item by reference, read part by part until all of it is here. */
+  const wholeAs =
+    <A>(as: (whole: Effect.Success<ReturnType<typeof partsOf>>) => A) =>
+    (installation: string, runId: string, ref: string) =>
+      Effect.runPromiseExit(partsOf(installation, runId, ref).pipe(Effect.map(as))).then(read);
 
   /**
    * A failure offers to try again under the same request id, so a request the host did
@@ -105,23 +114,11 @@ export const useActions = () => {
       offers({ payload: { installation, runId } }).then(read),
     workflowsIn: (installation: string, project: string) =>
       workflows({ payload: { installation, project } }).then(read),
-    /** A Run's item by reference, as text, read part by part until all of it is here. */
-    textOf: (installation: string, runId: string, ref: string) =>
-      Effect.runPromiseExit(
-        partsOf(installation, runId, ref).pipe(
-          Effect.map((whole) =>
-            whole._tag === "Text" ? whole.text : new TextDecoder().decode(joined(whole.parts)),
-          ),
-        ),
-      ).then(read),
-    /** A Run's item by reference, as bytes, read part by part until all of it is here. */
-    bytesOf: (installation: string, runId: string, ref: string) =>
-      Effect.runPromiseExit(
-        partsOf(installation, runId, ref).pipe(
-          Effect.map((whole) =>
-            whole._tag === "Text" ? new TextEncoder().encode(whole.text) : joined(whole.parts),
-          ),
-        ),
-      ).then(read),
+    textOf: wholeAs((whole) =>
+      whole._tag === "Text" ? whole.text : new TextDecoder().decode(joined(whole.parts)),
+    ),
+    bytesOf: wholeAs((whole) =>
+      whole._tag === "Text" ? new TextEncoder().encode(whole.text) : joined(whole.parts),
+    ),
   };
 };

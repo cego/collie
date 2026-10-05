@@ -5,6 +5,30 @@ export default defineNuxtConfig({
   // @comark/nuxt turns on Nuxt UI's prose components, which style rendered markdown.
   modules: ["@nuxt/ui", "@comark/nuxt"],
   css: ["~/assets/css/main.css"],
+  app: {
+    head: {
+      // Agent-written markdown and reports render here; nothing they name may be fetched,
+      // and a report's frame may not navigate away. Electrobun's RPC is a loopback socket.
+      meta: [
+        {
+          "http-equiv": "Content-Security-Policy",
+          content: [
+            "default-src 'self' views:",
+            "script-src 'self' views: 'unsafe-inline' 'wasm-unsafe-eval'",
+            "style-src 'self' views: 'unsafe-inline'",
+            "img-src 'self' views: data: blob:",
+            "media-src 'self' views: data: blob:",
+            "font-src 'self' views: data:",
+            "connect-src 'self' views: ws://127.0.0.1:*",
+            "frame-src 'self' views:",
+            "worker-src 'self' views: blob:",
+            "object-src 'none'",
+            "base-uri 'none'",
+          ].join("; "),
+        },
+      ],
+    },
+  },
   ssr: false,
   experimental: {
     // Its _nuxt/builds/meta/<uuid>.json path is long enough to need a GNU long-name tar

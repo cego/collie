@@ -22,13 +22,16 @@ const confined = (html: string) => {
 
 const open = ref(false);
 const html = ref<string | null>(null);
+const failed = ref(false);
 let reading = false;
 watch(open, (now) => {
   if (!now || html.value !== null || reading) return;
   reading = true;
+  failed.value = false;
   void textOf(props.installation, props.runId, `evidence:${props.file.name}`).then((text) => {
     reading = false;
-    if (text !== null) html.value = confined(text);
+    if (text === null) failed.value = true;
+    else html.value = confined(text);
   });
 });
 </script>
@@ -54,7 +57,9 @@ watch(open, (now) => {
         class="h-[70vh] w-full border-t border-default bg-white"
         :title="file.name"
       />
-      <p v-else class="border-t border-default p-3 text-sm text-muted">Reading…</p>
+      <p v-else class="border-t border-default p-3 text-sm text-muted">
+        {{ failed ? "Could not be read." : "Reading…" }}
+      </p>
     </template>
   </div>
 </template>

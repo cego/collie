@@ -18,11 +18,20 @@ const failure = computed(() =>
   AsyncResult.isFailure(result.value) ? Cause.pretty(result.value.cause) : null,
 );
 
+/** The location last followed: opened in the diff, or read-only in Review where there is none. */
+const target = ref<DiffTarget | null>(null);
+const jump = (file: string, line: number | null) => {
+  target.value = { file, line };
+  chosen.value = detail.value?.diff ? "diff" : "review";
+};
+provide("jumpTo", jump);
+
 const tabs = computed(() => {
   const shown = detail.value;
   return [
     ...(shown?.plan ? [{ label: "Plan", value: "plan" }] : []),
-    ...(shown !== null && (shown.review._tag === "Text" || shown.findings.length > 0)
+    ...(shown !== null &&
+    (shown.review._tag === "Text" || shown.findings.length > 0 || target.value !== null)
       ? [{ label: "Review", value: "review" }]
       : []),
     ...(shown?.diff ? [{ label: "Diff", value: "diff" }] : []),
@@ -44,12 +53,11 @@ const tab = computed({
 const diffSeen = ref(false);
 watch(tab, (now) => now === "diff" && (diffSeen.value = true), { immediate: true });
 
-/** The finding last followed: opened in the diff, or read-only here where there is none. */
-const target = ref<DiffTarget | null>(null);
-const jump = (file: string, line: number | null) => {
-  target.value = { file, line };
-  if (detail.value?.diff) chosen.value = "diff";
-};
+const review = useWhole(
+  () => ({ installation: props.placed.installation, runId: props.placed.task.run }),
+  "review",
+  () => detail.value?.review ?? { _tag: "None", reason: "" },
+);
 const locationOf = (file: string, line: number | null) =>
   line === null ? file : `${file}:${line}`;
 </script>
@@ -86,7 +94,12 @@ const locationOf = (file: string, line: number | null) =>
               :run-id="detail.id"
               @close="target = null"
             />
-            <RichMarkdown v-if="detail.review._tag === 'Text'" :text="detail.review.text" />
+            <template v-if="review !== null">
+              <RichMarkdown :text="review.text" />
+              <p v-if="review.cut" class="text-muted text-sm" data-testid="cut">
+                {{ review.cut }}
+              </p>
+            </template>
             <ul
               v-if="detail.findings.length > 0"
               class="flex flex-col gap-2"

@@ -5,6 +5,8 @@ import { Markdown } from "@comark/vue";
 import mermaid, { Mermaid } from "@comark/vue/plugins/mermaid";
 import security from "@comark/vue/plugins/security";
 import shiki from "@comark/vue/plugins/shiki";
+import { confined } from "../../../src/shared/markdown";
+import FileRef from "./FileRef.vue";
 import MarkdownLink from "./MarkdownLink.vue";
 
 const props = defineProps<{
@@ -23,10 +25,11 @@ const PLUGINS = [
     // Nothing is fetched from the network: an image a Run kept is evidence, read from its host.
     allowedImagePrefixes: ["data:image/"],
   }),
+  confined(),
   shiki(),
   mermaid(),
 ];
-const COMPONENTS = { a: MarkdownLink, mermaid: Mermaid };
+const COMPONENTS = { a: MarkdownLink, mermaid: Mermaid, "file-ref": FileRef };
 </script>
 
 <template>

@@ -24,9 +24,14 @@ provide("openPlanFile", (file: string) => {
   opened.value = file;
   if (file !== SPEC) load(file);
 });
+const wholeSpec = useWhole(
+  () => props,
+  `plan:${SPEC}`,
+  () => props.plan.spec,
+);
 const spec = computed<PlanText>(() =>
   props.plan.spec._tag === "Text"
-    ? { text: props.plan.spec.text }
+    ? { text: wholeSpec.value?.text ?? "", cut: wholeSpec.value?.cut ?? null }
     : { failed: props.plan.spec.reason },
 );
 

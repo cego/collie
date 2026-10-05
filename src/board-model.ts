@@ -825,7 +825,7 @@ export const FrontDoorRpcs = RpcGroup.make(
     stream: true,
   }),
   /**
-   * A large item of a Run's, by reference: `log`, `diff:<path>`, `evidence:<name>`,
+   * A large item of a Run's, by reference: `log`, `review`, `diff:<path>`, `evidence:<name>`,
    * `verification:<id>`, `plan:<file>` and, read-only from its checkout, `file:<path>`.
    */
   Rpc.make("runFile", {

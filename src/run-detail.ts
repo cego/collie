@@ -12,6 +12,7 @@ import {
   type RunFile,
 } from "./board-model";
 import { shell } from "./mr";
+import { REVIEW_FILE } from "./output";
 import { settled, type RunFacts } from "./runs";
 import { workSourceOf } from "./strategies";
 import { readVerifications } from "./verify";
@@ -315,6 +316,8 @@ export const fetchRef = Effect.fn("RunDetail.fetchRef")(function* (
           : yield* literally(root, ["diff", "--no-renames", diff.base, "--", name]);
       return patch(shown.stdout);
     }
+    case "review":
+      return yield* under(run.dir, REVIEW_FILE, "review");
     case "evidence":
       return yield* under(run.evidence, name, "evidence called");
     case "plan": {

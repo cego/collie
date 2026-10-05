@@ -64,12 +64,12 @@ watch(
   { immediate: true },
 );
 
-/** The row a finding points at: its line as the file is now, or as it was where it went. */
+/** The row a finding points at: its line as the file is now, or as it was for a deleted file. */
 const targetLine = computed(() => {
   const line = props.target?.line ?? null;
   if (line === null || hunks.value === null) return undefined;
-  const all = hunks.value.flatMap((hunk) => hunk.lines);
-  return all.find((one) => one.new === line) ?? all.find((one) => one.old === line);
+  const side = props.file.status === "deleted" ? "old" : "new";
+  return hunks.value.flatMap((hunk) => hunk.lines).find((one) => one[side] === line);
 });
 
 const shown = ref<HTMLElement | null>(null);
