@@ -568,6 +568,18 @@ it installs that release's runner unchecked. Rotating the key means changing bot
 `release.pub`, and
 releases signed with the old key stop verifying.
 
+Collie Desktop is built by the same release, from the same tag, by the workflow's
+`desktop` job: `bun run build` in `desktop/` builds the stable channel at
+`herdr-plugin.toml`'s version, with the updater's base URL set to the GitHub Releases
+`latest/download` URL. Electrobun's self-extractor cannot read a GNU long-name tar entry,
+so `tools/check-payload.ts` fails the job when any path in the installer's payload is over
+100 characters. The release job signs Desktop's installer, its update manifest, its update
+archive and `install-desktop.sh`, each as `<asset>.sig`. It also signs the archive as the
+tar it is applied as, `<name>.tar.sig` beside `<name>.tar.zst` (`appliedSignatureOf` in
+`src/signing.ts`). Desktop verifies that tar before it installs an update, whether
+Electrobun built it from the archive or from a delta patch
+(`desktop/src/bun/updates.ts`).
+
 `bun run build` compiles beside the binary and renames over it, because replacing a running
 runner's own file kills the process executing it. In a git checkout `install.sh` builds from
 source rather than fetching a release, because that machine's own source is what a release

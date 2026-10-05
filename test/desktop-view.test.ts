@@ -79,6 +79,8 @@ const served = (main: Channel<ToView, ToMain>) =>
         offers: () => Effect.die("not asked"),
         workflows: () => Effect.die("not asked"),
         openLink: () => Effect.die("not asked"),
+        updates: () => Stream.die("not asked"),
+        restart: () => Effect.die("not asked"),
       }),
     ),
     Layer.provide(Layer.effect(RpcServer.Protocol, serverProtocol(main))),

@@ -829,6 +829,26 @@ the header sentence are counted across the Flock. Once there is more than one Ma
 card names its Machine, and its Herd too when that Machine runs more than one herdr
 session.
 
+Desktop is released with Collie, under the same tag and version. Install it on Linux (x64)
+for your user, with a desktop entry:
+
+```sh
+curl -fsSL https://github.com/cego/collie/releases/latest/download/install-desktop.sh | sh
+```
+
+The script downloads the latest release's installer and runs it only once the download
+verifies against Collie's release key. Checking needs OpenSSL 3.0 or later.
+
+Desktop then keeps itself up to date. It checks the latest release when it starts and every
+6 hours after, and downloads an update in the background. It installs nothing until the
+tar it would install verifies against the same key, because Electrobun's bundle hash is
+not authentication. An update that is unsigned or does not match is thrown away and said
+so. One that verifies is announced as "Collie 0.33.0 is ready, restart Desktop", and
+**Restart Desktop** installs it. Desktop never restarts itself: an update that is ready when
+you quit is installed the next time you start Desktop. A Desktop run from a checkout
+(`bun run start`, or any build that is not the stable channel) never updates itself. The new
+Desktop then upgrades your released Machines to its version as they connect.
+
 The Machines are this computer and every machine enabled in `herdr machine list`; Collie
 keeps no list of its own. At launch Desktop opens one SSH master per herdr machine, from
 its target and your own SSH config, so an SSO check is made once per machine, and keeps it

@@ -10,6 +10,13 @@ export const RELEASE_PUBLIC_KEY: string = releaseKey;
 /** The suffix a release asset's signature is published under, beside the asset. */
 export const SIGNATURE_SUFFIX = ".sig";
 
+/**
+ * The signature an update archive is applied under: `<name>.tar.sig` for `<name>.tar.zst`,
+ * over its decompressed tar, which is what an installed update is made of.
+ */
+export const appliedSignatureOf = (archive: string): string | null =>
+  archive.endsWith(".tar.zst") ? `${archive.slice(0, -".zst".length)}${SIGNATURE_SUFFIX}` : null;
+
 export type Verified = { ok: true } | { ok: false; reason: string };
 
 /** A detached ed25519 signature, base64, as published in `<asset>.sig`. */

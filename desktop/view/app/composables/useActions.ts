@@ -11,6 +11,7 @@ const actAtom = FlockClient.mutation("act");
 const offersAtom = FlockClient.mutation("offers");
 const workflowsAtom = FlockClient.mutation("workflows");
 const openLinkAtom = FlockClient.mutation("openLink");
+const restartAtom = FlockClient.mutation("restart");
 
 type Failed = ActionFailed | RpcClientError.RpcClientError;
 
@@ -28,6 +29,7 @@ export const useActions = () => {
   const offers = useAtomSet(() => offersAtom, { mode: "promiseExit" });
   const workflows = useAtomSet(() => workflowsAtom, { mode: "promiseExit" });
   const openLink = useAtomSet(() => openLinkAtom, { mode: "promiseExit" });
+  const restart = useAtomSet(() => restartAtom, { mode: "promiseExit" });
 
   /** A failed read is said once, here; its caller gets nothing back. */
   const read = <A>(exit: Exit.Exit<A, Failed>) => {
@@ -62,6 +64,13 @@ export const useActions = () => {
 
   return {
     run,
+    /** Installs Desktop's ready update, which restarts it; a refusal is said in a toast. */
+    restart: () =>
+      restart({ payload: undefined }).then((exit) => {
+        if (Exit.isSuccess(exit)) return;
+        const { reason } = failureOf(exit.cause);
+        toast.add({ title: `Desktop did not restart to update: ${reason}`, color: "error" });
+      }),
     openLink: (url: string) => openLink({ payload: { url } }),
     offersOf: (installation: string, runId: string) =>
       offers({ payload: { installation, runId } }).then(read),

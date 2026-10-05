@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { SECTIONS } from "../../../src/board-model";
+import { AsyncResult, useAtomValue } from "@effect/atom-vue";
 import type { NotLive } from "../../src/shared/flock";
+import { updatesAtom } from "./flock";
 
 const {
   connecting,
@@ -29,6 +31,32 @@ const NOT_LIVE: Record<NotLive, { icon: string; title: (name: string) => string 
 const toast = useToast();
 watch(notices, (now, before) => {
   for (const text of now.slice(before.length)) toast.add({ title: text, color: "info" });
+});
+
+const update = useAtomValue(() => updatesAtom);
+const { restart } = useActions();
+watch(update, (now) => {
+  if (!AsyncResult.isSuccess(now)) return;
+  const news = now.value;
+  if (news._tag === "Refused") {
+    toast.add({
+      title: `Desktop ${news.version} was not installed: ${news.reason}`,
+      color: "error",
+    });
+    return;
+  }
+  toast.add({
+    id: `update-${news.version}`,
+    title: `Collie ${news.version} is ready, restart Desktop`,
+    color: "info",
+    duration: 0,
+    actions: [
+      {
+        label: "Restart Desktop",
+        onClick: () => void restart(),
+      },
+    ],
+  });
 });
 </script>
 

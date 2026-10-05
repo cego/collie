@@ -49,3 +49,8 @@ export const flockAtom = FlockClient.runtime
     flockOf(Stream.unwrap(FlockClient.use((client) => Effect.succeed(client("flock", undefined))))),
   )
   .pipe(Atom.keepAlive);
+
+/** Desktop's own update news, kept alive so a ready update is heard whenever it is. */
+export const updatesAtom = FlockClient.runtime
+  .atom(Stream.unwrap(FlockClient.use((client) => Effect.succeed(client("updates", undefined)))))
+  .pipe(Atom.keepAlive);

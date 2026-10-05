@@ -16,5 +16,6 @@
       "electrobun/bun": ["./.hutch/devkit/api/sdks/main/index.ts"]
     }
   },
-  "include": ["src", "test", "electrobun.config.ts"]
+  // The root's declarations for the text files `src/` imports, such as `release.pub`.
+  "include": ["src", "test", "electrobun.config.ts", "../src/markdown.d.ts"]
 }

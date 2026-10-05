@@ -119,6 +119,13 @@ export class ActionFailed extends Schema.TaggedError<ActionFailed>()("ActionFail
   request: Schema.optional(Schema.String),
 }) {}
 
+/** Desktop's own update: downloaded and verified, or refused, and why. */
+export const UpdateNews = Schema.Union([
+  Schema.TaggedStruct("Ready", { version: Schema.String }),
+  Schema.TaggedStruct("Refused", { version: Schema.String, reason: Schema.String }),
+]);
+export type UpdateNews = typeof UpdateNews.Type;
+
 export const DesktopRpcs = RpcGroup.make(
   Rpc.make("flock", { success: FlockItem, stream: true }),
   /** A retry names the request that failed; a first try leaves it to the main process. */
@@ -143,6 +150,10 @@ export const DesktopRpcs = RpcGroup.make(
     success: Schema.Array(Startable),
     error: ActionFailed,
   }),
+  /** Desktop's own update news, the latest first. */
+  Rpc.make("updates", { success: UpdateNews, stream: true }),
+  /** Installs the update that is ready, which quits Desktop and starts the new one. */
+  Rpc.make("restart", { error: ActionFailed }),
 );
 
 /**

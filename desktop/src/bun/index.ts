@@ -3,7 +3,18 @@
 
 import { hostname } from "node:os";
 import { BunRuntime, BunServices } from "@effect/platform-bun";
-import { Clock, Config, Crypto, Effect, FileSystem, Layer, Result, Schema, Stream } from "effect";
+import {
+  Clock,
+  Config,
+  Crypto,
+  Effect,
+  FileSystem,
+  Layer,
+  Result,
+  Schema,
+  Stream,
+  SubscriptionRef,
+} from "effect";
 import * as RpcServer from "effect/unstable/rpc/RpcServer";
 import Electrobun, { BrowserView, BrowserWindow, type RPCSchema, Utils } from "electrobun/bun";
 import {
@@ -13,7 +24,7 @@ import {
   type ToMain,
   type ToView,
 } from "../shared/channel";
-import { ActionFailed, DesktopRpcs, type FlockItem } from "../shared/flock";
+import { ActionFailed, DesktopRpcs, type FlockItem, type UpdateNews } from "../shared/flock";
 import {
   act,
   type Door,
@@ -27,7 +38,9 @@ import {
   type Route,
   remoteRoute,
 } from "./machine";
+import { electrobunUpdater } from "./electrobun-updater";
 import { savedBoards, saving } from "./saved";
+import { applyAtLaunch, restartToUpdate, watchForUpdates } from "./updates";
 // The version Desktop keeps every Machine on: the Collie it was built from.
 import manifest from "../../../herdr-plugin.toml";
 
@@ -45,16 +58,22 @@ const rpc = BrowserView.defineRPC<{ bun: Frames; webview: Frames }>({
   },
 });
 
-const window = new BrowserWindow({
-  title: "Collie",
-  url: "views://mainview/index.html",
-  renderer: "cef",
-  frame: { width: 1200, height: 800, x: 120, y: 80 },
-  rpc,
-});
+// Opened once an update readied before the last quit has had its chance to install, so
+// installing one never shows a window that closes again.
+let window: BrowserWindow<typeof rpc> | undefined;
+const openWindow = () =>
+  Effect.sync(() => {
+    window = new BrowserWindow({
+      title: "Collie",
+      url: "views://mainview/index.html",
+      renderer: "cef",
+      frame: { width: 1200, height: 800, x: 120, y: 80 },
+      rpc,
+    });
+  });
 
 const toView: Channel<ToView, ToMain> = {
-  send: (frame) => window.webview.rpc?.send.frame(frame),
+  send: (frame) => window?.webview.rpc?.send.frame(frame),
   listen: (listener) => {
     receive = listener;
   },
@@ -74,6 +93,16 @@ const Collie = Config.schema(
 );
 
 const main = Effect.gen(function* () {
+  const updater = yield* electrobunUpdater;
+  yield* applyAtLaunch(updater).pipe(
+    Effect.catch((reason) => Effect.logWarning(`Desktop update not installed: ${reason}`)),
+  );
+  yield* openWindow();
+  const updates = yield* SubscriptionRef.make<UpdateNews | null>(null);
+  yield* watchForUpdates(updater).pipe(
+    Stream.runForEach((news) => SubscriptionRef.set(updates, news)),
+    Effect.forkScoped,
+  );
   const local = hostname();
   const collie = yield* Collie;
   const fs = yield* FileSystem.FileSystem;
@@ -131,6 +160,15 @@ const main = Effect.gen(function* () {
       doorTo(doors, installation).pipe(Effect.flatMap((door) => offersOn(door, runId))),
     workflows: ({ installation, project }) =>
       doorTo(doors, installation).pipe(Effect.flatMap((door) => workflowsOn(door, project))),
+    updates: () =>
+      SubscriptionRef.changes(updates).pipe(
+        Stream.filter((news): news is UpdateNews => news !== null),
+      ),
+    restart: () =>
+      restartToUpdate(updater).pipe(
+        Effect.mapError((reason) => new ActionFailed({ reason })),
+        Effect.provide(BunServices.layer),
+      ),
   });
   return yield* Layer.launch(
     RpcServer.layer(DesktopRpcs).pipe(

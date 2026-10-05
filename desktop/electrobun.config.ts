@@ -1,4 +1,5 @@
 import type { ElectrobunConfig } from "electrobun";
+import manifest from "../herdr-plugin.toml";
 
 // A port here opens CEF's debugging protocol on it, so Playwright can drive the built app.
 const cdp = Bun.env.COLLIE_DESKTOP_CDP;
@@ -7,8 +8,10 @@ export default {
   app: {
     name: "collie-desktop",
     identifier: "dk.cego.collie.desktop",
-    version: "0.0.0",
+    // Released with Collie, under the same tag and version.
+    version: manifest.version,
   },
+  release: { baseUrl: "https://github.com/cego/collie/releases/latest/download" },
   build: {
     mainProcess: "bun",
     bun: { entrypoint: "src/bun/index.ts" },
