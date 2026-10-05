@@ -821,17 +821,29 @@ a run directory: an unsent answer is yours, not the run's.
 
 ## Collie Desktop
 
-**Desktop** is a desktop app, Linux first, that will show the **Flock** — every Herd on
-every Machine it reaches — on one board. It lives in `desktop/` and is one more front door
-over the same board: it reads the host's stream and builds nothing of its own. So far it
-shows this computer's board, live, in the same sections and under the same header sentence
-as the Home's.
+**Desktop** is a desktop app, Linux first, that shows the **Flock** — every Herd on every
+Machine it reaches — on one board. It lives in `desktop/` and is one more front door over
+the same board: it reads each host's stream and builds nothing of its own. The sections and
+the header sentence are counted across the Flock. Once there is more than one Machine, each
+card names its Machine, and its Herd too when that Machine runs more than one herdr
+session.
 
-It reaches this computer's host the way it will reach any Machine's: by running
-`collie bridge --as desktop --client <this computer>` in a login shell, so the host is
-started with the environment `collie` itself would use, and every operation Desktop
-makes is recorded as `desktop`. It never starts, signals or connects to a host by any other
-route. `COLLIE_DESKTOP_COLLIE` replaces how `collie` is run, as a JSON array.
+The Machines are this computer and every machine enabled in `herdr machine list`; Collie
+keeps no list of its own. At launch Desktop opens one SSH master per herdr machine, from
+its target and your own SSH config, so an SSO check is made once per machine, and keeps it
+open until Desktop quits. A Machine reached two ways — two herdr machines on one computer,
+or one pointing at this computer — is shown once, through the first in herdr's list (this
+computer before any). It is named by that herdr machine's label, or the hostname here, and
+two Machines with one name show as `name (ssh target)`. A Machine Desktop cannot reach is
+named above the board with what SSH or its bridge said.
+
+Every Machine's host is reached the same way: by running
+`collie bridge --as desktop --client <this computer>` in a login shell, here directly and
+elsewhere as a channel on that machine's master, so the host is started with the
+environment `collie` itself would use, and every operation Desktop makes is recorded as
+`desktop`. For a herdr machine on a session other than `default`, the host is handed that
+session's socket. Desktop never starts, signals or connects to a host by any other route.
+`COLLIE_DESKTOP_COLLIE` replaces how `collie` is run here, as a JSON array.
 
 ```sh
 cd desktop
@@ -841,9 +853,10 @@ bun run typecheck
 bun run test        # build with CEF's debugging port open, then drive the app with Playwright
 ```
 
-`bun run test` starts the built app under Xvfb when there is no display, against a scripted
-host behind a local bridge (`desktop/test/support/scripted-host.ts`), so it needs neither
-herdr nor a real host. The app links the system's WebKitGTK and AppIndicator libraries even
+`bun run test` starts the built app under Xvfb when there is no display, against scripted
+hosts (`desktop/test/support/scripted-host.ts`): this computer's behind a local bridge, and
+each herdr machine's behind scripted `herdr` and `ssh` commands put first on its PATH, so
+it needs neither herdr, SSH nor a real host. The app links the system's WebKitGTK and AppIndicator libraries even
 though it renders with its bundled Chromium; on a computer without them, put them on
 `LD_LIBRARY_PATH`.
 

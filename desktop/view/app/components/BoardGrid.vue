@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import type { TaskView } from "../../../../src/board-model";
+import type { Card } from "../../../src/shared/flock";
 
-defineProps<{ tasks: ReadonlyArray<TaskView> }>();
+defineProps<{ cards: ReadonlyArray<Card> }>();
 </script>
 
 <template>
   <div class="grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-3">
-    <BoardCard v-for="task in tasks" :key="task.id" :task="task" />
+    <BoardCard v-for="card in cards" :key="card.key" :task="card.task" :where="card.where" />
   </div>
 </template>

@@ -33,7 +33,9 @@ workspace — and is not the Herd.
 **Machine** — One computer's Collie: one state directory, its one host, and every Herd on
 that computer. Known by its **installation id**, which the first host to own the state
 directory writes into it and every later host keeps, so two routes to one state directory
-are one Machine. Not the plugin installation a host serves, which `identity` calls `root`.
+are one Machine. Desktop names it by the label of the first enabled herdr machine that
+reaches it, or by the hostname for Local, and adds its SSH target where two share a name.
+Not the plugin installation a host serves, which `identity` calls `root`.
 
 **Flock** — Every Herd on every Machine **Desktop** reaches.
 

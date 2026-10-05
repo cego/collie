@@ -2,10 +2,17 @@
 // as `desktop`, never through Collie's own host client.
 
 import { expect, test } from "bun:test";
-import { Config, Effect, Option, Schema, Stream } from "effect";
+import { Config, Deferred, Effect, Option, Schedule, Schema, Stream } from "effect";
+import type { BoardMessage } from "../src/board-model";
 import { readAudit } from "../src/audit";
 import { runDir } from "../src/engine";
-import { bridgeCommand, machineBoard, openBridge } from "../desktop/src/bun/machine";
+import {
+  bridgeCommand,
+  flockStream,
+  machineBoard,
+  openBridge,
+  type Route,
+} from "../desktop/src/bun/machine";
 import { watchedBy } from "./support/effect";
 import { root, stopHost } from "./support/host";
 import { proves } from "./support/world";
@@ -34,7 +41,7 @@ test(
             HERDR_BIN_PATH: Bun.env.HERDR_BIN_PATH ?? "",
             FAKE_HERDR_LOG: Bun.env.FAKE_HERDR_LOG ?? "",
           });
-          const board = yield* machineBoard("mk-pc", door).pipe(Stream.toPull);
+          const board = yield* machineBoard({ name: "mk-pc" }, door).pipe(Stream.toPull);
 
           const first = yield* board;
           const snapshot = first[0].message;
@@ -96,4 +103,63 @@ test("Desktop's main process never reaches Collie's own host client", () =>
       expect(built.logs.filter((log) => log.level === "error")).toEqual([]);
       expect(reached).toEqual([]);
     }),
+  ));
+
+test("a Machine reached by two routes is shown through the first, and the other's bridge closes", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const closed: string[] = [];
+      const snapshot = (installation: string): BoardMessage => ({
+        _tag: "Snapshot",
+        installation,
+        build: "0.31.0",
+        protocol: 1,
+        herds: [],
+        tasks: [],
+        seq: 0,
+      });
+      const route = (name: string, board: Stream.Stream<BoardMessage>): Route => ({
+        machine: { name, target: `mk@${name}` },
+        open: Effect.acquireRelease(Effect.succeed({ board: () => board }), () =>
+          Effect.sync(() => closed.push(name)),
+        ),
+      });
+      const preferredAnswers = yield* Deferred.make<void>();
+      const otherChanges = yield* Deferred.make<void>();
+      const after = (go: Deferred.Deferred<void>, message: BoardMessage) =>
+        Stream.fromEffect(Deferred.await(go).pipe(Effect.as(message)));
+      const told: string[] = [];
+      yield* flockStream([
+        route(
+          "preferred",
+          after(preferredAnswers, snapshot("vm")).pipe(Stream.concat(Stream.never)),
+        ),
+        route(
+          "other",
+          Stream.make(snapshot("vm")).pipe(
+            Stream.concat(after(otherChanges, { _tag: "Remove", seq: 1, id: "t1" })),
+            Stream.concat(Stream.never),
+          ),
+        ),
+      ]).pipe(
+        Stream.runForEach((item) =>
+          Effect.sync(() =>
+            told.push("_tag" in item ? item._tag : `${item.machine.name} ${item.message._tag}`),
+          ),
+        ),
+        Effect.forkScoped,
+      );
+      const until = (what: () => boolean) =>
+        Effect.suspend(() => (what() ? Effect.void : Effect.fail("not yet"))).pipe(
+          Effect.retry(Schedule.spaced("5 millis")),
+        );
+
+      yield* until(() => told.length === 1);
+      yield* Deferred.succeed(preferredAnswers, undefined);
+      yield* until(() => told.length === 2);
+      yield* Deferred.succeed(otherChanges, undefined);
+      yield* until(() => closed.includes("other"));
+      expect(told).toEqual(["other Snapshot", "preferred Snapshot"]);
+      expect(closed).toEqual(["other"]);
+    }).pipe(Effect.scoped),
   ));

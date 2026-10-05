@@ -14,11 +14,13 @@ import {
   type ToView,
 } from "../desktop/src/shared/channel";
 import {
-  applyMessage,
+  applyItem,
   DesktopRpcs,
   EMPTY_FLOCK,
+  type FlockItem,
+  flockCards,
   flockOf,
-  flockTasks,
+  type Machine,
   type MachineMessage,
 } from "../desktop/src/shared/flock";
 import { task } from "./support/task";
@@ -92,7 +94,7 @@ test("the view decodes every board message its main process relays, a reload inc
       for (const _view of ["first", "after a reload"]) {
         const { heard, flock } = yield* listen;
         expect(heard).toEqual([...told]);
-        const tasks = flockTasks(flock ?? EMPTY_FLOCK);
+        const tasks = flockCards(flock ?? EMPTY_FLOCK).tasks;
         expect(tasks.map((one) => [one.id, one.state])).toEqual([["t-work", "blocked"]]);
         expect(sectionsOf(tasks, "").needs.map((one) => one.name)).toEqual(["Busy"]);
         expect(headerSentence(tasks).text).toBe("One task is waiting on you. 0 working.");
@@ -100,23 +102,101 @@ test("the view decodes every board message its main process relays, a reload inc
     }).pipe(Effect.scoped),
   ));
 
+const snapshot = (
+  machine: Machine,
+  tasks: ReadonlyArray<typeof asking>,
+  herds: ReadonlyArray<{ id: string; name?: string }> = [{ id: "default" }],
+): MachineMessage => ({
+  machine,
+  message: {
+    _tag: "Snapshot",
+    installation: machine.installation,
+    build: "0.31.0",
+    protocol: 1,
+    herds,
+    tasks,
+    seq: 0,
+  },
+});
+const pc = { installation: "inst-pc", name: "mk-pc" };
+const vm = { installation: "inst-vm", name: "vm-mk", target: "mk@vm-mk.cegohost.dk" };
+const where = (items: ReadonlyArray<FlockItem>) => {
+  const { tasks, cardOf } = flockCards(items.reduce(applyItem, EMPTY_FLOCK));
+  return tasks.map((one) => [one.id, cardOf(one).where]);
+};
+
 test("a snapshot replaces what its installation said before, whatever it is called, and leaves other Machines alone", () => {
-  const snapshot = (name: string, tasks: ReadonlyArray<typeof asking>): MachineMessage => ({
-    machine: { installation: `inst-${name}`, name },
-    message: {
-      _tag: "Snapshot",
-      installation: name,
-      build: "0.31.0",
-      protocol: 1,
-      herds: [],
-      tasks,
-      seq: 0,
-    },
-  });
-  const flock = [
-    snapshot("mk-pc", [asking]),
-    snapshot("vm-mk", [working]),
-    { ...snapshot("mk-pc", []), machine: { installation: "inst-mk-pc", name: "another route" } },
-  ].reduce(applyMessage, EMPTY_FLOCK);
-  expect(flockTasks(flock).map((one) => one.id)).toEqual(["t-work"]);
+  expect(
+    where([
+      snapshot(pc, [asking]),
+      snapshot(vm, [working]),
+      snapshot({ ...pc, name: "renamed in herdr" }, [{ ...asking, id: "t-new" }]),
+    ]),
+  ).toEqual([
+    ["t-new", "renamed in herdr"],
+    ["t-work", "vm-mk"],
+  ]);
+});
+
+test("a card names its Machine only once the Flock has more than one", () => {
+  expect(where([snapshot(pc, [asking])])).toEqual([["t-ask", ""]]);
+  expect(where([snapshot(pc, [asking]), snapshot(vm, [{ ...working, id: "t-ask" }])])).toEqual([
+    ["t-ask", "mk-pc"],
+    ["t-ask", "vm-mk"],
+  ]);
+});
+
+test("a card names its Herd only when its Machine runs several", () => {
+  const herds = [{ id: "h1", name: "default" }, { id: "h2", name: "work" }, { id: "h3" }];
+  expect(
+    where([
+      snapshot(pc, [{ ...working, id: "t-pc", herd: "h1", at: 1 }]),
+      snapshot(
+        vm,
+        [
+          { ...asking, herd: "h2" },
+          { ...working, herd: "h3" },
+        ],
+        herds,
+      ),
+    ]),
+  ).toEqual([
+    ["t-ask", "vm-mk · work"],
+    ["t-work", "vm-mk · h3"],
+    ["t-pc", "mk-pc"],
+  ]);
+});
+
+test("Machines that share a name are told apart by how they are reached, and nothing else is renamed", () => {
+  const other = { installation: "inst-vm2", name: "vm-mk", target: "mk@vm-mk2" };
+  expect(
+    where([
+      snapshot({ ...pc, name: "vm-mk" }, [asking]),
+      snapshot(vm, [{ ...working, id: "t-vm" }]),
+      snapshot(other, [working]),
+    ]),
+  ).toEqual([
+    ["t-ask", "vm-mk (local)"],
+    ["t-vm", "vm-mk (mk@vm-mk.cegohost.dk)"],
+    ["t-work", "vm-mk (mk@vm-mk2)"],
+  ]);
+});
+
+test("the sections and the header sentence count every Machine's Tasks", () => {
+  const { tasks } = flockCards(
+    [snapshot(pc, [asking]), snapshot(vm, [{ ...asking, id: "t-vm" }, working])].reduce(
+      applyItem,
+      EMPTY_FLOCK,
+    ),
+  );
+  expect(sectionsOf(tasks, "").needs.map((one) => one.id)).toEqual(["t-ask", "t-vm"]);
+  expect(headerSentence(tasks).text).toBe("2 tasks are waiting on you. 1 working.");
+});
+
+test("a Machine out of reach is said by name until it reports again", () => {
+  const lost: FlockItem = { _tag: "Lost", name: "vm-mk", reason: "ssh: connection refused" };
+  const after = [snapshot(pc, [asking]), lost].reduce(applyItem, EMPTY_FLOCK);
+  expect([...after.lost]).toEqual([["vm-mk", "ssh: connection refused"]]);
+  expect(flockCards(after).tasks.map((one) => one.id)).toEqual(["t-ask"]);
+  expect([...applyItem(after, snapshot(vm, [])).lost]).toEqual([]);
 });

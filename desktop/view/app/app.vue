@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { SECTIONS } from "../../../src/board-model";
 
-const { connecting, failure, tasks, sections, header, waiting } = useFlock();
+const { connecting, failure, lost, tasks, sections, header, waiting } = useFlock();
 </script>
 
 <template>
@@ -23,6 +23,16 @@ const { connecting, failure, tasks, sections, header, waiting } = useFlock();
         :description="failure"
       />
       <template v-else>
+        <UAlert
+          v-for="[name, reason] in lost"
+          :key="name"
+          :data-testid="`lost-${name}`"
+          color="warning"
+          variant="subtle"
+          icon="i-lucide-unplug"
+          :title="`${name} is out of reach`"
+          :description="reason"
+        />
         <p v-if="tasks.length === 0" class="text-muted">Nothing on the board yet.</p>
         <template v-for="[section, label] in SECTIONS" :key="section">
           <section
@@ -34,7 +44,7 @@ const { connecting, failure, tasks, sections, header, waiting } = useFlock();
               <summary class="cursor-pointer text-sm font-semibold text-muted">
                 {{ label }} · {{ sections.finished.length }}
               </summary>
-              <BoardGrid :tasks="sections.finished" class="mt-2" />
+              <BoardGrid :cards="sections.finished" class="mt-2" />
             </details>
             <template v-else>
               <h2
@@ -43,12 +53,12 @@ const { connecting, failure, tasks, sections, header, waiting } = useFlock();
               >
                 {{ label }}
               </h2>
-              <BoardGrid :tasks="section === 'waiting' ? waiting.recent : sections[section]" />
+              <BoardGrid :cards="section === 'waiting' ? waiting.recent : sections[section]" />
               <details v-if="section === 'waiting' && waiting.older.length > 0">
                 <summary class="cursor-pointer text-sm text-muted">
                   {{ waiting.older.length }} older than a week
                 </summary>
-                <BoardGrid :tasks="waiting.older" class="mt-2" />
+                <BoardGrid :cards="waiting.older" class="mt-2" />
               </details>
             </template>
           </section>

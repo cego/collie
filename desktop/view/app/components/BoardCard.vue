@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { TaskView } from "../../../../src/board-model";
 
-const props = defineProps<{ task: TaskView }>();
+const props = defineProps<{ task: TaskView; where: string }>();
 
 const STATES: Record<
   TaskView["state"],
@@ -16,7 +16,7 @@ const STATES: Record<
   done: { label: "Done", color: "success" },
 };
 const state = computed(() => STATES[props.task.state]);
-const where = computed(() =>
+const project = computed(() =>
   [props.task.project.split("/").at(-1), props.task.branch].filter(Boolean).join(" · "),
 );
 </script>
@@ -30,13 +30,16 @@ const where = computed(() =>
           {{ state.label }}
         </UBadge>
       </div>
-      <small class="text-muted">{{ where }}</small>
+      <small class="text-muted">{{ project }}</small>
     </template>
     <p data-testid="sentence" class="text-sm">{{ task.sentence }}</p>
     <p v-if="task.held" class="text-sm text-muted">{{ task.held }}</p>
     <p v-if="task.drift" class="text-sm text-warning">{{ task.drift }}</p>
     <template #footer>
       <small class="text-muted">
+        <template v-if="where !== ''"
+          ><span data-testid="where">{{ where }}</span> ·
+        </template>
         {{ task.age }}
         <template v-if="task.agents.length > 0">
           · {{ task.agents.length === 1 ? "1 agent" : `${task.agents.length} agents` }}
