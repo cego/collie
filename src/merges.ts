@@ -5,7 +5,7 @@
 
 import { Effect, FileSystem, Option, Path, Schema } from "effect";
 import { mrLabel, type ForgeChecks, type ForgeFacts } from "./board";
-import { sectionOf, type MrPanel, type MrState, type TaskView } from "./board-model";
+import { pullOf, sectionOf, type MrPanel, type MrState, type TaskView } from "./board-model";
 import { latest, readDispositions, recordDisposition } from "./disposition";
 import { liveTier, mrDetails, type Runner } from "./mr";
 import { parseMrTarget, type MrRef } from "./board-model";
@@ -69,12 +69,6 @@ export function pipelineChecks(status: string): ForgeChecks {
   )
     return { state: "running" };
   return { state: "unknown" };
-}
-
-/** `https://github.com/owner/repo/pull/30` as its repository and number. */
-export function pullOf(mr: string): { readonly repo: string; readonly number: string } | null {
-  const pull = /^https?:\/\/github\.com\/([^/]+\/[^/]+)\/pull\/(\d+)/.exec(mr);
-  return pull ? { repo: pull[1]!, number: pull[2]! } : null;
 }
 
 const PullJson = Schema.fromJsonString(

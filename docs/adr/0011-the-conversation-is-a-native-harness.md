@@ -4,8 +4,9 @@
 slice: the two-pane Home, the harness preference, the bounded read contract, and the two
 transport adapters. The amendment is "Chat may do what the human could do on the board"
 below, which replaces this ADR's original rule that chat's write tools carry nothing out,
-"Amended 2026-09-29: chat may choose what proves a Run", and "Amended 2026-10-02: the
-tools are one Effect Toolkit".
+"Amended 2026-09-29: chat may choose what proves a Run", "Amended 2026-10-02: the
+tools are one Effect Toolkit", and "Amended 2026-10-05: a Herd's chat per Home, and one
+Flock chat per Desktop".
 
 The Herd's conversation is an ordinary Claude Code or Pi session running in the Home's
 right-hand pane. Collie does not implement a chat.
@@ -169,6 +170,31 @@ a harness is shown and what every call is decoded with, strictly. Each answers a
 a sentence rather than an error, and none needs approval. The MCP server registers the
 Toolkit's tools itself rather than through `McpServer.toolkit`, which answers in JSON and
 turns a refusal into a protocol error.
+
+## Amended 2026-10-05: a Herd's chat per Home, and one Flock chat per Desktop
+
+There are now two kinds of conversation, and both reach Collie only through Collie tools.
+Each Home keeps the Herd-scoped Native chat this ADR describes, unchanged. Each Desktop
+adds one **Flock chat**, about every Herd on every Machine it reaches.
+
+The Flock chat is not a pane: Desktop has no terminal to put a harness in. It is a session
+of the user's own Claude Code driven by the Agent SDK in Desktop's main process, so the
+harness still owns the session, its persistence and its compaction, and Collie still owns
+which session it is and what the model may reach. Its session id is minted once per
+Desktop and resumed on every launch after, never "the most recent session", for the reason
+`--continue` is refused above. It runs `opus` at medium effort
+([ADR-0032](0032-a-chat-starts-new-on-the-latest-opus.md)), with Claude Code's built-in
+tools off and no setting sources, so the user's hooks, skills and CLAUDE.md stay out.
+
+Its tools are the same Toolkit, served in process rather than by `collie mcp`, and answered
+by each Machine's host over a bridge channel Desktop opens `--as chat`, never Desktop's own
+`desktop` channel: a model's action cannot be stamped human by a coding slip. Everything is
+named `<machine>:<id>`; a bare id is taken only where one Machine has it. Before each write
+the tool host declares the channel's conversation (`flock@<this computer>`) and the human's
+message that turn, which the host records in the Actor
+([ADR-0039](0039-every-operation-records-who-asked.md)). `collie_definitions`,
+`collie_installation` and a workspace-wide `collie_hold` are not served there: each reads a
+Machine's own files, which no host operation hands over.
 
 ## What has actually been proven
 

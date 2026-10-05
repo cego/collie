@@ -683,13 +683,13 @@ const frontDoorHandlers = (
               new HostRefused({ reason: `this channel is already ${already.frontDoor}` }),
             );
           }
-          // The first declaration stands, so a bridged channel stays what its bridge said.
-          if (already !== undefined) return Effect.void;
           return Effect.sync(() => {
+            // Only a chat speaks for the human it is talking to, and says each turn's words again.
+            if (frontDoor === "chat") voices.set(client.id, voiceOf(voice));
+            // The first declaration stands, so a bridged channel stays what its bridge said.
+            if (already !== undefined) return;
             declared.set(client.id, { frontDoor, from });
             if (session !== undefined && session !== null) sessions.set(client.id, session);
-            // Only a chat speaks for the human it is talking to.
-            if (frontDoor === "chat") voices.set(client.id, voiceOf(voice));
           });
         },
         start: (

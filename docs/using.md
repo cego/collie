@@ -858,9 +858,31 @@ Every Machine's host is reached the same way: by running
 `collie bridge --as desktop --client <this computer>` in a login shell, here directly and
 elsewhere as a channel on that machine's master, so the host is started with the
 environment `collie` itself would use, and every operation Desktop makes is recorded as
-`desktop`. For a herdr machine on a session other than `default`, the host is handed that
+`desktop`. A second bridge on the same master, started `--as chat`, is the Flock chat's,
+so nothing its model does is ever recorded as yours. For a herdr machine on a session other than `default`, the host is handed that
 session's socket. Desktop never starts, signals or connects to a host by any other route.
 `COLLIE_DESKTOP_COLLIE` replaces how `collie` is run here, as a JSON array.
+
+### The Flock chat
+
+Right of the board is a conversation about the whole Flock. Ask what is happening anywhere
+and have it act on any Machine: it reaches Collie through the same tools as Native chat,
+answered by each Machine's host over that Machine's `chat` channel, and carries out what
+you ask at once. Everything it names is `<machine>:<id>`, as in `vm-mk:run-04ab8fe5`; a bare
+id is taken where only one Machine has it, and refused with the candidates where several
+do. Every action is recorded on its Machine as `chat`, under the conversation
+`flock@<this computer>`, with the words you wrote that turn. It has the Herd's read and act
+tools except `collie_definitions` and `collie_installation`, and holds one Run at a time,
+because those read a Machine's own files, which no host operation hands over.
+
+It is a session of your own Claude Code, on your own Claude seat, driven through the Agent
+SDK in Desktop's main process: `opus` at medium effort with summarised thinking, Claude
+Code's built-in tools off, and none of your settings, hooks, skills or CLAUDE.md. Your
+first message starts it, and it stays warm until Desktop quits. Its session id is minted
+once and kept in `$XDG_STATE_HOME/collie-desktop/flock-chat.json` (or
+`~/.local/state/collie-desktop/`), so a restart resumes the same conversation; Claude Code
+keeps and compacts the transcript on this computer. Replies stream in as Markdown, with
+each Collie tool it called named above them.
 
 ```sh
 cd desktop

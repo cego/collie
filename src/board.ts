@@ -25,7 +25,7 @@ import { listTasks, type TaskRecord } from "./task";
 import { ago, agoMs, agoShort, spanned, epochMs } from "./time";
 import { readVerifications, type Verification } from "./verify";
 import { markersOf, runningCheck } from "./checks";
-import { pullOf, readForge, readMrStates } from "./merges";
+import { readForge, readMrStates } from "./merges";
 import { filed, standingOf } from "./standing";
 import { offersOf } from "./lifecycle";
 import { shell } from "./mr";
@@ -35,6 +35,7 @@ import { readCards } from "./cards";
 import {
   Answered,
   EVIDENCE_GATE,
+  mrLabel,
   SECTIONS,
   sectionOf,
   sortBoard,
@@ -54,6 +55,8 @@ import {
   type TaskState,
   type TaskView,
 } from "./board-model";
+
+export { mrLabel } from "./board-model";
 
 /** The character each state is drawn as, wherever it is drawn. The colour is the pane's. */
 export const GLYPH_FOR: Readonly<Record<TaskState, string>> = {
@@ -457,21 +460,6 @@ export function sentenceFor(facts: Sentence): string {
  */
 function alsoBecame(sentence: string, disposition: Sentence["disposition"]): string {
   return disposition === null ? sentence : `${sentence} ${doneSentence(disposition)}`;
-}
-
-/**
- * `group/project!42` from a GitLab URL or an `mr:` target, `owner/repo#30` from a GitHub
- * pull request URL; anything else as it is.
- */
-export function mrLabel(mr: string): string {
-  const url = /^https?:\/\/[^/]+\/(.+?)\/-\/merge_requests\/(\d+)/.exec(mr);
-  if (url) return `${url[1]}!${url[2]}`;
-  const pull = pullOf(mr);
-  if (pull) return `${pull.repo}#${pull.number}`;
-  const bare = mr.startsWith("mr:") ? mr.slice(3) : mr;
-  // `host/group/project!42` reads as `group/project!42`: the host is where, not what.
-  const host = /^[^/!]+\.[^/!]+\/(.+)$/.exec(bare);
-  return host ? host[1]! : bare;
 }
 
 /** The second line a held Task carries, under its sentence. */

@@ -5,6 +5,7 @@
 import { Schema, Stream, Struct } from "effect";
 import * as Rpc from "effect/unstable/rpc/Rpc";
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
+import { AguiEvent } from "./agui";
 import {
   BoardMessage,
   type Herd,
@@ -109,6 +110,8 @@ export const DesktopRpcs = RpcGroup.make(
     success: Schema.Array(Startable),
     error: ActionFailed,
   }),
+  /** One message from the human to the Flock chat, and the turn it starts as it streams. */
+  Rpc.make("say", { payload: { text: Schema.String }, success: AguiEvent, stream: true }),
 );
 
 /** What a Machine's host last told: who it is, its Herds, and its Tasks by id. */
@@ -152,7 +155,7 @@ export const applyItem = (flock: Flock, item: FlockItem): Flock => {
 };
 
 /** Each Machine's display name: its own, or with how it is reached where two share one. */
-const machineNames = (machines: ReadonlyArray<Machine>) => {
+export const machineNames = (machines: ReadonlyArray<Machine>) => {
   const counts = new Map<string, number>();
   for (const { name } of machines) counts.set(name, (counts.get(name) ?? 0) + 1);
   return new Map(

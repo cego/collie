@@ -4,7 +4,7 @@
 // Every operation it is asked is appended to `<board.json>.ops.jsonl`; an answer also
 // takes the decision off its Task, as a host's would.
 //
-// Usage: bun scripted-host.ts <board.json> bridge --as desktop --client <computer>
+// Usage: bun scripted-host.ts <board.json> bridge --as desktop|chat --client <computer>
 
 import { BunFileSystem, BunRuntime, BunStdio } from "@effect/platform-bun";
 import { Effect, FileSystem, Layer, Schedule, Schema, Stream } from "effect";
@@ -15,7 +15,7 @@ import { boardMessages } from "../../../src/board-stream";
 import { OFFERS, REFUSED_RUN, STARTABLE, ScriptedMachine } from "./scripted-machine";
 
 const [board, ...bridge] = Bun.argv.slice(2);
-if (board === undefined || bridge.slice(0, 3).join(" ") !== "bridge --as desktop") {
+if (board === undefined || !/^bridge --as (desktop|chat)$/.test(bridge.slice(0, 3).join(" "))) {
   process.stderr.write(`scripted host: started as ${Bun.argv.slice(2).join(" ")}\n`);
   process.exit(2);
 }

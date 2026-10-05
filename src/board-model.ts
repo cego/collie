@@ -747,7 +747,10 @@ export const NewsBatch = Schema.Struct({
  */
 export const FrontDoorRpcs = RpcGroup.make(
   Rpc.make("board", { success: BoardMessage, stream: true }),
-  /** Once per channel, for good; a channel that never declares is stamped `cli`, never a human. */
+  /**
+   * Once per channel, for good; a channel that never declares is stamped `cli`, never a
+   * human. A chat declares again each turn, with that turn's words.
+   */
   Rpc.make("declare", {
     payload: Declaration,
     error: HostRefused,
@@ -1249,4 +1252,25 @@ export function headerSentence(views: ReadonlyArray<TaskView>, now?: number): He
   ];
   const inHand = held.length === 0 ? "" : ` ${held.join(", ")}.`;
   return { text: `${opening}${inHand} ${working.length} working${gone}.`, urgent: needs > 0 };
+}
+
+/** `https://github.com/owner/repo/pull/30` as its repository and number. */
+export function pullOf(mr: string): { readonly repo: string; readonly number: string } | null {
+  const pull = /^https?:\/\/github\.com\/([^/]+\/[^/]+)\/pull\/(\d+)/.exec(mr);
+  return pull ? { repo: pull[1]!, number: pull[2]! } : null;
+}
+
+/**
+ * `group/project!42` from a GitLab URL or an `mr:` target, `owner/repo#30` from a GitHub
+ * pull request URL; anything else as it is.
+ */
+export function mrLabel(mr: string): string {
+  const url = /^https?:\/\/[^/]+\/(.+?)\/-\/merge_requests\/(\d+)/.exec(mr);
+  if (url) return `${url[1]}!${url[2]}`;
+  const pull = pullOf(mr);
+  if (pull) return `${pull.repo}#${pull.number}`;
+  const bare = mr.startsWith("mr:") ? mr.slice(3) : mr;
+  // `host/group/project!42` reads as `group/project!42`: the host is where, not what.
+  const host = /^[^/!]+\.[^/!]+\/(.+)$/.exec(bare);
+  return host ? host[1]! : bare;
 }

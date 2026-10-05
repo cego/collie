@@ -78,6 +78,7 @@ const served = (main: Channel<ToView, ToMain>) =>
         act: () => Effect.die("not asked"),
         offers: () => Effect.die("not asked"),
         workflows: () => Effect.die("not asked"),
+        say: () => Stream.die("not asked"),
         openLink: () => Effect.die("not asked"),
       }),
     ),

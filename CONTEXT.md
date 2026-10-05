@@ -59,6 +59,12 @@ compaction; Collie owns which harness, which session, and what the model may rea
 bound to a session id Collie mints per Herd and harness, never to whichever session ran
 last in a directory. Its whole reach is **Collie tools**.
 
+**Flock chat** — Desktop's conversation about the **Flock**: one per Desktop, a session of
+the user's own Claude Code driven through the Agent SDK in Desktop's main process, with
+**Collie tools** as its whole reach. Its tools are answered by each Machine's host over that
+Machine's `chat` channel, and name everything `<machine>:<id>`. Beside each Home's Native
+chat, never instead of it.
+
 **Chat harness** — Which native chat Collie opens with, `claude` (the default, on an
 existing installation as much as a new one) or `pi`, from `chat_harness` in `config.json`.
 It is a launch preference: changing it never stops, replaces or summarises a running
@@ -157,7 +163,8 @@ facts: `decision` > `consequential` > `try-it` > `routine`. A narrative never ra
 
 **Hold** — A Run under a hold starts no new work until a human releases it. It takes effect at the Run's next boundary, so what is already running finishes. Nothing lifts a hold at a time.
 
-**Conversation** — The durable journal of human and Collie turns for a Herd, plus the turns
+**Conversation** — Scoped to one Herd (Native chat, in its Home) or to the Flock (the
+**Flock chat**, in Desktop). For a Herd, also the durable journal of human and Collie turns, plus the turns
 the board starts (`event`) when something meaningful changes — recorded as the board's, never
 as the human's. Redacted for credential-shaped values, bounded to 500 turns and 30 days, and
 never a worker transcript.
