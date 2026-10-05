@@ -73,7 +73,7 @@ import { metricsOf, readMetrics } from "../metrics";
 import type { Metrics } from "../board-model";
 import { reportOf } from "../report";
 import { latest, readDispositions, statusLine } from "../disposition";
-import { nowIso } from "../time";
+import { nowIso, epochMs } from "../time";
 import type { PluginEnv } from "../env";
 import {
   attempt,
@@ -638,7 +638,7 @@ const runReport = Command.make(
       yield* attempt(
         Effect.gen(function* () {
           const from = Option.getOrNull(since);
-          if (from !== null && Number.isNaN(Date.parse(from)))
+          if (from !== null && Number.isNaN(epochMs(from)))
             return err("invalid_input", `--since is not a date: ${from}`);
           const resolved = yield* context(global, false);
           if (resolved._tag === "ContextFailure") return resolved.result;

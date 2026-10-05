@@ -23,7 +23,7 @@ import { latest, readDispositions } from "./disposition";
 import { openFindingsIn } from "./output";
 import { settled, type RunFacts } from "./runs";
 import type { TaskRecord } from "./task";
-import { took } from "./time";
+import { took, epochMs } from "./time";
 import { LEADING_GLYPH, type AgentInfo, type WorkspaceInfo } from "./herdr";
 
 /** How many finished runs stay on the screen; the tab must not need scrolling. */
@@ -369,7 +369,7 @@ export const fixableRun = (run: Pick<RunFacts, "dir">) =>
 
 /** When a run ended, or last changed while it was going. */
 const touchedAt = (run: RunFacts) =>
-  run.finished === null ? touchedDirAt(run.dir) : Effect.succeed(Date.parse(run.finished));
+  run.finished === null ? touchedDirAt(run.dir) : Effect.succeed(epochMs(run.finished));
 
 /**
  * Everything the tab shows, from the run dirs and one `agent list`: the runs of

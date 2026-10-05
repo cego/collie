@@ -16,7 +16,7 @@ import type { BunServices } from "@effect/platform-bun/BunServices";
 import { Clock, Data, Effect, FileSystem, Path, Schema } from "effect";
 import { ensureLockDir, withLock } from "./lock";
 import { herdDir, herdKey } from "./steering";
-import { nowIso } from "./time";
+import { nowIso, epochMs } from "./time";
 import { BOARD_RATIO, CHAT_PANE_TOKEN } from "./chat";
 import { Herdr, type PaneInfo, type WorkspaceInfo } from "./herdr";
 
@@ -167,7 +167,7 @@ export const readOrigin = Effect.fn("Home.readOrigin")(function* (file: string) 
   const decoded = decodeOrigin(raw);
   if (decoded._tag === "None") return null;
   const { at, ...origin } = decoded.value;
-  const age = (yield* Clock.currentTimeMillis) - Date.parse(at);
+  const age = (yield* Clock.currentTimeMillis) - epochMs(at);
   return Number.isFinite(age) && age <= ORIGIN_TTL_MS ? origin : null;
 });
 

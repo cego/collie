@@ -25,6 +25,7 @@ import { err } from "./operations";
 import { probeHelle, probeLinearMcp, type Probe } from "./optional";
 import { projectsRoot } from "./projects";
 import { claudeSettingsPath, readStatusLine, STATUS_LINE_ARGS } from "./statusline";
+import { epochMs } from "./time";
 
 export interface Check {
   /** How the check is named, in the rendering and in `--json`. */
@@ -334,7 +335,7 @@ const tokenExpiry = Effect.fn("Doctor.tokenExpiry")(function* (
   }
   const expires = token.value.expires_at;
   if (expires === null) return passed(`${host}: the token never expires`);
-  const days = Math.floor((Date.parse(expires) - (yield* Clock.currentTimeMillis)) / DAY_MS);
+  const days = Math.floor((epochMs(expires) - (yield* Clock.currentTimeMillis)) / DAY_MS);
   if (days < 0) return failed(`${host}: the token expired on ${expires}`, renew);
   if (days < RENEW_WITHIN_DAYS) return warned(`${host}: the token expires on ${expires}`, renew);
   return passed(`${host}: the token expires on ${expires}`);

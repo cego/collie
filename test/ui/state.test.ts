@@ -34,7 +34,7 @@ import {
 } from "../../src/ui/state";
 import { NO_MARKS } from "../../src/lines";
 import { DateTime } from "effect";
-import { ago, agoShort, took } from "../../src/time";
+import { ago, agoShort, took, epochMs } from "../../src/time";
 import type { PendingChoice } from "../../src/board";
 import type { WideGroup, WideView, WorkspaceView } from "../../src/workspace";
 import { NO_OUTCOME } from "../../src/workspace";
@@ -42,7 +42,7 @@ import { focus } from "../support/focus";
 import { task } from "../support/task";
 
 /** A fixed clock: relative times are the point, so they must not depend on the wall. */
-const NOW = Date.parse("2026-09-02T12:00:00.000Z");
+const NOW = epochMs("2026-09-02T12:00:00.000Z");
 /** `ago` takes an ISO string and `agoShort` epoch millis; this is the one clock in both. */
 const FIXED_ISO = (ms: number) => DateTime.formatIso(DateTime.makeUnsafe(ms));
 

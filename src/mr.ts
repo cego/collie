@@ -9,6 +9,7 @@ import type { YamlValue } from "./yaml";
 import { isString } from "./schema";
 import { targetKind, workSourceOf, type Settled } from "./strategies";
 import type { MrDetails, MrPanel, MrUnavailable } from "./board-model";
+import { epochMs } from "./time";
 
 export type Runner<R = never> = (
   cmd: string,
@@ -327,7 +328,7 @@ export function mrDetails<R>(
     }
     const mr = decoded.value;
     const draft = mr.draft === true || mr.work_in_progress === true;
-    const updated = mr.updated_at ? Date.parse(mr.updated_at) : Number.NaN;
+    const updated = mr.updated_at ? epochMs(mr.updated_at) : Number.NaN;
     return {
       _tag: "Details",
       iid: mr.iid === undefined || mr.iid === null ? ref.iid : String(mr.iid),

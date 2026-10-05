@@ -1,7 +1,15 @@
-import { DateTime, Effect } from "effect";
+import { DateTime, Effect, Option } from "effect";
 
 export function nowIso() {
   return DateTime.now.pipe(Effect.map(DateTime.formatIso));
+}
+
+/** A recorded timestamp in epoch milliseconds, and `NaN` for one that is not a time. */
+export function epochMs(iso: string): number {
+  return Option.match(DateTime.make(iso), {
+    onNone: () => Number.NaN,
+    onSome: DateTime.toEpochMillis,
+  });
 }
 
 /**
@@ -50,7 +58,7 @@ export function spanned(ms: number): string {
  * prompt both want "2 days ago", not a timestamp to subtract in your head.
  */
 export function ago(iso: string, nowMs: number): string {
-  const then = Date.parse(iso);
+  const then = epochMs(iso);
   return Number.isNaN(then) ? iso : agoMs(then, nowMs);
 }
 

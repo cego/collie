@@ -14,7 +14,7 @@ import { Data, DateTime, Effect, FileSystem, Path, Schema } from "effect";
 import { readJournal } from "./journal";
 import { ensureLockDir, withLock } from "./lock";
 import { herdDir } from "./steering";
-import { nowIso } from "./time";
+import { nowIso, epochMs } from "./time";
 
 /** How much of a conversation is kept. Old enough or far enough back, and it goes. */
 export const MAX_TURNS = 500;
@@ -104,7 +104,7 @@ export function keep(turns: ReadonlyArray<Turn>, nowMs: number): Turn[] {
   const oldest = nowMs - MAX_AGE_DAYS * 24 * 60 * 60 * 1000;
   return turns
     .filter((turn) => {
-      const at = Date.parse(turn.at);
+      const at = epochMs(turn.at);
       return Number.isNaN(at) || at >= oldest;
     })
     .slice(-MAX_TURNS);

@@ -13,7 +13,7 @@ import { ActionSchema } from "./evaluator";
 import { appendJournal, readJournal } from "./journal";
 import { ensureLockDir, withLock } from "./lock";
 import { herdDir } from "./steering";
-import { nowIso } from "./time";
+import { nowIso, epochMs } from "./time";
 
 /** How long a proposal stands. After this the world has moved and it is re-asked. */
 export const EXPIRES_AFTER_MS = 30 * 60 * 1000;
@@ -278,7 +278,7 @@ function unanswered(lines: ReadonlyArray<ProposalLine>, nowMs: number): Proposal
   );
   return lines.filter(
     (line): line is ProposalRecord =>
-      line.kind === "proposal" && !answered.has(line.id) && Date.parse(line.expires_at) > nowMs,
+      line.kind === "proposal" && !answered.has(line.id) && epochMs(line.expires_at) > nowMs,
   );
 }
 
@@ -314,7 +314,7 @@ export function judgeConfirmation(
       detail: `action ${waiting.join(", ")} started and never settled; reconcile it before confirming again`,
     };
 
-  if (Date.parse(found.expires_at) <= nowMs)
+  if (epochMs(found.expires_at) <= nowMs)
     return { refused: "expired", detail: `"${id}" expired at ${found.expires_at}` };
   if (found.content_hash !== hash)
     return {
@@ -348,7 +348,7 @@ export const confirm = Effect.fn("Proposals.confirm")(function* (
         id,
         hash,
         actor,
-        Date.parse(at),
+        epochMs(at),
         currentVersions,
       );
       if ("refused" in judged) return judged;

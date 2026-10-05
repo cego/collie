@@ -2,6 +2,7 @@
 // `focus.ts` gives: one fixture that grows every time a card learns to say something new.
 
 import type { TaskView } from "../../src/board-model";
+import { epochMs } from "../../src/time";
 
 /** One Task, with the parts a test does not care about at rest. */
 export function task(over: Partial<TaskView> = {}): TaskView {
@@ -39,7 +40,7 @@ export function task(over: Partial<TaskView> = {}): TaskView {
     offer: null,
     run: "r1",
     runs: ["r1"],
-    at: Date.parse("2026-09-16T12:00:00.000Z"),
+    at: epochMs("2026-09-16T12:00:00.000Z"),
     ...over,
   };
 }

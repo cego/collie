@@ -33,7 +33,7 @@ import {
   type Delivery,
 } from "./steering";
 import { gate, interruptKeys } from "./steering-caps";
-import { nowIso, took } from "./time";
+import { nowIso, took, epochMs } from "./time";
 
 /** How long a message may sit `reserved` before a later reader calls it `unknown`. */
 export const SUBMIT_TIMEOUT_MS = 60_000;
@@ -381,8 +381,7 @@ const send = Effect.fn("Dispatcher.send")(function* (
   // a restart is held to the same deadline rather than a fresh one.
   const before = deferralsOf(ledger.lines, id);
   const attempts = before.count + 1;
-  const held =
-    before.since === null ? 0 : (yield* Clock.currentTimeMillis) - Date.parse(before.since);
+  const held = before.since === null ? 0 : (yield* Clock.currentTimeMillis) - epochMs(before.since);
   if (held < draft.patienceMs) {
     if (attempts === 1)
       yield* deps.log(`${entry.agent} cannot take a prompt yet (${code}); retrying`);

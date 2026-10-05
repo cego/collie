@@ -13,6 +13,7 @@ import {
   type Verification,
   type Verifying,
 } from "./verify";
+import { epochMs } from "./time";
 
 /** One pass Collie ran and finished. */
 export interface DonePass {
@@ -124,7 +125,7 @@ export const runningCheck = Effect.fn("Checks.running")(function* (
 ) {
   const marker = markers.get(run.id);
   if (marker === undefined) return null;
-  const started = Date.parse(marker.started);
+  const started = epochMs(marker.started);
   const facts = {
     name: marker.name,
     pass: marker.pass,

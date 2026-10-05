@@ -34,6 +34,7 @@ import {
 } from "../src/registry";
 import type { AgentInfo } from "../src/herdr";
 import { runEffect } from "./support/effect";
+import { epochMs } from "../src/time";
 
 let stateDir: string;
 
@@ -176,12 +177,12 @@ test("the ledger round trips, and a torn last line does not cost the rest", () =
 
 test("a reservation nobody settled becomes unknown, not a guess in either direction", () => {
   const lines: LedgerLine[] = [delivery()];
-  const tooSoon = settleStaleReservations(lines, Date.parse("2026-09-09T10:00:30Z"), 60_000, "t");
+  const tooSoon = settleStaleReservations(lines, epochMs("2026-09-09T10:00:30Z"), 60_000, "t");
   expect(tooSoon).toHaveLength(0);
 
   const [settled] = settleStaleReservations(
     lines,
-    Date.parse("2026-09-09T10:01:30Z"),
+    epochMs("2026-09-09T10:01:30Z"),
     60_000,
     "2026-09-09T10:01:30Z",
   );

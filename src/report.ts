@@ -4,6 +4,7 @@
 import { STOP, type RunView } from "./engine";
 import { resultText } from "./lifecycle";
 import type { Metrics } from "./board-model";
+import { epochMs } from "./time";
 
 export interface WorkflowTally {
   readonly workflow: string;
@@ -47,10 +48,10 @@ export function reportOf(
   metrics: ReadonlyMap<string, Metrics>,
   since: string | null,
 ): Report {
-  const from = since === null ? -Infinity : Date.parse(since);
+  const from = since === null ? -Infinity : epochMs(since);
   const kept = views
-    .filter((view) => Date.parse(view.created) >= from)
-    .toSorted((a, b) => Date.parse(a.created) - Date.parse(b.created));
+    .filter((view) => epochMs(view.created) >= from)
+    .toSorted((a, b) => epochMs(a.created) - epochMs(b.created));
   const tallies = new Map<string, Mutable<WorkflowTally>>();
   const failed: Mutable<Report["failed"]> = [];
   const completed: Mutable<Report["completed"]> = [];
