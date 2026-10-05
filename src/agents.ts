@@ -41,7 +41,7 @@ import {
 import { COMPACTION_PORTS, submittedDelivery } from "./compactors";
 import { kindForRole } from "./cards";
 import { Oversight } from "./oversight";
-import { FALLBACK_DEFAULTS, loadDefaults, type Defaults } from "./config";
+import { FALLBACK_DEFAULTS, loadDefaults, readConfig, type Defaults } from "./config";
 import * as dispatch from "./dispatcher";
 import { bodySections, layers, personaHoles, skillDirs } from "./definitions";
 import { currentEnv, type PluginEnv } from "./env";
@@ -49,6 +49,7 @@ import {
   HARNESSES,
   foldPreferences,
   isPermissionMode,
+  permissionsAsWritten,
   personaPrefix,
   preferencesIn,
   resolveChoice,
@@ -1123,7 +1124,17 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
   ) {
     const adapter = adapterFor(ask.harness ?? host.harness);
     const wanted = ask.permissions ?? undefined;
-    const asked = isPermissionMode(wanted) ? wanted : host.permissions;
+    // Read at each start rather than kept from the host's: a host outlives the
+    // Settings change that flips this, and every agent after it has to see the change.
+    const written = yield* readConfig(host.env.userDir).pipe(
+      Effect.map((config) => permissionsAsWritten(config.permissions)),
+      Effect.orElseSucceed(() => undefined),
+    );
+    const asked = isPermissionMode(wanted)
+      ? wanted
+      : isPermissionMode(written)
+        ? written
+        : host.permissions;
     const forbidden =
       asked === "bypass" && adapter.bypassForbidden !== undefined
         ? yield* adapter.bypassForbidden(host.env)
