@@ -7,7 +7,7 @@
 // Usage: bun scripted-host.ts <board.json> bridge --as desktop --client <computer>
 
 import { BunFileSystem, BunRuntime, BunStdio } from "@effect/platform-bun";
-import { Effect, Encoding, FileSystem, Layer, Schedule, Schema, Stream } from "effect";
+import { Effect, Encoding, FileSystem, Layer, Result, Schedule, Schema, Stream } from "effect";
 import * as RpcSerialization from "effect/unstable/rpc/RpcSerialization";
 import * as RpcServer from "effect/unstable/rpc/RpcServer";
 import { BRIDGE_READY, FrontDoorRpcs, HostRefused, PROTOCOL } from "../../../src/board-model";
@@ -144,13 +144,15 @@ const handlers = Served.toLayer(
             return Effect.fail(
               new HostRefused({ reason: `${payload.ref} is not ${payload.runId}'s` }),
             );
-          // As a host hands out a large item: in parts, as base64, unless it is whole.
-          const bytes = new TextEncoder().encode(content);
+          // As a host hands out an item: in parts, and as base64 unless it is text and whole.
+          const [text, bytes] = Schema.is(Schema.String)(content)
+            ? [content, new TextEncoder().encode(content)]
+            : [null, Encoding.decodeBase64(content.base64).pipe(Result.getOrThrow)];
           const offset = payload.offset ?? 0;
           const part = bytes.subarray(offset, offset + PART_BYTES);
           return Effect.succeed(
-            part.length === bytes.length
-              ? { ref: payload.ref, encoding: "utf8" as const, content, size: bytes.length }
+            text !== null && part.length === bytes.length
+              ? { ref: payload.ref, encoding: "utf8" as const, content: text, size: bytes.length }
               : {
                   ref: payload.ref,
                   encoding: "base64" as const,

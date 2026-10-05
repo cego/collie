@@ -13,8 +13,13 @@ export const ScriptedMachine = Schema.Struct({
   tasks: Schema.Array(TaskView),
   /** Each Run's details, by its id. */
   details: Schema.optionalKey(Schema.Record(Schema.String, RunDetail)),
-  /** What each reference of a Run's fetches, keyed `<run id> <ref>`. */
-  files: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
+  /** What each reference of a Run's fetches, keyed `<run id> <ref>`: text, or bytes as base64. */
+  files: Schema.optionalKey(
+    Schema.Record(
+      Schema.String,
+      Schema.Union([Schema.String, Schema.Struct({ base64: Schema.String })]),
+    ),
+  ),
 });
 export type ScriptedMachine = typeof ScriptedMachine.Type;
 

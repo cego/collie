@@ -14,6 +14,16 @@ const openLinkAtom = FlockClient.mutation("openLink");
 
 type Failed = ActionFailed | RpcClientError.RpcClientError;
 
+const joined = (parts: ReadonlyArray<Uint8Array>) => {
+  const whole = new Uint8Array(parts.reduce((size, part) => size + part.length, 0));
+  let at = 0;
+  for (const part of parts) {
+    whole.set(part, at);
+    at += part.length;
+  }
+  return whole;
+};
+
 const failureOf = (cause: Cause.Cause<Failed>) => {
   const found = Cause.findError(cause);
   if (Result.isFailure(found)) return { reason: Cause.pretty(cause), request: undefined };
@@ -38,6 +48,24 @@ export const useActions = () => {
         ),
       ),
     );
+
+  /** An item whole: as text where it came in one part, else as its parts' bytes. */
+  const partsOf = (installation: string, runId: string, ref: string) =>
+    Effect.gen(function* () {
+      const parts: Uint8Array[] = [];
+      let offset = 0;
+      for (;;) {
+        const part = yield* runFile({ installation, runId, ref, offset });
+        if (part.encoding === "utf8" && offset === 0)
+          return { _tag: "Text", text: part.content } as const;
+        const bytes = yield* Effect.fromResult(Encoding.decodeBase64(part.content)).pipe(
+          Effect.orDie,
+        );
+        parts.push(bytes);
+        offset += bytes.length;
+        if (offset >= part.size || bytes.length === 0) return { _tag: "Bytes", parts } as const;
+      }
+    });
 
   /** A failed read is said once, here; its caller gets nothing back. */
   const read = <A>(exit: Exit.Exit<A, Failed>) => {
@@ -80,22 +108,20 @@ export const useActions = () => {
     /** A Run's item by reference, as text, read part by part until all of it is here. */
     textOf: (installation: string, runId: string, ref: string) =>
       Effect.runPromiseExit(
-        Effect.gen(function* () {
-          // Streamed, so a character split across two parts is decoded whole.
-          const decoder = new TextDecoder();
-          let text = "";
-          let offset = 0;
-          for (;;) {
-            const part = yield* runFile({ installation, runId, ref, offset });
-            if (part.encoding === "utf8" && offset === 0) return part.content;
-            const bytes = yield* Effect.fromResult(Encoding.decodeBase64(part.content)).pipe(
-              Effect.orDie,
-            );
-            text += decoder.decode(bytes, { stream: true });
-            offset += bytes.length;
-            if (offset >= part.size || bytes.length === 0) return text + decoder.decode();
-          }
-        }),
+        partsOf(installation, runId, ref).pipe(
+          Effect.map((whole) =>
+            whole._tag === "Text" ? whole.text : new TextDecoder().decode(joined(whole.parts)),
+          ),
+        ),
+      ).then(read),
+    /** A Run's item by reference, as bytes, read part by part until all of it is here. */
+    bytesOf: (installation: string, runId: string, ref: string) =>
+      Effect.runPromiseExit(
+        partsOf(installation, runId, ref).pipe(
+          Effect.map((whole) =>
+            whole._tag === "Text" ? new TextEncoder().encode(whole.text) : joined(whole.parts),
+          ),
+        ),
       ).then(read),
   };
 };

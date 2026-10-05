@@ -5,6 +5,7 @@ import { afterAll, beforeAll, expect, test } from "bun:test";
 import { Effect } from "effect";
 import type { RunDetail, TaskView } from "../../src/board-model";
 import { task } from "../../test/support/task";
+import type { ScriptedMachine } from "./support/scripted-machine";
 import { type App, LOCAL, launch, quit, reads, run, serve, settled } from "./support/app";
 
 const SPEC = [
@@ -67,10 +68,10 @@ const detail = (tail: ReadonlyArray<string>, seedAdded = 2): RunDetail => ({
     delivered: null,
     metrics: {
       timeToFirstEvidence: null,
-      verifications: { pass: 0, fail: 0, unstable: 0, byCollie: 0 },
-      slices: { done: 0, total: 0 },
-      rework: 0,
-      peakContext: null,
+      verifications: { pass: 1, fail: 2, unstable: 0, byCollie: 3 },
+      slices: { done: 1, total: 2 },
+      rework: 1,
+      peakContext: { agent: "builder", tokens: 81000 },
       halts: [],
       obstacles: [],
     },
@@ -118,7 +119,35 @@ const detail = (tail: ReadonlyArray<string>, seedAdded = 2): RunDetail => ({
       detail: null,
     },
   ],
-  verifications: [],
+  verifications: [
+    {
+      id: "v-unit",
+      name: "unit",
+      result: "pass",
+      expect: "pass",
+      exit: 0,
+      at: "2026-10-05T10:00:00Z",
+      by: "collie",
+    },
+    {
+      id: "v-lint",
+      name: "lint",
+      result: "fail",
+      expect: "pass",
+      exit: 1,
+      at: "2026-10-05T10:01:00Z",
+      by: "collie",
+    },
+    {
+      id: "v-repro",
+      name: "regression",
+      result: "fail",
+      expect: "fail",
+      exit: 1,
+      at: "2026-10-05T09:00:00Z",
+      by: "agent",
+    },
+  ],
   steering: [
     {
       id: "c1",
@@ -130,7 +159,17 @@ const detail = (tail: ReadonlyArray<string>, seedAdded = 2): RunDetail => ({
       missing: ["nobody ran it against staging"],
     },
   ],
-  evidence: [],
+  evidence: [
+    ...[
+      "home.before.png",
+      "home.after.png",
+      ...SHOTS,
+      "demo.webm",
+      "lighthouse.html",
+      "suite.log",
+      "core.bin",
+    ].map((name) => ({ name, bytes: 68 })),
+  ],
   diff: {
     base: "abc1234def",
     live: true,
@@ -164,7 +203,34 @@ const BIG_PATCH = [
 
 const README = Array.from({ length: 60 }, (_, at) => `Line ${at + 1} of the readme.`).join("\n");
 
+/** Enough single shots, beside one before/after pair, to need a second page. */
+const SHOTS = Array.from({ length: 14 }, (_, at) => `shot-${String(at + 1).padStart(2, "0")}.png`);
+const PNG = {
+  base64:
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+};
+const REPORT = [
+  "<!doctype html><html><head><title>Lighthouse</title></head><body>",
+  '<p id="score">Score 97</p>',
+  "<script>",
+  'document.getElementById("score").textContent += " (scripted)";',
+  'try { parent.document.title = "pwned"; } catch { document.body.append(" kept out"); }',
+  'fetch("https://example.com/").then(() => document.body.append(" fetched"), () => document.body.append(" offline"));',
+  "</script></body></html>",
+].join("");
+
 const FILES = {
+  "r-seed verification:v-unit": "12 pass",
+  "r-seed verification:v-lint":
+    "\x1b[31mFAIL\x1b[0m src/seed.ts\n\x1b[32mok\x1b[0m src/load.ts\nfound 1 problem",
+  "r-seed verification:v-repro": "the bug, reproduced",
+  ...Object.fromEntries(
+    ["home.before.png", "home.after.png", ...SHOTS].map((name) => [`r-seed evidence:${name}`, PNG]),
+  ),
+  "r-seed evidence:demo.webm": { base64: "GkXfowEAAAAAAAAf" },
+  "r-seed evidence:lighthouse.html": REPORT,
+  "r-seed evidence:suite.log":
+    "\x1b[1mRUN\x1b[0m suite\n\x1b[32mPASS\x1b[0m seeds\n\x1b[31mFAIL\x1b[0m staging",
   "r-seed diff:src/seed.ts": SEED_PATCH,
   "r-seed diff:gen/big.ts": BIG_PATCH,
   "r-seed diff:docs/notes/a.md": "@@ -1 +0,0 @@\n-A note.",
@@ -190,7 +256,7 @@ const board = () => `${app!.flock}/${LOCAL}`;
 const served = (
   tail: ReadonlyArray<string>,
   seedAdded = 2,
-  files: Record<string, string> = FILES,
+  files: NonNullable<ScriptedMachine["files"]> = FILES,
 ) =>
   serve(board(), "pc", [SEEDING], undefined, {
     details: { "r-seed": detail(tail, seedAdded) },
@@ -530,6 +596,170 @@ test(
         yield* reads(seed().locator('[data-new-line="5"] [data-side="new"]'), "const more = true;");
         yield* served(LOG);
         yield* Effect.promise(() => diffOf().getByTestId("split").click());
+      }),
+    ),
+  30_000,
+);
+
+const evidence = () => drawer().getByTestId("evidence");
+
+test(
+  "verifications are a checklist with the failures open, in their terminal colours",
+  () =>
+    run(
+      Effect.gen(function* () {
+        yield* opened;
+        yield* Effect.promise(() => tab("Evidence").click());
+        const checks = evidence().getByTestId("verifications");
+        // The one that did not do what it was expected to comes first, already open.
+        yield* reads(
+          checks.getByTestId("evidence-text-open").first().locator("span.flex-1"),
+          "lint",
+        );
+        const lint = checks.getByTestId("check-lint");
+        const fail = lint.locator("[data-testid='ansi-lines'] span", { hasText: "FAIL" });
+        expect(
+          yield* Effect.promise(() => fail.evaluate((span) => getComputedStyle(span).color)),
+        ).toBe("rgb(207, 34, 46)");
+        expect(
+          yield* Effect.promise(() =>
+            checks.getByTestId("check-unit").getByTestId("ansi-lines").count(),
+          ),
+        ).toBe(0);
+        expect(
+          yield* Effect.promise(() =>
+            checks.getByTestId("check-regression").getByTestId("ansi-lines").count(),
+          ),
+        ).toBe(0);
+        yield* Effect.promise(() =>
+          checks.getByTestId("check-unit").getByTestId("evidence-text-open").click(),
+        );
+        yield* reads(checks.getByTestId("check-unit").getByTestId("ansi-lines"), "12 pass");
+      }),
+    ),
+  30_000,
+);
+
+test(
+  "a suite log is read by reference and searched",
+  () =>
+    run(
+      Effect.gen(function* () {
+        yield* opened;
+        yield* Effect.promise(() => tab("Evidence").click());
+        const log = evidence().getByTestId("file-suite.log");
+        yield* Effect.promise(() => log.getByTestId("evidence-text-open").click());
+        yield* reads(log.getByTestId("ansi-lines"), "RUN suite\nPASS seeds\nFAIL staging");
+        yield* Effect.promise(() => log.getByTestId("ansi-search").fill("fail"));
+        yield* reads(log.getByTestId("ansi-lines"), "FAIL staging");
+        expect(
+          yield* Effect.promise(() => evidence().getByTestId("files").textContent()),
+        ).toContain("core.bin");
+      }),
+    ),
+  30_000,
+);
+
+test(
+  "screenshots are a gallery, a before beside its after, paged when there are many",
+  () =>
+    run(
+      Effect.gen(function* () {
+        yield* opened;
+        yield* Effect.promise(() => tab("Evidence").click());
+        const gallery = evidence().getByTestId("gallery");
+        const pair = gallery.getByTestId("pair-home.png");
+        const [before, after] = yield* Effect.all([
+          settled("the before shot", () =>
+            pair
+              .getByTestId("image-home.before.png")
+              .locator("img")
+              .boundingBox({ timeout: 1000 })
+              .then((box) => box ?? undefined),
+          ),
+          settled("the after shot", () =>
+            pair
+              .getByTestId("image-home.after.png")
+              .locator("img")
+              .boundingBox({ timeout: 1000 })
+              .then((box) => box ?? undefined),
+          ),
+        ]);
+        expect(after.x).toBeGreaterThan(before.x);
+        expect(Math.abs(after.y - before.y)).toBeLessThan(2);
+        const loaded = yield* Effect.promise(() =>
+          pair
+            .locator("img")
+            .first()
+            .evaluate((img: HTMLImageElement) => img.decode().then(() => img.naturalWidth)),
+        );
+        expect(loaded).toBe(1);
+        expect(yield* Effect.promise(() => gallery.locator("figure").count())).toBe(12 + 1);
+        yield* Effect.promise(() =>
+          gallery.getByTestId("gallery-pages").getByRole("button", { name: "2" }).click(),
+        );
+        yield* settled("the second page", () =>
+          gallery
+            .locator("figure")
+            .count()
+            .then((n) => (n === 3 ? n : undefined)),
+        );
+        yield* reads(gallery.locator("figcaption").last(), "shot-14.png");
+      }),
+    ),
+  30_000,
+);
+
+test(
+  "a video plays inline, and an HTML report runs sandboxed, kept from Desktop and the network",
+  () =>
+    run(
+      Effect.gen(function* () {
+        yield* opened;
+        yield* Effect.promise(() => tab("Evidence").click());
+        const video = evidence().getByTestId("video-demo.webm").locator("video");
+        yield* settled("the video", () =>
+          video
+            .getAttribute("src", { timeout: 1000 })
+            .then((src) => src?.startsWith("blob:") || undefined),
+        );
+        expect(yield* Effect.promise(() => video.getAttribute("controls"))).not.toBeNull();
+        const report = evidence().getByTestId("report-lighthouse.html");
+        yield* Effect.promise(() => report.getByTestId("report-open").click());
+        const frame = report.locator("iframe");
+        yield* settled("the report", () => frame.isVisible().then((seen) => seen || undefined));
+        expect(yield* Effect.promise(() => frame.getAttribute("sandbox"))).toBe("allow-scripts");
+        const inside = report.frameLocator("iframe").locator("body");
+        yield* settled("the report's own script", () =>
+          inside
+            .innerText({ timeout: 1000 })
+            .then((text) =>
+              ["Score 97 (scripted)", "kept out", "offline"].every((part) => text.includes(part))
+                ? text
+                : undefined,
+            ),
+        );
+        expect(yield* Effect.promise(() => inside.innerText())).not.toContain("fetched");
+        expect(yield* Effect.promise(() => app!.page.title())).not.toBe("pwned");
+      }),
+    ),
+  30_000,
+);
+
+test(
+  "a Run's metrics are a table",
+  () =>
+    run(
+      Effect.gen(function* () {
+        yield* opened;
+        yield* Effect.promise(() => tab("Evidence").click());
+        const metrics = evidence().getByTestId("metrics");
+        yield* reads(
+          metrics.getByTestId("metric-Verifications"),
+          "1 pass · 2 fail · 0 unstable · 3 by Collie",
+        );
+        yield* reads(metrics.getByTestId("metric-Slices"), "1 of 2");
+        yield* reads(metrics.getByTestId("metric-Peak context"), "81000 tokens (builder)");
       }),
     ),
   30_000,

@@ -26,6 +26,7 @@ const tabs = computed(() => {
       ? [{ label: "Review", value: "review" }]
       : []),
     ...(shown?.diff ? [{ label: "Diff", value: "diff" }] : []),
+    ...(shown !== null ? [{ label: "Evidence", value: "evidence" }] : []),
     { label: "Log", value: "log" },
     ...(shown?.mr ? [{ label: "Merge request", value: "mr" }] : []),
     { label: "Facts", value: "facts" },
@@ -113,6 +114,11 @@ const locationOf = (file: string, line: number | null) =>
               </li>
             </ul>
           </div>
+          <EvidenceTab
+            v-else-if="tab === 'evidence'"
+            :detail="detail"
+            :installation="placed.installation"
+          />
           <LogTab v-else-if="tab === 'log'" :tail="detail.tail" />
           <MrPanel v-else-if="tab === 'mr' && detail.mr" :mr="detail.mr" />
           <DiffTab

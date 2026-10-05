@@ -864,7 +864,13 @@ works, final after — as a file tree beside each file's diff, unified or side b
 as you left it while the drawer is open. Shiki colours each side of a hunk as one text, so
 a comment spanning its lines is coloured on all of them. A file is read from the host when
 it is opened, and again when the Run changes it, with no line cap; a file with more than
-500 changed lines, or a binary one, starts collapsed. **Log**
+500 changed lines, or a binary one, starts collapsed. **Evidence** is the Run's
+verifications as a checklist, those that did not do what they were expected to first and
+already open with their output in its terminal colours; the logs it kept, each read when
+opened and searchable; its screenshots as a gallery, a `before` beside its `after` where
+their names pair them, twelve to a page; its videos, played inline; its HTML reports, such
+as Lighthouse or Playwright, in a sandboxed frame that runs their scripts but can reach
+neither Desktop nor the network; and its metrics as a table. **Log**
 follows the end of the Run's log as it is written, with a search that keeps only the lines
 that match. **Merge request** shows what the host's merge watch last read — title, state,
 pipeline, approvals and comments — with Open in browser. **Facts** shows the Run's intent,
