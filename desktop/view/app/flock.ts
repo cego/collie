@@ -49,3 +49,13 @@ export const flockAtom = FlockClient.runtime
     flockOf(Stream.unwrap(FlockClient.use((client) => Effect.succeed(client("flock", undefined))))),
   )
   .pipe(Atom.keepAlive);
+
+/** A Run's details while some drawer shows them, keyed `<installation> <run id>`. */
+export const runDetailAtom = Atom.family((key: string) => {
+  const [installation = "", runId = ""] = key.split(" ");
+  return FlockClient.runtime.atom(
+    Stream.unwrap(
+      FlockClient.use((client) => Effect.succeed(client("runDetail", { installation, runId }))),
+    ),
+  );
+});

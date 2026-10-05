@@ -9,6 +9,8 @@ import {
   BoardMessage,
   type Herd,
   OfferView,
+  RunDetail,
+  RunFile,
   sortBoard,
   Startable,
   type TaskView,
@@ -107,6 +109,19 @@ export const DesktopRpcs = RpcGroup.make(
   Rpc.make("workflows", {
     payload: { installation: Schema.String, project: Schema.String },
     success: Schema.Array(Startable),
+    error: ActionFailed,
+  }),
+  /** One Run's details while its drawer is open, with its log's tail, again as they change. */
+  Rpc.make("runDetail", {
+    payload: { installation: Schema.String, runId: Schema.String },
+    success: Schema.NullOr(RunDetail),
+    error: ActionFailed,
+    stream: true,
+  }),
+  /** A large item of a Run's, by the reference its details hand out. */
+  Rpc.make("runFile", {
+    payload: { installation: Schema.String, runId: Schema.String, ref: Schema.String },
+    success: RunFile,
     error: ActionFailed,
   }),
 );

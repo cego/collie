@@ -2,7 +2,8 @@
 // views://mainview/. Nothing may come from the network at runtime.
 
 export default defineNuxtConfig({
-  modules: ["@nuxt/ui"],
+  // @comark/nuxt turns on Nuxt UI's prose components, which style rendered markdown.
+  modules: ["@nuxt/ui", "@comark/nuxt"],
   css: ["~/assets/css/main.css"],
   ssr: false,
   experimental: {

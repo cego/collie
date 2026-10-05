@@ -1,10 +1,20 @@
 import { Schema } from "effect";
-import { Herd, type OfferView, type Startable, TaskView } from "../../../src/board-model";
+import {
+  Herd,
+  type OfferView,
+  RunDetail,
+  type Startable,
+  TaskView,
+} from "../../../src/board-model";
 
 export const ScriptedMachine = Schema.Struct({
   installation: Schema.String,
   herds: Schema.Array(Herd),
   tasks: Schema.Array(TaskView),
+  /** Each Run's details, by its id. */
+  details: Schema.optionalKey(Schema.Record(Schema.String, RunDetail)),
+  /** What each reference of a Run's fetches, keyed `<run id> <ref>`. */
+  files: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
 });
 export type ScriptedMachine = typeof ScriptedMachine.Type;
 

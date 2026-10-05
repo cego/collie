@@ -11,6 +11,7 @@ const actAtom = FlockClient.mutation("act");
 const offersAtom = FlockClient.mutation("offers");
 const workflowsAtom = FlockClient.mutation("workflows");
 const openLinkAtom = FlockClient.mutation("openLink");
+const runFileAtom = FlockClient.mutation("runFile");
 
 type Failed = ActionFailed | RpcClientError.RpcClientError;
 
@@ -28,6 +29,7 @@ export const useActions = () => {
   const offers = useAtomSet(() => offersAtom, { mode: "promiseExit" });
   const workflows = useAtomSet(() => workflowsAtom, { mode: "promiseExit" });
   const openLink = useAtomSet(() => openLinkAtom, { mode: "promiseExit" });
+  const runFile = useAtomSet(() => runFileAtom, { mode: "promiseExit" });
 
   /** A failed read is said once, here; its caller gets nothing back. */
   const read = <A>(exit: Exit.Exit<A, Failed>) => {
@@ -67,5 +69,7 @@ export const useActions = () => {
       offers({ payload: { installation, runId } }).then(read),
     workflowsIn: (installation: string, project: string) =>
       workflows({ payload: { installation, project } }).then(read),
+    fileOf: (installation: string, runId: string, ref: string) =>
+      runFile({ payload: { installation, runId, ref } }).then(read),
   };
 };

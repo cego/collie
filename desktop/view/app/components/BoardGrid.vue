@@ -12,6 +12,7 @@ defineProps<{ tasks: ReadonlyArray<PlacedTask> }>();
       :task="one.task"
       :where="one.where"
       :installation="one.installation"
+      :card-key="one.key"
     />
   </div>
 </template>

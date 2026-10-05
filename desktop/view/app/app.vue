@@ -1,8 +1,13 @@
 <script setup lang="ts">
 import { SECTIONS } from "../../../src/board-model";
 
-const { connecting, failure, lost, machines, tasks, sections, header, waiting } = useFlock();
+const { connecting, failure, lost, machines, tasks, sections, header, waiting, placedBy } =
+  useFlock();
 const starting = ref(false);
+const drawer = useDrawer();
+const opened = computed(() =>
+  drawer.opened.value === null ? undefined : placedBy(drawer.opened.value),
+);
 </script>
 
 <template>
@@ -75,5 +80,12 @@ const starting = ref(false);
         </template>
       </template>
     </main>
+    <RunDrawer
+      v-if="opened"
+      :key="`${opened.key} ${opened.task.run}`"
+      :placed="opened"
+      :open="true"
+      @update:open="(still: boolean) => !still && drawer.close()"
+    />
   </UApp>
 </template>

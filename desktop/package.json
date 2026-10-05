@@ -10,12 +10,15 @@
     "test": "bun run view && COLLIE_DESKTOP_CDP=9333 electrobun build && bun test"
   },
   "dependencies": {
+    "@comark/nuxt": "0.7.0",
     "@effect/atom-vue": "4.0.0-rc.117",
     "@fontsource-variable/public-sans": "5.3.0",
     "@iconify-json/lucide": "1.2.138",
     "@nuxt/ui": "4.11.3",
+    "beautiful-mermaid": "1.1.3",
     "electrobun": "2.0.2",
     "nuxt": "4.5.2",
+    "shiki": "4.5.0",
     "tailwindcss": "4.3.3"
   },
   "devDependencies": {

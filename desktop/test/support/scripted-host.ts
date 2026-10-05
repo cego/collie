@@ -28,8 +28,6 @@ type Asked = Parameters<typeof asLine>[0];
 
 const Served = FrontDoorRpcs.omit(
   "declare",
-  "runDetail",
-  "runFile",
   "propose",
   "act",
   "reconcile",
@@ -131,6 +129,24 @@ const handlers = Served.toLayer(
           },
           payload.runId,
         ),
+      runDetail: (payload) =>
+        Stream.fromSchedule(Schedule.spaced("100 millis")).pipe(
+          Stream.mapEffect(() => read),
+          Stream.map(({ details }) => details?.[payload.runId] ?? null),
+          Stream.changesWith((a, b) => asLine(a) === asLine(b)),
+        ),
+      runFile: (payload) =>
+        Effect.flatMap(read, ({ files }) => {
+          const content = files?.[`${payload.runId} ${payload.ref}`];
+          return content === undefined
+            ? Effect.fail(new HostRefused({ reason: `${payload.ref} is not ${payload.runId}'s` }))
+            : Effect.succeed({
+                ref: payload.ref,
+                encoding: "utf8" as const,
+                content,
+                size: content.length,
+              });
+        }),
       steerAbout: (payload) =>
         logged("steerAbout", payload).pipe(
           Effect.as({

@@ -854,6 +854,17 @@ same request again, so a host that took it before the answer was lost does it on
 stream like any other change. Every one is recorded on that Machine as `desktop`, with this
 computer's name.
 
+Pressing a card's name opens its drawer, which follows the card's Run on its host for as
+long as it is open. Its **Plan** tab renders the spec and lists the tickets, each expanding
+in place, read from the host when first opened; a link from one plan file to another opens
+that file at the top of the tab. **Review** renders the review and lists its findings. **Log**
+follows the end of the Run's log as it is written, with a search that keeps only the lines
+that match. **Merge request** shows what the host's merge watch last read — title, state,
+pipeline, approvals and comments — with Open in browser. **Facts** shows the Run's intent,
+its steering cards and the card's TaskView as the host sent it. Markdown is rendered with
+Comark: tables, Shiki-highlighted code and mermaid diagrams, with anything that could run
+removed, because agents write it. A web link in it opens in your browser, never in Desktop.
+
 Every Machine's host is reached the same way: by running
 `collie bridge --as desktop --client <this computer>` in a login shell, here directly and
 elsewhere as a channel on that machine's master, so the host is started with the

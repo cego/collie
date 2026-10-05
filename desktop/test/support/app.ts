@@ -25,24 +25,28 @@ export const serve = (
   installation: string,
   tasks: ReadonlyArray<TaskView>,
   herds: ScriptedMachine["herds"] = [{ id: "default" }],
+  runs: Pick<ScriptedMachine, "details" | "files"> = {},
 ) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
-    yield* fs.writeFileString(`${file}.new`, asMachine({ installation, herds, tasks }));
+    yield* fs.writeFileString(`${file}.new`, asMachine({ installation, herds, tasks, ...runs }));
     yield* fs.rename(`${file}.new`, file);
   });
 
 export const LOCAL = "local.json";
 
 /**
- * herdr's list; a master that logs when it opens and closes, and which `-O check` finds
- * once it is open; and a passenger that runs its remote command as a Machine's login
+ * herdr's list; a browser that logs what it was asked to open; a master that logs when it
+ * opens and closes, and which `-O check` finds once it is open; and a passenger that runs its remote command as a Machine's login
  * shell would, with `collie` on PATH.
  */
 const scripts = (flock: string) => ({
   herdr: `#!/bin/sh
 [ "$*" = "machine list --json" ] || exit 2
 cat '${flock}/machines.json'
+`,
+  "xdg-open": `#!/bin/sh
+echo "$1" >> '${flock}/opened.log'
 `,
   ssh: `#!/bin/bash
 args=("$@")

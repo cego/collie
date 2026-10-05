@@ -10,8 +10,14 @@ import {
 } from "../../../../src/board-model";
 import type { DesktopAction } from "../../../src/shared/flock";
 
-const props = defineProps<{ task: TaskView; where: string; installation: string }>();
+const props = defineProps<{
+  task: TaskView;
+  where: string;
+  installation: string;
+  cardKey: string;
+}>();
 const { run, openLink } = useActions();
+const { open } = useDrawer();
 const act = (action: DesktopAction) => run(props.installation, action);
 
 const STATES: Record<
@@ -137,7 +143,14 @@ const menu = computed(() =>
   <UCard :data-testid="`card-${task.id}`" :variant="task.state === 'blocked' ? 'soft' : 'outline'">
     <template #header>
       <div class="flex items-start justify-between gap-2">
-        <strong data-testid="name">{{ task.name }}</strong>
+        <button
+          type="button"
+          class="cursor-pointer text-left font-semibold hover:underline"
+          data-testid="name"
+          @click="open(cardKey)"
+        >
+          {{ task.name }}
+        </button>
         <div class="flex shrink-0 items-center gap-1">
           <UBadge :color="state.color" variant="subtle" data-testid="state">
             {{ state.label }}

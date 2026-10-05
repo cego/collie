@@ -406,3 +406,11 @@ export const offersOn = (door: Door, runId: string) =>
 
 export const workflowsOn = (door: Door, project: string) =>
   door.workflows({ project }).pipe(Effect.mapError(refusal()));
+
+export const runDetailOn = (door: Door, runId: string) =>
+  door
+    .runDetail({ runId, tail: true, pages: 1, refreshMr: false })
+    .pipe(Stream.mapError(refusal()));
+
+export const runFileOn = (door: Door, runId: string, ref: string) =>
+  door.runFile({ runId, ref }).pipe(Effect.mapError(refusal()));
