@@ -1467,8 +1467,10 @@ carries it out; `act`, which carries out the board's own actions on a Run (`stop
 `release`, `hold`, `answer`, `deliver`, `followup`, `start`) with no proposal, anything else
 being refused as `propose`'s; `reconcile`, which settles a proposal step nobody can account
 for; `settleDelivery`, which does the same for a message to an agent; and `news`, which
-hands one conversation its Herd's pending News and records it `read`, `sent` or
-`uncertain` for that conversation alone. Actions travel as
+hands one conversation its Herd's pending News, each item with its Significance, and
+records it `read`, `sent` or `uncertain` for that conversation alone. Given `keys`, it hands
+over every pending item and records only those keys: what Desktop's Flock chat actually
+gave the model, out of a batch it put together across Machines. Actions travel as
 JSON and the host decodes them. `collie confirm`, `decline`, `steer`, `run disposition`,
 `proposal reconcile`, `run deliveries --reconcile` and `chat news --sent`, the board and
 chat's tools all go through these, so the host is the only writer of what they record

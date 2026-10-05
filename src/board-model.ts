@@ -2,7 +2,7 @@
 // and count its cards, decide what each one offers and read what it names. No I/O and no
 // Bun-only import: a browser bundle imports this too.
 
-import { Option, Schema, SchemaGetter } from "effect";
+import { Effect, Option, Schema, SchemaGetter } from "effect";
 import * as Rpc from "effect/unstable/rpc/Rpc";
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
 import { IntentSeedSchema } from "./intent-model";
@@ -725,6 +725,13 @@ export const Declaration = Schema.Struct({
 });
 export type Declaration = typeof Declaration.Type;
 
+/** Whether something is worth interrupting a human for: `decision` > `consequential` > `try-it` > `routine`. */
+export const Significance = Schema.Literals(["routine", "try-it", "decision", "consequential"]);
+export type Significance = typeof Significance.Type;
+
+/** How many News items one batch carries: a screen's worth. */
+export const NEWS_BATCH = 10;
+
 /** What became of a News item in one conversation. */
 export const NewsReceipt = Schema.Literals(["read", "sent", "uncertain"]);
 
@@ -736,6 +743,8 @@ export const NewsBatch = Schema.Struct({
       run: Schema.String,
       text: Schema.String,
       at: Schema.String,
+      /** Routine from a host whose News did not say. */
+      significance: Significance.pipe(Schema.withDecodingDefaultKey(Effect.succeed("routine"))),
     }),
   ),
   omitted: Schema.Int,
@@ -950,6 +959,8 @@ export const FrontDoorRpcs = RpcGroup.make(
       conversation: Schema.String,
       as: NewsReceipt,
       request: Schema.String,
+      /** Hand over every pending item and settle only these, which is what the conversation was given. */
+      keys: Schema.optionalKey(Schema.Array(Schema.String)),
     },
     success: NewsBatch,
     error: Schema.Union([HostRefused, RequestConflict]),

@@ -15,6 +15,13 @@ export type About = typeof About.Type;
 
 export const aboutLine = (about: About) => `${about.machine} › ${about.name}`;
 
+/** How a turn Desktop starts about News begins, which is how the window tells it from the human's. */
+export const DESKTOP_SAID = "Desktop noticed, while you were not asked:";
+
+/** When a turn Desktop started of its own begins and ends. */
+export const DesktopTurn = Schema.Literals(["started", "ended"]);
+export type DesktopTurn = typeof DesktopTurn.Type;
+
 /** The human's choices, keyed by question, as AskUserQuestion takes them. */
 export const Answers = Schema.Record(Schema.String, Schema.String);
 export type Answers = typeof Answers.Type;

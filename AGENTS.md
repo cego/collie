@@ -66,7 +66,8 @@ herdr actions, and the `collie` CLI.
   its own `package.json`; Effect is the root's, so the board's Schemas exist once. The
   Flock chat is `desktop/src/bun/chat.ts` (the Agent SDK session), `session.ts` (what it
   runs with), `flock-tools.ts` (the Toolkit over each Machine's `chat` channel), `agui.ts`
-  (SDK messages as AG-UI) and `transcript.ts` (a conversation read back), with
+  (SDK messages as AG-UI), `transcript.ts` (a conversation read back) and `settings.ts`
+  (Desktop's own switches, the proactive one among them), with
   `desktop/src/shared/chat-view.ts` what the window says of a tool call and the card a
   message is about, and `src/toolkit.ts` the Toolkit both chats share
   ([ADR-0011](docs/adr/0011-the-conversation-is-a-native-harness.md#amended-2026-10-05-a-herds-chat-per-home-and-one-flock-chat-per-desktop)).

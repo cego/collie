@@ -74,7 +74,18 @@ const machine = (name: string, tasks: ReadonlyArray<TaskView>, asked: Asked[]): 
     news: (payload) =>
       Effect.sync(() => {
         note("news", payload);
-        return { items: [{ key: "k1", run: "r-1", text: "r-1 finished.", at: "" }], omitted: 0 };
+        return {
+          items: [
+            {
+              key: "k1",
+              run: "r-1",
+              text: "r-1 finished.",
+              at: "",
+              significance: "consequential" as const,
+            },
+          ],
+          omitted: 0,
+        };
       }),
     runDetail: () => Stream.make(null),
     workflows: () => Effect.succeed([]),
@@ -193,16 +204,19 @@ test("input a tool does not take is refused in the tool's own terms", () =>
     }),
   ));
 
-test("News is read from every Herd on every Machine for the Flock conversation", () =>
+test("News is read from every Herd on every Machine, and only what was handed over is settled", () =>
   Effect.runPromise(
     Effect.gen(function* () {
       const asked: Asked[] = [];
       const said = yield* call(asked, "collie_news", {});
-      expect(said).toContain("mk-pc:r-1");
-      expect(said).toContain("vm-mk:r-1");
-      expect(asked.filter(({ op }) => op === "news").map(({ payload }) => payload)).toEqual([
-        expect.objectContaining({ herd: "h1", conversation: "flock@mk-pc", as: "read" }),
-        expect.objectContaining({ herd: "h1", conversation: "flock@mk-pc", as: "read" }),
+      expect(said).toContain("[consequential] mk-pc:r-1");
+      expect(said).toContain("[consequential] vm-mk:r-1");
+      const reads = asked.filter(({ op }) => op === "news");
+      expect(reads.map(({ machine, payload }) => [machine, payload])).toEqual([
+        ["mk-pc", expect.objectContaining({ herd: "h1", as: "sent", keys: [] })],
+        ["vm-mk", expect.objectContaining({ herd: "h1", as: "sent", keys: [] })],
+        ["mk-pc", expect.objectContaining({ herd: "h1", as: "read", keys: ["k1"] })],
+        ["vm-mk", expect.objectContaining({ herd: "h1", as: "read", keys: ["k1"] })],
       ]);
     }),
   ));

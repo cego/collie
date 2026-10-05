@@ -8,6 +8,7 @@ import { sessionOptions } from "../desktop/src/bun/session";
 import type { About } from "../desktop/src/shared/chat-view";
 
 let about: About | undefined;
+let noticed: string | undefined;
 const asked: string[] = [];
 const options = sessionOptions({
   cwd: "/state/collie-desktop",
@@ -19,6 +20,7 @@ const options = sessionOptions({
     return Promise.resolve({ "Which one?": "vm-mk" });
   },
   about: () => about,
+  noticed: () => noticed,
 });
 const permission = {
   signal: new AbortController().signal,
@@ -97,5 +99,16 @@ test("the card a message goes with is attached to it, as context and not as the 
       expect(attached.hookSpecificOutput?.additionalContext).toContain("vm-mk:t-1");
       expect(attached.hookSpecificOutput?.additionalContext).toContain("vm-mk:r-2");
       expect(attached.hookSpecificOutput?.additionalContext).toContain("Fix board bugs");
+    }),
+  ));
+
+test("News waiting for the human's next message goes with it, as context and not as their words", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      about = undefined;
+      noticed = "- [routine] vm-mk:r-2: Run r-2 ended.";
+      const attached = yield* submitted();
+      expect(attached.hookSpecificOutput?.additionalContext).toContain("vm-mk:r-2: Run r-2 ended.");
+      noticed = undefined;
     }),
   ));

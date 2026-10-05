@@ -25,15 +25,36 @@ import {
   PubSub,
   Queue,
   Schema,
+  Schedule,
   Scope,
   Semaphore,
   Stream,
 } from "effect";
 import { isJsonObject } from "../../../src/schema";
 import { type AguiEvent, ends } from "../shared/agui";
-import type { About, Answers, ChatMessage, Conversations } from "../shared/chat-view";
+import {
+  type About,
+  type Answers,
+  type ChatMessage,
+  type Conversations,
+  DESKTOP_SAID,
+  type DesktopTurn,
+} from "../shared/chat-view";
+import { appendJournal } from "../../../src/journal";
+import { nowIso } from "../../../src/time";
 import { startState, step } from "./agui";
-import { callFlockTool, FLOCK_TOOLS, type FlockChat } from "./flock-tools";
+import {
+  callFlockTool,
+  delivered,
+  FLOCK_TOOLS,
+  type FlockBatch,
+  type FlockChat,
+  flockBatch,
+  flockNewsText,
+  heardNews,
+  newsKey,
+  wakes,
+} from "./flock-tools";
 import { sessionOptions } from "./session";
 import { transcriptOf } from "./transcript";
 
@@ -81,7 +102,48 @@ export interface FlockConversation {
   readonly conversations: Effect.Effect<Conversations>;
   /** Ends the current session and makes that one current, or a fresh one. */
   readonly reopen: (session: string | null) => Effect.Effect<void>;
+  /** Something changed on a board: News may be waiting, worth a turn of Desktop's own. */
+  readonly nudge: Effect.Effect<void>;
+  /** When a turn of Desktop's own starts and ends. */
+  readonly desktopTurns: Stream.Stream<DesktopTurn>;
 }
+
+/** What a turn cost, as Claude Code's result says. */
+const TurnResult = Schema.Struct({
+  type: Schema.Literal("result"),
+  duration_ms: Schema.Number,
+  usage: Schema.Struct({
+    input_tokens: Schema.Number,
+    output_tokens: Schema.Number,
+    cache_read_input_tokens: Schema.Number,
+    cache_creation_input_tokens: Schema.Number,
+  }),
+});
+const decodeTurnResult = Schema.decodeUnknownOption(TurnResult);
+
+/** A turn of Desktop's own, recorded as usage on this computer: data, never a limit. */
+const UsageLine = Schema.fromJsonString(
+  Schema.Struct({
+    at: Schema.String,
+    session: Schema.String,
+    turn: Schema.Literal("desktop"),
+    duration_ms: Schema.Number,
+    usage: TurnResult.fields.usage,
+  }),
+);
+
+/** Who a turn speaks for: the human's words and card, and the News it carries. */
+interface Voice {
+  said?: string;
+  about?: About;
+  news?: FlockBatch;
+}
+
+/** How long after a board change Desktop looks for News, so the host has written it. */
+const SETTLE = "3 seconds";
+
+/** How often Desktop looks for News no board change pointed to. */
+const LOOK_AGAIN = "2 minutes";
 
 /** How many earlier conversations the history offers. */
 const HISTORY = 10;
@@ -97,8 +159,11 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
   readonly dir: string;
   readonly conversation: string;
   readonly machines: FlockChat["machines"];
+  /** Whether Desktop may start a turn about News nobody asked for. */
+  readonly proactive: () => boolean;
 }) {
   const fs = yield* FileSystem.FileSystem;
+  const scope = yield* Effect.scope;
   const crypto = yield* Crypto.Crypto;
   yield* fs.makeDirectory(opts.dir, { recursive: true });
   const file = (yield* Path.Path).join(opts.dir, "flock-chat.json");
@@ -109,14 +174,22 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
     fs.writeFileString(file, Schema.encodeSync(SessionFile)({ session }));
   let said: string | undefined;
   let attached: About | undefined;
+  let noticed: FlockBatch | undefined;
   const asking = new Map<string, Deferred.Deferred<Answers>>();
-  const services = yield* Effect.context<Crypto.Crypto>();
+  const services = yield* Effect.context<Crypto.Crypto | FileSystem.FileSystem | Path.Path>();
   const run = (effect: Effect.Effect<string, never, Crypto.Crypto>) =>
     Effect.runPromise(effect.pipe(Effect.provideContext(services)));
-  const server = flockServer(
-    { machines: opts.machines, conversation: opts.conversation, said: () => said },
-    run,
-  );
+  const flock: FlockChat = {
+    machines: opts.machines,
+    conversation: opts.conversation,
+    said: () => said,
+  };
+  const server = flockServer(flock, run);
+  const usage = (yield* Path.Path).join(opts.dir, "flock-usage.jsonl");
+  const desktopTurns = yield* PubSub.unbounded<DesktopTurn>();
+  // ponytail: grows by one key per item Desktop spoke about, for as long as Desktop runs.
+  /** News a turn of Desktop's has been about, so an item a host failed to settle never wakes it twice. */
+  const spoken = new Set<string>();
   const ask = (toolUseID: string, signal: AbortSignal) => {
     const answered = Deferred.makeUnsafe<Answers>();
     asking.set(toolUseID, answered);
@@ -141,8 +214,10 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
         claude: Bun.which("claude"),
         ask,
         about: () => attached,
+        noticed: () => (noticed === undefined ? undefined : flockNewsText(noticed)),
       }),
     });
+    let lastResult: typeof TurnResult.Type | undefined;
     const events = yield* PubSub.unbounded<AguiEvent>();
     /** Why the session ended, once it has: every turn after it is told at once. */
     let ended: string | null = null;
@@ -152,6 +227,11 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
         return PubSub.publish(events, refusal(why));
       });
     yield* Stream.fromAsyncIterable(claude, String).pipe(
+      Stream.tap((message) =>
+        Effect.sync(() => {
+          lastResult = Option.getOrElse(decodeTurnResult(message), () => lastResult);
+        }),
+      ),
       Stream.mapAccum(() => startState(id), step),
       Stream.runForEach((event) => PubSub.publish(events, event)),
       Effect.matchCauseEffect({
@@ -162,7 +242,7 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
     );
     // Added after the reader, so it runs first and the reader's pending message ends.
     yield* Effect.addFinalizer(() => Effect.sync(() => claude.close()));
-    return { claude, inbox, events, ended: () => ended };
+    return { claude, inbox, events, ended: () => ended, lastResult: () => lastResult };
   });
 
   type Live = Effect.Success<ReturnType<typeof start>>;
@@ -185,6 +265,120 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
   const turns = yield* Semaphore.make(1);
   /** The session a turn is under way on, if one is. */
   let turning: Live | undefined;
+  // A throttle: the first board change in a while has Desktop look for News once things settle.
+  let nudged = false;
+  const nudge: Effect.Effect<void> = Effect.suspend(() => {
+    if (nudged) return Effect.void;
+    nudged = true;
+    return Effect.sleep(SETTLE).pipe(
+      Effect.andThen(
+        Effect.sync(() => {
+          nudged = false;
+        }),
+      ),
+      Effect.andThen(speakFirst),
+      Effect.forkIn(scope),
+      Effect.asVoid,
+    );
+  });
+
+  /**
+   * A message on the session and the events of the turn it starts, in the words of whoever
+   * said it, with the News it carries settled once the model has it. A turn its reader
+   * dropped is interrupted and seen out, so the next starts clean; any turn's end may leave
+   * News that waited for it.
+   */
+  const turnOn = Effect.fnUntraced(function* (running: Live, text: string, voice: Voice) {
+    const heard = yield* PubSub.subscribe(running.events);
+    let finished = false;
+    yield* Effect.addFinalizer(() =>
+      Effect.sync(() => {
+        said = undefined;
+        attached = undefined;
+        noticed = undefined;
+        turning = undefined;
+      }).pipe(
+        Effect.andThen(
+          finished
+            ? Effect.void
+            : Effect.tryPromise(() => running.claude.interrupt()).pipe(
+                Effect.andThen(
+                  Stream.fromSubscription(heard).pipe(Stream.takeUntil(ends), Stream.runDrain),
+                ),
+                Effect.timeout("10 seconds"),
+                Effect.ignore,
+              ),
+        ),
+        Effect.andThen(nudge),
+      ),
+    );
+    said = voice.said;
+    attached = voice.about;
+    // A turn of Desktop's carries its News in its message; the human's carries it as context.
+    noticed = voice.said === undefined ? undefined : voice.news;
+    turning = running;
+    yield* Queue.offer(running.inbox, {
+      type: "user",
+      message: { role: "user", content: text },
+      parent_tool_use_id: null,
+    });
+    const news = voice.news;
+    return Stream.fromSubscription(heard).pipe(
+      Stream.takeUntil(ends),
+      Stream.tap((event) =>
+        Effect.suspend(() => {
+          if (ends(event)) finished = true;
+          // The model starting the turn is what shows it has the message, and its News.
+          if (news === undefined || event.type !== "RUN_STARTED") return Effect.void;
+          return delivered(flock, news).pipe(
+            Effect.provideContext(services),
+            Effect.forkIn(scope),
+            Effect.asVoid,
+          );
+        }),
+      ),
+    );
+  });
+
+  const waiting = heardNews(flock).pipe(
+    Effect.map(({ batch }) => batch),
+    Effect.provideContext(services),
+    Effect.orElseSucceed(() => flockBatch([])),
+  );
+
+  /** A turn of Desktop's own about News that matters, when the chat is idle and may speak first. */
+  const speakFirst: Effect.Effect<void> = Effect.gen(function* () {
+    if (!opts.proactive()) return;
+    const batch = yield* waiting;
+    const fresh: FlockBatch = {
+      ...batch,
+      items: batch.items.filter((placed) => !spoken.has(newsKey(placed))),
+    };
+    if (!wakes(fresh)) return;
+    const running = yield* warm;
+    if (running.ended() !== null) return;
+    for (const placed of fresh.items) spoken.add(newsKey(placed));
+    const before = running.lastResult();
+    yield* PubSub.publish(desktopTurns, "started");
+    yield* turnOn(running, `${DESKTOP_SAID}\n${flockNewsText(fresh)}`, { news: fresh }).pipe(
+      Effect.flatMap(Stream.runDrain),
+      Effect.scoped,
+      Effect.ensuring(PubSub.publish(desktopTurns, "ended")),
+    );
+    const result = running.lastResult();
+    if (result !== undefined && result !== before)
+      yield* appendJournal(usage, UsageLine, {
+        at: yield* nowIso(),
+        session: id,
+        turn: "desktop",
+        duration_ms: result.duration_ms,
+        usage: result.usage,
+      });
+  }).pipe(turns.withPermitsIfAvailable(1), Effect.provideContext(services), Effect.ignore);
+
+  // ponytail: a fixed look-again for News written after its board change settled; a host push would replace it.
+  yield* nudge.pipe(Effect.repeat(Schedule.spaced(LOOK_AGAIN)), Effect.forkIn(scope));
+
   const conversation: FlockConversation = {
     send: (text, about) =>
       Stream.unwrap(
@@ -193,47 +387,11 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
           const running = yield* warm;
           const ended = running.ended();
           if (ended !== null) return Stream.make(refusal(ended));
-          const heard = yield* PubSub.subscribe(running.events);
-          let finished = false;
-          // A turn its reader dropped is interrupted and seen out, so the next starts clean.
-          yield* Effect.addFinalizer(() =>
-            Effect.sync(() => {
-              said = undefined;
-              turning = undefined;
-              attached = undefined;
-            }).pipe(
-              Effect.andThen(
-                finished
-                  ? Effect.void
-                  : Effect.tryPromise(() => running.claude.interrupt()).pipe(
-                      Effect.andThen(
-                        Stream.fromSubscription(heard).pipe(
-                          Stream.takeUntil(ends),
-                          Stream.runDrain,
-                        ),
-                      ),
-                      Effect.timeout("10 seconds"),
-                      Effect.ignore,
-                    ),
-              ),
-            ),
-          );
-          said = text;
-          turning = running;
-          attached = about ?? undefined;
-          yield* Queue.offer(running.inbox, {
-            type: "user",
-            message: { role: "user", content: text },
-            parent_tool_use_id: null,
-          });
-          return Stream.fromSubscription(heard).pipe(
-            Stream.takeUntil(ends),
-            Stream.tap((event) =>
-              Effect.sync(() => {
-                if (ends(event)) finished = true;
-              }),
-            ),
-          );
+          const news = yield* waiting;
+          const voice: Voice = { said: text };
+          if (about !== null) voice.about = about;
+          if (news.items.length > 0) voice.news = news;
+          return yield* turnOn(running, text, voice);
         }),
       ),
     answer: (toolCallId, answers) =>
@@ -275,6 +433,8 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
           }),
         );
       }).pipe(Effect.orDie),
+    nudge,
+    desktopTurns: Stream.fromPubSub(desktopTurns),
   };
   return conversation;
 });

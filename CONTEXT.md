@@ -159,8 +159,9 @@ statement about tests is a **claim**, and is shown as one.
 what backs it, and what nobody checked. Its **readiness** — `claimed`, `inspect-ready`,
 `verified` — says how far the evidence goes and no further.
 
-**Significance** — Whether a Card is worth interrupting a human for, decided by rules over
-facts: `decision` > `consequential` > `try-it` > `routine`. A narrative never raises it.
+**Significance** — Whether a Card or a **News** item is worth interrupting a human for,
+decided by rules over facts: `decision` > `consequential` > `try-it` > `routine`. A
+narrative never raises it.
 
 **Hold** — A Run under a hold starts no new work until a human releases it. It takes effect at the Run's next boundary, so what is already running finishes. Nothing lifts a hold at a time.
 

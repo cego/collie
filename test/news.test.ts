@@ -4,7 +4,7 @@
 // proactivity was meant to replace, so a burst has to become a batch. And writing a
 // notification is not evidence that anybody read it, so `sent` must never settle an item.
 
-import { Effect, FileSystem } from "effect";
+import { Effect, FileSystem, Schema } from "effect";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import {
   BATCH,
@@ -218,3 +218,73 @@ test("a receipt written before conversations had names is Native chat's", () =>
       expect(pending(lines, "flock@pc").items).toHaveLength(1);
     }),
   ));
+
+test("each item says how much it matters, and one written before items did is routine", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* append(file, {
+        key: "r1:asking:x",
+        run: "r1",
+        text: "r1 asks.",
+        significance: "decision",
+      });
+      yield* fs.writeFileString(
+        file,
+        `${yield* fs.readFileString(file)}${Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))({ kind: "item", key: "r0:ended:done", run: "r0", text: "r0 ended.", at: "2026-01-01T00:00:00Z" })}\n`,
+      );
+      expect(
+        pending(yield* read(file)).items.map(({ key, significance }) => [key, significance]),
+      ).toEqual([
+        ["r1:asking:x", "decision"],
+        ["r0:ended:done", "routine"],
+      ]);
+    }),
+  ));
+
+test("a conversation that takes every pending item is not limited to one batch", () =>
+  runEffect(
+    Effect.gen(function* () {
+      for (let n = 0; n < BATCH + 5; n++)
+        yield* append(file, {
+          key: `r${n}:ended`,
+          run: `r${n}`,
+          text: `Run r${n} ended.`,
+          significance: "consequential",
+        });
+      expect(pending(yield* read(file), "flock@pc", Infinity)).toMatchObject({ omitted: 0 });
+      expect(pending(yield* read(file), "flock@pc", Infinity).items).toHaveLength(BATCH + 5);
+    }),
+  ));
+
+test("a question and drift Collie could not correct are decisions, an end or a park is consequential, and Ready is worth trying", () => {
+  const of = (events: ReturnType<typeof eventsIn>) =>
+    events.map(({ significance }) => significance);
+  expect(
+    of(
+      eventsIn([
+        record({
+          id: "r1",
+          state: "waiting",
+          asking: [{ name: "scope", prompt: "?", options: [] }],
+        }),
+      ]),
+    ),
+  ).toEqual(["decision"]);
+  expect(of(eventsIn([record({ id: "r8" })], new Map([["r8", "stay in src"]])))).toEqual([
+    "decision",
+  ]);
+  expect(of(eventsIn([record({ id: "r2", state: "waiting", note: "stuck" })]))).toEqual([
+    "consequential",
+  ]);
+  expect(of(eventsIn([record({ id: "r3", state: "failed" })]))).toEqual(["consequential"]);
+  expect(
+    of(
+      eventsIn(
+        [record({ id: "r4" })],
+        new Map(),
+        new Map([["r4", { at: "abc", sentence: "Ready." }]]),
+      ),
+    ),
+  ).toEqual(["try-it"]);
+});

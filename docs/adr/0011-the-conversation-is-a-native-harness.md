@@ -204,6 +204,13 @@ Code keeps, never as "the most recent". The session before either ends first, so
 Desktop has one live Flock chat at a time. The board card the human clicked goes with
 their next message as context from a UserPromptSubmit callback, never as their words.
 
+News reaches the Flock chat as one batch across every Herd on every Machine, ordered by
+Significance. A `decision` or `consequential` item starts a turn of Desktop's own when the
+chat is idle and Desktop's `proactive` switch is on. That turn shows as Desktop's, and the
+tool host declares no human words for it, so nothing it does is recorded as said by the
+human. Anything else waits for the human's next message and goes with it as context. The
+host settles only the items the model was given (the `news` operation's `keys`).
+
 ## What has actually been proven
 
 Recorded by `tools/chat-live.ts <harness>` against herdr 0.9.0, Claude Code 2.1.272 and

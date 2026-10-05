@@ -4,9 +4,15 @@
 // candidates where several do. The human's words go with each write as the channel's
 // declaration, attached here and never by the model.
 
-import { Clock, Crypto, Effect, Option, Result, Schema, Stream } from "effect";
+import { Cause, Clock, Crypto, Effect, Exit, Option, Result, Schema, Stream } from "effect";
 import * as Toolkit from "effect/unstable/ai/Toolkit";
-import type { RunDetail, TaskView } from "../../../src/board-model";
+import {
+  NEWS_BATCH,
+  type NewsBatch,
+  type RunDetail,
+  type Significance,
+  type TaskView,
+} from "../../../src/board-model";
 import { isString, type JsonObject } from "../../../src/schema";
 import {
   answerWith,
@@ -266,31 +272,127 @@ const workspaces = Effect.fn("FlockTools.workspaces")(function* (flock: FlockCha
   ].join("\n");
 });
 
-const news = Effect.fn("FlockTools.news")(function* (flock: FlockChat) {
+type NewsItem = (typeof NewsBatch.Type)["items"][number];
+
+/** One Herd's pending News on one Machine. */
+export interface Heard {
+  readonly machine: string;
+  readonly herd: string;
+  readonly items: ReadonlyArray<NewsItem>;
+}
+
+const RANK: Record<Significance, number> = {
+  decision: 3,
+  consequential: 2,
+  "try-it": 1,
+  routine: 0,
+};
+
+/**
+ * Every Herd's News as one batch: a screen's worth of what matters most, newest first among
+ * equals, listed by significance then time, and how many items each Machine had left out.
+ */
+type PlacedNews = { readonly machine: string; readonly herd: string; readonly item: NewsItem };
+
+/** One item across the Flock: the same key in two Herds is two items. */
+export const newsKey = ({ machine, herd, item }: PlacedNews) =>
+  `${machine}\u0000${herd}\u0000${item.key}`;
+
+const bySignificance = (newestFirst: boolean) => (a: PlacedNews, b: PlacedNews) =>
+  RANK[b.item.significance] - RANK[a.item.significance] ||
+  (newestFirst ? b.item.at.localeCompare(a.item.at) : a.item.at.localeCompare(b.item.at));
+
+export const flockBatch = (heard: ReadonlyArray<Heard>) => {
+  const all = heard.flatMap(({ machine, herd, items }) =>
+    items.map((item) => ({ machine, herd, item })),
+  );
+  const pressing = all.toSorted(bySignificance(true));
+  const items = pressing.slice(0, NEWS_BATCH).toSorted(bySignificance(false));
+  const omitted = new Map<string, number>();
+  for (const { machine } of pressing.slice(NEWS_BATCH))
+    omitted.set(machine, (omitted.get(machine) ?? 0) + 1);
+  return { items, omitted };
+};
+export type FlockBatch = ReturnType<typeof flockBatch>;
+
+export const flockNewsText = (batch: FlockBatch) =>
+  [
+    ...batch.items.map(
+      ({ machine, item }) => `- [${item.significance}] ${machine}:${item.run}: ${item.text}`,
+    ),
+    ...[...batch.omitted].map(
+      ([machine, count]) => `- and ${count} older or less pressing items on ${machine}`,
+    ),
+  ].join("\n");
+
+/** Whether a batch is worth a turn nobody asked for. */
+export const wakes = (batch: FlockBatch) =>
+  batch.items.some(({ item }) => RANK[item.significance] >= RANK.consequential);
+
+/**
+ * Every Herd's pending News on every Machine, taking nothing: what the conversation is
+ * given is settled apart, by `delivered`. Asked as `sent` with no keys, so a host from
+ * before `keys`, which settles what it hands over, records only that it was handed over.
+ */
+export const heardNews = Effect.fn("FlockTools.heardNews")(function* (flock: FlockChat) {
   const known = yield* boards(flock);
-  const lines = yield* Effect.forEach(known, ({ machine, board }) =>
-    Effect.forEach(board?.herds ?? [], (one) =>
-      Effect.gen(function* () {
+  const heard: Heard[] = [];
+  const unread: string[] = [];
+  for (const { machine, board } of known)
+    for (const one of board?.herds ?? []) {
+      const told = yield* Effect.gen(function* () {
         yield* speaking(flock, machine);
-        const batch = yield* machine.door.news({
+        return yield* machine.door.news({
           herd: one.id,
           conversation: flock.conversation,
-          as: "read",
+          as: "sent",
           request: yield* newRequest,
+          keys: [],
         });
-        return [
-          ...batch.items.map((item) => `- ${machine.name}:${item.run}: ${item.text}`),
-          ...(batch.omitted > 0 ? [`- and ${batch.omitted} older item(s) on ${machine.name}`] : []),
-        ];
-      }).pipe(
-        Effect.catch((error) =>
-          Effect.succeed([`- (${machine.name}'s News could not be read: ${reasonOf(error)})`]),
-        ),
-      ),
-    ),
+      }).pipe(Effect.exit);
+      if (Exit.isSuccess(told))
+        heard.push({ machine: machine.name, herd: one.id, items: told.value.items });
+      else {
+        const failed = Cause.findError(told.cause);
+        const why = Result.isSuccess(failed) ? reasonOf(failed.success) : "its host did not answer";
+        unread.push(`${machine.name}'s News could not be read: ${why}`);
+      }
+    }
+  return { batch: flockBatch(heard), unread };
+});
+
+/** Settles what the conversation was given as read, in each Herd it came from. */
+export const delivered = Effect.fn("FlockTools.delivered")(function* (
+  flock: FlockChat,
+  batch: FlockBatch,
+) {
+  const byMachine = new Map(flock.machines().map((machine) => [machine.name, machine]));
+  const herds = Map.groupBy(batch.items, ({ machine, herd }) => `${machine}\u0000${herd}`);
+  for (const items of herds.values()) {
+    // SAFETY: `groupBy` makes no empty group.
+    const { machine: name, herd } = items[0]!;
+    const machine = byMachine.get(name);
+    if (machine === undefined) continue;
+    yield* speaking(flock, machine).pipe(Effect.ignoreCause);
+    yield* machine.door
+      .news({
+        herd,
+        conversation: flock.conversation,
+        as: "read",
+        request: yield* newRequest,
+        keys: items.map(({ item }) => item.key),
+      })
+      .pipe(Effect.ignoreCause);
+  }
+});
+
+const news = Effect.fn("FlockTools.news")(function* (flock: FlockChat) {
+  const { batch, unread } = yield* heardNews(flock);
+  yield* delivered(flock, batch);
+  const said = [flockNewsText(batch), ...unread.map((line) => `- (${line})`)].filter(
+    (part) => part !== "",
   );
-  const all = lines.flat(2);
-  return all.length === 0 ? "Nothing new on any Machine." : all.join("\n");
+  return said.length === 0 ? "Nothing new on any Machine." : said.join("\n");
 });
 
 const hold = Effect.fn("FlockTools.hold")(

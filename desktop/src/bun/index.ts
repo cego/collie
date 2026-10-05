@@ -28,6 +28,7 @@ import {
 import { ActionFailed, DesktopRpcs, type FlockItem, machineNames } from "../shared/flock";
 import { type FlockConversation, openFlockChat, refusal } from "./chat";
 import { chatDoor } from "./flock-tools";
+import { readSettings, writeSettings } from "./settings";
 import {
   act,
   bridgeCommand,
@@ -117,10 +118,13 @@ const main = Effect.gen(function* () {
   }));
   const scope = yield* Effect.scope;
   const doors = new Map<string, Effect.Success<(typeof named)[number]["open"]>>();
+  const own = (yield* Path.Path).join(yield* StateDir, "collie-desktop");
+  let settings = yield* readSettings(own);
   // Opened by the view's first ask, in Desktop's own scope; its session starts with the first message.
   const chat = yield* openFlockChat({
-    dir: (yield* Path.Path).join(yield* StateDir, "collie-desktop"),
+    dir: own,
     conversation: `flock@${local}`,
+    proactive: () => settings.proactive,
     machines: () => {
       const shown = [...doors].map(([installation, { machine }]) => ({ ...machine, installation }));
       const names = machineNames(shown);
@@ -139,7 +143,11 @@ const main = Effect.gen(function* () {
     | { readonly window: BrowserWindow; readonly closed: Deferred.Deferred<void> }
     | undefined;
   const handlers = DesktopRpcs.toLayer({
-    flock: () => Stream.merge(Stream.fromIterable(unlisted), flockStream(named, doors)),
+    // Every board change may have left News, so each one nudges the chat to look.
+    flock: () =>
+      Stream.merge(Stream.fromIterable(unlisted), flockStream(named, doors)).pipe(
+        Stream.tap(() => withChat((opened) => opened.nudge, undefined)),
+      ),
     act: ({ installation, action, request: again }) =>
       Effect.gen(function* () {
         const request = again ?? (yield* (yield* Crypto.Crypto).randomUUIDv4.pipe(Effect.orDie));
@@ -192,6 +200,18 @@ const main = Effect.gen(function* () {
         yield* Deferred.await(popped.closed);
       }),
     popIn: () => Effect.sync(() => popped?.window.close()),
+    desktopTurns: () =>
+      Stream.unwrap(withChat((opened) => Effect.succeed(opened.desktopTurns), Stream.empty)),
+    settings: () => Effect.sync(() => settings),
+    setSettings: (changed) =>
+      writeSettings(own, changed).pipe(
+        Effect.andThen(
+          Effect.sync(() => {
+            settings = changed;
+          }),
+        ),
+        Effect.orDie,
+      ),
   });
   const servedOn = (channel: Channel<ToView, ToMain>) =>
     RpcServer.layer(DesktopRpcs).pipe(

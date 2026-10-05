@@ -2,11 +2,11 @@
 // by its Machine, and the board those messages add up to. No Bun-only import: the view
 // bundles this.
 
-import { Schema, Stream, Struct } from "effect";
+import { Effect, Schema, Stream, Struct } from "effect";
 import * as Rpc from "effect/unstable/rpc/Rpc";
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
 import { AguiEvent } from "./agui";
-import { About, Answers, ChatMessage, Conversations } from "./chat-view";
+import { About, Answers, ChatMessage, Conversations, DesktopTurn } from "./chat-view";
 import {
   BoardMessage,
   type Herd,
@@ -87,6 +87,13 @@ export class ActionFailed extends Schema.TaggedError<ActionFailed>()("ActionFail
   request: Schema.optional(Schema.String),
 }) {}
 
+/** What the human set in Desktop. */
+export const DesktopSettings = Schema.Struct({
+  /** Whether the Flock chat may start a turn about News nobody asked for. */
+  proactive: Schema.Boolean.pipe(Schema.withDecodingDefaultKey(Effect.succeed(true))),
+});
+export type DesktopSettings = typeof DesktopSettings.Type;
+
 export const DesktopRpcs = RpcGroup.make(
   Rpc.make("flock", { success: FlockItem, stream: true }),
   /** A retry names the request that failed; a first try leaves it to the main process. */
@@ -130,6 +137,10 @@ export const DesktopRpcs = RpcGroup.make(
   Rpc.make("popOut"),
   /** Closes the chat's own window, which puts the chat back beside the board. */
   Rpc.make("popIn"),
+  /** When the Flock chat starts and ends a turn of Desktop's own. */
+  Rpc.make("desktopTurns", { success: DesktopTurn, stream: true }),
+  Rpc.make("settings", { success: DesktopSettings }),
+  Rpc.make("setSettings", { payload: DesktopSettings }),
 );
 
 /** What a Machine's host last told: who it is, its Herds, and its Tasks by id. */

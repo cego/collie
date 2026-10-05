@@ -62,6 +62,7 @@ const sayWhatHappened = Effect.fn("SideJobs.sayWhatHappened")(function* (
       key: event.key,
       run: event.run,
       text: event.text,
+      significance: event.significance,
     }).pipe(Effect.catchCause(() => Effect.succeed(null)));
     if (queued !== null) yield* remember(dir, event.key, yield* nowIso());
   }

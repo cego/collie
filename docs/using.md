@@ -894,6 +894,18 @@ Click a card and it becomes a chip above the input ("About: vm-mk › Fix board 
 next message goes with it, so "this one" means that card, and sending uses it up. Clear it
 with its ✕. The chip is attached as context for the turn, never as your words.
 
+News reaches it from every Herd on every Machine as one batch: what matters most first —
+decisions, then consequential outcomes, then what is worth trying, then the routine — and
+by time within each, a screen's worth, saying per Machine what it left out ("and 7 older
+items on vm-mk"). Desktop looks a few seconds after a board changes, and every two minutes
+regardless. When the chat is idle, a decision or a consequential outcome starts a turn of
+Desktop's own: it shows as **Desktop**, never as you, so anything Collie does in it
+carries no words of yours, and its usage is written to `flock-usage.jsonl` beside the
+session (data, never a limit). News arriving mid-turn waits for that turn to end; what is
+worth trying and routine News waits for your next message and goes with it as context. An
+item counts as read once the model has it. The bell turns Desktop's own turns off (and on
+again); it is on by default, and kept in `settings.json` beside the session.
+
 **Start fresh** (the pen) mints a new session and makes it current; the history (the clock)
 lists the earlier ones on this computer, newest first, and reopens one. Either way the
 session before it ends: there is only ever one live conversation. **Pop out** moves the

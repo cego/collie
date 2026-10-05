@@ -27,14 +27,12 @@ const asLine = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 type Asked = Parameters<typeof asLine>[0];
 
 const Served = FrontDoorRpcs.omit(
-  "declare",
   "runDetail",
   "runFile",
   "propose",
   "act",
   "reconcile",
   "settleDelivery",
-  "news",
 );
 
 const handlers = Served.toLayer(
@@ -116,6 +114,17 @@ const handlers = Served.toLayer(
       followUp: (payload) => asked("followUp", payload, started, payload.runId),
       offers: (payload) => asked("offers", payload, OFFERS, payload.runId),
       workflows: (payload) => logged("workflows", payload).pipe(Effect.as(STARTABLE)),
+      declare: (payload) => logged("declare", payload),
+      news: (payload) =>
+        Effect.gen(function* () {
+          yield* logged("news", payload);
+          const machine = yield* read;
+          const items = machine.news ?? [];
+          const taken = payload.keys ?? items.map(({ key }) => key);
+          if (payload.as === "read" && taken.length > 0)
+            yield* write({ ...machine, news: items.filter(({ key }) => !taken.includes(key)) });
+          return { items, omitted: 0 };
+        }),
       confirm: (payload) => asked("confirm", payload, { proposal: payload.proposal, results: [] }),
       decline: (payload) => asked("decline", payload, { proposal: payload.proposal }),
       dispose: (payload) =>

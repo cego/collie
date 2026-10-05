@@ -961,7 +961,7 @@ const frontDoorHandlers = (
               }),
             ),
           ),
-        news: ({ herd, conversation, as, request }, { client }) =>
+        news: ({ herd, conversation, as, request, keys }, { client }) =>
           plainly(
             Effect.gen(function* () {
               if (herd !== null && !isHerdName(herd))
@@ -980,14 +980,22 @@ const frontDoorHandlers = (
                   operation: "news",
                   request,
                   ...whoOf(client),
-                  asked: { conversation, as },
+                  asked: keys === undefined ? { conversation, as } : { conversation, as, keys },
                   result: NewsBatch,
                 },
                 Effect.gen(function* () {
                   const file = yield* newsPath(env.stateDir, key);
-                  const batch = pendingNews(yield* readNews(file), conversation);
+                  const lines = yield* readNews(file);
+                  if (keys === undefined) {
+                    const batch = pendingNews(lines, conversation);
+                    for (const item of batch.items)
+                      yield* settleNews(file, item.key, as, conversation);
+                    return batch;
+                  }
+                  const batch = pendingNews(lines, conversation, Infinity);
                   for (const item of batch.items)
-                    yield* settleNews(file, item.key, as, conversation);
+                    if (keys.includes(item.key))
+                      yield* settleNews(file, item.key, as, conversation);
                   return batch;
                 }),
               );
