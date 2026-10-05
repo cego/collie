@@ -113,7 +113,11 @@ interface Placed {
  */
 export const place = (
   named: string,
-  owners: ReadonlyArray<{ readonly machine: ChatMachine; readonly ids: ReadonlySet<string> }>,
+  /** `ids` is null for a Machine whose board could not be read: it may have any id. */
+  owners: ReadonlyArray<{
+    readonly machine: ChatMachine;
+    readonly ids: ReadonlySet<string> | null;
+  }>,
   what: string,
 ): Result.Result<Placed, string> => {
   const colon = named.indexOf(":");
@@ -121,12 +125,18 @@ export const place = (
     colon > 0 ? owners.find(({ machine }) => machine.name === named.slice(0, colon)) : undefined;
   if (prefixed !== undefined)
     return Result.succeed({ machine: prefixed.machine, id: named.slice(colon + 1) });
-  const having = owners.filter(({ ids }) => ids.has(named));
+  const having = owners.filter(({ ids }) => ids?.has(named) === true);
+  const unread = owners.filter(({ ids }) => ids === null).map(({ machine }) => machine.name);
   if (colon > 0 && having.length === 0)
     return Result.fail(
       `No Machine "${named.slice(0, colon)}". Nothing was done; the Machines are ${owners
         .map(({ machine }) => machine.name)
         .join(", ")}.`,
+    );
+  const [only] = having;
+  if (only !== undefined && having.length === 1 && unread.length > 0)
+    return Result.fail(
+      `${what} "${named}" is on ${only.machine.name}, and ${unread.join(", ")} could not be read to say whether it has one too. Nothing was done; name it as ${only.machine.name}:${named}.`,
     );
   if (having.length === 1) return Result.succeed({ machine: having[0]!.machine, id: named });
   if (having.length > 1)
@@ -150,7 +160,7 @@ const proposalsOf = (tasks: ReadonlyArray<TaskView>) =>
 const owning = (known: Boards, ids: (tasks: ReadonlyArray<TaskView>) => ReadonlySet<string>) =>
   known.map(({ machine, board }) => ({
     machine,
-    ids: ids(board?.tasks ?? []),
+    ids: board === null ? null : ids(board.tasks),
   }));
 
 /** The board protocol a host must speak to keep each turn's words and settle only the News named. */
@@ -168,14 +178,16 @@ const declareVoice = (flock: FlockChat, machine: ChatMachine) => {
 
 /** `declareVoice`, refused where the host is too old to record the turn's words. */
 const speaking = (flock: FlockChat, machine: ChatMachine, known: Boards) => {
-  const board = known.find((one) => one.machine === machine)?.board;
-  return board != null && board.protocol < FLOCK_PROTOCOL
-    ? Effect.fail(
-        new HostRefused({
-          reason: `its Collie is older than Desktop's chat; upgrade Collie on ${machine.name}. Nothing was done there.`,
-        }),
-      )
-    : declareVoice(flock, machine);
+  const board = known.find((one) => one.machine === machine)?.board ?? null;
+  const refused =
+    board === null
+      ? `its board could not be read, so Desktop cannot tell whether its Collie would record the human's words. Nothing was done on ${machine.name}.`
+      : board.protocol < FLOCK_PROTOCOL
+        ? `its Collie is older than Desktop's chat; upgrade Collie on ${machine.name}. Nothing was done there.`
+        : null;
+  return refused === null
+    ? declareVoice(flock, machine)
+    : Effect.fail(new HostRefused({ reason: refused }));
 };
 
 const newRequest = Effect.flatMap(Crypto.Crypto, (crypto) => crypto.randomUUIDv4);

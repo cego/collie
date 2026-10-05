@@ -277,3 +277,25 @@ test("a Machine that stops answering costs a look for News its time, and the oth
       expect(said).toContain("vm-mk's News could not be read");
     }).pipe(Effect.provide([BunServices.layer, TestClock.layer()])),
   ));
+
+test("a Machine whose board could not be read is written to by nothing, and a bare id it may have is not taken as unique", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const asked: Asked[] = [];
+      const unreadable = machine("vm-mk", [], asked);
+      const flock = {
+        machines: () => [
+          machine("mk-pc", [task({ id: "t-a", run: "r-1", runs: ["r-1"] })], asked),
+          { ...unreadable, door: { ...unreadable.door, board: () => Stream.empty } },
+        ],
+        conversation: "flock@mk-pc",
+        said: () => "hold it",
+      };
+      const bare = yield* callFlockTool(flock, "collie_hold", { run: "r-1" });
+      const named = yield* callFlockTool(flock, "collie_hold", { run: "vm-mk:r-1" });
+      expect(bare).toContain("vm-mk could not be read");
+      expect(bare).toContain("mk-pc:r-1");
+      expect(named).toContain("its board could not be read");
+      expect(asked).toEqual([]);
+    }).pipe(Effect.provide(BunServices.layer)),
+  ));
