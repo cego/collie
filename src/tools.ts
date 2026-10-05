@@ -25,7 +25,7 @@ import { Clock, Crypto, Effect, Result, Schema } from "effect";
 import { ChildProcessSpawner } from "effect/unstable/process";
 import type { PluginEnv } from "./env";
 import { newRequestId, runFacts, workspaceCwdFromPanes } from "./operations";
-import type { Action } from "./evaluator";
+import type { Action } from "./actions";
 import {
   boardSnapshot,
   confirmProposed,
@@ -74,8 +74,6 @@ import {
   SETTLE_KINDS,
   TAKES,
 } from "./toolkit";
-
-export { CollieTools, herdLines } from "./toolkit";
 
 /**
  * One tool call, which cannot fail into the conversation: an unreadable record is a

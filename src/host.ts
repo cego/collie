@@ -98,7 +98,8 @@ import {
   read as readNews,
   settle as settleNews,
 } from "./news";
-import { ActionSchema, evaluationDeps } from "./evaluator";
+import { evaluationDeps } from "./evaluator";
+import { ActionSchema } from "./actions";
 import { err, request, steer, type OpResult } from "./operations";
 import { REJECTED } from "./envelope";
 import {

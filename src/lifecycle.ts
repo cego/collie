@@ -49,7 +49,7 @@ import {
   type TaskView,
   type NewsReceipt,
 } from "./board-model";
-import type { Action } from "./evaluator";
+import type { Action } from "./actions";
 import { REFUSED_INPUT, runDir, type Given, type RunView } from "./engine";
 import type { OfferView } from "./board-model";
 import { err, ExpectedError, taskFor, type Failure, type OpResult } from "./operations";

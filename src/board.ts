@@ -56,8 +56,6 @@ import {
   type TaskView,
 } from "./board-model";
 
-export { mrLabel } from "./board-model";
-
 /** The character each state is drawn as, wherever it is drawn. The colour is the pane's. */
 export const GLYPH_FOR: Readonly<Record<TaskState, string>> = {
   blocked: "◆",

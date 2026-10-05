@@ -64,7 +64,8 @@ herdr actions, and the `collie` CLI.
   client), `desktop/src/shared/` (the view's RPC and the Flock it folds) and
   `desktop/test/board.test.ts` (Playwright over CEF against a scripted host). Desktop has
   its own `package.json`; Effect is the root's, so the board's Schemas exist once. The
-  Flock chat is `desktop/src/bun/chat.ts` (the Agent SDK session), `session.ts` (what it
+  Flock chat is `desktop/src/bun/chat.ts` (the session and its turns), `claude.ts` (the
+  Agent SDK it runs on, and Collie's tools served to it), `session.ts` (what it
   runs with), `flock-tools.ts` (the Toolkit over each Machine's `chat` channel), `agui.ts`
   (SDK messages as AG-UI), `transcript.ts` (a conversation read back) and `settings.ts`
   (Desktop's own switches, the proactive one among them), with
@@ -83,8 +84,8 @@ herdr actions, and the `collie` CLI.
   the pass on a record and the bounded log) and `collie run checks` in
   `src/commands/run.ts`. A pass is the Workflow's declaration, never inferred from its id.
 - **Changing the Home's panes, the chat harness, or what native chat may read** →
-  [`docs/using.md`](docs/using.md#talking-to-collie-about-the-flock), alongside
-  `src/chat.ts` (the harness and the session), `src/tools.ts` (the read contract) and
+  [`docs/using.md`](docs/using.md#talking-to-collie-about-a-herd), alongside
+  `src/chat.ts` (the harness and the session), `src/toolkit.ts` (the read contract) and
   [ADR-0011](docs/adr/0011-the-conversation-is-a-native-harness.md), whose sessions and
   model [ADR-0032](docs/adr/0032-a-chat-starts-new-on-the-latest-opus.md) replaces. What the board has
   selected is an explicit input chat may read, never a filter over the reads

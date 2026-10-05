@@ -51,8 +51,6 @@ export type Judgement = Schema.Schema.Type<typeof JudgementSchema>;
 
 import { ActionSchema, type Action } from "./actions";
 
-export { ActionSchema, type Action, type ActionKind } from "./actions";
-
 export const ProposalSchema = Schema.Struct({
   interpretation: Schema.String,
   targets: Schema.Array(Schema.Struct({ run: Schema.String })),

@@ -30,12 +30,6 @@ import { appendJournal, readJournal } from "./journal";
 import { herdDir } from "./steering";
 import { nowIso } from "./time";
 
-/**
- * How many items one batch carries. A screen's worth of news; what it left out is said
- * rather than dropped silently, and nothing is lost — the rest stays pending.
- */
-export const BATCH = NEWS_BATCH;
-
 /** How many items the journal keeps. Old news nobody read is still not worth unbounded disk. */
 export const KEEP = 200;
 
@@ -108,7 +102,11 @@ export interface Batch {
  * a conversation received it, and the one thing this must not do is call something
  * delivered because it was handed over.
  */
-export function pending(lines: ReadonlyArray<Line>, conversation = NATIVE, bound = BATCH): Batch {
+export function pending(
+  lines: ReadonlyArray<Line>,
+  conversation = NATIVE,
+  bound = NEWS_BATCH,
+): Batch {
   const all = live(lines)
     .filter((entry) => !entry.read.has(conversation))
     .map((entry) => entry.item);

@@ -4,7 +4,8 @@
 // forge's own checks are kept beside the state, for the card to say whether it is ready.
 
 import { Effect, FileSystem, Option, Path, Schema } from "effect";
-import { mrLabel, type ForgeChecks, type ForgeFacts } from "./board";
+import { type ForgeChecks, type ForgeFacts } from "./board";
+import { mrLabel } from "./board-model";
 import { pullOf, sectionOf, type MrPanel, type MrState, type TaskView } from "./board-model";
 import { latest, readDispositions, recordDisposition } from "./disposition";
 import { liveTier, mrDetails, type Runner } from "./mr";

@@ -7,7 +7,6 @@
 import { Effect, FileSystem, Schema } from "effect";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import {
-  BATCH,
   NATIVE,
   append,
   asText,
@@ -19,6 +18,7 @@ import {
   supersede,
   uncertain,
 } from "../src/news";
+import { NEWS_BATCH } from "../src/board-model";
 import { eventsIn, holding } from "../src/proactive";
 import { runFacts as record } from "./support/records";
 import { runEffect } from "./support/effect";
@@ -59,7 +59,7 @@ test("the same thing that happened is one piece of news, however often it is not
 test("news older than one batch is still deduplicated", () =>
   runEffect(
     Effect.gen(function* () {
-      for (let n = 0; n < BATCH + 5; n++)
+      for (let n = 0; n < NEWS_BATCH + 5; n++)
         yield* append(file, { key: `r${n}:ended`, run: `r${n}`, text: `Run r${n} ended.` });
       // The oldest waiting item has fallen out of the batch, and it is still the same
       // news: a human who has not read in a while must not be told twice.
@@ -72,10 +72,10 @@ test("news older than one batch is still deduplicated", () =>
 test("a burst becomes one batch that says what it left out, not a turn each", () =>
   runEffect(
     Effect.gen(function* () {
-      for (let n = 0; n < BATCH + 5; n++)
+      for (let n = 0; n < NEWS_BATCH + 5; n++)
         yield* append(file, { key: `r${n}:ended`, run: `r${n}`, text: `Run r${n} ended.` });
       const batch = pending(yield* read(file));
-      expect(batch.items).toHaveLength(BATCH);
+      expect(batch.items).toHaveLength(NEWS_BATCH);
       expect(batch.omitted).toBe(5);
       // Said out loud. The five are still pending, not dropped, and not replaced by one
       // generic line that swallowed them.
@@ -245,7 +245,7 @@ test("each item says how much it matters, and one written before items did is ro
 test("a conversation that takes every pending item is not limited to one batch", () =>
   runEffect(
     Effect.gen(function* () {
-      for (let n = 0; n < BATCH + 5; n++)
+      for (let n = 0; n < NEWS_BATCH + 5; n++)
         yield* append(file, {
           key: `r${n}:ended`,
           run: `r${n}`,
@@ -253,7 +253,7 @@ test("a conversation that takes every pending item is not limited to one batch",
           significance: "consequential",
         });
       expect(pending(yield* read(file), "flock@pc", Infinity)).toMatchObject({ omitted: 0 });
-      expect(pending(yield* read(file), "flock@pc", Infinity).items).toHaveLength(BATCH + 5);
+      expect(pending(yield* read(file), "flock@pc", Infinity).items).toHaveLength(NEWS_BATCH + 5);
     }),
   ));
 

@@ -86,8 +86,7 @@ Run whose work has a disposition — settled by the host for every conversation 
 not read it; it drops out of batches, an `uncertain` send of it included, and stays in the
 journal. A cause that holds again later is news again.
 
-**Collie tools** — The whole of what native chat may reach, over Collie's own shared
-operations. Most read — `collie_herd`, `collie_run`, `collie_workspaces`,
+**Collie tools** — What a chat may reach, over Collie's own shared operations. Most read — `collie_herd`, `collie_run`, `collie_workspaces`,
 `collie_receipts`, `collie_definitions`, `collie_installation`, `collie_news` — Herd-wide,
 and never narrowed by the board's Filter or its Selection, which are what a human is
 looking at rather than what supervision may see; the Selection is told to chat with each
@@ -96,15 +95,16 @@ Three write — `collie_hold`, `collie_do`, `collie_propose` — and every one c
 what the human asked for, at once, over the same closed action set, the same admission
 check and the same executors the CLI and the board use. What Collie wants of its own
 accord is a Proposal because of where it came from, never because of who confirms it. Reached over a local MCP server by Claude and a generated
-extension by Pi, and by `collie tools call` from a terminal: one implementation, three ways
-in.
+extension by Pi, and by `collie tools call` from a terminal. Desktop's Flock chat takes
+the same Toolkit's tools that a host's front door can answer, in-process, each answered by
+the host of the Machine it names (`desktop/src/bun/flock-tools.ts`).
 
 **Redirect notice** — What a per-workspace Collie pane from an older release shows on its
 next launch: one line and "Open Collie". No board, no chat.
 
 **Steer** — One free-form request about a named Run. Requested actions execute directly;
 questions receive explanations without changes, and a dry run previews actions. A target
-is required. Questions about the flock are Native chat's.
+is required. Questions about a Herd are Native chat's, and about the whole Flock, Desktop's Flock chat's.
 
 **Proposal** — A durable, hash-bound set of actions. Explicit requests execute through
 this record immediately. Unsolicited background suggestions remain pending.

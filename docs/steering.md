@@ -184,7 +184,7 @@ Targets are **named, never inferred**. `--target` is required: without one the c
 refused with `target_required` rather than having a run guessed for it from your words.
 Collie has no grammar of its own, and a sentence that happens to name a branch is not a
 target. Questions about the flock are the Home's
-[native chat](using.md#talking-to-collie-about-the-flock), which reads the Herd rather than
+[native chat](using.md#talking-to-collie-about-a-herd), which reads the Herd rather than
 paying for a model to be asked one here.
 
 The conversation is one per Herd — one herdr session, every workspace in it — and lives on

@@ -13,7 +13,8 @@
 
 import type { Card } from "./cards";
 import type { Delivery } from "./steering";
-import type { Action, DriftReport, Ref } from "./evaluator";
+import type { DriftReport, Ref } from "./evaluator";
+import type { Action } from "./actions";
 
 /** How much a line asks for the eye. Never the only thing saying what it says. */
 export type Tone = "plain" | "dim" | "bad" | "accent";
