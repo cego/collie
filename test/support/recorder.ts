@@ -473,6 +473,9 @@ export class Rig {
     const logPath = this.logPath;
     const socketPath = this.socketPath;
     const requestsFrom = this.requestsFrom.bind(this);
+    // herdr pushes when something changes, and nothing changes again here: a push on
+    // every subscription is a stream of changes faster than the host's debounce lets out.
+    let pushed = false;
     const setFiber = (fiber: Fiber.Fiber<void>) => {
       this.socketFiber = fiber;
     };
@@ -535,13 +538,19 @@ export class Rig {
                       )}\n`,
                     );
                     // A subscription herdr has something to say on at once.
-                    if (req.method === "events.subscribe" && Bun.env.FAKE_HERDR_PUSH_EVENT === "1")
+                    if (
+                      req.method === "events.subscribe" &&
+                      Bun.env.FAKE_HERDR_PUSH_EVENT === "1" &&
+                      !pushed
+                    ) {
+                      pushed = true;
                       socket.write(
                         `${encodeJson({
                           event: "pane.agent_status_changed",
                           data: { pane_id: "1-1", workspace_id: "w1", agent_status: "blocked" },
                         })}\n`,
                       );
+                    }
                   },
                   fail: () =>
                     socket.write(

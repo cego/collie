@@ -93,7 +93,7 @@ const sentBy = (method: SocketMethod) =>
     );
     const sent = yield* rig.calls();
     expect(sent.map((call) => call.cmd)).toEqual([method]);
-    return sent[0]!.params;
+    return sent[0]!.params ?? {};
   }).pipe(Effect.scoped);
 
 // Only meaningful for the committed snapshot; a fresh schema printed by some other

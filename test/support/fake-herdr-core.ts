@@ -1,7 +1,18 @@
 // Fake herdr. Records every invocation and answers with canned ids so a whole
 // run can be driven without a herdr server.
 
-import { Cause, Clock, Config, Effect, FileSystem, Option, Path, Schema, Semaphore } from "effect";
+import {
+  Cause,
+  Clock,
+  Config,
+  Effect,
+  FileSystem,
+  Option,
+  Path,
+  Schedule,
+  Schema,
+  Semaphore,
+} from "effect";
 
 /** How a shim runs the fake: what `bun run test` compiled of it, or else its source. */
 export const fakeHerdrCommand = (source: string) =>
@@ -221,7 +232,34 @@ export function fakeHerdr(
   argv: string[],
   environment: Readonly<Record<string, string | undefined>> = {},
 ): Effect.Effect<FakeResult, never, FileSystem.FileSystem | Path.Path> {
-  return turn.withPermits(1)(handle(argv, environment));
+  return turn.withPermits(1)(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const log =
+        environment.FAKE_HERDR_LOG ??
+        (yield* Config.String("FAKE_HERDR_LOG").pipe(
+          Config.withDefault(Bun.env.FAKE_HERDR_LOG ?? ""),
+          Effect.orElseSucceed(() => ""),
+        ));
+      if (log === "") return yield* handle(argv, environment);
+      // The same turn across processes: the host and the test each spawn this, and two
+      // edits of the state file at once lose one of them — an agent just started, say.
+      // ponytail: a lock left by a killed call is waited out for ~2 s, then taken over.
+      const lock = `${log}.lock`;
+      return yield* Effect.acquireUseRelease(
+        fs
+          .makeDirectory(path.dirname(log), { recursive: true })
+          .pipe(
+            Effect.andThen(fs.makeDirectory(lock)),
+            Effect.retry({ times: 1_000, schedule: Schedule.spaced("2 millis") }),
+            Effect.ignore,
+          ),
+        () => handle(argv, environment),
+        () => fs.remove(lock, { recursive: true }).pipe(Effect.ignore),
+      );
+    }),
+  );
 }
 
 function handle(
