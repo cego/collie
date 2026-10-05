@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import type { Card } from "../../../src/shared/flock";
+import type { PlacedTask } from "../../../src/shared/flock";
 
-defineProps<{ cards: ReadonlyArray<Card> }>();
+defineProps<{ tasks: ReadonlyArray<PlacedTask> }>();
 </script>
 
 <template>
   <div class="grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-3">
-    <BoardCard v-for="card in cards" :key="card.key" :task="card.task" :where="card.where" />
+    <BoardCard v-for="one in tasks" :key="one.key" :task="one.task" :where="one.where" />
   </div>
 </template>

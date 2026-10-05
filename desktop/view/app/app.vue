@@ -24,8 +24,8 @@ const { connecting, failure, lost, tasks, sections, header, waiting } = useFlock
       />
       <template v-else>
         <UAlert
-          v-for="[name, reason] in lost"
-          :key="name"
+          v-for="[route, { name, reason }] in lost"
+          :key="route"
           :data-testid="`lost-${name}`"
           color="warning"
           variant="subtle"
@@ -44,7 +44,7 @@ const { connecting, failure, lost, tasks, sections, header, waiting } = useFlock
               <summary class="cursor-pointer text-sm font-semibold text-muted">
                 {{ label }} · {{ sections.finished.length }}
               </summary>
-              <BoardGrid :cards="sections.finished" class="mt-2" />
+              <BoardGrid :tasks="sections.finished" class="mt-2" />
             </details>
             <template v-else>
               <h2
@@ -53,12 +53,12 @@ const { connecting, failure, lost, tasks, sections, header, waiting } = useFlock
               >
                 {{ label }}
               </h2>
-              <BoardGrid :cards="section === 'waiting' ? waiting.recent : sections[section]" />
+              <BoardGrid :tasks="section === 'waiting' ? waiting.recent : sections[section]" />
               <details v-if="section === 'waiting' && waiting.older.length > 0">
                 <summary class="cursor-pointer text-sm text-muted">
                   {{ waiting.older.length }} older than a week
                 </summary>
-                <BoardGrid :cards="waiting.older" class="mt-2" />
+                <BoardGrid :tasks="waiting.older" class="mt-2" />
               </details>
             </template>
           </section>

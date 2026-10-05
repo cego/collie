@@ -121,8 +121,8 @@ const snapshot = (
 const pc = { installation: "inst-pc", name: "mk-pc" };
 const vm = { installation: "inst-vm", name: "vm-mk", target: "mk@vm-mk.cegohost.dk" };
 const where = (items: ReadonlyArray<FlockItem>) => {
-  const { tasks, cardOf } = flockCards(items.reduce(applyItem, EMPTY_FLOCK));
-  return tasks.map((one) => [one.id, cardOf(one).where]);
+  const { tasks, placedOf } = flockCards(items.reduce(applyItem, EMPTY_FLOCK));
+  return tasks.map((one) => [one.id, placedOf(one).where]);
 };
 
 test("a snapshot replaces what its installation said before, whatever it is called, and leaves other Machines alone", () => {
@@ -193,10 +193,14 @@ test("the sections and the header sentence count every Machine's Tasks", () => {
   expect(headerSentence(tasks).text).toBe("2 tasks are waiting on you. 1 working.");
 });
 
-test("a Machine out of reach is said by name until it reports again", () => {
-  const lost: FlockItem = { _tag: "Lost", name: "vm-mk", reason: "ssh: connection refused" };
+test("a route out of reach is said by name until its Machine reports through it again", () => {
+  const lost: FlockItem = {
+    _tag: "Lost",
+    machine: { name: vm.name, target: vm.target },
+    reason: "ssh: connection refused",
+  };
   const after = [snapshot(pc, [asking]), lost].reduce(applyItem, EMPTY_FLOCK);
-  expect([...after.lost]).toEqual([["vm-mk", "ssh: connection refused"]]);
+  expect([...after.lost.values()]).toEqual([{ name: "vm-mk", reason: "ssh: connection refused" }]);
   expect(flockCards(after).tasks.map((one) => one.id)).toEqual(["t-ask"]);
   expect([...applyItem(after, snapshot(vm, [])).lost]).toEqual([]);
 });

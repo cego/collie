@@ -85,8 +85,9 @@ if [ "$1" = -M ]; then
 fi
 if [ "\${args[2]}" = -O ]; then [ -e "$control" ]; exit; fi
 [ -e "$control" ] || { echo "no master for $target" >&2; exit 255; }
-target="\${args[3]}"
-FAKE_TARGET="$target" SHELL='${flock}/remote/shell' exec /bin/sh -c "\${args[4]}"
+[[ " $* " == *" ControlMaster=no "* ]] || { echo "a channel could log in by itself" >&2; exit 255; }
+target="\${args[-2]}"
+FAKE_TARGET="$target" SHELL='${flock}/remote/shell' exec /bin/sh -c "\${args[-1]}"
 `,
   // A login shell here would reset PATH from the system's profile.
   "remote/shell": `#!/bin/sh

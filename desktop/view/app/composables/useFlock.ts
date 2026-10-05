@@ -10,7 +10,7 @@ import {
   sectionsOf,
   type TaskView,
 } from "../../../../src/board-model";
-import { type Card, EMPTY_FLOCK, flockCards } from "../../../src/shared/flock";
+import { EMPTY_FLOCK, flockCards, type PlacedTask } from "../../../src/shared/flock";
 import { flockAtom } from "../flock";
 
 /** Now, again every minute: a week's fold and the header's count of it age with it. */
@@ -28,31 +28,31 @@ export const useFlock = () => {
   const flock = useAtomValue(() => flockAtom);
   const clock = useAtomValue(() => clockAtom);
   const now = computed(() => AsyncResult.getOrElse(clock.value, () => 0));
-  const known = computed(() => AsyncResult.getOrElse(flock.value, () => EMPTY_FLOCK));
-  const board = computed(() => flockCards(known.value));
+  const told = computed(() => AsyncResult.getOrElse(flock.value, () => EMPTY_FLOCK));
+  const board = computed(() => flockCards(told.value));
   const tasks = computed(() => board.value.tasks);
-  const cards = (some: ReadonlyArray<TaskView>) => some.map(board.value.cardOf);
-  const found = computed(() => sectionsOf(tasks.value, ""));
+  const placed = (some: ReadonlyArray<TaskView>) => some.map(board.value.placedOf);
+  const sections = computed(() => sectionsOf(tasks.value, ""));
   return {
     connecting: computed(() => AsyncResult.isInitial(flock.value)),
     failure: computed(() =>
       AsyncResult.isFailure(flock.value) ? Cause.pretty(flock.value.cause) : null,
     ),
-    lost: computed(() => [...known.value.lost]),
+    lost: computed(() => [...told.value.lost]),
     tasks,
     sections: computed(
       () =>
         ({
-          "needs-you": cards(found.value.needs),
-          waiting: cards(found.value.waiting),
-          working: cards(found.value.working),
-          finished: cards(found.value.finished),
-        }) satisfies Record<Section, ReadonlyArray<Card>>,
+          "needs-you": placed(sections.value.needs),
+          waiting: placed(sections.value.waiting),
+          working: placed(sections.value.working),
+          finished: placed(sections.value.finished),
+        }) satisfies Record<Section, ReadonlyArray<PlacedTask>>,
     ),
     header: computed(() => headerSentence(tasks.value, now.value)),
     waiting: computed(() => {
-      const { recent, older } = foldWaiting(found.value.waiting, now.value);
-      return { recent: cards(recent), older: cards(older) };
+      const { recent, older } = foldWaiting(sections.value.waiting, now.value);
+      return { recent: placed(recent), older: placed(older) };
     }),
   };
 };

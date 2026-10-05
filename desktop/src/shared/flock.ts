@@ -2,7 +2,7 @@
 // by its Machine, and the board those messages add up to. No Bun-only import: the view
 // bundles this.
 
-import { Schema, Stream } from "effect";
+import { Schema, Stream, Struct } from "effect";
 import * as Rpc from "effect/unstable/rpc/Rpc";
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
 import { BoardMessage, type Herd, sortBoard, type TaskView } from "../../../src/board-model";
@@ -18,13 +18,17 @@ export const Machine = Schema.Struct({
 });
 export type Machine = typeof Machine.Type;
 
+/** A Machine as it is known before its host has said which installation it is. */
+const KnownMachine = Machine.mapFields(Struct.omit(["installation"]));
+export type KnownMachine = typeof KnownMachine.Type;
+
 /** One message of a Machine's board stream, as the host sent it, and which Machine sent it. */
 export const MachineMessage = Schema.Struct({ machine: Machine, message: BoardMessage });
 export type MachineMessage = typeof MachineMessage.Type;
 
-/** A Machine Desktop could not reach, or lost, by the name it was reached as. */
+/** A route to a Machine that Desktop could not open, or lost. */
 export const MachineLost = Schema.TaggedStruct("Lost", {
-  name: Schema.String,
+  machine: KnownMachine,
   reason: Schema.String,
 });
 export type MachineLost = typeof MachineLost.Type;
@@ -41,31 +45,37 @@ export interface FlockMachine {
   readonly tasks: ReadonlyMap<string, TaskView>;
 }
 
-/** Each Machine keyed by installation id, and the Machines out of reach by name. */
+/** Each Machine keyed by installation id, and each route out of reach by how it is reached. */
 export interface Flock {
   readonly machines: ReadonlyMap<string, FlockMachine>;
-  readonly lost: ReadonlyMap<string, string>;
+  readonly lost: ReadonlyMap<string, { readonly name: string; readonly reason: string }>;
 }
+
+const routeOf = (machine: KnownMachine) => machine.target ?? "local";
 
 export const EMPTY_FLOCK: Flock = { machines: new Map(), lost: new Map() };
 
 /** A snapshot replaces its Machine; a change touches one Task; anything newer is skipped. */
 export const applyItem = (flock: Flock, item: FlockItem): Flock => {
-  if ("_tag" in item) return { ...flock, lost: new Map(flock.lost).set(item.name, item.reason) };
+  const lost = new Map(flock.lost);
+  if ("_tag" in item) {
+    lost.set(routeOf(item.machine), { name: item.machine.name, reason: item.reason });
+    return { ...flock, lost };
+  }
   const { machine, message } = item;
   if (message._tag === "Unknown") return flock;
   const known = flock.machines.get(machine.installation);
-  const now: FlockMachine =
-    message._tag === "Snapshot"
-      ? { machine, herds: message.herds, tasks: new Map(message.tasks.map((t) => [t.id, t])) }
-      : { machine, herds: known?.herds ?? [], tasks: new Map(known?.tasks) };
-  // SAFETY: built here as a Map, and read back only through the readonly interface.
-  const tasks = now.tasks as Map<string, TaskView>;
+  const tasks = new Map(
+    message._tag === "Snapshot" ? message.tasks.map((task) => [task.id, task]) : known?.tasks,
+  );
   if (message._tag === "Upsert") tasks.set(message.task.id, message.task);
   if (message._tag === "Remove") tasks.delete(message.id);
-  const lost = new Map(flock.lost);
-  lost.delete(machine.name);
-  return { machines: new Map(flock.machines).set(machine.installation, now), lost };
+  const herds = message._tag === "Snapshot" ? message.herds : (known?.herds ?? []);
+  lost.delete(routeOf(machine));
+  return {
+    machines: new Map(flock.machines).set(machine.installation, { machine, herds, tasks }),
+    lost,
+  };
 };
 
 /** Each Machine's display name: its own, or with how it is reached where two share one. */
@@ -81,19 +91,19 @@ const machineNames = (machines: ReadonlyArray<Machine>) => {
 };
 
 /** A Task as the board draws it: keyed across the Flock, and where it is when that matters. */
-export interface Card {
+export interface PlacedTask {
   readonly key: string;
   readonly task: TaskView;
   readonly where: string;
 }
 
 /**
- * Every Task of the Flock in the board's own order, and its card. A card names its Machine
- * once there is more than one, and its Herd only when its Machine runs several.
+ * Every Task of the Flock in the board's own order, and where it is: its Machine once there
+ * is more than one, and its Herd only when its Machine runs several.
  */
 export const flockCards = (flock: Flock) => {
   const names = machineNames([...flock.machines.values()].map(({ machine }) => machine));
-  const cards = new Map<TaskView, Card>();
+  const placed = new Map<TaskView, PlacedTask>();
   for (const [installation, { herds, tasks }] of flock.machines) {
     for (const task of tasks.values()) {
       const herd = herds.length > 1 ? herds.find(({ id }) => id === task.herd) : undefined;
@@ -101,7 +111,7 @@ export const flockCards = (flock: Flock) => {
         flock.machines.size > 1 ? names.get(installation) : undefined,
         herd === undefined ? undefined : (herd.name ?? herd.id),
       ];
-      cards.set(task, {
+      placed.set(task, {
         key: `${installation}:${task.id}`,
         task,
         where: where.filter((part) => part !== undefined).join(" · "),
@@ -109,9 +119,9 @@ export const flockCards = (flock: Flock) => {
     }
   }
   return {
-    tasks: sortBoard([...cards.keys()]),
+    tasks: sortBoard([...placed.keys()]),
     // SAFETY: the board's helpers filter and sort these Tasks; they never make new ones.
-    cardOf: (task: TaskView) => cards.get(task)!,
+    placedOf: (task: TaskView) => placed.get(task)!,
   };
 };
 

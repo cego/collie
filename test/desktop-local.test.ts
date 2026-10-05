@@ -105,7 +105,7 @@ test("Desktop's main process never reaches Collie's own host client", () =>
     }),
   ));
 
-test("a Machine reached by two routes is shown through the first, and the other's bridge closes", () =>
+test("a Machine reached by two routes is shown through the first, and the other's bridge closes at once", () =>
   Effect.runPromise(
     Effect.gen(function* () {
       const closed: string[] = [];
@@ -125,7 +125,6 @@ test("a Machine reached by two routes is shown through the first, and the other'
         ),
       });
       const preferredAnswers = yield* Deferred.make<void>();
-      const otherChanges = yield* Deferred.make<void>();
       const after = (go: Deferred.Deferred<void>, message: BoardMessage) =>
         Stream.fromEffect(Deferred.await(go).pipe(Effect.as(message)));
       const told: string[] = [];
@@ -134,17 +133,11 @@ test("a Machine reached by two routes is shown through the first, and the other'
           "preferred",
           after(preferredAnswers, snapshot("vm")).pipe(Stream.concat(Stream.never)),
         ),
-        route(
-          "other",
-          Stream.make(snapshot("vm")).pipe(
-            Stream.concat(after(otherChanges, { _tag: "Remove", seq: 1, id: "t1" })),
-            Stream.concat(Stream.never),
-          ),
-        ),
+        route("other", Stream.make(snapshot("vm")).pipe(Stream.concat(Stream.never))),
       ]).pipe(
         Stream.runForEach((item) =>
           Effect.sync(() =>
-            told.push("_tag" in item ? item._tag : `${item.machine.name} ${item.message._tag}`),
+            told.push(`${item.machine.name} ${"_tag" in item ? item._tag : item.message._tag}`),
           ),
         ),
         Effect.forkScoped,
@@ -156,9 +149,7 @@ test("a Machine reached by two routes is shown through the first, and the other'
 
       yield* until(() => told.length === 1);
       yield* Deferred.succeed(preferredAnswers, undefined);
-      yield* until(() => told.length === 2);
-      yield* Deferred.succeed(otherChanges, undefined);
-      yield* until(() => closed.includes("other"));
+      yield* until(() => told.length === 2 && closed.includes("other"));
       expect(told).toEqual(["other Snapshot", "preferred Snapshot"]);
       expect(closed).toEqual(["other"]);
     }).pipe(Effect.scoped),

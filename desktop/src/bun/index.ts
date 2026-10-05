@@ -3,7 +3,7 @@
 
 import { hostname } from "node:os";
 import { BunRuntime, BunServices } from "@effect/platform-bun";
-import { Config, Effect, FileSystem, Layer, Schema, Stream } from "effect";
+import { Config, Effect, FileSystem, Layer, Result, Schema, Stream } from "effect";
 import * as RpcServer from "effect/unstable/rpc/RpcServer";
 import Electrobun, { BrowserView, BrowserWindow, type RPCSchema } from "electrobun/bun";
 import {
@@ -13,7 +13,7 @@ import {
   type ToMain,
   type ToView,
 } from "../shared/channel";
-import { DesktopRpcs } from "../shared/flock";
+import { DesktopRpcs, type FlockItem } from "../shared/flock";
 import {
   bridgeCommand,
   endChildren,
@@ -72,22 +72,24 @@ const main = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   // Short, because a control socket's path is capped at about 100 bytes.
   const controls = yield* fs.makeTempDirectoryScoped({ prefix: "collie-ssh-" });
+  // herdr's list is the only list of Machines there is.
   const listed = yield* herdrMachines("herdr").pipe(Effect.result);
-  const remote = yield* Effect.forEach(
-    listed._tag === "Success" ? listed.success : [],
-    (machine, at) => remoteRoute("ssh", `${controls}/${at}`, machine, local),
+  const [enabled, unlisted] = Result.match(listed, {
+    onSuccess: (machines) => [machines, []] as const,
+    onFailure: (reason): readonly [[], FlockItem[]] => [
+      [],
+      [{ _tag: "Lost", machine: { name: "herdr's machines" }, reason }],
+    ],
+  });
+  const remote = yield* Effect.forEach(enabled, (machine, at) =>
+    remoteRoute("ssh", `${controls}/${at}`, machine, local),
   );
   const routes: ReadonlyArray<Route> = [
     { machine: { name: local }, open: openBridge(bridgeCommand(collie, local)) },
     ...remote,
   ];
-  const unlisted = Stream.fromIterable(
-    listed._tag === "Failure"
-      ? [{ _tag: "Lost" as const, name: "herdr's machines", reason: listed.failure }]
-      : [],
-  );
   const handlers = DesktopRpcs.toLayer({
-    flock: () => Stream.merge(unlisted, flockStream(routes)),
+    flock: () => Stream.merge(Stream.fromIterable(unlisted), flockStream(routes)),
   });
   return yield* Layer.launch(
     RpcServer.layer(DesktopRpcs).pipe(
@@ -97,7 +99,7 @@ const main = Effect.gen(function* () {
   );
 }).pipe(Effect.scoped, Effect.provide(BunServices.layer));
 
-// Quitting may end the process before any scope closes, and an SSH master outlives it.
+// Quitting may end the process before any scope closes, and an SSH master would outlive it.
 Electrobun.events.on("before-quit", endChildren);
 process.on("exit", endChildren);
 

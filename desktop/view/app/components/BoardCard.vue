@@ -16,7 +16,7 @@ const STATES: Record<
   done: { label: "Done", color: "success" },
 };
 const state = computed(() => STATES[props.task.state]);
-const project = computed(() =>
+const repoAndBranch = computed(() =>
   [props.task.project.split("/").at(-1), props.task.branch].filter(Boolean).join(" · "),
 );
 </script>
@@ -30,7 +30,7 @@ const project = computed(() =>
           {{ state.label }}
         </UBadge>
       </div>
-      <small class="text-muted">{{ project }}</small>
+      <small class="text-muted">{{ repoAndBranch }}</small>
     </template>
     <p data-testid="sentence" class="text-sm">{{ task.sentence }}</p>
     <p v-if="task.held" class="text-sm text-muted">{{ task.held }}</p>

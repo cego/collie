@@ -2,14 +2,13 @@
 // output after the ready marker is the host's socket. Never Collie's own host client: over
 // a channel that would start a host on this computer, or signal a pid that is not its own.
 
-import { Effect, Fiber, Layer, Ref, Schedule, Schema, type Scope, Stream } from "effect";
+import { Deferred, Effect, Fiber, Layer, Ref, Schedule, Schema, type Scope, Stream } from "effect";
 import * as RpcClient from "effect/unstable/rpc/RpcClient";
 import * as RpcSerialization from "effect/unstable/rpc/RpcSerialization";
 import * as Socket from "effect/unstable/socket/Socket";
 import { BRIDGE_READY, type BoardMessage, FrontDoorRpcs } from "../../../src/board-model";
-import type { FlockItem, Machine, MachineMessage } from "../shared/flock";
+import type { FlockItem, KnownMachine, Machine, MachineMessage } from "../shared/flock";
 
-/** Every process Desktop started, so quitting ends them even where no scope gets to close. */
 const children = new Set<Bun.Subprocess>();
 export const endChildren = () => {
   for (const child of children) child.kill();
@@ -91,9 +90,6 @@ export const openBridge = Effect.fn("Desktop.openBridge")(function* (
   return yield* RpcClient.make(FrontDoorRpcs).pipe(Effect.provideContext(context));
 });
 
-export type Door = Effect.Success<ReturnType<typeof openBridge>>;
-
-/** As much of a door as its board needs. */
 export interface BoardSource {
   readonly board: () => Stream.Stream<BoardMessage, { readonly message: string }>;
 }
@@ -102,7 +98,7 @@ export interface BoardSource {
  * A Machine's board stream, each message named by its Machine. The host's snapshot comes
  * first and says which installation it is; every change after it is that installation's.
  */
-export const machineBoard = (known: Omit<Machine, "installation">, door: BoardSource) =>
+export const machineBoard = (known: KnownMachine, door: BoardSource) =>
   door.board().pipe(
     Stream.mapError((error) => error.message),
     Stream.mapAccum(
@@ -116,16 +112,6 @@ export const machineBoard = (known: Omit<Machine, "installation">, door: BoardSo
       },
     ),
   );
-
-/** A saved herdr machine, as `herdr machine list --json` lists it. */
-const HerdrMachine = Schema.Struct({
-  label: Schema.String,
-  target: Schema.String,
-  session: Schema.String,
-  enabled: Schema.Boolean,
-});
-export type HerdrMachine = typeof HerdrMachine.Type;
-const HerdrMachines = Schema.fromJsonString(Schema.Array(HerdrMachine));
 
 const output = (command: ReadonlyArray<string>) =>
   Effect.gen(function* () {
@@ -144,7 +130,20 @@ const output = (command: ReadonlyArray<string>) =>
     return out;
   });
 
-/** The machines enabled in herdr: herdr's list is the only list of Machines there is. */
+/** A saved herdr machine, as `herdr machine list --json` lists it. */
+const HerdrMachine = Schema.Struct({
+  label: Schema.String,
+  target: Schema.String,
+  session: Schema.String,
+  enabled: Schema.Boolean,
+});
+export type HerdrMachine = typeof HerdrMachine.Type;
+const HerdrMachines = Schema.fromJsonString(Schema.Array(HerdrMachine));
+
+/**
+ * The machines enabled in herdr. Asked here rather than through `src/herdr.ts`, which
+ * would bring Collie's locks into Desktop; this is Desktop's only herdr call.
+ */
 export const herdrMachines = (herdr: string) =>
   output([herdr, "machine", "list", "--json"]).pipe(
     Effect.flatMap((json) =>
@@ -155,21 +154,15 @@ export const herdrMachines = (herdr: string) =>
 
 /** One way to reach a Machine: what it is called, and how its bridge is opened. */
 export interface Route {
-  readonly machine: Omit<Machine, "installation">;
+  readonly machine: KnownMachine;
   readonly open: Effect.Effect<BoardSource, string, Scope.Scope>;
 }
 
 const quoted = (word: string) => `'${word.replaceAll("'", `'\\''`)}'`;
 
-/**
- * The bridge as the Machine's login shell runs it, as Local's is. A profile names one
- * herdr session, and the host it starts is told that session's socket.
- */
-export const remoteBridge = (session: string, client: string) =>
+/** The bridge as the Machine's login shell runs it, as Local's is. */
+const remoteBridge = (client: string) =>
   [
-    ...(session === "default"
-      ? []
-      : [`export HERDR_SOCKET_PATH="$HOME/.config/herdr/sessions/"${quoted(session)}/herdr.sock;`]),
     `exec "\${SHELL:-/bin/sh}" -lc 'exec collie "$@"' collie`,
     ...bridgeCommand([], client).map(quoted),
   ].join(" ");
@@ -193,15 +186,13 @@ const openMaster = Effect.fn("Desktop.openMaster")(function* (
   const ended = Effect.promise(() =>
     Promise.all([master.exited, new Response(master.stderr).text()]),
   ).pipe(Effect.map(([code, err]) => err.trim() || `ssh to ${target} exited ${code}`));
-  const check = output([ssh, "-S", control, "-O", "check", target]).pipe(
+  yield* output([ssh, "-S", control, "-O", "check", target]).pipe(
     Effect.retry({
       while: () => master.exitCode === null,
       schedule: Schedule.spaced("200 millis"),
     }),
-  );
-  yield* Effect.raceFirst(
-    check.pipe(Effect.asVoid),
-    ended.pipe(Effect.flatMap((reason) => Effect.fail(reason))),
+    // Only a master that has ended stops the checks, and what it said is why.
+    Effect.catch(() => ended.pipe(Effect.flatMap((reason) => Effect.fail(reason)))),
   );
 });
 
@@ -220,13 +211,16 @@ export const remoteRoute = Effect.fn("Desktop.remoteRoute")(function* (
     machine: { name: machine.label, target: machine.target },
     open: Fiber.join(master).pipe(
       Effect.andThen(
+        // Never a login of its own: SSO is asked once, by the master.
         openBridge([
           ssh,
           "-S",
           control,
+          "-o",
+          "ControlMaster=no",
           "-T",
           machine.target,
-          remoteBridge(machine.session, client),
+          remoteBridge(client),
         ]),
       ),
     ),
@@ -243,20 +237,26 @@ export const flockStream = (routes: ReadonlyArray<Route>): Stream.Stream<FlockIt
   Stream.unwrap(
     Effect.gen(function* () {
       const owners = yield* Ref.make(new Map<string, number>());
+      const displaced = yield* Effect.forEach(routes, () => Deferred.make<void>());
       const owns = (at: number, { machine, message }: MachineMessage) =>
-        Ref.modify(owners, (now) => {
-          const owner = now.get(machine.installation);
-          if (message._tag === "Snapshot" && (owner === undefined || at < owner)) {
-            return [true, new Map(now).set(machine.installation, at)] as const;
-          }
-          return [owner === at, now] as const;
+        Effect.gen(function* () {
+          const [owner, before] = yield* Ref.modify(owners, (now) => {
+            const owner = now.get(machine.installation);
+            const takes = message._tag === "Snapshot" && (owner === undefined || at < owner);
+            const after = takes ? new Map(now).set(machine.installation, at) : now;
+            return [[after.get(machine.installation), owner] as const, after] as const;
+          });
+          const lost = before === undefined || before === owner ? undefined : displaced[before];
+          if (lost !== undefined) yield* Deferred.succeed(lost, undefined);
+          return owner === at;
         });
       return Stream.mergeAll(
         routes.map((route, at) =>
           Stream.unwrap(Effect.map(route.open, (door) => machineBoard(route.machine, door))).pipe(
             Stream.takeWhileEffect((item) => owns(at, item)),
+            Stream.interruptWhen(Deferred.await(displaced[at]!)),
             Stream.catch((reason) =>
-              Stream.succeed<FlockItem>({ _tag: "Lost", name: route.machine.name, reason }),
+              Stream.succeed<FlockItem>({ _tag: "Lost", machine: route.machine, reason }),
             ),
           ),
         ),

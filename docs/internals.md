@@ -193,6 +193,12 @@ state, and a binary in a temp directory rather than the one the user is running.
 nothing above it to fake, and routing it through `herdr.ts` would mean asking the running
 herdr what some other version's schema says.
 
+Desktop's main process runs one more: `herdr machine list --json`, for the machines
+saved in herdr (`desktop/src/bun/machine.ts`). Desktop is another program, usually on
+another computer, and it is not talking to a session either: it asks which machines to
+reach and nothing else. Routing it through `herdr.ts` would bring Collie's locks into
+Desktop, which reaches a Machine only through `collie bridge`.
+
 ### Checking the boundary against herdr
 
 The reply structs in `herdr.ts` are hand-written, and herdr releases often. `herdr api
