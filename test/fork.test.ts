@@ -1,4 +1,5 @@
 import { Clock, Effect, FileSystem } from "effect";
+import { exec } from "./support/command";
 import { runEffect } from "./support/effect";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { forkDefinition } from "../src/fork";
@@ -108,7 +109,7 @@ test("a full copy whose original has changed since is stale", () =>
       );
 
       // The baseline moves on, which is exactly what a full copy cannot follow.
-      Bun.spawnSync(["sh", "-c", `printf '\n<!-- a later change -->\n' >> ${source.path}`]);
+      yield* exec(["sh", "-c", `printf '\n<!-- a later change -->\n' >> ${source.path}`]);
 
       expect(isStale((yield* loadDefinitions(yield* layers(env))).personas.get("reviewer")!)).toBe(
         true,
@@ -132,7 +133,7 @@ test("forking a persona into the project layer is what that project's agents rea
         },
       );
       expect(result.ok).toBe(true);
-      Bun.spawnSync(["sh", "-c", `printf 'Project reviewer.\\n' >> ${result.path}`]);
+      yield* exec(["sh", "-c", `printf 'Project reviewer.\\n' >> ${result.path}`]);
 
       const after = yield* loadDefinitions(yield* layers(env));
       expect(after.personas.get("reviewer")!.layer).toBe("project");
@@ -147,7 +148,7 @@ test("forking never overwrites an existing fork", () =>
       const source = (yield* loadDefinitions(yield* layers(env))).personas.get("planner")!;
 
       expect((yield* forkDefinition(source.path, "personas", rig.userDir)).ok).toBe(true);
-      Bun.spawnSync([
+      yield* exec([
         "sh",
         "-c",
         `printf 'edited\\n' >> ${join(rig.userDir, "personas", "planner.md")}`,
@@ -168,7 +169,7 @@ test("a target occupied while a fork is being prepared is never overwritten", ()
       const source = join(root, "helper.md");
       const targetDir = join(root, "target");
       const target = join(targetDir, "personas", "helper.md");
-      Bun.spawnSync(["mkfifo", source]);
+      yield* exec(["mkfifo", source]);
       yield* mkdirp(join(targetDir, "personas"));
       const forkModule = new URL("../src/fork.ts", import.meta.url).pathname.replaceAll("'", "\\'");
       const marker = join(root, "child-ready");
@@ -227,7 +228,7 @@ test("a fork of the baseline leaves the baseline file untouched", () =>
       const before = yield* readText(source.path);
 
       yield* forkDefinition(source.path, "personas", join(rig.projectDir, ".collie"));
-      Bun.spawnSync([
+      yield* exec([
         "sh",
         "-c",
         `printf 'changed\\n' >> ${join(rig.projectDir, ".collie", "personas", "implementer.md")}`,

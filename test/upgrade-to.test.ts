@@ -3,6 +3,7 @@
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect } from "effect";
+import { exec } from "./support/command";
 import { runEffect } from "./support/effect";
 import { Rig } from "./support/recorder";
 import { upgrade } from "../src/operations";
@@ -12,8 +13,8 @@ let rig: Rig;
 let origin: string;
 let clone: string;
 
-const git = (cwd: string, ...args: string[]) => {
-  const done = Bun.spawnSync(["git", ...args], {
+const git = (cwd: string, ...args: string[]) =>
+  exec(["git", ...args], {
     cwd,
     env: {
       PATH: "/usr/bin:/bin",
@@ -23,20 +24,23 @@ const git = (cwd: string, ...args: string[]) => {
       GIT_COMMITTER_NAME: "t",
       GIT_COMMITTER_EMAIL: "t@example.com",
     },
-  });
-  if (done.exitCode !== 0) throw new Error(`git ${args.join(" ")}: ${done.stderr.toString()}`);
-  return done.stdout.toString().trim();
-};
+  }).pipe(
+    Effect.flatMap((done) =>
+      done.exitCode === 0
+        ? Effect.succeed(done.stdout.trim())
+        : Effect.die(new Error(`git ${args.join(" ")}: ${done.stderr}`)),
+    ),
+  );
 
-const release = (version: string) => {
-  Bun.spawnSync(
+const release = Effect.fn("test.release")(function* (version: string) {
+  yield* exec(
     ["sh", "-c", `echo 'echo "prepare: runner: done"' > prepare.sh; echo ${version} > version`],
     { cwd: origin },
   );
-  git(origin, "add", ".");
-  git(origin, "commit", "--quiet", "-m", version);
-  git(origin, "tag", version);
-};
+  yield* git(origin, "add", ".");
+  yield* git(origin, "commit", "--quiet", "-m", version);
+  yield* git(origin, "tag", version);
+});
 
 beforeEach(() =>
   runEffect(
@@ -44,12 +48,12 @@ beforeEach(() =>
       rig = yield* Rig.make();
       origin = `${rig.root}/origin`;
       clone = `${rig.root}/collie`;
-      Bun.spawnSync(["mkdir", "-p", origin]);
-      git(origin, "init", "--quiet", "-b", "master");
-      release("0.1.0");
-      release("0.2.0");
-      git(rig.root, "clone", "--quiet", origin, clone);
-      git(clone, "reset", "--quiet", "--hard", "0.1.0");
+      yield* exec(["mkdir", "-p", origin]);
+      yield* git(origin, "init", "--quiet", "-b", "master");
+      yield* release("0.1.0");
+      yield* release("0.2.0");
+      yield* git(rig.root, "clone", "--quiet", origin, clone);
+      yield* git(clone, "reset", "--quiet", "--hard", "0.1.0");
     }),
   ),
 );
@@ -61,7 +65,7 @@ const env = () => ({ ...rig.pluginEnv(), pluginRoot: clone });
 test("a released checkout moves to the exact version, and says what moved", () =>
   runEffect(
     Effect.gen(function* () {
-      const before = git(clone, "rev-parse", "--short", "HEAD");
+      const before = yield* git(clone, "rev-parse", "--short", "HEAD");
 
       const moved = yield* upgrade(env(), { to: "0.2.0" });
 
@@ -69,7 +73,7 @@ test("a released checkout moves to the exact version, and says what moved", () =
         ok: true,
         data: { checkout: true, updated: true, before, version: "0.2.0" },
       });
-      expect(git(clone, "describe", "--exact-match", "--tags", "HEAD")).toBe("0.2.0");
+      expect(yield* git(clone, "describe", "--exact-match", "--tags", "HEAD")).toBe("0.2.0");
       expect(moved.ok && moved.human).toContain(`from ${before} to `);
       expect(moved.ok && moved.human).toMatch(/runner\s+done/);
     }),
@@ -78,8 +82,8 @@ test("a released checkout moves to the exact version, and says what moved", () =
 test("a checkout detached on a release tag is a release, whatever else is tagged there", () =>
   runEffect(
     Effect.gen(function* () {
-      git(clone, "checkout", "--quiet", "--detach", "0.1.0");
-      git(clone, "tag", "zzz-local");
+      yield* git(clone, "checkout", "--quiet", "--detach", "0.1.0");
+      yield* git(clone, "tag", "zzz-local");
 
       const moved = yield* upgrade(env(), { to: "0.2.0" });
 
@@ -93,19 +97,19 @@ test("a version with no release is refused and nothing moves", () =>
       const refused = yield* upgrade(env(), { to: "9.9.9" });
 
       expect(refused).toMatchObject({ ok: false, error: { code: "invalid_input" } });
-      expect(git(clone, "describe", "--exact-match", "--tags", "HEAD")).toBe("0.1.0");
+      expect(yield* git(clone, "describe", "--exact-match", "--tags", "HEAD")).toBe("0.1.0");
     }),
   ));
 
 const refusedAsDevelopment = (reason: RegExp) =>
   Effect.gen(function* () {
-    const head = git(clone, "rev-parse", "HEAD");
+    const head = yield* git(clone, "rev-parse", "HEAD");
 
     const refused = yield* upgrade(env(), { to: "0.2.0" });
 
     expect(refused).toMatchObject({ ok: false, error: { code: "invalid_state" } });
     expect(!refused.ok && refused.error.message).toMatch(reason);
-    expect(git(clone, "rev-parse", "HEAD")).toBe(head);
+    expect(yield* git(clone, "rev-parse", "HEAD")).toBe(head);
   });
 
 test("a checkout with uncommitted changes is never moved", () =>
@@ -122,7 +126,7 @@ test("a checkout with uncommitted changes is never moved", () =>
 test("a checkout on a branch of its own is never moved", () =>
   runEffect(
     Effect.gen(function* () {
-      git(clone, "checkout", "--quiet", "-b", "feature");
+      yield* git(clone, "checkout", "--quiet", "-b", "feature");
       yield* refusedAsDevelopment(/branch feature/);
     }),
   ));
@@ -130,8 +134,8 @@ test("a checkout on a branch of its own is never moved", () =>
 test("a checkout ahead of its remote is never moved", () =>
   runEffect(
     Effect.gen(function* () {
-      git(clone, "reset", "--quiet", "--hard", "origin/master");
-      git(clone, "commit", "--quiet", "--allow-empty", "-m", "local");
+      yield* git(clone, "reset", "--quiet", "--hard", "origin/master");
+      yield* git(clone, "commit", "--quiet", "--allow-empty", "-m", "local");
       yield* refusedAsDevelopment(/ahead of its remote/);
     }),
   ));
@@ -139,8 +143,8 @@ test("a checkout ahead of its remote is never moved", () =>
 test("a checkout detached on a commit that is not a release is never moved", () =>
   runEffect(
     Effect.gen(function* () {
-      git(clone, "commit", "--quiet", "--allow-empty", "-m", "local");
-      git(clone, "checkout", "--quiet", "--detach", "HEAD");
+      yield* git(clone, "commit", "--quiet", "--allow-empty", "-m", "local");
+      yield* git(clone, "checkout", "--quiet", "--detach", "HEAD");
       yield* refusedAsDevelopment(/not a release/);
     }),
   ));
@@ -150,8 +154,8 @@ test("a development build is named by its version and commit", () =>
     Effect.gen(function* () {
       expect(yield* installation(clone, "0.1.0")).toEqual({ release: true });
 
-      git(clone, "checkout", "--quiet", "-b", "feature");
-      const sha = git(clone, "rev-parse", "--short", "HEAD");
+      yield* git(clone, "checkout", "--quiet", "-b", "feature");
+      const sha = yield* git(clone, "rev-parse", "--short", "HEAD");
       expect(yield* installation(clone, "0.1.0")).toMatchObject({
         release: false,
         build: `0.1.0+${sha}`,

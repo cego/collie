@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, Fiber, FileSystem, Schema } from "effect";
+import { exec } from "./support/command";
 import { runEffect } from "./support/effect";
 import { claudeTrust } from "../src/trust";
 import { isYamlMap, YamlMapSchema, type YamlMap } from "../src/yaml";
@@ -220,7 +221,7 @@ test("a config claude keeps rewriting is left alone rather than overwritten", ()
         const path = join(rig.root, ".claude.json");
         // A fifo hands every read of the config different bytes, which is what a claude
         // writing between this grant's read and its rename looks like from in here.
-        Bun.spawnSync(["mkfifo", path]);
+        yield* exec(["mkfifo", path]);
         const trustModule = new URL("../src/trust.ts", import.meta.url).pathname.replaceAll(
           "'",
           "\\'",

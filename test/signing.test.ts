@@ -3,6 +3,7 @@
 import { expect, test } from "bun:test";
 import { generateKeyPairSync } from "node:crypto";
 import { Effect, FileSystem } from "effect";
+import { exec } from "./support/command";
 import { runEffect } from "./support/effect";
 import { RELEASE_PUBLIC_KEY, signRelease, verifyRelease } from "../src/signing";
 
@@ -64,8 +65,9 @@ test("the built-in release key parses, and refuses what another key signed", () 
 const signTool = (file: string, key?: string) => {
   const path = { PATH: Bun.env.PATH ?? "" };
   const env = key === undefined ? path : { ...path, COLLIE_SIGNING_KEY: key };
-  const done = Bun.spawnSync(["bun", "run", `${import.meta.dir}/../tools/sign.ts`, file], { env });
-  return { code: done.exitCode, said: done.stderr.toString() + done.stdout.toString() };
+  return exec(["bun", "run", `${import.meta.dir}/../tools/sign.ts`, file], { env }).pipe(
+    Effect.map((done) => ({ code: done.exitCode, said: done.stderr + done.stdout })),
+  );
 };
 
 test("the signing tool refuses to sign without a key, or with one Collie does not verify", () =>
@@ -75,11 +77,11 @@ test("the signing tool refuses to sign without a key, or with one Collie does no
       const file = `${yield* fs.makeTempDirectoryScoped()}/collie-linux-x64`;
       yield* fs.writeFile(file, binary);
 
-      const unset = signTool(file);
+      const unset = yield* signTool(file);
       expect(unset.code).not.toBe(0);
       expect(unset.said).toContain("never published unsigned");
 
-      const wrong = signTool(file, pair().privateKey);
+      const wrong = yield* signTool(file, pair().privateKey);
       expect(wrong.code).not.toBe(0);
       expect(wrong.said).toContain("not the key Collie verifies");
       expect(yield* fs.exists(`${file}.sig`)).toBe(false);

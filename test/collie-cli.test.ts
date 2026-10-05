@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { Config, Effect, FileSystem, Option, Schema } from "effect";
+import { exec } from "./support/command";
 import { runEffect, watchedBy } from "./support/effect";
 import { installFakeSkills } from "./support/defs";
 import { readIntent, seedIntent, writeIntent } from "../src/intent";
@@ -423,13 +424,11 @@ test(
         const named = join(tree.dir, "named");
         yield* fs.makeDirectory(named, { recursive: true });
         const git = (...args: string[]) =>
-          Bun.spawnSync(["git", "-c", "user.email=t@t", "-c", "user.name=t", ...args], {
-            cwd: named,
-          });
-        git("init", "-q", "-b", "main");
-        git("commit", "-q", "--allow-empty", "-m", "base");
-        git("checkout", "-q", "-b", "topic");
-        git("commit", "-q", "--allow-empty", "-m", "work");
+          exec(["git", "-c", "user.email=t@t", "-c", "user.name=t", ...args], { cwd: named });
+        yield* git("init", "-q", "-b", "main");
+        yield* git("commit", "-q", "--allow-empty", "-m", "base");
+        yield* git("checkout", "-q", "-b", "topic");
+        yield* git("commit", "-q", "--allow-empty", "-m", "work");
         const bin = join(tree.dir, "bin");
         yield* fs.makeDirectory(bin, { recursive: true });
         yield* fs.writeFileString(join(bin, "glab"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
@@ -511,7 +510,7 @@ test(
             "first",
           ],
         ])
-          Bun.spawnSync(["git", ...args], { cwd: checkout });
+          yield* exec(["git", ...args], { cwd: checkout });
         const starts = yield* documentedStarts();
         expect(starts.length).toBeGreaterThan(2);
         for (const line of starts) {
@@ -826,11 +825,9 @@ test(
         // A checkout of its own, as a worktree is, and gone once the Run has settled.
         const worktree = join(world.home, "worktree");
         yield* fs.makeDirectory(worktree, { recursive: true });
-        Bun.spawnSync(["git", "init", "-q"], { cwd: worktree });
+        yield* exec(["git", "init", "-q"], { cwd: worktree });
         for (const cwd of [world.project, worktree])
-          Bun.spawnSync(["git", "remote", "add", "origin", "git@example.test:team/app.git"], {
-            cwd,
-          });
+          yield* exec(["git", "remote", "add", "origin", "git@example.test:team/app.git"], { cwd });
         const run = yield* settledRun(world, "hello", { workspace: worktree });
         const client = yield* connect(world.state).pipe(Effect.orDie);
         expect((yield* client.run({ runId: run.id }).pipe(Effect.orDie))?.cwd).toBe(worktree);

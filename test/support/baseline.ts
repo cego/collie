@@ -13,6 +13,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, Fiber, FileSystem, Layer, Option, Path, Schema } from "effect";
 import * as WorkflowEngine from "effect/unstable/workflow/WorkflowEngine";
 import { Rig, FakeHerdr } from "./recorder";
+import { exec } from "./command";
 import { fastForward, runEffect } from "./effect";
 import { FakeBin } from "./bin";
 import { installFakeSkills } from "./defs";
@@ -1487,16 +1488,16 @@ const approve = (runId: string, names: ReadonlyArray<string>) =>
  * on, and a directory git knows nothing about has no tree to move.
  */
 const repository = () =>
-  Effect.sync(() => {
+  Effect.gen(function* () {
     for (const args of [
       ["init", "-q"],
       ["config", "user.email", "t@example.com"],
       ["config", "user.name", "t"],
       ["remote", "add", "origin", "https://gitlab.example.com/group/project.git"],
     ]) {
-      Bun.spawnSync(["git", ...args], { cwd: rig.projectDir });
+      yield* exec(["git", ...args], { cwd: rig.projectDir });
     }
-    Bun.spawnSync(["git", "commit", "-qm", "first", "--allow-empty"], { cwd: rig.projectDir });
+    yield* exec(["git", "commit", "-qm", "first", "--allow-empty"], { cwd: rig.projectDir });
   });
 
 /** A plan of tickets on disk, which is the only thing that makes a build a list. */
@@ -2083,15 +2084,15 @@ scenario(
         yield* bin.add("glab", `exit 0`);
         yield* repository();
         const git = (...args: string[]) =>
-          Bun.spawnSync(["git", ...args], { cwd: rig.projectDir })
-            .stdout.toString()
-            .trim();
-        const base = git("rev-parse", "HEAD");
-        git("checkout", "-qb", "feature");
+          exec(["git", ...args], { cwd: rig.projectDir }).pipe(
+            Effect.map((done) => done.stdout.trim()),
+          );
+        const base = yield* git("rev-parse", "HEAD");
+        yield* git("checkout", "-qb", "feature");
         const fs = yield* FileSystem.FileSystem;
         yield* fs.writeFileString(`${rig.projectDir}/broken`, "");
-        git("add", "broken");
-        git("commit", "-qm", "break it");
+        yield* git("add", "broken");
+        yield* git("commit", "-qm", "break it");
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
         yield* approve("r-impl-own-red", ["unit"]);
         yield* fs.writeFileString(
@@ -2122,7 +2123,7 @@ scenario(
         expect(opening).toContain("- unproved after 4 gate fixes: unit failed");
         expect(opening).not.toContain("also fails at");
         // The comparison ran at the base and put the branch back.
-        expect(git("rev-parse", "--abbrev-ref", "HEAD")).toBe("feature");
+        expect(yield* git("rev-parse", "--abbrev-ref", "HEAD")).toBe("feature");
         const journal = yield* fs.readFileString(
           `${evidenceDir(dir, "r-impl-own-red")}/steering/verifications.jsonl`,
         );

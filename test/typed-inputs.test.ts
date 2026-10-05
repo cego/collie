@@ -17,6 +17,7 @@ import { pickFlow, type FlowPrompts } from "../src/flows";
 import { Herdr } from "../src/herdr";
 import { connect } from "../src/host";
 import { runViews } from "../src/lifecycle";
+import { exec } from "./support/command";
 import { runEffect } from "./support/effect";
 import { fixtures, root, stopHost, until } from "./support/host";
 
@@ -89,7 +90,7 @@ const proves = <A, E>(
         yield* fs.makeDirectory(made, { recursive: true }).pipe(Effect.orDie);
       }
       // A project is a checkout, which is what an agent's start from inside it names.
-      Bun.spawnSync(["git", "init", "-q"], { cwd: world.project });
+      yield* exec(["git", "init", "-q"], { cwd: world.project });
       for (const name of MODULE) {
         yield* fs.copyFile(`${fixtures}/${name}`, `${world.user}/${name}`).pipe(Effect.orDie);
       }
