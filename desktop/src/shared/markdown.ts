@@ -1,15 +1,14 @@
 // A Comark plugin for agent-written markdown. No Bun-only import: the view bundles this.
 
-/** Comark's tree: text, `[tag, attributes, ...children]`, or a comment with a null tag. */
-export type MarkdownNode = string | [string | null, Record<string, unknown>, ...MarkdownNode[]];
+import type { ComarkPlugin, Node } from "comark";
 
 const FILE_LINE = /(?<![\w/:.@-])((?:[\w@.-]+\/)*[\w@-][\w@.-]*\.[A-Za-z]\w*):(\d+)(?![\w:])/g;
 const WHOLE_FILE_LINE = new RegExp(`^${FILE_LINE.source}$`);
 /** Inside these a `file:line` is something else's text. */
 const LEFT_ALONE = new Set(["pre", "a", "code", "file-ref"]);
 
-const referencesIn = (text: string): Array<MarkdownNode> => {
-  const nodes: Array<MarkdownNode> = [];
+const referencesIn = (text: string): Array<Node> => {
+  const nodes: Array<Node> = [];
   let from = 0;
   for (const found of text.matchAll(FILE_LINE)) {
     if (found.index > from) nodes.push(text.slice(from, found.index));
@@ -20,7 +19,7 @@ const referencesIn = (text: string): Array<MarkdownNode> => {
   return nodes;
 };
 
-const confine = (node: MarkdownNode): Array<MarkdownNode> => {
+const confine = (node: Node): Array<Node> => {
   if (!Array.isArray(node)) return referencesIn(node);
   const [tag, attributes, ...children] = node;
   if (tag === null) return [node];
@@ -37,9 +36,9 @@ const confine = (node: MarkdownNode): Array<MarkdownNode> => {
 };
 
 /** Strips every style, and turns each `file:line` outside code and links into a `file-ref`. */
-export const confined = () => ({
+export const confined = (): ComarkPlugin => ({
   name: "confined",
-  post: ({ tree }: { readonly tree: { nodes: Array<MarkdownNode> } }) => {
+  post: ({ tree }) => {
     tree.nodes = tree.nodes.flatMap(confine);
   },
 });

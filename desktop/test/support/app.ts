@@ -149,15 +149,16 @@ export const launch = (
     if (stale._tag === "Some") return yield* Effect.die(`port ${CDP} is already CEF's`);
     // In a session of its own, so the whole app goes with it; under Xvfb without a display.
     const display = Bun.env.DISPLAY === undefined ? ["xvfb-run", "-a"] : [];
+    const env = {
+      ...Bun.env,
+      // CEF keeps one profile per user, so a test's app must not find the operator's.
+      HOME: scratch,
+      PATH: `${browsers ? `${flock}/browsers:` : ""}${flock}:${Bun.env.PATH}`,
+      COLLIE_DESKTOP_COLLIE: asCommand([process.execPath, HOST, `${flock}/${LOCAL}`]),
+    };
+    if (browsers) env.XDG_DATA_HOME = `${flock}/share`;
     const process_ = Bun.spawn(["setsid", ...display, APP], {
-      env: {
-        ...Bun.env,
-        // CEF keeps one profile per user, so a test's app must not find the operator's.
-        HOME: scratch,
-        PATH: `${browsers ? `${flock}/browsers:` : ""}${flock}:${Bun.env.PATH}`,
-        ...(browsers ? { XDG_DATA_HOME: `${flock}/share` } : {}),
-        COLLIE_DESKTOP_COLLIE: asCommand([process.execPath, HOST, `${flock}/${LOCAL}`]),
-      },
+      env,
       stdout: "ignore",
       stderr: "ignore",
     });

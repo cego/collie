@@ -12,6 +12,7 @@
         "@iconify-json/lucide": "1.2.138",
         "@nuxt/ui": "4.11.3",
         "beautiful-mermaid": "1.1.3",
+        "comark": "0.7.0",
         "electrobun": "2.0.2",
         "nuxt": "4.5.2",
         "shiki": "4.5.0",

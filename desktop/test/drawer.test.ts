@@ -853,14 +853,13 @@ test(
 /** What the view's policy refused from now on, by directive and address. */
 const watchRefusals = () =>
   app!.page.evaluate(() => {
-    const seen: Array<string> = [];
-    Reflect.set(window, "refused", seen);
-    document.addEventListener("securitypolicyviolation", (event) =>
-      seen.push(`${event.effectiveDirective} ${event.blockedURI}`),
-    );
+    document.body.dataset.refused = "";
+    document.addEventListener("securitypolicyviolation", (event) => {
+      document.body.dataset.refused += `${event.effectiveDirective} ${event.blockedURI}\n`;
+    });
   });
 const refusals = () =>
-  app!.page.evaluate((): Array<string> => Reflect.get(window, "refused") ?? []);
+  app!.page.evaluate(() => (document.body.dataset.refused ?? "").split("\n").filter(Boolean));
 
 test(
   "agent markdown fetches nothing from the network, and lays nothing over the window",
@@ -888,7 +887,7 @@ test(
         );
         const fetched = yield* Effect.promise(() =>
           app!.page.evaluate(() =>
-            performance
+            window.performance
               .getEntriesByType("resource")
               .map((entry) => entry.name)
               .filter((name) => name.startsWith("http")),
