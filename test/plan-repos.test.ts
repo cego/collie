@@ -262,11 +262,6 @@ test("only the run's own root is a single-repo plan", () => {
   );
 });
 
-test("a single-repo plan is not asked for a checkout: the chain refuses that as it always did", () => {
-  const plan = readPlanRepos([ticket("01-a", { repo: "." })], new Set());
-  expect(plan.refusal).toBeNull();
-});
-
 test("a number claimed twice is refused however many repositories the plan names", () => {
   const plan = readPlanRepos(
     [

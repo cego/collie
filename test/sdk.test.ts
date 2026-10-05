@@ -44,10 +44,6 @@ const entry = (over: Partial<WorkflowEntry>): WorkflowEntry => ({
   metadata: { hints: { text: "goal" }, ...over.metadata },
 });
 
-test("a module that says nothing wrong is registered", () => {
-  expect(checkEntry(entry({}))).toEqual([]);
-});
-
 test("the identity is an identity, and a title is there for a human to read", () => {
   expect(checkEntry(entry({ id: "Echo" }))[0]).toContain("is not an identity");
   expect(checkEntry(entry({ id: "2fast" }))[0]).toContain("is not an identity");

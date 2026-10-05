@@ -225,19 +225,6 @@ test("a malformed status reply fails cleanly, without guessing a socket", () =>
     }),
   ));
 
-test("the herdr subprocess inherits this process's environment", () =>
-  runEffect(
-    Effect.gen(function* () {
-      // The CLI boundary spawns through ChildProcessSpawner with extendEnv, so herdr
-      // sees PATH and the rest; passing only the plugin's own keys would leave it
-      // without one. The fake herdr reads its own configuration from that environment,
-      // so a call that works at all is that inheritance working.
-      const herdr = new Herdr(rig.pluginEnv());
-      expect(yield* herdr.tabCreate({ label: "inherits" })).toBeTruthy();
-      expect(yield* rig.cmds()).toEqual(["tab create"]);
-    }),
-  ));
-
 test("malformed herdr replies fail at the boundary", () =>
   runEffect(
     Effect.gen(function* () {

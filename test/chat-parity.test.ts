@@ -364,13 +364,15 @@ test("nothing this build cannot carry out is offered as something to ask for", (
   runEffect(
     Effect.gen(function* () {
       yield* registerRunExecutors();
-      const carried = new Set(registeredKinds());
+      const carried = new Set<string>(registeredKinds());
       // `ask_human` and `none` are what the validator turns a refused action into, not
       // something to ask for; everything else the schema offers has to be runnable.
-      const asked = INVENTORY.flatMap((entry) =>
-        entry[1].route === "propose" ? [entry[1].kind] : [],
-      );
-      expect([...new Set(asked)].filter((kind) => !carried.has(kind))).toEqual([]);
+      const offered = decodeOffered(
+        toolNamed("collie_propose")!.input,
+      ).properties.actions.items.anyOf.flatMap((one) => one.properties.kind.enum);
+      expect(
+        offered.filter((kind) => kind !== "ask_human" && kind !== "none" && !carried.has(kind)),
+      ).toEqual([]);
     }),
   ));
 
