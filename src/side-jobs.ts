@@ -11,8 +11,9 @@ import type { Herdr } from "./herdr";
 import { liveHerds } from "./herds";
 import { settleMerges, type MrPanels } from "./merges";
 import { shell } from "./mr";
-import { append as appendNews, newsPath } from "./news";
-import { eventsIn, idleAgain, readSaid, remember } from "./proactive";
+import { append as appendNews, newsPath, read as readNews, retired, supersede } from "./news";
+import { eventsIn, holding, idleAgain, readSaid, remember } from "./proactive";
+import { latest, readDispositions } from "./disposition";
 import { everyRegistered } from "./registry";
 import { settled, type RunFacts } from "./runs";
 import { herdDir, herdOf } from "./steering";
@@ -50,8 +51,12 @@ const sayWhatHappened = Effect.fn("SideJobs.sayWhatHappened")(function* (
   const dir = yield* herdDir(stateDir, key);
   const said = yield* readSaid(dir);
   const file = yield* newsPath(stateDir, key);
-  for (const event of eventsIn(runs, yield* escalatedDrift(runs), readyRuns(views), done)) {
-    if (said.has(event.key)) continue;
+  const drifting = yield* escalatedDrift(runs);
+  const ready = readyRuns(views);
+  const gone = retired(yield* readNews(file));
+  const held = holding(runs, drifting, yield* disposed(runs), ready, done);
+  for (const event of eventsIn(runs, drifting, ready, done)) {
+    if (!held.has(event.key) || (said.has(event.key) && !gone.has(event.key))) continue;
     // Remembered only once it is in the journal, so a failed write is retried next round.
     const queued = yield* appendNews(file, {
       key: event.key,
@@ -60,6 +65,18 @@ const sayWhatHappened = Effect.fn("SideJobs.sayWhatHappened")(function* (
     }).pipe(Effect.catchCause(() => Effect.succeed(null)));
     if (queued !== null) yield* remember(dir, event.key, yield* nowIso());
   }
+  yield* supersede(file, (item) => held.has(item.key));
+});
+
+/** The finished Runs whose work has a disposition. */
+const disposed = Effect.fn("SideJobs.disposed")(function* (runs: ReadonlyArray<RunFacts>) {
+  const out = new Set<string>();
+  for (const run of runs) {
+    if (!settled(run)) continue;
+    const lines = yield* readDispositions(run.dir).pipe(Effect.orElseSucceed(() => []));
+    if (latest(lines) !== null) out.add(run.id);
+  }
+  return out;
 });
 
 /** Each Herd's News from its own Runs; a Run whose Task records no Herd is the host's own Herd's. */
@@ -71,11 +88,9 @@ const news = Effect.fn("SideJobs.news")(function* (
   done: ReadonlyMap<string, Reopened>,
 ) {
   if (!(yield* loadDefaults(env.userDir)).proactive) return;
+  // Unread Tasks would put every Run in the host's own Herd and retire the rest's News.
   const herdOfTask = new Map(
-    (yield* listTasks(env.stateDir).pipe(Effect.orElseSucceed(() => []))).map((task) => [
-      task.id,
-      task.herd ?? null,
-    ]),
+    (yield* listTasks(env.stateDir)).map((task) => [task.id, task.herd ?? null]),
   );
   const own = yield* herdOf(env.socketPath).pipe(Effect.orElseSucceed(() => null));
   for (const { herd } of yield* liveHerds(herdr, env)) {

@@ -98,6 +98,8 @@ herdr actions, and the `collie` CLI.
   [ADR-0028](docs/adr/0028-names-are-the-domains-and-the-proof-drives-the-shipped-host.md),
   alongside `test/support/host.ts`. A name says what the thing does, never which
   implementation it replaced, and a test drives the `collie host` an installation runs.
+- **Writing a test that waits, starts `collie` or stops a host, or adding an import a front
+  door loads** → [`docs/internals.md`](docs/internals.md#keeping-the-suite-and-a-start-fast).
 - **Changing where a workflow module is looked for, which layer wins, or when an edit
   reaches new work** →
   [ADR-0016](docs/adr/0016-a-workflow-module-is-found-where-it-was-saved.md) and

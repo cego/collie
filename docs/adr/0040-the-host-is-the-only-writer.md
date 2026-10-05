@@ -17,7 +17,8 @@ evaluator turn free words about one Run into actions and carries them out, and `
 starts the follow-up a finished Run's Workflow declares. `propose` records and carries out
 what chat's `collie_propose` was asked for, `act` carries out `collie_do`'s and
 `collie_hold`'s board actions, and `reconcile` and `settleDelivery` settle a proposal step or
-a delivery nobody can account for. Actions travel as JSON and the host decodes them, so the
+a delivery nobody can account for, and `news` records a conversation's News receipts.
+Actions travel as JSON and the host decodes them, so the
 group keeps no schema a browser bundle cannot import. All are on `FrontDoorRpcs`
 ([ADR-0038](0038-the-host-builds-and-serves-the-board.md)) and take a request id.
 
@@ -36,7 +37,9 @@ own. A front door names no Herd.
 - The host runs a confirmed proposal's actions, so a `navigate` reaches no screen there:
   the board puts the target on screen itself once the host says it applied.
 - The CLI's own receipts are still written by the CLI: they are its record of a command,
-  not the Machine's state.
+  not the Machine's state. So is the prompt `collie chat heard` keeps for Native chat's
+  tool host: a hand-off between two of one chat's processes, which the host records only
+  once an operation carries it.
 - Two CLI commands still write a Run's state themselves, so only a Collie on the same
   computer can make them: `collie run intent …` amends `intent.json` (and, with
   `--propagate`, its children's), and `collie run clear-override` appends to an agent's

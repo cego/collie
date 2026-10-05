@@ -50,8 +50,8 @@ Runner source (Bun/TypeScript). Compiled to `bin/collie` per platform; see ADR-0
 | `disposition.ts`   | What became of a Run's work, recorded beside its status and never over it                |
 | `conversation.ts`  | What the human and Collie have said about this Herd, redacted and reference-checked      |
 | `chat.ts`          | The Home's native conversation: which harness, which session, and how it is launched     |
-| `tools.ts`         | The bounded Herd-wide reads native chat may make, and nothing else                       |
-| `mcp.ts`           | Those same reads over MCP on stdio, which is how Claude Code reaches them                |
+| `tools.ts`         | `CollieTools`, the Effect Toolkit of everything chat may ask, and nothing else           |
+| `mcp.ts`           | That Toolkit over MCP on stdio, which is how Claude Code reaches it                      |
 | `engine.ts`        | Effect's workflow engine, the SDK the binary serves a module, and where generations live |
 | `host.ts`          | The one host per state directory: who owns it, the board it serves, every operation      |
 | `run-detail.ts`    | One Run's diff against its merge base, items by reference, and a drawer's subscription   |
@@ -67,7 +67,7 @@ Runner source (Bun/TypeScript). Compiled to `bin/collie` per platform; see ADR-0
 | `sdk.ts`           | `collie`: what a module exports, declares, waits on, and starts as a child               |
 | `agents.ts`        | What a workflow does with an agent: one launch, one collection, one repair               |
 | `proactive.ts`     | What is worth Collie starting a turn about, and what it has already said                 |
-| `news.ts`          | What it noticed and nobody has read: deduped, batched, and sent is never read            |
+| `news.ts`          | What it noticed, per conversation: deduped, batched, superseded; sent is never read      |
 | `home.ts`          | Which workspace is this Herd's Home, decided by proof and never by a label               |
 | `live.ts`          | The board's Live region and every row's marks, from one pass. Read-only                  |
 | `lines.ts`         | A card, a report, a delivery, a row's marks and an action, as the same words everywhere  |

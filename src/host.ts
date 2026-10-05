@@ -60,7 +60,7 @@ import {
 import { configuredAgents } from "./agents";
 import { Catalogue, discover, searchPath } from "./discovery";
 import { sideJobs } from "./side-jobs";
-import { once, recordAudit } from "./audit";
+import { once, recordAudit, trimAudit } from "./audit";
 import { currentEnv } from "./env";
 import { installation as installedRelease } from "./release";
 import { Herdr, type AgentInfo } from "./herdr";
@@ -77,6 +77,7 @@ import {
   EVIDENCE_GATE,
   FrontDoorRpcs,
   HostRefused,
+  NewsBatch,
   PROTOCOL,
   ProposalRefused,
   RUN_FILE_BYTES,
@@ -89,6 +90,14 @@ import {
 } from "./board-model";
 import { boardMessages } from "./board-stream";
 import { recordDisposition } from "./disposition";
+import {
+  NEWS_TRAIL,
+  newsPath,
+  newsTrail,
+  pending as pendingNews,
+  read as readNews,
+  settle as settleNews,
+} from "./news";
 import { ActionSchema, evaluationDeps } from "./evaluator";
 import { err, request, steer, type OpResult } from "./operations";
 import { REJECTED } from "./envelope";
@@ -111,6 +120,9 @@ import {
   type ProposalLine,
   type Actor,
   type ProposalRecord,
+  voiceOf,
+  type Asker,
+  type Voice,
 } from "./proposals";
 import { carryOut, carryOutAsked, followUpField } from "./run-actions";
 import { nothingApproved } from "./outcome";
@@ -426,6 +438,9 @@ const sideJobsLayer = (dir: string, panels: MrPanels) =>
     }),
   );
 
+/** A Herd's key names one directory under the state directory, and nothing above it. */
+const isHerdName = (herd: string) => herd !== "." && herd !== ".." && /^[^/\\]+$/.test(herd);
+
 /**
  * The board, built here for every front door. Anything written under the state
  * directory, by this host or anyone else, is a reason to look again.
@@ -447,6 +462,16 @@ const frontDoorHandlers = (
       const plans = new Map<string, PlanPanel | null>();
       const stampOf = (client: { readonly id: number }) => stampIn(declared, client);
       const doorOf = (client: { readonly id: number }) => stampOf(client).origin;
+      /** Who asks on a channel: its front door, and a chat's voice. */
+      const askerOf = (client: { readonly id: number }): Asker => ({
+        origin: doorOf(client),
+        ...voices.get(client.id),
+      });
+      /** What a channel's operations are recorded as: who asks, and where a bridge said it came from. */
+      const whoOf = (client: { readonly id: number }) => ({
+        ...askerOf(client),
+        ...stampOf(client),
+      });
       type Carrying = ReturnType<typeof carryOut>;
       /** Each carry-out still running, so a retry of its confirm answers what it came to. */
       type Carried = Exit.Exit<Effect.Success<Carrying>, Effect.Error<Carrying>>;
@@ -459,12 +484,16 @@ const frontDoorHandlers = (
       };
       // ponytail: one entry per connection, never removed, as `declared`.
       const sessions = new Map<number, string>();
+      const voices = new Map<number, Voice>();
       /** The serving env in the herdr session the asking channel declared, where it named one. */
       const askerEnv = (client: { readonly id: number }) => {
         const session = sessions.get(client.id);
         return session === undefined ? env : { ...env, socketPath: session };
       };
       const trail = (runId: string) => runDir(env.stateDir, runId);
+      /** The Herd of the session the asker runs in, where it names none. */
+      const askersHerd = (client: { readonly id: number }) =>
+        herdOf(askerEnv(client).socketPath).pipe(Effect.catch(() => Effect.succeed(null)));
       /** An operation that is idempotent by itself, recorded the first time it does anything. */
       // ponytail: a host that dies between acting and recording leaves that one unrecorded.
       const fresh = <A extends { readonly fresh: boolean }, I extends Schema.Json, E>(
@@ -501,7 +530,7 @@ const frontDoorHandlers = (
           runId: string,
           operation: string,
           request: string,
-          stamp: { readonly origin: FrontDoor; readonly from?: Where | undefined },
+          who: Asker & { readonly from?: Where | undefined },
           reason?: string,
         ) =>
         <E>(act: Effect.Effect<typeof Controlled.Type, E, HostServices>) =>
@@ -512,7 +541,7 @@ const frontDoorHandlers = (
               {
                 operation,
                 request,
-                ...stamp,
+                ...who,
                 reason,
                 asked: { reason: reason ?? null },
                 result: Controlled,
@@ -647,7 +676,7 @@ const frontDoorHandlers = (
         { concurrency: "unbounded" },
       ).pipe(Stream.share({ capacity: 1, strategy: "sliding" }));
       return FrontDoorRpcs.of({
-        declare: ({ frontDoor, session, from }, { client }) => {
+        declare: ({ frontDoor, session, from, ...voice }, { client }) => {
           const already = declared.get(client.id);
           if (already !== undefined && already.frontDoor !== frontDoor) {
             return Effect.fail(
@@ -659,6 +688,8 @@ const frontDoorHandlers = (
           return Effect.sync(() => {
             declared.set(client.id, { frontDoor, from });
             if (session !== undefined && session !== null) sessions.set(client.id, session);
+            // Only a chat speaks for the human it is talking to.
+            if (frontDoor === "chat") voices.set(client.id, voiceOf(voice));
           });
         },
         start: (
@@ -681,7 +712,7 @@ const frontDoorHandlers = (
         ) =>
           fresh(
             (started) => started.runId,
-            { operation: "start", request, ...stampOf(client), result: Started },
+            { operation: "start", request, ...whoOf(client), result: Started },
             registry.resolve({ project, id }).pipe(
               Effect.flatMap((generation) =>
                 registry.start({
@@ -709,15 +740,15 @@ const frontDoorHandlers = (
                 {
                   operation: "answer",
                   request,
-                  ...stampOf(client),
+                  ...whoOf(client),
                   asked: { value },
                   result: Answered,
                 },
-                passGate(runId, value, { origin: doorOf(client), requestId: request }),
+                passGate(runId, value, { ...whoOf(client), requestId: request }),
               ).pipe(plainly)
             : fresh(
                 () => runId,
-                { operation: "answer", request, ...stampOf(client), result: Answered },
+                { operation: "answer", request, ...whoOf(client), result: Answered },
                 registry.answer({ runId, decision, value, request }),
               ),
         control: ({ runId, control, set, request, reason }, { client }) =>
@@ -725,11 +756,11 @@ const frontDoorHandlers = (
             runId,
             `${set ? "" : "un"}${control}`,
             request,
-            stampOf(client),
+            whoOf(client),
             reason,
           )(registry.control({ runId, control, set })),
         resume: ({ runId, request }, { client }) =>
-          auditedControl(runId, "resume", request, stampOf(client))(takeUp(runId)),
+          auditedControl(runId, "resume", request, whoOf(client))(takeUp(runId)),
         offers: ({ runId }) => registry.offers(runId),
         workflows: ({ project }) =>
           discover(searchPath({ pluginRoot: env.pluginRoot, userDir: env.userDir, project })).pipe(
@@ -746,7 +777,7 @@ const frontDoorHandlers = (
         invoke: ({ runId, offer, input, request }, { client }) =>
           fresh(
             () => runId,
-            { operation: "invoke", request, ...stampOf(client), result: Started },
+            { operation: "invoke", request, ...whoOf(client), result: Started },
             registry.invoke({ runId, offer, input, request }),
           ),
         confirm: ({ proposal, hash, request }, { client }) =>
@@ -761,7 +792,7 @@ const frontDoorHandlers = (
                     carrying.set(carryingKey(proposal, request), done);
                     const exit = yield* Effect.exit(
                       carryOut(askerEnv(client), proposal, hash, {
-                        origin: doorOf(client),
+                        ...whoOf(client),
                         requestId: request,
                       }),
                     );
@@ -781,7 +812,7 @@ const frontDoorHandlers = (
         decline: ({ proposal, hash, request }, { client }) =>
           answeredOnce(proposal, hash, request, "declined", (file, lines) =>
             lines === null
-              ? decline(file, proposal, { origin: doorOf(client), requestId: request }).pipe(
+              ? decline(file, proposal, { ...whoOf(client), requestId: request }).pipe(
                   Effect.flatMap((done) =>
                     done.refused === null
                       ? Effect.succeed({ proposal })
@@ -800,20 +831,18 @@ const frontDoorHandlers = (
               return outcomeOf(
                 err("invalid_input", "An action is not one of the kinds Collie takes."),
               );
-            if (herd !== null && (herd === "." || herd === ".." || !/^[^/\\]+$/.test(herd)))
+            if (herd !== null && !isHerdName(herd))
               return outcomeOf(err("invalid_input", `"${herd}" is not a Herd.`));
-            const key =
-              herd ??
-              (yield* herdOf(asker.socketPath).pipe(Effect.catch(() => Effect.succeed(null))));
+            const key = herd ?? (yield* askersHerd(client));
             if (key === null)
               return outcomeOf(err("invalid_state", "No Herd to keep the request in."));
-            const actor = { origin: doorOf(client), requestId };
+            const actor = { ...whoOf(client), requestId };
             return yield* once(
               yield* herdDir(env.stateDir, key),
               {
                 operation: "propose",
                 request: requestId,
-                ...stampOf(client),
+                ...whoOf(client),
                 asked: { interpretation, actions },
                 result: SteerOutcome,
               },
@@ -859,7 +888,7 @@ const frontDoorHandlers = (
                       }),
                     )
                   : carryOutAsked(askerEnv(client), decoded, {
-                      origin: doorOf(client),
+                      ...whoOf(client),
                       requestId: request,
                     });
               }),
@@ -880,13 +909,13 @@ const frontDoorHandlers = (
                 {
                   operation: "reconcile",
                   request,
-                  ...stampOf(client),
+                  ...whoOf(client),
                   asked: { proposal, index, as },
                   result: Schema.Struct({ proposal: Schema.String }),
                 },
                 Effect.gen(function* () {
                   const done = yield* reconcileStep(file, proposal, index, as, {
-                    origin: doorOf(client),
+                    ...whoOf(client),
                     requestId: request,
                   });
                   if (done.refused !== null)
@@ -906,7 +935,7 @@ const frontDoorHandlers = (
               {
                 operation: "settle-delivery",
                 request,
-                ...stampOf(client),
+                ...whoOf(client),
                 asked: { delivery, as },
                 result: Schema.Json,
               },
@@ -922,7 +951,7 @@ const frontDoorHandlers = (
                   yield* readLedger(found.file),
                   delivery,
                   as,
-                  actorName({ origin: doorOf(client), requestId: request }),
+                  actorName({ ...whoOf(client), requestId: request }),
                   yield* nowIso(),
                 );
                 if ("error" in settled)
@@ -932,6 +961,40 @@ const frontDoorHandlers = (
               }),
             ),
           ),
+        news: ({ herd, conversation, as, request }, { client }) =>
+          plainly(
+            Effect.gen(function* () {
+              if (herd !== null && !isHerdName(herd))
+                return yield* new HostRefused({
+                  reason: `${REFUSED_INPUT}: "${herd}" is not a Herd`,
+                });
+              const key = herd ?? (yield* askersHerd(client));
+              if (key === null)
+                return yield* new HostRefused({
+                  reason: "invalid_state: no Herd to read News for",
+                });
+              const trail = yield* newsTrail(env.stateDir, key);
+              const batch = yield* once(
+                trail,
+                {
+                  operation: "news",
+                  request,
+                  ...whoOf(client),
+                  asked: { conversation, as },
+                  result: NewsBatch,
+                },
+                Effect.gen(function* () {
+                  const file = yield* newsPath(env.stateDir, key);
+                  const batch = pendingNews(yield* readNews(file), conversation);
+                  for (const item of batch.items)
+                    yield* settleNews(file, item.key, as, conversation);
+                  return batch;
+                }),
+              );
+              yield* trimAudit(trail, NEWS_TRAIL).pipe(Effect.orDie);
+              return batch;
+            }),
+          ),
         dispose: ({ runId, kind, ref, note, request }, { client }) =>
           known(runId).pipe(
             Effect.andThen(
@@ -940,14 +1003,14 @@ const frontDoorHandlers = (
                 {
                   operation: "disposition",
                   request,
-                  ...stampOf(client),
+                  ...whoOf(client),
                   asked: { kind, ref, note },
                   result: Disposition,
                 },
                 Effect.gen(function* () {
                   const line = {
                     at: yield* nowIso(),
-                    by: actorName({ origin: doorOf(client), requestId: request }),
+                    by: actorName({ ...whoOf(client), requestId: request }),
                     kind,
                     ref,
                     note,
@@ -971,7 +1034,7 @@ const frontDoorHandlers = (
               {
                 operation: "steer",
                 request,
-                ...stampOf(client),
+                ...whoOf(client),
                 asked: { text, from, dryRun },
                 result: SteerOutcome,
               },
@@ -984,7 +1047,7 @@ const frontDoorHandlers = (
                   from,
                   dryRun,
                   requestId: request,
-                  origin: doorOf(client),
+                  ...askerOf(client),
                 });
                 if (!said.ok)
                   return yield* new SteerUnanswered({
@@ -1023,7 +1086,7 @@ const frontDoorHandlers = (
         followUp: ({ runId, text, request }, { client }) =>
           fresh(
             () => runId,
-            { operation: "followup", request, ...stampOf(client), result: Started },
+            { operation: "followup", request, ...whoOf(client), result: Started },
             Effect.gen(function* () {
               const view = yield* known(runId);
               if (!settled(factsOfView(env.stateDir, view)))

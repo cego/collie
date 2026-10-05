@@ -249,7 +249,7 @@ test("a config claude keeps rewriting is left alone rather than overwritten", ()
                   () => false,
                 ),
               );
-              yield* Effect.promise(() => Bun.sleep(5));
+              yield* Effect.sleep("5 millis");
             }
           }),
         );

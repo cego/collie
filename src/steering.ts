@@ -9,7 +9,7 @@
 import { Data, Effect, FileSystem, Path, Schema } from "effect";
 import { appendJournal, readJournal, readJournalWhole } from "./journal";
 import { ensureLockDir, withLock } from "./lock";
-import { nowIso } from "./time";
+import { nowIso, epochMs } from "./time";
 
 /** What a delivery is about. The work, not the words. */
 const CauseSchema = Schema.Struct({
@@ -106,6 +106,8 @@ const OverrideSchema = Schema.Struct({
   incarnation: Schema.String,
   by: Schema.String,
   note: Schema.optionalKey(Schema.String),
+  conversation: Schema.optionalKey(Schema.String),
+  said: Schema.optionalKey(Schema.String),
 });
 export type Override = Schema.Schema.Type<typeof OverrideSchema>;
 
@@ -282,7 +284,7 @@ export function settleStaleReservations(
   const settled: Delivery[] = [];
   for (const delivery of newestById(lines).values()) {
     if (delivery.state !== "reserved") continue;
-    const reservedAt = Date.parse(delivery.at);
+    const reservedAt = epochMs(delivery.at);
     if (Number.isNaN(reservedAt) || nowMs - reservedAt < submitTimeoutMs) continue;
     settled.push({
       ...delivery,
@@ -429,7 +431,7 @@ function staleSettlements(
   const settled = new Set(lines.flatMap((l) => (l.kind === "settle" ? [l.id] : [])));
   return lines.flatMap((line): BudgetLine[] => {
     if (line.kind !== "reserve" || settled.has(line.id)) return [];
-    const startedAt = Date.parse(line.at);
+    const startedAt = epochMs(line.at);
     if (Number.isNaN(startedAt) || nowMs - startedAt < 2 * line.max_seconds * 1000) return [];
     return [{ kind: "settle", id: line.id, at, outcome: "failed", seconds: 0, bytes: 0 }];
   });
@@ -446,7 +448,7 @@ export function planReservation(
   request: { readonly id: string; readonly run: string | null; readonly at: string },
   limits: CallLimits,
 ) {
-  const nowMs = Date.parse(request.at);
+  const nowMs = epochMs(request.at);
   const stale = staleSettlements(lines, nowMs, request.at);
   const reserve: BudgetLine = {
     kind: "reserve",

@@ -13,7 +13,7 @@ import { ActionSchema } from "./evaluator";
 import { appendJournal, readJournal } from "./journal";
 import { ensureLockDir, withLock } from "./lock";
 import { herdDir } from "./steering";
-import { nowIso } from "./time";
+import { nowIso, epochMs } from "./time";
 
 /** How long a proposal stands. After this the world has moved and it is re-asked. */
 export const EXPIRES_AFTER_MS = 30 * 60 * 1000;
@@ -54,6 +54,8 @@ const SettledSchema = Schema.Struct({
   id: Schema.String,
   at: Schema.String,
   by: Schema.String,
+  conversation: Schema.optionalKey(Schema.String),
+  said: Schema.optionalKey(Schema.String),
 });
 
 /**
@@ -194,9 +196,24 @@ export const record = Effect.fn("Proposals.record")(function* (file: string, wha
  * asked for in chat is carried out as theirs, and what Collie wants of its own accord is
  * a proposal because of where it came from, never because of who confirms it.
  */
-export interface Actor {
+export interface Actor extends Voice {
   readonly origin: FrontDoor;
   readonly requestId: string;
+}
+
+/** Where a chat acted, and what the human said that turn: attached by the tool host, never the model. */
+export interface Voice {
+  readonly conversation?: string;
+  readonly said?: string;
+}
+
+/** Who asks, as a channel declares it: a front door and, for a chat, its voice. */
+export type Asker = Omit<Actor, "requestId">;
+
+/** Just the voice of anything that carries one, with no key for what it lacks. */
+export function voiceOf({ conversation, said }: Voice): Voice {
+  if (conversation === undefined) return said === undefined ? {} : { said };
+  return said === undefined ? { conversation } : { conversation, said };
 }
 
 export function isHuman(actor: Actor): boolean {
@@ -278,7 +295,7 @@ function unanswered(lines: ReadonlyArray<ProposalLine>, nowMs: number): Proposal
   );
   return lines.filter(
     (line): line is ProposalRecord =>
-      line.kind === "proposal" && !answered.has(line.id) && Date.parse(line.expires_at) > nowMs,
+      line.kind === "proposal" && !answered.has(line.id) && epochMs(line.expires_at) > nowMs,
   );
 }
 
@@ -314,7 +331,7 @@ export function judgeConfirmation(
       detail: `action ${waiting.join(", ")} started and never settled; reconcile it before confirming again`,
     };
 
-  if (Date.parse(found.expires_at) <= nowMs)
+  if (epochMs(found.expires_at) <= nowMs)
     return { refused: "expired", detail: `"${id}" expired at ${found.expires_at}` };
   if (found.content_hash !== hash)
     return {
@@ -348,11 +365,11 @@ export const confirm = Effect.fn("Proposals.confirm")(function* (
         id,
         hash,
         actor,
-        Date.parse(at),
+        epochMs(at),
         currentVersions,
       );
       if ("refused" in judged) return judged;
-      yield* append(file, { kind: "confirmed", id, at, by: actorName(actor) });
+      yield* append(file, { kind: "confirmed", id, at, by: actorName(actor), ...voiceOf(actor) });
       return judged;
     }),
   );
@@ -391,7 +408,7 @@ export const decline = Effect.fn("Proposals.decline")(function* (
         (line) => (line.kind === "confirmed" || line.kind === "declined") && line.id === id,
       );
       if (settled) return settledAs("not_pending", `"${id}" is already ${settled.kind}`, id);
-      yield* append(file, { kind: "declined", id, at, by: actorName(actor) });
+      yield* append(file, { kind: "declined", id, at, by: actorName(actor), ...voiceOf(actor) });
       return settledAs(null, "", id);
     }),
   );

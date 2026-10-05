@@ -719,8 +719,27 @@ export const Declaration = Schema.Struct({
   /** The herdr session socket it runs in, where what it asks names workspaces and panes. */
   session: Schema.optionalKey(Schema.NullOr(Schema.String)),
   from: Schema.optionalKey(Where),
+  /** A chat's conversation, and the human's message that turn, as its tool host heard it. */
+  conversation: Schema.optionalKey(Schema.String),
+  said: Schema.optionalKey(Schema.String),
 });
 export type Declaration = typeof Declaration.Type;
+
+/** What became of a News item in one conversation. */
+export const NewsReceipt = Schema.Literals(["read", "sent", "uncertain"]);
+
+/** A conversation's News, as the host handed it over: the newest items and how many it left. */
+export const NewsBatch = Schema.Struct({
+  items: Schema.Array(
+    Schema.Struct({
+      key: Schema.String,
+      run: Schema.String,
+      text: Schema.String,
+      at: Schema.String,
+    }),
+  ),
+  omitted: Schema.Int,
+});
 
 /**
  * What any front door, on this computer or another, may ask a host. Every operation takes
@@ -919,6 +938,18 @@ export const FrontDoorRpcs = RpcGroup.make(
   Rpc.make("workflows", {
     payload: { project: Schema.String },
     success: Schema.Array(Startable),
+  }),
+  /** A conversation's pending News, settled as `as` for that conversation alone. */
+  Rpc.make("news", {
+    payload: {
+      /** The Herd whose journal it is; the asker's own where null. */
+      herd: Schema.NullOr(Schema.String),
+      conversation: Schema.String,
+      as: NewsReceipt,
+      request: Schema.String,
+    },
+    success: NewsBatch,
+    error: Schema.Union([HostRefused, RequestConflict]),
   }),
   /** Carries out what a finished Run offers, as a Run of its own. */
   Rpc.make("invoke", {

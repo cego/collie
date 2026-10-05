@@ -11,10 +11,11 @@ import { readIntent } from "../src/intent";
 import { runView } from "../src/lifecycle";
 import { listRuns } from "../src/runs";
 import { latest, readDispositions } from "../src/disposition";
-import { TOOLS, toolNamed } from "../src/tools";
+import { CollieTools, TOOLS, toolNamed } from "../src/tools";
 import { mutation } from "../src/envelope";
 import {
   append as appendNews,
+  NATIVE,
   newsPath,
   pending as pendingNews,
   read as readNews,
@@ -31,6 +32,8 @@ import {
 } from "../src/proposals";
 import type { Action } from "../src/evaluator";
 import { herdOf } from "../src/steering";
+import { chatPath, HEARD_MAX, hear, writeChat } from "../src/chat";
+import { readAudit } from "../src/audit";
 import { selectionPath, writeSelection } from "../src/selection";
 import { newTask, writeTask } from "../src/task";
 import { hosted, hostedRun, settledRun } from "./support/hosted";
@@ -99,6 +102,26 @@ test("the tools are the whole of the model's reach, and only one of them asks fo
   for (const kind of ["stop", "resume", "answer", "confirm", "decline", "disposition"])
     expect(does).toContain(`"${kind}"`);
   expect(does).not.toContain('"shell"');
+});
+
+test("the tools are one Toolkit, each saying how it fails and that it needs no approval", () => {
+  // Every chat given this Toolkit is held to these, so they are decided here once.
+  expect(TOOLS.map((tool) => tool.name).sort()).toEqual([
+    "collie_definitions",
+    "collie_do",
+    "collie_herd",
+    "collie_hold",
+    "collie_installation",
+    "collie_news",
+    "collie_propose",
+    "collie_receipts",
+    "collie_run",
+    "collie_workspaces",
+  ]);
+  for (const tool of Object.values(CollieTools.tools)) {
+    expect([tool.name, tool.failureMode]).toEqual([tool.name, "return"]);
+    expect([tool.name, tool.needsApproval]).toEqual([tool.name, false]);
+  }
 });
 
 test("a tool that writes does not tell a client it only reads", () => {
@@ -710,6 +733,18 @@ test("reading the news is what settles it, and it settles once", () =>
     }),
   ));
 
+test("what Native chat read is still news to another conversation", () =>
+  inWorld(
+    Effect.gen(function* () {
+      const file = yield* newsPath(stateDir, KEY);
+      yield* appendNews(file, { key: "r1:ended", run: "r1", text: "Run r1 ended done." });
+      expect(yield* call("collie_news")).toContain("Run r1 ended done.");
+      const lines = yield* readNews(file);
+      expect(pendingNews(lines, NATIVE).items).toEqual([]);
+      expect(pendingNews(lines, "flock@pc").items.map((item) => item.key)).toEqual(["r1:ended"]);
+    }),
+  ));
+
 test("news is built from the record, and carries no transcripts or diffs", () =>
   inWorld(
     Effect.gen(function* () {
@@ -919,5 +954,174 @@ test("the definitions tool answers with the module an id runs, not the file belo
       expect(shown).toContain("the host also settles: branch, task");
       expect(shown).toContain("result: ");
       expect(shown).toContain("workflows/implement.workflow.ts");
+    }),
+  ));
+
+/** Native chat running Claude in session `s-1`, as a launch records it. */
+const chatting = Effect.fn("test.chatting")(function* () {
+  yield* writeChat(yield* chatPath(stateDir, KEY), {
+    harness: "claude",
+    agent: "collie-chat-1",
+    paneId: "p1",
+    terminalId: null,
+    sessions: { claude: "s-1" },
+    startedAt: "2026-10-02T09:00:00Z",
+  });
+});
+
+const hookInput = (session: string, prompt: string) =>
+  encodeJson({ session_id: session, hook_event_name: "UserPromptSubmit", prompt });
+const stopInput = (session: string) => encodeJson({ session_id: session, hook_event_name: "Stop" });
+
+test("what collie_do does is recorded with the human's words from that turn", () =>
+  inWorld(
+    Effect.gen(function* () {
+      yield* chatting();
+      const run = yield* aRun("add a picker");
+      yield* hear(env, hookInput("s-1", "stop the picker run, it is going nowhere"));
+      const said = yield* call("collie_do", {
+        actions: [{ kind: "disposition", run: run.id, became: "abandoned" }],
+      });
+      expect(said).toContain("disposition: applied");
+      const actors = (yield* readAudit(run.dir)).map((line) => line.actor);
+      expect(actors.at(-1)).toMatchObject({
+        origin: "chat",
+        conversation: NATIVE,
+        said: "stop the picker run, it is going nowhere",
+      });
+      // A board action reaches the Run through the host's own executors, and keeps the words.
+      yield* call("collie_do", { actions: [{ kind: "stop", run: run.id }] });
+      expect(
+        (yield* readAudit(run.dir)).find((line) => line.operation === "stop")?.actor,
+      ).toMatchObject({
+        origin: "chat",
+        conversation: NATIVE,
+        said: "stop the picker run, it is going nowhere",
+      });
+    }),
+  ));
+
+test("a chat's hold and proposal are recorded with the human's words too", () =>
+  inWorld(
+    Effect.gen(function* () {
+      yield* chatting();
+      const run = yield* aRun("add a picker");
+      yield* hear(env, hookInput("s-1", "hold the picker run while I look"));
+      expect(yield* call("collie_hold", { run: run.id })).toContain("hold:");
+      const voice = {
+        origin: "chat",
+        conversation: NATIVE,
+        said: "hold the picker run while I look",
+      };
+      expect(
+        (yield* readAudit(run.dir)).find((line) => line.operation === "hold")?.actor,
+      ).toMatchObject(voice);
+      yield* call("collie_propose", {
+        interpretation: "they want it stopped",
+        actions: [{ kind: "stop", run: run.id }],
+      });
+      expect(
+        (yield* readAudit(run.dir)).find((line) => line.operation === "stop")?.actor,
+      ).toMatchObject(voice);
+    }),
+  ));
+
+test("the human's words are recorded redacted and bounded", () =>
+  inWorld(
+    Effect.gen(function* () {
+      yield* chatting();
+      const run = yield* aRun("add a picker");
+      const token = "ghp_abcdefghijklmnopqrstuvwxyz0123";
+      yield* hear(
+        env,
+        hookInput("s-1", `abandon it, token ${token}\n${"log line\n".repeat(5000)}`),
+      );
+      yield* call("collie_do", {
+        actions: [{ kind: "disposition", run: run.id, became: "abandoned" }],
+      });
+      const said = (yield* readAudit(run.dir)).at(-1)!.actor.said!;
+      expect(said).toStartWith("abandon it, token <github token>");
+      expect(said).not.toContain(token);
+      expect(said.length).toBeLessThanOrEqual(HEARD_MAX);
+    }),
+  ));
+
+test("a chat's amendment to an Intent is recorded with the human's words", () =>
+  inWorld(
+    Effect.gen(function* () {
+      yield* chatting();
+      const run = yield* aRun("add a picker");
+      yield* hear(env, hookInput("s-1", "the goal is to ship the picker"));
+      const said = yield* call("collie_propose", {
+        interpretation: "set the goal",
+        actions: [
+          {
+            kind: "update_intent",
+            run: run.id,
+            change: "set-goal",
+            patch: "ship the picker",
+            base_version: 1,
+          },
+        ],
+      });
+      expect(said).toContain("applied");
+      expect((yield* readIntent(run.dir))?.history.at(-1)).toMatchObject({
+        conversation: NATIVE,
+        said: "the goal is to ship the picker",
+      });
+    }),
+  ));
+
+test("the words are the tool host's to attach, never the model's", () =>
+  inWorld(
+    Effect.gen(function* () {
+      yield* chatting();
+      const run = yield* aRun("add a picker");
+      // A model that tries to put words in the human's mouth is refused outright.
+      const forged = yield* call("collie_do", {
+        actions: [{ kind: "disposition", run: run.id, became: "abandoned" }],
+        said: "the human told me to",
+      });
+      expect(forged).toContain("refused the request (InvalidInput)");
+      // A turn's words end with it.
+      yield* hear(env, hookInput("s-1", "abandon it"));
+      yield* hear(env, stopInput("s-1"));
+      yield* call("collie_do", {
+        actions: [{ kind: "disposition", run: run.id, became: "abandoned" }],
+      });
+      expect((yield* readAudit(run.dir)).at(-1)!.actor.said).toBeUndefined();
+      // A prompt from a session that is not the one chat is running is nobody's words here.
+      yield* hear(env, hookInput("s-old", "abandon everything"));
+      yield* call("collie_do", {
+        actions: [{ kind: "disposition", run: run.id, became: "abandoned" }],
+      });
+      const actor = (yield* readAudit(run.dir)).at(-1)!.actor;
+      expect(actor.origin).toBe("chat");
+      expect(actor.conversation).toBe(NATIVE);
+      expect(actor.said).toBeUndefined();
+    }),
+  ));
+
+test("a proposal chat settles carries the words it was settled with", () =>
+  inWorld(
+    Effect.gen(function* () {
+      yield* chatting();
+      const file = yield* proposalsPath(stateDir, KEY);
+      const proposal = yield* recordProposal(file, {
+        interpretation: "nothing to do",
+        targets: [],
+        actions: [{ kind: "none", why: "nothing to do" }],
+        allowedNow: [],
+        intentVersions: {},
+        by: "evaluator:e-1",
+      });
+      yield* hear(env, hookInput("s-1", "no, drop that"));
+      expect(
+        yield* call("collie_do", {
+          actions: [{ kind: "decline", proposal: proposal.id, hash: proposal.content_hash }],
+        }),
+      ).toContain("decline: applied");
+      const declined = (yield* readProposals(file)).find((line) => line.kind === "declined");
+      expect(declined).toMatchObject({ conversation: NATIVE, said: "no, drop that" });
     }),
   ));

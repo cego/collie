@@ -16,14 +16,15 @@
 
 import { Crypto, Effect, FileSystem, Path, Schema } from "effect";
 import { readConfig } from "./config";
-import { newsPath } from "./news";
+import { redact } from "./conversation";
+import { NATIVE, newsPath } from "./news";
 import { selfCommand, type PluginEnv } from "./env";
 import { HARNESSES } from "./harness";
 import type { AgentInfo, Herdr, PaneInfo } from "./herdr";
 import { ensureLockDir, withLock } from "./lock";
 import { reason, shellQuote } from "./naming";
 import { isString, type JsonObject } from "./schema";
-import { herdDir } from "./steering";
+import { herdDir, herdOf } from "./steering";
 import { nowIso } from "./time";
 import { TOOLS } from "./tools";
 
@@ -422,27 +423,100 @@ export function mcpConfig(command: ReadonlyArray<string>, env: Readonly<Record<s
 }
 
 /**
- * The `--settings` document a Claude launch is given: one `UserPromptSubmit` hook whose
- * output is the board's selection, attached to the prompt as context. Cheaper than a
- * tool: no round trip to learn what "it" is, and nothing at all while no card is open.
- * Pi has no such hook, so its conversation asks with a run-scoped tool given no run.
+ * The `--settings` document a Claude launch is given: prompt hooks that attach the board's
+ * selection as context and hand the prompt to the tool host. Pi has no such hook, so its
+ * conversation asks with a run-scoped tool given no run.
  */
 export function claudeSettings(
   command: ReadonlyArray<string>,
   env: Readonly<Record<string, string>>,
 ): string {
-  const hook = [
-    ...Object.entries(env).map(([key, value]) => `${key}=${shellQuote(value)}`),
-    ...command.map(shellQuote),
-    "chat",
-    "context",
-  ].join(" ");
-  return `${JSON.stringify(
-    { hooks: { UserPromptSubmit: [{ hooks: [{ type: "command", command: hook }] }] } },
-    null,
-    2,
-  )}\n`;
+  const run = (sub: string) =>
+    [
+      ...Object.entries(env).map(([key, value]) => `${key}=${shellQuote(value)}`),
+      ...command.map(shellQuote),
+      "chat",
+      sub,
+    ].join(" ");
+  const heard = { type: "command", command: run("heard") };
+  const hooks = {
+    UserPromptSubmit: [{ hooks: [{ type: "command", command: run("context") }, heard] }],
+    // A turn's words end with it, so a turn nobody prompted carries none.
+    Stop: [{ hooks: [heard] }],
+  };
+  return `${JSON.stringify({ hooks }, null, 2)}\n`;
 }
+
+/** What Claude's hooks are given, as far as Collie reads it: only `UserPromptSubmit` has a prompt. */
+const HookInput = Schema.fromJsonString(
+  Schema.Struct({ session_id: Schema.String, prompt: Schema.optionalKey(Schema.String) }),
+);
+
+const HeardSchema = Schema.Struct({ session: Schema.String, said: Schema.String });
+const HeardJson = Schema.fromJsonString(HeardSchema);
+
+/** The most of a prompt kept: it is copied into every record of its turn. */
+export const HEARD_MAX = 2000;
+
+const heardOf = (prompt: string) => {
+  const said = redact(prompt);
+  return said.length <= HEARD_MAX ? said : `${said.slice(0, HEARD_MAX - 1)}…`;
+};
+
+const heardPath = Effect.fn("Chat.heardPath")(function* (stateDir: string, key: string) {
+  const path = yield* Path.Path;
+  return path.join(yield* chatDir(stateDir, key), "heard.json");
+});
+
+/**
+ * The human's prompt this turn, kept for the tool host, and forgotten when that session's
+ * turn ends. Input that is not a hook's is ignored.
+ */
+export const hear = Effect.fn("Chat.hear")(function* (env: PluginEnv, input: string) {
+  const key = yield* herdOf(env.socketPath).pipe(Effect.catch(() => Effect.succeed(null)));
+  const given = Schema.decodeUnknownOption(HookInput)(input);
+  if (key === null || given._tag === "None") return;
+  const fs = yield* FileSystem.FileSystem;
+  const file = yield* heardPath(env.stateDir, key);
+  if (given.value.prompt === undefined) {
+    const kept = Schema.decodeUnknownOption(HeardJson)(
+      yield* fs.readFileString(file).pipe(Effect.catch(() => Effect.succeed(""))),
+    );
+    if (kept._tag === "Some" && kept.value.session === given.value.session_id)
+      yield* fs.remove(file, { force: true });
+    return;
+  }
+  const path = yield* Path.Path;
+  yield* fs.makeDirectory(path.dirname(file), { recursive: true });
+  const tmp = `${file}.${process.pid}.tmp`;
+  yield* fs.writeFileString(
+    tmp,
+    Schema.encodeSync(HeardJson)({
+      session: given.value.session_id,
+      said: heardOf(given.value.prompt),
+    }),
+  );
+  yield* fs.rename(tmp, file);
+});
+
+/**
+ * Who a chat's operation is recorded as speaking for: Native chat and, where
+ * the running chat's own session last said something, those words.
+ */
+export const heardVoice = Effect.fn("Chat.heardVoice")(function* (env: PluginEnv) {
+  const key = yield* herdOf(env.socketPath).pipe(Effect.catch(() => Effect.succeed(null)));
+  if (key === null) return {};
+  const fs = yield* FileSystem.FileSystem;
+  const raw = yield* fs
+    .readFileString(yield* heardPath(env.stateDir, key))
+    .pipe(Effect.catch(() => Effect.succeed("")));
+  const heard = Schema.decodeUnknownOption(HeardJson)(raw);
+  const running = yield* readChat(yield* chatPath(env.stateDir, key));
+  const current = running === null ? undefined : running.sessions[running.harness];
+  return heard._tag === "Some" && heard.value.session === current
+    ? { conversation: NATIVE, said: heard.value.said }
+    : { conversation: NATIVE };
+});
 
 export interface PiTool {
   readonly name: string;

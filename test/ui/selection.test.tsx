@@ -15,8 +15,9 @@ import type { Command } from "../../src/ui/state";
 import type { AppState } from "../../src/ui/state";
 import { readSelection, selectionPath, writeSelection } from "../../src/selection";
 import { NO_OUTCOME, type WorkspaceView } from "../../src/workspace";
+import { epochMs } from "../../src/time";
 
-const NOW = Date.parse("2026-09-16T12:00:00.000Z");
+const NOW = epochMs("2026-09-16T12:00:00.000Z");
 const KEY = "herd-key";
 
 let rig: Rig;
@@ -51,7 +52,7 @@ function appState(over: Partial<AppState> = {}): AppState {
     view: "runs",
     filter: { kind: "all" },
     tasks: [],
-    now: Date.parse("2026-09-16T12:00:00.000Z"),
+    now: epochMs("2026-09-16T12:00:00.000Z"),
     density: "comfortable",
     board: board(),
     wide: null,

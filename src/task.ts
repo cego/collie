@@ -99,13 +99,19 @@ export const taskOfWorkspace = Effect.fn("task.taskOfWorkspace")(function* (
   return (yield* listTasks(stateDir)).find((task) => task.workspace === workspaceId) ?? null;
 });
 
+let taskWrites = 0;
+
+/** Written aside and renamed in, so a reader never meets a half-written Task. */
 export const writeTask = Effect.fn("task.writeTask")(function* (
   stateDir: string,
   task: TaskRecord,
 ) {
   const fs = yield* FileSystem.FileSystem;
   yield* fs.makeDirectory(yield* tasksDir(stateDir), { recursive: true });
-  yield* fs.writeFileString(yield* taskFile(stateDir, task.id), `${encodeTask(task)}\n`);
+  const file = yield* taskFile(stateDir, task.id);
+  const tmp = `${file}.${process.pid}.${++taskWrites}.tmp`;
+  yield* fs.writeFileString(tmp, `${encodeTask(task)}\n`);
+  yield* fs.rename(tmp, file);
   return task;
 });
 

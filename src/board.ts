@@ -22,7 +22,7 @@ import { everyRegistered, type AgentEntry } from "./registry";
 import { listRuns, newestFirst, settled as ended, type RunFacts, type RunState } from "./runs";
 import type { PluginEnv } from "./env";
 import { listTasks, type TaskRecord } from "./task";
-import { ago, agoMs, agoShort, spanned } from "./time";
+import { ago, agoMs, agoShort, spanned, epochMs } from "./time";
 import { readVerifications, type Verification } from "./verify";
 import { markersOf, runningCheck } from "./checks";
 import { pullOf, readForge, readMrStates } from "./merges";
@@ -96,10 +96,10 @@ const DEPLOYED = { "on-stage": " On stage.", "in-prod": " In production." } as c
 
 /** When a Run ended: its own record, else the final card its finish wrote. Null for neither. */
 const finishedAt = Effect.fn("Board.finishedAt")(function* (run: RunFacts) {
-  if (run.finished !== null) return Date.parse(run.finished);
+  if (run.finished !== null) return epochMs(run.finished);
   const cards = yield* readCards(run.dir).pipe(Effect.orElseSucceed(() => []));
   const final = cards.findLast((card) => card.kind === "final");
-  return final === undefined ? null : Date.parse(final.at);
+  return final === undefined ? null : epochMs(final.at);
 });
 
 /** The first line the Run's log recorded telling `agent` something, the newest such. */
@@ -133,7 +133,7 @@ const reopenedOf = Effect.fn("Board.reopenedOf")(function* (
         one.run === run.id &&
         one.cause.kind === "steer" &&
         SENT_STATES.has(one.state) &&
-        Date.parse(one.at) > ended,
+        epochMs(one.at) > ended,
     )
     .sort((a, b) => a.at.localeCompare(b.at))
     .at(-1);
@@ -666,7 +666,7 @@ const resumedWith = Effect.fn("Board.resumedWith")(function* (stateDir: string, 
     ),
     Effect.orElseSucceed(() => 0),
   );
-  if (launched > Date.parse(last.at)) return null;
+  if (launched > epochMs(last.at)) return null;
   const answered = Schema.decodeUnknownOption(Answered)(last.result);
   return Option.isSome(answered) ? answered.value.value : null;
 });
@@ -891,9 +891,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
     // A Run records no end of its own: its last activity is when it ended, and a Run
     // that wrote nothing ended no later than it began.
     const endedAt = (run: RunFacts) =>
-      run.finished === null
-        ? touched.get(run.id) || Date.parse(run.created)
-        : Date.parse(run.finished);
+      run.finished === null ? touched.get(run.id) || epochMs(run.created) : epochMs(run.finished);
     const last = Math.max(0, ...runs.map(endedAt).filter(Number.isFinite));
     // Finished work older than a day is History's, behind `older…` — landed work only:
     // an unmerged branch from last week is still waiting on you, however old.
@@ -968,7 +966,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
     );
     const task = leader.task === null ? null : (tasks.get(leader.task) ?? null);
     const { name, project } = namesOf(task?.label ?? "", leader);
-    const started = runs.map((run) => Date.parse(run.created)).filter(Number.isFinite);
+    const started = runs.map((run) => epochMs(run.created)).filter(Number.isFinite);
     // A Task is as old as its first Run; a Run with no readable stamp has no age.
     const first = started.length === 0 ? 0 : Math.min(...started);
 

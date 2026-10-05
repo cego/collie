@@ -83,6 +83,62 @@
     "effecttsgo/prefer-schema-over-json": "error",
     "effecttsgo/process-env": "error",
     "effecttsgo/process-env-in-effect": "error",
-    "effecttsgo/unsafe-effect-type-assertion": "error"
-  }
+    "effecttsgo/unsafe-effect-type-assertion": "error",
+    // Time comes from Effect: `Clock.currentTimeMillis` or `DateTime.now` for now, so a test
+    // clock moves it, and `DateTime` or `epochMs` (src/time.ts) for a recorded timestamp.
+    "no-restricted-globals": [
+      "error",
+      {
+        "name": "Date",
+        "message": "Use Clock.currentTimeMillis or DateTime.now for now, and DateTime or epochMs (src/time.ts) for a timestamp."
+      },
+      { "name": "performance", "message": "Use Clock.currentTimeMillis or Clock.currentTimeNanos." }
+    ],
+    "no-restricted-properties": [
+      "error",
+      {
+        "object": "Bun",
+        "property": "sleep",
+        "message": "Use Effect.sleep, which a test clock moves."
+      },
+      {
+        "object": "Bun",
+        "property": "sleepSync",
+        "message": "Use Effect.sleep, which a test clock moves."
+      },
+      { "object": "Bun", "property": "nanoseconds", "message": "Use Clock.currentTimeNanos." },
+      { "object": "process", "property": "hrtime", "message": "Use Clock.currentTimeNanos." }
+    ],
+    "typescript/no-restricted-types": [
+      "error",
+      { "types": { "Date": { "message": "A time is a DateTime, or epoch milliseconds." } } }
+    ]
+  },
+  "overrides": [
+    {
+      // Every `collie` start, hook and board pays for what loads before its first line runs.
+      "files": ["src/**"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "paths": [
+              {
+                "name": "@effect/platform-bun",
+                "message": "Import the module you use (`@effect/platform-bun/BunServices`): the index loads all of them, ~0.1 s of every start."
+              },
+              {
+                "name": "effect/unstable/http",
+                "message": "Import the module you use (`effect/unstable/http/HttpClient`): the index loads the server too."
+              },
+              {
+                "name": "effect/unstable/ai",
+                "message": "Import the module you use (`effect/unstable/ai/Tool`): the index loads McpServer and LanguageModel into every chat hook."
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
 }

@@ -37,6 +37,7 @@ import { encodeVerifying } from "../src/verify";
 import { madeRun } from "./support/records";
 import { task } from "./support/task";
 import { runEffect } from "./support/effect";
+import { epochMs } from "../src/time";
 
 const encodeJson = Schema.encodeUnknownSync(Schema.fromJsonString(Schema.Any));
 
@@ -246,6 +247,7 @@ const INVENTORY: ReadonlyArray<readonly [string, Route]> = [
   // The line under the human's own prompt; chat is told the same fact at each prompt.
   ["chat status-line", { route: "shell" }],
   ["chat context", { route: "shell" }],
+  ["chat heard", { route: "shell" }],
   ["tools list", { route: "shell" }],
   ["tools call", { route: "shell" }],
   ["mcp", { route: "shell" }],
@@ -422,7 +424,7 @@ test("collie_run and collie_herd say what a running check's card says", () =>
           started: "2026-09-14T10:00:00Z",
         }),
       );
-      const now = Date.parse("2026-09-14T10:12:00Z");
+      const now = epochMs("2026-09-14T10:12:00Z");
       const [card] = yield* buildBoard({
         env: readEnv({ HERDR_PLUGIN_STATE_DIR: stateDir, COLLIE_CWD: "/project" }),
         runs: [run],
@@ -466,7 +468,7 @@ test("collie_run gives a running check's last forty lines under the card's sente
           log,
         }),
       );
-      const lines = yield* checkLines(run, [run], Date.parse("2026-09-14T10:04:00Z"));
+      const lines = yield* checkLines(run, [run], epochMs("2026-09-14T10:04:00Z"));
       expect(lines.slice(0, 2)).toEqual([
         "Check running: Running test on the branch, 4 min.",
         "Its last lines:",

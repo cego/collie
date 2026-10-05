@@ -38,7 +38,7 @@ import {
   type BoardSnapshot,
   type RunDetail,
   type Controlled,
-  type FrontDoor,
+  FrontDoor,
   type HostRefused,
   type Disposition,
   type ProposalCarried,
@@ -47,11 +47,13 @@ import {
   type ActionResult,
   type SteerOutcome,
   type TaskView,
+  type NewsReceipt,
 } from "./board-model";
 import type { Action } from "./evaluator";
 import { REFUSED_INPUT, runDir, type Given, type RunView } from "./engine";
 import type { OfferView } from "./board-model";
 import { err, ExpectedError, taskFor, type Failure, type OpResult } from "./operations";
+import { voiceOf, type Asker } from "./proposals";
 import type { TaskChoice } from "./task";
 import { encodeApprovedFile, rememberedFile, renderApproved, type VerifySpec } from "./verify-spec";
 import { projectHere, shell } from "./mr";
@@ -141,8 +143,10 @@ const refusal = (cause: HostFailure): Failure => {
   switch (cause._tag) {
     case "HostRefused":
       // The host says so first where the input is why, and that is exit 2, not exit 1.
-      return cause.reason.startsWith(`${REFUSED_INPUT}:`)
-        ? err("invalid_input", cause.reason.slice(REFUSED_INPUT.length + 1).trim())
+      if (cause.reason.startsWith(`${REFUSED_INPUT}:`))
+        return err("invalid_input", cause.reason.slice(REFUSED_INPUT.length + 1).trim());
+      return cause.reason.startsWith("invalid_state:")
+        ? err("invalid_state", cause.reason.slice("invalid_state:".length).trim())
         : err("operation_failed", cause.reason);
     case "ProposalRefused":
       return err("invalid_input", cause.detail, { reason: cause.refused });
@@ -157,6 +161,16 @@ const refusal = (cause: HostFailure): Failure => {
   }
 };
 
+/** Who is asking: a front door, or an Actor whose voice a nested operation carries on. */
+export type Door = FrontDoor | Asker;
+
+const isFrontDoor = Schema.is(FrontDoor);
+
+const declaring = (door: Door, session: string | null) =>
+  isFrontDoor(door)
+    ? { frontDoor: door, session }
+    : { frontDoor: door.origin, session, ...voiceOf(door) };
+
 /**
  * One question to the host that owns this state directory, asked on its own connection.
  * An operation names the front door asking, which the channel declares before anything else.
@@ -164,14 +178,12 @@ const refusal = (cause: HostFailure): Failure => {
 const asks = <A>(
   env: PluginEnv,
   question: (client: HostClient) => Effect.Effect<A, HostFailure>,
-  door?: FrontDoor,
+  door?: Door,
 ): Effect.Effect<{ readonly ok: true; readonly value: A } | Failure, never, Client> =>
   Effect.scoped(
     connect(env.stateDir).pipe(
       Effect.tap((client) =>
-        door === undefined
-          ? Effect.void
-          : client.declare({ frontDoor: door, session: env.socketPath }),
+        door === undefined ? Effect.void : client.declare(declaring(door, env.socketPath)),
       ),
       Effect.flatMap(question),
       Effect.map((value) => ({ ok: true as const, value })),
@@ -191,7 +203,7 @@ const asks = <A>(
 export const startRun = Effect.fn("Lifecycle.startRun")(function* (
   env: PluginEnv,
   options: {
-    readonly door: FrontDoor;
+    readonly door: Door;
     readonly id: string;
     readonly request: string;
     /** What the caller said, in the two halves the author's schemas settle differently. */
@@ -536,7 +548,7 @@ const shown =
 export const answerRun = (
   env: PluginEnv,
   options: {
-    readonly door: FrontDoor;
+    readonly door: Door;
     readonly runId: string;
     readonly decision: string | null;
     readonly value: string;
@@ -575,7 +587,7 @@ export const answerRun = (
 export const controlRun = (
   env: PluginEnv,
   options: {
-    readonly door: FrontDoor;
+    readonly door: Door;
     readonly runId: string;
     readonly control: "hold" | "stop";
     readonly set: boolean;
@@ -635,7 +647,7 @@ const controlled = (
 /** Picks a Run up again from any door: recovered first, then its stop cleared, so what wakes can run. */
 export const resumeRun = (
   env: PluginEnv,
-  options: { readonly door: FrontDoor; readonly runId: string; readonly request: string },
+  options: { readonly door: Door; readonly runId: string; readonly request: string },
 ): Effect.Effect<OpResult, never, Client> =>
   asks(
     env,
@@ -654,7 +666,7 @@ export const grantRun = (
     readonly name: string;
     readonly command: Omit<VerifySpec, "name"> | null;
     readonly request: string;
-    readonly door: FrontDoor;
+    readonly door: Door;
   },
 ): Effect.Effect<OpResult, never, Client> =>
   asks(
@@ -739,7 +751,7 @@ export const steerRun = (
     readonly operation?: string;
     readonly agent?: string;
     readonly mode?: "boundary" | "now" | "interrupt";
-    readonly door: FrontDoor;
+    readonly door: Door;
   },
 ): Effect.Effect<OpResult, never, Client> =>
   asks(
@@ -897,7 +909,7 @@ const describeOffers = (offers: ReadonlyArray<OfferView>): string =>
 export const invokeOffer = (
   env: PluginEnv,
   options: {
-    readonly door: FrontDoor;
+    readonly door: Door;
     readonly runId: string;
     readonly offer: string;
     readonly input: Readonly<Record<string, Schema.Json>>;
@@ -930,7 +942,7 @@ export const invokeOffer = (
 export const confirmProposed = (
   env: PluginEnv,
   options: {
-    readonly door: FrontDoor;
+    readonly door: Door;
     readonly proposal: string;
     readonly hash: string;
     readonly request: string;
@@ -950,7 +962,7 @@ export const confirmProposed = (
 export const declineProposed = (
   env: PluginEnv,
   options: {
-    readonly door: FrontDoor;
+    readonly door: Door;
     readonly proposal: string;
     readonly hash: string;
     readonly request: string;
@@ -977,7 +989,7 @@ export const declineProposed = (
 export const disposeRun = (
   env: PluginEnv,
   options: {
-    readonly door: FrontDoor;
+    readonly door: Door;
     readonly runId: string;
     readonly kind: Disposition["kind"];
     readonly ref: string;
@@ -1002,7 +1014,7 @@ export const disposeRun = (
 export const steerAbout = (
   env: PluginEnv,
   options: {
-    readonly door: FrontDoor;
+    readonly door: Door;
     readonly runId: string;
     readonly text: string;
     readonly from: string | null;
@@ -1045,7 +1057,7 @@ const opResultOf = (said: SteerOutcome): OpResult => {
 export const proposeActions = (
   env: PluginEnv,
   options: {
-    readonly door: FrontDoor;
+    readonly door: Door;
     readonly herd: string | null;
     readonly interpretation: string;
     readonly actions: ReadonlyArray<Action>;
@@ -1064,11 +1076,34 @@ export const proposeActions = (
     options.door,
   ).pipe(Effect.map((answered) => (answered.ok ? opResultOf(answered.value) : answered)));
 
+/** A conversation's pending News, settled for it by the host. */
+export const settleNewsFor = (
+  env: PluginEnv,
+  options: {
+    readonly door: Door;
+    readonly herd: string | null;
+    readonly conversation: string;
+    readonly as: typeof NewsReceipt.Type;
+    readonly request: string;
+  },
+) =>
+  asks(
+    env,
+    (client) =>
+      client.news({
+        herd: options.herd,
+        conversation: options.conversation,
+        as: options.as,
+        request: options.request,
+      }),
+    options.door,
+  );
+
 /** The board's own actions, asked for by name and carried out by the host. */
 export const actAsked = (
   env: PluginEnv,
   options: {
-    readonly door: FrontDoor;
+    readonly door: Door;
     readonly actions: ReadonlyArray<Action>;
     readonly request: string;
   },
@@ -1093,7 +1128,7 @@ export const actAsked = (
 export const reconcileProposed = (
   env: PluginEnv,
   options: {
-    readonly door: FrontDoor;
+    readonly door: Door;
     readonly proposal: string;
     readonly index: number;
     readonly as: "applied" | "not-applied";
@@ -1126,7 +1161,7 @@ export const reconcileProposed = (
 export const reconcileDelivered = (
   env: PluginEnv,
   options: {
-    readonly door: FrontDoor;
+    readonly door: Door;
     readonly runId: string;
     readonly delivery: string;
     readonly as: "sent" | "not-sent";
@@ -1159,7 +1194,7 @@ export const reconcileDelivered = (
 export const followUpRun = (
   env: PluginEnv,
   options: {
-    readonly door: FrontDoor;
+    readonly door: Door;
     readonly runId: string;
     readonly text: string;
     readonly request: string;

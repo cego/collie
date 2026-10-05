@@ -57,62 +57,87 @@ export function eventsIn(
   /** Reopened Runs whose agent has finished what it was told, by Run (`idleAgain`). */
   done: ReadonlyMap<string, Reopened> = new Map(),
 ): Event[] {
-  const out: Event[] = [];
-  for (const run of runs) {
-    const about = runTitle(run);
-    const finished = done.get(run.id);
-    // Beside whatever else is true of the Run: it is about one request, not the Run.
-    if (finished !== undefined) {
-      const told = finished.told === null ? "" : ` (“${finished.told}”)`;
-      out.push({
-        run: run.id,
-        key: `${run.id}:reopened:${finished.delivery}`,
-        text: `Run ${run.id} (${about}): ${finished.agent} has finished what it was told after the Run ended${told}. What came of it?`,
-      });
-    }
-    const asked = run.asking[0];
-    if (asked !== undefined) {
-      out.push({
-        run: run.id,
-        key: `${run.id}:asking:${asked.name}`,
-        text: `Run ${run.id} (${about}) is waiting on me (${asked.name}). What is it asking, and what turns on the answer?`,
-      });
-      continue;
-    }
-    const drifted = drifting.get(run.id);
-    if (drifted !== undefined && !settled(run)) {
-      out.push({
-        run: run.id,
-        key: `${run.id}:drift:${drifted}`,
-        text: `Run ${run.id} (${about}) drifted from ${drifted} and Collie could not correct it. What is it doing instead, and should it be stopped or steered?`,
-      });
-      continue;
-    }
-    if (run.state === "waiting") {
-      out.push({
-        run: run.id,
-        key: `${run.id}:parked:${run.note ?? ""}`,
-        text: `Run ${run.id} (${about}) parked its work${run.note === null ? "" : `: ${run.note}`}. What does it need, and from whom?`,
-      });
-      continue;
-    }
-    const shippable = ready.get(run.id);
-    if (shippable !== undefined) {
-      out.push({
-        run: run.id,
-        key: `${run.id}:ready:${shippable.at}`,
-        text: `Run ${run.id} (${about}): ${shippable.sentence}`,
-      });
-      continue;
-    }
-    if (settled(run)) {
-      out.push({
-        run: run.id,
-        key: `${run.id}:ended:${run.state}`,
-        text: `Run ${run.id} (${about}) ended ${run.state}. What came of it, and is there anything left to do?`,
-      });
-    }
-  }
+  return runs.flatMap((run) => [
+    ...reopenedOf(run, done),
+    ...causesOf(run, drifting, ready).slice(0, 1),
+  ]);
+}
+
+/**
+ * The keys of every event whose cause still holds, including those a more pressing one
+ * masks. A finished Run's outcome holds until its work has a disposition.
+ */
+export function holding(
+  runs: ReadonlyArray<RunFacts>,
+  drifting: ReadonlyMap<string, string> = new Map(),
+  disposed: ReadonlySet<string> = new Set(),
+  ready: ReadonlyMap<string, { at: string; sentence: string }> = new Map(),
+  done: ReadonlyMap<string, Reopened> = new Map(),
+): Set<string> {
+  return new Set(
+    runs.flatMap((run) =>
+      [
+        ...reopenedOf(run, done),
+        ...causesOf(run, drifting, ready).filter(
+          (event) => !(disposed.has(run.id) && event.key.startsWith(`${run.id}:ended:`)),
+        ),
+      ].map((event) => event.key),
+    ),
+  );
+}
+
+/** Beside whatever else is true of the Run: it is about one request, not the Run. */
+function reopenedOf(run: RunFacts, done: ReadonlyMap<string, Reopened>): Event[] {
+  const finished = done.get(run.id);
+  if (finished === undefined) return [];
+  const told = finished.told === null ? "" : ` (“${finished.told}”)`;
+  return [
+    {
+      run: run.id,
+      key: `${run.id}:reopened:${finished.delivery}`,
+      text: `Run ${run.id} (${runTitle(run)}): ${finished.agent} has finished what it was told after the Run ended${told}. What came of it?`,
+    },
+  ];
+}
+
+/** Everything worth saying about one Run, most pressing first. */
+function causesOf(
+  run: RunFacts,
+  drifting: ReadonlyMap<string, string>,
+  ready: ReadonlyMap<string, { at: string; sentence: string }>,
+): Event[] {
+  const about = runTitle(run);
+  const out: Event[] = run.asking.map((asked) => ({
+    run: run.id,
+    key: `${run.id}:asking:${asked.name}`,
+    text: `Run ${run.id} (${about}) is waiting on me (${asked.name}). What is it asking, and what turns on the answer?`,
+  }));
+  const drifted = drifting.get(run.id);
+  if (drifted !== undefined && !settled(run))
+    out.push({
+      run: run.id,
+      key: `${run.id}:drift:${drifted}`,
+      text: `Run ${run.id} (${about}) drifted from ${drifted} and Collie could not correct it. What is it doing instead, and should it be stopped or steered?`,
+    });
+  if (run.state === "waiting" && run.asking.length === 0)
+    out.push({
+      run: run.id,
+      key: `${run.id}:parked:${run.note ?? ""}`,
+      text: `Run ${run.id} (${about}) parked its work${run.note === null ? "" : `: ${run.note}`}. What does it need, and from whom?`,
+    });
+  const shippable = ready.get(run.id);
+  if (shippable !== undefined)
+    out.push({
+      run: run.id,
+      key: `${run.id}:ready:${shippable.at}`,
+      text: `Run ${run.id} (${about}): ${shippable.sentence}`,
+    });
+  if (settled(run))
+    out.push({
+      run: run.id,
+      key: `${run.id}:ended:${run.state}`,
+      text: `Run ${run.id} (${about}) ended ${run.state}. What came of it, and is there anything left to do?`,
+    });
   return out;
 }
 

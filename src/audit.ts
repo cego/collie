@@ -1,8 +1,9 @@
 // A Run's audit trail: every operation a front door asked of it, who asked, and what came
 // of it. Written by the host alone, which stamps the front door the channel declared.
 
-import { Effect, Schema } from "effect";
+import { Effect, FileSystem, Schema } from "effect";
 import { FrontDoor, RequestConflict, Where } from "./board-model";
+import { voiceOf, type Voice } from "./proposals";
 import { appendJournal, readJournal } from "./journal";
 import { nowIso } from "./time";
 
@@ -14,6 +15,8 @@ export const AuditLine = Schema.Struct({
     origin: FrontDoor,
     requestId: Schema.String,
     from: Schema.optionalKey(Where),
+    conversation: Schema.optionalKey(Schema.String),
+    said: Schema.optionalKey(Schema.String),
   }),
   /** Why, in the asker's own words, where they gave one. */
   reason: Schema.optionalKey(Schema.String),
@@ -30,10 +33,27 @@ const fileOf = (runDir: string) => `${runDir}/${AUDIT_FILE}`;
 
 export const readAudit = (runDir: string) => readJournal(fileOf(runDir), AuditJson);
 
+/** Keeps a trail's newest `keep` lines, for one that is written too often to keep whole. */
+export const trimAudit = Effect.fn("Audit.trim")(function* (runDir: string, keep: number) {
+  const lines = yield* readAudit(runDir);
+  if (lines.length <= keep) return;
+  const fs = yield* FileSystem.FileSystem;
+  const encode = Schema.encodeSync(AuditJson);
+  const tmp = `${fileOf(runDir)}.${process.pid}.tmp`;
+  yield* fs.writeFileString(
+    tmp,
+    lines
+      .slice(-keep)
+      .map((line) => `${encode(line)}\n`)
+      .join(""),
+  );
+  yield* fs.rename(tmp, fileOf(runDir));
+});
+
 /** What one operation did, written down under the request that asked for it. */
 export const recordAudit = Effect.fn("Audit.record")(function* <A, I extends Schema.Json>(
   runDir: string,
-  line: {
+  line: Voice & {
     readonly operation: string;
     readonly request: string;
     readonly origin: FrontDoor;
@@ -44,14 +64,12 @@ export const recordAudit = Effect.fn("Audit.record")(function* <A, I extends Sch
     readonly value: A;
   },
 ) {
+  const spoken = { origin: line.origin, requestId: line.request, ...voiceOf(line) };
   const written: AuditLine = {
     at: yield* nowIso(),
     operation: line.operation,
     request: line.request,
-    actor:
-      line.from === undefined
-        ? { origin: line.origin, requestId: line.request }
-        : { origin: line.origin, requestId: line.request, from: line.from },
+    actor: line.from === undefined ? spoken : { ...spoken, from: line.from },
     result: Schema.encodeSync(line.result)(line.value),
   };
   let full = written;
@@ -67,7 +85,7 @@ export const recordAudit = Effect.fn("Audit.record")(function* <A, I extends Sch
 // ponytail: two copies of one request arriving together can both act; a lock per Run if that happens.
 export const once = Effect.fn("Audit.once")(function* <A, I extends Schema.Json, E, R>(
   runDir: string,
-  line: {
+  line: Voice & {
     readonly operation: string;
     readonly request: string;
     readonly origin: FrontDoor;

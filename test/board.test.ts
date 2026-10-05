@@ -52,6 +52,7 @@ import { runEffect } from "./support/effect";
 import { madeRun } from "./support/records";
 import { collie, proves } from "./support/world";
 import { stopHost, until } from "./support/host";
+import { epochMs } from "../src/time";
 
 function facts(over: Partial<Sentence> = {}): Sentence {
   return {
@@ -321,7 +322,7 @@ test("the four sections take every Task, in the board's own order", () => {
 });
 
 test("the header counts what is waiting on you this week, and the fold counts the rest", () => {
-  const now = Date.parse("2026-09-16T12:00:00.000Z");
+  const now = epochMs("2026-09-16T12:00:00.000Z");
   const views = [
     task({ id: "w", state: "active" }),
     task({ id: "recent", state: "failed", ended: now - 2 * 24 * 60 * 60 * 1000 }),
@@ -386,7 +387,7 @@ test("Finished is one line until it is opened", () => {
   expect(finishedLabel(finished, true)).toBe("Finished · 2");
   expect(finishedLabel([task({ state: "done" })], false)).toBe("1 finished today");
   // Given the clock, a dead Run that landed weeks ago is counted as older, not as today's.
-  const now = Date.parse("2026-09-17T08:00:00.000Z");
+  const now = epochMs("2026-09-17T08:00:00.000Z");
   const fresh = finished.map((view) => ({ ...view, ended: now - 60 * 60 * 1000 }));
   const old = task({ id: "t3", state: "abandoned", ended: now - 14 * 24 * 60 * 60 * 1000 });
   expect(finishedLabel([...fresh, old], false, now)).toBe("2 finished today, 1 failed, 1 older");
@@ -507,7 +508,7 @@ const board = Effect.fn("board.build")(function* (
     registered: [],
     proposals: [],
     mrStates: new Map(),
-    now: Date.parse("2026-09-14T10:05:00Z"),
+    now: epochMs("2026-09-14T10:05:00Z"),
     ...over,
   });
 });
@@ -793,7 +794,7 @@ test("what the host writes about a finished Run does not move when it ended", ()
       yield* writtenAt(`${run.dir}/operations.jsonl`, "2026-09-14T10:04:00Z");
 
       const [view] = yield* board(env, [run]);
-      expect(view!.ended).toBe(Date.parse(old));
+      expect(view!.ended).toBe(epochMs(old));
     }),
   ));
 
@@ -821,7 +822,7 @@ test("what became of the work is the disposition's answer and nobody else's", ()
         finished: "2026-09-14T08:30:00Z",
       });
 
-      const now = Date.parse("2026-09-14T10:00:00Z");
+      const now = epochMs("2026-09-14T10:00:00Z");
       const before = yield* board(env, [run], { now });
       // A merge request nobody has said landed is not a merge, but it is news.
       expect(before[0]!.sentence).toBe("content!1 is open; nothing has checked it.");
@@ -857,7 +858,7 @@ test("a Run whose work shipped by hand says so, without its status being edited"
         note: null,
       });
 
-      const [card] = yield* board(env, [run], { now: Date.parse("2026-09-14T10:00:00Z") });
+      const [card] = yield* board(env, [run], { now: epochMs("2026-09-14T10:00:00Z") });
       // Both facts, on the card a person is looking at: how execution ended, and what
       // became of the work. Neither is edited to tidy the other away.
       expect(card!.state).toBe("failed");
@@ -1810,7 +1811,7 @@ test("a succeeded Run whose agent works on what it was told after it ended is Wo
       expect(card.steps).toEqual([{ name: "implement", state: "done" }]);
       expect(card.reopened).toMatchObject({ agent: "builder", status: "working" });
       // Chat reads the same card, in the same section.
-      const said = herdLines([card], Date.parse("2026-09-14T10:05:00Z"));
+      const said = herdLines([card], epochMs("2026-09-14T10:05:00Z"));
       expect(said).toContain("## Working · 1");
       expect(said).toContain(card.sentence);
     }),
@@ -1908,7 +1909,7 @@ test(
 );
 
 test("work ready to release is never folded away, however long it has waited", () => {
-  const now = Date.parse("2026-09-16T12:00:00.000Z");
+  const now = epochMs("2026-09-16T12:00:00.000Z");
   const week = 8 * 24 * 60 * 60 * 1000;
   const views = [
     task({ id: "ready", state: "done", landed: false, ready: true, ended: now - week }),

@@ -13,6 +13,16 @@ import { nothingApproved } from "../src/outcome";
 import { proposalsPath, read as readProposals, record as recordProposal } from "../src/proposals";
 import { defaultsPath, readDefaults } from "../src/intent";
 import { scopeKey } from "../src/registry";
+import {
+  NATIVE,
+  NEWS_TRAIL,
+  append as appendNews,
+  newsPath,
+  newsTrail,
+  pending,
+  read as readNews,
+} from "../src/news";
+import { herdDir } from "../src/steering";
 import { stopHost, until } from "./support/host";
 import { collie, proves } from "./support/world";
 
@@ -401,6 +411,52 @@ test(
           yield* stopHost(world.state);
         }).pipe(Effect.orDie),
       ["gated.workflow.ts"],
+    ),
+  120_000,
+);
+
+test(
+  "a conversation's News receipts are the host's, once per request, and that conversation's alone",
+  () =>
+    proves(
+      "collie-writer-news-",
+      (world) =>
+        Effect.gen(function* () {
+          const file = yield* newsPath(world.state, "some-herd");
+          yield* appendNews(file, { key: "r1:ended:failed", run: "r1", text: "r1 failed." });
+          const client = yield* connect(world.state);
+          yield* client.declare({ frontDoor: "chat" });
+          const asked = {
+            herd: "some-herd",
+            conversation: "flock@pc",
+            as: "read" as const,
+            request: "n-1",
+          };
+          const first = yield* client.news(asked);
+          expect(first.items.map((item) => item.key)).toEqual(["r1:ended:failed"]);
+          // The same request is the same batch, not the nothing a second read would find.
+          expect(yield* client.news(asked)).toEqual(first);
+          expect((yield* client.news({ ...asked, request: "n-2" })).items).toEqual([]);
+          const sent = yield* client.news({ ...asked, as: "sent" }).pipe(Effect.flip);
+          expect(sent._tag).toBe("RequestConflict");
+          const lines = yield* readNews(file);
+          expect(pending(lines, NATIVE).items).toHaveLength(1);
+          const trail = yield* newsTrail(world.state, "some-herd");
+          const audit = yield* readAudit(trail);
+          expect(audit.map((one) => [one.operation, one.actor.origin, one.request])).toEqual([
+            ["news", "chat", "n-1"],
+            ["news", "chat", "n-2"],
+          ]);
+          // Read every turn, so its trail is bounded and the Herd's own audit takes none of it.
+          for (let n = 0; n < NEWS_TRAIL + 5; n++)
+            yield* client.news({ ...asked, request: `more-${n}` });
+          const kept = yield* readAudit(trail);
+          yield* stopHost(world.state);
+          expect(kept).toHaveLength(NEWS_TRAIL);
+          expect(kept.at(-1)?.request).toBe(`more-${NEWS_TRAIL + 4}`);
+          expect(yield* readAudit(yield* herdDir(world.state, "some-herd"))).toEqual([]);
+        }),
+      [],
     ),
   120_000,
 );

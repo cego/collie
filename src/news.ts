@@ -21,8 +21,11 @@
 // **Submitted is not delivered.** Writing a notification is not evidence anybody read it.
 // An item stays `pending` until the conversation itself says otherwise, and an item whose
 // fate nobody can establish stays `uncertain` rather than being quietly called done.
+//
+// One journal per Herd; receipts are per conversation (CONTEXT.md, News).
 
 import { Effect, FileSystem, Path, Schema } from "effect";
+import { NewsReceipt } from "./board-model";
 import { appendJournal, readJournal } from "./journal";
 import { herdDir } from "./steering";
 import { nowIso } from "./time";
@@ -35,6 +38,9 @@ export const BATCH = 10;
 
 /** How many items the journal keeps. Old news nobody read is still not worth unbounded disk. */
 export const KEEP = 200;
+
+/** The Herd's Native chat, in its Home. */
+export const NATIVE = "native";
 
 const ItemSchema = Schema.Struct({
   /** What makes this news this news. `proactive.ts` mints it; a repeat is the same key. */
@@ -55,11 +61,15 @@ const LineSchema = Schema.Union([
    * kept rather than retried: an ambiguous delivery repeated is the same news twice.
    */
   Schema.Struct({
-    kind: Schema.Literals(["sent", "read", "uncertain"]),
+    kind: NewsReceipt,
     key: Schema.String,
+    /** Whose receipt: `NATIVE`, or another conversation such as `flock@pc`. */
+    conversation: Schema.String.pipe(Schema.withDecodingDefaultKey(Effect.succeed(NATIVE))),
     at: Schema.String,
     note: Schema.optionalKey(Schema.String),
   }),
+  /** Its cause no longer holds, so it is nobody's news any more. */
+  Schema.Struct({ kind: Schema.Literal("superseded"), key: Schema.String, at: Schema.String }),
 ]);
 type Line = Schema.Schema.Type<typeof LineSchema>;
 const LineJson = Schema.fromJsonString(LineSchema);
@@ -67,6 +77,15 @@ const LineJson = Schema.fromJsonString(LineSchema);
 export const newsPath = Effect.fn("News.path")(function* (stateDir: string, key: string) {
   const path = yield* Path.Path;
   return path.join(yield* herdDir(stateDir, key), "news.jsonl");
+});
+
+/** How many News reads a Herd's trail keeps: enough to answer a retried request. */
+export const NEWS_TRAIL = 50;
+
+/** Where a Herd's News reads are audited, apart from its other operations. */
+export const newsTrail = Effect.fn("News.trail")(function* (stateDir: string, key: string) {
+  const path = yield* Path.Path;
+  return path.join(yield* herdDir(stateDir, key), "news");
 });
 
 export const read = (file: string) =>
@@ -87,31 +106,61 @@ export interface Batch {
  * a conversation received it, and the one thing this must not do is call something
  * delivered because it was handed over.
  */
-export function pending(lines: ReadonlyArray<Line>): Batch {
-  const all = unread(lines);
+export function pending(lines: ReadonlyArray<Line>, conversation = NATIVE): Batch {
+  const all = live(lines)
+    .filter((entry) => !entry.read.has(conversation))
+    .map((entry) => entry.item);
   return { items: all.slice(-BATCH), omitted: Math.max(0, all.length - BATCH) };
 }
 
-/** Every item nobody has read, newest last — the batch before it is bounded. */
-function unread(lines: ReadonlyArray<Line>): ReadonlyArray<Item> {
-  const readKeys = new Set(lines.flatMap((line) => (line.kind === "read" ? [line.key] : [])));
-  const items = new Map<string, Item>();
-  for (const line of lines)
-    if (line.kind === "item" && !readKeys.has(line.key))
-      items.set(line.key, { key: line.key, run: line.run, text: line.text, at: line.at });
-  return [...items.values()];
+interface Entry {
+  readonly item: Item;
+  /** The conversations that read it, and those whose send of it nobody can account for. */
+  readonly read: Set<string>;
+  readonly uncertain: Set<string>;
+}
+
+/**
+ * Every item not superseded, newest last, with its receipts. A key written again after it
+ * was superseded is a new item with none.
+ */
+function live(lines: ReadonlyArray<Line>): ReadonlyArray<Entry> {
+  const entries = new Map<string, Entry>();
+  for (const line of lines) {
+    if (line.kind === "item") {
+      const item = { key: line.key, run: line.run, text: line.text, at: line.at };
+      entries.delete(line.key);
+      entries.set(line.key, { item, read: new Set(), uncertain: new Set() });
+      continue;
+    }
+    const entry = entries.get(line.key);
+    if (entry === undefined) continue;
+    if (line.kind === "superseded") entries.delete(line.key);
+    else if (line.kind === "read") entry.read.add(line.conversation);
+    else if (line.kind === "uncertain") entry.uncertain.add(line.conversation);
+  }
+  return [...entries.values()];
+}
+
+/**
+ * Keys whose last item was superseded: a cause that holds again under one of these is
+ * new news, whatever has been said before.
+ */
+export function retired(lines: ReadonlyArray<Line>): ReadonlySet<string> {
+  const alive = new Set(live(lines).map((entry) => entry.item.key));
+  return new Set(
+    lines.flatMap((line) => (line.kind === "superseded" && !alive.has(line.key) ? [line.key] : [])),
+  );
 }
 
 /** Items a send could not be accounted for, which stay a human's to look at. */
-export function uncertain(lines: ReadonlyArray<Line>): ReadonlyArray<string> {
-  const settled = new Set(lines.flatMap((line) => (line.kind === "read" ? [line.key] : [])));
-  return [
-    ...new Set(
-      lines.flatMap((line) =>
-        line.kind === "uncertain" && !settled.has(line.key) ? [line.key] : [],
-      ),
-    ),
-  ];
+export function uncertain(
+  lines: ReadonlyArray<Line>,
+  conversation = NATIVE,
+): ReadonlyArray<string> {
+  return live(lines).flatMap((entry) =>
+    entry.uncertain.has(conversation) && !entry.read.has(conversation) ? [entry.item.key] : [],
+  );
 }
 
 /**
@@ -123,7 +172,7 @@ export function uncertain(lines: ReadonlyArray<Line>): ReadonlyArray<string> {
  */
 export const append = Effect.fn("News.append")(function* (file: string, item: Omit<Item, "at">) {
   const lines = yield* read(file);
-  if (unread(lines).some((known) => known.key === item.key)) return false;
+  if (live(lines).some((known) => known.item.key === item.key)) return false;
   yield* appendJournal(file, LineJson, { kind: "item", ...item, at: yield* nowIso() }).pipe(
     Effect.orDie,
   );
@@ -135,12 +184,31 @@ export const append = Effect.fn("News.append")(function* (file: string, item: Om
 export const settle = Effect.fn("News.settle")(function* (
   file: string,
   key: string,
-  as: "sent" | "read" | "uncertain",
+  as: typeof NewsReceipt.Type,
+  conversation: string,
   note?: string,
 ) {
   const at = yield* nowIso();
-  const line: Line = note === undefined ? { kind: as, key, at } : { kind: as, key, at, note };
+  const line: Line =
+    note === undefined
+      ? { kind: as, key, conversation, at }
+      : { kind: as, key, conversation, at, note };
   yield* appendJournal(file, LineJson, line).pipe(Effect.orDie);
+});
+
+/** Retires every live item whose cause no longer holds, for every conversation; how many. */
+export const supersede = Effect.fn("News.supersede")(function* (
+  file: string,
+  holds: (item: Item) => boolean,
+) {
+  const gone = live(yield* read(file)).filter((entry) => !holds(entry.item));
+  for (const { item } of gone)
+    yield* appendJournal(file, LineJson, {
+      kind: "superseded",
+      key: item.key,
+      at: yield* nowIso(),
+    }).pipe(Effect.orDie);
+  return gone.length;
 });
 
 /** Kept bounded on write, because there is no daemon to sweep with. */

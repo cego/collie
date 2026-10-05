@@ -8,6 +8,7 @@
 
 import { Data, Effect, FileSystem, Path, Schema } from "effect";
 import { withDirLock } from "./lock";
+import type { Voice } from "./proposals";
 import {
   AuthoritySchema,
   ConstraintSchema,
@@ -51,6 +52,8 @@ const IntentSchema = Schema.Struct({
       version: Schema.Int,
       at: Schema.String,
       by: Schema.String,
+      conversation: Schema.optionalKey(Schema.String),
+      said: Schema.optionalKey(Schema.String),
       change: Schema.String,
     }),
   ),
@@ -170,14 +173,20 @@ function applied(intent: Intent, change: Change, version: number): Intent | null
  * version bump that changed nothing is a history entry nobody can act on, and every
  * later comparison keys off the version.
  */
-export function amend(intent: Intent, change: Change, by: string, at: string): Intent {
+export function amend(
+  intent: Intent,
+  change: Change,
+  by: string,
+  at: string,
+  voice: Voice = {},
+): Intent {
   const version = intent.version + 1;
   const next = applied(intent, change, version);
   if (!next) return intent;
   return {
     ...next,
     version,
-    history: [...intent.history, { version, at, by, change: describe(change) }],
+    history: [...intent.history, { version, at, by, ...voice, change: describe(change) }],
   };
 }
 

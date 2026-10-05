@@ -9,6 +9,7 @@ import { Rig } from "../support/recorder";
 import { runEffect } from "../support/effect";
 import { driveBridge, type Focus } from "../../src/ui/bridge";
 import type { AppState, Command } from "../../src/ui/state";
+import { epochMs } from "../../src/time";
 
 let rig: Rig;
 
@@ -31,7 +32,7 @@ function stateFor(selected: string | null): AppState {
     view: "runs",
     filter: { kind: "workspace", id: "w1" },
     tasks: [],
-    now: Date.parse("2026-09-16T12:00:00.000Z"),
+    now: epochMs("2026-09-16T12:00:00.000Z"),
     density: "comfortable",
     wide: null,
     board: {
