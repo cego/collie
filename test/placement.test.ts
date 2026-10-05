@@ -12,6 +12,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import type { BunServices } from "@effect/platform-bun";
 import { Effect, FileSystem, Result, Schema } from "effect";
 import { Rig, FakeHerdr } from "./support/recorder";
+import { exec } from "./support/command";
 import { fastForward, runEffect as runLive } from "./support/effect";
 import { installFakeSkills } from "./support/defs";
 import { fixtures, until } from "./support/host";
@@ -43,7 +44,7 @@ beforeEach(() =>
       const fs = yield* FileSystem.FileSystem;
       yield* fs.makeDirectory(rig.projectDir, { recursive: true });
       yield* installFakeSkills(rig.root);
-      gitRepo(rig.projectDir);
+      yield* gitRepo(rig.projectDir);
     }),
   ),
 );
@@ -51,9 +52,9 @@ beforeEach(() =>
 afterEach(() => runEffect(rig.close()));
 
 /** A repository with one commit on master, which is all a worktree needs to be cut from. */
-const gitRepo = (at: string) => {
-  const git = (...args: string[]) => {
-    const done = Bun.spawnSync(["git", ...args], {
+const gitRepo = Effect.fn("test.gitRepo")(function* (at: string) {
+  const git = (...args: string[]) =>
+    exec(["git", ...args], {
       cwd: at,
       env: {
         PATH: "/usr/bin:/bin",
@@ -63,12 +64,16 @@ const gitRepo = (at: string) => {
         GIT_COMMITTER_NAME: "t",
         GIT_COMMITTER_EMAIL: "t@example.com",
       },
-    });
-    if (done.exitCode !== 0) throw new Error(`git ${args.join(" ")}: ${done.stderr.toString()}`);
-  };
-  git("init", "--quiet", "-b", "master");
-  git("commit", "--quiet", "--allow-empty", "-m", "init");
-};
+    }).pipe(
+      Effect.flatMap((done) =>
+        done.exitCode === 0
+          ? Effect.void
+          : Effect.die(new Error(`git ${args.join(" ")}: ${done.stderr}`)),
+      ),
+    );
+  yield* git("init", "--quiet", "-b", "master");
+  yield* git("commit", "--quiet", "--allow-empty", "-m", "init");
+});
 
 const env = () => rig.pluginEnv({ HERDR_PLUGIN_ROOT: ROOT, GITLAB_USER_LOGIN: LOGIN });
 /** The state directory the host, its Tasks and its agents all share, as an install's do. */
@@ -634,7 +639,7 @@ test(
         const plan = yield* twoRepoPlan;
         for (const repo of ["api", "web"]) {
           yield* fs.makeDirectory(`${rig.projectDir}/${repo}/.collie`, { recursive: true });
-          gitRepo(`${rig.projectDir}/${repo}`);
+          yield* gitRepo(`${rig.projectDir}/${repo}`);
         }
         yield* fs.writeFileString(
           `${rig.projectDir}/api/.collie/verify.json`,
@@ -696,7 +701,7 @@ test(
         const plan = yield* twoRepoPlan;
         for (const repo of ["api", "web"]) {
           yield* fs.makeDirectory(`${rig.projectDir}/${repo}/.collie`, { recursive: true });
-          gitRepo(`${rig.projectDir}/${repo}`);
+          yield* gitRepo(`${rig.projectDir}/${repo}`);
         }
         yield* fs.writeFileString(
           `${rig.projectDir}/api/.collie/verify.json`,
@@ -770,7 +775,7 @@ test(
     runEffect(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
-        Bun.spawnSync(["git", "remote", "add", "origin", "git@example.test:team/app.git"], {
+        yield* exec(["git", "remote", "add", "origin", "git@example.test:team/app.git"], {
           cwd: rig.projectDir,
         });
         yield* fs.writeFileString(
@@ -881,7 +886,7 @@ test(
       Effect.gen(function* () {
         yield* claimCut({}, "roams");
         const roaming = `${rig.root}/.herdr/worktrees/project/roaming`;
-        Bun.spawnSync(["git", "worktree", "add", "--quiet", "--detach", roaming, "master"], {
+        yield* exec(["git", "worktree", "add", "--quiet", "--detach", roaming, "master"], {
           cwd: rig.projectDir,
         });
 
@@ -1264,7 +1269,7 @@ test(
           ["remote", "add", "origin", origin],
           ["push", "--quiet", "origin", "master", "picker"],
         ]) {
-          Bun.spawnSync(["git", ...args], { cwd: rig.projectDir });
+          yield* exec(["git", ...args], { cwd: rig.projectDir });
         }
         const finding = { severity: "major", title: "the guard is backwards", file: "a.ts" };
         yield* rig.queueOutputs([

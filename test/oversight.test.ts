@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, FileSystem, Layer, Path, Schema } from "effect";
 import * as WorkflowEngine from "effect/unstable/workflow/WorkflowEngine";
 import { Rig, FakeHerdr } from "./support/recorder";
+import { exec } from "./support/command";
 import { runEffect } from "./support/effect";
 import { Agents, agentsLayer } from "../src/agents";
 import { Children, Host } from "../src/sdk";
@@ -127,7 +128,7 @@ test("a card a human could go and try says so, and a routine one does not", () =
       const fs = yield* FileSystem.FileSystem;
       // The host's own directory is where a Run nobody placed works: a change there is
       // something to look at.
-      Bun.spawnSync(["git", "init", "-q"], { cwd: dir });
+      yield* exec(["git", "init", "-q"], { cwd: dir });
       yield* session(
         Effect.gen(function* () {
           const oversight = yield* Oversight;
@@ -151,7 +152,7 @@ test("a Run whose own plan moved its Intent still has a slice to try", () =>
   runEffect(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      Bun.spawnSync(["git", "init", "-q"], { cwd: dir });
+      yield* exec(["git", "init", "-q"], { cwd: dir });
       yield* intended("r1", []);
       yield* fs.makeDirectory(`${runDir(dir, "r1")}/plan`, { recursive: true });
       yield* fs.writeFileString(
@@ -180,7 +181,7 @@ test("a Run whose Intent a human moved says so on its card", () =>
   runEffect(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      Bun.spawnSync(["git", "init", "-q"], { cwd: dir });
+      yield* exec(["git", "init", "-q"], { cwd: dir });
       yield* intended("r1", []);
       const intent = (yield* readIntent(runDir(dir, "r1")))!;
       yield* writeIntent(
@@ -258,7 +259,7 @@ const repository = () =>
       ["config", "user.name", "t"],
       ["commit", "-q", "--allow-empty", "-m", "first"],
     ])
-      Bun.spawnSync(["git", ...args], { cwd: dir });
+      yield* exec(["git", ...args], { cwd: dir });
     yield* (yield* FileSystem.FileSystem).writeFileString(
       `${dir}/.git/info/exclude`,
       "/*\n!/notes.txt\n!/src/\n",

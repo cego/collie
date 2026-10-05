@@ -15,6 +15,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, FileSystem, Layer, Schema } from "effect";
 import { VerifySpecSchema } from "../src/verify-spec";
 import { Rig, FakeHerdr } from "./support/recorder";
+import { exec } from "./support/command";
 import { runEffect } from "./support/effect";
 import { agentsLayer, type AgentHost } from "../src/agents";
 import { Children, Host } from "../src/sdk";
@@ -41,11 +42,11 @@ beforeEach(() =>
         ["config", "user.email", "t@example.com"],
         ["config", "user.name", "t"],
       ]) {
-        Bun.spawnSync(["git", ...args], { cwd: rig.projectDir });
+        yield* exec(["git", ...args], { cwd: rig.projectDir });
       }
       yield* fs.writeFileString(`${rig.projectDir}/thing.ts`, "export const one = 1;\n");
-      Bun.spawnSync(["git", "add", "-A"], { cwd: rig.projectDir });
-      Bun.spawnSync(["git", "commit", "-qm", "first"], { cwd: rig.projectDir });
+      yield* exec(["git", "add", "-A"], { cwd: rig.projectDir });
+      yield* exec(["git", "commit", "-qm", "first"], { cwd: rig.projectDir });
     }),
   ),
 );

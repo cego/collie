@@ -29,6 +29,7 @@ import {
 } from "../src/drift";
 import { seedIntent, type Constraint, type Intent } from "../src/intent";
 import type { DriftReport } from "../src/evaluator";
+import { exec } from "./support/command";
 import { runEffect } from "./support/effect";
 import { readBudget } from "../src/steering";
 
@@ -304,17 +305,14 @@ test("evidence is the actual diff, from the actual tree", () =>
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const repo = yield* fs.makeTempDirectory({ prefix: "hw-drift-repo-" });
-      const git = (args: string[]) =>
-        Effect.sync(() => Bun.spawnSync(["git", ...args], { cwd: repo, stdout: "pipe" }));
+      const git = (args: string[]) => exec(["git", ...args], { cwd: repo });
       yield* git(["init", "-q"]);
       yield* git(["config", "user.email", "t@example.com"]);
       yield* git(["config", "user.name", "t"]);
       yield* fs.writeFileString(path.join(repo, "a.ts"), "one\n");
       yield* git(["add", "-A"]);
       yield* git(["commit", "-qm", "first"]);
-      const base = Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: repo, stdout: "pipe" })
-        .stdout.toString()
-        .trim();
+      const base = (yield* git(["rev-parse", "HEAD"])).stdout.trim();
       yield* fs.writeFileString(path.join(repo, "a.ts"), "two\n");
 
       const evidence = yield* evidenceFor(repo, [], base);

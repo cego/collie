@@ -4,6 +4,7 @@
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
+import { exec } from "./support/command";
 import { runEffect } from "./support/effect";
 import { FakeBin } from "./support/bin";
 import { readEnv } from "../src/env";
@@ -16,8 +17,8 @@ let origin: string;
 let root: string;
 let bin: FakeBin;
 
-const git = (cwd: string, ...args: string[]) => {
-  const done = Bun.spawnSync(["git", ...args], {
+const git = (cwd: string, ...args: string[]) =>
+  exec(["git", ...args], {
     cwd,
     env: {
       PATH: "/usr/bin:/bin",
@@ -27,13 +28,16 @@ const git = (cwd: string, ...args: string[]) => {
       GIT_COMMITTER_NAME: "t",
       GIT_COMMITTER_EMAIL: "t@example.com",
     },
-  });
-  if (done.exitCode !== 0) throw new Error(`git ${args.join(" ")}: ${done.stderr.toString()}`);
-  return done.stdout.toString().trim();
-};
+  }).pipe(
+    Effect.flatMap((done) =>
+      done.exitCode === 0
+        ? Effect.succeed(done.stdout.trim())
+        : Effect.die(new Error(`git ${args.join(" ")}: ${done.stderr}`)),
+    ),
+  );
 
-const release = (version: string) => {
-  Bun.spawnSync(
+const release = Effect.fn("test.release")(function* (version: string) {
+  yield* exec(
     [
       "sh",
       "-c",
@@ -41,10 +45,10 @@ const release = (version: string) => {
     ],
     { cwd: origin },
   );
-  git(origin, "add", ".");
-  git(origin, "commit", "--quiet", "-m", version);
-  git(origin, "tag", version);
-};
+  yield* git(origin, "add", ".");
+  yield* git(origin, "commit", "--quiet", "-m", version);
+  yield* git(origin, "tag", version);
+});
 
 const read = (file: string) =>
   Effect.flatMap(FileSystem.FileSystem, (fs) =>
@@ -125,9 +129,9 @@ beforeEach(() =>
       root = `${home}/.collie`;
       doctorRan = 0;
       yield* fs.makeDirectory(origin);
-      git(origin, "init", "--quiet", "-b", "master");
-      release("0.1.0");
-      release("0.2.0");
+      yield* git(origin, "init", "--quiet", "-b", "master");
+      yield* release("0.1.0");
+      yield* release("0.2.0");
       bin = yield* FakeBin.make(`${home}/stubs`);
       yield* fs.writeFileString(`${home}/herdr-installer`, installer("herdr"));
       yield* fs.writeFileString(`${home}/claude-installer`, installer("claude", LOGGED_IN));
@@ -195,9 +199,9 @@ test("a bare Machine gets herdr, Claude Code, Collie at the tag, the plugin and 
       for (const step of ["system", "claude-login", "gitlab", "push"])
         expect(statusOf(events, step)).toBe("in_place");
       for (const step of ["helle", "linear"]) expect(statusOf(events, step)).toBe("skipped");
-      expect(git(root, "describe", "--exact-match", "--tags", "HEAD")).toBe("0.2.0");
+      expect(yield* git(root, "describe", "--exact-match", "--tags", "HEAD")).toBe("0.2.0");
       // On its branch, so a plain `collie upgrade` can pull.
-      expect(git(root, "symbolic-ref", "--short", "HEAD")).toBe("master");
+      expect(yield* git(root, "symbolic-ref", "--short", "HEAD")).toBe("master");
       expect(yield* read(`${home}/curl-calls`)).toContain("https://herdr.dev/install.sh");
       expect(yield* read(`${home}/curl-calls`)).toContain("https://claude.ai/install.sh");
       expect(yield* read(`${home}/prepared`)).toBe("ran\n");
@@ -227,12 +231,12 @@ test("a re-run is a repair: everything already in place is left alone", () =>
 test("a released checkout on an older version is moved to the one asked for", () =>
   runEffect(
     Effect.gen(function* () {
-      git(home, "clone", "--quiet", "--branch", "0.1.0", origin, root);
+      yield* git(home, "clone", "--quiet", "--branch", "0.1.0", origin, root);
 
       const { events } = yield* onboarded();
 
       expect(statusOf(events, "collie")).toBe("done");
-      expect(git(root, "describe", "--exact-match", "--tags", "HEAD")).toBe("0.2.0");
+      expect(yield* git(root, "describe", "--exact-match", "--tags", "HEAD")).toBe("0.2.0");
     }),
   ));
 
@@ -294,9 +298,9 @@ test("where no package gives OpenSSL 3, the step names none to run", () =>
 test("a development checkout gets the checks, and nothing installed or moved", () =>
   runEffect(
     Effect.gen(function* () {
-      git(home, "clone", "--quiet", origin, root);
-      git(root, "checkout", "--quiet", "-b", "feature");
-      const head = git(root, "rev-parse", "HEAD");
+      yield* git(home, "clone", "--quiet", origin, root);
+      yield* git(root, "checkout", "--quiet", "-b", "feature");
+      const head = yield* git(root, "rev-parse", "HEAD");
       yield* claudeAt(`case "$*" in "auth status --json") ${LOGGED_IN} ;; esac`);
 
       const { result, events } = yield* onboarded({ HERDR_PLUGIN_ROOT: root });
@@ -313,8 +317,8 @@ test("a development checkout gets the checks, and nothing installed or moved", (
         "linear",
         "doctor",
       ]);
-      expect(git(root, "rev-parse", "HEAD")).toBe(head);
-      expect(git(root, "symbolic-ref", "--short", "HEAD")).toBe("feature");
+      expect(yield* git(root, "rev-parse", "HEAD")).toBe(head);
+      expect(yield* git(root, "symbolic-ref", "--short", "HEAD")).toBe("feature");
       expect(yield* read(`${home}/curl-calls`)).toBe("");
       expect(yield* read(`${home}/prepared`)).toBe("");
       expect(doctorRan).toBe(1);

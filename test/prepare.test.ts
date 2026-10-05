@@ -5,6 +5,7 @@
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, FileSystem, Path } from "effect";
+import { exec } from "./support/command";
 import { runEffect } from "./support/effect";
 import { FakeBin } from "./support/bin";
 import { generateKeyPairSync } from "node:crypto";
@@ -21,21 +22,16 @@ const repoRoot = Effect.gen(function* () {
 });
 
 /** One of the install scripts, against the temporary HOME with only the stubs on PATH. */
-function run(
+const run = (
   script: string,
   path = `${home}/stubs:/usr/bin:/bin`,
   extra: Record<string, string> = {},
-) {
-  const result = Bun.spawnSync({
-    cmd: ["sh", `${root}/${script}`],
+) =>
+  exec(["sh", `${root}/${script}`], {
     // Only the stubs and the system tools the scripts use: a real `herdr` on the
     // developer's own PATH would answer for one a test has deliberately removed.
     env: { HOME: home, PATH: path, HERDR_CONFIG: `${home}/.config/herdr/config.toml`, ...extra },
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  return { code: result.exitCode, out: result.stdout.toString() + result.stderr.toString() };
-}
+  }).pipe(Effect.map((result) => ({ code: result.exitCode, out: result.stdout + result.stderr })));
 
 const prepare = () => run("prepare.sh");
 const setup = () => run("setup.sh");
@@ -137,7 +133,7 @@ test("prepare leaves a linked plugin, a collie on PATH and the operator skill", 
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
 
-      const first = prepare();
+      const first = yield* prepare();
 
       expect(first.out).toContain("prepare: plugin-link: done");
       expect(first.out).toContain("prepare: runner: done");
@@ -159,8 +155,8 @@ test("prepare leaves a linked plugin, a collie on PATH and the operator skill", 
 test("a second run changes nothing and says every step is already in place", () =>
   runEffect(
     Effect.gen(function* () {
-      prepare();
-      const again = prepare();
+      yield* prepare();
+      const again = yield* prepare();
 
       expect(again.out).toContain("prepare: plugin-link: already in place");
       expect(again.out).toContain("prepare: runner: already in place");
@@ -179,7 +175,7 @@ test("what prepare reports is what `collie upgrade` reads back", () =>
       // The real script's own output, through the real parser: the two halves of this
       // contract are a `printf` in sh and a regex in TypeScript, and nothing else
       // would notice a step line reworded on one side only.
-      const steps = prepareSteps(prepare().out);
+      const steps = prepareSteps((yield* prepare()).out);
 
       expect(steps.map((s) => s.step)).toEqual([
         "plugin-link",
@@ -207,7 +203,7 @@ test("a link that builds the runner is not a second build reported as no change"
         esac`,
       );
 
-      const run = prepare();
+      const run = yield* prepare();
 
       // Built once, by the hook, and said so — not built again and called unchanged.
       expect(run.out).toContain("prepare: runner: done");
@@ -221,10 +217,10 @@ test("an unchanged checkout is not rebuilt, and a changed one is", () =>
   runEffect(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      prepare();
+      yield* prepare();
       yield* remove(`${home}/builds`);
 
-      const unchanged = prepare();
+      const unchanged = yield* prepare();
 
       // `bun build --compile` is seconds, and its output is not byte-identical run to
       // run, so rebuilding an unchanged checkout would cost that and report a change
@@ -233,7 +229,7 @@ test("an unchanged checkout is not rebuilt, and a changed one is", () =>
       expect(yield* exists(`${home}/builds`)).toBe(false);
 
       yield* fs.writeFileString(`${root}/src/main.ts`, "// newer\n");
-      const changed = prepare();
+      const changed = yield* prepare();
 
       expect(changed.out).toContain("prepare: runner: done");
       expect(yield* exists(`${home}/builds`)).toBe(true);
@@ -249,7 +245,7 @@ test("prepare never writes to the herdr config; keybindings are setup.sh's alone
       const before = '[server]\nkeep = "mine"\n';
       yield* fs.writeFileString(config, before);
 
-      prepare();
+      yield* prepare();
 
       expect(yield* read(config)).toBe(before);
     }),
@@ -260,7 +256,7 @@ test("prepare says what it skipped rather than failing when herdr is absent", ()
     Effect.gen(function* () {
       yield* remove(`${home}/stubs/herdr`);
 
-      const run = prepare();
+      const run = yield* prepare();
 
       expect(run.out).toContain("prepare: plugin-link: skipped");
       expect(run.out).toContain("prepare: runner: done");
@@ -274,7 +270,7 @@ test("prepare leaves a skill link that is not ours alone", () =>
       const fs = yield* FileSystem.FileSystem;
       yield* fs.makeDirectory(`${home}/.claude/skills/collie`, { recursive: true });
 
-      const run = prepare();
+      const run = yield* prepare();
 
       expect(run.out).toContain("prepare: operator-skill: skipped");
       expect(run.code).toBe(0);
@@ -311,7 +307,7 @@ test("prepare installs the skills the workflows require into the global store", 
       const fs = yield* FileSystem.FileSystem;
       yield* fakeSkillsCli();
 
-      const run = prepare();
+      const run = yield* prepare();
 
       expect(run.out).toContain("prepare: skills: done");
       expect(run.code).toBe(0);
@@ -336,10 +332,10 @@ test("a second run updates the skills without adding them again", () =>
   runEffect(
     Effect.gen(function* () {
       yield* fakeSkillsCli();
-      prepare();
+      yield* prepare();
       yield* remove(`${home}/skills-calls`);
 
-      const again = prepare();
+      const again = yield* prepare();
 
       expect(again.out).toContain("prepare: skills: already in place");
       const asked = yield* read(`${home}/skills-calls`);
@@ -352,13 +348,13 @@ test("a skill deleted by hand is added again rather than called already in place
   runEffect(
     Effect.gen(function* () {
       yield* fakeSkillsCli();
-      prepare();
+      yield* prepare();
       // The store is what the stamp is checked against, so removing from it is the
       // one thing that has to make the next run add rather than skip.
       yield* remove(`${home}/.agents/skills/tdd`);
       yield* remove(`${home}/skills-calls`);
 
-      const again = prepare();
+      const again = yield* prepare();
 
       expect(again.out).toContain("prepare: skills: done");
       expect(yield* read(`${home}/skills-calls`)).toContain("add");
@@ -370,12 +366,12 @@ test("an update that brings a new version is reported as done, not as unchanged"
   runEffect(
     Effect.gen(function* () {
       yield* fakeSkillsCli();
-      prepare();
+      yield* prepare();
 
       // Nothing to add — the sources have not changed — but upstream has moved, and
       // the version this machine now runs is the only thing that happened.
       yield* fakeSkillsCli("exit 0", `echo "newer" > "$HOME/.agents/skills/tdd/SKILL.md"`);
-      const again = prepare();
+      const again = yield* prepare();
 
       expect(again.out).toContain("prepare: skills: done");
       expect(yield* read(`${home}/skills-calls`)).toContain("update -g -y");
@@ -388,10 +384,10 @@ test("an update that cannot run does not make the next run clone everything agai
       // The sources are in; what fails afterwards is the CLI's own global update,
       // which reaches skills this machine has that Collie did not put there.
       yield* fakeSkillsCli(`case "$2" in update) exit 1 ;; esac`);
-      const first = prepare();
+      const first = yield* prepare();
       yield* remove(`${home}/skills-calls`);
 
-      const again = prepare();
+      const again = yield* prepare();
 
       expect(first.out).toContain("prepare: skills: skipped");
       expect(again.out).toContain("prepare: skills: skipped");
@@ -406,7 +402,7 @@ test("the skills install through the runner's own Bun, with no Node on the machi
     Effect.gen(function* () {
       yield* fakeSkillsCli();
 
-      const done = run("prepare.sh", yield* withoutNpx());
+      const done = yield* run("prepare.sh", yield* withoutNpx());
 
       expect(done.out).toContain("prepare: skills: done");
       expect(yield* read(`${home}/skills-calls`)).toContain("BUN_BE_BUN=1 skills@");
@@ -419,7 +415,7 @@ test("a skills CLI that fails is a reported skip, not a failed install", () =>
     Effect.gen(function* () {
       yield* fakeSkillsCli("echo 'network is unreachable' >&2; exit 1");
 
-      const run = prepare();
+      const run = yield* prepare();
 
       expect(run.out).toContain("prepare: skills: skipped");
       expect(run.out).toContain("prepare: runner: done");
@@ -433,8 +429,8 @@ test("re-running setup from the checkout updates it, and keeps the keybindings",
       // The documented install is a clone followed by this script, so running the
       // same command again has to be how a teammate gets newer — the checkout is
       // where the workflows, personas and skills live, not just the runner.
-      const first = setup();
-      const again = setup();
+      const first = yield* setup();
+      const again = yield* setup();
 
       const asked = yield* read(`${home}/git-calls`);
       expect(asked).toContain("-C " + root + " pull --ff-only");
@@ -462,7 +458,7 @@ test("a pull it cannot do does not end the install", () =>
         esac`,
       );
 
-      const done = setup();
+      const done = yield* setup();
 
       expect(done.out).toContain("Could not update");
       // Someone with work in progress here still wants the rest of the run.
@@ -478,14 +474,14 @@ test("setup configures Claude Code's status line; prepare never touches it", () 
       // script a teammate runs on purpose, and never by the routine that rebuilds a
       // runner. The runner is what edits the file, so the step is a call rather than a
       // shell script writing JSON.
-      prepare();
+      yield* prepare();
       // Whatever else prepare asks of the runner, it never asks for this.
       const afterPrepare = (yield* exists(`${home}/collie-calls`))
         ? yield* read(`${home}/collie-calls`)
         : "";
       expect(afterPrepare).not.toContain("chat status-line");
 
-      setup();
+      yield* setup();
 
       expect(yield* read(`${home}/collie-calls`)).toContain("chat status-line --install");
     }),
@@ -532,7 +528,7 @@ test("a downloaded runner signed by the release key is installed", () =>
       const release = yield* downloadable();
       yield* release.signature();
 
-      const done = release.install();
+      const done = yield* release.install();
 
       expect(done.code).toBe(0);
       expect(yield* fs.readFile(`${root}/bin/collie`)).toEqual(release.runner);
@@ -545,7 +541,7 @@ test("a download another key signed is refused before it replaces the runner", (
       const release = yield* downloadable();
       yield* release.signature(generateKeyPairSync("ed25519").privateKey);
 
-      const done = release.install();
+      const done = yield* release.install();
 
       expect(done.out).toContain("does not match its signature");
       expect(done.code).not.toBe(0);
@@ -559,7 +555,7 @@ test("a signature that cannot be fetched leaves the runner already there", () =>
     Effect.gen(function* () {
       const release = yield* downloadable();
 
-      const done = release.install();
+      const done = yield* release.install();
 
       expect(done.out).toContain("could not fetch");
       expect(done.code).not.toBe(0);
@@ -578,7 +574,7 @@ test("an OpenSSL that cannot check Ed25519 is named, not taken for a tampered do
         `case "$1" in version) echo "LibreSSL 3.3.6" ;; *) echo "pkeyutl: unknown option -rawin" >&2; exit 1 ;; esac`,
       );
 
-      const done = release.install();
+      const done = yield* release.install();
 
       expect(done.out).toContain("no OpenSSL 3.0 or later");
       expect(done.out).not.toContain("does not match");

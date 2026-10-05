@@ -32,6 +32,7 @@ import { carryOutProposal } from "../src/operations";
 import type { PluginEnv } from "../src/env";
 import { readIntent, seedIntent, writeIntent } from "../src/intent";
 import { herdOf } from "../src/steering";
+import { exec } from "./support/command";
 import { runEffect } from "./support/effect";
 import { hosted, hostedRun, settledRun } from "./support/hosted";
 import { save } from "./support/world";
@@ -608,11 +609,9 @@ test(
         // A checkout of its own, as a worktree is, and gone once the Run has settled.
         const worktree = `${world.home}/worktree`;
         yield* fs.makeDirectory(worktree, { recursive: true });
-        Bun.spawnSync(["git", "init", "-q"], { cwd: worktree });
+        yield* exec(["git", "init", "-q"], { cwd: worktree });
         for (const cwd of [world.project, worktree])
-          Bun.spawnSync(["git", "remote", "add", "origin", "git@example.test:team/app.git"], {
-            cwd,
-          });
+          yield* exec(["git", "remote", "add", "origin", "git@example.test:team/app.git"], { cwd });
         const run = yield* settledRun(world, "hello", { workspace: worktree });
         const client = yield* connect(world.state).pipe(Effect.orDie);
         expect((yield* client.run({ runId: run.id }).pipe(Effect.orDie))?.cwd).toBe(worktree);

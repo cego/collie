@@ -14,6 +14,7 @@ import { scopeFor } from "../src/registry";
 import { diffOf, fetchRef, keepDiffs, runDiff } from "../src/run-detail";
 import { madeRun } from "./support/records";
 import { runRowId } from "../src/ui/state";
+import { exec } from "./support/command";
 import { runEffect } from "./support/effect";
 import { focus } from "./support/focus";
 import { stopHost } from "./support/host";
@@ -184,12 +185,13 @@ const branched = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const repo = yield* fs.makeTempDirectoryScoped({ prefix: "collie-diff-" });
   const git = (...args: string[]) =>
-    Effect.sync(() => {
-      const ran = Bun.spawnSync(["git", "-c", "user.email=t@t", "-c", "user.name=t", ...args], {
-        cwd: repo,
-      });
-      if (ran.exitCode !== 0) throw new Error(`git ${args.join(" ")}: ${ran.stderr.toString()}`);
-    });
+    exec(["git", "-c", "user.email=t@t", "-c", "user.name=t", ...args], { cwd: repo }).pipe(
+      Effect.flatMap((done) =>
+        done.exitCode === 0
+          ? Effect.void
+          : Effect.die(new Error(`git ${args.join(" ")}: ${done.stderr}`)),
+      ),
+    );
   yield* git("init", "-q", "-b", "main");
   yield* fs.writeFileString(`${repo}/kept.txt`, "one\ntwo\n");
   yield* fs.writeFileString(`${repo}/gone.txt`, "bye\n");
@@ -317,7 +319,7 @@ test("a live diff never reads through a link or into a device or FIFO", () =>
         const { repo } = yield* branched;
         yield* fs.symlink("/dev/zero", `${repo}/zero`);
         const fifo = `${yield* fs.makeTempDirectoryScoped({ prefix: "collie-fifo-" })}/pipe`;
-        Bun.spawnSync(["mkfifo", fifo]);
+        yield* exec(["mkfifo", fifo]);
         yield* fs.symlink(fifo, `${repo}/pipe`);
 
         const live = yield* runDiff({ cwd: repo, branch: "feature", live: true }).pipe(

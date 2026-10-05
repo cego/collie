@@ -12,6 +12,7 @@ import type { PickItem } from "../src/inputs";
 import { homePath, writeHome } from "../src/home";
 import { runViews } from "../src/lifecycle";
 import { budgetPath, herdOf, readBudget } from "../src/steering";
+import { exec } from "./support/command";
 import { stopHost } from "./support/host";
 import { collie, proves, type World } from "./support/world";
 
@@ -72,13 +73,13 @@ const withMergeRequest = <A, E, R>(world: World, effect: Effect.Effect<A, E, R>)
     );
   });
 
-const onBranch = (world: World, branch: string) => {
+const onBranch = Effect.fn("test.onBranch")(function* (world: World, branch: string) {
   for (const args of [
     ["checkout", "-q", "-b", branch],
     ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "x"],
   ])
-    Bun.spawnSync(["git", ...args], { cwd: world.project });
-};
+    yield* exec(["git", ...args], { cwd: world.project });
+});
 
 /** The flow opened from the Herd's Home, whose own directory is no checkout. */
 const atHome = Effect.fn("test.atHome")(function* (world: World) {
@@ -111,7 +112,7 @@ test(
       withMergeRequest(
         world,
         Effect.gen(function* () {
-          onBranch(world, "feature/x");
+          yield* onBranch(world, "feature/x");
           const env = yield* currentEnv;
 
           const cancelled = answering(["targeted", ""]);
@@ -232,9 +233,9 @@ const projectsTree = Effect.fn("test.projectsTree")(function* (world: World) {
   const root = `${world.home}/projects`;
   for (const name of ["app", "api"]) {
     const dir = `${root}/team/${name}`;
-    Bun.spawnSync(["mkdir", "-p", dir]);
-    Bun.spawnSync(["git", "init", "-q"], { cwd: dir });
-    Bun.spawnSync(["git", "remote", "add", "origin", `git@gitlab.example.com:team/${name}.git`], {
+    yield* exec(["mkdir", "-p", dir]);
+    yield* exec(["git", "init", "-q"], { cwd: dir });
+    yield* exec(["git", "remote", "add", "origin", `git@gitlab.example.com:team/${name}.git`], {
       cwd: dir,
     });
   }

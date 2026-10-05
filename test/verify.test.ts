@@ -17,16 +17,14 @@ import {
   staleAgainst,
 } from "../src/verify";
 import type { VerifySpec } from "../src/intent";
+import { exec } from "./support/command";
 import { runEffect } from "./support/effect";
 import { until } from "./support/host";
 
 let repo: string;
 
-const git = Effect.fn("test.git")(function* (args: string[], cwd = repo) {
-  const done = Bun.spawnSync(["git", ...args], { cwd, stdout: "pipe", stderr: "pipe" });
-  yield* Effect.void;
-  return done.exitCode;
-});
+const git = (args: string[], cwd = repo) =>
+  exec(["git", ...args], { cwd }).pipe(Effect.map((done) => done.exitCode));
 
 beforeEach(() =>
   runEffect(

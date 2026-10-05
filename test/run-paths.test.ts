@@ -4,6 +4,7 @@
 import { Clock, DateTime, Effect, FileSystem, Path, Schema } from "effect";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { breakStaleLock, processStartTime, withDirLock, withLock } from "../src/lock";
+import { exec } from "./support/command";
 import { runEffect } from "./support/effect";
 
 let stateDir: string;
@@ -212,7 +213,7 @@ test("a claim that changed since it was inspected is never the one removed", () 
       const live = `${encodeJson({ pid: globalThis.process.pid, start: null })}\n`;
 
       const changed = path.join(dir, "changed.lock");
-      Bun.spawnSync(["mkfifo", changed]);
+      yield* exec(["mkfifo", changed]);
       const child = breakInChild(changed, path.join(dir, "changed.ready"));
       yield* awaitMarker(path.join(dir, "changed.ready"));
       // The inspection sees a dead holder; the check before the removal sees a live claim

@@ -11,6 +11,7 @@ import { Config, ConfigProvider, Effect, FileSystem, Layer, Option, Scope } from
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { connect, ownerOf } from "../src/host";
 import { signalProcess } from "../src/lock";
+import { exec } from "./support/command";
 import { runEffect } from "./support/effect";
 import { stopHost, until } from "./support/host";
 
@@ -388,8 +389,8 @@ test(
         // What it lives no longer than: a process stopped at will, and nobody's child here —
         // a child of this test would linger as a zombie once killed, which a signal still
         // reaches, where a test process that exits is reaped by whoever started it.
-        const detached = Bun.spawnSync(["sh", "-c", "sleep 60 >/dev/null 2>&1 & echo $!"]);
-        const outlived = Number(detached.stdout.toString().trim());
+        const detached = yield* exec(["sh", "-c", "sleep 60 >/dev/null 2>&1 & echo $!"]);
+        const outlived = Number(detached.stdout.trim());
         const hostFor = (state: string, watch: string) =>
           spawner.spawn(
             ChildProcess.make(executable, [...prefix, "host", "--dir", state], {
@@ -461,7 +462,7 @@ test(
         const fs = yield* FileSystem.FileSystem;
         const checkout = yield* fs.makeTempDirectoryScoped({ prefix: "collie-host-checkout-" });
         const git = (...args: string[]) =>
-          Bun.spawnSync(["git", "-C", checkout, ...args], {
+          exec(["git", "-C", checkout, ...args], {
             env: {
               PATH: "/usr/bin:/bin",
               GIT_AUTHOR_NAME: "t",
@@ -469,12 +470,10 @@ test(
               GIT_COMMITTER_NAME: "t",
               GIT_COMMITTER_EMAIL: "t@example.com",
             },
-          })
-            .stdout.toString()
-            .trim();
-        git("init", "--quiet", "-b", "feature");
-        git("commit", "--quiet", "--allow-empty", "-m", "work");
-        const sha = git("rev-parse", "--short", "HEAD");
+          }).pipe(Effect.map((done) => done.stdout.trim()));
+        yield* git("init", "--quiet", "-b", "feature");
+        yield* git("commit", "--quiet", "--allow-empty", "-m", "work");
+        const sha = yield* git("rev-parse", "--short", "HEAD");
         const release = yield* fs.makeTempDirectoryScoped({ prefix: "collie-host-release-" });
 
         const development = yield* identityAt(checkout);

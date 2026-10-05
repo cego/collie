@@ -6,6 +6,7 @@
 
 import { Config, ConfigProvider, Effect, FileSystem, Option, Schema, Scope } from "effect";
 import type { BunServices } from "@effect/platform-bun/BunServices";
+import { exec } from "./command";
 import { runEffect, watchedBy } from "./effect";
 import { fakeHerdrCommand } from "./fake-herdr-core";
 import { fixtures, root } from "./host";
@@ -149,7 +150,7 @@ export const proves = <A, E>(
         yield* fs.makeDirectory(made, { recursive: true }).pipe(Effect.orDie);
       }
       // A project is a checkout, which is what an agent's start from inside it names.
-      Bun.spawnSync(["git", "init", "-q"], { cwd: world.project });
+      yield* exec(["git", "init", "-q"], { cwd: world.project });
       yield* save(world.user, modules);
       const binary = yield* Config.option(Config.String("COLLIE_TEST_BINARY"));
       const command = Option.isSome(binary)
