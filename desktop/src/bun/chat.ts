@@ -181,6 +181,7 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* <Server>(opts
   // ponytail: grows by one key per item Desktop spoke about, for as long as Desktop runs.
   /** News a turn of Desktop's has been about, so an item a host failed to settle never wakes it twice. */
   const spoken = new Set<string>();
+  let resting = false;
   const ask = (toolUseID: string, signal: AbortSignal) => {
     // A turn of Desktop's own has nobody to click an answer.
     if (said === undefined) return Promise.resolve(null);
@@ -315,15 +316,18 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* <Server>(opts
       message: { role: "user", content: text },
       parent_tool_use_id: null,
     });
-    const news = voice.news;
+    let news = voice.news;
     return Stream.fromSubscription(heard).pipe(
       Stream.takeUntil(ends),
       Stream.tap((event) =>
         Effect.suspend(() => {
           if (ends(event)) finished = true;
-          // The model starting the turn is what shows it has the message, and its News.
-          if (news === undefined || event.type !== "RUN_STARTED") return Effect.void;
-          return delivered(flock, news).pipe(
+          // The model saying anything is what shows it has the message, and its News.
+          if (news === undefined || event.type === "RUN_STARTED" || ends(event)) return Effect.void;
+          const settled = news;
+          news = undefined;
+          for (const placed of settled.items) spoken.add(newsKey(placed));
+          return delivered(flock, settled).pipe(
             Effect.provideContext(services),
             Effect.forkIn(scope),
             Effect.asVoid,
@@ -341,12 +345,11 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* <Server>(opts
 
   /** A turn of Desktop's own about News that matters, when the chat is idle and may speak first. */
   const speakFirst: Effect.Effect<void> = Effect.gen(function* () {
-    if (!opts.proactive()) return;
+    if (!opts.proactive() || resting) return;
     const fresh = worthSpeaking(yield* waiting, spoken);
     if (fresh === null) return;
     const running = yield* warm;
     if (running.ended() !== null) return;
-    for (const placed of fresh.items) spoken.add(newsKey(placed));
     const before = running.lastResult();
     yield* PubSub.publish(desktopTurns, "started");
     yield* turnOn(running, `${DESKTOP_SAID}\n${flockNewsText(fresh)}`, { news: fresh }).pipe(
@@ -354,6 +357,8 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* <Server>(opts
       Effect.scoped,
       Effect.ensuring(PubSub.publish(desktopTurns, "ended")),
     );
+    // A turn that failed before the model had its News waits for the next look, not the next nudge.
+    resting = fresh.items.every((placed) => !spoken.has(newsKey(placed)));
     const result = running.lastResult();
     if (result !== undefined && result !== before)
       yield* appendJournal(usage, UsageLine, {
@@ -366,7 +371,9 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* <Server>(opts
   }).pipe(turns.withPermitsIfAvailable(1), Effect.provideContext(services), Effect.ignore);
 
   // ponytail: a fixed look-again for News written after its board change settled; a host push would replace it.
-  yield* nudge.pipe(Effect.repeat(Schedule.spaced(LOOK_AGAIN)), Effect.forkIn(scope));
+  yield* Effect.sync(() => {
+    resting = false;
+  }).pipe(Effect.andThen(nudge), Effect.repeat(Schedule.spaced(LOOK_AGAIN)), Effect.forkIn(scope));
 
   const conversation: FlockConversation = {
     send: (text, about) =>

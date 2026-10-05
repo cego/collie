@@ -902,12 +902,15 @@ regardless. When the chat is idle, a decision or a consequential outcome starts 
 Desktop's own: it shows as **Desktop**, never as you, so anything Collie does in it
 carries no words of yours, and its usage is written to `flock-usage.jsonl` beside the
 session (data, never a limit). Nobody is there to click in it, so a choice it needs is
-asked in its reply and you answer in your next message. News arriving mid-turn waits for that turn to end; what is
-worth trying and routine News waits for your next message and goes with it as context. An
-item counts as read once the model has it. A Machine that does not answer within ten
-seconds is said to be unread rather than holding up the rest, and one whose Collie is
-older than Desktop's chat is written to by nothing until it is upgraded. The bell turns Desktop's own turns off (and on
-again); it is on by default, and kept in `settings.json` beside the session.
+asked in its reply and you answer in your next message. News arriving mid-turn waits for
+that turn to end; what is worth trying and routine News waits for your next message and
+goes with it as context. An item counts as read once the model has it, so a turn that
+fails first (a usage limit, an outage) leaves it waiting; Desktop tries again at the next
+two-minute look. A Machine that does not answer within ten seconds is said to be unread
+rather than holding up the rest, and one whose Collie is older than Desktop's chat, or
+whose board could not be read, is written to by nothing. The bell turns Desktop's own
+turns off (and on again); it is on by default, and kept in `settings.json` beside the
+session.
 
 **Start fresh** (the pen) mints a new session and makes it current; the history (the clock)
 lists the earlier ones on this computer, newest first, and reopens one. Either way the

@@ -107,6 +107,12 @@ const scripted = (
 
 const answered = (text: string) => [
   { ...SAID, event: { type: "message_start", message: { id: `m-${text}` } } },
+  { ...SAID, event: { type: "content_block_start", index: 0, content_block: { type: "text" } } },
+  {
+    ...SAID,
+    event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Noted." } },
+  },
+  { ...SAID, event: { type: "content_block_stop", index: 0 } },
   {
     type: "result",
     subtype: "success",
@@ -201,9 +207,9 @@ test("with the switch off, Desktop starts no turn of its own", () =>
       }),
   ));
 
-test("a turn that fails before the model's first word ends, and the next one is taken", () =>
+test("a turn that fails before the model's first word ends, leaves its News waiting, and the next one is taken", () =>
   withChat(
-    { items: [], proactive: true },
+    { items: [item("r2:ended", "routine")], proactive: false },
     (text) =>
       text === "first"
         ? [
@@ -215,15 +221,45 @@ test("a turn that fails before the model's first word ends, and the next one is 
             },
           ]
         : answered(text),
-    ({ conversation, seen }) =>
+    ({ conversation, seen, read }) =>
       Effect.gen(function* () {
         const first = yield* Stream.runCollect(conversation.send("first", null));
         expect(first.at(-1)).toMatchObject({
           type: "RUN_ERROR",
           message: "API Error: rate limited",
         });
+        yield* TestClock.withLive(Effect.sleep("50 millis"));
+        expect(read).toEqual([]);
         const second = yield* Stream.runCollect(conversation.send("second", null));
         expect(second.at(-1)).toMatchObject({ type: "RUN_FINISHED" });
         expect(seen.prompts).toEqual(["first", "second"]);
+        expect(seen.context[1]).toContain("r2:ended happened.");
+        yield* eventually(() => read.includes("r2:ended"));
       }),
   ));
+
+test("News a failed turn of Desktop's carried waits for the next look, and wakes it", () => {
+  let failures = 1;
+  return withChat(
+    { items: [item("r1:asking", "decision")], proactive: true },
+    (text) =>
+      failures-- > 0
+        ? [{ type: "result", subtype: "success", is_error: true, result: "Overloaded" }]
+        : answered(text),
+    ({ seen, read }) =>
+      Effect.gen(function* () {
+        yield* TestClock.adjust("3 seconds");
+        yield* eventually(() => seen.prompts.length === 1);
+        yield* TestClock.withLive(Effect.sleep("50 millis"));
+        expect(read).toEqual([]);
+        // Not again at the next nudge, which would retry a rate-limited seat every few seconds.
+        yield* TestClock.adjust("3 seconds");
+        yield* TestClock.withLive(Effect.sleep("50 millis"));
+        expect(seen.prompts).toHaveLength(1);
+        yield* TestClock.adjust("2 minutes");
+        yield* eventually(() => read.includes("r1:asking"));
+        expect(seen.prompts).toHaveLength(2);
+        expect(seen.prompts[1]).toContain("r1:asking happened.");
+      }),
+  );
+});
