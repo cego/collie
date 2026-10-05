@@ -2,7 +2,7 @@
 // said in a toast, in the host's own words when it said no.
 
 import { AtomRegistry, injectRegistry, useAtomSet } from "@effect/atom-vue";
-import { Cause, Effect, Exit, Result } from "effect";
+import { Cause, Effect, Encoding, Exit, Result } from "effect";
 import type * as RpcClientError from "effect/unstable/rpc/RpcClientError";
 import type { ActionFailed, DesktopAction } from "../../../src/shared/flock";
 import { FlockClient } from "../flock";
@@ -31,12 +31,10 @@ export const useActions = () => {
   const registry = injectRegistry();
   /** One part of a Run's item: its own call, since several are read at once. */
   const runFile = (payload: { installation: string; runId: string; ref: string; offset: number }) =>
-    Effect.runPromiseExit(
-      AtomRegistry.getResult(registry, FlockClient.runtime).pipe(
-        Effect.flatMap((context) =>
-          FlockClient.use((client) => client("runFile", payload)).pipe(
-            Effect.provideContext(context),
-          ),
+    AtomRegistry.getResult(registry, FlockClient.runtime).pipe(
+      Effect.flatMap((context) =>
+        FlockClient.use((client) => client("runFile", payload)).pipe(
+          Effect.provideContext(context),
         ),
       ),
     );
@@ -80,20 +78,24 @@ export const useActions = () => {
     workflowsIn: (installation: string, project: string) =>
       workflows({ payload: { installation, project } }).then(read),
     /** A Run's item by reference, as text, read part by part until all of it is here. */
-    textOf: async (installation: string, runId: string, ref: string) => {
-      // Streamed, so a character split across two parts is decoded whole.
-      const decoder = new TextDecoder();
-      let text = "";
-      let offset = 0;
-      for (;;) {
-        const part = read(await runFile({ installation, runId, ref, offset }));
-        if (part === null) return null;
-        if (part.encoding === "utf8" && offset === 0) return part.content;
-        const bytes = Uint8Array.from(atob(part.content), (c) => c.charCodeAt(0));
-        text += decoder.decode(bytes, { stream: true });
-        offset += bytes.length;
-        if (offset >= part.size || bytes.length === 0) return text + decoder.decode();
-      }
-    },
+    textOf: (installation: string, runId: string, ref: string) =>
+      Effect.runPromiseExit(
+        Effect.gen(function* () {
+          // Streamed, so a character split across two parts is decoded whole.
+          const decoder = new TextDecoder();
+          let text = "";
+          let offset = 0;
+          for (;;) {
+            const part = yield* runFile({ installation, runId, ref, offset });
+            if (part.encoding === "utf8" && offset === 0) return part.content;
+            const bytes = yield* Effect.fromResult(Encoding.decodeBase64(part.content)).pipe(
+              Effect.orDie,
+            );
+            text += decoder.decode(bytes, { stream: true });
+            offset += bytes.length;
+            if (offset >= part.size || bytes.length === 0) return text + decoder.decode();
+          }
+        }),
+      ).then(read),
   };
 };

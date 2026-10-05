@@ -18,15 +18,15 @@ const languageOf = (path: string): BundledLanguage | "text" => {
 };
 
 /** Each line's tokens, in the colours of the light and the dark theme. */
-export const highlightLines = async (
+export const highlightLines = (
   lines: ReadonlyArray<string>,
   path: string,
-): Promise<ReadonlyArray<ReadonlyArray<Token>>> => {
-  const { tokens } = await codeToTokens(lines.join("\n"), {
+): Promise<ReadonlyArray<ReadonlyArray<Token>>> =>
+  codeToTokens(lines.join("\n"), {
     lang: languageOf(path),
     themes: { light: "github-light", dark: "github-dark" },
-  });
-  return tokens.map((line) =>
-    line.map((token) => ({ content: token.content, style: token.htmlStyle ?? {} })),
+  }).then(({ tokens }) =>
+    tokens.map((line) =>
+      line.map((token) => ({ content: token.content, style: token.htmlStyle ?? {} })),
+    ),
   );
-};
