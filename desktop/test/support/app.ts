@@ -149,7 +149,7 @@ export const launch = (
     if (stale._tag === "Some") return yield* Effect.die(`port ${CDP} is already CEF's`);
     // In a session of its own, so the whole app goes with it; under Xvfb without a display.
     const display = Bun.env.DISPLAY === undefined ? ["xvfb-run", "-a"] : [];
-    const env = {
+    const env: typeof Bun.env = {
       ...Bun.env,
       // CEF keeps one profile per user, so a test's app must not find the operator's.
       HOME: scratch,
