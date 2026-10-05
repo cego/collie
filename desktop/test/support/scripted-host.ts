@@ -34,6 +34,7 @@ const Served = FrontDoorRpcs.omit(
   "act",
   "reconcile",
   "settleDelivery",
+  "news",
 );
 
 const handlers = Served.toLayer(
