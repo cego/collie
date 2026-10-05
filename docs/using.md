@@ -857,7 +857,13 @@ computer's name.
 Pressing a card's name opens its drawer, which follows the card's Run on its host for as
 long as it is open. Its **Plan** tab renders the spec and lists the tickets, each expanding
 in place, read from the host when first opened; a link from one plan file to another opens
-that file at the top of the tab. **Review** renders the review and lists its findings. **Log**
+that file at the top of the tab. **Review** renders the review and lists its findings; a finding's `file:line` opens
+**Diff** at that line, or, for a file the Run did not change, a read-only view of it from
+the Run's checkout. **Diff** is the Run's branch against its merge base — live while the
+Run works, final after — as a file tree beside each file's diff, unified or side by side,
+coloured by Shiki across each side as a whole so a comment spanning lines stays one. Each
+file is read from the host when it is first opened, with no line cap, and a file with more
+than 500 changed lines, or a binary one, starts collapsed. **Log**
 follows the end of the Run's log as it is written, with a search that keeps only the lines
 that match. **Merge request** shows what the host's merge watch last read — title, state,
 pipeline, approvals and comments — with Open in browser. **Facts** shows the Run's intent,

@@ -34,6 +34,9 @@ const SPEC = [
   "See [the brands ticket](issues/02-brands.md), and [a lost one](issues/99-lost.md).",
 ].join("\n");
 
+/** More lines than any cap a diff view might have had. */
+const BIG_LINES = 1200;
+
 const LOG = ["starting", "loading brands", "seeded spilnu"];
 
 const detail = (tail: ReadonlyArray<string>): RunDetail => ({
@@ -97,7 +100,14 @@ const detail = (tail: ReadonlyArray<string>): RunDetail => ({
       severity: "major",
       title: "The loader skips a brand",
       file: "src/seed.ts",
-      line: 12,
+      line: 3,
+      detail: null,
+    },
+    {
+      severity: "minor",
+      title: "The readme says nothing of staging",
+      file: "README.md",
+      line: 40,
       detail: null,
     },
   ],
@@ -114,10 +124,44 @@ const detail = (tail: ReadonlyArray<string>): RunDetail => ({
     },
   ],
   evidence: [],
-  diff: null,
+  diff: {
+    base: "abc1234def",
+    live: true,
+    files: [
+      { path: "src/seed.ts", status: "modified", added: 2, removed: 1 },
+      { path: "gen/big.ts", status: "added", added: BIG_LINES, removed: 0 },
+      { path: "docs/notes/a.md", status: "deleted", added: 0, removed: 1 },
+    ],
+  },
 });
 
+const SEED_PATCH = [
+  "diff --git a/src/seed.ts b/src/seed.ts",
+  "--- a/src/seed.ts",
+  "+++ b/src/seed.ts",
+  "@@ -1,3 +1,4 @@",
+  " /* every brand,",
+  "-   once */",
+  "+   once,",
+  "+   and again */",
+  " const seeded = true;",
+].join("\n");
+
+const BIG_PATCH = [
+  "diff --git a/gen/big.ts b/gen/big.ts",
+  "--- /dev/null",
+  "+++ b/gen/big.ts",
+  `@@ -0,0 +1,${BIG_LINES} @@`,
+  ...Array.from({ length: BIG_LINES }, (_, at) => `+const line${at + 1} = ${at + 1};`),
+].join("\n");
+
+const README = Array.from({ length: 60 }, (_, at) => `Line ${at + 1} of the readme.`).join("\n");
+
 const FILES = {
+  "r-seed diff:src/seed.ts": SEED_PATCH,
+  "r-seed diff:gen/big.ts": BIG_PATCH,
+  "r-seed diff:docs/notes/a.md": "@@ -1 +0,0 @@\n-A note.",
+  "r-seed file:README.md": README,
   "r-seed plan:issues/01-loader.md":
     "# The loader\n\nReads every brand. Then [the spec](../SPEC.md).",
   "r-seed plan:issues/02-brands.md": "# Brands per environment\n\nOne row per brand.",
@@ -265,7 +309,10 @@ test(
         const review = drawer().getByTestId("review");
         yield* reads(review.getByRole("heading"), "Review");
         yield* reads(review.locator("strong", { hasText: "right" }), "right");
-        yield* reads(review.getByTestId("findings").locator("code"), "src/seed.ts:12");
+        yield* reads(
+          review.getByTestId("findings").getByTestId("finding-location").first(),
+          "src/seed.ts:3",
+        );
       }),
     ),
   30_000,
@@ -335,6 +382,112 @@ test(
         const shown = yield* Effect.promise(() => facts.getByTestId("taskview").textContent());
         expect(shown).toContain('"run": "r-seed"');
         expect(shown).toContain('"name": "Seed the brands"');
+      }),
+    ),
+  30_000,
+);
+
+const diffOf = () => drawer().getByTestId("diff");
+const seed = () => diffOf().getByTestId("diff-src/seed.ts");
+const colourOf = (side: string, text: string) =>
+  Effect.promise(() =>
+    seed()
+      .locator(`[data-side="${side}"] span`, { hasText: text })
+      .first()
+      .evaluate((span) => getComputedStyle(span).color),
+  );
+
+test(
+  "the diff lists every changed file as a tree, and opening one fetches it",
+  () =>
+    run(
+      Effect.gen(function* () {
+        yield* opened;
+        yield* Effect.promise(() => tab("Diff").click());
+        const tree = diffOf().getByTestId("diff-tree");
+        for (const name of ["src", "seed.ts", "gen", "big.ts", "docs", "notes", "a.md"])
+          yield* reads(tree.getByText(name, { exact: true }), name);
+        yield* Effect.promise(() => tree.getByText("a.md", { exact: true }).click());
+        yield* reads(
+          diffOf().getByTestId("diff-docs/notes/a.md").locator("[data-old-line='1'] td").last(),
+          "A note.",
+        );
+      }),
+    ),
+  30_000,
+);
+
+test(
+  "unified and side by side both colour a comment across every line it spans",
+  () =>
+    run(
+      Effect.gen(function* () {
+        yield* opened;
+        yield* Effect.promise(() => tab("Diff").click());
+        const comment = yield* colourOf("unified", "/* every brand,");
+        expect(yield* colourOf("unified", "and again */")).toBe(comment);
+        expect(yield* colourOf("unified", "const")).not.toBe(comment);
+        yield* Effect.promise(() => diffOf().getByTestId("split").click());
+        const row = seed().locator("tr", { has: app!.page.getByText("once */") });
+        yield* reads(row.locator('[data-side="new"]'), "once,");
+        expect(yield* colourOf("new", "and again */")).toBe(comment);
+        expect(yield* colourOf("old", "once */")).toBe(comment);
+        yield* Effect.promise(() => diffOf().getByTestId("split").click());
+      }),
+    ),
+  30_000,
+);
+
+test(
+  "a big file starts collapsed, and opened shows every line",
+  () =>
+    run(
+      Effect.gen(function* () {
+        yield* opened;
+        yield* Effect.promise(() => tab("Diff").click());
+        const big = diffOf().getByTestId("diff-gen/big.ts");
+        yield* settled("the big file's header", () =>
+          big.isVisible().then((seen) => seen || undefined),
+        );
+        expect(yield* Effect.promise(() => big.getByTestId("diff-lines").count())).toBe(0);
+        yield* Effect.promise(() => big.getByTestId("diff-file-header").click());
+        yield* reads(
+          big.locator(`[data-new-line='${BIG_LINES}'] td`).last(),
+          `const line${BIG_LINES} = ${BIG_LINES};`,
+        );
+        expect(yield* Effect.promise(() => big.locator("[data-new-line]").count())).toBe(BIG_LINES);
+      }),
+    ),
+  30_000,
+);
+
+test(
+  "a finding jumps to its line in the diff, or to the file read-only when it is not in it",
+  () =>
+    run(
+      Effect.gen(function* () {
+        yield* opened;
+        yield* Effect.promise(() => tab("Review").click());
+        const locations = drawer().getByTestId("finding-location");
+        yield* Effect.promise(() => locations.first().click());
+        const line = seed().locator("[data-target]");
+        yield* reads(line.locator("td").last(), "and again */");
+        yield* settled("the line in view", () =>
+          line.isVisible().then((seen) => seen || undefined),
+        );
+        yield* Effect.promise(() => tab("Review").click());
+        yield* Effect.promise(() => locations.last().click());
+        const source = diffOf().getByTestId("source-file");
+        yield* reads(source.getByTestId("source-file-name"), "README.md");
+        const target = source.locator("[data-target]");
+        yield* reads(target.locator("td").last(), "Line 40 of the readme.");
+        const inView = yield* Effect.promise(() =>
+          target.evaluate((row) => {
+            const box = row.getBoundingClientRect();
+            return box.top >= 0 && box.bottom <= window.innerHeight;
+          }),
+        );
+        expect(inView).toBe(true);
       }),
     ),
   30_000,

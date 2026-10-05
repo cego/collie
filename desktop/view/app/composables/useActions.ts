@@ -1,8 +1,8 @@
 // The board's actions, each asked of the Machine its card is on. What came of one is
 // said in a toast, in the host's own words when it said no.
 
-import { useAtomSet } from "@effect/atom-vue";
-import { Cause, Exit, Result } from "effect";
+import { AtomRegistry, injectRegistry, useAtomSet } from "@effect/atom-vue";
+import { Cause, Effect, Exit, Result } from "effect";
 import type * as RpcClientError from "effect/unstable/rpc/RpcClientError";
 import type { ActionFailed, DesktopAction } from "../../../src/shared/flock";
 import { FlockClient } from "../flock";
@@ -11,7 +11,6 @@ const actAtom = FlockClient.mutation("act");
 const offersAtom = FlockClient.mutation("offers");
 const workflowsAtom = FlockClient.mutation("workflows");
 const openLinkAtom = FlockClient.mutation("openLink");
-const runFileAtom = FlockClient.mutation("runFile");
 
 type Failed = ActionFailed | RpcClientError.RpcClientError;
 
@@ -29,7 +28,18 @@ export const useActions = () => {
   const offers = useAtomSet(() => offersAtom, { mode: "promiseExit" });
   const workflows = useAtomSet(() => workflowsAtom, { mode: "promiseExit" });
   const openLink = useAtomSet(() => openLinkAtom, { mode: "promiseExit" });
-  const runFile = useAtomSet(() => runFileAtom, { mode: "promiseExit" });
+  const registry = injectRegistry();
+  /** One part of a Run's item: its own call, since several are read at once. */
+  const runFile = (payload: { installation: string; runId: string; ref: string; offset: number }) =>
+    Effect.runPromiseExit(
+      AtomRegistry.getResult(registry, FlockClient.runtime).pipe(
+        Effect.flatMap((context) =>
+          FlockClient.use((client) => client("runFile", payload)).pipe(
+            Effect.provideContext(context),
+          ),
+        ),
+      ),
+    );
 
   /** A failed read is said once, here; its caller gets nothing back. */
   const read = <A>(exit: Exit.Exit<A, Failed>) => {
@@ -69,7 +79,21 @@ export const useActions = () => {
       offers({ payload: { installation, runId } }).then(read),
     workflowsIn: (installation: string, project: string) =>
       workflows({ payload: { installation, project } }).then(read),
-    fileOf: (installation: string, runId: string, ref: string) =>
-      runFile({ payload: { installation, runId, ref } }).then(read),
+    /** A Run's item by reference, as text, read part by part until all of it is here. */
+    textOf: async (installation: string, runId: string, ref: string) => {
+      // Streamed, so a character split across two parts is decoded whole.
+      const decoder = new TextDecoder();
+      let text = "";
+      let offset = 0;
+      for (;;) {
+        const part = read(await runFile({ installation, runId, ref, offset }));
+        if (part === null) return null;
+        if (part.encoding === "utf8" && offset === 0) return part.content;
+        const bytes = Uint8Array.from(atob(part.content), (c) => c.charCodeAt(0));
+        text += decoder.decode(bytes, { stream: true });
+        offset += bytes.length;
+        if (offset >= part.size || bytes.length === 0) return text + decoder.decode();
+      }
+    },
   };
 };

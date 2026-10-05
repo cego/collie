@@ -412,5 +412,5 @@ export const runDetailOn = (door: Door, runId: string) =>
     .runDetail({ runId, tail: true, pages: 1, refreshMr: false })
     .pipe(Stream.mapError(refusal()));
 
-export const runFileOn = (door: Door, runId: string, ref: string) =>
-  door.runFile({ runId, ref }).pipe(Effect.mapError(refusal()));
+export const runFileOn = (door: Door, runId: string, ref: string, offset?: number) =>
+  door.runFile({ runId, ref, offset }).pipe(Effect.mapError(refusal()));

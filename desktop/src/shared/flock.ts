@@ -118,9 +118,14 @@ export const DesktopRpcs = RpcGroup.make(
     error: ActionFailed,
     stream: true,
   }),
-  /** A large item of a Run's, by the reference its details hand out. */
+  /** A large item of a Run's, by the reference its details hand out, from `offset` bytes on. */
   Rpc.make("runFile", {
-    payload: { installation: Schema.String, runId: Schema.String, ref: Schema.String },
+    payload: {
+      installation: Schema.String,
+      runId: Schema.String,
+      ref: Schema.String,
+      offset: Schema.optional(Schema.Int),
+    },
     success: RunFile,
     error: ActionFailed,
   }),

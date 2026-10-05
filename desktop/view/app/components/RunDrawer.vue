@@ -3,6 +3,7 @@ import { AsyncResult, useAtomValue } from "@effect/atom-vue";
 import { Cause } from "effect";
 import type { PlacedTask } from "../../../src/shared/flock";
 import { runDetailAtom, runDetailKey } from "../flock";
+import type { DiffTarget } from "./DiffTab.vue";
 
 const props = defineProps<{ placed: PlacedTask }>();
 const emit = defineEmits<{ close: [] }>();
@@ -24,6 +25,7 @@ const tabs = computed(() => {
     ...(shown !== null && (shown.review._tag === "Text" || shown.findings.length > 0)
       ? [{ label: "Review", value: "review" }]
       : []),
+    ...(shown?.diff ? [{ label: "Diff", value: "diff" }] : []),
     { label: "Log", value: "log" },
     ...(shown?.mr ? [{ label: "Merge request", value: "mr" }] : []),
     { label: "Facts", value: "facts" },
@@ -36,6 +38,13 @@ const tab = computed({
     tabs.value.some(({ value }) => value === chosen.value) ? chosen.value : tabs.value[0]!.value,
   set: (value) => (chosen.value = value),
 });
+
+/** The finding last followed, which the Diff tab opens at. */
+const target = ref<DiffTarget | null>(null);
+const jump = (file: string, line: number | null) => {
+  target.value = { file, line };
+  chosen.value = "diff";
+};
 </script>
 
 <template>
@@ -77,13 +86,29 @@ const tab = computed({
                   <UBadge variant="subtle" :label="finding.severity" />
                   <strong>{{ finding.title }}</strong>
                 </div>
-                <code v-if="finding.file" class="text-xs text-muted">
+                <UButton
+                  v-if="finding.file && detail.diff"
+                  variant="link"
+                  size="xs"
+                  class="px-0 font-mono"
+                  data-testid="finding-location"
+                  :label="finding.line === null ? finding.file : `${finding.file}:${finding.line}`"
+                  @click="jump(finding.file, finding.line)"
+                />
+                <code v-else-if="finding.file" class="text-xs text-muted">
                   {{ finding.line === null ? finding.file : `${finding.file}:${finding.line}` }}
                 </code>
                 <p v-if="finding.detail" class="mt-1 whitespace-pre-wrap">{{ finding.detail }}</p>
               </li>
             </ul>
           </div>
+          <DiffTab
+            v-else-if="tab === 'diff' && detail.diff"
+            :diff="detail.diff"
+            :installation="placed.installation"
+            :run-id="detail.id"
+            :target="target"
+          />
           <LogTab v-else-if="tab === 'log'" :tail="detail.tail" />
           <MrPanel v-else-if="tab === 'mr' && detail.mr" :mr="detail.mr" />
         </template>

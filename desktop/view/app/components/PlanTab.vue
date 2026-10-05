@@ -3,26 +3,18 @@ import type { PlanPanel } from "../../../../src/board-model";
 import type { PlanText } from "./PlanFile.vue";
 
 const props = defineProps<{ plan: PlanPanel; installation: string; runId: string }>();
-const { fileOf } = useActions();
+const { textOf } = useActions();
 
 const SPEC = "SPEC.md";
 const ticketFile = (file: string) => `issues/${file}`;
-
-const decoded = (file: { encoding: "utf8" | "base64"; content: string }) =>
-  file.encoding === "utf8"
-    ? file.content
-    : new TextDecoder().decode(Uint8Array.from(atob(file.content), (c) => c.charCodeAt(0)));
 
 /** Each plan file asked for, by its path in the plan; null while it is being read. */
 const read = ref(new Map<string, PlanText | null>());
 const load = (file: string) => {
   if (read.value.has(file)) return;
   read.value.set(file, null);
-  void fileOf(props.installation, props.runId, `plan:${file}`).then((found) =>
-    read.value.set(
-      file,
-      found === null ? { failed: `${file} could not be read.` } : { text: decoded(found) },
-    ),
+  void textOf(props.installation, props.runId, `plan:${file}`).then((text) =>
+    read.value.set(file, text === null ? { failed: `${file} could not be read.` } : { text }),
   );
 };
 

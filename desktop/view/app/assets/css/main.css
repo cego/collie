@@ -6,3 +6,8 @@
 @theme {
   --font-sans: "Public Sans Variable", system-ui, sans-serif;
 }
+
+/* Highlighted code carries its dark theme's colour beside the light one's. */
+.dark [data-highlighted] span {
+  color: var(--shiki-dark) !important;
+}

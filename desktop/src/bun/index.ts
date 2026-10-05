@@ -113,8 +113,10 @@ const main = Effect.gen(function* () {
       doorTo(doors, installation).pipe(Effect.flatMap((door) => workflowsOn(door, project))),
     runDetail: ({ installation, runId }) =>
       Stream.unwrap(Effect.map(doorTo(doors, installation), (door) => runDetailOn(door, runId))),
-    runFile: ({ installation, runId, ref }) =>
-      doorTo(doors, installation).pipe(Effect.flatMap((door) => runFileOn(door, runId, ref))),
+    runFile: ({ installation, runId, ref, offset }) =>
+      doorTo(doors, installation).pipe(
+        Effect.flatMap((door) => runFileOn(door, runId, ref, offset)),
+      ),
   });
   return yield* Layer.launch(
     RpcServer.layer(DesktopRpcs).pipe(
