@@ -196,6 +196,14 @@ message that turn, which the host records in the Actor
 `collie_installation` and a workspace-wide `collie_hold` are not served there: each reads a
 Machine's own files, which no host operation hands over.
 
+The one built-in tool left on is AskUserQuestion. Its permission request is the human's
+question, put to them as choice buttons, and the tool goes on with their answer; every
+other permission request is refused. **Start fresh** mints a new session id and makes it
+the one resumed; an earlier session is reopened by its id, from the transcripts Claude
+Code keeps, never as "the most recent". The session before either ends first, so a
+Desktop has one live Flock chat at a time. The board card the human clicked goes with
+their next message as context from a UserPromptSubmit callback, never as their words.
+
 ## What has actually been proven
 
 Recorded by `tools/chat-live.ts <harness>` against herdr 0.9.0, Claude Code 2.1.272 and

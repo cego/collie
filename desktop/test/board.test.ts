@@ -180,6 +180,25 @@ test(
 );
 
 test(
+  "a clicked card goes with the next chat message as a chip, and the chip can be cleared",
+  () =>
+    run(
+      Effect.gen(function* () {
+        const { page } = app!;
+        const chip = page.getByTestId("chat-chip");
+        yield* Effect.promise(() => card("working", "t-vm").getByTestId("menu").click());
+        yield* Effect.promise(() => page.keyboard.press("Escape"));
+        expect(yield* Effect.promise(() => chip.count())).toBe(0);
+        yield* Effect.promise(() => card("working", "t-vm").getByTestId("sentence").click());
+        yield* reads(chip, "About: vm-mk › Reseed staging");
+        yield* Effect.promise(() => page.getByTestId("chat-chip-clear").click());
+        yield* Effect.promise(() => chip.waitFor({ state: "detached" }));
+      }),
+    ),
+  30_000,
+);
+
+test(
   "quitting Desktop closes every master it opened",
   () =>
     run(

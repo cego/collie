@@ -65,8 +65,10 @@ herdr actions, and the `collie` CLI.
   `desktop/test/board.test.ts` (Playwright over CEF against a scripted host). Desktop has
   its own `package.json`; Effect is the root's, so the board's Schemas exist once. The
   Flock chat is `desktop/src/bun/chat.ts` (the Agent SDK session), `session.ts` (what it
-  runs with), `flock-tools.ts` (the Toolkit over each Machine's `chat` channel) and
-  `agui.ts` (SDK messages as AG-UI), with `src/toolkit.ts` the Toolkit both chats share
+  runs with), `flock-tools.ts` (the Toolkit over each Machine's `chat` channel), `agui.ts`
+  (SDK messages as AG-UI) and `transcript.ts` (a conversation read back), with
+  `desktop/src/shared/chat-view.ts` what the window says of a tool call and the card a
+  message is about, and `src/toolkit.ts` the Toolkit both chats share
   ([ADR-0011](docs/adr/0011-the-conversation-is-a-native-harness.md#amended-2026-10-05-a-herds-chat-per-home-and-one-flock-chat-per-desktop)).
 - **Changing what a Run must prove, or what counts as proof** →
   [`docs/cli.md`](docs/cli.md#outcomes) and

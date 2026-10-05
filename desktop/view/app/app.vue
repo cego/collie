@@ -3,11 +3,23 @@ import { SECTIONS } from "../../../src/board-model";
 
 const { connecting, failure, lost, machines, tasks, sections, header, waiting } = useFlock();
 const starting = ref(false);
+
+/** This window is the chat's own, popped out of the board's. */
+const alone = window.location.hash === "#chat";
+const chatShown = ref(true);
+const popped = ref(false);
+const { popOut } = usePopOut();
+const popChatOut = async () => {
+  popped.value = true;
+  await popOut();
+  popped.value = false;
+};
 </script>
 
 <template>
   <UApp>
-    <div class="flex h-screen">
+    <FlockChat v-if="alone" alone class="h-screen border-l-0" />
+    <div v-else class="flex h-screen">
       <div class="flex min-w-0 flex-1 flex-col overflow-y-auto">
         <header class="flex items-center gap-3 border-b border-default px-4 py-3">
           <UIcon name="i-lucide-dog" class="size-5 text-primary" />
@@ -27,6 +39,15 @@ const starting = ref(false);
             @click="starting = true"
           />
           <StartDialog v-model:open="starting" :machines="machines" />
+          <UButton
+            v-if="!chatShown && !popped"
+            icon="i-lucide-messages-square"
+            color="neutral"
+            variant="ghost"
+            aria-label="Show the chat"
+            data-testid="chat-show"
+            @click="chatShown = true"
+          />
         </header>
         <main class="flex flex-col gap-6 p-4">
           <p v-if="connecting" class="text-muted">Connecting…</p>
@@ -81,7 +102,13 @@ const starting = ref(false);
           </template>
         </main>
       </div>
-      <FlockChat class="w-96 shrink-0" />
+      <FlockChat
+        v-if="!popped"
+        v-show="chatShown"
+        class="w-96 shrink-0"
+        @pop-out="popChatOut"
+        @collapse="chatShown = false"
+      />
     </div>
   </UApp>
 </template>

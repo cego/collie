@@ -10,9 +10,30 @@ import {
 } from "../../../../src/board-model";
 import type { DesktopAction } from "../../../src/shared/flock";
 
-const props = defineProps<{ task: TaskView; where: string; installation: string }>();
+const props = defineProps<{
+  task: TaskView;
+  where: string;
+  installation: string;
+  machine: string;
+}>();
 const { run, openLink } = useActions();
 const act = (action: DesktopAction) => run(props.installation, action);
+
+const { chip, choose } = useChip();
+const chosen = computed(
+  () => chip.value?.machine === props.machine && chip.value.task === props.task.id,
+);
+/** A click on the card itself, not on one of its controls, is what the next chat message is about. */
+const chooseForChat = (event: MouseEvent) => {
+  if (event.target instanceof Element && event.target.closest("button, a, input, label, form"))
+    return;
+  choose({
+    machine: props.machine,
+    task: props.task.id,
+    run: props.task.run,
+    name: props.task.name,
+  });
+};
 
 const STATES: Record<
   TaskView["state"],
@@ -134,7 +155,12 @@ const menu = computed(() =>
 </script>
 
 <template>
-  <UCard :data-testid="`card-${task.id}`" :variant="task.state === 'blocked' ? 'soft' : 'outline'">
+  <UCard
+    :data-testid="`card-${task.id}`"
+    :variant="task.state === 'blocked' ? 'soft' : 'outline'"
+    :class="{ 'ring-2 ring-primary': chosen }"
+    @click="chooseForChat"
+  >
     <template #header>
       <div class="flex items-start justify-between gap-2">
         <strong data-testid="name">{{ task.name }}</strong>

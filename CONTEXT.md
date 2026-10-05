@@ -59,7 +59,8 @@ compaction; Collie owns which harness, which session, and what the model may rea
 bound to a session id Collie mints per Herd and harness, never to whichever session ran
 last in a directory. Its whole reach is **Collie tools**.
 
-**Flock chat** — Desktop's conversation about the **Flock**: one per Desktop, a session of
+**Flock chat** — Desktop's conversation about the **Flock**: one live per Desktop (earlier
+ones can be reopened, never two at once), a session of
 the user's own Claude Code driven through the Agent SDK in Desktop's main process, with
 **Collie tools** as its whole reach. Its tools are answered by each Machine's host over that
 Machine's `chat` channel, and name everything `<machine>:<id>`. Beside each Home's Native

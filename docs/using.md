@@ -877,12 +877,30 @@ because those read a Machine's own files, which no host operation hands over.
 
 It is a session of your own Claude Code, on your own Claude seat, driven through the Agent
 SDK in Desktop's main process: `opus` at medium effort with summarised thinking, Claude
-Code's built-in tools off, and none of your settings, hooks, skills or CLAUDE.md. Your
-first message starts it, and it stays warm until Desktop quits. Its session id is minted
-once and kept in `$XDG_STATE_HOME/collie-desktop/flock-chat.json` (or
+Code's built-in tools off but AskUserQuestion, and none of your settings, hooks, skills or
+CLAUDE.md. Your first message starts it, and it stays warm until Desktop quits. Its session
+id is minted once and kept in `$XDG_STATE_HOME/collie-desktop/flock-chat.json` (or
 `~/.local/state/collie-desktop/`), so a restart resumes the same conversation; Claude Code
-keeps and compacts the transcript on this computer. Replies stream in as Markdown, with
-each Collie tool it called named above them.
+keeps and compacts the transcript on this computer.
+
+Replies stream in as Markdown. Each tool call is one row — the tool, the Machine it
+reached and what it was asked — that opens to what the tool answered, and thinking is a
+collapsed **Thinking** you can open. When the chat needs you to choose, it asks with choice
+buttons, and goes on when you click; any other permission it asks for is refused. Type
+while it is working and your message waits as **Queued** until the turn ends, or drop it
+with its ✕.
+
+Click a card and it becomes a chip above the input ("About: vm-mk › Fix board bugs"): your
+next message goes with it, so "this one" means that card, and sending uses it up. Clear it
+with its ✕. The chip is attached as context for the turn, never as your words.
+
+**Start fresh** (the pen) mints a new session and makes it current; the history (the clock)
+lists the earlier ones on this computer, newest first, and reopens one. Either way the
+session before it ends: there is only ever one live conversation. **Pop out** moves the
+chat into its own window, which follows the same conversation (between turns: a window
+the chat leaves would take its turn with it); **Put back**, or closing
+that window, returns it beside the board. **Hide the chat** folds the panel away, and the
+chat button in the board's header brings it back.
 
 ```sh
 cd desktop

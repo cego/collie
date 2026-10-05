@@ -5,13 +5,25 @@
 import { expect, test } from "bun:test";
 import { Effect } from "effect";
 import { sessionOptions } from "../desktop/src/bun/session";
+import type { About } from "../desktop/src/shared/chat-view";
 
+let about: About | undefined;
+const asked: string[] = [];
 const options = sessionOptions({
   cwd: "/state/collie-desktop",
   session: { resume: "5c1e6c8e-0000-4000-8000-000000000000" },
   server: "the in-process server",
   claude: "/usr/local/bin/claude",
+  ask: (toolUseID) => {
+    asked.push(toolUseID);
+    return Promise.resolve({ "Which one?": "vm-mk" });
+  },
+  about: () => about,
 });
+const permission = {
+  signal: new AbortController().signal,
+  toolUseID: "toolu_1",
+};
 
 test("the session is opus at medium effort, resumed, on the user's own Claude Code", () => {
   expect(options).toMatchObject({
@@ -23,8 +35,8 @@ test("the session is opus at medium effort, resumed, on the user's own Claude Co
   });
 });
 
-test("built-in tools are off, no setting source is read, and Collie's server is the only one", () => {
-  expect(options.tools).toEqual([]);
+test("built-in tools are off but AskUserQuestion, no setting source is read, and Collie's server is the only one", () => {
+  expect(options.tools).toEqual(["AskUserQuestion"]);
   expect(options.settingSources).toEqual([]);
   expect(options.strictMcpConfig).toBe(true);
   expect(Object.keys(options.mcpServers)).toEqual(["collie"]);
@@ -35,11 +47,55 @@ test("built-in tools are off, no setting source is read, and Collie's server is 
   });
   expect(options.allowedTools.every((name) => name.startsWith("mcp__collie__collie_"))).toBe(true);
   expect(options.allowedTools).toContain("mcp__collie__collie_do");
+  expect(options.allowedTools).not.toContain("AskUserQuestion");
 });
+
+test("AskUserQuestion is put to the human, and goes on with their answers", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const questions = [
+        {
+          question: "Which one?",
+          header: "Machine",
+          options: [],
+          multiSelect: false,
+        },
+      ];
+      const answer = yield* Effect.promise(() =>
+        options.canUseTool("AskUserQuestion", { questions }, permission),
+      );
+      expect(asked).toEqual(["toolu_1"]);
+      expect(answer).toEqual({
+        behavior: "allow",
+        updatedInput: { questions, answers: { "Which one?": "vm-mk" } },
+      });
+    }),
+  ));
 
 test("anything else that asks permission is refused", () =>
   Effect.runPromise(
-    Effect.promise(() => options.canUseTool("Bash")).pipe(
+    Effect.promise(() => options.canUseTool("Bash", {}, permission)).pipe(
       Effect.map((answer) => expect(answer).toMatchObject({ behavior: "deny" })),
     ),
+  ));
+
+const submitted = () => Effect.promise(() => options.hooks.UserPromptSubmit[0]!.hooks[0]!());
+
+test("the card a message goes with is attached to it, as context and not as the human's words", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      about = undefined;
+      expect(yield* submitted()).toEqual({});
+      about = {
+        machine: "vm-mk",
+        task: "t-1",
+        run: "r-2",
+        name: "Fix board bugs",
+      };
+      const attached = yield* submitted();
+      expect(attached.hookSpecificOutput?.hookEventName).toBe("UserPromptSubmit");
+      expect(attached.hookSpecificOutput?.additionalContext).toContain("vm-mk:t-1");
+      expect(attached.hookSpecificOutput?.additionalContext).toContain("vm-mk:r-2");
+      expect(attached.hookSpecificOutput?.additionalContext).toContain("Fix board bugs");
+    }),
   ));

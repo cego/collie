@@ -6,6 +6,7 @@ import { BunRuntime, BunServices } from "@effect/platform-bun";
 import {
   Config,
   Crypto,
+  Deferred,
   Effect,
   FileSystem,
   Layer,
@@ -25,7 +26,7 @@ import {
   type ToView,
 } from "../shared/channel";
 import { ActionFailed, DesktopRpcs, type FlockItem, machineNames } from "../shared/flock";
-import { openFlockChat } from "./chat";
+import { type FlockConversation, openFlockChat, refusal } from "./chat";
 import { chatDoor } from "./flock-tools";
 import {
   act,
@@ -43,32 +44,31 @@ import {
 
 type Frames = RPCSchema<FrameSchema>;
 
-let receive: (frame: ToMain) => void = () => {};
-const rpc = BrowserView.defineRPC<{ bun: Frames; webview: Frames }>({
-  maxRequestTime: 10_000,
-  handlers: {
-    requests: {},
-    messages: {
-      // SAFETY: only the view sends on this channel, and the view sends nothing but `ToMain`.
-      frame: (frame) => receive(frame as ToMain),
+/** A window on the view, and the channel its RPC rides. */
+const windowOn = (url: string, title: string, frame: BrowserWindow["frame"]) => {
+  let receive: (frame: ToMain) => void = () => {};
+  const rpc = BrowserView.defineRPC<{ bun: Frames; webview: Frames }>({
+    maxRequestTime: 10_000,
+    handlers: {
+      requests: {},
+      messages: {
+        // SAFETY: only the view sends on this channel, and the view sends nothing but `ToMain`.
+        frame: (frame) => receive(frame as ToMain),
+      },
     },
-  },
-});
-
-const window = new BrowserWindow({
-  title: "Collie",
-  url: "views://mainview/index.html",
-  renderer: "cef",
-  frame: { width: 1200, height: 800, x: 120, y: 80 },
-  rpc,
-});
-
-const toView: Channel<ToView, ToMain> = {
-  send: (frame) => window.webview.rpc?.send.frame(frame),
-  listen: (listener) => {
-    receive = listener;
-  },
+  });
+  const window = new BrowserWindow({ title, url, renderer: "cef", frame, rpc });
+  const channel: Channel<ToView, ToMain> = {
+    send: (frame) => window.webview.rpc?.send.frame(frame),
+    listen: (listener) => {
+      receive = listener;
+    },
+  };
+  return { window, channel };
 };
+
+const VIEW = "views://mainview/index.html";
+const board = windowOn(VIEW, "Collie", { width: 1200, height: 800, x: 120, y: 80 });
 
 /** How `collie` is run here: in a login shell, as SSH would on another Machine. */
 const Collie = Config.schema(
@@ -115,8 +115,9 @@ const main = Effect.gen(function* () {
     ...route,
     open: Effect.map(route.open, (doors) => ({ ...doors, machine: route.machine })),
   }));
+  const scope = yield* Effect.scope;
   const doors = new Map<string, Effect.Success<(typeof named)[number]["open"]>>();
-  // Opened by the first message and warm from then on, in Desktop's own scope.
+  // Opened by the view's first ask, in Desktop's own scope; its session starts with the first message.
   const chat = yield* openFlockChat({
     dir: (yield* Path.Path).join(yield* StateDir, "collie-desktop"),
     conversation: `flock@${local}`,
@@ -128,7 +129,15 @@ const main = Effect.gen(function* () {
         door: chatDoor(held.chat),
       }));
     },
-  }).pipe(Scope.provide(yield* Effect.scope), Effect.result, Effect.cached);
+  }).pipe(Scope.provide(scope), Effect.result, Effect.cached);
+  // ponytail: a chat that could not start stays so until Desktop restarts.
+  const withChat = <A>(use: (opened: FlockConversation) => Effect.Effect<A>, unstarted: A) =>
+    chat.pipe(
+      Effect.flatMap(Result.match({ onSuccess: use, onFailure: () => Effect.succeed(unstarted) })),
+    );
+  let popped:
+    | { readonly window: BrowserWindow; readonly closed: Deferred.Deferred<void> }
+    | undefined;
   const handlers = DesktopRpcs.toLayer({
     flock: () => Stream.merge(Stream.fromIterable(unlisted), flockStream(named, doors)),
     act: ({ installation, action, request: again }) =>
@@ -146,28 +155,50 @@ const main = Effect.gen(function* () {
       doorTo(doors, installation).pipe(
         Effect.flatMap((door) => workflowsOn(door.desktop, project)),
       ),
-    // ponytail: a chat that could not start stays so until Desktop restarts.
-    say: ({ text }) =>
+    say: ({ text, about }) =>
       Stream.unwrap(
         Effect.map(chat, (opened) =>
           Result.match(opened, {
-            onSuccess: (conversation) => conversation.send(text),
+            onSuccess: (conversation) => conversation.send(text, about),
             onFailure: (cause) =>
-              Stream.make({
-                type: "RUN_ERROR" as const,
-                runId: "",
-                message: `The Flock chat could not start: ${String(cause)}`,
-              }),
+              Stream.make(refusal(`The Flock chat could not start: ${String(cause)}`)),
           }),
         ),
       ),
+    answer: ({ toolCallId, answers }) =>
+      withChat((opened) => opened.answer(toolCallId, answers), undefined),
+    transcript: () => withChat((opened) => opened.transcript, []),
+    conversations: () => withChat((opened) => opened.conversations, { current: "", earlier: [] }),
+    reopen: ({ session }) => withChat((opened) => opened.reopen(session), undefined),
+    // Annotated because it serves its own window through `servedOn`, which needs these handlers.
+    popOut: (): Effect.Effect<void, never, Crypto.Crypto | FileSystem.FileSystem | Path.Path> =>
+      Effect.gen(function* () {
+        if (popped === undefined) {
+          const opened = windowOn(`${VIEW}#chat`, "Flock chat", {
+            width: 480,
+            height: 800,
+            x: 1340,
+            y: 80,
+          });
+          const closed = Deferred.makeUnsafe<void>();
+          opened.window.on("close", () => Deferred.doneUnsafe(closed, Effect.void));
+          popped = { window: opened.window, closed };
+          yield* Layer.launch(servedOn(opened.channel)).pipe(
+            Effect.raceFirst(Deferred.await(closed)),
+            Effect.ensuring(Effect.sync(() => (popped = undefined))),
+            Effect.forkIn(scope),
+          );
+        } else popped.window.activate();
+        yield* Deferred.await(popped.closed);
+      }),
+    popIn: () => Effect.sync(() => popped?.window.close()),
   });
-  return yield* Layer.launch(
+  const servedOn = (channel: Channel<ToView, ToMain>) =>
     RpcServer.layer(DesktopRpcs).pipe(
       Layer.provide(handlers),
-      Layer.provide(Layer.effect(RpcServer.Protocol, serverProtocol(toView))),
-    ),
-  );
+      Layer.provide(Layer.effect(RpcServer.Protocol, serverProtocol(channel))),
+    );
+  return yield* Layer.launch(servedOn(board.channel));
 }).pipe(Effect.scoped, Effect.provide(BunServices.layer));
 
 // Quitting may end the process before any scope closes, and an SSH master would outlive it.
