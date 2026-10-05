@@ -1,36 +1,42 @@
 <script setup lang="ts">
 import type { PlanPanel } from "../../../../src/board-model";
+import type { PlanText } from "./PlanFile.vue";
 
 const props = defineProps<{ plan: PlanPanel; installation: string; runId: string }>();
 const { fileOf } = useActions();
+
+const SPEC = "SPEC.md";
+const ticketFile = (file: string) => `issues/${file}`;
 
 const decoded = (file: { encoding: "utf8" | "base64"; content: string }) =>
   file.encoding === "utf8"
     ? file.content
     : new TextDecoder().decode(Uint8Array.from(atob(file.content), (c) => c.charCodeAt(0)));
 
-/** Each plan file read so far, by its path in the plan; null while it is being read. */
-const read = ref(new Map<string, string | null>());
+/** Each plan file asked for, by its path in the plan; null while it is being read. */
+const read = ref(new Map<string, PlanText | null>());
 const load = (file: string) => {
   if (read.value.has(file)) return;
   read.value.set(file, null);
-  void fileOf(props.installation, props.runId, `plan:${file}`).then((found) => {
-    if (found === null) read.value.delete(file);
-    else read.value.set(file, decoded(found));
-  });
+  void fileOf(props.installation, props.runId, `plan:${file}`).then((found) =>
+    read.value.set(
+      file,
+      found === null ? { failed: `${file} could not be read.` } : { text: decoded(found) },
+    ),
+  );
 };
 
 /** The plan file a link opened, shown above the plan until it is closed. */
 const opened = ref<string | null>(null);
 provide("openPlanFile", (file: string) => {
   opened.value = file;
-  if (file !== "SPEC.md") load(file);
+  if (file !== SPEC) load(file);
 });
-const openedText = computed(() => {
-  if (opened.value === "SPEC.md")
-    return props.plan.spec._tag === "Text" ? props.plan.spec.text : props.plan.spec.reason;
-  return opened.value === null ? null : read.value.get(opened.value);
-});
+const spec = computed<PlanText>(() =>
+  props.plan.spec._tag === "Text"
+    ? { text: props.plan.spec.text }
+    : { failed: props.plan.spec.reason },
+);
 
 const tickets = computed(() =>
   props.plan.tickets.map((ticket) => ({
@@ -40,7 +46,7 @@ const tickets = computed(() =>
   })),
 );
 const expanded = ref<string[]>([]);
-watch(expanded, (files) => files.forEach((file) => load(`issues/${file}`)));
+watch(expanded, (files) => files.forEach((file) => load(ticketFile(file))));
 </script>
 
 <template>
@@ -61,11 +67,9 @@ watch(expanded, (files) => files.forEach((file) => load(`issues/${file}`)));
           @click="opened = null"
         />
       </div>
-      <RichMarkdown v-if="openedText" :text="openedText" :from="opened" />
-      <p v-else class="text-muted text-sm">Reading…</p>
+      <PlanFile :file="opened === SPEC ? spec : read.get(opened)" :from="opened" />
     </section>
-    <RichMarkdown v-if="plan.spec._tag === 'Text'" :text="plan.spec.text" from="SPEC.md" />
-    <p v-else class="text-muted text-sm">{{ plan.spec.reason }}</p>
+    <PlanFile :file="spec" :from="SPEC" />
     <UAccordion
       v-if="tickets.length > 0"
       v-model="expanded"
@@ -75,12 +79,7 @@ watch(expanded, (files) => files.forEach((file) => load(`issues/${file}`)));
     >
       <template #body="{ item }">
         <div :data-testid="`ticket-${item.value}`">
-          <RichMarkdown
-            v-if="read.get(`issues/${item.value}`)"
-            :text="read.get(`issues/${item.value}`)!"
-            :from="`issues/${item.value}`"
-          />
-          <p v-else class="text-muted text-sm">Reading…</p>
+          <PlanFile :file="read.get(ticketFile(item.value))" :from="ticketFile(item.value)" />
         </div>
       </template>
     </UAccordion>

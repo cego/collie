@@ -29,7 +29,9 @@ const SPEC = [
   "",
   "[a bad link](javascript:window.pwned=true)",
   "",
-  "See [the brands ticket](issues/02-brands.md).",
+  "![a pixel](https://example.com/pixel.png)",
+  "",
+  "See [the brands ticket](issues/02-brands.md), and [a lost one](issues/99-lost.md).",
 ].join("\n");
 
 const LOG = ["starting", "loading brands", "seeded spilnu"];
@@ -168,6 +170,23 @@ const opened = Effect.gen(function* () {
 });
 
 test(
+  "a drawer opens on its plan",
+  () =>
+    run(
+      Effect.gen(function* () {
+        yield* opened;
+        yield* settled("the plan, unasked", () =>
+          drawer()
+            .getByTestId("plan")
+            .isVisible()
+            .then((seen) => seen || undefined),
+        );
+      }),
+    ),
+  30_000,
+);
+
+test(
   "a plan renders its tables, highlighted code and diagrams, with nothing it could run",
   () =>
     run(
@@ -197,6 +216,7 @@ test(
         );
         expect(yield* Effect.promise(() => plan.locator("script").count())).toBe(0);
         expect(yield* Effect.promise(() => plan.locator("[onerror]").count())).toBe(0);
+        expect(yield* Effect.promise(() => plan.locator("img[src^='http']").count())).toBe(0);
         expect(yield* Effect.promise(() => plan.locator("a[href^='javascript']").count())).toBe(0);
         expect(yield* Effect.promise(() => app!.page.evaluate(() => "pwned" in window))).toBe(
           false,
@@ -227,6 +247,8 @@ test(
           plan.getByTestId("ticket-01-loader.md").getByRole("link", { name: "the spec" }).click(),
         );
         yield* reads(file.getByTestId("plan-file-name"), "SPEC.md");
+        yield* Effect.promise(() => plan.getByRole("link", { name: "a lost one" }).first().click());
+        yield* reads(file.getByTestId("unread"), "issues/99-lost.md could not be read.");
         expect(app!.page.url()).toStartWith("views://");
       }),
     ),

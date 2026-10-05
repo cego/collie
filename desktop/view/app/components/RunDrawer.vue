@@ -2,13 +2,15 @@
 import { AsyncResult, useAtomValue } from "@effect/atom-vue";
 import { Cause } from "effect";
 import type { PlacedTask } from "../../../src/shared/flock";
-import { runDetailAtom } from "../flock";
+import { runDetailAtom, runDetailKey } from "../flock";
 
 const props = defineProps<{ placed: PlacedTask }>();
-const open = defineModel<boolean>("open", { required: true });
+const emit = defineEmits<{ close: [] }>();
 
 const result = useAtomValue(() =>
-  runDetailAtom(`${props.placed.installation} ${props.placed.task.run}`),
+  runDetailAtom(
+    runDetailKey({ installation: props.placed.installation, runId: props.placed.task.run }),
+  ),
 );
 const detail = computed(() => AsyncResult.getOrElse(result.value, () => null));
 const failure = computed(() =>
@@ -27,19 +29,19 @@ const tabs = computed(() => {
     { label: "Facts", value: "facts" },
   ];
 });
-const tab = ref<string>();
-watch(
-  tabs,
-  (now) => {
-    if (!now.some(({ value }) => value === tab.value)) tab.value = now[0]!.value;
-  },
-  { immediate: true },
-);
+/** The tab the human chose while it is there, else the first: Plan, where there is one. */
+const chosen = ref<string>();
+const tab = computed({
+  get: () =>
+    tabs.value.some(({ value }) => value === chosen.value) ? chosen.value : tabs.value[0]!.value,
+  set: (value) => (chosen.value = value),
+});
 </script>
 
 <template>
   <USlideover
-    v-model:open="open"
+    :open="true"
+    @update:open="(still: boolean) => !still && emit('close')"
     :title="placed.task.name"
     :description="detail?.title ?? placed.task.run"
     :ui="{ content: 'max-w-3xl', body: 'flex flex-col gap-4' }"

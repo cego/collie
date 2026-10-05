@@ -84,8 +84,7 @@ const opened = computed(() =>
       v-if="opened"
       :key="`${opened.key} ${opened.task.run}`"
       :placed="opened"
-      :open="true"
-      @update:open="(still: boolean) => !still && drawer.close()"
+      @close="drawer.close()"
     />
   </UApp>
 </template>

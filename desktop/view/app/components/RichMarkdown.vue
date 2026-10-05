@@ -18,7 +18,11 @@ provide(
 );
 
 const PLUGINS = [
-  security({ blockedTags: ["script", "style", "iframe", "object", "embed"] }),
+  security({
+    blockedTags: ["script", "style", "iframe", "object", "embed", "form", "base", "link", "meta"],
+    // Nothing is fetched from the network: an image a Run kept is evidence, read from its host.
+    allowedImagePrefixes: ["data:image/"],
+  }),
   shiki(),
   mermaid(),
 ];
@@ -28,7 +32,7 @@ const COMPONENTS = { a: MarkdownLink, mermaid: Mermaid };
 <template>
   <div class="text-sm" data-testid="markdown">
     <Suspense>
-      <Markdown :key="text" :value="text" :plugins="PLUGINS" :components="COMPONENTS" />
+      <Markdown :value="text" :plugins="PLUGINS" :components="COMPONENTS" />
       <template #fallback><p class="text-muted text-sm">Rendering…</p></template>
     </Suspense>
   </div>
