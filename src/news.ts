@@ -22,9 +22,7 @@
 // An item stays `pending` until the conversation itself says otherwise, and an item whose
 // fate nobody can establish stays `uncertain` rather than being quietly called done.
 //
-// **Each conversation has its own receipts.** One journal per Herd, read by every
-// conversation about it: what one conversation read is still news to another. An item
-// whose cause no longer holds is `superseded` for all of them, and kept.
+// One journal per Herd; receipts are per conversation (CONTEXT.md, News).
 
 import { Effect, FileSystem, Path, Schema } from "effect";
 import { NewsReceipt } from "./board-model";
@@ -79,6 +77,15 @@ const LineJson = Schema.fromJsonString(LineSchema);
 export const newsPath = Effect.fn("News.path")(function* (stateDir: string, key: string) {
   const path = yield* Path.Path;
   return path.join(yield* herdDir(stateDir, key), "news.jsonl");
+});
+
+/** How many News reads a Herd's trail keeps: enough to answer a retried request. */
+export const NEWS_TRAIL = 50;
+
+/** Where a Herd's News reads are audited, apart from its other operations. */
+export const newsTrail = Effect.fn("News.trail")(function* (stateDir: string, key: string) {
+  const path = yield* Path.Path;
+  return path.join(yield* herdDir(stateDir, key), "news");
 });
 
 export const read = (file: string) =>

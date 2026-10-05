@@ -142,8 +142,10 @@ const refusal = (cause: HostFailure): Failure => {
   switch (cause._tag) {
     case "HostRefused":
       // The host says so first where the input is why, and that is exit 2, not exit 1.
-      return cause.reason.startsWith(`${REFUSED_INPUT}:`)
-        ? err("invalid_input", cause.reason.slice(REFUSED_INPUT.length + 1).trim())
+      if (cause.reason.startsWith(`${REFUSED_INPUT}:`))
+        return err("invalid_input", cause.reason.slice(REFUSED_INPUT.length + 1).trim());
+      return cause.reason.startsWith("invalid_state:")
+        ? err("invalid_state", cause.reason.slice("invalid_state:".length).trim())
         : err("operation_failed", cause.reason);
     case "ProposalRefused":
       return err("invalid_input", cause.detail, { reason: cause.refused });

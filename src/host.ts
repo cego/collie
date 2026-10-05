@@ -61,7 +61,7 @@ import {
 import { configuredAgents } from "./agents";
 import { Catalogue, discover, searchPath } from "./discovery";
 import { sideJobs } from "./side-jobs";
-import { once, recordAudit } from "./audit";
+import { once, recordAudit, trimAudit } from "./audit";
 import { currentEnv } from "./env";
 import { installation as installedRelease } from "./release";
 import { Herdr, type AgentInfo } from "./herdr";
@@ -90,7 +90,14 @@ import {
 } from "./board-model";
 import { boardMessages } from "./board-stream";
 import { recordDisposition } from "./disposition";
-import { newsPath, pending as pendingNews, read as readNews, settle as settleNews } from "./news";
+import {
+  NEWS_TRAIL,
+  newsPath,
+  newsTrail,
+  pending as pendingNews,
+  read as readNews,
+  settle as settleNews,
+} from "./news";
 import { ActionSchema, evaluationDeps } from "./evaluator";
 import { err, request, steer, type OpResult } from "./operations";
 import { REJECTED } from "./envelope";
@@ -939,8 +946,9 @@ const frontDoorHandlers = (
                 return yield* new HostRefused({
                   reason: "invalid_state: no Herd to read News for",
                 });
-              return yield* once(
-                yield* herdDir(env.stateDir, key),
+              const trail = yield* newsTrail(env.stateDir, key);
+              const batch = yield* once(
+                trail,
                 {
                   operation: "news",
                   request,
@@ -956,6 +964,8 @@ const frontDoorHandlers = (
                   return batch;
                 }),
               );
+              yield* trimAudit(trail, NEWS_TRAIL).pipe(Effect.orDie);
+              return batch;
             }),
           ),
         dispose: ({ runId, kind, ref, note, request }, { client }) =>

@@ -1,7 +1,7 @@
 // A Run's audit trail: every operation a front door asked of it, who asked, and what came
 // of it. Written by the host alone, which stamps the front door the channel declared.
 
-import { Effect, Schema } from "effect";
+import { Effect, FileSystem, Schema } from "effect";
 import { FrontDoor, RequestConflict } from "./board-model";
 import { voiceOf, type Voice } from "./proposals";
 import { appendJournal, readJournal } from "./journal";
@@ -31,6 +31,23 @@ export const AUDIT_FILE = "operations.jsonl";
 const fileOf = (runDir: string) => `${runDir}/${AUDIT_FILE}`;
 
 export const readAudit = (runDir: string) => readJournal(fileOf(runDir), AuditJson);
+
+/** Keeps a trail's newest `keep` lines, for one that is written too often to keep whole. */
+export const trimAudit = Effect.fn("Audit.trim")(function* (runDir: string, keep: number) {
+  const lines = yield* readAudit(runDir);
+  if (lines.length <= keep) return;
+  const fs = yield* FileSystem.FileSystem;
+  const encode = Schema.encodeSync(AuditJson);
+  const tmp = `${fileOf(runDir)}.${process.pid}.tmp`;
+  yield* fs.writeFileString(
+    tmp,
+    lines
+      .slice(-keep)
+      .map((line) => `${encode(line)}\n`)
+      .join(""),
+  );
+  yield* fs.rename(tmp, fileOf(runDir));
+});
 
 /** What one operation did, written down under the request that asked for it. */
 export const recordAudit = Effect.fn("Audit.record")(function* <A, I extends Schema.Json>(
