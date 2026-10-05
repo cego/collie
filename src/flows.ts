@@ -777,14 +777,14 @@ const whyNoRenderer = Effect.fn("Flows.whyNoRenderer")(function* () {
 export const RELAUNCH = 75;
 
 /**
- * Completes once `file` is a different file than it was: a build renames a new binary
- * over the old one, so an upgrade is a new inode under the same path. Never completes
- * where the file cannot be read, as under `bun src/main.ts`.
+ * Reads `file` now, and gives back what completes once it is a different file than it was:
+ * a build renames a new binary over the old one, so an upgrade is a new inode under the
+ * same path. That never completes where the file cannot be read, as under `bun src/main.ts`.
  */
 export const replacedOnDisk = (
   file: string,
   every: Duration.Input = "2 seconds",
-): Effect.Effect<void, never, FileSystem.FileSystem> =>
+): Effect.Effect<Effect.Effect<void>, never, FileSystem.FileSystem> =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const inode = fs.stat(file).pipe(
@@ -792,12 +792,13 @@ export const replacedOnDisk = (
       Effect.orElseSucceed(() => null),
     );
     const start = yield* inode;
-    if (start === null) return yield* Effect.never;
-    yield* inode.pipe(
+    if (start === null) return Effect.never;
+    return inode.pipe(
       Effect.repeat({
         schedule: Schedule.spaced(every),
         until: (now) => now !== null && now !== start,
       }),
+      Effect.asVoid,
     );
   });
 
@@ -893,7 +894,7 @@ export const workspaceFlow = Effect.fn("Flows.workspaceFlow")(function* (
                 ),
       }).pipe(
         Effect.raceFirst(
-          replacedOnDisk(process.execPath).pipe(
+          Effect.flatten(replacedOnDisk(process.execPath)).pipe(
             Effect.andThen(
               Effect.sync(() => {
                 replaced = true;

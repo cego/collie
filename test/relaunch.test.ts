@@ -13,9 +13,8 @@ test("a board notices its binary renamed over, and nothing while it is left alon
         const bin = `${dir}/collie`;
         yield* fs.writeFileString(bin, "old");
 
-        const watching = yield* Effect.forkChild(
-          replacedOnDisk(bin, "10 millis").pipe(Effect.timeoutOption(2000)),
-        );
+        const replaced = yield* replacedOnDisk(bin, "10 millis");
+        const watching = yield* Effect.forkChild(replaced.pipe(Effect.timeoutOption(2000)));
         yield* Effect.sleep(100);
         // Rewritten in place is the same file: not an upgrade.
         yield* fs.writeFileString(bin, "old again");
@@ -28,7 +27,7 @@ test("a board notices its binary renamed over, and nothing while it is left alon
         expect(Option.isSome(yield* Fiber.join(watching))).toBe(true);
 
         // A path nobody can read never counts as rebuilt.
-        const missing = yield* replacedOnDisk(`${dir}/gone`, "10 millis").pipe(
+        const missing = yield* Effect.flatten(replacedOnDisk(`${dir}/gone`, "10 millis")).pipe(
           Effect.timeoutOption(100),
         );
         expect(Option.isNone(missing)).toBe(true);

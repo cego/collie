@@ -11,6 +11,7 @@ import type { BunServices } from "@effect/platform-bun/BunServices";
 import {
   Cause,
   Context,
+  Deferred,
   Duration,
   Effect,
   Exit,
@@ -100,11 +101,18 @@ export const answering = Effect.fn("Mcp.answering")(function* <R>(opts: {
   readonly rebuilt: (name: string, input: JsonObject) => Effect.Effect<string, never, R>;
 }) {
   const replaced = yield* Ref.make(false);
+  const watching = yield* Deferred.make<void>();
   yield* Effect.forkScoped(
-    replacedOnDisk(opts.binary, opts.every).pipe(Effect.andThen(Ref.set(replaced, true))),
+    replacedOnDisk(opts.binary, opts.every).pipe(
+      Effect.tap(() => Deferred.succeed(watching, undefined)),
+      Effect.flatten,
+      Effect.andThen(Ref.set(replaced, true)),
+    ),
   );
+  // An answer waits for the binary to be read, or one renamed over at once is never seen replaced.
   return (name: string, input: JsonObject) =>
-    Ref.get(replaced).pipe(
+    Deferred.await(watching).pipe(
+      Effect.andThen(Ref.get(replaced)),
       Effect.flatMap((now) => (now ? opts.rebuilt(name, input) : opts.direct(name, input))),
     );
 });
