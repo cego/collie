@@ -941,7 +941,7 @@ were — a changing pane is not progress.
 Several things happening at once is one batch, not one interruption each. It says how many
 older items it left out, and those stay waiting rather than being replaced by a single
 latest-status line. News whose cause has gone — a halted Run resumed, a question
-answered, a finished Run whose work you recorded as merged or abandoned — is dropped from
+answered, a finished Run whose work has a disposition (merged, abandoned or superseded) — is dropped from
 the next batch rather than told late, and stays in the journal. What one conversation
 has read is still news to any other about the same Herd.
 

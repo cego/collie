@@ -38,8 +38,8 @@ also declares its conversation and the human's message from that turn, and the h
 both in the Actor beside the front door. The message is attached by the tool host, from what
 the harness's own prompt hook handed it, and never by the model: `collie_do` takes no field
 for it and refuses one. The words last for the turn they were said in: Claude's `Stop` hook
-forgets them, so a turn nobody prompted carries none. Native chat's conversation is its
-Herd. Like the rest of this record it is honest, not secure: a model with a shell could
+forgets them, so a turn nobody prompted carries none. Native chat's conversation is
+`native`, the name its News receipts carry. Like the rest of this record it is honest, not secure: a model with a shell could
 still write the file its tool host reads.
 
 ## Consequences

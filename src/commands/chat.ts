@@ -210,10 +210,7 @@ const context = Command.make("context", {}, () =>
   ),
 ).pipe(Command.withDescription("The board's selection, as a chat prompt's context"));
 
-/**
- * What Claude Code's other `UserPromptSubmit` hook runs: the prompt, from the hook's input
- * on stdin, handed to the tool host so what chat does this turn carries the human's words.
- */
+/** Claude Code's other prompt hook: hands the prompt on stdin to the tool host. */
 const heard = Command.make("heard", {}, () =>
   answering((env) =>
     Effect.gen(function* () {

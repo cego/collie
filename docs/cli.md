@@ -701,7 +701,7 @@ through a generated extension; this is the third way in.
 | `collie_receipts`     | One run's pending proposals, and what state each message to its agents actually reached     |
 | `collie_definitions`  | The Workflows and Personas there are; one resolved and checked, or one Persona's body       |
 | `collie_installation` | What Collie needs, which workspace the Home is, what a cleanup would close, the defaults    |
-| `collie_news`         | What has happened that nobody has been told, and reading it settles those items             |
+| `collie_news`         | What this conversation has not been told; reading it settles those items for it             |
 | `collie_hold`         | Hold a run, or every unfinished run in a workspace, until someone releases it               |
 | `collie_do`           | Carry out, at once, a board action or decision on a named run the human asked for           |
 | `collie_propose`      | Carry out the rest of what the human can ask for, with a request id that makes retries safe |

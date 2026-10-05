@@ -876,10 +876,7 @@ export const FrontDoorRpcs = RpcGroup.make(
     success: Started,
     error: Schema.Union([HostRefused, RequestConflict]),
   }),
-  /**
-   * A conversation's pending News, settled as `as` for that conversation alone. `read` is
-   * the conversation having taken it; `sent` and `uncertain` are facts about a transport.
-   */
+  /** A conversation's pending News, settled as `as` for that conversation alone. */
   Rpc.make("news", {
     payload: {
       /** The Herd whose journal it is; the asker's own where null. */

@@ -22,7 +22,9 @@
 
 import type { BunServices } from "@effect/platform-bun/BunServices";
 import { Clock, Context, Crypto, Effect, Option, Result, Schema, Stream } from "effect";
-import { AiError, Tool, Toolkit } from "effect/unstable/ai";
+import * as AiError from "effect/unstable/ai/AiError";
+import * as Tool from "effect/unstable/ai/Tool";
+import * as Toolkit from "effect/unstable/ai/Toolkit";
 import { ChildProcessSpawner } from "effect/unstable/process";
 import type { PluginEnv } from "./env";
 import { newRequestId, runFacts, workspaceCwdFromPanes } from "./operations";
