@@ -1011,6 +1011,32 @@ test("a chat's hold and proposal are recorded with the human's words too", () =>
     }),
   ));
 
+test("a chat's amendment to an Intent is recorded with the human's words", () =>
+  inWorld(
+    Effect.gen(function* () {
+      yield* chatting();
+      const run = yield* aRun("add a picker");
+      yield* hear(env, hookInput("s-1", "the goal is to ship the picker"));
+      const said = yield* call("collie_propose", {
+        interpretation: "set the goal",
+        actions: [
+          {
+            kind: "update_intent",
+            run: run.id,
+            change: "set-goal",
+            patch: "ship the picker",
+            base_version: 1,
+          },
+        ],
+      });
+      expect(said).toContain("applied");
+      expect((yield* readIntent(run.dir))?.history.at(-1)).toMatchObject({
+        conversation: KEY,
+        said: "the goal is to ship the picker",
+      });
+    }),
+  ));
+
 test("the words are the tool host's to attach, never the model's", () =>
   inWorld(
     Effect.gen(function* () {

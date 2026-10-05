@@ -68,6 +68,7 @@ import {
   stepResults,
   stepSettled,
   stepStarted,
+  voiceOf,
   type Actor,
   type ProposalRecord,
 } from "./proposals";
@@ -156,7 +157,16 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
   );
   registerExecutor("release", (action, by, env) => control(env, by, action.run, "hold", false));
   registerExecutor("clear_override", (action, by, env) =>
-    carry(clearOverride(env.stateDir, new Herdr(env), action.run, action.agent, actorName(by))),
+    carry(
+      clearOverride(
+        env.stateDir,
+        new Herdr(env),
+        action.run,
+        action.agent,
+        actorName(by),
+        voiceOf(by),
+      ),
+    ),
   );
   registerExecutor("deliver", (action, by, env) =>
     carry(
@@ -217,6 +227,7 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
                   },
             actorName(by),
             yield* nowIso(),
+            voiceOf(by),
           );
           yield* writeIntentHeld(dir, amended);
           return { ok: true, amended } as const;
@@ -252,7 +263,10 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
           );
           if (intent === null) return;
           const change = verificationGrant(intent, action.name, command);
-          yield* writeIntentHeld(dir, amendIntent(intent, change, actorName(by), yield* nowIso()));
+          yield* writeIntentHeld(
+            dir,
+            amendIntent(intent, change, actorName(by), yield* nowIso(), voiceOf(by)),
+          );
         }),
       ).pipe(
         Effect.as(""),

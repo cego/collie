@@ -11,7 +11,8 @@ import { connect } from "../src/host";
 import { isSettled } from "../src/lifecycle";
 import { carryOutAsked } from "../src/run-actions";
 import { DELIVERY_TOKEN } from "../src/dispatcher";
-import { deliveriesOf } from "../src/steering";
+import { appendLine, deliveriesOf, ledgerPath, readLedger } from "../src/steering";
+import { Herdr } from "../src/herdr";
 import { stopHost, until } from "./support/host";
 import { hosted, hostedRun } from "./support/hosted";
 import { collie, proves, type World } from "./support/world";
@@ -104,6 +105,41 @@ const steerable = <A, E>(
       }),
     ["told.workflow.ts"],
   );
+
+test(
+  "a chat that clears an override is recorded with the human's words",
+  () =>
+    steerable("collie-finished-override-", (world) =>
+      Effect.gen(function* () {
+        const finished = yield* finishedWithAgent(world);
+        const { runId, agent } = finished;
+        // Cleared here rather than by the host, so it has to reach this world's herdr.
+        const env = { ...finished.env, binPath: Bun.env.HERDR_BIN_PATH! };
+        const live = yield* new Herdr(env).agentList().pipe(Effect.orDie);
+        const terminal = live.find((one) => one.name === agent.name)!.terminalId!;
+        const ledger = yield* ledgerPath(world.state, terminal);
+        yield* appendLine(ledger, {
+          kind: "manual_override",
+          at: "2026-10-05T10:00:00.000Z",
+          incarnation: terminal,
+          by: "hook:UserPromptSubmit",
+        });
+        const voiced = { ...chat(), conversation: "native", said: "let Collie steer it again" };
+        const [done] = yield* carryOutAsked(
+          env,
+          [{ kind: "clear_override", run: runId, agent: agent.name }],
+          voiced,
+        );
+        expect(done).toMatchObject({ kind: "clear_override", state: "applied" });
+        expect((yield* readLedger(ledger)).at(-1)).toMatchObject({
+          kind: "override_cleared",
+          conversation: "native",
+          said: "let Collie steer it again",
+        });
+      }),
+    ),
+  120_000,
+);
 
 test(
   "a succeeded Run's live agent takes a delivery, with its token and a ledger receipt",
