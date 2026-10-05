@@ -345,6 +345,7 @@ export function mrDetails<R>(
       unresolved: mr.blocking_discussions_resolved === false,
       notes: mr.user_notes_count ?? 0,
       headSha: (mr.sha ?? "").slice(0, 7),
+      head: mr.sha ?? "",
       mergedSha:
         mr.state === "merged" ? (mr.merge_commit_sha ?? mr.squash_commit_sha ?? mr.sha ?? "") : "",
       updatedAt: Number.isFinite(updated) ? updated : 0,

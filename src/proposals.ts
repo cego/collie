@@ -515,8 +515,6 @@ export const reconcileStep = Effect.fn("Proposals.reconcileStep")(function* (
 export interface AdmissionContext {
   /** The target Run as it is now, or null where it is gone. */
   readonly run: { readonly id: string; readonly status: string } | null;
-  /** Whether the host holds it, which `hold` and `deliver` need and `followup` refuses. */
-  readonly hostHolds: boolean;
   /** The Choice the Run is asking, if any. */
   readonly pendingChoice: string | null;
   /** The target agent's incarnation now, where the action names an agent. */
@@ -555,24 +553,18 @@ export function admit(action: Action, ctx: AdmissionContext): string | null {
   const terminal = TERMINAL_STATUSES.has(ctx.run.status);
   if (action.kind === "followup" && !terminal)
     return "a follow-up is a child of a finished run, and this one is still going";
-  // Resume owns its lifecycle checks, succeeded included; navigation does not change the
-  // Run, so a finished one may still be gone to.
-  if (
-    action.kind !== "followup" &&
-    action.kind !== "resume" &&
-    action.kind !== "navigate" &&
-    action.kind !== "remember_verification" &&
-    terminal
-  )
-    return `the run is ${ctx.run.status}`;
+  // A finished Run's live agents still take steering (ADR-0041); only what needs a step
+  // left to run is refused, with what to do instead.
+  if (terminal && (action.kind === "hold" || action.kind === "release"))
+    return "a finished Run has no step left to hold; stop closes its agents";
+  if (terminal && action.kind === "set_verification")
+    return "its checks were collected when it finished; remember_verification keeps them for the next Run";
 
-  if ((action.kind === "hold" || action.kind === "deliver") && !ctx.hostHolds)
-    return "the host no longer holds the run, so there is nothing to carry this out";
   if (action.kind === "hold" && action.until !== undefined)
     return "nothing lifts a hold at a time: hold it, and release it when it should go on";
   if (action.kind === "answer" && ctx.pendingChoice !== action.choiceId)
     return ctx.pendingChoice === null
-      ? "the run is not asking a Choice any more"
+      ? "the run is not asking a Choice"
       : `the run is asking "${ctx.pendingChoice}" now, not "${action.choiceId}"`;
 
   if (ctx.proposedIncarnation !== null && ctx.incarnation !== ctx.proposedIncarnation)

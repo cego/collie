@@ -2,7 +2,8 @@
 // Herd's News and worktree pruning.
 
 import { Clock, Effect, Schedule, type Duration } from "effect";
-import type { TaskView, MrState } from "./board-model";
+import type { TaskView, MrState, Reopened } from "./board-model";
+import { readyRuns } from "./board";
 import { loadDefaults } from "./config";
 import { currentReports, readDrift } from "./drift";
 import type { PluginEnv } from "./env";
@@ -11,7 +12,7 @@ import { liveHerds } from "./herds";
 import { settleMerges, type MrPanels } from "./merges";
 import { shell } from "./mr";
 import { append as appendNews, newsPath } from "./news";
-import { eventsIn, readSaid, remember } from "./proactive";
+import { eventsIn, idleAgain, readSaid, remember } from "./proactive";
 import { everyRegistered } from "./registry";
 import { settled, type RunFacts } from "./runs";
 import { herdDir, herdOf } from "./steering";
@@ -42,11 +43,14 @@ const sayWhatHappened = Effect.fn("SideJobs.sayWhatHappened")(function* (
   stateDir: string,
   key: string,
   runs: ReadonlyArray<RunFacts>,
+  views: ReadonlyArray<TaskView>,
+  /** Reopened Runs whose agent has finished what it was told, by Run. */
+  done: ReadonlyMap<string, Reopened>,
 ) {
   const dir = yield* herdDir(stateDir, key);
   const said = yield* readSaid(dir);
   const file = yield* newsPath(stateDir, key);
-  for (const event of eventsIn(runs, yield* escalatedDrift(runs))) {
+  for (const event of eventsIn(runs, yield* escalatedDrift(runs), readyRuns(views), done)) {
     if (said.has(event.key)) continue;
     // Remembered only once it is in the journal, so a failed write is retried next round.
     const queued = yield* appendNews(file, {
@@ -63,6 +67,8 @@ const news = Effect.fn("SideJobs.news")(function* (
   env: PluginEnv,
   herdr: Herdr,
   runs: ReadonlyArray<RunFacts>,
+  views: ReadonlyArray<TaskView>,
+  done: ReadonlyMap<string, Reopened>,
 ) {
   if (!(yield* loadDefaults(env.userDir)).proactive) return;
   const herdOfTask = new Map(
@@ -77,7 +83,7 @@ const news = Effect.fn("SideJobs.news")(function* (
     const mine = runs.filter(
       (run) => ((run.task === null ? null : herdOfTask.get(run.task)) ?? own) === herd,
     );
-    yield* sayWhatHappened(env.stateDir, herd, mine);
+    yield* sayWhatHappened(env.stateDir, herd, mine, views, done);
   }
 });
 
@@ -105,12 +111,18 @@ export const sideJobs = <E, R>(opts: {
   readonly herdr: Herdr;
   readonly runs: Effect.Effect<ReadonlyArray<RunFacts>, E, R>;
   readonly board: Effect.Effect<ReadonlyArray<TaskView>, E, R>;
+  /** The board with herdr's live agents, which says what a Reopened Run's agent is doing. */
+  readonly liveBoard: Effect.Effect<ReadonlyArray<TaskView>, E, R>;
   readonly panels: MrPanels;
 }) => {
   const { env, herdr } = opts;
   const checked = new Map<string, number>();
   const kept = new Set<string>();
   const states = new Map<string, MrState>();
+  /** Steers to Reopened Runs seen being worked on. */
+  const workedOn = new Set<string>();
+  /** Reopened Runs whose agent has since finished; the said journal keeps each to one item. */
+  const finishedTold = new Map<string, Reopened>();
   return Effect.all(
     [
       every(
@@ -130,9 +142,13 @@ export const sideJobs = <E, R>(opts: {
       ),
       every(
         LOOK_EVERY,
-        Effect.flatMap(opts.runs, (runs) =>
-          Effect.andThen(news(env, herdr, runs), keepDiffs(runs, kept)),
-        ),
+        Effect.gen(function* () {
+          const runs = yield* opts.runs;
+          const views = yield* opts.liveBoard;
+          for (const [run, done] of idleAgain(views, workedOn)) finishedTold.set(run, done);
+          yield* news(env, herdr, runs, views, finishedTold);
+          yield* keepDiffs(runs, kept);
+        }),
       ),
       every(
         PRUNE_EVERY,

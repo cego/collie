@@ -105,6 +105,55 @@ export type BoardOffer = typeof BoardOffer.Type;
 export const MrState = Schema.Literals(["open", "merged", "closed", "on-stage", "in-prod"]);
 export type MrState = typeof MrState.Type;
 
+/** What checked an open merge request's branch, at the revision named. */
+export const Checks = Schema.Union([
+  Schema.Struct({ state: Schema.Literal("passed"), at: Schema.String }),
+  Schema.Struct({ state: Schema.Literal("failed"), name: Schema.String, at: Schema.String }),
+  Schema.Struct({ state: Schema.Literal("running") }),
+  Schema.Struct({ state: Schema.Literal("unchecked") }),
+]);
+export type Checks = typeof Checks.Type;
+
+/**
+ * Why a check was run (ADR-0042): the gate on the branch, a recheck of the same tree for a
+ * flake, a fix after gate fix N, the default branch's base, the finish's own, or a plain
+ * check where nobody said.
+ */
+export const PASSES = ["gate", "recheck", "fix", "baseline", "finish", "check"] as const;
+export const Pass = Schema.Literals(PASSES);
+export type Pass = typeof Pass.Type;
+
+/** A check running now, and what it is measured against. */
+export const RunningCheck = Schema.Struct({
+  name: Schema.String,
+  pass: Pass,
+  round: Schema.NullOr(Schema.Number),
+  revision: Schema.String,
+  base: Schema.NullOr(Schema.String),
+  /** How long it has run, or null where the marker does not say when it started. */
+  elapsedMs: Schema.NullOr(Schema.Number),
+  /** The median of its last five completed runs in this repository, or null for none. */
+  usualMs: Schema.NullOr(Schema.Number),
+  /** Other checks this host is running now. */
+  others: Schema.Number,
+  sentence: Schema.String,
+  /** Where its output is being written, or null for a marker that does not say. */
+  log: Schema.NullOr(Schema.String),
+  /** The last lines it has written, oldest first. */
+  lastLines: Schema.Array(Schema.String),
+});
+export type RunningCheck = typeof RunningCheck.Type;
+
+/** A steer a finished Run's agent took after the Run ended, and what herdr says it is doing. */
+export const Reopened = Schema.Struct({
+  delivery: Schema.String,
+  agent: Schema.String,
+  /** The first line of what it was told, as the Run's log recorded it, or null for none. */
+  told: Schema.NullOr(Schema.String),
+  status: Schema.String,
+});
+export type Reopened = typeof Reopened.Type;
+
 /** One Task as the board draws it. */
 export const TaskView = Schema.Struct({
   /** The Task's id, or the Run's own where it belongs to no Task. */
@@ -138,8 +187,16 @@ export const TaskView = Schema.Struct({
   landed: Schema.Boolean,
   /** When the leading Run ended, or null while it has not. Orders Waiting on you. */
   ended: Schema.NullOr(Schema.Number),
-  /** What GitLab last said about the merge request, where Collie has asked. */
+  /** What the forge last said about the merge request, where Collie has asked. */
   mrState: Schema.NullOr(MrState),
+  /** What checked the open merge request's branch, or null where no merge request waits. */
+  checks: Schema.optionalKey(Schema.NullOr(Checks)),
+  /** Ready to release: the leading Run succeeded, its merge request is open and its checks passed. */
+  ready: Schema.optionalKey(Schema.Boolean),
+  /** The check Collie is running for the leading Run now, or null for none. */
+  check: Schema.optionalKey(Schema.NullOr(RunningCheck)),
+  /** A finished Run whose agent was told something after it ended, or null (ADR-0041 D5). */
+  reopened: Schema.optionalKey(Schema.NullOr(Reopened)),
   /** A plan that finished and nobody has implemented: its card's first action starts that. */
   planReady: Schema.Boolean,
   /** That action: the Run's primary offer as its module declares it now, or null for none. */
@@ -258,6 +315,8 @@ export const MrDetails = Schema.TaggedStruct("Details", {
   notes: Schema.Number,
   /** Seven characters: enough to tell two heads apart, short enough to read. */
   headSha: Schema.String,
+  /** The head revision in full, which evidence is matched against, or "" where unsaid. */
+  head: Schema.optionalKey(Schema.String),
   /** The commit the merge put on the target branch, in full, or "" while it is not merged. */
   mergedSha: Schema.String,
   /** When GitLab last saw it change, in epoch milliseconds, or 0 when it did not say. */
@@ -518,6 +577,8 @@ export const Controlled = Schema.Struct({
   detail: Schema.String,
   /** The agents a stop could not close, which may still be changing the workspace. */
   left: Schema.Array(Schema.String),
+  /** A stop of a finished Run: the agents it closed, with no control set and no status changed. */
+  closed: Schema.optionalKey(Schema.Array(Schema.String)),
 });
 
 /** What a start became: the run it is, and whether this call is what made it. */
@@ -824,23 +885,27 @@ export function sectionOf(view: Pick<TaskView, "state" | "landed">): Section {
   return view.landed ? "finished" : "waiting";
 }
 
-const SECTION_ORDER = new Map<Section, number>([
-  ["needs-you", 0],
-  ["working", 1],
-  ["waiting", 2],
-  ["finished", 3],
-]);
+/** The order every board draws its sections in, and what each is called. */
+export const SECTIONS: ReadonlyArray<readonly [Section, string]> = [
+  ["needs-you", "Needs you"],
+  ["waiting", "Waiting on you"],
+  ["working", "Working"],
+  ["finished", "Finished"],
+];
+const SECTION_ORDER = new Map(SECTIONS.map(([section], at) => [section, at]));
 const STATE_RANK = new Map<TaskState, number>(STATE_ORDER.map((state, at) => [state, at]));
 
 /**
- * The board's order: the four sections, then whatever changed last inside each. Nothing
- * else is ranked — a board that reordered itself on every tick is one a human cannot point at.
+ * The board's order: the sections, then the state order inside Needs you and what is
+ * ready to release inside Waiting on you, then whatever changed last. Nothing else is
+ * ranked — a board that reordered itself on every tick is one a human cannot point at.
  */
 export function sortBoard(views: ReadonlyArray<TaskView>): TaskView[] {
   return [...views].sort(
     (a, b) =>
       SECTION_ORDER.get(sectionOf(a))! - SECTION_ORDER.get(sectionOf(b))! ||
       (sectionOf(a) === "needs-you" ? STATE_RANK.get(a.state)! - STATE_RANK.get(b.state)! : 0) ||
+      Number(b.ready ?? false) - Number(a.ready ?? false) ||
       // What moved last is at the top: in Working what is doing something, in Waiting on
       // you what you were just doing.
       (b.ended ?? b.at) - (a.ended ?? a.at),
@@ -857,11 +922,13 @@ export interface Sections {
   finished: TaskView[];
 }
 
-/** Waiting on you, split at a week: what is older folds into one counted line. */
+/**
+ * Waiting on you, split at a week: what is older folds into one counted line. Work ready
+ * to release is never folded, however long it has waited.
+ */
 export function foldWaiting(waiting: ReadonlyArray<TaskView>, now: number) {
-  const recent = waiting.filter((view) => (view.ended ?? view.at) >= now - WAIT_FOLD_MS);
-  const older = waiting.filter((view) => (view.ended ?? view.at) < now - WAIT_FOLD_MS);
-  return { recent, older };
+  const old = (view: TaskView) => !view.ready && (view.ended ?? view.at) < now - WAIT_FOLD_MS;
+  return { recent: waiting.filter((view) => !old(view)), older: waiting.filter(old) };
 }
 
 /** What a search is matched against: what a human remembers about a Task, and no ids. */
@@ -919,8 +986,12 @@ export function headerSentence(views: ReadonlyArray<TaskView>, now?: number): He
         `${needs === 1 ? "One task is" : `${needs} tasks are`} waiting on you.`;
   const gone = quiet === 0 ? "" : `, ${quiet} gone quiet`;
   const waitingAll = views.filter((view) => sectionOf(view) === "waiting");
-  const waiting =
-    now === undefined ? waitingAll.length : foldWaiting(waitingAll, now).recent.length;
-  const held = waiting === 0 ? "" : ` ${waiting} waiting on you.`;
-  return { text: `${opening} ${working.length} working${gone}.${held}`, urgent: needs > 0 };
+  const waiting = now === undefined ? waitingAll : foldWaiting(waitingAll, now).recent;
+  const ready = waiting.filter((view) => view.ready).length;
+  const held = [
+    ...(ready === 0 ? [] : [`${ready} ready to release`]),
+    ...(waiting.length === ready ? [] : [`${waiting.length - ready} waiting on you`]),
+  ];
+  const inHand = held.length === 0 ? "" : ` ${held.join(", ")}.`;
+  return { text: `${opening}${inHand} ${working.length} working${gone}.`, urgent: needs > 0 };
 }

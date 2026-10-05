@@ -30,7 +30,7 @@ import {
   runDir,
 } from "../src/engine";
 import { VerifySpecSchema } from "../src/verify-spec";
-import { collect } from "../src/verify";
+import { collect, readVerifications } from "../src/verify";
 import { inputsFor, offersFrom } from "../src/offers";
 import { Store } from "../src/store";
 import { registerAgent, registryPath, scopeFor } from "../src/registry";
@@ -368,6 +368,7 @@ scenario(
         const body = yield* persona("r-arch", "architecture");
         expect(body).toContain("You are an architect");
         expect(body).toContain("improve-codebase-architecture/SKILL.md");
+        expect((yield* launched())[0]?.args).toContain("--model opus --effort xhigh");
       }),
     ),
   120_000,
@@ -530,6 +531,7 @@ scenario(
           `Write the spec to \`${runDir(dir, "r-plan")}/plan/SPEC.md\``,
         );
         expect(yield* persona("r-plan", "grill")).toContain("You are a planner");
+        expect((yield* launched())[0]?.args).toContain("--model opus --effort xhigh");
       }),
     ),
   120_000,
@@ -1996,6 +1998,76 @@ scenario(
         const opening = yield* asked("r-gate-fix", "mr");
         expect(opening).toContain("gate fix 1");
         expect(opening).not.toContain("- unproved after");
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "each gate pass says why it runs, in the marker while it runs and on its record after",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* bin.add("glab", `exit 0`);
+        yield* repository();
+        const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
+        const count = `${rig.root}/runs`;
+        const seen = `${rig.root}/markers`;
+        const marker = `${runDir(dir, "r-passes")}/verifying`;
+        yield* approve("r-passes", ["unit"]);
+        const fs = yield* FileSystem.FileSystem;
+        yield* fs.writeFileString(
+          `${evidenceDir(dir, "r-passes")}/approved.json`,
+          asApproved([
+            {
+              name: "unit",
+              executable: "sh",
+              // What the marker says while it runs, then: red at the gate, green at the
+              // base, red again on the recheck, green after the fix.
+              argv: [
+                "-c",
+                `cat ${marker} >> ${seen}; echo >> ${seen}; n=$(($(cat ${count} 2>/dev/null || echo 0) + 1)); echo $n > ${count}; [ $n -eq 2 ] || [ $n -ge 4 ]`,
+              ],
+              cwd: rig.projectDir,
+            },
+          ]),
+        );
+        const fix = {
+          verdict: "clean",
+          findings: [],
+          fixed: [],
+          disputed: [],
+          checks: [{ name: "unit" }],
+        };
+        yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, fix, OPENED]);
+        yield* ran({
+          entry: shipped("implement"),
+          runId: "r-passes",
+          input: { plan },
+          options: { outcome: "feature" },
+        });
+        yield* bin.restore();
+
+        const passes = ["gate", "baseline", "recheck", "fix"];
+        const markers = (yield* fs.readFileString(seen))
+          .split("\n")
+          .filter((line) => line !== "")
+          .map((line) => Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown))(line));
+        expect(markers.slice(0, 4)).toMatchObject(
+          passes.map((pass) => ({ name: "unit", pass, round: pass === "fix" ? 1 : null })),
+        );
+        const recorded = (yield* readVerifications(evidenceDir(dir, "r-passes"))).filter(
+          (one) => one.by === "collie",
+        );
+        expect(recorded.slice(0, 4).map((one) => [one.pass, one.round])).toEqual([
+          ["gate", undefined],
+          ["baseline", undefined],
+          ["recheck", undefined],
+          ["fix", 1],
+        ]);
+        // Gone once nothing is running.
+        expect(yield* fs.exists(marker)).toBe(false);
       }),
     ),
   120_000,

@@ -31,8 +31,9 @@ the shell. "I have no access" is never an answer here; find the way.
   `remember_verification` (`run`, and `replace: true` to overwrite what is kept there).
 - `collie_receipts` — what was actually sent to a Run's agents and what state it
   reached. `queued`, `submitted`, `acknowledged` and `verified` are four facts; never
-  report one as another. A `deliver` coming back `applied` is queued for the Run's
-  Driver, not read: check here before saying the agent has it.
+  report one as another. A `deliver` comes back `applied` only when the text was sent,
+  which is not read: check here before saying the agent has it. Anything else comes
+  back `failed`, with why.
 - `collie_definitions` — Workflows and Personas resolved, with the Inputs they really
   take. Read it before a launch.
 - `collie_installation` — what Collie needs and whether it is there, the Home, leftover
@@ -73,6 +74,12 @@ implement run" — or by starting `implement` with the review's run directory as
 `plan`; never by pasting them into a pane, and a Run is not stopped or superseded to route
 around it. Asked to give findings to an agent Collie did not start, say that only Collie's
 own agents get reviewed again, and offer the implement run.
+
+Tell a Collie agent something only with `deliver` — a finished Run's live agent takes one
+too, to merge, tag or release what it built. Never type into its pane with herdr: that
+send has no ledger line, no receipt and no provenance, and the agent will ask the human
+to confirm what they already ordered. When the agent is gone, the failed `deliver` names
+the route: `followup` with the message as its text, or a new Run on its branch.
 
 ## Telling the truth
 

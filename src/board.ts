@@ -23,25 +23,33 @@ import { listRuns, newestFirst, settled as ended, type RunFacts, type RunState }
 import type { PluginEnv } from "./env";
 import { listTasks, type TaskRecord } from "./task";
 import { ago, agoMs, agoShort, spanned } from "./time";
-import { readVerifications, verifyingIn, type Verification } from "./verify";
-import { readMrStates } from "./merges";
+import { readVerifications, type Verification } from "./verify";
+import { markersOf, runningCheck } from "./checks";
+import { pullOf, readForge, readMrStates } from "./merges";
 import { filed, standingOf } from "./standing";
 import { offersOf } from "./lifecycle";
+import { shell } from "./mr";
 import type { OfferView } from "./engine";
+import { everyDelivery, SENT_STATES, toldIn, type Delivery } from "./steering";
+import { readCards } from "./cards";
 import {
   Answered,
   EVIDENCE_GATE,
-  sectionsOf,
+  SECTIONS,
+  sectionOf,
   sortBoard,
   type BoardAgent,
   type BoardChild,
   type BoardOffer,
   type BoardStep,
+  type Checks,
   type Decision,
   type Gate,
   type MrState,
   type Proposal,
   type Question,
+  type Reopened,
+  type Section,
   type StepState,
   type TaskState,
   type TaskView,
@@ -86,6 +94,83 @@ export interface PendingChoice {
 const LANDED_STATES: ReadonlySet<MrState> = new Set(["merged", "on-stage", "in-prod"]);
 const DEPLOYED = { "on-stage": " On stage.", "in-prod": " In production." } as const;
 
+/** When a Run ended: its own record, else the final card its finish wrote. Null for neither. */
+const finishedAt = Effect.fn("Board.finishedAt")(function* (run: RunFacts) {
+  if (run.finished !== null) return Date.parse(run.finished);
+  const cards = yield* readCards(run.dir).pipe(Effect.orElseSucceed(() => []));
+  const final = cards.findLast((card) => card.kind === "final");
+  return final === undefined ? null : Date.parse(final.at);
+});
+
+/** The first line the Run's log recorded telling `agent` something, the newest such. */
+const toldBy = Effect.fn("Board.toldBy")(function* (
+  stateDir: string,
+  runId: string,
+  agent: string,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const log = yield* fs
+    .readFileString(`${stateDir}/agents/${runId}/agents.log`)
+    .pipe(Effect.orElseSucceed(() => ""));
+  return toldIn(log, agent);
+});
+
+/**
+ * A finished Run is Reopened by a steer Delivery to one of its agents, dated after it
+ * ended and taken by herdr. Derived, never stored: the ledger says what was sent and when.
+ */
+const reopenedOf = Effect.fn("Board.reopenedOf")(function* (
+  stateDir: string,
+  run: RunFacts,
+  deliveries: ReadonlyArray<Delivery>,
+  live: ReadonlyMap<string, AgentInfo>,
+) {
+  const ended = yield* finishedAt(run);
+  if (ended === null) return null;
+  const steer = deliveries
+    .filter(
+      (one) =>
+        one.run === run.id &&
+        one.cause.kind === "steer" &&
+        SENT_STATES.has(one.state) &&
+        Date.parse(one.at) > ended,
+    )
+    .sort((a, b) => a.at.localeCompare(b.at))
+    .at(-1);
+  if (steer === undefined) return null;
+  return {
+    delivery: steer.id,
+    agent: steer.agent,
+    told: yield* toldBy(stateDir, run.id, steer.agent),
+    status: live.get(steer.agent)?.status ?? "gone",
+  } satisfies Reopened;
+});
+
+/** What the forge said of a merge request's own checks: a pipeline or a check rollup. */
+export type ForgeChecks =
+  | { readonly state: "passed" | "running" | "unknown" }
+  | { readonly state: "failed"; readonly name: string };
+
+/** The forge's word on a merge request's checks, and the head revision it said it of. */
+export interface ForgeFacts {
+  readonly checks: ForgeChecks;
+  readonly head: string | null;
+}
+
+/**
+ * Collie's own checks and the forge's, as one: any failure fails, anything running is
+ * running, and passed needs every source that said anything to have passed.
+ */
+export function withForge(collie: Checks, forge: ForgeFacts | null): Checks {
+  const said = forge?.checks ?? { state: "unknown" };
+  const at = forge?.head ?? ("at" in collie ? collie.at : "");
+  if (said.state === "failed") return { state: "failed", name: said.name, at };
+  if (collie.state === "failed") return collie;
+  if (said.state === "running" || collie.state === "running") return { state: "running" };
+  if (said.state === "passed") return { state: "passed", at };
+  return collie;
+}
+
 /** Everything the sentence is made of, apart from the TaskView so the formatter is pure. */
 export interface Sentence {
   state: TaskState;
@@ -94,6 +179,10 @@ export interface Sentence {
   step: { id: string; round: { at: number; of: number | null } | null } | null;
   /** The step's own verb, where the definition gives one. */
   verb: string | null;
+  /** What a check Collie is running says about itself, which outranks the step. */
+  checking: string | null;
+  /** A Reopened Run's agent at work on what it was told after the Run ended. */
+  reopened: Pick<Reopened, "agent" | "told"> | null;
   /** How long it has written nothing, where it has gone quiet. */
   silent: string | null;
   /** How long ago its Driver died, for a Run nothing drives and no agent works on. */
@@ -119,6 +208,10 @@ export interface Sentence {
   disposition: { kind: string; ref: string; ago: string; by: string } | null;
   /** The merge request the work opened or was pointed at, where there is one. */
   mr: string | null;
+  /** What checked that merge request, where it is open; null reads as unchecked. */
+  checks: Checks | null;
+  /** A live agent of the Run's, which the next move can be handed to. */
+  agent: string | null;
   /**
    * Where a human is being waited for, when no Decision says: the pane of the agent
    * herdr will not prompt, or the step the Driver recorded itself waiting on. Null
@@ -152,9 +245,6 @@ const VERBS = new Map(
     record: "Recording what happened",
   }),
 );
-
-/** What a card says while Collie runs one of the Run's checks itself. */
-const checkingOf = (name: string) => (name === "" ? null : `Running the ${name} check`);
 
 /** An embedded workflow's step is that workflow's: `review.synthesize` is a synthesis. */
 function verbOf(facts: Sentence): string {
@@ -245,23 +335,44 @@ function decisionSentence(decision: Decision): string {
   }
 }
 
+const short = (sha: string) => sha.slice(0, 7);
+
+/** An open merge request: whether it is ready, and the human's next move. */
+function openSentence(mr: string, checks: Checks | null, agent: string | null): string {
+  const label = mrLabel(mr);
+  const handed = agent === null ? "" : `, or tell ${agent} to`;
+  const seen: Checks = checks ?? { state: "unchecked" };
+  switch (seen.state) {
+    case "passed":
+      return `Ready to release: ${label} is open and its checks passed at ${short(seen.at)}. Next: merge it${handed}.`;
+    case "failed":
+      return `${label} is open, but ${seen.name} failed at ${short(seen.at)}. Next: fix ${seen.name}${handed}.`;
+    case "running":
+      return `${label} is open; its pipeline is still running.`;
+    case "unchecked":
+      return `${label} is open; nothing has checked it.`;
+  }
+}
+
 function doneSentence(
   disposition: Sentence["disposition"],
   mr: string | null = null,
   mrState: MrState | null = null,
   planReady = false,
+  checks: Checks | null = null,
+  agent: string | null = null,
 ): string {
   if (disposition === null) {
     if (planReady) return "Plan ready to implement.";
     if (mr === null) return "Finished; nothing merged yet.";
     if (mrState === "closed") return `Merge request ${mrLabel(mr)} closed without merging.`;
-    return `Finished; ${mrLabel(mr)} is open.`;
+    return openSentence(mr, checks, agent);
   }
   switch (disposition.kind) {
     case "merged": {
       const deployed = mrState === "on-stage" || mrState === "in-prod" ? DEPLOYED[mrState] : "";
-      // GitLab's word carries no time of its own: the stamp is when Collie asked.
-      if (disposition.by === "gitlab")
+      // The forge's word carries no time of its own: the stamp is when Collie asked.
+      if (disposition.by === "gitlab" || disposition.by === "github")
         return (disposition.ref === "" ? "Merged." : `Merged as ${disposition.ref}.`) + deployed;
       return (
         (disposition.ref === ""
@@ -291,6 +402,11 @@ function stalledSentence(facts: Sentence): string {
 }
 
 function workingSentence(facts: Sentence): string {
+  if (facts.checking !== null) return facts.checking;
+  if (facts.reopened !== null)
+    return facts.reopened.told === null
+      ? `Working on what you told ${facts.reopened.agent}.`
+      : `Working on what you told ${facts.reopened.agent}: “${facts.reopened.told}”.`;
   if (facts.resumed !== null) return `Resumed with “${facts.resumed}”.`;
   if (facts.wave !== null) {
     const wave = waveSentence(facts.wave);
@@ -309,7 +425,14 @@ export function sentenceFor(facts: Sentence): string {
   if (facts.decision !== null) return decisionSentence(facts.decision);
   switch (facts.state) {
     case "done":
-      return doneSentence(facts.disposition, facts.mr, facts.mrState, facts.planReady);
+      return doneSentence(
+        facts.disposition,
+        facts.mr,
+        facts.mrState,
+        facts.planReady,
+        facts.checks,
+        facts.agent,
+      );
     case "failed":
       return alsoBecame(failedSentence(facts), facts.disposition);
     case "stopped":
@@ -336,10 +459,15 @@ function alsoBecame(sentence: string, disposition: Sentence["disposition"]): str
   return disposition === null ? sentence : `${sentence} ${doneSentence(disposition)}`;
 }
 
-/** `group/project!42` from a GitLab URL or an `mr:` target; anything else as it is. */
+/**
+ * `group/project!42` from a GitLab URL or an `mr:` target, `owner/repo#30` from a GitHub
+ * pull request URL; anything else as it is.
+ */
 export function mrLabel(mr: string): string {
   const url = /^https?:\/\/[^/]+\/(.+?)\/-\/merge_requests\/(\d+)/.exec(mr);
   if (url) return `${url[1]}!${url[2]}`;
+  const pull = pullOf(mr);
+  if (pull) return `${pull.repo}#${pull.number}`;
   const bare = mr.startsWith("mr:") ? mr.slice(3) : mr;
   // `host/group/project!42` reads as `group/project!42`: the host is where, not what.
   const host = /^[^/!]+\.[^/!]+\/(.+)$/.exec(bare);
@@ -418,6 +546,43 @@ export function lastFailure(
   }
   return { name: last.name, times };
 }
+
+/**
+ * What Collie's own checks say at one revision: the branch's head where it could be read,
+ * else the newest revision Collie checked. An agent's record is a claim and never counts.
+ */
+export function checksAt(records: ReadonlyArray<Verification>, head: string | null): Checks {
+  const collie = records.filter((record) => record.by === "collie");
+  const at = head ?? collie.at(-1)?.end.head_sha ?? "";
+  const newest = new Map<string, Verification>();
+  for (const record of collie)
+    if (at !== "" && record.end.head_sha === at) newest.set(record.name, record);
+  if (newest.size === 0) return { state: "unchecked" };
+  const red = [...newest.values()].find((record) => record.result !== record.expect);
+  return red === undefined ? { state: "passed", at } : { state: "failed", name: red.name, at };
+}
+
+/** The commit the Run's branch is at now in its checkout, or null where that cannot be read. */
+const branchHead = Effect.fn("Board.branchHead")(function* (run: RunFacts, now: number) {
+  if (run.branch === null) return null;
+  const key = `${run.cwd}\0${run.branch}`;
+  const known = heads.get(key);
+  if (known !== undefined && now - known.at < HEAD_FOR_MS) return known.sha;
+  const read = yield* shell(
+    "git",
+    ["rev-parse", "--verify", "--quiet", `${run.branch}^{commit}`],
+    run.cwd,
+  );
+  const sha = read.stdout.trim();
+  const head = read.code === 0 && sha !== "" ? sha : null;
+  heads.set(key, { at: now, sha: head });
+  return head;
+});
+
+/** How long a branch head read stands, so a board refresh does not spawn git per card. */
+const HEAD_FOR_MS = 60_000;
+// ponytail: one entry per checkout and branch for the process's life; prune if that grows.
+const heads = new Map<string, { readonly at: number; readonly sha: string | null }>();
 
 /** An absolute path, wherever one sits in a name, read as what it points at. */
 function withoutPaths(text: string): string {
@@ -671,8 +836,12 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
   now?: number;
   /** How long a Run may write nothing before its card says it has gone quiet. */
   quietMs?: number;
-  /** What GitLab last said about each merge request, by the reference the card carries. */
+  /** What the forge last said about each merge request, by the reference the card carries. */
   mrStates?: ReadonlyMap<string, MrState>;
+  /** What the forge last said about each merge request's checks, by its label. */
+  forge?: ReadonlyMap<string, ForgeFacts>;
+  /** Every steer and step Delivery the ledgers hold; read from them where not given. */
+  deliveries?: ReadonlyArray<Delivery>;
   /** What a Run offers now; the host is asked where this is not given. */
   offers?: (runId: string) => Effect.Effect<ReadonlyArray<OfferView>>;
 }) {
@@ -686,7 +855,10 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
   const registered = opts.registered ?? (yield* everyRegistered(stateDir));
   const proposals = opts.proposals ?? (yield* proposalsOf(stateDir));
   const mrStates = opts.mrStates ?? (yield* readMrStates(stateDir));
+  const forge = opts.forge ?? (yield* readForge(stateDir));
   const live = new Map((opts.alive ?? []).map((agent) => [agent.name, agent]));
+  const markers = yield* markersOf(all);
+  const deliveries = opts.deliveries ?? (yield* everyDelivery(stateDir));
   const offersOfRun =
     opts.offers ??
     ((runId: string) =>
@@ -745,10 +917,10 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
       working.some((run) => run.id === agent.run);
     const at = Math.max(...working.map((run) => touched.get(run.id) ?? 0));
     const agents = agentsOf(everyRun, registered, live);
-    const checking = yield* verifyingIn(leader.dir);
+    const check = yield* runningCheck(leader, all, markers, now);
     // An agent mid-turn or a check Collie is running is work, however little it writes.
     const busy =
-      checking !== "" || agents.some((agent) => ownsAgent(agent) && agent.status === "working");
+      check !== null || agents.some((agent) => ownsAgent(agent) && agent.status === "working");
     const going = !ended(leader);
     const silentFor = going && !busy && at > 0 ? now - at : 0;
     // Under a minute has no span to name, and is not silence worth a card saying.
@@ -766,11 +938,18 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
     // Nothing drives it and nobody works on it: the host could not take it up again. A
     // Decision outranks it, because answering is still what moves the work.
     const abandoned = decision === null && going && leader.undriven && !agents.some(ownsAgent);
+    const reopened = ended(leader) ? yield* reopenedOf(stateDir, leader, deliveries, live) : null;
+    // A Reopened Run is the work its agent is doing now, while it does it; then its facts.
     const state = abandoned
       ? "abandoned"
-      : stateOf(status, silent !== null, decision, stalled !== null);
+      : decision === null && reopened?.status === "working"
+        ? "active"
+        : decision === null && reopened?.status === "blocked"
+          ? "blocked"
+          : stateOf(status, silent !== null, decision, stalled !== null);
 
-    const held = runs.find((run) => run.held);
+    // A hold left on a Run that ended holds nothing, and a finished Run refuses its release.
+    const held = runs.find((run) => run.held && !ended(run));
     const settledNow =
       state === "done" || state === "failed" || state === "stopped" || state === "abandoned";
     // Read whatever the state: a merge GitLab reported lands the work even while the Run
@@ -809,6 +988,23 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
       disposed: disposition !== null,
       asking: decision !== null,
     });
+    const awaitingMerge =
+      state === "done" &&
+      mr !== null &&
+      disposition === null &&
+      !landed &&
+      (mrState === null || mrState === "open");
+    // Collie's own evidence counts at the head the forge reported, where it reported one.
+    const forged = mr === null ? null : (forge.get(mrLabel(mr)) ?? null);
+    const checks = awaitingMerge
+      ? withForge(
+          checksAt(
+            yield* readVerifications(leader.evidence).pipe(Effect.catch(() => Effect.succeed([]))),
+            forged?.head ?? (yield* branchHead(leader, now)),
+          ),
+          forged,
+        )
+      : null;
     const finishedAt = settledNow ? endedAt(leader) : 0;
     const fanned = runs.find((run) => repoRunsOf.has(run.id));
     const fan = fanned === undefined ? null : yield* fanOf(fanned, repoRunsOf.get(fanned.id)!);
@@ -821,13 +1017,17 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
       sentence: sentenceFor({
         mr,
         mrState,
+        checks,
+        agent: agents.find((one) => one.run === leader.id)?.name ?? null,
         planReady,
         abandoned: abandoned && at > 0 ? agoMs(at, now) : null,
         state,
         decision,
         step: doing?.step ?? null,
         // Never the pane's title: a terminal names its harness or file, not the work.
-        verb: checkingOf(checking) ?? doing?.verb ?? null,
+        verb: doing?.verb ?? null,
+        checking: check?.sentence ?? null,
+        reopened: state === "active" ? reopened : null,
         silent,
         wave: fan !== null && fanned === leader ? fan.wave : null,
         failure,
@@ -868,6 +1068,10 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
       landed,
       ended: finishedAt > 0 ? finishedAt : null,
       mrState,
+      checks,
+      ready: checks?.state === "passed",
+      check,
+      reopened,
       planReady,
       // Only a ready plan's first action is an offer; asking every card would ask every refresh.
       offer: planReady ? primaryOf(yield* offersOfRun(leader.id)) : null,
@@ -879,6 +1083,19 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
   }
   return sortBoard(views);
 });
+
+/** Each Ready to release card's Run, with the revision its checks passed at and its sentence. */
+export function readyRuns(
+  views: ReadonlyArray<TaskView>,
+): ReadonlyMap<string, { at: string; sentence: string }> {
+  return new Map(
+    views.flatMap((view) =>
+      view.ready && view.checks?.state === "passed"
+        ? [[view.run, { at: view.checks.at, sentence: view.sentence }] as const]
+        : [],
+    ),
+  );
+}
 
 /** The offer a card presents first: the one its module marks primary and can make now. */
 const primaryOf = (offers: ReadonlyArray<OfferView>): BoardOffer | null => {
@@ -941,14 +1158,17 @@ export function boardLines(
   /** Lines to put under one Task's own: the question a dumb terminal answers in place. */
   under: { run: string; lines: ReadonlyArray<string> } | null = null,
 ): string[] {
-  const { needs, working, waiting, finished } = sectionsOf(views, "");
-  const section = (label: string, rows: ReadonlyArray<TaskView>) => textSection(label, rows, under);
-  return [
-    ...section("Needs you", needs),
-    ...section(workingLabel(working), working),
-    ...(waiting.length === 0 ? [] : section(waitingLabel(waiting), waiting)),
-    ...(finished.length === 0 ? [] : section(finishedLabel(finished, true), finished)),
-  ];
+  const label: Record<Section, (rows: ReadonlyArray<TaskView>) => string> = {
+    "needs-you": () => "Needs you",
+    waiting: waitingLabel,
+    working: workingLabel,
+    finished: (rows) => finishedLabel(rows, true),
+  };
+  return SECTIONS.flatMap(([section]) => {
+    const rows = views.filter((view) => sectionOf(view) === section);
+    const always = section === "needs-you" || section === "working";
+    return rows.length === 0 && !always ? [] : textSection(label[section](rows), rows, under);
+  });
 }
 
 function textSection(

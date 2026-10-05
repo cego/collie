@@ -73,9 +73,36 @@ const NATIVE = "native-collie-control-panel (this MR)";
 const OPERATOR = "operator";
 const MODULES = "workflow modules (this MR)";
 const LAUNCH = "launch flow places human starts (this MR)";
+const RELEASE = "ready to release and checks you can see (this MR)";
 
 /** What the front door owes a person, and cannot be settled below the front door. */
 const FRONT_DOOR: readonly Check[] = [
+  {
+    id: "front-door/a-running-check-says-its-pass-reason-and-timing",
+    statement:
+      "While Collie runs one of a Run's checks, its card names the check and its pass in words — on the branch, where the branch left the default branch and why, again for a flake, after gate fix N — how long it has run against how long it usually takes, and how many other checks are running, never an agent operation's round.",
+    owner: RELEASE,
+    needs: "ui",
+    proof: {
+      kind: "test",
+      layer: "ui",
+      file: "test/board.test.ts",
+      name: "a running check never borrows the round of the agent operation before it",
+    },
+  },
+  {
+    id: "front-door/a-ready-card-says-it-is-ready",
+    statement:
+      "A succeeded Run whose merge request is open and whose checks passed at its branch's head leads Waiting on you, and its card says it is ready to release, where, the revision its checks passed at and the next move, naming its live agent.",
+    owner: RELEASE,
+    needs: "ui",
+    proof: {
+      kind: "test",
+      layer: "ui",
+      file: "test/board.test.ts",
+      name: "a succeeded Run's open merge request is ready only on checks at its branch's head",
+    },
+  },
   {
     id: "front-door/no-checkout-is-asked-for-from-the-home",
     statement:
@@ -660,6 +687,28 @@ const WORKFLOWS: readonly Check[] = [
 
 /** What only a person at a terminal can settle. */
 const OPERATOR_CHECKS: readonly Check[] = [
+  {
+    id: "checks/a-running-checks-output-opens-live-from-the-board",
+    statement:
+      "While Collie runs a check for a Run, the drawer shows its last lines, and Open check output opens a pane in the Task's workspace that prints the output as it is written and says how the check ended.",
+    owner: RELEASE,
+    needs: "operator",
+    proof: {
+      kind: "operator",
+      how: "With HERDR_PLUGIN_STATE_DIR pointed at a scratch directory and herdr on a disposable Herd, never the live one: start one Run whose one approved check prints for a few seconds, open its card's drawer while the check runs, choose Open check output, and record the pane's workspace, the lines it printed as they came, its closing line, and the revision.",
+    },
+  },
+  {
+    id: "steering/a-finished-runs-live-agent-takes-a-delivery",
+    statement:
+      "A succeeded Run's idle agent, told through chat's `collie_do deliver` to do something more, receives the text with Collie's delivery token and acts on it without asking the human to confirm; the result is `applied`, the ledger has the Delivery, and `run show` still says `succeeded`.",
+    owner: RELEASE,
+    needs: "operator",
+    proof: {
+      kind: "operator",
+      how: "With HERDR_PLUGIN_STATE_DIR pointed at a scratch directory and herdr on a disposable Herd, never the live one: start one Run whose one agent succeeds, deliver one message to that agent through `collie_do`, and record the result, the `collie run deliveries` line, what the agent's pane shows it did, and `run show`'s status, with the revision.",
+    },
+  },
   {
     id: "lifecycle/goal-activation-observed",
     statement:

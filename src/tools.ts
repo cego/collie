@@ -41,7 +41,7 @@ import { pendingFor, proposalsPath, read as readProposals } from "./proposals";
 import { statusLine } from "./disposition";
 import { Herdr } from "./herdr";
 import { mrLabel } from "./board";
-import { ASKED_KINDS, headerSentence, sectionOf, type Section, type TaskView } from "./board-model";
+import { ASKED_KINDS, headerSentence, sectionOf, SECTIONS, type TaskView } from "./board-model";
 import {
   asText as newsText,
   newsPath,
@@ -49,7 +49,8 @@ import {
   read as readNews,
   settle as settleNews,
 } from "./news";
-import { findRun, type RunFacts } from "./runs";
+import { findRun, listRuns, type RunFacts } from "./runs";
+import { donePasses, markersOf, runningCheck } from "./checks";
 import { deliveriesOf, herdOf } from "./steering";
 import { loadDefinitions, layers } from "./definitions";
 import { chatHarnessOf, chatPath, pushable, readChat, whyUnavailable } from "./chat";
@@ -263,7 +264,8 @@ export const TOOLS: ReadonlyArray<Tool> = [
       },
       additionalProperties: false,
     },
-    call: (env, input) => onSelectedRun(env, input, "collie_run", (run) => said(runFacts(run))),
+    call: (env, input) =>
+      onSelectedRun(env, input, "collie_run", (run) => said(runAnswer(env, run))),
   },
   {
     name: "collie_workspaces",
@@ -526,12 +528,6 @@ const settle = Effect.fn("Tools.settle")(function* (
 
 /** Cards per answer. Sections come in the board's order, so Finished is what gets cut. */
 const HERD_CARDS = 40;
-const SECTIONS: ReadonlyArray<readonly [Section, string]> = [
-  ["needs-you", "Needs you"],
-  ["working", "Working"],
-  ["waiting", "Waiting on you"],
-  ["finished", "Finished"],
-];
 
 /** One card as chat reads it: what the human sees on it, plus the id an action needs. */
 function cardLine(view: TaskView): string {
@@ -547,12 +543,53 @@ function cardLine(view: TaskView): string {
   return `- run ${view.run}: ${view.name}${project}, ${view.state}${where}${agents}. ${view.sentence}`;
 }
 
+/**
+ * What `collie_run` leads with while Collie runs a check for the Run: the card's sentence,
+ * then the last lines the check has written.
+ */
+export const checkLines = Effect.fn("Tools.checkLines")(function* (
+  run: RunFacts,
+  runs: ReadonlyArray<RunFacts>,
+  now: number,
+) {
+  const check = yield* runningCheck(run, runs, yield* markersOf(runs), now);
+  if (check === null) return [];
+  return [
+    `Check running: ${check.sentence}`,
+    ...(check.lastLines.length === 0
+      ? []
+      : ["Its last lines:", ...check.lastLines.map((line) => `  ${line}`)]),
+  ];
+});
+
+/** One Run in detail, led by the check Collie is running for it, then where each finished one's output is. */
+const runAnswer = Effect.fn("Tools.runAnswer")(function* (env: PluginEnv, run: RunFacts) {
+  const facts = yield* runFacts(run);
+  const running = yield* checkLines(run, yield* listRuns(env), yield* Clock.currentTimeMillis);
+  const kept = (yield* donePasses(run)).filter((one) => one.log !== null);
+  const done =
+    kept.length === 0
+      ? []
+      : [
+          "",
+          "### Checks run",
+          "",
+          ...kept.map((one) => `- ${one.name} (${one.pass}) ${one.result}: ${one.log}`),
+        ];
+  return [...running, facts, ...done].join("\n");
+});
+
 /** What `collie_herd` answers with: the board, so chat and board can never disagree about a card. */
 const boardFacts = Effect.fn("Tools.boardFacts")(function* (env: PluginEnv) {
   const read = yield* boardSnapshot(env);
   if (!read.ok) return `- (the board could not be read: ${read.error.message})`;
   const views = read.value.tasks;
   const now = yield* Clock.currentTimeMillis;
+  return herdLines(views, now);
+});
+
+/** The board as chat reads it: the header, then each section's cards in the board's order. */
+export function herdLines(views: ReadonlyArray<TaskView>, now: number): string {
   if (views.length === 0) return "- (no Runs in this Herd)";
   const lines = [headerSentence(views, now).text];
   let room = HERD_CARDS;
@@ -565,7 +602,7 @@ const boardFacts = Effect.fn("Tools.boardFacts")(function* (env: PluginEnv) {
   const left = views.length - HERD_CARDS;
   if (left > 0) lines.push("", `- (${left} more card(s) not listed here)`);
   return lines.join("\n");
-});
+}
 
 /** The action kinds that are not about one Run, so the selection never stands in for theirs. */
 const UNSCOPED_KINDS: ReadonlyArray<string> = ["start", "confirm", "decline"];

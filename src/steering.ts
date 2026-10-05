@@ -52,6 +52,20 @@ const DELIVERY_STATES = [
   "expired",
 ] as const;
 
+/** States that say herdr took the text: a delivery in one of these was sent. */
+export const SENT_STATES: ReadonlySet<string> = new Set(["submitted", "acknowledged", "verified"]);
+
+/** The line a Run's agents log keeps for a human's message told to one of its agents. */
+export const toldLine = (agent: string, text: string) =>
+  `${agent}: told "${text.split("\n")[0] ?? ""}"`;
+
+/** The first line of the newest message `log` says `agent` was told, or null for none. */
+export function toldIn(log: string, agent: string): string | null {
+  const prefix = `${agent}: told "`;
+  const line = log.split("\n").findLast((one) => one.startsWith(prefix) && one.endsWith('"'));
+  return line === undefined ? null : line.slice(prefix.length, -1);
+}
+
 /** States nothing follows: a causal key with one of these is free for a new delivery. */
 const TERMINAL_STATES: ReadonlySet<string> = new Set([
   "verified",
@@ -198,6 +212,16 @@ export const deliveriesOf = Effect.fn("Steering.deliveriesOf")(function* (
   for (const file of yield* ledgerFiles(stateDir))
     for (const delivery of newestById(yield* readLedger(file)).values())
       if (delivery.run === run) found.push({ file, delivery });
+  return found;
+});
+
+/** Every delivery this state directory's ledgers hold, newest state each, read once for a board. */
+export const everyDelivery = Effect.fn("Steering.everyDelivery")(function* (stateDir: string) {
+  const found: Delivery[] = [];
+  for (const file of yield* ledgerFiles(stateDir))
+    found.push(
+      ...newestById(yield* readLedger(file).pipe(Effect.orElseSucceed(() => []))).values(),
+    );
   return found;
 });
 

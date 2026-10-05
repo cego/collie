@@ -273,7 +273,6 @@ test("a confirmed proposal cannot then be declined", () =>
 
 const ctx = (over: Partial<AdmissionContext> = {}): AdmissionContext => ({
   run: { id: "r1", status: "running" },
-  hostHolds: true,
   pendingChoice: null,
   incarnation: "term-1",
   proposedIncarnation: "term-1",
@@ -299,10 +298,6 @@ test("admission asks again, immediately before the action runs", () => {
   };
   expect(admit(deliver, ctx())).toBeNull();
   expect(admit(deliver, ctx({ run: null }))).toBe("the run is gone");
-  expect(admit(deliver, ctx({ run: { id: "r1", status: "succeeded" } }))).toBe(
-    "the run is succeeded",
-  );
-  expect(admit(deliver, ctx({ hostHolds: false }))).toContain("the host no longer holds the run");
   // The agent moved on between the proposal and the yes.
   expect(admit(deliver, ctx({ incarnation: "term-2" }))).toContain("not the one in that pane");
   expect(admit(deliver, ctx({ intentVersion: 3 }))).toContain("v2");
@@ -332,16 +327,44 @@ test("admission asks again, immediately before the action runs", () => {
   expect(admit({ kind: "ask_human", question: "which?" }, ctx({ run: null }))).toBeNull();
 });
 
-test("terminal Runs can be resumed or visited through the same operations as the CLI", () => {
-  for (const status of ["failed", "stopped", "succeeded"]) {
-    // The resume operation owns its lifecycle rules, including succeeded Runs whose
-    // fan-out is unfinished. Admission must not reject them before it can check.
-    const terminal = ctx({ run: { id: "r1", status }, hostHolds: false });
-    expect(admit({ kind: "resume", run: "r1" }, terminal)).toBeNull();
-    expect(admit({ kind: "navigate", run: "r1" }, terminal)).toBeNull();
-    expect(admit({ kind: "hold", run: "r1" }, terminal)).toContain(`the run is ${status}`);
-  }
-});
+const NO_STEP = "a finished Run has no step left to hold; stop closes its agents";
+const COLLECTED =
+  "its checks were collected when it finished; remember_verification keeps them for the next Run";
+
+/** Every Run-scoped action kind, and what a finished Run's admission says to it (ADR-0041 D2). */
+const ON_A_FINISHED_RUN: ReadonlyArray<readonly [Action, string | null]> = [
+  [{ kind: "deliver", run: "r1", agent: "impl-1", text: "merge it", mode: "now" }, null],
+  [{ kind: "answer", run: "r1", choiceId: "c1", answer: "yes" }, "the run is not asking a Choice"],
+  [
+    {
+      kind: "update_intent",
+      run: "r1",
+      change: "add-constraint",
+      patch: "tag it",
+      base_version: 2,
+    },
+    null,
+  ],
+  [{ kind: "clear_override", run: "r1", agent: "impl-1" }, null],
+  [{ kind: "stop", run: "r1" }, null],
+  [{ kind: "hold", run: "r1" }, NO_STEP],
+  [{ kind: "release", run: "r1" }, NO_STEP],
+  [{ kind: "set_verification", run: "r1", name: "test" }, COLLECTED],
+  [{ kind: "followup", run: "r1", text: "and tag it" }, null],
+  [{ kind: "resume", run: "r1" }, null],
+  [{ kind: "navigate", run: "r1" }, null],
+  [{ kind: "remember_verification", run: "r1" }, null],
+];
+
+for (const status of ["succeeded", "failed", "stopped"]) {
+  test(`a ${status} Run is admitted on facts, never on its status`, () => {
+    for (const [action, refused] of ON_A_FINISHED_RUN) {
+      const said = admit(action, ctx({ run: { id: "r1", status } }));
+      if (refused === null) expect([action.kind, said]).toEqual([action.kind, null]);
+      else expect([action.kind, said]).toEqual([action.kind, expect.stringContaining(refused)]);
+    }
+  });
+}
 
 test("this build registers no executors, so nothing is stubbed into pretending", () => {
   // Every kind is registered by the module that owns the operation. Until one does, a
@@ -406,7 +429,7 @@ test(
         expect(out.ok).toBe(false);
         if (out.ok) return;
         expect(out.error.code).toBe("operation_failed");
-        expect(out.error.message).toContain("the run is succeeded");
+        expect(out.error.message).toContain("no step left to hold");
         expect(out.error.details).toMatchObject({ results: [{ kind: "hold", state: "skipped" }] });
         expect((yield* readIntent(dir))?.goal).toBe("a picker");
       }),

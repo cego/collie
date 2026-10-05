@@ -446,9 +446,10 @@ It is an application ([ADR-0005](adr/0005-collie-tab-is-an-application.md)), and
 **board of Tasks, not a table of Runs**
 ([ADR-0013](adr/0013-the-board-is-cards-of-tasks.md)): one card per
 [Task](../CONTEXT.md), whatever Runs that Task took. A header sentence, then four sections
-that answer four questions in order — what needs you, what is working, what is waiting on
-you, what finished. A decision beats liveness, liveness beats history, and history is split
-by whether the work **landed**.
+that answer four questions in order — what needs you, what is waiting on you, what is
+working, what finished. A decision beats liveness, liveness beats history, and history is
+split by whether the work **landed**. The order is the board model's own, and the text
+board and chat's `collie_herd` list the sections the same way.
 
 **Needs you** is one card per Task that has stopped for you: an open decision you answer
 on the card, or an agent waiting for you in its own pane — a harness dialog herdr will not
@@ -462,17 +463,44 @@ drifted, the step glyphs, where it has got to, how many agents are on it and how
 has been going. The sentence names the step the Run last launched an agent for, with its
 round (`Fixing the review findings, round 1.`, `Building ticket 02.`). Silence past
 `board_quiet_ms` reads `…but silent for 14 minutes` and moves nothing; a Run whose agent
-herdr reports working, or whose check Collie is running, is never silent. **Waiting on you** is work that ended without landing, and that nobody has
+herdr reports working, or whose check Collie is running, is never silent. While Collie runs
+one of the Run's checks itself, the sentence is about that check rather than the last step:
+which check, which pass and why, how long it has run against the median of its last five
+runs in this repository, and how many other checks this host is running —
+`Running test where the branch left master, to see whether it failed before this Run, 12
+min of a usual 20. 3 other checks are running.` With nothing to compare against it says
+only how long; over the usual it says `longer than the usual 20`. The drawer, `collie_run`,
+`collie_herd` and `collie run checks` say the same
+([ADR-0042](adr/0042-a-check-collie-runs-is-seen-while-it-runs.md)). The check's output is
+written to a log as it arrives: the drawer's Summary shows its last lines under the
+sentence, and **Open check output** in the card's menu opens a pane in the Task's workspace
+following it live (`collie run checks <run> --follow`) until the check ends. A finished Run is
+**Reopened** when one of its agents took something you told it after the Run ended
+([ADR-0041](adr/0041-a-finished-run-still-takes-steering.md)): while herdr says that agent
+is working, its card is in Working with `Working on what you told builder: “merge and tag
+it”.`; while it is blocked, the card is in Needs you naming its pane; once it is idle, the
+card stands on its own facts again — Ready to release, Waiting on you or Finished — and
+chat is told once that it finished what it was told. Nothing records it: the delivery
+ledger says what was sent and when, herdr says what the agent is doing, the step glyphs
+still show the Workflow's steps as they ended, and `run show` still says `succeeded`. **Waiting on you** is work that ended without landing, and that nobody has
 asked you about: an implement that succeeded and whose merge request is open, a plan that
 is ready to implement, a Run that failed, was stopped or was abandoned with a branch or a
-merge request behind it and has neither been resumed nor disposed of. A Run that ended with
+merge request behind it and has neither been resumed nor disposed of. An implement whose
+merge request is open says what checked it, from Collie's own checks counted only at the
+revision its branch is at now in its checkout (where that cannot be read, the newest
+revision Collie checked): `cego/collie!65 is open, but lint failed at 1a2b3c4. Next: fix
+lint, or tell builder to.`, or `cego/collie!65 is open; nothing has checked it.` Where
+every check passed it is **Ready to release**, leads the section, and says so: `Ready to
+release: cego/collie#30 is open and its checks passed at 1a2b3c4. Next: merge it, or tell
+builder to.` The agent is named only while it is alive. A GitHub pull request reads as
+`owner/repo#30`, a GitLab merge request as `group/project!42`. A Run that ended with
 nothing to file — no branch, no merge request, no plan, no question — is finished, not
 waiting: fifty such cards are not fifty obligations. Each card's first button is the one
 action that ends its wait — Open MR, Resume, Mark superseded, or on a plan that is ready
 the first offer its workflow declares, under the title it gave it (the shipped plan's is
 **Implement now**, refused with how to build it for a plan that spans repositories; a plan
 that declares none gets no button) — with Mark merged and Mark
-abandoned beside it in the menu. The newest ending is at the top; anything
+abandoned beside it in the menu. After what is ready to release, the newest ending is at the top; anything
 older than a week folds into one counted line, `▸ 9 older than a week`, and the header
 counts the week's endings while the fold counts the rest. **Finished** is work that landed
 — a disposition was recorded, the Run succeeded at a workflow that produces nothing to
@@ -481,14 +509,20 @@ land, such as a review, or it ended with nothing to file — as one line, `3 fin
 reads it from this checkout's history rather than carding every Run Collie has ever kept.
 
 Collie learns a merge by itself, whether or not a pane is open: the host asks GitLab
-about each merge request in Waiting on you every 5 minutes; one that merged gets its
-`merged` disposition recorded as GitLab's word and its card moves to Finished. One that was
-closed without merging only changes its card's sentence: closing can mean superseded as
-easily as abandoned, and only you know which.
+(`glab`) or GitHub (`gh`) about each merge request in Waiting on you every 5 minutes; one
+that merged gets its `merged` disposition recorded as that forge's word and its card moves
+to Finished. One that was closed without merging only changes its card's sentence: closing
+can mean superseded as easily as abandoned, and only you know which. The same answer
+carries the forge's own checks — GitLab's head pipeline, GitHub's check rollup — and the
+revision they ran at, which is the one Collie's own checks are counted at too: a failing
+one names itself (`cego/collie#30 is open, but lint failed at 1a2b3c4.`), a pending one
+reads `cego/collie#30 is open; its pipeline is still running.`, and Ready to release needs
+every check the card knows of to have passed. No `gh`, or one nobody logged in to, leaves
+the card `nothing has checked it` and says nothing about why.
 
-The header sentence counts the whole Herd, not what the search left: `One decision is
-waiting on you. 4 working, 1 gone quiet. 3 waiting on you.` — the last count being this
-week's endings, the older ones sitting behind the fold — amber while anything needs
+The header sentence counts the whole Herd, not what the search left: `One task is
+waiting on you. 1 ready to release, 2 waiting on you. 4 working, 1 gone quiet.` — the
+middle counts being this week's endings, the older ones sitting behind the fold — amber while anything needs
 you and muted otherwise. Beside it, a search field (`/`) matching a task's name, its project, its branch
 and what its agents are called and are doing, and **New run**. At the left, the brand
 signature — the mascot and the lettering, drawn as a picture over the Kitty graphics protocol —
@@ -497,12 +531,21 @@ WezTerm; not Alacritty); otherwise the plain `collie` wordmark stands there inst
 attached clients' `TERM` instead, and draws no mark rather than a blank when unsure.
 
 ```
-collie  One decision is waiting on you. 4 working, 1 gone quiet.   ⌕ find a task   + New run
+collie  One task is waiting on you. 1 ready to release. 2 working, 1 gone quiet.   ⌕ find a task   + New run
 
 NEEDS YOU
 ┌─────────────────────────────────────────┐
 │◆ RUM sourcemap upload  frontend-core  9m│
 │Waiting on your answer about the cap.    │
+└─────────────────────────────────────────┘
+WAITING ON YOU · 1
+┌─────────────────────────────────────────┐
+│✓ Control plane redesign    collie    2h │
+│Ready to release: mk/collie!65 is open   │
+│and its checks passed at 1a2b3c4. Next:  │
+│merge it, or tell builder to.            │
+│✓✓✓✓✓  done                              │
+│ Open MR   ⋯                             │
 └─────────────────────────────────────────┘
 WORKING · 2
 ┌─────────────────────────────────────────┐┌────────────────────────────────────┐
@@ -511,13 +554,6 @@ WORKING · 2
 │↯ editing src/ui/App.tsx, outside the    ││                                    │
 │✓●○  review  2 agents                    ││●○○  build  1 agent                 │
 └─────────────────────────────────────────┘└────────────────────────────────────┘
-WAITING ON YOU · 1
-┌─────────────────────────────────────────┐
-│✓ Control plane redesign    collie    2h │
-│Finished; mk/collie!65 is open.          │
-│✓✓✓✓✓  done                              │
-│ Open MR   ⋯                             │
-└─────────────────────────────────────────┘
 ▸ 1 finished today
 ```
 
@@ -839,7 +875,11 @@ Which of two things it does with one depends on **who wanted it**
   is `collie_hold`; stopping, resuming, releasing, answering a question, steering an agent,
   following up a finished run and starting one are `collie_do`, and so are the board's
   decisions — saying yes or no to a proposal, and marking what became of finished work.
-  Each says what it came to.
+  Each says what it came to. Steering reaches a finished run's live agent too — "have
+  builder merge and tag it" is a `deliver`, with a receipt, and comes back `applied` only
+  when it was sent; chat never types into a Collie agent's pane itself. When that agent is
+  gone the `deliver` fails and names the follow-up that carries it on
+  ([ADR-0041](adr/0041-a-finished-run-still-takes-steering.md)).
 - **Collie wanted it, so it waits.** Drift the evaluator noticed, a correction it wants
   to send: the board draws the proposal, and it is confirmed against its id and the hash
   of exactly those actions — by you on the board, or by chat — or declined, and nothing
@@ -886,7 +926,9 @@ every Run are untouched, and Collie does not quietly open the other one instead.
 
 **Collie also speaks first.** When a run ends or blocks, asks you something, drifts from
 its Intent past what Collie may correct, starts repeating itself, or claims to be finished
-without being able to show it, Collie writes that down as news. Turn it off with
+without being able to show it, Collie writes that down as news. A Run whose card becomes
+Ready to release is one item, keyed by the Run and the revision its checks passed at and
+saying the card's sentence; a Run ready when it ends is not also reported as ended. Turn it off with
 `"proactive": false` in `config.json`.
 
 What it does **not** do is call a model to find that out. The host looks at each Herd's

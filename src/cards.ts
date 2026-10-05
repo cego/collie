@@ -90,6 +90,15 @@ export const readCards = Effect.fn("Cards.read")(function* (runDir: string) {
   return yield* readJournal(yield* cardsPath(runDir), CardJson);
 });
 
+/**
+ * When the Run last finished, from the final card its finish writes: the one ending the
+ * host records without the Run's module. Null where it never finished, or was stopped.
+ */
+export const finishedOnRecord = Effect.fn("Cards.finishedOnRecord")(function* (runDir: string) {
+  const cards = yield* readCards(runDir).pipe(Effect.orElseSucceed((): ReadonlyArray<Card> => []));
+  return cards.findLast((card) => card.kind === "final")?.at ?? null;
+});
+
 /** The newest card per slice of work: a re-written card replaces the one it re-writes. */
 export function newest(cards: ReadonlyArray<Card>): Card[] {
   const latest = new Map<string, Card>();

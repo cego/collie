@@ -117,7 +117,7 @@ import {
 import { evaluationDeps } from "./evaluator";
 import { budgetPath, herdOf } from "./steering";
 import type { JudgementDeps } from "./drift";
-import type { Card } from "./cards";
+import { finishedOnRecord, type Card } from "./cards";
 import { reason } from "./naming";
 import {
   fromWorkSource,
@@ -145,15 +145,18 @@ import { Herdr, herdrFailureReason } from "./herdr";
 import type { PluginEnv } from "./env";
 import { WorktreeRecordSchema } from "./run";
 import { listTasks, newTask, taskOfWorkspace, writeTask } from "./task";
+import { nowIso } from "./time";
 import { classifyGivenTarget, classifyWorkSource, defaultBase } from "./inputs";
 import type { BunServices } from "@effect/platform-bun/BunServices";
 import { approvedFrom, VerifySpecSchema, type VerifySpec } from "./verify-spec";
 import {
+  encodeVerifying,
   fingerprint,
   insideRun,
   readVerifications,
   runApproved,
   VERIFYING_FILE,
+  type CheckPass,
   type Verification,
 } from "./verify";
 import * as Workflow from "effect/unstable/workflow/Workflow";
@@ -317,6 +320,9 @@ export const SDK_DECLARATIONS = `declare module "collie" {
       readonly expect?: "pass" | "fail";
       /** Run it where this checkout left the default branch, then put the checkout back. */
       readonly at?: "default-base";
+      /** Why it is run: the gate on the branch, a recheck for a flake, or a fix after gate fix \`round\`. */
+      readonly pass?: "gate" | "recheck" | "fix";
+      readonly round?: number;
     }) => Effect.Effect<Verification, WorkflowError>;
     /**
      * Puts a file on the merge request a Run was pointed at, as one note Collie sends.
@@ -1828,11 +1834,22 @@ const restoreCheckout = (cwd: string, away: string) =>
     yield* fs.remove(away).pipe(Effect.ignore);
   });
 
+/** The pass a workflow's verify asked for: at the default branch's base it is `baseline`. */
+const passAsked = (asked: Parameters<Sdk.HostApi["verify"]>[0]): CheckPass => {
+  if (asked.at === "default-base") return { pass: "baseline" };
+  if (asked.pass === "fix" && asked.round !== undefined) return { pass: "fix", round: asked.round };
+  return { pass: asked.pass ?? "check" };
+};
+
 /**
  * Runs `body` with the checkout at its merge-base with the default branch, then puts it
  * back. A checkout with changes of its own is refused: they would travel to the base.
  */
-const atDefaultBase = <A, R>(cwd: string, away: string, body: Effect.Effect<A, WorkflowError, R>) =>
+const atDefaultBase = <A, R>(
+  cwd: string,
+  away: string,
+  body: (branch: string) => Effect.Effect<A, WorkflowError, R>,
+) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const git = (...args: string[]) => runShell("git", args, cwd);
@@ -1854,7 +1871,7 @@ const atDefaultBase = <A, R>(cwd: string, away: string, body: Effect.Effect<A, W
       yield* fs.remove(away).pipe(Effect.ignore);
       return yield* refuse(`${merged.stdout.trim()} could not be checked out`);
     }
-    return yield* body.pipe(Effect.ensuring(restoreCheckout(cwd, away).pipe(Effect.orDie)));
+    return yield* body(branch).pipe(Effect.ensuring(restoreCheckout(cwd, away).pipe(Effect.orDie)));
   });
 
 export const hostLayer = (options: {
@@ -1927,6 +1944,82 @@ export const hostLayer = (options: {
         }
         return lineage;
       });
+      /** Runs one approved command for a Run, under the pass it was asked for (ADR-0042). */
+      const check = (asked: Parameters<Sdk.HostApi["verify"]>[0], recorded: CheckPass) =>
+        under(
+          Effect.gen(function* () {
+            const approved = yield* approvedOf(dir, asked.runId);
+            const spec = approved.find((entry) => entry.name === asked.name);
+            if (spec === undefined) {
+              return yield* new WorkflowError({
+                reason: `"${asked.name}" is not among this Run's approved verifications`,
+              });
+            }
+            // The workflow's checkout has to be the Run's own; the grant's directory is resolved from it.
+            const row = yield* store.run(asked.runId);
+            const placed =
+              row === null
+                ? null
+                : placedOf(
+                    row,
+                    yield* decodeStrings(row.options ?? "{}").pipe(
+                      Effect.orElseSucceed((): Record<string, string> => ({})),
+                    ),
+                  );
+            const worktree = placed?.worktree?.path ?? null;
+            const own = { id: asked.runId, cwd: placed?.cwd ?? dir, worktree };
+            if (!(yield* insideRun(asked.cwd, own))) {
+              return yield* new WorkflowError({
+                reason: `"${asked.cwd}" is not inside run ${asked.runId}`,
+              });
+            }
+            const journal = evidenceDir(dir, asked.runId);
+            const marker = `${runDir(dir, asked.runId)}/${VERIFYING_FILE}`;
+            const away = `${runDir(dir, asked.runId)}/${AWAY_FILE}`;
+            yield* restoreCheckout(asked.cwd, away);
+            // Written once the checkout is where the check runs, so it names that revision.
+            const verified = (base: string | null) =>
+              Effect.gen(function* () {
+                const head = yield* runShell("git", ["rev-parse", "HEAD"], asked.cwd);
+                const started = yield* nowIso();
+                // A file per run of the check, beside the journal its record goes to.
+                const log = `${journal}/checks/${started.replace(/[:.]/g, "-")}-${spec.name.replace(/[^\w.-]/g, "_")}.log`;
+                yield* fs
+                  .writeFileString(
+                    marker,
+                    encodeVerifying({
+                      name: spec.name,
+                      executable: spec.executable,
+                      argv: spec.argv,
+                      pass: recorded.pass,
+                      round: recorded.round ?? null,
+                      revision: head.code === 0 ? head.stdout.trim() : "",
+                      base,
+                      started,
+                      log,
+                    }),
+                  )
+                  .pipe(Effect.ignore);
+                return yield* runApproved(
+                  journal,
+                  { ...own, cwd: asked.cwd },
+                  approved,
+                  spec,
+                  asked.expect ?? "pass",
+                  recorded,
+                  log,
+                ).pipe(
+                  Effect.tap((record) => noteVerification(journal, record)),
+                  Effect.mapError((refused) => new WorkflowError({ reason: refused.why })),
+                );
+              });
+            return yield* (
+              asked.at === "default-base"
+                ? atDefaultBase(asked.cwd, away, verified)
+                : verified(null)
+            ).pipe(Effect.ensuring(fs.remove(marker).pipe(Effect.ignore)));
+          }),
+        );
       const host = Host.of({
         dir,
         place: (runId) =>
@@ -2018,54 +2111,7 @@ export const hostLayer = (options: {
               final: fingerprint(cwd),
             }),
           ).pipe(Effect.orDie),
-        verify: (asked) =>
-          under(
-            Effect.gen(function* () {
-              const approved = yield* approvedOf(dir, asked.runId);
-              const spec = approved.find((entry) => entry.name === asked.name);
-              if (spec === undefined) {
-                return yield* new WorkflowError({
-                  reason: `"${asked.name}" is not among this Run's approved verifications`,
-                });
-              }
-              // The workflow's checkout has to be the Run's own; the grant's directory is resolved from it.
-              const row = yield* store.run(asked.runId);
-              const placed =
-                row === null
-                  ? null
-                  : placedOf(
-                      row,
-                      yield* decodeStrings(row.options ?? "{}").pipe(
-                        Effect.orElseSucceed((): Record<string, string> => ({})),
-                      ),
-                    );
-              const worktree = placed?.worktree?.path ?? null;
-              const own = { id: asked.runId, cwd: placed?.cwd ?? dir, worktree };
-              if (!(yield* insideRun(asked.cwd, own))) {
-                return yield* new WorkflowError({
-                  reason: `"${asked.cwd}" is not inside run ${asked.runId}`,
-                });
-              }
-              const journal = evidenceDir(dir, asked.runId);
-              const marker = `${runDir(dir, asked.runId)}/${VERIFYING_FILE}`;
-              const away = `${runDir(dir, asked.runId)}/${AWAY_FILE}`;
-              yield* restoreCheckout(asked.cwd, away);
-              yield* fs.writeFileString(marker, spec.name).pipe(Effect.ignore);
-              const verified = runApproved(
-                journal,
-                { ...own, cwd: asked.cwd },
-                approved,
-                spec,
-                asked.expect ?? "pass",
-              ).pipe(
-                Effect.tap((record) => noteVerification(journal, record)),
-                Effect.mapError((refused) => new WorkflowError({ reason: refused.why })),
-              );
-              return yield* (
-                asked.at === "default-base" ? atDefaultBase(asked.cwd, away, verified) : verified
-              ).pipe(Effect.ensuring(fs.remove(marker).pipe(Effect.ignore)));
-            }),
-          ),
+        verify: (asked) => check(asked, passAsked(asked)),
         approved: (runId) => under(approvedOf(dir, runId)),
         config: (dotted) =>
           under(
@@ -2339,7 +2385,7 @@ export const hostLayer = (options: {
             const at = yield* watched(runId);
             // Bounded: an approved command that hangs would hold the Run's ending for ever.
             for (const name of yield* under(grantedToRun(at))) {
-              const outcome = yield* host.verify({ runId, name, cwd: at.cwd }).pipe(
+              const outcome = yield* check({ runId, name, cwd: at.cwd }, { pass: "finish" }).pipe(
                 Effect.map((one) => `${one.result} (exit ${one.exit})`),
                 Effect.catch((cause) => Effect.succeed(`refused — ${cause.reason}`)),
                 Effect.timeoutOption(Duration.minutes(10)),
@@ -2951,6 +2997,10 @@ export const Steered = Schema.Struct({
   /** What could be got out of herdr about it, never "it was accepted for sending". */
   delivered: Schema.Boolean,
   detail: Schema.String,
+  /** Not delivered because no incarnation of the agent is alive, rather than refused. */
+  gone: Schema.optionalKey(Schema.Boolean),
+  /** The Run's Workflow has ended, so a gone agent's request is carried on by a new Run. */
+  finished: Schema.optionalKey(Schema.Boolean),
 });
 
 /** One offer as a front door shows it, over the wire. */
@@ -4127,6 +4177,29 @@ const makeRegistry: (
     return { generation, execution: row.execution };
   });
 
+  /** Whether a Run has ended, a stop included: no step is left to hold, and a gone agent's work goes on elsewhere. */
+  const hasEnded = Effect.fn("Engine.hasEnded")(function* (runId: string) {
+    // A stopped Run writes no final card; its stop is the record.
+    if ((yield* controlsOf(runId)).includes(STOP)) return true;
+    return yield* workflowEnded(runId);
+  });
+
+  /** Whether a Run's Workflow ran to its end: the status a stop must not rewrite. */
+  const workflowEnded = Effect.fn("Engine.workflowEnded")(function* (runId: string) {
+    const found = yield* routed(runId).pipe(Effect.option);
+    // With its module gone the engine cannot be asked, and the finish's record answers.
+    if (Option.isNone(found)) return (yield* finishedOnRecord(runDir(dir, runId))) !== null;
+    const { generation, execution } = found.value;
+    const workflow = generation.registration.workflow;
+    const status = pollStatus(
+      yield* engine.poll(workflow, execution),
+      generation.entry,
+      workflow.successSchema,
+      workflow.errorSchema,
+    ).status;
+    return status === "complete" || status === "failed";
+  });
+
   /** Sets a control, and a stop over every child the Run started, then wakes what must look again. */
   const applyControl = Effect.fn("Engine.applyControl")(function* (
     runId: string,
@@ -4586,6 +4659,23 @@ const makeRegistry: (
       readonly control: string;
       readonly set: boolean;
     }) {
+      if (options.control === HOLD && (yield* hasEnded(options.runId)))
+        return yield* new HostRefused({
+          reason: "a finished Run has no step left to hold; stop closes its agents",
+        });
+      // A finished Run's status is history: a stop closes its live agents and sets nothing.
+      if (options.control === STOP && options.set && (yield* workflowEnded(options.runId))) {
+        const halted = yield* (yield* Agents).halt(options.runId);
+        return {
+          runId: options.runId,
+          control: options.control,
+          set: options.set,
+          left: halted.left,
+          closed: halted.stopped,
+          applied: true,
+          detail: "",
+        };
+      }
       const found = yield* routed(options.runId).pipe(Effect.result);
       const left =
         options.control === STOP && options.set
@@ -4628,10 +4718,12 @@ const makeRegistry: (
       readonly agent?: string;
       readonly mode?: AgentsSdk.DeliveryMode;
     }) {
-      // Routed first: a run this host is not holding has no agent it can vouch for.
-      yield* routed(options.runId);
-      const agents = yield* Agents;
-      return yield* agents.steer(options);
+      // A row is enough: a finished Run's agents need its launch journal, not its module.
+      if ((yield* store.run(options.runId)) === null) {
+        return yield* new HostRefused({ reason: `no run "${options.runId}" was started here` });
+      }
+      const sent = yield* (yield* Agents).steer(options);
+      return sent.gone === true ? { ...sent, finished: yield* hasEnded(options.runId) } : sent;
     }),
   } satisfies RegistryApi;
 });

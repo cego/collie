@@ -314,7 +314,7 @@ a re-check of an unchanged tree clears nothing.
 
 ## Finishing
 
-A finished run is immutable, so `finish` settles rather than acts:
+A finished run's status is history, so `finish` settles rather than acts:
 
 - A verification the run was granted, that a `command_exit` rule names and nobody ran, is
   run by Collie first — bounded at ten minutes, so a command that hangs cannot hold the
@@ -327,12 +327,27 @@ A finished run is immutable, so `finish` settles rather than acts:
 - With a blocking constraint still open, Collie records a **pending proposal** for a
   follow-up child run. It does not start one, and it does not re-prompt anybody.
 
+None of this runs again for a finished Run its agents are later steered on: what a steered
+agent does after the Run finished is not re-judged, and no drift correction is sent to it
+([ADR-0041](adr/0041-a-finished-run-still-takes-steering.md)).
+
 ## Follow-ups
 
-A finished run is immutable, and there is no mode that reopens one. Where its outcome
-needs more work, carrying on is one of the run's own offers
-([CLI](cli.md#carry-on-from-a-finished-run)) — a child run of the workflow it declares,
-started with `run action <run> <offer>`. Collie never starts one by itself.
+A finished Run's status is never rewritten, and its Workflow is never re-entered. Its
+live agents still take steering
+([ADR-0041](adr/0041-a-finished-run-still-takes-steering.md)): a `deliver` reaches them
+through the Dispatcher with the delivery token, the ledger line and the receipt a running
+Run's agent gets, and comes back `applied` only when the text was sent. `answer` is
+refused because a finished Run asks nothing; `update_intent` and `clear_override` work as
+they do on a running Run; `stop` closes its live agents' panes and leaves the status as it
+was; `hold`, `release` and `set_verification` are refused with what to do instead.
+
+A `deliver` whose agent's pane is gone fails and names the route that carries the request
+on. Where its outcome needs more work, or its agent is gone, carrying on is one of the
+run's own offers ([CLI](cli.md#carry-on-from-a-finished-run)) — a child run of the
+workflow it declares, started with `run action <run> <offer>` — or a new Run on its
+branch where it offers none. Collie never starts either by itself, and never relaunches a
+finished Run's agent.
 
 ## Cross-run checks
 

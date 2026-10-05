@@ -19,6 +19,7 @@ import { Effect, Path, Schema } from "effect";
 import { appendJournal, readJournal } from "./journal";
 import { runTitle } from "./naming";
 import { settled, type RunFacts } from "./runs";
+import type { Reopened, TaskView } from "./board-model";
 
 const SaidSchema = Schema.Struct({ at: Schema.String, key: Schema.String });
 const SaidJson = Schema.fromJsonString(SaidSchema);
@@ -51,10 +52,24 @@ export function eventsIn(
    * from. Read from the drift journal by the caller, which already reads it to mark rows.
    */
   drifting: ReadonlyMap<string, string> = new Map(),
+  /** Runs whose card is Ready to release: the revision its checks passed at, and its sentence. */
+  ready: ReadonlyMap<string, { at: string; sentence: string }> = new Map(),
+  /** Reopened Runs whose agent has finished what it was told, by Run (`idleAgain`). */
+  done: ReadonlyMap<string, Reopened> = new Map(),
 ): Event[] {
   const out: Event[] = [];
   for (const run of runs) {
     const about = runTitle(run);
+    const finished = done.get(run.id);
+    // Beside whatever else is true of the Run: it is about one request, not the Run.
+    if (finished !== undefined) {
+      const told = finished.told === null ? "" : ` (“${finished.told}”)`;
+      out.push({
+        run: run.id,
+        key: `${run.id}:reopened:${finished.delivery}`,
+        text: `Run ${run.id} (${about}): ${finished.agent} has finished what it was told after the Run ended${told}. What came of it?`,
+      });
+    }
     const asked = run.asking[0];
     if (asked !== undefined) {
       out.push({
@@ -81,6 +96,15 @@ export function eventsIn(
       });
       continue;
     }
+    const shippable = ready.get(run.id);
+    if (shippable !== undefined) {
+      out.push({
+        run: run.id,
+        key: `${run.id}:ready:${shippable.at}`,
+        text: `Run ${run.id} (${about}): ${shippable.sentence}`,
+      });
+      continue;
+    }
     if (settled(run)) {
       out.push({
         run: run.id,
@@ -90,6 +114,25 @@ export function eventsIn(
     }
   }
   return out;
+}
+
+/**
+ * Reopened Runs whose agent was seen working on what it was told and is idle now: once per
+ * Delivery. `seen` is the caller's memory between board reads, of Deliveries seen working.
+ */
+export function idleAgain(
+  views: ReadonlyArray<TaskView>,
+  seen: Set<string>,
+): Map<string, Reopened> {
+  const idle = new Map<string, Reopened>();
+  for (const view of views) {
+    const reopened = view.reopened ?? null;
+    if (reopened === null) continue;
+    if (reopened.status === "working") seen.add(reopened.delivery);
+    else if (reopened.status !== "blocked" && seen.delete(reopened.delivery))
+      idle.set(view.run, reopened);
+  }
+  return idle;
 }
 
 export const saidPath = Effect.fn("Proactive.saidPath")(function* (herdDir: string) {

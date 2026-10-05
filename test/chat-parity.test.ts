@@ -30,7 +30,12 @@ import { registeredKinds, resetExecutors } from "../src/executors";
 import { registerRunExecutors } from "../src/operations";
 import { readEnv } from "../src/env";
 import type { JsonObject } from "../src/schema";
-import { TOOLS, toolNamed } from "../src/tools";
+import { checkLines, herdLines, TOOLS, toolNamed } from "../src/tools";
+import { boardLines, buildBoard } from "../src/board";
+import { SECTIONS, sortBoard } from "../src/board-model";
+import { encodeVerifying } from "../src/verify";
+import { madeRun } from "./support/records";
+import { task } from "./support/task";
 import { runEffect } from "./support/effect";
 
 const encodeJson = Schema.encodeUnknownSync(Schema.fromJsonString(Schema.Any));
@@ -118,6 +123,7 @@ const INVENTORY: ReadonlyArray<readonly [string, Route]> = [
   ["run deliveries", { route: "read", tool: "collie_receipts", input: { run: RUN } }],
   ["run disposition", { route: "write", tool: "collie_do" }],
   ["run metrics", { route: "read", tool: "collie_run", input: { run: RUN } }],
+  ["run checks", { route: "read", tool: "collie_run", input: { run: RUN } }],
   ["run report", { route: "read", tool: "collie_herd" }],
   ["run drift", { route: "read", tool: "collie_run", input: { run: RUN } }],
   ["run cards", { route: "read", tool: "collie_run", input: { run: RUN } }],
@@ -379,3 +385,89 @@ test("every tool chat is given is a route somebody named", () => {
     "collie_propose",
   ]);
 });
+
+test("chat and the text board list the sections in the board's one order", () => {
+  const views = sortBoard([
+    task({ id: "done", name: "Landed", state: "done" }),
+    task({ id: "working", name: "Building" }),
+    task({ id: "waiting", name: "Shippable", state: "done", landed: false }),
+    task({ id: "blocked", name: "Asking", state: "blocked" }),
+  ]);
+  const order = SECTIONS.map(([, title]) => title);
+  const titled = (lines: ReadonlyArray<string>) =>
+    lines.flatMap((line) => order.filter((title) => line.replace(/^## /, "").startsWith(title)));
+  expect(titled(herdLines(views, 0).split("\n"))).toEqual(order);
+  expect(titled(boardLines(views))).toEqual(order);
+});
+
+test("collie_run and collie_herd say what a running check's card says", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const stateDir = yield* fs.makeTempDirectory({ prefix: "collie-parity-check-" });
+      const run = yield* madeRun(stateDir, { id: "r-check" });
+      yield* fs.writeFileString(
+        `${run.dir}/verifying`,
+        encodeVerifying({
+          name: "test",
+          executable: "bun",
+          argv: ["test"],
+          pass: "recheck",
+          round: null,
+          revision: "abc",
+          base: null,
+          started: "2026-09-14T10:00:00Z",
+        }),
+      );
+      const now = Date.parse("2026-09-14T10:12:00Z");
+      const [card] = yield* buildBoard({
+        env: readEnv({ HERDR_PLUGIN_STATE_DIR: stateDir, COLLIE_CWD: "/project" }),
+        runs: [run],
+        tasks: [],
+        registered: [],
+        proposals: [],
+        mrStates: new Map(),
+        now,
+      });
+      expect(card!.sentence).toBe(
+        "Running test again on the same tree to rule out a flake, 12 min.",
+      );
+      expect((yield* checkLines(run, [run], now))[0]).toBe(`Check running: ${card!.sentence}`);
+      expect(herdLines([card!], now)).toContain(card!.sentence);
+    }),
+  ));
+
+test("collie_run gives a running check's last forty lines under the card's sentence", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const stateDir = yield* fs.makeTempDirectory({ prefix: "collie-parity-lines-" });
+      const run = yield* madeRun(stateDir, { id: "r-lines" });
+      const log = `${run.evidence}/checks/test.log`;
+      yield* fs.makeDirectory(`${run.evidence}/checks`, { recursive: true });
+      yield* fs.writeFileString(
+        log,
+        Array.from({ length: 45 }, (_, at) => `line ${at + 1}`).join("\n") + "\n",
+      );
+      yield* fs.writeFileString(
+        `${run.dir}/verifying`,
+        encodeVerifying({
+          name: "test",
+          executable: "bun",
+          argv: ["test"],
+          pass: "gate",
+          round: null,
+          revision: "abc",
+          base: null,
+          started: "2026-09-14T10:00:00Z",
+          log,
+        }),
+      );
+      const lines = yield* checkLines(run, [run], Date.parse("2026-09-14T10:04:00Z"));
+      expect(lines.slice(0, 2)).toEqual([
+        "Check running: Running test on the branch, 4 min.",
+        "Its last lines:",
+      ]);
+      expect(lines.slice(2)).toEqual(Array.from({ length: 40 }, (_, at) => `  line ${at + 6}`));
+    }),
+  ));

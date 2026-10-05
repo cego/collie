@@ -74,7 +74,7 @@ import {
 import type { Action } from "./evaluator";
 import { ProposalRefused, type ProposalCarried, type StepResult } from "./board-model";
 import { fingerprint } from "./verify";
-import { findRun, settled } from "./runs";
+import { findRun } from "./runs";
 
 const takesFields = Schema.decodeUnknownOption(
   Schema.Struct({
@@ -640,7 +640,6 @@ const admissionFor = Effect.fn("runActions.admissionFor")(function* (
   const now = here === null ? null : `${here.head_sha}:${here.fingerprint}`;
   return admit(action, {
     run: { id: run.id, status: run.state },
-    hostHolds: !settled(run),
     pendingChoice: run.asking[0]?.name ?? null,
     incarnation: agent === null ? null : (live.find((a) => a.name === agent)?.terminalId ?? null),
     proposedIncarnation: agent === null ? null : (proposal?.incarnations?.[agent] ?? null),
@@ -653,7 +652,6 @@ const admissionFor = Effect.fn("runActions.admissionFor")(function* (
 function emptyAdmission(): Parameters<typeof admit>[1] {
   return {
     run: null,
-    hostHolds: false,
     pendingChoice: null,
     incarnation: null,
     proposedIncarnation: null,

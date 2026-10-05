@@ -4,12 +4,14 @@
 // human reads on a card — a form nobody has a case for is a form nobody can trust.
 
 import { expect, test } from "bun:test";
-import { DateTime, Effect, FileSystem, Schema } from "effect";
+import { DateTime, Effect, Fiber, FileSystem, Schema } from "effect";
 import {
   boardLines,
   buildBoard,
+  checksAt,
   finishedLabel,
   heldLine,
+  mrLabel,
   sentenceFor,
   whereItIs,
   workingLabel,
@@ -24,13 +26,24 @@ import {
   matchesTask,
   sectionOf,
   sectionsOf,
+  SECTIONS,
+  sortBoard,
   type TaskView,
 } from "../src/board-model";
 import { recordAudit } from "../src/audit";
 import { recordDisposition } from "../src/disposition";
 import { nothingApproved } from "../src/outcome";
+import {
+  appendVerification,
+  encodeVerifying,
+  readVerifications,
+  type Verification,
+} from "../src/verify";
+import { checkSentence, followLog } from "../src/checks";
 import { readEnv } from "../src/env";
 import type { AgentInfo } from "../src/herdr";
+import { toldIn, toldLine, type Delivery } from "../src/steering";
+import { herdLines } from "../src/tools";
 import { append as appendProposal, type ProposalLine } from "../src/proposals";
 import type { AgentEntry } from "../src/registry";
 import type { RunFacts } from "../src/runs";
@@ -38,7 +51,7 @@ import type { TaskRecord } from "../src/task";
 import { runEffect } from "./support/effect";
 import { madeRun } from "./support/records";
 import { collie, proves } from "./support/world";
-import { stopHost } from "./support/host";
+import { stopHost, until } from "./support/host";
 
 function facts(over: Partial<Sentence> = {}): Sentence {
   return {
@@ -46,6 +59,8 @@ function facts(over: Partial<Sentence> = {}): Sentence {
     decision: null,
     step: { id: "build", round: null },
     verb: null,
+    checking: null,
+    reopened: null,
     silent: null,
     wave: null,
     failure: null,
@@ -56,6 +71,8 @@ function facts(over: Partial<Sentence> = {}): Sentence {
     abandoned: null,
     planReady: false,
     mrState: null,
+    checks: null,
+    agent: null,
     stalled: null,
     ...over,
   };
@@ -155,7 +172,7 @@ const FORMS: Array<[string, Sentence, string]> = [
   [
     "done with a merge request open",
     facts({ state: "done", mr: "https://gitlab.cego.dk/mk/collie/-/merge_requests/65" }),
-    "Finished; mk/collie!65 is open.",
+    "mk/collie!65 is open; nothing has checked it.",
   ],
   [
     "done and abandoned",
@@ -222,6 +239,10 @@ function task(over: Partial<TaskView> = {}): TaskView {
     landed: (over.state ?? "active") === "done",
     ended: null,
     mrState: null,
+    checks: null,
+    ready: false,
+    check: null,
+    reopened: null,
     planReady: false,
     offer: null,
     run: "r1",
@@ -308,8 +329,8 @@ test("the header counts what is waiting on you this week, and the fold counts th
   ];
   // Given the clock, the header counts the week's endings; the fold's own line counts the
   // rest. Without it — a test's bare call — it counts them all.
-  expect(headerSentence(views, now).text).toBe("Nothing needs you. 1 working. 1 waiting on you.");
-  expect(headerSentence(views).text).toBe("Nothing needs you. 1 working. 2 waiting on you.");
+  expect(headerSentence(views, now).text).toBe("Nothing needs you. 1 waiting on you. 1 working.");
+  expect(headerSentence(views).text).toBe("Nothing needs you. 2 waiting on you. 1 working.");
   const { recent, older } = foldWaiting(sectionsOf(views, "").waiting, now);
   expect(recent.map((t) => t.id)).toEqual(["recent"]);
   expect(older.map((t) => t.id)).toEqual(["old"]);
@@ -673,7 +694,8 @@ test("a check Collie is running outranks what an idle agent last said", () =>
         registered: [registered("impl-1", run.id)],
       });
 
-      expect(view!.sentence).toBe("Running the typecheck-spilnu check.");
+      // A marker in the old one-line shape still reads, as a name and nothing more.
+      expect(view!.sentence).toBe("Running typecheck-spilnu.");
     }),
   ));
 
@@ -802,7 +824,7 @@ test("what became of the work is the disposition's answer and nobody else's", ()
       const now = Date.parse("2026-09-14T10:00:00Z");
       const before = yield* board(env, [run], { now });
       // A merge request nobody has said landed is not a merge, but it is news.
-      expect(before[0]!.sentence).toBe("Finished; content!1 is open.");
+      expect(before[0]!.sentence).toBe("content!1 is open; nothing has checked it.");
 
       yield* recordDisposition(run.dir, {
         at: "2026-09-14T09:00:00Z",
@@ -1259,5 +1281,721 @@ test("a question outranks a Run nothing drives: it is still waiting on you", () 
 
       expect(view!.decision).toMatchObject({ kind: "question" });
       expect(sectionOf(view!)).toBe("needs-you");
+    }),
+  ));
+
+// Ready to release: a succeeded Run's open merge request, and what checked it.
+
+test("the sections come out in the board's order, and ready work leads Waiting on you", () => {
+  const views = sortBoard([
+    task({ id: "done", state: "done" }),
+    task({ id: "working" }),
+    task({
+      id: "older-ready",
+      state: "done",
+      landed: false,
+      ready: true,
+      ended: 1,
+    }),
+    task({ id: "recent", state: "done", landed: false, ended: 2 }),
+    task({ id: "blocked", state: "blocked", decision: QUESTION }),
+  ]);
+  expect(views.map((view) => view.id)).toEqual([
+    "blocked",
+    "older-ready",
+    "recent",
+    "working",
+    "done",
+  ]);
+  expect(SECTIONS.map(([section]) => section)).toEqual([
+    "needs-you",
+    "waiting",
+    "working",
+    "finished",
+  ]);
+});
+
+const PR = "https://github.com/cego/collie/pull/30";
+
+test("an open merge request says whether it is ready, what failed, and the next move", () => {
+  const open = (over: Partial<Sentence>) => sentenceFor(facts({ state: "done", mr: PR, ...over }));
+  expect(open({ checks: { state: "passed", at: "1a2b3c4d5e" }, agent: "builder" })).toBe(
+    "Ready to release: cego/collie#30 is open and its checks passed at 1a2b3c4. Next: merge it, or tell builder to.",
+  );
+  expect(open({ checks: { state: "passed", at: "1a2b3c4d5e" } })).toBe(
+    "Ready to release: cego/collie#30 is open and its checks passed at 1a2b3c4. Next: merge it.",
+  );
+  expect(
+    open({
+      checks: { state: "failed", name: "lint", at: "1a2b3c4d5e" },
+      agent: "builder",
+    }),
+  ).toBe("cego/collie#30 is open, but lint failed at 1a2b3c4. Next: fix lint, or tell builder to.");
+  expect(open({ checks: { state: "unchecked" } })).toBe(
+    "cego/collie#30 is open; nothing has checked it.",
+  );
+});
+
+test("a GitHub pull request reads as owner/repo#N, and GitLab labels are unchanged", () => {
+  expect(mrLabel(PR)).toBe("cego/collie#30");
+  expect(mrLabel("https://gitlab.cego.dk/mk/collie/-/merge_requests/65")).toBe("mk/collie!65");
+  expect(mrLabel("mr:gitlab.cego.dk/mk/collie!65")).toBe("mk/collie!65");
+});
+
+test("the header names what is ready to release before what else waits on you", () => {
+  const views = [
+    task({ id: "ready", state: "done", landed: false, ready: true }),
+    task({ id: "w1", state: "failed" }),
+    task({ id: "w2", state: "done", landed: false }),
+    task({ id: "a1" }),
+    task({ id: "a2" }),
+    task({ id: "a3" }),
+  ];
+  expect(headerSentence(views).text).toBe(
+    "Nothing needs you. 1 ready to release, 2 waiting on you. 3 working.",
+  );
+  expect(headerSentence([views[0]!]).text).toBe(
+    "Nothing needs you. 1 ready to release. 0 working.",
+  );
+});
+
+/** A Collie-collected check of `name` at `head`. */
+const checked = (name: string, head: string, result: "pass" | "fail" = "pass"): Verification => ({
+  id: `v-${name}-${head}`,
+  run: "r1",
+  name,
+  executable: "/usr/bin/true",
+  argv: [],
+  cwd: "/project",
+  start: { head_sha: head, fingerprint: "f" },
+  end: { head_sha: head, fingerprint: "f" },
+  exit: result === "pass" ? 0 : 1,
+  seconds: 1,
+  expect: "pass",
+  tail: { stdout: "", stderr: "" },
+  result,
+  at: "2026-09-14T09:00:00Z",
+  by: "collie",
+});
+
+/** A checkout with `branch` at a commit of its own, and that commit's sha. */
+const checkout = Effect.fn("board.checkout")(function* (branch: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const repo = yield* fs.makeTempDirectory({ prefix: "collie-board-repo-" });
+  const git = (...args: string[]) =>
+    Effect.promise(() => Bun.$`git ${args}`.cwd(repo).quiet().text());
+  yield* git("init", "-q", "-b", branch);
+  yield* git(
+    "-c",
+    "user.email=t@t",
+    "-c",
+    "user.name=t",
+    "commit",
+    "-q",
+    "--allow-empty",
+    "-m",
+    "one",
+  );
+  return { repo, head: (yield* git("rev-parse", "HEAD")).trim() };
+});
+
+test("a succeeded Run's open merge request is ready only on checks at its branch's head", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const { repo, head } = yield* checkout("mk/ship");
+      const run = yield* madeRun(dir, {
+        task: "task-1",
+        state: "succeeded",
+        branch: "mk/ship",
+        cwd: repo,
+        mr: PR,
+        finished: "2026-09-14T09:30:00Z",
+      });
+      const view = Effect.map(board(env, [run]), (views) => views[0]!);
+
+      expect((yield* view).sentence).toBe("cego/collie#30 is open; nothing has checked it.");
+
+      // Green, but on a tree the branch has moved past: not evidence about this one.
+      yield* appendVerification(run.evidence, checked("test", "0000000older"));
+      expect((yield* view).checks).toEqual({ state: "unchecked" });
+      expect((yield* view).ready).toBe(false);
+
+      yield* appendVerification(run.evidence, checked("test", head));
+      yield* appendVerification(run.evidence, checked("lint", head, "fail"));
+      const red = yield* view;
+      expect(red.checks).toEqual({ state: "failed", name: "lint", at: head });
+      expect(red.sentence).toBe(
+        `cego/collie#30 is open, but lint failed at ${head.slice(0, 7)}. Next: fix lint.`,
+      );
+
+      yield* appendVerification(run.evidence, checked("lint", head));
+      const green = yield* board(env, [run], {
+        alive: [agent("builder", "idle")],
+        registered: [registered("builder", run.id)],
+      });
+      expect(green[0]!.ready).toBe(true);
+      expect(sectionOf(green[0]!)).toBe("waiting");
+      expect(green[0]!.sentence).toBe(
+        `Ready to release: cego/collie#30 is open and its checks passed at ${head.slice(0, 7)}. Next: merge it, or tell builder to.`,
+      );
+    }),
+  ));
+
+test("where the branch cannot be read, the newest revision Collie checked counts", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const run = yield* madeRun(dir, {
+        state: "succeeded",
+        branch: "mk/gone",
+        cwd: `${dir}/no-such-checkout`,
+        mr: PR,
+      });
+      yield* appendVerification(run.evidence, checked("test", "aaaaaaaold", "fail"));
+      yield* appendVerification(run.evidence, checked("test", "bbbbbbbnew"));
+      const [view] = yield* board(env, [run]);
+      expect(view!.checks).toEqual({ state: "passed", at: "bbbbbbbnew" });
+      expect(view!.sentence).toContain("passed at bbbbbbb.");
+    }),
+  ));
+
+// A check Collie is running: which pass, why, and how long against how long it usually takes.
+
+const PASS_SENTENCES: Array<[string, Parameters<typeof checkSentence>[0], string]> = [
+  [
+    "the gate",
+    {
+      name: "test",
+      pass: "gate",
+      round: null,
+      base: null,
+      elapsedMs: 4 * 60_000,
+      usualMs: 20 * 60_000,
+      others: 0,
+    },
+    "Running test on the branch, 4 min of a usual 20.",
+  ],
+  [
+    "the baseline, with contention",
+    {
+      name: "test",
+      pass: "baseline",
+      round: null,
+      base: "master",
+      elapsedMs: 12 * 60_000,
+      usualMs: 20 * 60_000,
+      others: 3,
+    },
+    "Running test where the branch left master, to see whether it failed before this Run, 12 min of a usual 20. 3 other checks are running.",
+  ],
+  [
+    "a recheck over its usual time",
+    {
+      name: "test",
+      pass: "recheck",
+      round: null,
+      base: null,
+      elapsedMs: 25 * 60_000,
+      usualMs: 20 * 60_000,
+      others: 1,
+    },
+    "Running test again on the same tree to rule out a flake, 25 min, longer than the usual 20. 1 other check is running.",
+  ],
+  [
+    "a fix, with nothing to compare against",
+    {
+      name: "lint",
+      pass: "fix",
+      round: 1,
+      base: null,
+      elapsedMs: 30_000,
+      usualMs: null,
+      others: 0,
+    },
+    "Running lint after gate fix 1, 30 s.",
+  ],
+  [
+    "the finish",
+    {
+      name: "test",
+      pass: "finish",
+      round: null,
+      base: null,
+      elapsedMs: 90_000,
+      usualMs: 40_000,
+      others: 0,
+    },
+    "Running test as the Run finishes, 2 min, longer than the usual 40 s.",
+  ],
+  [
+    "a plain check",
+    {
+      name: "test",
+      pass: "check",
+      round: null,
+      base: null,
+      elapsedMs: null,
+      usualMs: null,
+      others: 0,
+    },
+    "Running test.",
+  ],
+];
+
+for (const [form, given, expected] of PASS_SENTENCES) {
+  test(`a running check's sentence for ${form}`, () => {
+    expect(checkSentence(given)).toBe(expected);
+  });
+}
+
+/** A marker as the host writes one while a check runs. */
+const marking = Effect.fn("board.marking")(function* (
+  run: RunFacts,
+  over: Partial<Parameters<typeof encodeVerifying>[0]> = {},
+) {
+  const fs = yield* FileSystem.FileSystem;
+  yield* fs.writeFileString(
+    `${run.dir}/verifying`,
+    encodeVerifying({
+      name: "test",
+      executable: "bun",
+      argv: ["test"],
+      pass: "gate",
+      round: null,
+      revision: "abc",
+      base: null,
+      started: "2026-09-14T10:01:00Z",
+      ...over,
+    }),
+  );
+});
+
+/** A finished Collie run of `bun test` in `run`'s evidence that took `minutes`. */
+const took = (run: RunFacts, minutes: number, at: string) =>
+  appendVerification(run.evidence, {
+    ...checked("test", "abc"),
+    id: `v-${run.id}-${at}`,
+    run: run.id,
+    executable: "/usr/bin/bun",
+    argv: ["test"],
+    seconds: minutes * 60,
+    at,
+  });
+
+test("a running check never borrows the round of the agent operation before it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const run = yield* madeRun(dir, { task: "task-1" });
+      const fs = yield* FileSystem.FileSystem;
+      yield* fs.makeDirectory(`${dir}/agents/${run.id}`, { recursive: true });
+      yield* fs.writeFileString(`${dir}/agents/${run.id}/launches`, "fix-1\n");
+      yield* marking(run, { pass: "recheck" });
+
+      const [view] = yield* board(env, [run]);
+      expect(view!.sentence).toBe(
+        "Running test again on the same tree to rule out a flake, 4 min.",
+      );
+      expect(view!.sentence).not.toContain("round");
+      expect(view!.check?.pass).toBe("recheck");
+    }),
+  ));
+
+test("usually is the median of the last five runs of that check in the same repository", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const run = yield* madeRun(dir, { task: "task-1" });
+      const before = yield* madeRun(dir, {
+        id: "r-before",
+        state: "succeeded",
+        created: "2026-09-13T10:00:00Z",
+      });
+      const elsewhere = yield* madeRun(dir, {
+        id: "r-elsewhere",
+        state: "succeeded",
+        project: "/elsewhere",
+      });
+      yield* marking(run);
+      const at = (n: number) => `2026-09-13T1${n}:00:00Z`;
+      // Six earlier: the oldest falls out, and the last five's median is 3 minutes.
+      for (const [n, minutes] of [
+        [0, 90],
+        [1, 1],
+        [2, 2],
+        [3, 3],
+        [4, 4],
+        [5, 5],
+      ] as const)
+        yield* took(before, minutes, at(n));
+      // Another repository's runs of the same command are not this one's usual.
+      yield* took(elsewhere, 60, at(6));
+      // Nor are this repository's runs of it with other arguments, or of another command.
+      yield* appendVerification(before.evidence, {
+        ...checked("test", "abc"),
+        id: "v-other-args",
+        run: before.id,
+        executable: "/usr/bin/bun",
+        argv: ["test", "--bail"],
+        seconds: 90 * 60,
+        at: at(7),
+      });
+      yield* appendVerification(before.evidence, {
+        ...checked("test", "abc"),
+        id: "v-other-command",
+        run: before.id,
+        executable: "/usr/bin/npm",
+        argv: ["test"],
+        seconds: 90 * 60,
+        at: at(8),
+      });
+
+      const view = (yield* board(env, [run, before, elsewhere])).find((one) => one.run === run.id);
+      expect(view!.sentence).toBe("Running test on the branch, 4 min, longer than the usual 3.");
+    }),
+  ));
+
+test("with nothing to compare against, a running check says only how long it has run", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const run = yield* madeRun(dir, { task: "task-1" });
+      yield* marking(run);
+      const [view] = yield* board(env, [run]);
+      expect(view!.sentence).toBe("Running test on the branch, 4 min.");
+    }),
+  ));
+
+test("a running check counts the other checks this host is running", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const run = yield* madeRun(dir, { task: "task-1" });
+      const a = yield* madeRun(dir, { id: "r-a", task: "t-a" });
+      const b = yield* madeRun(dir, { id: "r-b", task: "t-b" });
+      for (const one of [run, a, b]) yield* marking(one);
+      const view = (yield* board(env, [run, a, b])).find((one) => one.run === run.id);
+      expect(view!.sentence).toBe("Running test on the branch, 4 min. 2 other checks are running.");
+    }),
+  ));
+
+test("a Verification recorded before passes were still reads, as a plain check", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir } = yield* scratch();
+      const run = yield* madeRun(dir);
+      const fs = yield* FileSystem.FileSystem;
+      const {
+        pass: _pass,
+        round: _round,
+        ...old
+      } = { ...checked("test", "abc"), pass: "gate", round: 1 };
+      yield* fs.makeDirectory(`${run.evidence}/steering`, { recursive: true });
+      yield* fs.writeFileString(
+        `${run.evidence}/steering/verifications.jsonl`,
+        `${Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))(old)}\n`,
+      );
+      const [read] = yield* readVerifications(run.evidence);
+      expect(read?.name).toBe("test");
+      expect(read?.pass).toBeUndefined();
+    }),
+  ));
+
+test(
+  "`collie --json run checks` lists the running pass and the finished ones",
+  () =>
+    proves(
+      "collie-run-checks-cli-",
+      (world) =>
+        Effect.gen(function* () {
+          const started = yield* collie(world, ["run", "start", "plain", "--input", "note=hi"]);
+          const runId = Schema.decodeUnknownSync(Schema.Struct({ runId: Schema.String }))(
+            started.envelope.data,
+          ).runId;
+          const fs = yield* FileSystem.FileSystem;
+          const run = yield* madeRun(world.state, { id: runId });
+          yield* appendVerification(run.evidence, {
+            ...checked("lint", "abc"),
+            run: runId,
+            pass: "gate",
+          });
+          yield* fs.writeFileString(
+            `${run.dir}/verifying`,
+            encodeVerifying({
+              name: "test",
+              executable: "bun",
+              argv: ["test"],
+              pass: "fix",
+              round: 1,
+              revision: "abc",
+              base: null,
+              started: "2026-09-14T10:00:00Z",
+            }),
+          );
+
+          const listed = yield* collie(world, ["run", "checks", runId]);
+          yield* stopHost(world.state);
+          expect(listed.envelope.ok).toBe(true);
+          expect(listed.envelope.data).toMatchObject({
+            run: runId,
+            running: { name: "test", pass: "fix", round: 1 },
+            done: [{ name: "lint", pass: "gate", result: "pass", revision: "abc" }],
+          });
+          expect(
+            Schema.decodeUnknownSync(
+              Schema.Struct({ running: Schema.Struct({ sentence: Schema.String }) }),
+            )(listed.envelope.data).running.sentence,
+          ).toStartWith("Running test after gate fix 1, ");
+        }),
+      ["plain.workflow.ts"],
+    ),
+  60_000,
+);
+
+// A finished Run Reopened by a steer to its live agent (ADR-0038 D5): derived from the
+// ledger and herdr's word on the agent, never stored.
+
+const steerAt = (at: string, state: Delivery["state"] = "submitted"): Delivery => ({
+  id: `d-${at}`,
+  at,
+  run: "r1",
+  incarnation: "term-builder",
+  agent: "builder",
+  causal_key: "steer:req-1",
+  request_id: "req-1",
+  cause: { kind: "steer", ref: "req-1" },
+  mode: "now",
+  text_hash: "h",
+  intent_version: 1,
+  attempt: 1,
+  state,
+});
+
+/** A succeeded Run whose builder was told "merge and tag it", with herdr saying `status`. */
+const reopened = Effect.fn("board.reopened")(function* (
+  status: AgentInfo["status"],
+  steeredAt = "2026-09-14T10:02:00Z",
+  over: Partial<Parameters<typeof buildBoard>[0]> = {},
+) {
+  const { dir, env } = yield* scratch();
+  const run = yield* madeRun(dir, {
+    task: "task-1",
+    state: "succeeded",
+    mr: "https://github.com/cego/collie/pull/30",
+    finished: "2026-09-14T10:00:00Z",
+  });
+  const fs = yield* FileSystem.FileSystem;
+  yield* fs.makeDirectory(`${dir}/agents/${run.id}`, { recursive: true });
+  yield* fs.writeFileString(
+    `${dir}/agents/${run.id}/agents.log`,
+    'builder: told "merge and tag it"\n',
+  );
+  const views = yield* board(env, [run], {
+    alive: [agent("builder", status)],
+    registered: [registered("builder", run.id)],
+    deliveries: [steerAt(steeredAt)],
+    ...over,
+  });
+  return views[0]!;
+});
+
+test("a succeeded Run whose agent works on what it was told after it ended is Working", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const card = yield* reopened("working");
+      expect(sectionOf(card)).toBe("working");
+      expect(card.sentence).toBe("Working on what you told builder: “merge and tag it”.");
+      // The Workflow's steps are as they ended.
+      expect(card.steps).toEqual([{ name: "implement", state: "done" }]);
+      expect(card.reopened).toMatchObject({ agent: "builder", status: "working" });
+      // Chat reads the same card, in the same section.
+      const said = herdLines([card], Date.parse("2026-09-14T10:05:00Z"));
+      expect(said).toContain("## Working · 1");
+      expect(said).toContain(card.sentence);
+    }),
+  ));
+
+test("a Reopened Run whose agent is blocked needs you, in that agent's pane", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const card = yield* reopened("blocked");
+      expect(sectionOf(card)).toBe("needs-you");
+      expect(card.sentence).toBe("Waiting for you in builder's pane.");
+    }),
+  ));
+
+test("a Reopened Run whose agent is idle again stands on its own facts", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const card = yield* reopened("idle", "2026-09-14T10:02:00Z", {
+        forge: new Map([["cego/collie#30", { checks: { state: "passed" }, head: "abc1234def" }]]),
+      });
+      expect(sectionOf(card)).toBe("waiting");
+      expect(card.ready).toBe(true);
+      expect(card.sentence).toStartWith("Ready to release: cego/collie#30");
+    }),
+  ));
+
+test("a steer sent before the Run finished does not reopen it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const card = yield* reopened("working", "2026-09-14T09:58:00Z");
+      expect(card.reopened).toBeNull();
+      expect(sectionOf(card)).toBe("waiting");
+    }),
+  ));
+
+test(
+  "`collie run checks --follow` prints a running check's output as it is written, and how it ended",
+  () =>
+    proves(
+      "collie-run-checks-follow-",
+      (world) =>
+        Effect.gen(function* () {
+          const started = yield* collie(world, ["run", "start", "plain", "--input", "note=hi"]);
+          const runId = Schema.decodeUnknownSync(Schema.Struct({ runId: Schema.String }))(
+            started.envelope.data,
+          ).runId;
+          const fs = yield* FileSystem.FileSystem;
+          const run = yield* madeRun(world.state, { id: runId });
+          const log = `${run.evidence}/checks/unit.log`;
+          yield* fs.makeDirectory(`${run.evidence}/checks`, { recursive: true });
+          yield* fs.writeFileString(log, "compiling\n");
+          const marker = `${run.dir}/verifying`;
+          yield* fs.writeFileString(
+            marker,
+            encodeVerifying({
+              name: "unit",
+              executable: "bun",
+              argv: ["test"],
+              pass: "gate",
+              round: null,
+              revision: "abc",
+              base: null,
+              started: "2026-09-14T10:00:00Z",
+              log,
+            }),
+          );
+
+          const following = yield* Effect.forkChild(
+            collie(world, ["run", "checks", runId, "--follow"]),
+          );
+          yield* Effect.sleep("1 second");
+          yield* fs.writeFileString(log, "1 pass\n", { flag: "a" });
+          yield* Effect.sleep("1 second");
+          yield* appendVerification(run.evidence, {
+            ...checked("unit", "abc"),
+            run: runId,
+            log,
+          });
+          yield* fs.remove(marker);
+          const followed = yield* Fiber.join(following);
+
+          const none = yield* collie(world, ["run", "checks", runId, "--follow"]);
+          yield* stopHost(world.state);
+          // Under --json the output is stderr's: stdout is the one envelope.
+          expect(followed.stderr).toContain("Running unit on the branch");
+          expect(followed.stderr.indexOf("compiling")).toBeLessThan(
+            followed.stderr.indexOf("1 pass"),
+          );
+          expect(followed.envelope.data).toMatchObject({ ended: { name: "unit", result: "pass" } });
+          expect(none.envelope.data).toEqual({ run: runId, ended: null });
+        }),
+      ["plain.workflow.ts"],
+    ),
+  60_000,
+);
+
+test("work ready to release is never folded away, however long it has waited", () => {
+  const now = Date.parse("2026-09-16T12:00:00.000Z");
+  const week = 8 * 24 * 60 * 60 * 1000;
+  const views = [
+    task({ id: "ready", state: "done", landed: false, ready: true, ended: now - week }),
+    task({ id: "stale", state: "failed", ended: now - week }),
+  ];
+  const { recent, older } = foldWaiting(views, now);
+  expect(recent.map((view) => view.id)).toEqual(["ready"]);
+  expect(older.map((view) => view.id)).toEqual(["stale"]);
+  expect(headerSentence(views, now).text).toBe("Nothing needs you. 1 ready to release. 0 working.");
+});
+
+test("only a steer herdr took, dated after the Run ended, reopens it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const at = "2026-09-14T10:02:00Z";
+      for (const state of ["reserved", "deferred", "failed", "unknown"] as const) {
+        const card = yield* reopened("working", at, { deliveries: [steerAt(at, state)] });
+        expect([state, card.reopened]).toEqual([state, null]);
+      }
+      const step = { ...steerAt(at), cause: { kind: "step" as const, ref: "build" } };
+      expect((yield* reopened("working", at, { deliveries: [step] })).reopened).toBeNull();
+      expect(
+        (yield* reopened("working", at, { deliveries: [steerAt(at, "acknowledged")] })).reopened,
+      ).not.toBeNull();
+    }),
+  ));
+
+test("an agent's own record of a check never counts toward ready", () => {
+  const claimed = { ...checked("test", "abc"), by: "agent" as const };
+  expect(checksAt([claimed], "abc")).toEqual({ state: "unchecked" });
+  expect(checksAt([claimed, checked("test", "abc")], "abc")).toEqual({
+    state: "passed",
+    at: "abc",
+  });
+});
+
+test("following a check hands on each line while the check is still running", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir } = yield* scratch();
+      const run = yield* madeRun(dir);
+      const fs = yield* FileSystem.FileSystem;
+      const log = `${run.evidence}/checks/unit.log`;
+      yield* fs.makeDirectory(`${run.evidence}/checks`, { recursive: true });
+      yield* fs.writeFileString(log, "");
+      yield* marking(run, { log });
+      const said: string[] = [];
+      const following = yield* Effect.forkChild(
+        followLog(run, log, (text) => Effect.sync(() => void said.push(text))),
+      );
+
+      yield* fs.writeFileString(log, "1 pass\n", { flag: "a" });
+      // Said with the marker still there: the check has not ended.
+      yield* until(
+        () => Effect.succeed(said.join("")),
+        (text) => text.includes("1 pass"),
+      );
+      expect(yield* fs.exists(`${run.dir}/verifying`)).toBe(true);
+
+      yield* fs.remove(`${run.dir}/verifying`);
+      expect(yield* Fiber.join(following)).toBeNull();
+      expect(said.join("")).toBe("1 pass\n");
+    }),
+  ));
+
+test("the told line the agents write is the one a Reopened card reads back", () => {
+  const log = [
+    toldLine("builder", "merge and tag it\nthen release"),
+    toldLine("reviewer", "look"),
+  ].join("\n");
+  expect(toldIn(log, "builder")).toBe("merge and tag it");
+  expect(toldIn(log, "nobody")).toBeNull();
+});
+
+test("a hold left on a Run that ended is not drawn: it holds nothing now", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const going = yield* madeRun(dir, { id: "r-going", task: "t-going", held: true });
+      const ended = yield* madeRun(dir, {
+        id: "r-ended",
+        task: "t-ended",
+        held: true,
+        state: "succeeded",
+      });
+      const views = yield* board(env, [going, ended]);
+      expect(views.find((one) => one.run === "r-going")!.held).toBe("⏸ Held.");
+      expect(views.find((one) => one.run === "r-ended")!.held).toBeNull();
     }),
   ));

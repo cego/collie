@@ -240,3 +240,32 @@ effectTest("questions is refused unless it is a way of presenting one", function
   expect(yield* set("questions", "notify")).toContain("notify");
   expect((yield* loadDefaults(rig.pluginEnv().userDir)).questions).toBe("notify");
 });
+
+effectTest(
+  "Open check output opens a pane in the Run's workspace following its check",
+  function* () {
+    const run = yield* madeRun(rig.pluginEnv().stateDir, {
+      id: "r-check",
+      workspace: "w7",
+      cwd: rig.projectDir,
+    });
+    runs = [run];
+
+    const note = yield* runCommand(
+      session(),
+      rig.pluginEnv(),
+      { _tag: "OpenCheckOutput", runId: run.id },
+      prompts,
+    );
+
+    expect(note).toBe("following r-check's check");
+    const calls = yield* rig.calls();
+    const tab = calls.find((call) => call.cmd === "tab create")?.argv ?? [];
+    expect(tab[tab.indexOf("--workspace") + 1]).toBe("w7");
+    const ran = calls.find((call) => call.cmd === "pane run");
+    expect((ran?.argv ?? []).join(" ")).toContain("'run' 'checks' 'r-check' '--follow'");
+    expect((ran?.argv ?? []).join(" ")).toContain(
+      `HERDR_PLUGIN_STATE_DIR=${rig.pluginEnv().stateDir}`,
+    );
+  },
+);

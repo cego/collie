@@ -12,7 +12,7 @@ import { task } from "../support/task";
 import { App } from "../../src/ui/App";
 import type { AppState, Command } from "../../src/ui/state";
 import type { Ask, Pending } from "../../src/ui/prompts";
-import type { RunDetail, TaskView } from "../../src/board-model";
+import { SECTIONS, type RunDetail, type TaskView } from "../../src/board-model";
 import { NO_RUN_OUTCOME } from "../../src/views";
 import type { Live } from "../../src/live";
 import type { Card } from "../../src/cards";
@@ -1001,6 +1001,7 @@ const MR_PANEL = {
   unresolved: true,
   notes: 3,
   headSha: "abc1234",
+  head: "abc1234",
   mergedSha: "",
   updatedAt: NOW,
   url: "https://gitlab.cego.dk/mk/collie/-/merge_requests/151",
@@ -1634,6 +1635,30 @@ test("a long name is cut to its card, and the project and age keep their place",
       expect(line).toContain("…");
       expect(line).toContain("17h");
       expect(app.said()).not.toContain("everything after it");
+    }),
+  ));
+
+test("the Home board draws its sections in the board's one order", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const app = yield* mount(
+        appState({
+          tasks: [
+            ...HERD,
+            task({ id: "t4", name: "Shippable", state: "done", landed: false, run: "r4" }),
+          ],
+        }),
+      );
+      const lines = ["Needs you", "Waiting on you · 1", "Working · 2", "1 finished today"].map(
+        (label) => app.lineOf(label),
+      );
+      expect(lines).toEqual([...lines].sort((a, b) => a - b));
+      expect(SECTIONS.map(([, title]) => title)).toEqual([
+        "Needs you",
+        "Waiting on you",
+        "Working",
+        "Finished",
+      ]);
     }),
   ));
 

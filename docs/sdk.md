@@ -752,6 +752,19 @@ With `at: "default-base"` it runs at the merge-base of the checkout and its defa
 in that same checkout so what the build installed is there, and then puts the checkout back;
 a checkout with changes of its own, or no default branch to compare with, is refused.
 
+Say why a check runs with `pass`: `"gate"` on the branch, `"recheck"` on the same tree to
+rule out a flake, or `"fix"` with `round: N` after gate fix N. Every door shows it while
+the check runs — the card says `Running test again on the same tree to rule out a flake,
+12 min of a usual 20.` — and the record keeps it after
+([ADR-0042](adr/0042-a-check-collie-runs-is-seen-while-it-runs.md)). A check at
+`"default-base"` is the `baseline` pass whatever you say, the checks Collie runs as a Run
+finishes are its `finish` pass, and a check asked for with no pass is a plain `check`.
+Collie never works a pass out from your workflow's id.
+
+```ts
+yield * host.verify({ runId, name: "test", cwd, pass: "fix", round: 2 });
+```
+
 `host.approved(runId)` is that list, for a prompt to name what the work will be held to
 before it starts — `renderApproved` writes it out — and `renderEvidence(host.evidence(...))`
 is what was actually collected and by whom, for a merge request to say what it proved.

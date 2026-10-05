@@ -229,7 +229,9 @@ collie --json run steer <run-id> "check the migration too" --request-id "$(uuidg
   rather than reporting a success nothing can stand behind.
 - **`run stop` parks the Run and stops its agents.** Their panes are closed, and those of
   the Runs it started; the workspace keeps its own tab. `run resume` clears the stop and
-  picks the Run up again, giving work whose agent has gone to a new one.
+  picks the Run up again, giving work whose agent has gone to a new one. On a Run that has
+  already finished, a stop only closes its live agents' panes: no control is set, the
+  status stays what it finished with, and with nothing alive it says nothing was running.
 - **A Run parks itself when its agent's pane will not take a prompt.** herdr answering
   `agent_blocked` for ten minutes leaves the Run `suspended`, with `parked` in its view —
   and in `run show` — saying what held, for how long, and where the prompt is. `run resume`
@@ -245,7 +247,9 @@ collie --json run steer <run-id> "check the migration too" --request-id "$(uuidg
   says so.
 - **`run steer` says something to the Run's agent** through the one sender, with the same
   incarnation and harness-capability checks as every other delivery, and tells you whether
-  it was delivered rather than that it was accepted for sending. It carries out nothing:
+  it was delivered rather than that it was accepted for sending: anything not sent is
+  `operation_failed`, with why. A finished Run's live agent takes one as a running Run's
+  does, whether or not its module is still loaded. It carries out nothing:
   `collie steer` is still the only thing that proposes an action, and a proposal still
   names its exact payload to be confirmed.
 
@@ -473,9 +477,9 @@ collie --json board
 
 The first snapshot of the board the host serves
 ([ADR-0038](adr/0038-the-host-builds-and-serves-the-board.md)): every Task on this Herd's
-board, in the order the Home draws them: **Needs you** first, then **Working** (`active`
-and `quiet`), then **Waiting on you** (work that ended and has not landed), then
-**Finished** (landed), and inside each whatever changed last first. `state: blocked` is what puts a Task in Needs you,
+board, in the order the Home draws them: **Needs you** first, then **Waiting on you** (work
+that ended and has not landed, what is `ready` to release first), then **Working** (`active`
+and `quiet`), then **Finished** (landed), and inside each whatever changed last first. `state: blocked` is what puts a Task in Needs you,
 and it means one of two things: a `decision` to answer, or an agent waiting for you in its
 own pane — a harness dialog herdr will not answer, or a run that parked because its agent's
 pane would not take a prompt. The `sentence` says which, and for the second kind it says which pane. It is the same model the pane renders, so an agent
@@ -500,10 +504,14 @@ Task of its own; a Repo run of a fan-out is its parent's `children` rather than 
 | `decision`                | The question, proposal or gate waiting on you, or `null`. One of the two ways into Needs you.                                                                   |
 | `agents[]`                | The live agents on it, its Repo runs' included.                                                                                                                 |
 | `children[]`              | A fan-out's repositories in wave order: `repo`, its `run` (`null` until it starts), its `state` (`done`, `active`, `blocked`, `failed` or `todo`) and its `mr`. |
-| `mr`, `mrState`, `branch` | What it is building, where it can be read, and what GitLab last said about the merge request.                                                                   |
+| `mr`, `mrState`, `branch` | What it is building, where it can be read, and what the forge last said about the merge request.                                                                |
 | `disposition`, `landed`   | What became of the work, where a person recorded it — never inferred from a merge request — and whether it needs nothing more, which is Finished.               |
 | `ended`                   | When the leading Run ended, or `null` while it has not.                                                                                                         |
 | `planReady`, `offer`      | A finished plan nobody has implemented, and the offer its card's first action invokes.                                                                          |
+| `checks`                  | What checked an open merge request: `passed` or `failed` (with `name`) at revision `at`, `running`, or `unchecked`; else `null`.                                |
+| `ready`                   | Ready to release: the leading Run succeeded, its merge request is open, and its `checks` passed.                                                                |
+| `check`                   | The check Collie is running for the leading Run, as `collie run checks` gives `running` (with its `log` and `lastLines`), or `null`.                            |
+| `reopened`                | A finished Run whose agent took a steer after it ended: the `delivery`, the `agent`, the first line it was `told` and its `status` now; else `null`.            |
 | `run`, `runs[]`           | The Run a card acts on, and every Run of the Task.                                                                                                              |
 
 A `gate` is a Run parked at its evidence gate with nothing approved, listing the checks its
@@ -811,8 +819,12 @@ more by `run resume` — see
 
 ## Carry on from a finished run
 
-A finished run is immutable — there is no mode that reopens one. What it offers to do next
-is its own declaration, so carrying on is one of its offers:
+A finished run's status is never rewritten and its Workflow is never re-entered, but its
+live agents still take `run steer` and `run stop`
+([ADR-0041](adr/0041-a-finished-run-still-takes-steering.md)). New work with steps of
+its own is a follow-up, and so is a request to an agent whose pane is gone: a steer to one
+fails and names this route. What a Run offers to do next is its own declaration, so
+carrying on is one of its offers:
 
 ```sh
 collie --json run actions <run-id>
@@ -974,6 +986,36 @@ same last line — Collie says so: on the record, in `run show`, and in the next
 the agent can change approach rather than repeat itself. It is a sentence, not a stop. A
 counter reaching a number is not evidence that work cannot be done, and what prevents a
 false claim of success is the evidence gate reading collected results.
+
+## Checks
+
+```sh
+collie --json run checks <run-id>
+```
+
+Every check Collie ran for the Run, oldest first, and the one it is running now
+([ADR-0042](adr/0042-a-check-collie-runs-is-seen-while-it-runs.md)). Each says its pass —
+`gate`, `baseline`, `recheck`, `fix` with its round, `finish`, or a plain `check` — so
+three runs of the same suite read as what each was for.
+
+| Field     | What it says                                                                                                                                                                                                                                                                                                                                                         |
+| --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `running` | The check running now, or `null`: `name`, `pass`, `round`, the `revision` it runs at, `elapsedMs`, `usualMs` (the median of its last five runs in this repository, `null` for none), `others` (checks this host is running beside it), `base` (the default branch a `baseline` runs where the branch left), the `sentence` the card says, its `log` and `lastLines`. |
+| `done[]`  | Each finished one: `name`, `pass`, `round`, `result`, `seconds`, the `revision` it ended on, when it ended (`at`) and its `log`.                                                                                                                                                                                                                                     |
+
+Each check's output is written to a log in the Run's evidence directory as it arrives —
+both streams, in the order they came — and kept after it ends, up to 8 MiB; past that the
+log says it was cut. `running.log`, `running.lastLines` (its last 40) and each `done[].log`
+say where it is.
+
+```sh
+collie run checks <run-id> --follow
+```
+
+`--follow` prints the running check's output as it is written and exits when the check
+ends, with a line saying how it ended; with no check running it says so and exits. Under
+`--json` the output goes to stderr and the envelope carries what the check ended as. The
+board's **Open check output** opens a pane in the Task's workspace running exactly this.
 
 ## Report
 

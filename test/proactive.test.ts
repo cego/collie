@@ -4,7 +4,8 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
 import { runEffect } from "./support/effect";
-import { eventsIn, readSaid, remember, type Event } from "../src/proactive";
+import { eventsIn, idleAgain, readSaid, remember, type Event } from "../src/proactive";
+import { task } from "./support/task";
 import {
   append as appendNews,
   newsPath,
@@ -176,3 +177,66 @@ test("noticing something costs a file append, and noticing nothing costs nothing
       expect(pendingNews(yield* readNews(file)).items).toHaveLength(1);
     }),
   ));
+
+test("a Run ready to release when it ends is said once as ready, never as ended", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const file = yield* newsPath(stateDir, "herd-abc");
+      const sentence =
+        "Ready to release: cego/collie#30 is open and its checks passed at 1a2b3c4. Next: merge it.";
+      const ready = new Map([["r1", { at: "1a2b3c4d", sentence }]]);
+      const ended = [record({ id: "r1", state: "succeeded" })];
+
+      const events = eventsIn(ended, new Map(), ready);
+      expect(events).toEqual([
+        { run: "r1", key: "r1:ready:1a2b3c4d", text: `Run r1 (Implement): ${sentence}` },
+      ]);
+      for (let tick = 0; tick < 20; tick++)
+        for (const event of eventsIn(ended, new Map(), ready)) yield* appendNews(file, event);
+      expect(pendingNews(yield* readNews(file)).items.map((item) => item.key)).toEqual([
+        "r1:ready:1a2b3c4d",
+      ]);
+    }),
+  ));
+
+test("a Reopened agent finishing what it was told is said once, and not while it works", () => {
+  const card = (status: string) =>
+    task({
+      run: "r1",
+      state: status === "working" ? "active" : "done",
+      reopened: { delivery: "d-1", agent: "builder", told: "merge and tag it", status },
+    });
+  const seen = new Set<string>();
+  const ended = [record({ id: "r1", state: "succeeded" })];
+  const said = (status: string) =>
+    eventsIn(ended, new Map(), new Map(), idleAgain([card(status)], seen)).filter((event) =>
+      event.key.includes(":reopened:"),
+    );
+
+  // Idle before anyone saw it work: nothing it was told has finished yet.
+  expect(said("idle")).toEqual([]);
+  expect(said("working")).toEqual([]);
+  expect(said("working")).toEqual([]);
+  expect(said("idle")).toEqual([
+    {
+      run: "r1",
+      key: "r1:reopened:d-1",
+      text: "Run r1 (Implement): builder has finished what it was told after the Run ended (“merge and tag it”). What came of it?",
+    },
+  ]);
+  // Once per Delivery: idle again is not finishing again.
+  expect(said("idle")).toEqual([]);
+});
+
+test("a Reopened agent that goes from working to blocked has not finished what it was told", () => {
+  const card = (status: string) =>
+    task({
+      run: "r1",
+      reopened: { delivery: "d-1", agent: "builder", told: "merge it", status },
+    });
+  const seen = new Set<string>();
+  expect(idleAgain([card("working")], seen).size).toBe(0);
+  expect(idleAgain([card("blocked")], seen).size).toBe(0);
+  // Still remembered as worked on: once it is idle, it has finished.
+  expect([...idleAgain([card("idle")], seen).keys()]).toEqual(["r1"]);
+});

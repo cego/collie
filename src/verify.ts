@@ -15,12 +15,16 @@ import type { VerifySpec } from "./intent";
 import { appendJournal, readJournal } from "./journal";
 import { shell } from "./mr";
 import { nowIso } from "./time";
+import { Pass } from "./board-model";
 
 /** Over this many bytes of working-tree content, the tree is not fingerprinted at all. */
 export const FINGERPRINT_MAX_BYTES = 50 * 1024 * 1024;
 
 /** How much of each stream is kept: enough to see what failed, not a transcript. */
 const TAIL_BYTES = 4 * 1024;
+
+/** How much of a check's output its log keeps; what comes after is cut, and the log says so. */
+export const LOG_BYTES = 8 * 1024 * 1024;
 
 /**
  * A tree too large to fingerprint. Two of these are **not** equality: they say the same
@@ -31,6 +35,14 @@ export const TOO_LARGE = "unstable:too-large";
 
 const SnapshotSchema = Schema.Struct({ head_sha: Schema.String, fingerprint: Schema.String });
 export type Snapshot = Schema.Schema.Type<typeof SnapshotSchema>;
+
+export { PASSES, Pass } from "./board-model";
+
+/** A pass, and the gate fix it follows where it is a `fix`. */
+export interface CheckPass {
+  readonly pass: Pass;
+  readonly round?: number;
+}
 
 const VerificationSchema = Schema.Struct({
   id: Schema.String,
@@ -57,6 +69,11 @@ const VerificationSchema = Schema.Struct({
   at: Schema.String,
   /** Who collected it. An agent may run one; only Collie may run an approved spec. */
   by: Schema.Literals(["agent", "collie"]),
+  /** Why Collie ran it; absent on an agent's and on records written before passes were. */
+  pass: Schema.optionalKey(Pass),
+  round: Schema.optionalKey(Schema.Int),
+  /** Where both streams were written as they arrived, up to `LOG_BYTES`. */
+  log: Schema.optionalKey(Schema.String),
 });
 export type Verification = Schema.Schema.Type<typeof VerificationSchema>;
 const VerificationJson = Schema.fromJsonString(VerificationSchema);
@@ -148,12 +165,51 @@ export const appendVerification = Effect.fn("Verify.append")(function* (
  */
 export const VERIFYING_FILE = "verifying";
 
-/** The name of the check running for the Run in `dir`, or "" when none is. */
-export const verifyingIn = (dir: string) =>
+const VerifyingSchema = Schema.Struct({
+  name: Schema.String,
+  executable: Schema.String,
+  argv: Schema.Array(Schema.String),
+  pass: Pass,
+  round: Schema.NullOr(Schema.Int),
+  /** The commit it runs at, which for `baseline` is where the branch left the default one. */
+  revision: Schema.String,
+  /** The default branch a `baseline` runs where the branch left; null for every other pass. */
+  base: Schema.NullOr(Schema.String),
+  started: Schema.String,
+  /** Where its output is being written. */
+  log: Schema.optionalKey(Schema.String),
+});
+export type Verifying = typeof VerifyingSchema.Type;
+const VerifyingJson = Schema.fromJsonString(VerifyingSchema);
+export const encodeVerifying = Schema.encodeSync(VerifyingJson);
+
+/**
+ * The check running for the Run in `dir`, or null when none is. A marker in the old
+ * one-line shape reads as its name alone, a plain `check` nothing else is known about.
+ */
+export const verifyingIn = (
+  dir: string,
+): Effect.Effect<Verifying | null, never, FileSystem.FileSystem> =>
   FileSystem.FileSystem.pipe(
     Effect.flatMap((fs) => fs.readFileString(`${dir}/${VERIFYING_FILE}`)),
-    Effect.map((text) => text.trim()),
-    Effect.orElseSucceed(() => ""),
+    Effect.map((text): Verifying | null => {
+      const decoded = Schema.decodeUnknownOption(VerifyingJson)(text);
+      if (decoded._tag === "Some") return decoded.value;
+      const name = text.trim();
+      return name === ""
+        ? null
+        : {
+            name,
+            executable: "",
+            argv: [],
+            pass: "check",
+            round: null,
+            revision: "",
+            base: null,
+            started: "",
+          };
+    }),
+    Effect.orElseSucceed(() => null),
   );
 
 export const readVerifications = Effect.fn("Verify.read")(function* (runDir: string) {
@@ -212,6 +268,9 @@ export interface Collected {
   readonly cwd: string;
   readonly by: "agent" | "collie";
   readonly expect?: "pass" | "fail";
+  readonly pass?: CheckPass;
+  /** Where both streams are appended as they arrive, so the output can be read while it runs. */
+  readonly log?: string;
 }
 
 /**
@@ -231,6 +290,25 @@ export const collect = Effect.fn("Verify.collect")(function* (
 
   const start = yield* fingerprint(what.cwd);
   const began = yield* nowIso();
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  let logged = 0;
+  if (what.log !== undefined) {
+    yield* fs.makeDirectory(path.dirname(what.log), { recursive: true }).pipe(Effect.orDie);
+    yield* fs.writeFileString(what.log, "").pipe(Effect.orDie);
+  }
+  /** One chunk into the log, in the order the two streams delivered them. */
+  const toLog = (chunk: string): Effect.Effect<void> => {
+    if (what.log === undefined || logged > LOG_BYTES) return Effect.void;
+    const bytes = Buffer.byteLength(chunk, "utf8");
+    const room = LOG_BYTES - logged;
+    logged += bytes;
+    const text =
+      bytes <= room
+        ? chunk
+        : `${Buffer.from(chunk, "utf8").subarray(0, room).toString("utf8")}\n[collie: the output was cut at ${LOG_BYTES} bytes; the rest was not kept]\n`;
+    return fs.writeFileString(what.log, text, { flag: "a" }).pipe(Effect.ignore);
+  };
   // No shell, and the argument list whole: a verification's value is that what ran is
   // what was written down, and a shell string is a second language in between.
   const [stdout, stderr, exit] = yield* Effect.gen(function* () {
@@ -248,6 +326,7 @@ export const collect = Effect.fn("Verify.collect")(function* (
     const drain = (stream: typeof handle.stdout, shown?: (text: string) => Effect.Effect<void>) =>
       stream.pipe(
         Stream.decodeText(),
+        Stream.tap((chunk) => toLog(chunk)),
         Stream.tap((chunk) => (shown === undefined ? Effect.void : shown(chunk))),
         Stream.runFold(
           () => "",
@@ -280,10 +359,19 @@ export const collect = Effect.fn("Verify.collect")(function* (
     result: resultOf(start, end, Number(exit), what.expect ?? "pass"),
     at,
     by: what.by,
+    ...passFields(what.pass),
   };
-  yield* appendVerification(runDir, record).pipe(Effect.orDie);
-  return record;
+  const kept: Verification = what.log === undefined ? record : { ...record, log: what.log };
+  yield* appendVerification(runDir, kept).pipe(Effect.orDie);
+  return kept;
 });
+
+/** The pass and round a record keeps, with nothing where no pass was given. */
+function passFields(given: CheckPass | undefined): Pick<Verification, "pass" | "round"> {
+  if (given === undefined) return {};
+  if (given.round === undefined) return { pass: given.pass };
+  return { pass: given.pass, round: given.round };
+}
 
 /**
  * A verification Collie runs itself, which it may do only for a command in the Run's
@@ -299,6 +387,8 @@ export const runApproved = Effect.fn("Verify.runApproved")(function* (
   approved: ReadonlyArray<VerifySpec>,
   spec: VerifySpec,
   expect: "pass" | "fail" = "pass",
+  pass?: CheckPass,
+  log?: string,
 ): Effect.fn.Return<Verification, VerifyRefused, Services> {
   const match = approved.find(
     (entry) =>
@@ -324,5 +414,7 @@ export const runApproved = Effect.fn("Verify.runApproved")(function* (
     cwd,
     by: "collie",
     expect,
+    pass,
+    log,
   });
 });

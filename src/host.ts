@@ -420,9 +420,11 @@ const hostBoard = (dir: string) =>
 const sideJobsLayer = (dir: string, panels: MrPanels) =>
   Layer.effectDiscard(
     Effect.gen(function* () {
-      const { env, herdr, bun, runs, unattended } = yield* hostBoard(dir);
+      const { env, herdr, bun, runs, build, unattended } = yield* hostBoard(dir);
       yield* Effect.forkScoped(
-        sideJobs({ env, herdr, runs, board: unattended, panels }).pipe(Effect.provideContext(bun)),
+        sideJobs({ env, herdr, runs, board: unattended, liveBoard: build, panels }).pipe(
+          Effect.provideContext(bun),
+        ),
       );
     }),
   );
