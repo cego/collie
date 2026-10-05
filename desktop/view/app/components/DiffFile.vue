@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { Semaphore } from "effect";
 import type { DiffFile } from "../../../../src/board-model";
 import { type PatchLine, parsePatch, sideBySide, sides } from "../../../src/shared/patch";
 import type { Token } from "../composables/useHighlight";
@@ -17,6 +18,7 @@ const props = defineProps<{
 const open = defineModel<boolean>("open", { required: true });
 const emit = defineEmits<{ missing: [target: DiffTarget] }>();
 const { textOf } = useActions();
+const within = inject<Semaphore.Semaphore>("diffReads");
 
 // Shallow: its lines are the token map's keys, which a reactive proxy would not match.
 const hunks = shallowRef<ReturnType<typeof parsePatch> | null>(null);
@@ -50,8 +52,15 @@ watch(
   async ([isOpen], _, onCleanup) => {
     if (!isOpen) return;
     let stale = false;
-    onCleanup(() => (stale = true));
-    const patch = await textOf(props.installation, props.runId, `diff:${props.file.path}`);
+    const wanted = new AbortController();
+    onCleanup(() => {
+      stale = true;
+      wanted.abort();
+    });
+    const patch = await textOf(props.installation, props.runId, `diff:${props.file.path}`, {
+      within,
+      signal: wanted.signal,
+    });
     if (stale) return;
     failed.value = patch === null;
     if (patch === null) return;

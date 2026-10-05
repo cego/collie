@@ -11,6 +11,7 @@ import {
   mrDetails,
   mrFacts,
   mrTarget,
+  pipelineStatus,
   projectFromRemote,
   repoArgs,
   resolveAssignee,
@@ -522,5 +523,21 @@ test("a null where a value could have been is the same as no value", () =>
       expect(details.approvals).toBe("");
       expect(details.unresolved).toBe(false);
       expect(details.updatedAt).toBe(0);
+    }),
+  ));
+
+test("a pipeline's status is read from GitLab by its address", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const glab = recorder({
+        "glab api --hostname gitlab.example.com projects/g%2Fp/pipelines/77": {
+          stdout: '{"id":77,"status":"failed"}',
+        },
+      });
+      const status = (url: string) => pipelineStatus(url, "/w", glab.run);
+      expect(yield* status("https://gitlab.example.com/g/p/-/pipelines/77")).toBe("failed");
+      // Not answered, or not a pipeline at all: nothing to say.
+      expect(yield* status("https://gitlab.example.com/g/p/-/pipelines/78")).toBeNull();
+      expect(yield* status("https://gitlab.example.com/g/p/-/merge_requests/1")).toBeNull();
     }),
   ));

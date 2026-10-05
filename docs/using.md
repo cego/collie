@@ -871,22 +871,23 @@ line cap; a file with more than
 verifications as a checklist, those that did not do what they were expected to first and
 already open with their output in its terminal colours; then every web link the Run's
 Outputs, handoffs, review and findings name, as a card: a Claude artifact by the title its
-link was given, the merge request with its state, and its pipelines with the head
-pipeline's status; the logs and files it kept, each
-read when opened and searchable; its screenshots as a gallery, a `before` beside its
-`after` where their names pair them, twelve to a page; its videos, read and played when
-asked; its HTML reports, such as Lighthouse, in a sandboxed frame that runs their scripts
-in an origin of their own, which may neither load anything from the network nor navigate
-away; and its
-metrics as a table. A report that keeps its attachments in files beside it shows without
-them. **Log**
+link was given, the merge request with its state, its pipelines with the head pipeline's
+status, and any other pipeline with the status GitLab gives it; its screenshots as a
+gallery, a `before` beside its `after` where their names pair them, twelve to a page; its
+videos, read and played when asked; its HTML reports, such as Lighthouse, in a sandboxed
+frame that runs their scripts in an origin of their own, which may neither load anything
+from the network nor navigate away; the logs and files it kept, each read when opened and
+searchable; and its metrics as a table. A report that keeps its attachments in files beside
+it shows without them. **Log**
 follows the end of the Run's log as it is written, with a search that keeps only the lines
 that match. **Merge request** shows what the host's merge watch last read — title, state,
 pipeline, approvals and comments — with Open in browser. **Facts** shows the Run's intent,
 its steering cards and the card's TaskView as the host sent it. Markdown is rendered with
 Comark: tables, Shiki-highlighted code and mermaid diagrams, with anything that could run
 and every inline style removed, because agents write it. The view's own policy lets nothing
-on a page load from the network. A web link in it opens in your browser, never in Desktop.
+on a page load from the network, and nothing may move Desktop's window off its own page;
+rendered markdown is kept inside its own box. A web link in it opens in your browser, never
+in Desktop.
 
 Every web page Desktop opens goes to your default browser, as `xdg-settings get
 default-web-browser` names it, where you are already signed in. Chrome, Chromium, Brave,

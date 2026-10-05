@@ -11,7 +11,7 @@ import {
   type RunDetail,
   type RunFile,
 } from "./board-model";
-import { shell } from "./mr";
+import { pipelineStatus, shell } from "./mr";
 import { REVIEW_FILE } from "./output";
 import { settled, type RunFacts } from "./runs";
 import { workSourceOf } from "./strategies";
@@ -315,6 +315,10 @@ export const fetchRef = Effect.fn("RunDetail.fetchRef")(function* (
           ? yield* git(root, ["diff", "--no-index", "--", "/dev/null", name])
           : yield* literally(root, ["diff", "--no-renames", diff.base, "--", name]);
       return patch(shown.stdout);
+    }
+    case "pipeline": {
+      const status = yield* pipelineStatus(name, run.cwd, shell);
+      return status === null ? yield* refused(`GitLab did not say how ${name} went`) : text(status);
     }
     case "review":
       return yield* under(run.dir, REVIEW_FILE, "review");

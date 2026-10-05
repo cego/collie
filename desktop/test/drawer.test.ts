@@ -36,10 +36,13 @@ const SPEC = [
   "",
   '<div style="position:fixed;inset:0;background:url(https://example.com/style.png)">over all</div>',
   "",
+  '<map name="away"><area shape="default" href="https://example.com/area"></map>',
+  '<img usemap="#away" alt="a map" width="40" height="40" src="data:image/gif;base64,R0lGODlhAQABAAAAACw=">',
+  "",
   "See [the brands ticket](issues/02-brands.md), and [a lost one](issues/99-lost.md).",
 ].join("\n");
 
-/** Longer than the host's cap, so the drawer reads it whole by reference. */
+/** Sent cut, so the drawer reads it whole by reference. */
 const REVIEW = "## Review\n\nLooks **right**, but see `src/seed.ts:3`.\n\nRead to the end.";
 
 /** A diff longer than a thousand lines, drawn whole. */
@@ -73,7 +76,7 @@ const detail = (tail: ReadonlyArray<string>, seedAdded = 2): RunDetail => ({
       step: "build",
       where: "agents/build.json",
       state: "recorded",
-      text: '{"notes":"Sketched in [Seeding plan](https://claude.ai/artifact/5eed), counts on https://kibana.cego.dk/app/seed."}',
+      text: '{"notes":"Sketched in [Seeding plan](https://claude.ai/artifact/5eed), counts on https://kibana.cego.dk/app/seed, and https://gitlab.cego.dk/mk/collie/-/pipelines/90 ran."}',
     },
   ],
   tail: { _tag: "Text", text: tail.join("\n"), truncated: false },
@@ -241,6 +244,7 @@ const REPORT = [
 
 const FILES = {
   "r-seed review": REVIEW,
+  "r-seed pipeline:https://gitlab.cego.dk/mk/collie/-/pipelines/90": "failed\n",
   "r-seed verification:v-unit": "12 pass",
   "r-seed verification:v-lint":
     "\x1b[31mFAIL\x1b[0m src/seed.ts\n\x1b[32mok\x1b[0m src/load.ts\nfound 1 problem",
@@ -261,7 +265,8 @@ const FILES = {
   ),
   "r-seed plan:issues/01-loader.md":
     "# The loader\n\nReads every brand. Then [the spec](../SPEC.md).",
-  "r-seed plan:issues/02-brands.md": "# Brands per environment\n\nOne row per brand.",
+  "r-seed plan:issues/02-brands.md":
+    '# Brands per environment\n\nOne row per brand.\n\n<div class="fixed inset-0 z-50">a cover</div>',
 };
 
 const SEEDING: TaskView = task({
@@ -821,7 +826,10 @@ test(
         const links = evidence().getByTestId("links");
         yield* reads(links.getByTestId("link-artifact").getByTestId("link-title"), "Seeding plan");
         yield* reads(links.getByTestId("link-mr").getByTestId("link-status"), "opened");
-        yield* reads(links.getByTestId("link-pipeline").getByTestId("link-status"), "success");
+        const pipeline = (title: string) =>
+          links.getByTestId("link-pipeline").filter({ hasText: title }).getByTestId("link-status");
+        yield* reads(pipeline("Pipeline of !151"), "success");
+        yield* reads(pipeline("Pipeline #90"), "failed");
         const asked = (what: string) =>
           settled(what, () =>
             Bun.file(`${app!.flock}/opened.log`)
@@ -878,6 +886,16 @@ test(
         expect(
           yield* Effect.promise(() => plan.locator("[style*='fixed'], [style*='url(']").count()),
         ).toBe(0);
+        // Positioned by a class of the view's own, and still kept inside its markdown.
+        yield* Effect.promise(() =>
+          plan.getByRole("button", { name: "Brands per environment" }).click(),
+        );
+        const ticket = plan.getByTestId("ticket-02-brands.md");
+        yield* reads(ticket.getByText("a cover"), "a cover");
+        const cover = yield* Effect.promise(() => ticket.getByText("a cover").boundingBox());
+        const markdown = yield* Effect.promise(() => ticket.getByTestId("markdown").boundingBox());
+        expect(cover!.width).toBeLessThanOrEqual(markdown!.width);
+        expect(cover!.y).toBeGreaterThanOrEqual(markdown!.y);
         const refused = yield* settled("the far pixel refused", () =>
           refusals().then((seen) =>
             seen.some((one) => one.startsWith("img-src https://example.com/srcset"))
@@ -940,6 +958,26 @@ test(
           drawer().getByTestId("review").getByTestId("markdown").getByTestId("file-ref").click(),
         );
         yield* reads(seed().locator("[data-target]").locator("td").last(), "and again */");
+      }),
+    ),
+  30_000,
+);
+
+// Last: were it to leave, the window would no longer be Desktop's.
+test(
+  "nothing in agent markdown navigates Desktop's window",
+  () =>
+    run(
+      Effect.gen(function* () {
+        yield* opened;
+        yield* Effect.promise(() => tab("Plan").click());
+        const map = drawer().getByTestId("plan").getByAltText("a map");
+        yield* Effect.promise(() => map.scrollIntoViewIfNeeded());
+        // A blocked navigation never commits, which a click would otherwise wait for.
+        yield* Effect.promise(() => map.click({ noWaitAfter: true }));
+        yield* Effect.promise(() => app!.page.waitForTimeout(1000));
+        expect(app!.page.url()).toStartWith("views://");
+        expect(yield* Effect.promise(() => drawer().isVisible())).toBe(true);
       }),
     ),
   30_000,

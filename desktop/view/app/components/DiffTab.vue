@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { TreeItem } from "@nuxt/ui";
+import { Semaphore } from "effect";
 import type { DiffFile, RunDiff } from "../../../../src/board-model";
 
 /** Where a finding points: a file, and a line in it as it is now. */
@@ -14,6 +15,9 @@ const props = defineProps<{
   runId: string;
   target: DiffTarget | null;
 }>();
+
+// Each diff read has the host run git again, so this drawer's are four at a time.
+provide("diffReads", Semaphore.makeUnsafe(4));
 
 /** A file with more changed lines than this, or a binary one, starts collapsed. */
 const BIG_FILE_LINES = 500;

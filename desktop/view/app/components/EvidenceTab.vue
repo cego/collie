@@ -100,7 +100,7 @@ const metrics = computed(() => {
 
     <section v-if="links.length > 0" class="flex flex-col gap-2" data-testid="links">
       <h3 class="font-semibold">Links</h3>
-      <LinkCards :links="links" />
+      <LinkCards :links="links" :installation="installation" :run-id="detail.id" />
     </section>
 
     <section v-if="sorted.gallery.length > 0" class="flex flex-col gap-2" data-testid="gallery">
