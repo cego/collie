@@ -34,12 +34,12 @@ const SPEC = [
   "See [the brands ticket](issues/02-brands.md), and [a lost one](issues/99-lost.md).",
 ].join("\n");
 
-/** More lines than any cap a diff view might have had. */
+/** Over a thousand, every one of which is drawn. */
 const BIG_LINES = 1200;
 
 const LOG = ["starting", "loading brands", "seeded spilnu"];
 
-const detail = (tail: ReadonlyArray<string>): RunDetail => ({
+const detail = (tail: ReadonlyArray<string>, seedAdded = 2): RunDetail => ({
   id: "r-seed",
   dir: "/state/runs/r-seed",
   title: "Implement · Strapi seeder",
@@ -110,6 +110,13 @@ const detail = (tail: ReadonlyArray<string>): RunDetail => ({
       line: 40,
       detail: null,
     },
+    {
+      severity: "minor",
+      title: "An unchanged line still says once",
+      file: "src/seed.ts",
+      line: 30,
+      detail: null,
+    },
   ],
   verifications: [],
   steering: [
@@ -128,7 +135,7 @@ const detail = (tail: ReadonlyArray<string>): RunDetail => ({
     base: "abc1234def",
     live: true,
     files: [
-      { path: "src/seed.ts", status: "modified", added: 2, removed: 1 },
+      { path: "src/seed.ts", status: "modified", added: seedAdded, removed: 1 },
       { path: "gen/big.ts", status: "added", added: BIG_LINES, removed: 0 },
       { path: "docs/notes/a.md", status: "deleted", added: 0, removed: 1 },
     ],
@@ -162,6 +169,9 @@ const FILES = {
   "r-seed diff:gen/big.ts": BIG_PATCH,
   "r-seed diff:docs/notes/a.md": "@@ -1 +0,0 @@\n-A note.",
   "r-seed file:README.md": README,
+  "r-seed file:src/seed.ts": Array.from({ length: 40 }, (_, at) => `// seed line ${at + 1}`).join(
+    "\n",
+  ),
   "r-seed plan:issues/01-loader.md":
     "# The loader\n\nReads every brand. Then [the spec](../SPEC.md).",
   "r-seed plan:issues/02-brands.md": "# Brands per environment\n\nOne row per brand.",
@@ -177,10 +187,14 @@ const SEEDING: TaskView = task({
 
 let app: App | undefined;
 const board = () => `${app!.flock}/${LOCAL}`;
-const served = (tail: ReadonlyArray<string>) =>
+const served = (
+  tail: ReadonlyArray<string>,
+  seedAdded = 2,
+  files: Record<string, string> = FILES,
+) =>
   serve(board(), "pc", [SEEDING], undefined, {
-    details: { "r-seed": detail(tail) },
-    files: FILES,
+    details: { "r-seed": detail(tail, seedAdded) },
+    files,
   });
 
 beforeAll(
@@ -476,7 +490,7 @@ test(
           line.isVisible().then((seen) => seen || undefined),
         );
         yield* Effect.promise(() => tab("Review").click());
-        yield* Effect.promise(() => locations.last().click());
+        yield* Effect.promise(() => locations.nth(1).click());
         const source = diffOf().getByTestId("source-file");
         yield* reads(source.getByTestId("source-file-name"), "README.md");
         const target = source.locator("[data-target]");
@@ -488,6 +502,34 @@ test(
           }),
         );
         expect(inView).toBe(true);
+        // A line of a changed file that no hunk shows is read from the checkout.
+        yield* Effect.promise(() => tab("Review").click());
+        yield* Effect.promise(() => locations.nth(2).click());
+        yield* reads(source.getByTestId("source-file-name"), "src/seed.ts");
+        yield* reads(source.locator("[data-target] td").last(), "// seed line 30");
+      }),
+    ),
+  30_000,
+);
+
+test(
+  "an open file follows the Run, and the Diff tab keeps its view across tabs",
+  () =>
+    run(
+      Effect.gen(function* () {
+        yield* opened;
+        yield* Effect.promise(() => tab("Diff").click());
+        yield* Effect.promise(() => diffOf().getByTestId("split").click());
+        yield* Effect.promise(() => tab("Log").click());
+        yield* Effect.promise(() => tab("Diff").click());
+        yield* reads(seed().locator('[data-new-line="3"] [data-side="new"]'), "and again */");
+        yield* served(LOG, 3, {
+          ...FILES,
+          "r-seed diff:src/seed.ts": `${SEED_PATCH}\n+const more = true;`,
+        });
+        yield* reads(seed().locator('[data-new-line="5"] [data-side="new"]'), "const more = true;");
+        yield* served(LOG);
+        yield* Effect.promise(() => diffOf().getByTestId("split").click());
       }),
     ),
   30_000,

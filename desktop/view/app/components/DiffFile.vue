@@ -6,13 +6,16 @@ import type { DiffTarget } from "./DiffTab.vue";
 
 const props = defineProps<{
   file: DiffFile;
+  /** The base the diff is against, which a rebase or a merge moves. */
+  base: string;
   installation: string;
   runId: string;
   split: boolean;
-  /** What a finding points at in this file; each new one is scrolled to. */
+  /** What a finding points at in this file; each new one is scrolled to once. */
   target: DiffTarget | null;
 }>();
 const open = defineModel<boolean>("open", { required: true });
+const emit = defineEmits<{ missing: [target: DiffTarget] }>();
 const { textOf } = useActions();
 
 // Shallow: its lines are the token map's keys, which a reactive proxy would not match.
@@ -20,55 +23,74 @@ const hunks = shallowRef<ReturnType<typeof parsePatch> | null>(null);
 const failed = ref(false);
 const tokens = shallowRef(new Map<PatchLine, ReadonlyArray<Token>>());
 
-/** Fetched again whenever the Run changes the file, while it is open. */
+/** Each hunk's sides highlighted on their own, since what lies between hunks is not here. */
+const highlighted = async (parsed: ReturnType<typeof parsePatch>) => {
+  const coloured = new Map<PatchLine, ReadonlyArray<Token>>();
+  const colour = (lines: ReadonlyArray<PatchLine>) =>
+    highlightLines(
+      lines.map((line) => line.text),
+      props.file.path,
+    );
+  await Promise.all(
+    parsed.map(async (hunk) => {
+      const { old, new: current } = sides([hunk]);
+      const [was, is] = await Promise.all([colour(old), colour(current)]);
+      // A context line is on both sides; it is coloured as the file is now.
+      old.forEach((line, at) => line.kind === "del" && coloured.set(line, was[at] ?? []));
+      current.forEach((line, at) => coloured.set(line, is[at] ?? []));
+    }),
+  );
+  return coloured;
+};
+
+// ponytail: refetched when its counts, status or base change; an edit keeping all of them
+// is missed until the host sends each file's fingerprint.
 watch(
-  () => [open.value, props.file.added, props.file.removed] as const,
-  async ([isOpen]) => {
+  () => [open.value, props.file.added, props.file.removed, props.file.status, props.base] as const,
+  async ([isOpen], _, onCleanup) => {
     if (!isOpen) return;
+    let stale = false;
+    onCleanup(() => (stale = true));
     const patch = await textOf(props.installation, props.runId, `diff:${props.file.path}`);
+    if (stale) return;
     failed.value = patch === null;
     if (patch === null) return;
     const parsed = parsePatch(patch);
-    const { old, new: now } = sides(parsed);
-    const [was, is] = await Promise.all([
-      highlightLines(
-        old.map((line) => line.text),
-        props.file.path,
-      ),
-      highlightLines(
-        now.map((line) => line.text),
-        props.file.path,
-      ),
-    ]);
-    const coloured = new Map<PatchLine, ReadonlyArray<Token>>();
-    old.forEach((line, at) => coloured.set(line, was[at] ?? []));
-    // A context line is coloured as the file is now.
-    now.forEach((line, at) => coloured.set(line, is[at] ?? []));
+    const coloured = await highlighted(parsed);
+    if (stale) return;
     tokens.value = coloured;
     hunks.value = parsed;
   },
   { immediate: true },
 );
 
+/** The row a finding points at: its line as the file is now, or as it was where it went. */
+const targetLine = computed(() => {
+  const line = props.target?.line ?? null;
+  if (line === null || hunks.value === null) return undefined;
+  const all = hunks.value.flatMap((hunk) => hunk.lines);
+  return all.find((one) => one.new === line) ?? all.find((one) => one.old === line);
+});
+
 const shown = ref<HTMLElement | null>(null);
+let scrolledTo: DiffTarget | null = null;
 watch(
-  () => [hunks.value, props.split, props.target] as const,
-  async ([, , target]) => {
-    const line = target?.line ?? null;
-    if (line === null || hunks.value === null) return;
+  () => [hunks.value, props.target] as const,
+  async ([loaded, target]) => {
+    if (target === null || loaded === null || target === scrolledTo) return;
+    scrolledTo = target;
+    if (target.line === null) return;
+    if (targetLine.value === undefined) return emit("missing", target);
     await nextTick();
-    const row =
-      shown.value?.querySelector(`[data-new-line="${line}"]`) ??
-      shown.value?.querySelector(`[data-old-line="${line}"]`);
-    row?.scrollIntoView({ block: "center" });
+    shown.value?.querySelector("[data-target]")?.scrollIntoView({ block: "center" });
   },
   { immediate: true },
 );
 
-const isTarget = (line: number | null | undefined) => line != null && line === props.target?.line;
-
 const SIGNS = { context: " ", add: "+", del: "-" } as const;
 const BACKGROUNDS = { context: "", add: "bg-success/10", del: "bg-error/10" } as const;
+const NUMBER = "w-10 select-none px-2 text-right text-muted";
+const TARGET = "ring-1 ring-warning ring-inset";
 </script>
 
 <template>
@@ -82,8 +104,10 @@ const BACKGROUNDS = { context: "", add: "bg-success/10", del: "bg-error/10" } as
       <UIcon :name="open ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" />
       <code class="flex-1 truncate">{{ file.path }}</code>
       <small class="text-muted">{{ file.status }}</small>
-      <small v-if="file.added !== null" class="text-success">+{{ file.added }}</small>
-      <small v-if="file.removed !== null" class="text-error">−{{ file.removed }}</small>
+      <template v-if="file.added !== null">
+        <small class="text-success">+{{ file.added }}</small>
+        <small class="text-error">−{{ file.removed }}</small>
+      </template>
       <small v-else class="text-muted">binary</small>
     </button>
     <div v-if="open" ref="shown" class="overflow-x-auto border-t border-default" data-highlighted>
@@ -93,9 +117,7 @@ const BACKGROUNDS = { context: "", add: "bg-success/10", del: "bg-error/10" } as
       <table v-else class="w-full font-mono text-xs" data-testid="diff-lines">
         <tbody v-for="(hunk, at) in hunks" :key="at">
           <tr>
-            <td colspan="4" class="bg-elevated px-2 py-1 text-muted">
-              {{ hunk.header }}
-            </td>
+            <td colspan="4" class="bg-elevated px-2 py-1 text-muted">{{ hunk.header }}</td>
           </tr>
           <template v-if="split">
             <tr
@@ -103,34 +125,28 @@ const BACKGROUNDS = { context: "", add: "bg-success/10", del: "bg-error/10" } as
               :key="index"
               :data-old-line="row.left?.old ?? undefined"
               :data-new-line="row.right?.new ?? undefined"
-              :data-target="isTarget(row.right?.new) || undefined"
-              :class="isTarget(row.right?.new) ? 'ring-1 ring-warning ring-inset' : ''"
+              :data-target="
+                (targetLine && (row.left === targetLine || row.right === targetLine)) || undefined
+              "
+              :class="
+                targetLine && (row.left === targetLine || row.right === targetLine) ? TARGET : ''
+              "
             >
-              <td class="w-10 select-none px-2 text-right text-muted">{{ row.left?.old }}</td>
+              <td :class="NUMBER">{{ row.left?.old }}</td>
               <td
                 class="w-1/2 whitespace-pre px-2"
                 :class="row.left ? BACKGROUNDS[row.left.kind] : ''"
                 data-side="old"
               >
-                <span
-                  v-for="(token, t) in row.left ? tokens.get(row.left) : []"
-                  :key="t"
-                  :style="token.style"
-                  >{{ token.content }}</span
-                >
+                <TokenSpans v-if="row.left" :tokens="tokens.get(row.left)" />
               </td>
-              <td class="w-10 select-none px-2 text-right text-muted">{{ row.right?.new }}</td>
+              <td :class="NUMBER">{{ row.right?.new }}</td>
               <td
                 class="w-1/2 whitespace-pre px-2"
                 :class="row.right ? BACKGROUNDS[row.right.kind] : ''"
                 data-side="new"
               >
-                <span
-                  v-for="(token, t) in row.right ? tokens.get(row.right) : []"
-                  :key="t"
-                  :style="token.style"
-                  >{{ token.content }}</span
-                >
+                <TokenSpans v-if="row.right" :tokens="tokens.get(row.right)" />
               </td>
             </tr>
           </template>
@@ -138,21 +154,16 @@ const BACKGROUNDS = { context: "", add: "bg-success/10", del: "bg-error/10" } as
             <tr
               v-for="(line, index) in hunk.lines"
               :key="index"
-              :class="[
-                BACKGROUNDS[line.kind],
-                isTarget(line.new) ? 'ring-1 ring-warning ring-inset' : '',
-              ]"
+              :class="[BACKGROUNDS[line.kind], line === targetLine ? TARGET : '']"
               :data-old-line="line.old ?? undefined"
               :data-new-line="line.new ?? undefined"
-              :data-target="isTarget(line.new) || undefined"
+              :data-target="line === targetLine || undefined"
             >
-              <td class="w-10 select-none px-2 text-right text-muted">{{ line.old }}</td>
-              <td class="w-10 select-none px-2 text-right text-muted">{{ line.new }}</td>
+              <td :class="NUMBER">{{ line.old }}</td>
+              <td :class="NUMBER">{{ line.new }}</td>
               <td class="w-4 select-none text-muted">{{ SIGNS[line.kind] }}</td>
               <td class="whitespace-pre px-2" data-side="unified">
-                <span v-for="(token, t) in tokens.get(line)" :key="t" :style="token.style">{{
-                  token.content
-                }}</span>
+                <TokenSpans :tokens="tokens.get(line)" />
               </td>
             </tr>
           </template>

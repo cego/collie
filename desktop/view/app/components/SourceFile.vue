@@ -17,11 +17,16 @@ const shown = ref<HTMLElement | null>(null);
 
 watch(
   () => props.path,
-  async (path) => {
+  async (path, _, onCleanup) => {
+    let stale = false;
+    onCleanup(() => (stale = true));
     lines.value = null;
     const text = await textOf(props.installation, props.runId, `file:${path}`);
+    if (stale) return;
     failed.value = text === null;
-    if (text !== null) lines.value = await highlightLines(text.split("\n"), path);
+    if (text === null) return;
+    const coloured = await highlightLines(text.split("\n"), path);
+    if (!stale) lines.value = coloured;
   },
   { immediate: true },
 );
@@ -64,9 +69,7 @@ watch(
         >
           <td class="w-10 select-none px-2 text-right text-muted">{{ at + 1 }}</td>
           <td class="whitespace-pre px-2">
-            <span v-for="(token, t) in tokens" :key="t" :style="token.style">{{
-              token.content
-            }}</span>
+            <TokenSpans :tokens="tokens" />
           </td>
         </tr>
       </table>

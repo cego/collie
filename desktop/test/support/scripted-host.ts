@@ -7,7 +7,7 @@
 // Usage: bun scripted-host.ts <board.json> bridge --as desktop --client <computer>
 
 import { BunFileSystem, BunRuntime, BunStdio } from "@effect/platform-bun";
-import { Effect, FileSystem, Layer, Schedule, Schema, Stream } from "effect";
+import { Effect, Encoding, FileSystem, Layer, Schedule, Schema, Stream } from "effect";
 import * as RpcSerialization from "effect/unstable/rpc/RpcSerialization";
 import * as RpcServer from "effect/unstable/rpc/RpcServer";
 import { BRIDGE_READY, FrontDoorRpcs, HostRefused, PROTOCOL } from "../../../src/board-model";
@@ -21,6 +21,8 @@ if (board === undefined || bridge.slice(0, 3).join(" ") !== "bridge --as desktop
 }
 
 const MachineFile = Schema.fromJsonString(ScriptedMachine);
+/** Smaller than a host's, so a test's large item is read in several parts. */
+const PART_BYTES = 16 * 1024;
 const asLine = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
 /** What an operation was asked with, as it is logged. */
@@ -138,14 +140,24 @@ const handlers = Served.toLayer(
       runFile: (payload) =>
         Effect.flatMap(read, ({ files }) => {
           const content = files?.[`${payload.runId} ${payload.ref}`];
-          return content === undefined
-            ? Effect.fail(new HostRefused({ reason: `${payload.ref} is not ${payload.runId}'s` }))
-            : Effect.succeed({
-                ref: payload.ref,
-                encoding: "utf8" as const,
-                content,
-                size: content.length,
-              });
+          if (content === undefined)
+            return Effect.fail(
+              new HostRefused({ reason: `${payload.ref} is not ${payload.runId}'s` }),
+            );
+          // As a host hands out a large item: in parts, as base64, unless it is whole.
+          const bytes = new TextEncoder().encode(content);
+          const offset = payload.offset ?? 0;
+          const part = bytes.subarray(offset, offset + PART_BYTES);
+          return Effect.succeed(
+            part.length === bytes.length
+              ? { ref: payload.ref, encoding: "utf8" as const, content, size: bytes.length }
+              : {
+                  ref: payload.ref,
+                  encoding: "base64" as const,
+                  content: Encoding.encodeBase64(part),
+                  size: bytes.length,
+                },
+          );
         }),
       steerAbout: (payload) =>
         logged("steerAbout", payload).pipe(

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { TreeItem } from "@nuxt/ui";
-import type { RunDiff } from "../../../../src/board-model";
+import type { DiffFile, RunDiff } from "../../../../src/board-model";
 
 /** Where a finding points: a file, and a line in it as it is now. */
 export interface DiffTarget {
@@ -16,16 +16,13 @@ const props = defineProps<{
 }>();
 
 /** A file with more changed lines than this, or a binary one, starts collapsed. */
-const BIG = 500;
+const BIG_FILE_LINES = 500;
 
 const split = ref(false);
 const opened = ref(new Map<string, boolean>());
-const isOpen = (path: string) =>
-  opened.value.get(path) ??
-  props.diff.files.some(
-    (file) =>
-      file.path === path && file.added !== null && (file.added ?? 0) + (file.removed ?? 0) <= BIG,
-  );
+const isOpen = (file: DiffFile) =>
+  opened.value.get(file.path) ??
+  (file.added !== null && file.added + (file.removed ?? 0) <= BIG_FILE_LINES);
 
 const sections = ref<HTMLElement | null>(null);
 const show = async (path: string) => {
@@ -121,10 +118,12 @@ const tree = computed(() => {
           :file="file"
           :installation="installation"
           :run-id="runId"
+          :base="diff.base"
           :split="split"
           :target="target?.file === file.path ? target : null"
-          :open="isOpen(file.path)"
+          :open="isOpen(file)"
           @update:open="(now: boolean) => opened.set(file.path, now)"
+          @missing="(missed: DiffTarget) => (source = missed)"
         />
       </div>
     </div>

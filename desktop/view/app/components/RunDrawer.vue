@@ -39,12 +39,18 @@ const tab = computed({
   set: (value) => (chosen.value = value),
 });
 
-/** The finding last followed, which the Diff tab opens at. */
+/** Mounted from its first visit on and kept, so its toggles and open files stay as left. */
+const diffSeen = ref(false);
+watch(tab, (now) => now === "diff" && (diffSeen.value = true), { immediate: true });
+
+/** The finding last followed: opened in the diff, or read-only here where there is none. */
 const target = ref<DiffTarget | null>(null);
 const jump = (file: string, line: number | null) => {
   target.value = { file, line };
-  chosen.value = "diff";
+  if (detail.value?.diff) chosen.value = "diff";
 };
+const locationOf = (file: string, line: number | null) =>
+  line === null ? file : `${file}:${line}`;
 </script>
 
 <template>
@@ -71,6 +77,14 @@ const jump = (file: string, line: number | null) => {
             :run-id="detail.id"
           />
           <div v-else-if="tab === 'review'" data-testid="review" class="flex flex-col gap-4">
+            <SourceFile
+              v-if="target !== null && !detail.diff"
+              :path="target.file"
+              :line="target.line"
+              :installation="placed.installation"
+              :run-id="detail.id"
+              @close="target = null"
+            />
             <RichMarkdown v-if="detail.review._tag === 'Text'" :text="detail.review.text" />
             <ul
               v-if="detail.findings.length > 0"
@@ -87,30 +101,28 @@ const jump = (file: string, line: number | null) => {
                   <strong>{{ finding.title }}</strong>
                 </div>
                 <UButton
-                  v-if="finding.file && detail.diff"
+                  v-if="finding.file"
                   variant="link"
                   size="xs"
                   class="px-0 font-mono"
                   data-testid="finding-location"
-                  :label="finding.line === null ? finding.file : `${finding.file}:${finding.line}`"
+                  :label="locationOf(finding.file, finding.line)"
                   @click="jump(finding.file, finding.line)"
                 />
-                <code v-else-if="finding.file" class="text-xs text-muted">
-                  {{ finding.line === null ? finding.file : `${finding.file}:${finding.line}` }}
-                </code>
                 <p v-if="finding.detail" class="mt-1 whitespace-pre-wrap">{{ finding.detail }}</p>
               </li>
             </ul>
           </div>
+          <LogTab v-else-if="tab === 'log'" :tail="detail.tail" />
+          <MrPanel v-else-if="tab === 'mr' && detail.mr" :mr="detail.mr" />
           <DiffTab
-            v-else-if="tab === 'diff' && detail.diff"
+            v-if="detail.diff && diffSeen"
+            v-show="tab === 'diff'"
             :diff="detail.diff"
             :installation="placed.installation"
             :run-id="detail.id"
             :target="target"
           />
-          <LogTab v-else-if="tab === 'log'" :tail="detail.tail" />
-          <MrPanel v-else-if="tab === 'mr' && detail.mr" :mr="detail.mr" />
         </template>
         <FactsTab v-if="tab === 'facts'" :task="placed.task" :detail="detail" />
       </div>
