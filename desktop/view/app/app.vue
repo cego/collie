@@ -1,8 +1,15 @@
 <script setup lang="ts">
 import { SECTIONS } from "../../../src/board-model";
+import type { NotLive } from "../../src/shared/flock";
 
 const { connecting, failure, lost, machines, tasks, sections, header, waiting } = useFlock();
 const starting = ref(false);
+
+const NOT_LIVE: Record<NotLive, { icon: string; title: (name: string) => string }> = {
+  unreachable: { icon: "i-lucide-unplug", title: (name) => `${name} is out of reach` },
+  sso: { icon: "i-lucide-key-round", title: (name) => `Waiting for SSO login on ${name}` },
+  "no-collie": { icon: "i-lucide-package-x", title: (name) => `Collie isn't installed on ${name}` },
+};
 </script>
 
 <template>
@@ -33,15 +40,17 @@ const starting = ref(false);
         :description="failure"
       />
       <template v-else>
+        <!-- ponytail: Onboard is off until Desktop can onboard a Machine (ticket 32). -->
         <UAlert
-          v-for="[route, { name, reason }] in lost"
-          :key="route"
+          v-for="[profile, { name, state, reason }] in lost"
+          :key="profile"
           :data-testid="`lost-${name}`"
           color="warning"
           variant="subtle"
-          icon="i-lucide-unplug"
-          :title="`${name} is out of reach`"
+          :icon="NOT_LIVE[state].icon"
+          :title="NOT_LIVE[state].title(name)"
           :description="reason"
+          :actions="state === 'no-collie' ? [{ label: 'Onboard', disabled: true }] : []"
         />
         <p v-if="tasks.length === 0" class="text-muted">Nothing on the board yet.</p>
         <template v-for="[section, label] in SECTIONS" :key="section">

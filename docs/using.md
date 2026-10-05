@@ -835,8 +835,28 @@ its target and your own SSH config, so an SSO check is made once per machine, an
 open until Desktop quits. A Machine reached two ways — two herdr machines on one computer,
 or one pointing at this computer — is shown once, through the first in herdr's list (this
 computer before any). It is named by that herdr machine's label, or the hostname here, and
-two Machines with one name show as `name (ssh target)`. A Machine Desktop cannot reach is
-named above the board with what SSH or its bridge said.
+two Machines with one name show as `name (ssh target)`.
+
+A Machine Desktop cannot show live says why above the board, by name:
+
+- **Out of reach** — SSH or its bridge failed, or the connection dropped, with what it said.
+  Its cards stay on the board, dimmed and marked "as of HH:MM" (when it was last live),
+  with every action on them off. Desktop tries again by itself, waiting 1 s after the first
+  failure and twice as long after each one after it, up to a minute, and opens a new master
+  if the old one has gone.
+- **Waiting for SSO login on _name_** — the master is waiting on an SSO login (the sshd
+  printed a line naming SSO). Its board appears once the login clears; nothing has to be
+  pressed.
+- **Collie isn't installed on _name_** — the machine answered, but its login shell has no
+  `collie`. **Onboard** is shown for it, though it does nothing yet. Until it has a host, it
+  is known by its herdr profile id. Once a host there answers, it becomes the Machine that
+  host's installation id names, as one more Machine or as the one already shown.
+
+A host that is not running needs nothing from you, because the bridge starts it. Desktop
+saves each Machine's last board on this computer, under
+`$XDG_DATA_HOME/dk.cego.collie.desktop/<channel>/machines/`. At launch it shows those boards
+dimmed, marked "as of", until each Machine's connection is live; a board saved through a
+machine herdr no longer lists is not shown.
 
 Every Decision and action the TUI board has is on Desktop's cards, and goes to the Machine
 the card is on. A question is answered with its options, or typed into where it has none;

@@ -12,8 +12,10 @@ import {
   flockStream,
   machineBoard,
   openBridge,
+  type Route,
 } from "../desktop/src/bun/machine";
-import { watchedBy } from "./support/effect";
+import type { FlockItem } from "../desktop/src/shared/flock";
+import { fastForward, watchedBy } from "./support/effect";
 import { root, stopHost } from "./support/host";
 import { proves } from "./support/world";
 
@@ -41,7 +43,9 @@ test(
             HERDR_BIN_PATH: Bun.env.HERDR_BIN_PATH ?? "",
             FAKE_HERDR_LOG: Bun.env.FAKE_HERDR_LOG ?? "",
           });
-          const board = yield* machineBoard({ name: "mk-pc" }, door).pipe(Stream.toPull);
+          const board = yield* machineBoard({ profile: "local", name: "mk-pc" }, door).pipe(
+            Stream.toPull,
+          );
 
           const first = yield* board;
           const snapshot = first[0].message;
@@ -49,7 +53,7 @@ test(
           // The Machine is its installation, which every later message carries too.
           const installation = snapshot._tag === "Snapshot" ? snapshot.installation : "";
           expect(installation).not.toBe("");
-          expect(first[0].machine).toEqual({ installation, name: "mk-pc" });
+          expect(first[0].machine).toEqual({ installation, profile: "local", name: "mk-pc" });
 
           const { runId } = yield* door.start({
             project: world.project,
@@ -114,29 +118,41 @@ test("Desktop's main process never reaches Collie's own host client", () =>
     }),
   ));
 
+const snapshot = (installation: string): BoardMessage => ({
+  _tag: "Snapshot",
+  installation,
+  build: "0.31.0",
+  protocol: 1,
+  herds: [],
+  tasks: [],
+  seq: 0,
+});
+interface Fake {
+  readonly name: string;
+  readonly board: () => Stream.Stream<BoardMessage>;
+}
+const fakeRoute = (
+  name: string,
+  board: Stream.Stream<BoardMessage>,
+  closed: string[] = [],
+): Route<Fake> => ({
+  machine: { profile: `p-${name}`, name, target: `mk@${name}` },
+  open: () =>
+    Effect.acquireRelease(Effect.succeed<Fake>({ name, board: () => board }), () =>
+      Effect.sync(() => closed.push(name)),
+    ),
+});
+const toldOf = (item: FlockItem) =>
+  `${item.machine.name} ${"_tag" in item ? item._tag : item.message._tag}`;
+const until = (what: () => boolean) =>
+  Effect.suspend(() => (what() ? Effect.void : Effect.fail("not yet"))).pipe(
+    Effect.retry(Schedule.spaced("5 millis")),
+  );
+
 test("a Machine reached by two routes is shown through the first, and the other's bridge closes at once", () =>
   Effect.runPromise(
     Effect.gen(function* () {
       const closed: string[] = [];
-      const snapshot = (installation: string): BoardMessage => ({
-        _tag: "Snapshot",
-        installation,
-        build: "0.31.0",
-        protocol: 1,
-        herds: [],
-        tasks: [],
-        seq: 0,
-      });
-      interface Fake {
-        readonly name: string;
-        readonly board: () => Stream.Stream<BoardMessage>;
-      }
-      const route = (name: string, board: Stream.Stream<BoardMessage>) => ({
-        machine: { name, target: `mk@${name}` },
-        open: Effect.acquireRelease(Effect.succeed<Fake>({ name, board: () => board }), () =>
-          Effect.sync(() => closed.push(name)),
-        ),
-      });
       const preferredAnswers = yield* Deferred.make<void>();
       const after = (go: Deferred.Deferred<void>, message: BoardMessage) =>
         Stream.fromEffect(Deferred.await(go).pipe(Effect.as(message)));
@@ -144,25 +160,18 @@ test("a Machine reached by two routes is shown through the first, and the other'
       const doors = new Map<string, Fake>();
       yield* flockStream(
         [
-          route(
+          fakeRoute(
             "preferred",
             after(preferredAnswers, snapshot("vm")).pipe(Stream.concat(Stream.never)),
+            closed,
           ),
-          route("other", Stream.make(snapshot("vm")).pipe(Stream.concat(Stream.never))),
+          fakeRoute("other", Stream.make(snapshot("vm")).pipe(Stream.concat(Stream.never)), closed),
         ],
         doors,
       ).pipe(
-        Stream.runForEach((item) =>
-          Effect.sync(() =>
-            told.push(`${item.machine.name} ${"_tag" in item ? item._tag : item.message._tag}`),
-          ),
-        ),
+        Stream.runForEach((item) => Effect.sync(() => told.push(toldOf(item)))),
         Effect.forkScoped,
       );
-      const until = (what: () => boolean) =>
-        Effect.suspend(() => (what() ? Effect.void : Effect.fail("not yet"))).pipe(
-          Effect.retry(Schedule.spaced("5 millis")),
-        );
 
       yield* until(() => told.length === 1);
       yield* Deferred.succeed(preferredAnswers, undefined);
@@ -171,5 +180,76 @@ test("a Machine reached by two routes is shown through the first, and the other'
       expect(closed).toEqual(["other"]);
       // Actions on the Machine go through the route it is shown through.
       expect(doors.get("vm")?.name).toBe("preferred");
+    }).pipe(Effect.scoped),
+  ));
+
+test("a route that comes up to a Machine already shown merges into it and closes", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const closed: string[] = [];
+      const told: string[] = [];
+      const doors = new Map<string, Fake>();
+      const shown = yield* Deferred.make<void>();
+      const later = Stream.fromEffect(Deferred.await(shown).pipe(Effect.as(snapshot("vm"))));
+      yield* flockStream(
+        [
+          fakeRoute("vm", Stream.make(snapshot("vm")).pipe(Stream.concat(Stream.never)), closed),
+          fakeRoute("installed", later.pipe(Stream.concat(Stream.never)), closed),
+        ],
+        doors,
+      ).pipe(
+        Stream.runForEach((item) => Effect.sync(() => told.push(toldOf(item)))),
+        Effect.forkScoped,
+      );
+      yield* until(() => told.length === 1);
+      yield* Deferred.succeed(shown, undefined);
+      yield* until(() => told.length === 2 && closed.includes("installed"));
+      expect(told).toEqual(["vm Snapshot", "installed Merged"]);
+      expect(doors.get("vm")?.name).toBe("vm");
+    }).pipe(Effect.scoped),
+  ));
+
+test("a route that cannot be opened says why and tries again by itself", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      let tries = 0;
+      const told: FlockItem[] = [];
+      const flaky: Route<Fake> = {
+        machine: { profile: "p-vm", name: "vm", target: "mk@vm" },
+        open: () =>
+          Effect.suspend(() =>
+            tries++ === 0
+              ? Effect.fail({ state: "unreachable" as const, reason: "ssh: connection refused" })
+              : Effect.succeed<Fake>({
+                  name: "vm",
+                  board: () => Stream.make(snapshot("vm")).pipe(Stream.concat(Stream.never)),
+                }),
+          ),
+      };
+      yield* flockStream([flaky], new Map()).pipe(
+        Stream.runForEach((item) => Effect.sync(() => told.push(item))),
+        Effect.forkScoped,
+      );
+      yield* until(() => told.length === 2);
+      expect(told.map(toldOf)).toEqual(["vm Lost", "vm Snapshot"]);
+      expect(told[0]).toMatchObject({ state: "unreachable", reason: "ssh: connection refused" });
+    }).pipe(Effect.scoped, fastForward),
+  ));
+
+test("a bridge whose shell finds no collie is a Machine without Collie, in the shell's words", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const failed = yield* openBridge([
+        "/bin/sh",
+        "-c",
+        "echo 'sh: 1: exec: collie: not found' >&2; exit 127",
+      ]).pipe(Effect.flip);
+      expect(failed).toEqual({ state: "no-collie", reason: "sh: 1: exec: collie: not found" });
+      const other = yield* openBridge([
+        "/bin/sh",
+        "-c",
+        "echo 'Permission denied' >&2; exit 1",
+      ]).pipe(Effect.flip);
+      expect(other).toEqual({ state: "unreachable", reason: "Permission denied" });
     }).pipe(Effect.scoped),
   ));

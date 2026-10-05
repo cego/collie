@@ -3,7 +3,7 @@
 
 import { hostname } from "node:os";
 import { BunRuntime, BunServices } from "@effect/platform-bun";
-import { Config, Crypto, Effect, FileSystem, Layer, Result, Schema, Stream } from "effect";
+import { Clock, Config, Crypto, Effect, FileSystem, Layer, Result, Schema, Stream } from "effect";
 import * as RpcServer from "effect/unstable/rpc/RpcServer";
 import Electrobun, { BrowserView, BrowserWindow, type RPCSchema, Utils } from "electrobun/bun";
 import {
@@ -28,6 +28,7 @@ import {
   type Route,
   remoteRoute,
 } from "./machine";
+import { savedBoards, saving } from "./saved";
 
 type Frames = RPCSchema<FrameSchema>;
 
@@ -79,23 +80,47 @@ const main = Effect.gen(function* () {
   const controls = yield* fs.makeTempDirectoryScoped({ prefix: "collie-ssh-" });
   // herdr's list is the only list of Machines there is.
   const listed = yield* herdrMachines("herdr").pipe(Effect.result);
+  const now = yield* Clock.currentTimeMillis;
   const [enabled, unlisted] = Result.match(listed, {
     onSuccess: (machines) => [machines, []] as const,
     onFailure: (reason): readonly [[], FlockItem[]] => [
       [],
-      [{ _tag: "Lost", machine: { name: "herdr's machines" }, reason }],
+      [
+        {
+          _tag: "Lost",
+          machine: { profile: "herdr", name: "herdr's machines" },
+          state: "unreachable",
+          reason,
+          at: now,
+        },
+      ],
     ],
   });
   const remote = yield* Effect.forEach(enabled, (machine, at) =>
     remoteRoute("ssh", `${controls}/${at}`, machine, local),
   );
   const routes: ReadonlyArray<Route> = [
-    { machine: { name: local }, open: openBridge(bridgeCommand(collie, local)) },
+    {
+      machine: { profile: "local", name: local },
+      open: () => openBridge(bridgeCommand(collie, local)),
+    },
     ...remote,
   ];
+  const profiles = new Set(routes.map(({ machine }) => machine.profile));
   const doors = new Map<string, Door>();
+  const boards = `${Utils.paths.userData}/machines`;
   const handlers = DesktopRpcs.toLayer({
-    flock: () => Stream.merge(Stream.fromIterable(unlisted), flockStream(routes, doors)),
+    flock: () =>
+      Stream.fromIterableEffect(
+        // A Machine herdr no longer lists is not Desktop's to show.
+        savedBoards(boards).pipe(
+          Effect.map((saved) => saved.filter(({ machine }) => profiles.has(machine.profile))),
+        ),
+      ).pipe(
+        Stream.concat(Stream.merge(Stream.fromIterable(unlisted), flockStream(routes, doors))),
+        saving(boards),
+        Stream.provide(BunServices.layer),
+      ),
     act: ({ installation, action, request: again }) =>
       Effect.gen(function* () {
         const request = again ?? (yield* (yield* Crypto.Crypto).randomUUIDv4.pipe(Effect.orDie));

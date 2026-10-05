@@ -7,19 +7,21 @@ import * as Rpc from "effect/unstable/rpc/Rpc";
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
 import {
   BoardMessage,
-  type Herd,
+  Herd,
   OfferView,
   sortBoard,
   Startable,
-  type TaskView,
+  TaskView,
 } from "../../../src/board-model";
 
 /**
- * A Machine as Desktop knows it: its installation id, the name a human reads, and the SSH
- * target it is reached through, which Local has none of.
+ * A Machine as Desktop knows it: its installation id, the herdr profile it is reached
+ * through (Local's is `local`), the name a human reads, and the SSH target, which Local
+ * has none of.
  */
 export const Machine = Schema.Struct({
   installation: Schema.String,
+  profile: Schema.String,
   name: Schema.String,
   target: Schema.optionalKey(Schema.String),
 });
@@ -33,14 +35,32 @@ export type KnownMachine = typeof KnownMachine.Type;
 export const MachineMessage = Schema.Struct({ machine: Machine, message: BoardMessage });
 export type MachineMessage = typeof MachineMessage.Type;
 
-/** A route to a Machine that Desktop could not open, or lost. */
+export const NotLive = Schema.Literals(["unreachable", "sso", "no-collie"]);
+export type NotLive = typeof NotLive.Type;
+
+/** A route Desktop could not open, or lost, and since when. */
 export const MachineLost = Schema.TaggedStruct("Lost", {
   machine: KnownMachine,
+  state: NotLive,
   reason: Schema.String,
+  at: Schema.Number,
 });
 export type MachineLost = typeof MachineLost.Type;
 
-export const FlockItem = Schema.Union([MachineMessage, MachineLost]);
+/** A Machine's board as Desktop last saw it live, and when. */
+export const MachineSaved = Schema.TaggedStruct("Saved", {
+  machine: Machine,
+  herds: Schema.Array(Herd),
+  tasks: Schema.Array(TaskView),
+  at: Schema.Number,
+});
+export type MachineSaved = typeof MachineSaved.Type;
+
+/** A route that turned out to reach a Machine already shown through another. */
+export const MachineMerged = Schema.TaggedStruct("Merged", { machine: KnownMachine });
+export type MachineMerged = typeof MachineMerged.Type;
+
+export const FlockItem = Schema.Union([MachineMessage, MachineLost, MachineSaved, MachineMerged]);
 export type FlockItem = typeof FlockItem.Type;
 
 /** One board action, as the view asks it of a Machine's host. */
@@ -111,29 +131,58 @@ export const DesktopRpcs = RpcGroup.make(
   }),
 );
 
-/** What a Machine's host last told: who it is, its Herds, and its Tasks by id. */
+/**
+ * What a Machine's host last told: who it is, its Herds, and its Tasks by id, and since when
+ * that is no longer live, if it is not.
+ */
 export interface FlockMachine {
   readonly machine: Machine;
   readonly herds: ReadonlyArray<Herd>;
   readonly tasks: ReadonlyMap<string, TaskView>;
+  readonly asOf: number | null;
 }
 
-/** Each Machine keyed by installation id, and each route out of reach by how it is reached. */
+/** Each Machine keyed by installation id, and each route not live by its herdr profile. */
 export interface Flock {
   readonly machines: ReadonlyMap<string, FlockMachine>;
-  readonly lost: ReadonlyMap<string, { readonly name: string; readonly reason: string }>;
+  readonly lost: ReadonlyMap<
+    string,
+    { readonly name: string; readonly state: NotLive; readonly reason: string }
+  >;
 }
-
-const routeOf = (machine: KnownMachine) => machine.target ?? "local";
 
 export const EMPTY_FLOCK: Flock = { machines: new Map(), lost: new Map() };
 
-/** A snapshot replaces its Machine; a change touches one Task; anything newer is skipped. */
+/**
+ * A snapshot replaces its Machine and makes it live; a change touches one Task; a lost
+ * route dims the Machine it was showing; a merged one is no longer lost; a saved board
+ * stands in until its Machine is live; anything newer is skipped.
+ */
 export const applyItem = (flock: Flock, item: FlockItem): Flock => {
+  if ("_tag" in item && item._tag === "Saved") {
+    const { machine, herds, tasks, at } = item;
+    if (flock.machines.has(machine.installation)) return flock;
+    const saved = {
+      machine,
+      herds,
+      tasks: new Map(tasks.map((task) => [task.id, task])),
+      asOf: at,
+    };
+    return { ...flock, machines: new Map(flock.machines).set(machine.installation, saved) };
+  }
   const lost = new Map(flock.lost);
-  if ("_tag" in item) {
-    lost.set(routeOf(item.machine), { name: item.machine.name, reason: item.reason });
+  if ("_tag" in item && item._tag === "Merged") {
+    lost.delete(item.machine.profile);
     return { ...flock, lost };
+  }
+  if ("_tag" in item) {
+    const { machine, state, reason, at } = item;
+    lost.set(machine.profile, { name: machine.name, state, reason });
+    const machines = new Map(flock.machines);
+    for (const [installation, known] of machines)
+      if (known.machine.profile === machine.profile && known.asOf === null)
+        machines.set(installation, { ...known, asOf: at });
+    return { machines, lost };
   }
   const { machine, message } = item;
   if (message._tag === "Unknown") return flock;
@@ -144,9 +193,14 @@ export const applyItem = (flock: Flock, item: FlockItem): Flock => {
   if (message._tag === "Upsert") tasks.set(message.task.id, message.task);
   if (message._tag === "Remove") tasks.delete(message.id);
   const herds = message._tag === "Snapshot" ? message.herds : (known?.herds ?? []);
-  lost.delete(routeOf(machine));
+  lost.delete(machine.profile);
   return {
-    machines: new Map(flock.machines).set(machine.installation, { machine, herds, tasks }),
+    machines: new Map(flock.machines).set(machine.installation, {
+      machine,
+      herds,
+      tasks,
+      asOf: null,
+    }),
     lost,
   };
 };
@@ -170,6 +224,8 @@ export interface PlacedTask {
   readonly installation: string;
   readonly task: TaskView;
   readonly where: string;
+  /** When its Machine was last live, where it is not now; its actions are off until it is. */
+  readonly asOf: number | null;
 }
 
 /**
@@ -179,7 +235,7 @@ export interface PlacedTask {
 export const flockCards = (flock: Flock) => {
   const names = machineNames([...flock.machines.values()].map(({ machine }) => machine));
   const placed = new Map<TaskView, PlacedTask>();
-  for (const [installation, { herds, tasks }] of flock.machines) {
+  for (const [installation, { herds, tasks, asOf }] of flock.machines) {
     for (const task of tasks.values()) {
       const herd = herds.length > 1 ? herds.find(({ id }) => id === task.herd) : undefined;
       const where = [
@@ -191,6 +247,7 @@ export const flockCards = (flock: Flock) => {
         installation,
         task,
         where: where.filter((part) => part !== undefined).join(" · "),
+        asOf,
       });
     }
   }
@@ -198,12 +255,14 @@ export const flockCards = (flock: Flock) => {
     tasks: sortBoard([...placed.keys()]),
     // SAFETY: the board's helpers filter and sort these Tasks; they never make new ones.
     placedOf: (task: TaskView) => placed.get(task)!,
-    /** Each Machine by its display name, and the projects its board has work in. */
-    machines: [...flock.machines].map(([installation, { tasks }]) => ({
-      installation,
-      name: names.get(installation)!,
-      projects: [...new Set([...tasks.values()].map((task) => task.project))].sort(),
-    })),
+    /** Each live Machine by its display name, and the projects its board has work in. */
+    machines: [...flock.machines]
+      .filter(([, { asOf }]) => asOf === null)
+      .map(([installation, { tasks }]) => ({
+        installation,
+        name: names.get(installation)!,
+        projects: [...new Set([...tasks.values()].map((task) => task.project))].sort(),
+      })),
   };
 };
 

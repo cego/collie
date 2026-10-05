@@ -8,11 +8,28 @@ import {
   primaryAction,
   type TaskView,
 } from "../../../../src/board-model";
+import { DateTime } from "effect";
 import type { DesktopAction } from "../../../src/shared/flock";
 
-const props = defineProps<{ task: TaskView; where: string; installation: string }>();
+const props = defineProps<{
+  task: TaskView;
+  where: string;
+  installation: string;
+  asOf: number | null;
+}>();
 const { run, openLink } = useActions();
-const act = (action: DesktopAction) => run(props.installation, action);
+// A dialog opened before its Machine dropped is outside the card's disabled controls.
+const act = (action: DesktopAction) =>
+  props.asOf === null ? run(props.installation, action) : Promise.resolve(false);
+
+const asOfLabel = computed(() => {
+  if (props.asOf === null) return null;
+  const { hour, minute } = DateTime.toParts(
+    DateTime.makeZonedUnsafe(props.asOf, { timeZone: DateTime.zoneMakeLocal() }),
+  );
+  const two = (n: number) => String(n).padStart(2, "0");
+  return `as of ${two(hour)}:${two(minute)}`;
+});
 
 const STATES: Record<
   TaskView["state"],
@@ -134,153 +151,162 @@ const menu = computed(() =>
 </script>
 
 <template>
-  <UCard :data-testid="`card-${task.id}`" :variant="task.state === 'blocked' ? 'soft' : 'outline'">
-    <template #header>
-      <div class="flex items-start justify-between gap-2">
-        <strong data-testid="name">{{ task.name }}</strong>
-        <div class="flex shrink-0 items-center gap-1">
-          <UBadge :color="state.color" variant="subtle" data-testid="state">
-            {{ state.label }}
-          </UBadge>
-          <UDropdownMenu :items="menu" :content="{ align: 'end' }">
-            <UButton
-              icon="i-lucide-ellipsis"
-              color="neutral"
-              variant="ghost"
-              size="xs"
-              aria-label="Actions"
-              data-testid="menu"
-            />
-          </UDropdownMenu>
-        </div>
-      </div>
-      <small class="text-muted">{{ repoAndBranch }}</small>
-    </template>
-    <p data-testid="sentence" class="text-sm">{{ task.sentence }}</p>
-    <p v-if="task.held" class="text-sm text-muted">{{ task.held }}</p>
-    <p v-if="task.drift" class="text-sm text-warning">{{ task.drift }}</p>
-
-    <div
-      v-if="task.decision?.kind === 'question'"
-      class="mt-3 flex flex-col gap-2"
-      data-testid="question"
+  <fieldset :disabled="asOf !== null" class="contents">
+    <UCard
+      :data-testid="`card-${task.id}`"
+      :variant="task.state === 'blocked' ? 'soft' : 'outline'"
+      :class="{ 'opacity-50': asOf !== null }"
     >
-      <p class="text-sm font-medium">{{ task.decision.text }}</p>
-      <div v-if="task.decision.options.length > 0" class="flex flex-wrap gap-2">
+      <template #header>
+        <div class="flex items-start justify-between gap-2">
+          <strong data-testid="name">{{ task.name }}</strong>
+          <div class="flex shrink-0 items-center gap-1">
+            <UBadge :color="state.color" variant="subtle" data-testid="state">
+              {{ state.label }}
+            </UBadge>
+            <UDropdownMenu :items="menu" :content="{ align: 'end' }">
+              <UButton
+                icon="i-lucide-ellipsis"
+                color="neutral"
+                variant="ghost"
+                size="xs"
+                aria-label="Actions"
+                data-testid="menu"
+              />
+            </UDropdownMenu>
+          </div>
+        </div>
+        <small class="text-muted">{{ repoAndBranch }}</small>
+      </template>
+      <p data-testid="sentence" class="text-sm">{{ task.sentence }}</p>
+      <p v-if="task.held" class="text-sm text-muted">{{ task.held }}</p>
+      <p v-if="task.drift" class="text-sm text-warning">{{ task.drift }}</p>
+
+      <div
+        v-if="task.decision?.kind === 'question'"
+        class="mt-3 flex flex-col gap-2"
+        data-testid="question"
+      >
+        <p class="text-sm font-medium">{{ task.decision.text }}</p>
+        <div v-if="task.decision.options.length > 0" class="flex flex-wrap gap-2">
+          <UButton
+            v-for="option in task.decision.options"
+            :key="option.id"
+            :data-testid="`option-${option.id}`"
+            size="sm"
+            :label="option.title"
+            @click="
+              act({
+                _tag: 'Answer',
+                runId: task.decision.run,
+                decision: task.decision.id,
+                value: option.id,
+              })
+            "
+          />
+        </div>
+        <form
+          v-else
+          class="flex gap-2"
+          @submit.prevent="
+            typed.trim() !== '' &&
+            act({
+              _tag: 'Answer',
+              runId: task.decision.run,
+              decision: task.decision.id,
+              value: typed.trim(),
+            })
+          "
+        >
+          <UInput v-model="typed" class="flex-1" size="sm" data-testid="answer" />
+          <UButton type="submit" size="sm" label="Send" data-testid="send-answer" />
+        </form>
+      </div>
+
+      <div
+        v-else-if="task.decision?.kind === 'gate'"
+        class="mt-3 flex flex-col gap-2"
+        data-testid="gate"
+      >
+        <p class="text-sm font-medium">Approve these checks before it carries on:</p>
+        <UCheckbox
+          v-for="name in task.decision.verifications"
+          :key="name"
+          :data-testid="`check-${name}`"
+          :label="name"
+          :model-value="kept.includes(name)"
+          @update:model-value="toggle(name, $event)"
+        />
         <UButton
-          v-for="option in task.decision.options"
-          :key="option.id"
-          :data-testid="`option-${option.id}`"
+          class="self-start"
           size="sm"
-          :label="option.title"
+          label="Approve"
+          data-testid="approve"
+          :disabled="kept.length === 0"
           @click="
             act({
               _tag: 'Answer',
               runId: task.decision.run,
               decision: task.decision.id,
-              value: option.id,
+              value:
+                kept.length === task.decision.verifications.length
+                  ? 'approve'
+                  : `approve:${kept.join(',')}`,
             })
           "
         />
       </div>
-      <form
-        v-else
-        class="flex gap-2"
-        @submit.prevent="
-          typed.trim() !== '' &&
-          act({
-            _tag: 'Answer',
-            runId: task.decision.run,
-            decision: task.decision.id,
-            value: typed.trim(),
-          })
-        "
+
+      <div
+        v-else-if="task.decision?.kind === 'proposal'"
+        class="mt-3 flex flex-col gap-2"
+        data-testid="proposal"
       >
-        <UInput v-model="typed" class="flex-1" size="sm" data-testid="answer" />
-        <UButton type="submit" size="sm" label="Send" data-testid="send-answer" />
-      </form>
-    </div>
-
-    <div
-      v-else-if="task.decision?.kind === 'gate'"
-      class="mt-3 flex flex-col gap-2"
-      data-testid="gate"
-    >
-      <p class="text-sm font-medium">Approve these checks before it carries on:</p>
-      <UCheckbox
-        v-for="name in task.decision.verifications"
-        :key="name"
-        :data-testid="`check-${name}`"
-        :label="name"
-        :model-value="kept.includes(name)"
-        @update:model-value="toggle(name, $event)"
-      />
-      <UButton
-        class="self-start"
-        size="sm"
-        label="Approve"
-        data-testid="approve"
-        :disabled="kept.length === 0"
-        @click="
-          act({
-            _tag: 'Answer',
-            runId: task.decision.run,
-            decision: task.decision.id,
-            value:
-              kept.length === task.decision.verifications.length
-                ? 'approve'
-                : `approve:${kept.join(',')}`,
-          })
-        "
-      />
-    </div>
-
-    <div
-      v-else-if="task.decision?.kind === 'proposal'"
-      class="mt-3 flex flex-col gap-2"
-      data-testid="proposal"
-    >
-      <p class="text-sm font-medium">{{ task.decision.text }}</p>
-      <UButton
-        class="self-start"
-        size="sm"
-        label="Review…"
-        data-testid="review"
-        @click="reviewing = true"
-      />
-      <ProposalDrawer
-        v-model:open="reviewing"
-        :proposal="task.decision"
-        @confirm="
-          (shown: Proposal) => act({ _tag: 'Confirm', proposal: shown.id, hash: shown.hash })
-        "
-        @decline="
-          (shown: Proposal) => act({ _tag: 'Decline', proposal: shown.id, hash: shown.hash })
-        "
-      />
-    </div>
-
-    <template #footer>
-      <div class="flex items-center justify-between gap-2">
-        <small class="text-muted">
-          <template v-if="where !== ''"
-            ><span data-testid="where">{{ where }}</span> ·
-          </template>
-          {{ task.age }}
-          <template v-if="task.agents.length > 0">
-            · {{ task.agents.length === 1 ? "1 agent" : `${task.agents.length} agents` }}
-          </template>
-        </small>
+        <p class="text-sm font-medium">{{ task.decision.text }}</p>
         <UButton
-          v-if="primary"
-          size="xs"
-          :label="primary.label"
-          data-testid="primary"
-          @click="primary.press()"
+          class="self-start"
+          size="sm"
+          label="Review…"
+          data-testid="review"
+          @click="reviewing = true"
+        />
+        <ProposalDrawer
+          v-model:open="reviewing"
+          :proposal="task.decision"
+          @confirm="
+            (shown: Proposal) => act({ _tag: 'Confirm', proposal: shown.id, hash: shown.hash })
+          "
+          @decline="
+            (shown: Proposal) => act({ _tag: 'Decline', proposal: shown.id, hash: shown.hash })
+          "
         />
       </div>
-    </template>
-  </UCard>
+
+      <template #footer>
+        <div class="flex items-center justify-between gap-2">
+          <small class="text-muted">
+            <template v-if="where !== ''"
+              ><span data-testid="where">{{ where }}</span> ·
+            </template>
+            {{ task.age }}
+            <template v-if="asOfLabel !== null">
+              · <span data-testid="as-of">{{ asOfLabel }}</span>
+            </template>
+            <template v-if="task.agents.length > 0">
+              · {{ task.agents.length === 1 ? "1 agent" : `${task.agents.length} agents` }}
+            </template>
+          </small>
+          <UButton
+            v-if="primary"
+            size="xs"
+            :label="primary.label"
+            data-testid="primary"
+            @click="primary.press()"
+          />
+        </div>
+      </template>
+    </UCard>
+  </fieldset>
 
   <TextDialog
     :open="asking !== null"

@@ -137,10 +137,14 @@ test(
     run(
       Effect.gen(function* () {
         const opened = (yield* sshLog()).map((line) => line.split(" ").slice(0, 2).join(" "));
-        expect(opened.toSorted()).toEqual(
+        // The one out of reach is tried again; every other is opened once and held.
+        expect([...new Set(opened)].toSorted()).toEqual(
           MACHINES.filter((one) => one.enabled)
             .map((one) => `open ${one.target}`)
             .toSorted(),
+        );
+        expect(opened.filter((line) => line !== "open mk@down")).toHaveLength(
+          MACHINES.filter((one) => one.enabled).length - 1,
         );
       }),
     ),
