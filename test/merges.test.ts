@@ -10,6 +10,7 @@ import { readEnv } from "../src/env";
 import { madeRun } from "./support/records";
 import { task } from "./support/task";
 import { runEffect } from "./support/effect";
+import { epochMs } from "../src/time";
 
 /** A GitLab that answers every readiness check and says one thing about every MR. */
 function gitlab(state: string, log: string[] = []): Runner {
@@ -57,7 +58,7 @@ test("a merge GitLab reports lands the work: a disposition by gitlab, and the ca
         cwd: "/project",
         run: gitlab("merged"),
         views: before,
-        now: Date.parse("2026-09-17T10:00:00Z"),
+        now: epochMs("2026-09-17T10:00:00Z"),
         checked: new Map(),
         states,
         panels: new Map(),
@@ -69,7 +70,7 @@ test("a merge GitLab reports lands the work: a disposition by gitlab, and the ca
       ]);
       expect(yield* readMrStates(stateDir)).toEqual(new Map([["mk/collie!65", "merged"]]));
       // Nothing passed in: the CLI's board reads what the pane's watch wrote.
-      const after = yield* boardOf({ now: Date.parse("2026-09-17T11:00:00Z") });
+      const after = yield* boardOf({ now: epochMs("2026-09-17T11:00:00Z") });
       expect(after[0]!.landed).toBe(true);
       expect(after[0]!.sentence).toBe("Merged as mk/collie!65.");
     }),
@@ -83,7 +84,7 @@ test("a closed merge request is news, not a verdict, and a fresh answer is not a
       const log: string[] = [];
       const checked = new Map<string, number>();
       const states = new Map();
-      const now = Date.parse("2026-09-17T10:00:00Z");
+      const now = epochMs("2026-09-17T10:00:00Z");
       yield* settleMerges({
         stateDir,
         cwd: "/project",
@@ -161,7 +162,7 @@ test("a merged card follows its deploy jobs: on stage, then in production, then 
       const { stateDir, run, board: boardOf } = yield* seeded();
       const states = new Map();
       const checked = new Map<string, number>();
-      let now = Date.parse("2026-09-17T10:00:00Z");
+      let now = epochMs("2026-09-17T10:00:00Z");
       const settle = (gitlab: Runner, log: string[] = []) =>
         Effect.gen(function* () {
           const current = yield* boardOf({ mrStates: states, now });
@@ -224,7 +225,7 @@ test("what is working, or already disposed of, is not asked about", () =>
           }),
           task({ id: "no-mr", state: "failed" }),
         ],
-        now: Date.parse("2026-09-17T10:00:00Z"),
+        now: epochMs("2026-09-17T10:00:00Z"),
         checked: new Map(),
         states: new Map(),
         panels: new Map(),
@@ -290,7 +291,7 @@ const cardAfter = Effect.fn("merges.cardAfter")(function* (mr: string, run: Runn
     mr,
     created: "2026-09-17T09:00:00Z",
   });
-  const now = Date.parse("2026-09-17T10:00:00Z");
+  const now = epochMs("2026-09-17T10:00:00Z");
   const views = yield* buildBoard({ env, runs: [made], now });
   yield* settleMerges({
     stateDir,
@@ -395,7 +396,7 @@ test("a board file in the old shape still reads, with nothing known of the forge
       yield* fs.writeFileString(`${stateDir}/board/mr-states.json`, '{"mk/collie!65":"open"}\n');
       expect(yield* readMrStates(stateDir)).toEqual(new Map([["mk/collie!65", "open"]]));
       expect(yield* readForge(stateDir)).toEqual(new Map());
-      const [card] = yield* boardOf({ now: Date.parse("2026-09-17T10:00:00Z") });
+      const [card] = yield* boardOf({ now: epochMs("2026-09-17T10:00:00Z") });
       expect(card!.mrState).toBe("open");
       expect(card!.checks).toEqual({ state: "unchecked" });
     }),
@@ -426,7 +427,7 @@ test("green forge checks with Collie's evidence at an older head pass on the for
         at: "2026-09-17T09:00:00Z",
         by: "collie",
       });
-      const now = Date.parse("2026-09-17T10:00:00Z");
+      const now = epochMs("2026-09-17T10:00:00Z");
       const tests = { name: "test", status: "COMPLETED", conclusion: "SUCCESS" };
       yield* settleMerges({
         stateDir,

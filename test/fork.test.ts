@@ -188,7 +188,7 @@ test("a target occupied while a fork is being prepared is never overwritten", ()
       // what holds it, so writing the source below is the handover.
       const deadline = (yield* Clock.currentTimeMillis) + 30_000;
       while (!(yield* exists(marker)) && (yield* Clock.currentTimeMillis) < deadline) {
-        yield* Effect.promise(() => Bun.sleep(10));
+        yield* Effect.sleep("10 millis");
       }
       expect(yield* exists(marker)).toBe(true);
 

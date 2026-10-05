@@ -14,6 +14,7 @@
 import { Effect, FileSystem, Path, Schema } from "effect";
 import { appendJournal, readJournal } from "./journal";
 import type { Metrics } from "./board-model";
+import { epochMs } from "./time";
 
 const MetricSchema = Schema.Struct({
   at: Schema.String,
@@ -146,7 +147,7 @@ export function obstacleOf(found: {
 }
 
 export function metricsOf(lines: ReadonlyArray<Metric>, createdAt: string): Metrics {
-  const created = Date.parse(createdAt);
+  const created = epochMs(createdAt);
   const first = lines.find((line) => line.kind === "verification");
   const verifications = { pass: 0, fail: 0, unstable: 0, byCollie: 0 };
   const slices = { done: 0, total: 0 };
@@ -188,9 +189,7 @@ export function metricsOf(lines: ReadonlyArray<Metric>, createdAt: string): Metr
 
   return {
     timeToFirstEvidence:
-      first && Number.isFinite(created)
-        ? Math.max(0, (Date.parse(first.at) - created) / 1000)
-        : null,
+      first && Number.isFinite(created) ? Math.max(0, (epochMs(first.at) - created) / 1000) : null,
     verifications,
     slices,
     rework,

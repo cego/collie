@@ -1,6 +1,7 @@
 import { Data, Schema, Effect, FileSystem, Path } from "effect";
 import type { AgentInfo } from "./herdr";
 import { ensureLockDir, withLock } from "./lock";
+import { epochMs } from "./time";
 
 /**
  * herdr's own identity for one live agent process, recorded when it is registered and
@@ -152,7 +153,7 @@ export const registerAgent = Effect.fn("registerAgent")(function* (
       const kept =
         alive === undefined
           ? others
-          : others.filter((e) => live.has(e) || Date.parse(e.at) >= Date.parse(alive.listedAt));
+          : others.filter((e) => live.has(e) || epochMs(e.at) >= epochMs(alive.listedAt));
       const entries = [...kept, entry];
       yield* write(file, entries);
       return entries;

@@ -190,7 +190,7 @@ const feed = Effect.fn("test.feed")(function* (fifo: string, text: string) {
     );
     if (written) return;
     expect(yield* Clock.currentTimeMillis).toBeLessThan(deadline);
-    yield* Effect.promise(() => Bun.sleep(10));
+    yield* Effect.sleep("10 millis");
   }
 });
 
@@ -198,7 +198,7 @@ const awaitMarker = Effect.fn("test.awaitMarker")(function* (marker: string) {
   const fs = yield* FileSystem.FileSystem;
   const deadline = (yield* Clock.currentTimeMillis) + 30_000;
   while (!(yield* fs.exists(marker)) && (yield* Clock.currentTimeMillis) < deadline) {
-    yield* Effect.promise(() => Bun.sleep(10));
+    yield* Effect.sleep("10 millis");
   }
   expect(yield* fs.exists(marker)).toBe(true);
 });

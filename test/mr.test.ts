@@ -20,6 +20,7 @@ import {
   templateFile,
 } from "../src/mr";
 import { Rig } from "./support/recorder";
+import { epochMs } from "../src/time";
 
 let rig: Rig;
 
@@ -357,7 +358,7 @@ test("a merge request answers the whole panel in one view call", () =>
       expect(details.notes).toBe(7);
       // Short enough to read, long enough to tell two heads apart.
       expect(details.headSha).toBe("0123456");
-      expect(details.updatedAt).toBe(Date.parse("2026-09-02T11:00:00.000Z"));
+      expect(details.updatedAt).toBe(epochMs("2026-09-02T11:00:00.000Z"));
       expect(details.url).toBe("https://gitlab.example.com/g/p/-/merge_requests/42");
 
       // One call for the panel; the readiness probes are what precede it.
@@ -426,11 +427,11 @@ test("a merge request that has not moved since a review says so, and one that ha
       if (details._tag !== "Details") throw new Error("expected details");
 
       // The review finished after the last change: nothing has moved, stop looking.
-      expect(sinceReview(details, Date.parse("2026-09-02T12:00:00.000Z"))).toBe(
+      expect(sinceReview(details, epochMs("2026-09-02T12:00:00.000Z"))).toBe(
         "nothing has moved since this review",
       );
       // The review finished before it: they have pushed, review again.
-      expect(sinceReview(details, Date.parse("2026-09-02T09:00:00.000Z"))).toBe(
+      expect(sinceReview(details, epochMs("2026-09-02T09:00:00.000Z"))).toBe(
         "changed 2h after this review — head 0123456",
       );
       // No review to compare against.

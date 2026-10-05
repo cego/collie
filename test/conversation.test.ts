@@ -18,6 +18,7 @@ import {
   type Turn,
 } from "../src/conversation";
 import { runEffect } from "./support/effect";
+import { epochMs } from "../src/time";
 
 let stateDir: string;
 let file: string;
@@ -111,7 +112,7 @@ test("the journal is what the board reads back after it is closed", () =>
   ));
 
 test("what is kept is the recent and the not-too-old", () => {
-  const epoch = Date.parse("2026-09-09T00:00:00Z");
+  const epoch = epochMs("2026-09-09T00:00:00Z");
   const at = (daysAgo: number) =>
     DateTime.formatIso(DateTime.makeUnsafe(epoch - daysAgo * 86_400_000));
   const turn = (id: string, daysAgo: number): Turn => ({

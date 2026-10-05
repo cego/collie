@@ -14,7 +14,7 @@ import { Stream } from "effect";
 import type { VerifySpec } from "./intent";
 import { appendJournal, readJournal } from "./journal";
 import { shell } from "./mr";
-import { nowIso } from "./time";
+import { nowIso, epochMs } from "./time";
 import { Pass } from "./board-model";
 
 /** Over this many bytes of working-tree content, the tree is not fingerprinted at all. */
@@ -349,7 +349,7 @@ export const collect = Effect.fn("Verify.collect")(function* (
   const at = yield* nowIso();
 
   const record: Verification = {
-    id: `${what.run}-${what.name}-${Date.parse(at)}`,
+    id: `${what.run}-${what.name}-${epochMs(at)}`,
     run: what.run,
     name: what.name,
     executable: absolute,
@@ -358,7 +358,7 @@ export const collect = Effect.fn("Verify.collect")(function* (
     start,
     end,
     exit: Number(exit),
-    seconds: Math.max(0, (Date.parse(at) - Date.parse(began)) / 1000),
+    seconds: Math.max(0, (epochMs(at) - epochMs(began)) / 1000),
     tail: { stdout, stderr },
     expect: what.expect ?? "pass",
     result: resultOf(start, end, Number(exit), what.expect ?? "pass"),

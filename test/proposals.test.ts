@@ -38,6 +38,7 @@ import { save } from "./support/world";
 import { connect } from "../src/host";
 import { writeConfigValue } from "../src/config";
 import type { World } from "./support/world";
+import { epochMs } from "../src/time";
 
 let stateDir: string;
 let file: string;
@@ -138,7 +139,7 @@ test("every refusal is its own fact, and says which one it was", () =>
     Effect.gen(function* () {
       const proposal = yield* written();
       const lines = yield* read(file);
-      const now = Date.parse(proposal.created_at);
+      const now = epochMs(proposal.created_at);
 
       expect(
         judgeConfirmation(lines, "nope", proposal.content_hash, human, now, versions),
@@ -223,7 +224,7 @@ test("an action that started and never settled stops the next confirmation", () 
         later.id,
         later.content_hash,
         human,
-        Date.parse(later.created_at),
+        epochMs(later.created_at),
         versions,
       );
       expect(judged).toMatchObject({ refused: "reconcile_required" });
@@ -646,7 +647,7 @@ test(
 );
 
 test("a proposal is pending until it is answered or it expires", () => {
-  const now = Date.parse("2026-09-09T10:00:00Z");
+  const now = epochMs("2026-09-09T10:00:00Z");
   const proposal: ProposalLine = {
     kind: "proposal",
     id: "p1",
@@ -668,7 +669,7 @@ test("a proposal is pending until it is answered or it expires", () => {
   const settled = { id: "p1", at: "t", by: "human:1" } as const;
   expect(pendingFor([proposal, { ...settled, kind: "confirmed" }], "r1", now)).toEqual([]);
   expect(pendingFor([proposal, { ...settled, kind: "declined" }], "r1", now)).toEqual([]);
-  expect(pendingFor([proposal], "r1", Date.parse("2026-09-09T12:00:00Z"))).toEqual([]);
+  expect(pendingFor([proposal], "r1", epochMs("2026-09-09T12:00:00Z"))).toEqual([]);
 });
 
 test("a proposal about the installation is waiting on the Herd, not on any Run", () =>
@@ -687,7 +688,7 @@ test("a proposal about the installation is waiting on the Herd, not on any Run",
         by: "chat:c-1",
       });
       const lines = yield* read(file);
-      const now = Date.parse(herdWide.expires_at) - 1;
+      const now = epochMs(herdWide.expires_at) - 1;
       expect(pendingHerdWide(lines, now).map((p) => p.id)).toEqual([herdWide.id]);
       // And a proposal about a Run is that Run's, never the Herd's: the two lists do not
       // overlap, so confirming one is never confirming the other.

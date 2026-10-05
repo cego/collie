@@ -16,7 +16,7 @@ import { REVIEW_FILE, findingsIn, openFindingsIn } from "./output";
 import { findRun, settled, type RunFacts, type RunState } from "./runs";
 import { diffTargetOf } from "./strategies";
 import { isString } from "./schema";
-import { took } from "./time";
+import { took, epochMs } from "./time";
 import { claudeTrust } from "./trust";
 import { isYamlMap, type YamlMap, type YamlValue } from "./yaml";
 import { NO_OUTCOME, type RunRow } from "./workspace";
@@ -33,7 +33,7 @@ const HISTORY = 200;
 /** How long the run took, where both ends of it were recorded. */
 function ranFor(run: RunFacts): string | null {
   if (!run.finished) return null;
-  const ms = Date.parse(run.finished) - Date.parse(run.created);
+  const ms = epochMs(run.finished) - epochMs(run.created);
   if (!Number.isFinite(ms) || ms <= 0) return null;
   return took(ms);
 }
@@ -63,7 +63,7 @@ export const buildHistory = Effect.fn("Views.buildHistory")(function* (opts: {
       glyph: glyphOf(run.state),
       title: runTitle(run),
       detail: parts.join(" · "),
-      at: run.finished ? Date.parse(run.finished) : 0,
+      at: run.finished ? epochMs(run.finished) : 0,
       target: diffTargetOf(run.settled)?.value ?? null,
       // History never nests: each Run is a row of its own in the record of everything
       // before now.
@@ -361,7 +361,7 @@ export const buildRunDetail = Effect.fn("Views.buildRunDetail")(function* (opts:
       ? ((yield* tailed(path.join(run.dir, "log.txt"), TAIL_CAP)) ??
         ({ _tag: "None", reason: "this run wrote no log" } satisfies Panel))
       : null,
-    finishedAt: run.finished ? Date.parse(run.finished) : 0,
+    finishedAt: run.finished ? epochMs(run.finished) : 0,
     mr: opts.mr,
     findings: (yield* findingsIn(run.dir)).map((finding) => ({
       severity: finding.severity,

@@ -622,17 +622,32 @@ stale timings cannot skip a test; delete the file to reset the schedule. Quiet-a
 use a controlled Effect clock so machine load cannot consume their nudge windows. A test
 whose work waits out timers runs under `fastForward` (`test/support/effect.ts`): a test
 clock a fiber of its own keeps moving many times faster than the wall's, from the wall's
-now. A wait on such a clock says what state it is for, never how long: real IO takes the
-time it takes, and only the timers are compressed.
-
-On the initial 377-test baseline (`fb2d018`), with Linux and Bun 1.4.2, the original checks
-took about 96 seconds (90 in tests); the new
-gate took about 51 seconds without timing history. Four-worker tests with history took
-about 39 seconds, or 43 seconds for the whole gate. Eight workers and running static checks
-alongside tests were rejected:
-both caused subprocess tests to exceed their existing timeouts, which were Bun's five-second
-default then. Limiting Oxlint/Oxfmt
-threads did not show a consistent improvement, so their defaults and rules stay unchanged.
+now.
 
 Documentation changes in the same merge request as the behavior it describes. There is no
 docs lint to catch a page that fell behind — a stale page is a defect like any other.
+
+### Keeping the suite and a start fast
+
+Each of these, where it crept in, cost the suite minutes or every start a large share of
+its time.
+
+- **A test waits for a state.** It waits with `until` (`test/support/host.ts`) for what it
+  needs: a run `suspended`, a file written, a pane gone. Real IO takes the time it takes,
+  and a fixed sleep is too long on an idle machine and too short on a busy one. Work that
+  waits out its own timers runs under `fastForward`, test by test: a file whose time goes
+  to real IO runs slower under a fast clock, because its polling keeps firing.
+- **A test starts the build.** A helper that starts `collie` or its host runs
+  `COLLIE_TEST_BINARY` when it is set, as `test/support/host.ts` does, and the sources only
+  without it. A start from source is most of a second of CPU, and the suite makes over a
+  thousand.
+- **A host is stopped while its run waits.** Stopped mid-step, it sits out upstream's
+  15-second `entityTerminationTimeout` before it exits.
+- **A test can go red.** Break `src/` the way its name says and watch it fail before relying
+  on it. A test that cannot fail, or whose every failure another test already has, is
+  deleted.
+- **A front door loads what it runs.** `src/main.ts` imports each front door with
+  `import()` once it knows which one runs, and `src/` imports `@effect/platform-bun` and
+  `effect/unstable/http` by module rather than through their index. `test/startup.test.ts`
+  holds the first and keeps the engine and the board out of the compaction helper; lint
+  holds the second.

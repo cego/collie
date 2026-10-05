@@ -2210,7 +2210,7 @@ test("a checkout made again by hand at the same path and branch is not a candida
       // Collie's checkout was removed by hand, and a human made their own at the same
       // path on the same branch. Path and branch match the old run record; the moment
       // git wrote the checkout does not.
-      yield* Effect.promise(() => Bun.sleep(10));
+      yield* Effect.sleep("10 millis");
       yield* fs.writeFileString(`${worktreePath}/.git`, `gitdir: ${worktreePath}/.gitdir\n`);
 
       expect(yield* prune()).toEqual([]);
