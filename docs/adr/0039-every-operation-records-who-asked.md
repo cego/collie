@@ -1,6 +1,6 @@
 # Every operation records who asked
 
-**Status: accepted.**
+**Status: accepted**, amended 2026-10-02 (D5: a chat's actions carry the human's words).
 
 ## What was true before
 
@@ -32,6 +32,15 @@ it; nothing else does.
 **D4. `cli-tty` is a terminal in a pane that is not an agent's.** A `collie` command is
 `cli-tty` only with a terminal on one of its streams, run in a pane herdr does not report
 as an agent's or outside herdr altogether. Where herdr cannot say, it is `cli`.
+
+**D5. A chat's actions carry the human's words** (amended 2026-10-02). A chat's channel
+also declares its conversation and the human's message from that turn, and the host records
+both in the Actor beside the front door. The message is attached by the tool host, from what
+the harness's own prompt hook handed it, and never by the model: `collie_do` takes no field
+for it and refuses one. The words last for the turn they were said in: Claude's `Stop` hook
+forgets them, so a turn nobody prompted carries none. Native chat's conversation is
+`native`, the name its News receipts carry. Like the rest of this record it is honest, not secure: a model with a shell could
+still write the file its tool host reads.
 
 ## Consequences
 

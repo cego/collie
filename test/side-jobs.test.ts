@@ -6,7 +6,8 @@ import { readDispositions } from "../src/disposition";
 import { currentEnv } from "../src/env";
 import { Herdr } from "../src/herdr";
 import { frontDoor } from "../src/host";
-import { newsPath, read as readNews } from "../src/news";
+import { newsPath, pending, read as readNews } from "../src/news";
+import { herdOf } from "../src/steering";
 import { writeTask } from "../src/task";
 import { stopHost } from "./support/host";
 import { collie, proves } from "./support/world";
@@ -73,6 +74,69 @@ test(
           ]);
         }),
       ["targeted.workflow.ts"],
+    ),
+  120_000,
+);
+
+test(
+  "the host retires an answered question's News, and a finished Run's once its work is disposed",
+  () =>
+    proves(
+      "collie-side-superseded-",
+      (world) =>
+        Effect.gen(function* () {
+          const socket = `${world.home}/desk.sock`;
+          const env = yield* currentEnv.pipe(Effect.orDie);
+          const workspace = yield* new Herdr(env)
+            .workspaceCreate({ cwd: world.project, label: "desk" })
+            .pipe(Effect.orDie);
+          const desk = {
+            HERDR_SOCKET_PATH: socket,
+            HERDR_WORKSPACE_ID: workspace.workspaceId,
+            FAKE_HERDR_SESSIONS: asSessions([{ name: "desk", socket_path: socket }]),
+          };
+          const started = yield* collie(
+            world,
+            ["run", "start", "proof", "--here", "--input", "note=hi"],
+            desk,
+          );
+          expect(started.envelope.ok).toBe(true);
+          const runId = yield* runIdOf(started.envelope);
+          const file = yield* newsPath(world.state, yield* herdOf(socket));
+          // Another conversation's view, so nothing Native chat read can hide an item here.
+          const keys = readNews(file).pipe(
+            Effect.map((lines) => pending(lines, "flock@pc").items.map((item) => item.key)),
+          );
+          const asked = `${runId}:asking:decision`;
+          const ended = `${runId}:ended:succeeded`;
+          yield* until(keys, (now) => now.includes(asked));
+          expect(
+            (yield* collie(world, ["run", "answer", runId, "approve"], desk)).envelope.ok,
+          ).toBe(true);
+          const answered = yield* until(keys, (now) => !now.includes(asked) && now.includes(ended));
+          expect(answered).toEqual([ended]);
+          const disposed = yield* collie(
+            world,
+            ["run", "disposition", runId, "--as", "merged", "--ref", "mk/project!7"],
+            desk,
+          );
+          expect(disposed.envelope.ok).toBe(true);
+          const after = yield* until(keys, (now) => now.length === 0);
+          // Two more rounds, so a retired cause said again would show.
+          yield* Effect.sleep("11 seconds");
+          const lines = yield* readNews(file);
+          yield* stopHost(world.state);
+          expect(after).toEqual([]);
+          // Retired, and kept: the journal still says what was news and that it stopped being.
+          expect(
+            lines.flatMap((line) => (line.kind === "superseded" ? [line.key] : [])).sort(),
+          ).toEqual([asked, ended].sort());
+          expect(lines.filter((line) => line.kind === "item").map((line) => line.key)).toEqual([
+            asked,
+            ended,
+          ]);
+        }),
+      ["proof.workflow.ts", "helper.ts", "notes.md"],
     ),
   120_000,
 );

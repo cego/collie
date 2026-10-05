@@ -13,6 +13,7 @@ import {
   chatHarnessOf,
   chatPath,
   DEFAULT_CHAT_HARNESS,
+  hear,
   isChatHarness,
   pushable,
   readChat,
@@ -21,18 +22,19 @@ import {
 import { writeConfigValue } from "../config";
 import {
   asText as newsText,
+  NATIVE,
   newsPath,
   pending as pendingNews,
   read as readNews,
-  settle as settleNews,
   uncertain as uncertainNews,
 } from "../news";
 import { claudeSettingsPath, installStatusLine, promptLineFor, statusLineFor } from "../statusline";
-import { err } from "../operations";
+import { err, newRequestId } from "../operations";
+import { settleNewsFor } from "../lifecycle";
 import { herdOf } from "../steering";
 import { isJsonObject } from "../schema";
 import { TOOLS, toolNamed } from "../tools";
-import { UnknownJson, answering, requestIdFlag } from "./shared";
+import { UnknownJson, answering, requestIdFlag, stdinText } from "./shared";
 import { mutation } from "../envelope";
 
 /**
@@ -140,13 +142,23 @@ const news = Command.make(
       Effect.gen(function* () {
         const key = yield* herdOf(env.socketPath).pipe(Effect.catch(() => Effect.succeed(null)));
         if (key === null) return err("invalid_state", "Collie cannot reach herdr.");
-        const file = yield* newsPath(env.stateDir, key);
-        const batch = pendingNews(yield* readNews(file));
         // `sent` and `uncertain` are facts about a transport, never about a conversation.
         // Only `collie_news` being read settles an item, because only that shows it
         // arrived somewhere that could act on it.
-        for (const item of batch.items)
-          if (sent || unsure) yield* settleNews(file, item.key, unsure ? "uncertain" : "sent");
+        const settled =
+          sent || unsure
+            ? yield* settleNewsFor(env, {
+                door: "chat",
+                herd: key,
+                conversation: NATIVE,
+                as: unsure ? "uncertain" : "sent",
+                request: yield* newRequestId(),
+              })
+            : null;
+        if (settled !== null && !settled.ok) return settled;
+        const batch =
+          settled?.value ??
+          pendingNews(yield* readNews(yield* newsPath(env.stateDir, key)), NATIVE);
         return {
           ok: true as const,
           data: { count: batch.items.length, omitted: batch.omitted, text: newsText(batch) },
@@ -197,6 +209,16 @@ const context = Command.make("context", {}, () =>
     Effect.map(promptLineFor(env), (line) => ({ ok: true as const, data: { line }, human: line })),
   ),
 ).pipe(Command.withDescription("The board's selection, as a chat prompt's context"));
+
+/** Claude Code's other prompt hook: hands the prompt on stdin to the tool host. */
+const heard = Command.make("heard", {}, () =>
+  answering((env) =>
+    Effect.gen(function* () {
+      yield* hear(env, yield* stdinText);
+      return { ok: true as const, data: {}, human: "" };
+    }),
+  ),
+).pipe(Command.withDescription("Keep this turn's prompt for chat's actions (Claude's hook)"));
 
 const list = Command.make("list", {}, () =>
   answering(() =>
@@ -252,7 +274,7 @@ export const tools = Command.make("tools").pipe(
 
 export const chat = Command.make("chat").pipe(
   Command.withDescription(`The Home's native conversation (default ${DEFAULT_CHAT_HARNESS})`),
-  Command.withSubcommands([status, harness, news, statusLine, context]),
+  Command.withSubcommands([status, harness, news, statusLine, context, heard]),
 );
 
 /**

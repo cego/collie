@@ -130,6 +130,10 @@
               {
                 "name": "effect/unstable/http",
                 "message": "Import the module you use (`effect/unstable/http/HttpClient`): the index loads the server too."
+              },
+              {
+                "name": "effect/unstable/ai",
+                "message": "Import the module you use (`effect/unstable/ai/Tool`): the index loads McpServer and LanguageModel into every chat hook."
               }
             ]
           }

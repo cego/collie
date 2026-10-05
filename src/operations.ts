@@ -54,6 +54,7 @@ import {
   record as recordProposal,
   type Recorded,
   type Actor,
+  type Voice,
 } from "./proposals";
 import { openReports, readDrift } from "./drift";
 import { readCards } from "./cards";
@@ -508,6 +509,7 @@ export const clearOverride = Effect.fn("operations.clearOverride")(function* (
   agent: string,
   /** Who is lifting it, as `actorName` writes it. Derived at the front door, never here. */
   by: string,
+  voice: Voice = {},
 ) {
   const live: AgentInfo[] = yield* herdr.agentList().pipe(Effect.catch(() => Effect.succeed([])));
   const terminalId = live.find((a) => a.name === agent)?.terminalId ?? null;
@@ -521,6 +523,7 @@ export const clearOverride = Effect.fn("operations.clearOverride")(function* (
     at: yield* nowIso(),
     incarnation: terminalId,
     by,
+    ...voice,
   });
   return ok({ runId, agent }, `Cleared the manual override on ${agent}.`);
 });

@@ -106,6 +106,8 @@ const OverrideSchema = Schema.Struct({
   incarnation: Schema.String,
   by: Schema.String,
   note: Schema.optionalKey(Schema.String),
+  conversation: Schema.optionalKey(Schema.String),
+  said: Schema.optionalKey(Schema.String),
 });
 export type Override = Schema.Schema.Type<typeof OverrideSchema>;
 

@@ -4,7 +4,8 @@
 slice: the two-pane Home, the harness preference, the bounded read contract, and the two
 transport adapters. The amendment is "Chat may do what the human could do on the board"
 below, which replaces this ADR's original rule that chat's write tools carry nothing out,
-and "Amended 2026-09-29: chat may choose what proves a Run".
+"Amended 2026-09-29: chat may choose what proves a Run", and "Amended 2026-10-02: the
+tools are one Effect Toolkit".
 
 The Herd's conversation is an ordinary Claude Code or Pi session running in the Home's
 right-hand pane. Collie does not implement a chat.
@@ -159,6 +160,15 @@ agent acting on a misread wish does damage the human never intended.
 Attribution is unchanged, and it is audit, never a gate: chat's tools record `chat`. A
 `collie` command chat runs from its shell inherits the pane's terminal and is recorded as
 human — a known gap in the record, not a permission.
+
+## Amended 2026-10-02: the tools are one Effect Toolkit
+
+The contract is one Effect `Toolkit`, so a second conversation can be given exactly the
+tools this one has. Each tool states its parameters as an Effect Schema, which is both what
+a harness is shown and what every call is decoded with, strictly. Each answers a failure as
+a sentence rather than an error, and none needs approval. The MCP server registers the
+Toolkit's tools itself rather than through `McpServer.toolkit`, which answers in JSON and
+turns a refusal into a protocol error.
 
 ## What has actually been proven
 

@@ -3,7 +3,7 @@
 //
 // A transport adapter and nothing more. Effect serves the MCP protocol over this
 // process's stdin and stdout, started by the chat launch with `--mcp-config`, and it
-// exposes exactly what `TOOLS` exposes. There is no port, no daemon and no second
+// exposes exactly what the `CollieTools` Toolkit does. There is no port, no daemon and no second
 // orchestration service: the server lives as long as the chat that started it, and every
 // answer it gives is a read through the shared operations.
 
@@ -20,13 +20,15 @@ import {
   Ref,
   Schema,
 } from "effect";
-import { McpProtocol, McpSchema, McpServer } from "effect/unstable/ai";
+import * as McpProtocol from "effect/unstable/ai/McpProtocol";
+import * as McpSchema from "effect/unstable/ai/McpSchema";
+import * as McpServer from "effect/unstable/ai/McpServer";
 import manifest from "../herdr-plugin.toml";
 import { currentEnv } from "./env";
 import { replacedOnDisk } from "./flows";
 import { shell } from "./mr";
 import { isJsonObject, type JsonObject } from "./schema";
-import { TOOLS } from "./tools";
+import { callTool, TOOLS } from "./tools";
 
 /**
  * Serve until stdin closes. Nothing is written to stdout but the protocol — a stray log
@@ -39,13 +41,12 @@ export const serveMcp = Effect.fn("Mcp.serve")(
     const server = yield* McpServer.McpServer;
     const answer = yield* answering({
       binary: process.execPath,
-      direct: (name, input) =>
-        (TOOLS.find((tool) => tool.name === name)?.call(env, input) ?? Effect.succeed("")).pipe(
-          Effect.provideContext(services),
-        ),
+      direct: (name, input) => callTool(env, name, input).pipe(Effect.provideContext(services)),
       rebuilt: (name, input) =>
         rebuiltAnswer(process.execPath, env.cwd, name, input).pipe(Effect.provideContext(services)),
     });
+    // Not `McpServer.toolkit`, which answers in JSON and refuses bad input as a protocol
+    // error: chat is answered in sentences, a refusal included.
     for (const tool of TOOLS) {
       const descriptor = yield* Schema.decodeUnknownEffect(McpSchema.Tool)({
         name: tool.name,

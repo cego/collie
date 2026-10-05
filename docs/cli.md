@@ -684,7 +684,10 @@ opened somewhere else carries no line about a board it is nowhere near.
 `chat context` is the same fact for the conversation: the Home's Claude Code runs it as a
 `UserPromptSubmit` hook, so each message you send carries one line naming the open card,
 and nothing at all while none is open. You never type it, and it is wired per launch —
-nothing in your own Claude Code settings changes.
+nothing in your own Claude Code settings changes. A second hook beside it, `chat heard`,
+hands each message you send to Collie's tool host, so what `collie_do` carries out that
+turn is recorded with your words; the same command on Claude's `Stop` hook forgets them
+when the turn ends, and a message from any other Claude session is not used.
 
 `tools` is the same contract native chat is given, and it is the whole of what chat can
 reach. Claude gets it over a local MCP server (`collie mcp`, which you never type) and Pi
@@ -698,7 +701,7 @@ through a generated extension; this is the third way in.
 | `collie_receipts`     | One run's pending proposals, and what state each message to its agents actually reached     |
 | `collie_definitions`  | The Workflows and Personas there are; one resolved and checked, or one Persona's body       |
 | `collie_installation` | What Collie needs, which workspace the Home is, what a cleanup would close, the defaults    |
-| `collie_news`         | What has happened that nobody has been told, and reading it settles those items             |
+| `collie_news`         | What this conversation has not been told; reading it settles those items for it             |
 | `collie_hold`         | Hold a run, or every unfinished run in a workspace, until someone releases it               |
 | `collie_do`           | Carry out, at once, a board action or decision on a named run the human asked for           |
 | `collie_propose`      | Carry out the rest of what the human can ask for, with a request id that makes retries safe |
@@ -1420,7 +1423,8 @@ the first host to own the directory, and survives restarts and upgrades.
 
 The host also runs what nobody has to have a pane open for: the merge watch, which asks
 GitLab about each waiting merge request every 5 minutes and records a merge; each Herd's
-News; and worktree pruning, every 3 minutes.
+News, which it also supersedes once an item's cause no longer holds; and worktree
+pruning, every 3 minutes.
 
 The operations that change a Run are on `FrontDoorRpcs` too: `start`, `answer`, `control`
 (a hold or a stop, set or cleared, and every watcher hears about it), `resume` and
@@ -1431,7 +1435,9 @@ Actor and what came of it ([ADR-0039](adr/0039-every-operation-records-who-asked
 channel that declares nothing is `cli`. `declare` may also carry `session`, the herdr
 session socket the front door runs in: a confirmed, asked or proposed action looks its
 workspaces, panes and Herd up there. A channel that names none has them looked up in the
-session the host was started from.
+session the host was started from. A `chat` channel may carry `conversation` and `said`,
+the human's message that turn as its tool host heard it; the host puts both in the Actor of
+everything done on that channel, the executors' own operations included.
 
 So are the ones that write anything else: `confirm` (a proposal's id and content hash) and
 `decline` (its id and content hash too), recorded in its Herd's proposals journal under the Actor; `dispose`,
@@ -1441,10 +1447,12 @@ Workflow declares; `propose`, which records what chat was asked for as a proposa
 carries it out; `act`, which carries out the board's own actions on a Run (`stop`, `resume`,
 `release`, `hold`, `answer`, `deliver`, `followup`, `start`) with no proposal, anything else
 being refused as `propose`'s; `reconcile`, which settles a proposal step nobody can account
-for; and `settleDelivery`, which does the same for a message to an agent. Actions travel as
+for; `settleDelivery`, which does the same for a message to an agent; and `news`, which
+hands one conversation its Herd's pending News and records it `read`, `sent` or
+`uncertain` for that conversation alone. Actions travel as
 JSON and the host decodes them. `collie confirm`, `decline`, `steer`, `run disposition`,
-`proposal reconcile` and `run deliveries --reconcile`, the board and chat's tools all go
-through these, so the host is the only writer of what they record
+`proposal reconcile`, `run deliveries --reconcile` and `chat news --sent`, the board and
+chat's tools all go through these, so the host is the only writer of what they record
 ([ADR-0040](adr/0040-the-host-is-the-only-writer.md)).
 
 `runDetail` streams one Run's details while a drawer is open — intent, plan, review,

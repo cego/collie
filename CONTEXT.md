@@ -58,9 +58,15 @@ history; nothing is carried between them.
 triggers only — terminal outcomes, halts, pending Choices, evidence gaps, repeated-failure
 obstacles and unresolved drift. Written from the Run's own record with no model in the
 path, so an unchanged Herd costs nothing; deduplicated by causal key, bounded into one
-batch that says what it left out. **Sent** is a transport having accepted it and **read**
+batch that says what it left out. Each Herd keeps one journal of it, and every
+conversation keeps its own receipts on it, recorded by the host: what one conversation
+read is still news to another. **Sent** is a transport having accepted it and **read**
 is the conversation having taken it — only the second settles an item, and a send nobody
-can account for stays `uncertain` for a human rather than being retried.
+can account for stays `uncertain` for a human rather than being retried. **Superseded**
+is an item whose cause no longer holds — a halt resumed, a question answered, a finished
+Run whose work has a disposition — settled by the host for every conversation that has
+not read it; it drops out of batches, an `uncertain` send of it included, and stays in the
+journal. A cause that holds again later is news again.
 
 **Collie tools** — The whole of what native chat may reach, over Collie's own shared
 operations. Most read — `collie_herd`, `collie_run`, `collie_workspaces`,
@@ -89,7 +95,9 @@ this record immediately. Unsolicited background suggestions remain pending.
 `cli-tty`, `cli`, `chat`, …) and the request id. The host records it in the Run's audit
 trail with every start, answer, hold, stop, resume, offer invoked, grant, steer,
 disposition and follow-up. `board` and
-`cli-tty` are a human; `cli-tty` needs a terminal outside any agent's pane.
+`cli-tty` are a human; `cli-tty` needs a terminal outside any agent's pane. A chat's
+`collie_do` also names its conversation and carries the human's message from that turn,
+attached by the tool host and never by the model.
 
 **Confirmation** — A command naming a Proposal's id **and** its content hash. A yes to a
 summary is not consent to a payload nobody read. Anyone may give one — a human at a
