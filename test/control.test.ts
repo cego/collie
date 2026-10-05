@@ -179,18 +179,6 @@ test(
           input: { note: "sole" },
         });
         expect(nothing.ok).toBe(true);
-        // Before the run has asked anything there is nothing to land on, and nothing is
-        // guessed at.
-        const early = yield* host.ask({
-          op: "answer",
-          id: "proof",
-          runId: "r1",
-          decision: null,
-          value: "go",
-        });
-        expect(early.ok).toBe(false);
-        expect(early.detail).toContain("is not waiting on a decision");
-
         yield* host.until({ op: "waiting", runId: "r1" }, asking("decision"));
         const answered = yield* host.ask({
           op: "answer",
@@ -203,6 +191,17 @@ test(
         expect((yield* host.until({ op: "poll", id: "proof", runId: "r1" }, complete)).value).toBe(
           "note:sole=go",
         );
+        // With its question answered there is nothing to land on, and nothing is guessed at.
+        // Checked here rather than before it asks, which races the run.
+        const after = yield* host.ask({
+          op: "answer",
+          id: "proof",
+          runId: "r1",
+          decision: null,
+          value: "stop",
+        });
+        expect(after.ok).toBe(false);
+        expect(after.detail).toContain("is not waiting on a decision");
         yield* host.stop;
       }).pipe(Effect.scoped),
     ),
