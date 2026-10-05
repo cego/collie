@@ -87,8 +87,11 @@ export class Keyboard {
   }
 }
 
-const keyboard = new Keyboard();
+// Made when a key is first wanted: reading `process.stdin` sets the stream up, and most
+// commands never take a key.
+let made: Keyboard | undefined;
+const keyboard = () => (made ??= new Keyboard());
 
-export const startKeyboard = () => keyboard.start();
-export const takeKey = () => keyboard.take();
-export const releaseKeyboard = () => keyboard.release();
+export const startKeyboard = () => keyboard().start();
+export const takeKey = () => keyboard().take();
+export const releaseKeyboard = () => keyboard().release();

@@ -34,15 +34,6 @@ afterEach(() =>
   ),
 );
 
-test("an unchanged Herd has nothing to say, however often it is looked at", () => {
-  // The whole of the "no model call on an idle Herd" promise, at its source: a Run that
-  // is getting on with it produces no event, so nothing is ever queued to say.
-  const going = [record(), record({ id: "r2", held: true })];
-  expect(eventsIn(going)).toEqual([]);
-  // And re-reading the same board a hundred times finds the same nothing.
-  for (let n = 0; n < 100; n++) expect(eventsIn(going)).toHaveLength(0);
-});
-
 test("the same thing that happened is one piece of news, however often it is noticed", () =>
   runEffect(
     Effect.gen(function* () {

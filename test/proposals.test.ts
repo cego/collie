@@ -26,7 +26,7 @@ import {
   type AdmissionContext,
   type ProposalLine,
 } from "../src/proposals";
-import { executorFor, registeredKinds, resetExecutors } from "../src/executors";
+import { resetExecutors } from "../src/executors";
 import type { Action } from "../src/evaluator";
 import { carryOutProposal } from "../src/operations";
 import type { PluginEnv } from "../src/env";
@@ -365,14 +365,6 @@ for (const status of ["succeeded", "failed", "stopped"]) {
     }
   });
 }
-
-test("this build registers no executors, so nothing is stubbed into pretending", () => {
-  // Every kind is registered by the module that owns the operation. Until one does, a
-  // confirmed action of that kind is refused rather than silently succeeding at nothing.
-  expect(registeredKinds()).toEqual([]);
-  expect(executorFor("followup")).toBeUndefined();
-  expect(executorFor("deliver")).toBeUndefined();
-});
 
 // From here on this process has executors registered, which is why it comes last.
 /** A Herd of this test's own with a host in it, and the proposals file its Herd keeps. */

@@ -161,6 +161,8 @@ const workflowCheck = Command.make(
               (one) => named === null || one.id === named,
             ),
             (one) => checkModule({ layer: one.layer, path: one.path }),
+            // Each typecheck is its own compiler process, and they share nothing.
+            { concurrency: 4 },
           );
           const bad = modules.filter((item) => item.problems.length > 0).length;
           const report = [...modules.map(moduleReport), ...toolchainNotes(modules)]

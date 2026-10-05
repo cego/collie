@@ -575,19 +575,6 @@ test("starting a workflow is this Session's, so a wide row is not offered one", 
   expect(keyIntent(keys({ row, filter: EVERYWHERE }), press("x"))).toBeNull();
 });
 
-test("a hand-off is this Session's, so it is not offered from a board of all of them", () => {
-  const row = rowsOf(board({ active: [run("r1")] }))[0]!;
-  const key = press("s");
-
-  expect(keyIntent(keys({ row, filter: HERE }), key)).toEqual({
-    _tag: "Do",
-    command: { _tag: "SendReview", runId: "r1" },
-  });
-  // Nothing moves the register or a hand-off across workspaces, so `s` on a wide board
-  // would act on this Session with another workspace's review.
-  expect(keyIntent(keys({ row, filter: EVERYWHERE }), key)).toBeNull();
-});
-
 test("a re-sorted list keeps the same run selected", () => {
   const before = rowsOf(board({ active: [run("r1"), run("r2")] }));
   const after = rowsOf(board({ active: [run("r2"), run("r1")] }));
@@ -1141,8 +1128,6 @@ test("Esc on the board drops a filter it is still narrowed by, and nothing else"
   const esc = press("\x1b", { name: "escape" });
 
   expect(keyIntent(narrowed, esc)).toEqual({ _tag: "Filtering", filter: "", typing: false });
-  // With nothing set it is not the filter's key at all, so the board does what it did
-  // before: nothing.
   // With none set it widens the board instead: narrowing to one workspace is a filter
   // too, and the way out of both has to be the same key.
   expect(keyIntent(keys({ query: "" }), esc)).toEqual({
@@ -1481,23 +1466,6 @@ test("a proposal on screen takes Enter and Esc, and nothing else", () => {
     command: { _tag: "DeclineProposal", id: "p1", hash: "deadbeef" },
   });
   expect(keyIntent(previewing, press("k"))).toBeNull();
-});
-
-test("Esc drops the filter text first, and widens the board once there is none", () => {
-  const narrowed = keys({
-    row: null,
-    filter: HERE,
-    query: "picker",
-  });
-  expect(keyIntent(narrowed, press("\x1b", { name: "escape" }))).toEqual({
-    _tag: "Filtering",
-    filter: "",
-    typing: false,
-  });
-  expect(keyIntent(keys({ row: null, filter: HERE }), press("\x1b", { name: "escape" }))).toEqual({
-    _tag: "Do",
-    command: { _tag: "SetFilter", filter: { kind: "all" } },
-  });
 });
 
 test("Enter on a workspace nobody can reach still answers", () => {

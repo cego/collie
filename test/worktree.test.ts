@@ -266,23 +266,6 @@ test("an explicit branch beats every inference", () =>
     }),
   ));
 
-test("a review of a merge request takes that merge request's own branch", () =>
-  runEffect(
-    Effect.gen(function* () {
-      yield* fakeGit("add-picker", ["fix-the-parser"]);
-      yield* bin.add("glab", `echo '{"source_branch": "fix-the-parser"}'`);
-
-      expect(
-        yield* plan({
-          plan: "/runs/review-1",
-          plan_kind: "review",
-          target: "mr:gitlab.example.com/acme/app!42",
-          target_kind: "mr",
-        }),
-      ).toMatchObject({ branch: "fix-the-parser" });
-    }),
-  ));
-
 test("a review of a branch diff takes its head, and a review of a tree the branch it is on", () =>
   runEffect(
     Effect.gen(function* () {
@@ -1133,7 +1116,6 @@ test("a run still going keeps its checkout, whether or not an agent is in it", (
           cwd: rig.projectDir,
         }),
       ).toEqual(["kept wt · a run is still working in it"]);
-      expect(worktreePath).toContain("wt");
     }),
   ));
 

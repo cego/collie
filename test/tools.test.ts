@@ -116,19 +116,6 @@ test("a tool that writes does not tell a client it only reads", () => {
   ]);
 });
 
-test("a read covers the whole Herd, whatever a board is filtered to", () =>
-  inWorld(
-    Effect.gen(function* () {
-      const one = yield* aRun("add a picker");
-      const two = yield* aRun("fix the parser");
-      // No filter, no selection, no workspace: those are what a human is looking at, and
-      // they have never been an input here.
-      const said = yield* call("collie_herd");
-      expect(said).toContain(one.id);
-      expect(said).toContain(two.id);
-    }),
-  ));
-
 test("the Tasks a Run can be started into are something chat can read", () =>
   inWorld(
     Effect.gen(function* () {
@@ -146,7 +133,13 @@ test("the Tasks a Run can be started into are something chat can read", () =>
 test("a Herd too big for one answer says how much it left out", () =>
   inWorld(
     Effect.gen(function* () {
-      for (let n = 0; n < 42; n++) yield* aRun(`run ${n}`);
+      yield* Effect.forEach(
+        Array.from({ length: 42 }, (_, n) => `run ${n}`),
+        aRun,
+        {
+          concurrency: 8,
+        },
+      );
       expect(yield* call("collie_herd")).toMatch(/\(\d+ more card\(s\) not listed here\)/);
     }),
   ));

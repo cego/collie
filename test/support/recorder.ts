@@ -14,7 +14,7 @@ import {
 } from "effect";
 import { readEnv, type PluginEnv } from "../../src/env";
 import { Herdr } from "../../src/herdr";
-import { fakeHerdr } from "./fake-herdr-core";
+import { fakeHerdr, fakeHerdrCommand } from "./fake-herdr-core";
 
 const JsonString = Schema.fromJsonString(Schema.Json);
 const JsonObjectString = Schema.fromJsonString(Schema.JsonObject);
@@ -225,9 +225,13 @@ export class Rig {
       for (const dir of dirs) {
         yield* fs.makeDirectory(dir, { recursive: true });
       }
-      yield* fs.writeFileString(binPath, `#!/bin/sh\nexec bun ${fakeHerdrPath} "$@"\n`, {
-        mode: 0o755,
-      });
+      yield* fs.writeFileString(
+        binPath,
+        `#!/bin/sh\nexec ${fakeHerdrCommand(fakeHerdrPath)} "$@"\n`,
+        {
+          mode: 0o755,
+        },
+      );
     });
   }
 
@@ -469,6 +473,9 @@ export class Rig {
     const logPath = this.logPath;
     const socketPath = this.socketPath;
     const requestsFrom = this.requestsFrom.bind(this);
+    // herdr pushes when something changes, and nothing changes again here: a push on
+    // every subscription is a stream of changes faster than the host's debounce lets out.
+    let pushed = false;
     const setFiber = (fiber: Fiber.Fiber<void>) => {
       this.socketFiber = fiber;
     };
@@ -531,13 +538,19 @@ export class Rig {
                       )}\n`,
                     );
                     // A subscription herdr has something to say on at once.
-                    if (req.method === "events.subscribe" && Bun.env.FAKE_HERDR_PUSH_EVENT === "1")
+                    if (
+                      req.method === "events.subscribe" &&
+                      Bun.env.FAKE_HERDR_PUSH_EVENT === "1" &&
+                      !pushed
+                    ) {
+                      pushed = true;
                       socket.write(
                         `${encodeJson({
                           event: "pane.agent_status_changed",
                           data: { pane_id: "1-1", workspace_id: "w1", agent_status: "blocked" },
                         })}\n`,
                       );
+                    }
                   },
                   fail: () =>
                     socket.write(

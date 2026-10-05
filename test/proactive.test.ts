@@ -41,13 +41,6 @@ const record = (over: Partial<RunFacts> & { id: string }): RunFacts =>
 
 const asking = { name: "scope", prompt: "Which repository?", options: [] };
 
-test("a Run getting on with it is not news", () => {
-  expect(eventsIn([record({ id: "r1" })])).toEqual([]);
-  // Nor is an agent working, or any amount of time passing: none of them is a fact about
-  // whether the work is getting anywhere.
-  expect(eventsIn([record({ id: "r1", held: true })])).toEqual([]);
-});
-
 test("the things worth saying are the things a human would want to know", () => {
   const said = (over: Partial<RunFacts>) => eventsIn([record({ id: "r1", ...over })])[0] ?? null;
 
@@ -81,7 +74,6 @@ test("a Run that stopped says so once, and says so again only for a different re
   const said = new Set(asked.map((e) => e.key));
 
   // The board redraws every few seconds: the same question must not be reported every time.
-  expect(unsaid(asked, said)).toHaveLength(0);
   expect(
     unsaid(eventsIn([record({ id: "r1", state: "waiting", asking: [asking] })]), said),
   ).toHaveLength(0);

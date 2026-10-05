@@ -55,6 +55,11 @@ await Bun.build({
   target: "bun",
   plugins: [solidPlugin],
   define: { "process.env.OPENTUI_LIBC": JSON.stringify(libc) },
+  // Compiled ahead rather than parsed at every start: a start is a quarter of a second
+  // instead of most of one, and hooks, agents and the board start one constantly. ESM,
+  // because `@opentui/core` awaits at its top level, which bytecode's default CJS cannot.
+  bytecode: true,
+  format: "esm",
   compile: { target, outfile: staging },
 });
 

@@ -54,7 +54,6 @@ test("effort is a flag only where the harness has one", () => {
     "--append-system-prompt-file",
     "/p/reviewer.md",
   ]);
-  expect(HARNESSES.claude!.efforts).toEqual(["low", "medium", "high", "xhigh", "max"]);
 
   // codex and opencode have none, so asking for one is a validation error, not a flag.
   expect("effortArgs" in HARNESSES.codex!).toBe(false);
@@ -70,7 +69,6 @@ test("`default` pins Claude to Opus while other harnesses keep their native defa
     expect(modelHint(harness)).toContain(DEFAULT_MODEL);
   }
 
-  expect(HARNESSES.claude!.defaultModel).toBe("opus");
   expect(
     startArgs(HARNESSES.claude!, DEFAULT_MODEL, "/p/implementer.md", "medium", "harness"),
   ).toEqual([

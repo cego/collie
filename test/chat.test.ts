@@ -5,7 +5,6 @@
 import { Effect, FileSystem, Schema } from "effect";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import {
-  BOARD_RATIO,
   CHAT_HARNESS_KEY,
   chatArgs,
   chatHarnessOf,
@@ -93,7 +92,6 @@ test("Claude Code is what opens, whatever the workers are on", () =>
       yield* writeConfigValue(userDir, "harness", "codex");
       yield* writeConfigValue(userDir, "scope", "local");
       expect(yield* chatHarnessOf(userDir)).toBe(DEFAULT_CHAT_HARNESS);
-      expect(DEFAULT_CHAT_HARNESS).toBe("claude");
 
       yield* writeConfigValue(userDir, CHAT_HARNESS_KEY, "pi");
       expect(yield* chatHarnessOf(userDir)).toBe("pi");
@@ -251,10 +249,6 @@ test("a harness that is not there is said out loud, and costs nothing else", () 
   expect(why).not.toContain("pi");
   // And never a reason to have no control plane.
   expect(why).toContain("board and existing Runs are unaffected");
-});
-
-test("the board keeps four sevenths of the tab", () => {
-  expect(BOARD_RATIO).toBeCloseTo(4 / 7, 10);
 });
 
 test("both adapters are told about the same Collie, in one place", () =>

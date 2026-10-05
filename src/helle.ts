@@ -7,7 +7,9 @@
 // read from the same environment file the MCP wrapper sources.
 
 import { Data, Effect, FileSystem, Schema } from "effect";
-import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http";
+import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
+import * as HttpClient from "effect/unstable/http/HttpClient";
+import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
 import { reason } from "./naming";
 
 export class HelleError extends Data.TaggedError("HelleError")<{

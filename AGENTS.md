@@ -179,7 +179,7 @@ herdr actions, and the `collie` CLI.
 - **Changing what a shipped workflow does** →
   [ADR-0026](docs/adr/0026-a-shipped-workflow-is-a-module-like-any-other.md) and
   [`docs/sdk.md`](docs/sdk.md), alongside `workflows/*.workflow.ts`, their Markdown beside
-  them and `test/baseline.test.ts`. All five are modules loaded through the public
+  them and the scenarios in `test/support/baseline.ts`. All five are modules loaded through the public
   contract: the Markdown is content, what happens is TypeScript, and what each one proves
   and offers is its own declaration rather than its name. One that expects to be varied —
   `renovate` — takes the varying steps as ordinary functions, so a fork supplies three and
@@ -194,8 +194,9 @@ herdr actions, and the `collie` CLI.
   are resolved together, layer over layer, and recorded before an agent starts.
 - **Adding anything in `src/` that looks at a workflow's id** →
   [ADR-0029](docs/adr/0029-one-host-acts-for-a-run-and-a-workflows-name-decides-nothing.md),
-  alongside `test/workflow-names.test.ts` and `test/baseline.test.ts`, whose every
-  scenario also runs under an id that shares nothing with the shipped one. Decide from a
+  alongside `test/workflow-names.test.ts` and `test/support/baseline.ts`, whose every
+  scenario also runs under an id that shares nothing with the shipped one
+  (`test/baseline-unrelated.test.ts`). Decide from a
   fact or a declaration; a module composing by id is fine, Collie dispatching on one is not.
 - **Changing how a run is executed, coordinated, or recorded** →
   [`docs/internals.md`](docs/internals.md) and [`docs/adr/`](docs/adr).

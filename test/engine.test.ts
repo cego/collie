@@ -6,7 +6,8 @@
 // a missing module leave work recoverable — have no answer in an in-memory engine.
 
 import { expect, test } from "bun:test";
-import { Effect, FileSystem, Layer, Schema, Scope } from "effect";
+import { Effect, Exit, FileSystem, Layer, Option, Schema } from "effect";
+import { TestClock } from "effect/testing";
 import * as WorkflowEngine from "effect/unstable/workflow/WorkflowEngine";
 import * as Workflow from "effect/unstable/workflow/Workflow";
 import { engineLayer, TOOLCHAIN } from "../src/engine";
@@ -16,6 +17,9 @@ import { HostReply, events, fixtures, openHost, root, until, workspace } from ".
 const stopsIn = (log: ReadonlyArray<string>) => log.filter((line) => line === "stopped").length;
 
 const suspended = (reply: typeof HostReply.Type) => reply.status === "suspended";
+
+/** What a `checks` reply carries: each entry asked about, with its problems. */
+const Problems = Schema.Record(Schema.String, Schema.Array(Schema.String));
 
 /** The run has reached its question and the host knows it, so an answer has one to land on. */
 const asking = (reply: typeof HostReply.Type) => (reply.diagnostics ?? []).includes("decision");
@@ -285,6 +289,9 @@ test(
         yield* hostOne.ask({ op: "start", id: "proof", runId: "shared", input: { note: "one" } });
         const elsewhere = yield* hostTwo.ask({ op: "poll", id: "proof", runId: "shared" });
         expect(elsewhere.ok).toBe(false);
+        // Stopped once it waits: a host stopped mid-step gives the step upstream's fifteen
+        // seconds to end, and this test is not about that.
+        yield* hostOne.until({ op: "poll", id: "proof", runId: "shared" }, suspended);
         yield* hostOne.stop;
         yield* hostTwo.stop;
       }).pipe(Effect.scoped),
@@ -293,7 +300,7 @@ test(
 );
 
 test(
-  "the provisioned toolchain typechecks a module, and says where a broken one is wrong",
+  "the provisioned toolchain typechecks every module against the declarations an author is given, and says where a broken one is wrong",
   () =>
     runEffect(
       Effect.gen(function* () {
@@ -318,19 +325,47 @@ test(
         expect(clean.diagnostics).toEqual([]);
 
         // One module's error says nothing about another's: the broken one names its own
-        // file and line, and the entry beside it still checks clean.
-        const broken = yield* host.ask({ op: "check", dir: wf, entry: `${wf}/broken.workflow.ts` });
-        expect(broken.diagnostics?.join("\n")).toContain("broken.workflow.ts(");
-        const beside = yield* host.ask({ op: "check", dir: wf, entry: `${wf}/plain.workflow.ts` });
-        expect(beside.diagnostics).toEqual([]);
-        // A definition is typechecked against the same declarations authors are given.
-        for (const defined of ["hello", "quiet", "branches", "delegates", "declines"]) {
-          const checked = yield* host.ask({
-            op: "check",
-            dir: wf,
-            entry: `${wf}/${defined}.workflow.ts`,
-          });
-          expect(checked.diagnostics).toEqual([]);
+        // file and line, and the entries beside it still check clean.
+        const beside = [
+          "plain",
+          // Definitions, typechecked against the same declarations authors are given.
+          "hello",
+          "quiet",
+          "branches",
+          "delegates",
+          "declines",
+          // The examples an author is given.
+          "echo",
+          "unwired",
+          "agent",
+          "rally",
+          "reviewed",
+          "graded",
+          "roster",
+          "sweep",
+          "spread",
+          "share",
+          "offered",
+          "planned",
+          // A fork of a shipped workflow, which is code an author writes the same way.
+          "landing",
+          // The shipped five, held to the same declarations: a workflow Collie ships is
+          // a module an author could have written, or the contract is two contracts.
+          "plan",
+          "review",
+          "architecture",
+          "implement",
+          "renovate",
+        ];
+        const checked = yield* host.ask({
+          op: "checks",
+          entries: ["broken", ...beside].map((name) => `${wf}/${name}.workflow.ts`),
+        });
+        expect(checked.ok).toBe(true);
+        const problems = Schema.decodeUnknownSync(Problems)(checked.value);
+        expect(problems[`${wf}/broken.workflow.ts`]?.join("\n")).toContain("broken.workflow.ts(");
+        for (const name of beside) {
+          expect([name, problems[`${wf}/${name}.workflow.ts`]]).toEqual([name, []]);
         }
         yield* host.stop;
       }).pipe(Effect.scoped),
@@ -353,79 +388,64 @@ test("the Effect an author's declarations come from is the one the host runs", (
     }),
   ));
 
-test(
-  "registering one name twice keeps the first, which is why a generation gets its own name",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-engine-duplicate-" });
-        const workflow = Workflow.make("duplicate", {
+test("work for a workflow nobody has registered waits past upstream's deadline for it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-engine-deadline-" });
+      const flow = (name: string) =>
+        Workflow.make(name, {
           payload: { runId: Schema.String },
           idempotencyKey: (payload) => payload.runId,
           success: Schema.String,
         });
-        const body = (answer: string) => workflow.toLayer(() => Effect.succeed(answer));
+      const patient = flow("patient");
+      const sibling = flow("sibling");
+      const payload = { runId: "r1" };
+      const executionId = yield* patient.executionId(payload);
+      // In-process, so the minute upstream would fail it after passes on a test clock.
+      const session = <A, E>(
+        registered: Layer.Layer<never, never, WorkflowEngine.WorkflowEngine>,
+        body: Effect.Effect<A, E, WorkflowEngine.WorkflowEngine | TestClock.TestClock>,
+      ) =>
+        body.pipe(
+          Effect.provide(registered),
+          Effect.provide(engineLayer({ dir })),
+          Effect.provide(TestClock.layer()),
+          Effect.scoped,
+          Effect.orDie,
+        );
 
-        // Upstream's answer, recorded rather than assumed. Registering a name a second
-        // time neither fails nor replaces anything: the first body keeps the name and the
-        // second is silently ignored. Duplicate registration is therefore not a reload
-        // API, which is why loading a file again mints a registration of its own.
-        const ran = yield* Effect.gen(function* () {
-          const scope = yield* Scope.make();
-          yield* Layer.buildWithScope(body("first"), scope);
-          yield* Layer.buildWithScope(body("second"), scope);
-          const engine = yield* WorkflowEngine.WorkflowEngine;
-          return yield* engine.execute(workflow, {
-            executionId: yield* workflow.executionId({ runId: "r1" }),
-            payload: { runId: "r1" },
-          });
-        }).pipe(Effect.provide(engineLayer({ dir })), Effect.scoped, Effect.orDie);
-        expect(ran).toBe("first");
-      }).pipe(Effect.scoped),
-    ),
-  120_000,
-);
+      // Its module is missing while another one loaded, which is when upstream's
+      // registration window starts; three minutes is past it whichever way it counts.
+      const waiting = yield* session(
+        sibling.toLayer(() => Effect.succeed("ran")),
+        Effect.gen(function* () {
+          yield* patient.execute(payload, { discard: true });
+          for (let step = 0; step < 36; step++) {
+            yield* TestClock.adjust("5 seconds");
+            // The engine's storage reads are real IO between ticks.
+            yield* TestClock.withLive(Effect.sleep("2 millis"));
+          }
+          return yield* patient.poll(executionId);
+        }),
+      );
+      expect(Option.isNone(waiting)).toBe(true);
 
-test(
-  "a run whose module is missing outlasts the deadline a default host would fail it on",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const { wf, state } = yield* workspace("collie-engine-deadline-");
-        const first = yield* openHost(state);
-        yield* first.ask({ op: "load", entry: `${wf}/proof.workflow.ts` });
-        yield* first.ask({ op: "start", id: "proof", runId: "r1", input: { note: "patient" } });
-        yield* first.until({ op: "poll", id: "proof", runId: "r1" }, suspended);
-        yield* first.stop;
-
-        yield* fs.remove(`${wf}/proof.workflow.ts`);
-        const second = yield* openHost(state);
-        // Longer than upstream's one-minute entityRegistrationTimeout, which this host
-        // does not use: the point of the setting is that waiting is not a failure.
-        yield* Effect.sleep("70 seconds");
-        yield* fs.copyFile(`${fixtures}/proof.workflow.ts`, `${wf}/proof.workflow.ts`);
-        yield* second.stop;
-
-        const third = yield* openHost(state);
-        yield* third.ask({
-          op: "answer",
-          id: "proof",
-          runId: "r1",
-          decision: "decision",
-          value: "late",
-        });
-        const done = yield* third.until({ op: "poll", id: "proof", runId: "r1" }, complete);
-        expect(done.value).toBe("note:patient=late");
-        yield* third.stop;
-        expect(
-          (yield* events(state, "r1")).filter((line) => line.startsWith("launch")),
-        ).toHaveLength(1);
-      }).pipe(Effect.scoped),
-    ),
-  240_000,
-);
+      const done = yield* session(
+        patient.toLayer(() => Effect.succeed("recovered")),
+        TestClock.withLive(
+          until(
+            () => patient.poll(executionId),
+            (result) => Option.isSome(result) && result.value._tag === "Complete",
+          ),
+        ),
+      );
+      expect(Option.isSome(done) && done.value._tag === "Complete" && done.value.exit).toEqual(
+        Exit.succeed("recovered"),
+      );
+    }).pipe(Effect.scoped),
+  ));
 
 test(
   "a host killed mid-run leaves the work suspended rather than failed, and the next one finishes it",
@@ -616,45 +636,4 @@ test(
       }).pipe(Effect.scoped),
     ),
   120_000,
-);
-
-test(
-  "the example module typechecks against the declarations an author is given",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const { wf, state } = yield* workspace("collie-engine-sdk-types-");
-        const host = yield* openHost(state);
-        expect((yield* host.ask({ op: "provision", dir: wf })).ok).toBe(true);
-        for (const entry of [
-          "echo.workflow.ts",
-          "unwired.workflow.ts",
-          "proof.workflow.ts",
-          "agent.workflow.ts",
-          "rally.workflow.ts",
-          "reviewed.workflow.ts",
-          "graded.workflow.ts",
-          "roster.workflow.ts",
-          "sweep.workflow.ts",
-          "spread.workflow.ts",
-          "share.workflow.ts",
-          "offered.workflow.ts",
-          "planned.workflow.ts",
-          // A fork of a shipped workflow, which is code an author writes the same way.
-          "landing.workflow.ts",
-          // The shipped five, held to the same declarations: a workflow Collie ships is
-          // a module an author could have written, or the contract is two contracts.
-          "plan.workflow.ts",
-          "review.workflow.ts",
-          "architecture.workflow.ts",
-          "implement.workflow.ts",
-          "renovate.workflow.ts",
-        ]) {
-          const checked = yield* host.ask({ op: "check", dir: wf, entry: `${wf}/${entry}` });
-          expect([entry, checked.diagnostics]).toEqual([entry, []]);
-        }
-        yield* host.stop;
-      }).pipe(Effect.scoped),
-    ),
-  300_000,
 );

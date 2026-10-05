@@ -604,22 +604,34 @@ resolves the default state directory under the real home. A host a test starts i
 that environment. A test that needs herdr sets up the fake under `test/support/`;
 `test/isolation.test.ts` fails if the live socket or home gets through.
 
-`bun run test` uses [Bun's process-parallel runner](https://bun.com/docs/test/parallel)
-with four workers and a fresh global per file. Tests within each file stay sequential:
-fixtures change environment variables and prototypes, so `--concurrent` is not safe here.
-For debugging, `bun test ./test/engine-e2e.test.ts` runs one file without workers.
+`bun run test` (`tools/test.ts`) first compiles `collie` the way a release does, and the
+fake herdr the same way, into `.scratch/test-bin/`, and runs the suite with
+`COLLIE_TEST_BINARY` and `COLLIE_TEST_FAKE_HERDR` naming them: the suite starts well over a
+thousand hosts, commands and herdr calls, and a bytecode build starts in a fraction of the
+time the sources take to load. It uses [Bun's process-parallel
+runner](https://bun.com/docs/test/parallel) with a worker for each idle core, never fewer
+than four, and a fresh global per file. Tests within each file stay sequential: fixtures
+change environment variables and prototypes, so `--concurrent` is not safe here. A test's
+default timeout is 30 seconds rather than Bun's five: a test that starts processes is
+slower on a busy machine, and that is not a hang. For debugging, `bun test
+./test/engine.test.ts` runs one file against the sources, without workers.
 
 Bun records file durations in `.scratch/test-timings.json` and uses them to schedule slow
 files first next time. CI caches only that scheduling data, never test results. Missing or
 stale timings cannot skip a test; delete the file to reset the schedule. Quiet-agent tests
-use a controlled Effect clock so machine load cannot consume their nudge windows.
+use a controlled Effect clock so machine load cannot consume their nudge windows. A test
+whose work waits out timers runs under `fastForward` (`test/support/effect.ts`): a test
+clock a fiber of its own keeps moving many times faster than the wall's, from the wall's
+now. A wait on such a clock says what state it is for, never how long: real IO takes the
+time it takes, and only the timers are compressed.
 
 On the initial 377-test baseline (`fb2d018`), with Linux and Bun 1.4.2, the original checks
 took about 96 seconds (90 in tests); the new
 gate took about 51 seconds without timing history. Four-worker tests with history took
 about 39 seconds, or 43 seconds for the whole gate. Eight workers and running static checks
 alongside tests were rejected:
-both caused subprocess tests to exceed their existing timeouts. Limiting Oxlint/Oxfmt
+both caused subprocess tests to exceed their existing timeouts, which were Bun's five-second
+default then. Limiting Oxlint/Oxfmt
 threads did not show a consistent improvement, so their defaults and rules stay unchanged.
 
 Documentation changes in the same merge request as the behavior it describes. There is no

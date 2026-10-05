@@ -396,13 +396,21 @@ test("the search narrows the sections and offers a way back", () =>
 test("the grid is one column on a narrow pane and three when compact", () =>
   runEffect(
     Effect.gen(function* () {
-      const many = [task({ id: "a", name: "Aaa" }), task({ id: "b", name: "Bbb" })];
+      const many = [
+        task({ id: "a", name: "Aaa" }),
+        task({ id: "b", name: "Bbb" }),
+        task({ id: "c", name: "Ccc" }),
+      ];
 
       const narrow = yield* mount(appState({ tasks: many }), 70);
       expect(narrow.lineOf("Aaa")).not.toBe(narrow.lineOf("Bbb"));
 
       const wide = yield* mount(appState({ tasks: many }), 120);
       expect(wide.lineOf("Aaa")).toBe(wide.lineOf("Bbb"));
+      expect(wide.lineOf("Ccc")).not.toBe(wide.lineOf("Aaa"));
+
+      const compact = yield* mount(appState({ tasks: many, density: "compact" }), 120);
+      expect(compact.lineOf("Ccc")).toBe(compact.lineOf("Aaa"));
     }),
   ));
 
@@ -946,11 +954,15 @@ test("density is a setting, and the board is drawn at the one that is set", () =
       expect(app.acted()).toEqual([{ _tag: "SetDefault", key: "density", value: "compact" }]);
 
       // What the file says is what the board draws: three across rather than two.
-      const three = [task({ id: "a", name: "Aaa" }), task({ id: "b", name: "Bbb" })];
+      const three = [
+        task({ id: "a", name: "Aaa" }),
+        task({ id: "b", name: "Bbb" }),
+        task({ id: "c", name: "Ccc" }),
+      ];
       const wide = yield* mount(appState({ tasks: three, density: "compact" }), 120);
-      expect(wide.lineOf("Aaa")).toBe(wide.lineOf("Bbb"));
-      const comfortable = yield* mount(appState({ tasks: three }), 100);
-      expect(comfortable.lineOf("Aaa")).toBe(comfortable.lineOf("Bbb"));
+      expect(wide.lineOf("Ccc")).toBe(wide.lineOf("Aaa"));
+      const comfortable = yield* mount(appState({ tasks: three }), 120);
+      expect(comfortable.lineOf("Ccc")).not.toBe(comfortable.lineOf("Aaa"));
     }),
   ));
 

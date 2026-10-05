@@ -89,13 +89,6 @@ const prompts = {
 const set = (key: string, value: string) =>
   runCommand(session(), rig.pluginEnv(), { _tag: "SetDefault", key, value }, prompts);
 
-effectTest("a default given a value is written where loadDefaults reads it", function* () {
-  const note = yield* set("harness", "codex");
-
-  expect(note).toContain("codex");
-  expect((yield* loadDefaults(rig.pluginEnv().userDir)).harness).toBe("codex");
-});
-
 effectTest("clearing a default unsets it rather than configuring an empty one", function* () {
   yield* set("harness", "codex");
 

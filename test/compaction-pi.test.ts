@@ -295,8 +295,15 @@ onMachineWith("pi")(
   () =>
     runEffect(
       Effect.gen(function* () {
+        // The flag the adapter launches with, from the adapter, so the two cannot drift.
+        const [flag = ""] = (yield* pi.install({
+          agent: "r1",
+          harness: "pi",
+          cwd: rig.projectDir,
+          dir,
+        })).args;
         const help = yield* Effect.promise(() => Bun.$`pi --help`.text());
-        expect(help).toContain("--extension");
+        expect(help).toMatch(new RegExp(`(^|[\\s,])${flag}([\\s,=]|$)`, "m"));
       }),
     ),
   { timeout: 30_000 },

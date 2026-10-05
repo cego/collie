@@ -1,21 +1,13 @@
-import { BunRuntime, BunServices } from "@effect/platform-bun";
+import * as BunRuntime from "@effect/platform-bun/BunRuntime";
+import * as BunServices from "@effect/platform-bun/BunServices";
 import { Config, Console, Effect, FileSystem, Path, type PlatformError } from "effect";
-import { program } from "./collie";
-import { recordClaudeEvent } from "./compactors";
-import { currentEnv, type PluginEnv } from "./env";
-import { Herdr, herdrFailureReason } from "./herdr";
-import {
-  boardFlow,
-  continueFlow,
-  forkFlow,
-  openPicker,
-  pickFlow,
-  resumeFlow,
-  workspaceFlow,
-} from "./flows";
+import type { PluginEnv } from "./env";
+import type { Herdr } from "./herdr";
 
 /**
- * The two front doors share one entry point. `Bun.argv` rather than Stdio's `args`
+ * The front doors share one entry point, and each imports only what it runs: a start
+ * is mostly loading modules, and the compaction helper is started for every status
+ * line and every prompt a Claude agent submits. `Bun.argv` rather than Stdio's `args`
  * only here: this choice is made before any Effect runs, because it decides which
  * program to hand to BunRuntime — and `program` itself reads its arguments through
  * Stdio, as Command.run does.
@@ -37,6 +29,10 @@ type MainServices = BunServices.BunServices | FileSystem.FileSystem | Path.Path;
 
 const herdr: (command: string, mode?: string) => Effect.Effect<void, MainError, MainServices> =
   Effect.fn("main.herdr")(function* (command: string, mode?: string) {
+    const [{ currentEnv }, { Herdr }, { boardFlow, openPicker, workspaceFlow }] =
+      yield* Effect.promise(() =>
+        Promise.all([import("./env"), import("./herdr"), import("./flows")]),
+      );
     const env = yield* currentEnv;
     const client = new Herdr(env);
     const configuredMode = yield* Config.option(Config.String("COLLIE_MODE"));
@@ -71,7 +67,9 @@ const popup = Effect.fn("main.popup")(function* (
   env: PluginEnv,
   mode: string,
 ): Generator<Effect.Effect<unknown, MainError, MainServices>, number> {
-  const { runFlow } = yield* Effect.promise(() => import("./ui/bridge"));
+  const [{ runFlow }, { continueFlow, forkFlow, pickFlow, resumeFlow }] = yield* Effect.promise(
+    () => Promise.all([import("./ui/bridge"), import("./flows")]),
+  );
   return yield* runFlow((prompts) =>
     mode === "pick"
       ? pickFlow(client, env, prompts)
@@ -93,7 +91,9 @@ const popup = Effect.fn("main.popup")(function* (
  */
 const compactionProgram = Effect.gen(function* () {
   const dir = args[2] ?? "";
-  const stdin = yield* Effect.promise(() => Bun.stdin.text());
+  const [stdin, { recordClaudeEvent }] = yield* Effect.promise(() =>
+    Promise.all([Bun.stdin.text(), import("./compactors")]),
+  );
   const line = yield* recordClaudeEvent(dir, stdin).pipe(Effect.catch(() => Effect.succeed("")));
   if (line !== "") yield* Console.log(line);
 }).pipe(Effect.provide(BunServices.layer));
@@ -101,6 +101,7 @@ const compactionProgram = Effect.gen(function* () {
 const herdrProgram = herdr(args[1] ?? "", args[2]).pipe(
   Effect.catch((cause) =>
     Effect.gen(function* () {
+      const { herdrFailureReason } = yield* Effect.promise(() => import("./herdr"));
       yield* Console.error(herdrFailureReason(cause));
       process.exitCode = 1;
     }),
@@ -110,7 +111,10 @@ const herdrProgram = herdr(args[1] ?? "", args[2]).pipe(
 
 // `program`, not `app`: the handler around it is what turns a parse failure into one
 // JSON envelope and exit 2, and running `app` bare bypassed it entirely.
-const cliProgram = program.pipe(Effect.provide(BunServices.layer));
+const cliProgram = Effect.promise(() => import("./collie")).pipe(
+  Effect.flatMap(({ program }) => program),
+  Effect.provide(BunServices.layer),
+);
 
 BunRuntime.runMain(
   args[0] === "herdr" ? (args[1] === "compaction" ? compactionProgram : herdrProgram) : cliProgram,
