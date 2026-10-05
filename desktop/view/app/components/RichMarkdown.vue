@@ -21,7 +21,11 @@ provide(
 
 const PLUGINS = [
   security({
-    blockedTags: ["script", "style", "iframe", "object", "embed", "form", "base", "link", "meta"],
+    blockedTags: [
+      ...["script", "style", "iframe", "object", "embed", "form", "base", "link", "meta"],
+      // Modal, so it would make the whole window inert.
+      "dialog",
+    ],
     // Nothing is fetched from the network: an image a Run kept is evidence, read from its host.
     allowedImagePrefixes: ["data:image/"],
   }),

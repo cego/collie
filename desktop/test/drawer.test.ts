@@ -283,6 +283,8 @@ const FILES = {
     '<div class="fixed inset-0 z-50">a cover</div>',
     '<button popovertarget="lid">Lift the lid</button>',
     '<div id="lid" popover class="fixed inset-0">a lid</div>',
+    '<button commandfor="held" command="show-modal">Hold the window</button>',
+    '<dialog id="held" closedby="none">held</dialog>',
   ].join("\n\n"),
 };
 
@@ -913,15 +915,18 @@ test(
         const markdown = yield* Effect.promise(() => ticket.getByTestId("markdown").boundingBox());
         expect(cover!.width).toBeLessThanOrEqual(markdown!.width);
         expect(cover!.y).toBeGreaterThanOrEqual(markdown!.y);
-        // A popover would be drawn above every box, so nothing in markdown is one.
-        // Dispatched, since the cover above lies over it.
+        // A popover or a modal dialog would be drawn above every box, so markdown opens neither.
+        // Dispatched, since the cover above lies over them.
         yield* Effect.promise(() => ticket.getByText("Lift the lid").dispatchEvent("click"));
+        yield* Effect.promise(() => ticket.getByText("Hold the window").dispatchEvent("click"));
         expect(
-          yield* Effect.promise(() => ticket.locator("[popover], [popovertarget]").count()),
+          yield* Effect.promise(() =>
+            ticket.locator("[popover], [popovertarget], [command], [commandfor], dialog").count(),
+          ),
         ).toBe(0);
         expect(
           yield* Effect.promise(() =>
-            app!.page.evaluate(() => document.querySelector(":popover-open")),
+            app!.page.evaluate(() => document.querySelector(":popover-open, :modal")),
           ),
         ).toBeNull();
         // The end of a wide row can be scrolled to, rather than being cut off by the box.

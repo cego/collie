@@ -28,6 +28,18 @@ test("nothing can be made a popover, which no box contains", () => {
   ]);
 });
 
+test("nothing can open a dialog by command", () => {
+  expect(
+    confine([
+      ["button", { commandfor: "d", command: "show-modal" }, "Open"],
+      ["div", { closedby: "none" }, "held"],
+    ]),
+  ).toEqual([
+    ["button", {}, "Open"],
+    ["div", {}, "held"],
+  ]);
+});
+
 test("a file:line in text is a reference, and the text around it stays", () => {
   expect(confine([["p", {}, "See src/seed.ts:12, and README.md:3."]])).toEqual([
     [

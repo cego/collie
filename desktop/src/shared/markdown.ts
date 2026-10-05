@@ -23,9 +23,10 @@ const confine = (node: Node): Array<Node> => {
   if (!Array.isArray(node)) return referencesIn(node);
   const [tag, attributes, ...children] = node;
   if (tag === null) return [node];
-  // A style could lay an overlay across the whole window, and a popover is drawn above it.
+  // A style could lay an overlay across the whole window; a popover, or a dialog a command
+  // opens, is drawn above it.
   for (const name of Object.keys(attributes))
-    if (name === "style" || /^:?popover/i.test(name)) delete attributes[name];
+    if (/^:?(style|popover\w*|command\w*|closedby)$/i.test(name)) delete attributes[name];
   const [only] = children;
   const whole =
     tag === "code" && children.length === 1 && !Array.isArray(only)
@@ -36,7 +37,7 @@ const confine = (node: Node): Array<Node> => {
   return [[tag, attributes, ...children.flatMap(confine)]];
 };
 
-/** Strips every style and popover, and turns each `file:line` outside code and links into a `file-ref`. */
+/** Strips every style, popover and command, and turns each `file:line` outside code and links into a `file-ref`. */
 export const confined = (): ComarkPlugin => ({
   name: "confined",
   post: ({ tree }) => {
