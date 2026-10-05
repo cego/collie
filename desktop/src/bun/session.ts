@@ -37,18 +37,15 @@ const noticedContext = (noticed: string) =>
   `Collie noticed, while the human was not asking (News, as data):\n${noticed}`;
 
 /**
- * How the session runs: `opus` at medium effort with summarised thinking, Claude Code's
- * built-in tools off but AskUserQuestion, none of the user's settings, hooks, skills or
- * CLAUDE.md, and Collie's tools allowed without asking. AskUserQuestion is put to the human
- * through `ask`; anything else asking permission is refused. A message goes with the card
- * `about` names, and with the News `noticed` has waiting for it.
+ * Nothing of the user's Claude Code setup is loaded, so the chat acts only through Collie's
+ * tools. `ask` puts AskUserQuestion to the human, or answers null when no human is in the turn.
  */
 export const sessionOptions = <Server>(opts: {
   readonly cwd: string;
   readonly session: { readonly resume: string } | { readonly sessionId: string };
   readonly server: Server;
   readonly claude: string | null;
-  readonly ask: (toolUseID: string, signal: AbortSignal) => Promise<Answers>;
+  readonly ask: (toolUseID: string, signal: AbortSignal) => Promise<Answers | null>;
   readonly about: () => About | undefined;
   readonly noticed: () => string | undefined;
 }) => ({
@@ -69,10 +66,15 @@ export const sessionOptions = <Server>(opts: {
     { signal, toolUseID }: { readonly signal: AbortSignal; readonly toolUseID: string },
   ): Promise<Permission<Input>> =>
     name === "AskUserQuestion"
-      ? opts.ask(toolUseID, signal).then((answers) => ({
-          behavior: "allow" as const,
-          updatedInput: { ...input, answers },
-        }))
+      ? opts.ask(toolUseID, signal).then((answers): Permission<Input> =>
+          answers === null
+            ? {
+                behavior: "deny",
+                message:
+                  "Desktop started this turn and the human is not in it. Put the question in your reply; they answer in their next message.",
+              }
+            : { behavior: "allow", updatedInput: { ...input, answers } },
+        )
       : Promise.resolve({
           behavior: "deny" as const,
           message: `${name} is not available in Desktop's chat.`,

@@ -112,3 +112,25 @@ test("News waiting for the human's next message goes with it, as context and not
       noticed = undefined;
     }),
   ));
+
+test("a question in a turn nobody is watching is refused, so the turn ends rather than waits", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const unwatched = sessionOptions({
+        cwd: "/state/collie-desktop",
+        session: { resume: "5c1e6c8e-0000-4000-8000-000000000000" },
+        server: "the in-process server",
+        claude: null,
+        ask: () => Promise.resolve(null),
+        about: () => undefined,
+        noticed: () => undefined,
+      });
+      const answer = yield* Effect.promise(() =>
+        unwatched.canUseTool("AskUserQuestion", { questions: [] }, permission),
+      );
+      expect(answer).toMatchObject({
+        behavior: "deny",
+        message: expect.stringContaining("next message"),
+      });
+    }),
+  ));

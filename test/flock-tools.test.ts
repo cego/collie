@@ -3,8 +3,9 @@
 
 import { expect, test } from "bun:test";
 import { BunServices } from "@effect/platform-bun";
-import { Effect, Stream } from "effect";
-import type { BoardMessage, Declaration, TaskView } from "../src/board-model";
+import { Effect, Fiber, Stream } from "effect";
+import { TestClock } from "effect/testing";
+import { type BoardMessage, type Declaration, PROTOCOL, type TaskView } from "../src/board-model";
 import type { JsonObject } from "../src/schema";
 import { callFlockTool, type ChatDoor, type ChatMachine } from "../desktop/src/bun/flock-tools";
 import { task } from "./support/task";
@@ -15,21 +16,26 @@ interface Asked {
   readonly payload: unknown;
 }
 
-const snapshot = (tasks: ReadonlyArray<TaskView>): BoardMessage => ({
+const snapshot = (tasks: ReadonlyArray<TaskView>, protocol: number): BoardMessage => ({
   _tag: "Snapshot",
   installation: "i",
   build: "0.32.0",
-  protocol: 1,
+  protocol,
   herds: [{ id: "h1" }],
   tasks,
   seq: 0,
 });
 
 /** A host that answers from its board and writes down every operation it is asked. */
-const machine = (name: string, tasks: ReadonlyArray<TaskView>, asked: Asked[]): ChatMachine => {
+const machine = (
+  name: string,
+  tasks: ReadonlyArray<TaskView>,
+  asked: Asked[],
+  protocol = PROTOCOL,
+): ChatMachine => {
   const note = <P>(op: string, payload: P) => asked.push({ machine: name, op, payload });
   const door: ChatDoor = {
-    board: () => Stream.make(snapshot(tasks)).pipe(Stream.concat(Stream.never)),
+    board: () => Stream.make(snapshot(tasks, protocol)).pipe(Stream.concat(Stream.never)),
     declare: (payload: Declaration) =>
       Effect.sync(() => {
         note("declare", payload);
@@ -230,4 +236,44 @@ test("a Machine nobody has is said to be no Machine, and nothing is done", () =>
       expect(said).toContain("mk-pc, vm-mk");
       expect(asked).toEqual([]);
     }),
+  ));
+
+test("a Machine whose host is older than the Flock chat is written to by nothing, and says why", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const asked: Asked[] = [];
+      const flock = {
+        machines: () => [machine("old-pc", [task({ id: "t-a", run: "r-1" })], asked, 1)],
+        conversation: "flock@mk-pc",
+        said: () => "hold it",
+      };
+      const hold = yield* callFlockTool(flock, "collie_hold", {
+        run: "old-pc:r-1",
+      });
+      const news = yield* callFlockTool(flock, "collie_news", {});
+      expect(asked).toEqual([]);
+      expect(hold).toContain("upgrade Collie on old-pc");
+      expect(news).toContain("upgrade Collie on old-pc");
+    }).pipe(Effect.provide(BunServices.layer)),
+  ));
+
+test("a Machine that stops answering costs a look for News its time, and the others still speak", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const asked: Asked[] = [];
+      const wedged = machine("vm-mk", [], asked);
+      const flock = {
+        machines: () => [
+          machine("mk-pc", [], asked),
+          { ...wedged, door: { ...wedged.door, news: () => Effect.never } },
+        ],
+        conversation: "flock@mk-pc",
+        said: () => undefined,
+      };
+      const looking = yield* callFlockTool(flock, "collie_news", {}).pipe(Effect.forkChild);
+      yield* TestClock.adjust("1 minute");
+      const said = yield* Fiber.join(looking);
+      expect(said).toContain("[consequential] mk-pc:r-1");
+      expect(said).toContain("vm-mk's News could not be read");
+    }).pipe(Effect.provide([BunServices.layer, TestClock.layer()])),
   ));

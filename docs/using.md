@@ -396,7 +396,7 @@ shortcut prints why, names the candidates and gives you `collie home reconcile`.
 created because a token expired, and nothing is adopted because it looks right.
 
 The Home is **one tab with two panes**: the board on the left at four sevenths of the
-width, and [native chat](#talking-to-collie-about-the-flock) on the right at three. Both
+width, and [native chat](#talking-to-collie-about-a-herd) on the right at three. Both
 are ordinary panes — herdr's own keys move between them and resize them, and reopening the
 Home reopens only a pane that has actually gone, so a divider you dragged stays where you
 put it.
@@ -901,9 +901,12 @@ items on vm-mk"). Desktop looks a few seconds after a board changes, and every t
 regardless. When the chat is idle, a decision or a consequential outcome starts a turn of
 Desktop's own: it shows as **Desktop**, never as you, so anything Collie does in it
 carries no words of yours, and its usage is written to `flock-usage.jsonl` beside the
-session (data, never a limit). News arriving mid-turn waits for that turn to end; what is
+session (data, never a limit). Nobody is there to click in it, so a choice it needs is
+asked in its reply and you answer in your next message. News arriving mid-turn waits for that turn to end; what is
 worth trying and routine News waits for your next message and goes with it as context. An
-item counts as read once the model has it. The bell turns Desktop's own turns off (and on
+item counts as read once the model has it. A Machine that does not answer within ten
+seconds is said to be unread rather than holding up the rest, and one whose Collie is
+older than Desktop's chat is written to by nothing until it is upgraded. The bell turns Desktop's own turns off (and on
 again); it is on by default, and kept in `settings.json` beside the session.
 
 **Start fresh** (the pen) mints a new session and makes it current; the history (the clock)
@@ -929,7 +932,7 @@ it needs neither herdr, SSH nor a real host. The app links the system's WebKitGT
 AppIndicator libraries even though it renders with its bundled Chromium; on a computer
 without them, put them on `LD_LIBRARY_PATH`.
 
-## Talking to Collie about the flock
+## Talking to Collie about a Herd
 
 The Home's right-hand pane is an ordinary **Claude Code** session — or **Pi**, if you
 choose it — with Collie's role and Collie's tools. It is focused when the Home opens, so
@@ -1240,7 +1243,7 @@ itself can tell it.
 `chat_harness` is which native chat the Home opens with, `claude` or `pi`. It is
 independent of `harness`, which is what runs your work, and it is a preference for the
 **next** launch rather than a switch: see
-[Talking to Collie](#talking-to-collie-about-the-flock).
+[Talking to Collie](#talking-to-collie-about-a-herd).
 
 `scope` is left over from the board of views and changes nothing you can see: the board is
 the whole Herd's whichever workspace you opened it from, and the search is what narrows it.

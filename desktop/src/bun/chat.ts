@@ -4,15 +4,7 @@
 // one; Claude Code keeps and compacts the transcripts on this computer. Collie's tools and
 // AskUserQuestion are its only tools.
 
-import {
-  getSessionInfo,
-  getSessionMessages,
-  listSessions,
-  query,
-  type SDKUserMessage,
-} from "@anthropic-ai/claude-agent-sdk";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import {
   Cause,
   Crypto,
@@ -30,7 +22,6 @@ import {
   Semaphore,
   Stream,
 } from "effect";
-import { isJsonObject } from "../../../src/schema";
 import { type AguiEvent, ends } from "../shared/agui";
 import {
   type About,
@@ -42,54 +33,53 @@ import {
 } from "../shared/chat-view";
 import { appendJournal } from "../../../src/journal";
 import { nowIso } from "../../../src/time";
-import { startState, step } from "./agui";
+import { type SdkMessage, startState, step } from "./agui";
 import {
-  callFlockTool,
   delivered,
-  FLOCK_TOOLS,
   type FlockBatch,
   type FlockChat,
   flockBatch,
   flockNewsText,
   heardNews,
   newsKey,
-  wakes,
+  worthSpeaking,
 } from "./flock-tools";
 import { sessionOptions } from "./session";
 import { transcriptOf } from "./transcript";
 
-/** Collie's tools as an MCP server in this process: listed from the Toolkit, and every call decoded by it. */
-export const flockServer = (
-  flock: FlockChat,
-  run: (effect: Effect.Effect<string, never, Crypto.Crypto>) => Promise<string>,
-) => {
-  const server = new McpServer(
-    { name: "collie", version: "1" },
-    { capabilities: { tools: { listChanged: false } } },
-  );
-  server.server.setRequestHandler(ListToolsRequestSchema, () =>
-    Promise.resolve({
-      tools: FLOCK_TOOLS.map((tool) => ({
-        name: tool.name,
-        title: tool.title,
-        description: tool.description,
-        // SAFETY: a JSON Schema document for an object's parameters, which is what MCP lists.
-        inputSchema: tool.input() as { type: "object" },
-        annotations: { readOnlyHint: tool.readOnly },
-      })),
-    }),
-  );
-  server.server.setRequestHandler(CallToolRequestSchema, (request) =>
-    run(
-      callFlockTool(
-        flock,
-        request.params.name,
-        isJsonObject(request.params.arguments) ? request.params.arguments : {},
-      ),
-    ).then((text) => ({ content: [{ type: "text" as const, text }] })),
-  );
-  return server;
-};
+/** A session as the chat drives it. */
+export interface ClaudeSession extends AsyncIterable<SdkMessage> {
+  readonly interrupt: () => Promise<void>;
+  readonly close: () => void;
+}
+
+/** What the chat needs of Claude Code: the Agent SDK in Desktop, a script in a test. */
+export interface ClaudeCode<Server> {
+  readonly query: (params: {
+    readonly prompt: AsyncIterable<SDKUserMessage>;
+    readonly options: ReturnType<typeof sessionOptions<Server>>;
+  }) => ClaudeSession;
+  readonly getSessionInfo: (
+    id: string,
+    options: { dir: string },
+  ) => Promise<{ readonly sessionId: string } | undefined>;
+  readonly getSessionMessages: (
+    id: string,
+    options: { dir: string },
+  ) => Promise<ReadonlyArray<unknown>>;
+  readonly listSessions: (options: { dir: string; limit: number }) => Promise<
+    ReadonlyArray<{
+      readonly sessionId: string;
+      readonly summary: string;
+      readonly lastModified: number;
+    }>
+  >;
+  /** Collie's tools as an MCP server in this process. */
+  readonly server: (
+    flock: FlockChat,
+    run: (effect: Effect.Effect<string, never, Crypto.Crypto>) => Promise<string>,
+  ) => Server;
+}
 
 const SessionFile = Schema.fromJsonString(Schema.Struct({ session: Schema.String }));
 
@@ -155,7 +145,8 @@ export const refusal = (message: string): AguiEvent => ({ type: "RUN_ERROR", run
  * until the scope closes, and never more than one. A session Claude Code has a transcript
  * for is resumed; one it has none of yet starts under its minted id.
  */
-export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
+export const openFlockChat = Effect.fn("FlockChat.open")(function* <Server>(opts: {
+  readonly claude: ClaudeCode<Server>;
   readonly dir: string;
   readonly conversation: string;
   readonly machines: FlockChat["machines"];
@@ -184,13 +175,15 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
     conversation: opts.conversation,
     said: () => said,
   };
-  const server = flockServer(flock, run);
+  const server = opts.claude.server(flock, run);
   const usage = (yield* Path.Path).join(opts.dir, "flock-usage.jsonl");
   const desktopTurns = yield* PubSub.unbounded<DesktopTurn>();
   // ponytail: grows by one key per item Desktop spoke about, for as long as Desktop runs.
   /** News a turn of Desktop's has been about, so an item a host failed to settle never wakes it twice. */
   const spoken = new Set<string>();
   const ask = (toolUseID: string, signal: AbortSignal) => {
+    // A turn of Desktop's own has nobody to click an answer.
+    if (said === undefined) return Promise.resolve(null);
     const answered = Deferred.makeUnsafe<Answers>();
     asking.set(toolUseID, answered);
     return Effect.runPromise(
@@ -201,11 +194,11 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
 
   /** One session, live until its scope closes. */
   const start = Effect.fnUntraced(function* (id: string) {
-    const known = yield* Effect.tryPromise(() => getSessionInfo(id, { dir: opts.dir })).pipe(
-      Effect.orElseSucceed(() => undefined),
-    );
+    const known = yield* Effect.tryPromise(() =>
+      opts.claude.getSessionInfo(id, { dir: opts.dir }),
+    ).pipe(Effect.orElseSucceed(() => undefined));
     const inbox = yield* Queue.unbounded<SDKUserMessage>();
-    const claude = query({
+    const claude = opts.claude.query({
       prompt: Stream.toAsyncIterable(Stream.fromQueue(inbox)),
       options: sessionOptions({
         cwd: opts.dir,
@@ -349,12 +342,8 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
   /** A turn of Desktop's own about News that matters, when the chat is idle and may speak first. */
   const speakFirst: Effect.Effect<void> = Effect.gen(function* () {
     if (!opts.proactive()) return;
-    const batch = yield* waiting;
-    const fresh: FlockBatch = {
-      ...batch,
-      items: batch.items.filter((placed) => !spoken.has(newsKey(placed))),
-    };
-    if (!wakes(fresh)) return;
+    const fresh = worthSpeaking(yield* waiting, spoken);
+    if (fresh === null) return;
     const running = yield* warm;
     if (running.ended() !== null) return;
     for (const placed of fresh.items) spoken.add(newsKey(placed));
@@ -399,12 +388,12 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
         const answered = asking.get(toolCallId);
         return answered === undefined ? Effect.void : Deferred.succeed(answered, answers);
       }),
-    transcript: Effect.tryPromise(() => getSessionMessages(id, { dir: opts.dir })).pipe(
+    transcript: Effect.tryPromise(() => opts.claude.getSessionMessages(id, { dir: opts.dir })).pipe(
       Effect.map(transcriptOf),
       Effect.orElseSucceed(() => []),
     ),
     conversations: Effect.tryPromise(() =>
-      listSessions({ dir: opts.dir, limit: HISTORY + 1 }),
+      opts.claude.listSessions({ dir: opts.dir, limit: HISTORY + 1 }),
     ).pipe(
       Effect.orElseSucceed(() => []),
       Effect.map((sessions) => ({

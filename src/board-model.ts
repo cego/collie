@@ -514,7 +514,7 @@ export type Startable = typeof Startable.Type;
  * The board protocol's version. An optional field, a new operation or a new kind of
  * message keeps it; a removal or a change of meaning bumps it.
  */
-export const PROTOCOL = 1;
+export const PROTOCOL = 2;
 
 /** One herdr session whose Tasks are on this board. */
 export const Herd = Schema.Struct({

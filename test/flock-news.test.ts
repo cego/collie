@@ -2,8 +2,8 @@
 // first, then by time, a screen's worth, and what it left out said per Machine.
 
 import { expect, test } from "bun:test";
-import { BATCH } from "../src/news";
-import { flockBatch, flockNewsText, wakes } from "../desktop/src/bun/flock-tools";
+import { NEWS_BATCH } from "../src/board-model";
+import { flockBatch, flockNewsText, newsKey, worthSpeaking } from "../desktop/src/bun/flock-tools";
 
 const item = (
   key: string,
@@ -48,7 +48,7 @@ test("every Herd on every Machine is one batch, what matters most first and then
 });
 
 test("a batch is a screen's worth, and says per Machine what it left out", () => {
-  const many = Array.from({ length: BATCH + 7 }, (_, n) =>
+  const many = Array.from({ length: NEWS_BATCH + 7 }, (_, n) =>
     item(`r${n}:ended`, "routine", `2026-10-05T10:${String(n).padStart(2, "0")}:00Z`),
   );
   const batch = flockBatch([
@@ -59,24 +59,35 @@ test("a batch is a screen's worth, and says per Machine what it left out", () =>
     },
     { machine: "vm-mk", herd: "h1", items: many },
   ]);
-  expect(batch.items).toHaveLength(BATCH);
+  expect(batch.items).toHaveLength(NEWS_BATCH);
   expect(batch.items[0]!.item.key).toBe("rx:asking");
   expect(flockNewsText(batch)).toContain("and 8 older or less pressing items on vm-mk");
   expect(flockNewsText(batch)).not.toContain("on mk-pc");
 });
 
-test("only a decision or a consequential item is worth speaking first about", () => {
+test("a turn nobody asked for is about the decisions and consequential items not yet spoken of", () => {
+  const batch = flockBatch([
+    {
+      machine: "m",
+      herd: "h",
+      items: [
+        item("a", "try-it", "t1"),
+        item("b", "routine", "t2"),
+        item("c", "consequential", "t3"),
+        item("d", "decision", "t4"),
+      ],
+    },
+  ]);
+  const about = worthSpeaking(batch, new Set());
+  expect(about?.items.map(({ item }) => item.key)).toEqual(["d", "c"]);
+  expect(about?.omitted.size).toBe(0);
+  expect(worthSpeaking(batch, new Set(about?.items.map(newsKey)))).toBeNull();
   expect(
-    wakes(
+    worthSpeaking(
       flockBatch([
         { machine: "m", herd: "h", items: [item("a", "try-it", "t"), item("b", "routine", "t")] },
       ]),
+      new Set(),
     ),
-  ).toBe(false);
-  expect(
-    wakes(flockBatch([{ machine: "m", herd: "h", items: [item("a", "consequential", "t")] }])),
-  ).toBe(true);
-  expect(
-    wakes(flockBatch([{ machine: "m", herd: "h", items: [item("a", "decision", "t")] }])),
-  ).toBe(true);
+  ).toBeNull();
 });

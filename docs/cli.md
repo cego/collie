@@ -655,7 +655,7 @@ Defaults are per workspace: every run started there begins with them.
 
 The Home's right-hand pane is an ordinary Claude Code (or Pi) session with Collie's role
 and Collie's tools — that is where questions about the flock are asked, and it is
-[docs/using.md](using.md#talking-to-collie-about-the-flock). From a terminal:
+[docs/using.md](using.md#talking-to-collie-about-a-herd). From a terminal:
 
 ```sh
 collie --json chat status
@@ -1498,6 +1498,10 @@ the directory it belongs to, links followed, or where it is not a regular file.
 kind of message does not change it, and a client reads a kind it does not know as
 `Unknown` and skips it. A removal or a change of meaning bumps it, and from then on the
 host serves its current version and the one before; version 1 has none before it.
+Version 2 changed two meanings: a `chat` channel's repeated `declare` replaces the words it
+speaks with rather than being ignored, and `news` with `keys` settles only those. A version
+1 client repeats no declaration and sends no `keys`, so it is still served as before.
+Desktop's Flock chat writes through no host older than version 2, and says so.
 
 `discover` and `start` name the project asking, because one host serves the machine and a
 project's own `.collie/workflows` is its own: two projects can run different implementations

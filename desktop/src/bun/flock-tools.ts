@@ -7,6 +7,7 @@
 import { Cause, Clock, Crypto, Effect, Exit, Option, Result, Schema, Stream } from "effect";
 import * as Toolkit from "effect/unstable/ai/Toolkit";
 import {
+  HostRefused,
   NEWS_BATCH,
   type NewsBatch,
   type RunDetail,
@@ -92,8 +93,10 @@ const boardOf = (machine: ChatMachine) =>
   );
 
 const boards = (flock: FlockChat) =>
-  Effect.forEach(flock.machines(), (machine) =>
-    boardOf(machine).pipe(Effect.map((board) => ({ machine, board }))),
+  Effect.forEach(
+    flock.machines(),
+    (machine) => boardOf(machine).pipe(Effect.map((board) => ({ machine, board }))),
+    { concurrency: "unbounded" },
   );
 
 type Boards = Effect.Success<ReturnType<typeof boards>>;
@@ -145,16 +148,34 @@ const proposalsOf = (tasks: ReadonlyArray<TaskView>) =>
   new Set(tasks.flatMap(({ decision }) => (decision?.kind === "proposal" ? [decision.id] : [])));
 
 const owning = (known: Boards, ids: (tasks: ReadonlyArray<TaskView>) => ReadonlySet<string>) =>
-  known.map(({ machine, board }) => ({ machine, ids: ids(board?.tasks ?? []) }));
+  known.map(({ machine, board }) => ({
+    machine,
+    ids: ids(board?.tasks ?? []),
+  }));
+
+/** The board protocol a host must speak to keep each turn's words and settle only the News named. */
+const FLOCK_PROTOCOL = 2;
 
 /** Says, before a write, who is asking and what the human said that turn. */
-const speaking = (flock: FlockChat, machine: ChatMachine) => {
+const declareVoice = (flock: FlockChat, machine: ChatMachine) => {
   const said = flock.said();
   return machine.door.declare(
     said === undefined
       ? { frontDoor: "chat", conversation: flock.conversation }
       : { frontDoor: "chat", conversation: flock.conversation, said },
   );
+};
+
+/** `declareVoice`, refused where the host is too old to record the turn's words. */
+const speaking = (flock: FlockChat, machine: ChatMachine, known: Boards) => {
+  const board = known.find((one) => one.machine === machine)?.board;
+  return board != null && board.protocol < FLOCK_PROTOCOL
+    ? Effect.fail(
+        new HostRefused({
+          reason: `its Collie is older than Desktop's chat; upgrade Collie on ${machine.name}. Nothing was done there.`,
+        }),
+      )
+    : declareVoice(flock, machine);
 };
 
 const newRequest = Effect.flatMap(Crypto.Crypto, (crypto) => crypto.randomUUIDv4);
@@ -288,11 +309,11 @@ const RANK: Record<Significance, number> = {
   routine: 0,
 };
 
-/**
- * Every Herd's News as one batch: a screen's worth of what matters most, newest first among
- * equals, listed by significance then time, and how many items each Machine had left out.
- */
-type PlacedNews = { readonly machine: string; readonly herd: string; readonly item: NewsItem };
+type PlacedNews = {
+  readonly machine: string;
+  readonly herd: string;
+  readonly item: NewsItem;
+};
 
 /** One item across the Flock: the same key in two Herds is two items. */
 export const newsKey = ({ machine, herd, item }: PlacedNews) =>
@@ -302,6 +323,10 @@ const bySignificance = (newestFirst: boolean) => (a: PlacedNews, b: PlacedNews) 
   RANK[b.item.significance] - RANK[a.item.significance] ||
   (newestFirst ? b.item.at.localeCompare(a.item.at) : a.item.at.localeCompare(b.item.at));
 
+/**
+ * Every Herd's News as one batch: a screen's worth of what matters most, newest first among
+ * equals, listed by significance then time, and how many items each Machine had left out.
+ */
 export const flockBatch = (heard: ReadonlyArray<Heard>) => {
   const all = heard.flatMap(({ machine, herd, items }) =>
     items.map((item) => ({ machine, herd, item })),
@@ -325,9 +350,20 @@ export const flockNewsText = (batch: FlockBatch) =>
     ),
   ].join("\n");
 
-/** Whether a batch is worth a turn nobody asked for. */
-export const wakes = (batch: FlockBatch) =>
-  batch.items.some(({ item }) => RANK[item.significance] >= RANK.consequential);
+/**
+ * What a turn nobody asked for would be about: the decisions and consequential items not yet
+ * spoken of, or null. Everything else waits for the human's next message.
+ */
+export const worthSpeaking = (
+  batch: FlockBatch,
+  spoken: ReadonlySet<string>,
+): FlockBatch | null => {
+  const items = batch.items.filter(
+    (placed) =>
+      RANK[placed.item.significance] >= RANK.consequential && !spoken.has(newsKey(placed)),
+  );
+  return items.length === 0 ? null : { items, omitted: new Map() };
+};
 
 /**
  * Every Herd's pending News on every Machine, taking nothing: what the conversation is
@@ -336,27 +372,36 @@ export const wakes = (batch: FlockBatch) =>
  */
 export const heardNews = Effect.fn("FlockTools.heardNews")(function* (flock: FlockChat) {
   const known = yield* boards(flock);
+  const told = yield* Effect.forEach(
+    known,
+    ({ machine, board }) =>
+      Effect.forEach(board?.herds ?? [], (one) =>
+        Effect.gen(function* () {
+          yield* speaking(flock, machine, known);
+          const { items } = yield* machine.door.news({
+            herd: one.id,
+            conversation: flock.conversation,
+            as: "sent",
+            request: yield* newRequest,
+            keys: [],
+          });
+          return { machine: machine.name, herd: one.id, items };
+        }),
+      ).pipe(
+        Effect.timeout(ANSWER_WITHIN),
+        Effect.exit,
+        Effect.map((exit) => ({ machine, exit })),
+      ),
+    { concurrency: "unbounded" },
+  );
   const heard: Heard[] = [];
   const unread: string[] = [];
-  for (const { machine, board } of known)
-    for (const one of board?.herds ?? []) {
-      const told = yield* Effect.gen(function* () {
-        yield* speaking(flock, machine);
-        return yield* machine.door.news({
-          herd: one.id,
-          conversation: flock.conversation,
-          as: "sent",
-          request: yield* newRequest,
-          keys: [],
-        });
-      }).pipe(Effect.exit);
-      if (Exit.isSuccess(told))
-        heard.push({ machine: machine.name, herd: one.id, items: told.value.items });
-      else {
-        const failed = Cause.findError(told.cause);
-        const why = Result.isSuccess(failed) ? reasonOf(failed.success) : "its host did not answer";
-        unread.push(`${machine.name}'s News could not be read: ${why}`);
-      }
+  for (const { machine, exit } of told)
+    if (Exit.isSuccess(exit)) heard.push(...exit.value);
+    else {
+      const failed = Cause.findError(exit.cause);
+      const why = Result.isSuccess(failed) ? reasonOf(failed.success) : "its host did not answer";
+      unread.push(`${machine.name}'s News could not be read: ${why}`);
     }
   return { batch: flockBatch(heard), unread };
 });
@@ -373,7 +418,7 @@ export const delivered = Effect.fn("FlockTools.delivered")(function* (
     const { machine: name, herd } = items[0]!;
     const machine = byMachine.get(name);
     if (machine === undefined) continue;
-    yield* speaking(flock, machine).pipe(Effect.ignoreCause);
+    yield* declareVoice(flock, machine).pipe(Effect.timeout(ANSWER_WITHIN), Effect.ignoreCause);
     yield* machine.door
       .news({
         herd,
@@ -382,7 +427,7 @@ export const delivered = Effect.fn("FlockTools.delivered")(function* (
         request: yield* newRequest,
         keys: items.map(({ item }) => item.key),
       })
-      .pipe(Effect.ignoreCause);
+      .pipe(Effect.timeout(ANSWER_WITHIN), Effect.ignoreCause);
   }
 });
 
@@ -399,10 +444,11 @@ const hold = Effect.fn("FlockTools.hold")(
   function* (flock: FlockChat, input: typeof HoldInput.Type) {
     if (input.run === undefined)
       return "collie_hold from Desktop's chat takes a Run; hold a workspace's Runs one by one, by the ids collie_herd lists.";
-    const placed = place(input.run, owning(yield* boards(flock), runsOf), "Run");
+    const known = yield* boards(flock);
+    const placed = place(input.run, owning(known, runsOf), "Run");
     if (Result.isFailure(placed)) return placed.failure;
     const { machine, id } = placed.success;
-    yield* speaking(flock, machine);
+    yield* speaking(flock, machine, known);
     const done = yield* machine.door.control({
       runId: id,
       control: "hold",
@@ -421,7 +467,7 @@ const textAt = (action: JsonObject, key: string) => {
   return isString(value) ? value : "";
 };
 
-/** What an action names its Machine by, and the same action under the Machine's own id. */
+/** The field an action names its Machine in, and the name. */
 const machineRef = (
   action: JsonObject,
 ): { readonly field: string; readonly name: string } | null => {
@@ -488,7 +534,7 @@ const carryOut = Effect.fn("FlockTools.do")(function* (flock: FlockChat, input: 
       break;
     }
     const step = `${request}-${index}`;
-    const done = yield* speaking(flock, machine).pipe(
+    const done = yield* speaking(flock, machine, known).pipe(
       Effect.andThen(doOne(machine, kind, local, step)),
       Effect.catch((error) => Effect.succeed({ state: "failed", note: reasonOf(error) })),
     );
@@ -561,7 +607,7 @@ const propose = Effect.fn("FlockTools.propose")(
         ? `These actions are on ${named.map((one) => one.name).join(" and ")}; propose each Machine's separately. Nothing was done.`
         : "Name the Machine this is for, as <machine>:<run> or <machine>:<workspace>. Nothing was done.";
     const request = request_id ?? (yield* newRequest);
-    yield* speaking(flock, machine);
+    yield* speaking(flock, machine, known);
     const done = yield* machine.door.propose({
       herd: null,
       interpretation,

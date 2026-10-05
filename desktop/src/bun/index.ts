@@ -27,6 +27,7 @@ import {
 } from "../shared/channel";
 import { ActionFailed, DesktopRpcs, type FlockItem, machineNames } from "../shared/flock";
 import { type FlockConversation, openFlockChat, refusal } from "./chat";
+import { claudeCode } from "./claude";
 import { chatDoor } from "./flock-tools";
 import { readSettings, writeSettings } from "./settings";
 import {
@@ -122,6 +123,7 @@ const main = Effect.gen(function* () {
   let settings = yield* readSettings(own);
   // Opened by the view's first ask, in Desktop's own scope; its session starts with the first message.
   const chat = yield* openFlockChat({
+    claude: claudeCode,
     dir: own,
     conversation: `flock@${local}`,
     proactive: () => settings.proactive,
