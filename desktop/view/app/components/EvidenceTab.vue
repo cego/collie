@@ -1,10 +1,24 @@
 <script setup lang="ts">
 import type { RunDetail, VerificationView } from "../../../../src/board-model";
 import { sortEvidence } from "../../../src/shared/evidence";
+import { webLinks } from "../../../src/shared/links";
 
 const props = defineProps<{ detail: RunDetail; installation: string }>();
 
 const sorted = computed(() => sortEvidence(props.detail.evidence));
+
+const links = computed(() => {
+  const { outputs, handoffs, review, findings, mr } = props.detail;
+  return webLinks({
+    texts: [
+      ...outputs.map((output) => output.text),
+      ...handoffs,
+      review._tag === "Text" ? review.text : "",
+      ...findings.map((finding) => finding.detail ?? ""),
+    ],
+    mr,
+  });
+});
 
 /** What it was expected to do, and did not: these are opened first. */
 const failedCheck = (check: VerificationView) => check.result !== check.expect;
@@ -82,6 +96,11 @@ const metrics = computed(() => {
           </small>
         </template>
       </EvidenceText>
+    </section>
+
+    <section v-if="links.length > 0" class="flex flex-col gap-2" data-testid="links">
+      <h3 class="font-semibold">Links</h3>
+      <LinkCards :links="links" />
     </section>
 
     <section v-if="sorted.gallery.length > 0" class="flex flex-col gap-2" data-testid="gallery">

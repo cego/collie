@@ -130,7 +130,7 @@ export const machineBoard = (known: KnownMachine, door: BoardSource) =>
     ),
   );
 
-const output = (command: ReadonlyArray<string>) =>
+export const output = (command: ReadonlyArray<string>) =>
   Effect.gen(function* () {
     const child = yield* Effect.try({
       try: () => Bun.spawn([...command], { stdin: "ignore", stdout: "pipe", stderr: "pipe" }),

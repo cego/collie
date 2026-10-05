@@ -2,7 +2,7 @@
 // and the review as rendered markdown, the log as it grows, the merge request and the facts.
 
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { Effect } from "effect";
+import { Effect, FileSystem } from "effect";
 import type { RunDetail, TaskView } from "../../src/board-model";
 import { task } from "../../test/support/task";
 import type { ScriptedMachine } from "./support/scripted-machine";
@@ -57,7 +57,14 @@ const detail = (tail: ReadonlyArray<string>, seedAdded = 2): RunDetail => ({
       { file: "02-brands.md", title: "Brands per environment", done: false },
     ],
   },
-  outputs: [],
+  outputs: [
+    {
+      step: "build",
+      where: "agents/build.json",
+      state: "recorded",
+      text: '{"notes":"Sketched in [Seeding plan](https://claude.ai/artifact/5eed), counts on https://kibana.cego.dk/app/seed."}',
+    },
+  ],
   tail: { _tag: "Text", text: tail.join("\n"), truncated: false },
   attention: { category: "none", reason: "running", explanation: "", actions: [] },
   outcome: {
@@ -777,6 +784,44 @@ test(
         );
         yield* reads(metrics.getByTestId("metric-Slices"), "1 of 2");
         yield* reads(metrics.getByTestId("metric-Peak context"), "81000 tokens (builder)");
+      }),
+    ),
+  30_000,
+);
+
+test(
+  "a Run's links are cards that open in the default browser, as an app window where it has one",
+  () =>
+    run(
+      Effect.gen(function* () {
+        yield* opened;
+        yield* Effect.promise(() => tab("Evidence").click());
+        const links = evidence().getByTestId("links");
+        yield* reads(links.getByTestId("link-artifact").getByTestId("link-title"), "Seeding plan");
+        yield* reads(links.getByTestId("link-mr").getByTestId("link-status"), "opened");
+        yield* reads(links.getByTestId("link-pipeline").getByTestId("link-status"), "success");
+        const asked = (what: string) =>
+          settled(what, () =>
+            Bun.file(`${app!.flock}/opened.log`)
+              .text()
+              .catch(() => "")
+              .then((log) => log.split("\n").includes(what) || undefined),
+          );
+        yield* Effect.promise(() => links.getByTestId("link-artifact").click());
+        yield* asked("https://claude.ai/artifact/5eed");
+
+        const fs = yield* FileSystem.FileSystem;
+        const applications = `${app!.flock}/share/applications`;
+        yield* fs.makeDirectory(applications, { recursive: true });
+        yield* fs.writeFileString(
+          `${applications}/brave-browser.desktop`,
+          `[Desktop Entry]\nName=Brave\nExec=${app!.flock}/brave %U\n`,
+        );
+        yield* fs.writeFileString(`${app!.flock}/browser`, "brave-browser.desktop\n");
+        yield* Effect.promise(() =>
+          links.getByTestId("link-link").filter({ hasText: "kibana" }).click(),
+        );
+        yield* asked("brave --app=https://kibana.cego.dk/app/seed");
       }),
     ),
   30_000,

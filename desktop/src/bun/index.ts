@@ -13,6 +13,7 @@ import {
   type ToMain,
   type ToView,
 } from "../shared/channel";
+import { appWindowFor } from "./browser";
 import { ActionFailed, DesktopRpcs, type FlockItem } from "../shared/flock";
 import {
   act,
@@ -106,7 +107,16 @@ const main = Effect.gen(function* () {
         );
         return yield* act(door, request, action);
       }),
-    openLink: ({ url }) => Effect.sync(() => void Utils.openExternal(url)),
+    openLink: ({ url }) =>
+      appWindowFor(url).pipe(
+        Effect.flatMap(Effect.fromNullishOr),
+        Effect.flatMap((command) =>
+          Effect.try(() =>
+            Bun.spawn(command, { stdio: ["ignore", "ignore", "ignore"], detached: true }).unref(),
+          ),
+        ),
+        Effect.catch(() => Effect.sync(() => void Utils.openExternal(url))),
+      ),
     offers: ({ installation, runId }) =>
       doorTo(doors, installation).pipe(Effect.flatMap((door) => offersOn(door, runId))),
     workflows: ({ installation, project }) =>

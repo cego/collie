@@ -872,13 +872,20 @@ read when opened and searchable; its screenshots as a gallery, a `before` beside
 asked; its HTML reports, such as Lighthouse, in a sandboxed frame that runs their scripts
 in an origin of their own, with a policy that loads nothing from the network; and its
 metrics as a table. A report that keeps its attachments in files beside it shows without
-them. **Log**
+them. Above them, every web link the Run's Outputs, handoffs, review and findings name is a
+card: a Claude artifact by the title its link was given, the merge request with its state,
+and its pipelines with the head pipeline's status. **Log**
 follows the end of the Run's log as it is written, with a search that keeps only the lines
 that match. **Merge request** shows what the host's merge watch last read — title, state,
 pipeline, approvals and comments — with Open in browser. **Facts** shows the Run's intent,
 its steering cards and the card's TaskView as the host sent it. Markdown is rendered with
 Comark: tables, Shiki-highlighted code and mermaid diagrams, with anything that could run
 removed, because agents write it. A web link in it opens in your browser, never in Desktop.
+
+Every web page Desktop opens goes to your default browser, as `xdg-settings get
+default-web-browser` names it, where you are already signed in. Chrome, Chromium, Brave,
+Edge and Vivaldi are started with `--app=<url>`, so the page gets a window of its own;
+any other browser, Firefox included, opens it as an ordinary tab.
 
 Every Machine's host is reached the same way: by running
 `collie bridge --as desktop --client <this computer>` in a login shell, here directly and

@@ -36,7 +36,8 @@ export const serve = (
 export const LOCAL = "local.json";
 
 /**
- * herdr's list; a browser that logs what it was asked to open; a master that logs when it
+ * herdr's list; a default browser, Firefox unless `browser` names another, and two that
+ * log what they were asked to open; a master that logs when it
  * opens and closes, and which `-O check` finds once it is open; and a passenger that runs its remote command as a Machine's login
  * shell would, with `collie` on PATH.
  */
@@ -47,6 +48,13 @@ cat '${flock}/machines.json'
 `,
   "xdg-open": `#!/bin/sh
 echo "$1" >> '${flock}/opened.log'
+`,
+  "xdg-settings": `#!/bin/sh
+[ "$*" = "get default-web-browser" ] || exit 2
+cat '${flock}/browser' 2>/dev/null || echo firefox.desktop
+`,
+  brave: `#!/bin/sh
+echo "brave $*" >> '${flock}/opened.log'
 `,
   ssh: `#!/bin/bash
 args=("$@")
@@ -144,6 +152,7 @@ export const launch = (
         // CEF keeps one profile per user, so a test's app must not find the operator's.
         HOME: scratch,
         PATH: `${flock}:${Bun.env.PATH}`,
+        XDG_DATA_HOME: `${flock}/share`,
         COLLIE_DESKTOP_COLLIE: asCommand([process.execPath, HOST, `${flock}/${LOCAL}`]),
       },
       stdout: "ignore",
