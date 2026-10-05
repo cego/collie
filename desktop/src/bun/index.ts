@@ -16,7 +16,6 @@ import {
 import { ActionFailed, DesktopRpcs, type FlockItem } from "../shared/flock";
 import {
   act,
-  bridgeCommand,
   type Door,
   doorTo,
   offersOn,
@@ -24,11 +23,13 @@ import {
   endChildren,
   flockStream,
   herdrMachines,
-  openBridge,
+  localRoute,
   type Route,
   remoteRoute,
 } from "./machine";
 import { savedBoards, saving } from "./saved";
+// The version Desktop keeps every Machine on: the Collie it was built from.
+import manifest from "../../../herdr-plugin.toml";
 
 type Frames = RPCSchema<FrameSchema>;
 
@@ -99,13 +100,7 @@ const main = Effect.gen(function* () {
   const remote = yield* Effect.forEach(enabled, (machine, at) =>
     remoteRoute("ssh", `${controls}/${at}`, machine, local),
   );
-  const routes: ReadonlyArray<Route> = [
-    {
-      machine: { profile: "local", name: local },
-      open: () => openBridge(bridgeCommand(collie, local)),
-    },
-    ...remote,
-  ];
+  const routes: ReadonlyArray<Route> = [localRoute(collie, local), ...remote];
   const profiles = new Set(routes.map(({ machine }) => machine.profile));
   const doors = new Map<string, Door>();
   const boards = `${Utils.paths.userData}/machines`;
@@ -117,7 +112,9 @@ const main = Effect.gen(function* () {
           Effect.map((saved) => saved.filter(({ machine }) => profiles.has(machine.profile))),
         ),
       ).pipe(
-        Stream.concat(Stream.merge(Stream.fromIterable(unlisted), flockStream(routes, doors))),
+        Stream.concat(
+          Stream.merge(Stream.fromIterable(unlisted), flockStream(routes, doors, manifest.version)),
+        ),
         saving(boards),
         Stream.provide(BunServices.layer),
       ),

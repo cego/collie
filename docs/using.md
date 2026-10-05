@@ -852,6 +852,20 @@ A Machine Desktop cannot show live says why above the board, by name:
   is known by its herdr profile id. Once a host there answers, it becomes the Machine that
   host's installation id names, as one more Machine or as the one already shown.
 
+Desktop keeps the Flock on its own build. When a Machine on a release older than Desktop
+connects, Desktop runs `collie upgrade --to <its version>` there through the same route
+as the bridge. No prompt is shown, and a notice says "vm-mk upgraded 0.26.0 → 0.27.0".
+Desktop then opens the Machine again, and the new build replaces the old host, as any
+newer `collie` does. Desktop never stops, signals or restarts a host itself. It asks each
+Machine once per launch, and a Machine that would not move says why in a notice and is
+shown as it is. A Machine on a development checkout (a non-release branch or tag,
+uncommitted changes, or commits its remote lacks) is never upgraded. It is named above the
+board with its build, "development build <version>+<sha>". Desktop reads any host inside
+the protocol window ([ADR-0038](adr/0038-the-host-builds-and-serves-the-board.md) D5): its
+own protocol version and the one after it. A host whose board is newer than that, or one a
+newer collie serves that Desktop cannot decode, is not shown, and its row says **Update
+Desktop to see _name_**.
+
 A host that is not running needs nothing from you, because the bridge starts it. Desktop
 saves each Machine's last board on this computer, under
 `$XDG_DATA_HOME/dk.cego.collie.desktop/<channel>/machines/`. At launch it shows those boards

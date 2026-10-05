@@ -7,7 +7,7 @@
 // none of them has an answer in one process with an in-memory engine.
 
 import { expect, test } from "bun:test";
-import { Config, ConfigProvider, Effect, FileSystem, Layer, Option, Scope } from "effect";
+import { Config, ConfigProvider, Effect, FileSystem, Layer, Option, Scope, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { connect, ownerOf } from "../src/host";
 import { signalProcess } from "../src/lock";
@@ -447,11 +447,15 @@ const hostFor = (pluginRoot: string) =>
 const identityAt = (pluginRoot: string) =>
   Effect.gen(function* () {
     const { state } = yield* workspace("collie-host-build-");
-    const who = yield* Effect.scoped(
-      connect(state).pipe(Effect.flatMap((client) => client.identity())),
+    const [who, snapshot] = yield* Effect.scoped(
+      connect(state).pipe(
+        Effect.flatMap((client) =>
+          Effect.all([client.identity(), client.board().pipe(Stream.runHead)]),
+        ),
+      ),
     ).pipe(Effect.orDie, Effect.provide(yield* hostFor(pluginRoot)));
     yield* stopHost(state);
-    return who;
+    return { ...who, board: Option.getOrUndefined(snapshot) };
   });
 
 test(
@@ -481,6 +485,9 @@ test(
 
         expect(development.development).toBe(`${development.build}+${sha}`);
         expect(released.development).toBeUndefined();
+        // A front door reads the same from the board it is served.
+        expect(development.board).toMatchObject({ development: development.development });
+        expect(released.board && "development" in released.board).toBe(false);
       }),
     ),
   120_000,

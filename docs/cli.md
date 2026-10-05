@@ -1413,7 +1413,8 @@ The operations above are `HostRpcs`: internal, and a Collie client of another bu
 before sending them anything. Beside them on the same socket is `FrontDoorRpcs`, the door
 any front door uses whatever its build or computer, declared with its Schemas in
 `src/board-model.ts`. `board` streams the board: a `Snapshot` (the state directory's
-`installation` id, `build`, `protocol`, the `herds` — every running herdr session, by Herd
+`installation` id, `build`, `development` — `<version>+<sha>`, only where the host runs a
+development checkout — `protocol`, the `herds` — every running herdr session, by Herd
 `id` and herdr's `name` — and every TaskView), then an `Upsert` or a `Remove` keyed by Task
 id for each change, each with a `seq` higher than the last. A client that reconnects gets a
 fresh snapshot. The host builds again when anything under its state directory is written,

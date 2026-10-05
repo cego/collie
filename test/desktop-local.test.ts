@@ -3,7 +3,7 @@
 
 import { expect, test } from "bun:test";
 import { Config, Deferred, Effect, Option, Schedule, Schema, Stream } from "effect";
-import type { BoardMessage } from "../src/board-model";
+import { type BoardMessage, type BoardSnapshot, PROTOCOL } from "../src/board-model";
 import { readAudit } from "../src/audit";
 import { runDir } from "../src/engine";
 import {
@@ -11,6 +11,7 @@ import {
   bridgeCommand,
   flockStream,
   machineBoard,
+  buildVerdict,
   openBridge,
   type Route,
 } from "../desktop/src/bun/machine";
@@ -118,7 +119,7 @@ test("Desktop's main process never reaches Collie's own host client", () =>
     }),
   ));
 
-const snapshot = (installation: string): BoardMessage => ({
+const snapshot = (installation: string): BoardSnapshot => ({
   _tag: "Snapshot",
   installation,
   build: "0.31.0",
@@ -129,7 +130,7 @@ const snapshot = (installation: string): BoardMessage => ({
 });
 interface Fake {
   readonly name: string;
-  readonly board: () => Stream.Stream<BoardMessage>;
+  readonly board: () => Stream.Stream<BoardMessage, { readonly message: string }>;
 }
 const fakeRoute = (
   name: string,
@@ -141,6 +142,7 @@ const fakeRoute = (
     Effect.acquireRelease(Effect.succeed<Fake>({ name, board: () => board }), () =>
       Effect.sync(() => closed.push(name)),
     ),
+  collie: () => Effect.die("not asked"),
 });
 const toldOf = (item: FlockItem) =>
   `${item.machine.name} ${"_tag" in item ? item._tag : item.message._tag}`;
@@ -168,6 +170,7 @@ test("a Machine reached by two routes is shown through the first, and the other'
           fakeRoute("other", Stream.make(snapshot("vm")).pipe(Stream.concat(Stream.never)), closed),
         ],
         doors,
+        "0.31.0",
       ).pipe(
         Stream.runForEach((item) => Effect.sync(() => told.push(toldOf(item)))),
         Effect.forkScoped,
@@ -197,6 +200,7 @@ test("a route that comes up to a Machine already shown merges into it and closes
           fakeRoute("installed", later.pipe(Stream.concat(Stream.never)), closed),
         ],
         doors,
+        "0.31.0",
       ).pipe(
         Stream.runForEach((item) => Effect.sync(() => told.push(toldOf(item)))),
         Effect.forkScoped,
@@ -216,6 +220,7 @@ test("a route that cannot be opened says why and tries again by itself", () =>
       const told: FlockItem[] = [];
       const flaky: Route<Fake> = {
         machine: { profile: "p-vm", name: "vm", target: "mk@vm" },
+        collie: () => Effect.die("not asked"),
         open: () =>
           Effect.suspend(() =>
             tries++ === 0
@@ -226,7 +231,7 @@ test("a route that cannot be opened says why and tries again by itself", () =>
                 }),
           ),
       };
-      yield* flockStream([flaky], new Map()).pipe(
+      yield* flockStream([flaky], new Map(), "0.31.0").pipe(
         Stream.runForEach((item) => Effect.sync(() => told.push(item))),
         Effect.forkScoped,
       );
@@ -251,5 +256,136 @@ test("a bridge whose shell finds no collie is a Machine without Collie, in the s
         "echo 'Permission denied' >&2; exit 1",
       ]).pipe(Effect.flip);
       expect(other).toEqual({ state: "unreachable", reason: "Permission denied" });
+    }).pipe(Effect.scoped),
+  ));
+
+test("a Machine's build asks for an upgrade only where it is an older release, and for a newer Desktop only outside the window", () => {
+  const at = (over: Partial<BoardSnapshot>) => ({ ...snapshot("vm"), ...over });
+  expect(buildVerdict(at({ build: "0.30.2" }), "0.31.0")).toBe("upgrade");
+  expect(buildVerdict(at({ build: "0.31.0" }), "0.31.0")).toBe("as-is");
+  expect(buildVerdict(at({ build: "0.32.0" }), "0.31.0")).toBe("as-is");
+  expect(buildVerdict(at({ build: "0.30.2", development: "0.30.2+abc1234" }), "0.31.0")).toBe(
+    "as-is",
+  );
+  expect(buildVerdict(at({ build: "0.32.0", protocol: PROTOCOL + 1 }), "0.31.0")).toBe("as-is");
+  expect(buildVerdict(at({ build: "0.40.0", protocol: PROTOCOL + 2 }), "0.31.0")).toBe(
+    "update-desktop",
+  );
+});
+
+const toldWithNotices = (item: FlockItem) =>
+  "_tag" in item && item._tag === "Notice"
+    ? item.text
+    : "_tag" in item
+      ? toldOf(item)
+      : `${item.message._tag}${item.message._tag === "Snapshot" ? ` ${item.message.build}` : ""}`;
+
+test("an older release is upgraded once through its route while its board stays live, then opened again on its new build without being shown lost", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      let build = "0.30.2";
+      const asked: string[][] = [];
+      const told: string[] = [];
+      const upgradeMayFinish = yield* Deferred.make<void>();
+      const old: Route<Fake> = {
+        machine: { profile: "p-vm", name: "vm", target: "mk@vm" },
+        open: () =>
+          Effect.sync(() => ({
+            name: "vm",
+            board: () =>
+              Stream.fromIterable<BoardMessage>([
+                { ...snapshot("vm"), build },
+                { _tag: "Remove", seq: 1, id: "t-gone" },
+              ]).pipe(Stream.concat(Stream.never)),
+          })),
+        collie: (args) =>
+          Deferred.await(upgradeMayFinish).pipe(
+            Effect.andThen(
+              Effect.sync(() => {
+                asked.push([...args]);
+                build = args.at(-1)!;
+                return { out: "", err: "", code: 0 };
+              }),
+            ),
+          ),
+      };
+      yield* flockStream([old], new Map(), "0.31.0").pipe(
+        Stream.runForEach((item) => Effect.sync(() => told.push(toldWithNotices(item)))),
+        Effect.forkScoped,
+      );
+      // A change on the board reaches it while the upgrade is still running.
+      yield* until(() => told.length === 2);
+      yield* Deferred.succeed(upgradeMayFinish, undefined);
+      yield* until(() => told.length >= 4);
+      expect(told.slice(0, 4)).toEqual([
+        "Snapshot 0.30.2",
+        "Remove",
+        "vm upgraded 0.30.2 → 0.31.0",
+        "Snapshot 0.31.0",
+      ]);
+      expect(asked).toEqual([["--json", "upgrade", "--to", "0.31.0"]]);
+    }).pipe(Effect.scoped),
+  ));
+
+test("a board a newer collie serves that this Desktop cannot read asks for a newer Desktop, and is not tried again", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      let opened = 0;
+      const told: FlockItem[] = [];
+      const newer: Route<Fake> = {
+        machine: { profile: "p-vm", name: "vm", target: "mk@vm" },
+        open: () =>
+          Effect.sync(() => {
+            opened++;
+            return {
+              name: "vm",
+              board: () => Stream.fail({ message: "could not decode Snapshot" }),
+            };
+          }),
+        collie: () => Effect.succeed({ out: "collie v0.40.0\n", err: "", code: 0 }),
+      };
+      yield* flockStream([newer], new Map(), "0.31.0").pipe(
+        Stream.runForEach((item) => Effect.sync(() => told.push(item))),
+        Effect.forkScoped,
+      );
+      yield* until(() => told.length === 1);
+      expect(told[0]).toMatchObject({
+        _tag: "Lost",
+        state: "update-desktop",
+        reason: "vm runs collie 0.40.0, whose board this Desktop (0.31.0) cannot read.",
+      });
+      yield* Effect.sleep("1500 millis");
+      expect(opened).toBe(1);
+    }).pipe(Effect.scoped, fastForward),
+  ));
+
+test("a Machine that cannot be upgraded says why in its own words, and is shown as it is", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const told: string[] = [];
+      const stuck: Route<Fake> = {
+        machine: { profile: "p-vm", name: "vm", target: "mk@vm" },
+        open: () =>
+          Effect.succeed({
+            name: "vm",
+            board: () =>
+              Stream.make({ ...snapshot("vm"), build: "0.30.2" }).pipe(Stream.concat(Stream.never)),
+          }),
+        collie: () =>
+          Effect.succeed({
+            out: JSON.stringify({ ok: false, error: { message: "There is no release 0.31.0." } }),
+            err: "",
+            code: 1,
+          }),
+      };
+      yield* flockStream([stuck], new Map(), "0.31.0").pipe(
+        Stream.runForEach((item) => Effect.sync(() => told.push(toldWithNotices(item)))),
+        Effect.forkScoped,
+      );
+      yield* until(() => told.length === 2);
+      expect(told).toEqual([
+        "Snapshot 0.30.2",
+        "Could not upgrade vm to 0.31.0: There is no release 0.31.0.",
+      ]);
     }).pipe(Effect.scoped),
   ));

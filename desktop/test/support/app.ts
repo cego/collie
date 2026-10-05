@@ -25,10 +25,11 @@ export const serve = (
   installation: string,
   tasks: ReadonlyArray<TaskView>,
   herds: ScriptedMachine["herds"] = [{ id: "default" }],
+  build: Pick<ScriptedMachine, "build" | "development" | "protocol"> = {},
 ) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
-    yield* fs.writeFileString(`${file}.new`, asMachine({ installation, herds, tasks }));
+    yield* fs.writeFileString(`${file}.new`, asMachine({ installation, herds, tasks, ...build }));
     yield* fs.rename(`${file}.new`, file);
   });
 

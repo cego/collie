@@ -37,11 +37,18 @@ export const saving =
       const fs = yield* FileSystem.FileSystem;
       yield* fs.makeDirectory(dir, { recursive: true }).pipe(Effect.ignore);
       let flock = EMPTY_FLOCK;
-      const save = ({ machine, herds, tasks, asOf }: FlockMachine) =>
+      const save = ({ machine, herds, tasks, asOf, development }: FlockMachine) =>
         Effect.gen(function* () {
           const at = asOf ?? (yield* Clock.currentTimeMillis);
           const file = fileOf(dir, machine.installation);
-          const saved = { _tag: "Saved" as const, machine, herds, tasks: [...tasks.values()], at };
+          const saved = {
+            _tag: "Saved" as const,
+            machine,
+            herds,
+            tasks: [...tasks.values()],
+            development,
+            at,
+          };
           yield* fs.writeFileString(`${file}.new`, Schema.encodeSync(SavedFile)(saved));
           yield* fs.rename(`${file}.new`, file);
         }).pipe(Effect.ignore);

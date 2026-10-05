@@ -2,9 +2,11 @@
 // marker, then `FrontDoorRpcs` over stdio. Its installation, Herds and TaskViews are
 // whatever the file named first on its command line holds, read again every 100 ms.
 // Every operation it is asked is appended to `<board.json>.ops.jsonl`; an answer also
-// takes the decision off its Task, as a host's would.
+// takes the decision off its Task, as a host's would. Run as `--json upgrade --to <v>`
+// instead, it logs that and moves the Machine's build to `v`, as a release's would.
 //
 // Usage: bun scripted-host.ts <board.json> bridge --as desktop --client <computer>
+//        bun scripted-host.ts <board.json> --json upgrade --to <version>
 
 import { BunFileSystem, BunRuntime, BunStdio } from "@effect/platform-bun";
 import { Effect, FileSystem, Layer, Schedule, Schema, Stream } from "effect";
@@ -15,13 +17,14 @@ import { boardMessages } from "../../../src/board-stream";
 import { OFFERS, REFUSED_RUN, STARTABLE, ScriptedMachine } from "./scripted-machine";
 
 const [board, ...bridge] = Bun.argv.slice(2);
-if (board === undefined || bridge.slice(0, 3).join(" ") !== "bridge --as desktop") {
+const MachineFile = Schema.fromJsonString(ScriptedMachine);
+const asLine = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+
+const upgrading = board !== undefined && bridge.slice(0, 3).join(" ") === "--json upgrade --to";
+if (!upgrading && (board === undefined || bridge.slice(0, 3).join(" ") !== "bridge --as desktop")) {
   process.stderr.write(`scripted host: started as ${Bun.argv.slice(2).join(" ")}\n`);
   process.exit(2);
 }
-
-const MachineFile = Schema.fromJsonString(ScriptedMachine);
-const asLine = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
 /** What an operation was asked with, as it is logged. */
 type Asked = Parameters<typeof asLine>[0];
@@ -47,7 +50,8 @@ const handlers = Served.toLayer(
       fs
         .writeFileString(`${board}.new`, asLine(machine))
         .pipe(Effect.andThen(fs.rename(`${board}.new`, board)), Effect.orDie);
-    const { installation, herds } = yield* read;
+    const { installation, herds, build, development, protocol } = yield* read;
+    const developing = development === undefined ? {} : { development };
     const logged = (op: string, payload: Asked) =>
       fs
         .writeFileString(`${board}.ops.jsonl`, `${asLine({ op, payload })}\n`, { flag: "a" })
@@ -73,7 +77,13 @@ const handlers = Served.toLayer(
     return {
       board: () =>
         boardMessages({
-          head: { installation, build: "scripted", protocol: PROTOCOL, herds },
+          head: {
+            installation,
+            build: build ?? "scripted",
+            ...developing,
+            protocol: protocol ?? PROTOCOL,
+            herds,
+          },
           build: Effect.map(read, ({ tasks }) => tasks),
           changed: Stream.fromSchedule(Schedule.spaced("100 millis")),
         }),
@@ -144,12 +154,34 @@ const handlers = Served.toLayer(
   }),
 );
 
-process.stdout.write(`Welcome to the scripted Machine\n${BRIDGE_READY}\n`);
+/** Moves the Machine's build to the version asked for, as `collie upgrade --to` would. */
+const upgrade = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const to = bridge[3]!;
+  const file = board!;
+  const machine = yield* fs
+    .readFileString(file)
+    .pipe(Effect.flatMap(Schema.decodeUnknownEffect(MachineFile)));
+  yield* fs.writeFileString(
+    `${file}.ops.jsonl`,
+    `${asLine({ op: "upgrade", payload: { to } })}\n`,
+    {
+      flag: "a",
+    },
+  );
+  yield* fs.writeFileString(`${file}.new`, asLine({ ...machine, build: to }));
+  yield* fs.rename(`${file}.new`, file);
+  process.stdout.write(`${asLine({ ok: true, data: { version: to } })}\n`);
+}).pipe(Effect.orDie, Effect.provide(BunFileSystem.layer));
 
-Layer.launch(
-  RpcServer.layer(Served).pipe(
-    Layer.provide(handlers),
-    Layer.provide(RpcServer.layerProtocolStdio),
-    Layer.provide([RpcSerialization.layerNdjson, BunStdio.layer, BunFileSystem.layer]),
-  ),
-).pipe(BunRuntime.runMain);
+if (upgrading) BunRuntime.runMain(upgrade);
+else {
+  process.stdout.write(`Welcome to the scripted Machine\n${BRIDGE_READY}\n`);
+  Layer.launch(
+    RpcServer.layer(Served).pipe(
+      Layer.provide(handlers),
+      Layer.provide(RpcServer.layerProtocolStdio),
+      Layer.provide([RpcSerialization.layerNdjson, BunStdio.layer, BunFileSystem.layer]),
+    ),
+  ).pipe(BunRuntime.runMain);
+}

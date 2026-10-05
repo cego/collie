@@ -35,7 +35,7 @@ export type KnownMachine = typeof KnownMachine.Type;
 export const MachineMessage = Schema.Struct({ machine: Machine, message: BoardMessage });
 export type MachineMessage = typeof MachineMessage.Type;
 
-export const NotLive = Schema.Literals(["unreachable", "sso", "no-collie"]);
+export const NotLive = Schema.Literals(["unreachable", "sso", "no-collie", "update-desktop"]);
 export type NotLive = typeof NotLive.Type;
 
 /** A route Desktop could not open, or lost, and since when. */
@@ -52,6 +52,7 @@ export const MachineSaved = Schema.TaggedStruct("Saved", {
   machine: Machine,
   herds: Schema.Array(Herd),
   tasks: Schema.Array(TaskView),
+  development: Schema.optionalKey(Schema.NullOr(Schema.String)),
   at: Schema.Number,
 });
 export type MachineSaved = typeof MachineSaved.Type;
@@ -60,7 +61,20 @@ export type MachineSaved = typeof MachineSaved.Type;
 export const MachineMerged = Schema.TaggedStruct("Merged", { machine: KnownMachine });
 export type MachineMerged = typeof MachineMerged.Type;
 
-export const FlockItem = Schema.Union([MachineMessage, MachineLost, MachineSaved, MachineMerged]);
+/** What Desktop did on a Machine that a human should hear of, such as upgrading it. */
+export const MachineNotice = Schema.TaggedStruct("Notice", {
+  machine: KnownMachine,
+  text: Schema.String,
+});
+export type MachineNotice = typeof MachineNotice.Type;
+
+export const FlockItem = Schema.Union([
+  MachineMessage,
+  MachineLost,
+  MachineSaved,
+  MachineMerged,
+  MachineNotice,
+]);
 export type FlockItem = typeof FlockItem.Type;
 
 /** One board action, as the view asks it of a Machine's host. */
@@ -140,6 +154,8 @@ export interface FlockMachine {
   readonly herds: ReadonlyArray<Herd>;
   readonly tasks: ReadonlyMap<string, TaskView>;
   readonly asOf: number | null;
+  /** `<version>+<sha>` where the Machine runs a development checkout. */
+  readonly development: string | null;
 }
 
 /** Each Machine keyed by installation id, and each route not live by its herdr profile. */
@@ -149,9 +165,11 @@ export interface Flock {
     string,
     { readonly name: string; readonly state: NotLive; readonly reason: string }
   >;
+  /** Every notice so far, oldest first. */
+  readonly notices: ReadonlyArray<string>;
 }
 
-export const EMPTY_FLOCK: Flock = { machines: new Map(), lost: new Map() };
+export const EMPTY_FLOCK: Flock = { machines: new Map(), lost: new Map(), notices: [] };
 
 /**
  * A snapshot replaces its Machine and makes it live; a change touches one Task; a lost
@@ -159,6 +177,8 @@ export const EMPTY_FLOCK: Flock = { machines: new Map(), lost: new Map() };
  * stands in until its Machine is live; anything newer is skipped.
  */
 export const applyItem = (flock: Flock, item: FlockItem): Flock => {
+  if ("_tag" in item && item._tag === "Notice")
+    return { ...flock, notices: [...flock.notices, item.text] };
   if ("_tag" in item && item._tag === "Saved") {
     const { machine, herds, tasks, at } = item;
     if (flock.machines.has(machine.installation)) return flock;
@@ -167,6 +187,7 @@ export const applyItem = (flock: Flock, item: FlockItem): Flock => {
       herds,
       tasks: new Map(tasks.map((task) => [task.id, task])),
       asOf: at,
+      development: item.development ?? null,
     };
     return { ...flock, machines: new Map(flock.machines).set(machine.installation, saved) };
   }
@@ -182,7 +203,7 @@ export const applyItem = (flock: Flock, item: FlockItem): Flock => {
     for (const [installation, known] of machines)
       if (known.machine.profile === machine.profile && known.asOf === null)
         machines.set(installation, { ...known, asOf: at });
-    return { machines, lost };
+    return { ...flock, machines, lost };
   }
   const { machine, message } = item;
   if (message._tag === "Unknown") return flock;
@@ -193,13 +214,17 @@ export const applyItem = (flock: Flock, item: FlockItem): Flock => {
   if (message._tag === "Upsert") tasks.set(message.task.id, message.task);
   if (message._tag === "Remove") tasks.delete(message.id);
   const herds = message._tag === "Snapshot" ? message.herds : (known?.herds ?? []);
+  const development =
+    message._tag === "Snapshot" ? (message.development ?? null) : (known?.development ?? null);
   lost.delete(machine.profile);
   return {
+    ...flock,
     machines: new Map(flock.machines).set(machine.installation, {
       machine,
       herds,
       tasks,
       asOf: null,
+      development,
     }),
     lost,
   };
@@ -263,6 +288,10 @@ export const flockCards = (flock: Flock) => {
         name: names.get(installation)!,
         projects: [...new Set([...tasks.values()].map((task) => task.project))].sort(),
       })),
+    /** Each Machine on a development build, by its display name, and which build it is. */
+    developments: [...flock.machines].flatMap(([installation, { development }]) =>
+      development === null ? [] : [{ name: names.get(installation)!, development }],
+    ),
   };
 };
 

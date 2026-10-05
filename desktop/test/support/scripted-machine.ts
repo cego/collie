@@ -3,6 +3,9 @@ import { Herd, type OfferView, type Startable, TaskView } from "../../../src/boa
 
 export const ScriptedMachine = Schema.Struct({
   installation: Schema.String,
+  build: Schema.optionalKey(Schema.String),
+  development: Schema.optionalKey(Schema.String),
+  protocol: Schema.optionalKey(Schema.Int),
   herds: Schema.Array(Herd),
   tasks: Schema.Array(TaskView),
 });

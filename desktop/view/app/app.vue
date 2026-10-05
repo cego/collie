@@ -2,14 +2,34 @@
 import { SECTIONS } from "../../../src/board-model";
 import type { NotLive } from "../../src/shared/flock";
 
-const { connecting, failure, lost, machines, tasks, sections, header, waiting } = useFlock();
+const {
+  connecting,
+  failure,
+  lost,
+  machines,
+  developments,
+  notices,
+  tasks,
+  sections,
+  header,
+  waiting,
+} = useFlock();
 const starting = ref(false);
 
 const NOT_LIVE: Record<NotLive, { icon: string; title: (name: string) => string }> = {
   unreachable: { icon: "i-lucide-unplug", title: (name) => `${name} is out of reach` },
   sso: { icon: "i-lucide-key-round", title: (name) => `Waiting for SSO login on ${name}` },
   "no-collie": { icon: "i-lucide-package-x", title: (name) => `Collie isn't installed on ${name}` },
+  "update-desktop": {
+    icon: "i-lucide-circle-arrow-up",
+    title: (name) => `Update Desktop to see ${name}`,
+  },
 };
+
+const toast = useToast();
+watch(notices, (now, before) => {
+  for (const text of now.slice(before.length)) toast.add({ title: text, color: "info" });
+});
 </script>
 
 <template>
@@ -51,6 +71,16 @@ const NOT_LIVE: Record<NotLive, { icon: string; title: (name: string) => string 
           :title="NOT_LIVE[state].title(name)"
           :description="reason"
           :actions="state === 'no-collie' ? [{ label: 'Onboard', disabled: true }] : []"
+        />
+        <UAlert
+          v-for="{ name, development } in developments"
+          :key="name"
+          :data-testid="`development-${name}`"
+          color="neutral"
+          variant="subtle"
+          icon="i-lucide-flask-conical"
+          :title="name"
+          :description="`development build ${development}`"
         />
         <p v-if="tasks.length === 0" class="text-muted">Nothing on the board yet.</p>
         <template v-for="[section, label] in SECTIONS" :key="section">

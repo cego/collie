@@ -529,6 +529,8 @@ export const BoardSnapshot = Schema.TaggedStruct("Snapshot", {
   /** Stable for the state directory, so a Machine reached by two routes is one. */
   installation: Schema.String,
   build: Schema.String,
+  /** `<version>+<sha>` for a development checkout, which nothing upgrades; absent for a release. */
+  development: Schema.optionalKey(Schema.String),
   protocol: Schema.Int,
   herds: Schema.Array(Herd),
   tasks: Schema.Array(TaskView),
