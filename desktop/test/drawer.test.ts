@@ -324,10 +324,7 @@ beforeAll(
   120_000,
 );
 
-afterAll(async () => {
-  await run(quit(app));
-  await away.stop();
-});
+afterAll(() => run(quit(app)).then(() => away.stop()));
 
 const drawer = () => app!.page.getByTestId("drawer");
 const tab = (name: string) => drawer().getByRole("tab", { name });
