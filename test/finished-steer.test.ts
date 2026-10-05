@@ -59,7 +59,7 @@ const deliver = (runId: string, agent: string, text: string) => ({
   run: runId,
   agent,
   text,
-  mode: "now" as const,
+  mode: "boundary" as const,
 });
 
 let asked = 0;
