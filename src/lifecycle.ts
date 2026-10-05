@@ -49,7 +49,8 @@ import {
   type TaskView,
 } from "./board-model";
 import type { Action } from "./evaluator";
-import { REFUSED_INPUT, runDir, type Given, type OfferView, type RunView } from "./engine";
+import { REFUSED_INPUT, runDir, type Given, type RunView } from "./engine";
+import type { OfferView } from "./board-model";
 import { err, ExpectedError, taskFor, type Failure, type OpResult } from "./operations";
 import type { TaskChoice } from "./task";
 import { encodeApprovedFile, rememberedFile, renderApproved, type VerifySpec } from "./verify-spec";

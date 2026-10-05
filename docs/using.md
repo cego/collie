@@ -845,10 +845,12 @@ drawer whose Confirm stays off until all of it has been on screen, then sent wit
 and content hash. Each card's `⋯` menu offers what the TUI menu does, by the same rules —
 Steer…, the Run's offers (asked of its host when opened, with a field for each argument),
 Resume, Follow-up, Hold or Release, Stop, and Mark merged, abandoned or superseded — and
-the card's first action is the TUI card's own, save going to a tab and opening a merge
-request, which Desktop does not do yet. **New run** asks a Machine what a project
+the card's first action is the TUI card's own. Going to a tab and following a check's output
+are not on Desktop yet: both are panes on the Machine. Open merge request opens it in your
+browser. **New run** asks a Machine what a project
 can start, then starts it with what you typed for its inputs. What came of each, or the
-host's own words for why not, is said in a toast; the card then changes from the host's
+host's own words for why not, is said in a toast, and **Try again** on a failure sends the
+same request again, so a host that took it before the answer was lost does it once; the card then changes from the host's
 stream like any other change. Every one is recorded on that Machine as `desktop`, with this
 computer's name.
 

@@ -2,7 +2,7 @@
 // readable labels. Labels go on tabs and panes; these go on agents.
 
 import { DEFAULT_MODEL } from "./harness";
-import { parseMrTarget } from "./mr";
+import { parseMrTarget } from "./board-model";
 import { diffTargetOf, type Settled } from "./strategies";
 
 const MAX = 32;

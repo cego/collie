@@ -300,23 +300,26 @@ export const flockStream = <D extends BoardSource>(
     }),
   );
 
-/** Why a host said no, in its own words. */
-const refusal = (
-  error:
-    | HostRefused
-    | ProposalRefused
-    | RequestConflict
-    | RpcClientError.RpcClientError
-    | Unsteered,
-) =>
-  new ActionFailed({
-    reason:
-      error._tag === "HostRefused" || error._tag === "RequestConflict"
-        ? error.reason
-        : error._tag === "ProposalRefused"
-          ? error.detail
-          : error.message,
-  });
+/** Why a host said no, in its own words, under the request it was asked as. */
+const refusal =
+  (request?: string) =>
+  (
+    error:
+      | HostRefused
+      | ProposalRefused
+      | RequestConflict
+      | RpcClientError.RpcClientError
+      | Unsteered,
+  ) =>
+    new ActionFailed({
+      request,
+      reason:
+        error._tag === "HostRefused" || error._tag === "RequestConflict"
+          ? error.reason
+          : error._tag === "ProposalRefused"
+            ? error.detail
+            : error.message,
+    });
 
 /** A steer the host carried no further, with what it said about it. */
 interface Unsteered {
@@ -384,7 +387,7 @@ export const act = (door: Door, request: string, action: DesktopAction) => {
           .pipe(Effect.map((started) => `Started ${started.runId}`));
     }
   })();
-  return said.pipe(Effect.mapError(refusal));
+  return said.pipe(Effect.mapError(refusal(request)));
 };
 
 /** The door to the Machine an installation id names, while Desktop shows it. */
@@ -399,7 +402,7 @@ export const doorTo = <D>(
 };
 
 export const offersOn = (door: Door, runId: string) =>
-  door.offers({ runId }).pipe(Effect.mapError(refusal));
+  door.offers({ runId }).pipe(Effect.mapError(refusal()));
 
 export const workflowsOn = (door: Door, project: string) =>
-  door.workflows({ project }).pipe(Effect.mapError(refusal));
+  door.workflows({ project }).pipe(Effect.mapError(refusal()));

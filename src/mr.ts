@@ -17,8 +17,6 @@ import {
   parseMrUrl,
 } from "./board-model";
 
-export { type MrRef, parseMrTarget, parseMrUrl };
-
 export type Runner<R = never> = (
   cmd: string,
   args: string[],

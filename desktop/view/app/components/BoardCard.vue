@@ -1,15 +1,17 @@
 <script setup lang="ts">
 import {
-  canResume,
-  dispositionKinds,
-  dispositionRef,
-  isSettled,
+  type CardAction,
+  cardActions,
+  dispositionActions,
+  mrUrlOf,
+  type Proposal,
+  primaryAction,
   type TaskView,
 } from "../../../../src/board-model";
 import type { DesktopAction } from "../../../src/shared/flock";
 
 const props = defineProps<{ task: TaskView; where: string; installation: string }>();
-const { run } = useActions();
+const { run, openLink } = useActions();
 const act = (action: DesktopAction) => run(props.installation, action);
 
 const STATES: Record<
@@ -52,81 +54,83 @@ const toggle = (name: string, on: boolean | "indeterminate") => {
   );
 };
 
-const dispose = (kind: "merged" | "abandoned" | "superseded") =>
-  act({
-    _tag: "Dispose",
-    runId: props.task.run,
-    kind,
-    ref: kind === "abandoned" ? "" : dispositionRef(props.task.mr),
-  });
+/**
+ * A card action as this board does it, or null where Desktop has no way to yet: a tab and
+ * a check's output are panes on the Machine, which going to a pane will bring.
+ */
+const doing = (action: CardAction, primary: boolean) => {
+  const view = props.task;
+  const runId = view.run;
+  switch (action.kind) {
+    case "go-to-tab":
+    case "check-output":
+      return null;
+    case "steer":
+      return {
+        label: "Steer…",
+        press: () =>
+          (asking.value = {
+            title: `What should ${view.name} do?`,
+            send: (text) => ({ _tag: "Steer", runId, text }),
+          }),
+      };
+    case "open-mr": {
+      const url = mrUrlOf(action.mr);
+      return url === null
+        ? null
+        : { label: primary ? "Open MR" : "Open merge request", press: () => openLink(url) };
+    }
+    case "offer": {
+      const offer = action.offer.id;
+      return { label: action.offer.title, press: () => (offering.value = { offer }) };
+    }
+    case "offers":
+      return { label: "What it offers…", press: () => (offering.value = { offer: null }) };
+    case "resume":
+      return {
+        label: primary ? "Resume" : "Resume run",
+        press: () => act({ _tag: "Resume", runId }),
+      };
+    case "follow-up":
+      return {
+        label: "Follow-up run",
+        press: () =>
+          (asking.value = {
+            title: `What still needs doing on ${view.name}?`,
+            send: (text) => ({ _tag: "FollowUp", runId, text }),
+          }),
+      };
+    case "hold":
+      return {
+        label: action.set ? "Hold run" : "Release hold",
+        press: () => act({ _tag: "Control", runId, control: "hold", set: action.set }),
+      };
+    case "stop":
+      return {
+        label: "Stop run",
+        press: () => act({ _tag: "Control", runId, control: "stop", set: true }),
+      };
+    case "dispose":
+      return {
+        label: `Mark ${action.disposition}`,
+        press: () => act({ _tag: "Dispose", runId, kind: action.disposition, ref: action.ref }),
+      };
+  }
+};
 
 /** The one action that ends this card's wait, as the TUI board draws it first. */
 const primary = computed(() => {
-  const view = props.task;
-  if (view.decision !== null || view.landed) return null;
-  if (view.state === "active" || view.state === "quiet") return null;
-  if (view.planReady) {
-    const offer = view.offer;
-    return offer === null
-      ? null
-      : { label: offer.title, press: () => (offering.value = { offer: offer.id }) };
-  }
-  if (canResume(view.state))
-    return { label: "Resume", press: () => act({ _tag: "Resume", runId: view.run }) };
-  if (view.mrState === "closed")
-    return { label: "Mark superseded", press: () => dispose("superseded") };
-  return null;
+  const action = primaryAction(props.task);
+  return action === null ? null : doing(action, true);
 });
 
-/** What this Task can be asked for, by the same rules as the TUI board's menu. */
-const menu = computed(() => {
-  const view = props.task;
-  const runId = view.run;
-  const items: Array<{ label: string; onSelect: () => void }> = [];
-  if (!isSettled(view.state)) {
-    items.push({
-      label: "Steer…",
-      onSelect: () =>
-        (asking.value = {
-          title: `What should ${view.name} do?`,
-          send: (text) => ({ _tag: "Steer", runId, text }),
-        }),
-    });
-  }
-  const offer = view.offer;
-  if (offer !== null) {
-    items.push({ label: offer.title, onSelect: () => (offering.value = { offer: offer.id }) });
-  }
-  items.push({ label: "What it offers…", onSelect: () => (offering.value = { offer: null }) });
-  if (canResume(view.state)) {
-    items.push({ label: "Resume run", onSelect: () => act({ _tag: "Resume", runId }) });
-  }
-  if (view.state === "done") {
-    items.push({
-      label: "Follow-up run",
-      onSelect: () =>
-        (asking.value = {
-          title: `What still needs doing on ${view.name}?`,
-          send: (text) => ({ _tag: "FollowUp", runId, text }),
-        }),
-    });
-  }
-  if (!isSettled(view.state)) {
-    const held = view.held !== null;
-    items.push({
-      label: held ? "Release hold" : "Hold run",
-      onSelect: () => act({ _tag: "Control", runId, control: "hold", set: !held }),
-    });
-    items.push({
-      label: "Stop run",
-      onSelect: () => act({ _tag: "Control", runId, control: "stop", set: true }),
-    });
-  }
-  for (const kind of dispositionKinds(view)) {
-    items.push({ label: `Mark ${kind}`, onSelect: () => dispose(kind) });
-  }
-  return items;
-});
+/** What this Task can be asked for, as the TUI board's menu offers it, and what became of it. */
+const menu = computed(() =>
+  [...cardActions(props.task), ...dispositionActions(props.task)].flatMap((action) => {
+    const one = doing(action, false);
+    return one === null ? [] : [{ label: one.label, onSelect: one.press }];
+  }),
+);
 </script>
 
 <template>
@@ -247,8 +251,12 @@ const menu = computed(() => {
       <ProposalDrawer
         v-model:open="reviewing"
         :proposal="task.decision"
-        @confirm="act({ _tag: 'Confirm', proposal: task.decision.id, hash: task.decision.hash })"
-        @decline="act({ _tag: 'Decline', proposal: task.decision.id, hash: task.decision.hash })"
+        @confirm="
+          (shown: Proposal) => act({ _tag: 'Confirm', proposal: shown.id, hash: shown.hash })
+        "
+        @decline="
+          (shown: Proposal) => act({ _tag: 'Decline', proposal: shown.id, hash: shown.hash })
+        "
       />
     </div>
 

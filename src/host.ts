@@ -45,7 +45,6 @@ import * as RpcServer from "effect/unstable/rpc/RpcServer";
 import manifest from "../herdr-plugin.toml";
 import {
   EntryError,
-  OfferView,
   REFUSED_INPUT,
   Registrations,
   RunStatus,
@@ -205,14 +204,6 @@ export const HostRpcs = RpcGroup.make(
   }),
   /** Registers what current files now allow and hands over what is outstanding. */
   Rpc.make("recover", { success: Registrations }),
-  // What a finished Run offers to do next. Through the host because only it holds the
-  // module that declared them: an offer is decided by the author's own code against the
-  // facts as they are now, never by a card's memory of it.
-  Rpc.make("offers", {
-    payload: { runId: Schema.String },
-    success: Schema.Array(OfferView),
-    error: HostRefused,
-  }),
   /** One command Collie may run for a run, granted or, with no command, withdrawn. */
   Rpc.make("grant", {
     payload: {
@@ -322,7 +313,6 @@ const handlers = (dir: string, installation: string, declared: Declared) =>
         runs: ({ task }) => registry.views(task),
         watch: ({ runId }) => registry.watch(runId),
         recover: () => registry.recover,
-        offers: ({ runId }) => registry.offers(runId),
         grant: ({ runId, name, command, request }, { client }) =>
           once(
             runDir(dir, runId),

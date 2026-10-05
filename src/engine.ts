@@ -92,12 +92,11 @@ import {
   gitlabForProject,
   gitlabReadiness,
   mrFacts,
-  parseMrTarget,
-  parseMrUrl,
   postNote,
   projectHere,
   shell as runShell,
 } from "./mr";
+import { parseMrTarget, parseMrUrl } from "./board-model";
 import { Notifier, SOUND, notificationTitle, wanted, type Sound } from "./notify";
 import {
   Oversight,
@@ -142,7 +141,6 @@ import {
 import { TASK_INPUT, checkoutFor, repositoryName, workOf } from "./worktree";
 import { Herdr, herdrFailureReason } from "./herdr";
 
-export { OfferView } from "./board-model";
 import type { PluginEnv } from "./env";
 import { WorktreeRecordSchema } from "./run";
 import { listTasks, newTask, taskOfWorkspace, writeTask } from "./task";

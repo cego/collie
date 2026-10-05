@@ -48,7 +48,8 @@ export { SOURCES, SOURCE_NAMES, isSource, type Source } from "./offers";
  * What a review is about its target: which kind of change it names, and the glab
  * arguments that point a command at its project from anywhere.
  */
-export { parseMrTarget, repoArgs, targetKind, type MrRef } from "./mr";
+export { repoArgs, targetKind } from "./mr";
+export { parseMrTarget, type MrRef } from "./board-model";
 
 export {
   CheckSchema,

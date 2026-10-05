@@ -1,5 +1,6 @@
 // What a board is made of, as every front door decodes it, and the pure rules that place
-// and count its cards. No I/O and no Bun-only import: a browser bundle imports this too.
+// and count its cards, decide what each one offers and read what it names. No I/O and no
+// Bun-only import: a browser bundle imports this too.
 
 import { Option, Schema, SchemaGetter } from "effect";
 import * as Rpc from "effect/unstable/rpc/Rpc";
@@ -904,7 +905,11 @@ export const FrontDoorRpcs = RpcGroup.make(
     success: Started,
     error: Schema.Union([HostRefused, RequestConflict]),
   }),
-  /** What a Run offers to do next, as its module decides now; what `invoke` takes. */
+  /**
+   * What a Run offers to do next. Through the host because only it holds the module that
+   * declared them: an offer is decided by the author's own code against the facts as they
+   * are now, never by a card's memory of it.
+   */
   Rpc.make("offers", {
     payload: { runId: Schema.String },
     success: Schema.Array(OfferView),
@@ -957,12 +962,6 @@ export function parseMrUrl(url: string): MrRef | null {
   return m ? { project: `${m[1]}/${m[2]}`, iid: m[3]! } : null;
 }
 
-/** What a disposition names as its backing: `collie!151` for the Task's merge request. */
-export function dispositionRef(mr: string | null): string {
-  const ref = mr === null ? null : (parseMrUrl(mr) ?? parseMrTarget(mr));
-  return ref === null ? "" : `${(ref.project ?? "").split("/").at(-1)}!${ref.iid}`;
-}
-
 /**
  * What an offer's arguments take, from what a human typed into each: text as typed for a
  * text field, anything else as the JSON it spells where it parses. Blank optional fields
@@ -1010,18 +1009,89 @@ export function canResume(state: TaskState): boolean {
   return state === "failed" || state === "stopped" || state === "abandoned";
 }
 
+/** However the Task names its merge request: the URL one opened, or the target one was pointed at. */
+export function mrRefOf(mr: string | null): MrRef | null {
+  return mr === null ? null : (parseMrUrl(mr) ?? parseMrTarget(mr));
+}
+
+/** Where a merge request is read in a browser, where its target says which project. */
+export function mrUrlOf(ref: MrRef): string | null {
+  return ref.project === null ? null : `https://${ref.project}/-/merge_requests/${ref.iid}`;
+}
+
+type DispositionKind = "merged" | "abandoned" | "superseded";
+
+/** One thing a card can be asked for. Each front door draws it its own way. */
+export type CardAction =
+  | { readonly kind: "go-to-tab" }
+  | { readonly kind: "steer" }
+  | { readonly kind: "open-mr"; readonly mr: MrRef }
+  | { readonly kind: "offer"; readonly offer: BoardOffer }
+  | { readonly kind: "check-output" }
+  | { readonly kind: "offers" }
+  | { readonly kind: "resume" }
+  | { readonly kind: "follow-up" }
+  | { readonly kind: "hold"; readonly set: boolean }
+  | { readonly kind: "stop" }
+  | { readonly kind: "dispose"; readonly disposition: DispositionKind; readonly ref: string };
+
+/** `collie!151` rather than the whole URL: a disposition's ref ends up in the card's sentence. */
+const dispose = (view: TaskView, disposition: DispositionKind): CardAction => {
+  const mr = mrRefOf(view.mr);
+  const ref =
+    disposition === "abandoned" || mr === null
+      ? ""
+      : `${(mr.project ?? "").split("/").at(-1)}!${mr.iid}`;
+  return { kind: "dispose", disposition, ref };
+};
+
 /**
- * What a human may record became of the work: for any settled Task, since a Run that
- * failed and was finished by hand is what a disposition is for; superseded where its
- * merge request was closed.
+ * What this Task can be asked for, in the order a menu shows it. Only what would work: an
+ * item the human has to try to find out is refused is worse than no item.
  */
-export function dispositionKinds(
-  view: Pick<TaskView, "state" | "mrState">,
-): ReadonlyArray<"merged" | "abandoned" | "superseded"> {
+export function cardActions(view: TaskView): CardAction[] {
+  const actions: CardAction[] = [{ kind: "go-to-tab" }];
+  if (!isSettled(view.state)) actions.push({ kind: "steer" });
+  const mr = mrRefOf(view.mr);
+  if (mr !== null) actions.push({ kind: "open-mr", mr });
+  if (view.offer !== null) actions.push({ kind: "offer", offer: view.offer });
+  if (view.check !== null) actions.push({ kind: "check-output" });
+  actions.push({ kind: "offers" });
+  if (canResume(view.state)) actions.push({ kind: "resume" });
+  if (view.state === "done") actions.push({ kind: "follow-up" });
+  if (!isSettled(view.state)) {
+    actions.push({ kind: "hold", set: view.held === null });
+    actions.push({ kind: "stop" });
+  }
+  return actions;
+}
+
+/**
+ * The one action that ends a card's wait, drawn first on it. Working cards go to their
+ * tab; waiting cards get the action that lands or retires the work; a finished or
+ * decision card has none — its buttons are the decision's own, or the menu's.
+ */
+export function primaryAction(view: TaskView): CardAction | null {
+  if (view.decision !== null) return null;
+  if (view.state === "active" || view.state === "quiet") return { kind: "go-to-tab" };
+  if (view.landed) return null;
+  // Whatever the plan's module offers first, under its own title; none, no button.
+  if (view.planReady) return view.offer === null ? null : { kind: "offer", offer: view.offer };
+  if (canResume(view.state)) return { kind: "resume" };
+  if (view.mrState === "closed") return dispose(view, "superseded");
+  const mr = mrRefOf(view.mr);
+  return mr === null ? null : { kind: "open-mr", mr };
+}
+
+/**
+ * What became of the work, for any settled Task: a Run that failed and was finished by
+ * hand is what a disposition is for. Superseded where its merge request was closed.
+ */
+export function dispositionActions(view: TaskView): CardAction[] {
   if (!isSettled(view.state)) return [];
-  return view.mrState === "closed"
-    ? ["merged", "abandoned", "superseded"]
-    : ["merged", "abandoned"];
+  const kinds: DispositionKind[] = ["merged", "abandoned"];
+  if (view.mrState === "closed") kinds.push("superseded");
+  return kinds.map((kind) => dispose(view, kind));
 }
 
 /**

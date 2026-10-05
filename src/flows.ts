@@ -93,7 +93,8 @@ import {
 import type { Focus } from "./ui/bridge";
 import { buildHistory, buildSettings, buildWorkflows, NUMERIC_DEFAULTS } from "./views";
 import { isPermissionMode, PERMISSION_MODES } from "./harness";
-import { parseMrTarget, repoArgs, shell } from "./mr";
+import { repoArgs, shell } from "./mr";
+import { parseMrTarget } from "./board-model";
 import type { ChildProcessSpawner } from "effect/unstable/process";
 import {
   agentForKey,

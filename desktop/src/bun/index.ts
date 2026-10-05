@@ -5,7 +5,7 @@ import { hostname } from "node:os";
 import { BunRuntime, BunServices } from "@effect/platform-bun";
 import { Config, Crypto, Effect, FileSystem, Layer, Result, Schema, Stream } from "effect";
 import * as RpcServer from "effect/unstable/rpc/RpcServer";
-import Electrobun, { BrowserView, BrowserWindow, type RPCSchema } from "electrobun/bun";
+import Electrobun, { BrowserView, BrowserWindow, type RPCSchema, Utils } from "electrobun/bun";
 import {
   type Channel,
   type FrameSchema,
@@ -13,7 +13,7 @@ import {
   type ToMain,
   type ToView,
 } from "../shared/channel";
-import { DesktopRpcs, type FlockItem } from "../shared/flock";
+import { ActionFailed, DesktopRpcs, type FlockItem } from "../shared/flock";
 import {
   act,
   bridgeCommand,
@@ -96,13 +96,15 @@ const main = Effect.gen(function* () {
   const doors = new Map<string, Door>();
   const handlers = DesktopRpcs.toLayer({
     flock: () => Stream.merge(Stream.fromIterable(unlisted), flockStream(routes, doors)),
-    act: ({ installation, action }) =>
+    act: ({ installation, action, request: again }) =>
       Effect.gen(function* () {
-        const door = yield* doorTo(doors, installation);
-        // One id per click: the bridge carries it once, and the host keeps it as the claim.
-        const request = yield* (yield* Crypto.Crypto).randomUUIDv4.pipe(Effect.orDie);
+        const request = again ?? (yield* (yield* Crypto.Crypto).randomUUIDv4.pipe(Effect.orDie));
+        const door = yield* doorTo(doors, installation).pipe(
+          Effect.mapError((failed) => new ActionFailed({ reason: failed.reason, request })),
+        );
         return yield* act(door, request, action);
       }),
+    openLink: ({ url }) => Effect.sync(() => void Utils.openExternal(url)),
     offers: ({ installation, runId }) =>
       doorTo(doors, installation).pipe(Effect.flatMap((door) => offersOn(door, runId))),
     workflows: ({ installation, project }) =>

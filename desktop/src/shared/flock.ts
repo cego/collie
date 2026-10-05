@@ -81,12 +81,19 @@ export type DesktopAction = typeof DesktopAction.Type;
 /** What a Machine's host said no with, or why it could not be asked. */
 export class ActionFailed extends Schema.TaggedError<ActionFailed>()("ActionFailed", {
   reason: Schema.String,
+  /** The id it was asked under, which a retry sends again so the host does it once. */
+  request: Schema.optional(Schema.String),
 }) {}
 
 export const DesktopRpcs = RpcGroup.make(
   Rpc.make("flock", { success: FlockItem, stream: true }),
+  /** A retry names the request that failed; a first try leaves it to the main process. */
   Rpc.make("act", {
-    payload: { installation: Schema.String, action: DesktopAction },
+    payload: {
+      installation: Schema.String,
+      action: DesktopAction,
+      request: Schema.optional(Schema.String),
+    },
     success: Schema.String,
     error: ActionFailed,
   }),
@@ -95,6 +102,8 @@ export const DesktopRpcs = RpcGroup.make(
     success: Schema.Array(OfferView),
     error: ActionFailed,
   }),
+  /** A web page, opened in the human's own browser. */
+  Rpc.make("openLink", { payload: { url: Schema.String } }),
   Rpc.make("workflows", {
     payload: { installation: Schema.String, project: Schema.String },
     success: Schema.Array(Startable),

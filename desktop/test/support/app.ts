@@ -145,31 +145,24 @@ export const launch = (
       stdout: "ignore",
       stderr: "ignore",
     });
-    const pages = () =>
-      browser === undefined ? [] : browser.contexts().flatMap((context) => context.pages());
-    let browser: Browser | undefined;
-    const found = yield* Effect.gen(function* () {
-      browser = yield* settled(
-        "CEF's debugging port",
-        () => chromium.connectOverCDP(`http://127.0.0.1:${CDP}`),
-        250,
-      );
-      return yield* settled(
-        "Desktop's window",
-        () => Promise.resolve(pages().find((one) => one.url().startsWith("views://"))),
-        250,
-      );
-    }).pipe(
-      Effect.mapError(
-        (error) =>
-          `${error}; pages: ${pages()
-            .map((one) => one.url())
-            .join(", ")}`,
-      ),
+    let seen: ReadonlyArray<string> = [];
+    // Connected afresh each try: a connection made before the window opened may never see it.
+    const found = yield* settled(
+      "Desktop's window",
+      () =>
+        chromium.connectOverCDP(`http://127.0.0.1:${CDP}`).then((browser) => {
+          const pages = browser.contexts().flatMap((context) => context.pages());
+          seen = pages.map((one) => one.url());
+          const page = pages.find((one) => one.url().startsWith("views://"));
+          return page === undefined ? browser.close().then(() => undefined) : { browser, page };
+        }),
+      250,
+    ).pipe(
+      Effect.mapError((error) => `${error}; pages: ${seen.join(", ")}`),
       // A start that never showed its window must not keep the port from the next one.
       Effect.tapError(() => quit({ process: process_ })),
     );
-    return { browser: browser!, page: found, flock, process: process_ } satisfies App;
+    return { ...found, flock, process: process_ } satisfies App;
   });
 
 /** Ends the app and everything it started. */
