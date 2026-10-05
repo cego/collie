@@ -92,12 +92,11 @@ import {
   gitlabForProject,
   gitlabReadiness,
   mrFacts,
-  parseMrTarget,
-  parseMrUrl,
   postNote,
   projectHere,
   shell as runShell,
 } from "./mr";
+import { parseMrTarget, parseMrUrl } from "./board-model";
 import { Notifier, SOUND, notificationTitle, wanted, type Sound } from "./notify";
 import {
   Oversight,
@@ -135,11 +134,13 @@ import {
   Answered,
   Controlled,
   HostRefused,
+  OfferView,
   RequestConflict,
   type Disposition,
 } from "./board-model";
 import { TASK_INPUT, checkoutFor, repositoryName, workOf } from "./worktree";
 import { Herdr, herdrFailureReason } from "./herdr";
+
 import type { PluginEnv } from "./env";
 import { WorktreeRecordSchema } from "./run";
 import { listTasks, newTask, taskOfWorkspace, writeTask } from "./task";
@@ -3048,21 +3049,6 @@ export const Steered = Schema.Struct({
   /** The Run's Workflow has ended, so a gone agent's request is carried on by a new Run. */
   finished: Schema.optionalKey(Schema.Boolean),
 });
-
-/** One offer as a front door shows it, over the wire. */
-export const OfferView = Schema.Struct({
-  id: Schema.String,
-  title: Schema.String,
-  /** The workflow it starts, by public id. */
-  workflow: Schema.String,
-  /** What it takes, as JSON Schema; null where it takes nothing. */
-  arguments: Schema.NullOr(Schema.Json),
-  kind: Schema.Literals(["action", "follow-up"]),
-  primary: Schema.Boolean,
-  /** Why it cannot be made now, or null when it can. */
-  unavailable: Schema.NullOr(Schema.String),
-});
-export type OfferView = typeof OfferView.Type;
 
 export const RunView = Schema.Struct({
   runId: Schema.String,

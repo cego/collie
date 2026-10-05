@@ -8,7 +8,14 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import type { YamlValue } from "./yaml";
 import { isString } from "./schema";
 import { targetKind, workSourceOf, type Settled } from "./strategies";
-import type { MrDetails, MrPanel, MrUnavailable } from "./board-model";
+import {
+  type MrDetails,
+  type MrPanel,
+  type MrRef,
+  type MrUnavailable,
+  parseMrTarget,
+  parseMrUrl,
+} from "./board-model";
 import { epochMs } from "./time";
 
 export type Runner<R = never> = (
@@ -25,29 +32,6 @@ export const MR_TEMPLATE = ".gitlab/merge_request_templates/default.md";
 const LINEAR_ID = /\b([A-Z][A-Z0-9]+-\d+)\b/g;
 
 /**
- * An MR target names its project, not just its iid: reviewing or commenting on
- * someone else's merge request has to work from a directory that is not a
- * checkout of it, and every glab call then needs `--repo`.
- */
-export interface MrRef {
-  /** `host/group/project`, or null for an old target that only carried an iid. */
-  project: string | null;
-  iid: string;
-}
-
-/** `mr:gitlab.example.com/group/project!42`, or the bare `mr:42` that came before. */
-export function parseMrTarget(target: string): MrRef | null {
-  if (!target.startsWith("mr:")) return null;
-  const rest = target.slice(3);
-  const at = rest.lastIndexOf("!");
-  if (at < 0) return /^\d+$/.test(rest) ? { project: null, iid: rest } : null;
-  const iid = rest.slice(at + 1);
-  if (!/^\d+$/.test(iid)) return null;
-  const project = rest.slice(0, at);
-  return { project: project === "" ? null : project, iid };
-}
-
-/**
  * What `branch:<base>...<head>` — or a bare `branch:<head>` — is pointed at. Null for a
  * target of any other kind, and empty for one that names nothing: a caller that has
  * somewhere else to look wants those told apart. A ref, not necessarily a branch —
@@ -57,12 +41,6 @@ export function parseMrTarget(target: string): MrRef | null {
 export function branchTargetHead(target: string): string | null {
   if (!target.startsWith("branch:")) return null;
   return target.slice("branch:".length).split("...").at(-1)?.trim() ?? "";
-}
-
-/** `https://host/group/project/-/merge_requests/7`, the way glab reports what it opened. */
-export function parseMrUrl(url: string): MrRef | null {
-  const m = /^https?:\/\/([^/\s]+)\/(.+?)\/-\/merge_requests\/(\d+)/.exec(url.trim());
-  return m ? { project: `${m[1]}/${m[2]}`, iid: m[3]! } : null;
 }
 
 export type MrRole = "assignee" | "reviewer";

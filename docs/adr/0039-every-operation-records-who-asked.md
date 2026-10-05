@@ -42,6 +42,14 @@ forgets them, so a turn nobody prompted carries none. Native chat's conversation
 `native`, the name its News receipts carry. Like the rest of this record it is honest, not secure: a model with a shell could
 still write the file its tool host reads.
 
+## Amended 2026-10-02: a bridged channel is declared by its bridge
+
+`collie bridge --as <front door>` declares the channel it pipes before handing it over, so
+a front door on another computer is stamped as what it was started as. `desktop` is a
+human origin beside `board` and `cli-tty`, and its Actor records `from`: the computer the
+front door named and the SSH client the bridge saw. Like every declaration it is a record,
+not a check: anything that can run the bridge runs as the user already.
+
 ## Consequences
 
 - An audit names who stopped, held, resumed, answered, started or carried on with each Run.

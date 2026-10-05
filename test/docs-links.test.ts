@@ -42,7 +42,7 @@ test("every link between the repository's documents resolves, anchors included",
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const files = [...new Bun.Glob("**/*.md").scanSync({ cwd: ROOT })].filter(
-        (path: string) => !path.startsWith("node_modules/") && !path.startsWith("plans/"),
+        (path: string) => !path.split("/").includes("node_modules") && !path.startsWith("plans/"),
       );
       expect(files).toContain("AGENTS.md");
 

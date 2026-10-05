@@ -45,7 +45,6 @@ import * as RpcServer from "effect/unstable/rpc/RpcServer";
 import manifest from "../herdr-plugin.toml";
 import {
   EntryError,
-  OfferView,
   REFUSED_INPUT,
   Registrations,
   RunStatus,
@@ -87,6 +86,7 @@ import {
   SteerOutcome,
   type FrontDoor,
   type PlanPanel,
+  type Where,
 } from "./board-model";
 import { boardMessages } from "./board-stream";
 import { recordDisposition } from "./disposition";
@@ -138,7 +138,7 @@ import { currentPid, ensureLockDir, lockHolder, withLock, type LockHolder } from
 /** What a host says it is. A client that is not this stops rather than guessing. */
 export const BUILD: string = manifest.version;
 
-const socketOf = (dir: string) => `${dir}/host.sock`;
+export const socketOf = (dir: string) => `${dir}/host.sock`;
 const lockOf = (dir: string) => `${dir}/host.lock`;
 
 export class HostUnavailable extends Data.TaggedError("HostUnavailable")<{
@@ -216,14 +216,6 @@ export const HostRpcs = RpcGroup.make(
   }),
   /** Registers what current files now allow and hands over what is outstanding. */
   Rpc.make("recover", { success: Registrations }),
-  // What a finished Run offers to do next. Through the host because only it holds the
-  // module that declared them: an offer is decided by the author's own code against the
-  // facts as they are now, never by a card's memory of it.
-  Rpc.make("offers", {
-    payload: { runId: Schema.String },
-    success: Schema.Array(OfferView),
-    error: HostRefused,
-  }),
   /** One command Collie may run for a run, granted or, with no command, withdrawn. */
   Rpc.make("grant", {
     payload: {
@@ -260,9 +252,15 @@ export type HostClient = RpcClient.RpcClient<
 
 const serialization = RpcSerialization.layerNdjson;
 
-/** The front door each connection declared, which every operation it asks is recorded under. */
+/** What each connection declared, which every operation it asks is recorded under. */
 // ponytail: one entry per connection, never removed; prune on disconnect if hosts live for months.
-type Declared = Map<number, FrontDoor>;
+type Declared = Map<number, { readonly frontDoor: FrontDoor; readonly from?: Where | undefined }>;
+
+/** What an operation on this connection is recorded as: `cli` where it declared nothing. */
+const stampIn = (declared: Declared, client: { readonly id: number }) => {
+  const channel = declared.get(client.id);
+  return { origin: channel?.frontDoor ?? ("cli" as const), from: channel?.from };
+};
 
 /**
  * The handlers, and with them the registry: built in this layer's scope, which is the
@@ -327,14 +325,13 @@ const handlers = (dir: string, installation: string, declared: Declared) =>
         runs: ({ task }) => registry.views(task),
         watch: ({ runId }) => registry.watch(runId),
         recover: () => registry.recover,
-        offers: ({ runId }) => registry.offers(runId),
         grant: ({ runId, name, command, request }, { client }) =>
           once(
             runDir(dir, runId),
             {
               operation: "grant",
               request,
-              origin: declared.get(client.id) ?? "cli",
+              ...stampIn(declared, client),
               asked: { name, command: fromText(toText(command)) },
               result: Schema.Array(VerifySpecSchema),
             },
@@ -346,7 +343,7 @@ const handlers = (dir: string, installation: string, declared: Declared) =>
             {
               operation: "deliver",
               request,
-              origin: declared.get(client.id) ?? "cli",
+              ...stampIn(declared, client),
               asked: {
                 text,
                 operation: operation ?? null,
@@ -463,11 +460,17 @@ const frontDoorHandlers = (
       // A finished Run's plan cannot change, so every drawer on it shares one read.
       // ponytail: kept for the host's life; evict by age if a host lives for months.
       const plans = new Map<string, PlanPanel | null>();
-      const doorOf = (client: { readonly id: number }) => declared.get(client.id) ?? "cli";
-      /** Who a channel's operations are recorded as: its front door, and a chat's voice. */
-      const whoOf = (client: { readonly id: number }): Asker => ({
+      const stampOf = (client: { readonly id: number }) => stampIn(declared, client);
+      const doorOf = (client: { readonly id: number }) => stampOf(client).origin;
+      /** Who asks on a channel: its front door, and a chat's voice. */
+      const askerOf = (client: { readonly id: number }): Asker => ({
         origin: doorOf(client),
         ...voices.get(client.id),
+      });
+      /** What a channel's operations are recorded as: who asks, and where a bridge said it came from. */
+      const whoOf = (client: { readonly id: number }) => ({
+        ...askerOf(client),
+        ...stampOf(client),
       });
       type Carrying = ReturnType<typeof carryOut>;
       /** Each carry-out still running, so a retry of its confirm answers what it came to. */
@@ -499,6 +502,7 @@ const frontDoorHandlers = (
           readonly operation: string;
           readonly request: string;
           readonly origin: FrontDoor;
+          readonly from?: Where | undefined;
           readonly result: Schema.Codec<A, I>;
         },
         act: Effect.Effect<A, E, HostServices>,
@@ -522,7 +526,13 @@ const frontDoorHandlers = (
             ),
           );
       const auditedControl =
-        (runId: string, operation: string, request: string, who: Asker, reason?: string) =>
+        (
+          runId: string,
+          operation: string,
+          request: string,
+          who: Asker & { readonly from?: Where | undefined },
+          reason?: string,
+        ) =>
         <E>(act: Effect.Effect<typeof Controlled.Type, E, HostServices>) =>
           Effect.andThen(
             known(runId),
@@ -666,13 +676,17 @@ const frontDoorHandlers = (
         { concurrency: "unbounded" },
       ).pipe(Stream.share({ capacity: 1, strategy: "sliding" }));
       return FrontDoorRpcs.of({
-        declare: ({ frontDoor, session, ...voice }, { client }) => {
+        declare: ({ frontDoor, session, from, ...voice }, { client }) => {
           const already = declared.get(client.id);
-          if (already !== undefined && already !== frontDoor) {
-            return Effect.fail(new HostRefused({ reason: `this channel is already ${already}` }));
+          if (already !== undefined && already.frontDoor !== frontDoor) {
+            return Effect.fail(
+              new HostRefused({ reason: `this channel is already ${already.frontDoor}` }),
+            );
           }
+          // The first declaration stands, so a bridged channel stays what its bridge said.
+          if (already !== undefined) return Effect.void;
           return Effect.sync(() => {
-            declared.set(client.id, frontDoor);
+            declared.set(client.id, { frontDoor, from });
             if (session !== undefined && session !== null) sessions.set(client.id, session);
             // Only a chat speaks for the human it is talking to.
             if (frontDoor === "chat") voices.set(client.id, voiceOf(voice));
@@ -747,6 +761,19 @@ const frontDoorHandlers = (
           )(registry.control({ runId, control, set })),
         resume: ({ runId, request }, { client }) =>
           auditedControl(runId, "resume", request, whoOf(client))(takeUp(runId)),
+        offers: ({ runId }) => registry.offers(runId),
+        workflows: ({ project }) =>
+          discover(searchPath({ pluginRoot: env.pluginRoot, userDir: env.userDir, project })).pipe(
+            Effect.map(({ entries }) =>
+              entries.map(({ id, title, description, inputs }) => ({
+                id,
+                title,
+                description,
+                inputs: inputs.map(({ name, required, schema }) => ({ name, required, schema })),
+              })),
+            ),
+            Effect.provideContext(bun),
+          ),
         invoke: ({ runId, offer, input, request }, { client }) =>
           fresh(
             () => runId,
@@ -1020,7 +1047,7 @@ const frontDoorHandlers = (
                   from,
                   dryRun,
                   requestId: request,
-                  ...whoOf(client),
+                  ...askerOf(client),
                 });
                 if (!said.ok)
                   return yield* new SteerUnanswered({
@@ -1299,7 +1326,11 @@ const own = (dir: string) =>
  */
 export const connect = (
   dir: string,
-  options?: { readonly build?: string },
+  options?: {
+    readonly build?: string;
+    /** More of the environment a host started from here is given, over this process's own. */
+    readonly hostEnv?: Readonly<Record<string, string>>;
+  },
 ): Effect.Effect<
   HostClient,
   HostUnavailable | HostVersionMismatch,
@@ -1307,14 +1338,15 @@ export const connect = (
 > =>
   Effect.gen(function* () {
     const build = options?.build ?? BUILD;
-    let who = yield* ensureRunning(dir);
+    const hostEnv = options?.hostEnv ?? {};
+    let who = yield* ensureRunning(dir, hostEnv);
     // Only a newer copy of the same installation upgrades the host; a dev checkout is not one.
     const install = (yield* currentEnv.pipe(Effect.orDie)).pluginRoot;
     const ours = who.root === undefined || who.root === install;
     const replaced = ours && who.build !== build && Bun.semver.order(build, who.build) === 1;
     if (replaced) {
       yield* stopOwner(dir, who.pid);
-      who = yield* ensureRunning(dir);
+      who = yield* ensureRunning(dir, hostEnv);
     }
     if (who.build !== build) {
       return yield* new HostVersionMismatch({
@@ -1386,12 +1418,15 @@ export const ownerOf = (
  * Asking is the whole probe: a socket that opens proves a file, and only an answer
  * proves a host.
  */
-const ensureRunning = Effect.fn("Host.ensureRunning")(function* (dir: string) {
+const ensureRunning = Effect.fn("Host.ensureRunning")(function* (
+  dir: string,
+  hostEnv: Readonly<Record<string, string>>,
+) {
   const first = yield* ask(dir).pipe(Effect.result);
   if (first._tag === "Success") return first.success;
   return yield* Effect.scoped(
     Effect.gen(function* () {
-      const started = yield* spawnHost(dir);
+      const started = yield* spawnHost(dir, hostEnv);
       // The host this started has ended and nothing owns the directory: no answer is
       // coming, so it is said now rather than after every retry. A host that lost the
       // race to another starter ends too, but then the winner owns the lock.
@@ -1428,7 +1463,10 @@ const diagnose = Effect.fn("Host.diagnose")(function* (dir: string) {
  * a chat turn that ends. Its stdio is closed for the same reason — there is no terminal
  * it belongs to.
  */
-const spawnHost = Effect.fn("Host.spawn")(function* (dir: string) {
+const spawnHost = Effect.fn("Host.spawn")(function* (
+  dir: string,
+  hostEnv: Readonly<Record<string, string>>,
+) {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const command = yield* hostCommand;
   // Which installation's workflows this host serves, decided by the client that needed
@@ -1437,7 +1475,7 @@ const spawnHost = Effect.fn("Host.spawn")(function* (dir: string) {
   return yield* Effect.gen(function* () {
     const handle = yield* spawner.spawn(
       ChildProcess.make(command[0] ?? "collie", [...command.slice(1), "host", "--dir", dir], {
-        env: { HERDR_PLUGIN_ROOT: install },
+        env: { ...hostEnv, HERDR_PLUGIN_ROOT: install },
         extendEnv: true,
         detached: true,
         stdin: "ignore",

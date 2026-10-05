@@ -7,7 +7,8 @@ import { Effect, FileSystem, Option, Path, Schema } from "effect";
 import { mrLabel, type ForgeChecks, type ForgeFacts } from "./board";
 import { sectionOf, type MrPanel, type MrState, type TaskView } from "./board-model";
 import { latest, readDispositions, recordDisposition } from "./disposition";
-import { liveTier, mrDetails, parseMrTarget, type MrRef, type Runner } from "./mr";
+import { liveTier, mrDetails, type Runner } from "./mr";
+import { parseMrTarget, type MrRef } from "./board-model";
 import { runDir } from "./engine";
 import { nowIso } from "./time";
 

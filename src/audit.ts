@@ -2,7 +2,7 @@
 // of it. Written by the host alone, which stamps the front door the channel declared.
 
 import { Effect, FileSystem, Schema } from "effect";
-import { FrontDoor, RequestConflict } from "./board-model";
+import { FrontDoor, RequestConflict, Where } from "./board-model";
 import { voiceOf, type Voice } from "./proposals";
 import { appendJournal, readJournal } from "./journal";
 import { nowIso } from "./time";
@@ -14,6 +14,7 @@ export const AuditLine = Schema.Struct({
   actor: Schema.Struct({
     origin: FrontDoor,
     requestId: Schema.String,
+    from: Schema.optionalKey(Where),
     conversation: Schema.optionalKey(Schema.String),
     said: Schema.optionalKey(Schema.String),
   }),
@@ -56,17 +57,19 @@ export const recordAudit = Effect.fn("Audit.record")(function* <A, I extends Sch
     readonly operation: string;
     readonly request: string;
     readonly origin: FrontDoor;
+    readonly from?: Where | undefined;
     readonly reason?: string | undefined;
     readonly asked?: Schema.Json | undefined;
     readonly result: Schema.Codec<A, I>;
     readonly value: A;
   },
 ) {
+  const spoken = { origin: line.origin, requestId: line.request, ...voiceOf(line) };
   const written: AuditLine = {
     at: yield* nowIso(),
     operation: line.operation,
     request: line.request,
-    actor: { origin: line.origin, requestId: line.request, ...voiceOf(line) },
+    actor: line.from === undefined ? spoken : { ...spoken, from: line.from },
     result: Schema.encodeSync(line.result)(line.value),
   };
   let full = written;
@@ -86,6 +89,7 @@ export const once = Effect.fn("Audit.once")(function* <A, I extends Schema.Json,
     readonly operation: string;
     readonly request: string;
     readonly origin: FrontDoor;
+    readonly from?: Where | undefined;
     readonly reason?: string | undefined;
     readonly asked?: Schema.Json | undefined;
     readonly result: Schema.Codec<A, I>;

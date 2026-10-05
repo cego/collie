@@ -605,17 +605,18 @@ move or grow. `⋯` opens that Task's menu, and so does a right-click anywhere o
 use `⋯` in a terminal that keeps the right button for its own menu. Clicking anywhere else
 closes it, as does Esc, and the key beside each item does it from the keyboard:
 
-|         |                    |                                     |
-| ------- | ------------------ | ----------------------------------- |
-| `enter` | Open record        | always                              |
-| `g`     | Go to its tab      | always                              |
-| `s`     | Steer…             | while something is still driving it |
-| `w`     | Open merge request | when there is one                   |
-| `i`     | its first offer    | a plan that is ready, by its title  |
-| `o`     | What it offers…    | always: the workflow's own offers   |
-| `u`     | Resume run         | failed or stopped                   |
-| `x`     | Follow-up run      | finished                            |
-| `k`     | Stop run           | working, quiet or waiting on you    |
+|         |                    |                                                          |
+| ------- | ------------------ | -------------------------------------------------------- |
+| `enter` | Open record        | always                                                   |
+| `g`     | Go to its tab      | always                                                   |
+| `s`     | Steer…             | while something is still driving it                      |
+| `w`     | Open merge request | when there is one                                        |
+| `i`     | its first offer    | a plan that is ready, by its title                       |
+| `o`     | What it offers…    | always: the workflow's own offers                        |
+| `u`     | Resume run         | failed or stopped                                        |
+| `x`     | Follow-up run      | finished                                                 |
+| `h`     | Hold run           | working, quiet or waiting on you; Release hold once held |
+| `k`     | Stop run           | working, quiet or waiting on you                         |
 
 Only what that Task can be asked for is listed: an item that would come back "this run has
 already finished" is not offered at all. Nothing is offered on one board and withheld on
@@ -818,6 +819,63 @@ What you have half-typed or half-chosen against a question is kept per run and p
 for as long as the tab is open, so moving between waiting runs costs nobody their answer.
 It is dropped when that question is answered or replaced by a new one, and never written to
 a run directory: an unsent answer is yours, not the run's.
+
+## Collie Desktop
+
+**Desktop** is a desktop app, Linux first, that shows the **Flock** — every Herd on every
+Machine it reaches — on one board. It lives in `desktop/` and is one more front door over
+the same board: it reads each host's stream and builds nothing of its own. The sections and
+the header sentence are counted across the Flock. Once there is more than one Machine, each
+card names its Machine, and its Herd too when that Machine runs more than one herdr
+session.
+
+The Machines are this computer and every machine enabled in `herdr machine list`; Collie
+keeps no list of its own. At launch Desktop opens one SSH master per herdr machine, from
+its target and your own SSH config, so an SSO check is made once per machine, and keeps it
+open until Desktop quits. A Machine reached two ways — two herdr machines on one computer,
+or one pointing at this computer — is shown once, through the first in herdr's list (this
+computer before any). It is named by that herdr machine's label, or the hostname here, and
+two Machines with one name show as `name (ssh target)`. A Machine Desktop cannot reach is
+named above the board with what SSH or its bridge said.
+
+Every Decision and action the TUI board has is on Desktop's cards, and goes to the Machine
+the card is on. A question is answered with its options, or typed into where it has none;
+an evidence gate is approved with the checks still ticked; and a proposal is read in a
+drawer whose Confirm stays off until all of it has been on screen, then sent with its id
+and content hash. Each card's `⋯` menu offers what the TUI menu does, by the same rules —
+Steer…, the Run's offers (asked of its host when opened, with a field for each argument),
+Resume, Follow-up, Hold or Release, Stop, and Mark merged, abandoned or superseded — and
+the card's first action is the TUI card's own. Going to a tab and following a check's output
+are not on Desktop yet: both are panes on the Machine. Open merge request opens it in your
+browser. **New run** asks a Machine what a project
+can start, then starts it with what you typed for its inputs. What came of each, or the
+host's own words for why not, is said in a toast, and **Try again** on a failure sends the
+same request again, so a host that took it before the answer was lost does it once; the card then changes from the host's
+stream like any other change. Every one is recorded on that Machine as `desktop`, with this
+computer's name.
+
+Every Machine's host is reached the same way: by running
+`collie bridge --as desktop --client <this computer>` in a login shell, here directly and
+elsewhere as a channel on that machine's master, so the host is started with the
+environment `collie` itself would use, and every operation Desktop makes is recorded as
+`desktop`. For a herdr machine on a session other than `default`, the host is handed that
+session's socket. Desktop never starts, signals or connects to a host by any other route.
+`COLLIE_DESKTOP_COLLIE` replaces how `collie` is run here, as a JSON array.
+
+```sh
+cd desktop
+bun install
+bun run start       # build the view and run Desktop from the checkout
+bun run typecheck
+bun run test        # build with CEF's debugging port open, then drive the app with Playwright
+```
+
+`bun run test` starts the built app under Xvfb when there is no display, against scripted
+hosts (`desktop/test/support/scripted-host.ts`): this computer's behind a local bridge, and
+each herdr machine's behind scripted `herdr` and `ssh` commands put first on its PATH, so
+it needs neither herdr, SSH nor a real host. The app links the system's WebKitGTK and
+AppIndicator libraries even though it renders with its bundled Chromium; on a computer
+without them, put them on `LD_LIBRARY_PATH`.
 
 ## Talking to Collie about the flock
 

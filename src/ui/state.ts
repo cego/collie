@@ -18,8 +18,17 @@ import type { DefinitionRow, SettingsView } from "../views";
 import { MAX_AGENTS, type AgentRow, type RunRow } from "../workspace";
 import type { WideGroup, WideView, WorkspaceView } from "../workspace";
 import type { Density, Scope } from "../config";
-import type { RunDetail, TaskView } from "../board-model";
-import { mrTarget, parseMrTarget, parseMrUrl } from "../mr";
+import {
+  type CardAction,
+  cardActions,
+  dispositionActions,
+  mrRefOf,
+  primaryAction,
+  type RunDetail,
+  type TaskView,
+} from "../board-model";
+import { mrTarget } from "../mr";
+import { parseMrTarget, parseMrUrl } from "../board-model";
 import type { Live } from "../live";
 import type { Selection } from "../selection";
 
@@ -221,6 +230,8 @@ export type Command =
    * reaches the Driver until it is up, so an undo inside it is exact rather than a race.
    */
   | { _tag: "StopRun"; runId: string }
+  /** Hold this Run where it is, or release the hold. */
+  | { _tag: "HoldRun"; runId: string; set: boolean }
   /** Take back every stop still inside its grace. The bridge answers it. */
   | { _tag: "UndoStop" }
   | { _tag: "OpenLog"; runId: string }
@@ -1096,127 +1107,74 @@ export interface MenuItem {
   command: Command;
 }
 
-/** Nothing is driving it any more, so there is nothing to stop, steer or answer. */
-function settled(state: TaskView["state"]): boolean {
-  return state === "done" || state === "failed" || state === "stopped" || state === "abandoned";
+/** A card's action as this board draws it: the key beside it, its label, and its command. */
+function itemFor(view: TaskView, action: CardAction, primary: boolean): MenuItem {
+  const runId = view.run;
+  switch (action.kind) {
+    case "go-to-tab":
+      return { key: "g", label: primary ? "Go to tab" : "Go to its tab", command: goToTab(view) };
+    case "steer":
+      return { key: "s", label: "Steer…", command: { _tag: "OpenSteer", id: view.id } };
+    case "open-mr":
+      return {
+        key: "w",
+        label: primary ? "Open MR" : "Open merge request",
+        command: { _tag: "OpenMr", target: mrTarget(action.mr.project, action.mr.iid), runId },
+      };
+    case "offer":
+      return {
+        key: "i",
+        label: action.offer.title,
+        command: { _tag: "InvokeOffer", runId, offer: action.offer.id },
+      };
+    case "check-output":
+      return { key: "c", label: "Open check output", command: { _tag: "OpenCheckOutput", runId } };
+    case "offers":
+      return { key: "o", label: "What it offers…", command: { _tag: "ChooseOffer", runId } };
+    case "resume":
+      return {
+        key: "u",
+        label: primary ? "Resume" : "Resume run",
+        command: { _tag: "ResumeRun", runId },
+      };
+    case "follow-up":
+      return { key: "x", label: "Follow-up run", command: { _tag: "FollowUp", runId } };
+    case "hold":
+      return {
+        key: "h",
+        label: action.set ? "Hold run" : "Release hold",
+        command: { _tag: "HoldRun", runId, set: action.set },
+      };
+    case "stop":
+      return { key: "k", label: "Stop run", command: { _tag: "StopRun", runId } };
+    case "dispose":
+      return {
+        key: DISPOSITION_KEYS[action.disposition],
+        label: `Mark ${action.disposition}`,
+        command: { _tag: "RecordDisposition", runId, kind: action.disposition, ref: action.ref },
+      };
+  }
 }
 
-/**
- * The one action that ends a card's wait, drawn first on the card. Working cards go to
- * their tab; waiting cards get the action that lands or retires the work; a finished or
- * decision card has none here — its buttons are the decision's own, or the menu's.
- */
+const DISPOSITION_KEYS = { merged: "M", abandoned: "A", superseded: "S" } as const;
+
+/** The one action that ends a card's wait, drawn first on the card. */
 export function primaryFor(view: TaskView): MenuItem | null {
-  const runId = view.run;
-  if (view.decision !== null) return null;
-  if (view.state === "active" || view.state === "quiet")
-    return { key: "g", label: "Go to tab", command: goToTab(view) };
-  if (view.landed) return null;
-  // Whatever the plan's module offers first, under its own title; none, no button.
-  if (view.planReady)
-    return view.offer === null
-      ? null
-      : {
-          key: "i",
-          label: view.offer.title,
-          command: { _tag: "InvokeOffer", runId, offer: view.offer.id },
-        };
-  if (view.state === "failed" || view.state === "stopped" || view.state === "abandoned")
-    return { key: "u", label: "Resume", command: { _tag: "ResumeRun", runId } };
-  if (view.mrState === "closed")
-    return {
-      key: "S",
-      label: "Mark superseded",
-      command: { _tag: "RecordDisposition", runId, kind: "superseded", ref: "" },
-    };
-  const mr = mrOf(view);
-  if (mr !== null)
-    return {
-      key: "w",
-      label: "Open MR",
-      command: { _tag: "OpenMr", target: mrTarget(mr.project, mr.iid), runId },
-    };
-  return null;
+  const action = primaryAction(view);
+  return action === null ? null : itemFor(view, action, true);
 }
 
-/**
- * What this Task can be asked for, in the order the menu shows it. Only what would work:
- * an item the human has to try to find out is refused is worse than no item.
- */
+/** What this Task can be asked for, in the order the menu shows it, its record first. */
 export function menuFor(view: TaskView): MenuItem[] {
-  const runId = view.run;
-  const items: MenuItem[] = [
+  return [
     { key: "enter", label: "Open record", command: { _tag: "OpenRecord", id: view.id } },
-    { key: "g", label: "Go to its tab", command: goToTab(view) },
+    ...cardActions(view).map((action) => itemFor(view, action, false)),
   ];
-  if (!settled(view.state)) {
-    items.push({ key: "s", label: "Steer…", command: { _tag: "OpenSteer", id: view.id } });
-  }
-  const mr = mrOf(view);
-  if (mr !== null) {
-    items.push({
-      key: "w",
-      label: "Open merge request",
-      command: { _tag: "OpenMr", target: mrTarget(mr.project, mr.iid), runId },
-    });
-  }
-  if (view.offer !== null) {
-    items.push({
-      key: "i",
-      label: view.offer.title,
-      command: { _tag: "InvokeOffer", runId, offer: view.offer.id },
-    });
-  }
-  if (view.check !== null) {
-    items.push({
-      key: "c",
-      label: "Open check output",
-      command: { _tag: "OpenCheckOutput", runId },
-    });
-  }
-  items.push({ key: "o", label: "What it offers…", command: { _tag: "ChooseOffer", runId } });
-  if (view.state === "failed" || view.state === "stopped" || view.state === "abandoned") {
-    items.push({ key: "u", label: "Resume run", command: { _tag: "ResumeRun", runId } });
-  }
-  if (view.state === "done") {
-    items.push({ key: "x", label: "Follow-up run", command: { _tag: "FollowUp", runId } });
-  }
-  if (!settled(view.state)) {
-    items.push({ key: "k", label: "Stop run", command: { _tag: "StopRun", runId } });
-  }
-  return items;
 }
 
-/**
- * What became of the work, for work that is over. Offered for every settled state: a Run
- * that failed and was then finished by hand is exactly what a disposition is for.
- */
+/** What became of the work, for work that is over. */
 export function dispositionsFor(view: TaskView): MenuItem[] {
-  if (!settled(view.state)) return [];
-  const mr = mrOf(view);
-  // `collie!151` rather than the whole URL: this ends up in the card's own sentence.
-  const ref = mr === null ? "" : `${(mr.project ?? "").split("/").at(-1)}!${mr.iid}`;
-  return [
-    {
-      key: "M",
-      label: "Mark merged",
-      command: { _tag: "RecordDisposition", runId: view.run, kind: "merged", ref },
-    },
-    {
-      key: "A",
-      label: "Mark abandoned",
-      command: { _tag: "RecordDisposition", runId: view.run, kind: "abandoned", ref: "" },
-    },
-    ...(view.mrState === "closed"
-      ? [
-          {
-            key: "S",
-            label: "Mark superseded",
-            command: { _tag: "RecordDisposition", runId: view.run, kind: "superseded", ref },
-          } satisfies MenuItem,
-        ]
-      : []),
-  ];
+  return dispositionActions(view).map((action) => itemFor(view, action, false));
 }
 
 /** The earlier finished runs on screen, and whether there are more to ask for. */
@@ -1254,8 +1212,7 @@ export function goToTab(view: TaskView): Command {
 /** However the Task names its merge request: the URL one opened, or the target one was
     pointed at. */
 function mrOf(view: TaskView) {
-  if (view.mr === null) return null;
-  return parseMrUrl(view.mr) ?? parseMrTarget(view.mr);
+  return mrRefOf(view.mr);
 }
 
 /**
@@ -1279,6 +1236,7 @@ export const ALL_KEYS: ReadonlyArray<{ key: string; what: string }> = [
   { key: "o", what: "What its workflow offers next" },
   { key: "i", what: "The first of those, on a plan that is ready" },
   { key: "x", what: "Follow-up run" },
+  { key: "h", what: "Hold run, or release its hold" },
   { key: "k", what: "Stop run" },
 ];
 

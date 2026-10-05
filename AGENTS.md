@@ -59,6 +59,11 @@ herdr actions, and the `collie` CLI.
   rather than a table of Runs
   ([ADR-0013](docs/adr/0013-the-board-is-cards-of-tasks.md), which supersedes what
   [ADR-0005](docs/adr/0005-collie-tab-is-an-application.md) says the tab draws).
+- **Changing Desktop** → [`docs/using.md`](docs/using.md#collie-desktop), alongside
+  `desktop/src/bun/machine.ts` (a Machine reached through `collie bridge`, never the host
+  client), `desktop/src/shared/` (the view's RPC and the Flock it folds) and
+  `desktop/test/board.test.ts` (Playwright over CEF against a scripted host). Desktop has
+  its own `package.json`; Effect is the root's, so the board's Schemas exist once.
 - **Changing what a Run must prove, or what counts as proof** →
   [`docs/cli.md`](docs/cli.md#outcomes) and
   [ADR-0010](docs/adr/0010-a-run-proves-its-outcome.md), alongside `src/outcome.ts` (the
@@ -225,9 +230,10 @@ binary still starts.
    manage each agent). `test/chat-parity.test.ts` holds this for chat.
 2. Every capability ships in both front doors: the CLI and the herdr actions are thin
    adapters over the same Effect services ([ADR-0003](docs/adr/0003-collie-is-one-effect-program.md)).
-3. All herdr communication goes through `src/herdr.ts`. The one exception is
-   `tools/herdr-schema.ts`, which runs a downloaded release offline to print its schema
-   and never touches the session — see [`docs/internals.md`](docs/internals.md#the-herdr-boundary).
+3. All herdr communication goes through `src/herdr.ts`. The two exceptions never touch a
+   session: `tools/herdr-schema.ts`, which runs a downloaded release offline to print its
+   schema, and Desktop's `herdr machine list` — see
+   [`docs/internals.md`](docs/internals.md#the-herdr-boundary).
 4. One host owns a state directory and everything it is running
    ([ADR-0015](docs/adr/0015-one-local-host-owns-a-state-directory.md)). Mutate a Run
    through it, under a request id, and never by writing its files.

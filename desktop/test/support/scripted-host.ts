@@ -1,0 +1,155 @@
+// A Machine's host as Desktop meets it, behind a bridge: login-shell noise, the ready
+// marker, then `FrontDoorRpcs` over stdio. Its installation, Herds and TaskViews are
+// whatever the file named first on its command line holds, read again every 100 ms.
+// Every operation it is asked is appended to `<board.json>.ops.jsonl`; an answer also
+// takes the decision off its Task, as a host's would.
+//
+// Usage: bun scripted-host.ts <board.json> bridge --as desktop --client <computer>
+
+import { BunFileSystem, BunRuntime, BunStdio } from "@effect/platform-bun";
+import { Effect, FileSystem, Layer, Schedule, Schema, Stream } from "effect";
+import * as RpcSerialization from "effect/unstable/rpc/RpcSerialization";
+import * as RpcServer from "effect/unstable/rpc/RpcServer";
+import { BRIDGE_READY, FrontDoorRpcs, HostRefused, PROTOCOL } from "../../../src/board-model";
+import { boardMessages } from "../../../src/board-stream";
+import { OFFERS, REFUSED_RUN, STARTABLE, ScriptedMachine } from "./scripted-machine";
+
+const [board, ...bridge] = Bun.argv.slice(2);
+if (board === undefined || bridge.slice(0, 3).join(" ") !== "bridge --as desktop") {
+  process.stderr.write(`scripted host: started as ${Bun.argv.slice(2).join(" ")}\n`);
+  process.exit(2);
+}
+
+const MachineFile = Schema.fromJsonString(ScriptedMachine);
+const asLine = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+
+/** What an operation was asked with, as it is logged. */
+type Asked = Parameters<typeof asLine>[0];
+
+const Served = FrontDoorRpcs.omit(
+  "declare",
+  "runDetail",
+  "runFile",
+  "propose",
+  "act",
+  "reconcile",
+  "settleDelivery",
+  "news",
+);
+
+const handlers = Served.toLayer(
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const read = fs
+      .readFileString(board)
+      .pipe(Effect.flatMap(Schema.decodeUnknownEffect(MachineFile)), Effect.orDie);
+    const write = (machine: ScriptedMachine) =>
+      fs
+        .writeFileString(`${board}.new`, asLine(machine))
+        .pipe(Effect.andThen(fs.rename(`${board}.new`, board)), Effect.orDie);
+    const { installation, herds } = yield* read;
+    const logged = (op: string, payload: Asked) =>
+      fs
+        .writeFileString(`${board}.ops.jsonl`, `${asLine({ op, payload })}\n`, { flag: "a" })
+        .pipe(Effect.orDie);
+    /** Logs what was asked, then refuses it for the refused Run or answers it. */
+    const asked = <A>(op: string, payload: Asked, answer: A, runId?: string) =>
+      logged(op, payload).pipe(
+        Effect.andThen(
+          runId === REFUSED_RUN
+            ? Effect.fail(new HostRefused({ reason: `${op} refused for ${REFUSED_RUN}` }))
+            : Effect.succeed(answer),
+        ),
+      );
+    const started = { runId: "r-new", registration: "r", execution: "e", fresh: true };
+    const controlled = (runId: string, control: string, set: boolean) => ({
+      runId,
+      control,
+      set,
+      applied: true,
+      detail: "",
+      left: [],
+    });
+    return {
+      board: () =>
+        boardMessages({
+          head: { installation, build: "scripted", protocol: PROTOCOL, herds },
+          build: Effect.map(read, ({ tasks }) => tasks),
+          changed: Stream.fromSchedule(Schedule.spaced("100 millis")),
+        }),
+      answer: (payload) =>
+        asked(
+          "answer",
+          payload,
+          {
+            runId: payload.runId,
+            decision: payload.decision ?? "",
+            value: payload.value,
+            fresh: true,
+          },
+          payload.runId,
+        ).pipe(
+          Effect.tap(() =>
+            Effect.flatMap(read, (machine) =>
+              write({
+                ...machine,
+                tasks: machine.tasks.map((task) =>
+                  task.run === payload.runId
+                    ? { ...task, state: "active", decision: null, sentence: "Carrying on." }
+                    : task,
+                ),
+              }),
+            ),
+          ),
+        ),
+      control: (payload) =>
+        asked(
+          "control",
+          payload,
+          controlled(payload.runId, payload.control, payload.set),
+          payload.runId,
+        ),
+      resume: (payload) =>
+        asked("resume", payload, controlled(payload.runId, "stop", false), payload.runId),
+      start: (payload) => asked("start", payload, started),
+      invoke: (payload) => asked("invoke", payload, started, payload.runId),
+      followUp: (payload) => asked("followUp", payload, started, payload.runId),
+      offers: (payload) => asked("offers", payload, OFFERS, payload.runId),
+      workflows: (payload) => logged("workflows", payload).pipe(Effect.as(STARTABLE)),
+      confirm: (payload) => asked("confirm", payload, { proposal: payload.proposal, results: [] }),
+      decline: (payload) => asked("decline", payload, { proposal: payload.proposal }),
+      dispose: (payload) =>
+        asked(
+          "dispose",
+          payload,
+          {
+            at: "2026-10-05T00:00:00Z",
+            by: "desktop",
+            kind: payload.kind,
+            ref: payload.ref,
+            note: null,
+          },
+          payload.runId,
+        ),
+      steerAbout: (payload) =>
+        logged("steerAbout", payload).pipe(
+          Effect.as({
+            ok: true,
+            code: null,
+            human: `Collie will propose what ${payload.runId} should do about it.`,
+            data: null,
+          }),
+        ),
+    };
+  }),
+);
+
+process.stdout.write(`Welcome to the scripted Machine\n${BRIDGE_READY}\n`);
+
+Layer.launch(
+  RpcServer.layer(Served).pipe(
+    Layer.provide(handlers),
+    Layer.provide(RpcServer.layerProtocolStdio),
+    Layer.provide([RpcSerialization.layerNdjson, BunStdio.layer, BunFileSystem.layer]),
+  ),
+).pipe(BunRuntime.runMain);

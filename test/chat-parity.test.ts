@@ -252,6 +252,7 @@ const INVENTORY: ReadonlyArray<readonly [string, Route]> = [
   ["tools call", { route: "shell" }],
   ["mcp", { route: "shell" }],
   ["host", { route: "shell" }],
+  ["bridge", { route: "shell" }],
   ["upgrade", { route: "propose", kind: "upgrade", action: { kind: "upgrade" } }],
   ["onboard", { route: "propose", kind: "onboard", action: { kind: "onboard" } }],
   ["doctor", { route: "read", tool: "collie_installation" }],

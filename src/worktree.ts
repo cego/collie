@@ -26,13 +26,13 @@ import {
   branchTargetHead,
   glabLogin,
   hostOf,
-  parseMrTarget,
   projectFromRemote,
   projectHere,
   repoArgs,
   shell,
   type Runner,
 } from "./mr";
+import { parseMrTarget } from "./board-model";
 import { withLock } from "./lock";
 import type { AgentEntry } from "./registry";
 import type { WorktreeRecord } from "./run";

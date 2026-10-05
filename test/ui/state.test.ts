@@ -1503,6 +1503,7 @@ test("a card's menu offers only what that Task can be asked for", () => {
     ["g", "Go to its tab"],
     ["s", "Steer…"],
     ["o", "What it offers…"],
+    ["h", "Hold run"],
     ["k", "Stop run"],
   ]);
   expect(working[0]!.command).toEqual({ _tag: "OpenRecord", id: "t1" });
@@ -1511,7 +1512,14 @@ test("a card's menu offers only what that Task can be asked for", () => {
     jump: { kind: "run", runId: "r1", label: "Strapi prod seeder" },
   });
   expect(working[3]!.command).toEqual({ _tag: "ChooseOffer", runId: "r1" });
-  expect(working[4]!.command).toEqual({ _tag: "StopRun", runId: "r1" });
+  expect(working[4]!.command).toEqual({ _tag: "HoldRun", runId: "r1", set: true });
+  expect(working[5]!.command).toEqual({ _tag: "StopRun", runId: "r1" });
+  // A held run offers its release instead.
+  expect(menuFor(task({ held: "⏸ Held." })).find((item) => item.key === "h")?.command).toEqual({
+    _tag: "HoldRun",
+    runId: "r1",
+    set: false,
+  });
 
   // A run nobody is driving cannot be stopped or steered; it can be taken up again.
   expect(menuFor(task({ state: "failed" })).map((item) => item.label)).toEqual([

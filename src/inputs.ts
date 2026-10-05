@@ -11,7 +11,8 @@ import { openFindingsIn } from "./output";
 import { targetLabel } from "./naming";
 import { FINDINGS_FILE, REVIEW_FILE } from "./output";
 import { ago } from "./time";
-import { type Runner, mrTarget, parseMrTarget, projectHere, shell as shellRun } from "./mr";
+import { type Runner, mrTarget, projectHere, shell as shellRun } from "./mr";
+import { parseMrTarget } from "./board-model";
 
 const JsonId = Schema.Union([Schema.String, Schema.Number]);
 const MrViewJson = Schema.fromJsonString(

@@ -1428,7 +1428,11 @@ pruning, every 3 minutes.
 
 The operations that change a Run are on `FrontDoorRpcs` too: `start`, `answer`, `control`
 (a hold or a stop, set or cleared, and every watcher hears about it), `resume` and
-`invoke` (an offer). `grant` and `steer` stay on `HostRpcs`. Each takes a request id, and the same id twice is one operation. A
+`invoke` (an offer). Two reads tell a front door on another computer what those take:
+`offers`, what a Run offers to do next as its module decides now, with each offer's
+arguments as JSON Schema; and `workflows`, what may be started in a project and the Inputs
+each asks for. `start` then takes what a human typed in `text`, and the host settles it
+against the workflow's own schema. `grant` and `steer` stay on `HostRpcs`. Each takes a request id, and the same id twice is one operation. A
 channel first sends `declare` with its front door, and the host stamps every operation on
 it with that, as a line in the Run's `operations.jsonl`: the operation, the request, the
 Actor and what came of it ([ADR-0039](adr/0039-every-operation-records-who-asked.md)). A
@@ -1438,6 +1442,21 @@ workspaces, panes and Herd up there. A channel that names none has them looked u
 session the host was started from. A `chat` channel may carry `conversation` and `said`,
 the human's message that turn as its tool host heard it; the host puts both in the Actor of
 everything done on that channel, the executors' own operations included.
+
+```sh
+collie bridge --as <board|desktop|chat> [--client <name>]
+```
+
+A front door on another computer reaches the host through this, run on the Machine — over
+SSH for Desktop, or spawned without it for Local. It starts the host if none runs, handing
+it the state directory and the herdr session socket (asked of `herdr status server` when a
+login shell sets none), declares the channel as the front door it was started as, prints
+`collie-bridge-ready` on a line of its own, and from then on copies bytes between its stdio
+and the host's socket. Whatever came before that line is a login shell's and is discarded.
+The declaration is the bridge's: a `declare` of another front door on the channel is
+refused, and the client at the other end never starts, stops or signals a process.
+`desktop` is a human, as `board` and `cli-tty` are, and its Actor carries `from`: the
+`--client` name and the SSH client address the bridge saw.
 
 So are the ones that write anything else: `confirm` (a proposal's id and content hash) and
 `decline` (its id and content hash too), recorded in its Herd's proposals journal under the Actor; `dispose`,

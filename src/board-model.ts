@@ -1,7 +1,8 @@
 // What a board is made of, as every front door decodes it, and the pure rules that place
-// and count its cards. No I/O and no Bun-only import: a browser bundle imports this too.
+// and count its cards, decide what each one offers and read what it names. No I/O and no
+// Bun-only import: a browser bundle imports this too.
 
-import { Schema, SchemaGetter } from "effect";
+import { Option, Schema, SchemaGetter } from "effect";
 import * as Rpc from "effect/unstable/rpc/Rpc";
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
 import { IntentSeedSchema } from "./intent-model";
@@ -478,6 +479,37 @@ export const RunDetail = Schema.Struct({
 });
 export type RunDetail = typeof RunDetail.Type;
 
+/** One offer as a front door shows it, over the wire. */
+export const OfferView = Schema.Struct({
+  id: Schema.String,
+  title: Schema.String,
+  /** The workflow it starts, by public id. */
+  workflow: Schema.String,
+  /** What it takes, as JSON Schema; null where it takes nothing. */
+  arguments: Schema.NullOr(Schema.Json),
+  kind: Schema.Literals(["action", "follow-up"]),
+  primary: Schema.Boolean,
+  /** Why it cannot be made now, or null when it can. */
+  unavailable: Schema.NullOr(Schema.String),
+});
+export type OfferView = typeof OfferView.Type;
+
+/** A workflow a front door may start in a project, and the Inputs it asks for. */
+export const Startable = Schema.Struct({
+  id: Schema.String,
+  title: Schema.String,
+  description: Schema.String,
+  inputs: Schema.Array(
+    Schema.Struct({
+      name: Schema.String,
+      required: Schema.Boolean,
+      /** The field's schema as JSON Schema, or null where it would not draw. */
+      schema: Schema.NullOr(Schema.Json),
+    }),
+  ),
+});
+export type Startable = typeof Startable.Type;
+
 /**
  * The board protocol's version. An optional field, a new operation or a new kind of
  * message keeps it; a removal or a change of meaning bumps it.
@@ -664,11 +696,34 @@ export const FrontDoor = Schema.Literals([
   "cli",
   "cli-tty",
   "board",
+  "desktop",
   "driver",
   "evaluator",
   "chat",
 ]);
 export type FrontDoor = typeof FrontDoor.Type;
+
+/** Where a bridged channel came from: the computer its front door named, and the SSH client the bridge saw. */
+export const Where = Schema.Struct({
+  client: Schema.optionalKey(Schema.String),
+  ssh: Schema.optionalKey(Schema.String),
+});
+export type Where = typeof Where.Type;
+
+/** The line before which anything a bridge prints is a login shell's, and after which it is the host's. */
+export const BRIDGE_READY = "collie-bridge-ready";
+
+/** What a channel says it is, once. */
+export const Declaration = Schema.Struct({
+  frontDoor: FrontDoor,
+  /** The herdr session socket it runs in, where what it asks names workspaces and panes. */
+  session: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  from: Schema.optionalKey(Where),
+  /** A chat's conversation, and the human's message that turn, as its tool host heard it. */
+  conversation: Schema.optionalKey(Schema.String),
+  said: Schema.optionalKey(Schema.String),
+});
+export type Declaration = typeof Declaration.Type;
 
 /** What became of a News item in one conversation. */
 export const NewsReceipt = Schema.Literals(["read", "sent", "uncertain"]);
@@ -694,14 +749,7 @@ export const FrontDoorRpcs = RpcGroup.make(
   Rpc.make("board", { success: BoardMessage, stream: true }),
   /** Once per channel, for good; a channel that never declares is stamped `cli`, never a human. */
   Rpc.make("declare", {
-    payload: {
-      frontDoor: FrontDoor,
-      /** The herdr session socket it runs in, where what it asks names workspaces and panes. */
-      session: Schema.optionalKey(Schema.NullOr(Schema.String)),
-      /** A chat's conversation, and the human's message that turn, as its tool host heard it. */
-      conversation: Schema.optionalKey(Schema.String),
-      said: Schema.optionalKey(Schema.String),
-    },
+    payload: Declaration,
     error: HostRefused,
   }),
   Rpc.make("start", {
@@ -876,6 +924,21 @@ export const FrontDoorRpcs = RpcGroup.make(
     success: Started,
     error: Schema.Union([HostRefused, RequestConflict]),
   }),
+  /**
+   * What a Run offers to do next. Through the host because only it holds the module that
+   * declared them: an offer is decided by the author's own code against the facts as they
+   * are now, never by a card's memory of it.
+   */
+  Rpc.make("offers", {
+    payload: { runId: Schema.String },
+    success: Schema.Array(OfferView),
+    error: HostRefused,
+  }),
+  /** What may be started in a project, which is what `start` takes. */
+  Rpc.make("workflows", {
+    payload: { project: Schema.String },
+    success: Schema.Array(Startable),
+  }),
   /** A conversation's pending News, settled as `as` for that conversation alone. */
   Rpc.make("news", {
     payload: {
@@ -900,6 +963,167 @@ export const FrontDoorRpcs = RpcGroup.make(
     error: Schema.Union([HostRefused, RequestConflict]),
   }),
 );
+
+/**
+ * An MR target names its project, not just its iid: reviewing or commenting on
+ * someone else's merge request has to work from a directory that is not a
+ * checkout of it, and every glab call then needs `--repo`.
+ */
+export interface MrRef {
+  /** `host/group/project`, or null for an old target that only carried an iid. */
+  project: string | null;
+  iid: string;
+}
+
+/** `mr:gitlab.example.com/group/project!42`, or the bare `mr:42` that came before. */
+export function parseMrTarget(target: string): MrRef | null {
+  if (!target.startsWith("mr:")) return null;
+  const rest = target.slice(3);
+  const at = rest.lastIndexOf("!");
+  if (at < 0) return /^\d+$/.test(rest) ? { project: null, iid: rest } : null;
+  const iid = rest.slice(at + 1);
+  if (!/^\d+$/.test(iid)) return null;
+  const project = rest.slice(0, at);
+  return { project: project === "" ? null : project, iid };
+}
+
+/** `https://host/group/project/-/merge_requests/7`, the way glab reports what it opened. */
+export function parseMrUrl(url: string): MrRef | null {
+  const m = /^https?:\/\/([^/\s]+)\/(.+?)\/-\/merge_requests\/(\d+)/.exec(url.trim());
+  return m ? { project: `${m[1]}/${m[2]}`, iid: m[3]! } : null;
+}
+
+/**
+ * What an offer's arguments take, from what a human typed into each: text as typed for a
+ * text field, anything else as the JSON it spells where it parses. Blank optional fields
+ * are left out.
+ */
+export const offerInput = (drawn: Schema.Json | null, typed: Readonly<Record<string, string>>) => {
+  const takes = decodeArguments(drawn);
+  const input: { [name: string]: Schema.Json } = {};
+  if (takes._tag === "None") return input;
+  for (const [name, field] of Object.entries(takes.value.properties ?? {})) {
+    const text = typed[name] ?? "";
+    if (text === "" && !(takes.value.required ?? []).includes(name)) continue;
+    const parsed = isTextField(field) ? Option.none() : parseJson(text);
+    input[name] = Option.isSome(parsed) ? parsed.value : text;
+  }
+  return input;
+};
+
+/** The fields an offer's arguments name, and whether each must be given. */
+export const offerFields = (drawn: Schema.Json | null) => {
+  const takes = decodeArguments(drawn);
+  if (takes._tag === "None") return [];
+  return Object.keys(takes.value.properties ?? {}).map((name) => ({
+    name,
+    required: (takes.value.required ?? []).includes(name),
+  }));
+};
+
+const decodeArguments = Schema.decodeUnknownOption(
+  Schema.Struct({
+    properties: Schema.optional(Schema.Record(Schema.String, Schema.Json)),
+    required: Schema.optional(Schema.Array(Schema.String)),
+  }),
+);
+const isTextField = Schema.is(Schema.Struct({ type: Schema.Literal("string") }));
+const parseJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Json));
+
+/** Nothing is driving it any more, so there is nothing to stop, steer or answer. */
+export function isSettled(state: TaskState): boolean {
+  return state === "done" || state === "failed" || state === "stopped" || state === "abandoned";
+}
+
+/** It ended without finishing, so it can be taken up again where it stopped. */
+export function canResume(state: TaskState): boolean {
+  return state === "failed" || state === "stopped" || state === "abandoned";
+}
+
+/** However the Task names its merge request: the URL one opened, or the target one was pointed at. */
+export function mrRefOf(mr: string | null): MrRef | null {
+  return mr === null ? null : (parseMrUrl(mr) ?? parseMrTarget(mr));
+}
+
+/** Where a merge request is read in a browser, where its target says which project. */
+export function mrUrlOf(ref: MrRef): string | null {
+  return ref.project === null ? null : `https://${ref.project}/-/merge_requests/${ref.iid}`;
+}
+
+type DispositionKind = "merged" | "abandoned" | "superseded";
+
+/** One thing a card can be asked for. Each front door draws it its own way. */
+export type CardAction =
+  | { readonly kind: "go-to-tab" }
+  | { readonly kind: "steer" }
+  | { readonly kind: "open-mr"; readonly mr: MrRef }
+  | { readonly kind: "offer"; readonly offer: BoardOffer }
+  | { readonly kind: "check-output" }
+  | { readonly kind: "offers" }
+  | { readonly kind: "resume" }
+  | { readonly kind: "follow-up" }
+  | { readonly kind: "hold"; readonly set: boolean }
+  | { readonly kind: "stop" }
+  | { readonly kind: "dispose"; readonly disposition: DispositionKind; readonly ref: string };
+
+/** `collie!151` rather than the whole URL: a disposition's ref ends up in the card's sentence. */
+const dispose = (view: TaskView, disposition: DispositionKind): CardAction => {
+  const mr = mrRefOf(view.mr);
+  const ref =
+    disposition === "abandoned" || mr === null
+      ? ""
+      : `${(mr.project ?? "").split("/").at(-1)}!${mr.iid}`;
+  return { kind: "dispose", disposition, ref };
+};
+
+/**
+ * What this Task can be asked for, in the order a menu shows it. Only what would work: an
+ * item the human has to try to find out is refused is worse than no item.
+ */
+export function cardActions(view: TaskView): CardAction[] {
+  const actions: CardAction[] = [{ kind: "go-to-tab" }];
+  if (!isSettled(view.state)) actions.push({ kind: "steer" });
+  const mr = mrRefOf(view.mr);
+  if (mr !== null) actions.push({ kind: "open-mr", mr });
+  if (view.offer !== null) actions.push({ kind: "offer", offer: view.offer });
+  if (view.check !== null) actions.push({ kind: "check-output" });
+  actions.push({ kind: "offers" });
+  if (canResume(view.state)) actions.push({ kind: "resume" });
+  if (view.state === "done") actions.push({ kind: "follow-up" });
+  if (!isSettled(view.state)) {
+    actions.push({ kind: "hold", set: view.held === null });
+    actions.push({ kind: "stop" });
+  }
+  return actions;
+}
+
+/**
+ * The one action that ends a card's wait, drawn first on it. Working cards go to their
+ * tab; waiting cards get the action that lands or retires the work; a finished or
+ * decision card has none — its buttons are the decision's own, or the menu's.
+ */
+export function primaryAction(view: TaskView): CardAction | null {
+  if (view.decision !== null) return null;
+  if (view.state === "active" || view.state === "quiet") return { kind: "go-to-tab" };
+  if (view.landed) return null;
+  // Whatever the plan's module offers first, under its own title; none, no button.
+  if (view.planReady) return view.offer === null ? null : { kind: "offer", offer: view.offer };
+  if (canResume(view.state)) return { kind: "resume" };
+  if (view.mrState === "closed") return dispose(view, "superseded");
+  const mr = mrRefOf(view.mr);
+  return mr === null ? null : { kind: "open-mr", mr };
+}
+
+/**
+ * What became of the work, for any settled Task: a Run that failed and was finished by
+ * hand is what a disposition is for. Superseded where its merge request was closed.
+ */
+export function dispositionActions(view: TaskView): CardAction[] {
+  if (!isSettled(view.state)) return [];
+  const kinds: DispositionKind[] = ["merged", "abandoned"];
+  if (view.mrState === "closed") kinds.push("superseded");
+  return kinds.map((kind) => dispose(view, kind));
+}
 
 /**
  * Which of the board's four sections a Task belongs in. A decision beats liveness,

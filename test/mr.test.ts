@@ -4,7 +4,6 @@ import { runEffect } from "./support/effect";
 import {
   MR_TEMPLATE,
   addMrRole,
-  parseMrUrl,
   gitlabForProject,
   gitlabReadiness,
   hostOf,
@@ -12,13 +11,13 @@ import {
   mrDetails,
   mrFacts,
   mrTarget,
-  parseMrTarget,
   projectFromRemote,
   repoArgs,
   resolveAssignee,
   sinceReview,
   templateFile,
 } from "../src/mr";
+import { parseMrUrl, parseMrTarget } from "../src/board-model";
 import { Rig } from "./support/recorder";
 import { epochMs } from "../src/time";
 

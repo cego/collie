@@ -33,7 +33,18 @@ workspace — and is not the Herd.
 **Machine** — One computer's Collie: one state directory, its one host, and every Herd on
 that computer. Known by its **installation id**, which the first host to own the state
 directory writes into it and every later host keeps, so two routes to one state directory
-are one Machine. Not the plugin installation a host serves, which `identity` calls `root`.
+are one Machine. Desktop names it by the label of the first enabled herdr machine that
+reaches it, or by the hostname for Local, and adds its SSH target where two share a name.
+Not the plugin installation a host serves, which `identity` calls `root`.
+
+**Flock** — Every Herd on every Machine **Desktop** reaches.
+
+**Local** — The Machine Desktop runs on, reached through a bridge it starts without SSH and
+named by its hostname. Otherwise no different from any other Machine.
+
+**Desktop** — The Collie desktop app: one more front door over each Machine's board, which it
+reaches through `collie bridge` started as `desktop`. Not "native", which already means
+harness-native (**Native chat**) and Effect-native.
 
 **Home** — The Herd's dedicated Collie workspace, owned by a record plus proof: a live
 `collie_home` token, or the recorded pane still carrying its recorded `terminal_id`. A
@@ -92,10 +103,12 @@ is required. Questions about the flock are Native chat's.
 this record immediately. Unsolicited background suggestions remain pending.
 
 **Actor** — Who asked for an operation: the front door its channel declared (`board`,
-`cli-tty`, `cli`, `chat`, …) and the request id. The host records it in the Run's audit
+`desktop`, `cli-tty`, `cli`, `chat`, …) and the request id. The host records it in the Run's audit
 trail with every start, answer, hold, stop, resume, offer invoked, grant, steer,
-disposition and follow-up. `board` and
-`cli-tty` are a human; `cli-tty` needs a terminal outside any agent's pane. A chat's
+disposition and follow-up. `board`, `desktop` and
+`cli-tty` are a human; `cli-tty` needs a terminal outside any agent's pane. A channel
+reached through `collie bridge` is the front door it was started as, and `desktop` adds
+where it came from: the computer it named and the SSH client the bridge saw. A chat's
 `collie_do` also names its conversation and carries the human's message from that turn,
 attached by the tool host and never by the model.
 
