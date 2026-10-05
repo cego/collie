@@ -1,7 +1,7 @@
 // What a board is made of, as every front door decodes it, and the pure rules that place
 // and count its cards. No I/O and no Bun-only import: a browser bundle imports this too.
 
-import { Schema, SchemaGetter } from "effect";
+import { Option, Schema, SchemaGetter } from "effect";
 import * as Rpc from "effect/unstable/rpc/Rpc";
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
 import { IntentSeedSchema } from "./intent-model";
@@ -478,6 +478,37 @@ export const RunDetail = Schema.Struct({
 });
 export type RunDetail = typeof RunDetail.Type;
 
+/** One offer as a front door shows it, over the wire. */
+export const OfferView = Schema.Struct({
+  id: Schema.String,
+  title: Schema.String,
+  /** The workflow it starts, by public id. */
+  workflow: Schema.String,
+  /** What it takes, as JSON Schema; null where it takes nothing. */
+  arguments: Schema.NullOr(Schema.Json),
+  kind: Schema.Literals(["action", "follow-up"]),
+  primary: Schema.Boolean,
+  /** Why it cannot be made now, or null when it can. */
+  unavailable: Schema.NullOr(Schema.String),
+});
+export type OfferView = typeof OfferView.Type;
+
+/** A workflow a front door may start in a project, and the Inputs it asks for. */
+export const Startable = Schema.Struct({
+  id: Schema.String,
+  title: Schema.String,
+  description: Schema.String,
+  inputs: Schema.Array(
+    Schema.Struct({
+      name: Schema.String,
+      required: Schema.Boolean,
+      /** The field's schema as JSON Schema, or null where it would not draw. */
+      schema: Schema.NullOr(Schema.Json),
+    }),
+  ),
+});
+export type Startable = typeof Startable.Type;
+
 /**
  * The board protocol's version. An optional field, a new operation or a new kind of
  * message keeps it; a removal or a change of meaning bumps it.
@@ -873,6 +904,17 @@ export const FrontDoorRpcs = RpcGroup.make(
     success: Started,
     error: Schema.Union([HostRefused, RequestConflict]),
   }),
+  /** What a Run offers to do next, as its module decides now; what `invoke` takes. */
+  Rpc.make("offers", {
+    payload: { runId: Schema.String },
+    success: Schema.Array(OfferView),
+    error: HostRefused,
+  }),
+  /** What may be started in a project, which is what `start` takes. */
+  Rpc.make("workflows", {
+    payload: { project: Schema.String },
+    success: Schema.Array(Startable),
+  }),
   /** Carries out what a finished Run offers, as a Run of its own. */
   Rpc.make("invoke", {
     payload: {
@@ -885,6 +927,102 @@ export const FrontDoorRpcs = RpcGroup.make(
     error: Schema.Union([HostRefused, RequestConflict]),
   }),
 );
+
+/**
+ * An MR target names its project, not just its iid: reviewing or commenting on
+ * someone else's merge request has to work from a directory that is not a
+ * checkout of it, and every glab call then needs `--repo`.
+ */
+export interface MrRef {
+  /** `host/group/project`, or null for an old target that only carried an iid. */
+  project: string | null;
+  iid: string;
+}
+
+/** `mr:gitlab.example.com/group/project!42`, or the bare `mr:42` that came before. */
+export function parseMrTarget(target: string): MrRef | null {
+  if (!target.startsWith("mr:")) return null;
+  const rest = target.slice(3);
+  const at = rest.lastIndexOf("!");
+  if (at < 0) return /^\d+$/.test(rest) ? { project: null, iid: rest } : null;
+  const iid = rest.slice(at + 1);
+  if (!/^\d+$/.test(iid)) return null;
+  const project = rest.slice(0, at);
+  return { project: project === "" ? null : project, iid };
+}
+
+/** `https://host/group/project/-/merge_requests/7`, the way glab reports what it opened. */
+export function parseMrUrl(url: string): MrRef | null {
+  const m = /^https?:\/\/([^/\s]+)\/(.+?)\/-\/merge_requests\/(\d+)/.exec(url.trim());
+  return m ? { project: `${m[1]}/${m[2]}`, iid: m[3]! } : null;
+}
+
+/** What a disposition names as its backing: `collie!151` for the Task's merge request. */
+export function dispositionRef(mr: string | null): string {
+  const ref = mr === null ? null : (parseMrUrl(mr) ?? parseMrTarget(mr));
+  return ref === null ? "" : `${(ref.project ?? "").split("/").at(-1)}!${ref.iid}`;
+}
+
+/**
+ * What an offer's arguments take, from what a human typed into each: text as typed for a
+ * text field, anything else as the JSON it spells where it parses. Blank optional fields
+ * are left out.
+ */
+export const offerInput = (drawn: Schema.Json | null, typed: Readonly<Record<string, string>>) => {
+  const takes = decodeArguments(drawn);
+  const input: { [name: string]: Schema.Json } = {};
+  if (takes._tag === "None") return input;
+  for (const [name, field] of Object.entries(takes.value.properties ?? {})) {
+    const text = typed[name] ?? "";
+    if (text === "" && !(takes.value.required ?? []).includes(name)) continue;
+    const parsed = isTextField(field) ? Option.none() : parseJson(text);
+    input[name] = Option.isSome(parsed) ? parsed.value : text;
+  }
+  return input;
+};
+
+/** The fields an offer's arguments name, and whether each must be given. */
+export const offerFields = (drawn: Schema.Json | null) => {
+  const takes = decodeArguments(drawn);
+  if (takes._tag === "None") return [];
+  return Object.keys(takes.value.properties ?? {}).map((name) => ({
+    name,
+    required: (takes.value.required ?? []).includes(name),
+  }));
+};
+
+const decodeArguments = Schema.decodeUnknownOption(
+  Schema.Struct({
+    properties: Schema.optional(Schema.Record(Schema.String, Schema.Json)),
+    required: Schema.optional(Schema.Array(Schema.String)),
+  }),
+);
+const isTextField = Schema.is(Schema.Struct({ type: Schema.Literal("string") }));
+const parseJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Json));
+
+/** Nothing is driving it any more, so there is nothing to stop, steer or answer. */
+export function isSettled(state: TaskState): boolean {
+  return state === "done" || state === "failed" || state === "stopped" || state === "abandoned";
+}
+
+/** It ended without finishing, so it can be taken up again where it stopped. */
+export function canResume(state: TaskState): boolean {
+  return state === "failed" || state === "stopped" || state === "abandoned";
+}
+
+/**
+ * What a human may record became of the work: for any settled Task, since a Run that
+ * failed and was finished by hand is what a disposition is for; superseded where its
+ * merge request was closed.
+ */
+export function dispositionKinds(
+  view: Pick<TaskView, "state" | "mrState">,
+): ReadonlyArray<"merged" | "abandoned" | "superseded"> {
+  if (!isSettled(view.state)) return [];
+  return view.mrState === "closed"
+    ? ["merged", "abandoned", "superseded"]
+    : ["merged", "abandoned"];
+}
 
 /**
  * Which of the board's four sections a Task belongs in. A decision beats liveness,

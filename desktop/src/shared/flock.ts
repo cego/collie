@@ -5,7 +5,14 @@
 import { Schema, Stream, Struct } from "effect";
 import * as Rpc from "effect/unstable/rpc/Rpc";
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
-import { BoardMessage, type Herd, sortBoard, type TaskView } from "../../../src/board-model";
+import {
+  BoardMessage,
+  type Herd,
+  OfferView,
+  sortBoard,
+  Startable,
+  type TaskView,
+} from "../../../src/board-model";
 
 /**
  * A Machine as Desktop knows it: its installation id, the name a human reads, and the SSH
@@ -36,7 +43,64 @@ export type MachineLost = typeof MachineLost.Type;
 export const FlockItem = Schema.Union([MachineMessage, MachineLost]);
 export type FlockItem = typeof FlockItem.Type;
 
-export const DesktopRpcs = RpcGroup.make(Rpc.make("flock", { success: FlockItem, stream: true }));
+/** One board action, as the view asks it of a Machine's host. */
+export const DesktopAction = Schema.Union([
+  Schema.TaggedStruct("Answer", {
+    runId: Schema.String,
+    decision: Schema.NullOr(Schema.String),
+    value: Schema.String,
+  }),
+  Schema.TaggedStruct("Control", {
+    runId: Schema.String,
+    control: Schema.Literals(["hold", "stop"]),
+    set: Schema.Boolean,
+  }),
+  Schema.TaggedStruct("Resume", { runId: Schema.String }),
+  Schema.TaggedStruct("Confirm", { proposal: Schema.String, hash: Schema.String }),
+  Schema.TaggedStruct("Decline", { proposal: Schema.String, hash: Schema.String }),
+  Schema.TaggedStruct("Dispose", {
+    runId: Schema.String,
+    kind: Schema.Literals(["merged", "abandoned", "superseded"]),
+    ref: Schema.String,
+  }),
+  Schema.TaggedStruct("Steer", { runId: Schema.String, text: Schema.String }),
+  Schema.TaggedStruct("FollowUp", { runId: Schema.String, text: Schema.String }),
+  Schema.TaggedStruct("Invoke", {
+    runId: Schema.String,
+    offer: Schema.String,
+    input: Schema.Record(Schema.String, Schema.Json),
+  }),
+  Schema.TaggedStruct("Start", {
+    project: Schema.String,
+    id: Schema.String,
+    text: Schema.Record(Schema.String, Schema.String),
+  }),
+]);
+export type DesktopAction = typeof DesktopAction.Type;
+
+/** What a Machine's host said no with, or why it could not be asked. */
+export class ActionFailed extends Schema.TaggedError<ActionFailed>()("ActionFailed", {
+  reason: Schema.String,
+}) {}
+
+export const DesktopRpcs = RpcGroup.make(
+  Rpc.make("flock", { success: FlockItem, stream: true }),
+  Rpc.make("act", {
+    payload: { installation: Schema.String, action: DesktopAction },
+    success: Schema.String,
+    error: ActionFailed,
+  }),
+  Rpc.make("offers", {
+    payload: { installation: Schema.String, runId: Schema.String },
+    success: Schema.Array(OfferView),
+    error: ActionFailed,
+  }),
+  Rpc.make("workflows", {
+    payload: { installation: Schema.String, project: Schema.String },
+    success: Schema.Array(Startable),
+    error: ActionFailed,
+  }),
+);
 
 /** What a Machine's host last told: who it is, its Herds, and its Tasks by id. */
 export interface FlockMachine {
@@ -93,6 +157,8 @@ const machineNames = (machines: ReadonlyArray<Machine>) => {
 /** A Task as the board draws it: keyed across the Flock, and where it is when that matters. */
 export interface PlacedTask {
   readonly key: string;
+  /** The Machine its actions go to. */
+  readonly installation: string;
   readonly task: TaskView;
   readonly where: string;
 }
@@ -113,6 +179,7 @@ export const flockCards = (flock: Flock) => {
       ];
       placed.set(task, {
         key: `${installation}:${task.id}`,
+        installation,
         task,
         where: where.filter((part) => part !== undefined).join(" · "),
       });
@@ -122,6 +189,12 @@ export const flockCards = (flock: Flock) => {
     tasks: sortBoard([...placed.keys()]),
     // SAFETY: the board's helpers filter and sort these Tasks; they never make new ones.
     placedOf: (task: TaskView) => placed.get(task)!,
+    /** Each Machine by its display name, and the projects its board has work in. */
+    machines: [...flock.machines].map(([installation, { tasks }]) => ({
+      installation,
+      name: names.get(installation)!,
+      projects: [...new Set([...tasks.values()].map((task) => task.project))].sort(),
+    })),
   };
 };
 

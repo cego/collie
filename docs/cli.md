@@ -1424,7 +1424,11 @@ News; and worktree pruning, every 3 minutes.
 
 The operations that change a Run are on `FrontDoorRpcs` too: `start`, `answer`, `control`
 (a hold or a stop, set or cleared, and every watcher hears about it), `resume` and
-`invoke` (an offer). `grant` and `steer` stay on `HostRpcs`. Each takes a request id, and the same id twice is one operation. A
+`invoke` (an offer). Two reads tell a front door on another computer what those take:
+`offers`, what a Run offers to do next as its module decides now, with each offer's
+arguments as JSON Schema; and `workflows`, what may be started in a project and the Inputs
+each asks for. `start` then takes what a human typed in `text`, and the host settles it
+against the workflow's own schema. `grant` and `steer` stay on `HostRpcs`. Each takes a request id, and the same id twice is one operation. A
 channel first sends `declare` with its front door, and the host stamps every operation on
 it with that, as a line in the Run's `operations.jsonl`: the operation, the request, the
 Actor and what came of it ([ADR-0039](adr/0039-every-operation-records-who-asked.md)). A

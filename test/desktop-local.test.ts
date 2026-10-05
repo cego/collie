@@ -7,11 +7,11 @@ import type { BoardMessage } from "../src/board-model";
 import { readAudit } from "../src/audit";
 import { runDir } from "../src/engine";
 import {
+  act,
   bridgeCommand,
   flockStream,
   machineBoard,
   openBridge,
-  type Route,
 } from "../desktop/src/bun/machine";
 import { watchedBy } from "./support/effect";
 import { root, stopHost } from "./support/host";
@@ -20,7 +20,7 @@ import { proves } from "./support/world";
 const asCommand = Schema.encodeSync(Schema.fromJsonString(Schema.Array(Schema.String)));
 
 test(
-  "Desktop sees Local's board through a bridge it started, and a Run appears on it live",
+  "Desktop sees Local's board through a bridge it started, a Run appears on it live, and what Desktop does there is recorded as Desktop's",
   () =>
     proves(
       "collie-desktop-local-",
@@ -65,12 +65,19 @@ test(
             );
           }
 
+          expect(
+            yield* act(door, "hold-1", { _tag: "Control", runId, control: "hold", set: true }),
+          ).not.toBe("");
+          const refused = yield* act(door, "resume-x", { _tag: "Resume", runId: "r-nobody" }).pipe(
+            Effect.flip,
+          );
+          expect(refused.reason).toBe("no Run r-nobody");
+
           const trail = yield* readAudit(runDir(world.state, runId));
-          expect(trail[0]?.actor).toEqual({
-            origin: "desktop",
-            requestId: "start-1",
-            from: { client: "mk-pc" },
-          });
+          expect(trail.map((line) => line.actor)).toEqual([
+            { origin: "desktop", requestId: "start-1", from: { client: "mk-pc" } },
+            { origin: "desktop", requestId: "hold-1", from: { client: "mk-pc" } },
+          ]);
           yield* stopHost(world.state);
         }).pipe(Effect.orDie),
       ["proof.workflow.ts", "helper.ts", "notes.md"],
@@ -118,9 +125,13 @@ test("a Machine reached by two routes is shown through the first, and the other'
         tasks: [],
         seq: 0,
       });
-      const route = (name: string, board: Stream.Stream<BoardMessage>): Route => ({
+      interface Fake {
+        readonly name: string;
+        readonly board: () => Stream.Stream<BoardMessage>;
+      }
+      const route = (name: string, board: Stream.Stream<BoardMessage>) => ({
         machine: { name, target: `mk@${name}` },
-        open: Effect.acquireRelease(Effect.succeed({ board: () => board }), () =>
+        open: Effect.acquireRelease(Effect.succeed<Fake>({ name, board: () => board }), () =>
           Effect.sync(() => closed.push(name)),
         ),
       });
@@ -128,13 +139,17 @@ test("a Machine reached by two routes is shown through the first, and the other'
       const after = (go: Deferred.Deferred<void>, message: BoardMessage) =>
         Stream.fromEffect(Deferred.await(go).pipe(Effect.as(message)));
       const told: string[] = [];
-      yield* flockStream([
-        route(
-          "preferred",
-          after(preferredAnswers, snapshot("vm")).pipe(Stream.concat(Stream.never)),
-        ),
-        route("other", Stream.make(snapshot("vm")).pipe(Stream.concat(Stream.never))),
-      ]).pipe(
+      const doors = new Map<string, Fake>();
+      yield* flockStream(
+        [
+          route(
+            "preferred",
+            after(preferredAnswers, snapshot("vm")).pipe(Stream.concat(Stream.never)),
+          ),
+          route("other", Stream.make(snapshot("vm")).pipe(Stream.concat(Stream.never))),
+        ],
+        doors,
+      ).pipe(
         Stream.runForEach((item) =>
           Effect.sync(() =>
             told.push(`${item.machine.name} ${"_tag" in item ? item._tag : item.message._tag}`),
@@ -152,5 +167,7 @@ test("a Machine reached by two routes is shown through the first, and the other'
       yield* until(() => told.length === 2 && closed.includes("other"));
       expect(told).toEqual(["other Snapshot", "preferred Snapshot"]);
       expect(closed).toEqual(["other"]);
+      // Actions on the Machine go through the route it is shown through.
+      expect(doors.get("vm")?.name).toBe("preferred");
     }).pipe(Effect.scoped),
   ));

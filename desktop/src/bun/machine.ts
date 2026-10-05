@@ -6,8 +6,23 @@ import { Deferred, Effect, Fiber, Layer, Ref, Schedule, Schema, type Scope, Stre
 import * as RpcClient from "effect/unstable/rpc/RpcClient";
 import * as RpcSerialization from "effect/unstable/rpc/RpcSerialization";
 import * as Socket from "effect/unstable/socket/Socket";
-import { BRIDGE_READY, type BoardMessage, FrontDoorRpcs } from "../../../src/board-model";
-import type { FlockItem, KnownMachine, Machine, MachineMessage } from "../shared/flock";
+import {
+  BRIDGE_READY,
+  type BoardMessage,
+  FrontDoorRpcs,
+  type HostRefused,
+  type ProposalRefused,
+  type RequestConflict,
+} from "../../../src/board-model";
+import type * as RpcClientError from "effect/unstable/rpc/RpcClientError";
+import {
+  ActionFailed,
+  type DesktopAction,
+  type FlockItem,
+  type KnownMachine,
+  type Machine,
+  type MachineMessage,
+} from "../shared/flock";
 
 const children = new Set<Bun.Subprocess>();
 export const endChildren = () => {
@@ -90,6 +105,8 @@ export const openBridge = Effect.fn("Desktop.openBridge")(function* (
   return yield* RpcClient.make(FrontDoorRpcs).pipe(Effect.provideContext(context));
 });
 
+export type Door = Effect.Success<ReturnType<typeof openBridge>>;
+
 export interface BoardSource {
   readonly board: () => Stream.Stream<BoardMessage, { readonly message: string }>;
 }
@@ -153,9 +170,9 @@ export const herdrMachines = (herdr: string) =>
   );
 
 /** One way to reach a Machine: what it is called, and how its bridge is opened. */
-export interface Route {
+export interface Route<D extends BoardSource = Door> {
   readonly machine: KnownMachine;
-  readonly open: Effect.Effect<BoardSource, string, Scope.Scope>;
+  readonly open: Effect.Effect<D, string, Scope.Scope>;
 }
 
 const quoted = (word: string) => `'${word.replaceAll("'", `'\\''`)}'`;
@@ -231,9 +248,13 @@ export const remoteRoute = Effect.fn("Desktop.remoteRoute")(function* (
 /**
  * Every route's board, one stream per installation. Routes earlier in the list are
  * preferred, so a Machine reached two ways is shown through the first; a route that turns
- * out to reach a Machine already shown ends, and its bridge with it.
+ * out to reach a Machine already shown ends, and its bridge with it. `doors` holds each
+ * shown Machine's door, by installation, for as long as its stream runs.
  */
-export const flockStream = (routes: ReadonlyArray<Route>): Stream.Stream<FlockItem> =>
+export const flockStream = <D extends BoardSource>(
+  routes: ReadonlyArray<Route<D>>,
+  doors: Map<string, D>,
+): Stream.Stream<FlockItem> =>
   Stream.unwrap(
     Effect.gen(function* () {
       const owners = yield* Ref.make(new Map<string, number>());
@@ -252,8 +273,22 @@ export const flockStream = (routes: ReadonlyArray<Route>): Stream.Stream<FlockIt
         });
       return Stream.mergeAll(
         routes.map((route, at) =>
-          Stream.unwrap(Effect.map(route.open, (door) => machineBoard(route.machine, door))).pipe(
-            Stream.takeWhileEffect((item) => owns(at, item)),
+          Stream.unwrap(
+            Effect.map(route.open, (door) =>
+              machineBoard(route.machine, door).pipe(
+                Stream.takeWhileEffect((item) => owns(at, item)),
+                Stream.tap(({ machine }) =>
+                  Effect.sync(() => doors.set(machine.installation, door)),
+                ),
+                Stream.ensuring(
+                  Effect.sync(() => {
+                    for (const [installation, held] of doors)
+                      if (held === door) doors.delete(installation);
+                  }),
+                ),
+              ),
+            ),
+          ).pipe(
             Stream.interruptWhen(Deferred.await(displaced[at]!)),
             Stream.catch((reason) =>
               Stream.succeed<FlockItem>({ _tag: "Lost", machine: route.machine, reason }),
@@ -264,3 +299,107 @@ export const flockStream = (routes: ReadonlyArray<Route>): Stream.Stream<FlockIt
       );
     }),
   );
+
+/** Why a host said no, in its own words. */
+const refusal = (
+  error:
+    | HostRefused
+    | ProposalRefused
+    | RequestConflict
+    | RpcClientError.RpcClientError
+    | Unsteered,
+) =>
+  new ActionFailed({
+    reason:
+      error._tag === "HostRefused" || error._tag === "RequestConflict"
+        ? error.reason
+        : error._tag === "ProposalRefused"
+          ? error.detail
+          : error.message,
+  });
+
+/** A steer the host carried no further, with what it said about it. */
+interface Unsteered {
+  readonly _tag: "Unsteered";
+  readonly message: string;
+}
+
+/** One board action carried out on a Machine's host, and what it came to in a line. */
+export const act = (door: Door, request: string, action: DesktopAction) => {
+  const said = (() => {
+    switch (action._tag) {
+      case "Answer":
+        return door
+          .answer({ runId: action.runId, decision: action.decision, value: action.value, request })
+          .pipe(Effect.as(`Answered ${action.runId}`));
+      case "Control": {
+        const verb = action.control === "stop" ? "Stopped" : action.set ? "Held" : "Released";
+        return door
+          .control({ runId: action.runId, control: action.control, set: action.set, request })
+          .pipe(Effect.map((done) => done.detail || `${verb} ${action.runId}`));
+      }
+      case "Resume":
+        return door
+          .resume({ runId: action.runId, request })
+          .pipe(Effect.map((done) => done.detail || `Resumed ${action.runId}`));
+      case "Confirm":
+        return door
+          .confirm({ proposal: action.proposal, hash: action.hash, request })
+          .pipe(Effect.as("Confirmed"));
+      case "Decline":
+        return door
+          .decline({ proposal: action.proposal, hash: action.hash, request })
+          .pipe(Effect.as("Declined"));
+      case "Dispose":
+        return door
+          .dispose({ runId: action.runId, kind: action.kind, ref: action.ref, note: null, request })
+          .pipe(Effect.as(`Marked ${action.kind}`));
+      case "Steer":
+        return door
+          .steerAbout({
+            runId: action.runId,
+            text: action.text,
+            from: null,
+            dryRun: false,
+            request,
+          })
+          .pipe(
+            Effect.flatMap((outcome) =>
+              outcome.ok
+                ? Effect.succeed(outcome.human)
+                : Effect.fail<Unsteered>({ _tag: "Unsteered", message: outcome.human }),
+            ),
+          );
+      case "FollowUp":
+        return door
+          .followUp({ runId: action.runId, text: action.text, request })
+          .pipe(Effect.map((started) => `Started ${started.runId}`));
+      case "Invoke":
+        return door
+          .invoke({ runId: action.runId, offer: action.offer, input: action.input, request })
+          .pipe(Effect.map((started) => `Started ${started.runId}`));
+      case "Start":
+        return door
+          .start({ project: action.project, id: action.id, input: {}, text: action.text, request })
+          .pipe(Effect.map((started) => `Started ${started.runId}`));
+    }
+  })();
+  return said.pipe(Effect.mapError(refusal));
+};
+
+/** The door to the Machine an installation id names, while Desktop shows it. */
+export const doorTo = <D>(
+  doors: ReadonlyMap<string, D>,
+  installation: string,
+): Effect.Effect<D, ActionFailed> => {
+  const door = doors.get(installation);
+  return door === undefined
+    ? Effect.fail(new ActionFailed({ reason: "that Machine is not connected" }))
+    : Effect.succeed(door);
+};
+
+export const offersOn = (door: Door, runId: string) =>
+  door.offers({ runId }).pipe(Effect.mapError(refusal));
+
+export const workflowsOn = (door: Door, project: string) =>
+  door.workflows({ project }).pipe(Effect.mapError(refusal));

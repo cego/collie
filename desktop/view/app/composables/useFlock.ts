@@ -39,6 +39,7 @@ export const useFlock = () => {
       AsyncResult.isFailure(flock.value) ? Cause.pretty(flock.value.cause) : null,
     ),
     lost: computed(() => [...told.value.lost]),
+    machines: computed(() => board.value.machines),
     tasks,
     sections: computed(
       () =>

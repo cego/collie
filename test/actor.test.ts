@@ -195,3 +195,39 @@ test("a terminal is a human's only in a pane herdr does not report as an agent's
   // herdr could not say, so nobody can show it is not an agent's.
   expect(cliOrigin({ terminal: true, pane: "1-2", agentPanes: null })).toBe("cli");
 });
+
+test(
+  "a front door reads what a project can start and what a finished Run offers, from the host",
+  () =>
+    proves(
+      "collie-actor-reads-",
+      (world) =>
+        Effect.gen(function* () {
+          const host = yield* connect(world.state);
+          const door = yield* frontDoor(world.state);
+          yield* door.declare({ frontDoor: "desktop", from: { client: "mk-pc" } });
+          const startable = yield* door.workflows({ project: world.project });
+          expect(startable.find((one) => one.id === "offered")?.inputs).toEqual([
+            expect.objectContaining({ name: "note", required: true }),
+          ]);
+          const { runId } = yield* door.start({
+            project: world.project,
+            id: "offered",
+            request: "start-1",
+            input: {},
+            text: { note: "typed" },
+          });
+          yield* until(
+            () => host.status({ runId }),
+            (status) => status.status === "complete",
+          );
+          const offers = yield* door.offers({ runId });
+          expect(offers.map((offer) => offer.id)).toContain("look-again");
+          const refused = yield* door.offers({ runId: "r-nobody" }).pipe(Effect.flip);
+          expect(refused._tag).toBe("HostRefused");
+          yield* stopHost(world.state);
+        }).pipe(Effect.orDie),
+      ["offered.workflow.ts", "graded.workflow.ts"],
+    ),
+  120_000,
+);

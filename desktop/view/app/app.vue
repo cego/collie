@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { SECTIONS } from "../../../src/board-model";
 
-const { connecting, failure, lost, tasks, sections, header, waiting } = useFlock();
+const { connecting, failure, lost, machines, tasks, sections, header, waiting } = useFlock();
+const starting = ref(false);
 </script>
 
 <template>
@@ -12,6 +13,15 @@ const { connecting, failure, lost, tasks, sections, header, waiting } = useFlock
       <p data-testid="header" :class="header.urgent ? 'text-warning font-medium' : 'text-muted'">
         {{ connecting || failure !== null ? "" : header.text }}
       </p>
+      <UButton
+        class="ml-auto"
+        icon="i-lucide-plus"
+        label="New run"
+        data-testid="new-run"
+        :disabled="machines.length === 0"
+        @click="starting = true"
+      />
+      <StartDialog v-model:open="starting" :machines="machines" />
     </header>
     <main class="flex flex-col gap-6 p-4">
       <p v-if="connecting" class="text-muted">Connecting…</p>

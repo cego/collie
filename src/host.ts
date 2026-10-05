@@ -740,6 +740,19 @@ const frontDoorHandlers = (
           )(registry.control({ runId, control, set })),
         resume: ({ runId, request }, { client }) =>
           auditedControl(runId, "resume", request, stampOf(client))(takeUp(runId)),
+        offers: ({ runId }) => registry.offers(runId),
+        workflows: ({ project }) =>
+          discover(searchPath({ pluginRoot: env.pluginRoot, userDir: env.userDir, project })).pipe(
+            Effect.map(({ entries }) =>
+              entries.map(({ id, title, description, inputs }) => ({
+                id,
+                title,
+                description,
+                inputs: inputs.map(({ name, required, schema }) => ({ name, required, schema })),
+              })),
+            ),
+            Effect.provideContext(bun),
+          ),
         invoke: ({ runId, offer, input, request }, { client }) =>
           fresh(
             () => runId,

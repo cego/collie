@@ -18,7 +18,14 @@ import type { DefinitionRow, SettingsView } from "../views";
 import { MAX_AGENTS, type AgentRow, type RunRow } from "../workspace";
 import type { WideGroup, WideView, WorkspaceView } from "../workspace";
 import type { Density, Scope } from "../config";
-import type { RunDetail, TaskView } from "../board-model";
+import {
+  canResume,
+  dispositionKinds,
+  dispositionRef,
+  isSettled,
+  type RunDetail,
+  type TaskView,
+} from "../board-model";
 import { mrTarget, parseMrTarget, parseMrUrl } from "../mr";
 import type { Live } from "../live";
 import type { Selection } from "../selection";
@@ -221,6 +228,8 @@ export type Command =
    * reaches the Driver until it is up, so an undo inside it is exact rather than a race.
    */
   | { _tag: "StopRun"; runId: string }
+  /** Hold this Run where it is, or release the hold. */
+  | { _tag: "HoldRun"; runId: string; set: boolean }
   /** Take back every stop still inside its grace. The bridge answers it. */
   | { _tag: "UndoStop" }
   | { _tag: "OpenLog"; runId: string }
@@ -1096,11 +1105,6 @@ export interface MenuItem {
   command: Command;
 }
 
-/** Nothing is driving it any more, so there is nothing to stop, steer or answer. */
-function settled(state: TaskView["state"]): boolean {
-  return state === "done" || state === "failed" || state === "stopped" || state === "abandoned";
-}
-
 /**
  * The one action that ends a card's wait, drawn first on the card. Working cards go to
  * their tab; waiting cards get the action that lands or retires the work; a finished or
@@ -1121,7 +1125,7 @@ export function primaryFor(view: TaskView): MenuItem | null {
           label: view.offer.title,
           command: { _tag: "InvokeOffer", runId, offer: view.offer.id },
         };
-  if (view.state === "failed" || view.state === "stopped" || view.state === "abandoned")
+  if (canResume(view.state))
     return { key: "u", label: "Resume", command: { _tag: "ResumeRun", runId } };
   if (view.mrState === "closed")
     return {
@@ -1149,7 +1153,7 @@ export function menuFor(view: TaskView): MenuItem[] {
     { key: "enter", label: "Open record", command: { _tag: "OpenRecord", id: view.id } },
     { key: "g", label: "Go to its tab", command: goToTab(view) },
   ];
-  if (!settled(view.state)) {
+  if (!isSettled(view.state)) {
     items.push({ key: "s", label: "Steer…", command: { _tag: "OpenSteer", id: view.id } });
   }
   const mr = mrOf(view);
@@ -1175,13 +1179,19 @@ export function menuFor(view: TaskView): MenuItem[] {
     });
   }
   items.push({ key: "o", label: "What it offers…", command: { _tag: "ChooseOffer", runId } });
-  if (view.state === "failed" || view.state === "stopped" || view.state === "abandoned") {
+  if (canResume(view.state)) {
     items.push({ key: "u", label: "Resume run", command: { _tag: "ResumeRun", runId } });
   }
   if (view.state === "done") {
     items.push({ key: "x", label: "Follow-up run", command: { _tag: "FollowUp", runId } });
   }
-  if (!settled(view.state)) {
+  if (!isSettled(view.state)) {
+    const held = view.held !== null;
+    items.push({
+      key: "h",
+      label: held ? "Release hold" : "Hold run",
+      command: { _tag: "HoldRun", runId, set: !held },
+    });
     items.push({ key: "k", label: "Stop run", command: { _tag: "StopRun", runId } });
   }
   return items;
@@ -1192,32 +1202,21 @@ export function menuFor(view: TaskView): MenuItem[] {
  * that failed and was then finished by hand is exactly what a disposition is for.
  */
 export function dispositionsFor(view: TaskView): MenuItem[] {
-  if (!settled(view.state)) return [];
-  const mr = mrOf(view);
   // `collie!151` rather than the whole URL: this ends up in the card's own sentence.
-  const ref = mr === null ? "" : `${(mr.project ?? "").split("/").at(-1)}!${mr.iid}`;
-  return [
-    {
-      key: "M",
-      label: "Mark merged",
-      command: { _tag: "RecordDisposition", runId: view.run, kind: "merged", ref },
+  const ref = dispositionRef(view.mr);
+  return dispositionKinds(view).map((kind) => ({
+    key: DISPOSITION_KEYS[kind],
+    label: `Mark ${kind}`,
+    command: {
+      _tag: "RecordDisposition",
+      runId: view.run,
+      kind,
+      ref: kind === "abandoned" ? "" : ref,
     },
-    {
-      key: "A",
-      label: "Mark abandoned",
-      command: { _tag: "RecordDisposition", runId: view.run, kind: "abandoned", ref: "" },
-    },
-    ...(view.mrState === "closed"
-      ? [
-          {
-            key: "S",
-            label: "Mark superseded",
-            command: { _tag: "RecordDisposition", runId: view.run, kind: "superseded", ref },
-          } satisfies MenuItem,
-        ]
-      : []),
-  ];
+  }));
 }
+
+const DISPOSITION_KEYS = { merged: "M", abandoned: "A", superseded: "S" } as const;
 
 /** The earlier finished runs on screen, and whether there are more to ask for. */
 export interface Older {
@@ -1279,6 +1278,7 @@ export const ALL_KEYS: ReadonlyArray<{ key: string; what: string }> = [
   { key: "o", what: "What its workflow offers next" },
   { key: "i", what: "The first of those, on a plan that is ready" },
   { key: "x", what: "Follow-up run" },
+  { key: "h", what: "Hold run, or release its hold" },
   { key: "k", what: "Stop run" },
 ];
 

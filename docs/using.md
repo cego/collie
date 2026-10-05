@@ -605,17 +605,18 @@ move or grow. `⋯` opens that Task's menu, and so does a right-click anywhere o
 use `⋯` in a terminal that keeps the right button for its own menu. Clicking anywhere else
 closes it, as does Esc, and the key beside each item does it from the keyboard:
 
-|         |                    |                                     |
-| ------- | ------------------ | ----------------------------------- |
-| `enter` | Open record        | always                              |
-| `g`     | Go to its tab      | always                              |
-| `s`     | Steer…             | while something is still driving it |
-| `w`     | Open merge request | when there is one                   |
-| `i`     | its first offer    | a plan that is ready, by its title  |
-| `o`     | What it offers…    | always: the workflow's own offers   |
-| `u`     | Resume run         | failed or stopped                   |
-| `x`     | Follow-up run      | finished                            |
-| `k`     | Stop run           | working, quiet or waiting on you    |
+|         |                    |                                                          |
+| ------- | ------------------ | -------------------------------------------------------- |
+| `enter` | Open record        | always                                                   |
+| `g`     | Go to its tab      | always                                                   |
+| `s`     | Steer…             | while something is still driving it                      |
+| `w`     | Open merge request | when there is one                                        |
+| `i`     | its first offer    | a plan that is ready, by its title                       |
+| `o`     | What it offers…    | always: the workflow's own offers                        |
+| `u`     | Resume run         | failed or stopped                                        |
+| `x`     | Follow-up run      | finished                                                 |
+| `h`     | Hold run           | working, quiet or waiting on you; Release hold once held |
+| `k`     | Stop run           | working, quiet or waiting on you                         |
 
 Only what that Task can be asked for is listed: an item that would come back "this run has
 already finished" is not offered at all. Nothing is offered on one board and withheld on
@@ -836,6 +837,20 @@ or one pointing at this computer — is shown once, through the first in herdr's
 computer before any). It is named by that herdr machine's label, or the hostname here, and
 two Machines with one name show as `name (ssh target)`. A Machine Desktop cannot reach is
 named above the board with what SSH or its bridge said.
+
+Every Decision and action the TUI board has is on Desktop's cards, and goes to the Machine
+the card is on. A question is answered with its options, or typed into where it has none;
+an evidence gate is approved with the checks still ticked; and a proposal is read in a
+drawer whose Confirm stays off until all of it has been on screen, then sent with its id
+and content hash. Each card's `⋯` menu offers what the TUI menu does, by the same rules —
+Steer…, the Run's offers (asked of its host when opened, with a field for each argument),
+Resume, Follow-up, Hold or Release, Stop, and Mark merged, abandoned or superseded — and
+the card's first action is the TUI card's own, save going to a tab and opening a merge
+request, which Desktop does not do yet. **New run** asks a Machine what a project
+can start, then starts it with what you typed for its inputs. What came of each, or the
+host's own words for why not, is said in a toast; the card then changes from the host's
+stream like any other change. Every one is recorded on that Machine as `desktop`, with this
+computer's name.
 
 Every Machine's host is reached the same way: by running
 `collie bridge --as desktop --client <this computer>` in a login shell, here directly and

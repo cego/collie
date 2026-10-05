@@ -18,7 +18,7 @@ import { EXCLUSIVE_STRATEGIES, strategyMeaning } from "./strategies";
 import { PROJECTS_ROOT_OPTION, projectsRoot } from "./projects";
 import { insideCheckout } from "./agent-start";
 import { placeableUnder, placedByUrl, routed, routerDeps } from "./route";
-import { StepResult, type RunDetail } from "./board-model";
+import { offerFields, offerInput, StepResult, type RunDetail } from "./board-model";
 import {
   DENSITIES,
   isDensity,
@@ -686,32 +686,18 @@ export const resumeFlow = Effect.fn("Flows.resumeFlow")(function* (
   return 0;
 });
 
-const OfferArguments = Schema.Struct({
-  properties: Schema.optional(Schema.Record(Schema.String, Schema.Json)),
-  required: Schema.optional(Schema.Array(Schema.String)),
-});
-const decodeArguments = Schema.decodeUnknownOption(OfferArguments);
-const TextOnly = Schema.Struct({ type: Schema.Literal("string") });
-const isTextField = Schema.is(TextOnly);
-const parseJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Json));
-
-/** Each field an offer takes: text as typed, anything else as JSON where it parses; null on cancel. */
+/** Each field an offer takes, asked for in turn; null on cancel. */
 const offerArguments = Effect.fn("Flows.offerArguments")(function* (
   prompts: FlowPrompts,
   drawn: Schema.Json | null,
 ) {
-  const takes = decodeArguments(drawn);
-  if (takes._tag === "None") return {};
-  const required = new Set(takes.value.required ?? []);
-  const input: Record<string, Schema.Json> = {};
-  for (const [name, field] of Object.entries(takes.value.properties ?? {})) {
-    const typed = yield* prompts.ask(required.has(name) ? `${name}?` : `${name}? (optional)`);
-    if (typed === null) return null;
-    if (typed === "" && !required.has(name)) continue;
-    const parsed = isTextField(field) ? Option.none() : parseJson(typed);
-    input[name] = Option.isSome(parsed) ? parsed.value : typed;
+  const typed: Record<string, string> = {};
+  for (const { name, required } of offerFields(drawn)) {
+    const answer = yield* prompts.ask(required ? `${name}?` : `${name}? (optional)`);
+    if (answer === null) return null;
+    typed[name] = answer;
   }
-  return input;
+  return offerInput(drawn, typed);
 });
 
 /**
@@ -1190,6 +1176,17 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
         request: yield* newRequestId(),
       });
       return stopped.ok ? stopped.human : stopped.error.message;
+    }
+    case "HoldRun": {
+      const held = yield* controlRun(env, {
+        door: "board",
+        runId: command.runId,
+        control: "hold",
+        set: command.set,
+        request: yield* newRequestId(),
+      });
+      if (!held.ok) return held.error.message;
+      return `${command.set ? "Held" : "Released"} ${command.runId}`;
     }
     case "OpenLog":
       return "a Run keeps no log of its own: its agents' panes are the record";

@@ -72,7 +72,14 @@ const told: ReadonlyArray<MachineMessage> = [
 
 const served = (main: Channel<ToView, ToMain>) =>
   RpcServer.layer(DesktopRpcs).pipe(
-    Layer.provide(DesktopRpcs.toLayer({ flock: () => Stream.fromIterable(told) })),
+    Layer.provide(
+      DesktopRpcs.toLayer({
+        flock: () => Stream.fromIterable(told),
+        act: () => Effect.die("not asked"),
+        offers: () => Effect.die("not asked"),
+        workflows: () => Effect.die("not asked"),
+      }),
+    ),
     Layer.provide(Layer.effect(RpcServer.Protocol, serverProtocol(main))),
   );
 

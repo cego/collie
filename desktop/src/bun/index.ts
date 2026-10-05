@@ -3,7 +3,7 @@
 
 import { hostname } from "node:os";
 import { BunRuntime, BunServices } from "@effect/platform-bun";
-import { Config, Effect, FileSystem, Layer, Result, Schema, Stream } from "effect";
+import { Config, Crypto, Effect, FileSystem, Layer, Result, Schema, Stream } from "effect";
 import * as RpcServer from "effect/unstable/rpc/RpcServer";
 import Electrobun, { BrowserView, BrowserWindow, type RPCSchema } from "electrobun/bun";
 import {
@@ -15,7 +15,12 @@ import {
 } from "../shared/channel";
 import { DesktopRpcs, type FlockItem } from "../shared/flock";
 import {
+  act,
   bridgeCommand,
+  type Door,
+  doorTo,
+  offersOn,
+  workflowsOn,
   endChildren,
   flockStream,
   herdrMachines,
@@ -88,8 +93,20 @@ const main = Effect.gen(function* () {
     { machine: { name: local }, open: openBridge(bridgeCommand(collie, local)) },
     ...remote,
   ];
+  const doors = new Map<string, Door>();
   const handlers = DesktopRpcs.toLayer({
-    flock: () => Stream.merge(Stream.fromIterable(unlisted), flockStream(routes)),
+    flock: () => Stream.merge(Stream.fromIterable(unlisted), flockStream(routes, doors)),
+    act: ({ installation, action }) =>
+      Effect.gen(function* () {
+        const door = yield* doorTo(doors, installation);
+        // One id per click: the bridge carries it once, and the host keeps it as the claim.
+        const request = yield* (yield* Crypto.Crypto).randomUUIDv4.pipe(Effect.orDie);
+        return yield* act(door, request, action);
+      }),
+    offers: ({ installation, runId }) =>
+      doorTo(doors, installation).pipe(Effect.flatMap((door) => offersOn(door, runId))),
+    workflows: ({ installation, project }) =>
+      doorTo(doors, installation).pipe(Effect.flatMap((door) => workflowsOn(door, project))),
   });
   return yield* Layer.launch(
     RpcServer.layer(DesktopRpcs).pipe(
