@@ -16,6 +16,18 @@ test("no element keeps a style of its own", () => {
   ]);
 });
 
+test("nothing can be made a popover, which no box contains", () => {
+  expect(
+    confine([
+      ["button", { popovertarget: "p", popovertargetaction: "show" }, "Open"],
+      ["div", { id: "p", ":popover": "true", popover: "" }, "over all"],
+    ]),
+  ).toEqual([
+    ["button", {}, "Open"],
+    ["div", { id: "p" }, "over all"],
+  ]);
+});
+
 test("a file:line in text is a reference, and the text around it stays", () => {
   expect(confine([["p", {}, "See src/seed.ts:12, and README.md:3."]])).toEqual([
     [

@@ -33,8 +33,8 @@ const COMPONENTS = { a: MarkdownLink, mermaid: Mermaid, "file-ref": FileRef };
 </script>
 
 <template>
-  <!-- Contained, so nothing an agent positions can leave it or cover the window. -->
-  <div class="text-sm [contain:paint]" data-testid="markdown">
+  <!-- Contained, so nothing an agent positions can leave it; scrolled, so nothing wide is cut. -->
+  <div class="overflow-x-auto text-sm [contain:paint]" data-testid="markdown">
     <Suspense>
       <Markdown :value="text" :plugins="PLUGINS" :components="COMPONENTS" />
       <template #fallback><p class="text-muted text-sm">Rendering…</p></template>

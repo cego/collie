@@ -1141,10 +1141,12 @@ const frontDoorHandlers = (
             Effect.flatMap((view) =>
               view === null
                 ? Effect.fail(new HostRefused({ reason: `no Run ${runId}` }))
-                : fetchRef(factsOfView(env.stateDir, view), ref, {
-                    offset: offset ?? 0,
-                    length: length ?? RUN_FILE_BYTES,
-                  }),
+                : fetchRef(
+                    factsOfView(env.stateDir, view),
+                    ref,
+                    { offset: offset ?? 0, length: length ?? RUN_FILE_BYTES },
+                    env.cwd,
+                  ),
             ),
             Effect.provideContext(bun),
           ),

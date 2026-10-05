@@ -241,6 +241,8 @@ export const fetchRef = Effect.fn("RunDetail.fetchRef")(function* (
     offset: 0,
     length: RUN_FILE_BYTES,
   },
+  /** Where glab runs: not the Run's checkout, which is removed once the Run settles. */
+  glabCwd: string = run.dir,
 ): Effect.fn.Return<
   RunFile,
   HostRefused,
@@ -317,7 +319,7 @@ export const fetchRef = Effect.fn("RunDetail.fetchRef")(function* (
       return patch(shown.stdout);
     }
     case "pipeline": {
-      const status = yield* pipelineStatus(name, run.cwd, shell);
+      const status = yield* pipelineStatus(name, glabCwd, shell);
       return status === null ? yield* refused(`GitLab did not say how ${name} went`) : text(status);
     }
     case "review":

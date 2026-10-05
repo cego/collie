@@ -8,12 +8,24 @@ import { task } from "../../test/support/task";
 import type { ScriptedMachine } from "./support/scripted-machine";
 import { type App, LOCAL, launch, quit, reads, run, serve, settled } from "./support/app";
 
+/** A page on this machine, so a navigation the rules let through commits at once. */
+const asked: Array<string> = [];
+const away = Bun.serve({
+  hostname: "127.0.0.1",
+  port: 0,
+  fetch: (request) => {
+    asked.push(request.url);
+    return new Response("<title>away</title>", { headers: { "content-type": "text/html" } });
+  },
+});
+
 const SPEC = [
   "# The seeder",
   "",
   "| Brand | Seeded |",
   "| --- | --- |",
   "| spilnu | yes |",
+  `| ${"brands/".repeat(40)}vinderhuset | no |`,
   "",
   "```ts",
   "const seeded = true;",
@@ -36,7 +48,7 @@ const SPEC = [
   "",
   '<div style="position:fixed;inset:0;background:url(https://example.com/style.png)">over all</div>',
   "",
-  '<map name="away"><area shape="default" href="https://example.com/area"></map>',
+  `<map name="away"><area shape="default" href="${away.url}area"></map>`,
   '<img usemap="#away" alt="a map" width="40" height="40" src="data:image/gif;base64,R0lGODlhAQABAAAAACw=">',
   "",
   "See [the brands ticket](issues/02-brands.md), and [a lost one](issues/99-lost.md).",
@@ -265,8 +277,13 @@ const FILES = {
   ),
   "r-seed plan:issues/01-loader.md":
     "# The loader\n\nReads every brand. Then [the spec](../SPEC.md).",
-  "r-seed plan:issues/02-brands.md":
-    '# Brands per environment\n\nOne row per brand.\n\n<div class="fixed inset-0 z-50">a cover</div>',
+  "r-seed plan:issues/02-brands.md": [
+    "# Brands per environment",
+    "One row per brand.",
+    '<div class="fixed inset-0 z-50">a cover</div>',
+    '<button popovertarget="lid">Lift the lid</button>',
+    '<div id="lid" popover class="fixed inset-0">a lid</div>',
+  ].join("\n\n"),
 };
 
 const SEEDING: TaskView = task({
@@ -307,7 +324,10 @@ beforeAll(
   120_000,
 );
 
-afterAll(() => run(quit(app)));
+afterAll(async () => {
+  await run(quit(app));
+  await away.stop();
+});
 
 const drawer = () => app!.page.getByTestId("drawer");
 const tab = (name: string) => drawer().getByRole("tab", { name });
@@ -896,6 +916,25 @@ test(
         const markdown = yield* Effect.promise(() => ticket.getByTestId("markdown").boundingBox());
         expect(cover!.width).toBeLessThanOrEqual(markdown!.width);
         expect(cover!.y).toBeGreaterThanOrEqual(markdown!.y);
+        // A popover would be drawn above every box, so nothing in markdown is one.
+        // Dispatched, since the cover above lies over it.
+        yield* Effect.promise(() => ticket.getByText("Lift the lid").dispatchEvent("click"));
+        expect(
+          yield* Effect.promise(() => ticket.locator("[popover], [popovertarget]").count()),
+        ).toBe(0);
+        expect(
+          yield* Effect.promise(() =>
+            app!.page.evaluate(() => document.querySelector(":popover-open")),
+          ),
+        ).toBeNull();
+        // The end of a wide row can be scrolled to, rather than being cut off by the box.
+        const spec = plan.getByTestId("markdown").first();
+        const end = spec.locator("tr", { hasText: "vinderhuset" }).locator("td").last();
+        yield* Effect.promise(() => end.scrollIntoViewIfNeeded());
+        const [cell, box] = yield* Effect.promise(() =>
+          Promise.all([end.boundingBox(), spec.boundingBox()]),
+        );
+        expect(cell!.x + cell!.width).toBeLessThanOrEqual(box!.x + box!.width + 1);
         const refused = yield* settled("the far pixel refused", () =>
           refusals().then((seen) =>
             seen.some((one) => one.startsWith("img-src https://example.com/srcset"))
@@ -975,8 +1014,12 @@ test(
         yield* Effect.promise(() => map.scrollIntoViewIfNeeded());
         // A blocked navigation never commits, which a click would otherwise wait for.
         yield* Effect.promise(() => map.click({ noWaitAfter: true }));
+        // A navigation let through reaches the local page well inside this.
         yield* Effect.promise(() => app!.page.waitForTimeout(1000));
-        expect(app!.page.url()).toStartWith("views://");
+        expect({ url: app!.page.url(), asked }).toEqual({
+          url: expect.stringMatching(/^views:\/\//),
+          asked: [],
+        });
         expect(yield* Effect.promise(() => drawer().isVisible())).toBe(true);
       }),
     ),
