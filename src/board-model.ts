@@ -678,6 +678,9 @@ export const Where = Schema.Struct({
 });
 export type Where = typeof Where.Type;
 
+/** The line before which anything a bridge prints is a login shell's, and after which it is the host's. */
+export const BRIDGE_READY = "collie-bridge-ready";
+
 /** What a channel says it is, once. */
 export const Declaration = Schema.Struct({
   frontDoor: FrontDoor,

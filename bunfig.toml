@@ -1,2 +1,4 @@
 [test]
 preload = ["@opentui/solid/preload", "./test/support/hosts.ts"]
+# Desktop's own tests drive its built app, and run from desktop/.
+root = "test"

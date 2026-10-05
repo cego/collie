@@ -819,6 +819,34 @@ for as long as the tab is open, so moving between waiting runs costs nobody thei
 It is dropped when that question is answered or replaced by a new one, and never written to
 a run directory: an unsent answer is yours, not the run's.
 
+## Collie Desktop
+
+**Desktop** is a desktop app, Linux first, that will show the **Flock** — every Herd on
+every Machine it reaches — on one board. It lives in `desktop/` and is one more front door
+over the same board: it reads the host's stream and builds nothing of its own. So far it
+shows this computer's board, live, in the same sections and under the same header sentence
+as the Home's.
+
+It reaches this computer's host the way it will reach any Machine's: by running
+`collie bridge --as desktop --client <this computer>` in a login shell, so the host is
+started with the environment `collie` itself would use, and every operation Desktop
+makes is recorded as `desktop`. It never starts, signals or connects to a host by any other
+route. `COLLIE_DESKTOP_COLLIE` replaces how `collie` is run, as a JSON array.
+
+```sh
+cd desktop
+bun install
+bun run start       # build the view and run Desktop from the checkout
+bun run typecheck
+bun run test        # build with CEF's debugging port open, then drive the app with Playwright
+```
+
+`bun run test` starts the built app under Xvfb when there is no display, against a scripted
+host behind a local bridge (`desktop/test/support/scripted-host.ts`), so it needs neither
+herdr nor a real host. The app links the system's WebKitGTK and AppIndicator libraries even
+though it renders with its bundled Chromium; on a computer without them, put them on
+`LD_LIBRARY_PATH`.
+
 ## Talking to Collie about the flock
 
 The Home's right-hand pane is an ordinary **Claude Code** session — or **Pi**, if you

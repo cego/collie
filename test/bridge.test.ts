@@ -7,7 +7,7 @@ import * as RpcClient from "effect/unstable/rpc/RpcClient";
 import * as RpcSerialization from "effect/unstable/rpc/RpcSerialization";
 import * as Socket from "effect/unstable/socket/Socket";
 import { readAudit } from "../src/audit";
-import { FrontDoorRpcs } from "../src/board-model";
+import { BRIDGE_READY, FrontDoorRpcs } from "../src/board-model";
 import { runDir } from "../src/engine";
 import { ownerOf } from "../src/host";
 import { actorName } from "../src/proposals";
@@ -15,7 +15,7 @@ import { watchedBy } from "./support/effect";
 import { root, stopHost } from "./support/host";
 import { proves, type World } from "./support/world";
 
-const READY = "collie-bridge-ready\n";
+const READY = `${BRIDGE_READY}\n`;
 const asCommand = Schema.encodeSync(Schema.fromJsonString(Schema.Array(Schema.String)));
 
 /** Everything after the ready marker, whatever a login shell printed before it. */

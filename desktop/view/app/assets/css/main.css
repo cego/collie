@@ -1,0 +1,8 @@
+@import "tailwindcss";
+@import "@nuxt/ui";
+/* From an installed package, so nothing is fetched at runtime. */
+@import "@fontsource-variable/public-sans";
+
+@theme {
+  --font-sans: "Public Sans Variable", system-ui, sans-serif;
+}

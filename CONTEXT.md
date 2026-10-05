@@ -35,6 +35,15 @@ that computer. Known by its **installation id**, which the first host to own the
 directory writes into it and every later host keeps, so two routes to one state directory
 are one Machine. Not the plugin installation a host serves, which `identity` calls `root`.
 
+**Flock** — Every Herd on every Machine **Desktop** reaches.
+
+**Local** — The Machine Desktop runs on, reached through a bridge it starts without SSH and
+named by its hostname. Otherwise no different from any other Machine.
+
+**Desktop** — The Collie desktop app: one more front door over each Machine's board, which it
+reaches through `collie bridge` started as `desktop`. Not "native", which already means
+harness-native (**Native chat**) and Effect-native.
+
 **Home** — The Herd's dedicated Collie workspace, owned by a record plus proof: a live
 `collie_home` token, or the recorded pane still carrying its recorded `terminal_id`. A
 label is never proof. Anything uncertain is `ownership_unknown` and waits for a human. It

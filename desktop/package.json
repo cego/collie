@@ -1,0 +1,27 @@
+{
+  "name": "collie-desktop",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "view": "nuxi generate view",
+    "start": "bun run view && electrobun dev",
+    "build": "bun run view && electrobun build --env=stable",
+    "typecheck": "electrobun prepare && tsc --noEmit && nuxi typecheck view",
+    "test": "bun run view && COLLIE_DESKTOP_CDP=9333 electrobun build && bun test"
+  },
+  "dependencies": {
+    "@effect/atom-vue": "4.0.0-rc.117",
+    "@fontsource-variable/public-sans": "5.3.0",
+    "@iconify-json/lucide": "1.2.138",
+    "@nuxt/ui": "4.11.3",
+    "electrobun": "2.0.2",
+    "nuxt": "4.5.2",
+    "tailwindcss": "4.3.3"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "playwright-core": "1.63.0",
+    "typescript": "5.9.3",
+    "vue-tsc": "3.3.12"
+  }
+}

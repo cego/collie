@@ -5,13 +5,10 @@
 import { createConnection } from "node:net";
 import { Config, Effect, Option, Schema } from "effect";
 import type * as RpcMessage from "effect/unstable/rpc/RpcMessage";
-import type { Declaration, FrontDoor, Where } from "./board-model";
+import { BRIDGE_READY, type Declaration, type FrontDoor, type Where } from "./board-model";
 import { currentEnv } from "./env";
 import { Herdr } from "./herdr";
 import { HostUnavailable, connect, socketOf } from "./host";
-
-/** The line before which anything on stdout is a login shell's, and after which it is the host's. */
-export const READY = "collie-bridge-ready";
 
 const DECLARE_REQUEST = "bridge";
 
@@ -95,7 +92,7 @@ const relay = (dir: string, declaration: string) =>
         return refuse(`the host refused the declaration: ${line}`);
       }
       ready = true;
-      process.stdout.write(`${READY}\n`);
+      process.stdout.write(`${BRIDGE_READY}\n`);
       const rest = reply.slice(end + 1);
       if (rest !== "") process.stdout.write(rest);
       conn.pipe(process.stdout, { end: false });

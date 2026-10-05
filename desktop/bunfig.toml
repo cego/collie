@@ -1,0 +1,7 @@
+[install]
+# Effect is the repository root's, so the board's Schemas and Desktop share one copy.
+peer = false
+
+[test]
+# Not the Electrobun devkit's own tests under .hutch/.
+root = "test"

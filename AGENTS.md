@@ -59,6 +59,11 @@ herdr actions, and the `collie` CLI.
   rather than a table of Runs
   ([ADR-0013](docs/adr/0013-the-board-is-cards-of-tasks.md), which supersedes what
   [ADR-0005](docs/adr/0005-collie-tab-is-an-application.md) says the tab draws).
+- **Changing Desktop** → [`docs/using.md`](docs/using.md#collie-desktop), alongside
+  `desktop/src/bun/machine.ts` (a Machine reached through `collie bridge`, never the host
+  client), `desktop/src/shared/` (the view's RPC and the Flock it folds) and
+  `desktop/test/board.test.ts` (Playwright over CEF against a scripted host). Desktop has
+  its own `package.json`; Effect is the root's, so the board's Schemas exist once.
 - **Changing what a Run must prove, or what counts as proof** →
   [`docs/cli.md`](docs/cli.md#outcomes) and
   [ADR-0010](docs/adr/0010-a-run-proves-its-outcome.md), alongside `src/outcome.ts` (the

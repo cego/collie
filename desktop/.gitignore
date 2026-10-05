@@ -1,0 +1,8 @@
+.hutch/
+.cottontail-tmp/
+node_modules/
+build/
+artifacts/
+view/.nuxt/
+view/.output/
+view/dist
