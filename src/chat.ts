@@ -16,7 +16,8 @@
 
 import { Crypto, Effect, FileSystem, Path, Schema } from "effect";
 import { readConfig } from "./config";
-import { newsPath } from "./news";
+import { redact } from "./conversation";
+import { NATIVE, newsPath } from "./news";
 import { selfCommand, type PluginEnv } from "./env";
 import { HARNESSES } from "./harness";
 import type { AgentInfo, Herdr, PaneInfo } from "./herdr";
@@ -422,11 +423,9 @@ export function mcpConfig(command: ReadonlyArray<string>, env: Readonly<Record<s
 }
 
 /**
- * The `--settings` document a Claude launch is given: `UserPromptSubmit` hooks that attach
- * the board's selection to the prompt as context, and hand the prompt itself to the tool
- * host so what chat does is recorded with the human's words. Cheaper than a tool: no
- * round trip to learn what "it" is, and nothing at all while no card is open. Pi has no
- * such hook, so its conversation asks with a run-scoped tool given no run.
+ * The `--settings` document a Claude launch is given: prompt hooks that attach the board's
+ * selection as context and hand the prompt to the tool host. Pi has no such hook, so its
+ * conversation asks with a run-scoped tool given no run.
  */
 export function claudeSettings(
   command: ReadonlyArray<string>,
@@ -456,6 +455,14 @@ const HookInput = Schema.fromJsonString(
 const HeardSchema = Schema.Struct({ session: Schema.String, said: Schema.String });
 const HeardJson = Schema.fromJsonString(HeardSchema);
 
+/** The most of a prompt kept: it is copied into every record of its turn. */
+export const HEARD_MAX = 2000;
+
+const heardOf = (prompt: string) => {
+  const said = redact(prompt);
+  return said.length <= HEARD_MAX ? said : `${said.slice(0, HEARD_MAX - 1)}…`;
+};
+
 const heardPath = Effect.fn("Chat.heardPath")(function* (stateDir: string, key: string) {
   const path = yield* Path.Path;
   return path.join(yield* chatDir(stateDir, key), "heard.json");
@@ -484,13 +491,16 @@ export const hear = Effect.fn("Chat.hear")(function* (env: PluginEnv, input: str
   const tmp = `${file}.${process.pid}.tmp`;
   yield* fs.writeFileString(
     tmp,
-    Schema.encodeSync(HeardJson)({ session: given.value.session_id, said: given.value.prompt }),
+    Schema.encodeSync(HeardJson)({
+      session: given.value.session_id,
+      said: heardOf(given.value.prompt),
+    }),
   );
   yield* fs.rename(tmp, file);
 });
 
 /**
- * Who a chat's operation is recorded as speaking for: this Herd's conversation and, where
+ * Who a chat's operation is recorded as speaking for: Native chat and, where
  * the running chat's own session last said something, those words.
  */
 export const heardVoice = Effect.fn("Chat.heardVoice")(function* (env: PluginEnv) {
@@ -504,8 +514,8 @@ export const heardVoice = Effect.fn("Chat.heardVoice")(function* (env: PluginEnv
   const running = yield* readChat(yield* chatPath(env.stateDir, key));
   const current = running === null ? undefined : running.sessions[running.harness];
   return heard._tag === "Some" && heard.value.session === current
-    ? { conversation: key, said: heard.value.said }
-    : { conversation: key };
+    ? { conversation: NATIVE, said: heard.value.said }
+    : { conversation: NATIVE };
 });
 
 export interface PiTool {
