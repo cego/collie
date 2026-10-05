@@ -94,3 +94,31 @@ test("the next turn is a run of its own, and a failed one ends in an error", () 
     message: "error_during_execution",
   });
 });
+
+test("a turn that fails before the model's first word still starts and ends, with the error", () => {
+  const apiError = {
+    type: "assistant",
+    parent_tool_use_id: null,
+    error: "rate_limit",
+    message: { content: [{ type: "text", text: "API Error: rate limited" }] },
+  };
+  const failed = {
+    type: "result",
+    subtype: "success",
+    is_error: true,
+    result: "API Error: rate limited",
+  };
+  expect(eventsOf([apiError, failed])).toEqual([
+    { type: "RUN_STARTED", threadId: "session-1", runId: "session-1:1" },
+    {
+      type: "RUN_ERROR",
+      runId: "session-1:1",
+      message: "API Error: rate limited",
+    },
+  ]);
+  const answered = { type: "result", subtype: "success", is_error: false };
+  expect(eventsOf([answered])).toEqual([
+    { type: "RUN_STARTED", threadId: "session-1", runId: "session-1:1" },
+    { type: "RUN_FINISHED", threadId: "session-1", runId: "session-1:1" },
+  ]);
+});

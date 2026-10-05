@@ -118,9 +118,9 @@ export const step = (
   const read = known.value;
   const begun: AguiEvent[] = [];
   let now = state;
-  // A turn begins with the model's first word; anything before it is not this turn's.
+  // A turn begins with the model's first word, or ends without one; a message before it is not this turn's.
   if (now.run === null) {
-    if (read.type !== "stream_event") return [now, []];
+    if (read.type === "user") return [now, []];
     const run = `${now.thread}:${now.turns + 1}`;
     now = { ...now, turns: now.turns + 1, run };
     begun.push({ type: "RUN_STARTED", threadId: now.thread, runId: run });
@@ -131,7 +131,7 @@ export const step = (
       const done: AguiEvent = read.is_error
         ? { type: "RUN_ERROR", runId: run, message: read.result ?? read.subtype }
         : { type: "RUN_FINISHED", threadId: now.thread, runId: run };
-      return [{ ...now, run: null, blocks: new Map() }, [done]];
+      return [{ ...now, run: null, blocks: new Map() }, [...begun, done]];
     }
     case "user": {
       const results = isString(read.message.content)
