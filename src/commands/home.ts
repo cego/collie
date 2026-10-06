@@ -2,7 +2,7 @@
 //
 // `show` is the whole of the ownership question in one place: what was recorded, what
 // herdr has now, and which proof — if any — makes the first still true of the second.
-// When there is none, `reconcile` is how a person settles it, because Collie will not.
+// When there is none and healing is not safe, `reconcile` is how a person settles it.
 
 import { Effect } from "effect";
 import { Command, Flag } from "effect/unstable/cli";
@@ -14,6 +14,7 @@ import {
   archived,
   closable,
   decide,
+  healedLines,
   homePath,
   missingRuntime,
   readHome,
@@ -48,6 +49,7 @@ const show = Command.make("show", {}, () =>
               ? "record\tunreadable"
               : `record\t${record.workspaceId}\t${record.state}`,
           `ownership\t${decision.kind}${decision.kind === "ownership_unknown" ? `\t${decision.why}` : ""}`,
+          ...healedLines(record, decision),
           ...(decision.kind === "ownership_unknown"
             ? decision.candidates.map((id) => `candidate\t${id}`)
             : []),
