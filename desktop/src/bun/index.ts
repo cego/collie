@@ -56,6 +56,7 @@ import {
   act,
   type Doors,
   doorTo,
+  focusOn,
   offersOn,
   runDetailOn,
   runFileOn,
@@ -70,6 +71,7 @@ import {
   removeFromHerdr,
   type RouteChange,
 } from "./machine";
+import { attachCommand, inTerminal, shellLine } from "./terminal";
 import { addToHerdr, doctorOn, NOT_STARTED, onboardThrough, RELEASES, tracked } from "./onboarding";
 import {
   claudeLoginThrough,
@@ -582,6 +584,25 @@ const main = Effect.gen(function* () {
           Effect.mapError((failed) => new ActionFailed({ reason: failed.reason, request })),
         );
         return yield* act(door.desktop, request, action);
+      }),
+    goToPane: ({ installation, runId }) =>
+      Effect.gen(function* () {
+        const door = yield* doorTo(doors, installation);
+        const at = yield* focusOn(door.desktop, yield* uuid, runId);
+        const attach = attachCommand(door.machine.target, at.session);
+        const terminal = inTerminal(attach, process.platform, Bun.which);
+        const opened =
+          terminal !== null &&
+          (yield* Effect.try(() =>
+            Bun.spawn([...terminal], {
+              stdio: ["ignore", "ignore", "ignore"],
+              detached: true,
+            }).unref(),
+          ).pipe(
+            Effect.as(true),
+            Effect.orElseSucceed(() => false),
+          ));
+        return { at, command: shellLine(attach), opened };
       }),
     openLink: ({ url }) =>
       appWindowFor(url).pipe(

@@ -169,6 +169,13 @@ const handlers = Served.toLayer(
           },
           payload.runId,
         ),
+      focus: (payload) =>
+        asked(
+          "focus",
+          payload,
+          { session: "work", workspace: "workspace 3", tab: "tab 2" },
+          payload.runId,
+        ),
       runDetail: (payload) =>
         Stream.fromSchedule(Schedule.spaced("100 millis")).pipe(
           Stream.mapEffect(() => read),

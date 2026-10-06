@@ -201,6 +201,11 @@ program, usually on another computer, and it is not talking to a session either:
 herdr's list and nothing else. Routing them through `herdr.ts` would bring Collie's locks
 into Desktop, which reaches a Machine only through `collie bridge`.
 
+Go to pane is the one place Desktop touches a session, and it does so as the human would:
+it opens a terminal running `herdr --remote <target> --session <name>`
+(`desktop/src/bun/terminal.ts`), a client the human then drives. Desktop asks it nothing
+and reads nothing from it. The focus before it is the host's, through `herdr.ts`.
+
 ### Checking the boundary against herdr
 
 The reply structs in `herdr.ts` are hand-written, and herdr releases often. `herdr api

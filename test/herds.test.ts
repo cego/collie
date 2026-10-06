@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { type Duration, Effect, Option, Stream } from "effect";
 import { Herdr } from "../src/herdr";
-import { herdChanges } from "../src/herds";
+import { focusPane, herdChanges } from "../src/herds";
 import { newTask, readTask, writeTask } from "../src/task";
 import { runEffect } from "./support/effect";
 import { Rig } from "./support/recorder";
@@ -75,3 +75,52 @@ test("a new Task records its Herd, and one recorded before the field still loads
       expect(read?.herd).toBeUndefined();
     }),
   ));
+
+test(
+  "a Run's pane is focused where its newest live agent is, and said as herdr labels it",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const herdr = new Herdr(rig.pluginEnv());
+        yield* rig.addWorkspace("1", "workspace 3", "/p");
+        const { paneId } = yield* rig.addTab("tab 2", "impl");
+        yield* rig.addAgent("impl-1", paneId);
+        const sessions = [{ herd: null, name: "work", default: false, herdr }];
+
+        expect(yield* focusPane(sessions, ["impl-2", "impl-1"], null)).toEqual({
+          session: "work",
+          workspace: "workspace 3",
+          tab: "tab 2",
+        });
+        expect((yield* rig.cmds()).filter((cmd) => cmd.includes("focus"))).toEqual(["agent focus"]);
+
+        // herdr's default session is the one a client attaches to without naming one.
+        const inDefault = yield* focusPane([{ ...sessions[0]!, default: true }], ["impl-1"], null);
+        expect(inDefault?.session).toBeNull();
+      }),
+    ),
+  30_000,
+);
+
+test(
+  "a Run with no live agent is focused as its workspace, and one with neither is nowhere",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const herdr = new Herdr(rig.pluginEnv());
+        yield* rig.addWorkspace("w7", "workspace 7", "/p");
+        const sessions = [{ herd: null, name: "default", default: true, herdr }];
+
+        expect(yield* focusPane(sessions, ["impl-1"], "w7")).toEqual({
+          session: null,
+          workspace: "workspace 7",
+          tab: null,
+        });
+        expect((yield* rig.cmds()).filter((cmd) => cmd.includes("focus"))).toEqual([
+          "workspace.focus",
+        ]);
+        expect(yield* focusPane(sessions, ["impl-1"], "w-gone")).toBeNull();
+      }),
+    ),
+  30_000,
+);

@@ -752,6 +752,14 @@ export const NewsBatch = Schema.Struct({
   omitted: Schema.Int,
 });
 
+/** Where a host focused a Run's pane. `session` is null for herdr's default. */
+export const PaneAt = Schema.Struct({
+  session: Schema.NullOr(Schema.String),
+  workspace: Schema.String,
+  tab: Schema.NullOr(Schema.String),
+});
+export type PaneAt = typeof PaneAt.Type;
+
 /**
  * What any front door, on this computer or another, may ask a host. Every operation takes
  * a request id: the same one twice is one operation, and with other arguments is refused.
@@ -966,6 +974,15 @@ export const FrontDoorRpcs = RpcGroup.make(
       keys: Schema.optionalKey(Schema.Array(Schema.String)),
     },
     success: NewsBatch,
+    error: Schema.Union([HostRefused, RequestConflict]),
+  }),
+  /**
+   * Focuses a Run's newest live agent, else its workspace, on this Machine's own herdr.
+   * An open herdr window does not follow; a new client attached to `session` lands there.
+   */
+  Rpc.make("focus", {
+    payload: { runId: Schema.String, request: Schema.String },
+    success: PaneAt,
     error: Schema.Union([HostRefused, RequestConflict]),
   }),
   /** Carries out what a finished Run offers, as a Run of its own. */

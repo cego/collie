@@ -11,6 +11,7 @@ const actAtom = FlockClient.mutation("act");
 const offersAtom = FlockClient.mutation("offers");
 const workflowsAtom = FlockClient.mutation("workflows");
 const openLinkAtom = FlockClient.mutation("openLink");
+const goToPaneAtom = FlockClient.mutation("goToPane");
 const restartAtom = FlockClient.mutation("restart");
 const onboardAtom = FlockClient.mutation("onboard");
 const addMachineAtom = FlockClient.mutation("addMachine");
@@ -56,6 +57,7 @@ export const useActions = () => {
   const offers = useAtomSet(() => offersAtom, { mode: "promiseExit" });
   const workflows = useAtomSet(() => workflowsAtom, { mode: "promiseExit" });
   const openLink = useAtomSet(() => openLinkAtom, { mode: "promiseExit" });
+  const goToPane = useAtomSet(() => goToPaneAtom, { mode: "promiseExit" });
   const restart = useAtomSet(() => restartAtom, { mode: "promiseExit" });
   const onboard = useAtomSet(() => onboardAtom, { mode: "promiseExit" });
   const addMachine = useAtomSet(() => addMachineAtom, { mode: "promiseExit" });
@@ -146,6 +148,9 @@ export const useActions = () => {
         toast.add({ title: `Desktop did not restart to update: ${reason}`, color: "error" });
       }),
     openLink: (url: string) => openLink({ payload: { url } }),
+    /** Where the pane is and how to attach to it, or null where the host said no. */
+    goToPane: (installation: string, runId: string) =>
+      goToPane({ payload: { installation, runId } }).then(read),
     offersOf: (installation: string, runId: string) =>
       offers({ payload: { installation, runId } }).then(read),
     workflowsIn: (installation: string, project: string) =>

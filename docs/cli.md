@@ -1467,7 +1467,9 @@ Workflow declares; `propose`, which records what chat was asked for as a proposa
 carries it out; `act`, which carries out the board's own actions on a Run (`stop`, `resume`,
 `release`, `hold`, `answer`, `deliver`, `followup`, `start`) with no proposal, anything else
 being refused as `propose`'s; `reconcile`, which settles a proposal step nobody can account
-for; `settleDelivery`, which does the same for a message to an agent; and `news`, which
+for; `settleDelivery`, which does the same for a message to an agent; `focus`, which focuses
+a Run's newest live agent, or its workspace, on the host's own herdr and answers with the
+session, workspace and tab it is in; and `news`, which
 hands one conversation its Herd's pending News, each item with its Significance, and
 records it `read`, `sent` or `uncertain` for that conversation alone. Given `keys`, it hands
 over every pending item and records only those keys: what Desktop's Flock chat actually
