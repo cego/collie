@@ -4,7 +4,7 @@
 // saved, a Run belongs to a project, and the host that serves both owns a directory of
 // its own. Building that is the same work for every one of them, so it is here.
 
-import { Config, ConfigProvider, Effect, FileSystem, Option, Schema, Scope } from "effect";
+import { Config, ConfigProvider, Effect, FileSystem, Option, Schema, Scope, Stream } from "effect";
 import type { BunServices } from "@effect/platform-bun/BunServices";
 import { exec } from "./command";
 import { runEffect, watchedBy } from "./effect";
@@ -70,19 +70,23 @@ export const collie = Effect.fn("World.collie")(function* (
     stdout: "pipe",
     stderr: "pipe",
   });
-  const [stdout, stderr, exit] = yield* Effect.promise(() =>
-    Promise.all([
-      new Response(child.stdout).text(),
-      (async () => {
-        let all = "";
-        for await (const chunk of child.stderr.pipeThrough(new TextDecoderStream())) {
-          all += chunk;
-          heard?.(all);
-        }
-        return all;
-      })(),
-      child.exited,
-    ]),
+  const [stdout, stderr, exit] = yield* Effect.all(
+    [
+      Effect.promise(() => new Response(child.stdout).text()),
+      Stream.fromReadableStream({ evaluate: () => child.stderr, onError: String }).pipe(
+        Stream.decodeText,
+        Stream.runFold(
+          () => "",
+          (all, chunk) => {
+            heard?.(all + chunk);
+            return all + chunk;
+          },
+        ),
+        Effect.orDie,
+      ),
+      Effect.promise(() => child.exited),
+    ],
+    { concurrency: "unbounded" },
   );
   return { exit, stderr, envelope: yield* asEnvelope(stdout).pipe(Effect.orDie) };
 });
