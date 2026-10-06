@@ -14,9 +14,11 @@ const props = defineProps<{
   task: TaskView;
   where: string;
   installation: string;
+  cardKey: string;
   machine: string;
 }>();
 const { run, openLink } = useActions();
+const { open } = useDrawer();
 const act = (action: DesktopAction) => run(props.installation, action);
 
 const { chip, choose } = useChip();
@@ -163,7 +165,14 @@ const menu = computed(() =>
   >
     <template #header>
       <div class="flex items-start justify-between gap-2">
-        <strong data-testid="name">{{ task.name }}</strong>
+        <button
+          type="button"
+          class="cursor-pointer text-left font-semibold hover:underline"
+          data-testid="name"
+          @click="open(cardKey)"
+        >
+          {{ task.name }}
+        </button>
         <div class="flex shrink-0 items-center gap-1">
           <UBadge :color="state.color" variant="subtle" data-testid="state">
             {{ state.label }}

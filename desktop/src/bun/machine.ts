@@ -145,7 +145,7 @@ export const machineBoard = (known: KnownMachine, door: BoardSource) =>
     ),
   );
 
-const output = (command: ReadonlyArray<string>) =>
+export const output = (command: ReadonlyArray<string>) =>
   Effect.gen(function* () {
     const child = yield* Effect.try({
       try: () => Bun.spawn([...command], { stdin: "ignore", stdout: "pipe", stderr: "pipe" }),
@@ -421,3 +421,11 @@ export const offersOn = (door: Door, runId: string) =>
 
 export const workflowsOn = (door: Door, project: string) =>
   door.workflows({ project }).pipe(Effect.mapError(refusal()));
+
+export const runDetailOn = (door: Door, runId: string) =>
+  door
+    .runDetail({ runId, tail: true, pages: 1, refreshMr: false })
+    .pipe(Stream.mapError(refusal()));
+
+export const runFileOn = (door: Door, runId: string, ref: string, offset?: number) =>
+  door.runFile({ runId, ref, offset }).pipe(Effect.mapError(refusal()));

@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.3.289",
+    "@comark/nuxt": "0.7.0",
     "@comark/vue": "0.7.0",
     "@effect/atom-vue": "4.0.0-rc.117",
     "@fontsource-variable/public-sans": "5.3.0",
@@ -19,9 +20,11 @@
     "@nuxt/ui": "4.11.3",
     "@tanstack/ai-client": "0.36.1",
     "@tanstack/ai-vue": "0.25.4",
+    "beautiful-mermaid": "1.1.3",
     "comark": "0.7.0",
     "electrobun": "2.0.2",
     "nuxt": "4.5.2",
+    "shiki": "4.5.0",
     "tailwindcss": "4.3.3",
     "zod": "4.6.5"
   },

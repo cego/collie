@@ -62,8 +62,12 @@ herdr actions, and the `collie` CLI.
 - **Changing Desktop** → [`docs/using.md`](docs/using.md#collie-desktop), alongside
   `desktop/src/bun/machine.ts` (a Machine reached through `collie bridge`, never the host
   client), `desktop/src/shared/` (the view's RPC and the Flock it folds) and
-  `desktop/test/board.test.ts` (Playwright over CEF against a scripted host). Desktop has
-  its own `package.json`; Effect is the root's, so the board's Schemas exist once. The
+  `desktop/test/board.test.ts` and `desktop/test/drawer.test.ts` (Playwright over CEF
+  against a scripted host). A card's drawer is `desktop/view/app/components/RunDrawer.vue`;
+  what agent markdown may keep is `desktop/src/shared/markdown.ts` with
+  `desktop/test/markdown.test.ts`, and the window's navigation rule is in
+  `desktop/src/bun/index.ts`. Desktop has its own `package.json`; Effect is the root's, so
+  the board's Schemas exist once. The
   Flock chat is `desktop/src/bun/chat.ts` (the session and its turns), `claude.ts` (the
   Agent SDK it runs on, and Collie's tools served to it), `session.ts` (what it
   runs with), `flock-tools.ts` (the Toolkit over each Machine's `chat` channel), `agui.ts`

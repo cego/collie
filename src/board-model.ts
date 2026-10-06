@@ -837,8 +837,9 @@ export const FrontDoorRpcs = RpcGroup.make(
     stream: true,
   }),
   /**
-   * A large item of a Run's, by reference: `log`, `diff:<path>`, `evidence:<name>`,
-   * `verification:<id>`, `plan:<file>` and, read-only from its checkout, `file:<path>`.
+   * A large item of a Run's, by reference: `log`, `review`, `diff:<path>`, `evidence:<name>`,
+   * `verification:<id>`, `plan:<file>`, read-only from its checkout `file:<path>`, and
+   * `pipeline:<url>`, the status GitLab gives a pipeline the Run links to.
    */
   Rpc.make("runFile", {
     payload: {

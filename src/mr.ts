@@ -516,6 +516,32 @@ const DeploymentsJson = Schema.fromJsonString(
     Schema.Struct({ sha: Schema.String, environment: Schema.Struct({ name: Schema.String }) }),
   ),
 );
+const PipelineJson = Schema.fromJsonString(Schema.Struct({ status: Schema.String }));
+
+/** `https://host/group/project/-/pipelines/7`'s status, or null where GitLab does not say. */
+export function pipelineStatus<R>(
+  url: string,
+  cwd: string,
+  run: Runner<R>,
+): Effect.Effect<string | null, never, R> {
+  return Effect.gen(function* () {
+    const m = /^https?:\/\/([^/\s]+)\/(.+?)\/-\/pipelines\/(\d+)(?:[/?#]\S*)?$/.exec(url.trim());
+    if (!m) return null;
+    const [, host, project, id] = m;
+    // The address is agent text: only a host the human signed glab in to is called.
+    if ((yield* run("glab", ["auth", "status", "--hostname", host!], cwd)).code !== 0) return null;
+    const answer = yield* run(
+      "glab",
+      ["api", "--hostname", host!, `projects/${encodeURIComponent(project!)}/pipelines/${id}`],
+      cwd,
+    );
+    if (answer.code !== 0) return null;
+    return Option.getOrNull(
+      Option.map(Schema.decodeUnknownOption(PipelineJson)(answer.stdout), (one) => one.status),
+    );
+  });
+}
+
 const MergeBaseJson = Schema.fromJsonString(Schema.Struct({ id: optionalText }));
 
 export type DeployTier = "production" | "staging";

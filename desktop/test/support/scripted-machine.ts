@@ -3,6 +3,7 @@ import {
   Herd,
   NewsBatch,
   type OfferView,
+  RunDetail,
   type Startable,
   TaskView,
 } from "../../../src/board-model";
@@ -11,6 +12,14 @@ export const ScriptedMachine = Schema.Struct({
   installation: Schema.String,
   herds: Schema.Array(Herd),
   tasks: Schema.Array(TaskView),
+  details: Schema.optionalKey(Schema.Record(Schema.String, RunDetail)),
+  /** What each reference of a Run's fetches, keyed `<run id> <ref>`: text, or bytes as base64. */
+  files: Schema.optionalKey(
+    Schema.Record(
+      Schema.String,
+      Schema.Union([Schema.String, Schema.Struct({ base64: Schema.String })]),
+    ),
+  ),
   /** Its News for whoever asks, every Herd's alike; a conversation settling an item takes it off. */
   news: Schema.optionalKey(NewsBatch.fields.items),
 });

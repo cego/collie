@@ -854,6 +854,46 @@ same request again, so a host that took it before the answer was lost does it on
 stream like any other change. Every one is recorded on that Machine as `desktop`, with this
 computer's name.
 
+Pressing a card's name opens its drawer, which follows the card's Run on its host for as
+long as it is open. Its **Plan** tab renders the spec, read whole from the host where it is longer than the
+details carry, and lists the tickets, each expanding
+in place, read from the host when first opened; a link from one plan file to another opens
+that file at the top of the tab. **Review** renders the review, read whole the same way, and lists its findings; a
+`file:line` in a finding or anywhere in rendered markdown opens
+**Diff** at that line, or a read-only view of the file from the Run's checkout where no
+hunk shows it. **Diff** is the Run's branch against its merge base — live while the Run
+works, final after — as a file tree beside each file's diff, unified or side by side, kept
+as you left it while the drawer is open. Shiki colours each side of a hunk as one text, so
+a comment spanning its lines is coloured on all of them. A file is read from the host when
+it is opened, and again when the Run changes how many lines it adds or removes, with no
+line cap; a file with more than
+500 changed lines, or a binary one, starts collapsed. **Evidence** is the Run's
+verifications as a checklist, those that did not do what they were expected to first and
+already open with their output in its terminal colours; then every web link the Run's
+Outputs, handoffs, review and findings name, as a card: a Claude artifact by the title its
+link was given, the merge request with its state, its pipelines with the head pipeline's
+status, and any other pipeline with the status GitLab gives it where `glab` is signed in to its host; its screenshots as a
+gallery, a `before` beside its `after` where their names pair them, twelve to a page; its
+videos, read and played when asked; its HTML reports, such as Lighthouse, in a sandboxed
+frame that runs their scripts in an origin of their own, which may neither load anything
+from the network nor navigate away; the logs and files it kept, each read when opened and
+searchable; and its metrics as a table. A report that keeps its attachments in files beside
+it shows without them. **Log**
+follows the end of the Run's log as it is written, with a search that keeps only the lines
+that match. **Merge request** shows what the host's merge watch last read — title, state,
+pipeline, approvals and comments — with Open in browser. **Facts** shows the Run's intent,
+its steering cards and the card's TaskView as the host sent it. Markdown is rendered with
+Comark: tables, Shiki-highlighted code and mermaid diagrams, with anything that could run
+and every inline style removed, because agents write it. The view's own policy lets nothing
+on a page load from the network, and nothing may move Desktop's window off its own page;
+rendered markdown is kept inside its own box. A web link in it opens in your browser, never
+in Desktop.
+
+Every web page Desktop opens goes to your default browser, as `xdg-settings get
+default-web-browser` names it, where you are already signed in. Chrome, Chromium, Brave,
+Edge and Vivaldi are started with `--app=<url>`, so the page gets a window of its own;
+any other browser, Firefox included, opens it as an ordinary tab.
+
 Every Machine's host is reached the same way: by running
 `collie bridge --as desktop --client <this computer>` in a login shell, here directly and
 elsewhere as a channel on that machine's master, so the host is started with the
@@ -883,7 +923,8 @@ id is minted once and kept in `$XDG_STATE_HOME/collie-desktop/flock-chat.json` (
 `~/.local/state/collie-desktop/`), so a restart resumes the same conversation; Claude Code
 keeps and compacts the transcript on this computer.
 
-Replies stream in as Markdown. Each tool call is one row — the tool, the Machine it
+Replies stream in as Markdown, rendered as the drawer renders it: nothing in it runs or
+keeps a style, and a web link opens in your browser. Each tool call is one row — the tool, the Machine it
 reached and what it was asked — that opens to what the tool answered, and thinking is a
 collapsed **Thinking** you can open. When the chat needs you to choose, it asks with choice
 buttons, and goes on when you click; any other permission it asks for is refused. Type

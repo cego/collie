@@ -26,6 +26,7 @@ import {
   type ToView,
 } from "../shared/channel";
 import { ActionFailed, DesktopRpcs, type FlockItem, machineNames } from "../shared/flock";
+import { appWindowFor } from "./browser";
 import { type FlockConversation, openFlockChat, refusal } from "./chat";
 import { claudeCode } from "./claude";
 import { chatDoor } from "./flock-tools";
@@ -35,6 +36,8 @@ import {
   bridgeCommand,
   doorTo,
   offersOn,
+  runDetailOn,
+  runFileOn,
   workflowsOn,
   endChildren,
   flockStream,
@@ -60,6 +63,9 @@ const windowOn = (url: string, title: string, frame: BrowserWindow["frame"]) => 
     },
   });
   const window = new BrowserWindow({ title, url, renderer: "cef", frame, rpc });
+  // The view holds the Bun bridge, so nothing may navigate the window off it. Set on the
+  // webview: as a window option, Linux CEF ignores it.
+  window.webview.setNavigationRules(["^*", url, "about:srcdoc"]);
   const channel: Channel<ToView, ToMain> = {
     send: (frame) => window.webview.rpc?.send.frame(frame),
     listen: (listener) => {
@@ -158,12 +164,29 @@ const main = Effect.gen(function* () {
         );
         return yield* act(door.desktop, request, action);
       }),
-    openLink: ({ url }) => Effect.sync(() => void Utils.openExternal(url)),
+    openLink: ({ url }) =>
+      appWindowFor(url).pipe(
+        Effect.flatMap(Effect.fromNullishOr),
+        Effect.flatMap((command) =>
+          Effect.try(() =>
+            Bun.spawn(command, { stdio: ["ignore", "ignore", "ignore"], detached: true }).unref(),
+          ),
+        ),
+        Effect.catch(() => Effect.sync(() => void Utils.openExternal(url))),
+      ),
     offers: ({ installation, runId }) =>
       doorTo(doors, installation).pipe(Effect.flatMap((door) => offersOn(door.desktop, runId))),
     workflows: ({ installation, project }) =>
       doorTo(doors, installation).pipe(
         Effect.flatMap((door) => workflowsOn(door.desktop, project)),
+      ),
+    runDetail: ({ installation, runId }) =>
+      Stream.unwrap(
+        Effect.map(doorTo(doors, installation), (door) => runDetailOn(door.desktop, runId)),
+      ),
+    runFile: ({ installation, runId, ref, offset }) =>
+      doorTo(doors, installation).pipe(
+        Effect.flatMap((door) => runFileOn(door.desktop, runId, ref, offset)),
       ),
     say: ({ text, about }) =>
       Stream.unwrap(

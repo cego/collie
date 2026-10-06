@@ -128,7 +128,7 @@ beforeAll(
       Effect.gen(function* () {
         now = yield* Clock.currentTimeMillis;
         app = yield* launch(
-          [{ label: "vm-mk", target: "mk@vm-mk", session: "default", enabled: true }],
+          [{ label: "build box", target: "mk@vm-mk", session: "default", enabled: true }],
           (flock) =>
             Effect.gen(function* () {
               yield* serve(`${flock}/${LOCAL}`, "pc", local());
@@ -405,7 +405,7 @@ test(
         const { page } = app!;
         yield* press(page.getByTestId("new-run"));
         yield* press(page.getByTestId("machine"));
-        yield* press(page.getByRole("option", { name: "vm-mk" }));
+        yield* press(page.getByRole("option", { name: "build box", exact: true }));
         yield* Effect.promise(() => page.getByTestId("project").fill("/home/mk/seeder"));
         yield* press(page.getByTestId("find-workflows"));
         expect(yield* asked(VM, "workflows")).toEqual({ project: "/home/mk/seeder" });

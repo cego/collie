@@ -1,8 +1,13 @@
 <script setup lang="ts">
 import { SECTIONS } from "../../../src/board-model";
 
-const { connecting, failure, lost, machines, tasks, sections, header, waiting } = useFlock();
+const { connecting, failure, lost, machines, tasks, sections, header, waiting, placedBy } =
+  useFlock();
 const starting = ref(false);
+const drawer = useDrawer();
+const opened = computed(() =>
+  drawer.opened.value === null ? undefined : placedBy(drawer.opened.value),
+);
 
 /** This window is the chat's own, popped out of the board's. */
 const alone = window.location.hash === "#chat";
@@ -108,6 +113,12 @@ const popChatOut = async () => {
         class="w-96 shrink-0"
         @pop-out="popChatOut"
         @collapse="chatShown = false"
+      />
+      <RunDrawer
+        v-if="opened"
+        :key="`${opened.key} ${opened.task.run}`"
+        :placed="opened"
+        @close="drawer.close()"
       />
     </div>
   </UApp>

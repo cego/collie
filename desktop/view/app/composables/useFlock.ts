@@ -41,6 +41,7 @@ export const useFlock = () => {
     lost: computed(() => [...told.value.lost]),
     machines: computed(() => board.value.machines),
     tasks,
+    placedBy: (key: string) => placed(tasks.value).find((one) => one.key === key),
     sections: computed(
       () =>
         ({

@@ -25,24 +25,36 @@ export const serve = (
   installation: string,
   tasks: ReadonlyArray<TaskView>,
   herds: ScriptedMachine["herds"] = [{ id: "default" }],
+  runs: Pick<ScriptedMachine, "details" | "files"> = {},
 ) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
-    yield* fs.writeFileString(`${file}.new`, asMachine({ installation, herds, tasks }));
+    yield* fs.writeFileString(`${file}.new`, asMachine({ installation, herds, tasks, ...runs }));
     yield* fs.rename(`${file}.new`, file);
   });
 
 export const LOCAL = "local.json";
 
 /**
- * herdr's list; a master that logs when it opens and closes, and which `-O check` finds
- * once it is open; and a passenger that runs its remote command as a Machine's login
- * shell would, with `collie` on PATH.
+ * herdr's list; under `browsers/`, the default browser that `browser` names and two that
+ * log what they were asked to open; a master that logs when it opens and closes, and which
+ * `-O check` finds once it is open; and a passenger that runs its remote command as a
+ * Machine's login shell would, with `collie` on PATH.
  */
 const scripts = (flock: string) => ({
   herdr: `#!/bin/sh
 [ "$*" = "machine list --json" ] || exit 2
 cat '${flock}/machines.json'
+`,
+  "browsers/xdg-open": `#!/bin/sh
+echo "$1" >> '${flock}/opened.log'
+`,
+  "browsers/xdg-settings": `#!/bin/sh
+[ "$*" = "get default-web-browser" ] && exec cat '${flock}/browser'
+exit 2
+`,
+  "browsers/brave": `#!/bin/sh
+echo "brave $*" >> '${flock}/opened.log'
 `,
   ssh: `#!/bin/bash
 args=("$@")
@@ -110,12 +122,15 @@ export interface App {
 export const launch = (
   machines: ReadonlyArray<Saved>,
   boards: (flock: string) => Effect.Effect<void, unknown, FileSystem.FileSystem>,
+  // Only where a test opens links: CEF runs these too, and a quit then leaves masters open.
+  browsers = false,
 ) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const scratch = yield* fs.makeTempDirectory({ prefix: "collie-desktop-" });
     const flock = `${scratch}/flock`;
     yield* fs.makeDirectory(`${flock}/remote`, { recursive: true });
+    yield* fs.makeDirectory(`${flock}/browsers`);
     for (const [name, script] of Object.entries(scripts(flock))) {
       yield* fs.writeFileString(`${flock}/${name}`, script);
       yield* fs.chmod(`${flock}/${name}`, 0o755);
@@ -134,14 +149,17 @@ export const launch = (
     if (stale._tag === "Some") return yield* Effect.die(`port ${CDP} is already CEF's`);
     // In a session of its own, so the whole app goes with it; under Xvfb without a display.
     const display = Bun.env.DISPLAY === undefined ? ["xvfb-run", "-a"] : [];
+    const env: typeof Bun.env = {
+      ...Bun.env,
+      // CEF keeps one profile per user, so a test's app must not find the operator's.
+      HOME: scratch,
+      XDG_STATE_HOME: `${scratch}/.local/state`,
+      PATH: `${browsers ? `${flock}/browsers:` : ""}${flock}:${Bun.env.PATH}`,
+      COLLIE_DESKTOP_COLLIE: asCommand([process.execPath, HOST, `${flock}/${LOCAL}`]),
+    };
+    if (browsers) env.XDG_DATA_HOME = `${flock}/share`;
     const process_ = Bun.spawn(["setsid", ...display, APP], {
-      env: {
-        ...Bun.env,
-        // CEF keeps one profile per user, so a test's app must not find the operator's.
-        HOME: scratch,
-        PATH: `${flock}:${Bun.env.PATH}`,
-        COLLIE_DESKTOP_COLLIE: asCommand([process.execPath, HOST, `${flock}/${LOCAL}`]),
-      },
+      env,
       stdout: "ignore",
       stderr: "ignore",
     });
