@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { Markdown } from "@comark/vue";
 import type { DropdownMenuItem } from "@nuxt/ui";
 import type { QueuedMessage } from "@tanstack/ai-client";
 import { DateTime, type Schema } from "effect";
@@ -148,7 +147,10 @@ const queuedText = ({ content }: QueuedMessage) => (isString(content) ? content 
           class="flex flex-col gap-1 rounded-md border border-default px-3 py-2 text-sm"
         >
           <UBadge class="self-start" size="sm" color="neutral" variant="subtle" label="Desktop" />
-          <Markdown :value="desktopSaid(message) ?? ''" class="prose prose-sm dark:prose-invert" />
+          <RichMarkdown
+            :text="desktopSaid(message) ?? ''"
+            class="prose prose-sm dark:prose-invert"
+          />
         </li>
         <li
           v-else
@@ -157,9 +159,9 @@ const queuedText = ({ content }: QueuedMessage) => (isString(content) ? content 
           :class="message.role === 'user' ? 'self-end rounded-md bg-elevated px-3 py-2' : ''"
         >
           <template v-for="(part, at) in message.parts" :key="at">
-            <Markdown
+            <RichMarkdown
               v-if="part.type === 'text'"
-              :value="part.content"
+              :text="part.content"
               :streaming="isLoading && message === messages.at(-1)"
               class="prose prose-sm dark:prose-invert"
             />

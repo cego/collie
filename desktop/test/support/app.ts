@@ -153,6 +153,7 @@ export const launch = (
       ...Bun.env,
       // CEF keeps one profile per user, so a test's app must not find the operator's.
       HOME: scratch,
+      XDG_STATE_HOME: `${scratch}/.local/state`,
       PATH: `${browsers ? `${flock}/browsers:` : ""}${flock}:${Bun.env.PATH}`,
       COLLIE_DESKTOP_COLLIE: asCommand([process.execPath, HOST, `${flock}/${LOCAL}`]),
     };

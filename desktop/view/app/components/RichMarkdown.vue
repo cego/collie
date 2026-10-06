@@ -10,6 +10,7 @@ import MarkdownLink from "./MarkdownLink.vue";
 
 const props = defineProps<{
   text: string;
+  streaming?: boolean;
   /** The plan file this was read from, which its relative links are resolved against. */
   from?: string;
 }>();
@@ -39,7 +40,7 @@ const COMPONENTS = { a: MarkdownLink, mermaid: Mermaid, "file-ref": FileRef };
   <!-- Contained, so nothing an agent positions can leave it; scrolled, so nothing wide is cut. -->
   <div class="overflow-x-auto text-sm [contain:paint]" data-testid="markdown">
     <Suspense>
-      <Markdown :value="text" :plugins="PLUGINS" :components="COMPONENTS" />
+      <Markdown :value="text" :streaming="streaming" :plugins="PLUGINS" :components="COMPONENTS" />
       <template #fallback><p class="text-muted text-sm">Rendering…</p></template>
     </Suspense>
   </div>
