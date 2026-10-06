@@ -262,6 +262,11 @@ test(
             .dispose({ ...asked, kind: "abandoned" })
             .pipe(Effect.flip);
           expect(otherwise._tag).toBe("RequestConflict");
+          // Focused on this Machine's own herdr, which here has nothing of the Run's left.
+          expect(yield* client.focus({ runId, request: "fo-1" }).pipe(Effect.flip)).toMatchObject({
+            _tag: "HostRefused",
+            reason: `${runId} has no pane or workspace herdr still has`,
+          });
           yield* client.grant({ runId, name: "lint", command: null, request: "g-1" });
           const dir = runDir(world.state, runId);
           expect(yield* readDispositions(dir)).toEqual([line]);

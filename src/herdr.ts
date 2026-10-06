@@ -373,14 +373,20 @@ const decodeOrNamed = <S extends Schema.Top>(
  */
 const SessionListReply = Schema.Struct({
   sessions: Schema.Array(
-    Schema.Struct({ name: Schema.String, running: Schema.Boolean, socket_path: Schema.String }),
+    Schema.Struct({
+      name: Schema.String,
+      default: Schema.optionalKey(Schema.Boolean),
+      running: Schema.Boolean,
+      socket_path: Schema.String,
+    }),
   ),
 });
 
-/** One running herdr session: its name, and the socket that reaches it. */
+/** One running herdr session: its name, the socket that reaches it, and whether it is herdr's default. */
 export interface HerdrSession {
   readonly name: string;
   readonly socketPath: string;
+  readonly default: boolean;
 }
 
 const decodeBoundary = <S extends Schema.Top>(operation: string, schema: S, value: BoundaryValue) =>
@@ -757,12 +763,11 @@ export class Herdr {
     return this.cli(["workspace", "list"]).pipe(Effect.flatMap(decodeWorkspaceList));
   }
 
-  tabList(): HerdrEffect<TabInfo[]> {
-    const env = this.env;
+  tabList(workspaceId = this.env.workspaceId): HerdrEffect<TabInfo[]> {
     const cli = this.cli.bind(this);
     return Effect.gen(function* () {
       const args = ["tab", "list"];
-      if (env.workspaceId) args.push("--workspace", env.workspaceId);
+      if (workspaceId) args.push("--workspace", workspaceId);
       const res = yield* cli(args);
       const decoded = yield* decodeBoundary("herdr tab list", TabListReply, res);
       return decoded.result.tabs.map((tab) => ({
@@ -1018,7 +1023,11 @@ export class Herdr {
       Effect.map((reply) =>
         reply.sessions
           .filter((one) => one.running)
-          .map((one) => ({ name: one.name, socketPath: one.socket_path })),
+          .map((one) => ({
+            name: one.name,
+            socketPath: one.socket_path,
+            default: one.default ?? false,
+          })),
       ),
     );
   }

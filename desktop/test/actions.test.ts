@@ -327,6 +327,31 @@ test(
 );
 
 test(
+  "Go to pane focuses it on its Machine, attaches a terminal here and says where it is",
+  () =>
+    run(
+      Effect.gen(function* () {
+        yield* fromMenu("t-vm", "Go to pane");
+        expect(yield* asked(VM, "focus")).toMatchObject({ runId: "r-vm" });
+        yield* reads(card("t-vm").getByTestId("pane-where"), "build box › workspace 3 › tab 2");
+        const told = yield* settled("the terminal", () =>
+          run(
+            Effect.gen(function* () {
+              const fs = yield* FileSystem.FileSystem;
+              const log = yield* fs
+                .readFileString(`${app!.flock}/terminal.log`)
+                .pipe(Effect.orElseSucceed(() => ""));
+              return log === "" ? undefined : log;
+            }),
+          ),
+        );
+        expect(told).toBe("-e herdr --remote mk@vm-mk --session work\n");
+      }),
+    ),
+  30_000,
+);
+
+test(
   "a failed card resumes from its first action, and a refusal is said in the host's words",
   () =>
     run(

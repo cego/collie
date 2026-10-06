@@ -78,6 +78,7 @@ import {
   FrontDoorRpcs,
   HostRefused,
   NewsBatch,
+  PaneAt,
   PROTOCOL,
   ProposalRefused,
   RUN_FILE_BYTES,
@@ -128,12 +129,13 @@ import {
 import { carryOut, carryOutAsked, followUpField } from "./run-actions";
 import { nothingApproved } from "./outcome";
 import { approvedFrom, VerifySpecSchema, type VerifySpec } from "./verify-spec";
+import { everyRegistered } from "./registry";
 import { readTask } from "./task";
 import { nowIso } from "./time";
 import { reason } from "./naming";
 import { loadDefaults } from "./config";
 import { factsOfView, settled } from "./runs";
-import { aliveIn, herdChanges, liveHerds } from "./herds";
+import { aliveIn, focusPane, herdChanges, liveHerds } from "./herds";
 import { currentPid, ensureLockDir, lockHolder, withLock, type LockHolder } from "./lock";
 
 /** What a host says it is. A client that is not this stops rather than guessing. */
@@ -1035,6 +1037,40 @@ const frontDoorHandlers = (
               ),
             ),
             plainly,
+          ),
+        focus: ({ runId, request }, { client }) =>
+          plainly(
+            Effect.gen(function* () {
+              const view = yield* known(runId);
+              const task = view.task === null ? null : yield* readTask(env.stateDir, view.task);
+              const agents = (yield* everyRegistered(env.stateDir))
+                .filter((entry) => entry.runId === runId)
+                .map((entry) => entry.agent)
+                .reverse();
+              const sessions = (yield* liveHerds(herdr, env)).toSorted(
+                (a, b) => Number(b.herd === task?.herd) - Number(a.herd === task?.herd),
+              );
+              return yield* once(
+                trail(runId),
+                { operation: "focus", request, ...whoOf(client), asked: {}, result: PaneAt },
+                focusPane(
+                  sessions,
+                  agents,
+                  view.workspace ?? task?.workspace ?? null,
+                  task?.herd,
+                ).pipe(
+                  Effect.flatMap((at) =>
+                    at === null
+                      ? Effect.fail(
+                          new HostRefused({
+                            reason: `${runId} has no pane or workspace herdr still has`,
+                          }),
+                        )
+                      : Effect.succeed(at),
+                  ),
+                ),
+              );
+            }),
           ),
         steerAbout: ({ runId, text, from, dryRun, request }, { client }) =>
           Effect.gen(function* () {

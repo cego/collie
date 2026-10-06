@@ -242,9 +242,10 @@ binary still starts.
    manage each agent). `test/chat-parity.test.ts` holds this for chat.
 2. Every capability ships in both front doors: the CLI and the herdr actions are thin
    adapters over the same Effect services ([ADR-0003](docs/adr/0003-collie-is-one-effect-program.md)).
-3. All herdr communication goes through `src/herdr.ts`. The two exceptions never touch a
-   session: `tools/herdr-schema.ts`, which runs a downloaded release offline to print its
-   schema, and Desktop's `herdr machine list`, `add` and `remove` — see
+3. All herdr communication goes through `src/herdr.ts`. The exceptions never talk to a
+   session for Collie: `tools/herdr-schema.ts`, which runs a downloaded release offline to
+   print its schema; Desktop's `herdr machine list`, `add` and `remove`; and the herdr
+   client Go to pane opens in a terminal for the human — see
    [`docs/internals.md`](docs/internals.md#the-herdr-boundary).
 4. One host owns a state directory and everything it is running
    ([ADR-0015](docs/adr/0015-one-local-host-owns-a-state-directory.md)). Mutate a Run

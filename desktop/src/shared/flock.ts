@@ -11,6 +11,7 @@ import {
   BoardMessage,
   Herd,
   OfferView,
+  PaneAt,
   RunDetail,
   RunFile,
   sortBoard,
@@ -204,6 +205,14 @@ export class ActionFailed extends Schema.TaggedError<ActionFailed>()("ActionFail
   request: Schema.optional(Schema.String),
 }) {}
 
+/** `command` is the herdr client that shows the pane, to copy where no terminal opened it. */
+export const WentToPane = Schema.Struct({
+  at: PaneAt,
+  command: Schema.String,
+  opened: Schema.Boolean,
+});
+export type WentToPane = typeof WentToPane.Type;
+
 /** Desktop's own update: downloaded and verified, or refused, and why. */
 export const UpdateNews = Schema.Union([
   Schema.TaggedStruct("Ready", { version: Schema.String }),
@@ -234,6 +243,11 @@ export const DesktopRpcs = RpcGroup.make(
   Rpc.make("offers", {
     payload: { installation: Schema.String, runId: Schema.String },
     success: Schema.Array(OfferView),
+    error: ActionFailed,
+  }),
+  Rpc.make("goToPane", {
+    payload: { installation: Schema.String, runId: Schema.String },
+    success: WentToPane,
     error: ActionFailed,
   }),
   /** A web page, opened in the human's own browser. */

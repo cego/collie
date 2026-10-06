@@ -104,6 +104,10 @@ PATH='${flock}/remote':"$PATH" exec /bin/sh -c "$@"
   "secret-tool": `#!/bin/sh
 [ "$1" = lookup ] && shift && cat '${flock}'/"secret-$(echo "$@" | tr ' /' '__')" 2>/dev/null
 `,
+  // This computer's terminal: it logs what it was told to run.
+  "x-terminal-emulator": `#!/bin/sh
+echo "$*" >> '${flock}/terminal.log'
+`,
   // This computer's browser: it logs what it opens, and approves a login sent to a localhost
   // callback unless `no-browser` exists.
   "xdg-open": `#!${process.execPath}
