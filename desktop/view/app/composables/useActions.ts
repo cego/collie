@@ -163,8 +163,8 @@ export const useActions = () => {
         if (said !== null) toast.add({ title: said, color: "success" });
         return said !== null;
       }),
-    saveHelle: (url: string, token: string) =>
-      saveHelle({ payload: { url, token } }).then((exit) => {
+    saveHelle: (token: string) =>
+      saveHelle({ payload: { token } }).then((exit) => {
         const said = read(exit);
         if (said !== null) toast.add({ title: said, color: "success" });
         return said !== null;

@@ -12,6 +12,7 @@ import { doctor, glabHosts, onPath, pushCheck } from "./doctor";
 import { GITLAB_HOST, tokenPage } from "./gitlab-token";
 import type { PluginEnv } from "./env";
 import { err, moveToRelease, prepareSteps, type OpResult } from "./operations";
+import { HELLE_URL } from "./helle-url";
 import { helleEnvPath, LINEAR_MCP_ADD, LINEAR_MCP_FIX, probeLinearMcp } from "./optional";
 import { installation, manifestField, RELEASE_TAG } from "./release";
 
@@ -44,7 +45,7 @@ export type Skippable = "helle" | "linear";
 export interface OnboardOptions {
   readonly to: string;
   readonly skip?: ReadonlyArray<Skippable>;
-  /** `GITLAB_TOKEN`, `HELLE_API_URL` and `HELLE_API_TOKEN`, from stdin: never an argument. */
+  /** `GITLAB_TOKEN` and `HELLE_API_TOKEN`, from stdin: never an argument. */
   readonly secrets?: Readonly<Record<string, string>>;
   /** stdin is a terminal the human can paste into. */
   readonly terminal?: boolean;
@@ -508,19 +509,19 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
       const skip = skipped("helle");
       if (skip) return skip;
       const file = helleEnvPath(here);
-      const url = secrets["HELLE_API_URL"];
       const token = secrets["HELLE_API_TOKEN"];
       const there = yield* fs.exists(file);
-      if (url === undefined || token === undefined) {
+      if (token === undefined) {
         return there
           ? inPlace(`credentials at ${file}`)
           : ({
               status: "needs_human",
-              detail: "give HELLE_API_URL=… and HELLE_API_TOKEN=… on stdin, or skip helle",
+              detail: "give HELLE_API_TOKEN=… on stdin, or skip helle",
               command: "collie onboard --secrets-stdin",
             } satisfies Outcome);
       }
-      const text = `HELLE_API_URL=${url}\nHELLE_API_TOKEN=${token}\n`;
+      // Other Helle clients read the URL from this file.
+      const text = `HELLE_API_URL=${here.raw["COLLIE_HELLE_URL"] ?? HELLE_URL}\nHELLE_API_TOKEN=${token}\n`;
       const current = there ? yield* fs.readFileString(file) : "";
       yield* fs.makeDirectory(file.slice(0, file.lastIndexOf("/")), { recursive: true });
       // Before the write: a file from before may be readable by others, and `mode` only applies to a new one.

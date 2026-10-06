@@ -165,6 +165,8 @@ const environmentKeys = [
   // Which environment file Helle's credentials are read from, for a machine that keeps
   // them somewhere other than the MCP wrapper's default.
   "HELLE_ENV_FILE",
+  // A fake Helle, for tests only.
+  "COLLIE_HELLE_URL",
   "HERDR_BIN_PATH",
   "HERDR_SOCKET_PATH",
   // Which config.toml herdr itself is reading, which is the one that says where a

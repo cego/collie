@@ -133,14 +133,13 @@ login of yours. Neither is needed by the bundled `implement` and `review`, so `c
 reports them without failing, and a run that needs one is refused up front with the fix
 rather than failing hours in.
 
-| Integration | Who needs it                                                          | How to set it up                                                                                                           |
-| ----------- | --------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| Helle       | `renovate`, or any forked workflow with `waits: helle`                | `HELLE_API_URL=<url>` and `HELLE_API_TOKEN=<token>` in `~/.config/helle/env`, the file the Helle MCP wrapper sources       |
-| Linear MCP  | `plan`'s "Offload to Linear"; `implement` given a Linear issue or URL | `claude mcp add --transport http --scope user linear-server https://mcp.linear.app/mcp`, then log in when Claude Code asks |
+| Integration | Who needs it                                                          | How to set it up                                                                                                                    |
+| ----------- | --------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| Helle       | `renovate`, or any forked workflow with `waits: helle`                | `HELLE_API_TOKEN=<token>` in `~/.config/helle/env`, the file the Helle MCP wrapper sources; Helle is always `https://helle.cego.dk` |
+| Linear MCP  | `plan`'s "Offload to Linear"; `implement` given a Linear issue or URL | `claude mcp add --transport http --scope user linear-server https://mcp.linear.app/mcp`, then log in when Claude Code asks          |
 
 Doctor tells the two failure modes apart. Not set up at all is a note under a `✓`, with
-the command above. Set up and not working is a `!`: a credentials file missing one of its
-lines, a token Helle answers 401 to, a host that does not answer, a `.claude.json` that is
+the command above. Set up and not working is a `!`: a credentials file without a token, a token Helle answers 401 to, a host that does not answer, a `.claude.json` that is
 not valid JSON. Each names the file to look in. `collie run start` asks the same two
 questions for the workflow it is about to run and refuses with that detail when the answer
 is no — a Run that would only find out at its merge step is not started.
@@ -942,8 +941,8 @@ that Machine skips it too.
 What only you can give is asked once, here, and never pasted on a command line. **Machines**
 keeps the Flock's credentials in this computer's Secret Service keyring, through
 `secret-tool` (libsecret): one GitLab token, made on GitLab's own page — **Make one on
-GitLab** opens it with the `api` and `write_repository` scopes filled in — and Helle's URL
-and token. Desktop takes a token only once GitLab accepts it with those scopes, and gives
+GitLab** opens it with the `api` and `write_repository` scopes filled in — and Helle's
+token; Helle's URL is always `https://helle.cego.dk` and is never asked for. Desktop takes a token only once GitLab accepts it with those scopes, and gives
 it at once to glab on every Machine it reaches (`glab auth login --hostname
 gitlab.cego.dk --stdin`); Helle's go to each Machine's credentials file, owner-only, the
 same way. Every onboarding gets what is kept on its stdin (`--secrets-stdin`), so a second

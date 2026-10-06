@@ -588,6 +588,8 @@ checkout, whose channel is not `stable`, may be given another key in
 given another release URL in `COLLIE_DESKTOP_RELEASES`, since what it downloads from there
 is still verified against the key. `COLLIE_DESKTOP_GITLAB` names the GitLab Desktop
 checks a token with and gives it for, `https://gitlab.cego.dk` unless set.
+`COLLIE_HELLE_URL` replaces `https://helle.cego.dk` (`HELLE_URL` in `src/helle-url.ts`) for
+both the runner and Desktop. It is for tests that answer as a fake Helle, not a setting.
 
 `bun run build` compiles beside the binary and renames over it, because replacing a running
 runner's own file kills the process executing it. In a git checkout `install.sh` builds from

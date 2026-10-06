@@ -82,6 +82,7 @@ import {
   secretsFor,
 } from "./credentials";
 import { tokenPage } from "../../../src/gitlab-token";
+import { HELLE_URL } from "../../../src/helle-url";
 import { electrobunUpdater } from "./electrobun-updater";
 import {
   dropBoardsOf,
@@ -179,6 +180,7 @@ const main = Effect.gen(function* () {
           Config.withDefault(RELEASE_PUBLIC_KEY),
         );
   const gitlab = yield* Config.String("COLLIE_DESKTOP_GITLAB").pipe(Config.withDefault(GITLAB));
+  const helle = yield* Config.String("COLLIE_HELLE_URL").pipe(Config.withDefault(HELLE_URL));
   const gitlabHost = new URL(gitlab).host;
   const keyring = secretService();
   const blank: Credentials = { gitlab: null, helle: false, tokenPage: tokenPage(gitlabHost) };
@@ -512,15 +514,13 @@ const main = Effect.gen(function* () {
         yield* SubscriptionRef.update(credentials, (now) => ({ ...now, gitlab: { expires } }));
         return given("GitLab token", yield* giveToken(everyRoute(), gitlabHost, said));
       }).pipe(Effect.mapError((reason) => new ActionFailed({ reason }))),
-    saveHelle: ({ url, token }) =>
+    saveHelle: ({ token }) =>
       Effect.gen(function* () {
-        const [at, said] = [url.trim(), token.trim()];
-        if (!oneLine(at) || !oneLine(said))
-          return yield* Effect.fail("Helle needs its URL and a token, each on one line");
-        yield* keyring.store("helle-url", "Helle's URL for Collie", at);
+        const said = token.trim();
+        if (!oneLine(said)) return yield* Effect.fail("a token is one line");
         yield* keyring.store("helle-token", "Collie's Helle token", said);
         yield* SubscriptionRef.update(credentials, (now) => ({ ...now, helle: true }));
-        return given("Helle's credentials", yield* giveHelle(everyRoute(), at, said));
+        return given("Helle's token", yield* giveHelle(everyRoute(), helle, said));
       }).pipe(Effect.mapError((reason) => new ActionFailed({ reason }))),
     claudeLogin: ({ profile }) =>
       Effect.gen(function* () {

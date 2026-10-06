@@ -15,6 +15,7 @@ import {
   type HelleClaim,
   type HelleProject,
 } from "../src/helle";
+import { HELLE_URL } from "../src/helle-url";
 import { handOverClaim } from "../src/engine";
 
 const ME = "6b9ba520-user";
@@ -85,25 +86,29 @@ beforeEach(() => {
 afterEach(() => server.stop());
 
 /** An env file in the shape the MCP wrapper's own one has. */
-const envFile = Effect.fn("test.envFile")(function* (token = "token-abc", url = server.base) {
+const envFile = Effect.fn("test.envFile")(function* (token = "token-abc") {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const dir = yield* fs.makeTempDirectory();
   const file = path.join(dir, "env");
   yield* fs.writeFileString(
     file,
-    `# helle\nexport HELLE_API_URL=${url}\nHELLE_API_TOKEN=${token}\n`,
+    `# helle\nexport HELLE_API_URL=https://elsewhere.example\nHELLE_API_TOKEN=${token}\n`,
   );
   return file;
 });
 
 const project = (slug: string, group?: string): HelleProject => ({ slug, group: group ?? null });
 
-test("credentials come from the env file the MCP wrapper sources", () =>
+test("the token comes from the env file the MCP wrapper sources; the URL is always Helle's", () =>
   runEffect(
     Effect.gen(function* () {
       const file = yield* envFile();
       expect(yield* credentials({ home: "/nowhere", envFile: file })).toEqual({
+        url: HELLE_URL,
+        token: "token-abc",
+      });
+      expect(yield* credentials({ home: "/nowhere", envFile: file, url: server.base })).toEqual({
         url: server.base,
         token: "token-abc",
       });
@@ -117,7 +122,7 @@ test("a missing token is a refusal, not an absent project", () =>
       const path = yield* Path.Path;
       const dir = yield* fs.makeTempDirectory();
       const file = path.join(dir, "env");
-      yield* fs.writeFileString(file, `HELLE_API_URL=${server.base}\n`);
+      yield* fs.writeFileString(file, `HELLE_API_URL=${HELLE_URL}\n`);
 
       const result = yield* credentials({ home: "/nowhere", envFile: file }).pipe(Effect.result);
       expect(Result.isFailure(result)).toBe(true);
@@ -209,6 +214,7 @@ function gate(opts: {
   return waitForHelle({
     home: "/nowhere",
     envFile: opts.file,
+    url: server.base,
     gitlabPath:
       opts.gitlabPath === undefined ? "gitlab.cego.dk/spilnu/frontend/spilnu" : opts.gitlabPath,
     repoName: opts.repoName ?? "spilnu",
@@ -364,6 +370,7 @@ test("a resumed Run does not ask again, and waits rather than assuming it holds 
           waitForHelle({
             home: "/nowhere",
             envFile: yield* envFile(),
+            url: server.base,
             gitlabPath: "gitlab.cego.dk/spilnu/frontend/spilnu",
             repoName: "spilnu",
             claimed: { slug: "spilnu", claim: "mine" },

@@ -268,9 +268,9 @@ export const DesktopRpcs = RpcGroup.make(
     success: Schema.String,
     error: ActionFailed,
   }),
-  /** Keeps Helle's credentials and writes them on every Machine. */
+  /** Keeps Helle's token and writes it on every Machine. */
   Rpc.make("saveHelle", {
-    payload: { url: Schema.String, token: Schema.String },
+    payload: { token: Schema.String },
     success: Schema.String,
     error: ActionFailed,
   }),

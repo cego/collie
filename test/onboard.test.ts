@@ -447,13 +447,15 @@ test("Helle's credentials file is written owner-only", () =>
         {},
         {
           skip: ["linear"],
-          secrets: { HELLE_API_URL: "https://helle.example", HELLE_API_TOKEN: "helle-secret" },
+          secrets: { HELLE_API_TOKEN: "helle-secret" },
         },
       );
 
       expect(statusOf(events, "helle")).toBe("done");
       const file = `${home}/.config/helle/env`;
-      expect(yield* read(file)).toContain("HELLE_API_TOKEN=helle-secret");
+      expect(yield* read(file)).toBe(
+        "HELLE_API_URL=https://helle.cego.dk\nHELLE_API_TOKEN=helle-secret\n",
+      );
       expect((yield* fs.stat(file)).mode & 0o777).toBe(0o600);
     }),
   ));
@@ -470,7 +472,7 @@ test("an existing Helle file readable by others is made owner-only", () =>
         {},
         {
           skip: ["linear"],
-          secrets: { HELLE_API_URL: "https://helle.example", HELLE_API_TOKEN: "helle-secret" },
+          secrets: { HELLE_API_TOKEN: "helle-secret" },
         },
       );
 

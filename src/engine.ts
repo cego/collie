@@ -2224,6 +2224,7 @@ export const hostLayer = (options: {
             return yield* waitForHelle({
               home: env.home,
               envFile: env.raw.HELLE_ENV_FILE ?? null,
+              url: env.raw.COLLIE_HELLE_URL ?? null,
               gitlabPath: yield* projectHere(asked.cwd, runShell),
               // git's repository, never the checkout's basename: a roaming Run's directory
               // is named after the workflow, and a Helle project under that name is a
@@ -2286,7 +2287,11 @@ export const hostLayer = (options: {
             const file = claimPath(dir, runId);
             const held = yield* recordedClaim(file);
             if (held === null) return;
-            yield* credentials({ home: env.home, envFile: env.raw.HELLE_ENV_FILE ?? null }).pipe(
+            yield* credentials({
+              home: env.home,
+              envFile: env.raw.HELLE_ENV_FILE ?? null,
+              url: env.raw.COLLIE_HELLE_URL ?? null,
+            }).pipe(
               Effect.flatMap((creds) => releaseClaim(creds, held.slug)),
               Effect.provide(FetchHttpClient.layer),
             );

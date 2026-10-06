@@ -22,6 +22,7 @@ import {
 } from "../desktop/src/bun/credentials";
 import { type OnboardRun } from "../desktop/src/shared/flock";
 import { renewalDue } from "../src/gitlab-token";
+import { HELLE_URL } from "../src/helle-url";
 
 const run = <A, E>(effect: Effect.Effect<A, E, BunServices.BunServices | Scope.Scope>) =>
   Effect.runPromise(effect.pipe(Effect.scoped, Effect.provide(BunServices.layer)));
@@ -130,11 +131,8 @@ test("the secrets Desktop holds are handed to collie onboard as stdin lines", ()
       const keyring = secretService(`${dir}/secret-tool`);
       expect(yield* secretsFor(keyring)).toBe("");
       yield* keyring.store("gitlab-token", "token", "glpat-good");
-      yield* keyring.store("helle-url", "url", "https://helle.example");
       yield* keyring.store("helle-token", "token", "h-1");
-      expect(yield* secretsFor(keyring)).toBe(
-        "GITLAB_TOKEN=glpat-good\nHELLE_API_URL=https://helle.example\nHELLE_API_TOKEN=h-1\n",
-      );
+      expect(yield* secretsFor(keyring)).toBe("GITLAB_TOKEN=glpat-good\nHELLE_API_TOKEN=h-1\n");
     }),
   ));
 
@@ -323,15 +321,11 @@ test("Helle's credentials are written on every Machine, readable by its owner al
       const fs = yield* FileSystem.FileSystem;
       const dir = yield* scratch;
       yield* fs.makeDirectory(`${dir}/home`);
-      const said = yield* giveHelle(
-        [machineIn(`${dir}/home`, dir)],
-        "https://helle.example",
-        "h-1",
-      );
+      const said = yield* giveHelle([machineIn(`${dir}/home`, dir)], HELLE_URL, "h-1");
       expect(said).toEqual([{ name: "pc", failed: null }]);
       const file = `${dir}/home/.config/helle/env`;
       expect(yield* fs.readFileString(file)).toBe(
-        "HELLE_API_URL=https://helle.example\nHELLE_API_TOKEN=h-1\n",
+        "HELLE_API_URL=https://helle.cego.dk\nHELLE_API_TOKEN=h-1\n",
       );
       expect(((yield* fs.stat(file)).mode & 0o777).toString(8)).toBe("600");
     }),

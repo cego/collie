@@ -1289,7 +1289,7 @@ release to install, this runner's own version when it is not given. Nothing runs
 | `claude-login` | `claude auth login` in this terminal, if `claude auth status --json` says Claude Code is not logged in; without a terminal, `needs_human` with that command                                                                                                                                                                                                               |
 | `gitlab`       | `glab auth login --hostname gitlab.cego.dk --stdin` (or `GITLAB_HOST`) with `GITLAB_TOKEN`, if glab is not already logged in there, or is logged in with another token than the one given. Without a token: `needs_human`, with the token page and its `api` and `write_repository` scopes as `url`                                                                       |
 | `push`         | Generates `~/.ssh/id_ed25519` if there is none and registers it with `glab ssh-key add`, unless the Machine can already push (over HTTPS with glab's login, or with its own key). GitLab's host key is trusted on first use, and a key GitLab already has counts as registered                                                                                            |
-| `helle`        | Writes `HELLE_API_URL` and `HELLE_API_TOKEN` to Helle's credentials file, owner-only; with neither given and no file, `needs_human`                                                                                                                                                                                                                                       |
+| `helle`        | Writes `HELLE_API_TOKEN`, and `HELLE_API_URL=https://helle.cego.dk` for other Helle clients, to Helle's credentials file, owner-only; with no token given and no file, `needs_human`                                                                                                                                                                                      |
 | `linear`       | `claude mcp add --transport http --scope user linear-server https://mcp.linear.app/mcp`, then `claude mcp login linear-server` in a terminal of its own, whose URL is streamed: the one it prints, or the one with its callback port it hands `$BROWSER`, which a shim writes down                                                                                        |
 | `doctor`       | [`collie doctor`](#checking-an-installation); onboarded means it is ready                                                                                                                                                                                                                                                                                                 |
 
@@ -1298,7 +1298,7 @@ A development checkout — the one this runner belongs to when that is a checkou
 only and the logins: nothing is installed and its checkout is not moved.
 
 Secrets are never arguments. `--secrets-stdin` reads `KEY=value` lines from stdin —
-`GITLAB_TOKEN`, `HELLE_API_URL` and `HELLE_API_TOKEN` — and the token reaches glab on its
+`GITLAB_TOKEN` and `HELLE_API_TOKEN` — and the token reaches glab on its
 stdin too. Helle and Linear count toward onboarded unless `--skip` names them; a skipped
 step reports `skipped`. Doctor's own checks for them stay optional.
 
@@ -1356,12 +1356,13 @@ one host, each of those two checks is named with its host.
 
 Two more are optional, and reported rather than required. **Helle**, where a loaded
 workflow waits on it (`renovate` does): the credentials file the Helle MCP wrapper sources,
-`~/.config/helle/env` (or `HELLE_ENV_FILE`), read and then tried against Helle's `/me`. **A
+`~/.config/helle/env` (or `HELLE_ENV_FILE`), whose token is tried against
+`https://helle.cego.dk`'s `/me`; a `HELLE_API_URL` line in it is ignored. **A
 Linear MCP server in Claude Code**, where a workflow routes a step to Claude: user and
 local scope in `.claude.json`, project scope in the project's `.mcp.json`, matched by name
 or URL. Each has three states, and the glyph says which: `✓` there and working, a note
 with the setup command when it is not set up at all, and `!` — set up and not working, a
-file with one of its two lines, a token Helle refuses, a settings file that is not JSON —
+file without a token, a token Helle refuses, a settings file that is not JSON —
 with the file to look in. Neither ever fails the run: the bundled `implement` and `review`
 need neither. A run that does need one is refused at `collie run start` with the same
 detail and fix, before any tab opens.

@@ -10,6 +10,7 @@ import { Data, Effect, FileSystem, Schema } from "effect";
 import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
+import { HELLE_URL } from "./helle-url";
 import { reason } from "./naming";
 
 export class HelleError extends Data.TaggedError("HelleError")<{
@@ -62,6 +63,7 @@ export interface HelleProject extends Schema.Schema.Type<typeof Project> {}
 export const credentials = Effect.fn("Helle.credentials")(function* (where: {
   home: string;
   envFile?: string | null;
+  url?: string | null;
 }) {
   const file = where.envFile ?? `${where.home}/.config/helle/env`;
   const fs = yield* FileSystem.FileSystem;
@@ -73,11 +75,9 @@ export const credentials = Effect.fn("Helle.credentials")(function* (where: {
     const entry = /^\s*(?:export\s+)?([A-Z_][A-Z0-9_]*)\s*=\s*(.*?)\s*$/.exec(line);
     if (entry) values.set(entry[1]!, entry[2]!.replace(/^["']|["']$/g, ""));
   }
-  const url = values.get("HELLE_API_URL");
   const token = values.get("HELLE_API_TOKEN");
-  if (!url) return yield* Effect.fail(failed(`helle credentials: no HELLE_API_URL in ${file}`));
   if (!token) return yield* Effect.fail(failed(`helle credentials: no HELLE_API_TOKEN in ${file}`));
-  return { url: url.replace(/\/+$/, ""), token } satisfies HelleCredentials;
+  return { url: where.url ?? HELLE_URL, token } satisfies HelleCredentials;
 });
 
 /**
@@ -166,6 +166,7 @@ function positionOf(project: HelleProject, user: string): number | null {
 export interface HelleGate<E, R> {
   home: string;
   envFile?: string | null;
+  url?: string | null;
   /** `host/group/…/name` for the repository, or null where it has no GitLab remote. */
   gitlabPath: string | null;
   repoName: string;

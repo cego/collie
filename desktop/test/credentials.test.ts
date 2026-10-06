@@ -40,7 +40,7 @@ case "$secrets" in *GITLAB_TOKEN=*) done_ gitlab "glab is logged in" ;; *)
   echo '{"event":"result","step":"gitlab","status":"needs_human","detail":"make a token with the api and write_repository scopes","url":"https://gitlab.example/-/user_settings/personal_access_tokens?name=collie&scopes=api,write_repository"}'; ready=false ;; esac
 start helle "Helle's credentials"
 case "$secrets" in *HELLE_API_TOKEN=*) done_ helle "wrote it" ;; *)
-  echo '{"event":"result","step":"helle","status":"needs_human","detail":"give HELLE_API_URL and HELLE_API_TOKEN"}'; ready=false ;; esac
+  echo '{"event":"result","step":"helle","status":"needs_human","detail":"give HELLE_API_TOKEN"}'; ready=false ;; esac
 start linear "The Linear MCP in Claude Code"
 case " $* " in *" --skip linear "*)
   echo '{"event":"result","step":"linear","status":"skipped","detail":"skipped for this Machine"}' ;; *)
@@ -177,7 +177,6 @@ test(
         yield* press(step("gitlab").getByTestId("save-gitlab"));
         // Onboarded again, with the token.
         yield* reads(step("gitlab").getByTestId("detail"), "glab is logged in");
-        yield* fill(step("helle").getByTestId("helle-url"), "https://helle.example");
         yield* fill(step("helle").getByTestId("helle-token"), "h-1");
         yield* press(step("helle").getByTestId("save-helle"));
         yield* reads(dialog().getByTestId("outcome"), "Onboarded: collie doctor is ready.");
@@ -190,9 +189,7 @@ test(
 
         yield* onboardOn("b");
         yield* reads(dialog().getByTestId("outcome"), "Onboarded: collie doctor is ready.");
-        expect(yield* read("stdin-mk@b")).toBe(
-          "GITLAB_TOKEN=glpat-good\nHELLE_API_URL=https://helle.example\nHELLE_API_TOKEN=h-1\n",
-        );
+        expect(yield* read("stdin-mk@b")).toBe("GITLAB_TOKEN=glpat-good\nHELLE_API_TOKEN=h-1\n");
         yield* closeDialog;
       }),
     ),

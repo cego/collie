@@ -48,9 +48,7 @@ export const onboard = Command.make(
       Flag.atLeast(0),
     ),
     secretsStdin: Flag.Boolean("secrets-stdin").pipe(
-      Flag.withDescription(
-        "Read GITLAB_TOKEN=, HELLE_API_URL= and HELLE_API_TOKEN= lines from stdin",
-      ),
+      Flag.withDescription("Read GITLAB_TOKEN= and HELLE_API_TOKEN= lines from stdin"),
       Flag.withDefault(false),
     ),
   },

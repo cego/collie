@@ -1,18 +1,14 @@
 <script setup lang="ts">
-/** Takes the GitLab token or Helle's credentials, kept once for every Machine. */
+/** Takes the GitLab token or Helle's token, kept once for every Machine. */
 const props = defineProps<{ which: "gitlab" | "helle"; label: string }>();
 const emit = defineEmits<{ saved: [] }>();
 const { saveGitlab, saveHelle } = useActions();
 
-const url = ref("");
 const token = ref("");
 const keep = async () => {
-  const kept =
-    props.which === "gitlab"
-      ? await saveGitlab(token.value.trim())
-      : await saveHelle(url.value.trim(), token.value.trim());
+  const said = token.value.trim();
+  const kept = props.which === "gitlab" ? await saveGitlab(said) : await saveHelle(said);
   if (!kept) return;
-  url.value = "";
   token.value = "";
   emit("saved");
 };
@@ -20,13 +16,6 @@ const keep = async () => {
 
 <template>
   <form class="flex gap-2" :data-testid="`${which}-fields`" @submit.prevent="keep">
-    <UInput
-      v-if="which === 'helle'"
-      v-model="url"
-      class="flex-1"
-      placeholder="Helle's URL"
-      data-testid="helle-url"
-    />
     <UInput
       v-model="token"
       type="password"
@@ -39,7 +28,7 @@ const keep = async () => {
       size="sm"
       :label="label"
       :data-testid="`save-${which}`"
-      :disabled="token.trim() === '' || (which === 'helle' && url.trim() === '')"
+      :disabled="token.trim() === ''"
     />
   </form>
 </template>

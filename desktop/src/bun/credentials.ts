@@ -13,7 +13,7 @@ import { ranWith, shOn, tracked } from "./onboarding";
 export const GITLAB = `https://${GITLAB_HOST}`;
 
 /** What Desktop keeps in the keyring, by name. */
-export type KeyringEntry = "gitlab-token" | "helle-url" | "helle-token";
+export type KeyringEntry = "gitlab-token" | "helle-token";
 
 export interface Keyring {
   readonly lookup: (key: KeyringEntry) => Effect.Effect<string | null, string>;
@@ -53,7 +53,6 @@ export const secretsFor = (keyring: Keyring) =>
   Effect.gen(function* () {
     const lines: Array<readonly [string, KeyringEntry]> = [
       ["GITLAB_TOKEN", "gitlab-token"],
-      ["HELLE_API_URL", "helle-url"],
       ["HELLE_API_TOKEN", "helle-token"],
     ];
     let text = "";
