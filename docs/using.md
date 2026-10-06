@@ -911,7 +911,8 @@ computer, with no `--session` for herdr's default session. It lands on the focus
 The terminal is `x-terminal-emulator` where it exists, else the first of `gnome-terminal`,
 `konsole`, `kitty`, `alacritty` and `xterm` on PATH; on macOS it is Terminal.app. The card
 then says where the pane is, as "vm-mk › workspace 3 › tab 2", and where no terminal was
-found it shows the command to copy. **New run** asks a Machine what a project
+found, or it failed as it started, it shows the command to copy. A Run with no live agent is
+looked for only in its Task's own Herd, since workspace ids are only unique within one. **New run** asks a Machine what a project
 can start, then starts it with what you typed for its inputs. What came of each, or the
 host's own words for why not, is said in a toast, and **Try again** on a failure sends the
 same request again, so a host that took it before the answer was lost does it once; the card then changes from the host's

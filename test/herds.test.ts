@@ -87,7 +87,7 @@ test(
         yield* rig.addAgent("impl-1", paneId);
         const sessions = [{ herd: null, name: "work", default: false, herdr }];
 
-        expect(yield* focusPane(sessions, ["impl-2", "impl-1"], null)).toEqual({
+        expect(yield* focusPane(sessions, ["impl-2", "impl-1"], null, null)).toEqual({
           session: "work",
           workspace: "workspace 3",
           tab: "tab 2",
@@ -95,7 +95,12 @@ test(
         expect((yield* rig.cmds()).filter((cmd) => cmd.includes("focus"))).toEqual(["agent focus"]);
 
         // herdr's default session is the one a client attaches to without naming one.
-        const inDefault = yield* focusPane([{ ...sessions[0]!, default: true }], ["impl-1"], null);
+        const inDefault = yield* focusPane(
+          [{ ...sessions[0]!, default: true }],
+          ["impl-1"],
+          null,
+          null,
+        );
         expect(inDefault?.session).toBeNull();
       }),
     ),
@@ -111,7 +116,7 @@ test(
         yield* rig.addWorkspace("w7", "workspace 7", "/p");
         const sessions = [{ herd: null, name: "default", default: true, herdr }];
 
-        expect(yield* focusPane(sessions, ["impl-1"], "w7")).toEqual({
+        expect(yield* focusPane(sessions, ["impl-1"], "w7", null)).toEqual({
           session: null,
           workspace: "workspace 7",
           tab: null,
@@ -119,7 +124,28 @@ test(
         expect((yield* rig.cmds()).filter((cmd) => cmd.includes("focus"))).toEqual([
           "workspace.focus",
         ]);
-        expect(yield* focusPane(sessions, ["impl-1"], "w-gone")).toBeNull();
+        expect(yield* focusPane(sessions, ["impl-1"], "w-gone", null)).toBeNull();
+      }),
+    ),
+  30_000,
+);
+
+test(
+  "a Run's workspace is looked for only in its own Herd, where workspace ids are its own",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const herdr = new Herdr(rig.pluginEnv());
+        yield* rig.addWorkspace("w7", "someone else's", "/p");
+        const theirs = { herd: "theirs", name: "theirs", default: false, herdr };
+
+        expect(yield* focusPane([theirs], ["impl-1"], "w7", "mine")).toBeNull();
+        // A Task from before Herds were recorded falls back only where there is no other Herd.
+        expect(
+          yield* focusPane([theirs, { ...theirs, herd: "x" }], [], "w7", undefined),
+        ).toBeNull();
+        expect((yield* rig.cmds()).filter((cmd) => cmd.includes("focus"))).toEqual([]);
+        expect((yield* focusPane([theirs], [], "w7", undefined))?.workspace).toBe("someone else's");
       }),
     ),
   30_000,

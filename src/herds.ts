@@ -49,13 +49,15 @@ export const liveHerds = Effect.fn("Herds.live")(function* (herdr: Herdr, env: P
 });
 
 /**
- * Focuses the first of `agents` a session still has, else `workspace`, in the first
- * session that holds either; null where none does.
+ * Focuses the first of `agents` a session still has, else `workspace` in the Task's own
+ * `herd` (undefined where the Task recorded none), in the first session that holds either;
+ * null where none does.
  */
 export const focusPane = Effect.fn("Herds.focusPane")(function* (
   sessions: ReadonlyArray<LiveHerd>,
   agents: ReadonlyArray<string>,
   workspace: string | null,
+  herd: string | null | undefined,
 ) {
   for (const session of sessions) {
     const { herdr } = session;
@@ -67,7 +69,9 @@ export const focusPane = Effect.fn("Herds.focusPane")(function* (
         : (yield* herdr.paneList().pipe(Effect.orElseSucceed((): PaneInfo[] => []))).find(
             (one) => one.paneId === agent.paneId,
           );
-    const workspaceId = pane?.workspaceId ?? agent?.workspaceId ?? workspace;
+    // Workspace ids are only unique within a session.
+    const home = herd === undefined ? sessions.length === 1 : session.herd === herd;
+    const workspaceId = pane?.workspaceId ?? agent?.workspaceId ?? (home ? workspace : null);
     if (workspaceId === null) continue;
     const named = (yield* herdr.workspaceList().pipe(Effect.orElseSucceed(() => []))).find(
       (one) => one.workspaceId === workspaceId,

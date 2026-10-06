@@ -1,5 +1,6 @@
 // Go to pane on this computer: a new herdr client, in a terminal of its own.
 
+import { Effect, Option } from "effect";
 import { quoted } from "./machine";
 
 /** A herdr client attached to a Machine's session: over SSH where it has a target, else Local's. */
@@ -44,3 +45,18 @@ export const inTerminal = (
   }
   return null;
 };
+
+/** Whether `command` started and had not failed a second later. */
+export const launched = (command: ReadonlyArray<string>) =>
+  Effect.try(() =>
+    Bun.spawn([...command], { stdio: ["ignore", "ignore", "ignore"], detached: true }),
+  ).pipe(
+    Effect.flatMap((started) =>
+      Effect.promise(() => started.exited).pipe(
+        Effect.timeoutOption("1 second"),
+        Effect.map(Option.match({ onNone: () => true, onSome: (code) => code === 0 })),
+        Effect.ensuring(Effect.sync(() => started.unref())),
+      ),
+    ),
+    Effect.orElseSucceed(() => false),
+  );

@@ -1,7 +1,9 @@
 // Going to a pane: the herdr client Desktop attaches, and the terminal on this computer it opens in.
 
 import { expect, test } from "bun:test";
-import { attachCommand, inTerminal, shellLine } from "../desktop/src/bun/terminal";
+import { Effect } from "effect";
+import { attachCommand, inTerminal, launched, shellLine } from "../desktop/src/bun/terminal";
+import { runEffect } from "./support/effect";
 
 const onPath =
   (...found: ReadonlyArray<string>) =>
@@ -52,3 +54,13 @@ test("on macOS it is Terminal.app, told the command as a line", () => {
     `tell application "Terminal" to activate`,
   ]);
 });
+
+test("a terminal that fails as it starts, or is not there, did not open", () =>
+  runEffect(
+    Effect.gen(function* () {
+      expect(yield* launched(["true"])).toBe(true);
+      expect(yield* launched(["sleep", "5"])).toBe(true);
+      expect(yield* launched(["false"])).toBe(false);
+      expect(yield* launched(["/nonexistent/terminal"])).toBe(false);
+    }),
+  ));

@@ -93,7 +93,15 @@ const toggle = (name: string, on: boolean | "indeterminate") => {
 
 /** Where Go to pane last found this card's pane, and the herdr client that attaches to it. */
 const pane = ref<{ where: string; command: string; opened: boolean } | null>(null);
-const copy = (text: string) => navigator.clipboard.writeText(text);
+watch(
+  () => props.task.run,
+  () => (pane.value = null),
+);
+const copy = (text: string) =>
+  navigator.clipboard.writeText(text).then(
+    () => toast.add({ title: "Copied", color: "success" }),
+    () => toast.add({ title: "Could not copy the command", color: "error" }),
+  );
 const goTo = async () => {
   if (props.asOf !== null) return;
   const went = await goToPane(props.installation, props.task.run);

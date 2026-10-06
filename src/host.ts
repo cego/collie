@@ -1047,14 +1047,18 @@ const frontDoorHandlers = (
                 .filter((entry) => entry.runId === runId)
                 .map((entry) => entry.agent)
                 .reverse();
-              // The Task's own Herd first: workspace ids are only unique within a session.
               const sessions = (yield* liveHerds(herdr, env)).toSorted(
                 (a, b) => Number(b.herd === task?.herd) - Number(a.herd === task?.herd),
               );
               return yield* once(
                 trail(runId),
                 { operation: "focus", request, ...whoOf(client), asked: {}, result: PaneAt },
-                focusPane(sessions, agents, view.workspace ?? task?.workspace ?? null).pipe(
+                focusPane(
+                  sessions,
+                  agents,
+                  view.workspace ?? task?.workspace ?? null,
+                  task?.herd,
+                ).pipe(
                   Effect.flatMap((at) =>
                     at === null
                       ? Effect.fail(
