@@ -193,11 +193,13 @@ state, and a binary in a temp directory rather than the one the user is running.
 nothing above it to fake, and routing it through `herdr.ts` would mean asking the running
 herdr what some other version's schema says.
 
-Desktop's main process runs one more: `herdr machine list --json`, for the machines
-saved in herdr (`desktop/src/bun/machine.ts`). Desktop is another program, usually on
-another computer, and it is not talking to a session either: it asks which machines to
-reach and nothing else. Routing it through `herdr.ts` would bring Collie's locks into
-Desktop, which reaches a Machine only through `collie bridge`.
+Desktop's main process runs three more, all on herdr's list of saved machines:
+`herdr machine list --json`, which machines to reach, and `herdr machine remove`
+(`desktop/src/bun/machine.ts`), and `herdr machine add` (`desktop/src/bun/onboarding.ts`),
+run under `script` so herdr has the terminal its questions need. Desktop is another
+program, usually on another computer, and it is not talking to a session either: it keeps
+herdr's list and nothing else. Routing them through `herdr.ts` would bring Collie's locks
+into Desktop, which reaches a Machine only through `collie bridge`.
 
 ### Checking the boundary against herdr
 
@@ -578,7 +580,12 @@ archive and `install-desktop.sh`, each as `<asset>.sig`. It also signs the archi
 tar it is applied as, `<name>.tar.sig` beside `<name>.tar.zst` (`appliedSignatureOf` in
 `src/signing.ts`). Desktop verifies that tar before it installs an update, whether
 Electrobun built it from the archive or from a delta patch
-(`desktop/src/bun/updates.ts`).
+(`desktop/src/bun/updates.ts`). It verifies a runner it onboards a Machine with the same
+way, before it is put on the Machine and each time the copy Desktop keeps is used again,
+and puts it there only by its SHA-256 (`desktop/src/bun/onboarding.ts`). A Desktop from a
+checkout, whose channel is not `stable`, may be given another key in
+`COLLIE_DESKTOP_RELEASE_KEY` and another release URL in `COLLIE_DESKTOP_RELEASES`, as its
+tests are; a release takes neither key.
 
 `bun run build` compiles beside the binary and renames over it, because replacing a running
 runner's own file kills the process executing it. In a git checkout `install.sh` builds from

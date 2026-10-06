@@ -11,6 +11,7 @@ import { ScriptedMachine } from "./scripted-machine";
 export const CDP = Bun.env.COLLIE_DESKTOP_CDP ?? "9333";
 const APP = `${import.meta.dir}/../../build/dev-linux-x64/collie-desktop-dev/bin/launcher`;
 export const HOST = `${import.meta.dir}/scripted-host.ts`;
+const HERDR = `${import.meta.dir}/scripted-herdr.ts`;
 
 export const run = <A, E>(effect: Effect.Effect<A, E, BunServices.BunServices>) =>
   Effect.runPromise(effect.pipe(Effect.provide(BunServices.layer)));
@@ -36,16 +37,15 @@ export const serve = (
 export const LOCAL = "local.json";
 
 /**
- * herdr's list; a master that logs when it opens and closes, and which `-O check` finds
- * once it is open; and a passenger that runs its remote command as a Machine's login
- * shell would, with `collie` on PATH where the Machine has a board. While `down-<target>`
- * exists the target cannot be reached and its master drops, taking its passengers with it;
- * while `sso-<target>` exists a master waits on an SSO login.
+ * herdr, as `scripted-herdr.ts` scripts it; a master that logs when it opens and closes,
+ * and which `-O check` finds once it is open; and a passenger that runs its remote command
+ * as a Machine's login shell would, with `collie` on PATH where the Machine has a board.
+ * While `down-<target>` exists the target cannot be reached and its master drops, taking
+ * its passengers with it; while `sso-<target>` exists a master waits on an SSO login.
  */
 const scripts = (flock: string) => ({
   herdr: `#!/bin/sh
-[ "$*" = "machine list --json" ] || exit 2
-cat '${flock}/machines.json'
+exec '${process.execPath}' '${HERDR}' '${flock}' "$@"
 `,
   ssh: `#!/bin/bash
 args=("$@")
@@ -127,12 +127,13 @@ export interface App {
 
 /**
  * Starts the app with herdr listing `machines`, once every board it reads is written: in a
- * home of its own, or in `home`, so it finds what an app there saved.
+ * home of its own, or in `home`, so it finds what an app there saved; `env` added to its own.
  */
 export const launch = (
   machines: ReadonlyArray<Saved>,
   boards: (flock: string) => Effect.Effect<void, unknown, FileSystem.FileSystem>,
   home?: string,
+  env: Readonly<Record<string, string>> = {},
 ) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -166,6 +167,7 @@ export const launch = (
         XDG_DATA_HOME: `${scratch}/data`,
         PATH: `${flock}:${Bun.env.PATH}`,
         COLLIE_DESKTOP_COLLIE: asCommand([process.execPath, HOST, `${flock}/${LOCAL}`]),
+        ...env,
       },
       stdout: "ignore",
       stderr: "ignore",

@@ -12,6 +12,10 @@ const offersAtom = FlockClient.mutation("offers");
 const workflowsAtom = FlockClient.mutation("workflows");
 const openLinkAtom = FlockClient.mutation("openLink");
 const restartAtom = FlockClient.mutation("restart");
+const onboardAtom = FlockClient.mutation("onboard");
+const addMachineAtom = FlockClient.mutation("addMachine");
+const answerHerdrAtom = FlockClient.mutation("answerHerdr");
+const removeMachineAtom = FlockClient.mutation("removeMachine");
 
 type Failed = ActionFailed | RpcClientError.RpcClientError;
 
@@ -30,6 +34,10 @@ export const useActions = () => {
   const workflows = useAtomSet(() => workflowsAtom, { mode: "promiseExit" });
   const openLink = useAtomSet(() => openLinkAtom, { mode: "promiseExit" });
   const restart = useAtomSet(() => restartAtom, { mode: "promiseExit" });
+  const onboard = useAtomSet(() => onboardAtom, { mode: "promiseExit" });
+  const addMachine = useAtomSet(() => addMachineAtom, { mode: "promiseExit" });
+  const answerHerdr = useAtomSet(() => answerHerdrAtom, { mode: "promiseExit" });
+  const removeMachine = useAtomSet(() => removeMachineAtom, { mode: "promiseExit" });
 
   /** A failed read is said once, here; its caller gets nothing back. */
   const read = <A>(exit: Exit.Exit<A, Failed>) => {
@@ -76,5 +84,15 @@ export const useActions = () => {
       offers({ payload: { installation, runId } }).then(read),
     workflowsIn: (installation: string, project: string) =>
       workflows({ payload: { installation, project } }).then(read),
+    /** The job onboarding that route's Machine, whose progress comes on the board. */
+    onboard: (profile: string) => onboard({ payload: { profile } }).then(read),
+    addMachine: (target: string, label: string, session: string) =>
+      addMachine({ payload: { target, label, session } }).then(read),
+    answerHerdr: (job: string, yes: boolean) => answerHerdr({ payload: { job, yes } }),
+    removeMachine: (profile: string) =>
+      removeMachine({ payload: { profile } }).then((exit) => {
+        const said = read(exit);
+        if (said !== null) toast.add({ title: said, color: "success" });
+      }),
   };
 };

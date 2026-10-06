@@ -68,12 +68,70 @@ export const MachineNotice = Schema.TaggedStruct("Notice", {
 });
 export type MachineNotice = typeof MachineNotice.Type;
 
+/** A route Desktop reaches a Machine by, from herdr's list or Local, as it is opened. */
+export const MachineRouted = Schema.TaggedStruct("Routed", { machine: KnownMachine });
+export type MachineRouted = typeof MachineRouted.Type;
+
+/** A route removed from herdr's list, with whatever Desktop showed through it. */
+export const MachineRemoved = Schema.TaggedStruct("Removed", { machine: KnownMachine });
+export type MachineRemoved = typeof MachineRemoved.Type;
+
+/** A step of onboarding as `collie onboard` streams it, or one Desktop takes before it. */
+export const OnboardStep = Schema.Struct({
+  step: Schema.String,
+  title: Schema.String,
+  status: Schema.Literals([
+    "running",
+    "done",
+    "in_place",
+    "skipped",
+    "needs_root",
+    "needs_human",
+    "failed",
+  ]),
+  detail: Schema.optionalKey(Schema.String),
+  /** What to run by hand: the root command, or the one that retries the step. */
+  command: Schema.optionalKey(Schema.String),
+  url: Schema.optionalKey(Schema.String),
+});
+export type OnboardStep = typeof OnboardStep.Type;
+
+/** A yes-or-no question herdr asks while it saves a Machine, and its own default. */
+export const HerdrQuestion = Schema.Struct({ text: Schema.String, yes: Schema.Boolean });
+export type HerdrQuestion = typeof HerdrQuestion.Type;
+
+/** One onboarding of a Machine so far: its steps, and whether it was ready once it ended. */
+export const OnboardRun = Schema.Struct({
+  steps: Schema.Array(OnboardStep),
+  asked: Schema.NullOr(HerdrQuestion),
+  /** Null while it runs. */
+  ready: Schema.NullOr(Schema.Boolean),
+  /** Why it ended short where no step says. */
+  reason: Schema.NullOr(Schema.String),
+  at: Schema.Number,
+});
+export type OnboardRun = typeof OnboardRun.Type;
+
+/** An onboarding as it stands, under the job the view started it as. */
+export const MachineOnboarding = Schema.TaggedStruct("Onboarding", {
+  job: Schema.String,
+  machine: KnownMachine,
+  run: OnboardRun,
+});
+export type MachineOnboarding = typeof MachineOnboarding.Type;
+
+/** What a step may end as and leave the human nothing to do. */
+export const SETTLED: ReadonlyArray<OnboardStep["status"]> = ["done", "in_place", "skipped"];
+
 export const FlockItem = Schema.Union([
   MachineMessage,
   MachineLost,
   MachineSaved,
   MachineMerged,
   MachineNotice,
+  MachineRouted,
+  MachineRemoved,
+  MachineOnboarding,
 ]);
 export type FlockItem = typeof FlockItem.Type;
 
@@ -154,6 +212,26 @@ export const DesktopRpcs = RpcGroup.make(
   Rpc.make("updates", { success: UpdateNews, stream: true }),
   /** Installs the update that is ready, which quits Desktop and starts the new one. */
   Rpc.make("restart", { error: ActionFailed }),
+  /** Onboards, or repairs, the Machine a route reaches; its progress comes on `flock`. */
+  Rpc.make("onboard", {
+    payload: { profile: Schema.String },
+    success: Schema.String,
+    error: ActionFailed,
+  }),
+  /** Saves a Machine in herdr, then onboards it, under the job it answers with. */
+  Rpc.make("addMachine", {
+    payload: { target: Schema.String, label: Schema.String, session: Schema.String },
+    success: Schema.String,
+    error: ActionFailed,
+  }),
+  /** The human's answer to the question herdr asks in a job. */
+  Rpc.make("answerHerdr", { payload: { job: Schema.String, yes: Schema.Boolean } }),
+  /** Removes a route from herdr's list; nothing on its Machine is stopped or uninstalled. */
+  Rpc.make("removeMachine", {
+    payload: { profile: Schema.String },
+    success: Schema.String,
+    error: ActionFailed,
+  }),
 );
 
 /**
@@ -178,9 +256,22 @@ export interface Flock {
   >;
   /** Every notice so far, oldest first. */
   readonly notices: ReadonlyArray<string>;
+  /** Every route Desktop reaches a Machine by, by herdr profile. */
+  readonly routes: ReadonlyMap<string, KnownMachine>;
+  /** Each onboarding the view started, by job. */
+  readonly onboarding: ReadonlyMap<string, MachineOnboarding>;
+  /** The latest onboarding of each route, by herdr profile. */
+  readonly onboarded: ReadonlyMap<string, OnboardRun>;
 }
 
-export const EMPTY_FLOCK: Flock = { machines: new Map(), lost: new Map(), notices: [] };
+export const EMPTY_FLOCK: Flock = {
+  machines: new Map(),
+  lost: new Map(),
+  notices: [],
+  routes: new Map(),
+  onboarding: new Map(),
+  onboarded: new Map(),
+};
 
 /**
  * A snapshot replaces its Machine and makes it live; a change touches one Task; a lost
@@ -190,6 +281,31 @@ export const EMPTY_FLOCK: Flock = { machines: new Map(), lost: new Map(), notice
 export const applyItem = (flock: Flock, item: FlockItem): Flock => {
   if ("_tag" in item && item._tag === "Notice")
     return { ...flock, notices: [...flock.notices, item.text] };
+  if ("_tag" in item && item._tag === "Routed")
+    return { ...flock, routes: new Map(flock.routes).set(item.machine.profile, item.machine) };
+  if ("_tag" in item && item._tag === "Onboarding")
+    return {
+      ...flock,
+      onboarding: new Map(flock.onboarding).set(item.job, item),
+      onboarded: new Map(flock.onboarded).set(item.machine.profile, item.run),
+    };
+  if ("_tag" in item && item._tag === "Removed") {
+    const { profile } = item.machine;
+    const without = <V>(map: ReadonlyMap<string, V>) => {
+      const kept = new Map(map);
+      kept.delete(profile);
+      return kept;
+    };
+    return {
+      ...flock,
+      routes: without(flock.routes),
+      lost: without(flock.lost),
+      onboarded: without(flock.onboarded),
+      machines: new Map(
+        [...flock.machines].filter(([, { machine }]) => machine.profile !== profile),
+      ),
+    };
+  }
   if ("_tag" in item && item._tag === "Saved") {
     const { machine, herds, tasks, at } = item;
     if (flock.machines.has(machine.installation)) return flock;
@@ -305,6 +421,30 @@ export const flockCards = (flock: Flock) => {
     ),
   };
 };
+
+/** A route as the Machines list shows it: how it stands now, and its latest onboarding. */
+export interface MachineRow {
+  readonly profile: string;
+  readonly name: string;
+  readonly target: string | null;
+  readonly state: "live" | "connecting" | NotLive;
+  readonly onboarded: OnboardRun | null;
+}
+
+/** Every route, in the order Desktop opened them. */
+export const machineRows = (flock: Flock): ReadonlyArray<MachineRow> =>
+  [...flock.routes.values()].map(({ profile, name, target }) => {
+    const live = [...flock.machines.values()].some(
+      ({ machine, asOf }) => machine.profile === profile && asOf === null,
+    );
+    return {
+      profile,
+      name,
+      target: target ?? null,
+      state: live ? "live" : (flock.lost.get(profile)?.state ?? "connecting"),
+      onboarded: flock.onboarded.get(profile) ?? null,
+    };
+  });
 
 /** The board after each item, from the first item on. */
 export const flockOf = <E, R>(items: Stream.Stream<FlockItem, E, R>) =>

@@ -17,6 +17,8 @@ const {
   waiting,
 } = useFlock();
 const starting = ref(false);
+const listing = ref(false);
+const { onboardOn } = useOnboarding();
 
 const NOT_LIVE: Record<NotLive, { icon: string; title: (name: string) => string }> = {
   unreachable: { icon: "i-lucide-unplug", title: (name) => `${name} is out of reach` },
@@ -70,6 +72,16 @@ watch(update, (now) => {
       </p>
       <UButton
         class="ml-auto"
+        color="neutral"
+        variant="outline"
+        icon="i-lucide-server"
+        label="Machines"
+        data-testid="machines"
+        @click="listing = true"
+      />
+      <MachinesPanel v-model:open="listing" />
+      <OnboardDialog />
+      <UButton
         icon="i-lucide-plus"
         label="New run"
         data-testid="new-run"
@@ -88,7 +100,6 @@ watch(update, (now) => {
         :description="failure"
       />
       <template v-else>
-        <!-- ponytail: Onboard is off until Desktop can onboard a Machine (ticket 32). -->
         <UAlert
           v-for="[profile, { name, state, reason }] in lost"
           :key="profile"
@@ -98,7 +109,9 @@ watch(update, (now) => {
           :icon="NOT_LIVE[state].icon"
           :title="NOT_LIVE[state].title(name)"
           :description="reason"
-          :actions="state === 'no-collie' ? [{ label: 'Onboard', disabled: true }] : []"
+          :actions="
+            state === 'no-collie' ? [{ label: 'Onboard', onClick: () => onboardOn(profile) }] : []
+          "
         />
         <UAlert
           v-for="{ name, development } in developments"

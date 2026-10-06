@@ -868,9 +868,9 @@ A Machine Desktop cannot show live says why above the board, by name:
   printed a line naming SSO). Its board appears once the login clears; nothing has to be
   pressed.
 - **Collie isn't installed on _name_** — the machine answered, but its login shell has no
-  `collie`. **Onboard** is shown for it, though it does nothing yet. Until it has a host, it
-  is known by its herdr profile id. Once a host there answers, it becomes the Machine that
-  host's installation id names, as one more Machine or as the one already shown.
+  `collie`. **Onboard** onboards it, as below. Until it has a host, it is known by its
+  herdr profile id. Once a host there answers, it becomes the Machine that host's
+  installation id names, as one more Machine or as the one already shown.
 
 Desktop keeps the Flock on its own build. When a Machine on a release older than Desktop
 connects, Desktop runs `collie upgrade --to <its version>` there through the same route
@@ -907,6 +907,34 @@ host's own words for why not, is said in a toast, and **Try again** on a failure
 same request again, so a host that took it before the answer was lost does it once; the card then changes from the host's
 stream like any other change. Every one is recorded on that Machine as `desktop`, with this
 computer's name.
+
+**Machines** lists every Machine Desktop reaches — this computer first, then herdr's — with
+how it stands, and is where Machines join the Flock. Each joins the same way:
+
+- **Add Machine** takes an SSH target, a label and a herdr session (`default` unless you
+  say), and runs `herdr machine add` in a terminal Desktop drives. herdr's own questions —
+  whether to install herdr there, whether to replace a running server — are dialogs, and
+  closing one answers herdr's default, which for replacing a server is No. herdr saves the
+  machine, so its list stays the only one, and Desktop then onboards it.
+- **Onboard** on a Machine herdr already has, or on this computer, onboards it there and
+  then. It is the same button on a Machine whose Collie isn't installed.
+
+Onboarding downloads the runner of Desktop's own version for that Machine from the GitHub
+release, with its `.sig`, and verifies it against Collie's release key before it goes
+anywhere; one that is unsigned or does not match is refused and said, and nothing reaches
+the Machine. The verified runner is kept on this computer, checked again each time it is
+used, and put on the Machine under `~/.cache/collie/runners/` only once what arrived has
+the same SHA-256. Desktop then runs `collie --json onboard --to <its version>` there and
+shows each step as it streams: a step that needs root shows the exact command to run and
+**Retry**, and one that needs you shows what to open. A Machine onboarding left short lists
+its missing steps on its row in Machines, each with its command or link and **Retry**;
+onboarding again repairs only what is missing. Once onboarding ends, Desktop tries the
+Machine's board again at once rather than after its backoff. Desktop keeps each Machine's
+latest onboarding on this computer, beside its saved board.
+
+**Remove** runs `herdr machine remove` for that herdr machine, closes Desktop's connection
+to it and drops its saved board. It never stops a host, a Run or herdr there, and never
+uninstalls Collie. This computer is not in herdr's list, so it has no Remove.
 
 Every Machine's host is reached the same way: by running
 `collie bridge --as desktop --client <this computer>` in a login shell, here directly and

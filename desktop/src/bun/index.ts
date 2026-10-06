@@ -7,11 +7,17 @@ import {
   Clock,
   Config,
   Crypto,
+  Deferred,
   Effect,
+  Exit,
+  Fiber,
   FileSystem,
   Layer,
+  Option,
+  PubSub,
   Result,
   Schema,
+  Scope,
   Stream,
   SubscriptionRef,
 } from "effect";
@@ -24,7 +30,15 @@ import {
   type ToMain,
   type ToView,
 } from "../shared/channel";
-import { ActionFailed, DesktopRpcs, type FlockItem, type UpdateNews } from "../shared/flock";
+import {
+  ActionFailed,
+  DesktopRpcs,
+  type FlockItem,
+  type KnownMachine,
+  type OnboardRun,
+  type UpdateNews,
+} from "../shared/flock";
+import { RELEASE_PUBLIC_KEY } from "../../../src/signing";
 import {
   act,
   type Door,
@@ -33,13 +47,24 @@ import {
   workflowsOn,
   endChildren,
   flockStream,
+  type HerdrMachine,
   herdrMachines,
   localRoute,
-  type Route,
+  type ShellRoute,
   remoteRoute,
+  removeFromHerdr,
+  type RouteChange,
 } from "./machine";
+import { addToHerdr, NOT_STARTED, onboardThrough, RELEASES, tracked } from "./onboarding";
 import { electrobunUpdater } from "./electrobun-updater";
-import { savedBoards, saving } from "./saved";
+import {
+  dropBoardsOf,
+  dropOnboarding,
+  saveOnboarding,
+  savedBoards,
+  savedOnboardings,
+  saving,
+} from "./saved";
 import { applyAtLaunch, restartToUpdate, watchForUpdates } from "./updates";
 // The version Desktop keeps every Machine on: the Collie it was built from.
 import manifest from "../../../herdr-plugin.toml";
@@ -92,6 +117,9 @@ const Collie = Config.schema(
   ),
 );
 
+/** How long herdr's question waits on the human before it takes herdr's own default. */
+const QUESTION_LIMIT = "10 minutes";
+
 const main = Effect.gen(function* () {
   const updater = yield* electrobunUpdater;
   yield* applyAtLaunch(updater).pipe(
@@ -105,6 +133,16 @@ const main = Effect.gen(function* () {
   );
   const local = hostname();
   const collie = yield* Collie;
+  const releases = yield* Config.String("COLLIE_DESKTOP_RELEASES").pipe(
+    Config.withDefault(RELEASES),
+  );
+  // A Desktop from a checkout, as its tests run, may trust another key; a release never.
+  const key =
+    (yield* updater.channel) === "stable"
+      ? RELEASE_PUBLIC_KEY
+      : yield* Config.String("COLLIE_DESKTOP_RELEASE_KEY").pipe(
+          Config.withDefault(RELEASE_PUBLIC_KEY),
+        );
   const fs = yield* FileSystem.FileSystem;
   // Short, because a control socket's path is capped at about 100 bytes.
   const controls = yield* fs.makeTempDirectoryScoped({ prefix: "collie-ssh-" });
@@ -126,30 +164,198 @@ const main = Effect.gen(function* () {
       ],
     ],
   });
-  const remote = yield* Effect.forEach(enabled, (machine, at) =>
-    remoteRoute("ssh", `${controls}/${at}`, machine, local),
+  // Every route by herdr profile, each herdr machine's with the scope its master lives in.
+  const routes = new Map<string, { route: ShellRoute; scope?: Scope.Closeable }>();
+  routes.set("local", { route: localRoute(collie, local) });
+  let opened = 0;
+  const open = (machine: HerdrMachine) =>
+    Effect.gen(function* () {
+      const scope = yield* Scope.make();
+      const route = yield* remoteRoute("ssh", `${controls}/${opened++}`, machine, local).pipe(
+        Scope.provide(scope),
+      );
+      routes.set(route.machine.profile, { route, scope });
+      return route;
+    });
+  yield* Effect.forEach(enabled, open, { discard: true });
+  yield* Effect.addFinalizer(() =>
+    Effect.forEach(
+      routes.values(),
+      ({ scope }) => (scope ? Scope.close(scope, Exit.void) : Effect.void),
+      {
+        discard: true,
+      },
+    ),
   );
-  const routes: ReadonlyArray<Route> = [localRoute(collie, local), ...remote];
-  const profiles = new Set(routes.map(({ machine }) => machine.profile));
+  const changes = yield* PubSub.unbounded<RouteChange>();
+  const news = yield* PubSub.unbounded<FlockItem>();
   const doors = new Map<string, Door>();
   const boards = `${Utils.paths.userData}/machines`;
+  const onboardings = `${Utils.paths.userData}/onboarding`;
+  const runners = `${Utils.paths.userData}/runners`;
+  const scope = yield* Effect.scope;
+  const uuid = (yield* Crypto.Crypto).randomUUIDv4.pipe(Effect.orDie);
+
+  // The job onboarding each route, and its fiber, while one runs; and the question each job waits on.
+  const onboarding = new Map<string, { job: string; fiber?: Fiber.Fiber<unknown> }>();
+  const answers = new Map<string, Deferred.Deferred<boolean>>();
+  const tell = (job: string, machine: KnownMachine) => (run: OnboardRun) =>
+    PubSub.publish(news, { _tag: "Onboarding", job, machine, run }).pipe(Effect.asVoid);
+  /** Onboards through `route` under `job`, then keeps how it ended and has it tried at once. */
+  const onboardAs = (job: string, route: ShellRoute, start: OnboardRun = NOT_STARTED) => {
+    const { machine } = route;
+    onboarding.set(machine.profile, { job });
+    return onboardThrough(
+      route,
+      { version: manifest.version, releases, runners, key },
+      tell(job, machine),
+      start,
+    ).pipe(
+      Effect.tap((run) => saveOnboarding(onboardings, { _tag: "Onboarding", job, machine, run })),
+      Effect.tap(() => PubSub.publish(changes, { _tag: "Wake", profile: machine.profile })),
+      Effect.ensuring(Effect.sync(() => onboarding.delete(machine.profile))),
+      Effect.provide(BunServices.layer),
+      Effect.forkIn(scope),
+      // Unless it has already ended.
+      Effect.tap((fiber) =>
+        Effect.sync(() => {
+          if (onboarding.get(machine.profile)?.job === job)
+            onboarding.set(machine.profile, { job, fiber });
+        }),
+      ),
+    );
+  };
+  /** Saves the machine in herdr, asking herdr's questions of the human, then onboards it. */
+  const addAs = (job: string, target: string, label: string, session: string) =>
+    Effect.gen(function* () {
+      const run = tracked(tell(job, { profile: `adding:${job}`, name: label, target }));
+      const saved = { step: "herdr", title: `Saved in herdr as ${label}` } as const;
+      yield* run.step(saved);
+      const ask = (text: string, yes: boolean) =>
+        Effect.gen(function* () {
+          const answer = yield* Deferred.make<boolean>();
+          answers.set(job, answer);
+          yield* run.change((now) => ({ ...now, asked: { text, yes } }));
+          // Nobody left to answer, as when the view went away, is herdr's own default.
+          const said = yield* Deferred.await(answer).pipe(
+            Effect.timeoutOption(QUESTION_LIMIT),
+            Effect.map(Option.getOrElse(() => yes)),
+          );
+          answers.delete(job);
+          yield* run.change((now) => ({ ...now, asked: null }));
+          return said;
+        });
+      const before = new Set(routes.keys());
+      const added = yield* addToHerdr("herdr", target, label, session, ask).pipe(
+        Effect.andThen(herdrMachines("herdr")),
+        Effect.flatMap((machines) => {
+          const found = machines.find(
+            (machine) =>
+              !before.has(machine.id) && machine.target === target && machine.label === label,
+          );
+          return found === undefined
+            ? Effect.fail(`herdr lists no new machine for ${target}`)
+            : Effect.succeed(found);
+        }),
+        Effect.result,
+      );
+      if (Result.isFailure(added)) {
+        yield* run.step({ ...saved, status: "failed", detail: added.failure });
+        return yield* run.end(false, null);
+      }
+      const route = yield* open(added.success);
+      yield* PubSub.publish(news, { _tag: "Routed", machine: route.machine });
+      yield* PubSub.publish(changes, { _tag: "Add", route });
+      yield* run.step({ ...saved, status: "done", detail: `herdr machine ${added.success.id}` });
+      yield* Fiber.join(yield* onboardAs(job, route, run.current()));
+    });
+
   const handlers = DesktopRpcs.toLayer({
     flock: () =>
-      Stream.fromIterableEffect(
-        // A Machine herdr no longer lists is not Desktop's to show.
-        savedBoards(boards).pipe(
-          Effect.map((saved) => saved.filter(({ machine }) => profiles.has(machine.profile))),
-        ),
-      ).pipe(
-        Stream.concat(
-          Stream.merge(Stream.fromIterable(unlisted), flockStream(routes, doors, manifest.version)),
-        ),
-        saving(boards),
-        Stream.provide(BunServices.layer),
-      ),
+      Stream.unwrap(
+        Effect.gen(function* () {
+          // Before the routes are read, so a route added meanwhile is not missed.
+          const changed = yield* PubSub.subscribe(changes);
+          const told = yield* PubSub.subscribe(news);
+          const reachable = [...routes.values()].map(({ route }) => route);
+          // A Machine herdr no longer lists is not Desktop's to show.
+          const listed = ({ machine }: { readonly machine: KnownMachine }) =>
+            routes.has(machine.profile);
+          const before: ReadonlyArray<FlockItem> = [
+            ...reachable.map(({ machine }): FlockItem => ({ _tag: "Routed", machine })),
+            ...(yield* savedBoards(boards)).filter(listed),
+            ...(yield* savedOnboardings(onboardings)).filter(listed),
+          ];
+          return Stream.fromIterable(before).pipe(
+            Stream.concat(
+              Stream.mergeAll(
+                [
+                  Stream.fromIterable(unlisted),
+                  flockStream(reachable, doors, manifest.version, Stream.fromSubscription(changed)),
+                  Stream.fromSubscription(told),
+                ],
+                { concurrency: "unbounded" },
+              ),
+            ),
+          );
+        }),
+      ).pipe(saving(boards), Stream.provide(BunServices.layer)),
+    onboard: ({ profile }) =>
+      Effect.gen(function* () {
+        const running = onboarding.get(profile);
+        if (running !== undefined) return running.job;
+        const route = routes.get(profile)?.route;
+        if (route === undefined)
+          return yield* new ActionFailed({ reason: "that Machine is not in herdr's list" });
+        const job = yield* uuid;
+        yield* onboardAs(job, route);
+        return job;
+      }),
+    addMachine: ({ target, label, session }) =>
+      Effect.gen(function* () {
+        if ([target, label, session].some((one) => one.trim() === ""))
+          return yield* new ActionFailed({
+            reason: "a Machine needs an SSH target, a label and a session",
+          });
+        const job = yield* uuid;
+        yield* addAs(job, target.trim(), label.trim(), session.trim()).pipe(
+          Effect.provide(BunServices.layer),
+          Effect.forkIn(scope),
+        );
+        return job;
+      }),
+    answerHerdr: ({ job, yes }) =>
+      Effect.suspend(() => {
+        const answer = answers.get(job);
+        return answer === undefined ? Effect.void : Deferred.succeed(answer, yes);
+      }),
+    removeMachine: ({ profile }) =>
+      Effect.gen(function* () {
+        const known = routes.get(profile);
+        if (known?.scope === undefined)
+          return yield* new ActionFailed({
+            reason: "only a machine in herdr's list can be removed",
+          });
+        yield* removeFromHerdr("herdr", profile).pipe(
+          Effect.mapError((reason) => new ActionFailed({ reason })),
+        );
+        const done = yield* Deferred.make<void>();
+        yield* PubSub.publish(changes, { _tag: "Remove", profile, done });
+        // Without a board open there is no stream to end.
+        yield* Deferred.await(done).pipe(Effect.timeoutOption("5 seconds"));
+        routes.delete(profile);
+        const running = onboarding.get(profile)?.fiber;
+        if (running !== undefined) yield* Fiber.interrupt(running);
+        yield* Scope.close(known.scope, Exit.void);
+        yield* Effect.all([
+          dropOnboarding(onboardings, profile),
+          dropBoardsOf(boards, profile),
+        ]).pipe(Effect.provide(BunServices.layer));
+        return `Removed ${known.route.machine.name}`;
+      }),
     act: ({ installation, action, request: again }) =>
       Effect.gen(function* () {
-        const request = again ?? (yield* (yield* Crypto.Crypto).randomUUIDv4.pipe(Effect.orDie));
+        const request = again ?? (yield* uuid);
         const door = yield* doorTo(doors, installation).pipe(
           Effect.mapError((failed) => new ActionFailed({ reason: failed.reason, request })),
         );

@@ -46,7 +46,7 @@ export const endChildren = () => {
   for (const child of children) child.kill();
 };
 
-const spawned = <C extends Bun.Subprocess>(start: () => C) =>
+export const spawned = <C extends Bun.Subprocess>(start: () => C) =>
   Effect.acquireRelease(
     Effect.sync(() => {
       const child = start();
@@ -246,7 +246,7 @@ const HerdrMachines = Schema.fromJsonString(Schema.Array(HerdrMachine));
 
 /**
  * The machines enabled in herdr. Asked here rather than through `src/herdr.ts`, which
- * would bring Collie's locks into Desktop; this is Desktop's only herdr call.
+ * would bring Collie's locks into Desktop, as are adding one and removing one.
  */
 export const herdrMachines = (herdr: string) =>
   output([herdr, "machine", "list", "--json"]).pipe(
@@ -255,6 +255,10 @@ export const herdrMachines = (herdr: string) =>
     ),
     Effect.map((machines) => machines.filter((machine) => machine.enabled)),
   );
+
+/** Drops a machine from herdr's list; nothing on it is stopped or uninstalled. */
+export const removeFromHerdr = (herdr: string, profile: string) =>
+  output([herdr, "machine", "remove", profile]).pipe(Effect.asVoid);
 
 /**
  * One way to reach a Machine: what it is called, and how its bridge is opened, saying
@@ -267,11 +271,17 @@ export interface Route<D extends BoardSource = Door> {
   readonly collie: (args: ReadonlyArray<string>) => Effect.Effect<Ran, string>;
 }
 
-const quoted = (word: string) => `'${word.replaceAll("'", `'\\''`)}'`;
+export const quoted = (word: string) => `'${word.replaceAll("'", `'\\''`)}'`;
 
 /** `collie` as the Machine's login shell runs it, as Local's is. */
 const remoteCollie = (args: ReadonlyArray<string>) =>
   [`exec "\${SHELL:-/bin/sh}" -lc 'exec collie "$@"' collie`, ...args.map(quoted)].join(" ");
+
+/** A route that can also run a shell script on its Machine, as onboarding does. */
+export interface ShellRoute extends Route {
+  /** The command that runs `script` in the Machine's login shell. */
+  readonly sh: (script: string) => Effect.Effect<ReadonlyArray<string>, string>;
+}
 
 /** What an SSO login that ssh is waiting on prints before it, as vm-mk's sshd does. */
 const SSO = /\bSSO\b/;
@@ -328,7 +338,7 @@ export const remoteRoute = Effect.fn("Desktop.remoteRoute")(function* (
   );
   let master = yield* start;
   // Never a login of its own: SSO is asked once, by the master.
-  const channel = (args: ReadonlyArray<string>) => [
+  const channel = (remote: string) => [
     ssh,
     "-S",
     control,
@@ -336,9 +346,9 @@ export const remoteRoute = Effect.fn("Desktop.remoteRoute")(function* (
     "ControlMaster=no",
     "-T",
     machine.target,
-    remoteCollie(args),
+    remote,
   ];
-  const route: Route = {
+  const route: ShellRoute = {
     machine: { profile: machine.id, name: machine.label, target: machine.target },
     open: (waitingOnSso) =>
       Effect.gen(function* () {
@@ -349,22 +359,28 @@ export const remoteRoute = Effect.fn("Desktop.remoteRoute")(function* (
         if (done !== undefined && (done._tag === "Failure" || done.value.exitCode !== null))
           master = yield* start;
         yield* Fiber.join(master);
-        return yield* openBridge(channel(bridgeCommand([], client)));
+        return yield* openBridge(channel(remoteCollie(bridgeCommand([], client))));
       }),
     collie: (args) =>
       Fiber.join(master).pipe(
         Effect.mapError(({ reason }) => reason),
-        Effect.andThen(ran(channel(args))),
+        Effect.andThen(ran(channel(remoteCollie(args)))),
+      ),
+    sh: (script) =>
+      Fiber.join(master).pipe(
+        Effect.mapError(({ reason }) => reason),
+        Effect.as(channel(`exec "\${SHELL:-/bin/sh}" -lc ${quoted(script)}`)),
       ),
   };
   return route;
 });
 
 /** Local, reached through a bridge it starts without SSH. */
-export const localRoute = (collie: ReadonlyArray<string>, name: string): Route => ({
+export const localRoute = (collie: ReadonlyArray<string>, name: string): ShellRoute => ({
   machine: { profile: "local", name },
   open: () => openBridge(bridgeCommand(collie, name)),
   collie: (args) => ran([...collie, ...args]),
+  sh: (script) => Effect.succeed([Bun.env.SHELL ?? "/bin/sh", "-lc", script]),
 });
 
 const RELEASE = /^\d+\.\d+\.\d+$/;
@@ -406,22 +422,37 @@ const upgradeTo = (route: Route<BoardSource>, version: string) =>
 /** How long a route waits before it tries again, after so many tries in a row failed. */
 const backoff = (failures: number) => Math.min(1000 * 2 ** failures, 60_000);
 
+/** A route added, one removed, or one woken to try again now rather than after its backoff. */
+export type RouteChange<D extends BoardSource = Door> =
+  | { readonly _tag: "Add"; readonly route: Route<D> }
+  /** `done` once its stream has ended and its Machine is said to be removed. */
+  | { readonly _tag: "Remove"; readonly profile: string; readonly done: Deferred.Deferred<void> }
+  | { readonly _tag: "Wake"; readonly profile: string };
+
 /**
  * Every route's board, one stream per installation. Routes earlier in the list are
  * preferred, so a Machine reached two ways is shown through the first; a route that turns
  * out to reach a Machine already shown says so and ends, and its bridge with it. A route
  * that is not live says why, and tries again with backoff. `doors` holds each shown
- * Machine's door, by installation, for as long as its stream runs.
+ * Machine's door, by installation, for as long as its stream runs. A route added later is
+ * preferred less than every route before it.
  */
 export const flockStream = <D extends BoardSource>(
   routes: ReadonlyArray<Route<D>>,
   doors: Map<string, D>,
   version: string,
+  changes: Stream.Stream<RouteChange<D>> = Stream.empty,
 ): Stream.Stream<FlockItem> =>
   Stream.unwrap(
     Effect.gen(function* () {
       const owners = yield* Ref.make(new Map<string, number>());
-      const displaced = yield* Effect.forEach(routes, () => Deferred.make<void>());
+      // By each route's place in the order it was added.
+      const displaced: Array<Deferred.Deferred<void>> = [];
+      const removed: Array<Deferred.Deferred<void>> = [];
+      const ended: Array<Deferred.Deferred<void>> = [];
+      const wakes: Array<Queue.Queue<void>> = [];
+      const places = new Map<string, number>();
+      const routeAt: Array<Route<D>> = [];
       // Routes with nothing more to show: merged into another, or too new to read.
       const done = new Set<number>();
       // Each installation is asked to upgrade once, so one that did not move is shown as it is.
@@ -575,8 +606,12 @@ export const flockStream = <D extends BoardSource>(
                       return lost;
                     }
                     const again = reached ? 0 : failures;
+                    const waited = Effect.raceFirst(
+                      Effect.sleep(backoff(again)),
+                      Queue.take(wakes[at]!),
+                    );
                     return lost.pipe(
-                      Stream.concat(Stream.fromEffectDrain(Effect.sleep(backoff(again)))),
+                      Stream.concat(Stream.fromEffectDrain(waited)),
                       Stream.concat(afterFailures(again + 1)),
                     );
                   }),
@@ -586,17 +621,56 @@ export const flockStream = <D extends BoardSource>(
           });
         return afterFailures(0);
       };
-      return Stream.mergeAll(
-        routes.map((route, at) =>
-          Stream.unwrap(
-            Effect.map(Queue.unbounded<FlockItem>(), (notices) =>
-              Stream.merge(Stream.fromQueue(notices), tries(route, at, notices), {
-                haltStrategy: "right",
-              }),
+      const added = (route: Route<D>) =>
+        Effect.gen(function* () {
+          const at = displaced.length;
+          displaced.push(yield* Deferred.make<void>());
+          removed.push(yield* Deferred.make<void>());
+          ended.push(yield* Deferred.make<void>());
+          wakes.push(yield* Queue.sliding<void>(1));
+          places.set(route.machine.profile, at);
+          routeAt.push(route);
+          const notices = yield* Queue.unbounded<FlockItem>();
+          return Stream.merge(Stream.fromQueue(notices), tries(route, at, notices), {
+            haltStrategy: "right",
+          }).pipe(
+            Stream.interruptWhen(
+              Effect.raceFirst(Deferred.await(displaced[at]!), Deferred.await(removed[at]!)),
             ),
-          ).pipe(Stream.interruptWhen(Deferred.await(displaced[at]!))),
-        ),
-        { concurrency: "unbounded" },
+            Stream.ensuring(Deferred.succeed(ended[at]!, undefined)),
+          );
+        });
+      const changed = (change: RouteChange<D>): Stream.Stream<FlockItem> => {
+        if (change._tag === "Add")
+          return places.has(change.route.machine.profile)
+            ? Stream.empty
+            : Stream.unwrap(added(change.route));
+        const at = places.get(change.profile);
+        if (change._tag === "Wake")
+          return at === undefined
+            ? Stream.empty
+            : Stream.fromEffectDrain(Queue.offer(wakes[at]!, undefined));
+        if (at === undefined)
+          return Stream.fromEffectDrain(Deferred.succeed(change.done, undefined));
+        places.delete(change.profile);
+        done.add(at);
+        return Stream.fromEffect(
+          Effect.gen(function* () {
+            // Another route to its Machine may show it now.
+            yield* Ref.update(
+              owners,
+              (now) => new Map([...now].filter(([, owner]) => owner !== at)),
+            );
+            yield* Deferred.succeed(removed[at]!, undefined);
+            yield* Deferred.await(ended[at]!);
+            return { _tag: "Removed", machine: routeAt[at]!.machine } satisfies FlockItem;
+          }),
+        ).pipe(Stream.ensuring(Deferred.succeed(change.done, undefined)));
+      };
+      return Stream.fromIterable(routes).pipe(
+        Stream.map((route): RouteChange<D> => ({ _tag: "Add", route })),
+        Stream.concat(changes),
+        Stream.flatMap(changed, { concurrency: "unbounded" }),
       );
     }),
   );
