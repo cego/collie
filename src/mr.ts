@@ -525,9 +525,11 @@ export function pipelineStatus<R>(
   run: Runner<R>,
 ): Effect.Effect<string | null, never, R> {
   return Effect.gen(function* () {
-    const m = /^https?:\/\/([^/\s]+)\/(.+?)\/-\/pipelines\/(\d+)\/?$/.exec(url.trim());
+    const m = /^https?:\/\/([^/\s]+)\/(.+?)\/-\/pipelines\/(\d+)(?:[/?#]\S*)?$/.exec(url.trim());
     if (!m) return null;
     const [, host, project, id] = m;
+    // The address is agent text: only a host the human signed glab in to is called.
+    if ((yield* run("glab", ["auth", "status", "--hostname", host!], cwd)).code !== 0) return null;
     const answer = yield* run(
       "glab",
       ["api", "--hostname", host!, `projects/${encodeURIComponent(project!)}/pipelines/${id}`],

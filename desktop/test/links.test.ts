@@ -100,3 +100,25 @@ test("the merge request's pipelines named in a Run's text are still one card", (
     { kind: "mr", url: mr.url, title: "Drawer", status: "opened" },
   ]);
 });
+
+test("a pipeline's own page is its card, and a page that only starts with digits is a link", () => {
+  expect(
+    webLinks({
+      texts: [
+        "https://gitlab.cego.dk/g/p/-/pipelines/90/failures https://gitlab.cego.dk/g/p/-/pipelines/90x",
+      ],
+      mr: null,
+    }),
+  ).toEqual([
+    {
+      kind: "pipeline",
+      url: "https://gitlab.cego.dk/g/p/-/pipelines/90/failures",
+      title: "Pipeline #90",
+    },
+    {
+      kind: "link",
+      url: "https://gitlab.cego.dk/g/p/-/pipelines/90x",
+      title: "gitlab.cego.dk/g/p/-/pipelines/90x",
+    },
+  ]);
+});

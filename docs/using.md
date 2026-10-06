@@ -872,7 +872,7 @@ verifications as a checklist, those that did not do what they were expected to f
 already open with their output in its terminal colours; then every web link the Run's
 Outputs, handoffs, review and findings name, as a card: a Claude artifact by the title its
 link was given, the merge request with its state, its pipelines with the head pipeline's
-status, and any other pipeline with the status GitLab gives it; its screenshots as a
+status, and any other pipeline with the status GitLab gives it where `glab` is signed in to its host; its screenshots as a
 gallery, a `before` beside its `after` where their names pair them, twelve to a page; its
 videos, read and played when asked; its HTML reports, such as Lighthouse, in a sandboxed
 frame that runs their scripts in an origin of their own, which may neither load anything

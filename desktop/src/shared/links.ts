@@ -11,7 +11,7 @@ export interface LinkCard {
 
 const LINK = /\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)|https?:\/\/[^\s<>"'`)\]\\]+/g;
 const ARTIFACT = /^https:\/\/claude\.ai\/(?:[^/]+\/)*artifacts?\//;
-const PIPELINE = /\/-\/pipelines\/(\d+)/;
+const PIPELINE = /\/-\/pipelines\/(\d+)(?:[/?#]|$)/;
 
 const where = (url: string) => url.replace(/^https?:\/\//, "").replace(/\/$/, "");
 
