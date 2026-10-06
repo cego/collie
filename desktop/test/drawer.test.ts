@@ -8,17 +8,6 @@ import { task } from "../../test/support/task";
 import type { ScriptedMachine } from "./support/scripted-machine";
 import { type App, LOCAL, launch, quit, reads, run, serve, settled } from "./support/app";
 
-/** A page on this machine, so a navigation the rules let through commits at once. */
-const asked: Array<string> = [];
-const away = Bun.serve({
-  hostname: "127.0.0.1",
-  port: 0,
-  fetch: (request) => {
-    asked.push(request.url);
-    return new Response("<title>away</title>", { headers: { "content-type": "text/html" } });
-  },
-});
-
 const SPEC = [
   "# The seeder",
   "",
@@ -48,8 +37,12 @@ const SPEC = [
   "",
   '<div style="position:fixed;inset:0;background:url(https://example.com/style.png)">over all</div>',
   "",
-  `<map name="away"><area shape="default" href="${away.url}area"></map>`,
+  '<map name="away"><area shape="default" href="views://mainview/away.html"></map>',
   '<img usemap="#away" alt="a map" width="40" height="40" src="data:image/gif;base64,R0lGODlhAQABAAAAACw=">',
+  "",
+  '<pre><a href="elsewhere.html">a raw link</a></pre>',
+  "",
+  ':prose-a[a prose link]{href="views://mainview/elsewhere.html"}',
   "",
   "See [the brands ticket](issues/02-brands.md), and [a lost one](issues/99-lost.md).",
 ].join("\n");
@@ -328,7 +321,7 @@ beforeAll(
   120_000,
 );
 
-afterAll(() => run(quit(app)).then(() => away.stop()));
+afterAll(() => run(quit(app)));
 
 const drawer = () => app!.page.getByTestId("drawer");
 const tab = (name: string) => drawer().getByRole("tab", { name });
@@ -1015,16 +1008,25 @@ test(
       Effect.gen(function* () {
         yield* opened;
         yield* Effect.promise(() => tab("Plan").click());
-        const map = drawer().getByTestId("plan").getByAltText("a map");
-        yield* Effect.promise(() => map.scrollIntoViewIfNeeded());
+        // The page hears a refused navigation as one that failed, and a let-through one leaves it.
+        yield* Effect.promise(() =>
+          // A string, since this lib.dom does not type the Navigation API.
+          app!.page.evaluate(`
+            document.body.dataset.refused = "0";
+            navigation.addEventListener("navigateerror", () => {
+              document.body.dataset.refused = String(Number(document.body.dataset.refused) + 1);
+            });
+          `),
+        );
+        const plan = drawer().getByTestId("plan");
         // A blocked navigation never commits, which a click would otherwise wait for.
-        yield* Effect.promise(() => map.click({ noWaitAfter: true }));
-        // A navigation let through reaches the local page well inside this.
-        yield* Effect.promise(() => app!.page.waitForTimeout(1000));
-        expect({ url: app!.page.url(), asked }).toEqual({
-          url: expect.stringMatching(/^views:\/\//),
-          asked: [],
-        });
+        yield* Effect.promise(() => plan.getByAltText("a map").click({ noWaitAfter: true }));
+        for (const name of ["a raw link", "a prose link"])
+          yield* Effect.promise(() => plan.getByText(name).dispatchEvent("click"));
+        yield* Effect.promise(() =>
+          app!.page.waitForFunction(() => document.body.dataset.refused === "2"),
+        );
+        expect(app!.page.url()).toBe("views://mainview/index.html");
         expect(yield* Effect.promise(() => drawer().isVisible())).toBe(true);
       }),
     ),

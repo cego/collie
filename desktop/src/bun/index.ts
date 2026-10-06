@@ -56,7 +56,7 @@ const window = new BrowserWindow({
 
 // The view holds the Bun bridge, so nothing may navigate the window off it. Set on the
 // webview: as a window option, Linux CEF ignores it.
-window.webview.setNavigationRules(["^*", "views://*", "about:srcdoc"]);
+window.webview.setNavigationRules(["^*", "views://mainview/index.html", "about:srcdoc"]);
 
 const toView: Channel<ToView, ToMain> = {
   send: (frame) => window.webview.rpc?.send.frame(frame),
