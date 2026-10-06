@@ -34,11 +34,13 @@ import {
 } from "../shared/channel";
 import {
   ActionFailed,
+  applyItem,
   type Credentials,
   DesktopRpcs,
+  EMPTY_FLOCK,
   type FlockItem,
   type KnownMachine,
-  machineNames,
+  nameAsShown,
   type OnboardRun,
   type OnboardStep,
   Skippable,
@@ -399,6 +401,8 @@ const main = Effect.gen(function* () {
       yield* Fiber.join(yield* onboardAs(job, route, run));
     });
 
+  // The Flock as the board was last sent it, so the chat names its Machines as the cards do.
+  let shown = EMPTY_FLOCK;
   const own = (yield* Path.Path).join(yield* StateDir, "collie-desktop");
   let settings = yield* readSettings(own);
   // Opened by the view's first ask, in Desktop's own scope; its session starts with the first message.
@@ -408,10 +412,9 @@ const main = Effect.gen(function* () {
     conversation: `flock@${local}`,
     proactive: () => settings.proactive,
     machines: () => {
-      const shown = [...doors].map(([installation, { machine }]) => ({ ...machine, installation }));
-      const names = machineNames(shown);
+      const named = nameAsShown(shown);
       return [...doors].map(([installation, held]) => ({
-        name: names.get(installation) ?? held.machine.name,
+        name: named({ ...held.machine, installation }),
         door: chatDoor(held.chat),
       }));
     },
@@ -445,6 +448,7 @@ const main = Effect.gen(function* () {
             checked.add(item.machine.profile);
             return doctored(route).pipe(Effect.forkIn(scope));
           };
+          shown = EMPTY_FLOCK;
           const before: ReadonlyArray<FlockItem> = [
             ...reachable.map(({ machine }): FlockItem => ({ _tag: "Routed", machine })),
             ...(yield* savedBoards(boards)).filter(listed),
@@ -470,6 +474,7 @@ const main = Effect.gen(function* () {
         }),
       ).pipe(
         saving(boards),
+        Stream.tap((item) => Effect.sync(() => void (shown = applyItem(shown, item)))),
         Stream.provide(BunServices.layer),
         Stream.tap(() => withChat((opened) => opened.nudge, undefined)),
       ),

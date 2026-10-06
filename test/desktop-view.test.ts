@@ -21,6 +21,7 @@ import {
   flockCards,
   flockOf,
   type Machine,
+  nameAsShown,
   type MachineMessage,
 } from "../desktop/src/shared/flock";
 import { task } from "./support/task";
@@ -216,6 +217,18 @@ test("Machines that share a name are told apart by how they are reached, and not
     ["t-vm", "vm-mk (mk@vm-mk.cegohost.dk)"],
     ["t-work", "vm-mk (mk@vm-mk2)"],
   ]);
+});
+
+test("the chat calls a live Machine what its cards call it, a saved board's Machine among them", () => {
+  const away = { installation: "inst-away", profile: "p-away", name: "mk-pc", target: "mk@away" };
+  const flock = [
+    { _tag: "Saved", machine: away, herds: [{ id: "default" }], tasks: [working], at: 7 } as const,
+    snapshot(pc, [asking]),
+  ].reduce(applyItem, EMPTY_FLOCK);
+  expect(nameAsShown(flock)(pc)).toBe("mk-pc (local)");
+  const { tasks, placedOf } = flockCards(flock);
+  const card = tasks.find((one) => one.id === "t-ask")!;
+  expect(placedOf(card).machine).toBe("mk-pc (local)");
 });
 
 test("the sections and the header sentence count every Machine's Tasks", () => {

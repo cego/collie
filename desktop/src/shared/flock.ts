@@ -472,6 +472,15 @@ export const machineNames = (machines: ReadonlyArray<Machine>) => {
   );
 };
 
+const shownNames = (flock: Flock) =>
+  machineNames([...flock.machines.values()].map(({ machine }) => machine));
+
+/** What the board calls a Machine, among every Machine it shows, saved ones included. */
+export const nameAsShown = (flock: Flock) => {
+  const names = shownNames(flock);
+  return (machine: Machine) => names.get(machine.installation) ?? machine.name;
+};
+
 /** A Task as the board draws it: keyed across the Flock, and where it is when that matters. */
 export interface PlacedTask {
   readonly key: string;
@@ -490,7 +499,7 @@ export interface PlacedTask {
  * is more than one, and its Herd only when its Machine runs several.
  */
 export const flockCards = (flock: Flock) => {
-  const names = machineNames([...flock.machines.values()].map(({ machine }) => machine));
+  const names = shownNames(flock);
   const placed = new Map<TaskView, PlacedTask>();
   for (const [installation, { herds, tasks, asOf }] of flock.machines) {
     for (const task of tasks.values()) {
