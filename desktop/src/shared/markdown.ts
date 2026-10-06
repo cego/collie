@@ -19,28 +19,29 @@ const referencesIn = (text: string): Array<Node> => {
   return nodes;
 };
 
-const confine = (node: Node): Array<Node> => {
-  if (!Array.isArray(node)) return referencesIn(node);
-  const [tag, attributes, ...children] = node;
-  if (tag === null) return [node];
-  // A style could lay an overlay across the whole window; a popover, or a dialog a command
-  // opens, is drawn above it.
-  for (const name of Object.keys(attributes))
-    if (/^:?(style|popover\w*|command\w*|closedby)$/i.test(name)) delete attributes[name];
-  const [only] = children;
-  const whole =
-    tag === "code" && children.length === 1 && !Array.isArray(only)
-      ? WHOLE_FILE_LINE.exec(only ?? "")
-      : null;
-  if (whole !== null) return [["file-ref", { file: whole[1], line: whole[2] }, whole[0]]];
-  if (LEFT_ALONE.has(tag)) return [node];
-  return [[tag, attributes, ...children.flatMap(confine)]];
-};
+const confine =
+  (referenced: boolean) =>
+  (node: Node): Array<Node> => {
+    if (!Array.isArray(node)) return referenced ? referencesIn(node) : [node];
+    const [tag, attributes, ...children] = node;
+    if (tag === null) return [node];
+    // A style could lay an overlay across the whole window; a popover, or a dialog a command
+    // opens, is drawn above it.
+    for (const name of Object.keys(attributes))
+      if (/^:?(style|popover\w*|command\w*|closedby)$/i.test(name)) delete attributes[name];
+    const [only] = children;
+    const whole =
+      referenced && tag === "code" && children.length === 1 && !Array.isArray(only)
+        ? WHOLE_FILE_LINE.exec(only ?? "")
+        : null;
+    if (whole !== null) return [["file-ref", { file: whole[1], line: whole[2] }, whole[0]]];
+    return [[tag, attributes, ...children.flatMap(confine(referenced && !LEFT_ALONE.has(tag)))]];
+  };
 
 /** Strips every style, popover and command, and turns each `file:line` outside code and links into a `file-ref`. */
 export const confined = (): ComarkPlugin => ({
   name: "confined",
   post: ({ tree }) => {
-    tree.nodes = tree.nodes.flatMap(confine);
+    tree.nodes = tree.nodes.flatMap(confine(true));
   },
 });

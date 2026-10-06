@@ -285,6 +285,8 @@ const FILES = {
     '<div id="lid" popover class="fixed inset-0">a lid</div>',
     '<button commandfor="held" command="show-modal">Hold the window</button>',
     '<dialog id="held" closedby="none">held</dialog>',
+    '<pre><div id="den" popover>a den</div></pre>',
+    '[<button popovertarget="den">Open the den</button>](#den)',
   ].join("\n\n"),
 };
 
@@ -919,6 +921,7 @@ test(
         // Dispatched, since the cover above lies over them.
         yield* Effect.promise(() => ticket.getByText("Lift the lid").dispatchEvent("click"));
         yield* Effect.promise(() => ticket.getByText("Hold the window").dispatchEvent("click"));
+        yield* Effect.promise(() => ticket.getByText("Open the den").dispatchEvent("click"));
         expect(
           yield* Effect.promise(() =>
             ticket.locator("[popover], [popovertarget], [command], [commandfor], dialog").count(),

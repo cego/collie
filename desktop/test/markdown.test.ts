@@ -40,6 +40,20 @@ test("nothing can open a dialog by command", () => {
   ]);
 });
 
+test("nothing inside a block, a link or code keeps a style, popover or command either", () => {
+  expect(
+    confine([
+      ["pre", {}, ["div", { popover: "manual", id: "p", style: "position:fixed" }, "over"]],
+      ["a", { href: "#" }, ["button", { popovertarget: "p", command: "show-popover" }, "go"]],
+      ["code", {}, ["span", { ":popover": "true" }, "x"]],
+    ]),
+  ).toEqual([
+    ["pre", {}, ["div", { id: "p" }, "over"]],
+    ["a", { href: "#" }, ["button", {}, "go"]],
+    ["code", {}, ["span", {}, "x"]],
+  ]);
+});
+
 test("a file:line in text is a reference, and the text around it stays", () => {
   expect(confine([["p", {}, "See src/seed.ts:12, and README.md:3."]])).toEqual([
     [
