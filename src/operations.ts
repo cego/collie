@@ -43,11 +43,11 @@ import {
   budgetedDeps,
   evaluate,
   validate,
-  type Action,
   type CallLimits as EvaluatorLimits,
   type EvaluatorDeps,
   type Validated,
 } from "./evaluator";
+import type { Action } from "./actions";
 import {
   actorName,
   proposalsPath,

@@ -1,10 +1,18 @@
 import { Schema } from "effect";
-import { Herd, type OfferView, type Startable, TaskView } from "../../../src/board-model";
+import {
+  Herd,
+  NewsBatch,
+  type OfferView,
+  type Startable,
+  TaskView,
+} from "../../../src/board-model";
 
 export const ScriptedMachine = Schema.Struct({
   installation: Schema.String,
   herds: Schema.Array(Herd),
   tasks: Schema.Array(TaskView),
+  /** Its News for whoever asks, every Herd's alike; a conversation settling an item takes it off. */
+  news: Schema.optionalKey(NewsBatch.fields.items),
 });
 export type ScriptedMachine = typeof ScriptedMachine.Type;
 

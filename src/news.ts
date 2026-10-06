@@ -25,16 +25,10 @@
 // One journal per Herd; receipts are per conversation (CONTEXT.md, News).
 
 import { Effect, FileSystem, Path, Schema } from "effect";
-import { NewsReceipt } from "./board-model";
+import { NEWS_BATCH, NewsReceipt, Significance } from "./board-model";
 import { appendJournal, readJournal } from "./journal";
 import { herdDir } from "./steering";
 import { nowIso } from "./time";
-
-/**
- * How many items one batch carries. A screen's worth of news; what it left out is said
- * rather than dropped silently, and nothing is lost — the rest stays pending.
- */
-export const BATCH = 10;
 
 /** How many items the journal keeps. Old news nobody read is still not worth unbounded disk. */
 export const KEEP = 200;
@@ -49,6 +43,8 @@ const ItemSchema = Schema.Struct({
   /** The words a human reads. Built from the record, never written by a model. */
   text: Schema.String,
   at: Schema.String,
+  /** Decided by rules over the cause (`proactive.ts`); an item written before it was is routine. */
+  significance: Significance.pipe(Schema.withDecodingDefaultKey(Effect.succeed("routine"))),
 });
 export type Item = Schema.Schema.Type<typeof ItemSchema>;
 
@@ -106,11 +102,16 @@ export interface Batch {
  * a conversation received it, and the one thing this must not do is call something
  * delivered because it was handed over.
  */
-export function pending(lines: ReadonlyArray<Line>, conversation = NATIVE): Batch {
+export function pending(
+  lines: ReadonlyArray<Line>,
+  conversation = NATIVE,
+  bound = NEWS_BATCH,
+): Batch {
   const all = live(lines)
     .filter((entry) => !entry.read.has(conversation))
     .map((entry) => entry.item);
-  return { items: all.slice(-BATCH), omitted: Math.max(0, all.length - BATCH) };
+  const kept = all.length > bound ? all.slice(-bound) : all;
+  return { items: kept, omitted: all.length - kept.length };
 }
 
 interface Entry {
@@ -128,7 +129,8 @@ function live(lines: ReadonlyArray<Line>): ReadonlyArray<Entry> {
   const entries = new Map<string, Entry>();
   for (const line of lines) {
     if (line.kind === "item") {
-      const item = { key: line.key, run: line.run, text: line.text, at: line.at };
+      const { key, run, text, at, significance } = line;
+      const item = { key, run, text, at, significance };
       entries.delete(line.key);
       entries.set(line.key, { item, read: new Set(), uncertain: new Set() });
       continue;
@@ -170,12 +172,18 @@ export function uncertain(
  * different questions: that one is "have I ever said this", and this one is "is it
  * already waiting". A restart that re-notices a halt must not queue it twice.
  */
-export const append = Effect.fn("News.append")(function* (file: string, item: Omit<Item, "at">) {
+export const append = Effect.fn("News.append")(function* (
+  file: string,
+  item: Omit<Item, "at" | "significance"> & { readonly significance?: Significance },
+) {
   const lines = yield* read(file);
   if (live(lines).some((known) => known.item.key === item.key)) return false;
-  yield* appendJournal(file, LineJson, { kind: "item", ...item, at: yield* nowIso() }).pipe(
-    Effect.orDie,
-  );
+  yield* appendJournal(file, LineJson, {
+    kind: "item",
+    significance: "routine",
+    ...item,
+    at: yield* nowIso(),
+  }).pipe(Effect.orDie);
   yield* trim(file);
   return true;
 });

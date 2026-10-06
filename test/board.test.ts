@@ -11,12 +11,12 @@ import {
   checksAt,
   finishedLabel,
   heldLine,
-  mrLabel,
   sentenceFor,
   whereItIs,
   workingLabel,
   type Sentence,
 } from "../src/board";
+import { mrLabel } from "../src/board-model";
 import {
   Answered,
   Controlled,
@@ -43,7 +43,7 @@ import { checkSentence, followLog } from "../src/checks";
 import { readEnv } from "../src/env";
 import type { AgentInfo } from "../src/herdr";
 import { toldIn, toldLine, type Delivery } from "../src/steering";
-import { herdLines } from "../src/tools";
+import { herdLines } from "../src/toolkit";
 import { append as appendProposal, type ProposalLine } from "../src/proposals";
 import type { AgentEntry } from "../src/registry";
 import type { RunFacts } from "../src/runs";

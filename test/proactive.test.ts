@@ -141,10 +141,10 @@ test("a Run is named by what a human can find: its workflow and its target", () 
 
 test("the event carries no action, so speaking first grants nothing", () => {
   const event: Event = eventsIn([record({ id: "r1", state: "failed" })])[0]!;
-  // An Event is a Run, a key and a question. There is nowhere in it to put a thing to
-  // do: what may be done comes back from the evaluator and through `validate`, exactly
-  // as it does for a message somebody typed.
-  expect(Object.keys(event).sort()).toEqual(["key", "run", "text"]);
+  // An Event is a Run, a key, a question and how much it matters. There is nowhere in it
+  // to put a thing to do: what may be done comes back from the evaluator and through
+  // `validate`, exactly as it does for a message somebody typed.
+  expect(Object.keys(event).sort()).toEqual(["key", "run", "significance", "text"]);
   expect(event.text.endsWith("?")).toBe(true);
 });
 
@@ -181,7 +181,12 @@ test("a Run ready to release when it ends is said once as ready, never as ended"
 
       const events = eventsIn(ended, new Map(), ready);
       expect(events).toEqual([
-        { run: "r1", key: "r1:ready:1a2b3c4d", text: `Run r1 (Implement): ${sentence}` },
+        {
+          run: "r1",
+          key: "r1:ready:1a2b3c4d",
+          text: `Run r1 (Implement): ${sentence}`,
+          significance: "try-it",
+        },
       ]);
       for (let tick = 0; tick < 20; tick++)
         for (const event of eventsIn(ended, new Map(), ready)) yield* appendNews(file, event);
@@ -214,6 +219,7 @@ test("a Reopened agent finishing what it was told is said once, and not while it
       run: "r1",
       key: "r1:reopened:d-1",
       text: "Run r1 (Implement): builder has finished what it was told after the Run ended (“merge and tag it”). What came of it?",
+      significance: "consequential",
     },
   ]);
   // Once per Delivery: idle again is not finishing again.

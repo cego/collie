@@ -416,6 +416,44 @@ test(
 );
 
 test(
+  "a conversation can take every pending item and settle only the ones it delivered",
+  () =>
+    proves(
+      "collie-writer-news-keys-",
+      (world) =>
+        Effect.gen(function* () {
+          const file = yield* newsPath(world.state, "some-herd");
+          yield* appendNews(file, {
+            key: "r1:ended:failed",
+            run: "r1",
+            text: "r1 failed.",
+            significance: "consequential",
+          });
+          yield* appendNews(file, {
+            key: "r2:asking:x",
+            run: "r2",
+            text: "r2 asks.",
+            significance: "decision",
+          });
+          const client = yield* connect(world.state);
+          yield* client.declare({ frontDoor: "chat" });
+          const asked = { herd: "some-herd", conversation: "flock@pc", as: "read" as const };
+          const peeked = yield* client.news({ ...asked, request: "k-1", keys: [] });
+          expect(peeked.items.map(({ key, significance }) => [key, significance])).toEqual([
+            ["r1:ended:failed", "consequential"],
+            ["r2:asking:x", "decision"],
+          ]);
+          yield* client.news({ ...asked, request: "k-2", keys: ["r2:asking:x"] });
+          const left = yield* client.news({ ...asked, request: "k-3", keys: [] });
+          yield* stopHost(world.state);
+          expect(left.items.map(({ key }) => key)).toEqual(["r1:ended:failed"]);
+        }),
+      [],
+    ),
+  120_000,
+);
+
+test(
   "a conversation's News receipts are the host's, once per request, and that conversation's alone",
   () =>
     proves(

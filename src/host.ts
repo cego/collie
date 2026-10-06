@@ -98,7 +98,8 @@ import {
   read as readNews,
   settle as settleNews,
 } from "./news";
-import { ActionSchema, evaluationDeps } from "./evaluator";
+import { evaluationDeps } from "./evaluator";
+import { ActionSchema } from "./actions";
 import { err, request, steer, type OpResult } from "./operations";
 import { REJECTED } from "./envelope";
 import {
@@ -683,13 +684,13 @@ const frontDoorHandlers = (
               new HostRefused({ reason: `this channel is already ${already.frontDoor}` }),
             );
           }
-          // The first declaration stands, so a bridged channel stays what its bridge said.
-          if (already !== undefined) return Effect.void;
           return Effect.sync(() => {
+            // Only a chat speaks for the human it is talking to, and says each turn's words again.
+            if (frontDoor === "chat") voices.set(client.id, voiceOf(voice));
+            // The first declaration stands, so a bridged channel stays what its bridge said.
+            if (already !== undefined) return;
             declared.set(client.id, { frontDoor, from });
             if (session !== undefined && session !== null) sessions.set(client.id, session);
-            // Only a chat speaks for the human it is talking to.
-            if (frontDoor === "chat") voices.set(client.id, voiceOf(voice));
           });
         },
         start: (
@@ -961,7 +962,7 @@ const frontDoorHandlers = (
               }),
             ),
           ),
-        news: ({ herd, conversation, as, request }, { client }) =>
+        news: ({ herd, conversation, as, request, keys }, { client }) =>
           plainly(
             Effect.gen(function* () {
               if (herd !== null && !isHerdName(herd))
@@ -980,14 +981,22 @@ const frontDoorHandlers = (
                   operation: "news",
                   request,
                   ...whoOf(client),
-                  asked: { conversation, as },
+                  asked: keys === undefined ? { conversation, as } : { conversation, as, keys },
                   result: NewsBatch,
                 },
                 Effect.gen(function* () {
                   const file = yield* newsPath(env.stateDir, key);
-                  const batch = pendingNews(yield* readNews(file), conversation);
+                  const lines = yield* readNews(file);
+                  if (keys === undefined) {
+                    const batch = pendingNews(lines, conversation);
+                    for (const item of batch.items)
+                      yield* settleNews(file, item.key, as, conversation);
+                    return batch;
+                  }
+                  const batch = pendingNews(lines, conversation, Infinity);
                   for (const item of batch.items)
-                    yield* settleNews(file, item.key, as, conversation);
+                    if (keys.includes(item.key))
+                      yield* settleNews(file, item.key, as, conversation);
                   return batch;
                 }),
               );

@@ -19,7 +19,7 @@ import { Effect, Path, Schema } from "effect";
 import { appendJournal, readJournal } from "./journal";
 import { runTitle } from "./naming";
 import { settled, type RunFacts } from "./runs";
-import type { Reopened, TaskView } from "./board-model";
+import type { Reopened, Significance, TaskView } from "./board-model";
 
 const SaidSchema = Schema.Struct({ at: Schema.String, key: Schema.String });
 const SaidJson = Schema.fromJsonString(SaidSchema);
@@ -36,6 +36,12 @@ export interface Event {
   key: string;
   /** What Collie is being asked about, in the words the human will see it answered in. */
   text: string;
+  /**
+   * Whether it is worth interrupting someone for. A question or drift nobody could correct
+   * waits on a human's decision; an end, a park or a reopened Run's answer is consequential;
+   * a Ready card is worth trying.
+   */
+  significance: Significance;
 }
 
 /**
@@ -95,6 +101,7 @@ function reopenedOf(run: RunFacts, done: ReadonlyMap<string, Reopened>): Event[]
     {
       run: run.id,
       key: `${run.id}:reopened:${finished.delivery}`,
+      significance: "consequential",
       text: `Run ${run.id} (${runTitle(run)}): ${finished.agent} has finished what it was told after the Run ended${told}. What came of it?`,
     },
   ];
@@ -107,9 +114,10 @@ function causesOf(
   ready: ReadonlyMap<string, { at: string; sentence: string }>,
 ): Event[] {
   const about = runTitle(run);
-  const out: Event[] = run.asking.map((asked) => ({
+  const out: Event[] = run.asking.map((asked): Event => ({
     run: run.id,
     key: `${run.id}:asking:${asked.name}`,
+    significance: "decision",
     text: `Run ${run.id} (${about}) is waiting on me (${asked.name}). What is it asking, and what turns on the answer?`,
   }));
   const drifted = drifting.get(run.id);
@@ -117,12 +125,14 @@ function causesOf(
     out.push({
       run: run.id,
       key: `${run.id}:drift:${drifted}`,
+      significance: "decision",
       text: `Run ${run.id} (${about}) drifted from ${drifted} and Collie could not correct it. What is it doing instead, and should it be stopped or steered?`,
     });
   if (run.state === "waiting" && run.asking.length === 0)
     out.push({
       run: run.id,
       key: `${run.id}:parked:${run.note ?? ""}`,
+      significance: "consequential",
       text: `Run ${run.id} (${about}) parked its work${run.note === null ? "" : `: ${run.note}`}. What does it need, and from whom?`,
     });
   const shippable = ready.get(run.id);
@@ -130,12 +140,14 @@ function causesOf(
     out.push({
       run: run.id,
       key: `${run.id}:ready:${shippable.at}`,
+      significance: "try-it",
       text: `Run ${run.id} (${about}): ${shippable.sentence}`,
     });
   if (settled(run))
     out.push({
       run: run.id,
       key: `${run.id}:ended:${run.state}`,
+      significance: "consequential",
       text: `Run ${run.id} (${about}) ended ${run.state}. What came of it, and is there anything left to do?`,
     });
   return out;

@@ -50,6 +50,13 @@ human origin beside `board` and `cli-tty`, and its Actor records `from`: the com
 front door named and the SSH client the bridge saw. Like every declaration it is a record,
 not a check: anything that can run the bridge runs as the user already.
 
+## Amended 2026-10-05: a chat channel says each turn's words again
+
+A channel's front door is still what it first declared. A chat channel that lives across
+turns — the Flock chat's bridge, declared `chat` by its bridge — declares again before each
+operation with that turn's conversation and words, and the host takes the new voice; a
+declaration naming another front door is still refused.
+
 ## Consequences
 
 - An audit names who stopped, held, resumed, answered, started or carried on with each Run.

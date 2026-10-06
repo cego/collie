@@ -2,7 +2,7 @@
 // and count its cards, decide what each one offers and read what it names. No I/O and no
 // Bun-only import: a browser bundle imports this too.
 
-import { Option, Schema, SchemaGetter } from "effect";
+import { Effect, Option, Schema, SchemaGetter } from "effect";
 import * as Rpc from "effect/unstable/rpc/Rpc";
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
 import { IntentSeedSchema } from "./intent-model";
@@ -514,7 +514,7 @@ export type Startable = typeof Startable.Type;
  * The board protocol's version. An optional field, a new operation or a new kind of
  * message keeps it; a removal or a change of meaning bumps it.
  */
-export const PROTOCOL = 1;
+export const PROTOCOL = 2;
 
 /** One herdr session whose Tasks are on this board. */
 export const Herd = Schema.Struct({
@@ -725,6 +725,13 @@ export const Declaration = Schema.Struct({
 });
 export type Declaration = typeof Declaration.Type;
 
+/** Whether something is worth interrupting a human for: `decision` > `consequential` > `try-it` > `routine`. */
+export const Significance = Schema.Literals(["routine", "try-it", "decision", "consequential"]);
+export type Significance = typeof Significance.Type;
+
+/** How many News items one batch carries: a screen's worth. */
+export const NEWS_BATCH = 10;
+
 /** What became of a News item in one conversation. */
 export const NewsReceipt = Schema.Literals(["read", "sent", "uncertain"]);
 
@@ -736,6 +743,8 @@ export const NewsBatch = Schema.Struct({
       run: Schema.String,
       text: Schema.String,
       at: Schema.String,
+      /** Routine from a host whose News did not say. */
+      significance: Significance.pipe(Schema.withDecodingDefaultKey(Effect.succeed("routine"))),
     }),
   ),
   omitted: Schema.Int,
@@ -747,7 +756,10 @@ export const NewsBatch = Schema.Struct({
  */
 export const FrontDoorRpcs = RpcGroup.make(
   Rpc.make("board", { success: BoardMessage, stream: true }),
-  /** Once per channel, for good; a channel that never declares is stamped `cli`, never a human. */
+  /**
+   * Once per channel, for good; a channel that never declares is stamped `cli`, never a
+   * human. A chat declares again each turn, with that turn's words.
+   */
   Rpc.make("declare", {
     payload: Declaration,
     error: HostRefused,
@@ -947,6 +959,8 @@ export const FrontDoorRpcs = RpcGroup.make(
       conversation: Schema.String,
       as: NewsReceipt,
       request: Schema.String,
+      /** Hand over every pending item and settle only these, which is what the conversation was given. */
+      keys: Schema.optionalKey(Schema.Array(Schema.String)),
     },
     success: NewsBatch,
     error: Schema.Union([HostRefused, RequestConflict]),
@@ -1249,4 +1263,25 @@ export function headerSentence(views: ReadonlyArray<TaskView>, now?: number): He
   ];
   const inHand = held.length === 0 ? "" : ` ${held.join(", ")}.`;
   return { text: `${opening}${inHand} ${working.length} working${gone}.`, urgent: needs > 0 };
+}
+
+/** `https://github.com/owner/repo/pull/30` as its repository and number. */
+export function pullOf(mr: string): { readonly repo: string; readonly number: string } | null {
+  const pull = /^https?:\/\/github\.com\/([^/]+\/[^/]+)\/pull\/(\d+)/.exec(mr);
+  return pull ? { repo: pull[1]!, number: pull[2]! } : null;
+}
+
+/**
+ * `group/project!42` from a GitLab URL or an `mr:` target, `owner/repo#30` from a GitHub
+ * pull request URL; anything else as it is.
+ */
+export function mrLabel(mr: string): string {
+  const url = /^https?:\/\/[^/]+\/(.+?)\/-\/merge_requests\/(\d+)/.exec(mr);
+  if (url) return `${url[1]}!${url[2]}`;
+  const pull = pullOf(mr);
+  if (pull) return `${pull.repo}#${pull.number}`;
+  const bare = mr.startsWith("mr:") ? mr.slice(3) : mr;
+  // `host/group/project!42` reads as `group/project!42`: the host is where, not what.
+  const host = /^[^/!]+\.[^/!]+\/(.+)$/.exec(bare);
+  return host ? host[1]! : bare;
 }

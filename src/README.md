@@ -50,7 +50,9 @@ Runner source (Bun/TypeScript). Compiled to `bin/collie` per platform; see ADR-0
 | `disposition.ts`   | What became of a Run's work, recorded beside its status and never over it                |
 | `conversation.ts`  | What the human and Collie have said about this Herd, redacted and reference-checked      |
 | `chat.ts`          | The Home's native conversation: which harness, which session, and how it is launched     |
-| `tools.ts`         | `CollieTools`, the Effect Toolkit of everything chat may ask, and nothing else           |
+| `toolkit.ts`       | `CollieTools`, the Effect Toolkit of everything a chat may ask, and nothing else         |
+| `actions.ts`       | The closed union of everything a model may propose, with no effects                      |
+| `tools.ts`         | Native chat's answers to that Toolkit, read from this Machine's own files and host       |
 | `mcp.ts`           | That Toolkit over MCP on stdio, which is how Claude Code reaches it                      |
 | `engine.ts`        | Effect's workflow engine, the SDK the binary serves a module, and where generations live |
 | `host.ts`          | The one host per state directory: who owns it, the board it serves, every operation      |

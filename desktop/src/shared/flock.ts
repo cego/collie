@@ -2,9 +2,11 @@
 // by its Machine, and the board those messages add up to. No Bun-only import: the view
 // bundles this.
 
-import { Schema, Stream, Struct } from "effect";
+import { Effect, Schema, Stream, Struct } from "effect";
 import * as Rpc from "effect/unstable/rpc/Rpc";
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
+import { AguiEvent } from "./agui";
+import { About, Answers, ChatMessage, Conversations, DesktopTurn } from "./chat-view";
 import {
   BoardMessage,
   type Herd,
@@ -85,6 +87,13 @@ export class ActionFailed extends Schema.TaggedError<ActionFailed>()("ActionFail
   request: Schema.optional(Schema.String),
 }) {}
 
+/** What the human set in Desktop. */
+export const DesktopSettings = Schema.Struct({
+  /** Whether the Flock chat may start a turn about News nobody asked for. */
+  proactive: Schema.Boolean.pipe(Schema.withDecodingDefaultKey(Effect.succeed(true))),
+});
+export type DesktopSettings = typeof DesktopSettings.Type;
+
 export const DesktopRpcs = RpcGroup.make(
   Rpc.make("flock", { success: FlockItem, stream: true }),
   /** A retry names the request that failed; a first try leaves it to the main process. */
@@ -109,6 +118,29 @@ export const DesktopRpcs = RpcGroup.make(
     success: Schema.Array(Startable),
     error: ActionFailed,
   }),
+  /** One message from the human to the Flock chat, and the turn it starts as it streams. */
+  Rpc.make("say", {
+    payload: { text: Schema.String, about: Schema.NullOr(About) },
+    success: AguiEvent,
+    stream: true,
+  }),
+  /** The human's choices for a question the chat asked. */
+  Rpc.make("answer", {
+    payload: { toolCallId: Schema.String, answers: Answers },
+  }),
+  /** The current conversation, as far as it has gone. */
+  Rpc.make("transcript", { success: Schema.Array(ChatMessage) }),
+  Rpc.make("conversations", { success: Conversations }),
+  /** Makes that conversation the current one, or a fresh one; the one before it ends. */
+  Rpc.make("reopen", { payload: { session: Schema.NullOr(Schema.String) } }),
+  /** Opens the chat in its own window, and succeeds when that window is closed. */
+  Rpc.make("popOut"),
+  /** Closes the chat's own window, which puts the chat back beside the board. */
+  Rpc.make("popIn"),
+  /** When the Flock chat starts and ends a turn of Desktop's own. */
+  Rpc.make("desktopTurns", { success: DesktopTurn, stream: true }),
+  Rpc.make("settings", { success: DesktopSettings }),
+  Rpc.make("setSettings", { payload: DesktopSettings }),
 );
 
 /** What a Machine's host last told: who it is, its Herds, and its Tasks by id. */
@@ -152,7 +184,7 @@ export const applyItem = (flock: Flock, item: FlockItem): Flock => {
 };
 
 /** Each Machine's display name: its own, or with how it is reached where two share one. */
-const machineNames = (machines: ReadonlyArray<Machine>) => {
+export const machineNames = (machines: ReadonlyArray<Machine>) => {
   const counts = new Map<string, number>();
   for (const { name } of machines) counts.set(name, (counts.get(name) ?? 0) + 1);
   return new Map(
@@ -168,6 +200,8 @@ export interface PlacedTask {
   readonly key: string;
   /** The Machine its actions go to. */
   readonly installation: string;
+  /** That Machine's display name, as the chat's tools name it. */
+  readonly machine: string;
   readonly task: TaskView;
   readonly where: string;
 }
@@ -189,6 +223,8 @@ export const flockCards = (flock: Flock) => {
       placed.set(task, {
         key: `${installation}:${task.id}`,
         installation,
+        // SAFETY: `names` holds every Machine of this Flock.
+        machine: names.get(installation)!,
         task,
         where: where.filter((part) => part !== undefined).join(" · "),
       });

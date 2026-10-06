@@ -396,7 +396,7 @@ shortcut prints why, names the candidates and gives you `collie home reconcile`.
 created because a token expired, and nothing is adopted because it looks right.
 
 The Home is **one tab with two panes**: the board on the left at four sevenths of the
-width, and [native chat](#talking-to-collie-about-the-flock) on the right at three. Both
+width, and [native chat](#talking-to-collie-about-a-herd) on the right at three. Both
 are ordinary panes — herdr's own keys move between them and resize them, and reopening the
 Home reopens only a pane that has actually gone, so a divider you dragged stays where you
 put it.
@@ -858,9 +858,67 @@ Every Machine's host is reached the same way: by running
 `collie bridge --as desktop --client <this computer>` in a login shell, here directly and
 elsewhere as a channel on that machine's master, so the host is started with the
 environment `collie` itself would use, and every operation Desktop makes is recorded as
-`desktop`. For a herdr machine on a session other than `default`, the host is handed that
+`desktop`. A second bridge on the same master, started `--as chat`, is the Flock chat's,
+so nothing its model does is ever recorded as yours. For a herdr machine on a session other than `default`, the host is handed that
 session's socket. Desktop never starts, signals or connects to a host by any other route.
 `COLLIE_DESKTOP_COLLIE` replaces how `collie` is run here, as a JSON array.
+
+### The Flock chat
+
+Right of the board is a conversation about the whole Flock. Ask what is happening anywhere
+and have it act on any Machine: it reaches Collie through the same tools as Native chat,
+answered by each Machine's host over that Machine's `chat` channel, and carries out what
+you ask at once. Everything it names is `<machine>:<id>`, as in `vm-mk:run-04ab8fe5`; a bare
+id is taken where only one Machine has it, and refused with the candidates where several
+do. Every action is recorded on its Machine as `chat`, under the conversation
+`flock@<this computer>`, with the words you wrote that turn. It has the Herd's read and act
+tools except `collie_definitions` and `collie_installation`, and holds one Run at a time,
+because those read a Machine's own files, which no host operation hands over.
+
+It is a session of your own Claude Code, on your own Claude seat, driven through the Agent
+SDK in Desktop's main process: `opus` at medium effort with summarised thinking, Claude
+Code's built-in tools off but AskUserQuestion, and none of your settings, hooks, skills or
+CLAUDE.md. Your first message starts it, and it stays warm until Desktop quits. Its session
+id is minted once and kept in `$XDG_STATE_HOME/collie-desktop/flock-chat.json` (or
+`~/.local/state/collie-desktop/`), so a restart resumes the same conversation; Claude Code
+keeps and compacts the transcript on this computer.
+
+Replies stream in as Markdown. Each tool call is one row — the tool, the Machine it
+reached and what it was asked — that opens to what the tool answered, and thinking is a
+collapsed **Thinking** you can open. When the chat needs you to choose, it asks with choice
+buttons, and goes on when you click; any other permission it asks for is refused. Type
+while it is working and your message waits as **Queued** until the turn ends, or drop it
+with its ✕.
+
+Click a card and it becomes a chip above the input ("About: vm-mk › Fix board bugs"): your
+next message goes with it, so "this one" means that card, and sending uses it up. Clear it
+with its ✕. The chip is attached as context for the turn, never as your words.
+
+News reaches it from every Herd on every Machine as one batch: what matters most first —
+decisions, then consequential outcomes, then what is worth trying, then the routine — and
+by time within each, a screen's worth, saying per Machine what it left out ("and 7 older
+items on vm-mk"). Desktop looks a few seconds after a board changes, and every two minutes
+regardless. When the chat is idle, a decision or a consequential outcome starts a turn of
+Desktop's own: it shows as **Desktop**, never as you, so anything Collie does in it
+carries no words of yours, and its usage is written to `flock-usage.jsonl` beside the
+session (data, never a limit). Nobody is there to click in it, so a choice it needs is
+asked in its reply and you answer in your next message. News arriving mid-turn waits for
+that turn to end; what is worth trying and routine News waits for your next message and
+goes with it as context. An item counts as read once the model has it, so a turn that
+fails first (a usage limit, an outage) leaves it waiting; Desktop tries again at the next
+two-minute look. A Machine that does not answer within ten seconds is said to be unread
+rather than holding up the rest, and one whose Collie is older than Desktop's chat, or
+whose board could not be read, is written to by nothing. The bell turns Desktop's own
+turns off (and on again); it is on by default, and kept in `settings.json` beside the
+session.
+
+**Start fresh** (the pen) mints a new session and makes it current; the history (the clock)
+lists the earlier ones on this computer, newest first, and reopens one. Either way the
+session before it ends: there is only ever one live conversation. **Pop out** moves the
+chat into its own window, which follows the same conversation (between turns: a window
+the chat leaves would take its turn with it); **Put back**, or closing
+that window, returns it beside the board. **Hide the chat** folds the panel away, and the
+chat button in the board's header brings it back.
 
 ```sh
 cd desktop
@@ -877,7 +935,7 @@ it needs neither herdr, SSH nor a real host. The app links the system's WebKitGT
 AppIndicator libraries even though it renders with its bundled Chromium; on a computer
 without them, put them on `LD_LIBRARY_PATH`.
 
-## Talking to Collie about the flock
+## Talking to Collie about a Herd
 
 The Home's right-hand pane is an ordinary **Claude Code** session — or **Pi**, if you
 choose it — with Collie's role and Collie's tools. It is focused when the Home opens, so
@@ -1188,7 +1246,7 @@ itself can tell it.
 `chat_harness` is which native chat the Home opens with, `claude` or `pi`. It is
 independent of `harness`, which is what runs your work, and it is a preference for the
 **next** launch rather than a switch: see
-[Talking to Collie](#talking-to-collie-about-the-flock).
+[Talking to Collie](#talking-to-collie-about-a-herd).
 
 `scope` is left over from the board of views and changes nothing you can see: the board is
 the whole Herd's whichever workspace you opened it from, and the search is what narrows it.

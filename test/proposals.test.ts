@@ -27,7 +27,7 @@ import {
   type ProposalLine,
 } from "../src/proposals";
 import { resetExecutors } from "../src/executors";
-import type { Action } from "../src/evaluator";
+import type { Action } from "../src/actions";
 import { carryOutProposal } from "../src/operations";
 import type { PluginEnv } from "../src/env";
 import { readIntent, seedIntent, writeIntent } from "../src/intent";

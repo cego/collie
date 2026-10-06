@@ -12,6 +12,7 @@
 // they are doing; the only thing that still takes focus is a pending question.
 
 import { Effect, FileSystem, Path, Schema } from "effect";
+import { Significance } from "./board-model";
 import { appendJournal, readJournal } from "./journal";
 import { redact } from "./conversation";
 import type { Verification } from "./verify";
@@ -72,7 +73,7 @@ const CardSchema = Schema.Struct({
   narrative: Schema.NullOr(Schema.String),
   aligned: Schema.Literals(["true", "false", "unverified"]),
   cross_run: Schema.Literals(["evaluated", "pending", "none"]),
-  significance: Schema.Literals(["routine", "try-it", "decision", "consequential"]),
+  significance: Significance,
 });
 export type Card = Schema.Schema.Type<typeof CardSchema>;
 const CardJson = Schema.fromJsonString(CardSchema);
