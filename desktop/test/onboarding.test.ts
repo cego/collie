@@ -1,7 +1,7 @@
 // Machines join the Flock from Desktop, in the built app: Add Machine saves one in herdr
 // with herdr's question as a dialog, Adopt and Local onboard the same way, a runner is used
-// only once its signature verifies, a half-onboarded Machine lists what is missing, and
-// Remove drops a Machine without touching it.
+// only once its signature verifies, a half-onboarded Machine lists what doctor finds
+// missing, and Remove drops a Machine without touching it.
 
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { generateKeyPairSync } from "node:crypto";
@@ -65,7 +65,11 @@ beforeAll(
           (dir) =>
             Effect.gen(function* () {
               flock = dir;
-              yield* serve(`${dir}/${LOCAL}`, "pc", []);
+              yield* serve(`${dir}/${LOCAL}`, "pc", [], undefined, {
+                failing: [
+                  { name: "claude login", detail: "not logged in", fix: "claude auth login" },
+                ],
+              });
             }),
           undefined,
           {
@@ -101,6 +105,26 @@ const listMachines = Effect.gen(function* () {
   if ((yield* Effect.promise(() => page().getByTestId("add-form").count())) === 0)
     yield* click(page().getByTestId("machines"));
 });
+
+test(
+  "a live Machine lists what doctor finds missing, though Desktop never onboarded it",
+  () =>
+    run(
+      Effect.gen(function* () {
+        yield* listMachines;
+        const local = page().locator("[data-testid^=machine-]").first();
+        yield* reads(local.getByTestId("step-claude-login").getByTestId("detail"), "not logged in");
+        expect(yield* Effect.promise(() => local.getByTestId("login").count())).toBe(1);
+        yield* settled("the board in front", () =>
+          page()
+            .keyboard.press("Escape")
+            .then(() => page().getByTestId("add-form").count())
+            .then((open) => (open === 0 ? true : undefined)),
+        );
+      }),
+    ),
+  60_000,
+);
 
 test(
   "a runner without Collie's signature is refused before it reaches the Machine",

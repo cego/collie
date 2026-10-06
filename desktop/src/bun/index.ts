@@ -57,7 +57,7 @@ import {
   removeFromHerdr,
   type RouteChange,
 } from "./machine";
-import { addToHerdr, NOT_STARTED, onboardThrough, RELEASES, tracked } from "./onboarding";
+import { addToHerdr, doctorOn, NOT_STARTED, onboardThrough, RELEASES, tracked } from "./onboarding";
 import {
   claudeLoginThrough,
   GITLAB,
@@ -251,6 +251,16 @@ const main = Effect.gen(function* () {
   const answers = new Map<string, Deferred.Deferred<boolean>>();
   const tell = (job: string, machine: KnownMachine) => (run: OnboardRun) =>
     PubSub.publish(news, { _tag: "Onboarding", job, machine, run }).pipe(Effect.asVoid);
+  const doctored = (route: ShellRoute) =>
+    doctorOn(route).pipe(
+      Effect.flatMap(
+        Option.match({
+          onNone: () => Effect.void,
+          onSome: (run) => PubSub.publish(news, { _tag: "Doctored", machine: route.machine, run }),
+        }),
+      ),
+      Effect.asVoid,
+    );
   /** Onboards through `route` under `job`, then keeps how it ended and has it tried at once. */
   const onboardAs = (job: string, route: ShellRoute, start: OnboardRun = NOT_STARTED) => {
     const { machine } = route;
@@ -267,6 +277,8 @@ const main = Effect.gen(function* () {
     }).pipe(
       Effect.tap((run) => saveOnboarding(onboardings, { _tag: "Onboarding", job, machine, run })),
       Effect.tap(() => PubSub.publish(changes, { _tag: "Wake", profile: machine.profile })),
+      // Forked, as a Machine out of reach would hold the onboarding open until it is back.
+      Effect.tap(() => doctored(route).pipe(Effect.forkIn(scope))),
       Effect.ensuring(Effect.sync(() => onboarding.delete(machine.profile))),
       Effect.provide(BunServices.layer),
       Effect.forkIn(scope),
@@ -363,6 +375,14 @@ const main = Effect.gen(function* () {
           // A Machine herdr no longer lists is not Desktop's to show.
           const listed = ({ machine }: { readonly machine: KnownMachine }) =>
             routes.has(machine.profile);
+          const checked = new Set<string>();
+          const doctorOnceLive = (item: FlockItem) => {
+            if ("_tag" in item || item.message._tag !== "Snapshot") return Effect.void;
+            const route = routes.get(item.machine.profile)?.route;
+            if (route === undefined || checked.has(item.machine.profile)) return Effect.void;
+            checked.add(item.machine.profile);
+            return doctored(route).pipe(Effect.forkIn(scope));
+          };
           const before: ReadonlyArray<FlockItem> = [
             ...reachable.map(({ machine }): FlockItem => ({ _tag: "Routed", machine })),
             ...(yield* savedBoards(boards)).filter(listed),
@@ -373,7 +393,12 @@ const main = Effect.gen(function* () {
               Stream.mergeAll(
                 [
                   Stream.fromIterable(unlisted),
-                  flockStream(reachable, doors, manifest.version, Stream.fromSubscription(changed)),
+                  flockStream(
+                    reachable,
+                    doors,
+                    manifest.version,
+                    Stream.fromSubscription(changed),
+                  ).pipe(Stream.tap(doctorOnceLive)),
                   Stream.fromSubscription(told),
                 ],
                 { concurrency: "unbounded" },

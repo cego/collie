@@ -930,7 +930,10 @@ shows each step as it streams: a step that needs root shows the exact command to
 its missing steps on its row in Machines, each with its command or link and **Retry**;
 onboarding again repairs only what is missing. Once onboarding ends, Desktop tries the
 Machine's board again at once rather than after its backoff. Desktop keeps each Machine's
-latest onboarding on this computer, beside its saved board.
+latest onboarding on this computer, beside its saved board. Whether a Machine is onboarded
+is `collie doctor`'s to say: once a Machine is live, and after each onboarding of it,
+Desktop runs `collie --json doctor` there, and its row lists each check that failed, with
+its fix and **Retry**, even on a Machine Desktop never onboarded.
 
 What only you can give is asked once, here, and never pasted on a command line. **Machines**
 keeps the Flock's credentials in this computer's Secret Service keyring, through

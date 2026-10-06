@@ -120,6 +120,13 @@ export const MachineOnboarding = Schema.TaggedStruct("Onboarding", {
 });
 export type MachineOnboarding = typeof MachineOnboarding.Type;
 
+/** How `collie doctor` found a Machine once it was live, or after an onboarding of it. */
+export const MachineDoctored = Schema.TaggedStruct("Doctored", {
+  machine: KnownMachine,
+  run: OnboardRun,
+});
+export type MachineDoctored = typeof MachineDoctored.Type;
+
 /** Which credentials Desktop holds for every Machine, and nothing of the secrets themselves. */
 export const Credentials = Schema.Struct({
   gitlab: Schema.NullOr(Schema.Struct({ expires: Schema.NullOr(Schema.String) })),
@@ -141,6 +148,7 @@ export const FlockItem = Schema.Union([
   MachineRouted,
   MachineRemoved,
   MachineOnboarding,
+  MachineDoctored,
 ]);
 export type FlockItem = typeof FlockItem.Type;
 
@@ -291,7 +299,7 @@ export interface Flock {
   readonly routes: ReadonlyMap<string, KnownMachine>;
   /** Each onboarding the view started, by job. */
   readonly onboarding: ReadonlyMap<string, MachineOnboarding>;
-  /** The latest onboarding of each route, by herdr profile. */
+  /** How each route last stood, by herdr profile: doctor's reading or its latest onboarding. */
   readonly onboarded: ReadonlyMap<string, OnboardRun>;
 }
 
@@ -320,6 +328,8 @@ export const applyItem = (flock: Flock, item: FlockItem): Flock => {
       onboarding: new Map(flock.onboarding).set(item.job, item),
       onboarded: new Map(flock.onboarded).set(item.machine.profile, item.run),
     };
+  if ("_tag" in item && item._tag === "Doctored")
+    return { ...flock, onboarded: new Map(flock.onboarded).set(item.machine.profile, item.run) };
   if ("_tag" in item && item._tag === "Removed") {
     const { profile } = item.machine;
     const without = <V>(map: ReadonlyMap<string, V>) => {
@@ -453,7 +463,7 @@ export const flockCards = (flock: Flock) => {
   };
 };
 
-/** A route as the Machines list shows it: how it stands now, and its latest onboarding. */
+/** A route as the Machines list shows it: how it stands now, and how onboarded it is. */
 export interface MachineRow {
   readonly profile: string;
   readonly name: string;

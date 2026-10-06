@@ -8,7 +8,7 @@ import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import { RELEASE_PUBLIC_KEY, SIGNATURE_SUFFIX, verifyRelease } from "../../../src/signing";
 import { type OnboardRun, type OnboardStep, SETTLED } from "../shared/flock";
-import { quoted, type ShellRoute, spawned } from "./machine";
+import { quoted, type Route, type ShellRoute, spawned } from "./machine";
 
 export const RELEASES = "https://github.com/cego/collie/releases/download";
 
@@ -304,6 +304,47 @@ export const onboardThrough = Effect.fn("Desktop.onboardThrough")(function* (
     );
   return run.current();
 });
+
+const Checks = Schema.Array(
+  Schema.Struct({ name: Schema.String, ok: Schema.Boolean, detail: Schema.String, fix: Schema.String }),
+);
+const DoctorSaid = Schema.fromJsonString(
+  Schema.Union([
+    Schema.Struct({ data: Schema.Struct({ checks: Checks }) }),
+    Schema.Struct({ error: Schema.Struct({ details: Schema.Struct({ checks: Checks }) }) }),
+  ]),
+);
+
+/**
+ * How `collie doctor` finds the Machine, as an onboarding lists what is left: ready, or each
+ * failed check as a step. None where doctor did not answer.
+ */
+export const doctorOn = (route: Pick<Route, "collie">) =>
+  route.collie(["--json", "doctor"]).pipe(
+    Effect.flatMap(({ out }) => Schema.decodeUnknownEffect(DoctorSaid)(out.trim())),
+    Effect.map((said) => ("data" in said ? said.data : said.error.details).checks),
+    Effect.flatMap((checks) =>
+      Effect.map(
+        Clock.currentTimeMillis,
+        (at): OnboardRun => ({
+          steps: checks
+            .filter(({ ok }) => !ok)
+            .map(({ name, detail, fix }) => ({
+              step: name.replaceAll(" ", "-"),
+              title: name,
+              status: "failed",
+              detail,
+              ...(fix === "" ? {} : { command: fix }),
+            })),
+          asked: null,
+          ready: checks.every(({ ok }) => ok),
+          reason: null,
+          at,
+        }),
+      ),
+    ),
+    Effect.option,
+  );
 
 const QUESTION = /\[(y\/N|Y\/n)\]\s*$/;
 

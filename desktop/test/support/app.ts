@@ -26,7 +26,7 @@ export const serve = (
   installation: string,
   tasks: ReadonlyArray<TaskView>,
   herds: ScriptedMachine["herds"] = [{ id: "default" }],
-  build: Pick<ScriptedMachine, "build" | "development" | "protocol"> = {},
+  build: Pick<ScriptedMachine, "build" | "development" | "protocol" | "failing"> = {},
 ) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;

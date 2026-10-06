@@ -5,12 +5,13 @@
 import { expect, test } from "bun:test";
 import { createHash, generateKeyPairSync } from "node:crypto";
 import { BunServices } from "@effect/platform-bun";
-import { Clock, Deferred, Effect, FileSystem, Schedule, type Scope, Stream } from "effect";
+import { Clock, Deferred, Effect, FileSystem, Option, Schedule, type Scope, Stream } from "effect";
 import type { BoardMessage, BoardSnapshot } from "../src/board-model";
 import { signRelease } from "../src/signing";
 import { flockStream, localRoute, type Route } from "../desktop/src/bun/machine";
 import {
   addToHerdr,
+  doctorOn,
   onboardThrough,
   platformOf,
   verifiedRunner,
@@ -392,3 +393,50 @@ test("a removed Machine leaves the board, its routes and what onboarding left of
   expect(after.machines.size).toBe(0);
   expect(machineRows(after).map(({ profile }) => profile)).toEqual(["local"]);
 });
+
+test("a Machine's row says what doctor finds of it, over what its last onboarding said", () =>
+  run(
+    Effect.gen(function* () {
+      const machine = { profile: "p-vm", name: "vm", target: "mk@vm" };
+      const envelope = {
+        ok: false,
+        error: {
+          code: "operation_failed",
+          message: "1 of 2 checks failed.",
+          details: {
+            ready: false,
+            checks: [
+              { name: "herdr", ok: true, detail: "0.9.0", fix: "" },
+              { name: "claude login", ok: false, detail: "not logged in", fix: "claude auth login" },
+            ],
+          },
+        },
+      };
+      const route = {
+        collie: (args: ReadonlyArray<string>) =>
+          args.join(" ") === "--json doctor"
+            ? Effect.succeed({ out: `${JSON.stringify(envelope)}\n`, err: "", code: 1 })
+            : Effect.die(`asked ${args.join(" ")}`),
+      };
+      const doctored = Option.getOrThrow(yield* doctorOn(route));
+      expect(doctored.ready).toBe(false);
+      expect(doctored.steps).toEqual([
+        {
+          step: "claude-login",
+          title: "claude login",
+          status: "failed",
+          detail: "not logged in",
+          command: "claude auth login",
+        },
+      ]);
+      const onboarded: OnboardRun = { steps: [], asked: null, ready: true, reason: null, at: 1 };
+      const items: FlockItem[] = [
+        { _tag: "Routed", machine },
+        { _tag: "Onboarding", job: "j-1", machine, run: onboarded },
+        { _tag: "Doctored", machine, run: doctored },
+      ];
+      expect(machineRows(items.reduce(applyItem, EMPTY_FLOCK))[0]!.onboarded).toEqual(doctored);
+      const silent = { collie: () => Effect.fail("collie: not found") };
+      expect(Option.isNone(yield* doctorOn(silent))).toBe(true);
+    }),
+  ));

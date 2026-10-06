@@ -3,10 +3,12 @@
 // whatever the file named first on its command line holds, read again every 100 ms.
 // Every operation it is asked is appended to `<board.json>.ops.jsonl`; an answer also
 // takes the decision off its Task, as a host's would. Run as `--json upgrade --to <v>`
-// instead, it logs that and moves the Machine's build to `v`, as a release's would.
+// instead, it logs that and moves the Machine's build to `v`, as a release's would. Run as
+// `--json doctor`, it fails the checks its board names as `failing`, where it names any.
 //
 // Usage: bun scripted-host.ts <board.json> bridge --as desktop --client <computer>
 //        bun scripted-host.ts <board.json> --json upgrade --to <version>
+//        bun scripted-host.ts <board.json> --json doctor
 
 import { BunFileSystem, BunRuntime, BunStdio } from "@effect/platform-bun";
 import { Effect, FileSystem, Layer, Schedule, Schema, Stream } from "effect";
@@ -21,6 +23,17 @@ const MachineFile = Schema.fromJsonString(ScriptedMachine);
 const asLine = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
 const upgrading = board !== undefined && bridge.slice(0, 3).join(" ") === "--json upgrade --to";
+const failing =
+  board !== undefined && bridge.join(" ") === "--json doctor"
+    ? Schema.decodeUnknownSync(MachineFile)(await Bun.file(board).text()).failing
+    : undefined;
+if (failing !== undefined) {
+  const checks = failing.map((check) => ({ ...check, ok: false }));
+  process.stdout.write(
+    `${asLine(checks.length === 0 ? { ok: true, data: { ready: true, checks } } : { ok: false, error: { code: "operation_failed", message: "not ready", details: { ready: false, checks } } })}\n`,
+  );
+  process.exit(checks.length === 0 ? 0 : 1);
+}
 if (!upgrading && (board === undefined || bridge.slice(0, 3).join(" ") !== "bridge --as desktop")) {
   process.stderr.write(`scripted host: started as ${Bun.argv.slice(2).join(" ")}\n`);
   process.exit(2);
