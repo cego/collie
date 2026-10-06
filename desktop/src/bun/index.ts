@@ -261,6 +261,15 @@ const main = Effect.gen(function* () {
       ),
       Effect.asVoid,
     );
+  const ended = (job: string, profile: string) =>
+    Effect.sync(() => {
+      if (onboarding.get(profile)?.job === job) onboarding.delete(profile);
+    });
+  /** Records the fiber, unless `job` has already ended. */
+  const recorded = (job: string, profile: string) => (fiber: Fiber.Fiber<unknown>) =>
+    Effect.sync(() => {
+      if (onboarding.get(profile)?.job === job) onboarding.set(profile, { job, fiber });
+    });
   /** Onboards through `route` under `job`, then keeps how it ended and has it tried at once. */
   const onboardAs = (job: string, route: ShellRoute, start: OnboardRun = NOT_STARTED) => {
     const { machine } = route;
@@ -279,16 +288,10 @@ const main = Effect.gen(function* () {
       Effect.tap(() => PubSub.publish(changes, { _tag: "Wake", profile: machine.profile })),
       // Forked, as a Machine out of reach would hold the onboarding open until it is back.
       Effect.tap(() => doctored(route).pipe(Effect.forkIn(scope))),
-      Effect.ensuring(Effect.sync(() => onboarding.delete(machine.profile))),
+      Effect.ensuring(ended(job, machine.profile)),
       Effect.provide(BunServices.layer),
       Effect.forkIn(scope),
-      // Unless it has already ended.
-      Effect.tap((fiber) =>
-        Effect.sync(() => {
-          if (onboarding.get(machine.profile)?.job === job)
-            onboarding.set(machine.profile, { job, fiber });
-        }),
-      ),
+      Effect.tap(recorded(job, machine.profile)),
     );
   };
   /** Saves the machine in herdr, asking herdr's questions of the human, then onboards it. */
@@ -337,7 +340,6 @@ const main = Effect.gen(function* () {
     });
 
   const everyRoute = () => [...routes.values()].map(({ route }) => route);
-  /** What came of giving something to every Machine, in a line. */
   const given = (
     what: string,
     each: ReadonlyArray<{ readonly name: string; readonly failed: string | null }>,
@@ -456,8 +458,16 @@ const main = Effect.gen(function* () {
         const route = routes.get(profile)?.route;
         if (route === undefined)
           return yield* new ActionFailed({ reason: "that Machine is not in herdr's list" });
+        const busy = onboarding.get(profile);
+        if (busy !== undefined) return busy.job;
         const job = yield* uuid;
-        yield* loginAs(job, route).pipe(Effect.provide(BunServices.layer), Effect.forkIn(scope));
+        onboarding.set(profile, { job });
+        yield* loginAs(job, route).pipe(
+          Effect.ensuring(ended(job, profile)),
+          Effect.provide(BunServices.layer),
+          Effect.forkIn(scope),
+          Effect.tap(recorded(job, profile)),
+        );
         return job;
       }),
     pasteCode: ({ job, code }) =>

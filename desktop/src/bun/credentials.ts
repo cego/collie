@@ -91,6 +91,9 @@ export const gitlabToken = (base: string, token: string) =>
     Effect.provide(FetchHttpClient.layer),
   );
 
+/** How long a Machine is waited on, as one waiting on SSO would hold a save until it is back. */
+const GIVE_LIMIT = "15 seconds";
+
 /** Runs `script` on every Machine with `stdin`, and says how each went. */
 const onEvery = (routes: ReadonlyArray<ShellRoute>, script: string, stdin: string) =>
   Effect.forEach(
@@ -100,13 +103,16 @@ const onEvery = (routes: ReadonlyArray<ShellRoute>, script: string, stdin: strin
         Effect.flatMap(({ err, out, code }) =>
           code === 0 ? Effect.succeed(null) : Effect.fail((err + out).trim() || `exited ${code}`),
         ),
+        Effect.timeoutOrElse({
+          duration: GIVE_LIMIT,
+          orElse: () => Effect.fail("not reached; it is given when it is next onboarded"),
+        }),
         Effect.catch((failed) => Effect.succeed(failed)),
         Effect.map((failed) => ({ name: route.machine.name, failed })),
       ),
     { concurrency: "unbounded" },
   );
 
-/** Logs glab in to `host` with `token` on every Machine. */
 export const giveToken = (routes: ReadonlyArray<ShellRoute>, host: string, token: string) =>
   onEvery(routes, `exec glab auth login --hostname ${quoted(host)} --stdin`, `${token}\n`);
 
