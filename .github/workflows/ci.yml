@@ -28,3 +28,19 @@ jobs:
       - run: bun run smoke
       # Proves the committed snapshot is what the pinned herdr really prints.
       - run: bun run contract:check
+
+  # Desktop's own install and types, which the root check cannot see: the root installs none
+  # of Desktop's dependencies.
+  desktop:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4"
+      # Desktop's Effect is the root's, so the board's Schemas exist once.
+      - run: bun install --frozen-lockfile
+      - run: bun install --frozen-lockfile
+        working-directory: desktop
+      - run: bun run typecheck
+        working-directory: desktop

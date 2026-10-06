@@ -1069,7 +1069,8 @@ session.
 lists the earlier ones on this computer, newest first, and reopens one. Either way the
 session before it ends: there is only ever one live conversation. **Pop out** moves the
 chat into its own window, which follows the same conversation (between turns: a window
-the chat leaves would take its turn with it); **Put back**, or closing
+the chat leaves would take its turn with it) and opens no board of its own, so no Machine is
+reached again for it; **Put back**, or closing
 that window, returns it beside the board. **Hide the chat** folds the panel away, and the
 chat button in the board's header brings it back.
 

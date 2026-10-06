@@ -10,7 +10,7 @@
 // happens: what is asked of whom, in what order, and what the answer starts next.
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { Effect, Fiber, FileSystem, Layer, Option, Path, Schema } from "effect";
+import { Effect, Fiber, FileSystem, Layer, Option, Path, Schedule, Schema } from "effect";
 import * as WorkflowEngine from "effect/unstable/workflow/WorkflowEngine";
 import { Rig, FakeHerdr } from "./recorder";
 import { exec } from "./command";
@@ -2363,14 +2363,19 @@ scenario(
   120_000,
 );
 
-/** A Run of a shipped module that stops by itself, waited on until it has. */
-const stalled = (options: {
+interface ShippedRun {
   readonly entry: string;
   readonly runId: string;
   readonly input: Readonly<Record<string, Schema.Json>>;
   readonly options?: Readonly<Record<string, string>>;
   readonly host?: HostOverride;
-}) =>
+}
+
+/** A Run of a shipped module started, and `waiting` until it has stopped by itself. */
+const running = <A, E>(
+  options: ShippedRun,
+  waiting: (status: Effect.Effect<string>) => Effect.Effect<A, E, FileSystem.FileSystem>,
+) =>
   session(
     Effect.gen(function* () {
       const made = yield* loaded(options.entry, options.runId);
@@ -2385,14 +2390,33 @@ const stalled = (options: {
       return yield* Effect.gen(function* () {
         yield* made.workflow.execute(payload, { discard: true });
         const id = yield* made.workflow.executionId(payload);
-        return yield* until(
-          () =>
-            engine.poll(made.workflow, id).pipe(Effect.map((got) => pollStatus(got, "").status)),
-          (status) => status === "suspended",
+        return yield* waiting(
+          engine.poll(made.workflow, id).pipe(Effect.map((got) => pollStatus(got, "").status)),
         );
       }).pipe(Effect.provide(made.layer));
     }),
     options.host,
+  );
+
+/** A Run of a shipped module that stops by itself, waited on until it has. */
+const stalled = (options: ShippedRun) =>
+  running(options, (status) =>
+    until(
+      () => status,
+      (got) => got === "suspended",
+    ),
+  );
+
+/**
+ * A Run of a shipped module that parks inside an agent's wait, which the engine does not
+ * report as suspended: waited on, with no deadline of its own, until it says why.
+ */
+const parkedOn = (options: ShippedRun) =>
+  running(options, () =>
+    parkedWhy(options.runId).pipe(
+      Effect.filterOrFail((why) => why !== ""),
+      Effect.retry({ schedule: Schedule.spaced("20 millis") }),
+    ),
   );
 
 /** A stopped Run picked up again, as `collie run resume` does it, and run to its end. */
@@ -2540,15 +2564,13 @@ scenario(
           yield* approve("r-impl-inv", []);
           yield* rig.queueOutputs([null]);
 
-          yield* stalled({
+          // Its agent writes nothing, which parks it for that; never for what was approved.
+          const why = yield* parkedOn({
             entry: shipped("implement"),
             runId: "r-impl-inv",
             input: { plan: "why is the board slow?" },
             options: { outcome: "investigation" },
-          }).pipe(Effect.timeout("3 seconds"), Effect.ignore);
-
-          // Its agent writes nothing, which parks it for that; never for what was approved.
-          const why = yield* parkedWhy("r-impl-inv");
+          });
           expect(why).toContain("has written nothing to");
           expect(why).not.toContain("approved");
           expect((yield* rig.cmds()).filter((cmd) => cmd === "agent start")).toHaveLength(1);

@@ -618,6 +618,9 @@ fake.
 pass. Keeping those phases separate avoids CPU contention with the subprocess-heavy tests.
 The individual scripts in `package.json` still work for focused feedback.
 
+Desktop has an install of its own, so its types are checked apart, with
+`cd desktop && bun install && bun run typecheck`; CI runs that as a job of its own.
+
 Every host a test starts ends with that test. `test/support/hosts.ts`, a preload, gives
 each test file a temporary root of its own and tells every host started under it
 (`COLLIE_HOST_WATCH_PID`) to live no longer than the test process; after each test, a host
