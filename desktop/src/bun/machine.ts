@@ -479,6 +479,8 @@ export const flockStream = <D extends BoardSource>(
       const routeAt: Array<Route<D>> = [];
       // Routes with nothing more to show: merged into another, or too new to read.
       const done = new Set<number>();
+      // The installation each merged route reaches, by its place.
+      const merged = new Map<number, string>();
       // Each installation is asked to upgrade once, so one that did not move is shown as it is.
       const upgrading = new Set<string>();
       const owns = (at: number, { machine, message }: MachineMessage) =>
@@ -491,7 +493,10 @@ export const flockStream = <D extends BoardSource>(
           });
           const lost = before === undefined || before === owner ? undefined : displaced[before];
           if (lost !== undefined) yield* Deferred.succeed(lost, undefined);
-          if (owner !== at) done.add(at);
+          if (owner !== at) {
+            done.add(at);
+            merged.set(at, machine.installation);
+          }
           return owner === at;
         });
       const tooNew = (route: Route<D>, build: string): RouteFailure => ({
@@ -664,6 +669,8 @@ export const flockStream = <D extends BoardSource>(
             Stream.ensuring(Deferred.succeed(ended[at]!, undefined)),
           );
         });
+      const removedAt = (place: number) =>
+        places.get(routeAt[place]!.machine.profile) !== place;
       const changed = (change: RouteChange<D>): Stream.Stream<FlockItem> => {
         if (change._tag === "Add")
           return places.has(change.route.machine.profile)
@@ -678,18 +685,38 @@ export const flockStream = <D extends BoardSource>(
           return Stream.fromEffectDrain(Deferred.succeed(change.done, undefined));
         places.delete(change.profile);
         done.add(at);
-        return Stream.fromEffect(
+        const shown = new Set<string>();
+        const removal = Stream.fromEffect(
           Effect.gen(function* () {
-            // Another route to its Machine may show it now.
-            yield* Ref.update(
-              owners,
-              (now) => new Map([...now].filter(([, owner]) => owner !== at)),
-            );
+            yield* Ref.update(owners, (now) => {
+              const kept = new Map(now);
+              for (const [installation, owner] of now)
+                if (owner === at) {
+                  shown.add(installation);
+                  kept.delete(installation);
+                }
+              return kept;
+            });
             yield* Deferred.succeed(removed[at]!, undefined);
             yield* Deferred.await(ended[at]!);
             return { _tag: "Removed", machine: routeAt[at]!.machine } satisfies FlockItem;
           }),
         ).pipe(Stream.ensuring(Deferred.succeed(change.done, undefined)));
+        // A route that merged into this one's Machine shows it now, as a route added afresh.
+        const again = Stream.suspend(() =>
+          Stream.mergeAll(
+            [...merged]
+              .filter(([place, installation]) => shown.has(installation) && !removedAt(place))
+              .map(([place]) => {
+                merged.delete(place);
+                const route = routeAt[place]!;
+                places.delete(route.machine.profile);
+                return Stream.unwrap(added(route));
+              }),
+            { concurrency: "unbounded" },
+          ),
+        );
+        return removal.pipe(Stream.concat(again));
       };
       return Stream.fromIterable(routes).pipe(
         Stream.map((route): RouteChange<D> => ({ _tag: "Add", route })),
