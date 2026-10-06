@@ -269,10 +269,12 @@ const main = Effect.gen(function* () {
       Effect.flatMap(
         Option.match({
           onNone: () => Effect.void,
-          onSome: (run) => PubSub.publish(news, { _tag: "Doctored", machine: route.machine, run }),
+          onSome: (run) =>
+            PubSub.publish(news, { _tag: "Doctored", machine: route.machine, run }).pipe(
+              Effect.asVoid,
+            ),
         }),
       ),
-      Effect.asVoid,
     );
   const ended = (job: string, profile: string) =>
     Effect.sync(() => {
