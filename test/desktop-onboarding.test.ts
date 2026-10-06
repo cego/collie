@@ -170,6 +170,23 @@ test("herdr's questions while it saves a Machine are asked of the human, each wi
     }),
   ));
 
+test("a long stretch of herdr's output with no question in it is read in no time", () =>
+  run(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* scratch;
+      const herdr = `${dir}/herdr`;
+      yield* fs.writeFileString(
+        herdr,
+        `#!/bin/sh
+for i in $(seq 40); do echo "Installing herdr, step $i of 40"; done
+`,
+      );
+      yield* fs.chmod(herdr, 0o755);
+      yield* addToHerdr(herdr, "mk@vm", "vm", "default", () => Effect.succeed(false));
+    }),
+  ));
+
 test("herdr refusing to save a Machine is said in its own words", () =>
   run(
     Effect.gen(function* () {

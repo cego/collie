@@ -305,11 +305,19 @@ export const onboardThrough = Effect.fn("Desktop.onboardThrough")(function* (
   return run.current();
 });
 
+const QUESTION = /\[(y\/N|Y\/n)\]\s*$/;
+
 /**
- * A yes-or-no question as a terminal shows it, with its default capitalised, and the lines
- * just before it, such as a warning of what yes would stop.
+ * A yes-or-no question `text` ends in, as a terminal shows it with its default capitalised,
+ * and the lines just before it, such as a warning of what yes would stop.
  */
-const PROMPT = /((?:[^\n]*\S[^\n]*\n)*[^\n]*?)\s*\[(y\/N|Y\/n)\]\s*$/;
+const questionIn = (text: string) => {
+  const asked = QUESTION.exec(text);
+  if (asked === null) return null;
+  const lines = text.slice(0, asked.index).split("\n");
+  const blank = lines.findLastIndex((line, at) => at < lines.length - 1 && line.trim() === "");
+  return { text: lines.slice(blank + 1).join("\n").trim(), yes: asked[1] === "Y/n" };
+};
 // oxlint-disable-next-line no-control-regex
 const TERMINAL_CODES = /\x1b\[[0-9;?]*[ -/]*[@-~]|\r/g;
 
@@ -343,10 +351,10 @@ export const addToHerdr = Effect.fn("Desktop.addToHerdr")(function* (
       Effect.gen(function* () {
         said += chunk.replace(TERMINAL_CODES, "");
         // Less the terminal's echo of the last answer.
-        const asked = PROMPT.exec(said.slice(answered).replace(/^\s*[yn]\n/, ""));
+        const asked = questionIn(said.slice(answered).replace(/^\s*[yn]\n/, ""));
         if (asked === null) return;
         answered = said.length;
-        const yes = yield* ask(asked[1]!.trim(), asked[2] === "Y/n");
+        const yes = yield* ask(asked.text, asked.yes);
         void child.stdin.write(yes ? "y\n" : "n\n");
         void child.stdin.flush();
       }),
