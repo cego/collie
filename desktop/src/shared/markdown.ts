@@ -1,6 +1,6 @@
 // A Comark plugin for agent-written markdown. No Bun-only import: the view bundles this.
 
-import type { ComarkPlugin, Node } from "comark";
+import type { ComarkPlugin, ElementNodeAttributes, Node } from "comark";
 
 const FILE_LINE = /(?<![\w/:.@-])((?:[\w@.-]+\/)*[\w@-][\w@.-]*\.[A-Za-z]\w*):(\d+)(?![\w:])/g;
 const WHOLE_FILE_LINE = new RegExp(`^${FILE_LINE.source}$`);
@@ -19,23 +19,21 @@ const referencesIn = (text: string): Array<Node> => {
   return nodes;
 };
 
-const scripted = (value: unknown): boolean =>
-  typeof value === "string"
-    ? /javascript:/i.test(value.replace(/[\s\0-\x1f]/g, ""))
-    : typeof value === "object" && value !== null && Object.values(value).some(scripted);
-
 /**
- * Whether a value could run script once rendered. A component's own URL prop, such as a
- * card's `to`, is not checked by the security plugin; a binding is decoded as JSON, or else
- * read from the frontmatter, which an agent writes too.
+ * Whether an attribute could run script once rendered. A component's own URL prop, such as
+ * a card's `to`, is not checked by the security plugin; a binding is decoded as JSON, or
+ * else read from the frontmatter, which an agent writes too.
  */
-const unsafe = (name: string, value: unknown) => {
-  if (!name.startsWith(":") || typeof value !== "string") return scripted(value);
-  try {
-    return scripted(JSON.parse(value));
-  } catch {
-    return true;
-  }
+const scripted = (attributes: ElementNodeAttributes, name: string) => {
+  let rendered = String(JSON.stringify(attributes[name]));
+  if (name.startsWith(":"))
+    try {
+      rendered = JSON.stringify(JSON.parse(String(attributes[name])));
+    } catch {
+      return true;
+    }
+  // A URL's scheme survives whitespace and control characters, which JSON writes escaped.
+  return /javascript:/i.test(rendered.replace(/\\(?:[bfnrt]|u00[01][\da-f])|\s/gi, ""));
 };
 
 const confine =
@@ -46,8 +44,8 @@ const confine =
     if (tag === null) return [node];
     // A style could lay an overlay across the whole window; a popover, or a dialog a command
     // opens, is drawn above it.
-    for (const [name, value] of Object.entries(attributes))
-      if (/^:?(style|popover\w*|command\w*|closedby)$/i.test(name) || unsafe(name, value))
+    for (const name of Object.keys(attributes))
+      if (/^:?(style|popover\w*|command\w*|closedby)$/i.test(name) || scripted(attributes, name))
         delete attributes[name];
     const [only] = children;
     const whole =
