@@ -6,7 +6,6 @@
 import { Effect, FileSystem, Schema } from "effect";
 import { expect, test } from "bun:test";
 import {
-  ActionSchema,
   JudgementSchema,
   ProposalSchema,
   REQUIRED_FLAGS,
@@ -20,6 +19,7 @@ import {
   type Route,
   type ValidationContext,
 } from "../src/evaluator";
+import { ActionSchema } from "../src/actions";
 import { DEFAULT_AUTHORITY, type Authority } from "../src/intent";
 import { runEffect } from "./support/effect";
 import { leaks } from "../tools/evaluator-probe";

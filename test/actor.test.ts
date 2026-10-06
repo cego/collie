@@ -231,3 +231,39 @@ test(
     ),
   120_000,
 );
+
+test(
+  "a chat channel says each turn's words again, and each operation is recorded with the words of its turn",
+  () =>
+    proves(
+      "collie-actor-turns-",
+      (world) =>
+        Effect.gen(function* () {
+          const host = yield* connect(world.state);
+          const door = yield* frontDoor(world.state);
+          const conversation = "flock@mk-pc";
+          yield* door.declare({ frontDoor: "chat", conversation, said: "start the proof" });
+          const { runId } = yield* door.start({
+            project: world.project,
+            id: "proof",
+            request: "start-1",
+            input: { note: "turns" },
+          });
+          yield* until(
+            () => host.status({ runId }),
+            (status) => status.status === "suspended",
+          );
+          yield* door.declare({ frontDoor: "chat", conversation, said: "hold it" });
+          yield* door.control({ runId, control: "hold", set: true, request: "hold-1" });
+
+          const trail = yield* readAudit(runDir(world.state, runId));
+          expect(trail.map(({ operation, actor }) => [operation, actor.said])).toEqual([
+            ["start", "start the proof"],
+            ["hold", "hold it"],
+          ]);
+          yield* stopHost(world.state);
+        }).pipe(Effect.orDie),
+      ["proof.workflow.ts", "helper.ts", "notes.md"],
+    ),
+  120_000,
+);

@@ -11,7 +11,8 @@ import { readIntent } from "../src/intent";
 import { runView } from "../src/lifecycle";
 import { listRuns } from "../src/runs";
 import { latest, readDispositions } from "../src/disposition";
-import { CollieTools, TOOLS, toolNamed } from "../src/tools";
+import { TOOLS, toolNamed } from "../src/tools";
+import { CollieTools } from "../src/toolkit";
 import { mutation } from "../src/envelope";
 import {
   append as appendNews,
@@ -30,7 +31,7 @@ import {
   type Actor,
   type ProposalRecord,
 } from "../src/proposals";
-import type { Action } from "../src/evaluator";
+import type { Action } from "../src/actions";
 import { herdOf } from "../src/steering";
 import { chatPath, HEARD_MAX, hear, writeChat } from "../src/chat";
 import { readAudit } from "../src/audit";

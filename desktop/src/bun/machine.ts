@@ -1,6 +1,7 @@
-// Desktop's channel to a Machine's host: a bridge command started as `desktop`, whose
-// output after the ready marker is the host's socket. Never Collie's own host client: over
-// a channel that would start a host on this computer, or signal a pid that is not its own.
+// Desktop's channels to a Machine's host: bridge commands started as `desktop` and as
+// `chat`, whose output after the ready marker is the host's socket. Never Collie's own host
+// client: over a channel that would start a host on this computer, or signal a pid that is
+// not its own.
 
 import { Deferred, Effect, Fiber, Layer, Ref, Schedule, Schema, type Scope, Stream } from "effect";
 import * as RpcClient from "effect/unstable/rpc/RpcClient";
@@ -43,15 +44,15 @@ const spawned = <C extends Bun.Subprocess>(start: () => C) =>
       }),
   );
 
+/** The front doors Desktop opens a Machine's channels as. */
+export type Bridged = "desktop" | "chat";
+
 /** The bridge `collie` runs for Desktop, which records Desktop's computer with what it does. */
-export const bridgeCommand = (collie: ReadonlyArray<string>, client: string) => [
-  ...collie,
-  "bridge",
-  "--as",
-  "desktop",
-  "--client",
-  client,
-];
+export const bridgeCommand = (
+  collie: ReadonlyArray<string>,
+  client: string,
+  as: Bridged = "desktop",
+) => [...collie, "bridge", "--as", as, "--client", client];
 
 /** Everything after the ready marker, whatever a login shell printed before it. */
 const afterReady = (from: ReadableStream<Uint8Array>) => {
@@ -106,6 +107,20 @@ export const openBridge = Effect.fn("Desktop.openBridge")(function* (
 });
 
 export type Door = Effect.Success<ReturnType<typeof openBridge>>;
+
+/** A Machine's two channels: the board's and its actions on one, the Flock chat's tools on the other. */
+export interface Doors extends BoardSource {
+  readonly desktop: Door;
+  readonly chat: Door;
+}
+
+/** Opens both of a Machine's channels, each a bridge started as its front door. */
+export const openDoors = (command: (as: Bridged) => ReadonlyArray<string>) =>
+  Effect.all([openBridge(command("desktop")), openBridge(command("chat"))], {
+    concurrency: "unbounded",
+  }).pipe(
+    Effect.map(([desktop, chat]): Doors => ({ desktop, chat, board: () => desktop.board() })),
+  );
 
 export interface BoardSource {
   readonly board: () => Stream.Stream<BoardMessage, { readonly message: string }>;
@@ -170,7 +185,7 @@ export const herdrMachines = (herdr: string) =>
   );
 
 /** One way to reach a Machine: what it is called, and how its bridge is opened. */
-export interface Route<D extends BoardSource = Door> {
+export interface Route<D extends BoardSource = Doors> {
   readonly machine: KnownMachine;
   readonly open: Effect.Effect<D, string, Scope.Scope>;
 }
@@ -178,10 +193,10 @@ export interface Route<D extends BoardSource = Door> {
 const quoted = (word: string) => `'${word.replaceAll("'", `'\\''`)}'`;
 
 /** The bridge as the Machine's login shell runs it, as Local's is. */
-const remoteBridge = (client: string) =>
+const remoteBridge = (client: string, as: Bridged) =>
   [
     `exec "\${SHELL:-/bin/sh}" -lc 'exec collie "$@"' collie`,
-    ...bridgeCommand([], client).map(quoted),
+    ...bridgeCommand([], client, as).map(quoted),
   ].join(" ");
 
 /**
@@ -229,7 +244,7 @@ export const remoteRoute = Effect.fn("Desktop.remoteRoute")(function* (
     open: Fiber.join(master).pipe(
       Effect.andThen(
         // Never a login of its own: SSO is asked once, by the master.
-        openBridge([
+        openDoors((as) => [
           ssh,
           "-S",
           control,
@@ -237,7 +252,7 @@ export const remoteRoute = Effect.fn("Desktop.remoteRoute")(function* (
           "ControlMaster=no",
           "-T",
           machine.target,
-          remoteBridge(client),
+          remoteBridge(client, as),
         ]),
       ),
     ),

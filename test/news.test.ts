@@ -4,10 +4,9 @@
 // proactivity was meant to replace, so a burst has to become a batch. And writing a
 // notification is not evidence that anybody read it, so `sent` must never settle an item.
 
-import { Effect, FileSystem } from "effect";
+import { Effect, FileSystem, Schema } from "effect";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import {
-  BATCH,
   NATIVE,
   append,
   asText,
@@ -19,6 +18,7 @@ import {
   supersede,
   uncertain,
 } from "../src/news";
+import { NEWS_BATCH } from "../src/board-model";
 import { eventsIn, holding } from "../src/proactive";
 import { runFacts as record } from "./support/records";
 import { runEffect } from "./support/effect";
@@ -59,7 +59,7 @@ test("the same thing that happened is one piece of news, however often it is not
 test("news older than one batch is still deduplicated", () =>
   runEffect(
     Effect.gen(function* () {
-      for (let n = 0; n < BATCH + 5; n++)
+      for (let n = 0; n < NEWS_BATCH + 5; n++)
         yield* append(file, { key: `r${n}:ended`, run: `r${n}`, text: `Run r${n} ended.` });
       // The oldest waiting item has fallen out of the batch, and it is still the same
       // news: a human who has not read in a while must not be told twice.
@@ -72,10 +72,10 @@ test("news older than one batch is still deduplicated", () =>
 test("a burst becomes one batch that says what it left out, not a turn each", () =>
   runEffect(
     Effect.gen(function* () {
-      for (let n = 0; n < BATCH + 5; n++)
+      for (let n = 0; n < NEWS_BATCH + 5; n++)
         yield* append(file, { key: `r${n}:ended`, run: `r${n}`, text: `Run r${n} ended.` });
       const batch = pending(yield* read(file));
-      expect(batch.items).toHaveLength(BATCH);
+      expect(batch.items).toHaveLength(NEWS_BATCH);
       expect(batch.omitted).toBe(5);
       // Said out loud. The five are still pending, not dropped, and not replaced by one
       // generic line that swallowed them.
@@ -218,3 +218,73 @@ test("a receipt written before conversations had names is Native chat's", () =>
       expect(pending(lines, "flock@pc").items).toHaveLength(1);
     }),
   ));
+
+test("each item says how much it matters, and one written before items did is routine", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* append(file, {
+        key: "r1:asking:x",
+        run: "r1",
+        text: "r1 asks.",
+        significance: "decision",
+      });
+      yield* fs.writeFileString(
+        file,
+        `${yield* fs.readFileString(file)}${Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))({ kind: "item", key: "r0:ended:done", run: "r0", text: "r0 ended.", at: "2026-01-01T00:00:00Z" })}\n`,
+      );
+      expect(
+        pending(yield* read(file)).items.map(({ key, significance }) => [key, significance]),
+      ).toEqual([
+        ["r1:asking:x", "decision"],
+        ["r0:ended:done", "routine"],
+      ]);
+    }),
+  ));
+
+test("a conversation that takes every pending item is not limited to one batch", () =>
+  runEffect(
+    Effect.gen(function* () {
+      for (let n = 0; n < NEWS_BATCH + 5; n++)
+        yield* append(file, {
+          key: `r${n}:ended`,
+          run: `r${n}`,
+          text: `Run r${n} ended.`,
+          significance: "consequential",
+        });
+      expect(pending(yield* read(file), "flock@pc", Infinity)).toMatchObject({ omitted: 0 });
+      expect(pending(yield* read(file), "flock@pc", Infinity).items).toHaveLength(NEWS_BATCH + 5);
+    }),
+  ));
+
+test("a question and drift Collie could not correct are decisions, an end or a park is consequential, and Ready is worth trying", () => {
+  const of = (events: ReturnType<typeof eventsIn>) =>
+    events.map(({ significance }) => significance);
+  expect(
+    of(
+      eventsIn([
+        record({
+          id: "r1",
+          state: "waiting",
+          asking: [{ name: "scope", prompt: "?", options: [] }],
+        }),
+      ]),
+    ),
+  ).toEqual(["decision"]);
+  expect(of(eventsIn([record({ id: "r8" })], new Map([["r8", "stay in src"]])))).toEqual([
+    "decision",
+  ]);
+  expect(of(eventsIn([record({ id: "r2", state: "waiting", note: "stuck" })]))).toEqual([
+    "consequential",
+  ]);
+  expect(of(eventsIn([record({ id: "r3", state: "failed" })]))).toEqual(["consequential"]);
+  expect(
+    of(
+      eventsIn(
+        [record({ id: "r4" })],
+        new Map(),
+        new Map([["r4", { at: "abc", sentence: "Ready." }]]),
+      ),
+    ),
+  ).toEqual(["try-it"]);
+});

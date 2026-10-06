@@ -43,6 +43,13 @@ export class FlockClient extends AtomRpc.Service<FlockClient>()("FlockClient", {
   ),
 }) {}
 
+/** When the Flock chat starts and ends a turn of Desktop's own; kept alive with the view. */
+export const desktopTurnsAtom = FlockClient.runtime
+  .atom(
+    Stream.unwrap(FlockClient.use((client) => Effect.succeed(client("desktopTurns", undefined)))),
+  )
+  .pipe(Atom.keepAlive);
+
 /** Kept alive, so the board stays subscribed for as long as the view is open. */
 export const flockAtom = FlockClient.runtime
   .atom(

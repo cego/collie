@@ -4,7 +4,7 @@
 // Every operation it is asked is appended to `<board.json>.ops.jsonl`; an answer also
 // takes the decision off its Task, as a host's would.
 //
-// Usage: bun scripted-host.ts <board.json> bridge --as desktop --client <computer>
+// Usage: bun scripted-host.ts <board.json> bridge --as desktop|chat --client <computer>
 
 import { BunFileSystem, BunRuntime, BunStdio } from "@effect/platform-bun";
 import { Effect, Encoding, FileSystem, Layer, Result, Schedule, Schema, Stream } from "effect";
@@ -15,7 +15,7 @@ import { boardMessages } from "../../../src/board-stream";
 import { OFFERS, REFUSED_RUN, STARTABLE, ScriptedMachine } from "./scripted-machine";
 
 const [board, ...bridge] = Bun.argv.slice(2);
-if (board === undefined || bridge.slice(0, 3).join(" ") !== "bridge --as desktop") {
+if (board === undefined || !/^bridge --as (desktop|chat)$/.test(bridge.slice(0, 3).join(" "))) {
   process.stderr.write(`scripted host: started as ${Bun.argv.slice(2).join(" ")}\n`);
   process.exit(2);
 }
@@ -28,14 +28,7 @@ const asLine = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 /** What an operation was asked with, as it is logged. */
 type Asked = Parameters<typeof asLine>[0];
 
-const Served = FrontDoorRpcs.omit(
-  "declare",
-  "propose",
-  "act",
-  "reconcile",
-  "settleDelivery",
-  "news",
-);
+const Served = FrontDoorRpcs.omit("propose", "act", "reconcile", "settleDelivery");
 
 const handlers = Served.toLayer(
   Effect.gen(function* () {
@@ -116,6 +109,17 @@ const handlers = Served.toLayer(
       followUp: (payload) => asked("followUp", payload, started, payload.runId),
       offers: (payload) => asked("offers", payload, OFFERS, payload.runId),
       workflows: (payload) => logged("workflows", payload).pipe(Effect.as(STARTABLE)),
+      declare: (payload) => logged("declare", payload),
+      news: (payload) =>
+        Effect.gen(function* () {
+          yield* logged("news", payload);
+          const machine = yield* read;
+          const items = machine.news ?? [];
+          const taken = payload.keys ?? items.map(({ key }) => key);
+          if (payload.as === "read" && taken.length > 0)
+            yield* write({ ...machine, news: items.filter(({ key }) => !taken.includes(key)) });
+          return { items, omitted: 0 };
+        }),
       confirm: (payload) => asked("confirm", payload, { proposal: payload.proposal, results: [] }),
       decline: (payload) => asked("decline", payload, { proposal: payload.proposal }),
       dispose: (payload) =>

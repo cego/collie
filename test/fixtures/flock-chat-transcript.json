@@ -1,0 +1,61 @@
+[
+  {
+    "type": "user",
+    "uuid": "2e013233-a0ba-4e27-88d5-46b380506047",
+    "parent_tool_use_id": null,
+    "message": {
+      "role": "user",
+      "content": "What is on the board? Use collie_herd, then answer in one short sentence."
+    }
+  },
+  {
+    "type": "assistant",
+    "uuid": "eb96f79b-9ce3-490c-afc8-9e0c87022560",
+    "parent_tool_use_id": null,
+    "message": {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "tool_use",
+          "id": "toolu_01LHit6nWcJEcBC351ReCvQy",
+          "name": "mcp__collie__collie_herd",
+          "input": {}
+        }
+      ]
+    }
+  },
+  {
+    "type": "user",
+    "uuid": "10158baa-aa4c-40c0-90e5-185dedc3077a",
+    "parent_tool_use_id": null,
+    "message": {
+      "role": "user",
+      "content": [
+        {
+          "tool_use_id": "toolu_01LHit6nWcJEcBC351ReCvQy",
+          "type": "tool_result",
+          "content": [
+            {
+              "type": "text",
+              "text": "Nothing needs you. 1 working.\n\n## Working · 1\n- run vm-mk.cegohost.dk:run-04ab8fe5: Fix board bugs (content), active, branch mk/strapi-seed. Fixing the review findings, round 2 of 5."
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "type": "assistant",
+    "uuid": "e258d830-7fd7-478a-b2f9-c9162869a2a5",
+    "parent_tool_use_id": null,
+    "message": {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "One Run is working and nothing needs you: vm-mk.cegohost.dk:run-04ab8fe5, \"Fix board bugs (content)\" on mk/strapi-seed, is fixing the review findings in round 2 of 5."
+        }
+      ]
+    }
+  }
+]

@@ -612,6 +612,20 @@ test("an operator who opts into bypass has the agent started past its prompts", 
     }),
   ));
 
+test("a bypass written to the config after the host started reaches the next agent", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const userDir = rig.pluginEnv().userDir;
+      yield* fs.makeDirectory(userDir, { recursive: true });
+      yield* fs.writeFileString(`${userDir}/config.json`, `{ "permissions": "bypass" }`);
+      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+      yield* session(started("r1"), { permissions: "auto" });
+
+      expect(permissionModeOf(launchArgs(yield* rig.calls()))).toBe("bypassPermissions");
+    }),
+  ));
+
 test("bypass falls back to auto mode where Claude Code's managed settings forbid it, and says so", () =>
   runEffect(
     Effect.gen(function* () {

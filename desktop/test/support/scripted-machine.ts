@@ -1,6 +1,7 @@
 import { Schema } from "effect";
 import {
   Herd,
+  NewsBatch,
   type OfferView,
   RunDetail,
   type Startable,
@@ -19,6 +20,8 @@ export const ScriptedMachine = Schema.Struct({
       Schema.Union([Schema.String, Schema.Struct({ base64: Schema.String })]),
     ),
   ),
+  /** Its News for whoever asks, every Herd's alike; a conversation settling an item takes it off. */
+  news: Schema.optionalKey(NewsBatch.fields.items),
 });
 export type ScriptedMachine = typeof ScriptedMachine.Type;
 

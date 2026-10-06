@@ -95,7 +95,13 @@ test("Desktop's main process never reaches Collie's own host client", () =>
         Bun.build({
           entrypoints: [`${root}desktop/src/bun/index.ts`],
           target: "bun",
-          external: ["electrobun", "electrobun/*"],
+          // Desktop's own dependencies, which the root suite does not install.
+          external: [
+            "electrobun",
+            "electrobun/*",
+            "@anthropic-ai/claude-agent-sdk",
+            "@modelcontextprotocol/sdk/*",
+          ],
           plugins: [
             {
               name: "host-client",

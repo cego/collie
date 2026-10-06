@@ -28,8 +28,9 @@ Conversation complements that overview. The human can express goals, change dire
 ask questions, and guide work in natural language. Collie understands the relevant
 work, with filters and action targets visible rather than implicit.
 
-There is one global Collie and one conversation per herdr session, covering all its
-workspaces. Workspace and Run filters narrow the view, not supervision. Each Run
+There is one global Collie. Each Home has a Herd-scoped Native chat covering all its
+herdr session's workspaces, and each Desktop has one Flock conversation covering every Herd
+on every Machine it reaches; both reach Collie only through Collie tools. Workspace and Run filters narrow the view, not supervision. Each Run
 retains its own goal, constraints, and authority; one Collie does not mean mixing
 every project's instructions into one model context.
 

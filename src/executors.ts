@@ -7,7 +7,7 @@
 
 import type { BunServices } from "@effect/platform-bun/BunServices";
 import type { Effect } from "effect";
-import type { Action, ActionKind } from "./evaluator";
+import type { Action, ActionKind } from "./actions";
 import type { Actor } from "./proposals";
 import type { PluginEnv } from "./env";
 
