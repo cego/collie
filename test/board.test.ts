@@ -1879,12 +1879,21 @@ test(
             }),
           );
 
+          let heard = "";
           const following = yield* Effect.forkChild(
-            collie(world, ["run", "checks", runId, "--follow"]),
+            collie(world, ["run", "checks", runId, "--follow"], {}, (stderr) => {
+              heard = stderr;
+            }),
           );
-          yield* Effect.sleep("1 second");
+          yield* until(
+            () => Effect.succeed(heard),
+            (stderr) => stderr.includes("compiling"),
+          );
           yield* fs.writeFileString(log, "1 pass\n", { flag: "a" });
-          yield* Effect.sleep("1 second");
+          yield* until(
+            () => Effect.succeed(heard),
+            (stderr) => stderr.includes("1 pass"),
+          );
           yield* appendVerification(run.evidence, {
             ...checked("unit", "abc"),
             run: runId,

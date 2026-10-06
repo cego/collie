@@ -44,6 +44,8 @@ export const collie = Effect.fn("World.collie")(function* (
   args: ReadonlyArray<string>,
   /** More of the operator's environment, over this world's own. */
   extra: Readonly<Record<string, string>> = {},
+  /** Told everything on stderr so far, each time more arrives. */
+  heard?: (stderr: string) => void,
 ) {
   const binary = yield* Config.option(Config.String("COLLIE_TEST_BINARY"));
   const command = Option.isSome(binary) ? [binary.value] : [process.execPath, `${root}src/main.ts`];
@@ -71,7 +73,14 @@ export const collie = Effect.fn("World.collie")(function* (
   const [stdout, stderr, exit] = yield* Effect.promise(() =>
     Promise.all([
       new Response(child.stdout).text(),
-      new Response(child.stderr).text(),
+      (async () => {
+        let all = "";
+        for await (const chunk of child.stderr.pipeThrough(new TextDecoderStream())) {
+          all += chunk;
+          heard?.(all);
+        }
+        return all;
+      })(),
       child.exited,
     ]),
   );
