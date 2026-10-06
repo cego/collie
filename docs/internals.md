@@ -575,9 +575,9 @@ Collie Desktop is built by the same release, from the same tag, by the workflow'
 `herdr-plugin.toml`'s version, with the updater's base URL set to the GitHub Releases
 `latest/download` URL. Electrobun names the archives an installed Desktop updates from by
 `app.name`, so that stays `collie-desktop`, as do the keyring service and the state
-directory that hold Desktop's credentials and chat. The name people see is written into the launcher entry by
-`desktop/src/desktop-entry.ts`, Electrobun's postBuild and postWrap hook, before the
-bundle is packed. Electrobun's self-extractor cannot read a GNU long-name tar entry,
+directory that hold Desktop's credentials and chat. The name people see is written into
+the launcher entry by `desktop/scripts/name-desktop-entry.ts`, Electrobun's postBuild and
+postWrap hook, before the bundle is packed; it fails the build if there is none to name. Electrobun's self-extractor cannot read a GNU long-name tar entry,
 so `tools/check-payload.ts` fails the job when any path in the installer's payload is over
 100 characters. The release job signs Desktop's installer, its update manifest, its update
 archive and `install-desktop.sh`, each as `<asset>.sig`. It also signs the archive as the

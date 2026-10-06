@@ -6,14 +6,17 @@ const cdp = Bun.env.COLLIE_DESKTOP_CDP;
 
 export default {
   app: {
-    // Names the artifacts installed Desktops update from; people see Collie instead.
+    // Names the update archives; scripts/name-desktop-entry.ts sets what people see.
     name: "collie-desktop",
     identifier: "dk.cego.collie.desktop",
     // Released with Collie, under the same tag and version.
     version: manifest.version,
   },
   release: { baseUrl: "https://github.com/cego/collie/releases/latest/download" },
-  scripts: { postBuild: "src/desktop-entry.ts", postWrap: "src/desktop-entry.ts" },
+  scripts: {
+    postBuild: "scripts/name-desktop-entry.ts",
+    postWrap: "scripts/name-desktop-entry.ts",
+  },
   build: {
     mainProcess: "bun",
     bun: { entrypoint: "src/bun/index.ts" },
