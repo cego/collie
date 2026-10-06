@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "view": "nuxi generate view",
+    "view": "electrobun prepare && nuxi generate view",
     "start": "bun run view && electrobun dev",
     "build": "bun run view && electrobun build --env=stable",
     "typecheck": "electrobun prepare && tsc --noEmit && nuxi typecheck view",
