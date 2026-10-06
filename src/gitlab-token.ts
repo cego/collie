@@ -6,6 +6,10 @@ import { epochMs } from "./time";
 
 export const GITLAB_HOST = "gitlab.cego.dk";
 
+/** A host as glab names one: DNS labels, and a port where it has one. */
+export const isHostName = (value: string) =>
+  /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*(:\d{1,5})?$/i.test(value);
+
 /** What the token must be allowed: the API, and pushing. */
 export const SCOPES = ["api", "write_repository"];
 

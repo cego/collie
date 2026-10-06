@@ -18,6 +18,7 @@ export type KeyringEntry = "gitlab-token" | "helle-url" | "helle-token";
 export interface Keyring {
   readonly lookup: (key: KeyringEntry) => Effect.Effect<string | null, string>;
   readonly store: (key: KeyringEntry, label: string, value: string) => Effect.Effect<void, string>;
+  readonly clear: (key: KeyringEntry) => Effect.Effect<void, string>;
 }
 
 /** The Secret Service keyring, through libsecret's `secret-tool`. */
@@ -43,6 +44,13 @@ export const secretService = (tool = "secret-tool"): Keyring => {
         ),
         Effect.flatMap(({ err, code }) =>
           code === 0 ? Effect.void : Effect.fail(err.trim() || `${tool} store exited ${code}`),
+        ),
+      ),
+    clear: (key) =>
+      present.pipe(
+        Effect.andThen(ranWith([tool, "clear", ...attributes(key)])),
+        Effect.flatMap(({ err, code }) =>
+          code === 0 ? Effect.void : Effect.fail(err.trim() || `${tool} clear exited ${code}`),
         ),
       ),
   };

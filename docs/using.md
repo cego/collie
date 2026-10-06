@@ -949,14 +949,22 @@ keeps the Flock's credentials in this computer's Secret Service keyring, through
 `secret-tool` (libsecret): one GitLab token, made on GitLab's own page — **Make one on
 GitLab** opens it with the `api` and `write_repository` scopes filled in — and Helle's URL
 and token. Desktop takes a token only once GitLab accepts it with those scopes, and gives
-it at once to glab on every Machine it reaches (`glab auth login --hostname
-gitlab.cego.dk --stdin`); Helle's go to each Machine's credentials file, owner-only, the
+it at once to glab on every Machine it reaches (`glab auth login --hostname <host>
+--stdin`); Helle's go to each Machine's credentials file, owner-only, the
 same way. Every onboarding gets what is kept on its stdin (`--secrets-stdin`), so a second
 Machine asks for neither, and one that was out of reach when a token was renewed gets the
 new one the next time it is onboarded. A step that needs one you have not given yet takes it
 there and onboards again. Desktop asks GitLab when the token expires, at launch and when it
 is saved, and warns above the board from 14 days before; **Renew** with a new one replaces
 it on every Machine.
+
+That GitLab is one host for the whole Flock, `gitlab.cego.dk` unless you name another in
+**Machines** (**Use this GitLab**, kept in Desktop's own `settings.json`). It is the token
+page Desktop opens, the GitLab a token is checked against and logged in to, and the
+`--gitlab-host` every Machine is onboarded and doctored with, so each Machine's readiness
+is that host's. A change applies at once, without a restart, and every Machine is doctored
+again. It also forgets the GitLab token Desktop kept, since a token is made for one GitLab:
+make a new one on the new host's page and save it.
 
 The Claude login is each Machine's own. **Log in** on that step runs `claude auth login`
 on the Machine with `$BROWSER` set to a shim Desktop reads, because Claude Code hands its
@@ -1390,6 +1398,7 @@ checkout there is no branch and no working tree to review, so the target menu is
   "scope": "local",
   "density": "comfortable",
   "questions": "focus",
+  "gitlab_host": "gitlab.cego.dk",
   "chat_harness": "claude"
 }
 ```
@@ -1446,6 +1455,12 @@ by accident.
 
 `compact_at_tokens` is where compaction between pieces of work kicks in — see
 [Compaction between pieces of work](#compaction-between-pieces-of-work).
+
+`gitlab_host` is the one GitLab this Machine works against, `gitlab.cego.dk` unless you
+change it under Settings, which refuses anything that is not a host name. `collie doctor`
+checks glab's login, the token and `git push` for that host alone, and `collie onboard` logs
+in and pushes to it; another host glab knows is named in a note and never counts against
+the Machine. `GITLAB_HOST`, or `--gitlab-host` on either command, overrides it for one run.
 
 ## Compaction between pieces of work
 

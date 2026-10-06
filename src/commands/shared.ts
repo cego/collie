@@ -13,6 +13,7 @@ import { actorName, type Actor } from "../proposals";
 import { taskOfWorkspace } from "../task";
 import { attempt, mutation, type CollieError, type Result } from "../envelope";
 import type { YamlMap } from "../yaml";
+import { isHostName } from "../gitlab-token";
 
 const InputsJson = Schema.fromJsonString(Schema.Record(Schema.String, Schema.Json));
 
@@ -348,3 +349,18 @@ export const actorNow = Effect.fn("Shared.actorNow")(function* (env: PluginEnv, 
 });
 
 export { actorName };
+
+/** `--gitlab-host`, which names the GitLab for this run ahead of `GITLAB_HOST` and the setting. */
+export const gitlabHostFlag = Flag.String("gitlab-host").pipe(
+  Flag.withDescription("The GitLab to work against, over GITLAB_HOST and gitlab_host"),
+  Flag.optional,
+);
+
+/** `env` with `--gitlab-host` as its `GITLAB_HOST`, or the refusal of one that is not a host. */
+export const withGitlabHost = (env: PluginEnv, given: Option.Option<string>) => {
+  if (Option.isNone(given)) return env;
+  if (!isHostName(given.value)) {
+    return err("invalid_input", `--gitlab-host has to be a host name, not "${given.value}".`);
+  }
+  return { ...env, raw: { ...env.raw, GITLAB_HOST: given.value } };
+};

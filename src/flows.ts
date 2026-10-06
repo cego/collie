@@ -93,6 +93,7 @@ import {
 import type { Focus } from "./ui/bridge";
 import { buildHistory, buildSettings, buildWorkflows, NUMERIC_DEFAULTS } from "./views";
 import { isPermissionMode, PERMISSION_MODES } from "./harness";
+import { isHostName } from "./gitlab-token";
 import { repoArgs, shell } from "./mr";
 import { parseMrTarget } from "./board-model";
 import type { ChildProcessSpawner } from "effect/unstable/process";
@@ -1348,6 +1349,9 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
       // is refused here rather than quietly leaving every question stealing focus.
       if (typed !== "" && command.key === "questions" && !isQuestionMode(typed)) {
         return `questions has to be one of ${QUESTION_MODES.join(", ")}, not "${command.value}"`;
+      }
+      if (typed !== "" && command.key === "gitlab_host" && !isHostName(typed)) {
+        return `gitlab_host has to be a host name, such as gitlab.example.com, not "${command.value}"`;
       }
       // A threshold no Run can use fails every step that would launch an agent, so
       // it is refused where it is written rather than at the next launch.
