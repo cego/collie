@@ -20,7 +20,6 @@ import {
   applyItem,
   EMPTY_FLOCK,
   type FlockItem,
-  type Flock,
   machineRows,
   type OnboardRun,
   type OnboardStep,
@@ -525,14 +524,14 @@ test("Helle and the Linear MCP count toward onboarded though doctor passes them,
         reason: null,
         at: 0,
       });
-      const row = (run: OnboardRun) =>
-        machineRows(
-          [
-            { _tag: "Routed", machine },
-            { _tag: "Onboarding", job: "j-1", machine, run },
-            { _tag: "Doctored", machine, run: doctored },
-          ].reduce<Flock>((flock, item) => applyItem(flock, item as FlockItem), EMPTY_FLOCK),
-        )[0]!.onboarded!;
+      const row = (run: OnboardRun) => {
+        const items: FlockItem[] = [
+          { _tag: "Routed", machine },
+          { _tag: "Onboarding", job: "j-1", machine, run },
+          { _tag: "Doctored", machine, run: doctored },
+        ];
+        return machineRows(items.reduce(applyItem, EMPTY_FLOCK))[0]!.onboarded!;
+      };
       expect(row(onboarding("needs_human")).ready).toBe(false);
       expect(row(onboarding("skipped")).ready).toBe(true);
       const working = absent.map((check) =>
