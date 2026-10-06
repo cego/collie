@@ -9,7 +9,7 @@ import { currentReports, readDrift } from "./drift";
 import type { PluginEnv } from "./env";
 import type { Herdr } from "./herdr";
 import { liveHerds } from "./herds";
-import { homeDeps, keepHomesProven } from "./home";
+import { homeDeps, restateHome, type HomeDeps } from "./home";
 import { settleMerges, type MrPanels } from "./merges";
 import { shell } from "./mr";
 import { append as appendNews, newsPath, read as readNews, retired, supersede } from "./news";
@@ -122,6 +122,24 @@ const MERGES_EVERY = "10 seconds";
 /** How often checkouts are swept: a sweep walks each one with git and glab. */
 const PRUNE_EVERY = "3 minutes";
 
+/** How often a proven Home's tokens are restated: well within their 24-hour TTL. */
+const RESTATE_EVERY = "4 hours";
+
+/** Each live Herd's proven Home kept tokened; one Herd's failure skips only that Herd. */
+export const keepHomesTokened = <R>(
+  stateDir: string,
+  herds: Effect.Effect<ReadonlyArray<{ readonly key: string; readonly deps: HomeDeps }>, never, R>,
+) =>
+  every(
+    RESTATE_EVERY,
+    Effect.gen(function* () {
+      for (const { key, deps } of yield* herds)
+        yield* restateHome(stateDir, key, deps).pipe(
+          Effect.catchCause((cause) => Effect.logWarning(`home: could not restate ${key}`, cause)),
+        );
+    }),
+  );
+
 /** Every side job, run until the host stops. */
 export const sideJobs = <E, R>(opts: {
   readonly env: PluginEnv;
@@ -180,7 +198,7 @@ export const sideJobs = <E, R>(opts: {
           });
         }),
       ),
-      keepHomesProven(
+      keepHomesTokened(
         env.stateDir,
         liveHerds(herdr, env).pipe(
           Effect.map((sessions) =>

@@ -50,10 +50,9 @@ harness-native (**Native chat**) and Effect-native.
 
 **Home** — The Herd's dedicated Collie workspace, owned by a record plus proof: a live
 `collie_home` token, or the recorded pane still carrying its recorded `terminal_id`. A
-label is never proof. A `ready` record whose workspace is still there and unclaimed by any
-other is healed after a herdr restart; anything uncertain is `ownership_unknown` and waits
-for a human. It
-holds one tab of two panes: the board on the left at four sevenths, **Native chat** on the
+label is never proof. Anything uncertain is `ownership_unknown` and waits for a human; a
+`ready` record whose workspace nothing else claims is not uncertain, and is healed. It holds
+one tab of two panes: the board on the left at four sevenths, **Native chat** on the
 right at three. Only a pane that has gone is reopened, so a layout a human resized stays
 where they put it.
 

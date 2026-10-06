@@ -476,14 +476,15 @@ of the Home's panes every four hours, well inside the token's 24-hour TTL, so a 
 open for days does not let it lapse.
 
 A herdr restart loses both proofs at once. herdr 0.9.3 saves each session to
-`~/.config/herdr/session.json` — workspace ids, tabs, and each pane's cwd, label and launch
-command — but nothing reported with `report_metadata`, so every token is gone when the
-server comes back, and every pane comes back with a new terminal. The workspace
-keeps its id. So a recorded workspace that is still there, with a `ready` record and no
-other workspace carrying this Herd's token, is **healed**: re-tokened, and its missing
-panes reopened, as a reopen. `collie home show` prints a `healed` line saying why. A pane
-herdr restored from its saved layout is not recognised as the board — its label is not
-proof — so it stays beside the reopened one until a human closes it.
+`~/.config/herdr/session.json`: workspace ids, tabs, and each pane with its cwd, label,
+launch command and agent session, so it relaunches the board and resumes the chat. It saves
+nothing reported with `report_metadata`, so every token is gone when the server comes back,
+and each restored pane has a new terminal. A recorded workspace that is still there, with a
+`ready` record, no other Herd's token and no other workspace carrying this one's, is
+therefore **healed** rather than refused: the panes still under their recorded ids are
+taken back with their new terminals, any that are gone are reopened, and the tokens are
+written again. The record keeps when and why, and `collie home show` prints it as `healed`.
+This rests on herdr never handing a workspace id to a different workspace.
 
 A **label is never proof**. Two workspaces can be called the same thing, and a home test
 reads `home.ts` to keep it that way. A live token with no record is not proof either — it

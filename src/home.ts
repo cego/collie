@@ -13,7 +13,7 @@
 // disagreeing about the same Runs.
 
 import type { BunServices } from "@effect/platform-bun/BunServices";
-import { Clock, Data, Effect, FileSystem, Path, Schedule, Schema } from "effect";
+import { Clock, Data, Effect, FileSystem, Path, Schema } from "effect";
 import { ensureLockDir, withLock } from "./lock";
 import { herdDir, herdKey } from "./steering";
 import { nowIso, epochMs } from "./time";
@@ -25,9 +25,6 @@ export const HOME_TOKEN = "collie_home";
 
 /** A day. Long enough to survive a machine sleeping, short enough that a stale claim goes. */
 export const TOKEN_TTL_MS = 86_400_000;
-
-/** How often the host restates a proven Home's tokens: well within `TOKEN_TTL_MS`. */
-export const TOKEN_REFRESH_EVERY = "4 hours";
 
 /** What a legacy per-workspace pane is marked with, so cleanup can find exactly those. */
 export const LEGACY_PANE_TOKEN = "collie_pane";
@@ -52,6 +49,8 @@ const RecordSchema = Schema.Struct({
    * find rather than an orphan nobody can attribute.
    */
   state: Schema.Literals(["creating", "ready"]),
+  /** The last time the Home was taken back with no proof, and why that was safe. */
+  healed: Schema.optionalKey(Schema.Struct({ at: Schema.String, why: Schema.String })),
   /** Homes this Herd used to have, kept rather than deleted: they are how an orphan is named. */
   previous: Schema.Array(Schema.Struct({ workspaceId: Schema.String, archivedAt: Schema.String })),
 });
@@ -225,7 +224,7 @@ export type Decision =
       readonly kind: "reopen";
       readonly record: HomeRecord;
       readonly missing: ReadonlyArray<"board" | "chat">;
-      /** Why a Home that had lost both proofs is taken back rather than refused. */
+      /** Why a Home with neither proof is taken back rather than refused. */
       readonly healed?: string;
     }
   /** Nothing owns this Herd's Home yet. `orphan` names a record left mid-create. */
@@ -334,28 +333,31 @@ export function decide(
       "the recorded workspace has lost its proof and another carries this Herd's token",
       [record.workspaceId, ...elsewhere],
     );
+  const theirs = workspaces.find((entry) => entry.workspaceId === record.workspaceId)?.tokens[
+    HOME_TOKEN
+  ];
+  if (theirs !== undefined)
+    return unknown("the recorded workspace carries another Herd's token", [record.workspaceId]);
 
-  // A token past its TTL and panes a herdr restart replaced: the record says Collie
-  // finished making this workspace and nothing else claims the Herd, so the claim is
-  // restated. A pane id herdr gave to something new is not the Home's pane.
-  const ours = (paneId: string | null | undefined, terminalId: string | null | undefined) =>
-    panes.some(
-      (entry) =>
-        entry.paneId === paneId &&
-        entry.workspaceId === record.workspaceId &&
-        entry.terminalId === terminalId,
-    );
-  const missing: Array<"board" | "chat"> = [];
-  if (!ours(record.paneId, record.terminalId)) missing.push("board");
-  if (!ours(record.chatPaneId, record.chatTerminalId)) missing.push("chat");
+  // herdr keeps workspace and pane ids across a restart but not their tokens, and gives
+  // each restored pane a new terminal.
+  const terminalOf = (paneId: string | null | undefined) =>
+    panes.find((entry) => entry.paneId === paneId && entry.workspaceId === record.workspaceId)
+      ?.terminalId ?? null;
   return {
     kind: "reopen",
-    record,
-    missing,
-    healed:
-      "the recorded workspace is still there with no token or pane of this Herd's, the record was ready, and no other workspace claims the Herd",
+    record: {
+      ...record,
+      terminalId: terminalOf(record.paneId),
+      chatTerminalId: terminalOf(record.chatPaneId),
+    },
+    missing: missingPanes(record, panes),
+    healed: HEALED,
   };
 }
+
+const HEALED =
+  "the recorded workspace had no token and no pane terminal of this Herd's, the record was ready, and no other workspace claims the Herd";
 
 /** A record archived rather than deleted: it is how an orphan is later named. */
 export function archived(record: HomeRecord, at: string): HomeRecord["previous"][number] {
@@ -565,6 +567,7 @@ export const ensureHome = Effect.fn("Home.ensure")(function* (
         else if (decision.healed !== undefined && next.chatPaneId != null)
           yield* deps.markPane(next.chatPaneId, { [HOME_TOKEN]: key, [CHAT_PANE_TOKEN]: key });
         next = { ...next, state: "ready" };
+        if (decision.healed !== undefined) next = { ...next, healed: { at, why: decision.healed } };
         yield* writeHome(file, next);
         yield* deps.markWorkspace(next.workspaceId, { [HOME_TOKEN]: key });
         if (next.paneId !== null) yield* deps.markPane(next.paneId, { [HOME_TOKEN]: key });
@@ -650,11 +653,10 @@ export const ensureHome = Effect.fn("Home.ensure")(function* (
 });
 
 /**
- * The Home's tokens restated on its workspace and whichever of its panes are there, while
- * the Home is still proven. A board left open longer than `TOKEN_TTL_MS` would otherwise
- * lose its token, and a herdr restart then takes the pane proof too.
+ * A proven Home's tokens restated on its workspace and the panes it still has, so a board
+ * left open longer than `TOKEN_TTL_MS` keeps its token. An unproven Home is left alone.
  */
-const refreshHome = Effect.fn("Home.refresh")(function* (
+export const restateHome = Effect.fn("Home.restate")(function* (
   stateDir: string,
   key: string,
   deps: HomeDeps,
@@ -665,11 +667,11 @@ const refreshHome = Effect.fn("Home.refresh")(function* (
     Effect.gen(function* () {
       const record = yield* readHome(file);
       if (record === null || record === UNREADABLE || record.state !== "ready") return;
-      const workspaces = yield* deps.workspaces;
-      const panes = yield* deps.panes;
-      const decision = decide(record, workspaces, panes, key);
-      if (decision.kind !== "adopt" && (decision.kind !== "reopen" || decision.healed)) return;
-      const missing = missingPanes(record, panes);
+      const decision = decide(record, yield* deps.workspaces, yield* deps.panes, key);
+      const proven =
+        decision.kind === "adopt" || (decision.kind === "reopen" && decision.healed === undefined);
+      if (!proven) return;
+      const missing = decision.kind === "reopen" ? decision.missing : [];
       yield* deps.markWorkspace(record.workspaceId, { [HOME_TOKEN]: key });
       if (record.paneId !== null && !missing.includes("board"))
         yield* deps.markPane(record.paneId, { [HOME_TOKEN]: key });
@@ -678,18 +680,6 @@ const refreshHome = Effect.fn("Home.refresh")(function* (
     }),
   );
 });
-
-/** Every live Herd's proven Home kept tokened, for as long as the host runs. */
-export const keepHomesProven = <R>(
-  stateDir: string,
-  herds: Effect.Effect<ReadonlyArray<{ readonly key: string; readonly deps: HomeDeps }>, never, R>,
-) =>
-  Effect.gen(function* () {
-    for (const { key, deps } of yield* herds)
-      yield* refreshHome(stateDir, key, deps).pipe(
-        Effect.catchCause((cause) => Effect.logWarning(`home: could not restate ${key}`, cause)),
-      );
-  }).pipe(Effect.repeat(Schedule.spaced(TOKEN_REFRESH_EVERY)), Effect.asVoid);
 
 /**
  * The board's pane split, with native chat on the right. The board keeps `BOARD_RATIO`,

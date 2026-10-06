@@ -418,7 +418,7 @@ then only when it is alone in its tab — everything else is listed with the rea
 kept.
 
 ```
-collie home show                 what Collie thinks the Home is, and what proves it
+collie home show                 what Collie thinks the Home is, what proves it, and why it last healed
 collie home reconcile --adopt w7 that workspace is this Herd's Home
 collie home reconcile --forget   forget the record; the next launch decides again
 collie home cleanup --confirm    close the legacy panes that are alone in their tab
