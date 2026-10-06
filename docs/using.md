@@ -957,8 +957,9 @@ That GitLab is one host for the whole Flock, `gitlab.cego.dk` unless you name an
 **Machines** (**Use this GitLab**, kept in Desktop's own `settings.json`). It is the token
 page Desktop opens, the GitLab a token is checked against and logged in to, and the
 `--gitlab-host` every Machine is onboarded and doctored with, so each Machine's readiness
-is that host's. A change applies at once, without a restart: the token's expiry is asked of
-the new host and every Machine is doctored again.
+is that host's. A change applies at once, without a restart, and every Machine is doctored
+again. It also forgets the GitLab token Desktop kept, since a token is made for one GitLab:
+make a new one on the new host's page and save it.
 
 The Claude login is each Machine's own. **Log in** on that step runs `claude auth login`
 on the Machine with `$BROWSER` set to a shim Desktop reads, because Claude Code hands its

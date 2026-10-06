@@ -134,10 +134,17 @@ test(
             .text()
             .catch(() => "")
             .then((text) => text.split("\n").filter(Boolean).length);
-        const boards = [LOCAL, "mk@old.json", "mk@dev.json", "mk@next.json"];
+        // Once per build: the upgraded one is doctored on its old build and its new one.
+        const expected = new Map([
+          [LOCAL, 1],
+          ["mk@old.json", 2],
+          ["mk@dev.json", 1],
+          ["mk@next.json", 1],
+        ]);
+        const boards = [...expected.keys()];
         yield* settled("the board's doctor", () =>
           Promise.all(boards.map((board) => doctored(`${board}.doctored`))).then((counts) =>
-            counts.every((n) => n > 0) ? true : undefined,
+            counts.every((n, at) => n >= expected.get(boards[at]!)!) ? true : undefined,
           ),
         );
         yield* Effect.promise(() => app!.page.getByTestId("chat-pop-out").click());
@@ -162,7 +169,7 @@ test(
         for (const board of boards)
           expect([board, yield* Effect.promise(() => doctored(`${board}.doctored`))]).toEqual([
             board,
-            1,
+            expected.get(board)!,
           ]);
         yield* Effect.promise(() => chat.getByTestId("chat-pop-in").click());
         yield* Effect.promise(() => browser.close());

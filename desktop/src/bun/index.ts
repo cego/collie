@@ -461,8 +461,10 @@ const main = Effect.gen(function* () {
           const doctorOnceLive = (item: FlockItem) => {
             if ("_tag" in item || item.message._tag !== "Snapshot") return Effect.void;
             const route = routes.get(item.machine.profile)?.route;
-            if (route === undefined || checked.has(item.machine.profile)) return Effect.void;
-            checked.add(item.machine.profile);
+            // Again on a new build, which an older one could not answer `--gitlab-host` for.
+            const once = `${item.machine.profile}@${item.message.build}`;
+            if (route === undefined || checked.has(once)) return Effect.void;
+            checked.add(once);
             return doctored(route).pipe(Effect.forkIn(scope));
           };
           shown = EMPTY_FLOCK;
@@ -535,11 +537,13 @@ const main = Effect.gen(function* () {
         if (!isHostName(named))
           return yield* Effect.fail(`"${named}" is not a host name, such as gitlab.example.com`);
         if (named === gitlabHost()) return `GitLab is ${named} already`;
+        // A token is made for one GitLab, so the old host's goes before the host changes.
+        // Without a keyring there is none to go.
+        const token = yield* keyring.lookup("gitlab-token").pipe(Effect.orElseSucceed(() => null));
+        if (token !== null) yield* keyring.clear("gitlab-token");
         const changed = { ...settings, gitlabHost: named };
         yield* writeSettings(own, changed).pipe(Effect.mapError((error) => error.message));
         settings = changed;
-        // A token is made for one GitLab, so the old host's is not given to the new one.
-        yield* keyring.clear("gitlab-token");
         yield* SubscriptionRef.update(credentials, (now) => ({
           ...now,
           ...gitlabPages(),

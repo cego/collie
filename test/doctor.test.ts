@@ -3,7 +3,7 @@
 // fake-PATH rig — the same seam the `upgrade` tests use.
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { DateTime, Effect, FileSystem, Schema } from "effect";
+import { DateTime, Effect, FileSystem, Option, Schema } from "effect";
 import { runEffect } from "./support/effect";
 import { FakeHerdr, Rig } from "./support/recorder";
 import { installBaseline } from "./support/engine";
@@ -14,6 +14,7 @@ import { claudeSettingsPath, installStatusLine } from "../src/statusline";
 import { shell } from "../src/mr";
 import type { OpResult } from "../src/operations";
 import { writeConfigValue } from "../src/config";
+import { withGitlabHost } from "../src/commands/shared";
 
 let rig: Rig;
 let bin: FakeBin;
@@ -704,5 +705,26 @@ test("set to gitlab.com, doctor checks gitlab.com instead", () =>
       const overridden = yield* report({ GITLAB_HOST: "gitlab.cego.dk" });
       expect(check(overridden, "git push").detail).toContain("gitlab.cego.dk");
       expect(check(yield* report({ GITLAB_HOST: "" }), "git push").detail).toContain("gitlab.com");
+    }),
+  ));
+
+test("--gitlab-host names the host doctor checks, and a URL is refused", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* healthy();
+      yield* writeConfigValue(rig.userDir, "gitlab_host", null);
+      yield* twoHosts();
+      const pluginEnv = env({ FAKE_HERDR_PLUGINS: `cego.collie 0.1.0 [local:${rig.baselineDir}]` });
+
+      const named = withGitlabHost(pluginEnv, Option.some("gitlab.com"));
+      if ("ok" in named) throw new Error(named.error.message);
+      const result = yield* doctor(named, undefined, new FakeHerdr(named));
+      expect(check(result, "git push").detail).toContain("gitlab.com");
+      expect(check(result, "other gitlabs").detail).toContain("gitlab.cego.dk");
+
+      expect(withGitlabHost(pluginEnv, Option.some("https://gitlab.com/"))).toMatchObject({
+        ok: false,
+        error: { code: "invalid_input" },
+      });
     }),
   ));
