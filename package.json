@@ -28,6 +28,7 @@
     "solid-js": "^1.9.15"
   },
   "devDependencies": {
+    "@anthropic-ai/claude-agent-sdk": "0.3.289",
     "@effect/tsgo": "0.38.0",
     "@oxlint/plugins": "1.80.0",
     "@types/bun": "latest",
