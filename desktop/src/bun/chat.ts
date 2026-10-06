@@ -4,7 +4,6 @@
 // one; Claude Code keeps and compacts the transcripts on this computer. Collie's tools and
 // AskUserQuestion are its only tools.
 
-import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import {
   Cause,
   Crypto,
@@ -53,10 +52,17 @@ export interface ClaudeSession extends AsyncIterable<SdkMessage> {
   readonly close: () => void;
 }
 
+/** The Agent SDK's user message, as much of it as the chat sends; claude.ts holds it to the SDK's. */
+export interface UserMessage {
+  readonly type: "user";
+  readonly message: { readonly role: "user"; readonly content: string };
+  readonly parent_tool_use_id: null;
+}
+
 /** What the chat needs of Claude Code: the Agent SDK in Desktop, a script in a test. */
 export interface ClaudeCode<Server> {
   readonly query: (params: {
-    readonly prompt: AsyncIterable<SDKUserMessage>;
+    readonly prompt: AsyncIterable<UserMessage>;
     readonly options: ReturnType<typeof sessionOptions<Server>>;
   }) => ClaudeSession;
   readonly getSessionInfo: (
@@ -198,7 +204,7 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* <Server>(opts
     const known = yield* Effect.tryPromise(() =>
       opts.claude.getSessionInfo(id, { dir: opts.dir }),
     ).pipe(Effect.orElseSucceed(() => undefined));
-    const inbox = yield* Queue.unbounded<SDKUserMessage>();
+    const inbox = yield* Queue.unbounded<UserMessage>();
     const claude = opts.claude.query({
       prompt: Stream.toAsyncIterable(Stream.fromQueue(inbox)),
       options: sessionOptions({
