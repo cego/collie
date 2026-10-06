@@ -950,7 +950,14 @@ GitLab token, made on GitLab's own page — **Make one on GitLab** opens it with
 `https://helle.cego.dk` and is never asked for. Desktop takes a token only once GitLab
 accepts it with those scopes, and gives it at once to glab on every Machine it reaches
 (`glab auth login --hostname gitlab.cego.dk --stdin`); Helle's goes to each Machine's
-credentials file, owner-only, the same way. Every onboarding gets what is kept on its stdin (`--secrets-stdin`), so a second
+credentials file, owner-only, the same way.
+
+Helle makes tokens only in Slack, so its step walks you there: **Open Slack** opens the
+Slack app, or Slack on the web where the app does not open; run `/helle token` (the copy
+button puts it on the clipboard); press **Create new token** and label it, for example
+"Collie"; and paste the token. Desktop asks Helle's `/api/v1/me` about it at once and says
+whose it is, or that Helle refused it, and keeps nothing until Helle accepts it. **Skip on
+this Machine** stays there for a Machine that goes without Helle. Every onboarding gets what is kept on its stdin (`--secrets-stdin`), so a second
 Machine asks for neither, and one that was out of reach when a token was renewed gets the
 new one the next time it is onboarded. A step that needs one you have not given yet takes it
 there and onboards again. Desktop asks GitLab when the token expires, at launch and when it

@@ -109,6 +109,7 @@ PATH='${flock}/remote':"$PATH" exec /bin/sh -c "$@"
   "xdg-open": `#!${process.execPath}
 const url = Bun.argv[2];
 require("fs").appendFileSync("${flock}/opened.log", url + "\\n");
+if (url.startsWith("slack:") && require("fs").existsSync("${flock}/no-slack")) process.exit(4);
 const back = new URL(url).searchParams.get("redirect_uri");
 if (back?.startsWith("http://localhost") && !require("fs").existsSync("${flock}/no-browser")) {
   const callback = new URL(back);

@@ -55,6 +55,7 @@ if $ready; then echo '{"ok":true,"data":{"ready":true}}'; else
 let app: App | undefined;
 let releases: ReturnType<typeof Bun.serve> | undefined;
 let gitlab: ReturnType<typeof Bun.serve> | undefined;
+let helle: ReturnType<typeof Bun.serve> | undefined;
 const day = (from: number) =>
   DateTime.formatIsoDate(DateTime.add(DateTime.nowUnsafe(), { days: from }));
 /** How soon each token GitLab knows expires: the first is due for renewal. */
@@ -92,6 +93,13 @@ beforeAll(
               : Response.json({ expires_at: expires, scopes: ["api", "write_repository"] });
           },
         });
+        helle = Bun.serve({
+          port: 0,
+          fetch: (request) =>
+            request.headers.get("Authorization") === "Bearer h-1"
+              ? Response.json({ user_id: "u-1", display_name: "mk" })
+              : Response.json({ detail: "invalid token" }, { status: 401 }),
+        });
         app = yield* launch(
           ["a", "b", "c", "d"].map((name) => ({
             label: name,
@@ -111,6 +119,7 @@ beforeAll(
                 .export({ type: "spki", format: "pem" })
                 .toString(),
               COLLIE_DESKTOP_GITLAB: `http://127.0.0.1:${gitlab.port}`,
+              COLLIE_HELLE_URL: `http://127.0.0.1:${helle.port}`,
             },
           },
         );
@@ -123,6 +132,7 @@ afterAll(() =>
   run(quit(app)).finally(() => {
     void releases?.stop(true);
     void gitlab?.stop(true);
+    void helle?.stop(true);
   }),
 );
 
@@ -177,7 +187,28 @@ test(
         yield* press(step("gitlab").getByTestId("save-gitlab"));
         // Onboarded again, with the token.
         yield* reads(step("gitlab").getByTestId("detail"), "glab is logged in");
+        // Helle makes tokens in Slack: its app where it opens, its web client otherwise.
+        yield* press(step("helle").getByTestId("helle-slack"));
+        yield* holds("opened.log", "slack://open");
+        yield* touch("no-slack");
+        yield* press(step("helle").getByTestId("helle-slack"));
+        yield* holds("opened.log", "https://app.slack.com/client");
+        yield* press(step("helle").getByTestId("helle-copy"));
+        yield* reads(
+          page().getByText("Copied /helle token", { exact: true }),
+          "Copied /helle token",
+        );
+        // A token Helle refuses is said, and cannot be saved.
+        yield* fill(step("helle").getByTestId("helle-token"), "h-bad");
+        yield* reads(
+          step("helle").getByTestId("helle-check"),
+          "Helle refused that token; make a new one with /helle token",
+        );
+        expect(
+          yield* Effect.promise(() => step("helle").getByTestId("save-helle").isDisabled()),
+        ).toBe(true);
         yield* fill(step("helle").getByTestId("helle-token"), "h-1");
+        yield* reads(step("helle").getByTestId("helle-check"), "Belongs to mk");
         yield* press(step("helle").getByTestId("save-helle"));
         yield* reads(dialog().getByTestId("outcome"), "Onboarded: collie doctor is ready.");
         expect(

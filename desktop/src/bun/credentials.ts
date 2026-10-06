@@ -134,6 +134,43 @@ export const gitlabToken = (base: string, token: string) =>
     Effect.provide(FetchHttpClient.layer),
   );
 
+/** Slack's own app, where Helle makes tokens; its web client where the app is not here. */
+export const SLACK_APP = "slack://open";
+export const SLACK_WEB = "https://app.slack.com/client";
+
+const HelleMe = Schema.fromJsonString(
+  Schema.Struct({
+    user_id: Schema.String,
+    display_name: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  }),
+);
+
+/** Who Helle at `base` says `token` belongs to; a token it refuses is said plainly. */
+export const helleOwner = (base: string, token: string) =>
+  HttpClient.execute(
+    HttpClientRequest.get(`${base}/api/v1/me`).pipe(HttpClientRequest.bearerToken(token)),
+  ).pipe(
+    Effect.mapError((error) => `could not ask Helle about the token: ${error.message}`),
+    Effect.flatMap((response) =>
+      response.status === 200
+        ? response.text.pipe(Effect.mapError((error) => error.message))
+        : Effect.fail(
+            response.status === 401 || response.status === 403
+              ? "Helle refused that token; make a new one with /helle token"
+              : `Helle answered ${response.status}`,
+          ),
+    ),
+    Effect.flatMap((text) =>
+      Schema.decodeUnknownEffect(HelleMe)(text).pipe(Effect.mapError((e) => e.message)),
+    ),
+    Effect.map((me) => me.display_name ?? me.user_id),
+    Effect.timeoutOrElse({
+      duration: "10 seconds",
+      orElse: () => Effect.fail("Helle did not answer; try again"),
+    }),
+    Effect.provide(FetchHttpClient.layer),
+  );
+
 /** How long a Machine is waited on, as one waiting on SSO would hold a save until it is back. */
 const GIVE_LIMIT = "15 seconds";
 

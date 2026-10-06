@@ -70,16 +70,27 @@ import {
   removeFromHerdr,
   type RouteChange,
 } from "./machine";
-import { addToHerdr, doctorOn, NOT_STARTED, onboardThrough, RELEASES, tracked } from "./onboarding";
+import {
+  addToHerdr,
+  doctorOn,
+  NOT_STARTED,
+  onboardThrough,
+  ranWith,
+  RELEASES,
+  tracked,
+} from "./onboarding";
 import {
   claudeLoginThrough,
   GITLAB,
   giveHelle,
   giveToken,
   gitlabToken,
+  helleOwner,
   oneLine,
   credentialsFile,
   secretsFor,
+  SLACK_APP,
+  SLACK_WEB,
 } from "./credentials";
 import { tokenPage } from "../../../src/gitlab-token";
 import { HELLE_URL } from "../../../src/helle-url";
@@ -145,6 +156,18 @@ const openUrl = (url: string) =>
     if (Bun.which("xdg-open") === null) return void Utils.openExternal(url);
     Bun.spawn(["xdg-open", url], { stdin: "ignore", stdout: "ignore", stderr: "ignore" });
   });
+
+/** Slack's own app where it opens, else its web client. */
+const openSlack = Effect.gen(function* () {
+  const opened =
+    Bun.which("xdg-open") !== null &&
+    (yield* ranWith(["xdg-open", SLACK_APP]).pipe(
+      Effect.timeoutOption("5 seconds"),
+      // Still running is the app taking it.
+      Effect.map((ran) => Option.isNone(ran) || ran.value.code === 0),
+    ));
+  if (!opened) yield* openUrl(SLACK_WEB);
+});
 
 /** How long herdr's question waits on the human before it takes herdr's own default. */
 const QUESTION_LIMIT = "10 minutes";
@@ -517,10 +540,17 @@ const main = Effect.gen(function* () {
         yield* SubscriptionRef.update(credentials, (now) => ({ ...now, gitlab: { expires } }));
         return given("GitLab token", yield* giveToken(everyRoute(), gitlabHost, said));
       }).pipe(Effect.mapError((reason) => new ActionFailed({ reason }))),
+    checkHelle: ({ token }) =>
+      helleOwner(helle, token.trim()).pipe(
+        Effect.mapError((reason) => new ActionFailed({ reason })),
+      ),
+    openSlack: () => openSlack,
+    copyText: ({ text }) => Effect.sync(() => Utils.clipboardWriteText(text)),
     saveHelle: ({ token }) =>
       Effect.gen(function* () {
         const said = token.trim();
         if (!oneLine(said)) return yield* Effect.fail("a token is one line");
+        yield* helleOwner(helle, said);
         yield* keyring.store("helle-token", "Collie's Helle token", said);
         yield* SubscriptionRef.update(credentials, (now) => ({ ...now, helle: true }));
         return given("Helle's token", yield* giveHelle(everyRoute(), helle, said));

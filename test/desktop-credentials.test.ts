@@ -17,6 +17,7 @@ import {
   giveHelle,
   giveToken,
   gitlabToken,
+  helleOwner,
   credentialsFile,
   secretsFor,
 } from "../desktop/src/bun/credentials";
@@ -127,6 +128,36 @@ test("a GitLab token is taken only once GitLab accepts it with the scopes Collie
       expect(
         yield* gitlabToken(`http://127.0.0.1:${narrow.port}`, "glpat-good").pipe(Effect.flip),
       ).toContain("api and write_repository");
+    }),
+  ));
+
+/** Helle, answering `/me` for `h-1` and refusing the rest. */
+const helle = Effect.acquireRelease(
+  Effect.sync(() =>
+    Bun.serve({
+      port: 0,
+      fetch: (request) =>
+        new URL(request.url).pathname !== "/api/v1/me"
+          ? new Response("", { status: 404 })
+          : request.headers.get("Authorization") === "Bearer h-1"
+            ? Response.json({ user_id: "u-1", display_name: "mk" })
+            : Response.json({ detail: "invalid token" }, { status: 401 }),
+    }),
+  ),
+  (server) => Effect.sync(() => void server.stop(true)),
+);
+
+test("a Helle token is checked against Helle's /me, which says whose it is or refuses it", () =>
+  run(
+    Effect.gen(function* () {
+      const base = `http://127.0.0.1:${(yield* helle).port}`;
+      expect(yield* helleOwner(base, "h-1")).toBe("mk");
+      expect(yield* helleOwner(base, "h-bad").pipe(Effect.flip)).toBe(
+        "Helle refused that token; make a new one with /helle token",
+      );
+      expect(yield* helleOwner("http://127.0.0.1:1", "h-1").pipe(Effect.flip)).toContain(
+        "could not ask Helle",
+      );
     }),
   ));
 

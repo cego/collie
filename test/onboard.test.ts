@@ -487,6 +487,9 @@ test("Helle without credentials is not onboarded unless it is skipped", () =>
       const skipped = yield* onboarded();
 
       expect(statusOf(asked.events, "helle")).toBe("needs_human");
+      expect(results(asked.events).find((event) => event.step === "helle")?.detail).toContain(
+        'run /helle token, press "Create new token"',
+      );
       expect(asked.result).toMatchObject({ ok: false });
       expect(statusOf(skipped.events, "helle")).toBe("skipped");
       expect(skipped.result).toMatchObject({ ok: true, data: { ready: true } });

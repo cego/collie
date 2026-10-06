@@ -12,7 +12,7 @@ import { doctor, glabHosts, onPath, pushCheck } from "./doctor";
 import { GITLAB_HOST, tokenPage } from "./gitlab-token";
 import type { PluginEnv } from "./env";
 import { err, moveToRelease, prepareSteps, type OpResult } from "./operations";
-import { HELLE_URL } from "./helle-url";
+import { HELLE_TOKEN_STEPS, HELLE_URL } from "./helle-url";
 import { helleEnvPath, LINEAR_MCP_ADD, LINEAR_MCP_FIX, probeLinearMcp } from "./optional";
 import { installation, manifestField, RELEASE_TAG } from "./release";
 
@@ -516,7 +516,7 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
           ? inPlace(`credentials at ${file}`)
           : ({
               status: "needs_human",
-              detail: "give HELLE_API_TOKEN=… on stdin, or skip helle",
+              detail: `${HELLE_TOKEN_STEPS}; then give HELLE_API_TOKEN=… on stdin, or skip helle`,
               command: "collie onboard --secrets-stdin",
             } satisfies Outcome);
       }
