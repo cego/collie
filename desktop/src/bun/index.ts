@@ -38,6 +38,8 @@ import {
   type FlockItem,
   type KnownMachine,
   type OnboardRun,
+  type OnboardStep,
+  Skippable,
   type UpdateNews,
 } from "../shared/flock";
 import { RELEASE_PUBLIC_KEY } from "../../../src/signing";
@@ -271,18 +273,36 @@ const main = Effect.gen(function* () {
       if (onboarding.get(profile)?.job === job) onboarding.set(profile, { job, fiber });
     });
   /** Onboards through `route` under `job`, then keeps how it ended and has it tried at once. */
-  const onboardAs = (job: string, route: ShellRoute, start: OnboardRun = NOT_STARTED) => {
+  const onboardAs = (
+    job: string,
+    route: ShellRoute,
+    start: OnboardRun = NOT_STARTED,
+    skipping: ReadonlyArray<Skippable> = [],
+  ) => {
     const { machine } = route;
     onboarding.set(machine.profile, { job });
     return Effect.gen(function* () {
       // Without the keyring, a Machine is onboarded as far as it goes with none.
       const secrets = yield* secretsFor(keyring).pipe(Effect.orElseSucceed(() => ""));
-      return yield* onboardThrough(
+      const before = (yield* savedOnboardings(onboardings)).find(
+        (saved) => saved.machine.profile === machine.profile,
+      );
+      const skip = Skippable.literals.filter(
+        (step) =>
+          skipping.includes(step) ||
+          before?.run.steps.some((one) => one.step === step && one.status === "skipped"),
+      );
+      const run = yield* onboardThrough(
         route,
-        { version: manifest.version, releases, runners, key, secrets, open: openUrl },
+        { version: manifest.version, releases, runners, key, secrets, open: openUrl, skip },
         tell(job, machine),
         start,
       );
+      // Kept as skipped where the run ended before it, so the next run skips it too.
+      const unreached = skip
+        .filter((step) => !run.steps.some((one) => one.step === step))
+        .map((step): OnboardStep => ({ step, title: step, status: "skipped" }));
+      return { ...run, steps: [...run.steps, ...unreached] };
     }).pipe(
       Effect.tap((run) => saveOnboarding(onboardings, { _tag: "Onboarding", job, machine, run })),
       Effect.tap(() => PubSub.publish(changes, { _tag: "Wake", profile: machine.profile })),
@@ -409,7 +429,7 @@ const main = Effect.gen(function* () {
           );
         }),
       ).pipe(saving(boards), Stream.provide(BunServices.layer)),
-    onboard: ({ profile }) =>
+    onboard: ({ profile, skip }) =>
       Effect.gen(function* () {
         const running = onboarding.get(profile);
         if (running !== undefined) return running.job;
@@ -417,7 +437,7 @@ const main = Effect.gen(function* () {
         if (route === undefined)
           return yield* new ActionFailed({ reason: "that Machine is not in herdr's list" });
         const job = yield* uuid;
-        yield* onboardAs(job, route);
+        yield* onboardAs(job, route, NOT_STARTED, skip);
         return job;
       }),
     addMachine: ({ target, label, session }) =>

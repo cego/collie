@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import type { Skippable } from "../../../src/shared/flock";
+
 const { onboarding } = useFlock();
 const { answerHerdr, pasteCode } = useActions();
 const { job, onboardOn, loginOn } = useOnboarding();
@@ -24,6 +26,10 @@ const retry = () => {
   const profile = current.value?.machine.profile;
   if (profile !== undefined) void onboardOn(profile);
 };
+const skip = (step: Skippable) => {
+  const profile = current.value?.machine.profile;
+  if (profile !== undefined) void onboardOn(profile, [step]);
+};
 const login = () => {
   const profile = current.value?.machine.profile;
   if (profile !== undefined) void loginOn(profile);
@@ -47,6 +53,7 @@ const answer = (yes: boolean) => {
             :ended="current.run.ready !== null"
             @retry="retry"
             @login="login"
+            @skip="skip"
             @code="code"
           />
           <p v-if="current.run.ready === true" class="text-success" data-testid="outcome">

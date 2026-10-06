@@ -4,7 +4,7 @@
 import { useAtomSet } from "@effect/atom-vue";
 import { Cause, Exit, Result } from "effect";
 import type * as RpcClientError from "effect/unstable/rpc/RpcClientError";
-import type { ActionFailed, DesktopAction } from "../../../src/shared/flock";
+import type { ActionFailed, DesktopAction, Skippable } from "../../../src/shared/flock";
 import { FlockClient } from "../flock";
 
 const actAtom = FlockClient.mutation("act");
@@ -93,7 +93,8 @@ export const useActions = () => {
     workflowsIn: (installation: string, project: string) =>
       workflows({ payload: { installation, project } }).then(read),
     /** The job onboarding that route's Machine, whose progress comes on the board. */
-    onboard: (profile: string) => onboard({ payload: { profile } }).then(read),
+    onboard: (profile: string, skip?: ReadonlyArray<Skippable>) =>
+      onboard({ payload: skip === undefined ? { profile } : { profile, skip } }).then(read),
     addMachine: (target: string, label: string, session: string) =>
       addMachine({ payload: { target, label, session } }).then(read),
     answerHerdr: (job: string, yes: boolean) => answerHerdr({ payload: { job, yes } }),

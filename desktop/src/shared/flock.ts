@@ -136,6 +136,10 @@ export const Credentials = Schema.Struct({
 });
 export type Credentials = typeof Credentials.Type;
 
+/** The default steps a Machine may go without. */
+export const Skippable = Schema.Literals(["helle", "linear"]);
+export type Skippable = typeof Skippable.Type;
+
 /** What a step may end as and leave the human nothing to do. */
 export const SETTLED: ReadonlyArray<OnboardStep["status"]> = ["done", "in_place", "skipped"];
 
@@ -229,9 +233,12 @@ export const DesktopRpcs = RpcGroup.make(
   Rpc.make("updates", { success: UpdateNews, stream: true }),
   /** Installs the update that is ready, which quits Desktop and starts the new one. */
   Rpc.make("restart", { error: ActionFailed }),
-  /** Onboards, or repairs, the Machine a route reaches; its progress comes on `flock`. */
+  /**
+   * Onboards, or repairs, the Machine a route reaches; its progress comes on `flock`. A step
+   * in `skip` is skipped for that Machine from then on.
+   */
   Rpc.make("onboard", {
-    payload: { profile: Schema.String },
+    payload: { profile: Schema.String, skip: Schema.optionalKey(Schema.Array(Skippable)) },
     success: Schema.String,
     error: ActionFailed,
   }),
@@ -477,8 +484,10 @@ export interface MachineRow {
 }
 
 /**
- * How onboarded a route is: doctor's reading, less a step its latest onboarding skipped, or
- * that onboarding where it is newer or doctor has not answered.
+ * How onboarded a route is: doctor's reading, less a step its latest onboarding skipped and
+ * with a default step that onboarding left unsettled, which doctor cannot see (a Linear
+ * server added but not logged in); or that onboarding where it is newer or doctor has not
+ * answered.
  */
 const standing = (onboarding?: OnboardRun, doctor?: OnboardRun): OnboardRun | null => {
   if (doctor === undefined || (onboarding !== undefined && onboarding.at > doctor.at))
@@ -486,7 +495,14 @@ const standing = (onboarding?: OnboardRun, doctor?: OnboardRun): OnboardRun | nu
   const skipped = new Set(
     onboarding?.steps.filter(({ status }) => status === "skipped").map(({ step }) => step),
   );
-  const steps = doctor.steps.filter(({ step }) => !skipped.has(step));
+  const listed = new Set(doctor.steps.map(({ step }) => step));
+  const left = (onboarding?.steps ?? []).filter(
+    ({ step, status }) =>
+      Skippable.literals.some((one) => one === step) &&
+      !listed.has(step) &&
+      !SETTLED.includes(status),
+  );
+  const steps = [...doctor.steps.filter(({ step }) => !skipped.has(step)), ...left];
   return { ...doctor, steps, ready: steps.length === 0 };
 };
 

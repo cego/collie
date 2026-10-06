@@ -28,6 +28,7 @@ on="\${FAKE_TARGET:-local}"
 secrets=""
 [ "$5" = --secrets-stdin ] && secrets=$(cat)
 printf '%s\\n' "$secrets" > '${flock}'/"stdin-$on"
+echo "$*" > '${flock}'/"args-$on"
 ready=true
 start() { echo "{\\"event\\":\\"start\\",\\"step\\":\\"$1\\",\\"title\\":\\"$2\\"}"; }
 done_() { echo "{\\"event\\":\\"result\\",\\"step\\":\\"$1\\",\\"status\\":\\"done\\",\\"detail\\":\\"$2\\"}"; }
@@ -41,8 +42,12 @@ start helle "Helle's credentials"
 case "$secrets" in *HELLE_API_TOKEN=*) done_ helle "wrote it" ;; *)
   echo '{"event":"result","step":"helle","status":"needs_human","detail":"give HELLE_API_URL and HELLE_API_TOKEN"}'; ready=false ;; esac
 start linear "The Linear MCP in Claude Code"
-echo '{"event":"human","step":"linear","detail":"open this to let Claude Code reach Linear","url":"${LINEAR}","port":62074}'
-done_ linear "logged in to Linear"
+case " $* " in *" --skip linear "*)
+  echo '{"event":"result","step":"linear","status":"skipped","detail":"skipped for this Machine"}' ;; *)
+  echo '{"event":"human","step":"linear","detail":"open this to let Claude Code reach Linear","url":"${LINEAR}","port":62074}'
+  if [ -e '${flock}/linear-fails' ]; then
+    echo '{"event":"result","step":"linear","status":"failed","detail":"the Linear login did not finish"}'; ready=false
+  else done_ linear "logged in to Linear"; fi ;; esac
 if $ready; then echo '{"ok":true,"data":{"ready":true}}'; else
   echo '{"ok":false,"error":{"code":"operation_failed","message":"Not onboarded yet","details":{}}}'; exit 1; fi
 `);
@@ -268,4 +273,25 @@ test(
       }),
     ),
   60_000,
+);
+
+test(
+  "Linear's step left failed can be skipped on that Machine, and stays skipped when it is onboarded again",
+  () =>
+    run(
+      Effect.gen(function* () {
+        yield* touch("linear-fails");
+        yield* onboardOn("a");
+        yield* reads(step("linear").getByTestId("detail"), "the Linear login did not finish");
+        yield* press(step("linear").getByTestId("skip"));
+        yield* reads(dialog().getByTestId("outcome"), "Onboarded: collie doctor is ready.");
+        expect(yield* read("args-mk@a")).toContain("--skip linear");
+        yield* closeDialog;
+        yield* onboardOn("a");
+        yield* reads(dialog().getByTestId("outcome"), "Onboarded: collie doctor is ready.");
+        yield* reads(step("linear").getByTestId("detail"), "skipped for this Machine");
+        yield* closeDialog;
+      }),
+    ),
+  90_000,
 );

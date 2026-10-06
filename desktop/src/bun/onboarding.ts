@@ -7,7 +7,7 @@ import { Clock, Effect, FileSystem, Option, Schema, Stream } from "effect";
 import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import { RELEASE_PUBLIC_KEY, SIGNATURE_SUFFIX, verifyRelease } from "../../../src/signing";
-import { type OnboardRun, type OnboardStep, SETTLED } from "../shared/flock";
+import { type OnboardRun, type OnboardStep, SETTLED, type Skippable } from "../shared/flock";
 import { quoted, type Route, type ShellRoute, spawned } from "./machine";
 
 export const RELEASES = "https://github.com/cego/collie/releases/download";
@@ -210,6 +210,7 @@ export interface OnboardWith {
   readonly secrets?: string;
   /** Opens a login a step streams in this computer's browser. */
   readonly open?: (url: string) => Effect.Effect<void>;
+  readonly skip?: ReadonlyArray<Skippable>;
 }
 
 /**
@@ -218,7 +219,15 @@ export interface OnboardWith {
  */
 export const onboardThrough = Effect.fn("Desktop.onboardThrough")(function* (
   route: ShellRoute,
-  { version, releases, runners, key, secrets = "", open = () => Effect.void }: OnboardWith,
+  {
+    version,
+    releases,
+    runners,
+    key,
+    secrets = "",
+    open = () => Effect.void,
+    skip = [],
+  }: OnboardWith,
   told: (run: OnboardRun) => Effect.Effect<void>,
   start: OnboardRun = NOT_STARTED,
 ) {
@@ -247,7 +256,11 @@ export const onboardThrough = Effect.fn("Desktop.onboardThrough")(function* (
 
   const ended = yield* Effect.gen(function* () {
     const command = yield* route.sh(
-      `exec ${placedAt(version)} --json onboard --to ${quoted(version)}${secrets === "" ? "" : " --secrets-stdin"}`,
+      [
+        `exec ${placedAt(version)} --json onboard --to ${quoted(version)}`,
+        ...(secrets === "" ? [] : ["--secrets-stdin"]),
+        ...skip.map((step) => `--skip ${step}`),
+      ].join(" "),
     );
     const child = yield* spawned(() =>
       Bun.spawn([...command], {

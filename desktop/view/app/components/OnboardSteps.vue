@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { type OnboardStep, SETTLED } from "../../../src/shared/flock";
+import { type OnboardStep, SETTLED, Skippable } from "../../../src/shared/flock";
 
 /** `ended` once the onboarding has, when a step left unsettled offers to try again. */
 defineProps<{ steps: ReadonlyArray<OnboardStep>; ended: boolean }>();
-const emit = defineEmits<{ retry: []; login: []; code: [code: string] }>();
+const emit = defineEmits<{ retry: []; login: []; code: [code: string]; skip: [step: Skippable] }>();
 const { openLink } = useActions();
 
 const code = ref("");
@@ -22,6 +22,7 @@ const ICON: Record<OnboardStep["status"], string> = {
   failed: "i-lucide-circle-x",
 };
 const left = ({ status }: OnboardStep) => status !== "running" && !SETTLED.includes(status);
+const skippable = ({ step }: OnboardStep) => Skippable.literals.find((one) => one === step);
 </script>
 
 <template>
@@ -79,6 +80,15 @@ const left = ({ status }: OnboardStep) => status !== "running" && !SETTLED.inclu
             label="Retry"
             data-testid="retry"
             @click="emit('retry')"
+          />
+          <UButton
+            v-if="ended && left(one) && skippable(one)"
+            size="xs"
+            color="neutral"
+            variant="outline"
+            label="Skip on this Machine"
+            data-testid="skip"
+            @click="emit('skip', skippable(one)!)"
           />
         </div>
         <!-- Kept once, for every Machine; this one is then onboarded again. -->

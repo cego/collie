@@ -121,6 +121,7 @@ const add = async () => {
               :ended="true"
               @retry="onboardOn(row.profile)"
               @login="loginOn(row.profile)"
+              @skip="(step) => onboardOn(row.profile, [step])"
             />
           </template>
           <div class="flex justify-end gap-2">

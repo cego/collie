@@ -933,7 +933,11 @@ Machine's board again at once rather than after its backoff. Desktop keeps each 
 latest onboarding on this computer, beside its saved board. Whether a Machine is onboarded
 is `collie doctor`'s to say: once a Machine is live, and after each onboarding of it,
 Desktop runs `collie --json doctor` there, and its row lists each check that failed, with
-its fix and **Retry**, even on a Machine Desktop never onboarded.
+its fix and **Retry**, even on a Machine Desktop never onboarded. Helle and the Linear MCP
+count too, though doctor passes them as optional: the row lists either one doctor finds
+absent or not working, and a Linear login onboarding left unfinished. **Skip on this
+Machine** on either step onboards it again with `--skip`, and every later onboarding of
+that Machine skips it too.
 
 What only you can give is asked once, here, and never pasted on a command line. **Machines**
 keeps the Flock's credentials in this computer's Secret Service keyring, through

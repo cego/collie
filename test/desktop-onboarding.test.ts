@@ -540,3 +540,46 @@ test("Helle and the Linear MCP count toward onboarded though doctor passes them,
       expect(Option.getOrThrow(yield* doctorOn(said(working))).ready).toBe(true);
     }),
   ));
+
+test("a Linear login onboarding left unfinished keeps the row short, though doctor finds the server", () =>
+  run(
+    Effect.gen(function* () {
+      const machine = { profile: "p-vm", name: "vm", target: "mk@vm" };
+      const checks = [
+        { name: "helle", ok: true, detail: "as mk", fix: "" },
+        { name: "linear mcp", ok: true, detail: '"linear-server"', fix: "" },
+      ];
+      const doctored = Option.getOrThrow(
+        yield* doctorOn({
+          collie: () =>
+            Effect.succeed({
+              out: JSON.stringify({ ok: true, data: { checks } }),
+              err: "",
+              code: 0,
+            }),
+        }),
+      );
+      const row = (status: OnboardStep["status"]) => {
+        const run: OnboardRun = {
+          steps: [{ step: "linear", title: "The Linear MCP", status }],
+          asked: null,
+          ready: status === "skipped",
+          reason: null,
+          at: 0,
+        };
+        const items: FlockItem[] = [
+          { _tag: "Routed", machine },
+          { _tag: "Onboarding", job: "j-1", machine, run },
+          { _tag: "Doctored", machine, run: doctored },
+        ];
+        return machineRows(items.reduce(applyItem, EMPTY_FLOCK))[0]!.onboarded!;
+      };
+      const failed = row("failed");
+      expect(failed.ready).toBe(false);
+      expect(failed.steps.map(({ step, status }) => [step, status])).toEqual([
+        ["linear", "failed"],
+      ]);
+      expect(row("skipped").ready).toBe(true);
+      expect(row("done").ready).toBe(true);
+    }),
+  ));
