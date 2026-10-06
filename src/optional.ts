@@ -8,6 +8,7 @@
 import { Effect, FileSystem, Option, Path, Result, Schema } from "effect";
 import type { PluginEnv } from "./env";
 import { credentials, helleMe } from "./helle";
+import { helleUrlOf } from "./helle-url";
 
 /**
  * `ok`: there. `absent`: not set up, and nothing is wrong. `broken`: set up and not
@@ -31,14 +32,18 @@ export const probeHelle = Effect.fn("Optional.probeHelle")(function* (env: Plugi
     return {
       state: "absent",
       detail: `no credentials at ${file}; only workflows that wait on Helle (renovate) need them`,
-      fix: `write HELLE_API_URL=<url> and HELLE_API_TOKEN=<token> to ${file}`,
+      fix: `write HELLE_API_TOKEN=<token> to ${file}`,
     } satisfies Probe;
-  const creds = yield* credentials({ home: env.home, envFile: file }).pipe(Effect.result);
+  const creds = yield* credentials({
+    home: env.home,
+    envFile: file,
+    url: helleUrlOf(env.raw),
+  }).pipe(Effect.result);
   if (Result.isFailure(creds))
     return {
       state: "broken",
       detail: creds.failure.message,
-      fix: `add the missing line to ${file}`,
+      fix: `add HELLE_API_TOKEN=<token> to ${file}`,
     } satisfies Probe;
   const me = yield* helleMe(creds.success).pipe(
     Effect.result,
@@ -49,7 +54,7 @@ export const probeHelle = Effect.fn("Optional.probeHelle")(function* (env: Plugi
     return {
       state: "broken",
       detail: `${creds.success.url} did not answer within ${HELLE_PROBE}`,
-      fix: `check HELLE_API_URL in ${file}, and that the host is reachable`,
+      fix: `check that ${creds.success.url} is reachable`,
     } satisfies Probe;
   if (Result.isFailure(me))
     return {

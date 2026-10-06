@@ -1,7 +1,9 @@
-// What only the human can give, asked once by Desktop: credentials kept in this computer's
-// keyring and handed to each Machine on stdin, and logins approved in this computer's browser.
+// What only the human can give, asked once by Desktop: credentials kept in an owner-only file
+// on this computer and handed to each Machine on stdin, and logins approved in this computer's browser.
 
-import { Effect, Option, Queue, Schedule, Schema, Stream } from "effect";
+import { Effect, FileSystem, Option, Queue, Schedule, Schema, Semaphore, Stream } from "effect";
+import { BunFileSystem } from "@effect/platform-bun";
+import type { PlatformError } from "effect/PlatformError";
 import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
@@ -12,8 +14,8 @@ import { ranWith, shOn, tracked } from "./onboarding";
 
 export const GITLAB = `https://${GITLAB_HOST}`;
 
-/** What Desktop keeps in the keyring, by name. */
-export type KeyringEntry = "gitlab-token" | "helle-url" | "helle-token";
+/** What Desktop keeps, by name. */
+export type KeyringEntry = "gitlab-token" | "helle-token";
 
 export interface Keyring {
   readonly lookup: (key: KeyringEntry) => Effect.Effect<string | null, string>;
@@ -21,36 +23,80 @@ export interface Keyring {
   readonly clear: (key: KeyringEntry) => Effect.Effect<void, string>;
 }
 
-/** The Secret Service keyring, through libsecret's `secret-tool`. */
-export const secretService = (tool = "secret-tool"): Keyring => {
-  const present =
-    Bun.which(tool) === null
-      ? Effect.fail(`${tool} is not installed; install libsecret-tools to keep credentials`)
-      : Effect.void;
-  const attributes = (key: KeyringEntry) => ["service", "collie-desktop", "key", key];
+const ENTRIES: ReadonlyArray<KeyringEntry> = ["gitlab-token", "helle-token"];
+
+const parsed = (text: string) =>
+  new Map(
+    text.split("\n").flatMap((line) => {
+      const at = line.indexOf("=");
+      return at > 0 ? [[line.slice(0, at), line.slice(at + 1)] as const] : [];
+    }),
+  );
+
+/** What an earlier Desktop kept through `secret-tool`, if that is here; nothing otherwise. */
+const fromSecretTool = (tool: string) =>
+  Effect.gen(function* () {
+    const found = new Map<string, string>();
+    if (Bun.which(tool) === null) return found;
+    for (const key of ENTRIES) {
+      // A locked keyring may wait on an unlock prompt; Desktop's launch does not.
+      const ran = yield* ranWith([tool, "lookup", "service", "collie-desktop", "key", key]).pipe(
+        Effect.timeoutOption("5 seconds"),
+      );
+      if (Option.isSome(ran) && ran.value.code === 0 && ran.value.out !== "")
+        found.set(key, ran.value.out);
+    }
+    return found;
+  });
+
+/**
+ * Desktop's credentials, as `key=value` lines in `dir/credentials`: owner-only and replaced
+ * whole, as glab, gh and Helle keep the same tokens on every Machine. Until it exists, what
+ * an earlier Desktop left in the Secret Service is read and copied into it.
+ */
+export const credentialsFile = (dir: string, secretTool = "secret-tool"): Keyring => {
+  const file = `${dir}/credentials`;
+  const lock = Semaphore.makeUnsafe(1);
+  const write = (values: ReadonlyMap<string, string>) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* fs.makeDirectory(dir, { recursive: true, mode: 0o700 });
+      yield* fs.chmod(dir, 0o700);
+      yield* fs.remove(`${file}.new`, { force: true });
+      const text = [...values].map(([key, value]) => `${key}=${value}\n`).join("");
+      yield* fs.writeFileString(`${file}.new`, text, { mode: 0o600 });
+      yield* fs.rename(`${file}.new`, file);
+    });
+  const load = Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    if (yield* fs.exists(file)) return parsed(yield* fs.readFileString(file));
+    const found = yield* fromSecretTool(secretTool).pipe(
+      Effect.orElseSucceed(() => new Map<string, string>()),
+    );
+    // Written only with something in it, so a keyring that did not answer is asked again.
+    if (found.size > 0) yield* write(found);
+    return found;
+  });
+  const locked = <A>(effect: Effect.Effect<A, PlatformError, FileSystem.FileSystem>) =>
+    lock
+      .withPermits(1)(effect)
+      .pipe(
+        Effect.mapError((error) => `${file}: ${error.message}`),
+        Effect.provide(BunFileSystem.layer),
+      );
   return {
-    lookup: (key) =>
-      present.pipe(
-        Effect.andThen(ranWith([tool, "lookup", ...attributes(key)])),
-        Effect.map(({ out, code }) => (code === 0 && out !== "" ? out : null)),
-      ),
-    store: (key, label, value) =>
-      present.pipe(
-        Effect.andThen(
-          ranWith(
-            [tool, "store", "--label", label, ...attributes(key)],
-            new TextEncoder().encode(value),
-          ),
-        ),
-        Effect.flatMap(({ err, code }) =>
-          code === 0 ? Effect.void : Effect.fail(err.trim() || `${tool} store exited ${code}`),
-        ),
-      ),
+    lookup: (key) => locked(load.pipe(Effect.map((values) => values.get(key) ?? null))),
+    store: (key, _label, value) =>
+      locked(load.pipe(Effect.flatMap((values) => write(new Map(values).set(key, value))))),
+    // Written even when nothing is left, so an earlier Desktop's keyring is not copied back.
     clear: (key) =>
-      present.pipe(
-        Effect.andThen(ranWith([tool, "clear", ...attributes(key)])),
-        Effect.flatMap(({ err, code }) =>
-          code === 0 ? Effect.void : Effect.fail(err.trim() || `${tool} clear exited ${code}`),
+      locked(
+        load.pipe(
+          Effect.flatMap((values) => {
+            const left = new Map(values);
+            left.delete(key);
+            return write(left);
+          }),
         ),
       ),
   };
@@ -61,7 +107,6 @@ export const secretsFor = (keyring: Keyring) =>
   Effect.gen(function* () {
     const lines: Array<readonly [string, KeyringEntry]> = [
       ["GITLAB_TOKEN", "gitlab-token"],
-      ["HELLE_API_URL", "helle-url"],
       ["HELLE_API_TOKEN", "helle-token"],
     ];
     let text = "";
@@ -96,6 +141,43 @@ export const gitlabToken = (base: string, token: string) =>
         ? Effect.fail(`the token needs the ${SCOPES.join(" and ")} scopes`)
         : Effect.succeed({ expires: expires_at }),
     ),
+    Effect.provide(FetchHttpClient.layer),
+  );
+
+/** Slack's own app, where Helle makes tokens; its web client where the app is not here. */
+export const SLACK_APP = "slack://open";
+export const SLACK_WEB = "https://app.slack.com/client";
+
+const HelleMe = Schema.fromJsonString(
+  Schema.Struct({
+    user_id: Schema.String,
+    display_name: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  }),
+);
+
+/** Who Helle at `base` says `token` belongs to; a token it refuses is said plainly. */
+export const helleOwner = (base: string, token: string) =>
+  HttpClient.execute(
+    HttpClientRequest.get(`${base}/api/v1/me`).pipe(HttpClientRequest.bearerToken(token)),
+  ).pipe(
+    Effect.mapError((error) => `could not ask Helle about the token: ${error.message}`),
+    Effect.flatMap((response) =>
+      response.status === 200
+        ? response.text.pipe(Effect.mapError((error) => error.message))
+        : Effect.fail(
+            response.status === 401 || response.status === 403
+              ? "Helle refused that token; make a new one with /helle token"
+              : `Helle answered ${response.status}`,
+          ),
+    ),
+    Effect.flatMap((text) =>
+      Schema.decodeUnknownEffect(HelleMe)(text).pipe(Effect.mapError((e) => e.message)),
+    ),
+    Effect.map((me) => me.display_name ?? me.user_id),
+    Effect.timeoutOrElse({
+      duration: "10 seconds",
+      orElse: () => Effect.fail("Helle did not answer; try again"),
+    }),
     Effect.provide(FetchHttpClient.layer),
   );
 

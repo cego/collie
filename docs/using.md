@@ -133,14 +133,13 @@ login of yours. Neither is needed by the bundled `implement` and `review`, so `c
 reports them without failing, and a run that needs one is refused up front with the fix
 rather than failing hours in.
 
-| Integration | Who needs it                                                          | How to set it up                                                                                                           |
-| ----------- | --------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| Helle       | `renovate`, or any forked workflow with `waits: helle`                | `HELLE_API_URL=<url>` and `HELLE_API_TOKEN=<token>` in `~/.config/helle/env`, the file the Helle MCP wrapper sources       |
-| Linear MCP  | `plan`'s "Offload to Linear"; `implement` given a Linear issue or URL | `claude mcp add --transport http --scope user linear-server https://mcp.linear.app/mcp`, then log in when Claude Code asks |
+| Integration | Who needs it                                                          | How to set it up                                                                                                                    |
+| ----------- | --------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| Helle       | `renovate`, or any forked workflow with `waits: helle`                | `HELLE_API_TOKEN=<token>` in `~/.config/helle/env`, the file the Helle MCP wrapper sources; Helle is always `https://helle.cego.dk` |
+| Linear MCP  | `plan`'s "Offload to Linear"; `implement` given a Linear issue or URL | `claude mcp add --transport http --scope user linear-server https://mcp.linear.app/mcp`, then log in when Claude Code asks          |
 
 Doctor tells the two failure modes apart. Not set up at all is a note under a `✓`, with
-the command above. Set up and not working is a `!`: a credentials file missing one of its
-lines, a token Helle answers 401 to, a host that does not answer, a `.claude.json` that is
+the command above. Set up and not working is a `!`: a credentials file without a token, a token Helle answers 401 to, a host that does not answer, a `.claude.json` that is
 not valid JSON. Each names the file to look in. `collie run start` asks the same two
 questions for the workflow it is about to run and refuses with that detail when the answer
 is no — a Run that would only find out at its merge step is not started.
@@ -948,13 +947,18 @@ Machine** on either step onboards it again with `--skip`, and every later onboar
 that Machine skips it too.
 
 What only you can give is asked once, here, and never pasted on a command line. **Machines**
-keeps the Flock's credentials in this computer's Secret Service keyring, through
-`secret-tool` (libsecret): one GitLab token, made on GitLab's own page — **Make one on
-GitLab** opens it with the `api` and `write_repository` scopes filled in — and Helle's URL
-and token. Desktop takes a token only once GitLab accepts it with those scopes, and gives
-it at once to glab on every Machine it reaches (`glab auth login --hostname <host>
---stdin`); Helle's go to each Machine's credentials file, owner-only, the
-same way. Every onboarding gets what is kept on its stdin (`--secrets-stdin`), so a second
+keeps the Flock's credentials in a file of Desktop's own,
+`$XDG_CONFIG_HOME/collie-desktop/credentials` (`~/.config/collie-desktop/credentials`
+unless that is set), readable by you alone and replaced whole on every save — the way glab,
+gh and Helle already keep the same tokens on every Machine, so nothing has to be installed
+for it. A Desktop that kept them in the Secret Service through `secret-tool` before has them
+copied into that file the first time, where `secret-tool` is there. What it keeps is one
+GitLab token, made on GitLab's own page — **Make one on GitLab** opens it with the `api` and
+`write_repository` scopes filled in — and Helle's token; Helle's URL is always
+`https://helle.cego.dk` and is never asked for. Desktop takes a token only once GitLab
+accepts it with those scopes, and gives it at once to glab on every Machine it reaches
+(`glab auth login --hostname <host> --stdin`); Helle's goes to each Machine's
+credentials file, owner-only, the same way. Every onboarding gets what is kept on its stdin (`--secrets-stdin`), so a second
 Machine asks for neither, and one that was out of reach when a token was renewed gets the
 new one the next time it is onboarded. A step that needs one you have not given yet takes it
 there and onboards again. Desktop asks GitLab when the token expires, at launch and when it
@@ -968,6 +972,13 @@ page Desktop opens, the GitLab a token is checked against and logged in to, and 
 is that host's. A change applies at once, without a restart, and every Machine is doctored
 again. It also forgets the GitLab token Desktop kept, since a token is made for one GitLab:
 make a new one on the new host's page and save it.
+
+Helle makes tokens only in Slack, so its step walks you there: **Open Slack** opens the
+Slack app, or Slack on the web where the app does not open; run `/helle token` (the copy
+button puts it on the clipboard); press **Create new token** and label it, for example
+"Collie"; and paste the token. Desktop asks Helle's `/api/v1/me` about it at once and says
+whose it is, or that Helle refused it, and keeps nothing until Helle accepts it. **Skip on
+this Machine** stays there for a Machine that goes without Helle.
 
 The Claude login is each Machine's own. **Log in** on that step runs `claude auth login`
 on the Machine with `$BROWSER` set to a shim Desktop reads, because Claude Code hands its

@@ -19,6 +19,9 @@ const removeMachineAtom = FlockClient.mutation("removeMachine");
 const saveGitlabAtom = FlockClient.mutation("saveGitlab");
 const saveGitlabHostAtom = FlockClient.mutation("saveGitlabHost");
 const saveHelleAtom = FlockClient.mutation("saveHelle");
+const checkHelleAtom = FlockClient.mutation("checkHelle");
+const openSlackAtom = FlockClient.mutation("openSlack");
+const copyTextAtom = FlockClient.mutation("copyText");
 const claudeLoginAtom = FlockClient.mutation("claudeLogin");
 const pasteCodeAtom = FlockClient.mutation("pasteCode");
 
@@ -65,6 +68,9 @@ export const useActions = () => {
   const saveGitlab = useAtomSet(() => saveGitlabAtom, { mode: "promiseExit" });
   const saveGitlabHost = useAtomSet(() => saveGitlabHostAtom, { mode: "promiseExit" });
   const saveHelle = useAtomSet(() => saveHelleAtom, { mode: "promiseExit" });
+  const checkHelle = useAtomSet(() => checkHelleAtom, { mode: "promiseExit" });
+  const openSlack = useAtomSet(() => openSlackAtom, { mode: "promiseExit" });
+  const copyText = useAtomSet(() => copyTextAtom, { mode: "promiseExit" });
   const claudeLogin = useAtomSet(() => claudeLoginAtom, { mode: "promiseExit" });
   const pasteCode = useAtomSet(() => pasteCodeAtom, { mode: "promiseExit" });
   const registry = injectRegistry();
@@ -167,7 +173,19 @@ export const useActions = () => {
     /** Whether it was kept; what came of giving it to each Machine is said. */
     saveGitlab: (token: string) => saveGitlab({ payload: { token } }).then(kept),
     saveGitlabHost: (host: string) => saveGitlabHost({ payload: { host } }).then(kept),
-    saveHelle: (url: string, token: string) => saveHelle({ payload: { url, token } }).then(kept),
+    saveHelle: (token: string) => saveHelle({ payload: { token } }).then(kept),
+    /** Who the token belongs to, or why Helle would not say. */
+    checkHelle: (token: string) =>
+      checkHelle({ payload: { token } }).then((exit) =>
+        Exit.isSuccess(exit)
+          ? ({ owner: exit.value } as const)
+          : ({ refused: failureOf(exit.cause).reason } as const),
+      ),
+    openSlack: () => openSlack({ payload: undefined }),
+    copyText: (text: string) =>
+      copyText({ payload: { text } }).then((exit) => {
+        if (Exit.isSuccess(exit)) toast.add({ title: `Copied ${text}`, color: "success" });
+      }),
     /** The job logging Claude Code in on that route's Machine. */
     claudeLogin: (profile: string) => claudeLogin({ payload: { profile } }).then(read),
     pasteCode: (job: string, code: string) => pasteCode({ payload: { job, code } }),

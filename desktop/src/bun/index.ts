@@ -1,7 +1,7 @@
 // Desktop's main process: one window on the view, every Machine's board relayed to it as
 // Effect RPC over Electrobun's message channel, and the Flock chat beside them.
 
-import { hostname } from "node:os";
+import { homedir, hostname } from "node:os";
 import { BunRuntime, BunServices } from "@effect/platform-bun";
 import {
   Clock,
@@ -77,11 +77,15 @@ import {
   giveHelle,
   giveToken,
   gitlabToken,
+  helleOwner,
   oneLine,
-  secretService,
+  credentialsFile,
   secretsFor,
+  SLACK_APP,
+  SLACK_WEB,
 } from "./credentials";
 import { isHostName, tokenPage } from "../../../src/gitlab-token";
+import { HELLE_URL } from "../../../src/helle-url";
 import { electrobunUpdater } from "./electrobun-updater";
 import {
   dropBoardsOf,
@@ -145,6 +149,15 @@ const openUrl = (url: string) =>
     Bun.spawn(["xdg-open", url], { stdin: "ignore", stdout: "ignore", stderr: "ignore" });
   });
 
+/** Slack's own app where it opens, else its web client. */
+const openSlack = Effect.gen(function* () {
+  if (Bun.which("xdg-open") === null) return yield* openUrl(SLACK_WEB);
+  // Never killed: still running is the app taking it.
+  const child = Bun.spawn(["xdg-open", SLACK_APP], { stdio: ["ignore", "ignore", "ignore"] });
+  const code = yield* Effect.promise(() => child.exited).pipe(Effect.timeoutOption("5 seconds"));
+  if (Option.isSome(code) && code.value !== 0) yield* openUrl(SLACK_WEB);
+});
+
 /** How long herdr's question waits on the human before it takes herdr's own default. */
 const QUESTION_LIMIT = "10 minutes";
 
@@ -189,7 +202,11 @@ const main = Effect.gen(function* () {
       : defaultGitlab;
   const gitlabHost = () => new URL(gitlab()).host;
   const gitlabPages = () => ({ host: gitlabHost(), tokenPage: tokenPage(gitlabHost()) });
-  const keyring = secretService();
+  const helle = yield* Config.String("COLLIE_HELLE_URL").pipe(Config.withDefault(HELLE_URL));
+  const config =
+    (yield* Config.String("XDG_CONFIG_HOME").pipe(Config.withDefault(""))) ||
+    `${homedir()}/.config`;
+  const keyring = credentialsFile(`${config}/collie-desktop`);
   const blank: Credentials = { gitlab: null, helle: false, ...gitlabPages() };
   // Its expiry is GitLab's to say, so a token renewed elsewhere is not warned of.
   const held = Effect.gen(function* () {
@@ -307,7 +324,7 @@ const main = Effect.gen(function* () {
     const { machine } = route;
     onboarding.set(machine.profile, { job });
     return Effect.gen(function* () {
-      // Without the keyring, a Machine is onboarded as far as it goes with none.
+      // Without its credentials file, a Machine is onboarded as far as it goes with none.
       const secrets = yield* secretsFor(keyring).pipe(Effect.orElseSucceed(() => ""));
       const before = (yield* savedOnboardings(onboardings)).find(
         (saved) => saved.machine.profile === machine.profile,
@@ -552,15 +569,20 @@ const main = Effect.gen(function* () {
         for (const route of everyRoute()) yield* doctored(route).pipe(Effect.forkIn(scope));
         return `Machines are onboarded and doctored against ${named} from now on; make a token there`;
       }).pipe(Effect.mapError((reason) => new ActionFailed({ reason }))),
-    saveHelle: ({ url, token }) =>
+    checkHelle: ({ token }) =>
+      helleOwner(helle, token.trim()).pipe(
+        Effect.mapError((reason) => new ActionFailed({ reason })),
+      ),
+    openSlack: () => openSlack,
+    copyText: ({ text }) => Effect.sync(() => Utils.clipboardWriteText(text)),
+    saveHelle: ({ token }) =>
       Effect.gen(function* () {
-        const [at, said] = [url.trim(), token.trim()];
-        if (!oneLine(at) || !oneLine(said))
-          return yield* Effect.fail("Helle needs its URL and a token, each on one line");
-        yield* keyring.store("helle-url", "Helle's URL for Collie", at);
+        const said = token.trim();
+        if (!oneLine(said)) return yield* Effect.fail("a token is one line");
+        yield* helleOwner(helle, said);
         yield* keyring.store("helle-token", "Collie's Helle token", said);
         yield* SubscriptionRef.update(credentials, (now) => ({ ...now, helle: true }));
-        return given("Helle's credentials", yield* giveHelle(everyRoute(), at, said));
+        return given("Helle's token", yield* giveHelle(everyRoute(), helle, said));
       }).pipe(Effect.mapError((reason) => new ActionFailed({ reason }))),
     claudeLogin: ({ profile }) =>
       Effect.gen(function* () {

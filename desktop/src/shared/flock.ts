@@ -278,9 +278,18 @@ export const DesktopRpcs = RpcGroup.make(
     success: Schema.String,
     error: ActionFailed,
   }),
-  /** Keeps Helle's credentials and writes them on every Machine. */
+  /** Who Helle says a token belongs to; a token it refuses fails. */
+  Rpc.make("checkHelle", {
+    payload: { token: Schema.String },
+    success: Schema.String,
+    error: ActionFailed,
+  }),
+  /** Slack, where Helle makes tokens: its app where that is here, else the web. */
+  Rpc.make("openSlack"),
+  Rpc.make("copyText", { payload: { text: Schema.String } }),
+  /** Keeps Helle's token once Helle accepts it, and writes it on every Machine. */
   Rpc.make("saveHelle", {
-    payload: { url: Schema.String, token: Schema.String },
+    payload: { token: Schema.String },
     success: Schema.String,
     error: ActionFailed,
   }),

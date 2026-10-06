@@ -1,5 +1,5 @@
 // What only the human can give, asked once by Desktop, in the built app: the GitLab token
-// made on GitLab's own page and Helle's credentials, kept in the keyring and given to every
+// made on GitLab's own page and Helle's token, kept in Desktop's own file and given to every
 // Machine; the Claude login finished in this computer's browser through a forwarded port,
 // or with a pasted code; Linear's login through its forwarded port; and the token renewed
 // on every Machine before it expires.
@@ -40,7 +40,7 @@ case "$secrets" in *GITLAB_TOKEN=*) done_ gitlab "glab is logged in" ;; *)
   echo '{"event":"result","step":"gitlab","status":"needs_human","detail":"make a token with the api and write_repository scopes","url":"https://gitlab.example/-/user_settings/personal_access_tokens?name=collie&scopes=api,write_repository"}'; ready=false ;; esac
 start helle "Helle's credentials"
 case "$secrets" in *HELLE_API_TOKEN=*) done_ helle "wrote it" ;; *)
-  echo '{"event":"result","step":"helle","status":"needs_human","detail":"give HELLE_API_URL and HELLE_API_TOKEN"}'; ready=false ;; esac
+  echo '{"event":"result","step":"helle","status":"needs_human","detail":"give HELLE_API_TOKEN"}'; ready=false ;; esac
 start linear "The Linear MCP in Claude Code"
 case " $* " in *" --skip linear "*)
   echo '{"event":"result","step":"linear","status":"skipped","detail":"skipped for this Machine"}' ;; *)
@@ -55,6 +55,7 @@ if $ready; then echo '{"ok":true,"data":{"ready":true}}'; else
 let app: App | undefined;
 let releases: ReturnType<typeof Bun.serve> | undefined;
 let gitlab: ReturnType<typeof Bun.serve> | undefined;
+let helle: ReturnType<typeof Bun.serve> | undefined;
 const day = (from: number) =>
   DateTime.formatIsoDate(DateTime.add(DateTime.nowUnsafe(), { days: from }));
 /** How soon each token GitLab knows expires: the first is due for renewal. */
@@ -92,6 +93,13 @@ beforeAll(
               : Response.json({ expires_at: expires, scopes: ["api", "write_repository"] });
           },
         });
+        helle = Bun.serve({
+          port: 0,
+          fetch: (request) =>
+            request.headers.get("Authorization") === "Bearer h-1"
+              ? Response.json({ user_id: "u-1", display_name: "mk" })
+              : Response.json({ detail: "invalid token" }, { status: 401 }),
+        });
         app = yield* launch(
           ["a", "b", "c", "d"].map((name) => ({
             label: name,
@@ -111,6 +119,7 @@ beforeAll(
                 .export({ type: "spki", format: "pem" })
                 .toString(),
               COLLIE_DESKTOP_GITLAB: `http://127.0.0.1:${gitlab.port}`,
+              COLLIE_HELLE_URL: `http://127.0.0.1:${helle.port}`,
             },
           },
         );
@@ -123,6 +132,7 @@ afterAll(() =>
   run(quit(app)).finally(() => {
     void releases?.stop(true);
     void gitlab?.stop(true);
+    void helle?.stop(true);
   }),
 );
 
@@ -140,6 +150,10 @@ const read = (name: string) =>
   Effect.flatMap(FileSystem.FileSystem, (fs) =>
     fs.readFileString(`${app!.flock}/${name}`).pipe(Effect.orElseSucceed(() => "")),
   );
+/** Desktop's own credentials file. */
+const kept = Effect.flatMap(FileSystem.FileSystem, (fs) =>
+  fs.readFileString(`${app!.scratch}/.config/collie-desktop/credentials`),
+);
 const holds = (name: string, text: string) =>
   settled(`${name} holding "${text}"`, () =>
     Bun.file(`${app!.flock}/${name}`)
@@ -159,7 +173,7 @@ const onboardOn = (name: string) =>
   });
 
 test(
-  "the GitLab token is made on GitLab's own page and Helle's given once, kept in the keyring, and a second Machine needs neither",
+  "the GitLab token is made on GitLab's own page and Helle's given once, kept in Desktop's credentials file, and a second Machine needs neither",
   () =>
     run(
       Effect.gen(function* () {
@@ -177,11 +191,31 @@ test(
         yield* press(step("gitlab").getByTestId("save-gitlab"));
         // Onboarded again, with the token.
         yield* reads(step("gitlab").getByTestId("detail"), "glab is logged in");
-        yield* fill(step("helle").getByTestId("helle-url"), "https://helle.example");
+        // Helle makes tokens in Slack: its app where it opens, its web client otherwise.
+        yield* press(step("helle").getByTestId("helle-slack"));
+        yield* holds("opened.log", "slack://open");
+        yield* touch("no-slack");
+        yield* press(step("helle").getByTestId("helle-slack"));
+        yield* holds("opened.log", "https://app.slack.com/client");
+        yield* press(step("helle").getByTestId("helle-copy"));
+        yield* reads(
+          page().getByText("Copied /helle token", { exact: true }),
+          "Copied /helle token",
+        );
+        // A token Helle refuses is said, and cannot be saved.
+        yield* fill(step("helle").getByTestId("helle-token"), "h-bad");
+        yield* reads(
+          step("helle").getByTestId("helle-check"),
+          "Helle refused that token; make a new one with /helle token",
+        );
+        expect(
+          yield* Effect.promise(() => step("helle").getByTestId("save-helle").isDisabled()),
+        ).toBe(true);
         yield* fill(step("helle").getByTestId("helle-token"), "h-1");
+        yield* reads(step("helle").getByTestId("helle-check"), "Belongs to mk");
         yield* press(step("helle").getByTestId("save-helle"));
         yield* reads(dialog().getByTestId("outcome"), "Onboarded: collie doctor is ready.");
-        expect(yield* read("secret-service_collie-desktop_key_gitlab-token")).toBe("glpat-good");
+        expect(yield* kept).toContain("gitlab-token=glpat-good\n");
         expect(yield* read("stdin-mk@a")).toContain("GITLAB_TOKEN=glpat-good");
         // The token went to glab on every Machine Desktop reaches, on stdin.
         yield* holds("glab.log", "mk@b auth login --hostname");
@@ -190,9 +224,7 @@ test(
 
         yield* onboardOn("b");
         yield* reads(dialog().getByTestId("outcome"), "Onboarded: collie doctor is ready.");
-        expect(yield* read("stdin-mk@b")).toBe(
-          "GITLAB_TOKEN=glpat-good\nHELLE_API_URL=https://helle.example\nHELLE_API_TOKEN=h-1\n",
-        );
+        expect(yield* read("stdin-mk@b")).toBe("GITLAB_TOKEN=glpat-good\nHELLE_API_TOKEN=h-1\n");
         yield* closeDialog;
       }),
     ),
@@ -308,7 +340,7 @@ test(
         yield* holds(`${LOCAL}.doctored`, "--json doctor --gitlab-host gitlab.com");
         // The old host's token is not given to the new one.
         yield* reads(page().getByTestId("gitlab-state"), "none yet");
-        expect(yield* read("secret-service_collie-desktop_key_gitlab-token")).toBe("");
+        expect(yield* kept).not.toContain("gitlab-token=");
         yield* press(page().getByTestId("token-page"));
         yield* holds(
           "opened.log",

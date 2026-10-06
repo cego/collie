@@ -510,17 +510,16 @@ test("Helle is optional: absent is a note, configured and broken is a warning, n
       // A file with one of its two lines: misconfigured, which is not "not set up".
       const file = `${rig.root}/.config/helle/env`;
       yield* fs.makeDirectory(`${rig.root}/.config/helle`, { recursive: true });
-      yield* fs.writeFileString(file, "HELLE_API_URL=http://127.0.0.1:1\n");
+      yield* fs.writeFileString(file, "HELLE_API_URL=https://helle.cego.dk\n");
       const missingToken = check(yield* report(), "helle");
       expect(missingToken.ok).toBe(true);
       expect(missingToken.warn).toBe(true);
       expect(missingToken.detail).toContain("HELLE_API_TOKEN");
       expect(missingToken.fix).toContain(file);
 
-      // Both lines, and a Helle that does not answer: the token or the URL is wrong,
-      // and the human is told which file to look in.
-      yield* fs.writeFileString(file, "HELLE_API_URL=http://127.0.0.1:1\nHELLE_API_TOKEN=x\n");
-      const result = yield* report();
+      // A token, and a Helle that does not answer: the human is told which file to look in.
+      yield* fs.writeFileString(file, "HELLE_API_TOKEN=x\n");
+      const result = yield* report({ COLLIE_HELLE_URL: "http://127.0.0.1:1" });
       const unreachable = check(result, "helle");
       expect(unreachable.warn).toBe(true);
       expect(unreachable.fix).toContain(file);

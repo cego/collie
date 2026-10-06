@@ -1,5 +1,5 @@
 // What only the human can give, asked once by Desktop: the GitLab token and Helle's
-// credentials kept in the keyring and handed to every Machine on stdin, and the logins
+// token kept in an owner-only file and handed to every Machine on stdin, and the logins
 // finished in this computer's browser through a forwarded callback port.
 
 import { expect, test } from "bun:test";
@@ -17,11 +17,13 @@ import {
   giveHelle,
   giveToken,
   gitlabToken,
-  secretService,
+  helleOwner,
+  credentialsFile,
   secretsFor,
 } from "../desktop/src/bun/credentials";
 import { type OnboardRun } from "../desktop/src/shared/flock";
 import { renewalDue } from "../src/gitlab-token";
+import { HELLE_URL } from "../src/helle-url";
 
 const run = <A, E>(effect: Effect.Effect<A, E, BunServices.BunServices | Scope.Scope>) =>
   Effect.runPromise(effect.pipe(Effect.scoped, Effect.provide(BunServices.layer)));
@@ -52,35 +54,55 @@ const machineIn = (home: string, bin: string, forwarded: number[] = []): ShellRo
   forward: (port) => Effect.sync(() => void forwarded.push(port)),
 });
 
-/** `secret-tool`, keeping each secret in a file named for its attributes. */
+/** `secret-tool`, as an earlier Desktop kept its secrets: each in a file named for its attributes. */
 const fakeSecretTool = (dir: string) =>
   executable(
     `${dir}/secret-tool`,
     `#!/bin/sh
-cmd=$1; shift
-[ "$1" = --label ] && shift 2
-key="${dir}/secret-$(echo "$@" | tr ' /' '__')"
-case "$cmd" in
-  store) cat > "$key" ;;
-  lookup) [ -e "$key" ] && cat "$key" ;;
-  clear) rm -f "$key" ;;
-esac
+[ "$1" = lookup ] && shift && cat "${dir}/secret-$(echo "$@" | tr ' /' '__')"
 `,
   );
 
-test("a secret is kept in the keyring and read back, and a missing secret-tool says what to install", () =>
+test("a secret is kept in an owner-only file and read back, with no secret-tool anywhere", () =>
   run(
     Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = `${yield* scratch}/collie-desktop`;
+      const keyring = credentialsFile(dir, `${dir}/no-such-tool`);
+      expect(yield* keyring.lookup("gitlab-token")).toBeNull();
+      // Nothing to copy is not written down, so a keyring that did not answer is asked again.
+      expect(yield* fs.exists(`${dir}/credentials`)).toBe(false);
+      yield* keyring.store("gitlab-token", "Collie's GitLab token", "glpat-123");
+      yield* keyring.store("helle-token", "Collie's Helle token", "h-1");
+      expect(yield* keyring.lookup("gitlab-token")).toBe("glpat-123");
+      expect(yield* credentialsFile(dir).lookup("helle-token")).toBe("h-1");
+      expect(((yield* fs.stat(dir)).mode & 0o777).toString(8)).toBe("700");
+      expect(((yield* fs.stat(`${dir}/credentials`)).mode & 0o777).toString(8)).toBe("600");
+      expect(yield* fs.exists(`${dir}/credentials.new`)).toBe(false);
+      yield* keyring.clear("gitlab-token");
+      expect(yield* keyring.lookup("gitlab-token")).toBeNull();
+      expect(yield* keyring.lookup("helle-token")).toBe("h-1");
+    }),
+  ));
+
+test("what an earlier Desktop kept through secret-tool is moved into the file, once", () =>
+  run(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
       const dir = yield* scratch;
       yield* fakeSecretTool(dir);
-      const keyring = secretService(`${dir}/secret-tool`);
-      expect(yield* keyring.lookup("gitlab-token")).toBeNull();
-      yield* keyring.store("gitlab-token", "Collie's GitLab token", "glpat-123");
-      expect(yield* keyring.lookup("gitlab-token")).toBe("glpat-123");
-      const missing = yield* secretService(`${dir}/no-such-tool`)
-        .lookup("gitlab-token")
-        .pipe(Effect.flip);
-      expect(missing).toContain("libsecret");
+      yield* fs.writeFileString(
+        `${dir}/secret-service_collie-desktop_key_gitlab-token`,
+        "glpat-old",
+      );
+      const keyring = credentialsFile(`${dir}/collie-desktop`, `${dir}/secret-tool`);
+      expect(yield* keyring.lookup("gitlab-token")).toBe("glpat-old");
+      expect(yield* keyring.lookup("helle-token")).toBeNull();
+      // The file is what is read from now on, with or without secret-tool.
+      yield* fs.writeFileString(`${dir}/secret-service_collie-desktop_key_helle-token`, "h-late");
+      const later = credentialsFile(`${dir}/collie-desktop`, `${dir}/no-such-tool`);
+      expect(yield* later.lookup("gitlab-token")).toBe("glpat-old");
+      expect(yield* later.lookup("helle-token")).toBeNull();
     }),
   ));
 
@@ -114,6 +136,36 @@ test("a GitLab token is taken only once GitLab accepts it with the scopes Collie
     }),
   ));
 
+/** Helle, answering `/me` for `h-1` and refusing the rest. */
+const helle = Effect.acquireRelease(
+  Effect.sync(() =>
+    Bun.serve({
+      port: 0,
+      fetch: (request) =>
+        new URL(request.url).pathname !== "/api/v1/me"
+          ? new Response("", { status: 404 })
+          : request.headers.get("Authorization") === "Bearer h-1"
+            ? Response.json({ user_id: "u-1", display_name: "mk" })
+            : Response.json({ detail: "invalid token" }, { status: 401 }),
+    }),
+  ),
+  (server) => Effect.sync(() => void server.stop(true)),
+);
+
+test("a Helle token is checked against Helle's /me, which says whose it is or refuses it", () =>
+  run(
+    Effect.gen(function* () {
+      const base = `http://127.0.0.1:${(yield* helle).port}`;
+      expect(yield* helleOwner(base, "h-1")).toBe("mk");
+      expect(yield* helleOwner(base, "h-bad").pipe(Effect.flip)).toBe(
+        "Helle refused that token; make a new one with /helle token",
+      );
+      expect(yield* helleOwner("http://127.0.0.1:1", "h-1").pipe(Effect.flip)).toContain(
+        "could not ask Helle",
+      );
+    }),
+  ));
+
 test("a token is due for renewal from 14 days before it expires", () => {
   const now = epochMs("2026-11-01T12:00:00Z");
   expect(renewalDue("2026-11-16", now)).toBe(false);
@@ -126,15 +178,11 @@ test("the secrets Desktop holds are handed to collie onboard as stdin lines", ()
   run(
     Effect.gen(function* () {
       const dir = yield* scratch;
-      yield* fakeSecretTool(dir);
-      const keyring = secretService(`${dir}/secret-tool`);
+      const keyring = credentialsFile(dir, `${dir}/no-such-tool`);
       expect(yield* secretsFor(keyring)).toBe("");
       yield* keyring.store("gitlab-token", "token", "glpat-good");
-      yield* keyring.store("helle-url", "url", "https://helle.example");
       yield* keyring.store("helle-token", "token", "h-1");
-      expect(yield* secretsFor(keyring)).toBe(
-        "GITLAB_TOKEN=glpat-good\nHELLE_API_URL=https://helle.example\nHELLE_API_TOKEN=h-1\n",
-      );
+      expect(yield* secretsFor(keyring)).toBe("GITLAB_TOKEN=glpat-good\nHELLE_API_TOKEN=h-1\n");
     }),
   ));
 
@@ -323,15 +371,11 @@ test("Helle's credentials are written on every Machine, readable by its owner al
       const fs = yield* FileSystem.FileSystem;
       const dir = yield* scratch;
       yield* fs.makeDirectory(`${dir}/home`);
-      const said = yield* giveHelle(
-        [machineIn(`${dir}/home`, dir)],
-        "https://helle.example",
-        "h-1",
-      );
+      const said = yield* giveHelle([machineIn(`${dir}/home`, dir)], HELLE_URL, "h-1");
       expect(said).toEqual([{ name: "pc", failed: null }]);
       const file = `${dir}/home/.config/helle/env`;
       expect(yield* fs.readFileString(file)).toBe(
-        "HELLE_API_URL=https://helle.example\nHELLE_API_TOKEN=h-1\n",
+        "HELLE_API_URL=https://helle.cego.dk\nHELLE_API_TOKEN=h-1\n",
       );
       expect(((yield* fs.stat(file)).mode & 0o777).toString(8)).toBe("600");
     }),

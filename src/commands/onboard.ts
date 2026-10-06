@@ -3,6 +3,7 @@ import { Command, Flag } from "effect/unstable/cli";
 import manifest from "../../herdr-plugin.toml";
 import { attempt, say } from "../envelope";
 import { onboard as onboardMachine, type OnboardEvent, type StepStatus } from "../onboard";
+import { HELLE_TOKEN_STEPS } from "../helle-url";
 import { context, gitlabHostFlag, root, stdinText, withGitlabHost } from "./shared";
 
 const EventJson = Schema.fromJsonString(Schema.Unknown);
@@ -49,7 +50,7 @@ export const onboard = Command.make(
     ),
     secretsStdin: Flag.Boolean("secrets-stdin").pipe(
       Flag.withDescription(
-        "Read GITLAB_TOKEN=, HELLE_API_URL= and HELLE_API_TOKEN= lines from stdin",
+        `Read GITLAB_TOKEN= and HELLE_API_TOKEN= lines from stdin; to get the second, ${HELLE_TOKEN_STEPS}`,
       ),
       Flag.withDefault(false),
     ),
