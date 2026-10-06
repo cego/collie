@@ -1,10 +1,11 @@
 // The Flock chat's markdown, which an agent wrote, as the window shows a conversation read back.
 
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { Effect, FileSystem } from "effect";
+import { Effect, FileSystem, Schema } from "effect";
 import { DESKTOP_SAID } from "../src/shared/chat-view";
 import { type App, LOCAL, launch, quit, run, serve, settled } from "./support/app";
 
+const asJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const SESSION = "11111111-1111-4111-8111-111111111111";
 const HOSTILE = [
   '<img src="x" onerror="window.pwned = true">',
@@ -22,9 +23,14 @@ const transcript = (home: string) =>
     const projects = `${home}/.claude/projects/${own.replace(/[^a-zA-Z0-9]/g, "-")}`;
     yield* fs.makeDirectory(projects, { recursive: true });
     yield* fs.makeDirectory(own, { recursive: true });
-    yield* fs.writeFileString(`${own}/flock-chat.json`, JSON.stringify({ session: SESSION }));
-    const entry = (uuid: string, parent: string | null, type: string, content: unknown) =>
-      JSON.stringify({
+    yield* fs.writeFileString(`${own}/flock-chat.json`, asJson({ session: SESSION }));
+    const entry = (
+      uuid: string,
+      parent: string | null,
+      type: "user" | "assistant",
+      content: string | ReadonlyArray<{ type: "text"; text: string }>,
+    ) =>
+      asJson({
         type,
         uuid,
         parentUuid: parent,

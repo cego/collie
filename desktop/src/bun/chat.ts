@@ -48,7 +48,7 @@ import { transcriptOf } from "./transcript";
 
 /** A session as the chat drives it. */
 export interface ClaudeSession extends AsyncIterable<SdkMessage> {
-  readonly interrupt: () => Promise<unknown>;
+  readonly interrupt: () => Promise<object | void>;
   readonly close: () => void;
 }
 
