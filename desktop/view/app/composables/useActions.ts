@@ -14,7 +14,6 @@ const openLinkAtom = FlockClient.mutation("openLink");
 
 type Failed = ActionFailed | RpcClientError.RpcClientError;
 
-/** How one read of a Run's item is done. */
 export interface ReadOptions {
   /** Bounds how many reads run at once. */
   readonly within?: Semaphore.Semaphore;

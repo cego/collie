@@ -63,7 +63,10 @@ herdr actions, and the `collie` CLI.
   `desktop/src/bun/machine.ts` (a Machine reached through `collie bridge`, never the host
   client), `desktop/src/shared/` (the view's RPC and the Flock it folds) and
   `desktop/test/board.test.ts` and `desktop/test/drawer.test.ts` (Playwright over CEF
-  against a scripted host). A card's drawer is `desktop/view/app/components/RunDrawer.vue`.
+  against a scripted host). A card's drawer is `desktop/view/app/components/RunDrawer.vue`;
+  what agent markdown may keep is `desktop/src/shared/markdown.ts` with
+  `desktop/test/markdown.test.ts`, and the window's navigation rule is in
+  `desktop/src/bun/index.ts`.
   Desktop has its own `package.json`; Effect is the root's, so the board's Schemas exist once.
 - **Changing what a Run must prove, or what counts as proof** →
   [`docs/cli.md`](docs/cli.md#outcomes) and

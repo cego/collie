@@ -11,7 +11,6 @@ export const ScriptedMachine = Schema.Struct({
   installation: Schema.String,
   herds: Schema.Array(Herd),
   tasks: Schema.Array(TaskView),
-  /** Each Run's details, by its id. */
   details: Schema.optionalKey(Schema.Record(Schema.String, RunDetail)),
   /** What each reference of a Run's fetches, keyed `<run id> <ref>`: text, or bytes as base64. */
   files: Schema.optionalKey(

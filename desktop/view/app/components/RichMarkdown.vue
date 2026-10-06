@@ -1,6 +1,5 @@
 <script setup lang="ts">
-// Agent-written markdown, which is untrusted: parsed by Comark, sanitised, with Shiki for
-// code and mermaid for diagrams. A link never navigates the window.
+// Agent-written markdown, which is untrusted. A link never navigates the window.
 import { Markdown } from "@comark/vue";
 import mermaid, { Mermaid } from "@comark/vue/plugins/mermaid";
 import security from "@comark/vue/plugins/security";
