@@ -232,7 +232,7 @@ binary still starts.
    adapters over the same Effect services ([ADR-0003](docs/adr/0003-collie-is-one-effect-program.md)).
 3. All herdr communication goes through `src/herdr.ts`. The two exceptions never touch a
    session: `tools/herdr-schema.ts`, which runs a downloaded release offline to print its
-   schema, and Desktop's `herdr machine list` — see
+   schema, and Desktop's `herdr machine list`, `add` and `remove` — see
    [`docs/internals.md`](docs/internals.md#the-herdr-boundary).
 4. One host owns a state directory and everything it is running
    ([ADR-0015](docs/adr/0015-one-local-host-owns-a-state-directory.md)). Mutate a Run

@@ -30,7 +30,6 @@ const savedIn = <A>(dir: string, file: Schema.Codec<A, string>) =>
     return read.flatMap((saved) => (saved._tag === "Some" ? [saved.value] : []));
   });
 
-/** Every board saved in `dir`. */
 export const savedBoards = (dir: string) => savedIn(dir, SavedFile);
 
 /** The latest onboarding of each route saved in `dir`. */
