@@ -10,6 +10,7 @@ import {
   closable,
   decide,
   ensureHome,
+  healedLines,
   originPath,
   readOrigin,
   writeOrigin,
@@ -29,6 +30,7 @@ import { keepHomesTokened } from "../src/side-jobs";
 import type { PaneInfo, WorkspaceInfo } from "../src/herdr";
 import { BOARD_RATIO } from "../src/chat";
 import { runEffect } from "./support/effect";
+import { until } from "./support/host";
 
 const KEY = "herd-abc";
 let stateDir: string;
@@ -262,6 +264,43 @@ test("a healed Home is re-tokened, gets both panes back, and remembers why", () 
     }),
   ));
 
+test("a healed Home takes back the panes herdr restored, re-tokens both, and records their new terminals", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const file = yield* homePath(stateDir, KEY);
+      yield* writeHome(file, record());
+      const h = fake({ workspaces: [workspace("w1")], panes: panes({ terminalId: "term-new" }) });
+      const ensured = yield* ensureHome(stateDir, KEY, "/ns", h.deps);
+      expect(ensured.kind).toBe("ready");
+      expect(h.calls).toEqual([
+        "markPane 1-2",
+        `markWorkspace w1 ${HOME_TOKEN}=${KEY}`,
+        "markPane 1-1",
+      ]);
+      expect(yield* readHome(file)).toMatchObject({
+        paneId: "1-1",
+        terminalId: "term-new",
+        chatPaneId: "1-2",
+        chatTerminalId: "term-new",
+        healed: { why: expect.stringContaining("no token") },
+      });
+    }),
+  ));
+
+test("home show says a heal is coming, and afterwards when and why it happened", () => {
+  const lapsed = record();
+  expect(healedLines(lapsed, decide(lapsed, [workspace("w1")], [], KEY))).toEqual([
+    expect.stringMatching(/^healed\tnext launch\t.*no token/),
+  ]);
+  const healed = record({ healed: { at: "2026-10-06T13:00:00Z", why: "because" } });
+  expect(
+    healedLines(healed, decide(healed, [workspace("w1", { [HOME_TOKEN]: KEY })], panes(), KEY)),
+  ).toEqual(["healed\t2026-10-06T13:00:00Z\tbecause"]);
+  expect(
+    healedLines(record(), decide(record(), [workspace("w1", { [HOME_TOKEN]: KEY })], panes(), KEY)),
+  ).toEqual([]);
+});
+
 /** A herdr that records what it was asked, with whatever it currently has. */
 function fake(initial: { workspaces?: WorkspaceInfo[]; panes?: PaneInfo[] } = {}) {
   const calls: string[] = [];
@@ -450,9 +489,9 @@ const restatedRounds = (calls: ReadonlyArray<string>, perRound: number, rounds: 
     const fs = yield* FileSystem.FileSystem;
     const lock = `${yield* homePath(stateDir, KEY)}.lock`;
     yield* TestClock.withLive(
-      Effect.sleep("10 millis").pipe(
-        Effect.andThen(fs.exists(lock)),
-        Effect.repeat({ until: (held) => !held && calls.length >= rounds * perRound, times: 500 }),
+      until(
+        () => fs.exists(lock),
+        (held) => !held && calls.length >= rounds * perRound,
       ),
     );
   });
@@ -503,10 +542,16 @@ test("a Home that is not proven is left alone: restating a token is not how owne
         ),
       );
       yield* TestClock.withLive(
-        Effect.sleep("10 millis").pipe(
-          Effect.repeat({ until: () => proven.calls.length >= 3, times: 500 }),
+        until(
+          () => Effect.succeed(proven.calls.length),
+          (made) => made >= 3,
         ),
       );
+      expect(proven.calls).toEqual([
+        `markWorkspace w1 ${HOME_TOKEN}=herd-proven`,
+        "markPane 1-1",
+        "markPane 1-2",
+      ]);
       expect(unproven.calls).toEqual([]);
     }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
   ));

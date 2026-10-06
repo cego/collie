@@ -216,8 +216,8 @@ export type Decision =
   /** Nothing to do but refresh what is already true. */
   | { readonly kind: "adopt"; readonly record: HomeRecord; readonly proof: "token" | "pane" }
   /**
-   * A pane is gone but the workspace is still ours: reopen the ones that are missing and
-   * nothing else. `missing` is which, so a live half-resized layout is left where the
+   * The workspace is ours but a pane is gone, or the Home is `healed`: reopen the panes
+   * that are missing and nothing else. `missing` is which, so a live half-resized layout is left where the
    * human put it rather than rebuilt because the other half went.
    */
   | {
@@ -358,6 +358,14 @@ export function decide(
 
 const HEALED =
   "the recorded workspace had no token and no pane terminal of this Herd's, the record was ready, and no other workspace claims the Herd";
+
+/** What `home show` says about healing: the one the next launch will do, or the last one done. */
+export function healedLines(record: ReadHome, decision: Decision): string[] {
+  if (decision.kind === "reopen" && decision.healed !== undefined)
+    return [`healed\tnext launch\t${decision.healed}`];
+  if (record === null || record === UNREADABLE || record.healed === undefined) return [];
+  return [`healed\t${record.healed.at}\t${record.healed.why}`];
+}
 
 /** A record archived rather than deleted: it is how an orphan is later named. */
 export function archived(record: HomeRecord, at: string): HomeRecord["previous"][number] {

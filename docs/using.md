@@ -390,10 +390,15 @@ and its hand-offs.
 The Home is **owned by metadata, never by a label**: the workspace and the board's pane
 carry a token naming this Herd, and Collie's record of which workspace that is counts only
 while the token — or the recorded pane, still with the terminal it was recorded with —
-proves it. Two workspaces claiming it, or a claim nothing proves, is a question Collie
-refuses to answer for you: rather than draw a board it cannot say is this Herd's, the
-shortcut prints why, names the candidates and gives you `collie home reconcile`. Nothing is
-created because a token expired, and nothing is adopted because it looks right.
+proves it. While it is proven, the host restates the token every four hours, so a board left
+open for days keeps it. A herdr restart drops every token and gives each pane a new
+terminal, so a Home whose workspace is still there, whose record says it was finished, and
+which no other workspace claims is healed: re-tokened, with its panes taken back or
+reopened, and `collie home show` says when and why. Two workspaces claiming it, or a claim
+that is not this Herd's, is a question Collie refuses to answer for you: rather than draw a
+board it cannot say is this Herd's, the shortcut prints why, names the candidates and gives
+you `collie home reconcile`. Nothing is created because a token expired, and nothing is
+adopted because it looks right.
 
 The Home is **one tab with two panes**: the board on the left at four sevenths of the
 width, and [native chat](#talking-to-collie-about-a-herd) on the right at three. Both
