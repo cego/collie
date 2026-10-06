@@ -44,3 +44,6 @@ jobs:
         working-directory: desktop
       - run: bun run typecheck
         working-directory: desktop
+      # The release builds the view on a fresh checkout, so CI does too.
+      - run: bun run view
+        working-directory: desktop
