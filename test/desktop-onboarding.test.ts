@@ -444,7 +444,12 @@ test("a Machine's row says what doctor finds of it, over what its last onboardin
             ready: false,
             checks: [
               { name: "herdr", ok: true, detail: "0.9.0", fix: "" },
-              { name: "claude login", ok: false, detail: "not logged in", fix: "claude auth login" },
+              {
+                name: "claude login",
+                ok: false,
+                detail: "not logged in",
+                fix: "claude auth login",
+              },
             ],
           },
         },

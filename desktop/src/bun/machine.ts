@@ -669,8 +669,7 @@ export const flockStream = <D extends BoardSource>(
             Stream.ensuring(Deferred.succeed(ended[at]!, undefined)),
           );
         });
-      const removedAt = (place: number) =>
-        places.get(routeAt[place]!.machine.profile) !== place;
+      const removedAt = (place: number) => places.get(routeAt[place]!.machine.profile) !== place;
       const changed = (change: RouteChange<D>): Stream.Stream<FlockItem> => {
         if (change._tag === "Add")
           return places.has(change.route.machine.profile)

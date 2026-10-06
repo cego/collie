@@ -306,7 +306,12 @@ export const onboardThrough = Effect.fn("Desktop.onboardThrough")(function* (
 });
 
 const Checks = Schema.Array(
-  Schema.Struct({ name: Schema.String, ok: Schema.Boolean, detail: Schema.String, fix: Schema.String }),
+  Schema.Struct({
+    name: Schema.String,
+    ok: Schema.Boolean,
+    detail: Schema.String,
+    fix: Schema.String,
+  }),
 );
 const DoctorSaid = Schema.fromJsonString(
   Schema.Union([
@@ -324,24 +329,21 @@ export const doctorOn = (route: Pick<Route, "collie">) =>
     Effect.flatMap(({ out }) => Schema.decodeUnknownEffect(DoctorSaid)(out.trim())),
     Effect.map((said) => ("data" in said ? said.data : said.error.details).checks),
     Effect.flatMap((checks) =>
-      Effect.map(
-        Clock.currentTimeMillis,
-        (at): OnboardRun => ({
-          steps: checks
-            .filter(({ ok }) => !ok)
-            .map(({ name, detail, fix }) => ({
-              step: name.replaceAll(" ", "-"),
-              title: name,
-              status: "failed",
-              detail,
-              ...(fix === "" ? {} : { command: fix }),
-            })),
-          asked: null,
-          ready: checks.every(({ ok }) => ok),
-          reason: null,
-          at,
-        }),
-      ),
+      Effect.map(Clock.currentTimeMillis, (at): OnboardRun => ({
+        steps: checks
+          .filter(({ ok }) => !ok)
+          .map(({ name, detail, fix }) => ({
+            step: name.replaceAll(" ", "-"),
+            title: name,
+            status: "failed",
+            detail,
+            command: fix,
+          })),
+        asked: null,
+        ready: checks.every(({ ok }) => ok),
+        reason: null,
+        at,
+      })),
     ),
     Effect.option,
   );
@@ -357,7 +359,13 @@ const questionIn = (text: string) => {
   if (asked === null) return null;
   const lines = text.slice(0, asked.index).split("\n");
   const blank = lines.findLastIndex((line, at) => at < lines.length - 1 && line.trim() === "");
-  return { text: lines.slice(blank + 1).join("\n").trim(), yes: asked[1] === "Y/n" };
+  return {
+    text: lines
+      .slice(blank + 1)
+      .join("\n")
+      .trim(),
+    yes: asked[1] === "Y/n",
+  };
 };
 // oxlint-disable-next-line no-control-regex
 const TERMINAL_CODES = /\x1b\[[0-9;?]*[ -/]*[@-~]|\r/g;
