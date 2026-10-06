@@ -475,12 +475,23 @@ lapsed. While either proof holds, the host restates the token on the workspace a
 of the Home's panes every four hours, well inside the token's 24-hour TTL, so a board left
 open for days does not let it lapse.
 
+A herdr restart loses both proofs at once. herdr 0.9.3 saves each session to
+`~/.config/herdr/session.json` — workspace ids, tabs, and each pane's cwd, label and launch
+command — but nothing reported with `report_metadata`, so every token is gone when the
+server comes back, and every pane comes back with a new terminal. The workspace
+keeps its id. So a recorded workspace that is still there, with a `ready` record and no
+other workspace carrying this Herd's token, is **healed**: re-tokened, and its missing
+panes reopened, as a reopen. `collie home show` prints a `healed` line saying why. A pane
+herdr restored from its saved layout is not recognised as the board — its label is not
+proof — so it stays beside the reopened one until a human closes it.
+
 A **label is never proof**. Two workspaces can be called the same thing, and a home test
 reads `home.ts` to keep it that way. A live token with no record is not proof either — it
 is a previous Collie's Home or another state directory's, and adopting it silently would
 be one Herd taking over another's board.
 
-Anything uncertain is `ownership_unknown` and stops: `collie home show` says what was
+Anything uncertain — another workspace carrying this Herd's token, more than one
+candidate, a token with no record — is `ownership_unknown` and stops: `collie home show` says what was
 recorded, what herdr has, and which candidates there are; `collie home reconcile --adopt`
 or `--forget` is how a person settles it. Two things this must never do are creating a
 second Home because a token expired, and adopting one because it looks right.

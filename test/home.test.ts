@@ -130,11 +130,10 @@ test("every uncertain case stops rather than guessing", () => {
     kind: "ownership_unknown",
     candidates: ["w1"],
   });
-  // The recorded workspace exists but proves nothing.
-  expect(decide(record(), [workspace("w1")], [], KEY)).toMatchObject({
-    kind: "ownership_unknown",
-    candidates: ["w1"],
-  });
+  // The recorded workspace lost its proof while another workspace carries the token.
+  expect(
+    decide(record(), [workspace("w1"), workspace("w2", { [HOME_TOKEN]: KEY })], [], KEY),
+  ).toMatchObject({ kind: "ownership_unknown", candidates: ["w1", "w2"] });
   // A crash mid-create is the one uncertain case that does not stop: the record is named
   // as an orphan candidate and a Home is made, so a crash in that window does not need a
   // human before Collie can be used at all (SPEC §7.12 case 5).
@@ -216,6 +215,31 @@ test("a vanished workspace is not a licence to make a second board beside a live
     ),
   ).toMatchObject({ kind: "create", orphan: "w1" });
 });
+
+test("10-06: a ready Home whose token lapsed and whose panes went with a herdr restart is healed, not refused", () => {
+  // herdr came back from an upgrade: the recorded workspace is there, its token is past
+  // its TTL, and the board and chat panes are gone. Nothing else claims the Herd.
+  const decision = decide(record(), [workspace("w1"), workspace("w2")], [], KEY);
+  expect(decision).toMatchObject({ kind: "reopen", missing: ["board", "chat"] });
+  expect(decision.kind === "reopen" ? decision.healed : undefined).toContain("token");
+  // A pane id herdr handed to something new is not the Home's pane.
+  expect(decide(record(), [workspace("w1")], panes({ terminalId: "term-new" }), KEY)).toMatchObject(
+    { kind: "reopen", missing: ["board", "chat"] },
+  );
+});
+
+test("a healed Home is re-tokened and gets its panes back", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* writeHome(yield* homePath(stateDir, KEY), record());
+      const h = fake({ workspaces: [workspace("w1")] });
+      const ensured = yield* ensureHome(stateDir, KEY, "/ns", h.deps);
+      expect(ensured.kind).toBe("ready");
+      expect(h.calls).toContain("openPane w1");
+      expect(h.calls).toContain(`markWorkspace w1 ${HOME_TOKEN}=${KEY}`);
+      expect(h.calls.some((call) => call.startsWith("createWorkspace"))).toBe(false);
+    }),
+  ));
 
 /** A herdr that records what it was asked, with whatever it currently has. */
 function fake(initial: { workspaces?: WorkspaceInfo[]; panes?: PaneInfo[] } = {}) {
@@ -405,11 +429,19 @@ test("while the Home is proven the host restates its tokens every few hours, so 
       yield* writeHome(yield* homePath(stateDir, KEY), record());
       const h = fake({ workspaces: [workspace("w1", { [HOME_TOKEN]: KEY })], panes: panes() });
       const restated = () => h.calls.filter((call) => call.startsWith("markWorkspace")).length;
+      // Each round's herdr calls are synchronous, but the lock around them is real file IO.
+      const settled = (rounds: number) =>
+        TestClock.withLive(
+          Effect.sleep("10 millis").pipe(
+            Effect.repeat({ until: () => h.calls.length >= rounds * 3, times: 500 }),
+            Effect.andThen(Effect.sleep("50 millis")),
+          ),
+        );
 
       yield* Effect.forkScoped(
         keepHomesProven(stateDir, Effect.succeed([{ key: KEY, deps: h.deps }])),
       );
-      yield* TestClock.withLive(Effect.sleep("50 millis"));
+      yield* settled(1);
       expect(h.calls).toEqual([
         `markWorkspace w1 ${HOME_TOKEN}=${KEY}`,
         "markPane 1-1",
@@ -417,9 +449,9 @@ test("while the Home is proven the host restates its tokens every few hours, so 
       ]);
 
       // A day of an open board: the token is restated long before its 24 hours run out.
-      for (let hour = 0; hour < 24; hour += 4) {
+      for (let round = 2; round <= 7; round++) {
         yield* TestClock.adjust("4 hours");
-        yield* TestClock.withLive(Effect.sleep("20 millis"));
+        yield* settled(round);
       }
       expect(restated()).toBe(7);
     }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),

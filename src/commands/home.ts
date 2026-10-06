@@ -48,6 +48,9 @@ const show = Command.make("show", {}, () =>
               ? "record\tunreadable"
               : `record\t${record.workspaceId}\t${record.state}`,
           `ownership\t${decision.kind}${decision.kind === "ownership_unknown" ? `\t${decision.why}` : ""}`,
+          ...(decision.kind === "reopen" && decision.healed !== undefined
+            ? [`healed\t${decision.healed}`]
+            : []),
           ...(decision.kind === "ownership_unknown"
             ? decision.candidates.map((id) => `candidate\t${id}`)
             : []),
