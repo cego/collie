@@ -923,7 +923,8 @@ id is minted once and kept in `$XDG_STATE_HOME/collie-desktop/flock-chat.json` (
 `~/.local/state/collie-desktop/`), so a restart resumes the same conversation; Claude Code
 keeps and compacts the transcript on this computer.
 
-Replies stream in as Markdown. Each tool call is one row — the tool, the Machine it
+Replies stream in as Markdown, rendered as the drawer renders it: nothing in it runs or
+keeps a style, and a web link opens in your browser. Each tool call is one row — the tool, the Machine it
 reached and what it was asked — that opens to what the tool answered, and thinking is a
 collapsed **Thinking** you can open. When the chat needs you to choose, it asks with choice
 buttons, and goes on when you click; any other permission it asks for is refused. Type
