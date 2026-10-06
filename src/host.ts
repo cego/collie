@@ -430,7 +430,7 @@ const hostBoard = (dir: string) =>
     return { env, herdr, bun, runs, build, unattended };
   });
 
-/** The merge watch, News and pruning, for as long as this host runs. */
+/** The merge watch, News, pruning and the Home's tokens, for as long as this host runs. */
 const sideJobsLayer = (dir: string, panels: MrPanels) =>
   Layer.effectDiscard(
     Effect.gen(function* () {

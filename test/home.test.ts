@@ -21,9 +21,11 @@ import {
   serverPath,
   writeHome,
   writeServer,
+  keepHomesProven,
   type HomeDeps,
   type HomeRecord,
 } from "../src/home";
+import { TestClock } from "effect/testing";
 import type { PaneInfo, WorkspaceInfo } from "../src/herdr";
 import { BOARD_RATIO } from "../src/chat";
 import { runEffect } from "./support/effect";
@@ -395,6 +397,45 @@ test("an expired token on a Home whose pane is still there refreshes it, and cre
       expect(h.calls.some((call) => call.startsWith("createWorkspace"))).toBe(false);
       expect(h.calls).toContain(`markWorkspace w1 ${HOME_TOKEN}=${KEY}`);
     }),
+  ));
+
+test("while the Home is proven the host restates its tokens every few hours, so a long-open board never lapses", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* writeHome(yield* homePath(stateDir, KEY), record());
+      const h = fake({ workspaces: [workspace("w1", { [HOME_TOKEN]: KEY })], panes: panes() });
+      const restated = () => h.calls.filter((call) => call.startsWith("markWorkspace")).length;
+
+      yield* Effect.forkScoped(
+        keepHomesProven(stateDir, Effect.succeed([{ key: KEY, deps: h.deps }])),
+      );
+      yield* TestClock.withLive(Effect.sleep("50 millis"));
+      expect(h.calls).toEqual([
+        `markWorkspace w1 ${HOME_TOKEN}=${KEY}`,
+        "markPane 1-1",
+        "markPane 1-2",
+      ]);
+
+      // A day of an open board: the token is restated long before its 24 hours run out.
+      for (let hour = 0; hour < 24; hour += 4) {
+        yield* TestClock.adjust("4 hours");
+        yield* TestClock.withLive(Effect.sleep("20 millis"));
+      }
+      expect(restated()).toBe(7);
+    }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
+  ));
+
+test("a Home that is not proven is left alone: restating a token is not how ownership is decided", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* writeHome(yield* homePath(stateDir, KEY), record());
+      const h = fake({ workspaces: [workspace("w1")], panes: [] });
+      yield* Effect.forkScoped(
+        keepHomesProven(stateDir, Effect.succeed([{ key: KEY, deps: h.deps }])),
+      );
+      yield* TestClock.withLive(Effect.sleep("50 millis"));
+      expect(h.calls).toEqual([]);
+    }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
   ));
 
 test("a workspace this Herd never recorded is not adopted, whatever it carries", () =>

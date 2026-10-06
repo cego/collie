@@ -1,5 +1,5 @@
 // What the host does on its own, whether or not a pane is open: the merge watch, each
-// Herd's News and worktree pruning.
+// Herd's News, worktree pruning and keeping each Herd's Home tokened.
 
 import { Clock, Effect, Schedule, type Duration } from "effect";
 import type { TaskView, MrState, Reopened } from "./board-model";
@@ -9,6 +9,7 @@ import { currentReports, readDrift } from "./drift";
 import type { PluginEnv } from "./env";
 import type { Herdr } from "./herdr";
 import { liveHerds } from "./herds";
+import { homeDeps, keepHomesProven } from "./home";
 import { settleMerges, type MrPanels } from "./merges";
 import { shell } from "./mr";
 import { append as appendNews, newsPath, read as readNews, retired, supersede } from "./news";
@@ -178,6 +179,18 @@ export const sideJobs = <E, R>(opts: {
             cwd: env.cwd,
           });
         }),
+      ),
+      keepHomesProven(
+        env.stateDir,
+        liveHerds(herdr, env).pipe(
+          Effect.map((sessions) =>
+            sessions.flatMap((session) =>
+              session.herd === null
+                ? []
+                : [{ key: session.herd, deps: homeDeps(session.herdr, () => Effect.void) }],
+            ),
+          ),
+        ),
       ),
     ],
     { concurrency: "unbounded", discard: true },

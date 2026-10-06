@@ -471,7 +471,9 @@ Collie wrote plus **proof** that what it names is still what it meant — either
 `collie_home` token on the workspace, or the recorded pane still carrying the recorded
 `terminal_id`. Either proof alone is enough, and the second is what heals an expired
 token: the pane Collie opened is still there, so the claim was true and the TTL merely
-lapsed.
+lapsed. While either proof holds, the host restates the token on the workspace and on both
+of the Home's panes every four hours, well inside the token's 24-hour TTL, so a board left
+open for days does not let it lapse.
 
 A **label is never proof**. Two workspaces can be called the same thing, and a home test
 reads `home.ts` to keep it that way. A live token with no record is not proof either — it

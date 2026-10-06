@@ -13,7 +13,7 @@
 // disagreeing about the same Runs.
 
 import type { BunServices } from "@effect/platform-bun/BunServices";
-import { Clock, Data, Effect, FileSystem, Path, Schema } from "effect";
+import { Clock, Data, Effect, FileSystem, Path, Schedule, Schema } from "effect";
 import { ensureLockDir, withLock } from "./lock";
 import { herdDir, herdKey } from "./steering";
 import { nowIso, epochMs } from "./time";
@@ -25,6 +25,9 @@ export const HOME_TOKEN = "collie_home";
 
 /** A day. Long enough to survive a machine sleeping, short enough that a stale claim goes. */
 export const TOKEN_TTL_MS = 86_400_000;
+
+/** How often the host restates a proven Home's tokens: well within `TOKEN_TTL_MS`. */
+export const TOKEN_REFRESH_EVERY = "4 hours";
 
 /** What a legacy per-workspace pane is marked with, so cleanup can find exactly those. */
 export const LEGACY_PANE_TOKEN = "collie_pane";
@@ -616,6 +619,48 @@ export const ensureHome = Effect.fn("Home.ensure")(function* (
     }),
   );
 });
+
+/**
+ * The Home's tokens restated on its workspace and whichever of its panes are there, while
+ * the Home is still proven. A board left open longer than `TOKEN_TTL_MS` would otherwise
+ * lose its token, and a herdr restart then takes the pane proof too.
+ */
+const refreshHome = Effect.fn("Home.refresh")(function* (
+  stateDir: string,
+  key: string,
+  deps: HomeDeps,
+) {
+  const file = yield* homePath(stateDir, key);
+  yield* withHomeLock(
+    file,
+    Effect.gen(function* () {
+      const record = yield* readHome(file);
+      if (record === null || record === UNREADABLE || record.state !== "ready") return;
+      const workspaces = yield* deps.workspaces;
+      const panes = yield* deps.panes;
+      const decision = decide(record, workspaces, panes, key);
+      if (decision.kind !== "adopt" && decision.kind !== "reopen") return;
+      const missing = missingPanes(record, panes);
+      yield* deps.markWorkspace(record.workspaceId, { [HOME_TOKEN]: key });
+      if (record.paneId !== null && !missing.includes("board"))
+        yield* deps.markPane(record.paneId, { [HOME_TOKEN]: key });
+      if (record.chatPaneId != null && !missing.includes("chat"))
+        yield* deps.markPane(record.chatPaneId, { [HOME_TOKEN]: key, [CHAT_PANE_TOKEN]: key });
+    }),
+  );
+});
+
+/** Every live Herd's proven Home kept tokened, for as long as the host runs. */
+export const keepHomesProven = <R>(
+  stateDir: string,
+  herds: Effect.Effect<ReadonlyArray<{ readonly key: string; readonly deps: HomeDeps }>, never, R>,
+) =>
+  Effect.gen(function* () {
+    for (const { key, deps } of yield* herds)
+      yield* refreshHome(stateDir, key, deps).pipe(
+        Effect.catchCause((cause) => Effect.logWarning(`home: could not restate ${key}`, cause)),
+      );
+  }).pipe(Effect.repeat(Schedule.spaced(TOKEN_REFRESH_EVERY)), Effect.asVoid);
 
 /**
  * The board's pane split, with native chat on the right. The board keeps `BOARD_RATIO`,
