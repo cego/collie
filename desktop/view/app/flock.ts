@@ -57,6 +57,17 @@ export const flockAtom = FlockClient.runtime
   )
   .pipe(Atom.keepAlive);
 
+/** Desktop's own update news, kept alive so a ready update is heard whenever it is. */
+export const updatesAtom = FlockClient.runtime
+  .atom(Stream.unwrap(FlockClient.use((client) => Effect.succeed(client("updates", undefined)))))
+  .pipe(Atom.keepAlive);
+
+/** Which credentials Desktop holds, kept alive so a token due for renewal is always heard. */
+export const credentialsAtom = FlockClient.runtime
+  .atom(
+    Stream.unwrap(FlockClient.use((client) => Effect.succeed(client("credentials", undefined)))),
+  )
+  .pipe(Atom.keepAlive);
 /** A Run's details while some drawer shows them, keyed by `runDetailKey`. */
 export const runDetailAtom = Atom.family((key: string) => {
   const { installation, runId } = Schema.decodeSync(RunOn)(key);

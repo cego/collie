@@ -2,9 +2,13 @@
 // marker, then `FrontDoorRpcs` over stdio. Its installation, Herds and TaskViews are
 // whatever the file named first on its command line holds, read again every 100 ms.
 // Every operation it is asked is appended to `<board.json>.ops.jsonl`; an answer also
-// takes the decision off its Task, as a host's would.
+// takes the decision off its Task, as a host's would. Run as `--json upgrade --to <v>`
+// instead, it logs that and moves the Machine's build to `v`, as a release's would. Run as
+// `--json doctor`, it fails the checks its board names as `failing`, where it names any.
 //
 // Usage: bun scripted-host.ts <board.json> bridge --as desktop|chat --client <computer>
+//        bun scripted-host.ts <board.json> --json upgrade --to <version>
+//        bun scripted-host.ts <board.json> --json doctor
 
 import { BunFileSystem, BunRuntime, BunStdio } from "@effect/platform-bun";
 import { Effect, Encoding, FileSystem, Layer, Result, Schedule, Schema, Stream } from "effect";
@@ -15,15 +19,30 @@ import { boardMessages } from "../../../src/board-stream";
 import { OFFERS, REFUSED_RUN, STARTABLE, ScriptedMachine } from "./scripted-machine";
 
 const [board, ...bridge] = Bun.argv.slice(2);
-if (board === undefined || !/^bridge --as (desktop|chat)$/.test(bridge.slice(0, 3).join(" "))) {
-  process.stderr.write(`scripted host: started as ${Bun.argv.slice(2).join(" ")}\n`);
-  process.exit(2);
-}
-
 const MachineFile = Schema.fromJsonString(ScriptedMachine);
 /** Smaller than a host's, so a test's large item is read in several parts. */
 const PART_BYTES = 16 * 1024;
 const asLine = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+
+const upgrading = board !== undefined && bridge.slice(0, 3).join(" ") === "--json upgrade --to";
+const failing =
+  board !== undefined && bridge.join(" ") === "--json doctor"
+    ? Schema.decodeUnknownSync(MachineFile)(await Bun.file(board).text()).failing
+    : undefined;
+if (failing !== undefined) {
+  const checks = failing.map((check) => ({ ...check, ok: false }));
+  process.stdout.write(
+    `${asLine(checks.length === 0 ? { ok: true, data: { ready: true, checks } } : { ok: false, error: { code: "operation_failed", message: "not ready", details: { ready: false, checks } } })}\n`,
+  );
+  process.exit(checks.length === 0 ? 0 : 1);
+}
+if (
+  !upgrading &&
+  (board === undefined || !/^bridge --as (desktop|chat)$/.test(bridge.slice(0, 3).join(" ")))
+) {
+  process.stderr.write(`scripted host: started as ${Bun.argv.slice(2).join(" ")}\n`);
+  process.exit(2);
+}
 
 /** What an operation was asked with, as it is logged. */
 type Asked = Parameters<typeof asLine>[0];
@@ -40,7 +59,8 @@ const handlers = Served.toLayer(
       fs
         .writeFileString(`${board}.new`, asLine(machine))
         .pipe(Effect.andThen(fs.rename(`${board}.new`, board)), Effect.orDie);
-    const { installation, herds } = yield* read;
+    const { installation, herds, build, development, protocol } = yield* read;
+    const developing = development === undefined ? {} : { development };
     const logged = (op: string, payload: Asked) =>
       fs
         .writeFileString(`${board}.ops.jsonl`, `${asLine({ op, payload })}\n`, { flag: "a" })
@@ -66,7 +86,13 @@ const handlers = Served.toLayer(
     return {
       board: () =>
         boardMessages({
-          head: { installation, build: "scripted", protocol: PROTOCOL, herds },
+          head: {
+            installation,
+            build: build ?? "scripted",
+            ...developing,
+            protocol: protocol ?? PROTOCOL,
+            herds,
+          },
           build: Effect.map(read, ({ tasks }) => tasks),
           changed: Stream.fromSchedule(Schedule.spaced("100 millis")),
         }),
@@ -178,12 +204,34 @@ const handlers = Served.toLayer(
   }),
 );
 
-process.stdout.write(`Welcome to the scripted Machine\n${BRIDGE_READY}\n`);
+/** Moves the Machine's build to the version asked for, as `collie upgrade --to` would. */
+const upgrade = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const to = bridge[3]!;
+  const file = board!;
+  const machine = yield* fs
+    .readFileString(file)
+    .pipe(Effect.flatMap(Schema.decodeUnknownEffect(MachineFile)));
+  yield* fs.writeFileString(
+    `${file}.ops.jsonl`,
+    `${asLine({ op: "upgrade", payload: { to } })}\n`,
+    {
+      flag: "a",
+    },
+  );
+  yield* fs.writeFileString(`${file}.new`, asLine({ ...machine, build: to }));
+  yield* fs.rename(`${file}.new`, file);
+  process.stdout.write(`${asLine({ ok: true, data: { version: to } })}\n`);
+}).pipe(Effect.orDie, Effect.provide(BunFileSystem.layer));
 
-Layer.launch(
-  RpcServer.layer(Served).pipe(
-    Layer.provide(handlers),
-    Layer.provide(RpcServer.layerProtocolStdio),
-    Layer.provide([RpcSerialization.layerNdjson, BunStdio.layer, BunFileSystem.layer]),
-  ),
-).pipe(BunRuntime.runMain);
+if (upgrading) BunRuntime.runMain(upgrade);
+else {
+  process.stdout.write(`Welcome to the scripted Machine\n${BRIDGE_READY}\n`);
+  Layer.launch(
+    RpcServer.layer(Served).pipe(
+      Layer.provide(handlers),
+      Layer.provide(RpcServer.layerProtocolStdio),
+      Layer.provide([RpcSerialization.layerNdjson, BunStdio.layer, BunFileSystem.layer]),
+    ),
+  ).pipe(BunRuntime.runMain);
+}

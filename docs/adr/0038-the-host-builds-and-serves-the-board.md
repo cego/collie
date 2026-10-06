@@ -30,12 +30,12 @@ still local and nothing listens off the Machine; another computer reaches it thr
 bridge on the Machine itself.
 
 **D3. A snapshot, then keyed changes.** `board` streams a `Snapshot` (the state
-directory's installation id, the build, the protocol version, the Herds and every
-TaskView), then `Upsert` and `Remove` messages keyed by Task id, each with a sequence
-number higher than the last. A client that reconnects gets a fresh snapshot, the same
-"current first" rule `watch` follows. The host builds again when anything under its state
-directory is written, by itself or by anyone else, and every few seconds, so a time-based
-sentence ("silent for") stays true.
+directory's installation id, the build and whether it is a development checkout, the
+protocol version, the Herds and every TaskView), then `Upsert` and `Remove` messages keyed
+by Task id, each with a sequence number higher than the last. A client that reconnects
+gets a fresh snapshot, the same "current first" rule `watch` follows. The host builds
+again when anything under its state directory is written, by itself or by anyone else, and
+every few seconds, so a time-based sentence ("silent for") stays true.
 
 **D4. A stable installation id.** The first host to own a state directory writes an id
 into it, and every later host reads that id back. Restarts and upgrades keep it, so two

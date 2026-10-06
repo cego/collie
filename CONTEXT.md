@@ -35,7 +35,9 @@ that computer. Known by its **installation id**, which the first host to own the
 directory writes into it and every later host keeps, so two routes to one state directory
 are one Machine. Desktop names it by the label of the first enabled herdr machine that
 reaches it, or by the hostname for Local, and adds its SSH target where two share a name.
-Not the plugin installation a host serves, which `identity` calls `root`.
+A computer Desktop reaches that has no Collie yet is known by its herdr profile id until a
+host there reports an installation id. Not the plugin installation a host serves, which
+`identity` calls `root`.
 
 **Flock** — Every Herd on every Machine **Desktop** reaches.
 

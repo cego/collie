@@ -1,5 +1,6 @@
 # Tag a version (no `v`: install.sh builds the download URL from the version in
-# herdr-plugin.toml verbatim) to publish the runner binaries install.sh fetches.
+# herdr-plugin.toml verbatim) to publish the runner binaries install.sh fetches, and
+# Collie Desktop at the same version: its installer, its update files and install-desktop.sh.
 name: release
 on:
   push:
@@ -35,8 +36,33 @@ jobs:
           name: collie-${{ matrix.target }}
           path: collie-${{ matrix.target }}
 
+  desktop:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4"
+      # Desktop's Effect is the root's, so the board's Schemas exist once.
+      - run: bun install --frozen-lockfile
+      - run: bun install --frozen-lockfile
+        working-directory: desktop
+      # The stable channel, the only one that updates itself, under herdr-plugin.toml's version.
+      - run: bun run build
+        working-directory: desktop
+      # Electrobun's self-extractor cannot read a path over 100 characters, so an installer
+      # with one is never published.
+      - run: |
+          tar -xzf desktop/artifacts/linux-x64-collie-desktop-Setup.tar.gz -C "$RUNNER_TEMP" ./installer
+          bun run tools/check-payload.ts "$RUNNER_TEMP/installer"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: collie-desktop
+          path: desktop/artifacts/*
+          if-no-files-found: error
+
   release:
-    needs: build
+    needs: [build, desktop]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -51,10 +77,18 @@ jobs:
           bun-version: "1.4"
       - run: bun install --frozen-lockfile
         working-directory: repo
-      - run: bun run tools/sign.ts ../collie-*
+      - run: cp repo/install-desktop.sh .
+      # Desktop's installer, its update archive (also as the tar it is applied as, which is
+      # what Desktop verifies) and its update manifest, beside the runners.
+      - run: bun run tools/sign.ts ../collie-* ../*-collie-desktop* ../*-update.json ../install-desktop.sh
         working-directory: repo
         env:
           COLLIE_SIGNING_KEY: ${{ secrets.COLLIE_SIGNING_KEY }}
-      - run: gh release create "$GITHUB_REF_NAME" collie-* --repo "$GITHUB_REPOSITORY" --title "Collie $GITHUB_REF_NAME" --notes "Collie $GITHUB_REF_NAME"
+      # The newest release is the one Desktop's updater and install-desktop.sh read, through
+      # `releases/latest/download`.
+      # A delta patch exists only once there is a release before this one.
+      - run: |
+          shopt -s nullglob
+          gh release create "$GITHUB_REF_NAME" collie-* *-collie-desktop* *-update.json* *.patch install-desktop.sh* --repo "$GITHUB_REPOSITORY" --title "Collie $GITHUB_REF_NAME" --notes "Collie $GITHUB_REF_NAME"
         env:
           GH_TOKEN: ${{ github.token }}

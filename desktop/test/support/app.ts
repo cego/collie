@@ -11,6 +11,7 @@ import { ScriptedMachine } from "./scripted-machine";
 export const CDP = Bun.env.COLLIE_DESKTOP_CDP ?? "9333";
 const APP = `${import.meta.dir}/../../build/dev-linux-x64/collie-desktop-dev/bin/launcher`;
 export const HOST = `${import.meta.dir}/scripted-host.ts`;
+const HERDR = `${import.meta.dir}/scripted-herdr.ts`;
 
 export const run = <A, E>(effect: Effect.Effect<A, E, BunServices.BunServices>) =>
   Effect.runPromise(effect.pipe(Effect.provide(BunServices.layer)));
@@ -25,26 +26,31 @@ export const serve = (
   installation: string,
   tasks: ReadonlyArray<TaskView>,
   herds: ScriptedMachine["herds"] = [{ id: "default" }],
-  runs: Pick<ScriptedMachine, "details" | "files"> = {},
+  more: Pick<
+    ScriptedMachine,
+    "build" | "development" | "protocol" | "failing" | "details" | "files"
+  > = {},
 ) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
-    yield* fs.writeFileString(`${file}.new`, asMachine({ installation, herds, tasks, ...runs }));
+    yield* fs.writeFileString(`${file}.new`, asMachine({ installation, herds, tasks, ...more }));
     yield* fs.rename(`${file}.new`, file);
   });
 
 export const LOCAL = "local.json";
 
 /**
- * herdr's list; under `browsers/`, the default browser that `browser` names and two that
- * log what they were asked to open; a master that logs when it opens and closes, and which
- * `-O check` finds once it is open; and a passenger that runs its remote command as a
- * Machine's login shell would, with `collie` on PATH.
+ * herdr, as `scripted-herdr.ts` scripts it; under `browsers/`, the default browser that
+ * `browser` names and two that log what they were asked to open; a master that logs when it
+ * opens and closes, and which `-O check` finds once it is open; and a passenger that runs
+ * its remote command as a Machine's login shell would, with `collie` on PATH where the
+ * Machine has a board. While `down-<target>` exists the target cannot be reached and its
+ * master drops, taking its passengers with it; while `sso-<target>` exists a master waits on
+ * an SSO login.
  */
 const scripts = (flock: string) => ({
   herdr: `#!/bin/sh
-[ "$*" = "machine list --json" ] || exit 2
-cat '${flock}/machines.json'
+exec '${process.execPath}' '${HERDR}' '${flock}' "$@"
 `,
   "browsers/xdg-open": `#!/bin/sh
 echo "$1" >> '${flock}/opened.log'
@@ -60,25 +66,84 @@ echo "brave $*" >> '${flock}/opened.log'
 args=("$@")
 target="\${args[-1]}"
 for ((i = 0; i < \${#args[@]}; i++)); do [ "\${args[i]}" = -S ] && control="\${args[i+1]}"; done
+refused() { echo "ssh: connect to host \${target#*@} port 22: Connection refused" >&2; exit 255; }
 if [ "$1" = -M ]; then
   echo "open $target $PPID" >> '${flock}/ssh.log'
-  if [ "$target" = mk@down ]; then echo "ssh: connect to host down port 22: Connection refused" >&2; exit 255; fi
+  if [ "$target" = mk@down ] || [ -e '${flock}'/"down-$target" ]; then refused; fi
+  if [ -e '${flock}'/"sso-$target" ]; then
+    echo "SSH access guarded by SSO. Log in at https://sso.example/device" >&2
+    while [ -e '${flock}'/"sso-$target" ]; do sleep 0.1; done
+  fi
   trap 'echo "closed $target" >> "${flock}/ssh.log"; rm -f "$control"; exit 0' TERM
   touch "$control"
-  while :; do sleep 0.1; done
+  while [ ! -e '${flock}'/"down-$target" ]; do sleep 0.1; done
+  rm -f "$control"
+  refused
 fi
-if [ "\${args[2]}" = -O ]; then [ -e "$control" ]; exit; fi
+if [ "\${args[2]}" = -O ]; then
+  [ "\${args[3]}" = check ] || echo "\${args[3]} \${args[5]} \${args[-1]}" >> '${flock}/ssh.log'
+  [ -e "$control" ]; exit
+fi
 [ -e "$control" ] || { echo "no master for $target" >&2; exit 255; }
 [[ " $* " == *" ControlMaster=no "* ]] || { echo "a channel could log in by itself" >&2; exit 255; }
 target="\${args[-2]}"
-FAKE_TARGET="$target" SHELL='${flock}/remote/shell' exec /bin/sh -c "\${args[-1]}"
+FAKE_TARGET="$target" SHELL='${flock}/remote/shell' /bin/sh -c "\${args[-1]}" <&0 &
+passenger=$!
+while kill -0 $passenger 2>/dev/null; do
+  [ -e "$control" ] || { kill $passenger; echo "Shared connection to \${target#*@} closed." >&2; exit 255; }
+  sleep 0.1
+done
+wait $passenger
 `,
   // A login shell here would reset PATH from the system's profile.
   "remote/shell": `#!/bin/sh
 [ "$1" = -lc ] && shift
 PATH='${flock}/remote':"$PATH" exec /bin/sh -c "$@"
 `,
+  // The keyring, a file per secret.
+  "secret-tool": `#!/bin/sh
+cmd=$1; shift
+[ "$1" = --label ] && shift 2
+key='${flock}'/"secret-$(echo "$@" | tr ' /' '__')"
+case "$cmd" in
+  store) cat > "$key" ;;
+  lookup) [ -e "$key" ] && cat "$key" ;;
+esac
+`,
+  // This computer's browser: it logs what it opens, and approves a login sent to a localhost
+  // callback unless `no-browser` exists.
+  "xdg-open": `#!${process.execPath}
+const url = Bun.argv[2];
+require("fs").appendFileSync("${flock}/opened.log", url + "\\n");
+const back = new URL(url).searchParams.get("redirect_uri");
+if (back?.startsWith("http://localhost") && !require("fs").existsSync("${flock}/no-browser")) {
+  const callback = new URL(back);
+  callback.searchParams.set("code", "c-1");
+  await fetch(callback).catch(() => undefined);
+}
+`,
+  "remote/glab": `#!/bin/sh
+echo "$FAKE_TARGET $* $(cat)" >> '${flock}/glab.log'
+`,
+  // Claude Code's login: its callback URL goes to $BROWSER, and it ends at that callback or a
+  // pasted code, leaving `claude-<target>` as the Machine's login.
+  "remote/claude": `#!${process.execPath}
+const fs = require("fs");
+const done = (how) => { fs.writeFileSync("${flock}/claude-" + process.env.FAKE_TARGET, how); process.exit(0); };
+const server = Bun.serve({ port: 0, fetch: (request) => {
+  const code = new URL(request.url).searchParams.get("code");
+  if (code === null) return new Response("bad", { status: 400 });
+  setTimeout(() => done("browser " + code), 10);
+  return new Response("ok");
+} });
+const callback = encodeURIComponent("http://localhost:" + server.port + "/callback");
+Bun.spawn([process.env.BROWSER, "https://claude.example/oauth/authorize?redirect_uri=" + callback]);
+console.log("https://claude.example/oauth/authorize?redirect_uri=https%3A%2F%2Fplatform.claude.com%2Foauth%2Fcode%2Fcallback");
+process.stdout.write("Paste code here if prompted > ");
+for await (const line of console) done("code " + line.trim());
+`,
   "remote/collie": `#!/bin/sh
+[ -e '${flock}/'"$FAKE_TARGET.json" ] || { echo "sh: 1: exec: collie: not found" >&2; exit 127; }
 exec '${process.execPath}' '${HOST}' '${flock}/'"$FAKE_TARGET.json" "$@"
 `,
 });
@@ -115,20 +180,31 @@ export interface App {
   readonly page: Page;
   /** Where the scripted hosts read their boards and log what they were asked. */
   readonly flock: string;
+  /** The app's home, which a second launch can start on again. */
+  readonly scratch: string;
   readonly process: ReturnType<typeof Bun.spawn>;
 }
 
-/** Starts the app with herdr listing `machines`, once every board it reads is written. */
+/**
+ * Starts the app with herdr listing `machines`, once every board it reads is written: in a
+ * home of its own, or in `home`, so it finds what an app there saved; `env` added to its own.
+ * `browsers` only where a test opens links: CEF runs these too, and a quit then leaves
+ * masters open.
+ */
 export const launch = (
   machines: ReadonlyArray<Saved>,
   boards: (flock: string) => Effect.Effect<void, unknown, FileSystem.FileSystem>,
-  // Only where a test opens links: CEF runs these too, and a quit then leaves masters open.
-  browsers = false,
+  {
+    home,
+    env: extra = {},
+    browsers = false,
+  }: { home?: string; env?: Readonly<Record<string, string>>; browsers?: boolean } = {},
 ) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
-    const scratch = yield* fs.makeTempDirectory({ prefix: "collie-desktop-" });
+    const scratch = home ?? (yield* fs.makeTempDirectory({ prefix: "collie-desktop-" }));
     const flock = `${scratch}/flock`;
+    yield* fs.remove(flock, { recursive: true, force: true });
     yield* fs.makeDirectory(`${flock}/remote`, { recursive: true });
     yield* fs.makeDirectory(`${flock}/browsers`);
     for (const [name, script] of Object.entries(scripts(flock))) {
@@ -155,9 +231,10 @@ export const launch = (
       HOME: scratch,
       XDG_STATE_HOME: `${scratch}/.local/state`,
       PATH: `${browsers ? `${flock}/browsers:` : ""}${flock}:${Bun.env.PATH}`,
+      XDG_DATA_HOME: browsers ? `${flock}/share` : `${scratch}/data`,
       COLLIE_DESKTOP_COLLIE: asCommand([process.execPath, HOST, `${flock}/${LOCAL}`]),
+      ...extra,
     };
-    if (browsers) env.XDG_DATA_HOME = `${flock}/share`;
     const process_ = Bun.spawn(["setsid", ...display, APP], {
       env,
       stdout: "ignore",
@@ -180,7 +257,7 @@ export const launch = (
       // A start that never showed its window must not keep the port from the next one.
       Effect.tapError(() => quit({ process: process_ })),
     );
-    return { ...found, flock, process: process_ } satisfies App;
+    return { ...found, flock, scratch, process: process_ } satisfies App;
   });
 
 /** Ends the app and everything it started. */

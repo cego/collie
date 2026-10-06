@@ -1,9 +1,26 @@
 <script setup lang="ts">
 import { SECTIONS } from "../../../src/board-model";
+import { AsyncResult, useAtomValue } from "@effect/atom-vue";
+import type { NotLive } from "../../src/shared/flock";
+import { updatesAtom } from "./flock";
 
-const { connecting, failure, lost, machines, tasks, sections, header, waiting, placedBy } =
-  useFlock();
+const {
+  connecting,
+  failure,
+  lost,
+  machines,
+  developments,
+  notices,
+  tasks,
+  sections,
+  header,
+  waiting,
+  placedBy,
+} = useFlock();
 const starting = ref(false);
+const listing = ref(false);
+const { onboardOn } = useOnboarding();
+const { renewBy } = useCredentials();
 const drawer = useDrawer();
 const opened = computed(() =>
   drawer.opened.value === null ? undefined : placedBy(drawer.opened.value),
@@ -19,6 +36,47 @@ const popChatOut = async () => {
   await popOut();
   popped.value = false;
 };
+
+const NOT_LIVE: Record<NotLive, { icon: string; title: (name: string) => string }> = {
+  unreachable: { icon: "i-lucide-unplug", title: (name) => `${name} is out of reach` },
+  sso: { icon: "i-lucide-key-round", title: (name) => `Waiting for SSO login on ${name}` },
+  "no-collie": { icon: "i-lucide-package-x", title: (name) => `Collie isn't installed on ${name}` },
+  "update-desktop": {
+    icon: "i-lucide-circle-arrow-up",
+    title: (name) => `Update Desktop to see ${name}`,
+  },
+};
+
+const toast = useToast();
+watch(notices, (now, before) => {
+  for (const text of now.slice(before.length)) toast.add({ title: text, color: "info" });
+});
+
+const update = useAtomValue(() => updatesAtom);
+const { restart } = useActions();
+watch(update, (now) => {
+  if (!AsyncResult.isSuccess(now)) return;
+  const news = now.value;
+  if (news._tag === "Refused") {
+    toast.add({
+      title: `Desktop ${news.version} was not installed: ${news.reason}`,
+      color: "error",
+    });
+    return;
+  }
+  toast.add({
+    id: `update-${news.version}`,
+    title: `Collie ${news.version} is ready, restart Desktop`,
+    color: "info",
+    duration: 0,
+    actions: [
+      {
+        label: "Restart Desktop",
+        onClick: () => void restart(),
+      },
+    ],
+  });
+});
 </script>
 
 <template>
@@ -37,6 +95,16 @@ const popChatOut = async () => {
           </p>
           <UButton
             class="ml-auto"
+            color="neutral"
+            variant="outline"
+            icon="i-lucide-server"
+            label="Machines"
+            data-testid="machines"
+            @click="listing = true"
+          />
+          <MachinesPanel v-model:open="listing" />
+          <OnboardDialog />
+          <UButton
             icon="i-lucide-plus"
             label="New run"
             data-testid="new-run"
@@ -65,14 +133,39 @@ const popChatOut = async () => {
           />
           <template v-else>
             <UAlert
-              v-for="[route, { name, reason }] in lost"
-              :key="route"
+              v-if="renewBy !== null"
+              data-testid="renew-gitlab"
+              color="warning"
+              variant="subtle"
+              icon="i-lucide-key-round"
+              :title="`The GitLab token expires on ${renewBy}`"
+              description="Make a new one and Renew it, and every Machine gets it."
+              :actions="[{ label: 'Renew', onClick: () => void (listing = true) }]"
+            />
+            <UAlert
+              v-for="[profile, { name, state, reason }] in lost"
+              :key="profile"
               :data-testid="`lost-${name}`"
               color="warning"
               variant="subtle"
-              icon="i-lucide-unplug"
-              :title="`${name} is out of reach`"
+              :icon="NOT_LIVE[state].icon"
+              :title="NOT_LIVE[state].title(name)"
               :description="reason"
+              :actions="
+                state === 'no-collie'
+                  ? [{ label: 'Onboard', onClick: () => onboardOn(profile) }]
+                  : []
+              "
+            />
+            <UAlert
+              v-for="{ name, development } in developments"
+              :key="name"
+              :data-testid="`development-${name}`"
+              color="neutral"
+              variant="subtle"
+              icon="i-lucide-flask-conical"
+              :title="name"
+              :description="`development build ${development}`"
             />
             <p v-if="tasks.length === 0" class="text-muted">Nothing on the board yet.</p>
             <template v-for="[section, label] in SECTIONS" :key="section">

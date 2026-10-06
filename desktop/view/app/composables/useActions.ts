@@ -4,13 +4,22 @@
 import { AtomRegistry, injectRegistry, useAtomSet } from "@effect/atom-vue";
 import { Cause, Effect, Encoding, Exit, Result, type Semaphore } from "effect";
 import type * as RpcClientError from "effect/unstable/rpc/RpcClientError";
-import type { ActionFailed, DesktopAction } from "../../../src/shared/flock";
+import type { ActionFailed, DesktopAction, Skippable } from "../../../src/shared/flock";
 import { FlockClient } from "../flock";
 
 const actAtom = FlockClient.mutation("act");
 const offersAtom = FlockClient.mutation("offers");
 const workflowsAtom = FlockClient.mutation("workflows");
 const openLinkAtom = FlockClient.mutation("openLink");
+const restartAtom = FlockClient.mutation("restart");
+const onboardAtom = FlockClient.mutation("onboard");
+const addMachineAtom = FlockClient.mutation("addMachine");
+const answerHerdrAtom = FlockClient.mutation("answerHerdr");
+const removeMachineAtom = FlockClient.mutation("removeMachine");
+const saveGitlabAtom = FlockClient.mutation("saveGitlab");
+const saveHelleAtom = FlockClient.mutation("saveHelle");
+const claudeLoginAtom = FlockClient.mutation("claudeLogin");
+const pasteCodeAtom = FlockClient.mutation("pasteCode");
 
 type Failed = ActionFailed | RpcClientError.RpcClientError;
 
@@ -47,6 +56,15 @@ export const useActions = () => {
   const offers = useAtomSet(() => offersAtom, { mode: "promiseExit" });
   const workflows = useAtomSet(() => workflowsAtom, { mode: "promiseExit" });
   const openLink = useAtomSet(() => openLinkAtom, { mode: "promiseExit" });
+  const restart = useAtomSet(() => restartAtom, { mode: "promiseExit" });
+  const onboard = useAtomSet(() => onboardAtom, { mode: "promiseExit" });
+  const addMachine = useAtomSet(() => addMachineAtom, { mode: "promiseExit" });
+  const answerHerdr = useAtomSet(() => answerHerdrAtom, { mode: "promiseExit" });
+  const removeMachine = useAtomSet(() => removeMachineAtom, { mode: "promiseExit" });
+  const saveGitlab = useAtomSet(() => saveGitlabAtom, { mode: "promiseExit" });
+  const saveHelle = useAtomSet(() => saveHelleAtom, { mode: "promiseExit" });
+  const claudeLogin = useAtomSet(() => claudeLoginAtom, { mode: "promiseExit" });
+  const pasteCode = useAtomSet(() => pasteCodeAtom, { mode: "promiseExit" });
   const registry = injectRegistry();
   /** One part of a Run's item: its own call, since several are read at once. */
   const runFile = (payload: { installation: string; runId: string; ref: string; offset: number }) =>
@@ -120,11 +138,45 @@ export const useActions = () => {
 
   return {
     run,
+    /** Installs Desktop's ready update, which restarts it; a refusal is said in a toast. */
+    restart: () =>
+      restart({ payload: undefined }).then((exit) => {
+        if (Exit.isSuccess(exit)) return;
+        const { reason } = failureOf(exit.cause);
+        toast.add({ title: `Desktop did not restart to update: ${reason}`, color: "error" });
+      }),
     openLink: (url: string) => openLink({ payload: { url } }),
     offersOf: (installation: string, runId: string) =>
       offers({ payload: { installation, runId } }).then(read),
     workflowsIn: (installation: string, project: string) =>
       workflows({ payload: { installation, project } }).then(read),
+    /** The job onboarding that route's Machine, whose progress comes on the board. */
+    onboard: (profile: string, skip?: ReadonlyArray<Skippable>) =>
+      onboard({ payload: skip === undefined ? { profile } : { profile, skip } }).then(read),
+    addMachine: (target: string, label: string, session: string) =>
+      addMachine({ payload: { target, label, session } }).then(read),
+    answerHerdr: (job: string, yes: boolean) => answerHerdr({ payload: { job, yes } }),
+    /** Whether it was kept; what came of giving it to each Machine is said. */
+    saveGitlab: (token: string) =>
+      saveGitlab({ payload: { token } }).then((exit) => {
+        const said = read(exit);
+        if (said !== null) toast.add({ title: said, color: "success" });
+        return said !== null;
+      }),
+    saveHelle: (url: string, token: string) =>
+      saveHelle({ payload: { url, token } }).then((exit) => {
+        const said = read(exit);
+        if (said !== null) toast.add({ title: said, color: "success" });
+        return said !== null;
+      }),
+    /** The job logging Claude Code in on that route's Machine. */
+    claudeLogin: (profile: string) => claudeLogin({ payload: { profile } }).then(read),
+    pasteCode: (job: string, code: string) => pasteCode({ payload: { job, code } }),
+    removeMachine: (profile: string) =>
+      removeMachine({ payload: { profile } }).then((exit) => {
+        const said = read(exit);
+        if (said !== null) toast.add({ title: said, color: "success" });
+      }),
     textOf: wholeAs((whole) =>
       whole._tag === "Text" ? whole.text : new TextDecoder().decode(joined(whole.parts)),
     ),

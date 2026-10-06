@@ -10,6 +10,13 @@ import {
 
 export const ScriptedMachine = Schema.Struct({
   installation: Schema.String,
+  build: Schema.optionalKey(Schema.String),
+  development: Schema.optionalKey(Schema.String),
+  protocol: Schema.optionalKey(Schema.Int),
+  /** What `collie doctor` finds failing, where the Machine answers it at all. */
+  failing: Schema.optionalKey(
+    Schema.Array(Schema.Struct({ name: Schema.String, detail: Schema.String, fix: Schema.String })),
+  ),
   herds: Schema.Array(Herd),
   tasks: Schema.Array(TaskView),
   details: Schema.optionalKey(Schema.Record(Schema.String, RunDetail)),

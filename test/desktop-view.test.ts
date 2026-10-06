@@ -49,7 +49,7 @@ const channels = () => {
   return { view, main };
 };
 
-const machine = { installation: "inst-1", name: "mk-pc" };
+const machine = { installation: "inst-1", profile: "local", name: "mk-pc" };
 const asking = task({ id: "t-ask", name: "Ask me", state: "blocked", at: 3 });
 const working = task({ id: "t-work", name: "Busy", state: "active", at: 2 });
 const told: ReadonlyArray<MachineMessage> = [
@@ -80,6 +80,17 @@ const served = (main: Channel<ToView, ToMain>) =>
         workflows: () => Effect.die("not asked"),
         say: () => Stream.die("not asked"),
         openLink: () => Effect.die("not asked"),
+        updates: () => Stream.die("not asked"),
+        restart: () => Effect.die("not asked"),
+        onboard: () => Effect.die("not asked"),
+        addMachine: () => Effect.die("not asked"),
+        answerHerdr: () => Effect.die("not asked"),
+        removeMachine: () => Effect.die("not asked"),
+        credentials: () => Stream.die("not asked"),
+        saveGitlab: () => Effect.die("not asked"),
+        saveHelle: () => Effect.die("not asked"),
+        claudeLogin: () => Effect.die("not asked"),
+        pasteCode: () => Effect.die("not asked"),
         runDetail: () => Stream.die("not asked"),
         runFile: () => Effect.die("not asked"),
         answer: () => Effect.die("not asked"),
@@ -138,8 +149,13 @@ const snapshot = (
     seq: 0,
   },
 });
-const pc = { installation: "inst-pc", name: "mk-pc" };
-const vm = { installation: "inst-vm", name: "vm-mk", target: "mk@vm-mk.cegohost.dk" };
+const pc = { installation: "inst-pc", profile: "local", name: "mk-pc" };
+const vm = {
+  installation: "inst-vm",
+  profile: "p-vm",
+  name: "vm-mk",
+  target: "mk@vm-mk.cegohost.dk",
+};
 const where = (items: ReadonlyArray<FlockItem>) => {
   const { tasks, placedOf } = flockCards(items.reduce(applyItem, EMPTY_FLOCK));
   return tasks.map((one) => [one.id, placedOf(one).where]);
@@ -188,7 +204,7 @@ test("a card names its Herd only when its Machine runs several", () => {
 });
 
 test("Machines that share a name are told apart by how they are reached, and nothing else is renamed", () => {
-  const other = { installation: "inst-vm2", name: "vm-mk", target: "mk@vm-mk2" };
+  const other = { installation: "inst-vm2", profile: "p-vm2", name: "vm-mk", target: "mk@vm-mk2" };
   expect(
     where([
       snapshot({ ...pc, name: "vm-mk" }, [asking]),
@@ -213,14 +229,73 @@ test("the sections and the header sentence count every Machine's Tasks", () => {
   expect(headerSentence(tasks).text).toBe("2 tasks are waiting on you. 1 working.");
 });
 
+const lostVm = (state: "unreachable" | "sso" | "no-collie", at = 1_000): FlockItem => ({
+  _tag: "Lost",
+  machine: { profile: vm.profile, name: vm.name, target: vm.target },
+  state,
+  reason: "ssh: connection refused",
+  at,
+});
+const asOf = (flock: ReturnType<typeof applyItem>) =>
+  flockCards(flock).tasks.map((one) => [one.id, flockCards(flock).placedOf(one).asOf]);
+
 test("a route out of reach is said by name until its Machine reports through it again", () => {
-  const lost: FlockItem = {
-    _tag: "Lost",
-    machine: { name: vm.name, target: vm.target },
-    reason: "ssh: connection refused",
-  };
-  const after = [snapshot(pc, [asking]), lost].reduce(applyItem, EMPTY_FLOCK);
-  expect([...after.lost.values()]).toEqual([{ name: "vm-mk", reason: "ssh: connection refused" }]);
+  const after = [snapshot(pc, [asking]), lostVm("unreachable")].reduce(applyItem, EMPTY_FLOCK);
+  expect([...after.lost.values()]).toEqual([
+    { name: "vm-mk", state: "unreachable", reason: "ssh: connection refused" },
+  ]);
   expect(flockCards(after).tasks.map((one) => one.id)).toEqual(["t-ask"]);
   expect([...applyItem(after, snapshot(vm, [])).lost]).toEqual([]);
+});
+
+test("a Machine that drops keeps its cards as of when, off the machines a run can start on, until it is live again", () => {
+  const dropped = [
+    snapshot(pc, [asking]),
+    snapshot(vm, [working]),
+    lostVm("unreachable", 5),
+  ].reduce(applyItem, EMPTY_FLOCK);
+  expect(asOf(dropped)).toEqual([
+    ["t-ask", null],
+    ["t-work", 5],
+  ]);
+  expect(flockCards(dropped).machines.map((one) => one.name)).toEqual(["mk-pc"]);
+  // Still out of reach later, it is as of when it dropped.
+  expect(asOf(applyItem(dropped, lostVm("sso", 9)))).toEqual([
+    ["t-ask", null],
+    ["t-work", 5],
+  ]);
+  expect(asOf(applyItem(dropped, snapshot(vm, [working])))).toEqual([
+    ["t-ask", null],
+    ["t-work", null],
+  ]);
+});
+
+test("a saved board stands in, as of when it was saved, until its Machine is live, and never over a live one", () => {
+  const saved: FlockItem = {
+    _tag: "Saved",
+    machine: vm,
+    herds: [{ id: "default" }],
+    tasks: [working],
+    at: 7,
+  };
+  const launched = [saved].reduce(applyItem, EMPTY_FLOCK);
+  expect(asOf(launched)).toEqual([["t-work", 7]]);
+  expect(asOf(applyItem(launched, snapshot(vm, [asking])))).toEqual([["t-ask", null]]);
+  const live = [snapshot(vm, [asking]), saved].reduce(applyItem, EMPTY_FLOCK);
+  expect(asOf(live)).toEqual([["t-ask", null]]);
+});
+
+test("a Machine without Collie is known by its herdr profile until its host names its installation", () => {
+  const bare = [snapshot(pc, [asking]), lostVm("no-collie")].reduce(applyItem, EMPTY_FLOCK);
+  expect([...bare.lost.keys()]).toEqual(["p-vm"]);
+  const installed = applyItem(bare, snapshot(vm, [working]));
+  expect([...installed.lost]).toEqual([]);
+  expect([...installed.machines.keys()]).toEqual(["inst-pc", "inst-vm"]);
+  // One that reaches a Machine already shown merges into it.
+  const merged = applyItem(bare, {
+    _tag: "Merged",
+    machine: { profile: "p-vm", name: "vm-mk" },
+  });
+  expect([...merged.lost]).toEqual([]);
+  expect([...merged.machines.keys()]).toEqual(["inst-pc"]);
 });

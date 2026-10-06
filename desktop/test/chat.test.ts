@@ -62,7 +62,7 @@ beforeAll(
             serve(`${flock}/${LOCAL}`, "pc", []).pipe(
               Effect.andThen(transcript(flock.replace(/\/flock$/, ""))),
             ),
-          true,
+          { browsers: true },
         );
       }),
     ),

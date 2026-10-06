@@ -268,7 +268,15 @@ const stampIn = (declared: Declared, client: { readonly id: number }) => {
  * host's. A client's connection is a scope of its own under it, so a client that goes
  * takes nothing with it — not a registration, not an execution, not another client.
  */
-const handlers = (dir: string, installation: string, declared: Declared) =>
+/** `<version>+<sha>` where the host runs a development checkout; nothing for a release. */
+type Development = { readonly development?: string };
+
+const handlers = (
+  dir: string,
+  installation: string,
+  development: Development,
+  declared: Declared,
+) =>
   HostRpcs.toLayer(
     Effect.gen(function* () {
       const registry = yield* Registry;
@@ -278,10 +286,6 @@ const handlers = (dir: string, installation: string, declared: Declared) =>
       const env = yield* currentEnv.pipe(Effect.orDie);
       const catalogue = (project: string) =>
         discover(searchPath({ pluginRoot: env.pluginRoot, userDir: env.userDir, project }));
-
-      // Checked when the host starts.
-      const installed = yield* installedRelease(env.pluginRoot, BUILD);
-      const development = installed.release ? {} : { development: installed.build };
 
       return HostRpcs.of({
         identity: () =>
@@ -449,6 +453,7 @@ const isHerdName = (herd: string) => herd !== "." && herd !== ".." && /^[^/\\]+$
 const frontDoorHandlers = (
   dir: string,
   installation: string,
+  development: Development,
   panels: MrPanels,
   declared: Declared,
 ) =>
@@ -1167,6 +1172,7 @@ const frontDoorHandlers = (
                   head: {
                     installation,
                     build: BUILD,
+                    ...development,
                     protocol: PROTOCOL,
                     herds: sessions.flatMap(({ herd, name }) =>
                       herd === null ? [] : [name === undefined ? { id: herd } : { id: herd, name }],
@@ -1290,14 +1296,16 @@ const own = (dir: string) =>
     // socket cannot be bound while its file is there, and a dead host's is still there.
     yield* fs.remove(socketOf(dir), { force: true }).pipe(Effect.orDie);
     const installation = yield* installationOf(dir).pipe(Effect.orDie);
+    const installed = yield* installedRelease(env.pluginRoot, BUILD);
+    const development: Development = installed.release ? {} : { development: installed.build };
     const panels: MrPanels = new Map();
     const declared: Declared = new Map();
     return yield* Layer.launch(
       RpcServer.layer(AllRpcs).pipe(
         Layer.provide(
           Layer.mergeAll(
-            handlers(dir, installation, declared),
-            frontDoorHandlers(dir, installation, panels, declared),
+            handlers(dir, installation, development, declared),
+            frontDoorHandlers(dir, installation, development, panels, declared),
             sideJobsLayer(dir, panels),
           ).pipe(
             Layer.provide(

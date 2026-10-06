@@ -829,14 +829,68 @@ the header sentence are counted across the Flock. Once there is more than one Ma
 card names its Machine, and its Herd too when that Machine runs more than one herdr
 session.
 
+Desktop is released with Collie, under the same tag and version. Install it on Linux (x64)
+for your user, with a desktop entry:
+
+```sh
+curl -fsSL https://github.com/cego/collie/releases/latest/download/install-desktop.sh | sh
+```
+
+The script downloads the latest release's installer and runs it only once the download
+verifies against Collie's release key. Checking needs OpenSSL 3.0 or later.
+
+Desktop then keeps itself up to date. It checks the latest release when it starts and every
+6 hours after, and downloads an update in the background. It installs nothing until the
+tar it would install verifies against the same key, because Electrobun's bundle hash is
+not authentication. An update that is unsigned or does not match is thrown away and said
+so. One that verifies is announced as "Collie 0.33.0 is ready, restart Desktop", and
+**Restart Desktop** installs it. Desktop never restarts itself: an update that is ready when
+you quit is installed the next time you start Desktop. A Desktop run from a checkout
+(`bun run start`, or any build that is not the stable channel) never updates itself. The new
+Desktop then upgrades your released Machines to its version as they connect.
+
 The Machines are this computer and every machine enabled in `herdr machine list`; Collie
 keeps no list of its own. At launch Desktop opens one SSH master per herdr machine, from
 its target and your own SSH config, so an SSO check is made once per machine, and keeps it
 open until Desktop quits. A Machine reached two ways — two herdr machines on one computer,
 or one pointing at this computer — is shown once, through the first in herdr's list (this
 computer before any). It is named by that herdr machine's label, or the hostname here, and
-two Machines with one name show as `name (ssh target)`. A Machine Desktop cannot reach is
-named above the board with what SSH or its bridge said.
+two Machines with one name show as `name (ssh target)`.
+
+A Machine Desktop cannot show live says why above the board, by name:
+
+- **Out of reach** — SSH or its bridge failed, or the connection dropped, with what it said.
+  Its cards stay on the board, dimmed and marked "as of HH:MM" (when it was last live),
+  with every action on them off. Desktop tries again by itself, waiting 1 s after the first
+  failure and twice as long after each one after it, up to a minute, and opens a new master
+  if the old one has gone.
+- **Waiting for SSO login on _name_** — the master is waiting on an SSO login (the sshd
+  printed a line naming SSO). Its board appears once the login clears; nothing has to be
+  pressed.
+- **Collie isn't installed on _name_** — the machine answered, but its login shell has no
+  `collie`. **Onboard** onboards it, as below. Until it has a host, it is known by its
+  herdr profile id. Once a host there answers, it becomes the Machine that host's
+  installation id names, as one more Machine or as the one already shown.
+
+Desktop keeps the Flock on its own build. When a Machine on a release older than Desktop
+connects, Desktop runs `collie upgrade --to <its version>` there through the same route
+as the bridge. No prompt is shown, and a notice says "vm-mk upgraded 0.26.0 → 0.27.0".
+Desktop then opens the Machine again, and the new build replaces the old host, as any
+newer `collie` does. Desktop never stops, signals or restarts a host itself. It asks each
+Machine once per launch, and a Machine that would not move says why in a notice and is
+shown as it is. A Machine on a development checkout (a non-release branch or tag,
+uncommitted changes, or commits its remote lacks) is never upgraded. It is named above the
+board with its build, "development build <version>+<sha>". Desktop reads any host inside
+the protocol window ([ADR-0038](adr/0038-the-host-builds-and-serves-the-board.md) D5): its
+own protocol version and the one after it. A host whose board is newer than that, or one a
+newer collie serves that Desktop cannot decode, is not shown, and its row says **Update
+Desktop to see _name_**.
+
+A host that is not running needs nothing from you, because the bridge starts it. Desktop
+saves each Machine's last board on this computer, under
+`$XDG_DATA_HOME/dk.cego.collie.desktop/<channel>/machines/`. At launch it shows those boards
+dimmed, marked "as of", until each Machine's connection is live; a board saved through a
+machine herdr no longer lists is not shown.
 
 Every Decision and action the TUI board has is on Desktop's cards, and goes to the Machine
 the card is on. A question is answered with its options, or typed into where it has none;
@@ -853,6 +907,64 @@ host's own words for why not, is said in a toast, and **Try again** on a failure
 same request again, so a host that took it before the answer was lost does it once; the card then changes from the host's
 stream like any other change. Every one is recorded on that Machine as `desktop`, with this
 computer's name.
+
+**Machines** lists every Machine Desktop reaches — this computer first, then herdr's — with
+how it stands, and is where Machines join the Flock. Each joins the same way:
+
+- **Add Machine** takes an SSH target, a label and a herdr session (`default` unless you
+  say), and runs `herdr machine add` in a terminal Desktop drives. herdr's own questions —
+  whether to install herdr there, whether to replace a running server — are dialogs, and
+  closing one answers herdr's default, which for replacing a server is No. herdr saves the
+  machine, so its list stays the only one, and Desktop then onboards it.
+- **Onboard** on a Machine herdr already has, or on this computer, onboards it there and
+  then. It is the same button on a Machine whose Collie isn't installed.
+
+Onboarding downloads the runner of Desktop's own version for that Machine from the GitHub
+release, with its `.sig`, and verifies it against Collie's release key before it goes
+anywhere; one that is unsigned or does not match is refused and said, and nothing reaches
+the Machine. The verified runner is kept on this computer, checked again each time it is
+used, and put on the Machine under `~/.cache/collie/runners/` only once what arrived has
+the same SHA-256. Desktop then runs `collie --json onboard --to <its version>` there and
+shows each step as it streams: a step that needs root shows the exact command to run and
+**Retry**, and one that needs you shows what to open. A Machine onboarding left short lists
+its missing steps on its row in Machines, each with its command or link and **Retry**;
+onboarding again repairs only what is missing. Once onboarding ends, Desktop tries the
+Machine's board again at once rather than after its backoff. Desktop keeps each Machine's
+latest onboarding on this computer, beside its saved board. Whether a Machine is onboarded
+is `collie doctor`'s to say: once a Machine is live, and after each onboarding of it,
+Desktop runs `collie --json doctor` there, and its row lists each check that failed, with
+its fix and **Retry**, even on a Machine Desktop never onboarded. Helle and the Linear MCP
+count too, though doctor passes them as optional: the row lists either one doctor finds
+absent or not working, and a Linear login onboarding left unfinished. **Skip on this
+Machine** on either step onboards it again with `--skip`, and every later onboarding of
+that Machine skips it too.
+
+What only you can give is asked once, here, and never pasted on a command line. **Machines**
+keeps the Flock's credentials in this computer's Secret Service keyring, through
+`secret-tool` (libsecret): one GitLab token, made on GitLab's own page — **Make one on
+GitLab** opens it with the `api` and `write_repository` scopes filled in — and Helle's URL
+and token. Desktop takes a token only once GitLab accepts it with those scopes, and gives
+it at once to glab on every Machine it reaches (`glab auth login --hostname
+gitlab.cego.dk --stdin`); Helle's go to each Machine's credentials file, owner-only, the
+same way. Every onboarding gets what is kept on its stdin (`--secrets-stdin`), so a second
+Machine asks for neither, and one that was out of reach when a token was renewed gets the
+new one the next time it is onboarded. A step that needs one you have not given yet takes it
+there and onboards again. Desktop asks GitLab when the token expires, at launch and when it
+is saved, and warns above the board from 14 days before; **Renew** with a new one replaces
+it on every Machine.
+
+The Claude login is each Machine's own. **Log in** on that step runs `claude auth login`
+on the Machine with `$BROWSER` set to a shim Desktop reads, because Claude Code hands its
+browser the URL with its callback port and prints only a paste-code URL. Desktop forwards
+that port over the Machine's master and opens the URL in your browser, so approving there
+finishes the login on the Machine; the printed URL and a code field are the fallback, for
+a browser that cannot reach the callback. Linear's login, which `collie onboard` streams
+with its port, is forwarded and opened the same way. Desktop then onboards the Machine
+again.
+
+**Remove** runs `herdr machine remove` for that herdr machine, closes Desktop's connection
+to it and drops its saved board. It never stops a host, a Run or herdr there, and never
+uninstalls Collie. This computer is not in herdr's list, so it has no Remove.
 
 Pressing a card's name opens its drawer, which follows the card's Run on its host for as
 long as it is open. Its **Plan** tab renders the spec, read whole from the host where it is longer than the
@@ -889,7 +1001,7 @@ on a page load from the network, and nothing may move Desktop's window off its o
 rendered markdown is kept inside its own box. A web link in it opens in your browser, never
 in Desktop.
 
-Every web page Desktop opens goes to your default browser, as `xdg-settings get
+Every link you press in Desktop opens in your default browser, as `xdg-settings get
 default-web-browser` names it, where you are already signed in. Chrome, Chromium, Brave,
 Edge and Vivaldi are started with `--app=<url>`, so the page gets a window of its own;
 any other browser, Firefox included, opens it as an ordinary tab.

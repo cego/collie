@@ -10,7 +10,7 @@ import {
   sectionsOf,
   type TaskView,
 } from "../../../../src/board-model";
-import { EMPTY_FLOCK, flockCards, type PlacedTask } from "../../../src/shared/flock";
+import { EMPTY_FLOCK, flockCards, machineRows, type PlacedTask } from "../../../src/shared/flock";
 import { flockAtom } from "../flock";
 
 /** Now, again every minute: a week's fold and the header's count of it age with it. */
@@ -40,6 +40,12 @@ export const useFlock = () => {
     ),
     lost: computed(() => [...told.value.lost]),
     machines: computed(() => board.value.machines),
+    developments: computed(() => board.value.developments),
+    notices: computed(() => told.value.notices),
+    /** Now, as of the last minute. */
+    now,
+    rows: computed(() => machineRows(told.value)),
+    onboarding: computed(() => told.value.onboarding),
     tasks,
     placedBy: (key: string) => placed(tasks.value).find((one) => one.key === key),
     sections: computed(

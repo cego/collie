@@ -316,7 +316,7 @@ beforeAll(
               details: { "r-seed": detail(LOG) },
               files: FILES,
             }),
-          true,
+          { browsers: true },
         );
       }),
     ),

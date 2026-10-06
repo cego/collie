@@ -3,13 +3,28 @@
 // client: over a channel that would start a host on this computer, or signal a pid that is
 // not its own.
 
-import { Deferred, Effect, Fiber, Layer, Ref, Schedule, Schema, type Scope, Stream } from "effect";
+import {
+  Clock,
+  Deferred,
+  Effect,
+  Fiber,
+  Layer,
+  Option,
+  Queue,
+  Ref,
+  Schedule,
+  Schema,
+  type Scope,
+  Stream,
+} from "effect";
 import * as RpcClient from "effect/unstable/rpc/RpcClient";
 import * as RpcSerialization from "effect/unstable/rpc/RpcSerialization";
 import * as Socket from "effect/unstable/socket/Socket";
 import {
   BRIDGE_READY,
   type BoardMessage,
+  type BoardSnapshot,
+  PROTOCOL,
   FrontDoorRpcs,
   type HostRefused,
   type ProposalRefused,
@@ -22,7 +37,9 @@ import {
   type FlockItem,
   type KnownMachine,
   type Machine,
+  type MachineMerged,
   type MachineMessage,
+  type NotLive,
 } from "../shared/flock";
 
 const children = new Set<Bun.Subprocess>();
@@ -30,7 +47,7 @@ export const endChildren = () => {
   for (const child of children) child.kill();
 };
 
-const spawned = <C extends Bun.Subprocess>(start: () => C) =>
+export const spawned = <C extends Bun.Subprocess>(start: () => C) =>
   Effect.acquireRelease(
     Effect.sync(() => {
       const child = start();
@@ -54,8 +71,46 @@ export const bridgeCommand = (
   as: Bridged = "desktop",
 ) => [...collie, "bridge", "--as", as, "--client", client];
 
+/** The last of what a process has said on a stream so far, each chunk passed on as it comes. */
+const stderrTail = Effect.fnUntraced(function* (
+  from: ReadableStream<Uint8Array>,
+  echo: (chunk: Uint8Array) => void = () => {},
+) {
+  let text = "";
+  const decoder = new TextDecoder();
+  yield* Stream.fromReadableStream({ evaluate: () => from, onError: () => undefined }).pipe(
+    Stream.runForEach((chunk: Uint8Array) =>
+      Effect.sync(() => {
+        echo(chunk);
+        text = (text + decoder.decode(chunk, { stream: true })).slice(-4000);
+      }),
+    ),
+    Effect.ignore,
+    // Ends with its process.
+    Effect.forkDetach,
+  );
+  return () => text.trim();
+});
+
+/** Told what an SSO login a master waits on asks for. */
+export type WaitingOnSso = (said: string) => Effect.Effect<void>;
+
+/**
+ * Why a route shows no live board, short of waiting on SSO, which it reports as it waits;
+ * or that it is to be opened again at once, as after its Machine is upgraded.
+ */
+export interface RouteFailure {
+  readonly state: Exclude<NotLive, "sso"> | "reopen";
+  readonly reason: string;
+}
+
+const unreachable = (reason: string): RouteFailure => ({ state: "unreachable", reason });
+
+/** The shell's own status for a command it could not find. */
+const NOT_FOUND = 127;
+
 /** Everything after the ready marker, whatever a login shell printed before it. */
-const afterReady = (from: ReadableStream<Uint8Array>) => {
+const afterReady = (from: ReadableStream<Uint8Array>, onReady: () => void) => {
   const marker = new TextEncoder().encode(`${BRIDGE_READY}\n`);
   let seen = Buffer.alloc(0);
   let ready = false;
@@ -68,6 +123,7 @@ const afterReady = (from: ReadableStream<Uint8Array>) => {
         const at = seen.indexOf(marker);
         if (at === -1) return;
         ready = true;
+        onReady();
         const rest = seen.subarray(at + marker.length);
         if (rest.length > 0) out.enqueue(rest);
       },
@@ -75,17 +131,23 @@ const afterReady = (from: ReadableStream<Uint8Array>) => {
   );
 };
 
-/** Starts the bridge and speaks `FrontDoorRpcs` over its stdio until the scope closes. */
+/**
+ * Starts the bridge and speaks `FrontDoorRpcs` over its stdio until the scope closes, once
+ * it says it is ready. One that ends first was never a host: where its shell could not find
+ * `collie`, the Machine has none.
+ */
 export const openBridge = Effect.fn("Desktop.openBridge")(function* (
   command: ReadonlyArray<string>,
   env?: Readonly<Record<string, string>>,
 ) {
   const child = yield* spawned(() =>
-    Bun.spawn([...command], { env, stdin: "pipe", stdout: "pipe", stderr: "inherit" }),
+    Bun.spawn([...command], { env, stdin: "pipe", stdout: "pipe", stderr: "pipe" }),
   );
+  const said = yield* stderrTail(child.stderr, (chunk) => process.stderr.write(chunk));
+  const ready = Promise.withResolvers<void>();
   const socket = yield* Socket.fromTransformStream(
     Effect.succeed({
-      readable: afterReady(child.stdout),
+      readable: afterReady(child.stdout, ready.resolve),
       writable: new WritableStream<Uint8Array>({
         write: (chunk) => {
           void child.stdin.write(chunk);
@@ -103,23 +165,45 @@ export const openBridge = Effect.fn("Desktop.openBridge")(function* (
       Layer.provide(RpcSerialization.layerNdjson),
     ),
   );
-  return yield* RpcClient.make(FrontDoorRpcs).pipe(Effect.provideContext(context));
+  const door = yield* RpcClient.make(FrontDoorRpcs).pipe(Effect.provideContext(context));
+  const ended = Effect.promise(() => child.exited).pipe(
+    Effect.flatMap((code) =>
+      Effect.fail<RouteFailure>({
+        state: code === NOT_FOUND ? "no-collie" : "unreachable",
+        reason: said() || `${command.join(" ")} exited ${code}`,
+      }),
+    ),
+  );
+  yield* Effect.raceFirst(
+    Effect.promise(() => ready.promise),
+    ended,
+  );
+  return door;
 });
 
 export type Door = Effect.Success<ReturnType<typeof openBridge>>;
 
-/** A Machine's two channels: the board's and its actions on one, the Flock chat's tools on the other. */
+/**
+ * A Machine's two channels: the board's and its actions on one, the Flock chat's tools on
+ * the other. They know their Machine, so the chat's tools can name it.
+ */
 export interface Doors extends BoardSource {
+  readonly machine: KnownMachine;
   readonly desktop: Door;
   readonly chat: Door;
 }
 
 /** Opens both of a Machine's channels, each a bridge started as its front door. */
-export const openDoors = (command: (as: Bridged) => ReadonlyArray<string>) =>
+export const openDoors = (machine: KnownMachine, command: (as: Bridged) => ReadonlyArray<string>) =>
   Effect.all([openBridge(command("desktop")), openBridge(command("chat"))], {
     concurrency: "unbounded",
   }).pipe(
-    Effect.map(([desktop, chat]): Doors => ({ desktop, chat, board: () => desktop.board() })),
+    Effect.map(([desktop, chat]): Doors => ({
+      machine,
+      desktop,
+      chat,
+      board: () => desktop.board(),
+    })),
   );
 
 export interface BoardSource {
@@ -145,7 +229,8 @@ export const machineBoard = (known: KnownMachine, door: BoardSource) =>
     ),
   );
 
-export const output = (command: ReadonlyArray<string>) =>
+/** What a command printed and how it exited. */
+const ran = (command: ReadonlyArray<string>) =>
   Effect.gen(function* () {
     const child = yield* Effect.try({
       try: () => Bun.spawn([...command], { stdin: "ignore", stdout: "pipe", stderr: "pipe" }),
@@ -158,12 +243,23 @@ export const output = (command: ReadonlyArray<string>) =>
         child.exited,
       ]),
     );
-    if (code !== 0) return yield* Effect.fail(err.trim() || `${command.join(" ")} exited ${code}`);
-    return out;
+    return { out, err, code };
   });
+
+export type Ran = Effect.Success<ReturnType<typeof ran>>;
+
+export const output = (command: ReadonlyArray<string>) =>
+  ran(command).pipe(
+    Effect.flatMap(({ out, err, code }) =>
+      code === 0
+        ? Effect.succeed(out)
+        : Effect.fail(err.trim() || `${command.join(" ")} exited ${code}`),
+    ),
+  );
 
 /** A saved herdr machine, as `herdr machine list --json` lists it. */
 const HerdrMachine = Schema.Struct({
+  id: Schema.String,
   label: Schema.String,
   target: Schema.String,
   session: Schema.String,
@@ -174,7 +270,7 @@ const HerdrMachines = Schema.fromJsonString(Schema.Array(HerdrMachine));
 
 /**
  * The machines enabled in herdr. Asked here rather than through `src/herdr.ts`, which
- * would bring Collie's locks into Desktop; this is Desktop's only herdr call.
+ * would bring Collie's locks into Desktop, as are adding one and removing one.
  */
 export const herdrMachines = (herdr: string) =>
   output([herdr, "machine", "list", "--json"]).pipe(
@@ -184,29 +280,48 @@ export const herdrMachines = (herdr: string) =>
     Effect.map((machines) => machines.filter((machine) => machine.enabled)),
   );
 
-/** One way to reach a Machine: what it is called, and how its bridge is opened. */
-export interface Route<D extends BoardSource = Doors> {
-  readonly machine: KnownMachine;
-  readonly open: Effect.Effect<D, string, Scope.Scope>;
-}
-
-const quoted = (word: string) => `'${word.replaceAll("'", `'\\''`)}'`;
-
-/** The bridge as the Machine's login shell runs it, as Local's is. */
-const remoteBridge = (client: string, as: Bridged) =>
-  [
-    `exec "\${SHELL:-/bin/sh}" -lc 'exec collie "$@"' collie`,
-    ...bridgeCommand([], client, as).map(quoted),
-  ].join(" ");
+/** Drops a machine from herdr's list; nothing on it is stopped or uninstalled. */
+export const removeFromHerdr = (herdr: string, profile: string) =>
+  output([herdr, "machine", "remove", profile]).pipe(Effect.asVoid);
 
 /**
- * Opens a master to the machine and holds it until the scope closes. The user's SSH config
- * applies, and an SSO check is made once, here, rather than for every channel.
+ * One way to reach a Machine: what it is called, and how its bridge is opened, saying
+ * what a login it waits on asks for while it waits.
+ */
+export interface Route<D extends BoardSource = Doors> {
+  readonly machine: KnownMachine;
+  readonly open: (waitingOnSso: WaitingOnSso) => Effect.Effect<D, RouteFailure, Scope.Scope>;
+  /** Runs `collie` on the Machine with these arguments, as its bridge is run. */
+  readonly collie: (args: ReadonlyArray<string>) => Effect.Effect<Ran, string>;
+}
+
+export const quoted = (word: string) => `'${word.replaceAll("'", `'\\''`)}'`;
+
+/** `collie` as the Machine's login shell runs it, as Local's is. */
+const remoteCollie = (args: ReadonlyArray<string>) =>
+  [`exec "\${SHELL:-/bin/sh}" -lc 'exec collie "$@"' collie`, ...args.map(quoted)].join(" ");
+
+/** A route that can also run a shell script on its Machine, as onboarding does. */
+export interface ShellRoute extends Route {
+  /** The command that runs `script` in the Machine's login shell. */
+  readonly sh: (script: string) => Effect.Effect<ReadonlyArray<string>, string>;
+  /** Makes the Machine's `localhost:<port>` this computer's too, until the scope closes. */
+  readonly forward: (port: number) => Effect.Effect<void, string, Scope.Scope>;
+}
+
+/** What an SSO login that ssh is waiting on prints before it, as vm-mk's sshd does. */
+const SSO = /\bSSO\b/;
+
+/**
+ * Starts a master to the machine, held until the scope closes, and waits until it is open,
+ * saying what an SSO login asks for each time it finds the master still waiting on one.
+ * The user's SSH config applies, and SSO is asked once, here, rather than for every channel.
  */
 const openMaster = Effect.fn("Desktop.openMaster")(function* (
   ssh: string,
   control: string,
   target: string,
+  waitingOnSso: WaitingOnSso,
 ) {
   const master = yield* spawned(() =>
     Bun.spawn([ssh, "-M", "-N", "-S", control, "-o", "ControlPersist=no", target], {
@@ -215,22 +330,25 @@ const openMaster = Effect.fn("Desktop.openMaster")(function* (
       stderr: "pipe",
     }),
   );
-  const ended = Effect.promise(() =>
-    Promise.all([master.exited, new Response(master.stderr).text()]),
-  ).pipe(Effect.map(([code, err]) => err.trim() || `ssh to ${target} exited ${code}`));
+  const said = yield* stderrTail(master.stderr);
+  const ended = Effect.promise(() => master.exited).pipe(
+    Effect.map((code) => said() || `ssh to ${target} exited ${code}`),
+  );
   yield* output([ssh, "-S", control, "-O", "check", target]).pipe(
+    Effect.tapError(() => (SSO.test(said()) ? waitingOnSso(said()) : Effect.void)),
     Effect.retry({
       while: () => master.exitCode === null,
       schedule: Schedule.spaced("200 millis"),
     }),
     // Only a master that has ended stops the checks, and what it said is why.
-    Effect.catch(() => ended.pipe(Effect.flatMap((reason) => Effect.fail(reason)))),
+    Effect.catch(() => ended.pipe(Effect.flatMap((reason) => Effect.fail(unreachable(reason))))),
   );
+  return master;
 });
 
 /**
- * A route through a herdr machine. Its master opens now and lives as long as the scope;
- * each bridge is one more channel on it.
+ * A route through a herdr machine. Its master opens now and lives as long as the scope,
+ * and again on the next try after it drops; each bridge is one more channel on it.
  */
 export const remoteRoute = Effect.fn("Desktop.remoteRoute")(function* (
   ssh: string,
@@ -238,42 +356,162 @@ export const remoteRoute = Effect.fn("Desktop.remoteRoute")(function* (
   machine: HerdrMachine,
   client: string,
 ) {
-  const master = yield* openMaster(ssh, control, machine.target).pipe(Effect.forkScoped);
-  const route: Route = {
-    machine: { name: machine.label, target: machine.target },
-    open: Fiber.join(master).pipe(
-      Effect.andThen(
-        // Never a login of its own: SSO is asked once, by the master.
-        openDoors((as) => [
-          ssh,
-          "-S",
-          control,
-          "-o",
-          "ControlMaster=no",
-          "-T",
-          machine.target,
-          remoteBridge(client, as),
-        ]),
+  const scope = yield* Effect.scope;
+  // Whoever is waiting on the master now, which the one started at launch has none of yet.
+  let waiting: WaitingOnSso = () => Effect.void;
+  const start = openMaster(ssh, control, machine.target, (said) => waiting(said)).pipe(
+    Effect.forkIn(scope),
+  );
+  let master = yield* start;
+  // Never a login of its own: SSO is asked once, by the master.
+  const channel = (remote: string) => [
+    ssh,
+    "-S",
+    control,
+    "-o",
+    "ControlMaster=no",
+    "-T",
+    machine.target,
+    remote,
+  ];
+  const route: ShellRoute = {
+    machine: { profile: machine.id, name: machine.label, target: machine.target },
+    open: (waitingOnSso) =>
+      Effect.gen(function* () {
+        let told = false;
+        waiting = (said) =>
+          told ? Effect.void : Effect.suspend(() => ((told = true), waitingOnSso(said)));
+        const done = master.pollUnsafe();
+        if (done !== undefined && (done._tag === "Failure" || done.value.exitCode !== null))
+          master = yield* start;
+        yield* Fiber.join(master);
+        return yield* openDoors(route.machine, (as) =>
+          channel(remoteCollie(bridgeCommand([], client, as))),
+        );
+      }),
+    collie: (args) =>
+      Fiber.join(master).pipe(
+        Effect.mapError(({ reason }) => reason),
+        Effect.andThen(ran(channel(remoteCollie(args)))),
       ),
-    ),
+    sh: (script) =>
+      Fiber.join(master).pipe(
+        Effect.mapError(({ reason }) => reason),
+        Effect.as(channel(`exec "\${SHELL:-/bin/sh}" -lc ${quoted(script)}`)),
+      ),
+    forward: (port) => {
+      const spec = `${port}:127.0.0.1:${port}`;
+      const asMaster = (verb: string) => [
+        ssh,
+        "-S",
+        control,
+        "-O",
+        verb,
+        "-L",
+        spec,
+        machine.target,
+      ];
+      return Effect.acquireRelease(
+        Fiber.join(master).pipe(
+          Effect.mapError(({ reason }) => reason),
+          Effect.andThen(output(asMaster("forward"))),
+        ),
+        () => output(asMaster("cancel")).pipe(Effect.ignore),
+      ).pipe(Effect.asVoid);
+    },
   };
   return route;
 });
 
+/** Local, reached through a bridge it starts without SSH. */
+export const localRoute = (collie: ReadonlyArray<string>, name: string): ShellRoute => {
+  const machine = { profile: "local", name };
+  return {
+    machine,
+    open: () => openDoors(machine, (as) => bridgeCommand(collie, name, as)),
+    collie: (args) => ran([...collie, ...args]),
+    sh: (script) => Effect.succeed([Bun.env.SHELL ?? "/bin/sh", "-lc", script]),
+    // Its localhost is this computer's already.
+    forward: () => Effect.void,
+  };
+};
+
+const RELEASE = /^\d+\.\d+\.\d+$/;
+
+/**
+ * What a Machine's build asks of a Desktop of `version`: a board it cannot read, an upgrade
+ * to `version` for a release older than it, or nothing. A development checkout is never
+ * upgraded, and any host inside the protocol window is read as it is.
+ */
+export const buildVerdict = (snapshot: BoardSnapshot, version: string) =>
+  snapshot.protocol > PROTOCOL + 1
+    ? "update-desktop"
+    : snapshot.development === undefined &&
+        RELEASE.test(snapshot.build) &&
+        RELEASE.test(version) &&
+        Bun.semver.order(snapshot.build, version) < 0
+      ? "upgrade"
+      : "as-is";
+
+const Envelope = Schema.fromJsonString(
+  Schema.Struct({ error: Schema.optionalKey(Schema.Struct({ message: Schema.String })) }),
+);
+
+/** Moves a released Machine to exactly `version`, or says why it did not, in its own words. */
+const upgradeTo = (route: Route<BoardSource>, version: string) =>
+  route.collie(["--json", "upgrade", "--to", version]).pipe(
+    Effect.flatMap(({ out, err, code }) =>
+      code === 0
+        ? Effect.void
+        : Effect.fail(
+            Schema.decodeUnknownOption(Envelope)(out.trim()).pipe(
+              Option.flatMap(({ error }) => Option.fromNullishOr(error?.message)),
+              Option.getOrElse(() => err.trim() || `collie upgrade exited ${code}`),
+            ),
+          ),
+    ),
+  );
+
+/** How long a route waits before it tries again, after so many tries in a row failed. */
+const backoff = (failures: number) => Math.min(1000 * 2 ** failures, 60_000);
+
+/** A route added, one removed, or one woken to try again now rather than after its backoff. */
+export type RouteChange<D extends BoardSource = Doors> =
+  | { readonly _tag: "Add"; readonly route: Route<D> }
+  /** `done` once its stream has ended and its Machine is said to be removed. */
+  | { readonly _tag: "Remove"; readonly profile: string; readonly done: Deferred.Deferred<void> }
+  | { readonly _tag: "Wake"; readonly profile: string };
+
 /**
  * Every route's board, one stream per installation. Routes earlier in the list are
  * preferred, so a Machine reached two ways is shown through the first; a route that turns
- * out to reach a Machine already shown ends, and its bridge with it. `doors` holds each
- * shown Machine's door, by installation, for as long as its stream runs.
+ * out to reach a Machine already shown says so and ends, and its bridge with it. A route
+ * that is not live says why, and tries again with backoff. `doors` holds each shown
+ * Machine's door, by installation, for as long as its stream runs. A route added later is
+ * preferred less than every route before it.
  */
 export const flockStream = <D extends BoardSource>(
   routes: ReadonlyArray<Route<D>>,
   doors: Map<string, D>,
+  version: string,
+  changes: Stream.Stream<RouteChange<D>> = Stream.empty,
 ): Stream.Stream<FlockItem> =>
   Stream.unwrap(
     Effect.gen(function* () {
       const owners = yield* Ref.make(new Map<string, number>());
-      const displaced = yield* Effect.forEach(routes, () => Deferred.make<void>());
+      // By each route's place in the order it was added.
+      const displaced: Array<Deferred.Deferred<void>> = [];
+      const removed: Array<Deferred.Deferred<void>> = [];
+      const ended: Array<Deferred.Deferred<void>> = [];
+      const wakes: Array<Queue.Queue<void>> = [];
+      const places = new Map<string, number>();
+      const routeAt: Array<Route<D>> = [];
+      // Routes with nothing more to show: merged into another, or too new to read.
+      const done = new Set<number>();
+      // The installation each merged route reaches, by its place.
+      const merged = new Map<number, string>();
+      // Each installation is asked to upgrade once, so one that did not move is shown as it is.
+      const upgrading = new Set<string>();
       const owns = (at: number, { machine, message }: MachineMessage) =>
         Effect.gen(function* () {
           const [owner, before] = yield* Ref.modify(owners, (now) => {
@@ -283,34 +521,238 @@ export const flockStream = <D extends BoardSource>(
             return [[after.get(machine.installation), owner] as const, after] as const;
           });
           const lost = before === undefined || before === owner ? undefined : displaced[before];
-          if (lost !== undefined) yield* Deferred.succeed(lost, undefined);
+          if (lost !== undefined) {
+            merged.set(before!, machine.installation);
+            yield* Deferred.succeed(lost, undefined);
+          }
+          if (owner !== at) {
+            done.add(at);
+            merged.set(at, machine.installation);
+          }
           return owner === at;
         });
-      return Stream.mergeAll(
-        routes.map((route, at) =>
-          Stream.unwrap(
-            Effect.map(route.open, (door) =>
-              machineBoard(route.machine, door).pipe(
-                Stream.takeWhileEffect((item) => owns(at, item)),
-                Stream.tap(({ machine }) =>
-                  Effect.sync(() => doors.set(machine.installation, door)),
+      const tooNew = (route: Route<D>, build: string): RouteFailure => ({
+        state: "update-desktop",
+        reason: `${route.machine.name} runs collie ${build}, whose board this Desktop (${version}) cannot read.`,
+      });
+      /**
+       * Why a board failed before its first snapshot: one a newer collie serves, which this
+       * Desktop cannot decode, or the connection.
+       */
+      const unreadable = (route: Route<D>, reason: string) =>
+        route.collie(["--version"]).pipe(
+          Effect.map(({ out }) => /\d+\.\d+\.\d+/.exec(out)?.[0]),
+          Effect.orElseSucceed(() => undefined),
+          Effect.flatMap((build) =>
+            Effect.fail(
+              build !== undefined && RELEASE.test(version) && Bun.semver.order(build, version) > 0
+                ? tooNew(route, build)
+                : unreachable(reason),
+            ),
+          ),
+        );
+      const live = (route: Route<D>, at: number, waitingOnSso: WaitingOnSso) =>
+        Stream.unwrap(
+          Effect.gen(function* () {
+            const door = yield* route.open(waitingOnSso);
+            // The build of a release older than Desktop, once its board is shown.
+            const due = yield* Deferred.make<{
+              readonly installation: string;
+              readonly from: string;
+            }>();
+            let shown = false;
+            const board = machineBoard(route.machine, door).pipe(
+              Stream.tap(() => Effect.sync(() => void (shown = true))),
+              Stream.catch((reason) =>
+                Stream.fromEffect(
+                  shown ? Effect.fail(unreachable(reason)) : unreadable(route, reason),
                 ),
-                Stream.ensuring(
-                  Effect.sync(() => {
-                    for (const [installation, held] of doors)
-                      if (held === door) doors.delete(installation);
+              ),
+              Stream.mapEffect((item) =>
+                item.message._tag === "Snapshot" &&
+                buildVerdict(item.message, version) === "update-desktop"
+                  ? Effect.fail(tooNew(route, item.message.build))
+                  : Effect.succeed(item),
+              ),
+              Stream.mapEffect((item): Effect.Effect<MachineMessage | MachineMerged> =>
+                Effect.map(owns(at, item), (mine) =>
+                  mine ? item : { _tag: "Merged", machine: route.machine },
+                ),
+              ),
+              Stream.takeUntil((item) => "_tag" in item),
+              Stream.tap((item) =>
+                Effect.gen(function* () {
+                  if ("_tag" in item) return;
+                  const { machine, message } = item;
+                  doors.set(machine.installation, door);
+                  if (
+                    message._tag !== "Snapshot" ||
+                    buildVerdict(message, version) !== "upgrade" ||
+                    upgrading.has(machine.installation)
+                  )
+                    return;
+                  upgrading.add(machine.installation);
+                  yield* Deferred.succeed(due, {
+                    installation: machine.installation,
+                    from: message.build,
+                  });
+                }),
+              ),
+              Stream.ensuring(
+                Effect.sync(() => {
+                  for (const [installation, held] of doors)
+                    if (held === door) doors.delete(installation);
+                }),
+              ),
+            );
+            // Beside the board, which stays live while the Machine upgrades.
+            const upgrade = Stream.unwrap(
+              Effect.map(Deferred.await(due), ({ from }) => upgradeThenReopen(route, from)),
+            );
+            return Stream.merge(board, upgrade, { haltStrategy: "left" });
+          }),
+        );
+      const notice = (route: Route<D>, text: string): FlockItem => ({
+        _tag: "Notice",
+        machine: route.machine,
+        text,
+      });
+      /** Upgrades the Machine, then opens it again so its new build replaces its host. */
+      const upgradeThenReopen = (route: Route<D>, from: string) =>
+        Stream.unwrap(
+          upgradeTo(route, version).pipe(
+            Effect.match({
+              onSuccess: () =>
+                Stream.make(
+                  notice(route, `${route.machine.name} upgraded ${from} → ${version}`),
+                ).pipe(
+                  Stream.concat(Stream.fail<RouteFailure>({ state: "reopen", reason: "upgraded" })),
+                ),
+              onFailure: (reason) =>
+                Stream.make(
+                  notice(route, `Could not upgrade ${route.machine.name} to ${version}: ${reason}`),
+                ),
+            }),
+          ),
+        );
+      const lostItem = (route: Route<D>, state: NotLive, reason: string) =>
+        Effect.map(Clock.currentTimeMillis, (now): FlockItem => ({
+          _tag: "Lost",
+          machine: route.machine,
+          state,
+          reason,
+          at: now,
+        }));
+      const tries = (route: Route<D>, at: number, notices: Queue.Queue<FlockItem>) => {
+        const waitingOnSso = (reason: string) =>
+          Effect.flatMap(lostItem(route, "sso", reason), (item) => Queue.offer(notices, item));
+        const afterFailures = (failures: number): Stream.Stream<FlockItem> =>
+          Stream.suspend(() => {
+            let reached = false;
+            return live(route, at, waitingOnSso).pipe(
+              Stream.tap(() => Effect.sync(() => void (reached = true))),
+              Stream.concat(
+                Stream.fail(unreachable(`${route.machine.name} closed the connection`)),
+              ),
+              Stream.catch((failure) =>
+                Stream.unwrap(
+                  Effect.gen(function* () {
+                    // A route that reaches a Machine already shown is not lost: it is done.
+                    if (done.has(at) || (yield* Deferred.isDone(displaced[at]!)))
+                      return Stream.empty;
+                    if (failure.state === "reopen") return afterFailures(0);
+                    const lost = Stream.fromEffect(lostItem(route, failure.state, failure.reason));
+                    if (failure.state === "update-desktop") {
+                      done.add(at);
+                      return lost;
+                    }
+                    const again = reached ? 0 : failures;
+                    const waited = Effect.raceFirst(
+                      Effect.sleep(backoff(again)),
+                      Queue.take(wakes[at]!),
+                    );
+                    return lost.pipe(
+                      Stream.concat(Stream.fromEffectDrain(waited)),
+                      Stream.concat(afterFailures(again + 1)),
+                    );
                   }),
                 ),
               ),
+            );
+          });
+        return afterFailures(0);
+      };
+      const added = (route: Route<D>) =>
+        Effect.gen(function* () {
+          const at = displaced.length;
+          displaced.push(yield* Deferred.make<void>());
+          removed.push(yield* Deferred.make<void>());
+          ended.push(yield* Deferred.make<void>());
+          wakes.push(yield* Queue.sliding<void>(1));
+          places.set(route.machine.profile, at);
+          routeAt.push(route);
+          const notices = yield* Queue.unbounded<FlockItem>();
+          return Stream.merge(Stream.fromQueue(notices), tries(route, at, notices), {
+            haltStrategy: "right",
+          }).pipe(
+            Stream.interruptWhen(
+              Effect.raceFirst(Deferred.await(displaced[at]!), Deferred.await(removed[at]!)),
             ),
-          ).pipe(
-            Stream.interruptWhen(Deferred.await(displaced[at]!)),
-            Stream.catch((reason) =>
-              Stream.succeed<FlockItem>({ _tag: "Lost", machine: route.machine, reason }),
-            ),
+            Stream.ensuring(Deferred.succeed(ended[at]!, undefined)),
+          );
+        });
+      const removedAt = (place: number) => places.get(routeAt[place]!.machine.profile) !== place;
+      const changed = (change: RouteChange<D>): Stream.Stream<FlockItem> => {
+        if (change._tag === "Add")
+          return places.has(change.route.machine.profile)
+            ? Stream.empty
+            : Stream.unwrap(added(change.route));
+        const at = places.get(change.profile);
+        if (change._tag === "Wake")
+          return at === undefined
+            ? Stream.empty
+            : Stream.fromEffectDrain(Queue.offer(wakes[at]!, undefined));
+        if (at === undefined)
+          return Stream.fromEffectDrain(Deferred.succeed(change.done, undefined));
+        places.delete(change.profile);
+        done.add(at);
+        const shown = new Set<string>();
+        const removal = Stream.fromEffect(
+          Effect.gen(function* () {
+            yield* Ref.update(owners, (now) => {
+              const kept = new Map(now);
+              for (const [installation, owner] of now)
+                if (owner === at) {
+                  shown.add(installation);
+                  kept.delete(installation);
+                }
+              return kept;
+            });
+            yield* Deferred.succeed(removed[at]!, undefined);
+            yield* Deferred.await(ended[at]!);
+            return { _tag: "Removed", machine: routeAt[at]!.machine } satisfies FlockItem;
+          }),
+        ).pipe(Stream.ensuring(Deferred.succeed(change.done, undefined)));
+        // A route that merged into this one's Machine shows it now, as a route added afresh.
+        const again = Stream.suspend(() =>
+          Stream.mergeAll(
+            [...merged]
+              .filter(([place, installation]) => shown.has(installation) && !removedAt(place))
+              .map(([place]) => {
+                merged.delete(place);
+                const route = routeAt[place]!;
+                places.delete(route.machine.profile);
+                return Stream.unwrap(added(route));
+              }),
+            { concurrency: "unbounded" },
           ),
-        ),
-        { concurrency: "unbounded" },
+        );
+        return removal.pipe(Stream.concat(again));
+      };
+      return Stream.fromIterable(routes).pipe(
+        Stream.map((route): RouteChange<D> => ({ _tag: "Add", route })),
+        Stream.concat(changes),
+        Stream.flatMap(changed, { concurrency: "unbounded" }),
       );
     }),
   );
