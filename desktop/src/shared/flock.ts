@@ -120,6 +120,15 @@ export const MachineOnboarding = Schema.TaggedStruct("Onboarding", {
 });
 export type MachineOnboarding = typeof MachineOnboarding.Type;
 
+/** Which credentials Desktop holds for every Machine, and nothing of the secrets themselves. */
+export const Credentials = Schema.Struct({
+  gitlab: Schema.NullOr(Schema.Struct({ expires: Schema.NullOr(Schema.String) })),
+  helle: Schema.Boolean,
+  /** GitLab's page for a new token, with its scopes filled in. */
+  tokenPage: Schema.String,
+});
+export type Credentials = typeof Credentials.Type;
+
 /** What a step may end as and leave the human nothing to do. */
 export const SETTLED: ReadonlyArray<OnboardStep["status"]> = ["done", "in_place", "skipped"];
 
@@ -226,6 +235,28 @@ export const DesktopRpcs = RpcGroup.make(
   }),
   /** The human's answer to the question herdr asks in a job. */
   Rpc.make("answerHerdr", { payload: { job: Schema.String, yes: Schema.Boolean } }),
+  /** Which credentials Desktop holds, now and whenever that changes. */
+  Rpc.make("credentials", { success: Credentials, stream: true }),
+  /** Keeps the Flock's GitLab token once GitLab accepts it, and gives it to every Machine. */
+  Rpc.make("saveGitlab", {
+    payload: { token: Schema.String },
+    success: Schema.String,
+    error: ActionFailed,
+  }),
+  /** Keeps Helle's credentials and writes them on every Machine. */
+  Rpc.make("saveHelle", {
+    payload: { url: Schema.String, token: Schema.String },
+    success: Schema.String,
+    error: ActionFailed,
+  }),
+  /** Logs Claude Code in on the Machine a route reaches, then onboards it again. */
+  Rpc.make("claudeLogin", {
+    payload: { profile: Schema.String },
+    success: Schema.String,
+    error: ActionFailed,
+  }),
+  /** A code the human pasted, typed into the login a job runs. */
+  Rpc.make("pasteCode", { payload: { job: Schema.String, code: Schema.String } }),
   /** Removes a route from herdr's list; nothing on its Machine is stopped or uninstalled. */
   Rpc.make("removeMachine", {
     payload: { profile: Schema.String },

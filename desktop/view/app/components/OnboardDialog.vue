@@ -1,7 +1,7 @@
 <script setup lang="ts">
 const { onboarding } = useFlock();
-const { answerHerdr } = useActions();
-const { job, onboardOn } = useOnboarding();
+const { answerHerdr, pasteCode } = useActions();
+const { job, onboardOn, loginOn } = useOnboarding();
 
 const current = computed(() => (job.value === null ? undefined : onboarding.value.get(job.value)));
 const asked = computed(() => current.value?.run.asked ?? null);
@@ -24,6 +24,13 @@ const retry = () => {
   const profile = current.value?.machine.profile;
   if (profile !== undefined) void onboardOn(profile);
 };
+const login = () => {
+  const profile = current.value?.machine.profile;
+  if (profile !== undefined) void loginOn(profile);
+};
+const code = (pasted: string) => {
+  if (job.value !== null) void pasteCode(job.value, pasted);
+};
 const answer = (yes: boolean) => {
   if (job.value !== null) void answerHerdr(job.value, yes);
 };
@@ -39,6 +46,8 @@ const answer = (yes: boolean) => {
             :steps="current.run.steps"
             :ended="current.run.ready !== null"
             @retry="retry"
+            @login="login"
+            @code="code"
           />
           <p v-if="current.run.ready === true" class="text-success" data-testid="outcome">
             Onboarded: collie doctor is ready.

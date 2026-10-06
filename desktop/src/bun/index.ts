@@ -15,6 +15,7 @@ import {
   Layer,
   Option,
   PubSub,
+  Queue,
   Result,
   Schema,
   Scope,
@@ -32,6 +33,7 @@ import {
 } from "../shared/channel";
 import {
   ActionFailed,
+  type Credentials,
   DesktopRpcs,
   type FlockItem,
   type KnownMachine,
@@ -56,6 +58,17 @@ import {
   type RouteChange,
 } from "./machine";
 import { addToHerdr, NOT_STARTED, onboardThrough, RELEASES, tracked } from "./onboarding";
+import {
+  claudeLoginThrough,
+  GITLAB,
+  giveHelle,
+  giveToken,
+  gitlabToken,
+  oneLine,
+  secretService,
+  secretsFor,
+} from "./credentials";
+import { tokenPage } from "../../../src/gitlab-token";
 import { electrobunUpdater } from "./electrobun-updater";
 import {
   dropBoardsOf,
@@ -117,6 +130,13 @@ const Collie = Config.schema(
   ),
 );
 
+/** Opens a web page in the human's own browser. */
+const openUrl = (url: string) =>
+  Effect.sync(() => {
+    if (Bun.which("xdg-open") === null) return void Utils.openExternal(url);
+    Bun.spawn(["xdg-open", url], { stdin: "ignore", stdout: "ignore", stderr: "ignore" });
+  });
+
 /** How long herdr's question waits on the human before it takes herdr's own default. */
 const QUESTION_LIMIT = "10 minutes";
 
@@ -143,6 +163,36 @@ const main = Effect.gen(function* () {
       : yield* Config.String("COLLIE_DESKTOP_RELEASE_KEY").pipe(
           Config.withDefault(RELEASE_PUBLIC_KEY),
         );
+  const gitlab = yield* Config.String("COLLIE_DESKTOP_GITLAB").pipe(Config.withDefault(GITLAB));
+  const gitlabHost = new URL(gitlab).host;
+  const keyring = secretService();
+  const blank: Credentials = { gitlab: null, helle: false, tokenPage: tokenPage(gitlabHost) };
+  // Its expiry is GitLab's to say, so a token renewed elsewhere is not warned of.
+  const held = Effect.gen(function* () {
+    const token = yield* keyring.lookup("gitlab-token");
+    const expires =
+      token === null
+        ? null
+        : yield* gitlabToken(gitlab, token).pipe(
+            Effect.map((said) => said.expires),
+            Effect.orElseSucceed(() => null),
+          );
+    return {
+      ...blank,
+      gitlab: token === null ? null : { expires },
+      helle: (yield* keyring.lookup("helle-token")) !== null,
+    } satisfies Credentials;
+  });
+  const credentials = yield* SubscriptionRef.make(blank);
+  // Read beside the start rather than before it: frames the view sends before Desktop
+  // serves its RPCs are lost. A save made meanwhile is newer than it.
+  yield* held.pipe(
+    Effect.flatMap((read) =>
+      SubscriptionRef.update(credentials, (now) => (now === blank ? read : now)),
+    ),
+    Effect.ignore,
+    Effect.forkScoped,
+  );
   const fs = yield* FileSystem.FileSystem;
   // Short, because a control socket's path is capped at about 100 bytes.
   const controls = yield* fs.makeTempDirectoryScoped({ prefix: "collie-ssh-" });
@@ -205,12 +255,16 @@ const main = Effect.gen(function* () {
   const onboardAs = (job: string, route: ShellRoute, start: OnboardRun = NOT_STARTED) => {
     const { machine } = route;
     onboarding.set(machine.profile, { job });
-    return onboardThrough(
-      route,
-      { version: manifest.version, releases, runners, key },
-      tell(job, machine),
-      start,
-    ).pipe(
+    return Effect.gen(function* () {
+      // Without the keyring, a Machine is onboarded as far as it goes with none.
+      const secrets = yield* secretsFor(keyring).pipe(Effect.orElseSucceed(() => ""));
+      return yield* onboardThrough(
+        route,
+        { version: manifest.version, releases, runners, key, secrets, open: openUrl },
+        tell(job, machine),
+        start,
+      );
+    }).pipe(
       Effect.tap((run) => saveOnboarding(onboardings, { _tag: "Onboarding", job, machine, run })),
       Effect.tap(() => PubSub.publish(changes, { _tag: "Wake", profile: machine.profile })),
       Effect.ensuring(Effect.sync(() => onboarding.delete(machine.profile))),
@@ -270,6 +324,34 @@ const main = Effect.gen(function* () {
       yield* Fiber.join(yield* onboardAs(job, route, run.current()));
     });
 
+  const everyRoute = () => [...routes.values()].map(({ route }) => route);
+  /** What came of giving something to every Machine, in a line. */
+  const given = (
+    what: string,
+    each: ReadonlyArray<{ readonly name: string; readonly failed: string | null }>,
+  ) => {
+    const failed = each.filter((one) => one.failed !== null);
+    return [
+      `${what} given to ${each.length - failed.length} of ${each.length} Machines`,
+      ...failed.map(({ name, failed: why }) => `${name}: ${why}`),
+    ].join("; ");
+  };
+  const codes = new Map<string, Queue.Queue<string>>();
+  /** Logs Claude Code in through `route`, then onboards it again under the same job. */
+  const loginAs = (job: string, route: ShellRoute) =>
+    Effect.gen(function* () {
+      const typed = yield* Queue.unbounded<string>();
+      codes.set(job, typed);
+      const { run } = yield* claudeLoginThrough(
+        route,
+        openUrl,
+        typed,
+        tell(job, route.machine),
+        NOT_STARTED,
+      ).pipe(Effect.ensuring(Effect.sync(() => codes.delete(job))));
+      yield* Fiber.join(yield* onboardAs(job, route, run));
+    });
+
   const handlers = DesktopRpcs.toLayer({
     flock: () =>
       Stream.unwrap(
@@ -324,6 +406,42 @@ const main = Effect.gen(function* () {
         );
         return job;
       }),
+    credentials: () => SubscriptionRef.changes(credentials),
+    saveGitlab: ({ token }) =>
+      Effect.gen(function* () {
+        const said = token.trim();
+        if (!oneLine(said)) return yield* Effect.fail("a token is one line");
+        const { expires } = yield* gitlabToken(gitlab, said);
+        yield* keyring.store("gitlab-token", `Collie's GitLab token for ${gitlabHost}`, said);
+        yield* SubscriptionRef.update(credentials, (now) => ({ ...now, gitlab: { expires } }));
+        return given("GitLab token", yield* giveToken(everyRoute(), gitlabHost, said));
+      }).pipe(Effect.mapError((reason) => new ActionFailed({ reason }))),
+    saveHelle: ({ url, token }) =>
+      Effect.gen(function* () {
+        const [at, said] = [url.trim(), token.trim()];
+        if (!oneLine(at) || !oneLine(said))
+          return yield* Effect.fail("Helle needs its URL and a token, each on one line");
+        yield* keyring.store("helle-url", "Helle's URL for Collie", at);
+        yield* keyring.store("helle-token", "Collie's Helle token", said);
+        yield* SubscriptionRef.update(credentials, (now) => ({ ...now, helle: true }));
+        return given("Helle's credentials", yield* giveHelle(everyRoute(), at, said));
+      }).pipe(Effect.mapError((reason) => new ActionFailed({ reason }))),
+    claudeLogin: ({ profile }) =>
+      Effect.gen(function* () {
+        const route = routes.get(profile)?.route;
+        if (route === undefined)
+          return yield* new ActionFailed({ reason: "that Machine is not in herdr's list" });
+        const job = yield* uuid;
+        yield* loginAs(job, route).pipe(Effect.provide(BunServices.layer), Effect.forkIn(scope));
+        return job;
+      }),
+    pasteCode: ({ job, code }) =>
+      Effect.suspend(() => {
+        const typed = codes.get(job);
+        return typed === undefined || code.trim() === ""
+          ? Effect.void
+          : Queue.offer(typed, code.trim()).pipe(Effect.asVoid);
+      }),
     answerHerdr: ({ job, yes }) =>
       Effect.suspend(() => {
         const answer = answers.get(job);
@@ -361,7 +479,7 @@ const main = Effect.gen(function* () {
         );
         return yield* act(door, request, action);
       }),
-    openLink: ({ url }) => Effect.sync(() => void Utils.openExternal(url)),
+    openLink: ({ url }) => openUrl(url),
     offers: ({ installation, runId }) =>
       doorTo(doors, installation).pipe(Effect.flatMap((door) => offersOn(door, runId))),
     workflows: ({ installation, project }) =>

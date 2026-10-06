@@ -386,6 +386,28 @@ test("without a token, the GitLab step sends the human to the token page", () =>
     }),
   ));
 
+test("a glab logged in with another token is given the one onboarding brings, and the same one is left as it is", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* glab(
+        `echo "${GITLAB}" && echo "  ✓ Git operations for ${GITLAB} configured to use https protocol."`,
+        `case "$*" in
+          "config get token --host ${GITLAB}") cat "${home}/glab-token" ;;
+          "auth login"*) cat > "${home}/glab-token" ;;
+        esac`,
+      );
+      const fs = yield* FileSystem.FileSystem;
+      yield* fs.writeFileString(`${home}/glab-token`, "glpat-old\n");
+
+      const renewed = yield* onboarded({}, { secrets: { GITLAB_TOKEN: "glpat-new" } });
+      expect(statusOf(renewed.events, "gitlab")).toBe("done");
+      expect(yield* read(`${home}/glab-token`)).toBe("glpat-new\n");
+
+      const again = yield* onboarded({}, { secrets: { GITLAB_TOKEN: "glpat-new" } });
+      expect(statusOf(again.events, "gitlab")).toBe("in_place");
+    }),
+  ));
+
 test("a Machine that cannot push gets a key of its own, registered with glab", () =>
   runEffect(
     Effect.gen(function* () {
@@ -497,6 +519,31 @@ esac`,
       const end = events.findIndex((event) => event.event === "result" && event.step === "linear");
       expect(events[human]).toMatchObject({ url, port: 62074 });
       expect(human).toBeLessThan(end);
+      expect(statusOf(events, "linear")).toBe("done");
+    }),
+  ));
+
+test("a Linear login that hands its callback URL to $BROWSER, printing only a paste-code URL, still streams the URL with its port", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* claudeAt(
+        `case "$*" in
+  "auth status --json") ${LOGGED_IN} ;;
+  "mcp add"*) echo '{"mcpServers":{"linear-server":{"url":"https://mcp.linear.app/mcp"}}}' > "$HOME/.claude.json" ;;
+  "mcp get linear-server") if [ -f "${home}/authorized" ]; then echo "  Status: ✔ Connected"; else echo "  Status: ! Needs authentication"; fi ;;
+esac`,
+      );
+      const handed =
+        "https://mcp.linear.app/authorize?redirect_uri=http%3A%2F%2Flocalhost%3A62074%2Fcallback&state=s";
+      yield* bin.add(
+        "script",
+        `"$BROWSER" '${handed}'; echo "Paste this code: https://mcp.linear.app/authorize?redirect_uri=https%3A%2F%2Fexample.com"; sleep 1; touch "${home}/authorized"`,
+      );
+
+      const { events } = yield* onboarded({}, { skip: ["helle"] });
+
+      const human = events.filter((event) => event.event === "human" && event.step === "linear");
+      expect(human.at(-1)).toMatchObject({ url: handed, port: 62074 });
       expect(statusOf(events, "linear")).toBe("done");
     }),
   ));

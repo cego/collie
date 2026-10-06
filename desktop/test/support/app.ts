@@ -65,7 +65,10 @@ if [ "$1" = -M ]; then
   rm -f "$control"
   refused
 fi
-if [ "\${args[2]}" = -O ]; then [ -e "$control" ]; exit; fi
+if [ "\${args[2]}" = -O ]; then
+  [ "\${args[3]}" = check ] || echo "\${args[3]} \${args[5]} \${args[-1]}" >> '${flock}/ssh.log'
+  [ -e "$control" ]; exit
+fi
 [ -e "$control" ] || { echo "no master for $target" >&2; exit 255; }
 [[ " $* " == *" ControlMaster=no "* ]] || { echo "a channel could log in by itself" >&2; exit 255; }
 target="\${args[-2]}"
@@ -81,6 +84,48 @@ wait $passenger
   "remote/shell": `#!/bin/sh
 [ "$1" = -lc ] && shift
 PATH='${flock}/remote':"$PATH" exec /bin/sh -c "$@"
+`,
+  // The keyring, a file per secret.
+  "secret-tool": `#!/bin/sh
+cmd=$1; shift
+[ "$1" = --label ] && shift 2
+key='${flock}'/"secret-$(echo "$@" | tr ' /' '__')"
+case "$cmd" in
+  store) cat > "$key" ;;
+  lookup) [ -e "$key" ] && cat "$key" ;;
+esac
+`,
+  // This computer's browser: it logs what it opens, and approves a login sent to a localhost
+  // callback unless `no-browser` exists.
+  "xdg-open": `#!${process.execPath}
+const url = Bun.argv[2];
+require("fs").appendFileSync("${flock}/opened.log", url + "\\n");
+const back = new URL(url).searchParams.get("redirect_uri");
+if (back?.startsWith("http://localhost") && !require("fs").existsSync("${flock}/no-browser")) {
+  const callback = new URL(back);
+  callback.searchParams.set("code", "c-1");
+  await fetch(callback).catch(() => undefined);
+}
+`,
+  "remote/glab": `#!/bin/sh
+echo "$FAKE_TARGET $* $(cat)" >> '${flock}/glab.log'
+`,
+  // Claude Code's login: its callback URL goes to $BROWSER, and it ends at that callback or a
+  // pasted code, leaving `claude-<target>` as the Machine's login.
+  "remote/claude": `#!${process.execPath}
+const fs = require("fs");
+const done = (how) => { fs.writeFileSync("${flock}/claude-" + process.env.FAKE_TARGET, how); process.exit(0); };
+const server = Bun.serve({ port: 0, fetch: (request) => {
+  const code = new URL(request.url).searchParams.get("code");
+  if (code === null) return new Response("bad", { status: 400 });
+  setTimeout(() => done("browser " + code), 10);
+  return new Response("ok");
+} });
+const callback = encodeURIComponent("http://localhost:" + server.port + "/callback");
+Bun.spawn([process.env.BROWSER, "https://claude.example/oauth/authorize?redirect_uri=" + callback]);
+console.log("https://claude.example/oauth/authorize?redirect_uri=https%3A%2F%2Fplatform.claude.com%2Foauth%2Fcode%2Fcallback");
+process.stdout.write("Paste code here if prompted > ");
+for await (const line of console) done("code " + line.trim());
 `,
   "remote/collie": `#!/bin/sh
 [ -e '${flock}/'"$FAKE_TARGET.json" ] || { echo "sh: 1: exec: collie: not found" >&2; exit 127; }

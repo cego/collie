@@ -281,6 +281,8 @@ const remoteCollie = (args: ReadonlyArray<string>) =>
 export interface ShellRoute extends Route {
   /** The command that runs `script` in the Machine's login shell. */
   readonly sh: (script: string) => Effect.Effect<ReadonlyArray<string>, string>;
+  /** Makes the Machine's `localhost:<port>` this computer's too, until the scope closes. */
+  readonly forward: (port: number) => Effect.Effect<void, string, Scope.Scope>;
 }
 
 /** What an SSO login that ssh is waiting on prints before it, as vm-mk's sshd does. */
@@ -371,6 +373,26 @@ export const remoteRoute = Effect.fn("Desktop.remoteRoute")(function* (
         Effect.mapError(({ reason }) => reason),
         Effect.as(channel(`exec "\${SHELL:-/bin/sh}" -lc ${quoted(script)}`)),
       ),
+    forward: (port) => {
+      const spec = `${port}:127.0.0.1:${port}`;
+      const asMaster = (verb: string) => [
+        ssh,
+        "-S",
+        control,
+        "-O",
+        verb,
+        "-L",
+        spec,
+        machine.target,
+      ];
+      return Effect.acquireRelease(
+        Fiber.join(master).pipe(
+          Effect.mapError(({ reason }) => reason),
+          Effect.andThen(output(asMaster("forward"))),
+        ),
+        () => output(asMaster("cancel")).pipe(Effect.ignore),
+      ).pipe(Effect.asVoid);
+    },
   };
   return route;
 });
@@ -381,6 +403,8 @@ export const localRoute = (collie: ReadonlyArray<string>, name: string): ShellRo
   open: () => openBridge(bridgeCommand(collie, name)),
   collie: (args) => ran([...collie, ...args]),
   sh: (script) => Effect.succeed([Bun.env.SHELL ?? "/bin/sh", "-lc", script]),
+  // Its localhost is this computer's already.
+  forward: () => Effect.void,
 });
 
 const RELEASE = /^\d+\.\d+\.\d+$/;

@@ -585,7 +585,8 @@ way, before it is put on the Machine and each time the copy Desktop keeps is use
 and puts it there only by its SHA-256 (`desktop/src/bun/onboarding.ts`). A Desktop from a
 checkout, whose channel is not `stable`, may be given another key in
 `COLLIE_DESKTOP_RELEASE_KEY` and another release URL in `COLLIE_DESKTOP_RELEASES`, as its
-tests are; a release takes neither key.
+tests are; a release takes neither key. `COLLIE_DESKTOP_GITLAB` names the GitLab Desktop
+checks a token with and gives it for, `https://gitlab.cego.dk` unless set.
 
 `bun run build` compiles beside the binary and renames over it, because replacing a running
 runner's own file kills the process executing it. In a git checkout `install.sh` builds from

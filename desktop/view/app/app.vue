@@ -19,6 +19,7 @@ const {
 const starting = ref(false);
 const listing = ref(false);
 const { onboardOn } = useOnboarding();
+const { renewBy } = useCredentials();
 
 const NOT_LIVE: Record<NotLive, { icon: string; title: (name: string) => string }> = {
   unreachable: { icon: "i-lucide-unplug", title: (name) => `${name} is out of reach` },
@@ -100,6 +101,16 @@ watch(update, (now) => {
         :description="failure"
       />
       <template v-else>
+        <UAlert
+          v-if="renewBy !== null"
+          data-testid="renew-gitlab"
+          color="warning"
+          variant="subtle"
+          icon="i-lucide-key-round"
+          :title="`The GitLab token expires on ${renewBy}`"
+          description="Make a new one and Renew it, and every Machine gets it."
+          :actions="[{ label: 'Renew', onClick: () => void (listing = true) }]"
+        />
         <UAlert
           v-for="[profile, { name, state, reason }] in lost"
           :key="profile"

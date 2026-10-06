@@ -3,8 +3,14 @@ import { type OnboardStep, SETTLED } from "../../../src/shared/flock";
 
 /** `ended` once the onboarding has, when a step left unsettled offers to try again. */
 defineProps<{ steps: ReadonlyArray<OnboardStep>; ended: boolean }>();
-const emit = defineEmits<{ retry: [] }>();
+const emit = defineEmits<{ retry: []; login: []; code: [code: string] }>();
 const { openLink } = useActions();
+
+const code = ref("");
+const sendCode = () => {
+  emit("code", code.value.trim());
+  code.value = "";
+};
 
 const ICON: Record<OnboardStep["status"], string> = {
   running: "i-lucide-loader-circle",
@@ -57,6 +63,14 @@ const left = ({ status }: OnboardStep) => status !== "running" && !SETTLED.inclu
             data-testid="open"
             @click="openLink(one.url)"
           />
+          <UButton
+            v-if="ended && left(one) && one.step === 'claude-login'"
+            size="xs"
+            icon="i-lucide-log-in"
+            label="Log in"
+            data-testid="login"
+            @click="emit('login')"
+          />
           <!-- Saving in herdr is not onboarding: a Machine herdr would not save is added again. -->
           <UButton
             v-if="ended && left(one) && one.step !== 'herdr'"
@@ -67,6 +81,23 @@ const left = ({ status }: OnboardStep) => status !== "running" && !SETTLED.inclu
             @click="emit('retry')"
           />
         </div>
+        <!-- Kept once, for every Machine; this one is then onboarded again. -->
+        <CredentialFields
+          v-if="
+            ended && one.status === 'needs_human' && (one.step === 'gitlab' || one.step === 'helle')
+          "
+          :which="one.step"
+          label="Save"
+          @saved="emit('retry')"
+        />
+        <form
+          v-if="one.step === 'claude-login' && one.status === 'running' && one.url"
+          class="flex gap-2"
+          @submit.prevent="sendCode"
+        >
+          <UInput v-model="code" class="flex-1" placeholder="Code" data-testid="code" />
+          <UButton type="submit" size="sm" label="Send code" data-testid="send-code" />
+        </form>
       </div>
     </li>
   </ul>

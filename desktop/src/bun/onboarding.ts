@@ -86,7 +86,7 @@ export const verifiedRunner = Effect.fn("Desktop.verifiedRunner")(function* (
 });
 
 /** What a command said and how it exited, `stdin` given to it whole. */
-const ranWith = (command: ReadonlyArray<string>, stdin?: Uint8Array) =>
+export const ranWith = (command: ReadonlyArray<string>, stdin?: Uint8Array) =>
   Effect.scoped(
     Effect.gen(function* () {
       const child = yield* spawned(() =>
@@ -103,7 +103,7 @@ const ranWith = (command: ReadonlyArray<string>, stdin?: Uint8Array) =>
     }),
   );
 
-const shOn = (route: ShellRoute, script: string, stdin?: Uint8Array) =>
+export const shOn = (route: ShellRoute, script: string, stdin?: Uint8Array) =>
   Effect.flatMap(route.sh(script), (command) => ranWith(command, stdin));
 
 /** SHA-256 of stdin, as Linux and macOS each have it. */
@@ -150,6 +150,7 @@ const Line = Schema.fromJsonString(
       step: Schema.String,
       detail: Schema.String,
       url: Schema.String,
+      port: Schema.optionalKey(Schema.Number),
     }),
     Schema.Struct({
       event: Schema.Literal("result"),
@@ -205,6 +206,10 @@ export interface OnboardWith {
   /** Where the runners downloaded are kept on this computer. */
   readonly runners: string;
   readonly key?: string;
+  /** `KEY=value` lines `collie onboard` reads on stdin; none where empty. */
+  readonly secrets?: string;
+  /** Opens a login a step streams in this computer's browser. */
+  readonly open?: (url: string) => Effect.Effect<void>;
 }
 
 /**
@@ -213,7 +218,7 @@ export interface OnboardWith {
  */
 export const onboardThrough = Effect.fn("Desktop.onboardThrough")(function* (
   route: ShellRoute,
-  { version, releases, runners, key }: OnboardWith,
+  { version, releases, runners, key, secrets = "", open = () => Effect.void }: OnboardWith,
   told: (run: OnboardRun) => Effect.Effect<void>,
   start: OnboardRun = NOT_STARTED,
 ) {
@@ -242,12 +247,18 @@ export const onboardThrough = Effect.fn("Desktop.onboardThrough")(function* (
 
   const ended = yield* Effect.gen(function* () {
     const command = yield* route.sh(
-      `exec ${placedAt(version)} --json onboard --to ${quoted(version)}`,
+      `exec ${placedAt(version)} --json onboard --to ${quoted(version)}${secrets === "" ? "" : " --secrets-stdin"}`,
     );
     const child = yield* spawned(() =>
-      Bun.spawn([...command], { stdin: "ignore", stdout: "pipe", stderr: "pipe" }),
+      Bun.spawn([...command], {
+        stdin: secrets === "" ? "ignore" : new TextEncoder().encode(secrets),
+        stdout: "pipe",
+        stderr: "pipe",
+      }),
     );
     const said = new Response(child.stderr).text();
+    // One forward per port: cancelling a second would drop the first.
+    const forwarded = new Set<number>();
     yield* Stream.fromReadableStream({ evaluate: () => child.stdout, onError: String }).pipe(
       Stream.decodeText(),
       Stream.splitLines,
@@ -262,7 +273,18 @@ export const onboardThrough = Effect.fn("Desktop.onboardThrough")(function* (
             if (line.event === "start")
               return run.step({ step: line.step, title: line.title, status: "running" });
             if (line.event === "human")
-              return run.step({ step: line.step, detail: line.detail, url: line.url });
+              return run.step({ step: line.step, detail: line.detail, url: line.url }).pipe(
+                // Its redirect comes back to the Machine's port, now this computer's too.
+                Effect.andThen(
+                  line.port === undefined || forwarded.has(line.port)
+                    ? Effect.void
+                    : route
+                        .forward(line.port)
+                        .pipe(Effect.andThen(Effect.sync(() => void forwarded.add(line.port!)))),
+                ),
+                Effect.ignore,
+                Effect.andThen(open(line.url)),
+              );
             const { event: _, ...result } = line;
             return run.step(result);
           },

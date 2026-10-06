@@ -932,6 +932,29 @@ onboarding again repairs only what is missing. Once onboarding ends, Desktop tri
 Machine's board again at once rather than after its backoff. Desktop keeps each Machine's
 latest onboarding on this computer, beside its saved board.
 
+What only you can give is asked once, here, and never pasted on a command line. **Machines**
+keeps the Flock's credentials in this computer's Secret Service keyring, through
+`secret-tool` (libsecret): one GitLab token, made on GitLab's own page — **Make one on
+GitLab** opens it with the `api` and `write_repository` scopes filled in — and Helle's URL
+and token. Desktop takes a token only once GitLab accepts it with those scopes, and gives
+it at once to glab on every Machine it reaches (`glab auth login --hostname
+gitlab.cego.dk --stdin`); Helle's go to each Machine's credentials file, owner-only, the
+same way. Every onboarding gets what is kept on its stdin (`--secrets-stdin`), so a second
+Machine asks for neither, and one that was out of reach when a token was renewed gets the
+new one the next time it is onboarded. A step that needs one you have not given yet takes it
+there and onboards again. Desktop asks GitLab when the token expires, at launch and when it
+is saved, and warns above the board from 14 days before; **Renew** with a new one replaces
+it on every Machine.
+
+The Claude login is each Machine's own. **Log in** on that step runs `claude auth login`
+on the Machine with `$BROWSER` set to a shim Desktop reads, because Claude Code hands its
+browser the URL with its callback port and prints only a paste-code URL. Desktop forwards
+that port over the Machine's master and opens the URL in your browser, so approving there
+finishes the login on the Machine; the printed URL and a code field are the fallback, for
+a browser that cannot reach the callback. Linear's login, which `collie onboard` streams
+with its port, is forwarded and opened the same way. Desktop then onboards the Machine
+again.
+
 **Remove** runs `herdr machine remove` for that herdr machine, closes Desktop's connection
 to it and drops its saved board. It never stops a host, a Run or herdr there, and never
 uninstalls Collie. This computer is not in herdr's list, so it has no Remove.

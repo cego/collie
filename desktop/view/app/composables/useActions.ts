@@ -16,6 +16,10 @@ const onboardAtom = FlockClient.mutation("onboard");
 const addMachineAtom = FlockClient.mutation("addMachine");
 const answerHerdrAtom = FlockClient.mutation("answerHerdr");
 const removeMachineAtom = FlockClient.mutation("removeMachine");
+const saveGitlabAtom = FlockClient.mutation("saveGitlab");
+const saveHelleAtom = FlockClient.mutation("saveHelle");
+const claudeLoginAtom = FlockClient.mutation("claudeLogin");
+const pasteCodeAtom = FlockClient.mutation("pasteCode");
 
 type Failed = ActionFailed | RpcClientError.RpcClientError;
 
@@ -38,6 +42,10 @@ export const useActions = () => {
   const addMachine = useAtomSet(() => addMachineAtom, { mode: "promiseExit" });
   const answerHerdr = useAtomSet(() => answerHerdrAtom, { mode: "promiseExit" });
   const removeMachine = useAtomSet(() => removeMachineAtom, { mode: "promiseExit" });
+  const saveGitlab = useAtomSet(() => saveGitlabAtom, { mode: "promiseExit" });
+  const saveHelle = useAtomSet(() => saveHelleAtom, { mode: "promiseExit" });
+  const claudeLogin = useAtomSet(() => claudeLoginAtom, { mode: "promiseExit" });
+  const pasteCode = useAtomSet(() => pasteCodeAtom, { mode: "promiseExit" });
 
   /** A failed read is said once, here; its caller gets nothing back. */
   const read = <A>(exit: Exit.Exit<A, Failed>) => {
@@ -89,6 +97,22 @@ export const useActions = () => {
     addMachine: (target: string, label: string, session: string) =>
       addMachine({ payload: { target, label, session } }).then(read),
     answerHerdr: (job: string, yes: boolean) => answerHerdr({ payload: { job, yes } }),
+    /** Whether it was kept; what came of giving it to each Machine is said. */
+    saveGitlab: (token: string) =>
+      saveGitlab({ payload: { token } }).then((exit) => {
+        const said = read(exit);
+        if (said !== null) toast.add({ title: said, color: "success" });
+        return said !== null;
+      }),
+    saveHelle: (url: string, token: string) =>
+      saveHelle({ payload: { url, token } }).then((exit) => {
+        const said = read(exit);
+        if (said !== null) toast.add({ title: said, color: "success" });
+        return said !== null;
+      }),
+    /** The job logging Claude Code in on that route's Machine. */
+    claudeLogin: (profile: string) => claudeLogin({ payload: { profile } }).then(read),
+    pasteCode: (job: string, code: string) => pasteCode({ payload: { job, code } }),
     removeMachine: (profile: string) =>
       removeMachine({ payload: { profile } }).then((exit) => {
         const said = read(exit);

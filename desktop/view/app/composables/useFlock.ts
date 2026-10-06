@@ -42,6 +42,8 @@ export const useFlock = () => {
     machines: computed(() => board.value.machines),
     developments: computed(() => board.value.developments),
     notices: computed(() => told.value.notices),
+    /** Now, as of the last minute. */
+    now,
     rows: computed(() => machineRows(told.value)),
     onboarding: computed(() => told.value.onboarding),
     tasks,

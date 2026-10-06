@@ -4,11 +4,12 @@
 // a step that needs root stops with the command to run.
 
 import type { BunServices } from "@effect/platform-bun/BunServices";
-import { Effect, FileSystem, Option, Schema, Stream } from "effect";
+import { Effect, FileSystem, Option, Schedule, Schema, Stream } from "effect";
 import type { PlatformError } from "effect/PlatformError";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { hostname } from "node:os";
-import { doctor, glabHosts, onPath, pushCheck, tokenPage } from "./doctor";
+import { doctor, glabHosts, onPath, pushCheck } from "./doctor";
+import { GITLAB_HOST, tokenPage } from "./gitlab-token";
 import type { PluginEnv } from "./env";
 import { err, moveToRelease, prepareSteps, type OpResult } from "./operations";
 import { helleEnvPath, LINEAR_MCP_ADD, LINEAR_MCP_FIX, probeLinearMcp } from "./optional";
@@ -55,7 +56,6 @@ const HERDR_INSTALL = "curl -fsSL https://herdr.dev/install.sh | sh";
 const CLAUDE_INSTALL = "curl -fsSL https://claude.ai/install.sh | bash";
 const COLLIE_REPO = "https://github.com/cego/collie.git";
 const PROFILE_MARKER = "# added by collie onboard";
-const GITLAB_HOST = "gitlab.cego.dk";
 const LINEAR_LOGIN = "claude mcp login linear-server";
 const CLAUDE_LOGIN = "claude auth login";
 const LOGIN_LIMIT = "10 minutes";
@@ -405,8 +405,16 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
     Effect.gen(function* () {
       if ((yield* onPath(search, "glab")) === null) return yield* needsRoot(search, ["glab"]);
       const status = yield* exec("glab", ["auth", "status", "--hostname", host], root);
-      if (status.code === 0) return inPlace(`glab is logged in to ${host}`);
       const token = secrets["GITLAB_TOKEN"];
+      if (status.code === 0) {
+        // A token given is the Flock's, so one glab holds from before is replaced by it.
+        const held =
+          token === undefined
+            ? null
+            : yield* exec("glab", ["config", "get", "token", "--host", host], root);
+        if (held === null || held.stdout.trim() === token)
+          return inPlace(`glab is logged in to ${host}`);
+      }
       if (token === undefined) {
         return {
           status: "needs_human",
@@ -524,11 +532,30 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
 
   /** `claude mcp login` under a terminal of its own, streaming its URL as it is printed. */
   const linearLogin = Effect.gen(function* () {
-    let shown = false;
+    // A URL is told once it is printed, and again when one with a callback port comes.
+    let told: string | null = null;
+    const tell = (url: string) => {
+      const port = /localhost:(\d+)/.exec(decodeURIComponent(url))?.[1];
+      if (url === told || (told !== null && port === undefined)) return Effect.void;
+      told = url;
+      return emit({
+        event: "human",
+        step: "linear",
+        detail: "open this to let Claude Code reach Linear",
+        url,
+        ...(port && { port: Number(port) }),
+      });
+    };
+    // Claude Code may print only a paste-code URL and hand the one with its callback port
+    // to $BROWSER, which this shim writes down instead.
+    const shims = yield* fs.makeTempDirectoryScoped({ prefix: "collie-login-" });
+    const handed = `${shims}/url`;
+    yield* fs.writeFileString(`${shims}/browser`, `#!/bin/sh\necho "$1" > '${handed}'\n`);
+    yield* fs.chmod(`${shims}/browser`, 0o755);
     const handle = yield* spawner.spawn(
       ChildProcess.make("script", ["-qefc", LINEAR_LOGIN, "/dev/null"], {
         cwd: env.home,
-        env: childEnv,
+        env: { ...childEnv, BROWSER: `${shims}/browser` },
         // It waits on stdin for a pasted redirect, and gives up when stdin ends.
         stdin: options.terminal ? "inherit" : { stream: Stream.never, endOnDone: false },
         stdout: "pipe",
@@ -540,19 +567,18 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
       Stream.splitLines,
       Stream.runForEach((line) => {
         const url = URL_IN.exec(line)?.[0];
-        if (url === undefined || shown) return Effect.void;
-        shown = true;
-        const port = /localhost:(\d+)/.exec(decodeURIComponent(url))?.[1];
-        return emit({
-          event: "human",
-          step: "linear",
-          detail: "open this to let Claude Code reach Linear",
-          url,
-          ...(port && { port: Number(port) }),
-        });
+        return url === undefined ? Effect.void : tell(url);
       }),
     );
-    yield* Effect.all([said, handle.exitCode], { concurrency: "unbounded" });
+    const browsed = fs.readFileString(handed).pipe(
+      Effect.map((text) => URL_IN.exec(text)?.[0]),
+      Effect.flatMap((url) => (url === undefined ? Effect.fail("not yet") : tell(url))),
+      Effect.retry({ schedule: Schedule.spaced("300 millis") }),
+    );
+    yield* Effect.raceFirst(
+      Effect.all([said, handle.exitCode], { concurrency: "unbounded" }),
+      Effect.andThen(browsed, Effect.never),
+    );
   }).pipe(Effect.scoped, Effect.timeoutOption(LOGIN_LIMIT), Effect.ignore);
 
   yield* step(
