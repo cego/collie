@@ -1385,6 +1385,7 @@ checkout there is no branch and no working tree to review, so the target menu is
   "scope": "local",
   "density": "comfortable",
   "questions": "focus",
+  "gitlab_host": "gitlab.cego.dk",
   "chat_harness": "claude"
 }
 ```
@@ -1441,6 +1442,12 @@ by accident.
 
 `compact_at_tokens` is where compaction between pieces of work kicks in — see
 [Compaction between pieces of work](#compaction-between-pieces-of-work).
+
+`gitlab_host` is the one GitLab this Machine works against, `gitlab.cego.dk` unless you
+change it under Settings, which refuses anything that is not a host name. `collie doctor`
+checks glab's login, the token and `git push` for that host alone, and `collie onboard` logs
+in and pushes to it; another host glab knows is named in a note and never counts against
+the Machine. `GITLAB_HOST`, or `--gitlab-host` on either command, overrides it for one run.
 
 ## Compaction between pieces of work
 

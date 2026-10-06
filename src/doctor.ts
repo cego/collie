@@ -13,7 +13,7 @@
 
 import { Clock, Effect, FileSystem, Option, Path, Result, Schema } from "effect";
 import type { ChildProcessSpawner } from "effect/unstable/process";
-import { loadDefaults } from "./config";
+import { gitlabHostOf, loadDefaults } from "./config";
 import { savedModules } from "./discovery";
 import { layers, loadDefinitions, skillDirs, skillInstalled } from "./definitions";
 import type { PluginEnv } from "./env";
@@ -520,7 +520,17 @@ export const doctor = Effect.fn("Doctor.doctor")(function* (
   });
 
   const glabDir = yield* onPath(search, "glab");
-  const auth = glabDir ? yield* answered(run("glab", ["auth", "status"], root)) : null;
+  const host = yield* gitlabHostOf(env);
+  // The whole status only names the other hosts: one with a bad token fails it for all.
+  const [auth, all] = glabDir
+    ? yield* Effect.all(
+        [
+          answered(run("glab", ["auth", "status", "--hostname", host], root)),
+          answered(run("glab", ["auth", "status"], root)),
+        ],
+        { concurrency: "unbounded" },
+      )
+    : [null, null];
   checks.push({ name: "workflows", ...(yield* overrides(env)) });
   checks.push({ name: "personas", ...(yield* personas(env)) });
   checks.push({ name: "projects root", ...(yield* projects(env)) });
@@ -533,19 +543,37 @@ export const doctor = Effect.fn("Doctor.doctor")(function* (
           "install glab — https://gitlab.com/gitlab-org/cli",
         )
       : auth?.code === 0
-        ? passed("logged in")
+        ? passed(`logged in to ${host}`)
         : auth?.code === 124
-          ? failed(`installed, but did not answer within ${FETCH_LIMIT}`, "glab auth status")
-          : failed("installed, but not logged in", "glab auth login")),
+          ? failed(
+              `installed, but did not answer within ${FETCH_LIMIT}`,
+              `glab auth status --hostname ${host}`,
+            )
+          : failed(
+              `installed, but not logged in to ${host}`,
+              `glab auth login --hostname ${host}`,
+            )),
   });
 
-  // No host is the `glab` check's failure, not two more.
-  const hosts = auth ? glabHosts(auth.stdout) : [];
-  const ssh = (yield* onPath(search, "ssh")) !== null;
-  for (const host of hosts) {
-    const of = hosts.length > 1 ? ` ${host.host}` : "";
-    checks.push({ name: `gitlab token${of}`, ...(yield* tokenExpiry(host.host, root, run)) });
-    checks.push({ name: `git push${of}`, ...(yield* pushCheck(host, env, ssh, run)) });
+  // A host glab has never heard of is the `glab` check's failure, not two more.
+  const known = auth ? glabHosts(auth.stdout).find((one) => one.host === host) : undefined;
+  if (known !== undefined || auth?.code === 0) {
+    const ssh = (yield* onPath(search, "ssh")) !== null;
+    checks.push({ name: "gitlab token", ...(yield* tokenExpiry(host, root, run)) });
+    checks.push({
+      name: "git push",
+      ...(yield* pushCheck(known ?? { host, https: false }, env, ssh, run)),
+    });
+  }
+  const others = all ? glabHosts(all.stdout).filter((one) => one.host !== host) : [];
+  if (others.length > 0) {
+    checks.push({
+      name: "other gitlabs",
+      ...noted(
+        `${others.map((one) => one.host).join(", ")}: glab knows ${others.length === 1 ? "it" : "them"}, and only ${host} is checked`,
+        "",
+      ),
+    });
   }
 
   // Optional, and only where work could reach for them: Helle for a module that waits

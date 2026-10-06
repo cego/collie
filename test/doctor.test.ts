@@ -44,6 +44,7 @@ const healthy = Effect.fn("doctorTest.healthy")(function* () {
   yield* fs.makeDirectory(`${rig.baselineDir}/bin`, { recursive: true });
   yield* fs.writeFileString(`${rig.baselineDir}/bin/collie`, "", { mode: 0o755 });
   yield* bin.add("collie", "exit 0");
+  yield* writeConfigValue(rig.userDir, "gitlab_host", "gitlab.example");
   yield* gitlab({ expires: "2099-01-01" });
   yield* bin.add("ssh", `echo "Welcome to GitLab, @t!"; exit 0`);
   // A checkout that is level with its remote. `$*`, because the fetch arrives
@@ -61,7 +62,7 @@ const gitlab = (opts: { expires: string | null }) =>
   bin.add(
     "glab",
     `case "$*" in
-      "auth status") echo "gitlab.example"; echo "  ✓ Logged in to gitlab.example as t (config.yml)" ;;
+      "auth status"*) echo "gitlab.example"; echo "  ✓ Logged in to gitlab.example as t (config.yml)" ;;
       *personal_access_tokens/self*) echo '{"name":"collie","expires_at":${opts.expires === null ? "null" : `"${opts.expires}"`}}' ;;
       *) exit 0 ;;
     esac`,
@@ -633,7 +634,7 @@ test("a host git reaches over HTTPS pushes with glab's token, and no key is aske
       yield* bin.add(
         "glab",
         `case "$*" in
-          "auth status") echo "gitlab.example"; echo "  ✓ Git operations for gitlab.example configured to use https protocol." ;;
+          "auth status"*) echo "gitlab.example"; echo "  ✓ Git operations for gitlab.example configured to use https protocol." ;;
           *personal_access_tokens/self*) echo '{"expires_at":null}' ;;
           *) exit 0 ;;
         esac`,
@@ -641,5 +642,65 @@ test("a host git reaches over HTTPS pushes with glab's token, and no key is aske
       yield* bin.add("ssh", `exit 255`);
 
       expect(check(yield* report(), "git push").ok).toBe(true);
+    }),
+  ));
+
+/** A glab that knows gitlab.com and gitlab.cego.dk, logged in to gitlab.cego.dk alone. */
+const twoHosts = () =>
+  bin.add(
+    "glab",
+    `case "$*" in
+      "auth status") echo "gitlab.com"; echo "  x gitlab.com: api call failed"; echo "gitlab.cego.dk"; echo "  ✓ Logged in to gitlab.cego.dk as t"; exit 1 ;;
+      "auth status --hostname gitlab.cego.dk") echo "gitlab.cego.dk"; echo "  ✓ Logged in to gitlab.cego.dk as t" ;;
+      "auth status --hostname gitlab.com") echo "gitlab.com"; echo "  x gitlab.com: api call failed"; exit 1 ;;
+      *"--hostname gitlab.cego.dk personal_access_tokens/self"*) echo '{"expires_at":null}' ;;
+      *) exit 1 ;;
+    esac`,
+  );
+
+test("only the GitLab host Collie is set to is checked; another one glab knows is a note", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* healthy();
+      yield* writeConfigValue(rig.userDir, "gitlab_host", null);
+      yield* twoHosts();
+      yield* bin.add(
+        "ssh",
+        `case "$*" in *git@gitlab.cego.dk) echo "Welcome to GitLab, @t!" ;; *) exit 255 ;; esac`,
+      );
+
+      const result = yield* report();
+
+      if (!result.ok) throw new Error(result.error.message);
+      expect(check(result, "glab").detail).toContain("gitlab.cego.dk");
+      expect(check(result, "gitlab token").detail).toContain("gitlab.cego.dk");
+      expect(check(result, "git push").detail).toContain("gitlab.cego.dk");
+      const other = check(result, "other gitlabs");
+      expect(other).toMatchObject({ ok: true, fix: "" });
+      expect(other.warn).toBeUndefined();
+      expect(other.detail).toContain("gitlab.com");
+      expect(other.detail).toStartWith("gitlab.com:");
+      expect(reported(result).filter((c) => c.name.includes("gitlab.com"))).toEqual([]);
+    }),
+  ));
+
+test("set to gitlab.com, doctor checks gitlab.com instead", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* healthy();
+      yield* writeConfigValue(rig.userDir, "gitlab_host", "gitlab.com");
+      yield* twoHosts();
+
+      const result = yield* report();
+
+      expect(result.ok).toBe(false);
+      expect(check(result, "glab")).toMatchObject({ ok: false });
+      expect(check(result, "glab").fix).toContain("--hostname gitlab.com");
+      expect(check(result, "git push").detail).toContain("gitlab.com");
+      expect(check(result, "other gitlabs").detail).toContain("gitlab.cego.dk");
+
+      // An explicit GITLAB_HOST wins over the setting for that run.
+      const overridden = yield* report({ GITLAB_HOST: "gitlab.cego.dk" });
+      expect(check(overridden, "git push").detail).toContain("gitlab.cego.dk");
     }),
   ));

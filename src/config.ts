@@ -177,6 +177,14 @@ export const writeConfigValue = Effect.fn("Config.writeConfigValue")(function* (
   );
 });
 
+/** The GitLab this run works against: `GITLAB_HOST` where it is given, else the setting. */
+export const gitlabHostOf = Effect.fn("Config.gitlabHostOf")(function* (env: {
+  readonly raw: Readonly<Record<string, string | undefined>>;
+  readonly userDir: string;
+}) {
+  return env.raw["GITLAB_HOST"] ?? (yield* loadDefaults(env.userDir)).gitlabHost;
+});
+
 export const loadDefaults = Effect.fn("Config.loadDefaults")(function* (userDir: string) {
   const raw = yield* readConfig(userDir);
   const defaults: Defaults = {
