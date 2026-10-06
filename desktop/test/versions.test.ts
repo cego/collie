@@ -7,7 +7,8 @@ import { Clock, Effect, FileSystem, Schema } from "effect";
 import { PROTOCOL } from "../../src/board-model";
 import { task } from "../../test/support/task";
 import manifest from "../../herdr-plugin.toml";
-import { type App, LOCAL, launch, quit, reads, run, serve, settled } from "./support/app";
+import { chromium } from "playwright-core";
+import { type App, CDP, LOCAL, launch, quit, reads, run, serve, settled } from "./support/app";
 
 const MACHINES = [
   { label: "old", target: "mk@old", session: "default", enabled: true },
@@ -121,4 +122,51 @@ test(
       }),
     ),
   30_000,
+);
+
+test(
+  "a chat popped out of the board doctors no Machine again",
+  () =>
+    run(
+      Effect.gen(function* () {
+        const doctored = (target: string) =>
+          Bun.file(`${app!.flock}/${target}`)
+            .text()
+            .catch(() => "")
+            .then((text) => text.split("\n").filter(Boolean).length);
+        const boards = [LOCAL, "mk@old.json", "mk@dev.json", "mk@next.json"];
+        yield* settled("the board's doctor", () =>
+          Promise.all(boards.map((board) => doctored(`${board}.doctored`))).then((counts) =>
+            counts.every((n) => n > 0) ? true : undefined,
+          ),
+        );
+        yield* Effect.promise(() => app!.page.getByTestId("chat-pop-out").click());
+        // Connected afresh each try: a connection made before the window opened may never see it.
+        const { browser, page: chat } = yield* settled("the chat's own window", () =>
+          chromium.connectOverCDP(`http://127.0.0.1:${CDP}`).then((browser) => {
+            const page = browser
+              .contexts()
+              .flatMap((context) => context.pages())
+              .find((one) => one.url().endsWith("#chat"));
+            return page === undefined ? browser.close().then(() => undefined) : { browser, page };
+          }),
+        );
+        yield* settled("the popped chat", () =>
+          chat
+            .getByTestId("flock-chat")
+            .count()
+            .then((n) => (n > 0 ? true : undefined)),
+        );
+        // As long as a second board takes to reach every Machine and doctor it.
+        yield* Effect.sleep("3 seconds");
+        for (const board of boards)
+          expect([board, yield* Effect.promise(() => doctored(`${board}.doctored`))]).toEqual([
+            board,
+            1,
+          ]);
+        yield* Effect.promise(() => chat.getByTestId("chat-pop-in").click());
+        yield* Effect.promise(() => browser.close());
+      }),
+    ),
+  60_000,
 );

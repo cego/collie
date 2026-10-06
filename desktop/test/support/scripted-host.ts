@@ -4,7 +4,8 @@
 // Every operation it is asked is appended to `<board.json>.ops.jsonl`; an answer also
 // takes the decision off its Task, as a host's would. Run as `--json upgrade --to <v>`
 // instead, it logs that and moves the Machine's build to `v`, as a release's would. Run as
-// `--json doctor`, it fails the checks its board names as `failing`, where it names any.
+// `--json doctor`, it fails the checks its board names as `failing`, where it names any, and
+// adds a line to `<board.json>.doctored`.
 //
 // Usage: bun scripted-host.ts <board.json> bridge --as desktop|chat --client <computer>
 //        bun scripted-host.ts <board.json> --json upgrade --to <version>
@@ -25,10 +26,17 @@ const PART_BYTES = 16 * 1024;
 const asLine = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
 const upgrading = board !== undefined && bridge.slice(0, 3).join(" ") === "--json upgrade --to";
-const failing =
-  board !== undefined && bridge.join(" ") === "--json doctor"
-    ? Schema.decodeUnknownSync(MachineFile)(await Bun.file(board).text()).failing
-    : undefined;
+const doctoring = board !== undefined && bridge.join(" ") === "--json doctor";
+if (doctoring)
+  await Effect.runPromise(
+    FileSystem.FileSystem.pipe(
+      Effect.flatMap((fs) => fs.writeFileString(`${board}.doctored`, "doctor\n", { flag: "a" })),
+      Effect.provide(BunFileSystem.layer),
+    ),
+  );
+const failing = doctoring
+  ? Schema.decodeUnknownSync(MachineFile)(await Bun.file(board).text()).failing
+  : undefined;
 if (failing !== undefined) {
   const checks = failing.map((check) => ({ ...check, ok: false }));
   process.stdout.write(
