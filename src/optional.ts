@@ -8,6 +8,7 @@
 import { Effect, FileSystem, Option, Path, Result, Schema } from "effect";
 import type { PluginEnv } from "./env";
 import { credentials, helleMe } from "./helle";
+import { helleUrlOf } from "./helle-url";
 
 /**
  * `ok`: there. `absent`: not set up, and nothing is wrong. `broken`: set up and not
@@ -36,7 +37,7 @@ export const probeHelle = Effect.fn("Optional.probeHelle")(function* (env: Plugi
   const creds = yield* credentials({
     home: env.home,
     envFile: file,
-    url: env.raw["COLLIE_HELLE_URL"] ?? null,
+    url: helleUrlOf(env.raw),
   }).pipe(Effect.result);
   if (Result.isFailure(creds))
     return {

@@ -12,7 +12,7 @@ import { doctor, glabHosts, onPath, pushCheck } from "./doctor";
 import { GITLAB_HOST, tokenPage } from "./gitlab-token";
 import type { PluginEnv } from "./env";
 import { err, moveToRelease, prepareSteps, type OpResult } from "./operations";
-import { HELLE_TOKEN_STEPS, HELLE_URL } from "./helle-url";
+import { HELLE_TOKEN_STEPS, helleUrlOf } from "./helle-url";
 import { helleEnvPath, LINEAR_MCP_ADD, LINEAR_MCP_FIX, probeLinearMcp } from "./optional";
 import { installation, manifestField, RELEASE_TAG } from "./release";
 
@@ -521,7 +521,7 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
             } satisfies Outcome);
       }
       // Other Helle clients read the URL from this file.
-      const text = `HELLE_API_URL=${here.raw["COLLIE_HELLE_URL"] ?? HELLE_URL}\nHELLE_API_TOKEN=${token}\n`;
+      const text = `HELLE_API_URL=${helleUrlOf(here.raw)}\nHELLE_API_TOKEN=${token}\n`;
       const current = there ? yield* fs.readFileString(file) : "";
       yield* fs.makeDirectory(file.slice(0, file.lastIndexOf("/")), { recursive: true });
       // Before the write: a file from before may be readable by others, and `mode` only applies to a new one.

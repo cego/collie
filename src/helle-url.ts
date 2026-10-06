@@ -1,7 +1,10 @@
-// Where Helle always is. Pure, so Desktop shares it with the runner.
+// Where Helle always is, and how a token for it is made. Pure, so Desktop shares it.
 
-/** `COLLIE_HELLE_URL` replaces it, for tests only. */
 export const HELLE_URL = "https://helle.cego.dk";
+
+/** Helle's URL, unless `COLLIE_HELLE_URL` points a test at a fake one. */
+export const helleUrlOf = (raw: Readonly<Record<string, string | undefined>>) =>
+  raw["COLLIE_HELLE_URL"] ?? HELLE_URL;
 
 /** Helle makes tokens only in Slack. */
 export const HELLE_TOKEN_STEPS =

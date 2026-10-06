@@ -70,15 +70,7 @@ import {
   removeFromHerdr,
   type RouteChange,
 } from "./machine";
-import {
-  addToHerdr,
-  doctorOn,
-  NOT_STARTED,
-  onboardThrough,
-  ranWith,
-  RELEASES,
-  tracked,
-} from "./onboarding";
+import { addToHerdr, doctorOn, NOT_STARTED, onboardThrough, RELEASES, tracked } from "./onboarding";
 import {
   claudeLoginThrough,
   GITLAB,
@@ -159,14 +151,11 @@ const openUrl = (url: string) =>
 
 /** Slack's own app where it opens, else its web client. */
 const openSlack = Effect.gen(function* () {
-  const opened =
-    Bun.which("xdg-open") !== null &&
-    (yield* ranWith(["xdg-open", SLACK_APP]).pipe(
-      Effect.timeoutOption("5 seconds"),
-      // Still running is the app taking it.
-      Effect.map((ran) => Option.isNone(ran) || ran.value.code === 0),
-    ));
-  if (!opened) yield* openUrl(SLACK_WEB);
+  if (Bun.which("xdg-open") === null) return yield* openUrl(SLACK_WEB);
+  // Never killed: still running is the app taking it.
+  const child = Bun.spawn(["xdg-open", SLACK_APP], { stdio: ["ignore", "ignore", "ignore"] });
+  const code = yield* Effect.promise(() => child.exited).pipe(Effect.timeoutOption("5 seconds"));
+  if (Option.isSome(code) && code.value !== 0) yield* openUrl(SLACK_WEB);
 });
 
 /** How long herdr's question waits on the human before it takes herdr's own default. */

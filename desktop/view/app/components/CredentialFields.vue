@@ -8,12 +8,16 @@ const HELLE_COMMAND = "/helle token";
 const token = ref("");
 /** What Helle said of the token last pasted. */
 const check = ref<{ token: string; owner?: string; refused?: string } | null>(null);
-watch(token, async (now) => {
+watch(token, (now, _, onCleanup) => {
   const said = now.trim();
   check.value = null;
   if (props.which !== "helle" || said === "") return;
-  const answer = await checkHelle(said);
-  if (token.value.trim() === said) check.value = { token: said, ...answer };
+  // Asked once typing stops, not of every keystroke.
+  const asking = setTimeout(async () => {
+    const answer = await checkHelle(said);
+    if (token.value.trim() === said) check.value = { token: said, ...answer };
+  }, 400);
+  onCleanup(() => clearTimeout(asking));
 });
 const accepted = computed(
   () =>

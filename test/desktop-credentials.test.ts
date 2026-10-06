@@ -70,6 +70,8 @@ test("a secret is kept in an owner-only file and read back, with no secret-tool 
       const dir = `${yield* scratch}/collie-desktop`;
       const keyring = credentialsFile(dir, `${dir}/no-such-tool`);
       expect(yield* keyring.lookup("gitlab-token")).toBeNull();
+      // Nothing to copy is not written down, so a keyring that did not answer is asked again.
+      expect(yield* fs.exists(`${dir}/credentials`)).toBe(false);
       yield* keyring.store("gitlab-token", "Collie's GitLab token", "glpat-123");
       yield* keyring.store("helle-token", "Collie's Helle token", "h-1");
       expect(yield* keyring.lookup("gitlab-token")).toBe("glpat-123");

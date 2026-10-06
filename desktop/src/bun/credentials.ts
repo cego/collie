@@ -38,23 +38,20 @@ const fromSecretTool = (tool: string) =>
     const found = new Map<string, string>();
     if (Bun.which(tool) === null) return found;
     for (const key of ENTRIES) {
-      const { out, code } = yield* ranWith([
-        tool,
-        "lookup",
-        "service",
-        "collie-desktop",
-        "key",
-        key,
-      ]);
-      if (code === 0 && out !== "") found.set(key, out);
+      // A locked keyring may wait on an unlock prompt; Desktop's launch does not.
+      const ran = yield* ranWith([tool, "lookup", "service", "collie-desktop", "key", key]).pipe(
+        Effect.timeoutOption("5 seconds"),
+      );
+      if (Option.isSome(ran) && ran.value.code === 0 && ran.value.out !== "")
+        found.set(key, ran.value.out);
     }
     return found;
   });
 
 /**
  * Desktop's credentials, as `key=value` lines in `dir/credentials`: owner-only and replaced
- * whole, as glab, gh and Helle keep the same tokens on every Machine. Made the first time
- * with whatever an earlier Desktop left in the Secret Service.
+ * whole, as glab, gh and Helle keep the same tokens on every Machine. Until it exists, what
+ * an earlier Desktop left in the Secret Service is read and copied into it.
  */
 export const credentialsFile = (dir: string, secretTool = "secret-tool"): Keyring => {
   const file = `${dir}/credentials`;
@@ -75,7 +72,8 @@ export const credentialsFile = (dir: string, secretTool = "secret-tool"): Keyrin
     const found = yield* fromSecretTool(secretTool).pipe(
       Effect.orElseSucceed(() => new Map<string, string>()),
     );
-    yield* write(found);
+    // Written only with something in it, so a keyring that did not answer is asked again.
+    if (found.size > 0) yield* write(found);
     return found;
   });
   const locked = <A>(effect: Effect.Effect<A, PlatformError, FileSystem.FileSystem>) =>
