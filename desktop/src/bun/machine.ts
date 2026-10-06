@@ -492,7 +492,10 @@ export const flockStream = <D extends BoardSource>(
             return [[after.get(machine.installation), owner] as const, after] as const;
           });
           const lost = before === undefined || before === owner ? undefined : displaced[before];
-          if (lost !== undefined) yield* Deferred.succeed(lost, undefined);
+          if (lost !== undefined) {
+            merged.set(before!, machine.installation);
+            yield* Deferred.succeed(lost, undefined);
+          }
           if (owner !== at) {
             done.add(at);
             merged.set(at, machine.installation);

@@ -371,42 +371,54 @@ test("a route added while Desktop runs shows its Machine, one removed stops, and
     }),
   ));
 
-test("removing the route that showed a Machine reached two ways shows it through the other", () =>
-  run(
-    Effect.gen(function* () {
-      const told: string[] = [];
-      const route = (name: string): Route<Fake> => ({
-        machine: { profile: `p-${name}`, name, target: `mk@${name}` },
-        open: () =>
-          Effect.succeed<Fake>({
-            board: () => Stream.make(snapshot("pc")).pipe(Stream.concat(Stream.never)),
-          }),
-        collie: () => Effect.die("not asked"),
-      });
-      const remove = yield* Deferred.make<void>();
-      const removed = yield* Deferred.make<void>();
-      yield* flockStream(
-        [route("a"), route("b")],
-        new Map(),
-        "0.31.0",
-        Stream.fromEffect(Deferred.await(remove)).pipe(
-          Stream.map(() => ({ _tag: "Remove", profile: "p-a", done: removed }) as const),
-        ),
-      ).pipe(
-        Stream.runForEach((item: FlockItem) =>
-          Effect.sync(() =>
-            told.push(`${item.machine.name} ${"_tag" in item ? item._tag : item.message._tag}`),
+test.each([
+  ["first", "0 millis"],
+  ["second", "200 millis"],
+] as const)(
+  "removing the route that showed a Machine reached two ways, its board %s, shows it through the other",
+  (_, slower) =>
+    run(
+      Effect.gen(function* () {
+        const told: string[] = [];
+        const route = (name: string): Route<Fake> => ({
+          machine: { profile: `p-${name}`, name, target: `mk@${name}` },
+          open: () =>
+            Effect.succeed<Fake>({
+              board: () =>
+                Stream.fromEffect(
+                  Effect.as(Effect.sleep(name === "a" ? slower : "0 millis"), snapshot("pc")),
+                ).pipe(Stream.concat(Stream.never)),
+            }),
+          collie: () => Effect.die("not asked"),
+        });
+        const remove = yield* Deferred.make<void>();
+        const removed = yield* Deferred.make<void>();
+        yield* flockStream(
+          [route("a"), route("b")],
+          new Map(),
+          "0.31.0",
+          Stream.fromEffect(Deferred.await(remove)).pipe(
+            Stream.map(() => ({ _tag: "Remove", profile: "p-a", done: removed }) as const),
           ),
-        ),
-        Effect.forkScoped,
-      );
-      yield* until(() => told.includes("a Snapshot") && told.includes("b Merged"));
-      yield* Deferred.succeed(remove, undefined);
-      yield* Deferred.await(removed);
-      yield* until(() => told.includes("b Snapshot"));
-      expect(told.indexOf("a Removed")).toBeLessThan(told.indexOf("b Snapshot"));
-    }),
-  ));
+        ).pipe(
+          Stream.runForEach((item: FlockItem) =>
+            Effect.sync(() =>
+              told.push(`${item.machine.name} ${"_tag" in item ? item._tag : item.message._tag}`),
+            ),
+          ),
+          Effect.forkScoped,
+        );
+        yield* until(() => told.includes("a Snapshot") && told.some((one) => one.startsWith("b ")));
+        yield* Deferred.succeed(remove, undefined);
+        yield* Deferred.await(removed);
+        yield* until(
+          () =>
+            told.includes("a Removed") &&
+            told.lastIndexOf("b Snapshot") > told.indexOf("a Removed"),
+        );
+      }),
+    ),
+);
 
 test("a removed Machine leaves the board, its routes and what onboarding left of it", () => {
   const machine = { profile: "p-vm", name: "vm", target: "mk@vm" };
