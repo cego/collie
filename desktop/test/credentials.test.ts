@@ -296,3 +296,25 @@ test(
     ),
   90_000,
 );
+
+test(
+  "the GitLab host set to gitlab.com moves the token page, and every Machine's onboard and doctor",
+  () =>
+    run(
+      Effect.gen(function* () {
+        yield* listMachines;
+        yield* fill(page().getByTestId("gitlab-host"), "gitlab.com");
+        yield* press(page().getByTestId("save-gitlab-host"));
+        yield* holds(`${LOCAL}.doctored`, "--json doctor --gitlab-host gitlab.com");
+        yield* press(page().getByTestId("token-page"));
+        yield* holds(
+          "opened.log",
+          "https://gitlab.com/-/user_settings/personal_access_tokens?name=collie&scopes=api,write_repository",
+        );
+        yield* onboardOn("b");
+        yield* holds("args-mk@b", "--gitlab-host gitlab.com");
+        yield* closeDialog;
+      }),
+    ),
+  60_000,
+);

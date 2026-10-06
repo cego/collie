@@ -211,6 +211,8 @@ export interface OnboardWith {
   /** Opens a login a step streams in this computer's browser. */
   readonly open?: (url: string) => Effect.Effect<void>;
   readonly skip?: ReadonlyArray<Skippable>;
+  /** The GitLab the Machine is onboarded against. */
+  readonly gitlabHost?: string;
 }
 
 /**
@@ -227,6 +229,7 @@ export const onboardThrough = Effect.fn("Desktop.onboardThrough")(function* (
     secrets = "",
     open = () => Effect.void,
     skip = [],
+    gitlabHost,
   }: OnboardWith,
   told: (run: OnboardRun) => Effect.Effect<void>,
   start: OnboardRun = NOT_STARTED,
@@ -260,6 +263,7 @@ export const onboardThrough = Effect.fn("Desktop.onboardThrough")(function* (
         `exec ${placedAt(version)} --json onboard --to ${quoted(version)}`,
         ...(secrets === "" ? [] : ["--secrets-stdin"]),
         ...skip.map((step) => `--skip ${step}`),
+        ...(gitlabHost === undefined ? [] : [`--gitlab-host ${quoted(gitlabHost)}`]),
       ].join(" "),
     );
     const child = yield* spawned(() =>
@@ -345,32 +349,40 @@ const DEFAULT_STEPS = new Map([
  * check, and each default step doctor finds not working though it counts it ok. None where
  * doctor did not answer.
  */
-export const doctorOn = (route: Pick<Route, "collie">) =>
-  route.collie(["--json", "doctor"]).pipe(
-    Effect.flatMap(({ out }) => Schema.decodeUnknownEffect(DoctorSaid)(out.trim())),
-    Effect.map((said) => ("data" in said ? said.data : said.error.details).checks),
-    Effect.flatMap((checks) =>
-      Effect.map(Clock.currentTimeMillis, (at): OnboardRun => {
-        const steps = checks.flatMap(({ name, ok, detail, fix, warn }): OnboardStep[] => {
-          const byDefault = DEFAULT_STEPS.get(name);
-          if (byDefault !== undefined && (!ok || warn === true || fix !== ""))
-            return [{ step: byDefault, title: name, status: "needs_human", detail, command: fix }];
-          if (ok) return [];
-          return [
-            {
-              step: name.replaceAll(" ", "-"),
-              title: name,
-              status: "failed",
-              detail,
-              command: fix,
-            },
-          ];
-        });
-        return { steps, asked: null, ready: steps.length === 0, reason: null, at };
-      }),
-    ),
-    Effect.option,
-  );
+export const doctorOn = (route: Pick<Route, "collie">, gitlabHost?: string) =>
+  route
+    .collie([
+      "--json",
+      "doctor",
+      ...(gitlabHost === undefined ? [] : ["--gitlab-host", gitlabHost]),
+    ])
+    .pipe(
+      Effect.flatMap(({ out }) => Schema.decodeUnknownEffect(DoctorSaid)(out.trim())),
+      Effect.map((said) => ("data" in said ? said.data : said.error.details).checks),
+      Effect.flatMap((checks) =>
+        Effect.map(Clock.currentTimeMillis, (at): OnboardRun => {
+          const steps = checks.flatMap(({ name, ok, detail, fix, warn }): OnboardStep[] => {
+            const byDefault = DEFAULT_STEPS.get(name);
+            if (byDefault !== undefined && (!ok || warn === true || fix !== ""))
+              return [
+                { step: byDefault, title: name, status: "needs_human", detail, command: fix },
+              ];
+            if (ok) return [];
+            return [
+              {
+                step: name.replaceAll(" ", "-"),
+                title: name,
+                status: "failed",
+                detail,
+                command: fix,
+              },
+            ];
+          });
+          return { steps, asked: null, ready: steps.length === 0, reason: null, at };
+        }),
+      ),
+      Effect.option,
+    );
 
 const QUESTION = /\[(y\/N|Y\/n)\]\s*$/;
 

@@ -587,7 +587,8 @@ checkout, whose channel is not `stable`, may be given another key in
 `COLLIE_DESKTOP_RELEASE_KEY`, as its tests are; a release ignores it. Any Desktop may be
 given another release URL in `COLLIE_DESKTOP_RELEASES`, since what it downloads from there
 is still verified against the key. `COLLIE_DESKTOP_GITLAB` names the GitLab Desktop
-checks a token with and gives it for, `https://gitlab.cego.dk` unless set.
+checks a token with and gives it for while no GitLab host is set in Desktop, as its tests
+do; `https://gitlab.cego.dk` unless set.
 
 `bun run build` compiles beside the binary and renames over it, because replacing a running
 runner's own file kills the process executing it. In a git checkout `install.sh` builds from

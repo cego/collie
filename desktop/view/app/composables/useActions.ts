@@ -17,6 +17,7 @@ const addMachineAtom = FlockClient.mutation("addMachine");
 const answerHerdrAtom = FlockClient.mutation("answerHerdr");
 const removeMachineAtom = FlockClient.mutation("removeMachine");
 const saveGitlabAtom = FlockClient.mutation("saveGitlab");
+const saveGitlabHostAtom = FlockClient.mutation("saveGitlabHost");
 const saveHelleAtom = FlockClient.mutation("saveHelle");
 const claudeLoginAtom = FlockClient.mutation("claudeLogin");
 const pasteCodeAtom = FlockClient.mutation("pasteCode");
@@ -62,6 +63,7 @@ export const useActions = () => {
   const answerHerdr = useAtomSet(() => answerHerdrAtom, { mode: "promiseExit" });
   const removeMachine = useAtomSet(() => removeMachineAtom, { mode: "promiseExit" });
   const saveGitlab = useAtomSet(() => saveGitlabAtom, { mode: "promiseExit" });
+  const saveGitlabHost = useAtomSet(() => saveGitlabHostAtom, { mode: "promiseExit" });
   const saveHelle = useAtomSet(() => saveHelleAtom, { mode: "promiseExit" });
   const claudeLogin = useAtomSet(() => claudeLoginAtom, { mode: "promiseExit" });
   const pasteCode = useAtomSet(() => pasteCodeAtom, { mode: "promiseExit" });
@@ -159,6 +161,12 @@ export const useActions = () => {
     /** Whether it was kept; what came of giving it to each Machine is said. */
     saveGitlab: (token: string) =>
       saveGitlab({ payload: { token } }).then((exit) => {
+        const said = read(exit);
+        if (said !== null) toast.add({ title: said, color: "success" });
+        return said !== null;
+      }),
+    saveGitlabHost: (host: string) =>
+      saveGitlabHost({ payload: { host } }).then((exit) => {
         const said = read(exit);
         if (said !== null) toast.add({ title: said, color: "success" });
         return said !== null;
