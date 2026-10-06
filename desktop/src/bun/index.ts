@@ -247,7 +247,7 @@ const main = Effect.gen(function* () {
   const uuid = (yield* Crypto.Crypto).randomUUIDv4.pipe(Effect.orDie);
 
   // The job onboarding each route, and its fiber, while one runs; and the question each job waits on.
-  const onboarding = new Map<string, { job: string; fiber?: Fiber.Fiber<unknown> }>();
+  const onboarding = new Map<string, { job: string; fiber?: Fiber.Fiber<unknown, unknown> }>();
   const answers = new Map<string, Deferred.Deferred<boolean>>();
   const tell = (job: string, machine: KnownMachine) => (run: OnboardRun) =>
     PubSub.publish(news, { _tag: "Onboarding", job, machine, run }).pipe(Effect.asVoid);
@@ -266,7 +266,7 @@ const main = Effect.gen(function* () {
       if (onboarding.get(profile)?.job === job) onboarding.delete(profile);
     });
   /** Records the fiber, unless `job` has already ended. */
-  const recorded = (job: string, profile: string) => (fiber: Fiber.Fiber<unknown>) =>
+  const recorded = (job: string, profile: string) => (fiber: Fiber.Fiber<unknown, unknown>) =>
     Effect.sync(() => {
       if (onboarding.get(profile)?.job === job) onboarding.set(profile, { job, fiber });
     });
