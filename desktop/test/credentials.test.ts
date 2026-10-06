@@ -306,6 +306,9 @@ test(
         yield* fill(page().getByTestId("gitlab-host"), "gitlab.com");
         yield* press(page().getByTestId("save-gitlab-host"));
         yield* holds(`${LOCAL}.doctored`, "--json doctor --gitlab-host gitlab.com");
+        // The old host's token is not given to the new one.
+        yield* reads(page().getByTestId("gitlab-state"), "none yet");
+        expect(yield* read("secret-service_collie-desktop_key_gitlab-token")).toBe("");
         yield* press(page().getByTestId("token-page"));
         yield* holds(
           "opened.log",

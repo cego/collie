@@ -103,6 +103,12 @@ export const useActions = () => {
       toast.add({ title: failureOf(exit.cause).reason, color: "error" });
     return null;
   };
+  /** Whether it was kept; what came of it is said. */
+  const kept = (exit: Exit.Exit<string, Failed>) => {
+    const said = read(exit);
+    if (said !== null) toast.add({ title: said, color: "success" });
+    return said !== null;
+  };
 
   /** A Run's item by reference, read part by part until all of it is here. */
   const wholeAs =
@@ -159,24 +165,9 @@ export const useActions = () => {
       addMachine({ payload: { target, label, session } }).then(read),
     answerHerdr: (job: string, yes: boolean) => answerHerdr({ payload: { job, yes } }),
     /** Whether it was kept; what came of giving it to each Machine is said. */
-    saveGitlab: (token: string) =>
-      saveGitlab({ payload: { token } }).then((exit) => {
-        const said = read(exit);
-        if (said !== null) toast.add({ title: said, color: "success" });
-        return said !== null;
-      }),
-    saveGitlabHost: (host: string) =>
-      saveGitlabHost({ payload: { host } }).then((exit) => {
-        const said = read(exit);
-        if (said !== null) toast.add({ title: said, color: "success" });
-        return said !== null;
-      }),
-    saveHelle: (url: string, token: string) =>
-      saveHelle({ payload: { url, token } }).then((exit) => {
-        const said = read(exit);
-        if (said !== null) toast.add({ title: said, color: "success" });
-        return said !== null;
-      }),
+    saveGitlab: (token: string) => saveGitlab({ payload: { token } }).then(kept),
+    saveGitlabHost: (host: string) => saveGitlabHost({ payload: { host } }).then(kept),
+    saveHelle: (url: string, token: string) => saveHelle({ payload: { url, token } }).then(kept),
     /** The job logging Claude Code in on that route's Machine. */
     claudeLogin: (profile: string) => claudeLogin({ payload: { profile } }).then(read),
     pasteCode: (job: string, code: string) => pasteCode({ payload: { job, code } }),

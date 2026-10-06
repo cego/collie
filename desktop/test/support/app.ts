@@ -108,6 +108,7 @@ key='${flock}'/"secret-$(echo "$@" | tr ' /' '__')"
 case "$cmd" in
   store) cat > "$key" ;;
   lookup) [ -e "$key" ] && cat "$key" ;;
+  clear) rm -f "$key" ;;
 esac
 `,
   // This computer's browser: it logs what it opens, and approves a login sent to a localhost

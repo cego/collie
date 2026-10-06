@@ -180,14 +180,17 @@ const main = Effect.gen(function* () {
         );
   const own = (yield* Path.Path).join(yield* StateDir, "collie-desktop");
   let settings = yield* readSettings(own);
-  const unset = yield* Config.String("COLLIE_DESKTOP_GITLAB").pipe(Config.withDefault(GITLAB));
-  /** GitLab as Desktop reaches it, read at each use so a change applies at once. */
+  const defaultGitlab = yield* Config.String("COLLIE_DESKTOP_GITLAB").pipe(
+    Config.withDefault(GITLAB),
+  );
   const gitlab = () =>
-    settings.gitlabHost === undefined ? unset : `https://${settings.gitlabHost}`;
+    settings.gitlabHost !== undefined && isHostName(settings.gitlabHost)
+      ? `https://${settings.gitlabHost}`
+      : defaultGitlab;
   const gitlabHost = () => new URL(gitlab()).host;
-  const where = () => ({ host: gitlabHost(), tokenPage: tokenPage(gitlabHost()) });
+  const gitlabPages = () => ({ host: gitlabHost(), tokenPage: tokenPage(gitlabHost()) });
   const keyring = secretService();
-  const blank: Credentials = { gitlab: null, helle: false, ...where() };
+  const blank: Credentials = { gitlab: null, helle: false, ...gitlabPages() };
   // Its expiry is GitLab's to say, so a token renewed elsewhere is not warned of.
   const held = Effect.gen(function* () {
     const token = yield* keyring.lookup("gitlab-token");
@@ -200,7 +203,7 @@ const main = Effect.gen(function* () {
           );
     return {
       ...blank,
-      ...where(),
+      ...gitlabPages(),
       gitlab: token === null ? null : { expires },
       helle: (yield* keyring.lookup("helle-token")) !== null,
     } satisfies Credentials;
@@ -531,18 +534,19 @@ const main = Effect.gen(function* () {
         const named = host.trim();
         if (!isHostName(named))
           return yield* Effect.fail(`"${named}" is not a host name, such as gitlab.example.com`);
+        if (named === gitlabHost()) return `GitLab is ${named} already`;
         const changed = { ...settings, gitlabHost: named };
         yield* writeSettings(own, changed).pipe(Effect.mapError((error) => error.message));
         settings = changed;
-        yield* SubscriptionRef.update(credentials, (now) => ({ ...now, ...where() }));
-        // The token's expiry and each Machine's readiness are that host's now.
-        yield* held.pipe(
-          Effect.flatMap((read) => SubscriptionRef.set(credentials, read)),
-          Effect.ignore,
-          Effect.forkIn(scope),
-        );
+        // A token is made for one GitLab, so the old host's is not given to the new one.
+        yield* keyring.clear("gitlab-token");
+        yield* SubscriptionRef.update(credentials, (now) => ({
+          ...now,
+          ...gitlabPages(),
+          gitlab: null,
+        }));
         for (const route of everyRoute()) yield* doctored(route).pipe(Effect.forkIn(scope));
-        return `Every Machine is onboarded and doctored against ${named}`;
+        return `Machines are onboarded and doctored against ${named} from now on; make a token there`;
       }).pipe(Effect.mapError((reason) => new ActionFailed({ reason }))),
     saveHelle: ({ url, token }) =>
       Effect.gen(function* () {
@@ -689,7 +693,6 @@ const main = Effect.gen(function* () {
       Stream.unwrap(withChat((opened) => Effect.succeed(opened.desktopTurns), Stream.empty)),
     settings: () => Effect.sync(() => settings),
     setSettings: (changed) => {
-      // Merged, so a change to one setting leaves the GitLab host where it was.
       const merged = { ...settings, ...changed };
       return writeSettings(own, merged).pipe(
         Effect.andThen(

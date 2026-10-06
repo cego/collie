@@ -522,7 +522,7 @@ export const doctor = Effect.fn("Doctor.doctor")(function* (
   const glabDir = yield* onPath(search, "glab");
   const host = yield* gitlabHostOf(env);
   // The whole status only names the other hosts: one with a bad token fails it for all.
-  const [auth, all] = glabDir
+  const [auth, everyHost] = glabDir
     ? yield* Effect.all(
         [
           answered(run("glab", ["auth", "status", "--hostname", host], root)),
@@ -565,7 +565,7 @@ export const doctor = Effect.fn("Doctor.doctor")(function* (
       ...(yield* pushCheck(known ?? { host, https: false }, env, ssh, run)),
     });
   }
-  const others = all ? glabHosts(all.stdout).filter((one) => one.host !== host) : [];
+  const others = everyHost ? glabHosts(everyHost.stdout).filter((one) => one.host !== host) : [];
   if (others.length > 0) {
     checks.push({
       name: "other gitlabs",

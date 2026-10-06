@@ -696,11 +696,13 @@ test("set to gitlab.com, doctor checks gitlab.com instead", () =>
       expect(result.ok).toBe(false);
       expect(check(result, "glab")).toMatchObject({ ok: false });
       expect(check(result, "glab").fix).toContain("--hostname gitlab.com");
+      expect(check(result, "gitlab token").detail).toContain("gitlab.com");
       expect(check(result, "git push").detail).toContain("gitlab.com");
       expect(check(result, "other gitlabs").detail).toContain("gitlab.cego.dk");
 
-      // An explicit GITLAB_HOST wins over the setting for that run.
+      // An explicit GITLAB_HOST wins over the setting for that run; an empty one does not.
       const overridden = yield* report({ GITLAB_HOST: "gitlab.cego.dk" });
       expect(check(overridden, "git push").detail).toContain("gitlab.cego.dk");
+      expect(check(yield* report({ GITLAB_HOST: "" }), "git push").detail).toContain("gitlab.com");
     }),
   ));
