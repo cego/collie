@@ -844,6 +844,9 @@ curl -fsSL https://github.com/cego/collie/releases/latest/download/install-deskt
 The script downloads the latest release's installer and runs it only once the download
 verifies against Collie's release key. Checking needs OpenSSL 3.0 or later.
 
+It shows up as **Collie**, with the Collie mark, in your app launcher, on its window and in
+the taskbar.
+
 Desktop then keeps itself up to date. It checks the latest release when it starts and every
 6 hours after, and downloads an update in the background. It installs nothing until the
 tar it would install verifies against the same key, because Electrobun's bundle hash is

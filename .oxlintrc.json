@@ -33,6 +33,9 @@
     // The test preload: it runs before any Effect program does, sets the environment every
     // test inherits, and asks `ps` which hosts outlived their test.
     "test/support/hosts.ts",
+    // Desktop's Electrobun build hook: a plain script Electrobun's own runtime runs while
+    // packing Desktop, before any Effect program does.
+    "desktop/scripts/name-desktop-entry.ts",
     "tools/oxlint/anti-slop/**"
   ],
   "jsPlugins": [
