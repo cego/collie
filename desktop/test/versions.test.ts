@@ -19,7 +19,7 @@ const VERSION: string = manifest.version;
 const fromJson = Schema.decodeUnknownSync(
   Schema.fromJsonString(Schema.Struct({ op: Schema.String, payload: Schema.Unknown })),
 );
-/** What the Flock chat's own channel asks of every Machine, which changes nothing on it. */
+/** What the Flock chat's own channel asks of every Machine, none of it about its build. */
 const CHAT = new Set(["declare", "news"]);
 
 let app: App | undefined;
