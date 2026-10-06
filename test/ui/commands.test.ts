@@ -102,6 +102,19 @@ effectTest("clearing a default unsets it rather than configuring an empty one", 
 });
 
 effectTest(
+  "gitlab_host is refused unless it is a host name, and defaults to gitlab.cego.dk",
+  function* () {
+    expect((yield* loadDefaults(rig.pluginEnv().userDir)).gitlabHost).toBe("gitlab.cego.dk");
+
+    expect(yield* set("gitlab_host", "https://gitlab.com/")).toContain("host name");
+    expect(yield* readConfig(rig.pluginEnv().userDir)).not.toHaveProperty("gitlab_host");
+
+    expect(yield* set("gitlab_host", "gitlab.com")).toContain("gitlab.com");
+    expect((yield* loadDefaults(rig.pluginEnv().userDir)).gitlabHost).toBe("gitlab.com");
+  },
+);
+
+effectTest(
   "permissions is refused unless it is a mode a Run can start an agent with",
   function* () {
     // Written, it would fail every later `loadDefaults` — including the Settings view

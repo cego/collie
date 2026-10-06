@@ -4,7 +4,7 @@ import manifest from "../../herdr-plugin.toml";
 import { attempt, say } from "../envelope";
 import { onboard as onboardMachine, type OnboardEvent, type StepStatus } from "../onboard";
 import { HELLE_TOKEN_STEPS } from "../helle-url";
-import { context, root, stdinText } from "./shared";
+import { context, gitlabHostFlag, root, stdinText, withGitlabHost } from "./shared";
 
 const EventJson = Schema.fromJsonString(Schema.Unknown);
 
@@ -54,17 +54,20 @@ export const onboard = Command.make(
       ),
       Flag.withDefault(false),
     ),
+    gitlabHost: gitlabHostFlag,
   },
-  ({ to, skip, secretsStdin }) =>
+  ({ to, skip, secretsStdin, gitlabHost }) =>
     Effect.gen(function* () {
       const global = yield* root;
       yield* attempt(
         Effect.gen(function* () {
           const resolved = yield* context(global, false);
           if (resolved._tag === "ContextFailure") return resolved.result;
+          const env = withGitlabHost(resolved.env, gitlabHost);
+          if ("ok" in env) return env;
           const secrets = secretsStdin ? secretLines(yield* stdinText) : {};
           return yield* onboardMachine(
-            resolved.env,
+            env,
             {
               to: Option.getOrElse(to, () => manifest.version),
               skip,

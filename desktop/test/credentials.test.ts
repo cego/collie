@@ -150,6 +150,10 @@ const read = (name: string) =>
   Effect.flatMap(FileSystem.FileSystem, (fs) =>
     fs.readFileString(`${app!.flock}/${name}`).pipe(Effect.orElseSucceed(() => "")),
   );
+/** Desktop's own credentials file. */
+const kept = Effect.flatMap(FileSystem.FileSystem, (fs) =>
+  fs.readFileString(`${app!.scratch}/.config/collie-desktop/credentials`),
+);
 const holds = (name: string, text: string) =>
   settled(`${name} holding "${text}"`, () =>
     Bun.file(`${app!.flock}/${name}`)
@@ -211,13 +215,7 @@ test(
         yield* reads(step("helle").getByTestId("helle-check"), "Belongs to mk");
         yield* press(step("helle").getByTestId("save-helle"));
         yield* reads(dialog().getByTestId("outcome"), "Onboarded: collie doctor is ready.");
-        expect(
-          yield* FileSystem.FileSystem.pipe(
-            Effect.flatMap((fs) =>
-              fs.readFileString(`${app!.scratch}/.config/collie-desktop/credentials`),
-            ),
-          ),
-        ).toContain("gitlab-token=glpat-good\n");
+        expect(yield* kept).toContain("gitlab-token=glpat-good\n");
         expect(yield* read("stdin-mk@a")).toContain("GITLAB_TOKEN=glpat-good");
         // The token went to glab on every Machine Desktop reaches, on stdin.
         yield* holds("glab.log", "mk@b auth login --hostname");
@@ -329,4 +327,29 @@ test(
       }),
     ),
   90_000,
+);
+
+test(
+  "the GitLab host set to gitlab.com moves the token page, and every Machine's onboard and doctor",
+  () =>
+    run(
+      Effect.gen(function* () {
+        yield* listMachines;
+        yield* fill(page().getByTestId("gitlab-host"), "gitlab.com");
+        yield* press(page().getByTestId("save-gitlab-host"));
+        yield* holds(`${LOCAL}.doctored`, "--json doctor --gitlab-host gitlab.com");
+        // The old host's token is not given to the new one.
+        yield* reads(page().getByTestId("gitlab-state"), "none yet");
+        expect(yield* kept).not.toContain("gitlab-token=");
+        yield* press(page().getByTestId("token-page"));
+        yield* holds(
+          "opened.log",
+          "https://gitlab.com/-/user_settings/personal_access_tokens?name=collie&scopes=api,write_repository",
+        );
+        yield* onboardOn("b");
+        yield* holds("args-mk@b", "--gitlab-host gitlab.com");
+        yield* closeDialog;
+      }),
+    ),
+  60_000,
 );

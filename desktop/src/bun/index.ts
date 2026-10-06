@@ -84,7 +84,7 @@ import {
   SLACK_APP,
   SLACK_WEB,
 } from "./credentials";
-import { tokenPage } from "../../../src/gitlab-token";
+import { isHostName, tokenPage } from "../../../src/gitlab-token";
 import { HELLE_URL } from "../../../src/helle-url";
 import { electrobunUpdater } from "./electrobun-updater";
 import {
@@ -191,26 +191,36 @@ const main = Effect.gen(function* () {
       : yield* Config.String("COLLIE_DESKTOP_RELEASE_KEY").pipe(
           Config.withDefault(RELEASE_PUBLIC_KEY),
         );
-  const gitlab = yield* Config.String("COLLIE_DESKTOP_GITLAB").pipe(Config.withDefault(GITLAB));
+  const own = (yield* Path.Path).join(yield* StateDir, "collie-desktop");
+  let settings = yield* readSettings(own);
+  const defaultGitlab = yield* Config.String("COLLIE_DESKTOP_GITLAB").pipe(
+    Config.withDefault(GITLAB),
+  );
+  const gitlab = () =>
+    settings.gitlabHost !== undefined && isHostName(settings.gitlabHost)
+      ? `https://${settings.gitlabHost}`
+      : defaultGitlab;
+  const gitlabHost = () => new URL(gitlab()).host;
+  const gitlabPages = () => ({ host: gitlabHost(), tokenPage: tokenPage(gitlabHost()) });
   const helle = yield* Config.String("COLLIE_HELLE_URL").pipe(Config.withDefault(HELLE_URL));
-  const gitlabHost = new URL(gitlab).host;
   const config =
     (yield* Config.String("XDG_CONFIG_HOME").pipe(Config.withDefault(""))) ||
     `${homedir()}/.config`;
   const keyring = credentialsFile(`${config}/collie-desktop`);
-  const blank: Credentials = { gitlab: null, helle: false, tokenPage: tokenPage(gitlabHost) };
+  const blank: Credentials = { gitlab: null, helle: false, ...gitlabPages() };
   // Its expiry is GitLab's to say, so a token renewed elsewhere is not warned of.
   const held = Effect.gen(function* () {
     const token = yield* keyring.lookup("gitlab-token");
     const expires =
       token === null
         ? null
-        : yield* gitlabToken(gitlab, token).pipe(
+        : yield* gitlabToken(gitlab(), token).pipe(
             Effect.map((said) => said.expires),
             Effect.orElseSucceed(() => null),
           );
     return {
       ...blank,
+      ...gitlabPages(),
       gitlab: token === null ? null : { expires },
       helle: (yield* keyring.lookup("helle-token")) !== null,
     } satisfies Credentials;
@@ -284,7 +294,7 @@ const main = Effect.gen(function* () {
   const tell = (job: string, machine: KnownMachine) => (run: OnboardRun) =>
     PubSub.publish(news, { _tag: "Onboarding", job, machine, run }).pipe(Effect.asVoid);
   const doctored = (route: ShellRoute) =>
-    doctorOn(route).pipe(
+    doctorOn(route, gitlabHost()).pipe(
       Effect.flatMap(
         Option.match({
           onNone: () => Effect.void,
@@ -326,7 +336,16 @@ const main = Effect.gen(function* () {
       );
       const run = yield* onboardThrough(
         route,
-        { version: manifest.version, releases, runners, key, secrets, open: openUrl, skip },
+        {
+          version: manifest.version,
+          releases,
+          runners,
+          key,
+          secrets,
+          open: openUrl,
+          skip,
+          gitlabHost: gitlabHost(),
+        },
         tell(job, machine),
         start,
       );
@@ -420,8 +439,6 @@ const main = Effect.gen(function* () {
 
   // The Flock as the board was last sent it, so the chat names its Machines as the cards do.
   let shown = EMPTY_FLOCK;
-  const own = (yield* Path.Path).join(yield* StateDir, "collie-desktop");
-  let settings = yield* readSettings(own);
   // Opened by the view's first ask, in Desktop's own scope; its session starts with the first message.
   const chat = yield* openFlockChat({
     claude: claudeCode,
@@ -461,8 +478,10 @@ const main = Effect.gen(function* () {
           const doctorOnceLive = (item: FlockItem) => {
             if ("_tag" in item || item.message._tag !== "Snapshot") return Effect.void;
             const route = routes.get(item.machine.profile)?.route;
-            if (route === undefined || checked.has(item.machine.profile)) return Effect.void;
-            checked.add(item.machine.profile);
+            // Again on a new build, which an older one could not answer `--gitlab-host` for.
+            const once = `${item.machine.profile}@${item.message.build}`;
+            if (route === undefined || checked.has(once)) return Effect.void;
+            checked.add(once);
             return doctored(route).pipe(Effect.forkIn(scope));
           };
           shown = EMPTY_FLOCK;
@@ -524,10 +543,31 @@ const main = Effect.gen(function* () {
       Effect.gen(function* () {
         const said = token.trim();
         if (!oneLine(said)) return yield* Effect.fail("a token is one line");
-        const { expires } = yield* gitlabToken(gitlab, said);
-        yield* keyring.store("gitlab-token", `Collie's GitLab token for ${gitlabHost}`, said);
+        const { expires } = yield* gitlabToken(gitlab(), said);
+        yield* keyring.store("gitlab-token", `Collie's GitLab token for ${gitlabHost()}`, said);
         yield* SubscriptionRef.update(credentials, (now) => ({ ...now, gitlab: { expires } }));
-        return given("GitLab token", yield* giveToken(everyRoute(), gitlabHost, said));
+        return given("GitLab token", yield* giveToken(everyRoute(), gitlabHost(), said));
+      }).pipe(Effect.mapError((reason) => new ActionFailed({ reason }))),
+    saveGitlabHost: ({ host }) =>
+      Effect.gen(function* () {
+        const named = host.trim();
+        if (!isHostName(named))
+          return yield* Effect.fail(`"${named}" is not a host name, such as gitlab.example.com`);
+        if (named === gitlabHost()) return `GitLab is ${named} already`;
+        // A token is made for one GitLab, so the old host's goes before the host changes.
+        // Without a keyring there is none to go.
+        const token = yield* keyring.lookup("gitlab-token").pipe(Effect.orElseSucceed(() => null));
+        if (token !== null) yield* keyring.clear("gitlab-token");
+        const changed = { ...settings, gitlabHost: named };
+        yield* writeSettings(own, changed).pipe(Effect.mapError((error) => error.message));
+        settings = changed;
+        yield* SubscriptionRef.update(credentials, (now) => ({
+          ...now,
+          ...gitlabPages(),
+          gitlab: null,
+        }));
+        for (const route of everyRoute()) yield* doctored(route).pipe(Effect.forkIn(scope));
+        return `Machines are onboarded and doctored against ${named} from now on; make a token there`;
       }).pipe(Effect.mapError((reason) => new ActionFailed({ reason }))),
     checkHelle: ({ token }) =>
       helleOwner(helle, token.trim()).pipe(
@@ -678,15 +718,17 @@ const main = Effect.gen(function* () {
     desktopTurns: () =>
       Stream.unwrap(withChat((opened) => Effect.succeed(opened.desktopTurns), Stream.empty)),
     settings: () => Effect.sync(() => settings),
-    setSettings: (changed) =>
-      writeSettings(own, changed).pipe(
+    setSettings: (changed) => {
+      const merged = { ...settings, ...changed };
+      return writeSettings(own, merged).pipe(
         Effect.andThen(
           Effect.sync(() => {
-            settings = changed;
+            settings = merged;
           }),
         ),
         Effect.orDie,
-      ),
+      );
+    },
   });
   const servedOn = (channel: Channel<ToView, ToMain>) =>
     RpcServer.layer(DesktopRpcs).pipe(

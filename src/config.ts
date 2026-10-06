@@ -2,6 +2,7 @@
 
 import { Effect, FileSystem, Option, Path, Schema } from "effect";
 import { COMPACT_AT_TOKENS } from "./compaction";
+import { GITLAB_HOST, isHostName } from "./gitlab-token";
 import { permissionsAsWritten } from "./harness";
 import { isNumber, isString } from "./schema";
 import { isYamlMap, YamlMapSchema, type YamlMap, type YamlValue } from "./yaml";
@@ -91,6 +92,8 @@ export interface Defaults {
    * turn goes through the same authority path as one you typed.
    */
   proactive: boolean;
+  /** The one GitLab doctor and onboard check a Machine against. */
+  gitlabHost: string;
 }
 
 export const FALLBACK_DEFAULTS: Defaults = {
@@ -109,6 +112,7 @@ export const FALLBACK_DEFAULTS: Defaults = {
   notifications: {},
   questions: "focus",
   proactive: true,
+  gitlabHost: GITLAB_HOST,
 };
 
 const ConfigJson = Schema.fromJsonString(YamlMapSchema);
@@ -173,6 +177,17 @@ export const writeConfigValue = Effect.fn("Config.writeConfigValue")(function* (
   );
 });
 
+/** The GitLab this run works against: `GITLAB_HOST` where it names a host, else the setting. */
+export const gitlabHostOf = Effect.fn("Config.gitlabHostOf")(function* (env: {
+  readonly raw: Readonly<Record<string, string | undefined>>;
+  readonly userDir: string;
+}) {
+  const given = env.raw["GITLAB_HOST"];
+  return given !== undefined && isHostName(given)
+    ? given
+    : (yield* loadDefaults(env.userDir)).gitlabHost;
+});
+
 export const loadDefaults = Effect.fn("Config.loadDefaults")(function* (userDir: string) {
   const raw = yield* readConfig(userDir);
   const defaults: Defaults = {
@@ -218,6 +233,11 @@ export const loadDefaults = Effect.fn("Config.loadDefaults")(function* (userDir:
     // Only an explicit `false` turns it off: anything else, including a value nobody
     // meant, leaves a human being told what happened.
     proactive: raw.proactive !== false,
+    // Coerced like `scope`; a value that is not a host name is refused where it is written.
+    gitlabHost:
+      isString(raw.gitlab_host) && isHostName(raw.gitlab_host)
+        ? raw.gitlab_host
+        : FALLBACK_DEFAULTS.gitlabHost,
   };
   if (isString(raw.effort)) defaults.effort = raw.effort;
   return defaults;

@@ -1,5 +1,5 @@
 // What the host does on its own, whether or not a pane is open: the merge watch, each
-// Herd's News and worktree pruning.
+// Herd's News, worktree pruning and keeping each Herd's Home tokened.
 
 import { Clock, Effect, Schedule, type Duration } from "effect";
 import type { TaskView, MrState, Reopened } from "./board-model";
@@ -9,6 +9,7 @@ import { currentReports, readDrift } from "./drift";
 import type { PluginEnv } from "./env";
 import type { Herdr } from "./herdr";
 import { liveHerds } from "./herds";
+import { homeDeps, restateHome, type HomeDeps } from "./home";
 import { settleMerges, type MrPanels } from "./merges";
 import { shell } from "./mr";
 import { append as appendNews, newsPath, read as readNews, retired, supersede } from "./news";
@@ -121,6 +122,24 @@ const MERGES_EVERY = "10 seconds";
 /** How often checkouts are swept: a sweep walks each one with git and glab. */
 const PRUNE_EVERY = "3 minutes";
 
+/** How often a proven Home's tokens are restated: well within their 24-hour TTL. */
+const RESTATE_EVERY = "4 hours";
+
+/** Each live Herd's proven Home kept tokened; one Herd's failure skips only that Herd. */
+export const keepHomesTokened = <R>(
+  stateDir: string,
+  herds: Effect.Effect<ReadonlyArray<{ readonly key: string; readonly deps: HomeDeps }>, never, R>,
+) =>
+  every(
+    RESTATE_EVERY,
+    Effect.gen(function* () {
+      for (const { key, deps } of yield* herds)
+        yield* restateHome(stateDir, key, deps).pipe(
+          Effect.catchCause((cause) => Effect.logWarning(`home: could not restate ${key}`, cause)),
+        );
+    }),
+  );
+
 /** Every side job, run until the host stops. */
 export const sideJobs = <E, R>(opts: {
   readonly env: PluginEnv;
@@ -178,6 +197,18 @@ export const sideJobs = <E, R>(opts: {
             cwd: env.cwd,
           });
         }),
+      ),
+      keepHomesTokened(
+        env.stateDir,
+        liveHerds(herdr, env).pipe(
+          Effect.map((sessions) =>
+            sessions.flatMap((session) =>
+              session.herd === null
+                ? []
+                : [{ key: session.herd, deps: homeDeps(session.herdr, () => Effect.void) }],
+            ),
+          ),
+        ),
       ),
     ],
     { concurrency: "unbounded", discard: true },

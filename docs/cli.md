@@ -1271,12 +1271,16 @@ A host's `identity` names such a checkout's build as `development: "<version>+<s
 ## Onboarding a Machine
 
 ```sh
-collie onboard [--to 0.27.0] [--secrets-stdin] [--skip helle] [--skip linear]
+collie onboard [--to 0.27.0] [--secrets-stdin] [--skip helle] [--skip linear] [--gitlab-host <host>]
 ```
 
 Takes a Machine from bare to a working Collie host, and repairs a half-onboarded one: every
 step looks before it acts, so running it again does only what is missing. `--to` is the
 release to install, this runner's own version when it is not given. Nothing runs sudo.
+
+Its GitLab is one host: `--gitlab-host`, else `GITLAB_HOST`, else the
+[`gitlab_host` setting](using.md#your-defaults), `gitlab.cego.dk` by default. The token
+page, the glab login, the push and the closing doctor all name that host.
 
 | Step           | What it does                                                                                                                                                                                                                                                                                                                                                              |
 | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -1287,7 +1291,7 @@ release to install, this runner's own version when it is not given. Nothing runs
 | `path`         | Adds `~/.local/bin` (and `COLLIE_BIN_DIR`) to PATH in the shell's profile (`~/.bashrc`, `~/.zshrc` or `~/.profile`)                                                                                                                                                                                                                                                       |
 | `plugin`       | `prepare.sh`: the plugin link, the runner and shim, the operator skill and the skills. A runner `install.sh` downloads is installed only once the release key's signature (`<asset>.sig`) checks out                                                                                                                                                                      |
 | `claude-login` | `claude auth login` in this terminal, if `claude auth status --json` says Claude Code is not logged in; without a terminal, `needs_human` with that command                                                                                                                                                                                                               |
-| `gitlab`       | `glab auth login --hostname gitlab.cego.dk --stdin` (or `GITLAB_HOST`) with `GITLAB_TOKEN`, if glab is not already logged in there, or is logged in with another token than the one given. Without a token: `needs_human`, with the token page and its `api` and `write_repository` scopes as `url`                                                                       |
+| `gitlab`       | `glab auth login --hostname <host> --stdin` with `GITLAB_TOKEN`, if glab is not already logged in there, or is logged in with another token than the one given. Without a token: `needs_human`, with the token page and its `api` and `write_repository` scopes as `url`                                                                                                  |
 | `push`         | Generates `~/.ssh/id_ed25519` if there is none and registers it with `glab ssh-key add`, unless the Machine can already push (over HTTPS with glab's login, or with its own key). GitLab's host key is trusted on first use, and a key GitLab already has counts as registered                                                                                            |
 | `helle`        | Writes `HELLE_API_TOKEN`, and `HELLE_API_URL=https://helle.cego.dk` for other Helle clients, to Helle's credentials file, owner-only; with no token given and no file, `needs_human`, saying how Slack's `/helle token` makes one                                                                                                                                         |
 | `linear`       | `claude mcp add --transport http --scope user linear-server https://mcp.linear.app/mcp`, then `claude mcp login linear-server` in a terminal of its own, whose URL is streamed: the one it prints, or the one with its callback port it hands `$BROWSER`, which a shim writes down                                                                                        |
@@ -1338,6 +1342,7 @@ left, and the exit status is 1. Re-running is the retry.
 ```sh
 collie doctor
 collie doctor --json
+collie doctor --gitlab-host gitlab.example.com
 ```
 
 Every prerequisite in one pass, each with the command that fixes it: herdr present and at
@@ -1346,13 +1351,15 @@ installation; the runner built and the `collie` shim on PATH (installed-but-not-
 its own reported state); every skill and every harness
 the loaded workflows and personas name; whether the checkout is behind its remote; the
 Projects root and its source — `projects.root`, `GITTE_CWD`, or the home directory, the last
-a `!` warning that never fails the run; `glab` present and logged in; Claude Code logged
-in, from `claude auth status --json`, where `claude` is on PATH; for each GitLab host glab
-is logged in to, its token's expiry, a `!` warning within 14 days of it and a failure once
-it has passed; and whether this Machine can push to each of those hosts — over SSH with its
-own key, or over HTTPS where glab configured git to use it. An agent sshd forwarded into the
-session does not count, since it goes when the computer it came from sleeps. With more than
-one host, each of those two checks is named with its host.
+a `!` warning that never fails the run; Claude Code logged in, from
+`claude auth status --json`, where `claude` is on PATH; and, for the one GitLab host Collie
+works against, `glab` present and logged in there, the token's expiry — a `!` warning within
+14 days of it and a failure once it has passed — and whether this Machine can push there,
+over SSH with its own key, or over HTTPS where glab configured git to use it. An agent sshd
+forwarded into the session does not count, since it goes when the computer it came from
+sleeps. That host is `--gitlab-host`, else `GITLAB_HOST`, else the
+[`gitlab_host` setting](using.md#your-defaults). Any other host glab knows is named in one
+`other gitlabs` note, unchecked, and never fails the run.
 
 Two more are optional, and reported rather than required. **Helle**, where a loaded
 workflow waits on it (`renovate` does): the credentials file the Helle MCP wrapper sources,

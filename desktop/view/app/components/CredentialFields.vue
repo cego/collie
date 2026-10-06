@@ -3,6 +3,7 @@
 const props = defineProps<{ which: "gitlab" | "helle"; label: string }>();
 const emit = defineEmits<{ saved: [] }>();
 const { saveGitlab, saveHelle, checkHelle, openSlack, copyText } = useActions();
+const { credentials } = useCredentials();
 
 const HELLE_COMMAND = "/helle token";
 const token = ref("");
@@ -66,7 +67,9 @@ const keep = async () => {
         v-model="token"
         type="password"
         class="flex-1"
-        :placeholder="which === 'gitlab' ? 'The token GitLab made' : 'Helle token'"
+        :placeholder="
+          which === 'gitlab' ? `The token ${credentials?.host ?? 'GitLab'} made` : 'Helle token'
+        "
         :data-testid="`${which}-token`"
       />
       <UButton

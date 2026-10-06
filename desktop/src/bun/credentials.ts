@@ -20,6 +20,7 @@ export type KeyringEntry = "gitlab-token" | "helle-token";
 export interface Keyring {
   readonly lookup: (key: KeyringEntry) => Effect.Effect<string | null, string>;
   readonly store: (key: KeyringEntry, label: string, value: string) => Effect.Effect<void, string>;
+  readonly clear: (key: KeyringEntry) => Effect.Effect<void, string>;
 }
 
 const ENTRIES: ReadonlyArray<KeyringEntry> = ["gitlab-token", "helle-token"];
@@ -87,6 +88,17 @@ export const credentialsFile = (dir: string, secretTool = "secret-tool"): Keyrin
     lookup: (key) => locked(load.pipe(Effect.map((values) => values.get(key) ?? null))),
     store: (key, _label, value) =>
       locked(load.pipe(Effect.flatMap((values) => write(new Map(values).set(key, value))))),
+    // Written even when nothing is left, so an earlier Desktop's keyring is not copied back.
+    clear: (key) =>
+      locked(
+        load.pipe(
+          Effect.flatMap((values) => {
+            const left = new Map(values);
+            left.delete(key);
+            return write(left);
+          }),
+        ),
+      ),
   };
 };
 

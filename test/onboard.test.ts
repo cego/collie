@@ -11,6 +11,7 @@ import { readEnv } from "../src/env";
 import { eventText } from "../src/commands/onboard";
 import { onboard, type OnboardEvent, type OnboardOptions } from "../src/onboard";
 import { err, type OpResult } from "../src/operations";
+import { writeConfigValue } from "../src/config";
 
 let home: string;
 let origin: string;
@@ -70,6 +71,7 @@ const LOGGED_IN = `echo '{"loggedIn": true}'`;
 const READY: OpResult = { ok: true, data: { ready: true, checks: [] }, human: "ready" };
 
 let doctorRan = 0;
+let doctoredAs: string | undefined;
 
 /** A Claude Code where its installer puts it, ahead of the stubs on PATH. */
 const claudeAt = (script: string) =>
@@ -109,7 +111,8 @@ const onboarded = (overrides: Record<string, string> = {}, options: Partial<Onbo
       env,
       { to: "0.2.0", skip: ["helle", "linear"], ...options },
       (event) => Effect.sync(() => events.push(event)),
-      () => Effect.sync(() => (doctorRan++, READY)),
+      (checked) =>
+        Effect.sync(() => (doctorRan++, (doctoredAs = checked.raw["GITLAB_HOST"]), READY)),
     );
     return { result, events };
   });
@@ -383,6 +386,33 @@ test("without a token, the GitLab step sends the human to the token page", () =>
       expect(gitlab?.url).toContain(`https://${GITLAB}/-/user_settings/personal_access_tokens`);
       expect(gitlab?.url).toContain("scopes=api,write_repository");
       expect(result).toMatchObject({ ok: false, error: { details: { ready: false } } });
+    }),
+  ));
+
+test("the GitLab host setting moves the token page, the login, the push and doctor, and GITLAB_HOST overrides it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const config = `${home}/config`;
+      yield* writeConfigValue(config, "gitlab_host", "gitlab.com");
+      yield* glab("exit 1");
+
+      const { events } = yield* onboarded({ COLLIE_USER_DIR: config });
+
+      const started = (step: string) =>
+        events.find((event) => event.event === "start" && event.step === step);
+      expect(started("gitlab")).toMatchObject({ title: "Logged in to gitlab.com" });
+      expect(started("push")).toMatchObject({
+        title: "git push to gitlab.com on this Machine's own credentials",
+      });
+      const gitlab = results(events).find((event) => event.step === "gitlab");
+      expect(gitlab?.url).toStartWith("https://gitlab.com/-/user_settings/personal_access_tokens");
+      expect(doctoredAs).toBe("gitlab.com");
+
+      const overridden = yield* onboarded({ COLLIE_USER_DIR: config, GITLAB_HOST: GITLAB });
+      expect(results(overridden.events).find((event) => event.step === "gitlab")?.url).toContain(
+        `https://${GITLAB}/`,
+      );
+      expect(doctoredAs).toBe(GITLAB);
     }),
   ));
 

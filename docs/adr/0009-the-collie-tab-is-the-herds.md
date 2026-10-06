@@ -83,3 +83,13 @@ What is **not** proven here is the live half: the gate and the ownership matrix 
 against a fake herdr, and nothing in this repository can show a real herdr session moving
 a workspace out from under a live Home. That needs an operator at a running session, and
 until then the honest claim is "the rules are the rules, and the fake obeys them".
+
+## Amended 2026-10-06: a ready Home that lost its proof is healed
+
+A herdr restart drops every reported token and gives each restored pane a new terminal, so
+both proofs go at once and every user met `ownership_unknown` after an upgrade. A `ready`
+record whose workspace is still there, carrying no other Herd's token, with no other
+workspace carrying this Herd's, is not uncertain: it is healed — re-tokened, its restored
+panes taken back by id and any missing one reopened — and the record says why. Every other
+case under **Anything uncertain stops** still stops. While a Home is proven, the host
+restates its tokens every four hours, so a long-open board no longer lets them lapse.

@@ -135,6 +135,8 @@ export type MachineDoctored = typeof MachineDoctored.Type;
 export const Credentials = Schema.Struct({
   gitlab: Schema.NullOr(Schema.Struct({ expires: Schema.NullOr(Schema.String) })),
   helle: Schema.Boolean,
+  /** The GitLab every Machine is onboarded and doctored against. */
+  host: Schema.String,
   /** GitLab's page for a new token, with its scopes filled in. */
   tokenPage: Schema.String,
 });
@@ -212,6 +214,8 @@ export type UpdateNews = typeof UpdateNews.Type;
 export const DesktopSettings = Schema.Struct({
   /** Whether the Flock chat may start a turn about News nobody asked for. */
   proactive: Schema.Boolean.pipe(Schema.withDecodingDefaultKey(Effect.succeed(true))),
+  /** The GitLab every Machine is onboarded and doctored against; unset is the default one. */
+  gitlabHost: Schema.optionalKey(Schema.String),
 });
 export type DesktopSettings = typeof DesktopSettings.Type;
 
@@ -265,6 +269,12 @@ export const DesktopRpcs = RpcGroup.make(
   /** Keeps the Flock's GitLab token once GitLab accepts it, and gives it to every Machine. */
   Rpc.make("saveGitlab", {
     payload: { token: Schema.String },
+    success: Schema.String,
+    error: ActionFailed,
+  }),
+  /** Makes `host` the GitLab every Machine is onboarded and doctored against. */
+  Rpc.make("saveGitlabHost", {
+    payload: { host: Schema.String },
     success: Schema.String,
     error: ActionFailed,
   }),

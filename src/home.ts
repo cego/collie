@@ -49,6 +49,8 @@ const RecordSchema = Schema.Struct({
    * find rather than an orphan nobody can attribute.
    */
   state: Schema.Literals(["creating", "ready"]),
+  /** The last time the Home was taken back with no proof, and why that was safe. */
+  healed: Schema.optionalKey(Schema.Struct({ at: Schema.String, why: Schema.String })),
   /** Homes this Herd used to have, kept rather than deleted: they are how an orphan is named. */
   previous: Schema.Array(Schema.Struct({ workspaceId: Schema.String, archivedAt: Schema.String })),
 });
@@ -214,14 +216,16 @@ export type Decision =
   /** Nothing to do but refresh what is already true. */
   | { readonly kind: "adopt"; readonly record: HomeRecord; readonly proof: "token" | "pane" }
   /**
-   * A pane is gone but the workspace is still ours: reopen the ones that are missing and
-   * nothing else. `missing` is which, so a live half-resized layout is left where the
+   * The workspace is ours but a pane is gone, or the Home is `healed`: reopen the panes
+   * that are missing and nothing else. `missing` is which, so a live half-resized layout is left where the
    * human put it rather than rebuilt because the other half went.
    */
   | {
       readonly kind: "reopen";
       readonly record: HomeRecord;
       readonly missing: ReadonlyArray<"board" | "chat">;
+      /** Why a Home with neither proof is taken back rather than refused. */
+      readonly healed?: string;
     }
   /** Nothing owns this Herd's Home yet. `orphan` names a record left mid-create. */
   | { readonly kind: "create"; readonly orphan?: string }
@@ -324,10 +328,43 @@ export function decide(
           ...elsewhere,
         ]);
 
-  return unknown(
-    "the recorded workspace exists but carries neither this Herd's token nor its pane",
-    [record.workspaceId],
-  );
+  if (elsewhere.length > 0)
+    return unknown(
+      "the recorded workspace has lost its proof and another carries this Herd's token",
+      [record.workspaceId, ...elsewhere],
+    );
+  const theirs = workspaces.find((entry) => entry.workspaceId === record.workspaceId)?.tokens[
+    HOME_TOKEN
+  ];
+  if (theirs !== undefined)
+    return unknown("the recorded workspace carries another Herd's token", [record.workspaceId]);
+
+  // herdr keeps workspace and pane ids across a restart but not their tokens, and gives
+  // each restored pane a new terminal.
+  const terminalOf = (paneId: string | null | undefined) =>
+    panes.find((entry) => entry.paneId === paneId && entry.workspaceId === record.workspaceId)
+      ?.terminalId ?? null;
+  return {
+    kind: "reopen",
+    record: {
+      ...record,
+      terminalId: terminalOf(record.paneId),
+      chatTerminalId: terminalOf(record.chatPaneId),
+    },
+    missing: missingPanes(record, panes),
+    healed: HEALED,
+  };
+}
+
+const HEALED =
+  "the recorded workspace had no token and no pane terminal of this Herd's, the record was ready, and no other workspace claims the Herd";
+
+/** What `home show` says about healing: the one the next launch will do, or the last one done. */
+export function healedLines(record: ReadHome, decision: Decision): string[] {
+  if (decision.kind === "reopen" && decision.healed !== undefined)
+    return [`healed\tnext launch\t${decision.healed}`];
+  if (record === null || record === UNREADABLE || record.healed === undefined) return [];
+  return [`healed\t${record.healed.at}\t${record.healed.why}`];
 }
 
 /** A record archived rather than deleted: it is how an orphan is later named. */
@@ -535,13 +572,19 @@ export const ensureHome = Effect.fn("Home.ensure")(function* (
           };
         }
         if (decision.missing.includes("chat")) next = yield* withChat(next, namespaceDir, deps);
+        else if (decision.healed !== undefined && next.chatPaneId != null)
+          yield* deps.markPane(next.chatPaneId, { [HOME_TOKEN]: key, [CHAT_PANE_TOKEN]: key });
         next = { ...next, state: "ready" };
+        if (decision.healed !== undefined) next = { ...next, healed: { at, why: decision.healed } };
         yield* writeHome(file, next);
         yield* deps.markWorkspace(next.workspaceId, { [HOME_TOKEN]: key });
         if (next.paneId !== null) yield* deps.markPane(next.paneId, { [HOME_TOKEN]: key });
-        yield* deps.log(
-          `home: reopened the ${decision.missing.join(" and ")} pane in ${next.workspaceId}`,
-        );
+        if (decision.healed !== undefined)
+          yield* deps.log(`home: healed ${next.workspaceId}: ${decision.healed}`);
+        if (decision.missing.length > 0)
+          yield* deps.log(
+            `home: reopened the ${decision.missing.join(" and ")} pane in ${next.workspaceId}`,
+          );
         return ready(next);
       }
 
@@ -613,6 +656,35 @@ export const ensureHome = Effect.fn("Home.ensure")(function* (
       for (const paneId of generated) yield* deps.closePane(paneId);
       yield* deps.log(`home: created ${workspaceId}`);
       return ready(settled);
+    }),
+  );
+});
+
+/**
+ * A proven Home's tokens restated on its workspace and the panes it still has, so a board
+ * left open longer than `TOKEN_TTL_MS` keeps its token. An unproven Home is left alone.
+ */
+export const restateHome = Effect.fn("Home.restate")(function* (
+  stateDir: string,
+  key: string,
+  deps: HomeDeps,
+) {
+  const file = yield* homePath(stateDir, key);
+  yield* withHomeLock(
+    file,
+    Effect.gen(function* () {
+      const record = yield* readHome(file);
+      if (record === null || record === UNREADABLE || record.state !== "ready") return;
+      const decision = decide(record, yield* deps.workspaces, yield* deps.panes, key);
+      const proven =
+        decision.kind === "adopt" || (decision.kind === "reopen" && decision.healed === undefined);
+      if (!proven) return;
+      const missing = decision.kind === "reopen" ? decision.missing : [];
+      yield* deps.markWorkspace(record.workspaceId, { [HOME_TOKEN]: key });
+      if (record.paneId !== null && !missing.includes("board"))
+        yield* deps.markPane(record.paneId, { [HOME_TOKEN]: key });
+      if (record.chatPaneId != null && !missing.includes("chat"))
+        yield* deps.markPane(record.chatPaneId, { [HOME_TOKEN]: key, [CHAT_PANE_TOKEN]: key });
     }),
   );
 });

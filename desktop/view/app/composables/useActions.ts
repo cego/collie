@@ -17,6 +17,7 @@ const addMachineAtom = FlockClient.mutation("addMachine");
 const answerHerdrAtom = FlockClient.mutation("answerHerdr");
 const removeMachineAtom = FlockClient.mutation("removeMachine");
 const saveGitlabAtom = FlockClient.mutation("saveGitlab");
+const saveGitlabHostAtom = FlockClient.mutation("saveGitlabHost");
 const saveHelleAtom = FlockClient.mutation("saveHelle");
 const checkHelleAtom = FlockClient.mutation("checkHelle");
 const openSlackAtom = FlockClient.mutation("openSlack");
@@ -65,6 +66,7 @@ export const useActions = () => {
   const answerHerdr = useAtomSet(() => answerHerdrAtom, { mode: "promiseExit" });
   const removeMachine = useAtomSet(() => removeMachineAtom, { mode: "promiseExit" });
   const saveGitlab = useAtomSet(() => saveGitlabAtom, { mode: "promiseExit" });
+  const saveGitlabHost = useAtomSet(() => saveGitlabHostAtom, { mode: "promiseExit" });
   const saveHelle = useAtomSet(() => saveHelleAtom, { mode: "promiseExit" });
   const checkHelle = useAtomSet(() => checkHelleAtom, { mode: "promiseExit" });
   const openSlack = useAtomSet(() => openSlackAtom, { mode: "promiseExit" });
@@ -106,6 +108,12 @@ export const useActions = () => {
     if (!quiet && !Cause.hasInterruptsOnly(exit.cause))
       toast.add({ title: failureOf(exit.cause).reason, color: "error" });
     return null;
+  };
+  /** Whether it was kept; what came of it is said. */
+  const kept = (exit: Exit.Exit<string, Failed>) => {
+    const said = read(exit);
+    if (said !== null) toast.add({ title: said, color: "success" });
+    return said !== null;
   };
 
   /** A Run's item by reference, read part by part until all of it is here. */
@@ -163,18 +171,9 @@ export const useActions = () => {
       addMachine({ payload: { target, label, session } }).then(read),
     answerHerdr: (job: string, yes: boolean) => answerHerdr({ payload: { job, yes } }),
     /** Whether it was kept; what came of giving it to each Machine is said. */
-    saveGitlab: (token: string) =>
-      saveGitlab({ payload: { token } }).then((exit) => {
-        const said = read(exit);
-        if (said !== null) toast.add({ title: said, color: "success" });
-        return said !== null;
-      }),
-    saveHelle: (token: string) =>
-      saveHelle({ payload: { token } }).then((exit) => {
-        const said = read(exit);
-        if (said !== null) toast.add({ title: said, color: "success" });
-        return said !== null;
-      }),
+    saveGitlab: (token: string) => saveGitlab({ payload: { token } }).then(kept),
+    saveGitlabHost: (host: string) => saveGitlabHost({ payload: { host } }).then(kept),
+    saveHelle: (token: string) => saveHelle({ payload: { token } }).then(kept),
     /** Who the token belongs to, or why Helle would not say. */
     checkHelle: (token: string) =>
       checkHelle({ payload: { token } }).then((exit) =>

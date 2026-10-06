@@ -79,6 +79,9 @@ test("a secret is kept in an owner-only file and read back, with no secret-tool 
       expect(((yield* fs.stat(dir)).mode & 0o777).toString(8)).toBe("700");
       expect(((yield* fs.stat(`${dir}/credentials`)).mode & 0o777).toString(8)).toBe("600");
       expect(yield* fs.exists(`${dir}/credentials.new`)).toBe(false);
+      yield* keyring.clear("gitlab-token");
+      expect(yield* keyring.lookup("gitlab-token")).toBeNull();
+      expect(yield* keyring.lookup("helle-token")).toBe("h-1");
     }),
   ));
 

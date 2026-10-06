@@ -389,10 +389,15 @@ and its hand-offs.
 The Home is **owned by metadata, never by a label**: the workspace and the board's pane
 carry a token naming this Herd, and Collie's record of which workspace that is counts only
 while the token — or the recorded pane, still with the terminal it was recorded with —
-proves it. Two workspaces claiming it, or a claim nothing proves, is a question Collie
-refuses to answer for you: rather than draw a board it cannot say is this Herd's, the
-shortcut prints why, names the candidates and gives you `collie home reconcile`. Nothing is
-created because a token expired, and nothing is adopted because it looks right.
+proves it. While it is proven, the host restates the token every four hours, so a board left
+open for days keeps it. A herdr restart drops every token and gives each pane a new
+terminal, so a Home whose workspace is still there, whose record says it was finished, and
+which no other workspace claims is healed: re-tokened, with its panes taken back or
+reopened, and `collie home show` says when and why. Two workspaces claiming it, or a claim
+that is not this Herd's, is a question Collie refuses to answer for you: rather than draw a
+board it cannot say is this Herd's, the shortcut prints why, names the candidates and gives
+you `collie home reconcile`. Nothing is created because a token expired, and nothing is
+adopted because it looks right.
 
 The Home is **one tab with two panes**: the board on the left at four sevenths of the
 width, and [native chat](#talking-to-collie-about-a-herd) on the right at three. Both
@@ -417,7 +422,7 @@ then only when it is alone in its tab — everything else is listed with the rea
 kept.
 
 ```
-collie home show                 what Collie thinks the Home is, and what proves it
+collie home show                 what Collie thinks the Home is, what proves it, and why it last healed
 collie home reconcile --adopt w7 that workspace is this Herd's Home
 collie home reconcile --forget   forget the record; the next launch decides again
 collie home cleanup --confirm    close the legacy panes that are alone in their tab
@@ -949,20 +954,28 @@ GitLab token, made on GitLab's own page — **Make one on GitLab** opens it with
 `write_repository` scopes filled in — and Helle's token; Helle's URL is always
 `https://helle.cego.dk` and is never asked for. Desktop takes a token only once GitLab
 accepts it with those scopes, and gives it at once to glab on every Machine it reaches
-(`glab auth login --hostname gitlab.cego.dk --stdin`); Helle's goes to each Machine's
-credentials file, owner-only, the same way.
+(`glab auth login --hostname <host> --stdin`); Helle's goes to each Machine's
+credentials file, owner-only, the same way. Every onboarding gets what is kept on its stdin (`--secrets-stdin`), so a second
+Machine asks for neither, and one that was out of reach when a token was renewed gets the
+new one the next time it is onboarded. A step that needs one you have not given yet takes it
+there and onboards again. Desktop asks GitLab when the token expires, at launch and when it
+is saved, and warns above the board from 14 days before; **Renew** with a new one replaces
+it on every Machine.
+
+That GitLab is one host for the whole Flock, `gitlab.cego.dk` unless you name another in
+**Machines** (**Use this GitLab**, kept in Desktop's own `settings.json`). It is the token
+page Desktop opens, the GitLab a token is checked against and logged in to, and the
+`--gitlab-host` every Machine is onboarded and doctored with, so each Machine's readiness
+is that host's. A change applies at once, without a restart, and every Machine is doctored
+again. It also forgets the GitLab token Desktop kept, since a token is made for one GitLab:
+make a new one on the new host's page and save it.
 
 Helle makes tokens only in Slack, so its step walks you there: **Open Slack** opens the
 Slack app, or Slack on the web where the app does not open; run `/helle token` (the copy
 button puts it on the clipboard); press **Create new token** and label it, for example
 "Collie"; and paste the token. Desktop asks Helle's `/api/v1/me` about it at once and says
 whose it is, or that Helle refused it, and keeps nothing until Helle accepts it. **Skip on
-this Machine** stays there for a Machine that goes without Helle. Every onboarding gets what is kept on its stdin (`--secrets-stdin`), so a second
-Machine asks for neither, and one that was out of reach when a token was renewed gets the
-new one the next time it is onboarded. A step that needs one you have not given yet takes it
-there and onboards again. Desktop asks GitLab when the token expires, at launch and when it
-is saved, and warns above the board from 14 days before; **Renew** with a new one replaces
-it on every Machine.
+this Machine** stays there for a Machine that goes without Helle.
 
 The Claude login is each Machine's own. **Log in** on that step runs `claude auth login`
 on the Machine with `$BROWSER` set to a shim Desktop reads, because Claude Code hands its
@@ -1396,6 +1409,7 @@ checkout there is no branch and no working tree to review, so the target menu is
   "scope": "local",
   "density": "comfortable",
   "questions": "focus",
+  "gitlab_host": "gitlab.cego.dk",
   "chat_harness": "claude"
 }
 ```
@@ -1452,6 +1466,12 @@ by accident.
 
 `compact_at_tokens` is where compaction between pieces of work kicks in — see
 [Compaction between pieces of work](#compaction-between-pieces-of-work).
+
+`gitlab_host` is the one GitLab this Machine works against, `gitlab.cego.dk` unless you
+change it under Settings, which refuses anything that is not a host name. `collie doctor`
+checks glab's login, the token and `git push` for that host alone, and `collie onboard` logs
+in and pushes to it; another host glab knows is named in a note and never counts against
+the Machine. `GITLAB_HOST`, or `--gitlab-host` on either command, overrides it for one run.
 
 ## Compaction between pieces of work
 

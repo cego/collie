@@ -9,7 +9,8 @@ import type { PlatformError } from "effect/PlatformError";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { hostname } from "node:os";
 import { doctor, glabHosts, onPath, pushCheck } from "./doctor";
-import { GITLAB_HOST, tokenPage } from "./gitlab-token";
+import { gitlabHostOf } from "./config";
+import { tokenPage } from "./gitlab-token";
 import type { PluginEnv } from "./env";
 import { err, moveToRelease, prepareSteps, type OpResult } from "./operations";
 import { HELLE_TOKEN_STEPS, helleUrlOf } from "./helle-url";
@@ -352,15 +353,17 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
     );
   }
 
+  const userDir = env.raw["COLLIE_USER_DIR"] ?? `${root}/user`;
+  const host = yield* gitlabHostOf({ raw: childEnv, userDir });
+  // Named to doctor, so it checks the host this run logged in to.
   const here: PluginEnv = {
     ...env,
     pluginRoot: root,
-    userDir: env.raw["COLLIE_USER_DIR"] ?? `${root}/user`,
-    raw: childEnv,
+    userDir,
+    raw: { ...childEnv, GITLAB_HOST: host },
   };
   const secrets = options.secrets ?? {};
   const attended = options.attended ?? true;
-  const host = env.raw["GITLAB_HOST"] ?? GITLAB_HOST;
 
   yield* step(
     "claude-login",

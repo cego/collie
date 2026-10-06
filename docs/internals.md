@@ -471,14 +471,28 @@ Collie wrote plus **proof** that what it names is still what it meant — either
 `collie_home` token on the workspace, or the recorded pane still carrying the recorded
 `terminal_id`. Either proof alone is enough, and the second is what heals an expired
 token: the pane Collie opened is still there, so the claim was true and the TTL merely
-lapsed.
+lapsed. While either proof holds, the host restates the token on the workspace and on both
+of the Home's panes every four hours, well inside the token's 24-hour TTL, so a board left
+open for days does not let it lapse.
+
+A herdr restart loses both proofs at once. herdr 0.9.3 saves each session to
+`~/.config/herdr/session.json`: workspace ids, tabs, and each pane with its cwd, label,
+launch command and agent session, so it relaunches the board and resumes the chat. It saves
+nothing reported with `report_metadata`, so every token is gone when the server comes back,
+and each restored pane has a new terminal. A recorded workspace that is still there, with a
+`ready` record, no other Herd's token and no other workspace carrying this one's, is
+therefore **healed** rather than refused: the panes still under their recorded ids are
+taken back with their new terminals, any that are gone are reopened, and the tokens are
+written again. The record keeps when and why, and `collie home show` prints it as `healed`.
+This rests on herdr never handing a workspace id to a different workspace.
 
 A **label is never proof**. Two workspaces can be called the same thing, and a home test
 reads `home.ts` to keep it that way. A live token with no record is not proof either — it
 is a previous Collie's Home or another state directory's, and adopting it silently would
 be one Herd taking over another's board.
 
-Anything uncertain is `ownership_unknown` and stops: `collie home show` says what was
+Anything uncertain — another workspace carrying this Herd's token, more than one
+candidate, a token with no record — is `ownership_unknown` and stops: `collie home show` says what was
 recorded, what herdr has, and which candidates there are; `collie home reconcile --adopt`
 or `--forget` is how a person settles it. Two things this must never do are creating a
 second Home because a token expired, and adopting one because it looks right.
@@ -587,7 +601,8 @@ checkout, whose channel is not `stable`, may be given another key in
 `COLLIE_DESKTOP_RELEASE_KEY`, as its tests are; a release ignores it. Any Desktop may be
 given another release URL in `COLLIE_DESKTOP_RELEASES`, since what it downloads from there
 is still verified against the key. `COLLIE_DESKTOP_GITLAB` names the GitLab Desktop
-checks a token with and gives it for, `https://gitlab.cego.dk` unless set.
+checks a token with and gives it for while no GitLab host is set in Desktop, as its tests
+do; `https://gitlab.cego.dk` unless set.
 `COLLIE_HELLE_URL` replaces `https://helle.cego.dk` (`HELLE_URL` in `src/helle-url.ts`) for
 both the runner and Desktop. It is for tests that answer as a fake Helle, not a setting.
 
