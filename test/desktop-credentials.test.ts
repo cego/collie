@@ -1,5 +1,5 @@
 // What only the human can give, asked once by Desktop: the GitLab token and Helle's
-// credentials kept in the keyring and handed to every Machine on stdin, and the logins
+// token kept in an owner-only file and handed to every Machine on stdin, and the logins
 // finished in this computer's browser through a forwarded callback port.
 
 import { expect, test } from "bun:test";
@@ -17,7 +17,7 @@ import {
   giveHelle,
   giveToken,
   gitlabToken,
-  secretService,
+  credentialsFile,
   secretsFor,
 } from "../desktop/src/bun/credentials";
 import { type OnboardRun } from "../desktop/src/shared/flock";
@@ -53,35 +53,50 @@ const machineIn = (home: string, bin: string, forwarded: number[] = []): ShellRo
   forward: (port) => Effect.sync(() => void forwarded.push(port)),
 });
 
-/** `secret-tool`, keeping each secret in a file named for its attributes. */
+/** `secret-tool`, as an earlier Desktop kept its secrets: each in a file named for its attributes. */
 const fakeSecretTool = (dir: string) =>
   executable(
     `${dir}/secret-tool`,
     `#!/bin/sh
-cmd=$1; shift
-[ "$1" = --label ] && shift 2
-key="${dir}/secret-$(echo "$@" | tr ' /' '__')"
-case "$cmd" in
-  store) cat > "$key" ;;
-  lookup) [ -e "$key" ] && cat "$key" ;;
-  clear) rm -f "$key" ;;
-esac
+[ "$1" = lookup ] && shift && cat "${dir}/secret-$(echo "$@" | tr ' /' '__')"
 `,
   );
 
-test("a secret is kept in the keyring and read back, and a missing secret-tool says what to install", () =>
+test("a secret is kept in an owner-only file and read back, with no secret-tool anywhere", () =>
   run(
     Effect.gen(function* () {
-      const dir = yield* scratch;
-      yield* fakeSecretTool(dir);
-      const keyring = secretService(`${dir}/secret-tool`);
+      const fs = yield* FileSystem.FileSystem;
+      const dir = `${yield* scratch}/collie-desktop`;
+      const keyring = credentialsFile(dir, `${dir}/no-such-tool`);
       expect(yield* keyring.lookup("gitlab-token")).toBeNull();
       yield* keyring.store("gitlab-token", "Collie's GitLab token", "glpat-123");
+      yield* keyring.store("helle-token", "Collie's Helle token", "h-1");
       expect(yield* keyring.lookup("gitlab-token")).toBe("glpat-123");
-      const missing = yield* secretService(`${dir}/no-such-tool`)
-        .lookup("gitlab-token")
-        .pipe(Effect.flip);
-      expect(missing).toContain("libsecret");
+      expect(yield* credentialsFile(dir).lookup("helle-token")).toBe("h-1");
+      expect(((yield* fs.stat(dir)).mode & 0o777).toString(8)).toBe("700");
+      expect(((yield* fs.stat(`${dir}/credentials`)).mode & 0o777).toString(8)).toBe("600");
+      expect(yield* fs.exists(`${dir}/credentials.new`)).toBe(false);
+    }),
+  ));
+
+test("what an earlier Desktop kept through secret-tool is moved into the file, once", () =>
+  run(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* scratch;
+      yield* fakeSecretTool(dir);
+      yield* fs.writeFileString(
+        `${dir}/secret-service_collie-desktop_key_gitlab-token`,
+        "glpat-old",
+      );
+      const keyring = credentialsFile(`${dir}/collie-desktop`, `${dir}/secret-tool`);
+      expect(yield* keyring.lookup("gitlab-token")).toBe("glpat-old");
+      expect(yield* keyring.lookup("helle-token")).toBeNull();
+      // The file is what is read from now on, with or without secret-tool.
+      yield* fs.writeFileString(`${dir}/secret-service_collie-desktop_key_helle-token`, "h-late");
+      const later = credentialsFile(`${dir}/collie-desktop`, `${dir}/no-such-tool`);
+      expect(yield* later.lookup("gitlab-token")).toBe("glpat-old");
+      expect(yield* later.lookup("helle-token")).toBeNull();
     }),
   ));
 
@@ -127,8 +142,7 @@ test("the secrets Desktop holds are handed to collie onboard as stdin lines", ()
   run(
     Effect.gen(function* () {
       const dir = yield* scratch;
-      yield* fakeSecretTool(dir);
-      const keyring = secretService(`${dir}/secret-tool`);
+      const keyring = credentialsFile(dir, `${dir}/no-such-tool`);
       expect(yield* secretsFor(keyring)).toBe("");
       yield* keyring.store("gitlab-token", "token", "glpat-good");
       yield* keyring.store("helle-token", "token", "h-1");

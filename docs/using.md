@@ -939,13 +939,18 @@ Machine** on either step onboards it again with `--skip`, and every later onboar
 that Machine skips it too.
 
 What only you can give is asked once, here, and never pasted on a command line. **Machines**
-keeps the Flock's credentials in this computer's Secret Service keyring, through
-`secret-tool` (libsecret): one GitLab token, made on GitLab's own page — **Make one on
-GitLab** opens it with the `api` and `write_repository` scopes filled in — and Helle's
-token; Helle's URL is always `https://helle.cego.dk` and is never asked for. Desktop takes a token only once GitLab accepts it with those scopes, and gives
-it at once to glab on every Machine it reaches (`glab auth login --hostname
-gitlab.cego.dk --stdin`); Helle's go to each Machine's credentials file, owner-only, the
-same way. Every onboarding gets what is kept on its stdin (`--secrets-stdin`), so a second
+keeps the Flock's credentials in a file of Desktop's own,
+`$XDG_CONFIG_HOME/collie-desktop/credentials` (`~/.config/collie-desktop/credentials`
+unless that is set), readable by you alone and replaced whole on every save — the way glab,
+gh and Helle already keep the same tokens on every Machine, so nothing has to be installed
+for it. A Desktop that kept them in the Secret Service through `secret-tool` before has them
+copied into that file the first time, where `secret-tool` is there. What it keeps is one
+GitLab token, made on GitLab's own page — **Make one on GitLab** opens it with the `api` and
+`write_repository` scopes filled in — and Helle's token; Helle's URL is always
+`https://helle.cego.dk` and is never asked for. Desktop takes a token only once GitLab
+accepts it with those scopes, and gives it at once to glab on every Machine it reaches
+(`glab auth login --hostname gitlab.cego.dk --stdin`); Helle's goes to each Machine's
+credentials file, owner-only, the same way. Every onboarding gets what is kept on its stdin (`--secrets-stdin`), so a second
 Machine asks for neither, and one that was out of reach when a token was renewed gets the
 new one the next time it is onboarded. A step that needs one you have not given yet takes it
 there and onboards again. Desktop asks GitLab when the token expires, at launch and when it

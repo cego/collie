@@ -100,15 +100,9 @@ wait $passenger
 [ "$1" = -lc ] && shift
 PATH='${flock}/remote':"$PATH" exec /bin/sh -c "$@"
 `,
-  // The keyring, a file per secret.
+  // The keyring an earlier Desktop kept secrets in, a file per secret, so the operator's is never read.
   "secret-tool": `#!/bin/sh
-cmd=$1; shift
-[ "$1" = --label ] && shift 2
-key='${flock}'/"secret-$(echo "$@" | tr ' /' '__')"
-case "$cmd" in
-  store) cat > "$key" ;;
-  lookup) [ -e "$key" ] && cat "$key" ;;
-esac
+[ "$1" = lookup ] && shift && cat '${flock}'/"secret-$(echo "$@" | tr ' /' '__')" 2>/dev/null
 `,
   // This computer's browser: it logs what it opens, and approves a login sent to a localhost
   // callback unless `no-browser` exists.
@@ -230,6 +224,7 @@ export const launch = (
       // CEF keeps one profile per user, so a test's app must not find the operator's.
       HOME: scratch,
       XDG_STATE_HOME: `${scratch}/.local/state`,
+      XDG_CONFIG_HOME: `${scratch}/.config`,
       PATH: `${browsers ? `${flock}/browsers:` : ""}${flock}:${Bun.env.PATH}`,
       XDG_DATA_HOME: browsers ? `${flock}/share` : `${scratch}/data`,
       COLLIE_DESKTOP_COLLIE: asCommand([process.execPath, HOST, `${flock}/${LOCAL}`]),

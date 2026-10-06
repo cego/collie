@@ -1,5 +1,5 @@
 // What only the human can give, asked once by Desktop, in the built app: the GitLab token
-// made on GitLab's own page and Helle's credentials, kept in the keyring and given to every
+// made on GitLab's own page and Helle's token, kept in Desktop's own file and given to every
 // Machine; the Claude login finished in this computer's browser through a forwarded port,
 // or with a pasted code; Linear's login through its forwarded port; and the token renewed
 // on every Machine before it expires.
@@ -159,7 +159,7 @@ const onboardOn = (name: string) =>
   });
 
 test(
-  "the GitLab token is made on GitLab's own page and Helle's given once, kept in the keyring, and a second Machine needs neither",
+  "the GitLab token is made on GitLab's own page and Helle's given once, kept in Desktop's credentials file, and a second Machine needs neither",
   () =>
     run(
       Effect.gen(function* () {
@@ -180,7 +180,13 @@ test(
         yield* fill(step("helle").getByTestId("helle-token"), "h-1");
         yield* press(step("helle").getByTestId("save-helle"));
         yield* reads(dialog().getByTestId("outcome"), "Onboarded: collie doctor is ready.");
-        expect(yield* read("secret-service_collie-desktop_key_gitlab-token")).toBe("glpat-good");
+        expect(
+          yield* FileSystem.FileSystem.pipe(
+            Effect.flatMap((fs) =>
+              fs.readFileString(`${app!.scratch}/.config/collie-desktop/credentials`),
+            ),
+          ),
+        ).toContain("gitlab-token=glpat-good\n");
         expect(yield* read("stdin-mk@a")).toContain("GITLAB_TOKEN=glpat-good");
         // The token went to glab on every Machine Desktop reaches, on stdin.
         yield* holds("glab.log", "mk@b auth login --hostname");

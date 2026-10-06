@@ -1,7 +1,7 @@
 // Desktop's main process: one window on the view, every Machine's board relayed to it as
 // Effect RPC over Electrobun's message channel, and the Flock chat beside them.
 
-import { hostname } from "node:os";
+import { homedir, hostname } from "node:os";
 import { BunRuntime, BunServices } from "@effect/platform-bun";
 import {
   Clock,
@@ -78,7 +78,7 @@ import {
   giveToken,
   gitlabToken,
   oneLine,
-  secretService,
+  credentialsFile,
   secretsFor,
 } from "./credentials";
 import { tokenPage } from "../../../src/gitlab-token";
@@ -182,7 +182,10 @@ const main = Effect.gen(function* () {
   const gitlab = yield* Config.String("COLLIE_DESKTOP_GITLAB").pipe(Config.withDefault(GITLAB));
   const helle = yield* Config.String("COLLIE_HELLE_URL").pipe(Config.withDefault(HELLE_URL));
   const gitlabHost = new URL(gitlab).host;
-  const keyring = secretService();
+  const config =
+    (yield* Config.String("XDG_CONFIG_HOME").pipe(Config.withDefault(""))) ||
+    `${homedir()}/.config`;
+  const keyring = credentialsFile(`${config}/collie-desktop`);
   const blank: Credentials = { gitlab: null, helle: false, tokenPage: tokenPage(gitlabHost) };
   // Its expiry is GitLab's to say, so a token renewed elsewhere is not warned of.
   const held = Effect.gen(function* () {
@@ -299,7 +302,7 @@ const main = Effect.gen(function* () {
     const { machine } = route;
     onboarding.set(machine.profile, { job });
     return Effect.gen(function* () {
-      // Without the keyring, a Machine is onboarded as far as it goes with none.
+      // Without its credentials file, a Machine is onboarded as far as it goes with none.
       const secrets = yield* secretsFor(keyring).pipe(Effect.orElseSucceed(() => ""));
       const before = (yield* savedOnboardings(onboardings)).find(
         (saved) => saved.machine.profile === machine.profile,
