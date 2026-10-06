@@ -31,6 +31,8 @@ const SPEC = [
   "",
   "[a bad link](javascript:window.pwned=true)",
   "",
+  ':prose-card{title="a scripted card" to="javascript:window.pwned=true"}',
+  "",
   "![a pixel](https://example.com/pixel.png)",
   "",
   '<img srcset="https://example.com/srcset.png 1x" alt="a far pixel">',
@@ -390,6 +392,7 @@ test(
         expect(yield* Effect.promise(() => plan.locator("[onerror]").count())).toBe(0);
         expect(yield* Effect.promise(() => plan.locator("img[src^='http']").count())).toBe(0);
         expect(yield* Effect.promise(() => plan.locator("a[href^='javascript']").count())).toBe(0);
+        yield* Effect.promise(() => plan.getByText("a scripted card").dispatchEvent("click"));
         expect(yield* Effect.promise(() => app!.page.evaluate(() => "pwned" in window))).toBe(
           false,
         );

@@ -54,6 +54,26 @@ test("nothing inside a block, a link or code keeps a style, popover or command e
   ]);
 });
 
+test("no attribute keeps a script URL, whatever a component calls it", () => {
+  expect(
+    confine([
+      ["prose-card", { to: "javascript:window.pwned=true", title: "a card" }],
+      ["prose-a", { ":to": '" JaVa\tScRiPt:alert(1)"' }, "go"],
+      ["prose-callout", { ":ui": '{"base":"javascript:x"}', icon: "i-lucide-info" }, "note"],
+      ["prose-card", { ":to": '"\\u006aavascript:x()"' }],
+      ["prose-card", { ":to": "frontmatter.away" }],
+      ["input", { type: "checkbox", ":checked": "true" }],
+    ]),
+  ).toEqual([
+    ["prose-card", { title: "a card" }],
+    ["prose-a", {}, "go"],
+    ["prose-callout", { icon: "i-lucide-info" }, "note"],
+    ["prose-card", {}],
+    ["prose-card", {}],
+    ["input", { type: "checkbox", ":checked": "true" }],
+  ]);
+});
+
 test("a file:line in text is a reference, and the text around it stays", () => {
   expect(confine([["p", {}, "See src/seed.ts:12, and README.md:3."]])).toEqual([
     [
