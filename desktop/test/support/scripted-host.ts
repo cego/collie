@@ -6,12 +6,12 @@
 // instead, it logs that and moves the Machine's build to `v`, as a release's would. Run as
 // `--json doctor`, it fails the checks its board names as `failing`, where it names any.
 //
-// Usage: bun scripted-host.ts <board.json> bridge --as desktop --client <computer>
+// Usage: bun scripted-host.ts <board.json> bridge --as desktop|chat --client <computer>
 //        bun scripted-host.ts <board.json> --json upgrade --to <version>
 //        bun scripted-host.ts <board.json> --json doctor
 
 import { BunFileSystem, BunRuntime, BunStdio } from "@effect/platform-bun";
-import { Effect, FileSystem, Layer, Schedule, Schema, Stream } from "effect";
+import { Effect, Encoding, FileSystem, Layer, Result, Schedule, Schema, Stream } from "effect";
 import * as RpcSerialization from "effect/unstable/rpc/RpcSerialization";
 import * as RpcServer from "effect/unstable/rpc/RpcServer";
 import { BRIDGE_READY, FrontDoorRpcs, HostRefused, PROTOCOL } from "../../../src/board-model";
@@ -20,6 +20,8 @@ import { OFFERS, REFUSED_RUN, STARTABLE, ScriptedMachine } from "./scripted-mach
 
 const [board, ...bridge] = Bun.argv.slice(2);
 const MachineFile = Schema.fromJsonString(ScriptedMachine);
+/** Smaller than a host's, so a test's large item is read in several parts. */
+const PART_BYTES = 16 * 1024;
 const asLine = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
 const upgrading = board !== undefined && bridge.slice(0, 3).join(" ") === "--json upgrade --to";
@@ -34,7 +36,10 @@ if (failing !== undefined) {
   );
   process.exit(checks.length === 0 ? 0 : 1);
 }
-if (!upgrading && (board === undefined || bridge.slice(0, 3).join(" ") !== "bridge --as desktop")) {
+if (
+  !upgrading &&
+  (board === undefined || !/^bridge --as (desktop|chat)$/.test(bridge.slice(0, 3).join(" ")))
+) {
   process.stderr.write(`scripted host: started as ${Bun.argv.slice(2).join(" ")}\n`);
   process.exit(2);
 }
@@ -42,16 +47,7 @@ if (!upgrading && (board === undefined || bridge.slice(0, 3).join(" ") !== "brid
 /** What an operation was asked with, as it is logged. */
 type Asked = Parameters<typeof asLine>[0];
 
-const Served = FrontDoorRpcs.omit(
-  "declare",
-  "runDetail",
-  "runFile",
-  "propose",
-  "act",
-  "reconcile",
-  "settleDelivery",
-  "news",
-);
+const Served = FrontDoorRpcs.omit("propose", "act", "reconcile", "settleDelivery");
 
 const handlers = Served.toLayer(
   Effect.gen(function* () {
@@ -139,6 +135,17 @@ const handlers = Served.toLayer(
       followUp: (payload) => asked("followUp", payload, started, payload.runId),
       offers: (payload) => asked("offers", payload, OFFERS, payload.runId),
       workflows: (payload) => logged("workflows", payload).pipe(Effect.as(STARTABLE)),
+      declare: (payload) => logged("declare", payload),
+      news: (payload) =>
+        Effect.gen(function* () {
+          yield* logged("news", payload);
+          const machine = yield* read;
+          const items = machine.news ?? [];
+          const taken = payload.keys ?? items.map(({ key }) => key);
+          if (payload.as === "read" && taken.length > 0)
+            yield* write({ ...machine, news: items.filter(({ key }) => !taken.includes(key)) });
+          return { items, omitted: 0 };
+        }),
       confirm: (payload) => asked("confirm", payload, { proposal: payload.proposal, results: [] }),
       decline: (payload) => asked("decline", payload, { proposal: payload.proposal }),
       dispose: (payload) =>
@@ -154,6 +161,36 @@ const handlers = Served.toLayer(
           },
           payload.runId,
         ),
+      runDetail: (payload) =>
+        Stream.fromSchedule(Schedule.spaced("100 millis")).pipe(
+          Stream.mapEffect(() => read),
+          Stream.map(({ details }) => details?.[payload.runId] ?? null),
+          Stream.changesWith((a, b) => asLine(a) === asLine(b)),
+        ),
+      runFile: (payload) =>
+        Effect.flatMap(read, ({ files }) => {
+          const content = files?.[`${payload.runId} ${payload.ref}`];
+          if (content === undefined)
+            return Effect.fail(
+              new HostRefused({ reason: `${payload.ref} is not ${payload.runId}'s` }),
+            );
+          // As a host hands out an item: in parts, and as base64 unless it is text and whole.
+          const [text, bytes] = Schema.is(Schema.String)(content)
+            ? [content, new TextEncoder().encode(content)]
+            : [null, Encoding.decodeBase64(content.base64).pipe(Result.getOrThrow)];
+          const offset = payload.offset ?? 0;
+          const part = bytes.subarray(offset, offset + PART_BYTES);
+          return Effect.succeed(
+            text !== null && part.length === bytes.length
+              ? { ref: payload.ref, encoding: "utf8" as const, content: text, size: bytes.length }
+              : {
+                  ref: payload.ref,
+                  encoding: "base64" as const,
+                  content: Encoding.encodeBase64(part),
+                  size: bytes.length,
+                },
+          );
+        }),
       steerAbout: (payload) =>
         logged("steerAbout", payload).pipe(
           Effect.as({

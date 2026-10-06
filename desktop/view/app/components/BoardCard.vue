@@ -16,8 +16,11 @@ const props = defineProps<{
   where: string;
   installation: string;
   asOf: number | null;
+  cardKey: string;
+  machine: string;
 }>();
 const { run, openLink } = useActions();
+const { open } = useDrawer();
 // A dialog opened before its Machine dropped is outside the card's disabled controls.
 const act = (action: DesktopAction) =>
   props.asOf === null ? run(props.installation, action) : Promise.resolve(false);
@@ -30,6 +33,22 @@ const asOfLabel = computed(() => {
   const two = (n: number) => String(n).padStart(2, "0");
   return `as of ${two(hour)}:${two(minute)}`;
 });
+
+const { chip, choose } = useChip();
+const chosen = computed(
+  () => chip.value?.machine === props.machine && chip.value.task === props.task.id,
+);
+/** A click on the card itself, not on one of its controls, is what the next chat message is about. */
+const chooseForChat = (event: MouseEvent) => {
+  if (event.target instanceof Element && event.target.closest("button, a, input, label, form"))
+    return;
+  choose({
+    machine: props.machine,
+    task: props.task.id,
+    run: props.task.run,
+    name: props.task.name,
+  });
+};
 
 const STATES: Record<
   TaskView["state"],
@@ -155,11 +174,19 @@ const menu = computed(() =>
     <UCard
       :data-testid="`card-${task.id}`"
       :variant="task.state === 'blocked' ? 'soft' : 'outline'"
-      :class="{ 'opacity-50': asOf !== null }"
+      :class="{ 'opacity-50': asOf !== null, 'ring-2 ring-primary': chosen }"
+      @click="chooseForChat"
     >
       <template #header>
         <div class="flex items-start justify-between gap-2">
-          <strong data-testid="name">{{ task.name }}</strong>
+          <button
+            type="button"
+            class="cursor-pointer text-left font-semibold hover:underline"
+            data-testid="name"
+            @click="open(cardKey)"
+          >
+            {{ task.name }}
+          </button>
           <div class="flex shrink-0 items-center gap-1">
             <UBadge :color="state.color" variant="subtle" data-testid="state">
               {{ state.label }}

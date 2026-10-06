@@ -16,7 +16,11 @@ const MACHINES = [
   { label: "next", target: "mk@next", session: "default", enabled: true },
 ];
 const VERSION: string = manifest.version;
-const fromJson = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
+const fromJson = Schema.decodeUnknownSync(
+  Schema.fromJsonString(Schema.Struct({ op: Schema.String, payload: Schema.Unknown })),
+);
+/** What the Flock chat's own channel asks of every Machine, which changes nothing on it. */
+const CHAT = new Set(["declare", "news"]);
 
 let app: App | undefined;
 
@@ -63,7 +67,8 @@ const asked = (target: string) =>
       : log
           .trim()
           .split("\n")
-          .map((line) => fromJson(line));
+          .map((line) => fromJson(line))
+          .filter(({ op }) => !CHAT.has(op));
   });
 
 test(

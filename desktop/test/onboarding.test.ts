@@ -71,10 +71,11 @@ beforeAll(
                 ],
               });
             }),
-          undefined,
           {
-            COLLIE_DESKTOP_RELEASES: `http://127.0.0.1:${server.port}`,
-            COLLIE_DESKTOP_RELEASE_KEY: KEY,
+            env: {
+              COLLIE_DESKTOP_RELEASES: `http://127.0.0.1:${server.port}`,
+              COLLIE_DESKTOP_RELEASE_KEY: KEY,
+            },
           },
         );
       }),
@@ -254,7 +255,12 @@ test(
         expect(yield* fs.exists(saved)).toBe(false);
         // Its host and its board are as they were.
         expect(yield* fs.exists(`${app!.flock}/mk@fresh.json`)).toBe(true);
-        expect(yield* read("mk@fresh.json.ops.jsonl")).toBe("");
+        // Nothing but the Flock chat's own bookkeeping.
+        expect(
+          (yield* read("mk@fresh.json.ops.jsonl"))
+            .split("\n")
+            .filter((line) => line !== "" && !/^\{"op":"(declare|news)"/.test(line)),
+        ).toEqual([]);
       }),
     ),
   60_000,

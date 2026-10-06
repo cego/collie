@@ -2,13 +2,17 @@
 // by its Machine, and the board those messages add up to. No Bun-only import: the view
 // bundles this.
 
-import { Schema, Stream, Struct } from "effect";
+import { Effect, Schema, Stream, Struct } from "effect";
 import * as Rpc from "effect/unstable/rpc/Rpc";
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
+import { AguiEvent } from "./agui";
+import { About, Answers, ChatMessage, Conversations, DesktopTurn } from "./chat-view";
 import {
   BoardMessage,
   Herd,
   OfferView,
+  RunDetail,
+  RunFile,
   sortBoard,
   Startable,
   TaskView,
@@ -204,6 +208,12 @@ export const UpdateNews = Schema.Union([
   Schema.TaggedStruct("Refused", { version: Schema.String, reason: Schema.String }),
 ]);
 export type UpdateNews = typeof UpdateNews.Type;
+/** What the human set in Desktop. */
+export const DesktopSettings = Schema.Struct({
+  /** Whether the Flock chat may start a turn about News nobody asked for. */
+  proactive: Schema.Boolean.pipe(Schema.withDecodingDefaultKey(Effect.succeed(true))),
+});
+export type DesktopSettings = typeof DesktopSettings.Type;
 
 export const DesktopRpcs = RpcGroup.make(
   Rpc.make("flock", { success: FlockItem, stream: true }),
@@ -278,6 +288,47 @@ export const DesktopRpcs = RpcGroup.make(
     success: Schema.String,
     error: ActionFailed,
   }),
+  /** One Run's details while its drawer is open, with its log's tail, again as they change. */
+  Rpc.make("runDetail", {
+    payload: { installation: Schema.String, runId: Schema.String },
+    success: Schema.NullOr(RunDetail),
+    error: ActionFailed,
+    stream: true,
+  }),
+  /** A large item of a Run's, by the reference its details hand out, from `offset` bytes on. */
+  Rpc.make("runFile", {
+    payload: {
+      installation: Schema.String,
+      runId: Schema.String,
+      ref: Schema.String,
+      offset: Schema.optional(Schema.Int),
+    },
+    success: RunFile,
+    error: ActionFailed,
+  }),
+  /** One message from the human to the Flock chat, and the turn it starts as it streams. */
+  Rpc.make("say", {
+    payload: { text: Schema.String, about: Schema.NullOr(About) },
+    success: AguiEvent,
+    stream: true,
+  }),
+  /** The human's choices for a question the chat asked. */
+  Rpc.make("answer", {
+    payload: { toolCallId: Schema.String, answers: Answers },
+  }),
+  /** The current conversation, as far as it has gone. */
+  Rpc.make("transcript", { success: Schema.Array(ChatMessage) }),
+  Rpc.make("conversations", { success: Conversations }),
+  /** Makes that conversation the current one, or a fresh one; the one before it ends. */
+  Rpc.make("reopen", { payload: { session: Schema.NullOr(Schema.String) } }),
+  /** Opens the chat in its own window, and succeeds when that window is closed. */
+  Rpc.make("popOut"),
+  /** Closes the chat's own window, which puts the chat back beside the board. */
+  Rpc.make("popIn"),
+  /** When the Flock chat starts and ends a turn of Desktop's own. */
+  Rpc.make("desktopTurns", { success: DesktopTurn, stream: true }),
+  Rpc.make("settings", { success: DesktopSettings }),
+  Rpc.make("setSettings", { payload: DesktopSettings }),
 );
 
 /**
@@ -410,7 +461,7 @@ export const applyItem = (flock: Flock, item: FlockItem): Flock => {
 };
 
 /** Each Machine's display name: its own, or with how it is reached where two share one. */
-const machineNames = (machines: ReadonlyArray<Machine>) => {
+export const machineNames = (machines: ReadonlyArray<Machine>) => {
   const counts = new Map<string, number>();
   for (const { name } of machines) counts.set(name, (counts.get(name) ?? 0) + 1);
   return new Map(
@@ -426,6 +477,8 @@ export interface PlacedTask {
   readonly key: string;
   /** The Machine its actions go to. */
   readonly installation: string;
+  /** That Machine's display name, as the chat's tools name it. */
+  readonly machine: string;
   readonly task: TaskView;
   readonly where: string;
   /** When its Machine was last live, where it is not now; its actions are off until it is. */
@@ -449,6 +502,8 @@ export const flockCards = (flock: Flock) => {
       placed.set(task, {
         key: `${installation}:${task.id}`,
         installation,
+        // SAFETY: `names` holds every Machine of this Flock.
+        machine: names.get(installation)!,
         task,
         where: where.filter((part) => part !== undefined).join(" · "),
         asOf,

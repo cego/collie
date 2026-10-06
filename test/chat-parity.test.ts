@@ -25,12 +25,13 @@
 import { Effect, FileSystem, Schema } from "effect";
 import { afterAll, expect, test } from "bun:test";
 import { app } from "../src/collie";
-import { ActionSchema, type Action, type ActionKind } from "../src/evaluator";
+import { ActionSchema, type Action, type ActionKind } from "../src/actions";
 import { registeredKinds, resetExecutors } from "../src/executors";
 import { registerRunExecutors } from "../src/operations";
 import { readEnv } from "../src/env";
 import type { JsonObject } from "../src/schema";
-import { checkLines, herdLines, TOOLS, toolNamed } from "../src/tools";
+import { checkLines, TOOLS, toolNamed } from "../src/tools";
+import { herdLines } from "../src/toolkit";
 import { boardLines, buildBoard } from "../src/board";
 import { SECTIONS, sortBoard } from "../src/board-model";
 import { encodeVerifying } from "../src/verify";

@@ -47,6 +47,7 @@ export const useFlock = () => {
     rows: computed(() => machineRows(told.value)),
     onboarding: computed(() => told.value.onboarding),
     tasks,
+    placedBy: (key: string) => placed(tasks.value).find((one) => one.key === key),
     sections: computed(
       () =>
         ({

@@ -1,6 +1,7 @@
-// Desktop's channel to a Machine's host: a bridge command started as `desktop`, whose
-// output after the ready marker is the host's socket. Never Collie's own host client: over
-// a channel that would start a host on this computer, or signal a pid that is not its own.
+// Desktop's channels to a Machine's host: bridge commands started as `desktop` and as
+// `chat`, whose output after the ready marker is the host's socket. Never Collie's own host
+// client: over a channel that would start a host on this computer, or signal a pid that is
+// not its own.
 
 import {
   Clock,
@@ -60,15 +61,15 @@ export const spawned = <C extends Bun.Subprocess>(start: () => C) =>
       }),
   );
 
+/** The front doors Desktop opens a Machine's channels as. */
+export type Bridged = "desktop" | "chat";
+
 /** The bridge `collie` runs for Desktop, which records Desktop's computer with what it does. */
-export const bridgeCommand = (collie: ReadonlyArray<string>, client: string) => [
-  ...collie,
-  "bridge",
-  "--as",
-  "desktop",
-  "--client",
-  client,
-];
+export const bridgeCommand = (
+  collie: ReadonlyArray<string>,
+  client: string,
+  as: Bridged = "desktop",
+) => [...collie, "bridge", "--as", as, "--client", client];
 
 /** The last of what a process has said on a stream so far, each chunk passed on as it comes. */
 const stderrTail = Effect.fnUntraced(function* (
@@ -182,6 +183,29 @@ export const openBridge = Effect.fn("Desktop.openBridge")(function* (
 
 export type Door = Effect.Success<ReturnType<typeof openBridge>>;
 
+/**
+ * A Machine's two channels: the board's and its actions on one, the Flock chat's tools on
+ * the other. They know their Machine, so the chat's tools can name it.
+ */
+export interface Doors extends BoardSource {
+  readonly machine: KnownMachine;
+  readonly desktop: Door;
+  readonly chat: Door;
+}
+
+/** Opens both of a Machine's channels, each a bridge started as its front door. */
+export const openDoors = (machine: KnownMachine, command: (as: Bridged) => ReadonlyArray<string>) =>
+  Effect.all([openBridge(command("desktop")), openBridge(command("chat"))], {
+    concurrency: "unbounded",
+  }).pipe(
+    Effect.map(([desktop, chat]): Doors => ({
+      machine,
+      desktop,
+      chat,
+      board: () => desktop.board(),
+    })),
+  );
+
 export interface BoardSource {
   readonly board: () => Stream.Stream<BoardMessage, { readonly message: string }>;
 }
@@ -224,7 +248,7 @@ const ran = (command: ReadonlyArray<string>) =>
 
 export type Ran = Effect.Success<ReturnType<typeof ran>>;
 
-const output = (command: ReadonlyArray<string>) =>
+export const output = (command: ReadonlyArray<string>) =>
   ran(command).pipe(
     Effect.flatMap(({ out, err, code }) =>
       code === 0
@@ -264,7 +288,7 @@ export const removeFromHerdr = (herdr: string, profile: string) =>
  * One way to reach a Machine: what it is called, and how its bridge is opened, saying
  * what a login it waits on asks for while it waits.
  */
-export interface Route<D extends BoardSource = Door> {
+export interface Route<D extends BoardSource = Doors> {
   readonly machine: KnownMachine;
   readonly open: (waitingOnSso: WaitingOnSso) => Effect.Effect<D, RouteFailure, Scope.Scope>;
   /** Runs `collie` on the Machine with these arguments, as its bridge is run. */
@@ -361,7 +385,9 @@ export const remoteRoute = Effect.fn("Desktop.remoteRoute")(function* (
         if (done !== undefined && (done._tag === "Failure" || done.value.exitCode !== null))
           master = yield* start;
         yield* Fiber.join(master);
-        return yield* openBridge(channel(remoteCollie(bridgeCommand([], client))));
+        return yield* openDoors(route.machine, (as) =>
+          channel(remoteCollie(bridgeCommand([], client, as))),
+        );
       }),
     collie: (args) =>
       Fiber.join(master).pipe(
@@ -398,14 +424,17 @@ export const remoteRoute = Effect.fn("Desktop.remoteRoute")(function* (
 });
 
 /** Local, reached through a bridge it starts without SSH. */
-export const localRoute = (collie: ReadonlyArray<string>, name: string): ShellRoute => ({
-  machine: { profile: "local", name },
-  open: () => openBridge(bridgeCommand(collie, name)),
-  collie: (args) => ran([...collie, ...args]),
-  sh: (script) => Effect.succeed([Bun.env.SHELL ?? "/bin/sh", "-lc", script]),
-  // Its localhost is this computer's already.
-  forward: () => Effect.void,
-});
+export const localRoute = (collie: ReadonlyArray<string>, name: string): ShellRoute => {
+  const machine = { profile: "local", name };
+  return {
+    machine,
+    open: () => openDoors(machine, (as) => bridgeCommand(collie, name, as)),
+    collie: (args) => ran([...collie, ...args]),
+    sh: (script) => Effect.succeed([Bun.env.SHELL ?? "/bin/sh", "-lc", script]),
+    // Its localhost is this computer's already.
+    forward: () => Effect.void,
+  };
+};
 
 const RELEASE = /^\d+\.\d+\.\d+$/;
 
@@ -447,7 +476,7 @@ const upgradeTo = (route: Route<BoardSource>, version: string) =>
 const backoff = (failures: number) => Math.min(1000 * 2 ** failures, 60_000);
 
 /** A route added, one removed, or one woken to try again now rather than after its backoff. */
-export type RouteChange<D extends BoardSource = Door> =
+export type RouteChange<D extends BoardSource = Doors> =
   | { readonly _tag: "Add"; readonly route: Route<D> }
   /** `done` once its stream has ended and its Machine is said to be removed. */
   | { readonly _tag: "Remove"; readonly profile: string; readonly done: Deferred.Deferred<void> }
@@ -834,3 +863,11 @@ export const offersOn = (door: Door, runId: string) =>
 
 export const workflowsOn = (door: Door, project: string) =>
   door.workflows({ project }).pipe(Effect.mapError(refusal()));
+
+export const runDetailOn = (door: Door, runId: string) =>
+  door
+    .runDetail({ runId, tail: true, pages: 1, refreshMr: false })
+    .pipe(Stream.mapError(refusal()));
+
+export const runFileOn = (door: Door, runId: string, ref: string, offset?: number) =>
+  door.runFile({ runId, ref, offset }).pipe(Effect.mapError(refusal()));

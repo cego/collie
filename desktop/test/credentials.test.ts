@@ -104,13 +104,14 @@ beforeAll(
               flock = dir;
               yield* serve(`${dir}/${LOCAL}`, "pc", []);
             }),
-          undefined,
           {
-            COLLIE_DESKTOP_RELEASES: `http://127.0.0.1:${releases.port}`,
-            COLLIE_DESKTOP_RELEASE_KEY: publicKey
-              .export({ type: "spki", format: "pem" })
-              .toString(),
-            COLLIE_DESKTOP_GITLAB: `http://127.0.0.1:${gitlab.port}`,
+            env: {
+              COLLIE_DESKTOP_RELEASES: `http://127.0.0.1:${releases.port}`,
+              COLLIE_DESKTOP_RELEASE_KEY: publicKey
+                .export({ type: "spki", format: "pem" })
+                .toString(),
+              COLLIE_DESKTOP_GITLAB: `http://127.0.0.1:${gitlab.port}`,
+            },
           },
         );
       }),

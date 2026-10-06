@@ -655,7 +655,7 @@ Defaults are per workspace: every run started there begins with them.
 
 The Home's right-hand pane is an ordinary Claude Code (or Pi) session with Collie's role
 and Collie's tools — that is where questions about the flock are asked, and it is
-[docs/using.md](using.md#talking-to-collie-about-the-flock). From a terminal:
+[docs/using.md](using.md#talking-to-collie-about-a-herd). From a terminal:
 
 ```sh
 collie --json chat status
@@ -1468,8 +1468,10 @@ carries it out; `act`, which carries out the board's own actions on a Run (`stop
 `release`, `hold`, `answer`, `deliver`, `followup`, `start`) with no proposal, anything else
 being refused as `propose`'s; `reconcile`, which settles a proposal step nobody can account
 for; `settleDelivery`, which does the same for a message to an agent; and `news`, which
-hands one conversation its Herd's pending News and records it `read`, `sent` or
-`uncertain` for that conversation alone. Actions travel as
+hands one conversation its Herd's pending News, each item with its Significance, and
+records it `read`, `sent` or `uncertain` for that conversation alone. Given `keys`, it hands
+over every pending item and records only those keys: what Desktop's Flock chat actually
+gave the model, out of a batch it put together across Machines. Actions travel as
 JSON and the host decodes them. `collie confirm`, `decline`, `steer`, `run disposition`,
 `proposal reconcile`, `run deliveries --reconcile` and `chat news --sent`, the board and
 chat's tools all go through these, so the host is the only writer of what they record
@@ -1486,8 +1488,8 @@ again. An untracked file reached through a link, or that is not a regular file, 
 without being read. The review's findings come as
 a list. The merge request is what the merge watch last read, asked again after 5 minutes or
 when `refreshMr` is set. Large items are fetched by reference with `runFile`: `log`,
-`diff:<path>`, `evidence:<name>`, `verification:<id>`, `plan:<file>` and `file:<path>` (read
-only, from the Run's checkout), text as it is and anything else as base64. Each answer is
+`review`, `diff:<path>`, `evidence:<name>`, `verification:<id>`, `plan:<file>`, `file:<path>` (read
+only, from the Run's checkout) and `pipeline:<url>` (the status glab reads for that pipeline), text as it is and anything else as base64. Each answer is
 at most 4 MiB from `offset` (or `length` bytes where asked) and says the item's whole
 `size`, so a long log or a video is read in parts. A part of an item is base64 whatever it
 is, so a character split across two parts is whole once they are joined. A reference is refused where it leaves
@@ -1497,6 +1499,10 @@ the directory it belongs to, links followed, or where it is not a regular file.
 kind of message does not change it, and a client reads a kind it does not know as
 `Unknown` and skips it. A removal or a change of meaning bumps it, and from then on the
 host serves its current version and the one before; version 1 has none before it.
+Version 2 changed two meanings: a `chat` channel's repeated `declare` replaces the words it
+speaks with rather than being ignored, and `news` with `keys` settles only those. A version
+1 client repeats no declaration and sends no `keys`, so it is still served as before.
+Desktop's Flock chat writes through no host older than version 2, and says so.
 
 `discover` and `start` name the project asking, because one host serves the machine and a
 project's own `.collie/workflows` is its own: two projects can run different implementations

@@ -72,7 +72,7 @@ import {
   type Actor,
   type ProposalRecord,
 } from "./proposals";
-import type { Action } from "./evaluator";
+import type { Action } from "./actions";
 import { ProposalRefused, type ProposalCarried, type StepResult } from "./board-model";
 import { fingerprint } from "./verify";
 import { findRun } from "./runs";

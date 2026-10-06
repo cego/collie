@@ -158,7 +158,7 @@ test(
               const fs = yield* FileSystem.FileSystem;
               yield* fs.writeFileString(`${flock}/down-mk@vm`, "");
             }),
-          scratch,
+          { home: scratch },
         );
         yield* reads(card("t-vm").getByTestId("name"), "Pick a base");
         yield* asOf("t-vm");

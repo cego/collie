@@ -396,7 +396,7 @@ shortcut prints why, names the candidates and gives you `collie home reconcile`.
 created because a token expired, and nothing is adopted because it looks right.
 
 The Home is **one tab with two panes**: the board on the left at four sevenths of the
-width, and [native chat](#talking-to-collie-about-the-flock) on the right at three. Both
+width, and [native chat](#talking-to-collie-about-a-herd) on the right at three. Both
 are ordinary panes — herdr's own keys move between them and resize them, and reopening the
 Home reopens only a pane that has actually gone, so a divider you dragged stays where you
 put it.
@@ -966,13 +966,112 @@ again.
 to it and drops its saved board. It never stops a host, a Run or herdr there, and never
 uninstalls Collie. This computer is not in herdr's list, so it has no Remove.
 
+Pressing a card's name opens its drawer, which follows the card's Run on its host for as
+long as it is open. Its **Plan** tab renders the spec, read whole from the host where it is longer than the
+details carry, and lists the tickets, each expanding
+in place, read from the host when first opened; a link from one plan file to another opens
+that file at the top of the tab. **Review** renders the review, read whole the same way, and lists its findings; a
+`file:line` in a finding or anywhere in rendered markdown opens
+**Diff** at that line, or a read-only view of the file from the Run's checkout where no
+hunk shows it. **Diff** is the Run's branch against its merge base — live while the Run
+works, final after — as a file tree beside each file's diff, unified or side by side, kept
+as you left it while the drawer is open. Shiki colours each side of a hunk as one text, so
+a comment spanning its lines is coloured on all of them. A file is read from the host when
+it is opened, and again when the Run changes how many lines it adds or removes, with no
+line cap; a file with more than
+500 changed lines, or a binary one, starts collapsed. **Evidence** is the Run's
+verifications as a checklist, those that did not do what they were expected to first and
+already open with their output in its terminal colours; then every web link the Run's
+Outputs, handoffs, review and findings name, as a card: a Claude artifact by the title its
+link was given, the merge request with its state, its pipelines with the head pipeline's
+status, and any other pipeline with the status GitLab gives it where `glab` is signed in to its host; its screenshots as a
+gallery, a `before` beside its `after` where their names pair them, twelve to a page; its
+videos, read and played when asked; its HTML reports, such as Lighthouse, in a sandboxed
+frame that runs their scripts in an origin of their own, which may neither load anything
+from the network nor navigate away; the logs and files it kept, each read when opened and
+searchable; and its metrics as a table. A report that keeps its attachments in files beside
+it shows without them. **Log**
+follows the end of the Run's log as it is written, with a search that keeps only the lines
+that match. **Merge request** shows what the host's merge watch last read — title, state,
+pipeline, approvals and comments — with Open in browser. **Facts** shows the Run's intent,
+its steering cards and the card's TaskView as the host sent it. Markdown is rendered with
+Comark: tables, Shiki-highlighted code and mermaid diagrams, with anything that could run
+and every inline style removed, because agents write it. The view's own policy lets nothing
+on a page load from the network, and nothing may move Desktop's window off its own page;
+rendered markdown is kept inside its own box. A web link in it opens in your browser, never
+in Desktop.
+
+Every link you press in Desktop opens in your default browser, as `xdg-settings get
+default-web-browser` names it, where you are already signed in. Chrome, Chromium, Brave,
+Edge and Vivaldi are started with `--app=<url>`, so the page gets a window of its own;
+any other browser, Firefox included, opens it as an ordinary tab.
+
 Every Machine's host is reached the same way: by running
 `collie bridge --as desktop --client <this computer>` in a login shell, here directly and
 elsewhere as a channel on that machine's master, so the host is started with the
 environment `collie` itself would use, and every operation Desktop makes is recorded as
-`desktop`. For a herdr machine on a session other than `default`, the host is handed that
+`desktop`. A second bridge on the same master, started `--as chat`, is the Flock chat's,
+so nothing its model does is ever recorded as yours. For a herdr machine on a session other than `default`, the host is handed that
 session's socket. Desktop never starts, signals or connects to a host by any other route.
 `COLLIE_DESKTOP_COLLIE` replaces how `collie` is run here, as a JSON array.
+
+### The Flock chat
+
+Right of the board is a conversation about the whole Flock. Ask what is happening anywhere
+and have it act on any Machine: it reaches Collie through the same tools as Native chat,
+answered by each Machine's host over that Machine's `chat` channel, and carries out what
+you ask at once. Everything it names is `<machine>:<id>`, as in `vm-mk:run-04ab8fe5`; a bare
+id is taken where only one Machine has it, and refused with the candidates where several
+do. Every action is recorded on its Machine as `chat`, under the conversation
+`flock@<this computer>`, with the words you wrote that turn. It has the Herd's read and act
+tools except `collie_definitions` and `collie_installation`, and holds one Run at a time,
+because those read a Machine's own files, which no host operation hands over.
+
+It is a session of your own Claude Code, on your own Claude seat, driven through the Agent
+SDK in Desktop's main process: `opus` at medium effort with summarised thinking, Claude
+Code's built-in tools off but AskUserQuestion, and none of your settings, hooks, skills or
+CLAUDE.md. Your first message starts it, and it stays warm until Desktop quits. Its session
+id is minted once and kept in `$XDG_STATE_HOME/collie-desktop/flock-chat.json` (or
+`~/.local/state/collie-desktop/`), so a restart resumes the same conversation; Claude Code
+keeps and compacts the transcript on this computer.
+
+Replies stream in as Markdown, rendered as the drawer renders it: nothing in it runs or
+keeps a style, and a web link opens in your browser. Each tool call is one row — the tool, the Machine it
+reached and what it was asked — that opens to what the tool answered, and thinking is a
+collapsed **Thinking** you can open. When the chat needs you to choose, it asks with choice
+buttons, and goes on when you click; any other permission it asks for is refused. Type
+while it is working and your message waits as **Queued** until the turn ends, or drop it
+with its ✕.
+
+Click a card and it becomes a chip above the input ("About: vm-mk › Fix board bugs"): your
+next message goes with it, so "this one" means that card, and sending uses it up. Clear it
+with its ✕. The chip is attached as context for the turn, never as your words.
+
+News reaches it from every Herd on every Machine as one batch: what matters most first —
+decisions, then consequential outcomes, then what is worth trying, then the routine — and
+by time within each, a screen's worth, saying per Machine what it left out ("and 7 older
+items on vm-mk"). Desktop looks a few seconds after a board changes, and every two minutes
+regardless. When the chat is idle, a decision or a consequential outcome starts a turn of
+Desktop's own: it shows as **Desktop**, never as you, so anything Collie does in it
+carries no words of yours, and its usage is written to `flock-usage.jsonl` beside the
+session (data, never a limit). Nobody is there to click in it, so a choice it needs is
+asked in its reply and you answer in your next message. News arriving mid-turn waits for
+that turn to end; what is worth trying and routine News waits for your next message and
+goes with it as context. An item counts as read once the model has it, so a turn that
+fails first (a usage limit, an outage) leaves it waiting; Desktop tries again at the next
+two-minute look. A Machine that does not answer within ten seconds is said to be unread
+rather than holding up the rest, and one whose Collie is older than Desktop's chat, or
+whose board could not be read, is written to by nothing. The bell turns Desktop's own
+turns off (and on again); it is on by default, and kept in `settings.json` beside the
+session.
+
+**Start fresh** (the pen) mints a new session and makes it current; the history (the clock)
+lists the earlier ones on this computer, newest first, and reopens one. Either way the
+session before it ends: there is only ever one live conversation. **Pop out** moves the
+chat into its own window, which follows the same conversation (between turns: a window
+the chat leaves would take its turn with it); **Put back**, or closing
+that window, returns it beside the board. **Hide the chat** folds the panel away, and the
+chat button in the board's header brings it back.
 
 ```sh
 cd desktop
@@ -989,7 +1088,7 @@ it needs neither herdr, SSH nor a real host. The app links the system's WebKitGT
 AppIndicator libraries even though it renders with its bundled Chromium; on a computer
 without them, put them on `LD_LIBRARY_PATH`.
 
-## Talking to Collie about the flock
+## Talking to Collie about a Herd
 
 The Home's right-hand pane is an ordinary **Claude Code** session — or **Pi**, if you
 choose it — with Collie's role and Collie's tools. It is focused when the Home opens, so
@@ -1300,7 +1399,7 @@ itself can tell it.
 `chat_harness` is which native chat the Home opens with, `claude` or `pi`. It is
 independent of `harness`, which is what runs your work, and it is a preference for the
 **next** launch rather than a switch: see
-[Talking to Collie](#talking-to-collie-about-the-flock).
+[Talking to Collie](#talking-to-collie-about-a-herd).
 
 `scope` is left over from the board of views and changes nothing you can see: the board is
 the whole Herd's whichever workspace you opened it from, and the search is what narrows it.

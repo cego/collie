@@ -1,5 +1,5 @@
-// Desktop's main process: one window on the view, and every Machine's board relayed to it
-// as Effect RPC over Electrobun's message channel.
+// Desktop's main process: one window on the view, every Machine's board relayed to it as
+// Effect RPC over Electrobun's message channel, and the Flock chat beside them.
 
 import { hostname } from "node:os";
 import { BunRuntime, BunServices } from "@effect/platform-bun";
@@ -14,6 +14,7 @@ import {
   FileSystem,
   Layer,
   Option,
+  Path,
   PubSub,
   Queue,
   Result,
@@ -37,17 +38,25 @@ import {
   DesktopRpcs,
   type FlockItem,
   type KnownMachine,
+  machineNames,
   type OnboardRun,
   type OnboardStep,
   Skippable,
   type UpdateNews,
 } from "../shared/flock";
 import { RELEASE_PUBLIC_KEY } from "../../../src/signing";
+import { appWindowFor } from "./browser";
+import { type FlockConversation, openFlockChat, refusal } from "./chat";
+import { claudeCode } from "./claude";
+import { chatDoor } from "./flock-tools";
+import { readSettings, writeSettings } from "./settings";
 import {
   act,
-  type Door,
+  type Doors,
   doorTo,
   offersOn,
+  runDetailOn,
+  runFileOn,
   workflowsOn,
   endChildren,
   flockStream,
@@ -86,38 +95,33 @@ import manifest from "../../../herdr-plugin.toml";
 
 type Frames = RPCSchema<FrameSchema>;
 
-let receive: (frame: ToMain) => void = () => {};
-const rpc = BrowserView.defineRPC<{ bun: Frames; webview: Frames }>({
-  maxRequestTime: 10_000,
-  handlers: {
-    requests: {},
-    messages: {
-      // SAFETY: only the view sends on this channel, and the view sends nothing but `ToMain`.
-      frame: (frame) => receive(frame as ToMain),
+/** A window on the view, and the channel its RPC rides. */
+const windowOn = (url: string, title: string, frame: BrowserWindow["frame"]) => {
+  let receive: (frame: ToMain) => void = () => {};
+  const rpc = BrowserView.defineRPC<{ bun: Frames; webview: Frames }>({
+    maxRequestTime: 10_000,
+    handlers: {
+      requests: {},
+      messages: {
+        // SAFETY: only the view sends on this channel, and the view sends nothing but `ToMain`.
+        frame: (frame) => receive(frame as ToMain),
+      },
     },
-  },
-});
-
-// Opened once an update readied before the last quit has had its chance to install, so
-// installing one never shows a window that closes again.
-let window: BrowserWindow<typeof rpc> | undefined;
-const openWindow = () =>
-  Effect.sync(() => {
-    window = new BrowserWindow({
-      title: "Collie",
-      url: "views://mainview/index.html",
-      renderer: "cef",
-      frame: { width: 1200, height: 800, x: 120, y: 80 },
-      rpc,
-    });
   });
-
-const toView: Channel<ToView, ToMain> = {
-  send: (frame) => window?.webview.rpc?.send.frame(frame),
-  listen: (listener) => {
-    receive = listener;
-  },
+  const window = new BrowserWindow({ title, url, renderer: "cef", frame, rpc });
+  // The view holds the Bun bridge, so nothing may navigate the window off it. Set on the
+  // webview: as a window option, Linux CEF ignores it.
+  window.webview.setNavigationRules(["^*", url, "about:srcdoc"]);
+  const channel: Channel<ToView, ToMain> = {
+    send: (frame) => window.webview.rpc?.send.frame(frame),
+    listen: (listener) => {
+      receive = listener;
+    },
+  };
+  return { window, channel };
 };
+
+const VIEW = "views://mainview/index.html";
 
 /** How `collie` is run here: in a login shell, as SSH would on another Machine. */
 const Collie = Config.schema(
@@ -142,12 +146,19 @@ const openUrl = (url: string) =>
 /** How long herdr's question waits on the human before it takes herdr's own default. */
 const QUESTION_LIMIT = "10 minutes";
 
+/** Where Desktop keeps what is its own on this computer, the Flock chat's session among it. */
+const StateDir = Config.String("XDG_STATE_HOME").pipe(
+  Config.orElse(() => Config.String("HOME").pipe(Config.map((home) => `${home}/.local/state`))),
+);
+
 const main = Effect.gen(function* () {
   const updater = yield* electrobunUpdater;
   yield* applyAtLaunch(updater).pipe(
     Effect.catch((reason) => Effect.logWarning(`Desktop update not installed: ${reason}`)),
   );
-  yield* openWindow();
+  // Opened once an update readied before the last quit has had its chance to install, so
+  // installing one never shows a window that closes again.
+  const board = windowOn(VIEW, "Collie", { width: 1200, height: 800, x: 120, y: 80 });
   const updates = yield* SubscriptionRef.make<UpdateNews | null>(null);
   yield* watchForUpdates(updater).pipe(
     Stream.runForEach((news) => SubscriptionRef.set(updates, news)),
@@ -241,7 +252,7 @@ const main = Effect.gen(function* () {
   );
   const changes = yield* PubSub.unbounded<RouteChange>();
   const news = yield* PubSub.unbounded<FlockItem>();
-  const doors = new Map<string, Door>();
+  const doors = new Map<string, Doors>();
   const boards = `${Utils.paths.userData}/machines`;
   const onboardings = `${Utils.paths.userData}/onboarding`;
   const runners = `${Utils.paths.userData}/runners`;
@@ -386,7 +397,34 @@ const main = Effect.gen(function* () {
       yield* Fiber.join(yield* onboardAs(job, route, run));
     });
 
+  const own = (yield* Path.Path).join(yield* StateDir, "collie-desktop");
+  let settings = yield* readSettings(own);
+  // Opened by the view's first ask, in Desktop's own scope; its session starts with the first message.
+  const chat = yield* openFlockChat({
+    claude: claudeCode,
+    dir: own,
+    conversation: `flock@${local}`,
+    proactive: () => settings.proactive,
+    machines: () => {
+      const shown = [...doors].map(([installation, { machine }]) => ({ ...machine, installation }));
+      const names = machineNames(shown);
+      return [...doors].map(([installation, held]) => ({
+        name: names.get(installation) ?? held.machine.name,
+        door: chatDoor(held.chat),
+      }));
+    },
+  }).pipe(Scope.provide(scope), Effect.result, Effect.cached);
+  // ponytail: a chat that could not start stays so until Desktop restarts.
+  const withChat = <A>(use: (opened: FlockConversation) => Effect.Effect<A>, unstarted: A) =>
+    chat.pipe(
+      Effect.flatMap(Result.match({ onSuccess: use, onFailure: () => Effect.succeed(unstarted) })),
+    );
+  let popped:
+    | { readonly window: BrowserWindow; readonly closed: Deferred.Deferred<void> }
+    | undefined;
+
   const handlers = DesktopRpcs.toLayer({
+    // Every board change may have left News, so each one nudges the chat to look.
     flock: () =>
       Stream.unwrap(
         Effect.gen(function* () {
@@ -428,7 +466,11 @@ const main = Effect.gen(function* () {
             ),
           );
         }),
-      ).pipe(saving(boards), Stream.provide(BunServices.layer)),
+      ).pipe(
+        saving(boards),
+        Stream.provide(BunServices.layer),
+        Stream.tap(() => withChat((opened) => opened.nudge, undefined)),
+      ),
     onboard: ({ profile, skip }) =>
       Effect.gen(function* () {
         const running = onboarding.get(profile);
@@ -532,13 +574,24 @@ const main = Effect.gen(function* () {
         const door = yield* doorTo(doors, installation).pipe(
           Effect.mapError((failed) => new ActionFailed({ reason: failed.reason, request })),
         );
-        return yield* act(door, request, action);
+        return yield* act(door.desktop, request, action);
       }),
-    openLink: ({ url }) => openUrl(url),
+    openLink: ({ url }) =>
+      appWindowFor(url).pipe(
+        Effect.flatMap(Effect.fromNullishOr),
+        Effect.flatMap((command) =>
+          Effect.try(() =>
+            Bun.spawn(command, { stdio: ["ignore", "ignore", "ignore"], detached: true }).unref(),
+          ),
+        ),
+        Effect.catch(() => openUrl(url)),
+      ),
     offers: ({ installation, runId }) =>
-      doorTo(doors, installation).pipe(Effect.flatMap((door) => offersOn(door, runId))),
+      doorTo(doors, installation).pipe(Effect.flatMap((door) => offersOn(door.desktop, runId))),
     workflows: ({ installation, project }) =>
-      doorTo(doors, installation).pipe(Effect.flatMap((door) => workflowsOn(door, project))),
+      doorTo(doors, installation).pipe(
+        Effect.flatMap((door) => workflowsOn(door.desktop, project)),
+      ),
     updates: () =>
       SubscriptionRef.changes(updates).pipe(
         Stream.filter((news): news is UpdateNews => news !== null),
@@ -548,13 +601,70 @@ const main = Effect.gen(function* () {
         Effect.mapError((reason) => new ActionFailed({ reason })),
         Effect.provide(BunServices.layer),
       ),
+    runDetail: ({ installation, runId }) =>
+      Stream.unwrap(
+        Effect.map(doorTo(doors, installation), (door) => runDetailOn(door.desktop, runId)),
+      ),
+    runFile: ({ installation, runId, ref, offset }) =>
+      doorTo(doors, installation).pipe(
+        Effect.flatMap((door) => runFileOn(door.desktop, runId, ref, offset)),
+      ),
+    say: ({ text, about }) =>
+      Stream.unwrap(
+        Effect.map(chat, (opened) =>
+          Result.match(opened, {
+            onSuccess: (conversation) => conversation.send(text, about),
+            onFailure: (cause) =>
+              Stream.make(refusal(`The Flock chat could not start: ${String(cause)}`)),
+          }),
+        ),
+      ),
+    answer: ({ toolCallId, answers }) =>
+      withChat((opened) => opened.answer(toolCallId, answers), undefined),
+    transcript: () => withChat((opened) => opened.transcript, []),
+    conversations: () => withChat((opened) => opened.conversations, { current: "", earlier: [] }),
+    reopen: ({ session }) => withChat((opened) => opened.reopen(session), undefined),
+    // Annotated because it serves its own window through `servedOn`, which needs these handlers.
+    popOut: (): Effect.Effect<void, never, Crypto.Crypto | FileSystem.FileSystem | Path.Path> =>
+      Effect.gen(function* () {
+        if (popped === undefined) {
+          const opened = windowOn(`${VIEW}#chat`, "Flock chat", {
+            width: 480,
+            height: 800,
+            x: 1340,
+            y: 80,
+          });
+          const closed = Deferred.makeUnsafe<void>();
+          opened.window.on("close", () => Deferred.doneUnsafe(closed, Effect.void));
+          popped = { window: opened.window, closed };
+          yield* Layer.launch(servedOn(opened.channel)).pipe(
+            Effect.raceFirst(Deferred.await(closed)),
+            Effect.ensuring(Effect.sync(() => (popped = undefined))),
+            Effect.forkIn(scope),
+          );
+        } else popped.window.activate();
+        yield* Deferred.await(popped.closed);
+      }),
+    popIn: () => Effect.sync(() => popped?.window.close()),
+    desktopTurns: () =>
+      Stream.unwrap(withChat((opened) => Effect.succeed(opened.desktopTurns), Stream.empty)),
+    settings: () => Effect.sync(() => settings),
+    setSettings: (changed) =>
+      writeSettings(own, changed).pipe(
+        Effect.andThen(
+          Effect.sync(() => {
+            settings = changed;
+          }),
+        ),
+        Effect.orDie,
+      ),
   });
-  return yield* Layer.launch(
+  const servedOn = (channel: Channel<ToView, ToMain>) =>
     RpcServer.layer(DesktopRpcs).pipe(
       Layer.provide(handlers),
-      Layer.provide(Layer.effect(RpcServer.Protocol, serverProtocol(toView))),
-    ),
-  );
+      Layer.provide(Layer.effect(RpcServer.Protocol, serverProtocol(channel))),
+    );
+  return yield* Layer.launch(servedOn(board.channel));
 }).pipe(Effect.scoped, Effect.provide(BunServices.layer));
 
 // Quitting may end the process before any scope closes, and an SSH master would outlive it.

@@ -355,6 +355,8 @@ test("a reference never follows a link out of the directory it belongs to", () =
           "HostRefused",
         );
         expect((yield* fetchRef(run, "plan:issues/01-a.md")).content).toBe("# A\n");
+        yield* fs.writeFileString(`${run.dir}/review.md`, "## Review\n");
+        expect((yield* fetchRef(run, "review")).content).toBe("## Review\n");
 
         // Read in parts, a text comes back as bytes, so joined it is the file again.
         yield* fs.writeFileString(`${run.dir}/plan/issues/02-b.md`, "a—b");
