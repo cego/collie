@@ -20,8 +20,10 @@ import {
   applyItem,
   EMPTY_FLOCK,
   type FlockItem,
+  type Flock,
   machineRows,
   type OnboardRun,
+  type OnboardStep,
 } from "../desktop/src/shared/flock";
 
 const pair = () => {
@@ -480,5 +482,50 @@ test("a Machine's row says what doctor finds of it, over what its last onboardin
       expect(machineRows(items.reduce(applyItem, EMPTY_FLOCK))[0]!.onboarded).toEqual(doctored);
       const silent = { collie: () => Effect.fail("collie: not found") };
       expect(Option.isNone(yield* doctorOn(silent))).toBe(true);
+    }),
+  ));
+
+test("Helle and the Linear MCP count toward onboarded though doctor passes them, unless onboarding skipped them", () =>
+  run(
+    Effect.gen(function* () {
+      const machine = { profile: "p-vm", name: "vm", target: "mk@vm" };
+      const said = (checks: ReadonlyArray<object>) => ({
+        collie: () =>
+          Effect.succeed({
+            out: JSON.stringify({ ok: true, data: { ready: true, checks } }),
+            err: "",
+            code: 0,
+          }),
+      });
+      const absent = [
+        { name: "herdr", ok: true, detail: "0.9.0", fix: "" },
+        { name: "helle", ok: true, detail: "no credentials", fix: "give Helle's credentials" },
+        { name: "linear mcp", ok: true, detail: "logged in", fix: "" },
+      ];
+      const doctored = Option.getOrThrow(yield* doctorOn(said(absent)));
+      expect(doctored.steps.map(({ step, status }) => [step, status])).toEqual([
+        ["helle", "needs_human"],
+      ]);
+      const onboarding = (status: OnboardStep["status"]): OnboardRun => ({
+        steps: [{ step: "helle", title: "Helle's credentials", status }],
+        asked: null,
+        ready: status === "skipped",
+        reason: null,
+        at: 0,
+      });
+      const row = (run: OnboardRun) =>
+        machineRows(
+          [
+            { _tag: "Routed", machine },
+            { _tag: "Onboarding", job: "j-1", machine, run },
+            { _tag: "Doctored", machine, run: doctored },
+          ].reduce<Flock>((flock, item) => applyItem(flock, item as FlockItem), EMPTY_FLOCK),
+        )[0]!.onboarded!;
+      expect(row(onboarding("needs_human")).ready).toBe(false);
+      expect(row(onboarding("skipped")).ready).toBe(true);
+      const working = absent.map((check) =>
+        check.name === "helle" ? { ...check, detail: "as mk", fix: "" } : check,
+      );
+      expect(Option.getOrThrow(yield* doctorOn(said(working))).ready).toBe(true);
     }),
   ));

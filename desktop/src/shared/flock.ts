@@ -299,8 +299,10 @@ export interface Flock {
   readonly routes: ReadonlyMap<string, KnownMachine>;
   /** Each onboarding the view started, by job. */
   readonly onboarding: ReadonlyMap<string, MachineOnboarding>;
-  /** How each route last stood, by herdr profile: doctor's reading or its latest onboarding. */
+  /** The latest onboarding of each route, by herdr profile. */
   readonly onboarded: ReadonlyMap<string, OnboardRun>;
+  /** Doctor's latest reading of each route, by herdr profile. */
+  readonly doctored: ReadonlyMap<string, OnboardRun>;
 }
 
 export const EMPTY_FLOCK: Flock = {
@@ -310,6 +312,7 @@ export const EMPTY_FLOCK: Flock = {
   routes: new Map(),
   onboarding: new Map(),
   onboarded: new Map(),
+  doctored: new Map(),
 };
 
 /**
@@ -329,7 +332,7 @@ export const applyItem = (flock: Flock, item: FlockItem): Flock => {
       onboarded: new Map(flock.onboarded).set(item.machine.profile, item.run),
     };
   if ("_tag" in item && item._tag === "Doctored")
-    return { ...flock, onboarded: new Map(flock.onboarded).set(item.machine.profile, item.run) };
+    return { ...flock, doctored: new Map(flock.doctored).set(item.machine.profile, item.run) };
   if ("_tag" in item && item._tag === "Removed") {
     const { profile } = item.machine;
     const without = <V>(map: ReadonlyMap<string, V>) => {
@@ -342,6 +345,7 @@ export const applyItem = (flock: Flock, item: FlockItem): Flock => {
       routes: without(flock.routes),
       lost: without(flock.lost),
       onboarded: without(flock.onboarded),
+      doctored: without(flock.doctored),
       machines: new Map(
         [...flock.machines].filter(([, { machine }]) => machine.profile !== profile),
       ),
@@ -472,6 +476,20 @@ export interface MachineRow {
   readonly onboarded: OnboardRun | null;
 }
 
+/**
+ * How onboarded a route is: doctor's reading, less a step its latest onboarding skipped, or
+ * that onboarding where it is newer or doctor has not answered.
+ */
+const standing = (onboarding?: OnboardRun, doctor?: OnboardRun): OnboardRun | null => {
+  if (doctor === undefined || (onboarding !== undefined && onboarding.at > doctor.at))
+    return onboarding ?? null;
+  const skipped = new Set(
+    onboarding?.steps.filter(({ status }) => status === "skipped").map(({ step }) => step),
+  );
+  const steps = doctor.steps.filter(({ step }) => !skipped.has(step));
+  return { ...doctor, steps, ready: steps.length === 0 };
+};
+
 /** Every route, in the order Desktop opened them. */
 export const machineRows = (flock: Flock): ReadonlyArray<MachineRow> =>
   [...flock.routes.values()].map(({ profile, name, target }) => {
@@ -483,7 +501,7 @@ export const machineRows = (flock: Flock): ReadonlyArray<MachineRow> =>
       name,
       target: target ?? null,
       state: live ? "live" : (flock.lost.get(profile)?.state ?? "connecting"),
-      onboarded: flock.onboarded.get(profile) ?? null,
+      onboarded: standing(flock.onboarded.get(profile), flock.doctored.get(profile)),
     };
   });
 

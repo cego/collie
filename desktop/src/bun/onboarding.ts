@@ -311,6 +311,7 @@ const Checks = Schema.Array(
     ok: Schema.Boolean,
     detail: Schema.String,
     fix: Schema.String,
+    warn: Schema.optionalKey(Schema.Boolean),
   }),
 );
 const DoctorSaid = Schema.fromJsonString(
@@ -320,30 +321,40 @@ const DoctorSaid = Schema.fromJsonString(
   ]),
 );
 
+/** Doctor's optional checks for what onboarding sets up by default, by onboarding's step. */
+const DEFAULT_STEPS = new Map([
+  ["helle", "helle"],
+  ["linear mcp", "linear"],
+]);
+
 /**
- * How `collie doctor` finds the Machine, as an onboarding lists what is left: ready, or each
- * failed check as a step. None where doctor did not answer.
+ * How `collie doctor` finds the Machine, as an onboarding lists what is left: each failed
+ * check, and each default step doctor finds not working though it counts it ok. None where
+ * doctor did not answer.
  */
 export const doctorOn = (route: Pick<Route, "collie">) =>
   route.collie(["--json", "doctor"]).pipe(
     Effect.flatMap(({ out }) => Schema.decodeUnknownEffect(DoctorSaid)(out.trim())),
     Effect.map((said) => ("data" in said ? said.data : said.error.details).checks),
     Effect.flatMap((checks) =>
-      Effect.map(Clock.currentTimeMillis, (at): OnboardRun => ({
-        steps: checks
-          .filter(({ ok }) => !ok)
-          .map(({ name, detail, fix }) => ({
-            step: name.replaceAll(" ", "-"),
-            title: name,
-            status: "failed",
-            detail,
-            command: fix,
-          })),
-        asked: null,
-        ready: checks.every(({ ok }) => ok),
-        reason: null,
-        at,
-      })),
+      Effect.map(Clock.currentTimeMillis, (at): OnboardRun => {
+        const steps = checks.flatMap(({ name, ok, detail, fix, warn }): OnboardStep[] => {
+          const byDefault = DEFAULT_STEPS.get(name);
+          if (byDefault !== undefined && (!ok || warn === true || fix !== ""))
+            return [{ step: byDefault, title: name, status: "needs_human", detail, command: fix }];
+          if (ok) return [];
+          return [
+            {
+              step: name.replaceAll(" ", "-"),
+              title: name,
+              status: "failed",
+              detail,
+              command: fix,
+            },
+          ];
+        });
+        return { steps, asked: null, ready: steps.length === 0, reason: null, at };
+      }),
     ),
     Effect.option,
   );
