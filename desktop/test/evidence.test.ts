@@ -3,7 +3,7 @@
 
 import { expect, test } from "bun:test";
 import { ansiLines, ansiSpans } from "../src/shared/ansi";
-import { mediaType, sortEvidence } from "../src/shared/evidence";
+import { attachmentsShown, mediaType, sortEvidence } from "../src/shared/evidence";
 
 test("terminal colours become styled spans, and a reset ends them", () => {
   expect(ansiSpans("ok \x1b[31;1mFAIL\x1b[0m done")).toEqual([
@@ -93,4 +93,23 @@ test("a media file's type is known by its extension", () => {
     "video/webm",
     null,
   ]);
+});
+
+test("a Run's attached images show as thumbnails, and every other file by name", () => {
+  const file = (name: string, mediaType: string) => ({ name, size: 1, mediaType });
+  expect(
+    attachmentsShown([
+      file("trace.zip", "application/zip"),
+      file("shot.PNG", "image/png"),
+      file("notes.txt", "text/plain"),
+      file("clip.mp4", "video/mp4"),
+    ]),
+  ).toEqual({
+    thumbnails: [file("shot.PNG", "image/png")],
+    named: [
+      file("clip.mp4", "video/mp4"),
+      file("notes.txt", "text/plain"),
+      file("trace.zip", "application/zip"),
+    ],
+  });
 });

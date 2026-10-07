@@ -79,6 +79,19 @@ const ATTACHMENTS = "files in the Flock chat and its Runs (this MR)";
 /** What the front door owes a person, and cannot be settled below the front door. */
 const FRONT_DOOR: readonly Check[] = [
   {
+    id: "front-door/a-drawer-lists-what-a-run-was-given",
+    statement:
+      "A card's record lists the files the Run was given: the TUI's Summary with each one's path and size, and Desktop's Evidence tab with an image as a thumbnail and anything else by name.",
+    owner: ATTACHMENTS,
+    needs: "ui",
+    proof: {
+      kind: "test",
+      layer: "ui",
+      file: "test/ui/board.test.tsx",
+      name: "Summary lists what the Run was given with its path, and nothing for a Run given none",
+    },
+  },
+  {
     id: "front-door/a-running-check-says-its-pass-reason-and-timing",
     statement:
       "While Collie runs one of a Run's checks, its card names the check and its pass in words — on the branch, where the branch left the default branch and why, again for a flake, after gate fix N — how long it has run against how long it usually takes, and how many other checks are running, never an agent operation's round.",

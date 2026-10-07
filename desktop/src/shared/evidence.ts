@@ -1,6 +1,6 @@
 // A Run's evidence files as the drawer shows them. No Bun-only import: the view bundles this.
 
-import type { EvidenceFile } from "../../../src/board-model";
+import type { AttachmentFile, EvidenceFile } from "../../../src/board-model";
 
 const MEDIA = new Map([
   ["png", "image/png"],
@@ -59,4 +59,11 @@ export const sortEvidence = (files: ReadonlyArray<EvidenceFile>) => {
     reports: rest.filter(({ name }) => REPORT.test(name)).sort(byName),
     files: rest.filter((file) => kind(file) !== "video" && !REPORT.test(file.name)).sort(byName),
   };
+};
+
+/** A Run's attachments: images as thumbnails, everything else by name. */
+export const attachmentsShown = (files: ReadonlyArray<AttachmentFile>) => {
+  const sorted = [...files].sort((a, b) => a.name.localeCompare(b.name));
+  const image = (file: AttachmentFile) => mediaType(file.name)?.startsWith("image/") === true;
+  return { thumbnails: sorted.filter(image), named: sorted.filter((file) => !image(file)) };
 };

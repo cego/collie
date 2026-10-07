@@ -395,6 +395,14 @@ export type SteeringCard = typeof SteeringCard.Type;
 export const EvidenceFile = Schema.Struct({ name: Schema.String, bytes: Schema.Int });
 export type EvidenceFile = typeof EvidenceFile.Type;
 
+/** A file the Run was given, fetched as `attachment:<name>`. */
+export const AttachmentFile = Schema.Struct({
+  name: Schema.String,
+  size: Schema.Int,
+  mediaType: Schema.String,
+});
+export type AttachmentFile = typeof AttachmentFile.Type;
+
 /** What a reference fetches: text as it is, anything else as base64. */
 export const RunFile = Schema.Struct({
   ref: Schema.String,
@@ -474,6 +482,8 @@ export const RunDetail = Schema.Struct({
   verifications: Schema.Array(VerificationView),
   steering: Schema.Array(SteeringCard),
   evidence: Schema.Array(EvidenceFile),
+  /** Absent from a host older than attachments. */
+  attachments: Schema.optional(Schema.Array(AttachmentFile)),
   /** Null for a Run with no branch or no checkout left to compare. */
   diff: Schema.NullOr(RunDiff),
 });
@@ -1126,6 +1136,7 @@ type DispositionKind = "merged" | "abandoned" | "superseded";
 export type CardAction =
   | { readonly kind: "go-to-tab" }
   | { readonly kind: "steer" }
+  | { readonly kind: "attach" }
   | { readonly kind: "open-mr"; readonly mr: MrRef }
   | { readonly kind: "offer"; readonly offer: BoardOffer }
   | { readonly kind: "check-output" }
@@ -1152,7 +1163,7 @@ const dispose = (view: TaskView, disposition: DispositionKind): CardAction => {
  */
 export function cardActions(view: TaskView): CardAction[] {
   const actions: CardAction[] = [{ kind: "go-to-tab" }];
-  if (!isSettled(view.state)) actions.push({ kind: "steer" });
+  if (!isSettled(view.state)) actions.push({ kind: "steer" }, { kind: "attach" });
   const mr = mrRefOf(view.mr);
   if (mr !== null) actions.push({ kind: "open-mr", mr });
   if (view.offer !== null) actions.push({ kind: "offer", offer: view.offer });

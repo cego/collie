@@ -380,10 +380,9 @@ const handlers = (
                   Effect.flatMap((copied) =>
                     registry.steer({
                       runId,
-                      text:
-                        copied.length === 0
-                          ? text
-                          : `${text}\n\n${copied.map((one) => attachedLine(`${into}/${one.name}`)).join("\n")}`,
+                      text: [text, ...copied.map((one) => attachedLine(`${into}/${one.name}`))]
+                        .filter((line) => line !== "")
+                        .join("\n"),
                       request,
                       operation,
                       agent,

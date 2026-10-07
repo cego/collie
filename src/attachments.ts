@@ -108,3 +108,27 @@ const mediaTypeOf = (file: string) =>
 
 /** The line a steer's text gains for each file it brought. */
 export const attachedLine = (path: string) => `Attached: ${path}`;
+
+/** Paths as typed at a prompt: separated by spaces, with shell-style quotes and `\` escapes. */
+export const typedPaths = (typed: string) => {
+  const paths: string[] = [];
+  let word: string | null = null;
+  let quote: "'" | '"' | null = null;
+  for (let at = 0; at < typed.length; at++) {
+    const char = typed[at]!;
+    if (quote !== null) {
+      if (char === quote) quote = null;
+      else if (char === "\\" && quote === '"' && at + 1 < typed.length) word += typed[++at]!;
+      else word += char;
+    } else if (char === "'" || char === '"') {
+      quote = char;
+      word ??= "";
+    } else if (char === "\\" && at + 1 < typed.length) word = (word ?? "") + typed[++at]!;
+    else if (/\s/.test(char)) {
+      if (word !== null) paths.push(word);
+      word = null;
+    } else word = (word ?? "") + char;
+  }
+  if (word !== null) paths.push(word);
+  return paths;
+};

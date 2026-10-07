@@ -614,6 +614,7 @@ closes it, as does Esc, and the key beside each item does it from the keyboard:
 | `enter` | Open record        | always                                                   |
 | `g`     | Go to its tab      | always                                                   |
 | `s`     | Steer…             | while something is still driving it                      |
+| `a`     | Attach files…      | while something is still driving it                      |
 | `w`     | Open merge request | when there is one                                        |
 | `i`     | its first offer    | a plan that is ready, by its title                       |
 | `o`     | What it offers…    | always: the workflow's own offers                        |
@@ -636,6 +637,13 @@ above** instead, which closes the drawer to the card whose buttons answer it.
 **Steer…** opens the record with the keyboard in the field at its foot; type and press
 Enter, and Collie answers with a proposal on that Task's card. The field is not there for a
 run nothing is driving.
+
+**Attach files…** asks which files to give the Run: paths separated by spaces, quoted as a
+shell quotes them where a name has a space, and relative to the board's own directory.
+They go to the Run's newest live agent as a steer with no words of its own, the steer
+`collie run steer --attach` makes: the host copies each into the Run's `attachments/`, the
+agent is told each path, and every later step's prompt lists them. A Run with no live
+agent left is told so, with the follow-up that would carry the files on instead.
 
 Every action says what it did in one line at the foot of the board, which goes when you do
 anything else.
@@ -689,7 +697,8 @@ other. `close` or Esc puts it away. Under the name and the buttons are five tabs
 is showing at a time:
 
 - **Summary** — what it is for and where it has got to: the intent (its goal, and each
-  constraint marked `¬`), the steps with a duration each, the live agents — each saying
+  constraint marked `¬`), the files the Run was given, each with its size and its path
+  in the Run's directory where its agents read it, the steps with a duration each, the live agents — each saying
   what it is doing right now, from the terminal title its harness publishes, so progress is
   visible without opening the pane — the branch, and the merge request behind it: state,
   pipeline, approvals, unresolved threads, and what has moved since this review finished.
@@ -1050,7 +1059,9 @@ as you left it while the drawer is open. Shiki colours each side of a hunk as on
 a comment spanning its lines is coloured on all of them. A file is read from the host when
 it is opened, and again when the Run changes how many lines it adds or removes, with no
 line cap; a file with more than
-500 changed lines, or a binary one, starts collapsed. **Evidence** is the Run's
+500 changed lines, or a binary one, starts collapsed. **Evidence** opens with the files the
+Run was given, when it was given any: an image as a thumbnail, any other file by its name,
+type and size. Then come the Run's
 verifications as a checklist, those that did not do what they were expected to first and
 already open with their output in its terminal colours; then every web link the Run's
 Outputs, handoffs, review and findings name, as a card: a Claude artifact by the title its

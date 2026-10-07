@@ -11,6 +11,7 @@ import {
   type RunDetail,
   type RunFile,
 } from "./board-model";
+import { attachmentsDir } from "./attachments";
 import { pipelineStatus, shell } from "./mr";
 import { REVIEW_FILE } from "./output";
 import { settled, type RunFacts } from "./runs";
@@ -326,6 +327,8 @@ export const fetchRef = Effect.fn("RunDetail.fetchRef")(function* (
       return yield* under(run.dir, REVIEW_FILE, "review");
     case "evidence":
       return yield* under(run.evidence, name, "evidence called");
+    case "attachment":
+      return yield* under(attachmentsDir(run.dir), name, "attachment");
     case "plan": {
       const dir = yield* planDirOf(run).pipe(Effect.orElseSucceed(() => null));
       if (dir === null) return yield* refused(`${run.id} has no plan`);
