@@ -3,7 +3,7 @@
 
 import { expect, test } from "bun:test";
 import { BunServices } from "@effect/platform-bun";
-import { Clock, Effect, FileSystem, Schema, type Scope, Stream } from "effect";
+import { Clock, Effect, FileSystem, Result, Schema, type Scope, Stream } from "effect";
 import { HostRefused } from "../src/board-model";
 import { readAudit } from "../src/audit";
 import { connect, frontDoor } from "../src/host";
@@ -249,10 +249,27 @@ test("a glob stops listing, and a grep stops its search, at the bound, and a glo
         for (const root of [dir, `${dir}/`])
           expect((yield* globFiles(pattern, root)).paths).toEqual([...found]);
       expect((yield* globFiles("a/*.ts", `${dir}/`)).paths).toHaveLength(4);
-      // A directory below the root that cannot be read is passed by.
-      yield* fs.makeDirectory(`${dir}/locked`, { mode: 0o000 });
-      expect((yield* globFiles("**/*.nomatch", dir)).paths).toEqual([]);
-      yield* fs.chmod(`${dir}/locked`, 0o755);
+      // A dot name inside braces is named too, and a linked root is followed.
+      expect((yield* globFiles("{.env,.envrc}", dir)).paths).toEqual([`${dir}/.env`]);
+      expect((yield* globFiles(".{github,gitlab}/**/*.yml", dir)).paths).toHaveLength(1);
+      const link = `${yield* inTemp("collie-search-link-")}/root`;
+      yield* fs.symlink(dir, link);
+      expect((yield* globFiles("**/.env", link)).paths).toEqual([`${link}/.env`]);
+      // A root that is no directory, or cannot be listed, is refused.
+      expect(Result.isFailure(yield* Effect.result(globFiles("*", `${dir}/.env`)))).toBe(true);
+      yield* Effect.acquireUseRelease(
+        fs.makeDirectory(`${dir}/locked`, { mode: 0o000 }),
+        () =>
+          Effect.gen(function* () {
+            // A directory below the root that cannot be read is passed by.
+            expect((yield* globFiles("**/*.nomatch", dir)).paths).toEqual([]);
+            if (process.getuid?.() !== 0)
+              expect(Result.isFailure(yield* Effect.result(globFiles("*", `${dir}/locked`)))).toBe(
+                true,
+              );
+          }),
+        () => fs.chmod(`${dir}/locked`, 0o755).pipe(Effect.orDie),
+      );
       const grepped = yield* grepFiles(
         { pattern: "needle", path: dir, outputMode: "content", headLimit: 2 },
         5,

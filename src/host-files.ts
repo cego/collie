@@ -47,16 +47,17 @@ export const readPart = Effect.fn("HostFiles.read")(function* (
   );
 });
 
+/** The segments of `pattern` that name a dot path, `{.env,.envrc}` among them. */
+const dotSegments = (pattern: string) =>
+  pattern.split("/").filter((segment) => /^\.|[{,]\./.test(segment));
+
 /**
  * Whether `pattern` reaches `relative`: it matches, and each dot-named segment is one the
  * pattern names with a dot, as Glob leaves `.git` to a pattern that asks for it.
  */
 const reaches = (pattern: string) => {
   const glob = new Bun.Glob(pattern);
-  const dotted = pattern
-    .split("/")
-    .filter((segment) => segment.startsWith("."))
-    .map((segment) => new Bun.Glob(segment));
+  const dotted = dotSegments(pattern).map((segment) => new Bun.Glob(segment));
   return (relative: string) =>
     glob.match(relative) &&
     relative
@@ -75,28 +76,23 @@ export const globFiles = Effect.fn("HostFiles.glob")(function* (
   const paths = yield* Path.Path;
   const matches = reaches(pattern);
   const keep = (line: string) => matches(paths.relative(root, line));
-  const dotted = pattern.split("/").filter((segment) => segment.startsWith("."));
+  const dotted = dotSegments(pattern);
+  // The root must list; an unreadable directory below it is passed by.
+  yield* fs
+    .readDirectory(root)
+    .pipe(Effect.mapError((cause) => refused(`${root} cannot be listed: ${String(cause)}`)));
   const rg = Bun.which("rg");
-  // Links are not followed, so a loop of them ends, and a dot directory is entered only
-  // where the pattern names it: find prunes by those names, so it takes a dotted pattern.
-  // An unreadable root fails as the search's working directory; any other is passed by.
+  // Links below the root are not followed, so a loop of them ends, and a dot directory is
+  // entered only where the pattern names it: find prunes by those names, so it takes a
+  // dotted pattern. find's -name has no braces, so a braced one prunes nothing.
+  const prune = dotted.some((segment) => segment.includes("{"))
+    ? []
+    : ["-name", ".*", ...dotted.flatMap((segment) => ["!", "-name", segment]), "-prune", "-o"];
   const listed = yield* (
     rg === null || dotted.length > 0
       ? searched(
           "find",
-          [
-            root,
-            "-mindepth",
-            "1",
-            "-name",
-            ".*",
-            ...dotted.flatMap((segment) => ["!", "-name", segment]),
-            "-prune",
-            "-o",
-            "-type",
-            "f",
-            "-print",
-          ],
+          ["-H", root, "-mindepth", "1", ...prune, "-type", "f", "-print"],
           root,
           bound,
           bound,
