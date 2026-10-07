@@ -3,7 +3,7 @@
 // Every process a test starts carries `COLLIE_TEST_ROOT` naming its file's root, which is
 // how a leftover is proved to be the suite's. Read from /proc, so Linux only.
 
-import { readdirSync, readFileSync, rmSync } from "node:fs";
+import { chmodSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
 export const MARKER = "COLLIE_TEST_ROOT";
@@ -65,12 +65,23 @@ export const sweepDeadRoots = (dir: string): ReadonlyArray<string> =>
  * module cache is read-only). A root that still will not go is reported, never thrown: one
  * leftover is no reason not to run the suite.
  */
+/** `dir` and every directory under it, writable by its owner again. */
+const writable = (dir: string): void => {
+  try {
+    chmodSync(dir, 0o700);
+    for (const entry of readdirSync(dir, { withFileTypes: true }))
+      if (entry.isDirectory()) writable(join(dir, entry.name));
+  } catch {
+    // What cannot be reached stays, and the removal says so.
+  }
+};
+
 const removed = (root: string) => {
   try {
     rmSync(root, { recursive: true, force: true });
     return true;
   } catch {
-    Bun.spawnSync(["chmod", "-R", "u+rwX", root]);
+    writable(root);
   }
   try {
     rmSync(root, { recursive: true, force: true });
