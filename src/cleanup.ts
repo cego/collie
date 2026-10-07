@@ -27,6 +27,7 @@ import { judgeWorktrees, type Landed, type Settling } from "./worktree";
 import { readForge, readMrStates } from "./merges";
 import { latest, readDispositions } from "./disposition";
 import { gitlabRepositoryOf } from "./strategies";
+import { LEDGER_FILE } from "./steering";
 import { desktopVerdicts, type DesktopOwn } from "./desktop";
 import { CONTROL_DIR, putDownControl } from "./compaction";
 
@@ -411,7 +412,7 @@ export const stateSweeper = (stateDir: string, rows: ReadonlySet<string>): Sweep
         return yield* quiet(target, "nothing reads it any more");
       if (top === "agents") {
         if (name.endsWith(".json") || name === "deliveries.log") return null;
-        const ledger = `${target}/deliveries.jsonl`;
+        const ledger = `${target}/${LEDGER_FILE}`;
         if (yield* fs.exists(ledger).pipe(Effect.orElseSucceed(() => false))) {
           const runs = yield* readJournal(ledger, LedgerRuns);
           return runs.some((line) => owned(line.run))
@@ -867,7 +868,7 @@ export const retentionSweeper = (opts: {
       const names = yield* fs.readDirectory(root).pipe(Effect.orElseSucceed(() => []));
       const found: string[] = [];
       for (const name of names) {
-        const ledger = `${root}/${name}/deliveries.jsonl`;
+        const ledger = `${root}/${name}/${LEDGER_FILE}`;
         if (!(yield* fs.exists(ledger).pipe(Effect.orElseSucceed(() => false)))) continue;
         const lines = yield* readJournal(ledger, LedgerRuns);
         if (lines.length > 0 && lines.every((line) => gone.has(line.run)))
