@@ -175,6 +175,6 @@ export const attachedIn = (part: { readonly type: string }): Option.Option<Attac
 /** A Run's attachments: images as thumbnails, everything else by name. */
 export const attachmentsShown = (files: ReadonlyArray<AttachmentFile>) => {
   const sorted = [...files].sort((a, b) => a.name.localeCompare(b.name));
-  const image = (file: AttachmentFile) => file.mediaType.startsWith("image/");
+  const image = (file: AttachmentFile) => shownAs(file.mediaType) !== undefined;
   return { thumbnails: sorted.filter(image), named: sorted.filter((file) => !image(file)) };
 };

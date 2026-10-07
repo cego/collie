@@ -409,6 +409,33 @@ test("a message with an image hands the SDK the words, Desktop's listing and the
   );
 });
 
+test("a message's files are inlined only while their base64 fits the request, and the rest go by name", () =>
+  withChat({ items: [], proactive: false }, answered, ({ conversation, seen, dir }) =>
+    Effect.gen(function* () {
+      const pdfs = [];
+      for (let n = 0; n < 5; n++)
+        pdfs.push(
+          yield* staged(dir, `part${n}.pdf`, "application/pdf", new Uint8Array(4 * 1024 * 1024)),
+        );
+      yield* Stream.runDrain(
+        conversation.send(
+          "read these",
+          null,
+          false,
+          pdfs.map(({ id }) => id),
+        ),
+      );
+      // Four 4 MB PDFs fit the 24 MB of base64; the fifth would not.
+      expect(seen.contents[0]).toEqual([
+        { type: "text", text: "read these" },
+        { type: "text", text: listing(pdfs) },
+        ...pdfs
+          .slice(0, 4)
+          .map(({ name }) => expect.objectContaining({ type: "document", title: name })),
+      ]);
+    }),
+  ));
+
 test("a PDF goes as a document, a small text as text headed with its name, and a large text, image or a zip only by name", () =>
   withChat({ items: [], proactive: false }, answered, ({ conversation, seen, dir }) =>
     Effect.gen(function* () {

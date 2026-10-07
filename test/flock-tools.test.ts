@@ -5,6 +5,7 @@ import { expect, test } from "bun:test";
 import { BunServices } from "@effect/platform-bun";
 import { Effect, Fiber, FileSystem, Stream } from "effect";
 import { TestClock } from "effect/testing";
+import { ATTACHMENT_BYTES } from "../src/attachments";
 import { type BoardMessage, type Declaration, PROTOCOL, type TaskView } from "../src/board-model";
 import type { JsonObject } from "../src/schema";
 import { callFileTool, type ToolContent } from "../desktop/src/bun/file-tools";
@@ -650,6 +651,45 @@ test("a start carries the turn's files, uploaded to its Machine once and handed 
       flock.uploaded.get("vm-mk")!.set(shotSha, { ...held, at: held.at - 2 * 24 * 60 * 60 * 1000 });
       yield* callFlockTool(flock, "collie_do", start()).pipe(Effect.provide(BunServices.layer));
       expect(asked.filter(({ op }) => op === "upload")).toHaveLength(2);
+    }),
+  ));
+
+test("a file over 100 MB, here or on another Machine, is refused before it is read whole", () =>
+  withShot((dir) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* fs.writeFileString(`${dir}/huge.bin`, "");
+      yield* fs.truncate(`${dir}/huge.bin`, ATTACHMENT_BYTES + 1);
+      const asked: Asked[] = [];
+      const flock = carrying(asked, dir);
+      const here = yield* callFlockTool(
+        flock,
+        "collie_do",
+        start({ attachments: [`${dir}/huge.bin`] }),
+      ).pipe(Effect.provide(BunServices.layer));
+      expect(here).toContain(`${dir}/huge.bin is larger than 100 MB`);
+
+      const [pc, vm] = flock.machines();
+      const big = {
+        ...pc!,
+        door: {
+          ...pc!.door,
+          readFile: () =>
+            Effect.succeed({
+              path: "/big.log",
+              size: ATTACHMENT_BYTES + 1,
+              mediaType: "text/plain",
+              content: "",
+            }),
+        },
+      };
+      const there = yield* callFlockTool(
+        { ...flock, machines: () => [big, vm!] },
+        "collie_do",
+        start({ attachments: ["mk-pc:/big.log"] }),
+      ).pipe(Effect.provide(BunServices.layer));
+      expect(there).toContain("mk-pc:/big.log is larger than 100 MB");
+      expect(asked.filter(({ op }) => op === "upload" || op === "act")).toEqual([]);
     }),
   ));
 

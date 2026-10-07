@@ -47,14 +47,47 @@ export const readPart = Effect.fn("HostFiles.read")(function* (
   );
 });
 
+/** Files under `root` matching `pattern`, found a directory at a time until `bound` match. */
+const walk = Effect.fn("HostFiles.walk")(function* (root: string, pattern: string, bound: number) {
+  const fs = yield* FileSystem.FileSystem;
+  const glob = new Bun.Glob(pattern);
+  const found: string[] = [];
+  const dirs = [""];
+  for (let at = 0; at < dirs.length && found.length < bound; at++) {
+    const dir = dirs[at]!;
+    const names = yield* fs.readDirectory(`${root}/${dir}`).pipe(
+      // Only the root unreadable is the search's failure; any other is passed by.
+      Effect.catch((cause) =>
+        dir === ""
+          ? Effect.fail(refused(`the search of ${root || "/"} failed: ${String(cause)}`))
+          : Effect.succeed([]),
+      ),
+    );
+    for (const name of names) {
+      if (name.startsWith(".")) continue;
+      const relative = dir === "" ? name : `${dir}/${name}`;
+      const path = `${root}/${relative}`;
+      const info = yield* fs.stat(path).pipe(Effect.option);
+      if (info._tag === "None") continue;
+      if (info.value.type === "Directory") {
+        // A link is not followed, so a loop of them ends.
+        const link = yield* fs.readLink(path).pipe(Effect.option);
+        if (link._tag === "None") dirs.push(relative);
+      } else if (glob.match(relative) && found.push(path) >= bound) break;
+    }
+  }
+  return found;
+});
+
 /** Files under `dir` matching `pattern`, newest first, and how many beyond the bound. */
-export const globFiles = Effect.fn("HostFiles.glob")(function* (pattern: string, dir: string) {
+export const globFiles = Effect.fn("HostFiles.glob")(function* (
+  pattern: string,
+  dir: string,
+  bound = SEARCH_LIMIT,
+) {
   const fs = yield* FileSystem.FileSystem;
   const root = yield* absolute(dir);
-  const found = yield* Stream.fromAsyncIterable(
-    new Bun.Glob(pattern).scan({ cwd: root, absolute: true }),
-    (cause) => refused(`the search of ${root} failed: ${String(cause)}`),
-  ).pipe(Stream.take(SEARCH_LIMIT), Stream.runCollect);
+  const found = yield* walk(root === "/" ? "" : root, pattern, bound);
   const matched: Array<{ readonly path: string; readonly at: number }> = [];
   for (const path of found) {
     const info = yield* fs.stat(path).pipe(Effect.option);
@@ -123,8 +156,14 @@ const grepArgs = (asked: GrepAsked, mode: string) => [
   asked.pattern,
 ];
 
-/** The first `limit` lines a search prints, and how many more, counted to SEARCH_LIMIT. */
-const searched = (cmd: string, args: ReadonlyArray<string>, cwd: string, limit: number) =>
+/** The first `limit` lines a search prints, and how many more, counted to `bound`. */
+const searched = (
+  cmd: string,
+  args: ReadonlyArray<string>,
+  cwd: string,
+  limit: number,
+  bound: number,
+) =>
   Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const handle = yield* spawner.spawn(
@@ -135,7 +174,7 @@ const searched = (cmd: string, args: ReadonlyArray<string>, cwd: string, limit: 
       Stream.decodeText(),
       Stream.splitLines,
       Stream.filter((line) => line !== ""),
-      Stream.take(SEARCH_LIMIT),
+      Stream.take(bound),
       Stream.runFold(
         () => 0,
         (count, line) => {
@@ -145,11 +184,14 @@ const searched = (cmd: string, args: ReadonlyArray<string>, cwd: string, limit: 
       ),
     );
     // Cut short, the search is stopped rather than waited on.
-    const code = seen >= SEARCH_LIMIT ? 0 : Number(yield* handle.exitCode);
+    const code = seen >= bound ? 0 : Number(yield* handle.exitCode);
     return { lines, omitted: seen - lines.length, code };
   }).pipe(Effect.scoped);
 
-export const grepFiles = Effect.fn("HostFiles.grep")(function* (asked: GrepAsked) {
+export const grepFiles = Effect.fn("HostFiles.grep")(function* (
+  asked: GrepAsked,
+  bound = SEARCH_LIMIT,
+) {
   const root = yield* absolute(asked.path);
   const mode = asked.outputMode ?? "files_with_matches";
   const rg = Bun.which("rg");
@@ -163,8 +205,8 @@ export const grepFiles = Effect.fn("HostFiles.grep")(function* (asked: GrepAsked
   const limit = Math.min(asked.headLimit ?? FOUND_LIMIT, FOUND_LIMIT);
   const found = yield* (
     rg === null
-      ? searched("grep", [...grepArgs(asked, mode), root], cwd, limit)
-      : searched(rg, [...rgArgs(asked, mode), root], cwd, limit)
+      ? searched("grep", [...grepArgs(asked, mode), root], cwd, limit, bound)
+      : searched(rg, [...rgArgs(asked, mode), root], cwd, limit, bound)
   ).pipe(Effect.mapError((cause) => refused(`the search of ${root} failed: ${String(cause)}`)));
   // Exit 1 is "nothing matched"; anything above it is the search's own failure.
   if (found.code > 1) return yield* refused(`the search of ${root} failed (exit ${found.code})`);

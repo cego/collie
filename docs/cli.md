@@ -1603,11 +1603,13 @@ from a host that has these; a client sends files to no host without it.
 `uploads/<sha256>/` in its state directory, checks the size and the digest on the last, and
 answers the file's path, which a `start`, an `invoke` or a steer can then name as an
 attachment; before the last part it answers `null`. A digest it already holds whole is
-answered with its path at the first part, so the rest is never sent, and a part sent again
-is the same part, so a retry needs no request id. A mismatch removes what arrived and is
-refused, as is a file over 100 MB. Each upload is recorded with its Actor in
-`uploads/operations.jsonl`, and the host's side jobs remove an upload a week after it
-arrived. A `chat` channel's `declare` may also carry `attachments`, the names of the files
+answered with its path at the first part, so the rest is never sent, under the name it was
+asked for, and a part sent again is the same part, so a retry needs no request id. Parts are
+taken one at a time. A mismatched digest or size removes what arrived and is refused, as is
+a part at an offset other than what arrived (send it again from the start) and a file over
+100 MB. Each upload is recorded with its Actor in `uploads/operations.jsonl`. Being asked
+for a held digest renews its age, and the host's side jobs remove an upload a week after it
+was last asked for; Desktop trusts an upload's path for a day before it asks again. A `chat` channel's `declare` may also carry `attachments`, the names of the files
 the human's message carried, which the host records beside `said`.
 
 `protocol` is an integer, also in `identity`. An optional field, a new operation or a new

@@ -135,14 +135,14 @@ const FRONT_DOOR: readonly Check[] = [
   {
     id: "front-door/desktop-shows-what-a-run-was-given",
     statement:
-      "Desktop's record of a Run shows each image it was given as a thumbnail and any other file by name.",
+      "Desktop's record of a Run shows each PNG, JPEG, GIF or WebP image it was given as a thumbnail and any other file by name.",
     owner: ATTACHMENTS,
     needs: "ui",
     proof: {
       kind: "test",
       layer: "ui",
       file: "desktop/test/evidence.test.ts",
-      name: "a Run's attached images show as thumbnails, and every other file by name",
+      name: "a Run's attached images the view can show are thumbnails, and every other file is by name",
     },
   },
   {

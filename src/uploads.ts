@@ -1,6 +1,6 @@
 // Files a front door sends this Machine, so a Run here can be given them by path (ADR-0045).
 // Kept once by sha256: a digest held whole is answered at once, and a retried part is the
-// same part, so no request id is needed. Removed a week after each arrived.
+// same part, so no request id is needed. Removed a week after it was last asked for.
 
 import { createHash } from "node:crypto";
 import { Clock, Effect, Encoding, FileSystem, Option, Path, Result, Semaphore } from "effect";
@@ -84,10 +84,10 @@ const receivePart = Effect.fn("Uploads.receive")(function* (stateDir: string, pa
   return { path: whole, complete: true };
 });
 
-/** How long an upload is kept after it arrived. */
+/** How long an upload is kept after it was last asked for. */
 const KEPT_FOR = 7 * 24 * 60 * 60 * 1000;
 
-/** Removes every upload that arrived more than a week before `now`. */
+/** Removes every upload last asked for more than a week before `now`. */
 export const pruneUploads = Effect.fn("Uploads.prune")(function* (stateDir: string, now: number) {
   const fs = yield* FileSystem.FileSystem;
   const root = uploadsDir(stateDir);

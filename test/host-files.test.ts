@@ -2,10 +2,13 @@
 // parts, found, written and edited, and never written inside the host's own state.
 
 import { expect, test } from "bun:test";
-import { Effect, FileSystem, Schema, Stream } from "effect";
+import { BunServices } from "@effect/platform-bun";
+import { Clock, Effect, FileSystem, Schema, type Scope, Stream } from "effect";
 import { HostRefused } from "../src/board-model";
 import { readAudit } from "../src/audit";
 import { connect, frontDoor } from "../src/host";
+import { globFiles, grepFiles } from "../src/host-files";
+import { pruneUploads, receive } from "../src/uploads";
 import { proves } from "./support/world";
 
 /** Why the host refused, where it did; anything else fails the test. */
@@ -211,3 +214,61 @@ test(
     ),
   120_000,
 );
+
+const inTemp = (prefix: string) =>
+  Effect.flatMap(FileSystem.FileSystem, (fs) => fs.makeTempDirectoryScoped({ prefix }));
+
+const local = <A, E>(
+  effect: Effect.Effect<A, E, FileSystem.FileSystem | Scope.Scope | BunServices.BunServices>,
+) => Effect.runPromise(effect.pipe(Effect.scoped, Effect.provide(BunServices.layer)));
+
+test("a glob stops walking, and a grep stops its search, at the bound", () =>
+  local(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* inTemp("collie-search-bound-");
+      for (const sub of ["a", "b", "c"]) {
+        yield* fs.makeDirectory(`${dir}/${sub}`);
+        for (let n = 0; n < 4; n++) yield* fs.writeFileString(`${dir}/${sub}/f${n}.ts`, "needle\n");
+      }
+      // A link back up is not followed, so the walk ends.
+      yield* fs.symlink(dir, `${dir}/a/loop`);
+      const globbed = yield* globFiles("**/*.ts", dir, 5);
+      expect(globbed.paths).toHaveLength(5);
+      expect((yield* globFiles("**/*.ts", dir)).paths).toHaveLength(12);
+      const grepped = yield* grepFiles(
+        { pattern: "needle", path: dir, outputMode: "content", headLimit: 2 },
+        5,
+      );
+      expect(grepped.text.split("\n")).toHaveLength(2);
+      expect(grepped.omitted).toBe(3);
+    }),
+  ));
+
+test("a part at the wrong offset clears what arrived, and asking for a held file renews it", () =>
+  local(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const state = yield* inTemp("collie-upload-");
+      const bytes = new TextEncoder().encode("twenty bytes of shot");
+      const asked = { name: "shot.png", size: bytes.length, sha256: sha256(bytes) };
+      const dir = `${state}/uploads/${asked.sha256}`;
+
+      yield* receive(state, { ...asked, offset: 0, content: base64(bytes.subarray(0, 5)) });
+      const skipped = yield* receive(state, {
+        ...asked,
+        offset: 10,
+        content: base64(bytes.subarray(10)),
+      }).pipe(Effect.flip);
+      expect(reasonOf(skipped)).toContain("send it again from the start");
+      expect(yield* fs.exists(`${dir}/.partial`)).toBe(false);
+
+      yield* receive(state, { ...asked, offset: 0, content: base64(bytes) });
+      const now = yield* Clock.currentTimeMillis;
+      const weekAgo = now / 1000 - 8 * 24 * 60 * 60;
+      yield* fs.utimes(dir, weekAgo, weekAgo);
+      yield* receive(state, { ...asked, offset: 0, content: "" });
+      yield* pruneUploads(state, now);
+      expect(yield* fs.exists(`${dir}/shot.png`)).toBe(true);
+    }),
+  ));

@@ -96,7 +96,7 @@ test("a media file's type is known by its extension", () => {
   ]);
 });
 
-test("a Run's attached images show as thumbnails, and every other file by name", () => {
+test("a Run's attached images the view can show are thumbnails, and every other file is by name", () => {
   const file = (name: string, mediaType: string) => ({ name, size: 1, mediaType });
   expect(
     attachmentsShown([
@@ -104,11 +104,13 @@ test("a Run's attached images show as thumbnails, and every other file by name",
       file("shot.PNG", "image/png"),
       file("notes.txt", "text/plain"),
       file("clip.mp4", "video/mp4"),
+      file("layers.psd", "image/vnd.adobe.photoshop"),
     ]),
   ).toEqual({
     thumbnails: [file("shot.PNG", "image/png")],
     named: [
       file("clip.mp4", "video/mp4"),
+      file("layers.psd", "image/vnd.adobe.photoshop"),
       file("notes.txt", "text/plain"),
       file("trace.zip", "application/zip"),
     ],
