@@ -3638,10 +3638,7 @@ const makeRegistry: (
     // of its merge request, a fix of that review — is that Task's, wherever it came from.
     if (ask.workspace === undefined && opened === null) {
       const joined = yield* taskWorking(generation, ask, placed);
-      if (joined !== null) {
-        yield* Effect.ignore(placing.herdr.workspaceFocus(joined.workspace));
-        return { placed, task: joined.id };
-      }
+      if (joined !== null) return { placed, task: joined.id };
     }
     const label = opened?.label ?? ask.taskLabel;
     const openWorkspace = Effect.gen(function* () {
@@ -3685,8 +3682,6 @@ const makeRegistry: (
         Effect.flatMap((made) => writeTask(placing.env.stateDir, made)),
         Effect.orDie,
       ));
-    // Focused, not just created: a human who started work is taken to it.
-    yield* Effect.ignore(placing.herdr.workspaceFocus(workspace));
     return { placed, task: task.id };
   }, Effect.provideContext(bun));
 

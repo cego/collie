@@ -1346,16 +1346,22 @@ export class Herdr {
   }
 
   /**
-   * A workspace of Collie's own, for the Herd's Home. `focus: false`: creating it is not
-   * the same as going to it, and the shortcut is what does the going.
+   * A workspace of Collie's own, for the Herd's Home or a Task. Never focused: creating it
+   * is not the same as going to it, and the shortcut is what does the going.
    */
   workspaceCreate(opts: {
     cwd: string;
     label: string;
   }): HerdrEffect<{ workspaceId: string; rootTab: StartedTab | null }> {
-    return this.cli(["workspace", "create", "--cwd", opts.cwd, "--label", opts.label]).pipe(
-      Effect.flatMap((value) => decodeWorkspaceCreate(value)),
-    );
+    return this.cli([
+      "workspace",
+      "create",
+      "--cwd",
+      opts.cwd,
+      "--label",
+      opts.label,
+      "--no-focus",
+    ]).pipe(Effect.flatMap((value) => decodeWorkspaceCreate(value)));
   }
 
   /**

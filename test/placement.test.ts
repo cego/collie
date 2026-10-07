@@ -455,6 +455,7 @@ test(
   () =>
     runEffect(
       Effect.gen(function* () {
+        yield* rig.startSocket();
         yield* rig.queueOutputs([{ verdict: "clean" }]);
         const view = yield* hosted(
           Effect.gen(function* () {
@@ -480,8 +481,10 @@ test(
         expect(task).toMatchObject({ label: "Project | Picker", cwd: worktree });
         const created = (yield* rig.calls()).filter((call) => call.cmd === "workspace create");
         expect(created.map((call) => call.argv)).toEqual([
-          expect.arrayContaining(["--cwd", worktree]),
+          expect.arrayContaining(["--cwd", worktree, "--no-focus"]),
         ]);
+        // A start never takes the human away from what they are looking at.
+        expect(yield* rig.cmds()).not.toContain("workspace.focus");
         // The first agent takes over the shell the workspace came with, rather than leaving
         // it an empty first tab beside one of its own.
         expect(tabs(yield* rig.calls())).toEqual([]);
@@ -1398,6 +1401,7 @@ test(
   () =>
     runEffect(
       Effect.gen(function* () {
+        yield* rig.startSocket();
         yield* rig.queueOutputs([{ verdict: "clean" }]);
         const views = yield* hosted(
           Effect.gen(function* () {
@@ -1447,6 +1451,7 @@ test(
         expect(hello?.task).not.toBe(build?.task);
         expect(there?.task).not.toBe(build?.task);
         expect((yield* rig.cmds()).filter((cmd) => cmd === "workspace create")).toHaveLength(3);
+        expect(yield* rig.cmds()).not.toContain("workspace.focus");
       }),
     ),
   120_000,

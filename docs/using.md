@@ -213,8 +213,8 @@ see [CLI](cli.md).
 
 ### Tasks: one workspace per piece of work
 
-Starting a workflow starts a **task**, and a task gets a herdr workspace of its own —
-created and focused, so you land on the work. Everything the task takes stays there: the
+Starting a workflow starts a **task**, and a task gets a herdr workspace of its own. It is
+never focused: starting work does not take you away from what you are looking at. Everything the task takes stays there: the
 plan's tabs, the implementation it chains into, the review of that, and any follow-up.
 A start about a branch a task already works — one placed on it, or reviewing it — joins
 that task wherever you start it from. Any other fresh start, including one from

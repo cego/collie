@@ -1958,6 +1958,7 @@ test("a fresh start only names its Task, and a continuation goes where its Task 
       expect(fresh._tag === "Ok" ? fresh.label : null).toEqual(expect.any(String));
       expect(yield* rig.cmds()).not.toContain("workspace create");
 
+      yield* rig.startSocket();
       yield* rig.addWorkspace("wT", "Project | Work", rig.projectDir);
       const task = {
         id: "task-1",
@@ -1973,6 +1974,7 @@ test("a fresh start only names its Task, and a continuation goes where its Task 
       );
       expect(again._tag === "Ok" && again.task).toEqual(task);
       expect(again._tag === "Ok" ? again.label : "").toBeNull();
+      expect(yield* rig.cmds()).not.toContain("workspace.focus");
 
       // Outside herdr there is nowhere to open one, and a Run that starts no agent needs none.
       const outside = { ...env, workspaceId: null, socketPath: null };

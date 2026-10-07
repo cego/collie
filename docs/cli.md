@@ -270,7 +270,7 @@ A **Task** is the work itself, and the Runs it takes: a plan, the implementation
 into, the review of that. A fresh start about a branch an open Task's checkout has out —
 the branch it is placed on, or the one its diff target names; never merely the branch the
 caller is standing on — is that Task's, and opens in its workspace wherever it was started from. Any other fresh
-start is a new Task, and gets a herdr workspace of its own, created and focused. The
+start is a new Task, and gets a herdr workspace of its own, created and never focused. The
 default branch names no one piece of work, so a start on it is always new. Chains,
 follow-ups and resumes stay in the Task they came from.
 

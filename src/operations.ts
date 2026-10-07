@@ -483,7 +483,6 @@ export const taskFor = Effect.fn("operations.taskFor")(function* (
         `Task "${choice.task.id}" has no workspace any more; start fresh or continue another.`,
         "workspace_closed",
       );
-    yield* Effect.ignore(herdr.workspaceFocus(choice.task.workspace));
     return kept(choice.task);
   }
   const naming = yield* namingDeps(env);
