@@ -1,7 +1,6 @@
 // What a Run was given beside its words: files the host copies into the Run's own
 // directory, and every prompt of the Run lists (ADR-0046).
 
-import { createHash } from "node:crypto";
 import { Effect, FileSystem, Path } from "effect";
 
 /** The most a host takes of one file. */
@@ -40,7 +39,7 @@ export const attachmentRefusal = Effect.fn("attachments.refusal")(function* (
   return null;
 });
 
-const digest = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
+const digest = (bytes: Uint8Array) => new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
 
 const sameBytes = (a: Uint8Array, b: Uint8Array) => Buffer.from(a).equals(b);
 

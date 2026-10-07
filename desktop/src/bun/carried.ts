@@ -1,6 +1,5 @@
 // The files a Flock chat action carries, as paths on the Machine it goes to (ADR-0046).
 
-import { createHash } from "node:crypto";
 import { Clock, Effect, FileSystem, Result } from "effect";
 import { Base64 } from "effect/encoding";
 import { ATTACHMENT_BYTES } from "../../../src/attachments";
@@ -47,7 +46,7 @@ const uploaded = Effect.fn("Carried.upload")(function* (
   name: string,
   bytes: Uint8Array,
 ) {
-  const sha256 = createHash("sha256").update(bytes).digest("hex");
+  const sha256 = new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
   const known = flock.uploaded.get(machine.name) ?? new Map();
   flock.uploaded.set(machine.name, known);
   const now = yield* Clock.currentTimeMillis;

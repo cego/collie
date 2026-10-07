@@ -2,7 +2,6 @@
 // Kept once by sha256: a digest held whole is answered at once, and a retried part is the
 // same part, so no request id is needed. Removed a week after it was last asked for.
 
-import { createHash } from "node:crypto";
 import { Clock, Effect, FileSystem, Path, Result, Semaphore } from "effect";
 import { Base64 } from "effect/encoding";
 import { ATTACHMENT_BYTES } from "./attachments";
@@ -74,7 +73,7 @@ const receivePart = Effect.fn("Uploads.receive")(function* (stateDir: string, pa
   yield* fs.writeFile(partial, bytes, { flag: part.offset === 0 ? "w" : "a" });
   if (part.offset + bytes.length < part.size) return { path: null, complete: false };
   const all = yield* fs.readFile(partial);
-  const digest = createHash("sha256").update(all).digest("hex");
+  const digest = new Bun.CryptoHasher("sha256").update(all).digest("hex");
   if (all.length !== part.size || digest !== part.sha256) {
     yield* fs.remove(dir, { recursive: true });
     return yield* refused(

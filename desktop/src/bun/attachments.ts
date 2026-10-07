@@ -2,7 +2,6 @@
 // parts, kept once by sha256 under Desktop's state directory, and read back by id for the
 // model, a thumbnail or a Run (ADR-0046).
 
-import { createHash } from "node:crypto";
 import { Clock, Effect, FileSystem, Option, Path, Result, Schema } from "effect";
 import { Base64 } from "effect/encoding";
 import { PART_BYTES } from "../../../src/board-model";
@@ -83,7 +82,7 @@ const keep = Effect.fn("Attachments.keep")(function* (
   mediaType: string,
 ) {
   const fs = yield* FileSystem.FileSystem;
-  const id = `${createHash("sha256").update(bytes).digest("hex")}/${name}`;
+  const id = `${new Bun.CryptoHasher("sha256").update(bytes).digest("hex")}/${name}`;
   const kept = `${storeOf(dir)}/${id}`;
   yield* fs.makeDirectory(kept.slice(0, kept.lastIndexOf("/")), { recursive: true });
   yield* fs.writeFile(kept, bytes);

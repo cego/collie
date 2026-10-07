@@ -14,7 +14,6 @@
 // machine. `docs/adr/0015-one-local-host-owns-a-state-directory.md` is why each of those
 // is the way it is.
 
-import { createHash } from "node:crypto";
 import * as BunSocket from "@effect/platform-bun/BunSocket";
 import type { BunServices } from "@effect/platform-bun/BunServices";
 import * as BunSocketServer from "@effect/platform-bun/BunSocketServer";
@@ -1110,7 +1109,7 @@ const frontDoorHandlers = (
                 operation: "write",
                 request,
                 ...whoOf(client),
-                asked: { path, sha256: createHash("sha256").update(content).digest("hex") },
+                asked: { path, sha256: new Bun.CryptoHasher("sha256").update(content).digest("hex") },
                 result: Written,
               },
               writeWhole(path, content, env.stateDir),
