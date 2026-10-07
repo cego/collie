@@ -9,7 +9,7 @@ import type { BunServices } from "@effect/platform-bun/BunServices";
 import { exec } from "./command";
 import { runEffect, suiteEnv } from "./effect";
 import { fakeHerdrCommand } from "./fake-herdr-core";
-import { fixtures, root } from "./host";
+import { fixtures, root, stopHost } from "./host";
 
 export interface World {
   /** The installation whose user directory an author saves into. */
@@ -139,6 +139,8 @@ export const proves = <A, E>(
         home: `${dir}/home`,
         project: `${dir}/project`,
       };
+      // Before the directory goes, or a host left running can write it back.
+      yield* Effect.addFinalizer(() => Effect.ignore(stopHost(world.state)));
       for (const made of [
         world.user,
         `${world.install}/workflows`,
