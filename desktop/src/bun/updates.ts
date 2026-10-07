@@ -3,7 +3,7 @@
 // key, because its bundle hash is not authentication. A Desktop run from a checkout is on
 // a channel other than stable and never updates itself.
 
-import { Effect, FileSystem, Schedule, Stream } from "effect";
+import { Deferred, Effect, FileSystem, Schedule, Stream, SubscriptionRef } from "effect";
 import { appliedSignatureOf, RELEASE_PUBLIC_KEY, verifyRelease } from "../../../src/signing";
 import type { UpdateNews } from "../shared/flock";
 
@@ -63,41 +63,63 @@ const verified = (port: UpdaterPort, key: string) =>
     return { _tag: "Refused", version: prepared.version, reason: refused } satisfies UpdateNews;
   });
 
+export interface Updates {
+  /** What the latest check found, from the one running now. */
+  readonly news: Stream.Stream<UpdateNews>;
+  /** Checks now, or joins the check already running, and says what it found. */
+  readonly check: Effect.Effect<UpdateNews>;
+}
+
 /**
  * Checks for an update now and every `every` after, downloading one it finds in the
- * background, and says each update once: ready to install, or refused.
+ * background. `version` is this Desktop's own.
  */
-export const watchForUpdates = (
+export const updatesOf = (
   port: UpdaterPort,
+  version: string,
   key: string = RELEASE_PUBLIC_KEY,
-  every: Schedule.Schedule<unknown> = Schedule.spaced("6 hours"),
-): Stream.Stream<UpdateNews, never, FileSystem.FileSystem> =>
-  Stream.unwrap(
-    Effect.gen(function* () {
-      if (!(yield* released(port))) return Stream.empty;
-      const said = new Set<string>();
-      const once = Effect.gen(function* () {
-        const found = yield* port.check;
-        if (!found.available) return [];
+  every: Schedule.Schedule<unknown> = Schedule.spaced("1 hour"),
+) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const scope = yield* Effect.scope;
+    if (!(yield* released(port))) {
+      const never: UpdateNews = { _tag: "Never", reason: CHECKOUT };
+      return { news: Stream.make(never), check: Effect.succeed(never) } satisfies Updates;
+    }
+    const latest = yield* SubscriptionRef.make<UpdateNews>({ _tag: "Checking" });
+    const say = (news: UpdateNews) => SubscriptionRef.set(latest, news).pipe(Effect.as(news));
+    const once = Effect.gen(function* () {
+      yield* say({ _tag: "Checking" });
+      const found = yield* port.check;
+      if (!found.available) return yield* say({ _tag: "UpToDate", version });
+      const ready = yield* verified(port, key);
+      if (ready?.version !== found.version) {
+        yield* say({ _tag: "Downloading", version: found.version });
         yield* port.download;
-        const news = yield* verified(port, key);
-        if (news === null) return [];
-        const id = `${news._tag} ${news.version}`;
-        if (said.has(id)) return [];
-        said.add(id);
-        return [news];
-      }).pipe(
-        // A check or download that failed is tried again at the next one.
-        Effect.catch((failed) =>
-          Effect.logWarning(`Desktop update: ${failed}`).pipe(Effect.as([])),
-        ),
+      }
+      const news = yield* verified(port, key);
+      return yield* say(news ?? { _tag: "UpToDate", version });
+    }).pipe(
+      // Tried again at the next check.
+      Effect.catch((reason) => say({ _tag: "Failed", reason })),
+      Effect.provideService(FileSystem.FileSystem, fs),
+    );
+    let running: Deferred.Deferred<UpdateNews> | undefined;
+    const check = Effect.suspend(() => {
+      if (running !== undefined) return Deferred.await(running);
+      const done = Deferred.makeUnsafe<UpdateNews>();
+      running = done;
+      return once.pipe(
+        Effect.tap(() => Effect.sync(() => void (running = undefined))),
+        Effect.flatMap((news) => Deferred.succeed(done, news)),
+        Effect.forkIn(scope),
+        Effect.andThen(Deferred.await(done)),
       );
-      return Stream.fromEffect(once).pipe(
-        Stream.concat(Stream.fromSchedule(every).pipe(Stream.mapEffect(() => once))),
-        Stream.flatMap((news) => Stream.fromIterable(news)),
-      );
-    }),
-  );
+    });
+    yield* check.pipe(Effect.repeat(every), Effect.forkIn(scope));
+    return { news: SubscriptionRef.changes(latest), check } satisfies Updates;
+  });
 
 /** Installs the prepared update once it verifies again, which restarts Desktop. */
 export const restartToUpdate = (port: UpdaterPort, key: string = RELEASE_PUBLIC_KEY) =>

@@ -44,7 +44,6 @@ import {
   type OnboardRun,
   type OnboardStep,
   Skippable,
-  type UpdateNews,
 } from "../shared/flock";
 import { RELEASE_PUBLIC_KEY } from "../../../src/signing";
 import { appWindowFor } from "./browser";
@@ -97,7 +96,7 @@ import {
   savedOnboardings,
   saving,
 } from "./saved";
-import { applyAtLaunch, restartToUpdate, watchForUpdates } from "./updates";
+import { applyAtLaunch, restartToUpdate, updatesOf } from "./updates";
 // The version Desktop keeps every Machine on: the Collie it was built from.
 import manifest from "../../../herdr-plugin.toml";
 
@@ -176,11 +175,7 @@ const main = Effect.gen(function* () {
   // Opened once an update readied before the last quit has had its chance to install, so
   // installing one never shows a window that closes again.
   const board = windowOn(VIEW, "Collie", { width: 1200, height: 800, x: 120, y: 80 });
-  const updates = yield* SubscriptionRef.make<UpdateNews | null>(null);
-  yield* watchForUpdates(updater).pipe(
-    Stream.runForEach((news) => SubscriptionRef.set(updates, news)),
-    Effect.forkScoped,
-  );
+  const updates = yield* updatesOf(updater, manifest.version);
   const local = hostname();
   const collie = yield* Collie;
   const releases = yield* Config.String("COLLIE_DESKTOP_RELEASES").pipe(
@@ -672,10 +667,8 @@ const main = Effect.gen(function* () {
       doorTo(doors, installation).pipe(
         Effect.flatMap((door) => workflowsOn(door.desktop, project)),
       ),
-    updates: () =>
-      SubscriptionRef.changes(updates).pipe(
-        Stream.filter((news): news is UpdateNews => news !== null),
-      ),
+    updates: () => Stream.map(updates.news, (news) => ({ version: manifest.version, news })),
+    checkForUpdates: () => updates.check,
     restart: () =>
       restartToUpdate(updater).pipe(
         Effect.mapError((reason) => new ActionFailed({ reason })),

@@ -847,13 +847,17 @@ It shows up as **Collie**, with the Collie mark, in your app launcher, on its wi
 the taskbar.
 
 Desktop then keeps itself up to date. It checks the latest release when it starts and every
-6 hours after, and downloads an update in the background. It installs nothing until the
+hour after, and downloads an update in the background. **Machines** shows Desktop's own
+version with **Check for updates**, which checks now and says what it found: "Collie 0.34.0
+is up to date", "Downloading 0.35.0", the ready notice below, or why the check failed. A
+check asked for while one runs joins it rather than downloading twice. It installs nothing until the
 tar it would install verifies against the same key, because Electrobun's bundle hash is
 not authentication. An update that is unsigned or does not match is thrown away and said
 so. One that verifies is announced as "Collie 0.33.0 is ready, restart Desktop", and
 **Restart Desktop** installs it. Desktop never restarts itself: an update that is ready when
 you quit is installed the next time you start Desktop. A Desktop run from a checkout
-(`bun run start`, or any build that is not the stable channel) never updates itself. The new
+(`bun run start`, or any build that is not the stable channel) never updates itself, and
+**Machines** says so. The new
 Desktop then upgrades your released Machines to its version as they connect.
 
 The Machines are this computer and every machine enabled in `herdr machine list`; Collie

@@ -37,6 +37,7 @@ const add = async () => {
   <USlideover v-model:open="open" title="Machines">
     <template #body>
       <div class="flex flex-col gap-6">
+        <DesktopVersion />
         <section v-if="credentials" class="flex flex-col gap-3" data-testid="credentials">
           <h3 class="text-sm font-semibold">Given to every Machine</h3>
           <form class="flex gap-2" data-testid="gitlab-host-form" @submit.prevent="saveHost">
