@@ -5,7 +5,7 @@
 import { Effect, Encoding, FileSystem, Option, Path, Schema, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { mediaTypeOf } from "./attachments";
-import { HostRefused, RUN_FILE_BYTES, type HostFile } from "./board-model";
+import { HostRefused, PART_BYTES, type HostFile } from "./board-model";
 
 /** The most paths a glob answers, and lines a grep does, unless asked for fewer. */
 export const FOUND_LIMIT = 100;
@@ -28,7 +28,7 @@ const absolute = Effect.fn("HostFiles.absolute")(function* (path: string) {
 export const readPart = Effect.fn("HostFiles.read")(function* (
   asked: string,
   offset = 0,
-  length = RUN_FILE_BYTES,
+  length = PART_BYTES,
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* absolute(asked);
@@ -41,7 +41,7 @@ export const readPart = Effect.fn("HostFiles.read")(function* (
       const handle = yield* fs.open(path, { flag: "r" });
       yield* handle.seek(BigInt(from), "start");
       const bytes = yield* handle.readAlloc(
-        Math.min(Math.max(0, Math.min(length, RUN_FILE_BYTES)), size - from),
+        Math.min(Math.max(0, Math.min(length, PART_BYTES)), size - from),
       );
       const content = Encoding.encodeBase64(Option.getOrElse(bytes, () => new Uint8Array()));
       return { path, size, mediaType: mediaTypeOf(path), content } satisfies HostFile;

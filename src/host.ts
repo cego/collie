@@ -108,7 +108,7 @@ import {
   SharedSettings,
   PROTOCOL,
   ProposalRefused,
-  RUN_FILE_BYTES,
+  PART_BYTES,
   RequestConflict,
   Started,
   SteerOutcome,
@@ -460,7 +460,7 @@ const handlers = (
     }),
   );
 
-/** What a steer's request has to ask again; attachments only where there were some. */
+/** What a steer's request has to ask again, as `AskedFor` is a start's. */
 type SteerAsked = {
   readonly text: string;
   readonly operation: string | null;
@@ -631,6 +631,8 @@ const CLEANUP_TRAIL = 50;
 const SETTINGS_TRAIL = 50;
 /** How many of the chat's writes to files the host keeps a record of. */
 const FILES_TRAIL = 1000;
+/** How many uploads the host keeps a record of. */
+const UPLOADS_TRAIL = 1000;
 const Written = Schema.Struct({ path: Schema.String, bytes: Schema.Int });
 const Edited = Schema.Struct({ path: Schema.String, replaced: Schema.Int });
 
@@ -1089,7 +1091,10 @@ const frontDoorHandlers = (
                   asked: { name: part.name, size: part.size, sha256: part.sha256 },
                   result: Schema.String,
                   value: got.path,
-                }).pipe(Effect.orDie);
+                }).pipe(
+                  Effect.andThen(trimAudit(uploadsDir(env.stateDir), UPLOADS_TRAIL)),
+                  Effect.orDie,
+                );
               return { path: got.path };
             }),
           ),
@@ -1538,7 +1543,7 @@ const frontDoorHandlers = (
                 : fetchRef(
                     factsOfView(env.stateDir, view),
                     ref,
-                    { offset: offset ?? 0, length: length ?? RUN_FILE_BYTES },
+                    { offset: offset ?? 0, length: length ?? PART_BYTES },
                     env.cwd,
                   ),
             ),

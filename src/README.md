@@ -58,7 +58,7 @@ Runner source (Bun/TypeScript). Compiled to `bin/collie` per platform; see ADR-0
 | `engine.ts`        | Effect's workflow engine, the SDK the binary serves a module, and where generations live              |
 | `host.ts`          | The one host per state directory: who owns it, the board it serves, every operation                   |
 | `host-files.ts`    | A Machine's files for a front door: read in parts, glob, grep, write and edit, never into its state   |
-| `uploads.ts`       | Files a front door sends this Machine, kept once by sha256 and pruned a week after they arrived       |
+| `uploads.ts`       | Files a front door sends this Machine, kept once by sha256, swept a week after last use               |
 | `host-log.ts`      | The host's own log file beside its state, bounded and rotated                                         |
 | `run-detail.ts`    | One Run's diff against its merge base, items by reference, and a drawer's subscription                |
 | `side-jobs.ts`     | What the host does with no pane open: the merge watch, each Herd's News, cleanup and Home tokens      |

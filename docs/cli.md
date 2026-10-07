@@ -173,8 +173,10 @@ short sha256 prefix.
 
 A path that does not exist, is not a regular file, cannot be read or is larger than
 100 MB is `invalid_input` naming it, before anything is claimed: no Run, Task, worktree or
-workspace is made. The files are part of the request: the same `--request-id` with other
-attachments is `RequestConflict`, and with the same ones it is the same Run. They are not
+workspace is made. The files are part of the request: at the host, the same request id with other
+attachments is `RequestConflict`, and with the same ones it is the same Run. The CLI
+answers a `--request-id` it already has a receipt for from that receipt, before the host
+is asked, so there it is the first Run whatever is attached. They are not
 an Input, so the Workflow's own input, and with it the execution, is the same either way.
 The operation's line in the Run's `operations.jsonl` names each file under `asked`, by the
 name the Run keeps it under and the path it came from. Chat's `start`, `followup` and
@@ -1622,7 +1624,7 @@ again. An untracked file reached through a link, or that is not a regular file, 
 without being read. The review's findings come as
 a list. The merge request is what the merge watch last read, asked again after 5 minutes or
 when `refreshMr` is set. Large items are fetched by reference with `runFile`: `log`,
-`review`, `diff:<path>`, `evidence:<name>`, `verification:<id>`, `plan:<file>`, `file:<path>` (read
+`review`, `diff:<path>`, `evidence:<name>`, `verification:<id>`, `plan:<file>`, `attachment:<name>` (one of the Run's attachments), `file:<path>` (read
 only, from the Run's checkout) and `pipeline:<url>` (the status glab reads for that pipeline), text as it is and anything else as base64. Each answer is
 at most 4 MiB from `offset` (or `length` bytes where asked) and says the item's whole
 `size`, so a long log or a video is read in parts. A part of an item is base64 whatever it

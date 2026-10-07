@@ -7,7 +7,7 @@ import {
   type BoardSnapshot,
   HostRefused,
   type HostFile,
-  RUN_FILE_BYTES,
+  PART_BYTES,
 } from "../../../src/board-model";
 import type { ChatMachine, FlockChat } from "./flock-tools";
 
@@ -25,7 +25,7 @@ export const readWhole = Effect.fn("Carried.readWhole")(function* (
   let first: HostFile | null = null;
   let offset = 0;
   for (;;) {
-    const part = yield* machine.door.readFile({ path, offset, length: RUN_FILE_BYTES });
+    const part = yield* machine.door.readFile({ path, offset, length: PART_BYTES });
     first ??= part;
     if (part.size > most) return yield* tooLarge(`${machine.name}:${path}`);
     const bytes = Encoding.decodeBase64(part.content).pipe(
@@ -54,8 +54,8 @@ const uploaded = Effect.fn("Carried.upload")(function* (
   const now = yield* Clock.currentTimeMillis;
   const held = known.get(sha256);
   if (held !== undefined && now - held.at < REMEMBERED) return held.path;
-  for (let offset = 0; ; offset += RUN_FILE_BYTES) {
-    const part = bytes.subarray(offset, offset + RUN_FILE_BYTES);
+  for (let offset = 0; ; offset += PART_BYTES) {
+    const part = bytes.subarray(offset, offset + PART_BYTES);
     const { path } = yield* machine.door.upload({
       name,
       size: bytes.length,
@@ -67,7 +67,7 @@ const uploaded = Effect.fn("Carried.upload")(function* (
       known.set(sha256, { path, at: now });
       return path;
     }
-    if (offset + RUN_FILE_BYTES >= bytes.length)
+    if (offset + PART_BYTES >= bytes.length)
       return yield* new HostRefused({ reason: `${machine.name} did not keep ${name}` });
   }
 });

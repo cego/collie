@@ -5,7 +5,7 @@ import { Effect, Encoding, FileSystem, Option, Path, Schema, Stream } from "effe
 import type { ChildProcessSpawner } from "effect/unstable/process";
 import {
   HostRefused,
-  RUN_FILE_BYTES,
+  PART_BYTES,
   RunDiff,
   type DiffFile,
   type RunDetail,
@@ -240,7 +240,7 @@ export const fetchRef = Effect.fn("RunDetail.fetchRef")(function* (
   ref: string,
   range: { readonly offset: number; readonly length: number } = {
     offset: 0,
-    length: RUN_FILE_BYTES,
+    length: PART_BYTES,
   },
   /** Where glab runs: not the Run's checkout, which is removed once the Run settles. */
   glabCwd: string = run.dir,
@@ -251,7 +251,7 @@ export const fetchRef = Effect.fn("RunDetail.fetchRef")(function* (
 > {
   const part = {
     offset: Math.max(0, range.offset),
-    length: Math.min(Math.max(0, range.length), RUN_FILE_BYTES),
+    length: Math.min(Math.max(0, range.length), PART_BYTES),
   };
   const fs = yield* FileSystem.FileSystem;
   // A part of a text is bytes too: a character across the seam is whole once the parts are joined.

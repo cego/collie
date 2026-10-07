@@ -4,7 +4,7 @@
 
 import { createHash } from "node:crypto";
 import { Clock, Effect, Encoding, FileSystem, Option, Path, Result, Schema } from "effect";
-import { RUN_FILE_BYTES } from "../../../src/board-model";
+import { PART_BYTES } from "../../../src/board-model";
 import { capRefusal, type Staged } from "../shared/attachments";
 
 export class AttachmentRefused extends Schema.TaggedError<AttachmentRefused>()(
@@ -29,9 +29,9 @@ export interface StagedPart {
 
 const storeOf = (dir: string) => `${dir}/attachments`;
 
-/** A name that stays one entry of the directory it is put in. */
+/** A name that stays one entry of the directory it is put in, and one line of a listing. */
 const plainName = (name: string) =>
-  name !== "" && name !== "." && name !== ".." && !/[/\\\0]/.test(name);
+  !["", ".", "..", ".scaled"].includes(name) && !/[/\\\u0000-\u001f\u007f]/.test(name);
 
 /** `<sha256>/<name>`, which is where a copy is kept under the store. */
 const ID = /^[0-9a-f]{64}\/(.+)$/;
@@ -105,6 +105,7 @@ const keep = Effect.fn("Attachments.keep")(function* (
 export const stagePath = Effect.fn("Attachments.stagePath")(function* (dir: string, path: string) {
   const fs = yield* FileSystem.FileSystem;
   const name = path.split("/").at(-1) ?? "";
+  if (!plainName(name)) return { refused: `${path} is not a file's name` };
   const info = yield* fs.stat(path).pipe(Effect.option);
   if (Option.isNone(info)) return { refused: `${path} cannot be read` };
   if (info.value.type === "Directory") return { refused: `${path} is a directory` };
@@ -174,9 +175,7 @@ export const readAttachment = Effect.fn("Attachments.read")(function* (
     Effect.gen(function* () {
       const handle = yield* fs.open(held.path, { flag: "r" });
       yield* handle.seek(BigInt(offset), "start");
-      const bytes = yield* handle.readAlloc(
-        Math.max(0, Math.min(RUN_FILE_BYTES, held.size - offset)),
-      );
+      const bytes = yield* handle.readAlloc(Math.max(0, Math.min(PART_BYTES, held.size - offset)));
       return {
         content: Encoding.encodeBase64(Option.getOrElse(bytes, () => new Uint8Array())),
         size: held.size,

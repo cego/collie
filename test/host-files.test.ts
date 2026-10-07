@@ -349,7 +349,21 @@ test("a part at the wrong offset clears what arrived, and asking for a held file
         content: base64(bytes.subarray(10)),
       }).pipe(Effect.flip);
       expect(reasonOf(skipped)).toContain("send it again from the start");
-      expect(yield* fs.exists(`${dir}/.partial`)).toBe(false);
+      expect(yield* fs.exists(dir)).toBe(false);
+      // With nothing arrived, a later part is refused the same way.
+      const first = yield* receive(state, {
+        ...asked,
+        offset: 10,
+        content: base64(bytes.subarray(10)),
+      }).pipe(Effect.flip);
+      expect(reasonOf(first)).toContain("send it again from the start");
+      expect(yield* fs.exists(dir)).toBe(false);
+      for (const name of [".partial", "a\nb.png"]) {
+        const bad = yield* receive(state, { ...asked, name, offset: 0, content: "" }).pipe(
+          Effect.flip,
+        );
+        expect(reasonOf(bad)).toContain("is not a file's name");
+      }
 
       yield* receive(state, { ...asked, offset: 0, content: base64(bytes) });
       const now = yield* Clock.currentTimeMillis;

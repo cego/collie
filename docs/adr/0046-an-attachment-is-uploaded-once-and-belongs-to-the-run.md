@@ -53,10 +53,13 @@ with a steer would bump its version and stale every pending proposal. Instead, t
 `runs/<id>/attachments/` are the Run's attachments. The one function that renders every
 step prompt lists each, with its path, size and media type, so every Workflow gets them
 unchanged, and the list is read where the launch is decided, so a replay sends the prompt
-it sent. A steer's delivered text gets a line for each attachment it brought, and the next
+it sent; an agent revived after it died is sent the list as it is then. A steer's
+delivered text gets a line for each attachment it brought, and the next
 step's prompt lists it too. A Run starts with copies of the attachments of every Run in its
 Lineage — the parent of a follow-up or a child, the plan Run an implementation builds — taken
-when it is admitted, so its own directory is the whole list and outlives theirs.
+when it is admitted, so its own directory is the whole list and outlives theirs. A file gone,
+or a disk full, between the check and the copy starts the Run without it, with a warning
+in the host's log: the start has already been answered.
 
 **D4. The Flock chat sees them and hands them on.** Desktop keeps a copy of every
 attachment, by sha256, under its own state directory. The message that carried them says
@@ -80,8 +83,8 @@ recorded with their words says what came with them
 
 - The host's cleanup sweep removes an upload a week after it was last asked for: a Run
   holds its own copy, and a file uploaded for a start that was refused does not stay for
-  ever. A proposal confirmed later than that is refused naming the file, and Desktop
-  uploads it again.
+  ever. A proposal confirmed later than that is refused naming the file, and the human
+  attaches it again.
 - The cleanup sweep removes a Desktop copy unused for 30 days, as Claude Code prunes the
   transcripts that name it
   ([ADR-0045](0045-collie-removes-what-it-made-once-nothing-needs-it.md)). A conversation older than that shows the attachment's name without its thumbnail.

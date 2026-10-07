@@ -5,7 +5,7 @@
 import { createHash } from "node:crypto";
 import { Clock, Effect, Encoding, FileSystem, Path, Result, Semaphore } from "effect";
 import { ATTACHMENT_BYTES } from "./attachments";
-import { HostRefused, RUN_FILE_BYTES } from "./board-model";
+import { HostRefused, PART_BYTES } from "./board-model";
 
 export const uploadsDir = (stateDir: string) => `${stateDir}/uploads`;
 
@@ -34,7 +34,7 @@ const receivePart = Effect.fn("Uploads.receive")(function* (stateDir: string, pa
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   if (!/^[0-9a-f]{64}$/.test(part.sha256)) return yield* refused(`${part.sha256} is not a sha256`);
-  if (part.name === "" || part.name === "." || part.name === ".." || /[/\\\0]/.test(part.name))
+  if (["", ".", "..", ".partial"].includes(part.name) || /[/\\\u0000-\u001f\u007f]/.test(part.name))
     return yield* refused(`${part.name} is not a file's name`);
   if (part.size > ATTACHMENT_BYTES)
     return yield* refused(`${part.name} is larger than ${ATTACHMENT_BYTES / 1024 / 1024} MB`);
@@ -54,7 +54,7 @@ const receivePart = Effect.fn("Uploads.receive")(function* (stateDir: string, pa
   const decoded = Encoding.decodeBase64(part.content);
   if (Result.isFailure(decoded)) return yield* refused(`a part of ${part.name} is not base64`);
   const bytes = decoded.success;
-  if (bytes.length > RUN_FILE_BYTES) return yield* refused(`a part is at most 4 MiB`);
+  if (bytes.length > PART_BYTES) return yield* refused(`a part is at most 4 MiB`);
   const partial = path.join(dir, ".partial");
   yield* fs.makeDirectory(dir, { recursive: true });
   const arrived = yield* fs.stat(partial).pipe(
@@ -65,7 +65,7 @@ const receivePart = Effect.fn("Uploads.receive")(function* (stateDir: string, pa
   if (part.offset + bytes.length <= arrived && part.offset + bytes.length < part.size)
     return { path: null, complete: false };
   if (part.offset !== arrived) {
-    yield* fs.remove(partial);
+    yield* fs.remove(dir, { recursive: true, force: true });
     return yield* refused(
       `${part.name} has ${arrived} bytes here, not ${part.offset}; send it again from the start`,
     );

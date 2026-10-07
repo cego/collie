@@ -376,7 +376,12 @@ test("a message with an image hands the SDK the words, Desktop's listing and the
         expect(shot).toMatchObject({ name: "shot.png", size: 16, mediaType: "image/png" });
         expect(shot.path).toStartWith(`${dir}/attachments/`);
         expect(yield* (yield* FileSystem.FileSystem).readFile(shot.path)).toEqual(original);
-        yield* staged(dir, "shot.png", "image/png", new TextEncoder().encode("smaller"), shot.id);
+        // A PNG's header is all Desktop reads to know an image is within 2000 px.
+        const smaller = new Uint8Array(24);
+        smaller.set([0x89, 0x50, 0x4e, 0x47, 13, 10, 26, 10, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52]);
+        new DataView(smaller.buffer).setUint32(16, 2000);
+        new DataView(smaller.buffer).setUint32(20, 1500);
+        yield* staged(dir, "shot.png", "image/png", smaller, shot.id);
 
         yield* Stream.runDrain(conversation.send("what is this?", null, false, [shot.id]));
         expect(seen.contents[0]).toEqual([
@@ -387,7 +392,7 @@ test("a message with an image hands the SDK the words, Desktop's listing and the
             source: {
               type: "base64",
               media_type: "image/png",
-              data: Buffer.from("smaller").toString("base64"),
+              data: Buffer.from(smaller).toString("base64"),
             },
           },
         ]);

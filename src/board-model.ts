@@ -421,8 +421,8 @@ export const HostFile = Schema.Struct({
 });
 export type HostFile = typeof HostFile.Type;
 
-/** How much of an item one `runFile` hands over when no length is asked for. */
-export const RUN_FILE_BYTES = 4 * 1024 * 1024;
+/** The most one part of a file carries: of a `runFile` item, a read, an upload or a staging. */
+export const PART_BYTES = 4 * 1024 * 1024;
 
 export type RunFile = typeof RunFile.Type;
 
@@ -931,7 +931,7 @@ export const FrontDoorRpcs = RpcGroup.make(
       ref: Schema.String,
       /** Where in the item to start, in bytes. */
       offset: Schema.optional(Schema.Int),
-      /** How many bytes from there: `RUN_FILE_BYTES` when not given, and at most. */
+      /** How many bytes from there: `PART_BYTES` when not given, and at most. */
       length: Schema.optional(Schema.Int),
     },
     success: RunFile,
