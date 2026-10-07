@@ -200,21 +200,13 @@ export const useActions = () => {
     /** The Machine rule as Desktop has it saved, which the Flock chat may have changed. */
     machineRule: () =>
       desktopSettings({ payload: undefined }).then((exit) => read(exit)?.machineRule ?? ""),
-    /** Whether the rule was kept, alongside the rest of Desktop's settings as they are. */
+    /** Whether the rule was kept. */
     saveMachineRule: (machineRule: string) =>
-      desktopSettings({ payload: undefined })
-        .then((exit) => {
-          const settings = read(exit);
-          return settings === null
-            ? false
-            : setDesktopSettings({ payload: { ...settings, machineRule } }).then(
-                (saved) => read(saved) !== null,
-              );
-        })
-        .then((kept) => {
-          if (kept) toast.add({ title: "Machine rule saved", color: "success" });
-          return kept;
-        }),
+      setDesktopSettings({ payload: { machineRule } }).then((exit) => {
+        const kept = read(exit) !== null;
+        if (kept) toast.add({ title: "Machine rule saved", color: "success" });
+        return kept;
+      }),
     offersOf: (installation: string, runId: string) =>
       offers({ payload: { installation, runId } }).then(read),
     workflowsIn: (installation: string, project: string) =>

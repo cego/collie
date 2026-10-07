@@ -286,6 +286,14 @@ export const DesktopSettings = Schema.Struct({
 });
 export type DesktopSettings = typeof DesktopSettings.Type;
 
+/** The settings a change sets; the rest stay as they are. */
+export const DesktopSettingsChange = Schema.Struct({
+  proactive: Schema.optionalKey(Schema.Boolean),
+  gitlabHost: Schema.optionalKey(Schema.String),
+  machineRule: Schema.optionalKey(Schema.String),
+});
+export type DesktopSettingsChange = typeof DesktopSettingsChange.Type;
+
 export const DesktopRpcs = RpcGroup.make(
   Rpc.make("flock", { success: FlockItem, stream: true }),
   /** A retry names the request that failed; a first try leaves it to the main process. */
@@ -451,7 +459,7 @@ export const DesktopRpcs = RpcGroup.make(
   /** When the Flock chat starts and ends a turn of Desktop's own. */
   Rpc.make("desktopTurns", { success: DesktopTurn, stream: true }),
   Rpc.make("settings", { success: DesktopSettings }),
-  Rpc.make("setSettings", { payload: DesktopSettings }),
+  Rpc.make("setSettings", { payload: DesktopSettingsChange }),
 );
 
 /**

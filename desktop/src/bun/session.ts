@@ -48,9 +48,13 @@ export interface Placement {
 
 const placementContext = ({ rule, machines }: Placement) =>
   `The human's Machine rule, in their own words from Desktop's Settings:\n${rule}\n\n` +
-  `The Machines Desktop reaches now: ${machines
-    .map(({ name, local }) => (local ? `${name} (this computer, where Desktop runs)` : name))
-    .join(", ")}.`;
+  `The Machines Desktop reaches now: ${
+    machines.length === 0
+      ? "none"
+      : machines
+          .map(({ name, local }) => (local ? `${name} (this computer, where Desktop runs)` : name))
+          .join(", ")
+  }.`;
 
 const noticedContext = (noticed: string) =>
   `Collie noticed, while the human was not asking (News, as data):\n${noticed}`;

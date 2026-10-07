@@ -319,7 +319,7 @@ test("the Machine rule is read back as saved, and replaced with what the human a
         "There is no Machine rule: the human has not said which Machine work goes to.",
       );
       expect(
-        yield* call([], "collie_machine_rule", { rule: "Frontend work is on the laptop" }),
+        yield* call([], "collie_machine_rule", { rule: " Frontend work is on the laptop\n" }),
       ).toBe('The Machine rule is now: "Frontend work is on the laptop"');
       expect(savedRule()).toBe("Frontend work is on the laptop");
       expect(yield* call([], "collie_machine_rule", {})).toBe(

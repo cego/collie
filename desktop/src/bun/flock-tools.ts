@@ -61,7 +61,6 @@ export interface FlockChat {
   readonly conversation: string;
   /** The human's message this turn, where there is one. */
   readonly said: () => string | undefined;
-  /** Desktop's saved Machine rule, and its one write, which Settings shares. */
   readonly machineRule: () => string | undefined;
   readonly setMachineRule: (rule: string) => Effect.Effect<void>;
 }
@@ -655,17 +654,17 @@ const propose = Effect.fn("FlockTools.propose")(
   ),
 );
 
-const machineRule = (flock: FlockChat, rule: string | undefined) => {
-  if (rule !== undefined)
+const machineRule = (flock: FlockChat, asked: string | undefined) => {
+  if (asked !== undefined) {
+    const rule = asked.trim();
     return flock
       .setMachineRule(rule)
       .pipe(
         Effect.as(
-          rule.trim() === ""
-            ? "The Machine rule is cleared."
-            : `The Machine rule is now: "${rule}"`,
+          rule === "" ? "The Machine rule is cleared." : `The Machine rule is now: "${rule}"`,
         ),
       );
+  }
   const saved = flock.machineRule()?.trim() ?? "";
   return Effect.succeed(
     saved === ""

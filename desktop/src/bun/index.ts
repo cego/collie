@@ -38,7 +38,7 @@ import {
   applyItem,
   type Credentials,
   DesktopRpcs,
-  type DesktopSettings,
+  type DesktopSettingsChange,
   EMPTY_FLOCK,
   type FlockItem,
   type KnownMachine,
@@ -507,18 +507,19 @@ const main = Effect.gen(function* () {
       yield* Fiber.join(yield* onboardAs(job, route, run));
     });
 
-  /** Desktop's own settings, written as Settings and the Flock chat both change them. */
-  const saveSettings = (changed: Partial<DesktopSettings>) => {
-    const merged = { ...settings, ...changed };
-    return writeSettings(own, merged).pipe(
-      Effect.andThen(
-        Effect.sync(() => {
-          settings = merged;
-        }),
-      ),
-      Effect.orDie,
-    );
-  };
+  /** Desktop's own settings, one change at a time, as Settings and the Flock chat make them. */
+  const settingsWrite = Semaphore.makeUnsafe(1);
+  const saveSettings = (changed: DesktopSettingsChange) =>
+    Effect.suspend(() => {
+      const merged = { ...settings, ...changed };
+      return writeSettings(own, merged).pipe(
+        Effect.andThen(
+          Effect.sync(() => {
+            settings = merged;
+          }),
+        ),
+      );
+    }).pipe(settingsWrite.withPermits(1), Effect.orDie);
 
   // The Flock as the board was last sent it, so the chat names its Machines as the cards do.
   let shown = EMPTY_FLOCK;
