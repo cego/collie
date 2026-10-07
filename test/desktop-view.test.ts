@@ -27,7 +27,13 @@ import {
   type MachineMessage,
   machineToAdd,
 } from "../desktop/src/shared/flock";
-import { flockInSync, inSync } from "../desktop/src/shared/in-sync";
+import {
+  buildOf,
+  flockInSync,
+  flockInSyncSaid,
+  inSync,
+  syncable,
+} from "../desktop/src/shared/in-sync";
 import { task } from "./support/task";
 
 const asJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
@@ -470,6 +476,30 @@ test("the Flock's summary names Desktop's version, or each Machine that lags and
     said: "Not in sync with Desktop 0.35.0: vm-mk: behind on version and onboarding; vm-c: Out of reach",
     count: 2,
   });
+});
+
+test("a row says the Collie it runs, a development build's own, or that it isn't known yet", () => {
+  expect(buildOf(row())).toBe("Collie 0.35.0");
+  expect(buildOf(row({ development: "0.35.0+abc1234" }))).toBe("development build 0.35.0+abc1234");
+  expect(buildOf(row({ build: null }))).toBe("Build not known yet");
+});
+
+test("Sync now is offered for what connecting redoes, and not for onboarding alone", () => {
+  expect(syncable(inSync(row({ build: "0.34.0" }), DESKTOP))).toBe(true);
+  expect(syncable(inSync(row({ settings: { failed: "host refused" } }), DESKTOP))).toBe(true);
+  expect(syncable(inSync(row({ onboarded: doctored(false) }), DESKTOP))).toBe(false);
+  expect(syncable(inSync(row(), DESKTOP))).toBe(false);
+});
+
+test("the Flock chat reads the summary, then why each lagging Machine is behind", () => {
+  expect(
+    flockInSyncSaid(
+      [row({ name: "mk-pc" }), row({ settings: { failed: "host refused" } })],
+      DESKTOP,
+    ),
+  ).toBe(
+    "Not in sync with Desktop 0.35.0: vm-mk: behind on settings. vm-mk: Settings didn't sync: host refused",
+  );
 });
 
 test("a Machine whose last settings sync failed is behind on settings, with why; one not yet synced isn't", () => {

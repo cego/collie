@@ -995,14 +995,16 @@ version when it runs a release older than Desktop's, which the row says with bot
 never on a development checkout, and never while Desktop itself isn't a release. It is
 behind on settings when its last settings sync failed, with the host's reason; behind on
 credentials for each credential Desktop holds that it lacks, with why the last give failed
-where one did; and behind on onboarding when `collie doctor` doesn't find it onboarded, and
+where one did, though never on one its onboarding skipped, which Desktop gives only when the
+token is saved or renewed; and behind on onboarding when `collie doctor` doesn't find it onboarded, and
 the row lists the missing steps with their fixes. A part not known yet, such as a first sync
 not finished or doctor not having answered, is not counted, and a credential Desktop holds
 none of is no Machine's to lack: the summary says "Desktop has no GitLab token to give"
 instead. **Sync now** on a Machine behind on its version, settings or credentials does what
 connecting would: behind on its version, it reopens the Machine's connection, which asks the
 upgrade again and then syncs and gives on the new one; otherwise it syncs its settings and
-gives it what it lacks. A toast says what it did. The header's **Machines** button shows how many Machines aren't in sync, those
+gives it what it lacks. A toast says what it did, red where a part of it failed. The Flock
+chat reads the same standing and does the same Sync now through `collie_in_sync`. The header's **Machines** button shows how many Machines aren't in sync, those
 still connecting left out.
 
 Onboarding downloads the runner of Desktop's own version for that Machine from the GitHub
@@ -1074,7 +1076,8 @@ unchanged. **Reset to default**, shown while a setting is set, unsets it. Each s
 **Every Machine** shares it or it is for **This computer only**: the Flock chat's switch,
 like the bell in the chat's header, is this computer's. The groups, names, descriptions and
 units live with each key in the one list of settings (`src/settings.ts`) that the TUI's
-Settings reads too, so a new setting shows up in both; the TUI does not show the names,
+Settings reads too, so a new setting shows up in both, except the two for this computer only,
+whose are in `DESKTOP_SETTINGS` (`desktop/src/shared/flock-settings.ts`); the TUI does not show the names,
 descriptions or minutes yet. The ones every Machine shares are the Flock's: Desktop keeps them in
 `flock-settings.json` beside its chat, and gives them to every Machine through that
 Machine's host, never by editing a file over SSH. A Machine is synced each time it
@@ -1148,8 +1151,8 @@ each open their page and show as pressed while it is open; pressed again, they r
 board.
 
 **Escape** backs out one level: an open dialog, menu or popover closes first, then the
-open page, and on the board Escape lets the selected card go. Escape typed in a field, such as
-the Log search, stays with the field.
+open page, and with no page open Escape lets the selected card go, wherever the focus is in
+the window. Escape typed in a field, such as the Log search, stays with the field.
 
 The record's **Plan** tab renders the spec, read whole from the host where it is longer than the
 details carry, and lists the tickets, each expanding
@@ -1286,7 +1289,7 @@ steered there. What the host records of your words also names the files they car
 
 Click a card and it becomes a chip above the input ("About: vm-mk › Fix board bugs"): your
 next message goes with it, so "this one" means that card, and sending uses it up. Clear it
-with its ✕, a click on the board's background, or Escape on the board; a chat popped out
+with its ✕, a click on the board's background, or Escape outside a field; a chat popped out
 into its own window clears with it. The chip is attached as context for the turn, never as your words.
 
 News reaches it from every Herd on every Machine as one batch: what matters most first —

@@ -101,6 +101,30 @@ export const inSync = (row: MachineRow, desktop: DesktopHolds): InSync => {
   return { state: behind.length === 0 ? "in-sync" : "behind", behind };
 };
 
+/** Whether Sync now is offered: onboarding has its own steps. */
+export const syncable = (verdict: InSync) =>
+  verdict.behind.some(({ part }) => part !== "onboarding");
+
+/** The Collie a Machine's row says it runs. */
+export const buildOf = ({ build, development }: Pick<MachineRow, "build" | "development">) =>
+  development !== null
+    ? `development build ${development}`
+    : build !== null
+      ? `Collie ${build}`
+      : "Build not known yet";
+
+/** The Machines page's top line, then why each Machine is behind, as the Flock chat reads it. */
+export const flockInSyncSaid = (rows: ReadonlyArray<MachineRow>, desktop: DesktopHolds) =>
+  [
+    flockInSync(rows, desktop).said,
+    ...rows.flatMap((row) => {
+      const { behind } = inSync(row, desktop);
+      return behind.length === 0
+        ? []
+        : [`${row.name}: ${behind.map(({ said }) => said).join("; ")}`];
+    }),
+  ].join(". ");
+
 /** The Machines page's top line, and how many Machines aren't in sync, connecting ones aside. */
 export const flockInSync = (rows: ReadonlyArray<MachineRow>, desktop: DesktopHolds) => {
   const lagging = rows.flatMap((row) => {

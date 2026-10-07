@@ -456,7 +456,7 @@ export const DesktopRpcs = RpcGroup.make(
   /** Does for a lagging Machine what connecting would, and says what it did. */
   Rpc.make("syncNow", {
     payload: { profile: Schema.String },
-    success: Schema.String,
+    success: Schema.Struct({ said: Schema.String, failed: Schema.Boolean }),
     error: ActionFailed,
   }),
   /** One Run's details while its record is open, with its log's tail, again as they change. */

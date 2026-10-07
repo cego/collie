@@ -228,8 +228,9 @@ export const useActions = () => {
     pasteCode: (job: string, code: string) => pasteCode({ payload: { job, code } }),
     syncNow: (profile: string) =>
       syncNow({ payload: { profile } }).then((exit) => {
-        const said = read(exit);
-        if (said !== null) toast.add({ title: said, color: "success" });
+        const synced = read(exit);
+        if (synced !== null)
+          toast.add({ title: synced.said, color: synced.failed ? "error" : "success" });
       }),
     removeMachine: (profile: string) =>
       removeMachine({ payload: { profile } }).then((exit) => {

@@ -86,7 +86,7 @@ import {
   syncNow,
 } from "./machine";
 import { givenCredentials } from "./given";
-import { inSync } from "../shared/in-sync";
+import { flockInSyncSaid, inSync } from "../shared/in-sync";
 import { attachCommand, inTerminal, launched, openTerminal, shellLine } from "./terminal";
 import { addToHerdr, doctorOn, NOT_STARTED, onboardThrough, RELEASES, tracked } from "./onboarding";
 import {
@@ -553,6 +553,32 @@ const main = Effect.gen(function* () {
 
   // The Flock as the board was last sent it, so the chat names its Machines as the cards do.
   let shown = EMPTY_FLOCK;
+  const holds = Effect.map(given.held, (texts) => ({
+    version: manifest.version,
+    credentials: CREDENTIALS.filter((one) => texts[one] !== undefined),
+  }));
+  /** Sync now: what connecting would do for the Machine on `profile`. */
+  const syncMachine = (profile: string) =>
+    Effect.gen(function* () {
+      const route = routes.get(profile)?.route;
+      const row = machineRows(shown).find((one) => one.profile === profile);
+      if (route === undefined || row === undefined)
+        return yield* new ActionFailed({ reason: "that Machine is not in herdr's list" });
+      const { behind } = inSync(row, yield* holds);
+      const door = [...doors.values()].find((one) => one.machine.profile === profile);
+      return yield* syncNow(
+        route.machine,
+        behind.map(({ part }) => part),
+        {
+          reopen: PubSub.publish(changes, { _tag: "Reopen", profile }),
+          sync:
+            door === undefined
+              ? Effect.succeed("it isn't connected; it is synced when it connects")
+              : syncOn(settingsOf(door)),
+          give: given.giveLacking(route),
+        },
+      );
+    });
   // Opened by the view's first ask, in Desktop's own scope; its session starts with the first message.
   const chat = yield* openFlockChat({
     claude: claudeCode,
@@ -562,6 +588,18 @@ const main = Effect.gen(function* () {
     machineRule: () => settings.machineRule,
     setMachineRule: (machineRule) =>
       saveSettings({ machineRule }).pipe(Effect.provide(BunServices.layer)),
+    inSync: (sync) =>
+      Effect.gen(function* () {
+        const rows = machineRows(shown);
+        if (sync === undefined) return flockInSyncSaid(rows, yield* holds);
+        const row = rows.find((one) => one.name === sync || one.profile === sync);
+        if (row === undefined)
+          return `No Machine "${sync}"; the Machines are ${rows.map(({ name }) => name).join(", ")}`;
+        return yield* syncMachine(row.profile).pipe(
+          Effect.map(({ said }) => said),
+          Effect.catch(({ reason }) => Effect.succeed(reason)),
+        );
+      }),
     machines: () => {
       const named = nameAsShown(shown);
       return [...doors].map(([installation, held]) => ({
@@ -792,26 +830,7 @@ const main = Effect.gen(function* () {
         ]).pipe(Effect.provide(BunServices.layer));
         return `Removed ${known.route.machine.name}`;
       }),
-    syncNow: ({ profile }) =>
-      Effect.gen(function* () {
-        const route = routes.get(profile)?.route;
-        const row = machineRows(shown).find((one) => one.profile === profile);
-        if (route === undefined || row === undefined)
-          return yield* new ActionFailed({ reason: "that Machine is not in herdr's list" });
-        const texts = yield* given.held;
-        const held = CREDENTIALS.filter((one) => texts[one] !== undefined);
-        const { behind } = inSync(row, { version: manifest.version, credentials: held });
-        const door = [...doors.values()].find((one) => one.machine.profile === profile);
-        const parts = behind.map(({ part }) => part);
-        return yield* syncNow(route.machine, parts, {
-          reopen: PubSub.publish(changes, { _tag: "Reopen", profile }),
-          sync:
-            door === undefined
-              ? Effect.succeed("it isn't connected; it is synced when it connects")
-              : syncOn(settingsOf(door)),
-          give: given.giveLacking(route),
-        });
-      }),
+    syncNow: ({ profile }) => syncMachine(profile),
     act: ({ installation, action, request: again }) =>
       Effect.gen(function* () {
         const request = again ?? (yield* uuid);

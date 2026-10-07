@@ -925,11 +925,7 @@ export const runDetailOn = (door: Door, runId: string) =>
 export const runFileOn = (door: Door, runId: string, ref: string, offset?: number) =>
   door.runFile({ runId, ref, offset }).pipe(Effect.mapError(refusal()));
 
-/**
- * What connecting would do for a Machine that lags on `behind`: reopen its route, which
- * asks its upgrade again and syncs and gives on the new connection, where it is behind on
- * its version; else sync its settings and give it what it lacks. Answers what it did.
- */
+/** What connecting would do for a Machine that lags on `behind`, and whether any of it failed. */
 export const syncNow = (
   machine: KnownMachine,
   behind: ReadonlyArray<Lag["part"]>,
@@ -944,11 +940,14 @@ export const syncNow = (
   Effect.gen(function* () {
     if (behind.includes("version")) {
       yield* steps.reopen;
-      return `Reopening ${machine.name} to upgrade it; its settings and credentials follow once it connects`;
+      return {
+        said: `Reopening ${machine.name} to upgrade it; its settings and credentials follow once it connects`,
+        failed: false,
+      };
     }
     const failed = yield* steps.sync;
     const gave = yield* steps.give;
-    return [
+    const said = [
       `${machine.name}: ${failed === null ? "settings synced" : `settings didn't sync: ${failed}`}`,
       ...gave.map(({ credential, failed: why }) =>
         why === null
@@ -956,4 +955,5 @@ export const syncNow = (
           : `${CREDENTIAL_SAID[credential].lacks} not given: ${why}`,
       ),
     ].join("; ");
+    return { said, failed: failed !== null || gave.some(({ failed: why }) => why !== null) };
   });

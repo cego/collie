@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { type MachineRow, type OnboardRun, SETTLED } from "../../../src/shared/flock";
-import { type InSync, NOT_LIVE_SAID } from "../../../src/shared/in-sync";
+import { type OnboardRun, SETTLED } from "../../../src/shared/flock";
+import { buildOf, type InSync, NOT_LIVE_SAID, syncable } from "../../../src/shared/in-sync";
 
 const emit = defineEmits<{ back: [] }>();
 const { machines, summary } = useInSync();
@@ -16,14 +16,6 @@ const badgeOf = (state: InSync["state"]) =>
       : state === "connecting"
         ? { label: "Connecting", color: "neutral" as const }
         : { label: NOT_LIVE_SAID[state], color: "warning" as const };
-/** What Sync now redoes; onboarding has its own steps. */
-const syncable = (verdict: InSync) => verdict.behind.some(({ part }) => part !== "onboarding");
-const buildOf = ({ build, development }: MachineRow) =>
-  development !== null
-    ? `development build ${development}`
-    : build !== null
-      ? `Collie ${build}`
-      : "Build not known yet";
 
 const missing = (run: OnboardRun) => run.steps.filter(({ status }) => !SETTLED.includes(status));
 </script>

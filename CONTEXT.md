@@ -63,8 +63,8 @@ reaches through `collie bridge` started as `desktop`. Not "native", which alread
 harness-native (**Native chat**) and Effect-native.
 
 **In sync** — A Machine that has everything **Desktop** gives its Flock: it is live, it runs
-Desktop's Collie version, it holds the latest edit of every shared setting, it was given the
-credentials Desktop holds now, and `collie doctor` finds it onboarded. A Machine on a
+Desktop's Collie version or a newer release, it holds the latest edit of every shared
+setting, it was given the credentials Desktop holds now but those its onboarding skipped, and `collie doctor` finds it onboarded. A Machine on a
 development checkout, which nothing upgrades, is never behind on its version. Each part is
 read from what the Machine's host and doctor last told Desktop, and from what Desktop last
 gave it. A Machine that is not in sync is **behind** on each part it lacks, and each has its
@@ -494,7 +494,7 @@ request behind it are produced for the Selection, and a read superseded by a new
 interrupted rather than finished. An action is never applied to it: every action on the
 board belongs to the card it is on. In **Desktop** it is the card last clicked, whether or
 not its record is open, and it is what the Flock chat's chip is about: opening a card's
-record selects that card, and a click on the board's background, Escape on the board or a
+record selects that card, and a click on the board's background, Escape outside a field or a
 message sent clears it.
 
 **Focus** — What the Collie tab is being looked at as: the showing View, every View shown

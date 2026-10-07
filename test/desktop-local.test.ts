@@ -560,12 +560,55 @@ test("Sync now on a Machine behind on its version reopens its route, which asks 
         sync: Effect.die("not synced while it reconnects"),
         give: Effect.die("not given while it reconnects"),
       });
-      expect(answer).toBe(
-        "Reopening vm to upgrade it; its settings and credentials follow once it connects",
-      );
+      expect(answer).toEqual({
+        said: "Reopening vm to upgrade it; its settings and credentials follow once it connects",
+        failed: false,
+      });
       yield* until(() => connections === 2 && asked === 2);
       // Reopened, not lost.
       expect(told.filter((one) => one.endsWith("Lost"))).toEqual([]);
+    }).pipe(Effect.scoped),
+  ));
+
+test("Sync now while a Machine's upgrade runs leaves the upgrade to finish", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      let connections = 0;
+      let asked = 0;
+      const told: string[] = [];
+      const upgraded = yield* Deferred.make<void>();
+      const behind: Route<Fake> = {
+        machine: { profile: "p-vm", name: "vm", target: "mk@vm" },
+        open: () =>
+          Effect.sync((): Fake => {
+            connections++;
+            return {
+              name: "vm",
+              board: () =>
+                Stream.make<[BoardMessage]>({ ...snapshot("vm"), build: "0.30.2" }).pipe(
+                  Stream.concat(Stream.never),
+                ),
+            };
+          }),
+        collie: () =>
+          Effect.sync(() => void asked++).pipe(
+            Effect.andThen(Deferred.await(upgraded)),
+            Effect.as({ out: "", err: "disk full", code: 1 }),
+          ),
+      };
+      const changes = yield* Queue.unbounded<RouteChange<Fake>>();
+      yield* flockStream([behind], new Map(), "0.31.0", Stream.fromQueue(changes)).pipe(
+        Stream.runForEach((item) => Effect.sync(() => told.push(toldWithNotices(item)))),
+        Effect.forkScoped,
+      );
+      yield* until(() => asked === 1);
+      yield* Queue.offer(changes, { _tag: "Reopen", profile: "p-vm" });
+      // Long enough for a reopen that was not refused to reconnect.
+      yield* Effect.sleep("100 millis");
+      expect([connections, asked]).toEqual([1, 1]);
+      yield* Deferred.succeed(upgraded, undefined);
+      yield* until(() => told.includes("Could not upgrade vm to 0.31.0: disk full"));
+      expect(connections).toBe(1);
     }).pipe(Effect.scoped),
   ));
 
@@ -584,12 +627,17 @@ test("Sync now on a Machine behind on settings or credentials syncs and gives, a
         ),
       });
       const vm = { profile: "p-vm", name: "vm" };
-      expect(yield* syncNow(vm, ["credentials"], steps(null))).toBe(
-        "vm: settings synced; the GitLab token given; Helle's token not given: ssh: connection reset",
-      );
-      expect(yield* syncNow(vm, ["settings"], steps("host refused"))).toBe(
-        "vm: settings didn't sync: host refused; the GitLab token given; Helle's token not given: ssh: connection reset",
-      );
-      expect(did).toEqual(["sync", "give", "sync", "give"]);
+      expect(yield* syncNow(vm, ["credentials"], steps(null))).toEqual({
+        said: "vm: settings synced; the GitLab token given; Helle's token not given: ssh: connection reset",
+        failed: true,
+      });
+      expect(yield* syncNow(vm, ["settings"], steps("host refused"))).toEqual({
+        said: "vm: settings didn't sync: host refused; the GitLab token given; Helle's token not given: ssh: connection reset",
+        failed: true,
+      });
+      expect(
+        yield* syncNow(vm, ["settings"], { ...steps(null), give: Effect.succeed([]) }),
+      ).toEqual({ said: "vm: settings synced", failed: false });
+      expect(did).toEqual(["sync", "give", "sync", "give", "sync"]);
     }),
   ));
