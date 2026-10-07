@@ -39,10 +39,10 @@ test(
           const after = yield* client.setSettings({
             request: "s-1",
             settings: [
-              { key: "proactive", value: false, at: "2026-10-07T11:00:00.000Z" },
+              { key: "proactive", value: false, at: "2999-10-07T11:00:00.000Z" },
               // Older than this Machine's own edit, so the Machine's stands.
               { key: "model", value: "haiku", at: "2026-10-07T09:00:00.000Z" },
-              { key: "scope", value: null, at: "2026-10-07T11:00:00.000Z" },
+              { key: "scope", value: null, at: "2999-10-07T11:00:00.000Z" },
             ],
           });
           const defaults = yield* loadDefaults(world.config);
@@ -55,23 +55,23 @@ test(
           expect(after.settings.find(({ key }) => key === "scope")).toEqual({
             key: "scope",
             value: null,
-            at: "2026-10-07T11:00:00.000Z",
+            at: "2999-10-07T11:00:00.000Z",
           });
           expect((yield* readSettingsSet(world.config)).set.proactive).toBe(
-            "2026-10-07T11:00:00.000Z",
+            "2999-10-07T11:00:00.000Z",
           );
 
           const refused = yield* client
             .setSettings({
               request: "s-2",
-              settings: [{ key: "scope", value: "everywhere", at: "2026-10-07T12:00:00.000Z" }],
+              settings: [{ key: "scope", value: "everywhere", at: "2999-10-07T12:00:00.000Z" }],
             })
             .pipe(Effect.flip);
           expect(refused).toMatchObject({ _tag: "HostRefused" });
           const notOne = yield* client
             .setSettings({
               request: "s-3",
-              settings: [{ key: "linear.team", value: "X", at: "2026-10-07T12:00:00.000Z" }],
+              settings: [{ key: "linear.team", value: "X", at: "2999-10-07T12:00:00.000Z" }],
             })
             .pipe(Effect.flip);
           expect(notOne).toMatchObject({ _tag: "HostRefused" });
