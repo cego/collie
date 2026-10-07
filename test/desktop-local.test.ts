@@ -486,3 +486,36 @@ test("a failed upgrade is tried again when the Machine next connects, and only o
       expect(asked).toBe(2);
     }).pipe(Effect.scoped, fastForward),
   ));
+
+test("an upgrade cut off by its connection dropping is tried again when the Machine next connects", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      let asked = 0;
+      const drops: Array<Deferred.Deferred<void>> = [];
+      const dropping: Route<Fake> = {
+        machine: { profile: "p-vm", name: "vm", target: "mk@vm" },
+        open: () =>
+          Effect.sync((): Fake => {
+            const drop = Deferred.makeUnsafe<void>();
+            drops.push(drop);
+            return {
+              name: "vm",
+              board: () =>
+                Stream.make<[BoardMessage]>({ ...snapshot("vm"), build: "0.30.2" }).pipe(
+                  Stream.concat(
+                    Stream.fromEffect(Deferred.await(drop)).pipe(
+                      Stream.flatMap(() => Stream.fail({ message: "connection reset" })),
+                    ),
+                  ),
+                ),
+            };
+          }),
+        // Never answers: the connection drops first.
+        collie: () => Effect.sync(() => void asked++).pipe(Effect.andThen(Effect.never)),
+      };
+      yield* flockStream([dropping], new Map(), "0.31.0").pipe(Stream.runDrain, Effect.forkScoped);
+      yield* until(() => asked === 1);
+      yield* Deferred.succeed(drops[0]!, undefined);
+      yield* until(() => asked === 2);
+    }).pipe(Effect.scoped, fastForward),
+  ));

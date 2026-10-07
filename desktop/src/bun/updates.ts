@@ -88,9 +88,11 @@ export const updatesOf = (
       return { news: Stream.make(never), check: Effect.succeed(never) } satisfies Updates;
     }
     const latest = yield* SubscriptionRef.make<UpdateNews>({ _tag: "Checking" });
+    let running: Deferred.Deferred<UpdateNews> | undefined;
     const say = (news: UpdateNews) => SubscriptionRef.set(latest, news).pipe(Effect.as(news));
     const once = Effect.gen(function* () {
-      yield* say({ _tag: "Checking" });
+      // A ready update stays ready while Desktop looks for a newer one.
+      if ((yield* SubscriptionRef.get(latest))._tag !== "Ready") yield* say({ _tag: "Checking" });
       const found = yield* port.check;
       if (!found.available) return yield* say({ _tag: "UpToDate", version });
       const ready = yield* verified(port, key);
@@ -102,10 +104,22 @@ export const updatesOf = (
       return yield* say(news ?? { _tag: "UpToDate", version });
     }).pipe(
       // Tried again at the next check.
-      Effect.catch((reason) => say({ _tag: "Failed", reason })),
+      Effect.catch((reason) =>
+        Effect.flatMap(verified(port, key), (news) =>
+          say(news?._tag === "Ready" ? news : { _tag: "Failed", reason }),
+        ),
+      ),
       Effect.provideService(FileSystem.FileSystem, fs),
     );
-    let running: Deferred.Deferred<UpdateNews> | undefined;
+    // What `collie upgrade` staged, said without waiting for the next check.
+    const staged = Effect.gen(function* () {
+      const prepared = yield* port.prepared;
+      const now = yield* SubscriptionRef.get(latest);
+      const said = (now._tag === "Ready" || now._tag === "Refused") && now.version;
+      if (prepared === null || running !== undefined || said === prepared.version) return;
+      const news = yield* verified(port, key);
+      if (news !== null) yield* say(news);
+    }).pipe(Effect.provideService(FileSystem.FileSystem, fs));
     const check = Effect.suspend(() => {
       if (running !== undefined) return Deferred.await(running);
       const done = Deferred.makeUnsafe<UpdateNews>();
@@ -118,6 +132,7 @@ export const updatesOf = (
       );
     });
     yield* check.pipe(Effect.repeat(every), Effect.forkIn(scope));
+    yield* staged.pipe(Effect.repeat(Schedule.spaced("1 minute")), Effect.forkIn(scope));
     return { news: SubscriptionRef.changes(latest), check } satisfies Updates;
   });
 

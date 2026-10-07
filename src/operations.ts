@@ -21,7 +21,6 @@ import {
 import { carriedBefore, carryOutProposal } from "./run-actions";
 export { carryOutProposal, registerRunExecutors } from "./run-actions";
 import { shell, type Runner } from "./mr";
-import { dataHomeOf, updateDesktop } from "./desktop";
 import { installation, manifestField, RELEASE_TAG } from "./release";
 import manifest from "../herdr-plugin.toml";
 import { everyRegistered, type AgentEntry } from "./registry";
@@ -323,6 +322,8 @@ export const upgrade = Effect.fn("operations.upgrade")(function* (
     });
   }
 
+  // Loaded here: of every front door, only an upgrade reaches Desktop.
+  const { dataHomeOf, updateDesktop } = yield* Effect.promise(() => import("./desktop"));
   const desktop = yield* updateDesktop(to ?? (yield* manifestField(root, "version")), {
     dataHome: dataHomeOf(env.home, env.raw.XDG_DATA_HOME),
   });

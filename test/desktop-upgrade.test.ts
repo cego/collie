@@ -228,6 +228,76 @@ test("Desktop already at the version, as when it upgrades Local to its own, is l
   );
 });
 
+/** An update Desktop's own download already staged under `data`, at `version`. */
+const stageEarlier = (data: string, version: string, hash: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const extraction = `${data}/${ROOT}/self-extraction`;
+    yield* fs.makeDirectory(extraction, { recursive: true });
+    yield* fs.writeFileString(`${extraction}/${hash}.tar`, "an earlier bundle");
+    yield* fs.writeFileString(
+      `${extraction}/.electrobun-prepared-update.json`,
+      asJson({
+        schema_version: 1,
+        identifier: "dk.cego.collie.desktop",
+        channel: "stable",
+        version,
+        hash,
+        platform: "linux",
+        arch: "x64",
+        retained_tar_path: `${extraction}/${hash}.tar`,
+        artifact_file: ARTIFACT,
+      }),
+    );
+    return `${extraction}/${hash}.tar`;
+  });
+
+test("a newer update already staged is never replaced by an older one", () => {
+  const key = pair();
+  return run((data) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const release = yield* serveRelease(signRelease(TAR, key.privateKey));
+      yield* install(data, release.base, "0.33.0");
+      const newer = yield* stageEarlier(data, "0.35.0", "new35");
+
+      const step = yield* updateDesktop("0.34.0", {
+        dataHome: data,
+        key: key.publicKey,
+        platform: "linux-x64",
+        running: () => Effect.succeed(true),
+      });
+
+      expect(step?.detail).toBe("Desktop 0.33.0 → 0.35.0 applies when you restart Desktop");
+      expect(release.asked).toEqual([]);
+      expect(yield* staged(data)).toMatchObject({ version: "0.35.0" });
+      expect(yield* fs.exists(newer)).toBe(true);
+    }),
+  );
+});
+
+test("an older update staged before is replaced, and its tar removed", () => {
+  const key = pair();
+  return run((data) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const release = yield* serveRelease(signRelease(TAR, key.privateKey));
+      yield* install(data, release.base, "0.33.0");
+      const older = yield* stageEarlier(data, "0.33.5", "old335");
+
+      yield* updateDesktop("0.34.0", {
+        dataHome: data,
+        key: key.publicKey,
+        platform: "linux-x64",
+        running: () => Effect.succeed(false),
+      });
+
+      expect(yield* staged(data)).toMatchObject({ version: "0.34.0", hash: "new34" });
+      expect(yield* fs.exists(older)).toBe(false);
+    }),
+  );
+});
+
 test("no released Desktop, a development Desktop or a platform with no Desktop release is skipped quietly", () => {
   const key = pair();
   return run((data) =>

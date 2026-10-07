@@ -37,8 +37,10 @@ const Manifest = Schema.fromJsonString(
     }),
   }),
 );
-const PREPARED = ".electrobun-prepared-update.json";
-const Prepared = Schema.fromJsonString(
+/** Where Electrobun records an update it has downloaded and unpacked, waiting to install. */
+export const preparedRecordOf = (channelRoot: string) =>
+  `${channelRoot}/self-extraction/.electrobun-prepared-update.json`;
+export const PreparedRecord = Schema.fromJsonString(
   Schema.Struct({
     schema_version: Schema.Literal(1),
     identifier: Schema.String,
@@ -153,6 +155,15 @@ export const updateDesktop = Effect.fn("desktop.update")(function* (
     } satisfies DesktopStep;
   }
 
+  const staged = yield* fs
+    .readFileString(preparedRecordOf(root))
+    .pipe(Effect.flatMap(Schema.decodeUnknownEffect(PreparedRecord)), Effect.option);
+  // One already staged, by this or by Desktop's own download, is never replaced by an older one.
+  const target = Option.match(staged, {
+    onNone: () => to,
+    onSome: ({ version }) => (Bun.semver.order(version, to) >= 0 ? version : to),
+  });
+
   const staging = Effect.gen(function* () {
     const release = releaseOf(installed.value.baseUrl, to);
     const manifest = yield* bodyOf(`${release}/${PREFIX}-update.json`).pipe(
@@ -181,10 +192,10 @@ export const updateDesktop = Effect.fn("desktop.update")(function* (
     yield* fs.makeDirectory(extraction, { recursive: true });
     yield* fs.writeFile(`${retained}.partial`, tar);
     yield* fs.rename(`${retained}.partial`, retained);
-    const record = path.join(extraction, PREPARED);
+    const record = preparedRecordOf(root);
     yield* fs.writeFileString(
       `${record}.partial`,
-      yield* Schema.encodeEffect(Prepared)({
+      yield* Schema.encodeEffect(PreparedRecord)({
         schema_version: 1,
         identifier: IDENTIFIER,
         channel: "stable",
@@ -197,9 +208,11 @@ export const updateDesktop = Effect.fn("desktop.update")(function* (
       }),
     );
     yield* fs.rename(`${record}.partial`, record);
+    if (Option.isSome(staged) && staged.value.retained_tar_path !== retained)
+      yield* fs.remove(staged.value.retained_tar_path, { force: true });
   });
 
-  return yield* staging.pipe(
+  return yield* (target === to ? staging : Effect.void).pipe(
     Effect.provide(FetchHttpClient.layer),
     Effect.mapError(String),
     Effect.andThen(running(app)),
@@ -212,7 +225,7 @@ export const updateDesktop = Effect.fn("desktop.update")(function* (
       onSuccess: (live): DesktopStep => ({
         step: "desktop",
         state: "done",
-        detail: `Desktop ${from} → ${to} ${live ? "applies when you restart Desktop" : "installs when Desktop next starts"}`,
+        detail: `Desktop ${from} → ${target} ${live ? "applies when you restart Desktop" : "installs when Desktop next starts"}`,
       }),
     }),
   );

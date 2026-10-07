@@ -4,7 +4,7 @@
 
 import { expect, test } from "bun:test";
 import { generateKeyPairSync } from "node:crypto";
-import { Deferred, Effect, Fiber, FileSystem, Stream } from "effect";
+import { Deferred, Effect, Fiber, FileSystem, Schedule, Stream } from "effect";
 import { BunServices } from "@effect/platform-bun";
 import { signRelease } from "../src/signing";
 import {
@@ -169,13 +169,49 @@ test("a check asked for while one runs joins it rather than downloading twice", 
       const asked = yield* Effect.all([updates.check, updates.check], {
         concurrency: "unbounded",
       }).pipe(Effect.forkScoped);
-      yield* Effect.yieldNow;
+      yield* Effect.suspend(() =>
+        calls.includes("download") ? Effect.void : Effect.fail("not yet"),
+      ).pipe(Effect.retry(Schedule.spaced("5 millis")));
       yield* Deferred.succeed(downloading, undefined);
       const [first, second] = yield* Fiber.join(asked);
       expect(first).toEqual({ _tag: "Ready", version: "0.33.0" });
       expect(second).toEqual(first);
       expect(calls.filter((call) => call === "download")).toHaveLength(1);
       expect(calls.filter((call) => call === "check")).toHaveLength(1);
+    }).pipe(Effect.scoped),
+  );
+});
+
+test("an update collie upgrade staged is said to be ready within a minute, without waiting for the next check", () => {
+  const key = pair();
+  return run((dir) =>
+    Effect.gen(function* () {
+      const { port } = yield* fakeUpdater(dir, {
+        signature: signRelease(TAR, key.privateKey),
+        available: false,
+        preparedAtStart: true,
+      });
+      const updates = yield* updatesOf(port, "0.32.0", key.publicKey);
+      const said = yield* told(updates, Effect.sleep("2 minutes"));
+      expect(said.at(-1)).toEqual({ _tag: "Ready", version: "0.33.0" });
+    }).pipe(Effect.scoped, (effect) => fastForward(effect, 10_000)),
+  );
+});
+
+test("a ready update stays ready through a later check, even one that could not look", () => {
+  const key = pair();
+  return run((dir) =>
+    Effect.gen(function* () {
+      const { port } = yield* fakeUpdater(dir, {
+        signature: signRelease(TAR, key.privateKey),
+        preparedAtStart: true,
+        failing: "HTTP 503",
+      });
+      const updates = yield* updatesOf(port, "0.32.0", key.publicKey);
+      expect(yield* updates.check).toEqual({ _tag: "Ready", version: "0.33.0" });
+      const said = yield* told(updates, updates.check);
+      expect(said).not.toContainEqual({ _tag: "Checking" });
+      expect(said.at(-1)).toEqual({ _tag: "Ready", version: "0.33.0" });
     }).pipe(Effect.scoped),
   );
 });

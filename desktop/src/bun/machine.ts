@@ -7,6 +7,7 @@ import {
   Clock,
   Deferred,
   Effect,
+  Exit,
   Fiber,
   Layer,
   Option,
@@ -625,6 +626,12 @@ export const flockStream = <D extends BoardSource>(
       const upgradeThenReopen = (route: Route<D>, installation: string, from: string) =>
         Stream.unwrap(
           upgradeTo(route, version).pipe(
+            // Failed, or cut off with its connection: asked again when it next connects.
+            Effect.onExit((exit) =>
+              Exit.isSuccess(exit)
+                ? Effect.void
+                : Effect.sync(() => upgrading.delete(installation)),
+            ),
             Effect.match({
               onSuccess: () =>
                 Stream.make(
@@ -632,12 +639,10 @@ export const flockStream = <D extends BoardSource>(
                 ).pipe(
                   Stream.concat(Stream.fail<RouteFailure>({ state: "reopen", reason: "upgraded" })),
                 ),
-              onFailure: (reason) => {
-                upgrading.delete(installation);
-                return Stream.make(
+              onFailure: (reason) =>
+                Stream.make(
                   notice(route, `Could not upgrade ${route.machine.name} to ${version}: ${reason}`),
-                );
-              },
+                ),
             }),
           ),
         );

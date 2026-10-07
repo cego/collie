@@ -857,7 +857,8 @@ so. One that verifies is announced as "Collie 0.33.0 is ready, restart Desktop",
 **Restart Desktop** installs it. Desktop never restarts itself: an update that is ready when
 you quit is installed the next time you start Desktop. [`collie upgrade`](cli.md#upgrading)
 on this computer stages the same update for Desktop, verified the same way, so the CLI and
-Desktop move together. A Desktop run from a checkout
+Desktop move together; a running Desktop announces it within a minute. A ready update stays
+announced through later checks, even one that fails. A Desktop run from a checkout
 (`bun run start`, or any build that is not the stable channel) never updates itself, and
 **Machines** says so. The new
 Desktop then upgrades your released Machines to its version as they connect.

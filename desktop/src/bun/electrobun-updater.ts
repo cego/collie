@@ -4,22 +4,8 @@ import { Effect, FileSystem, Option, Schema } from "effect";
 import { Updater } from "electrobun/bun";
 import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
 import * as HttpClient from "effect/unstable/http/HttpClient";
-import { releaseOf } from "../../../src/desktop";
+import { PreparedRecord, preparedRecordOf, releaseOf } from "../../../src/desktop";
 import type { UpdaterPort } from "./updates";
-
-/** What Electrobun records once it has downloaded and unpacked an update. */
-// ponytail: Electrobun's own file, read as electrobun 2.0.2 writes it; recheck on an upgrade.
-const PreparedRecord = Schema.fromJsonString(
-  Schema.Struct({
-    version: Schema.String,
-    hash: Schema.String,
-    retained_tar_path: Schema.String,
-    artifact_file: Schema.String,
-  }),
-);
-
-const preparedRecordOf = (folder: string) =>
-  `${folder}/self-extraction/.electrobun-prepared-update.json`;
 
 const promised = <A>(evaluate: () => Promise<A>) =>
   Effect.tryPromise({ try: evaluate, catch: (cause) => String(cause) });
