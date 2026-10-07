@@ -759,6 +759,16 @@ const WORKFLOWS: readonly Check[] = [
 /** What only a person at a terminal can settle. */
 const OPERATOR_CHECKS: readonly Check[] = [
   {
+    id: "flock-chat/a-file-copied-in-gnome-files-pastes-as-a-chip",
+    statement: "A file copied in GNOME Files and pasted into the Flock chat becomes a chip.",
+    owner: ATTACHMENTS,
+    needs: "operator",
+    proof: {
+      kind: "operator",
+      how: "In Desktop on GNOME, copy a PDF and a text file in Files, press Ctrl+V in the chat's input, and record the two chips and what the model says of each once sent, with the revision.",
+    },
+  },
+  {
     id: "flock-chat/a-pasted-screenshot-is-seen-and-kept",
     statement:
       "A screenshot pasted with Ctrl+V in the popped-out Flock chat is described correctly by the model, and after a restart the message still shows its thumbnail.",

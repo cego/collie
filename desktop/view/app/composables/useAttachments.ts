@@ -3,17 +3,21 @@
 // main process in parts as it is added, scaled first where it is a large image.
 
 import { useAtomSet } from "@effect/atom-vue";
-import { DateTime, Encoding, Exit, Option, Schema } from "effect";
+import { DateTime, Effect, Encoding, Exit, Option, Schema } from "effect";
 import {
   type Attached,
   capRefusal,
   pastedName,
   scaledSize,
   Staged,
+  type StagedOrRefused,
 } from "../../../src/shared/attachments";
 import { FlockClient } from "../flock";
 
 const stageAtom = FlockClient.mutation("stage");
+const stagePathsAtom = FlockClient.mutation("stagePaths");
+const pickAtom = FlockClient.mutation("pickFiles");
+const clipboardAtom = FlockClient.mutation("clipboardFiles");
 const fileAtom = FlockClient.mutation("attachmentFile");
 
 const decodePending = Schema.decodeUnknownOption(Schema.Array(Staged));
@@ -38,19 +42,26 @@ export const useAttachments = () => {
   const stage = useAtomSet(() => stageAtom, { mode: "promiseExit" });
   const read = useAtomSet(() => fileAtom, { mode: "promiseExit" });
   const refused = ref<string | null>(null);
+  const stagePaths = useAtomSet(() => stagePathsAtom, { mode: "promiseExit" });
+  const pick = useAtomSet(() => pickAtom, { mode: "promiseExit" });
+  const fromClipboard = useAtomSet(() => clipboardAtom, { mode: "promiseExit" });
 
-  const send = async (bytes: Uint8Array, name: string, mediaType: string, scaledOf?: string) => {
-    const key = crypto.randomUUID();
-    for (let offset = 0; ; offset += PART) {
-      const content = Encoding.encodeBase64(bytes.subarray(offset, offset + PART));
-      const payload = { key, name, mediaType, size: bytes.length, offset, content };
-      const exit = await stage({
-        payload: scaledOf === undefined ? payload : { ...payload, scaledOf },
-      });
-      if (Exit.isFailure(exit)) throw new Error(`${name} could not be attached`);
-      if (exit.value !== null || offset + PART >= bytes.length) return exit.value;
-    }
-  };
+  const send = (bytes: Uint8Array, name: string, mediaType: string, scaledOf?: string) =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const key = crypto.randomUUID();
+        for (let offset = 0; ; offset += PART) {
+          const content = Encoding.encodeBase64(bytes.subarray(offset, offset + PART));
+          const payload = { key, name, mediaType, size: bytes.length, offset, content };
+          const exit = yield* Effect.promise(() =>
+            stage({ payload: scaledOf === undefined ? payload : { ...payload, scaledOf } }),
+          );
+          if (Exit.isFailure(exit))
+            return yield* Effect.fail(new Error(`${name} could not be attached`));
+          if (exit.value !== null || offset + PART >= bytes.length) return exit.value;
+        }
+      }),
+    );
 
   /** A copy of a large image, scaled down for the model; the original is what a Run gets. */
   const scaled = async (file: Blob, staged: Staged) => {
@@ -82,6 +93,30 @@ export const useAttachments = () => {
     }
   };
 
+  /** Files main copied in, held to the message's cap and scaled as a pasted image is. */
+  const took = async (results: ReadonlyArray<StagedOrRefused>, ...also: string[]) => {
+    const said = [...also];
+    for (const one of results) {
+      if ("refused" in one) {
+        said.push(one.refused);
+        continue;
+      }
+      const why = capRefusal(pending.value, one);
+      if (why !== null) {
+        said.push(why);
+        continue;
+      }
+      const bytes = one.mediaType.startsWith("image/") ? await bytesOf(one) : null;
+      if (bytes !== null) await scaled(bytes, one).catch(() => undefined);
+      if (!pending.value.some(({ id }) => id === one.id)) share([...pending.value, one]);
+    }
+    refused.value = said.length === 0 ? null : said.join(" ");
+  };
+  const asked = async (
+    exit: Exit.Exit<ReadonlyArray<StagedOrRefused>, unknown>,
+    ...also: string[]
+  ) => (Exit.isSuccess(exit) ? took(exit.value, ...also) : undefined);
+
   /** Desktop's copy, read back for a thumbnail; null once Desktop no longer has it. */
   const bytesOf = async (file: Attached) => {
     const parts: Uint8Array<ArrayBuffer>[] = [];
@@ -101,6 +136,13 @@ export const useAttachments = () => {
     pending: readonly(pending),
     refused: readonly(refused),
     add,
+    /** Files named by path, as a file manager copies or drops them; `also` are refusals of its own. */
+    addPaths: async (paths: ReadonlyArray<string>, also: ReadonlyArray<string> = []) =>
+      asked(await stagePaths({ payload: { paths } }), ...also),
+    /** The files a dialog lets the human choose. */
+    pick: async () => asked(await pick({ payload: undefined })),
+    /** The files on the system clipboard, where a paste handed the view none. */
+    fromClipboard: async () => asked(await fromClipboard({ payload: undefined })),
     remove: (id: string) => share(pending.value.filter((one) => one.id !== id)),
     clear: () => {
       refused.value = null;

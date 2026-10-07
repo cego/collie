@@ -408,3 +408,32 @@ test("a message with an image hands the SDK the words, Desktop's listing and the
       }),
   );
 });
+
+test("a PDF goes as a document, a small text as text headed with its name, and a large text or a zip only by name", () =>
+  withChat({ items: [], proactive: false }, answered, ({ conversation, seen, dir }) =>
+    Effect.gen(function* () {
+      const bytes = (text: string) => new TextEncoder().encode(text);
+      const pdf = yield* staged(dir, "spec.pdf", "application/pdf", bytes("%PDF-1.7 tiny"));
+      const log = yield* staged(dir, "app.log", "text/plain", bytes("one\ntwo\n"));
+      const big = yield* staged(dir, "big.txt", "text/plain", bytes("x".repeat(100 * 1024 + 1)));
+      const zip = yield* staged(dir, "trace.zip", "application/zip", bytes("PK\u0003\u0004"));
+
+      yield* Stream.runDrain(
+        conversation.send("look", null, false, [pdf.id, log.id, big.id, zip.id]),
+      );
+      expect(seen.contents[0]).toEqual([
+        { type: "text", text: "look" },
+        { type: "text", text: listing([pdf, log, big, zip]) },
+        {
+          type: "document",
+          source: {
+            type: "base64",
+            media_type: "application/pdf",
+            data: Buffer.from("%PDF-1.7 tiny").toString("base64"),
+          },
+          title: "spec.pdf",
+        },
+        { type: "text", text: "app.log:\n\none\ntwo\n" },
+      ]);
+    }),
+  ));

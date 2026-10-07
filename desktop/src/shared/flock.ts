@@ -6,7 +6,7 @@ import { Effect, Schema, Stream, Struct } from "effect";
 import * as Rpc from "effect/unstable/rpc/Rpc";
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
 import { AguiEvent } from "./agui";
-import { Staged } from "./attachments";
+import { Staged, StagedOrRefused } from "./attachments";
 import { About, Answers, ChatMessage, Conversations, DesktopTurn } from "./chat-view";
 import { FlockSettings } from "./flock-settings";
 import {
@@ -464,6 +464,15 @@ export const DesktopRpcs = RpcGroup.make(
     success: Schema.NullOr(Staged),
     error: ActionFailed,
   }),
+  /** Files on this computer, named by path as a paste or a drop names them, copied in. */
+  Rpc.make("stagePaths", {
+    payload: { paths: Schema.Array(Schema.String) },
+    success: Schema.Array(StagedOrRefused),
+  }),
+  /** The files a dialog lets the human choose, copied in; none where they chose nothing. */
+  Rpc.make("pickFiles", { success: Schema.Array(StagedOrRefused) }),
+  /** The files on the system clipboard, for a paste the view was handed no files in. */
+  Rpc.make("clipboardFiles", { success: Schema.Array(StagedOrRefused) }),
   /** Part of Desktop's copy of an attachment, for a thumbnail drawn again. */
   Rpc.make("attachmentFile", {
     payload: { id: Schema.String, offset: Schema.optionalKey(Schema.Int) },

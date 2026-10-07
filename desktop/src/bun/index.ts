@@ -18,6 +18,7 @@ import {
   PubSub,
   Queue,
   Result,
+  Schedule,
   Schema,
   Scope,
   Semaphore,
@@ -50,7 +51,8 @@ import {
 } from "../shared/flock";
 import { RELEASE_PUBLIC_KEY } from "../../../src/signing";
 import { appWindowFor } from "./browser";
-import { readAttachment, stageAttachment } from "./attachments";
+import { clipboardPaths } from "../shared/attachments";
+import { pruneAttachments, readAttachment, stageAttachment, stagePath } from "./attachments";
 import { type FlockConversation, openFlockChat, refusal } from "./chat";
 import { claudeCode } from "./claude";
 import { chatDoor } from "./flock-tools";
@@ -490,6 +492,21 @@ const main = Effect.gen(function* () {
       );
     }).pipe(settingsWrite.withPermits(1), Effect.orDie);
 
+  /** Files named by path, each copied in or refused in words. */
+  const stagedFrom = (paths: ReadonlyArray<string>) =>
+    Effect.forEach(paths, (path) =>
+      stagePath(own, path).pipe(
+        Effect.catch((cause) => Effect.succeed({ refused: `${path}: ${cause.message}` })),
+      ),
+    ).pipe(Effect.provide(BunServices.layer));
+  yield* Clock.currentTimeMillis.pipe(
+    Effect.flatMap((now) => pruneAttachments(own, now)),
+    Effect.ignore,
+    Effect.repeat(Schedule.spaced("1 day")),
+    Effect.provide(BunServices.layer),
+    Effect.forkIn(scope),
+  );
+
   // The Flock as the board was last sent it, so the chat names its Machines as the cards do.
   let shown = EMPTY_FLOCK;
   // Opened by the view's first ask, in Desktop's own scope; its session starts with the first message.
@@ -808,6 +825,17 @@ const main = Effect.gen(function* () {
         ),
         Effect.provide(BunServices.layer),
       ),
+    stagePaths: ({ paths }) => stagedFrom(paths),
+    pickFiles: () =>
+      Effect.promise(() =>
+        Utils.openFileDialog({ canChooseDirectory: false, allowsMultipleSelection: true }),
+      ).pipe(Effect.flatMap((paths) => stagedFrom(paths.filter((path) => path !== "")))),
+    clipboardFiles: () =>
+      Effect.sync(() =>
+        Utils.clipboardAvailableFormats().includes("files")
+          ? (Utils.clipboardReadText() ?? "")
+          : "",
+      ).pipe(Effect.flatMap((text) => stagedFrom(clipboardPaths(text)))),
     attachmentFile: ({ id, offset }) =>
       readAttachment(own, id, offset).pipe(
         Effect.mapError(

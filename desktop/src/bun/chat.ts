@@ -60,6 +60,15 @@ export interface ClaudeSession extends AsyncIterable<SdkMessage> {
 export type ContentBlock =
   | { readonly type: "text"; readonly text: string }
   | {
+      readonly type: "document";
+      readonly source: {
+        readonly type: "base64";
+        readonly media_type: "application/pdf";
+        readonly data: string;
+      };
+      readonly title: string;
+    }
+  | {
       readonly type: "image";
       readonly source: {
         readonly type: "base64";
@@ -178,6 +187,21 @@ export const refusal = (message: string): AguiEvent => ({ type: "RUN_ERROR", run
 const SHOWN = ["image/png", "image/jpeg", "image/gif", "image/webp"] as const;
 type ShownImage = (typeof SHOWN)[number];
 const shownAs = (mediaType: string) => SHOWN.find((one) => one === mediaType);
+/** The largest PDF handed over as a document, and text as text; anything larger goes by name. */
+const PDF_BYTES = 4 * 1024 * 1024;
+const TEXT_BYTES = 100 * 1024;
+/** What may be text; a file of unknown type is, where its bytes are UTF-8. */
+const TEXTUAL = /^text\/|json|xml|javascript|yaml|toml|x-sh|^application\/octet-stream$/;
+const strictly = new TextDecoder("utf-8", { fatal: true });
+/** The file as text, or null where it is not UTF-8 or holds a NUL. */
+const utf8 = (bytes: Uint8Array) => {
+  if (bytes.includes(0)) return null;
+  try {
+    return strictly.decode(bytes);
+  } catch {
+    return null;
+  }
+};
 
 /**
  * The human's message as the model is handed it: their words, Desktop's listing of the
@@ -196,21 +220,34 @@ const contentOf = Effect.fnUntraced(function* (
     files.push(held);
   }
   const images: ContentBlock[] = [];
+  const documents: ContentBlock[] = [];
+  const texts: ContentBlock[] = [];
   for (const file of files) {
     const media = shownAs(file.mediaType);
-    if (media === undefined) continue;
-    const shown =
-      (yield* scaledCopy(dir, file.id).pipe(Effect.orElseSucceed(() => null))) ?? file.path;
-    const bytes = yield* fs.readFile(shown).pipe(Effect.orElseSucceed(() => new Uint8Array()));
-    images.push({
-      type: "image",
-      source: { type: "base64", media_type: media, data: Encoding.encodeBase64(bytes) },
-    });
+    const read = (path: string) =>
+      fs.readFile(path).pipe(Effect.orElseSucceed(() => new Uint8Array()));
+    if (media !== undefined) {
+      const scaled = yield* scaledCopy(dir, file.id).pipe(Effect.orElseSucceed(() => null));
+      const data = Encoding.encodeBase64(yield* read(scaled ?? file.path));
+      images.push({ type: "image", source: { type: "base64", media_type: media, data } });
+    } else if (file.mediaType === "application/pdf" && file.size <= PDF_BYTES) {
+      const data = Encoding.encodeBase64(yield* read(file.path));
+      documents.push({
+        type: "document",
+        source: { type: "base64", media_type: "application/pdf", data },
+        title: file.name,
+      });
+    } else if (file.size <= TEXT_BYTES && TEXTUAL.test(file.mediaType)) {
+      const text = utf8(yield* read(file.path));
+      if (text !== null) texts.push({ type: "text", text: `${file.name}:\n\n${text}` });
+    }
   }
   const blocks: Array<ContentBlock> = [
     ...(text === "" ? [] : [{ type: "text" as const, text }]),
     { type: "text", text: listing(files) },
     ...images,
+    ...documents,
+    ...texts,
   ];
   return blocks;
 });

@@ -4,6 +4,9 @@
 import { expect, test } from "bun:test";
 import {
   capRefusal,
+  clipboardPaths,
+  dropKind,
+  uriListPaths,
   fromListing,
   listing,
   pastedImages,
@@ -72,4 +75,31 @@ test("Desktop's listing of a message's files reads back as the files it lists", 
     { id: `${sha}/my shot (1).png`, name: "my shot (1).png", size: 2048, mediaType: "image/png" },
   ]);
   expect(fromListing("what is this?")).toBeNull();
+});
+
+test("copied files arrive as a uri-list of file:// URIs, read as paths, and anything else is refused", () => {
+  expect(
+    uriListPaths(
+      "# copied\r\nfile:///home/mk/Pictures/my%20shot.png\r\nfile://localhost/tmp/log.txt\r\nhttps://example.com/x.png\r\nfile://other-host/etc/passwd\r\n",
+    ),
+  ).toEqual({
+    paths: ["/home/mk/Pictures/my shot.png", "/tmp/log.txt"],
+    refused: [
+      "https://example.com/x.png is not a file on this computer",
+      "file://other-host/etc/passwd is not a file on this computer",
+    ],
+  });
+});
+
+test("a drop of files is told from a drop of text", () => {
+  expect(dropKind(["text/uri-list", "text/plain"])).toBe("uris");
+  expect(dropKind(["Files"])).toBe("files");
+  expect(dropKind(["text/plain"])).toBe("text");
+});
+
+test("files the system clipboard names as text are read as paths, and nothing else is", () => {
+  expect(clipboardPaths("file:///tmp/a%20b.png\n/home/mk/c.txt\nhello")).toEqual([
+    "/tmp/a b.png",
+    "/home/mk/c.txt",
+  ]);
 });

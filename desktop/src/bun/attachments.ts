@@ -5,7 +5,7 @@
 import { createHash } from "node:crypto";
 import { Effect, Encoding, FileSystem, Option, Path, Result, Schema } from "effect";
 import { RUN_FILE_BYTES } from "../../../src/board-model";
-import type { Staged } from "../shared/attachments";
+import { capRefusal, type Staged } from "../shared/attachments";
 
 export class AttachmentRefused extends Schema.TaggedError<AttachmentRefused>()(
   "AttachmentRefused",
@@ -75,6 +75,64 @@ export const scaledCopy = Effect.fn("Attachments.scaledCopy")(function* (dir: st
   return (yield* (yield* FileSystem.FileSystem).exists(path)) ? path : null;
 });
 
+/** `bytes` kept once under their sha256, by `name`, and the copy's descriptor. */
+const keep = Effect.fn("Attachments.keep")(function* (
+  dir: string,
+  name: string,
+  bytes: Uint8Array,
+  mediaType: string,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const id = `${createHash("sha256").update(bytes).digest("hex")}/${name}`;
+  const kept = `${storeOf(dir)}/${id}`;
+  yield* fs.makeDirectory(kept.slice(0, kept.lastIndexOf("/")), { recursive: true });
+  yield* fs.writeFile(kept, bytes);
+  return {
+    id,
+    name,
+    size: bytes.length,
+    mediaType: mediaTypeOf(kept, mediaType),
+    path: kept,
+  } satisfies Staged;
+});
+
+/**
+ * A file on this computer, named by its path as a file manager names it, copied in; or why
+ * it cannot be.
+ */
+export const stagePath = Effect.fn("Attachments.stagePath")(function* (dir: string, path: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const name = path.split("/").at(-1) ?? "";
+  const info = yield* fs.stat(path).pipe(Effect.option);
+  if (Option.isNone(info)) return { refused: `${path} cannot be read` };
+  if (info.value.type === "Directory") return { refused: `${path} is a directory` };
+  if (info.value.type !== "File") return { refused: `${path} is not a file` };
+  const why = capRefusal([], { name, size: Number(info.value.size) });
+  if (why !== null) return { refused: why };
+  const bytes = yield* fs.readFile(path).pipe(Effect.option);
+  if (Option.isNone(bytes)) return { refused: `${path} cannot be read` };
+  return yield* keep(dir, name, bytes.value, "");
+});
+
+/** How long Desktop keeps a copy: as long as Claude Code keeps the transcripts naming it. */
+const KEPT_FOR = 30 * 24 * 60 * 60 * 1000;
+
+/** Removes every copy made more than 30 days before `now`. */
+export const pruneAttachments = Effect.fn("Attachments.prune")(function* (
+  dir: string,
+  now: number,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const store = storeOf(dir);
+  for (const entry of yield* fs.readDirectory(store).pipe(Effect.orElseSucceed(() => []))) {
+    if (!/^[0-9a-f]{64}$/.test(entry)) continue;
+    const made = yield* fs.stat(`${store}/${entry}`).pipe(Effect.option);
+    const at = Option.flatMap(made, (info) => info.mtime);
+    if (Option.isSome(at) && now - at.value.getTime() > KEPT_FOR)
+      yield* fs.remove(`${store}/${entry}`, { recursive: true });
+  }
+});
+
 /**
  * One part of a file the view stages, appended to what came before it. The last part is
  * checked against the size, kept under its sha256 and answered with its descriptor; null
@@ -112,17 +170,8 @@ export const stageAttachment = Effect.fn("Attachments.stage")(function* (
     yield* fs.rename(partial, to);
     return yield* describeAttachment(dir, part.scaledOf);
   }
-  const id = `${createHash("sha256").update(whole).digest("hex")}/${part.name}`;
-  const kept = `${storeOf(dir)}/${id}`;
-  yield* fs.makeDirectory(path.dirname(kept), { recursive: true });
-  yield* fs.rename(partial, kept);
-  return {
-    id,
-    name: part.name,
-    size: whole.length,
-    mediaType: mediaTypeOf(kept, part.mediaType),
-    path: kept,
-  } satisfies Staged;
+  yield* fs.remove(partial);
+  return yield* keep(dir, part.name, whole, part.mediaType);
 });
 
 /** Part of Desktop's copy, for a thumbnail the view draws again. */

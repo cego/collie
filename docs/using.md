@@ -1176,15 +1176,23 @@ Desktop's own, is interrupted and your message starts the next.
 
 Paste a screenshot with Ctrl+V, in the docked or the popped-out chat, and it goes with your
 next message: a chip above the input with its thumbnail, name and size, which its ✕ removes.
-Pasted text still pastes as text. The chips are shared by both windows, so popping the chat
+Pasted text still pastes as text. Files copied in a file manager and pasted attach the same
+way: they arrive as `file://` URIs, which Desktop's main process reads from disk, and where
+the window is handed nothing at all on a paste, main reads the system clipboard instead.
+Files dropped on the chat attach too, and the paperclip beside the input opens a file
+dialog where several can be chosen. A URI that is not a file on this computer, a directory,
+or a file that cannot be read is said in the composer and never becomes a chip. The chips are shared by both windows, so popping the chat
 out or back in keeps them, and sending uses them up; a message can be files alone, queued or
 sent now like any other. A file over 20 MB, or files over 30 MB together, are refused in the
 composer with the reason. Desktop keeps one copy of each file, by its sha256, under its state
 directory's `attachments/`. The model is handed your words, then a block of Desktop's own
-listing each file's name, type, size and the path of that copy, then each image as an image:
-one whose long edge is over 2000 px is scaled to 2000 px first, and never up, and the
+listing each file's name, type, size and the path of that copy, then each image as an image,
+each PDF up to 4 MB as a document, and each UTF-8 text up to 100 KB as text headed with its
+name; anything else, or anything larger, is in the listing alone, so the model can Read it
+there. An image whose long edge is over 2000 px is scaled to 2000 px first, and never up, and the
 original is what a Run gets. The message shows its chips at once, and again when the
-conversation is read back after a restart; a copy Desktop no longer has shows its name alone.
+conversation is read back after a restart; a copy Desktop no longer has shows its name alone. Desktop removes its copies 30 days after it
+made them, as Claude Code prunes the transcripts that name them.
 
 Click a card and it becomes a chip above the input ("About: vm-mk › Fix board bugs"): your
 next message goes with it, so "this one" means that card, and sending uses it up. Clear it

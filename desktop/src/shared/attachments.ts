@@ -17,6 +17,10 @@ export type Attached = typeof Attached.Type;
 export const Staged = Schema.Struct({ ...Attached.fields, path: Schema.String });
 export type Staged = typeof Staged.Type;
 
+/** A file copied in, or why it could not be. */
+export const StagedOrRefused = Schema.Union([Staged, Schema.Struct({ refused: Schema.String })]);
+export type StagedOrRefused = typeof StagedOrRefused.Type;
+
 export const FILE_CAP = 20 * 1024 * 1024;
 /** Under the API's 32 MB request, with room for the words and the listing. */
 export const MESSAGE_CAP = 30 * 1024 * 1024;
@@ -51,6 +55,36 @@ export const pastedImages = (
   items: ReadonlyArray<{ readonly kind: string; readonly type: string }>,
 ) =>
   items.flatMap((item, at) => (item.kind === "file" && item.type.startsWith("image/") ? [at] : []));
+
+/**
+ * The paths of a `text/uri-list` of files copied or dropped, and why any other line is
+ * not one. A file manager names files as `file://` URIs, which only main can read.
+ */
+export const uriListPaths = (text: string) => {
+  const paths: string[] = [];
+  const refused: string[] = [];
+  for (const line of text.split(/\r?\n/).map((one) => one.trim())) {
+    if (line === "" || line.startsWith("#")) continue;
+    const url = URL.parse(line);
+    if (url?.protocol === "file:" && (url.host === "" || url.host === "localhost"))
+      paths.push(decodeURIComponent(url.pathname));
+    else refused.push(`${line} is not a file on this computer`);
+  }
+  return { paths, refused };
+};
+
+/** The files the system clipboard names as text: `file://` URIs, or absolute paths. */
+export const clipboardPaths = (text: string) =>
+  text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .flatMap((line) =>
+      line.startsWith("/") ? [line] : line.startsWith("file:") ? uriListPaths(line).paths : [],
+    );
+
+/** What a drop carries: files named by URI, files' bytes, or text. */
+export const dropKind = (types: ReadonlyArray<string>) =>
+  types.includes("text/uri-list") ? "uris" : types.includes("Files") ? "files" : "text";
 
 /** A clipboard image's name: its own, or when it was pasted where the browser gave it none. */
 export const pastedName = (name: string, mediaType: string, at: string) =>

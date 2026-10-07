@@ -3,7 +3,7 @@ import type { DropdownMenuItem } from "@nuxt/ui";
 import type { QueuedMessage } from "@tanstack/ai-client";
 import { DateTime, Option, type Schema } from "effect";
 import { isString } from "../../../../src/schema";
-import { attachedIn, pastedImages } from "../../../src/shared/attachments";
+import { attachedIn, dropKind, pastedImages, uriListPaths } from "../../../src/shared/attachments";
 import { aboutLine, DESKTOP_SAID, questionsOf } from "../../../src/shared/chat-view";
 
 defineProps<{ alone?: boolean }>();
@@ -68,13 +68,39 @@ const send = (now = false) => {
   files.clear();
 };
 
-/** A paste of images attaches them; anything else pastes as it always did. */
+/**
+ * A paste of files attaches them: files a file manager copied, by the URIs main reads, or
+ * images. Anything else pastes as it always did, and a paste the webview handed nothing
+ * at all asks the system clipboard.
+ */
 const pasted = (event: ClipboardEvent) => {
-  const items = [...(event.clipboardData?.items ?? [])];
+  const data = event.clipboardData;
+  if (data === null) return;
+  if (data.types.includes("text/uri-list")) {
+    event.preventDefault();
+    const { paths, refused } = uriListPaths(data.getData("text/uri-list"));
+    void files.addPaths(paths, refused);
+    return;
+  }
+  const items = [...data.items];
   const images = pastedImages(items).flatMap((at) => [items[at]?.getAsFile() ?? null]);
-  if (images.length === 0) return;
+  if (images.length > 0) {
+    event.preventDefault();
+    for (const image of images) if (image !== null) void files.add(image, true);
+  } else if (data.types.length === 0) void files.fromClipboard();
+};
+
+/** A drop attaches files, and never navigates the window. */
+const dropped = (event: DragEvent) => {
+  const data = event.dataTransfer;
+  if (data === null) return;
+  const kind = dropKind([...data.types]);
+  if (kind === "text") return;
   event.preventDefault();
-  for (const image of images) if (image !== null) void files.add(image, true);
+  if (kind === "uris") {
+    const { paths, refused } = uriListPaths(data.getData("text/uri-list"));
+    void files.addPaths(paths, refused);
+  } else for (const file of data.files) void files.add(file, false);
 };
 
 /** The files a message part is, where it is one. */
@@ -108,7 +134,12 @@ const queuedText = ({ content }: QueuedMessage) => {
 </script>
 
 <template>
-  <aside data-testid="flock-chat" class="flex h-full flex-col border-l border-default">
+  <aside
+    data-testid="flock-chat"
+    class="flex h-full flex-col border-l border-default"
+    @dragover.prevent
+    @drop="dropped"
+  >
     <header class="flex items-center gap-1 border-b border-default px-6 py-2">
       <UIcon name="i-lucide-messages-square" class="size-4 text-primary" />
       <strong class="mr-auto ml-1 text-sm">Flock chat</strong>
@@ -306,6 +337,15 @@ const queuedText = ({ content }: QueuedMessage) => {
         @keydown.enter.exact.prevent="send()"
         @keydown.ctrl.enter.exact.prevent="send(true)"
         @paste="pasted"
+      />
+      <UButton
+        icon="i-lucide-paperclip"
+        color="neutral"
+        variant="ghost"
+        aria-label="Attach files"
+        title="Attach files"
+        data-testid="chat-attach"
+        @click="files.pick()"
       />
       <UButton type="submit" icon="i-lucide-send" aria-label="Send" />
     </form>
