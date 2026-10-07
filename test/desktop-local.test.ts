@@ -395,3 +395,94 @@ test("a Machine that cannot be upgraded says why in its own words, and is shown 
       ]);
     }).pipe(Effect.scoped),
   ));
+
+test("a Machine out of reach when Desktop starts is upgraded once it connects", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      let reachable = false;
+      let build = "0.30.2";
+      const asked: string[][] = [];
+      const told: string[] = [];
+      const late: Route<Fake> = {
+        machine: { profile: "p-vm", name: "vm", target: "mk@vm" },
+        open: () =>
+          reachable
+            ? Effect.succeed<Fake>({
+                name: "vm",
+                board: () =>
+                  Stream.make<[BoardMessage]>({ ...snapshot("vm"), build }).pipe(
+                    Stream.concat(Stream.never),
+                  ),
+              })
+            : Effect.fail({ state: "unreachable" as const, reason: "Connection refused" }),
+        collie: (args) =>
+          Effect.sync(() => {
+            asked.push([...args]);
+            build = args.at(-1)!;
+            return { out: "", err: "", code: 0 };
+          }),
+      };
+      yield* flockStream([late], new Map(), "0.31.0").pipe(
+        Stream.runForEach((item) => Effect.sync(() => told.push(toldWithNotices(item)))),
+        Effect.forkScoped,
+      );
+      yield* until(() => told.length === 1);
+      expect(told).toEqual(["vm Lost"]);
+      reachable = true;
+      yield* until(() => told.includes("Snapshot 0.31.0"));
+      expect(told.slice(1)).toEqual([
+        "Snapshot 0.30.2",
+        "vm upgraded 0.30.2 → 0.31.0",
+        "Snapshot 0.31.0",
+      ]);
+      expect(asked).toEqual([["--json", "upgrade", "--to", "0.31.0"]]);
+    }).pipe(Effect.scoped, fastForward),
+  ));
+
+test("a failed upgrade is tried again when the Machine next connects, and only once per connection", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const told: string[] = [];
+      let connections = 0;
+      let asked = 0;
+      const drops: Array<Deferred.Deferred<void>> = [];
+      const flaky: Route<Fake> = {
+        machine: { profile: "p-vm", name: "vm", target: "mk@vm" },
+        open: () =>
+          Effect.sync((): Fake => {
+            connections++;
+            const drop = Deferred.makeUnsafe<void>();
+            drops.push(drop);
+            return {
+              name: "vm",
+              board: () =>
+                Stream.make<[BoardMessage, BoardMessage]>(
+                  { ...snapshot("vm"), build: "0.30.2" },
+                  { ...snapshot("vm"), build: "0.30.2", seq: 1 },
+                ).pipe(
+                  Stream.concat(
+                    Stream.fromEffect(Deferred.await(drop)).pipe(
+                      Stream.flatMap(() => Stream.fail({ message: "connection reset" })),
+                    ),
+                  ),
+                ),
+            };
+          }),
+        collie: () =>
+          Effect.sync(() => {
+            asked++;
+            return { out: "", err: "disk full", code: 1 };
+          }),
+      };
+      yield* flockStream([flaky], new Map(), "0.31.0").pipe(
+        Stream.runForEach((item) => Effect.sync(() => told.push(toldWithNotices(item)))),
+        Effect.forkScoped,
+      );
+      yield* until(() => told.includes("Could not upgrade vm to 0.31.0: disk full"));
+      expect(asked).toBe(1);
+      yield* Deferred.succeed(drops[0]!, undefined);
+      yield* until(() => connections === 2 && asked === 2);
+      yield* Effect.sleep("2 seconds");
+      expect(asked).toBe(2);
+    }).pipe(Effect.scoped, fastForward),
+  ));

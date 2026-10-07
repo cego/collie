@@ -510,7 +510,8 @@ export const flockStream = <D extends BoardSource>(
       const done = new Set<number>();
       // The installation each merged route reaches, by its place.
       const merged = new Map<number, string>();
-      // Each installation is asked to upgrade once, so one that did not move is shown as it is.
+      // Asked to upgrade at most once per connection. One that upgraded but did not move is
+      // shown as it is; one that failed is asked again when it next connects.
       const upgrading = new Set<string>();
       const owns = (at: number, { machine, message }: MachineMessage) =>
         Effect.gen(function* () {
@@ -588,7 +589,8 @@ export const flockStream = <D extends BoardSource>(
                   if (
                     message._tag !== "Snapshot" ||
                     buildVerdict(message, version) !== "upgrade" ||
-                    upgrading.has(machine.installation)
+                    upgrading.has(machine.installation) ||
+                    (yield* Deferred.isDone(due))
                   )
                     return;
                   upgrading.add(machine.installation);
@@ -607,7 +609,9 @@ export const flockStream = <D extends BoardSource>(
             );
             // Beside the board, which stays live while the Machine upgrades.
             const upgrade = Stream.unwrap(
-              Effect.map(Deferred.await(due), ({ from }) => upgradeThenReopen(route, from)),
+              Effect.map(Deferred.await(due), ({ installation, from }) =>
+                upgradeThenReopen(route, installation, from),
+              ),
             );
             return Stream.merge(board, upgrade, { haltStrategy: "left" });
           }),
@@ -618,7 +622,7 @@ export const flockStream = <D extends BoardSource>(
         text,
       });
       /** Upgrades the Machine, then opens it again so its new build replaces its host. */
-      const upgradeThenReopen = (route: Route<D>, from: string) =>
+      const upgradeThenReopen = (route: Route<D>, installation: string, from: string) =>
         Stream.unwrap(
           upgradeTo(route, version).pipe(
             Effect.match({
@@ -628,10 +632,12 @@ export const flockStream = <D extends BoardSource>(
                 ).pipe(
                   Stream.concat(Stream.fail<RouteFailure>({ state: "reopen", reason: "upgraded" })),
                 ),
-              onFailure: (reason) =>
-                Stream.make(
+              onFailure: (reason) => {
+                upgrading.delete(installation);
+                return Stream.make(
                   notice(route, `Could not upgrade ${route.machine.name} to ${version}: ${reason}`),
-                ),
+                );
+              },
             }),
           ),
         );
