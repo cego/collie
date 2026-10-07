@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { AsyncResult, useAtomValue } from "@effect/atom-vue";
 import { Cause } from "effect";
+import { offersTerminal, opensHerdrWithoutPane } from "../../../src/shared/record-terminal";
 import type { PlacedTask } from "../../../src/shared/flock";
 import { runDetailAtom, runDetailKey } from "../flock";
 import type { DiffTarget } from "./DiffTab.vue";
@@ -37,17 +38,34 @@ const tabs = computed(() => {
     ...(shown?.diff ? [{ label: "Diff", value: "diff" }] : []),
     ...(shown !== null ? [{ label: "Evidence", value: "evidence" }] : []),
     { label: "Log", value: "log" },
+    ...(offersTerminal(props.placed.asOf, chosen.value)
+      ? [{ label: "Terminal", value: "terminal" }]
+      : []),
     ...(shown?.mr ? [{ label: "Merge request", value: "mr" }] : []),
     { label: "Facts", value: "facts" },
   ];
 });
 /** The tab the human chose while it is there, else the first: Plan, where there is one. */
 const chosen = ref<string>();
+const record = useRecord();
+const wentToPane = ref(false);
+watch(
+  record.asked,
+  (asked) => {
+    if (asked === null) return;
+    chosen.value = asked;
+    wentToPane.value = opensHerdrWithoutPane(asked);
+    record.taken();
+  },
+  { immediate: true },
+);
 const tab = computed({
   get: () =>
     tabs.value.some(({ value }) => value === chosen.value) ? chosen.value : tabs.value[0]!.value,
   set: (value) => (chosen.value = value),
 });
+
+watch(tab, (now) => now !== "terminal" && (wentToPane.value = false));
 
 /** Mounted from its first visit on and kept, so its toggles and open files stay as left. */
 const diffSeen = ref(false);
@@ -154,6 +172,7 @@ const locationOf = (file: string, line: number | null) =>
         />
       </template>
       <FactsTab v-if="tab === 'facts'" class="max-w-3xl" :task="placed.task" :detail="detail" />
+      <TerminalTab v-if="tab === 'terminal'" :placed="placed" :went-to-pane="wentToPane" />
     </div>
   </section>
 </template>
