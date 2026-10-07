@@ -6,12 +6,18 @@ import type { SharedSetting } from "../../../src/board-model";
 import {
   parseSetting,
   parseShared,
+  type Setting,
+  SETTING_GROUPS,
+  type SettingGroup,
   SETTINGS,
   type SettingKind,
+  settingShown,
+  type SettingUnit,
   SettingValue,
   settingText,
 } from "../../../src/settings";
 import { epochMs } from "../../../src/time";
+import type { DesktopSettings } from "./flock";
 
 /** Where an edit made in Desktop's own Settings is said to come from. */
 export const DESKTOP = "Desktop";
@@ -93,29 +99,93 @@ export const editSetting = (
   };
 };
 
-/** One setting as Settings shows it. */
+/** Desktop's own settings, which no Machine has. */
+const DESKTOP_SETTINGS = [
+  {
+    key: "proactive",
+    kind: "boolean",
+    choices: [],
+    fallback: "true",
+    group: "Chat",
+    label: "Flock chat speaks first",
+    description:
+      "Whether the Flock chat starts a turn about News that matters, as the bell in its header does.",
+    read: (desktop: DesktopSettings) => String(desktop.proactive),
+  },
+] satisfies ReadonlyArray<Setting & { read: (desktop: DesktopSettings) => string }>;
+
+/** One setting as Settings shows it, its value and default in its unit. */
 export interface SettingRow {
   readonly key: string;
+  readonly group: SettingGroup;
+  readonly label: string;
+  readonly description: string;
   readonly kind: SettingKind;
   readonly choices: ReadonlyArray<string>;
   /** What it is set to, empty where it is unset. */
   readonly value: string;
   /** What a Run uses while it is unset. */
   readonly fallback: string;
+  readonly unit: SettingUnit | undefined;
+  readonly set: boolean;
   /** The Machine its value was taken from over a different one, where it was. */
   readonly from: string | null;
+  /** Every Machine's, or this computer's alone. */
+  readonly shared: boolean;
 }
 
-/** Every setting of Collie's, but the GitLab host, which Settings keeps beside its tokens. */
-export const settingRows = (flock: FlockSettings): ReadonlyArray<SettingRow> =>
-  SETTINGS.filter(({ key }) => key !== GIVEN_ONLY).map(({ key, kind, choices, fallback }) => {
-    const held = flock.settings[key];
-    return {
-      key,
-      kind,
-      choices,
-      fallback,
-      value: held === undefined ? "" : settingText(valueOf(held.value)),
-      from: held?.differed === true ? held.from : null,
-    };
+export interface SettingSection {
+  readonly group: SettingGroup;
+  readonly rows: ReadonlyArray<SettingRow>;
+}
+
+const flockRow = (flock: FlockSettings, setting: Setting): SettingRow => {
+  const held = flock.settings[setting.key];
+  const value = held === undefined ? "" : settingText(valueOf(held.value));
+  return {
+    ...rowOf(setting),
+    value: settingShown(setting.key, value),
+    fallback: settingShown(setting.key, setting.fallback),
+    set: value !== "",
+    from: held?.differed === true ? held.from : null,
+    shared: true,
+  };
+};
+
+const rowOf = ({ key, group, label, description, kind, choices, unit }: Setting) => ({
+  key,
+  group,
+  label,
+  description,
+  kind,
+  choices,
+  unit,
+});
+
+/**
+ * Every setting of Collie's and Desktop's own, under its group in order, but the GitLab
+ * host, which Settings keeps beside its tokens.
+ */
+export const settingRows = (
+  flock: FlockSettings,
+  desktop: DesktopSettings,
+): ReadonlyArray<SettingSection> => {
+  const rows = [
+    ...SETTINGS.filter(({ key }) => key !== GIVEN_ONLY).map((setting) => flockRow(flock, setting)),
+    ...DESKTOP_SETTINGS.map(({ read, ...setting }): SettingRow => {
+      const value = read(desktop);
+      return {
+        ...rowOf(setting),
+        value,
+        fallback: setting.fallback,
+        set: value !== setting.fallback,
+        from: null,
+        shared: false,
+      };
+    }),
+  ];
+  return SETTING_GROUPS.flatMap((group) => {
+    const placed = rows.filter((row) => row.group === group);
+    return placed.length === 0 ? [] : [{ group, rows: placed }];
   });
+};

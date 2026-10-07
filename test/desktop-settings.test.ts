@@ -72,26 +72,54 @@ test("Settings shows every setting with its control, its value and its default",
   const flock = takeFrom(NO_FLOCK_SETTINGS, "vm-a", [
     set("scope", "all", 9),
     set("models.claude", ["claude-x"], 9),
+    set("quiet_ms", 90000, 9),
   ]).flock;
-  const rows = settingRows(takeFrom(flock, "vm-b", [set("scope", "local", 11)]).flock);
+  const sections = settingRows(takeFrom(flock, "vm-b", [set("scope", "local", 11)]).flock, {
+    proactive: false,
+  });
+  const rows = sections.flatMap((section) => section.rows);
+  const row = (key: string, shared = true) =>
+    rows.find((one) => one.key === key && one.shared === shared);
 
-  expect(rows.find((row) => row.key === "scope")).toMatchObject({
+  expect(sections.map((section) => section.group)).toEqual([
+    "Agents",
+    "Runs",
+    "Board",
+    "Chat",
+    "Notifications",
+  ]);
+  expect(row("scope")).toMatchObject({
+    label: "Board scope",
     kind: "choice",
     choices: ["local", "all"],
     value: "local",
     fallback: "local",
+    set: true,
     from: "vm-b",
   });
-  expect(rows.find((row) => row.key === "max_iterations")).toMatchObject({
+  expect(row("max_iterations")).toMatchObject({
     kind: "number",
     value: "",
     fallback: "5",
+    set: false,
     from: null,
   });
-  expect(rows.find((row) => row.key === "models.claude")).toMatchObject({ value: "claude-x" });
-  expect(rows.find((row) => row.key === "proactive")).toMatchObject({ kind: "boolean" });
+  // In its unit: the value and the default both.
+  expect(row("quiet_ms")).toMatchObject({ value: "1.5", fallback: "10", unit: "minutes" });
+  expect(row("models.claude")).toMatchObject({ value: "claude-x" });
+  expect(row("proactive")).toMatchObject({ kind: "boolean", shared: true });
+  // The Flock chat's own switch is this computer's, under Chat.
+  expect(sections.find((section) => section.group === "Chat")!.rows).toContainEqual(
+    expect.objectContaining({
+      key: "proactive",
+      shared: false,
+      value: "false",
+      fallback: "true",
+      set: true,
+    }),
+  );
   // The GitLab host is shared too, but beside the tokens made for it.
-  expect(rows.map((row) => row.key)).not.toContain("gitlab_host");
+  expect(rows.map((one) => one.key)).not.toContain("gitlab_host");
 });
 
 test("a Machine's GitLab host and a value its setting refuses are not the Flock's", () => {

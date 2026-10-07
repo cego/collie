@@ -970,7 +970,7 @@ absent or not working, and a Linear login onboarding left unfinished. **Skip on 
 Machine** on either step onboards it again with `--skip`, and every later onboarding of
 that Machine skips it too.
 
-What only you can give is asked once, in **Settings** under **Shared by every Machine**, and
+What only you can give is asked once, in **Settings** under **GitLab and credentials**, and
 never pasted on a command line. Desktop keeps the Flock's credentials in a file of Desktop's own,
 `$XDG_CONFIG_HOME/collie-desktop/credentials` (`~/.config/collie-desktop/credentials`
 unless that is set), readable by you alone and replaced whole on every save — the way glab,
@@ -999,11 +999,21 @@ make a new one on the new host's page and save it. The GitLab host is given to e
 Machine but never taken from one: an edit of `gitlab_host` in a Machine's TUI stays that
 Machine's.
 
-**Settings** also holds **Collie**: every setting the TUI's Settings offers — each default a
-Run reads, `proactive`, the extra `models.<harness>` and each `notifications.<kind>` — with
-a control that fits it (a choice, a number, a switch, or text), its default beside it, and
-the same refusals as the TUI. Both read one list of settings (`src/settings.ts`), so a new
-setting shows up in both. These are the Flock's: Desktop keeps them in
+**Settings** is grouped under headings, in order: **Agents**, **Runs**, **Board**, **Chat**,
+**Notifications**, **GitLab and credentials** and **About**. It holds every setting the TUI's
+Settings offers — each default a Run reads, `proactive`, the extra `models.<harness>` and each
+`notifications.<kind>` — and the Flock chat's own speak-first switch. Each setting has a plain
+name with its config key in small print, a sentence or two on what it changes (what 0 or
+unset means where that matters, and that `scope`, `density` and `questions` change the TUI's
+board, not Desktop's), a control that fits it (a choice, a number, a switch, or text), its
+default, and the same refusals as the TUI. Durations — `quiet_ms`, `handoff_timeout_ms` and
+`board_quiet_ms` — are shown and typed in minutes, decimals where a value is not a whole
+number of them, and still stored in milliseconds, so `config.json` and `collie settings` are
+unchanged. **Reset to default**, shown while a setting is set, unsets it. Each says whether
+**Every Machine** shares it or it is for **This computer only**: the Flock chat's switch,
+like the bell in the chat's header, is this computer's. The groups, names, descriptions and
+units live with each key in one list of settings (`src/settings.ts`) that the TUI reads too,
+so a new setting shows up in both. The ones every Machine shares are the Flock's: Desktop keeps them in
 `flock-settings.json` beside its chat, and gives them to every Machine through that
 Machine's host, never by editing a file over SSH. A Machine is synced each time it
 connects and after every edit in Settings, so one out of reach gets an edit when it is
