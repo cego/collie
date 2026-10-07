@@ -50,6 +50,7 @@ import {
 } from "../shared/flock";
 import { RELEASE_PUBLIC_KEY } from "../../../src/signing";
 import { appWindowFor } from "./browser";
+import { readAttachment, stageAttachment } from "./attachments";
 import { type FlockConversation, openFlockChat, refusal } from "./chat";
 import { claudeCode } from "./claude";
 import { chatDoor } from "./flock-tools";
@@ -797,11 +798,32 @@ const main = Effect.gen(function* () {
       doorTo(doors, installation).pipe(
         Effect.flatMap((door) => runFileOn(door.desktop, runId, ref, offset)),
       ),
-    say: ({ text, about, now }) =>
+    stage: (part) =>
+      stageAttachment(own, part).pipe(
+        Effect.mapError(
+          (cause) =>
+            new ActionFailed({
+              reason: cause._tag === "AttachmentRefused" ? cause.reason : cause.message,
+            }),
+        ),
+        Effect.provide(BunServices.layer),
+      ),
+    attachmentFile: ({ id, offset }) =>
+      readAttachment(own, id, offset).pipe(
+        Effect.mapError(
+          (cause) =>
+            new ActionFailed({
+              reason: cause._tag === "AttachmentRefused" ? cause.reason : cause.message,
+            }),
+        ),
+        Effect.provide(BunServices.layer),
+      ),
+    say: ({ text, about, now, attachments }) =>
       Stream.unwrap(
         Effect.map(chat, (opened) =>
           Result.match(opened, {
-            onSuccess: (conversation) => conversation.send(text, about, now === true),
+            onSuccess: (conversation) =>
+              conversation.send(text, about, now === true, attachments ?? []),
             onFailure: (cause) =>
               Stream.make(refusal(`The Flock chat could not start: ${String(cause)}`)),
           }),

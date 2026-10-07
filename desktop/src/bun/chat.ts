@@ -9,6 +9,7 @@ import {
   Crypto,
   Deferred,
   Effect,
+  Encoding,
   Exit,
   FileSystem,
   Option,
@@ -22,6 +23,9 @@ import {
   Stream,
 } from "effect";
 import { type AguiEvent, ends } from "../shared/agui";
+import { listing, type Staged } from "../shared/attachments";
+import { isString } from "../../../src/schema";
+import { describeAttachment, scaledCopy } from "./attachments";
 import {
   type About,
   type Answers,
@@ -52,10 +56,25 @@ export interface ClaudeSession extends AsyncIterable<SdkMessage> {
   readonly close: () => void;
 }
 
+/** A block of a message to the model, as the Messages API takes it. */
+export type ContentBlock =
+  | { readonly type: "text"; readonly text: string }
+  | {
+      readonly type: "image";
+      readonly source: {
+        readonly type: "base64";
+        readonly media_type: ShownImage;
+        readonly data: string;
+      };
+    };
+
 /** The Agent SDK's user message, as much of it as the chat sends; claude.ts holds it to the SDK's. */
 export interface UserMessage {
   readonly type: "user";
-  readonly message: { readonly role: "user"; readonly content: string };
+  readonly message: {
+    readonly role: "user";
+    readonly content: string | Array<ContentBlock>;
+  };
   readonly parent_tool_use_id: null;
 }
 
@@ -94,7 +113,13 @@ export interface FlockConversation {
    * One message from the human, about a card or none, and the events of the turn it starts:
    * after the turn under way, or `now`, interrupting it.
    */
-  readonly send: (text: string, about: About | null, now: boolean) => Stream.Stream<AguiEvent>;
+  readonly send: (
+    text: string,
+    about: About | null,
+    now: boolean,
+    /** Desktop's copies the message carries, by id. */
+    attachments?: ReadonlyArray<string>,
+  ) => Stream.Stream<AguiEvent>;
   /** Answers the question the chat asked in that tool call, if it is still asking. */
   readonly answer: (toolCallId: string, answers: Answers) => Effect.Effect<void>;
   readonly transcript: Effect.Effect<ReadonlyArray<ChatMessage>>;
@@ -148,6 +173,47 @@ const LOOK_AGAIN = "2 minutes";
 const HISTORY = 10;
 
 export const refusal = (message: string): AguiEvent => ({ type: "RUN_ERROR", runId: "", message });
+
+/** The image types the model is shown as images. */
+const SHOWN = ["image/png", "image/jpeg", "image/gif", "image/webp"] as const;
+type ShownImage = (typeof SHOWN)[number];
+const shownAs = (mediaType: string) => SHOWN.find((one) => one === mediaType);
+
+/**
+ * The human's message as the model is handed it: their words, Desktop's listing of the
+ * files apart from them, and each image as an image. Why not, where a file is gone.
+ */
+const contentOf = Effect.fnUntraced(function* (
+  dir: string,
+  text: string,
+  ids: ReadonlyArray<string>,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const files: Staged[] = [];
+  for (const id of ids) {
+    const held = yield* describeAttachment(dir, id).pipe(Effect.orElseSucceed(() => null));
+    if (held === null) return `Desktop no longer has ${id.split("/").at(-1)}; attach it again.`;
+    files.push(held);
+  }
+  const images: ContentBlock[] = [];
+  for (const file of files) {
+    const media = shownAs(file.mediaType);
+    if (media === undefined) continue;
+    const shown =
+      (yield* scaledCopy(dir, file.id).pipe(Effect.orElseSucceed(() => null))) ?? file.path;
+    const bytes = yield* fs.readFile(shown).pipe(Effect.orElseSucceed(() => new Uint8Array()));
+    images.push({
+      type: "image",
+      source: { type: "base64", media_type: media, data: Encoding.encodeBase64(bytes) },
+    });
+  }
+  const blocks: Array<ContentBlock> = [
+    ...(text === "" ? [] : [{ type: "text" as const, text }]),
+    { type: "text", text: listing(files) },
+    ...images,
+  ];
+  return blocks;
+});
 
 /**
  * The current conversation's session, started by its first message and warm from then
@@ -307,7 +373,11 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* <Server>(opts
    * dropped is interrupted and seen out, so the next starts clean; any turn's end may leave
    * News that waited for it.
    */
-  const turnOn = Effect.fnUntraced(function* (running: Live, text: string, voice: Voice) {
+  const turnOn = Effect.fnUntraced(function* (
+    running: Live,
+    content: UserMessage["message"]["content"],
+    voice: Voice,
+  ) {
     const heard = yield* PubSub.subscribe(running.events);
     let finished = false;
     yield* Effect.addFinalizer(() =>
@@ -338,7 +408,7 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* <Server>(opts
     turning = running;
     yield* Queue.offer(running.inbox, {
       type: "user",
-      message: { role: "user", content: text },
+      message: { role: "user", content },
       parent_tool_use_id: null,
     });
     let news = voice.news;
@@ -352,7 +422,8 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* <Server>(opts
           const settled = news;
           news = undefined;
           for (const placed of settled.items) spoken.add(newsKey(placed));
-          return delivered(flock, settled).pipe(
+          // In this turn's voice, which has ended by the time a quick reply's settling runs.
+          return delivered({ ...flock, said: () => voice.said }, settled).pipe(
             Effect.provideContext(services),
             Effect.forkIn(scope),
             Effect.asVoid,
@@ -401,9 +472,13 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* <Server>(opts
   }).pipe(Effect.andThen(nudge), Effect.repeat(Schedule.spaced(LOOK_AGAIN)), Effect.forkIn(scope));
 
   const conversation: FlockConversation = {
-    send: (text, about, now) =>
+    send: (text, about, now, attachments = []) =>
       Stream.unwrap(
         Effect.gen(function* () {
+          const content = yield* contentOf(opts.dir, text, attachments).pipe(
+            Effect.provideContext(services),
+          );
+          if (isString(content) && attachments.length > 0) return Stream.make(refusal(content));
           const claude = turning?.claude;
           if (now && claude !== undefined)
             yield* Effect.tryPromise(() => claude.interrupt()).pipe(Effect.ignore);
@@ -415,7 +490,7 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* <Server>(opts
           const voice: Voice = { said: text };
           if (about !== null) voice.about = about;
           if (news.items.length > 0) voice.news = news;
-          return yield* turnOn(running, text, voice);
+          return yield* turnOn(running, attachments.length > 0 ? content : text, voice);
         }),
       ),
     answer: (toolCallId, answers) =>

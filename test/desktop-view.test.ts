@@ -104,6 +104,8 @@ const served = (main: Channel<ToView, ToMain>) =>
         terminalSend: () => Effect.die("not asked"),
         runDetail: () => Stream.die("not asked"),
         runFile: () => Effect.die("not asked"),
+        stage: () => Effect.die("not asked"),
+        attachmentFile: () => Effect.die("not asked"),
         answer: () => Effect.die("not asked"),
         transcript: () => Effect.die("not asked"),
         conversations: () => Effect.die("not asked"),

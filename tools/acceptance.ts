@@ -81,6 +81,19 @@ const MACHINE_RULE = "the Machine rule (this MR)";
 /** What the front door owes a person, and cannot be settled below the front door. */
 const FRONT_DOOR: readonly Check[] = [
   {
+    id: "front-door/a-pasted-image-is-attached-and-a-file-too-large-is-refused",
+    statement:
+      "In the Flock chat's composer a pasted image becomes an attachment while pasted text stays text, a file over 20 MB or a message over 30 MB is refused naming the file or the total and the cap, and an image is scaled to 2000 px on its long edge and never up.",
+    owner: ATTACHMENTS,
+    needs: "ui",
+    proof: {
+      kind: "test",
+      layer: "ui",
+      file: "test/desktop-attachments.test.ts",
+      name: "a file over 20 MB, or a message over 30 MB, is refused naming the file or the total and the cap",
+    },
+  },
+  {
     id: "front-door/a-drawer-lists-what-a-run-was-given",
     statement:
       "A card's record lists the files the Run was given: the TUI's Summary with each one's path and size, and Desktop's Evidence tab with an image as a thumbnail and anything else by name.",
@@ -745,6 +758,17 @@ const WORKFLOWS: readonly Check[] = [
 
 /** What only a person at a terminal can settle. */
 const OPERATOR_CHECKS: readonly Check[] = [
+  {
+    id: "flock-chat/a-pasted-screenshot-is-seen-and-kept",
+    statement:
+      "A screenshot pasted with Ctrl+V in the popped-out Flock chat is described correctly by the model, and after a restart the message still shows its thumbnail.",
+    owner: ATTACHMENTS,
+    needs: "operator",
+    proof: {
+      kind: "operator",
+      how: "In Desktop, pop the chat out, paste a screenshot of something distinctive with Ctrl+V, send it with no words, and record the model's description; quit and start Desktop, reopen the conversation, and record that the message shows the thumbnail, with the revision.",
+    },
+  },
   {
     id: "desktop/a-flock-chat-start-goes-where-the-machine-rule-says",
     statement:

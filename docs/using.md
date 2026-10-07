@@ -1174,6 +1174,18 @@ while it is working and Enter queues your message as **Queued** until the turn e
 drop it with its ✕. Ctrl+Enter sends it now instead: the turn under way, yours or one of
 Desktop's own, is interrupted and your message starts the next.
 
+Paste a screenshot with Ctrl+V, in the docked or the popped-out chat, and it goes with your
+next message: a chip above the input with its thumbnail, name and size, which its ✕ removes.
+Pasted text still pastes as text. The chips are shared by both windows, so popping the chat
+out or back in keeps them, and sending uses them up; a message can be files alone, queued or
+sent now like any other. A file over 20 MB, or files over 30 MB together, are refused in the
+composer with the reason. Desktop keeps one copy of each file, by its sha256, under its state
+directory's `attachments/`. The model is handed your words, then a block of Desktop's own
+listing each file's name, type, size and the path of that copy, then each image as an image:
+one whose long edge is over 2000 px is scaled to 2000 px first, and never up, and the
+original is what a Run gets. The message shows its chips at once, and again when the
+conversation is read back after a restart; a copy Desktop no longer has shows its name alone.
+
 Click a card and it becomes a chip above the input ("About: vm-mk › Fix board bugs"): your
 next message goes with it, so "this one" means that card, and sending uses it up. Clear it
 with its ✕. The chip is attached as context for the turn, never as your words.

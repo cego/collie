@@ -3,12 +3,14 @@
 
 import { expect, test } from "bun:test";
 import { BunServices } from "@effect/platform-bun";
-import { Deferred, Effect, FileSystem, Stream } from "effect";
+import { Deferred, Effect, FileSystem, Path, Stream } from "effect";
 import { TestClock } from "effect/testing";
-import { NewsBatch, PROTOCOL, type Significance } from "../src/board-model";
+import { type Declaration, NewsBatch, PROTOCOL, type Significance } from "../src/board-model";
+import { stageAttachment } from "../desktop/src/bun/attachments";
 import { type ClaudeCode, openFlockChat } from "../desktop/src/bun/chat";
 import type { SdkMessage } from "../desktop/src/bun/agui";
 import type { ChatDoor, ChatMachine } from "../desktop/src/bun/flock-tools";
+import { listing } from "../desktop/src/shared/attachments";
 import { DESKTOP_SAID } from "../desktop/src/shared/chat-view";
 import { isString } from "../src/schema";
 
@@ -23,7 +25,11 @@ const item = (key: string, significance: Significance): Item => ({
 });
 
 /** A Machine whose one Herd has this News until it is settled read. */
-const machine = (items: ReadonlyArray<Item>, read: string[]): ChatMachine => {
+const machine = (
+  items: ReadonlyArray<Item>,
+  read: string[],
+  declared: Declaration[] = [],
+): ChatMachine => {
   const door: Partial<ChatDoor> = {
     board: () =>
       Stream.make({
@@ -35,7 +41,7 @@ const machine = (items: ReadonlyArray<Item>, read: string[]): ChatMachine => {
         tasks: [],
         seq: 0,
       }).pipe(Stream.concat(Stream.never)),
-    declare: () => Effect.void,
+    declare: (payload) => Effect.sync(() => void declared.push(payload)),
     news: ({ as, keys }) =>
       Effect.sync(() => {
         if (as === "read") read.push(...(keys ?? []));
@@ -51,6 +57,8 @@ const machine = (items: ReadonlyArray<Item>, read: string[]): ChatMachine => {
 
 interface Seen {
   readonly prompts: string[];
+  /** Each message as the SDK was handed it. */
+  readonly contents: unknown[];
   /** What each turn's message went with, as the UserPromptSubmit hook adds it. */
   readonly context: string[];
   readonly refusals: string[];
@@ -78,6 +86,7 @@ const scripted = (
         Effect.gen(function* () {
           const text = isString(message.message.content) ? message.message.content : "";
           seen.prompts.push(text);
+          seen.contents.push(message.message.content);
           // SAFETY: sessionOptions sets one UserPromptSubmit hook.
           const added = yield* Effect.promise(() => options.hooks.UserPromptSubmit[0]!.hooks[0]!());
           seen.context.push(
@@ -156,6 +165,7 @@ const withChat = <A, E>(
     readonly proactive: boolean;
     readonly holds?: (text: string) => boolean;
     readonly rule?: string;
+    readonly declared?: Declaration[];
   },
   reply: (text: string) => ReadonlyArray<SdkMessage>,
   body: (chat: {
@@ -163,7 +173,7 @@ const withChat = <A, E>(
     readonly seen: Seen;
     readonly read: string[];
     readonly dir: string;
-  }) => Effect.Effect<A, E, FileSystem.FileSystem>,
+  }) => Effect.Effect<A, E, FileSystem.FileSystem | Path.Path>,
 ) =>
   Effect.runPromise(
     Effect.gen(function* () {
@@ -171,13 +181,13 @@ const withChat = <A, E>(
       const dir = yield* fs.makeTempDirectoryScoped({
         prefix: "flock-chat-turns-",
       });
-      const seen: Seen = { prompts: [], context: [], refusals: [], interrupts: [] };
+      const seen: Seen = { prompts: [], contents: [], context: [], refusals: [], interrupts: [] };
       const read: string[] = [];
       const conversation = yield* openFlockChat({
         claude: scripted(seen, reply, opts.holds),
         dir,
         conversation: "flock@mk-pc",
-        machines: () => [machine(opts.items, read)],
+        machines: () => [machine(opts.items, read, opts.declared)],
         proactive: () => opts.proactive,
         machineRule: () => opts.rule ?? "Everything is on the vm",
         setMachineRule: () => Effect.void,
@@ -317,6 +327,84 @@ test("News a failed turn of Desktop's carried waits for the next look, and wakes
         yield* eventually(() => read.includes("r1:asking"));
         expect(seen.prompts).toHaveLength(2);
         expect(seen.prompts[1]).toContain("r1:asking happened.");
+      }),
+  );
+});
+
+/** Staged as the view stages it: in parts, the last of which answers the descriptor. */
+const staged = (
+  dir: string,
+  name: string,
+  mediaType: string,
+  bytes: Uint8Array,
+  scaledOf?: string,
+) =>
+  Effect.gen(function* () {
+    const key = `${name.replaceAll(".", "-")}-${scaledOf === undefined ? "original" : "scaled"}`;
+    const half = Math.ceil(bytes.length / 2);
+    const first = yield* stageAttachment(dir, {
+      key,
+      name,
+      mediaType,
+      size: bytes.length,
+      offset: 0,
+      content: Buffer.from(bytes.subarray(0, half)).toString("base64"),
+      scaledOf,
+    });
+    expect(first).toBeNull();
+    const last = yield* stageAttachment(dir, {
+      key,
+      name,
+      mediaType,
+      size: bytes.length,
+      offset: half,
+      content: Buffer.from(bytes.subarray(half)).toString("base64"),
+      scaledOf,
+    });
+    return last!;
+  });
+
+test("a message with an image hands the SDK the words, Desktop's listing and the scaled image, and says only the words", () => {
+  const declared: Declaration[] = [];
+  return withChat(
+    { items: [item("r1:ended", "routine")], proactive: false, declared },
+    answered,
+    ({ conversation, seen, read, dir }) =>
+      Effect.gen(function* () {
+        const original = new TextEncoder().encode("a very large png");
+        const shot = yield* staged(dir, "shot.png", "image/png", original);
+        expect(shot).toMatchObject({ name: "shot.png", size: 16, mediaType: "image/png" });
+        expect(shot.path).toStartWith(`${dir}/attachments/`);
+        expect(yield* (yield* FileSystem.FileSystem).readFile(shot.path)).toEqual(original);
+        yield* staged(dir, "shot.png", "image/png", new TextEncoder().encode("smaller"), shot.id);
+
+        yield* Stream.runDrain(conversation.send("what is this?", null, false, [shot.id]));
+        expect(seen.contents[0]).toEqual([
+          { type: "text", text: "what is this?" },
+          { type: "text", text: listing([shot]) },
+          {
+            type: "image",
+            source: {
+              type: "base64",
+              media_type: "image/png",
+              data: Buffer.from("smaller").toString("base64"),
+            },
+          },
+        ]);
+        // The News the turn carried is settled in the turn's voice: the words, and no file.
+        yield* eventually(() => read.includes("r1:ended"));
+        expect(declared.at(-1)?.said).toBe("what is this?");
+
+        // Words are not needed, and a copy that is gone is said to be.
+        yield* Stream.runDrain(conversation.send("", null, false, [shot.id]));
+        expect(seen.contents[1]).toEqual([
+          { type: "text", text: listing([shot]) },
+          expect.objectContaining({ type: "image" }),
+        ]);
+        const gone = yield* Stream.runCollect(
+          conversation.send("and this?", null, false, [`${"0".repeat(64)}/gone.png`]),
+        );
+        expect(gone).toEqual([expect.objectContaining({ type: "RUN_ERROR" })]);
       }),
   );
 });

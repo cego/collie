@@ -14,6 +14,7 @@ import type { ModelMessage, StreamChunk, UIMessage } from "@tanstack/ai";
 import { useChat } from "@tanstack/ai-vue";
 import { Effect, Exit, Option, Schema, Stream } from "effect";
 import { isString } from "../../../../src/schema";
+import { type Attached, attachedIn, attachmentPart } from "../../../src/shared/attachments";
 import { About, type Answers } from "../../../src/shared/chat-view";
 import { desktopTurnsAtom, FlockClient } from "../flock";
 
@@ -28,22 +29,38 @@ const popInAtom = FlockClient.mutation("popIn");
 
 const decodeAbout = Schema.decodeUnknownOption(About);
 
+/** The human's newest message: its words, and the ids of Desktop's copies it carries. */
 const lastSaid = (messages: ReadonlyArray<UIMessage | ModelMessage>) => {
   const last = messages.findLast((message) => message.role === "user");
-  if (last === undefined) return "";
-  if ("parts" in last)
-    return last.parts.flatMap((part) => (part.type === "text" ? [part.content] : [])).join("\n");
-  return isString(last.content) ? last.content : "";
+  if (last === undefined) return { text: "", attachments: [] };
+  const parts: ReadonlyArray<{ readonly type: string }> =
+    "parts" in last ? last.parts : isString(last.content) ? [] : (last.content ?? []);
+  const text =
+    "parts" in last
+      ? last.parts.flatMap((part) => (part.type === "text" ? [part.content] : [])).join("\n")
+      : isString(last.content)
+        ? last.content
+        : "";
+  return {
+    text,
+    attachments: parts.flatMap((part) => Option.toArray(attachedIn(part))).map(({ id }) => id),
+  };
 };
 
 export const useFlockChat = () => {
   const registry = injectRegistry();
-  const turn = (text: string, about: About | null, now: boolean) =>
+  const turn = (
+    { text, attachments }: ReturnType<typeof lastSaid>,
+    about: About | null,
+    now: boolean,
+  ) =>
     Stream.unwrap(
       AtomRegistry.getResult(registry, FlockClient.runtime).pipe(
         Effect.map((context) =>
           Stream.unwrap(
-            FlockClient.use((client) => Effect.succeed(client("say", { text, about, now }))),
+            FlockClient.use((client) =>
+              Effect.succeed(client("say", { text, about, now, attachments })),
+            ),
           ).pipe(Stream.provideContext(context)),
         ),
       ),
@@ -104,8 +121,18 @@ export const useFlockChat = () => {
      * Sends a message with the card it is about: queued while a turn is under way, or `now`,
      * interrupting it.
      */
-    say: (text: string, about: About | null, now = false) =>
-      chat.sendMessage(text, { body: { about, now }, whenBusy: now ? "interrupt" : "queue" }),
+    say: (text: string, about: About | null, now = false, files: ReadonlyArray<Attached> = []) =>
+      chat.sendMessage(
+        files.length === 0
+          ? text
+          : {
+              content: [
+                ...(text === "" ? [] : [{ type: "text" as const, content: text }]),
+                ...files.map(attachmentPart),
+              ],
+            },
+        { body: { about, now }, whenBusy: now ? "interrupt" : "queue" },
+      ),
     answer: (toolCallId: string, answers: Answers) => answer({ payload: { toolCallId, answers } }),
     reload,
     conversations: () =>

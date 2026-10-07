@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import type { DropdownMenuItem } from "@nuxt/ui";
 import type { QueuedMessage } from "@tanstack/ai-client";
-import { DateTime, type Schema } from "effect";
+import { DateTime, Option, type Schema } from "effect";
 import { isString } from "../../../../src/schema";
+import { attachedIn, pastedImages } from "../../../src/shared/attachments";
 import { aboutLine, DESKTOP_SAID, questionsOf } from "../../../src/shared/chat-view";
 
 defineProps<{ alone?: boolean }>();
@@ -52,15 +53,32 @@ const { chip, choose } = useChip();
 const { popIn } = usePopOut();
 const draft = ref("");
 onMounted(reload);
+const files = useAttachments();
 
-/** The message goes with the chip, which it uses up; `now` pushes it past the turn under way. */
+/**
+ * The message goes with the chip and the files, which it uses up; `now` pushes it past the
+ * turn under way. Files need no words.
+ */
 const send = (now = false) => {
   const text = draft.value.trim();
-  if (text === "") return;
+  if (text === "" && files.pending.value.length === 0) return;
   draft.value = "";
-  void say(text, chip.value, now);
+  void say(text, chip.value, now, files.pending.value);
   choose(null);
+  files.clear();
 };
+
+/** A paste of images attaches them; anything else pastes as it always did. */
+const pasted = (event: ClipboardEvent) => {
+  const items = [...(event.clipboardData?.items ?? [])];
+  const images = pastedImages(items).flatMap((at) => [items[at]?.getAsFile() ?? null]);
+  if (images.length === 0) return;
+  event.preventDefault();
+  for (const image of images) if (image !== null) void files.add(image, true);
+};
+
+/** The files a message part is, where it is one. */
+const attachedOf = (part: { readonly type: string }) => Option.getOrNull(attachedIn(part));
 
 const earlier = ref<DropdownMenuItem[]>([]);
 const listEarlier = async (open: boolean) => {
@@ -81,7 +99,12 @@ const listEarlier = async (open: boolean) => {
 
 const outputOf = (output: Schema.Json | undefined) =>
   output === undefined ? null : isString(output) ? output : JSON.stringify(output, null, 2);
-const queuedText = ({ content }: QueuedMessage) => (isString(content) ? content : "…");
+const queuedText = ({ content }: QueuedMessage) => {
+  const said = isString(content) ? content : content.content;
+  return isString(said)
+    ? said
+    : said.flatMap((part) => (part.type === "text" ? [part.content] : [])).join(" ") || "files";
+};
 </script>
 
 <template>
@@ -186,6 +209,11 @@ const queuedText = ({ content }: QueuedMessage) => (isString(content) ? content 
               :streaming="isLoading && message === messages.at(-1)"
               class="prose prose-sm dark:prose-invert"
             />
+            <AttachmentChip
+              v-else-if="attachedOf(part) !== null"
+              :file="attachedOf(part)!"
+              class="self-end"
+            />
             <details v-else-if="part.type === 'thinking'" data-testid="chat-thinking">
               <summary class="cursor-pointer text-xs text-muted">Thinking</summary>
               <p class="mt-1 text-xs whitespace-pre-wrap text-muted">{{ part.content }}</p>
@@ -253,6 +281,18 @@ const queuedText = ({ content }: QueuedMessage) => (isString(content) ? content 
         />
       </UBadge>
     </div>
+    <div v-if="files.pending.value.length > 0" class="flex flex-wrap gap-2 px-6 pt-2">
+      <AttachmentChip
+        v-for="file in files.pending.value"
+        :key="file.id"
+        :file="file"
+        removable
+        @remove="files.remove(file.id)"
+      />
+    </div>
+    <p v-if="files.refused.value" data-testid="chat-refused" class="px-6 pt-2 text-sm text-error">
+      {{ files.refused.value }}
+    </p>
     <form class="flex gap-2 border-t border-default px-6 py-3" @submit.prevent="send()">
       <UTextarea
         v-model="draft"
@@ -265,6 +305,7 @@ const queuedText = ({ content }: QueuedMessage) => (isString(content) ? content 
         "
         @keydown.enter.exact.prevent="send()"
         @keydown.ctrl.enter.exact.prevent="send(true)"
+        @paste="pasted"
       />
       <UButton type="submit" icon="i-lucide-send" aria-label="Send" />
     </form>
