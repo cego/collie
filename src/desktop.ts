@@ -9,7 +9,6 @@ import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import { RELEASE_TAG } from "./release";
 import { epochMs } from "./time";
-import { signalProcess } from "./lock";
 import { appliedSignatureOf, RELEASE_PUBLIC_KEY, verifyRelease } from "./signing";
 
 const IDENTIFIER = "dk.cego.collie.desktop";
@@ -341,7 +340,15 @@ export const sshControlsPrefix = (pid: number) => `collie-ssh-${pid}-`;
  */
 export const sweepSshControls = Effect.fn("desktop.sweepSshControls")(function* (
   tmp: string,
-  alive: (pid: number) => Effect.Effect<boolean> = (pid) => signalProcess(pid),
+  alive: (pid: number) => Effect.Effect<boolean> = (pid) =>
+    Effect.sync(() => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    }),
 ) {
   const fs = yield* FileSystem.FileSystem;
   const gone: string[] = [];
