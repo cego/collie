@@ -672,6 +672,11 @@ The individual scripts in `package.json` still work for focused feedback.
 
 Desktop has an install of its own, so its types are checked apart, with
 `cd desktop && bun install && bun run typecheck`; CI runs that as a job of its own.
+Desktop installs TypeScript twice. `@typescript/native` is TypeScript 7, the `tsc` that
+checks its `.ts` code, as the CLI's does. `typescript` is an alias for
+`@typescript/typescript6`, because TypeScript 7's package has no JS API and vue-tsc, which
+checks the `.vue` views through `nuxi typecheck`, loads one. The alias goes once
+TypeScript 7.1 ships its API and vue-tsc supports it: then `typescript` is 7 again.
 
 Every host a test starts ends with that test. `test/support/hosts.ts`, a preload, gives
 each test file a temporary root of its own and tells every host started under it
