@@ -41,6 +41,7 @@ const workspace = (id: string, tokens: Record<string, string> = {}): WorkspaceIn
   cwd: "/ns",
   worktree: null,
   tokens,
+  focused: false,
 });
 
 const pane = (over: Partial<PaneInfo> = {}): PaneInfo => ({
@@ -643,7 +644,7 @@ test("the shortcut records where it was pressed, and forgets it a minute later",
   runEffect(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const stateDir = yield* fs.makeTempDirectory();
+      const stateDir = yield* fs.makeTempDirectoryScoped();
       const file = yield* originPath(stateDir, KEY);
 
       // Nothing recorded is nothing to narrow to, not an error.

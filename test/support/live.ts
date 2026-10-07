@@ -1,6 +1,7 @@
 // A contract against an installed harness, rather than against a mock.
 
 import { test } from "bun:test";
+import { Config, Effect, FileSystem } from "effect";
 
 /**
  * The test, where that harness is on this machine, and skipped where it is not. What
@@ -9,3 +10,12 @@ import { test } from "bun:test";
  * absence rather than on the contract.
  */
 export const onMachineWith = (harness: string) => (Bun.which(harness) === null ? test.skip : test);
+
+/** Removes, when the test's scope closes, the cache an installed harness keeps in `TMPDIR`. */
+export const removesCache = Effect.fn("live.removesCache")(function* (name: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const tmp = yield* Config.String("TMPDIR");
+  yield* Effect.addFinalizer(() =>
+    Effect.ignore(fs.remove(`${tmp}/${name}`, { recursive: true, force: true })),
+  );
+});

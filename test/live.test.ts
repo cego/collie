@@ -51,7 +51,7 @@ function card(over: Partial<Card> = {}): Card {
 const rig = Effect.fn("live.rig")(function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const stateDir = yield* fs.makeTempDirectory();
+  const stateDir = yield* fs.makeTempDirectoryScoped();
   const runDir = path.join(stateDir, "runs", "r1");
   yield* fs.makeDirectory(runDir, { recursive: true });
   return { stateDir, runDir };

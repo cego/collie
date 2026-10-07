@@ -213,8 +213,8 @@ see [CLI](cli.md).
 
 ### Tasks: one workspace per piece of work
 
-Starting a workflow starts a **task**, and a task gets a herdr workspace of its own —
-created and focused, so you land on the work. Everything the task takes stays there: the
+Starting a workflow starts a **task**, and a task gets a herdr workspace of its own. It is
+never focused: starting work does not take you away from what you are looking at. Everything the task takes stays there: the
 plan's tabs, the implementation it chains into, the review of that, and any follow-up.
 A start about a branch a task already works — one placed on it, or reviewing it — joins
 that task wherever you start it from. Any other fresh start, including one from
@@ -350,16 +350,18 @@ reuses only the checkout it recorded itself, and never claims a new one.
 The worktree outlives the merge request: it is still there when the run ends, so you can
 look at what it built. It is removed only once **settled** — the tree is clean, it holds
 no commit that is not on the remote already, nothing is working in it or could be resumed
-in it, and its merge request is merged or closed (or its remote branch is gone). A
+in it while its work has not landed, its merge request is merged or closed on GitHub or
+GitLab (or a Disposition says what became of it, or its remote branch is gone), and its
+Task's workspace has closed. A squash merge counts: the head that merged is on the remote. A
 `renovate` checkout has no branch to ask either question about, so a clean one nothing is
-working in is settled, and there is no branch to delete with it. Pruning happens every 3 minutes in the
-host, whether or not a pane is open. The board says both what went and what is being held on to, with
+working in is settled, and there is no branch to delete with it. Pruning is part of the
+host's [cleanup](#cleanup) sweep, every ten minutes, whether or not a pane is open. The board says both what went and what is being held on to, with
 the reason:
 
 ```
 Worktrees
   ♻ removed add-a-picker · merged in !14
-  kept fix-the-parser · 2 commit(s) unpushed
+  kept fix-the-parser · 2 commit(s) on no remote
 ```
 
 Nothing is ever removed with a force flag, and a checkout you made yourself is never
@@ -866,6 +868,14 @@ announced through later checks, even one that fails. A Desktop run from a checko
 (`bun run start`, or any build that is not the stable channel) never updates itself, and
 **Settings** says so. The new
 Desktop then upgrades your released Machines to its version as they connect.
+
+Desktop keeps only what it uses. When it starts it removes every staged update but the one
+it is running, which is the base the next update is patched from, and one staged and not yet
+installed; every runner copy but its own version's and the newest; usage lines over 30
+days old; and the SSH control directories, with their masters, of a Desktop that is no
+longer running. [`collie cleanup`](cli.md#cleaning-up) lists the same files of Desktop's, as
+the kind `desktop`, on a computer that has Desktop
+([ADR-0045](adr/0045-collie-removes-what-it-made-once-nothing-needs-it.md)).
 
 The Machines are this computer and every machine enabled in `herdr machine list`; Collie
 keeps no list of its own. At launch Desktop opens one SSH master per herdr machine, from
@@ -1746,6 +1756,51 @@ Settings, where you would put it right, and starts agents in `auto` until you do
 
 Trust is unaffected and still answered first: it decides whether the harness will work in
 the directory at all, and permissions only decide what it asks about once it does.
+
+## Cleanup
+
+Collie removes what it made once nothing needs it, and only what it can show it made
+([ADR-0045](adr/0045-collie-removes-what-it-made-once-nothing-needs-it.md)). The host sweeps
+every ten minutes, whether or not a pane is open. A sweep removes:
+
+- **Task workspaces**, an hour after the first sweep or listing that saw their Task
+  **Finished**. One herdr has in focus at
+  that moment is kept, and so is one holding a pane Collie did not open — your own shell or
+  dev server — until you close it yourself. The Home, and a workspace that is no Task's,
+  are never closed. The Task's agents close with it, including any of its panes left in
+  another workspace. A Task that stops being Finished, because a new Run joined it or a
+  steer reopened it, starts its hour again. Continue task, or a Follow-up Run, reopens a
+  closed workspace on the Task's checkout.
+- **Worktrees** Collie made, once they are **Settled** (see
+  [What a run does to your repository](#what-a-run-does-to-your-repository)).
+- **Staged module generations** under `~/.cache/collie/entries`, once unused for 7 days.
+  Loading a module again counts as using it, and one that is needed after it went is
+  staged again.
+- **State no Run owns:** a Run's directories under `runs/`, `agents/` and `evidence/`, its
+  `stop.`, `hold.`, `parked.` and `notified.` markers and the steering ledgers of its
+  agents, once no Run has a row for them and nothing in them has changed for a day. That
+  includes what the previous engine left, and `events.*.log`, `plans/` and `runs/.seq`,
+  which nothing reads.
+- **CLI receipts** under `requests/`, 30 days after they were written.
+- **Compaction controls** of an agent no herdr session lists any more, with the endpoint it
+  held open.
+- **Runner copies** under `~/.cache/collie/runners`, but the running version's and the
+  newest.
+- **Desktop's own files**, on a computer with Desktop: staged updates, runner copies and
+  usage lines Desktop would remove itself as it starts (see [Collie Desktop](#collie-desktop)).
+- **Renovate clones** under the state directory's `renovate-repositories/`, once no Run uses
+  one and no checkout of it is left.
+- **Tasks**, 30 days after their last Run ended, with every one of their Runs, once nothing
+  — a workspace, an agent, a checkout, another Run — needs them.
+
+An entry of the state directory that is no kind Collie knows is listed as kept and never
+removed.
+
+`collie cleanup` lists what a sweep would remove now, with each item's size and the total,
+and what Collie keeps and why. `collie cleanup --apply` sweeps now; chat can do the same.
+Every removal is judged again at the moment it is made, never forced, and recorded in the
+state directory's `cleanup.jsonl` with when, what, how big, why and who asked, for 30 days.
+Anything a sweep cannot judge is kept, with the reason.
 
 ## Troubleshooting
 

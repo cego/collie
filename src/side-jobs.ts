@@ -1,5 +1,5 @@
 // What the host does on its own, whether or not a pane is open: the merge watch, each
-// Herd's News, worktree pruning and keeping each Herd's Home tokened.
+// Herd's News, the cleanup sweep and keeping each Herd's Home tokened.
 
 import { Clock, Effect, Schedule, type Duration } from "effect";
 import type { TaskView, MrState, Reopened } from "./board-model";
@@ -15,12 +15,11 @@ import { shell } from "./mr";
 import { append as appendNews, newsPath, read as readNews, retired, supersede } from "./news";
 import { eventsIn, holding, idleAgain, readSaid, remember } from "./proactive";
 import { latest, readDispositions } from "./disposition";
-import { everyRegistered } from "./registry";
 import { settled, type RunFacts } from "./runs";
 import { herdDir, herdOf } from "./steering";
 import { listTasks } from "./task";
 import { nowIso } from "./time";
-import { pruneWorktrees } from "./worktree";
+import { sweep, sweeping, type Sweeper } from "./cleanup";
 import { keepDiffs } from "./run-detail";
 
 /** The Runs still going whose drift was escalated to the human, by constraint. */
@@ -119,11 +118,25 @@ const LOOK_EVERY = "5 seconds";
  * and GitLab is asked about a merge request every 5 minutes whatever this is.
  */
 const MERGES_EVERY = "10 seconds";
-/** How often checkouts are swept: a sweep walks each one with git and glab. */
-const PRUNE_EVERY = "3 minutes";
+/** How long after one cleanup sweep ends the next begins (ADR-0045). */
+const SWEEP_EVERY = "10 minutes";
 
 /** How often a proven Home's tokens are restated: well within their 24-hour TTL. */
 const RESTATE_EVERY = "4 hours";
+
+/** The host's own cleanup sweep, ten minutes after it starts and after each one ends. */
+export const sweepEvery = <E, R>(
+  stateDir: string,
+  sweepers: Effect.Effect<ReadonlyArray<Sweeper>, E, R>,
+) =>
+  Effect.sleep(SWEEP_EVERY).pipe(
+    Effect.andThen(
+      every(
+        SWEEP_EVERY,
+        sweeping.withPermit(Effect.flatMap(sweepers, (all) => sweep(all, stateDir, "host"))),
+      ),
+    ),
+  );
 
 /** Each live Herd's proven Home kept tokened; one Herd's failure skips only that Herd. */
 export const keepHomesTokened = <R>(
@@ -149,6 +162,7 @@ export const sideJobs = <E, R>(opts: {
   /** The board with herdr's live agents, which says what a Reopened Run's agent is doing. */
   readonly liveBoard: Effect.Effect<ReadonlyArray<TaskView>, E, R>;
   readonly panels: MrPanels;
+  readonly sweepers: Effect.Effect<ReadonlyArray<Sweeper>, E, R>;
 }) => {
   const { env, herdr } = opts;
   const checked = new Map<string, number>();
@@ -185,19 +199,7 @@ export const sideJobs = <E, R>(opts: {
           yield* keepDiffs(runs, kept);
         }),
       ),
-      every(
-        PRUNE_EVERY,
-        Effect.gen(function* () {
-          yield* pruneWorktrees({
-            herdr,
-            sessions: (yield* liveHerds(herdr, env)).map((session) => session.herdr),
-            stateDir: env.stateDir,
-            runs: yield* opts.runs,
-            registered: yield* everyRegistered(env.stateDir),
-            cwd: env.cwd,
-          });
-        }),
-      ),
+      sweepEvery(env.stateDir, opts.sweepers),
       keepHomesTokened(
         env.stateDir,
         liveHerds(herdr, env).pipe(

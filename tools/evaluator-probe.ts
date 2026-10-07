@@ -167,7 +167,7 @@ const probe = Effect.fn("probe.run")(function* (calls: number) {
 
   // (3) A directory that tries to give the model a hook and an MCP server. Nothing in the
   // transcript may show either, or a tool call of any kind.
-  const hostile = yield* fs.makeTempDirectory({ prefix: "collie-probe-hostile-" });
+  const hostile = yield* fs.makeTempDirectoryScoped({ prefix: "collie-probe-hostile-" });
   yield* fs.makeDirectory(path.join(hostile, ".claude"), { recursive: true });
   yield* fs.writeFileString(
     path.join(hostile, ".claude", "settings.json"),
@@ -225,7 +225,6 @@ const probe = Effect.fn("probe.run")(function* (calls: number) {
       "Paste this into the Run's CAPABILITIES.md under Evaluator.",
     ].join("\n"),
   );
-  yield* fs.remove(hostile, { recursive: true, force: true });
   return good === calls && leaked.length === 0 ? 0 : 1;
 });
 
@@ -233,5 +232,5 @@ const probe = Effect.fn("probe.run")(function* (calls: number) {
 if (import.meta.main) {
   const at = Bun.argv.indexOf("--calls");
   const calls = at > 0 ? Number(Bun.argv[at + 1]) : 10;
-  process.exitCode = await runtime.runPromise(probe(calls).pipe(Effect.orDie));
+  process.exitCode = await runtime.runPromise(probe(calls).pipe(Effect.scoped, Effect.orDie));
 }

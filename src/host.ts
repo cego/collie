@@ -60,6 +60,26 @@ import {
 import { configuredAgents } from "./agents";
 import { Catalogue, discover, searchPath } from "./discovery";
 import { sideJobs } from "./side-jobs";
+import { dataHomeOf, desktopRootOf } from "./desktop";
+import type * as MessageStorage from "effect/unstable/cluster/MessageStorage";
+import {
+  collieCache,
+  compactionSweeper,
+  desktopSweeper,
+  renovateClonesSweeper,
+  retentionSweeper,
+  runnersSweeper,
+  settlingOf,
+  stateSweeper,
+  taskWorkspacesSweeper,
+  generationsDir,
+  generationsSweeper,
+  judge,
+  sweep,
+  sweeping,
+  worktreesSweeper,
+  type SweptBy,
+} from "./cleanup";
 import { once, recordAudit, trimAudit } from "./audit";
 import { currentEnv } from "./env";
 import { installation as installedRelease } from "./release";
@@ -72,6 +92,7 @@ import { buildRunDetail } from "./views";
 import {
   Answered,
   ASKED_KINDS,
+  CleanupReport,
   Controlled,
   Disposition,
   EVIDENCE_GATE,
@@ -131,7 +152,7 @@ import { carryOut, carryOutAsked, followUpField } from "./run-actions";
 import { nothingApproved } from "./outcome";
 import { approvedFrom, VerifySpecSchema, type VerifySpec } from "./verify-spec";
 import { everyRegistered } from "./registry";
-import { readTask } from "./task";
+import { listTasks, readTask } from "./task";
 import { nowIso } from "./time";
 import { reason } from "./naming";
 import { loadDefaults, SettingRefused, sharedSettings, takeShared } from "./config";
@@ -430,21 +451,81 @@ const hostBoard = (dir: string) =>
     );
     // What ended and what it opened needs no herdr: the merge watch asks nobody's panes.
     const unattended = boardOf([]);
-    return { env, herdr, bun, runs, build, unattended };
+    /** When each Task was first seen Finished, for as long as this host runs. */
+    const seen = new Map<string, number>();
+    const storage = yield* Effect.context<MessageStorage.MessageStorage>();
+    /** Every kind of thing Collie cleans, judged against the Runs as they are now. */
+    const sweepers = Effect.gen(function* () {
+      const herds = yield* liveHerds(herdr, env);
+      const sessions = herds.map((session) => session.herdr);
+      const all = yield* runs;
+      const tasks = yield* listTasks(env.stateDir);
+      return [
+        // Before the worktrees: a checkout goes only once its Task's workspace has closed.
+        taskWorkspacesSweeper({
+          stateDir: env.stateDir,
+          sessions: herds,
+          tasks,
+          // No board, no Task judged Finished, so nothing closed.
+          views: yield* build.pipe(Effect.orElseSucceed(() => [])),
+          runs: all,
+          seen,
+        }),
+        worktreesSweeper({
+          herdr,
+          sessions,
+          stateDir: env.stateDir,
+          runs: all,
+          registered: yield* everyRegistered(env.stateDir),
+          cwd: env.cwd,
+          settling: settlingOf({
+            stateDir: env.stateDir,
+            runs: all,
+            tasks,
+            sessions,
+            protect: [env.pluginRoot],
+          }),
+        }),
+        generationsSweeper(generationsDir()),
+        stateSweeper(env.stateDir, new Set(all.map((run) => run.id))),
+        compactionSweeper(env.stateDir, sessions),
+        runnersSweeper(`${collieCache()}/runners`, BUILD),
+        renovateClonesSweeper(env.stateDir, all),
+        desktopSweeper(
+          desktopRootOf(dataHomeOf(env.home, env.raw["XDG_DATA_HOME"])),
+          `${env.raw["XDG_STATE_HOME"] || `${env.home}/.local/state`}/collie-desktop`,
+        ),
+        // Last: a Task is kept while a workspace or a checkout of it is still there.
+        retentionSweeper({
+          stateDir: env.stateDir,
+          sessions,
+          // Every read or none: a Task judged without its Runs would look forgettable.
+          facts: Effect.all({ tasks: listTasks(env.stateDir), views: build, runs }).pipe(
+            Effect.orElseSucceed(() => ({ tasks: [], views: [], runs: [] })),
+            Effect.provideContext(bun),
+          ),
+          retire: (ids) => registry.retire(ids).pipe(Effect.provideContext(storage)),
+        }),
+      ];
+    });
+    return { env, herdr, bun, runs, build, unattended, sweepers };
   });
 
-/** The merge watch, News, pruning and the Home's tokens, for as long as this host runs. */
+/** The merge watch, News, the cleanup sweep and the Home's tokens, for as long as this host runs. */
 const sideJobsLayer = (dir: string, panels: MrPanels) =>
   Layer.effectDiscard(
     Effect.gen(function* () {
-      const { env, herdr, bun, runs, build, unattended } = yield* hostBoard(dir);
+      const { env, herdr, bun, runs, build, unattended, sweepers } = yield* hostBoard(dir);
       yield* Effect.forkScoped(
-        sideJobs({ env, herdr, runs, board: unattended, liveBoard: build, panels }).pipe(
+        sideJobs({ env, herdr, runs, board: unattended, liveBoard: build, panels, sweepers }).pipe(
           Effect.provideContext(bun),
         ),
       );
     }),
   );
+
+/** How many sweeps a front door asked for that a host keeps a record of. */
+const CLEANUP_TRAIL = 50;
 
 /** How many of the settings operations a host keeps a record of. */
 const SETTINGS_TRAIL = 50;
@@ -468,7 +549,7 @@ const frontDoorHandlers = (
       const fs = yield* FileSystem.FileSystem;
       const registry = yield* Registry;
       const hosted = yield* Effect.context<HostServices>();
-      const { env, herdr, bun, build } = yield* hostBoard(dir);
+      const { env, herdr, bun, build, sweepers } = yield* hostBoard(dir);
       // A finished Run's plan cannot change, so every drawer on it shares one read.
       // ponytail: kept for the host's life; evict by age if a host lives for months.
       const plans = new Map<string, PlanPanel | null>();
@@ -824,6 +905,26 @@ const frontDoorHandlers = (
               );
               yield* trimAudit(trail, SETTINGS_TRAIL).pipe(Effect.orDie);
               return taken;
+            }),
+          ),
+        cleanup: () => plainly(Effect.flatMap(sweepers, judge)),
+        sweep: ({ request }, { client }) =>
+          plainly(
+            Effect.gen(function* () {
+              const who = whoOf(client);
+              const spoken = { origin: who.origin, request, ...voiceOf(who) };
+              const actor: SweptBy =
+                who.from === undefined ? spoken : { ...spoken, from: who.from };
+              const trail = (yield* Path.Path).join(env.stateDir, "cleanup");
+              const swept = yield* once(
+                trail,
+                { operation: "cleanup", request, ...who, asked: {}, result: CleanupReport },
+                sweeping.withPermit(
+                  Effect.flatMap(sweepers, (all) => sweep(all, env.stateDir, actor)),
+                ),
+              );
+              yield* trimAudit(trail, CLEANUP_TRAIL).pipe(Effect.orDie);
+              return swept;
             }),
           ),
         invoke: ({ runId, offer, input, request }, { client }) =>
