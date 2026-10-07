@@ -1238,6 +1238,20 @@ question, so retrying cannot repeat the earlier actions.
 `run start` and `run answer` are the two worth being careful with: without a request id, a
 retried `run start` is a second run.
 
+## Settings
+
+```sh
+collie settings list
+collie settings set <key> <value> [--request-id <id>]
+```
+
+`list` prints every one of Collie's settings as this Machine has it, with its default.
+`set` sets one through the host, refused as the TUI's Settings refuses it; an empty value
+unsets it. It is an edit made now, so a Desktop that shares settings with its Flock gives it
+to every Machine: the latest edit of a key wins
+([ADR-0043](adr/0043-a-shared-setting-is-its-latest-edit.md)). Remembered answers and
+anything else in `config.json` are not settings and are refused.
+
 ## Upgrading
 
 ```sh
@@ -1492,7 +1506,12 @@ carries it out; `act`, which carries out the board's own actions on a Run (`stop
 being refused as `propose`'s; `reconcile`, which settles a proposal step nobody can account
 for; `settleDelivery`, which does the same for a message to an agent; `focus`, which focuses
 a Run's newest live agent, or its workspace, on the host's own herdr and answers with the
-session, workspace and tab it is in; and `news`, which
+session, workspace and tab it is in; `setSettings`, which writes the Flock's settings into
+the Machine's `config.json`, each with its own edit's time and only where that is later than
+the Machine's own last edit of the key, records when each was set in `settings-set.json`
+and, when Desktop asks, that a Desktop gave them, and refuses the whole batch over any value the TUI's Settings
+would refuse ([ADR-0043](adr/0043-a-shared-setting-is-its-latest-edit.md)); `settings`
+reads them back, each with when it was set; and `news`, which
 hands one conversation its Herd's pending News, each item with its Significance, and
 records it `read`, `sent` or `uncertain` for that conversation alone. Given `keys`, it hands
 over every pending item and records only those keys: what Desktop's Flock chat actually

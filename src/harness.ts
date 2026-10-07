@@ -4,6 +4,7 @@
 import { Effect, FileSystem, Option, Schema } from "effect";
 import type { PluginEnv } from "./env";
 import { isString } from "./schema";
+import { PERMISSION_MODES } from "./settings";
 import { claudeTrust, type Trust } from "./trust";
 import type { YamlValue } from "./yaml";
 
@@ -11,15 +12,6 @@ import type { YamlValue } from "./yaml";
  * The harness adapter's pinned default model. Adapters without one still omit the flag.
  */
 export const DEFAULT_MODEL = "default";
-
-/**
- * Who decides whether a tool call runs: the harness's own automatic review (`auto`), no
- * one (`bypass`), or the harness's prompt in the agent's own pane (`harness`). `auto` is
- * the default because a prompt nobody is watching stops the Run instead of protecting it,
- * and the review is what stands between an agent and the checkout it works in; `bypass`
- * is an operator's to opt into.
- */
-export const PERMISSION_MODES = ["auto", "bypass", "harness"] as const;
 
 export type PermissionMode = (typeof PERMISSION_MODES)[number];
 

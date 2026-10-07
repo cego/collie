@@ -6,6 +6,7 @@ import { CliConfig, CliError, Command, GlobalFlag } from "effect/unstable/cli";
 import { persona } from "./commands/persona";
 import { run } from "./commands/run";
 import { task } from "./commands/task";
+import { settings } from "./commands/settings";
 import { root } from "./commands/shared";
 import { doctor } from "./commands/doctor";
 import { upgrade } from "./commands/upgrade";
@@ -27,6 +28,7 @@ export const app = root.pipe(
     persona,
     run,
     task,
+    settings,
     steer,
     confirm,
     decline,
