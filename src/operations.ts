@@ -21,7 +21,8 @@ import {
 import { carriedBefore, carryOutProposal } from "./run-actions";
 export { carryOutProposal, registerRunExecutors } from "./run-actions";
 import { shell, type Runner } from "./mr";
-import { installation, RELEASE_TAG } from "./release";
+import { dataHomeOf, updateDesktop } from "./desktop";
+import { installation, manifestField, RELEASE_TAG } from "./release";
 import manifest from "../herdr-plugin.toml";
 import { everyRegistered, type AgentEntry } from "./registry";
 import { listRuns, type RunFacts } from "./runs";
@@ -322,8 +323,11 @@ export const upgrade = Effect.fn("operations.upgrade")(function* (
     });
   }
 
+  const desktop = yield* updateDesktop(to ?? (yield* manifestField(root, "version")), {
+    dataHome: dataHomeOf(env.home, env.raw.XDG_DATA_HOME),
+  });
   const moved = checkout && before !== after;
-  const steps = prepareSteps(installed.stdout);
+  const steps = [...prepareSteps(installed.stdout), ...(desktop === null ? [] : [desktop])];
   return {
     ok: true as const,
     data: { root, checkout, before, after, updated: moved, steps, ...(to && { version: to }) },

@@ -4,6 +4,7 @@ import { Effect, FileSystem, Option, Schema } from "effect";
 import { Updater } from "electrobun/bun";
 import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
 import * as HttpClient from "effect/unstable/http/HttpClient";
+import { releaseOf } from "../../../src/desktop";
 import type { UpdaterPort } from "./updates";
 
 /** What Electrobun records once it has downloaded and unpacked an update. */
@@ -19,10 +20,6 @@ const PreparedRecord = Schema.fromJsonString(
 
 const preparedRecordOf = (folder: string) =>
   `${folder}/self-extraction/.electrobun-prepared-update.json`;
-
-/** `version`'s own release, where `baseUrl` is the newest one's `latest/download`. */
-const releaseOf = (baseUrl: string, version: string) =>
-  baseUrl.replace(/\/+$/, "").replace(/\/latest\/download$/, `/download/${version}`);
 
 const promised = <A>(evaluate: () => Promise<A>) =>
   Effect.tryPromise({ try: evaluate, catch: (cause) => String(cause) });
