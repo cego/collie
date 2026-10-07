@@ -9,7 +9,13 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 import { nowIso } from "./time";
 import { attentionFor } from "./attention";
 import type { PluginEnv } from "./env";
-import type { FrontDoor } from "./board-model";
+import { Answered, mrLabel, type FrontDoor } from "./board-model";
+import { readAudit, type AuditLine } from "./audit";
+import { readForge, readMrStates } from "./merges";
+import { findingsIn } from "./output";
+import { latest, readDispositions } from "./disposition";
+import { PLAN_DIR } from "./run-detail";
+import { tailed } from "./views";
 import {
   Herdr,
   herdrFailureReason,
@@ -25,7 +31,7 @@ import { checkoutsUnder, projectsRoot } from "./projects";
 import { installation, manifestField, RELEASE_TAG } from "./release";
 import manifest from "../herdr-plugin.toml";
 import { everyRegistered, type AgentEntry } from "./registry";
-import { listRuns, type RunFacts } from "./runs";
+import { listRuns, type Asked, type RunFacts } from "./runs";
 import { newTask, taskOfWorkspace, writeTask, type TaskChoice, type TaskRecord } from "./task";
 import { nameTask, type LiveNames } from "./tasknames";
 import { readIntent, type Authority, type Intent } from "./intent";
@@ -48,7 +54,7 @@ import {
   type EvaluatorDeps,
   type Validated,
 } from "./evaluator";
-import type { Action } from "./actions";
+import { ActionSchema, type Action } from "./actions";
 import {
   actorName,
   proposalsPath,
@@ -163,6 +169,8 @@ export const workspaceNamed = Effect.fn("operations.workspaceNamed")(function* (
   if (matched.length === 0) {
     const opened = yield* workspaceForDirectory(env, wanted, all, panes);
     if (opened !== null) return opened;
+    if (wanted.includes("/"))
+      return refused(`no directory "${named}" on this Machine; ${yield* howToName(env)}`);
     const checkouts = yield* checkoutsNamed(env, wanted);
     if (checkouts.paths.length === 1)
       return yield* workspaceForDirectory(env, checkouts.paths[0]!, all, panes);
@@ -170,7 +178,10 @@ export const workspaceNamed = Effect.fn("operations.workspaceNamed")(function* (
       return refused(
         `"${named}" names ${checkouts.paths.length} checkouts under ${checkouts.root} (${checkouts.paths.join(", ")}); say which`,
       );
-    return refused(`no workspace "${named}"; ${all.map((w) => w.label).join(", ") || "none"}`);
+    const root = yield* projectsRoot(env).pipe(Effect.orElseSucceed(() => null));
+    return refused(
+      `no workspace id, label, directory${root === null ? "" : ` or checkout under the Projects root ${root.path}`} is named "${named}"; workspaces: ${all.map((w) => w.label).join(", ") || "none"}`,
+    );
   }
   if (matched.length > 1)
     return refused(
@@ -183,6 +194,33 @@ export const workspaceNamed = Effect.fn("operations.workspaceNamed")(function* (
     workspace.cwd !== "" ? workspace.cwd : workspaceCwdFromPanes(workspace.workspaceId, panes);
   if (cwd === "") return refused(`workspace "${named}" has no directory to run in`);
   return { found: { ...workspace, cwd } };
+});
+
+/** Whether `cwd` is in Collie's state directory, the Home's among it: no checkout (ADR-0033). */
+export const inCollieState = Effect.fn("operations.inCollieState")(function* (
+  env: PluginEnv,
+  cwd: string,
+) {
+  const path = yield* Path.Path;
+  const state = path.resolve(env.stateDir);
+  const dir = path.resolve(cwd);
+  return dir === state || dir.startsWith(`${state}${path.sep}`);
+});
+
+/** Why a start may not be rooted in `cwd`, or null where it may. */
+export const collieOwnRefusal = Effect.fn("operations.collieOwnRefusal")(function* (
+  env: PluginEnv,
+  named: string,
+  cwd: string,
+) {
+  if (!(yield* inCollieState(env, cwd))) return null;
+  return `"${named}" is ${cwd}, Collie's own namespace, not a checkout; ${yield* howToName(env)}, or projects-root`;
+});
+
+/** How a checkout is named instead, on this Machine. */
+const howToName = Effect.fn("operations.howToName")(function* (env: PluginEnv) {
+  const root = yield* projectsRoot(env).pipe(Effect.orElseSucceed(() => null));
+  return `name a checkout by its workspace, its path on this Machine${root === null ? "" : ` or its directory name under the Projects root ${root.path}`}`;
 });
 
 /**
@@ -924,25 +962,181 @@ export const herdFacts = Effect.fn("operations.herdFacts")(function* (env: Plugi
 const agentsOf = (registered: ReadonlyArray<AgentEntry>, run: string): Set<string> =>
   new Set(registered.filter((entry) => entry.runId === run).map((entry) => entry.agent));
 
+/** How much of a Run's own record one detail read carries. */
+const ANSWERS_IN_CONTEXT = 5;
+const FINDINGS_IN_CONTEXT = 10;
+const LOG_LINES_IN_CONTEXT = 5;
+const LOG_LINE_CHARS = 200;
+const LOG_TAIL_BYTES = 16 * 1024;
+
+const actionText = Schema.encodeSync(Schema.fromJsonString(ActionSchema));
+
+/** The `collie_do` action that answers `choiceId` on `run`. */
+export const answerAction = (run: string, choiceId: string, answer: string): string =>
+  actionText({ kind: "answer", run, choiceId, answer });
+
+/** The Choice a Run is waiting on, every option, and the `collie_do` action that answers it. */
+export const choiceLines = (run: string, asked: Asked): string[] => [
+  `Waiting on the Choice "${asked.name}": ${asked.prompt}`,
+  asked.options.length === 0
+    ? "It has no options: it is answered in words."
+    : `Options: ${asked.options.join(" | ")}`,
+  `Answer it with the collie_do action ${answerAction(
+    run,
+    asked.name,
+    asked.options.length === 0 ? "<their words>" : "<one of the options>",
+  )}`,
+];
+
+const decodeAnswered = Schema.decodeUnknownOption(Answered);
+
+/** Who an answer came from, in the words a human uses for the place they answered. */
+const answererOf = ({ origin, from, conversation }: AuditLine["actor"]): string => {
+  switch (origin) {
+    case "desktop":
+      return from?.client === undefined ? "desktop" : `desktop on ${from.client}`;
+    case "chat":
+      return conversation === undefined ? "chat" : `chat ${conversation}`;
+    case "cli-tty":
+      return "cli";
+    default:
+      return origin;
+  }
+};
+
+/** Each answered Choice, newest first, with who answered it and when as the audit trail has it. */
+const answeredLines = Effect.fn("operations.answeredLines")(function* (run: RunFacts) {
+  if (run.answered.length === 0) return [];
+  const trail = yield* readAudit(run.dir).pipe(Effect.orElseSucceed(() => []));
+  const by = new Map<string, AuditLine>();
+  for (const line of trail) {
+    if (line.operation !== "answer") continue;
+    const answered = decodeAnswered(line.result);
+    if (answered._tag === "Some" && answered.value.fresh) by.set(answered.value.decision, line);
+  }
+  return [
+    "",
+    "### Answered",
+    "",
+    ...run.answered
+      .slice(-ANSWERS_IN_CONTEXT)
+      .reverse()
+      .map(({ name, answer }) => {
+        const line = by.get(name);
+        return `- "${name}": ${answer} — ${line === undefined ? "who answered is not recorded" : `${answererOf(line.actor)} at ${line.at}`}`;
+      }),
+  ];
+});
+
+/** Its merge request with what the host's merge watch last recorded of it, and its branch. */
+const mergeLines = Effect.fn("operations.mergeLines")(function* (env: PluginEnv, run: RunFacts) {
+  const lines = run.branch === null ? [] : [`Branch: ${run.branch}`];
+  if (run.mr === null) return lines;
+  const label = mrLabel(run.mr);
+  const state = (yield* readMrStates(env.stateDir)).get(label);
+  const checks = (yield* readForge(env.stateDir)).get(label)?.checks;
+  const watched =
+    state === undefined
+      ? "not watched"
+      : `${state}, checks ${checks === undefined ? "not recorded" : checks.state === "failed" ? `failed (${checks.name})` : checks.state}`;
+  return [`Merge request: ${run.mr} — ${watched}`, ...lines];
+});
+
+/** The Run's own plan directory and how many tickets it holds. */
+const planLines = Effect.fn("operations.planLines")(function* (run: RunFacts) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const dir = path.join(run.dir, PLAN_DIR);
+  if (!(yield* fs.exists(dir))) return [];
+  const tickets = (yield* fs
+    .readDirectory(path.join(dir, "issues"))
+    .pipe(Effect.orElseSucceed(() => []))).filter((name) => name.endsWith(".md")).length;
+  return [`Plan: ${dir} (${tickets} ticket${tickets === 1 ? "" : "s"})`];
+});
+
+/** What the review found, what became of the work and what the Run has to prove. */
+const verdictLines = Effect.fn("operations.verdictLines")(function* (run: RunFacts) {
+  const findings = yield* findingsIn(run.dir);
+  const disposition = latest(yield* readDispositions(run.dir));
+  const left = findings.length - FINDINGS_IN_CONTEXT;
+  return [
+    ...(findings.length === 0
+      ? []
+      : [
+          "",
+          "### Findings",
+          "",
+          ...findings
+            .slice(0, FINDINGS_IN_CONTEXT)
+            .map((finding) => `- (${finding.severity}) ${finding.title}`),
+          ...(left > 0 ? [`- (${left} more)`] : []),
+          "",
+        ]),
+    ...(disposition === null
+      ? []
+      : [
+          `Disposition: ${disposition.ref === "" ? disposition.kind : `${disposition.kind} ${disposition.ref}`}`,
+        ]),
+    ...(run.outcome === "unspecified" ? [] : [`Outcome to prove: ${run.outcome}`]),
+  ];
+});
+
+/** The last lines its log recorded, each cut short, leaving out one that only repeats the result. */
+const logLines = Effect.fn("operations.logLines")(function* (run: RunFacts) {
+  const log = yield* tailed(`${run.dir}/log.txt`, LOG_TAIL_BYTES);
+  const kept = (log?.text ?? "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line !== "" && line !== run.summary?.trim())
+    .slice(-LOG_LINES_IN_CONTEXT);
+  if (kept.length === 0) return [];
+  return [
+    "",
+    "### Last recorded",
+    "",
+    ...kept.map(
+      (line) => `- ${line.length > LOG_LINE_CHARS ? `${line.slice(0, LOG_LINE_CHARS)}…` : line}`,
+    ),
+  ];
+});
+
 /**
  * One Run in the detail a next action turns on: what it is for, what bounds it, what it
- * has produced and where it has drifted. The same read the evidence pack embeds, so a
- * detail asked for in chat is the detail a proposal was made from.
+ * is asking, what it has produced and where it has drifted. The same read the evidence
+ * pack embeds, so a detail asked for in chat is the detail a proposal was made from.
  */
-export const runFacts = Effect.fn("operations.runFacts")(function* (run: RunFacts) {
+export const runFacts = Effect.fn("operations.runFacts")(function* (env: PluginEnv, run: RunFacts) {
   const intent = yield* readIntent(run.dir).pipe(Effect.catch(() => Effect.succeed(null)));
   const attention = yield* attentionFor(run);
+  const started = (yield* listRuns(env)).filter((one) => one.parent === run.id);
   const lines = [
     `Status: ${run.state}`,
     `Directory: ${run.cwd}`,
     `Workspace: ${run.workspace ?? "its Task's"}`,
     `Goal: ${intent?.goal ?? run.settled.inputs.goal ?? "(none recorded)"}`,
     `Intent version: ${intent?.version ?? "(none)"}`,
-    attention.explanation,
+    ...(run.asking.length === 0
+      ? [attention.explanation]
+      : run.asking.flatMap((asked) => choiceLines(run.id, asked))),
     `Actions: ${attention.actions.join(", ") || "none"}`,
     ...(intent?.constraints ?? []).map(
       (c) => `- constraint ${c.id} (${c.severity}, ${c.source}): ${c.text}`,
     ),
+    ...(yield* answeredLines(run)),
+    ...(run.summary === null ? [] : ["", `Result: ${run.summary}`]),
+    ...(started.length === 0
+      ? []
+      : [
+          "",
+          "### Runs it started",
+          "",
+          ...started.map((one) => `- run ${one.id}: ${one.workflow}, ${one.state}`),
+        ]),
+    "",
+    ...(yield* mergeLines(env, run)),
+    ...(yield* planLines(run)),
+    ...(yield* verdictLines(run)),
+    ...(yield* logLines(run)),
   ];
   const cards = yield* readCards(run.dir).pipe(Effect.catch(() => Effect.succeed([])));
   for (const entry of cards.slice(-CARDS_IN_CONTEXT)) {
@@ -966,7 +1160,10 @@ export const runFacts = Effect.fn("operations.runFacts")(function* (run: RunFact
         `- ${report.constraint} (${report.severity}, ${report.kind}): ${report.correction ?? "no correction recorded"}`,
       );
   }
-  return lines.join("\n");
+  return lines
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trimEnd();
 });
 
 const evidencePack = Effect.fn("operations.evidencePack")(function* (
@@ -1002,7 +1199,7 @@ const evidencePack = Effect.fn("operations.evidencePack")(function* (
     );
   }
   if (run !== null) {
-    lines.push("", `## Run ${run.id}`, "", yield* runFacts(run));
+    lines.push("", `## Run ${run.id}`, "", yield* runFacts(env, run));
     if (card !== null) {
       const cards = yield* readCards(run.dir).pipe(Effect.catch(() => Effect.succeed([])));
       const bound = cards.find((entry) => entry.id === card);

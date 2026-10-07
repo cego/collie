@@ -1207,6 +1207,11 @@ const frontDoorHandlers = (
               });
             }),
           ),
+        read: ({ tool, input }, { client }) =>
+          Effect.promise(() => import("./tools")).pipe(
+            Effect.flatMap(({ answerRead }) => answerRead(askerEnv(client), tool, input)),
+            Effect.provideContext(bun),
+          ),
         runDetail: ({ runId, tail, pages, refreshMr }) => {
           let fresh = refreshMr;
           const detail = Effect.gen(function* () {
