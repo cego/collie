@@ -1128,15 +1128,8 @@ cd desktop
 bun install
 bun run start       # build the view and run Desktop from the checkout
 bun run typecheck
-bun run test        # build with CEF's debugging port open, then drive the app with Playwright
+bun run test        # Desktop's unit tests
 ```
-
-`bun run test` starts the built app under Xvfb when there is no display, against scripted
-hosts (`desktop/test/support/scripted-host.ts`): this computer's behind a local bridge, and
-each herdr machine's behind scripted `herdr` and `ssh` commands put first on its PATH, so
-it needs neither herdr, SSH nor a real host. The app links the system's WebKitGTK and
-AppIndicator libraries even though it renders with its bundled Chromium; on a computer
-without them, put them on `LD_LIBRARY_PATH`.
 
 ## Talking to Collie about a Herd
 

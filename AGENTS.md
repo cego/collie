@@ -61,11 +61,11 @@ herdr actions, and the `collie` CLI.
   [ADR-0005](docs/adr/0005-collie-tab-is-an-application.md) says the tab draws).
 - **Changing Desktop** → [`docs/using.md`](docs/using.md#collie-desktop), alongside
   `desktop/src/bun/machine.ts` (a Machine reached through `collie bridge`, never the host
-  client), `desktop/src/shared/` (the view's RPC and the Flock it folds) and
-  `desktop/test/board.test.ts` and `desktop/test/drawer.test.ts` (Playwright over CEF
-  against a scripted host). A card's drawer is `desktop/view/app/components/RunDrawer.vue`;
-  what agent markdown may keep is `desktop/src/shared/markdown.ts` with
-  `desktop/test/markdown.test.ts`, and the window's navigation rule is in
+  client) and `desktop/src/shared/` (the view's RPC and the Flock it folds), with the main
+  process's behaviour tested in `test/desktop-*.test.ts`. A card's drawer is
+  `desktop/view/app/components/RunDrawer.vue`; what agent markdown may keep is
+  `desktop/src/shared/markdown.ts` with `desktop/test/markdown.test.ts`, and the window's
+  navigation rule is in
   `desktop/src/bun/index.ts`. Desktop has its own `package.json`; Effect is the root's, so
   the board's Schemas exist once. The
   Flock chat is `desktop/src/bun/chat.ts` (the session and its turns), `claude.ts` (the
@@ -229,6 +229,10 @@ herdr actions, and the `collie` CLI.
 The one pairing they do not record: before touching anything on the release or install
 path, run `bun run build && bun run smoke`. The build alone does not prove the compiled
 binary still starts.
+
+Tests are unit tests only: they call the code through its own interface, with fakes at
+its edges. No Playwright and no test that drives a built app or a browser — a behaviour
+of the view is covered by testing the logic it renders.
 
 ## Invariants
 
