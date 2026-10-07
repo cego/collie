@@ -34,7 +34,14 @@ import { humanBytes } from "./cleanup";
 import { agentStartRefusal, CHAT_CHECKOUT_FIX } from "./agent-start";
 import { PROJECTS_ROOT_OPTION, projectsRoot } from "./projects";
 import { listTasks, removeTask } from "./task";
-import { clearOverride, err, workspaceNamed, type Failure, type OpResult } from "./operations";
+import {
+  clearOverride,
+  collieOwnRefusal,
+  err,
+  workspaceNamed,
+  type Failure,
+  type OpResult,
+} from "./operations";
 import { Herdr } from "./herdr";
 import { runDir } from "./engine";
 import { withDirLock } from "./lock";
@@ -317,6 +324,9 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
       const atRoot = action.workspace?.trim() === PROJECTS_ROOT_OPTION;
       const where = atRoot ? null : yield* workspaceNamed(env, action.workspace);
       if (where !== null && "error" in where) return failed(where.error);
+      const own =
+        where === null ? null : yield* collieOwnRefusal(env, where.found.label, where.found.cwd);
+      if (own !== null) return failed(own);
       const rooted =
         where === null
           ? env

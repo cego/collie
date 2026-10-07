@@ -1141,7 +1141,12 @@ id is taken where only one Machine has it, and refused with the candidates where
 do. Every action is recorded on its Machine as `chat`, under the conversation
 `flock@<this computer>`, with the words you wrote that turn. It has the Herd's read and act
 tools except `collie_definitions` and `collie_installation`, and holds one Run at a time,
-because those read a Machine's own files, which no host operation hands over.
+because those read a Machine's own files, which no host operation hands over. What a Run
+is waiting on, who answered what, its merge request, plan and the messages sent to its
+agents (`collie_run`, `collie_receipts`), and where work can start (`collie_workspaces`),
+are answered by the Machine's own host exactly as its Home's chat would answer them, headed
+with the Machine's name. A Machine whose Collie is too old to answer is named with "upgrade
+Collie on <machine>", and the others still answer.
 
 It is a session of your own Claude Code, on your own Claude seat, driven through the Agent
 SDK in Desktop's main process: `opus` at medium effort with summarised thinking, Claude
