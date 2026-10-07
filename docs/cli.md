@@ -1509,7 +1509,7 @@ a Run's newest live agent, or its workspace, on the host's own herdr and answers
 session, workspace and tab it is in; `setSettings`, which writes the Flock's settings into
 the Machine's `config.json`, each with its own edit's time and only where that is later than
 the Machine's own last edit of the key, records when each was set in `settings-set.json`
-and which Desktop gave them, and refuses the whole batch over any value the TUI's Settings
+and, when Desktop asks, that a Desktop gave them, and refuses the whole batch over any value the TUI's Settings
 would refuse ([ADR-0043](adr/0043-a-shared-setting-is-its-latest-edit.md)); `settings`
 reads them back, each with when it was set; and `news`, which
 hands one conversation its Herd's pending News, each item with its Significance, and

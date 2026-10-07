@@ -220,7 +220,13 @@ Desktop keeps the Flock's settings in `flock-settings.json`
 reconnected — and after an edit in its Settings, it reads the Machine's `settings`, takes
 each key whose edit is later than the one it holds (`takeFrom` in
 `desktop/src/shared/flock-settings.ts`), and gives the Machine what it lacks with
-`setSettings`, which the host writes only where that edit is later than its own. The latest
+`setSettings`, which the host writes only where that edit is later than its own. It asks
+even with nothing to give, since that is what tells the host a Desktop shares its settings,
+which its TUI then says. It takes no value `parseShared` refuses, and never `gitlab_host`,
+whose token Desktop holds. A Machine's reply is taken into the settings as they are by then
+(`flockSync`), so an edit made during a sync survives, and an edit taken from one Machine
+goes on to every other connected one. Opening Settings syncs every connected Machine too.
+The latest
 edit of a key wins everywhere ([ADR-0043](adr/0043-a-shared-setting-is-its-latest-edit.md)).
 A Machine whose collie has no `settings` yet fails the read, is left alone, and is synced
 once Desktop has upgraded it and it connects again.
