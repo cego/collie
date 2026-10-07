@@ -34,7 +34,7 @@ asked for it unless it names others. Not an **Input**: no Workflow declares one,
 Workflow gets them unchanged. Not **Evidence**: it is what the work was given, not what it
 proved. In the Flock chat it is also what the model is shown — an image, a PDF, a text, or
 a name, size and path — and Desktop keeps a copy, so the conversation still shows it after a
-restart ([ADR-0046](docs/adr/0046-an-attachment-is-uploaded-once-and-belongs-to-the-run.md)).
+restart ([ADR-0045](docs/adr/0045-an-attachment-is-uploaded-once-and-belongs-to-the-run.md)).
 
 **Output** — A structured JSON file an agent writes to the Run directory for one operation (e.g. a review verdict + findings). It is decoded against the Workflow's schema before anything believes it, and one that does not decode buys one repair. Workflows read Outputs, never terminal text.
 

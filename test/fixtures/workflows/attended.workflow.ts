@@ -1,5 +1,5 @@
 // Two agents with a question between them, and a follow-up: what a Run's attachments
-// reach before its first step, with a steer, and in a Run started from it (ADR-0046).
+// reach before its first step, with a steer, and in a Run started from it (ADR-0045).
 
 import { agentWork, ask, defineWorkflow } from "collie";
 import { Effect, Schema } from "effect";

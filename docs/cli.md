@@ -179,7 +179,7 @@ an Input, so the Workflow's own input, and with it the execution, is the same ei
 The operation's line in the Run's `operations.jsonl` names each file under `asked`, by the
 name the Run keeps it under and the path it came from. Chat's `start`, `followup` and
 `deliver` actions take the same paths as `attachments`
-([ADR-0046](adr/0046-an-attachment-is-uploaded-once-and-belongs-to-the-run.md)).
+([ADR-0045](adr/0045-an-attachment-is-uploaded-once-and-belongs-to-the-run.md)).
 
 ### A workflow saved as a module
 

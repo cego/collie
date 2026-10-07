@@ -1,4 +1,4 @@
-// A Run takes attachments by path (ADR-0046): the host copies each into the Run's own
+// A Run takes attachments by path (ADR-0045): the host copies each into the Run's own
 // directory before its first step or the steer it came with, every step's prompt lists
 // them, and a Run started from it gets copies. Driven through the CLI and host an
 // installation runs, with herdr faked.
