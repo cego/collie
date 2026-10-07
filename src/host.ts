@@ -28,6 +28,7 @@ import {
   Exit,
   FileSystem,
   Layer,
+  Logger,
   Option,
   Path,
   Schedule,
@@ -59,6 +60,7 @@ import {
   type Locate,
 } from "./engine";
 import { configuredAgents } from "./agents";
+import { hostLogger } from "./host-log";
 import { Catalogue, discover, searchPath } from "./discovery";
 import { sideJobs } from "./side-jobs";
 import { once, recordAudit, trimAudit } from "./audit";
@@ -154,6 +156,7 @@ export const BUILD: string = manifest.version;
 
 export const socketOf = (dir: string) => `${dir}/host.sock`;
 const lockOf = (dir: string) => `${dir}/host.lock`;
+const logOf = (dir: string) => `${dir}/host.log`;
 
 export class HostUnavailable extends Data.TaggedError("HostUnavailable")<{
   readonly dir: string;
@@ -1316,7 +1319,11 @@ export const serve = (dir: string): Effect.Effect<void, never, BunServices | Sco
     return yield* withLock(
       lock,
       Effect.void,
-      boundedStop(lock).pipe(Effect.andThen(Effect.race(own(dir), orphaned(dir)))),
+      boundedStop(lock).pipe(
+        Effect.andThen(Effect.logInfo(`collie ${BUILD} host started, pid ${process.pid}`)),
+        Effect.andThen(Effect.race(own(dir), orphaned(dir))),
+        Effect.provide(Logger.layer([hostLogger(logOf(dir))], { mergeWithExisting: true })),
+      ),
       0,
     );
   }).pipe(Effect.orDie);
@@ -1341,7 +1348,11 @@ const boundedStop = (lock: string) =>
     const stopping = yield* Deferred.make<void>();
     // In the outer scope, which closes only once the shutdown it bounds has finished.
     yield* Deferred.await(stopping).pipe(
+      Effect.andThen(Effect.logInfo("asked to stop")),
       Effect.andThen(Effect.sleep(grace)),
+      Effect.andThen(Effect.logWarning(`still stopping after ${Duration.format(grace)}; exiting`)),
+      // Long enough for the log's next flush, which an exit does not wait for.
+      Effect.andThen(Effect.sleep("200 millis")),
       Effect.andThen(holdsLock(lock)),
       Effect.flatMap((ours) => (ours ? fs.remove(lock, { force: true }) : Effect.void)),
       Effect.ignore,

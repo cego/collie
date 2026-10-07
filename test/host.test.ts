@@ -258,6 +258,10 @@ test(
           (alive) => !alive,
         );
         expect(yield* ownerOf(state)).toBeNull();
+        // And it said so where the next human to look will find it.
+        const log = yield* fs.readFileString(`${state}/host.log`);
+        expect(log).toContain("host started");
+        expect(log).toContain("still stopping after");
       }),
     ),
   120_000,
