@@ -144,6 +144,7 @@ import { readTask } from "./task";
 import { nowIso } from "./time";
 import { reason } from "./naming";
 import { editString, globFiles, grepFiles, readPart, writeWhole } from "./host-files";
+import { pruneUploads, receive, uploadsDir } from "./uploads";
 import { loadDefaults, SettingRefused, sharedSettings, takeShared } from "./config";
 import { factsOfView, settled } from "./runs";
 import { aliveIn, focusPane, herdChanges, liveHerds } from "./herds";
@@ -934,6 +935,22 @@ const frontDoorHandlers = (
               { operation: "invoke", request, ...whoOf(client), asked, result: Started },
               registry.invoke({ runId, offer, input, request, attachments }),
             ),
+          ),
+        upload: (part, { client }) =>
+          refusedPlainly(
+            Effect.gen(function* () {
+              const got = yield* receive(env.stateDir, part);
+              if (got.complete && got.path !== null)
+                yield* recordAudit(uploadsDir(env.stateDir), {
+                  operation: "upload",
+                  request: part.sha256,
+                  ...whoOf(client),
+                  asked: { name: part.name, size: part.size, sha256: part.sha256 },
+                  result: Schema.String,
+                  value: got.path,
+                }).pipe(Effect.orDie);
+              return { path: got.path };
+            }),
           ),
         readFile: ({ path, offset, length }) =>
           readPart(path, offset, length).pipe(Effect.provideContext(bun)),

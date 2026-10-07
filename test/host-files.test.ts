@@ -104,3 +104,67 @@ test(
     ),
   120_000,
 );
+
+const sha256 = (bytes: Uint8Array) => new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
+const base64 = (bytes: Uint8Array) => Buffer.from(bytes).toString("base64");
+
+test(
+  "a file reaches a Machine once through its host's upload, and a start can name the path it answered",
+  () =>
+    proves(
+      "collie-host-upload-",
+      (world) =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          yield* connect(world.state);
+          const door = yield* frontDoor(world.state);
+          yield* door.declare({ frontDoor: "chat", conversation: "flock@mk-pc", said: "upload" });
+          const bytes = new TextEncoder().encode("a screenshot, in two parts");
+          const digest = sha256(bytes);
+          const asked = { name: "shot.png", size: bytes.length, sha256: digest };
+
+          const first = yield* door.upload({
+            ...asked,
+            offset: 0,
+            content: base64(bytes.subarray(0, 10)),
+          });
+          expect(first.path).toBeNull();
+          const last = yield* door.upload({
+            ...asked,
+            offset: 10,
+            content: base64(bytes.subarray(10)),
+          });
+          expect(last.path).toBe(`${world.state}/uploads/${digest}/shot.png`);
+          expect(yield* fs.readFile(last.path!)).toEqual(bytes);
+
+          // Held already: answered at its first part, whatever that part holds.
+          expect((yield* door.upload({ ...asked, offset: 0, content: "" })).path).toBe(last.path);
+
+          const other = new TextEncoder().encode("not what the hash says");
+          const lied = { name: "lie.png", size: other.length, sha256: sha256(bytes.subarray(1)) };
+          const refused = yield* door
+            .upload({ ...lied, offset: 0, content: base64(other) })
+            .pipe(Effect.flip);
+          expect(reasonOf(refused)).toContain("sha256");
+          expect(yield* fs.exists(`${world.state}/uploads/${lied.sha256}`)).toBe(false);
+
+          const { runId } = yield* door.start({
+            project: world.project,
+            id: "plain",
+            request: "start-1",
+            input: { note: "with the upload" },
+            attachments: [last.path!],
+          });
+          expect(yield* fs.readFile(`${world.state}/runs/${runId}/attachments/shot.png`)).toEqual(
+            bytes,
+          );
+
+          const trail = yield* readAudit(`${world.state}/uploads`);
+          expect(trail.map(({ operation, actor }) => [operation, actor.said])).toEqual([
+            ["upload", "upload"],
+          ]);
+        }).pipe(Effect.orDie),
+      ["plain.workflow.ts"],
+    ),
+  120_000,
+);

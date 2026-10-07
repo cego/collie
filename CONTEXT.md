@@ -147,7 +147,8 @@ disposition and follow-up. `board`, `desktop` and
 reached through `collie bridge` is the front door it was started as, and `desktop` adds
 where it came from: the computer it named and the SSH client the bridge saw. A chat's
 `collie_do` also names its conversation and carries the human's message from that turn,
-attached by the tool host and never by the model.
+with the names of the **Attachments** it carried, attached by the tool host and never by
+the model.
 
 **Confirmation** — A command naming a Proposal's id **and** its content hash. A yes to a
 summary is not consent to a payload nobody read. Anyone may give one — a human at a

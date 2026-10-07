@@ -111,7 +111,7 @@ export interface ClaudeCode<Server> {
   /** Collie's tools as an MCP server in this process. */
   readonly server: (
     flock: FlockChat,
-    run: <A>(effect: Effect.Effect<A, never, Crypto.Crypto>) => Promise<A>,
+    run: <A>(effect: Effect.Effect<A, never, Crypto.Crypto | FileSystem.FileSystem>) => Promise<A>,
   ) => Server;
 }
 
@@ -168,6 +168,8 @@ const UsageLine = Schema.fromJsonString(
 /** Who a turn speaks for: the human's words and card, and the News it carries. */
 interface Voice {
   said?: string;
+  /** Desktop's copies of the files the human's message carried. */
+  files?: ReadonlyArray<Staged>;
   about?: About;
   news?: FlockBatch;
 }
@@ -249,7 +251,7 @@ const contentOf = Effect.fnUntraced(function* (
     ...documents,
     ...texts,
   ];
-  return blocks;
+  return { blocks, files };
 });
 
 /**
@@ -278,16 +280,19 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* <Server>(opts
   const remember = (session: string) =>
     fs.writeFileString(file, Schema.encodeSync(SessionFile)({ session }));
   let said: string | undefined;
+  let carried: ReadonlyArray<Staged> | undefined;
   let attached: About | undefined;
   let noticed: FlockBatch | undefined;
   const asking = new Map<string, Deferred.Deferred<Answers>>();
   const services = yield* Effect.context<Crypto.Crypto | FileSystem.FileSystem | Path.Path>();
-  const run = <A>(effect: Effect.Effect<A, never, Crypto.Crypto>) =>
+  const run = <A>(effect: Effect.Effect<A, never, Crypto.Crypto | FileSystem.FileSystem>) =>
     Effect.runPromise(effect.pipe(Effect.provideContext(services)));
   const flock: FlockChat = {
     machines: opts.machines,
     conversation: opts.conversation,
     said: () => said,
+    attachments: () => carried,
+    uploaded: new Map(),
     machineRule: opts.machineRule,
     setMachineRule: opts.setMachineRule,
   };
@@ -420,6 +425,7 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* <Server>(opts
     yield* Effect.addFinalizer(() =>
       Effect.sync(() => {
         said = undefined;
+        carried = undefined;
         attached = undefined;
         noticed = undefined;
         turning = undefined;
@@ -439,6 +445,7 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* <Server>(opts
       ),
     );
     said = voice.said;
+    carried = voice.files;
     attached = voice.about;
     // A turn of Desktop's carries its News in its message; the human's carries it as context.
     noticed = voice.said === undefined ? undefined : voice.news;
@@ -460,11 +467,10 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* <Server>(opts
           news = undefined;
           for (const placed of settled.items) spoken.add(newsKey(placed));
           // In this turn's voice, which has ended by the time a quick reply's settling runs.
-          return delivered({ ...flock, said: () => voice.said }, settled).pipe(
-            Effect.provideContext(services),
-            Effect.forkIn(scope),
-            Effect.asVoid,
-          );
+          return delivered(
+            { ...flock, said: () => voice.said, attachments: () => voice.files },
+            settled,
+          ).pipe(Effect.provideContext(services), Effect.forkIn(scope), Effect.asVoid);
         }),
       ),
     );
@@ -515,7 +521,7 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* <Server>(opts
           const content = yield* contentOf(opts.dir, text, attachments).pipe(
             Effect.provideContext(services),
           );
-          if (isString(content) && attachments.length > 0) return Stream.make(refusal(content));
+          if (isString(content)) return Stream.make(refusal(content));
           const claude = turning?.claude;
           if (now && claude !== undefined)
             yield* Effect.tryPromise(() => claude.interrupt()).pipe(Effect.ignore);
@@ -525,9 +531,10 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* <Server>(opts
           if (ended !== null) return Stream.make(refusal(ended));
           const news = yield* waiting;
           const voice: Voice = { said: text };
+          if (content.files.length > 0) voice.files = content.files;
           if (about !== null) voice.about = about;
           if (news.items.length > 0) voice.news = news;
-          return yield* turnOn(running, attachments.length > 0 ? content : text, voice);
+          return yield* turnOn(running, attachments.length > 0 ? content.blocks : text, voice);
         }),
       ),
     answer: (toolCallId, answers) =>

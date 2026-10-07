@@ -1,6 +1,7 @@
 // What the host does on its own, whether or not a pane is open: the merge watch, each
 // Herd's News, worktree pruning and keeping each Herd's Home tokened.
 
+import { pruneUploads } from "./uploads";
 import { Clock, Effect, Schedule, type Duration } from "effect";
 import type { TaskView, MrState, Reopened } from "./board-model";
 import { readyRuns } from "./board";
@@ -188,6 +189,7 @@ export const sideJobs = <E, R>(opts: {
       every(
         PRUNE_EVERY,
         Effect.gen(function* () {
+          yield* pruneUploads(env.stateDir, yield* Clock.currentTimeMillis).pipe(Effect.ignore);
           yield* pruneWorktrees({
             herdr,
             sessions: (yield* liveHerds(herdr, env)).map((session) => session.herdr),

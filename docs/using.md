@@ -1194,6 +1194,16 @@ original is what a Run gets. The message shows its chips at once, and again when
 conversation is read back after a restart; a copy Desktop no longer has shows its name alone. Desktop removes its copies 30 days after it
 made them, as Claude Code prunes the transcripts that name them.
 
+When the chat starts a Run, follows one up or steers one because you asked, the work
+carries the files of your message: you need not say so. The model can name others instead —
+any file of the conversation, a path on this computer, or `vm-mk:/var/log/app.log` — or `[]`
+for none, and a turn Desktop started of its own carries none. A file already on the Run's
+Machine is handed over where it is; any other is read, here or from its own Machine's host,
+and sent once through the Run's Machine's host, however many Runs it goes to. The host
+copies each into the Run's directory before the work starts, where its agents' prompts name
+it. A Machine whose Collie is too old for files is told to upgrade, and nothing starts or is
+steered there. What the host records of your words also names the files they carried.
+
 Click a card and it becomes a chip above the input ("About: vm-mk › Fix board bugs"): your
 next message goes with it, so "this one" means that card, and sending uses it up. Clear it
 with its ✕. The chip is attached as context for the turn, never as your words.

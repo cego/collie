@@ -267,3 +267,42 @@ test(
     ),
   120_000,
 );
+
+test(
+  "a chat's turn that carried files is recorded with their names beside the human's words",
+  () =>
+    proves(
+      "collie-actor-files-",
+      (world) =>
+        Effect.gen(function* () {
+          const host = yield* connect(world.state);
+          const door = yield* frontDoor(world.state);
+          yield* door.declare({
+            frontDoor: "chat",
+            conversation: "flock@mk-pc",
+            said: "start a proof for this",
+            attachments: ["shot.png"],
+          });
+          const { runId } = yield* door.start({
+            project: world.project,
+            id: "proof",
+            request: "start-1",
+            input: { note: "files" },
+          });
+          yield* until(
+            () => host.status({ runId }),
+            (status) => status.status === "suspended",
+          );
+
+          const [line] = yield* readAudit(runDir(world.state, runId));
+          expect(line?.actor).toMatchObject({
+            origin: "chat",
+            said: "start a proof for this",
+            attachments: ["shot.png"],
+          });
+          yield* stopHost(world.state);
+        }).pipe(Effect.orDie),
+      ["proof.workflow.ts", "helper.ts", "notes.md"],
+    ),
+  120_000,
+);

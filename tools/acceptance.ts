@@ -569,6 +569,19 @@ const BACKEND: readonly Check[] = [
 
   // ── Attachments: files a Run is given, in its own directory and every prompt ──
   {
+    id: "backend/an-upload-reaches-a-machine-once",
+    statement:
+      "A file sent to a Machine's host arrives once: its parts are checked against its size and sha256, a digest the host holds is answered at the first part, a bad hash leaves nothing, and a start can name the path it answered.",
+    owner: ATTACHMENTS,
+    needs: "backend",
+    proof: {
+      kind: "test",
+      layer: "backend",
+      file: "test/host-files.test.ts",
+      name: "a file reaches a Machine once through its host's upload, and a start can name the path it answered",
+    },
+  },
+  {
     id: "backend/a-started-runs-attachments-are-there-before-its-first-prompt",
     statement:
       "A Run started with `--attach` has a copy of each file in its own directory before its first agent starts, and that agent's prompt lists each with its absolute path.",
@@ -758,6 +771,17 @@ const WORKFLOWS: readonly Check[] = [
 
 /** What only a person at a terminal can settle. */
 const OPERATOR_CHECKS: readonly Check[] = [
+  {
+    id: "flock-chat/start-a-plan-for-this-carries-the-screenshot",
+    statement:
+      '"Start a plan for this" with a pasted screenshot starts a Run on vm-mk whose grill prompt names its `attachments/` copy, the agent opens it, and the card\'s drawer shows the thumbnail.',
+    owner: ATTACHMENTS,
+    needs: "operator",
+    proof: {
+      kind: "operator",
+      how: "In Desktop with vm-mk reached, paste a screenshot and send \"start a plan for this\" naming vm-mk; record the Run's id, the line of its grill prompt that names `runs/<id>/attachments/<name>`, that the agent opened it, and the thumbnail in the card's drawer, with the revision.",
+    },
+  },
   {
     id: "flock-chat/a-file-copied-in-gnome-files-pastes-as-a-chip",
     statement: "A file copied in GNOME Files and pasted into the Flock chat becomes a chip.",

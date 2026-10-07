@@ -1586,6 +1586,18 @@ the same id twice being one operation, are recorded with the Actor in
 the file's real path is inside the state directory. The `Snapshot` carries `files: true`
 from a host that has these; a client sends files to no host without it.
 
+`upload` takes a file sent to this Machine in parts: its `name`, `size`, `sha256`, an
+`offset` and one base64 part of at most 4 MiB. The host appends the parts under
+`uploads/<sha256>/` in its state directory, checks the size and the digest on the last, and
+answers the file's path, which a `start`, an `invoke` or a steer can then name as an
+attachment; before the last part it answers `null`. A digest it already holds whole is
+answered with its path at the first part, so the rest is never sent, and a part sent again
+is the same part, so a retry needs no request id. A mismatch removes what arrived and is
+refused, as is a file over 100 MB. Each upload is recorded with its Actor in
+`uploads/operations.jsonl`, and the host's side jobs remove an upload a week after it
+arrived. A `chat` channel's `declare` may also carry `attachments`, the names of the files
+the human's message carried, which the host records beside `said`.
+
 `protocol` is an integer, also in `identity`. An optional field, a new operation or a new
 kind of message does not change it, and a client reads a kind it does not know as
 `Unknown` and skips it. A removal or a change of meaning bumps it, and from then on the

@@ -745,6 +745,8 @@ export const Declaration = Schema.Struct({
   /** A chat's conversation, and the human's message that turn, as its tool host heard it. */
   conversation: Schema.optionalKey(Schema.String),
   said: Schema.optionalKey(Schema.String),
+  /** The names of the files the human's message carried. */
+  attachments: Schema.optionalKey(Schema.Array(Schema.String)),
 });
 export type Declaration = typeof Declaration.Type;
 
@@ -1056,6 +1058,21 @@ export const FrontDoorRpcs = RpcGroup.make(
     },
     success: Started,
     error: Schema.Union([HostRefused, RequestConflict]),
+  }),
+  /**
+   * One part of a file sent to this Machine, kept once by its sha256. Answers the file's
+   * path once it is whole, at once where it already is, and null before then.
+   */
+  Rpc.make("upload", {
+    payload: {
+      name: Schema.String,
+      size: Schema.Int,
+      sha256: Schema.String,
+      offset: Schema.Int,
+      content: Schema.String,
+    },
+    success: Schema.Struct({ path: Schema.NullOr(Schema.String) }),
+    error: HostRefused,
   }),
   /** Part of a file on this host's Machine, by absolute path, as base64. */
   Rpc.make("readFile", {

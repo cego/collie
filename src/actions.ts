@@ -5,7 +5,10 @@ import { Effect, Schema, Struct } from "effect";
 import { VerifySpecSchema } from "./verify-spec";
 
 /** Files the work is given, as paths on the Machine of the host that carries it out. */
-const Attachments = Schema.Array(Schema.String);
+const Attachments = Schema.Array(Schema.String).annotate({
+  description:
+    "Files to give the work, copied into the Run's own directory. In Native chat, paths on this Machine. In Desktop's Flock chat, a path on the computer Desktop runs on or <machine>:<path>; left out, the files of the human's message that asked for it go with it, and [] sends none.",
+});
 
 /**
  * Everything the model may propose, and nothing else. A closed union is the security

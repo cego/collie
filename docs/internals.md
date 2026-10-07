@@ -204,7 +204,10 @@ into Desktop, which reaches a Machine only through `collie bridge`.
 Files reach a Machine the same way. The Flock chat's `collie_read`, `collie_glob`,
 `collie_grep`, `collie_write` and `collie_edit` (`desktop/src/bun/file-tools.ts`) are
 answered by the host's `readFile`, `glob`, `grep`, `writeFile` and `editFile` over the
-chat's channel (`src/host-files.ts`), never by ssh or scp beside the bridge. They are
+chat's channel (`src/host-files.ts`), never by ssh or scp beside the bridge. A file a start, a follow-up or a steer carries goes
+the same way: through the Run's Machine's `upload`, once per file and session
+(`desktop/src/bun/carried.ts`, `src/uploads.ts`), so a host only ever receives paths on its
+own Machine. The file tools are
 Desktop's own tools, not the Toolkit's, so Native chat's reach is unchanged.
 
 Go to pane is the one place Desktop touches a session, and it does so for the human

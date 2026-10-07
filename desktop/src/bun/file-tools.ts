@@ -7,6 +7,7 @@ import { Crypto, Effect, Encoding, Result, Schema } from "effect";
 import { HostRefused, RUN_FILE_BYTES, type HostFile } from "../../../src/board-model";
 import type { JsonObject } from "../../../src/schema";
 import { decodeStrict } from "../../../src/toolkit";
+import { readWhole } from "./carried";
 import { boardOf, type ChatMachine, type FlockChat, reasonOf, speaking } from "./flock-tools";
 
 /** What a file tool hands the model: text, or an image it can see. */
@@ -150,29 +151,6 @@ const takingFiles = Effect.fn("FileTools.takingFiles")(function* (machine: ChatM
       reason: `${machine.name}'s Collie does not take files; upgrade Collie on ${machine.name}`,
     });
   return [{ machine, board }];
-});
-
-/** The whole file, part by part, or as much as `enough` wants. */
-const readWhole = Effect.fn("FileTools.readWhole")(function* (
-  machine: ChatMachine,
-  path: string,
-  enough: (bytes: Uint8Array) => boolean = () => false,
-) {
-  const parts: Uint8Array[] = [];
-  let first: HostFile | null = null;
-  let offset = 0;
-  for (;;) {
-    const part = yield* machine.door.readFile({ path, offset, length: RUN_FILE_BYTES });
-    first ??= part;
-    const bytes = Encoding.decodeBase64(part.content).pipe(
-      Result.getOrElse(() => new Uint8Array()),
-    );
-    parts.push(bytes);
-    offset += bytes.length;
-    const all = Buffer.concat(parts);
-    if (bytes.length === 0 || offset >= part.size || enough(all))
-      return { file: first, bytes: new Uint8Array(all) };
-  }
 });
 
 const TEXTUAL = /^text\/|json|xml|javascript|yaml|toml|x-sh/;
