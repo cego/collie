@@ -130,16 +130,17 @@ const searched = (cmd: string, args: ReadonlyArray<string>, cwd: string, limit: 
     const handle = yield* spawner.spawn(
       ChildProcess.make(cmd, args, { cwd, stdout: "pipe", stderr: "ignore", extendEnv: true }),
     );
-    const { lines, seen } = yield* handle.stdout.pipe(
+    const lines: string[] = [];
+    const seen = yield* handle.stdout.pipe(
       Stream.decodeText(),
       Stream.splitLines,
       Stream.filter((line) => line !== ""),
       Stream.take(SEARCH_LIMIT),
       Stream.runFold(
-        (): { lines: string[]; seen: number } => ({ lines: [], seen: 0 }),
-        (acc, line) => {
-          if (acc.seen < limit) acc.lines.push(line);
-          return { lines: acc.lines, seen: acc.seen + 1 };
+        () => 0,
+        (count, line) => {
+          if (count < limit) lines.push(line);
+          return count + 1;
         },
       ),
     );
