@@ -847,13 +847,20 @@ It shows up as **Collie**, with the Collie mark, in your app launcher, on its wi
 the taskbar.
 
 Desktop then keeps itself up to date. It checks the latest release when it starts and every
-6 hours after, and downloads an update in the background. It installs nothing until the
+hour after, and downloads an update in the background. **Machines** shows Desktop's own
+version with **Check for updates**, which checks now and says what it found: "Collie 0.34.0
+is up to date", "Downloading 0.35.0", the ready notice below, or why the check failed. A
+check asked for while one runs joins it rather than downloading twice. It installs nothing until the
 tar it would install verifies against the same key, because Electrobun's bundle hash is
 not authentication. An update that is unsigned or does not match is thrown away and said
 so. One that verifies is announced as "Collie 0.33.0 is ready, restart Desktop", and
 **Restart Desktop** installs it. Desktop never restarts itself: an update that is ready when
-you quit is installed the next time you start Desktop. A Desktop run from a checkout
-(`bun run start`, or any build that is not the stable channel) never updates itself. The new
+you quit is installed the next time you start Desktop. [`collie upgrade`](cli.md#upgrading)
+on this computer stages the same update for Desktop, verified the same way, so the CLI and
+Desktop move together; a running Desktop announces it within a minute. A ready update stays
+announced through later checks, even one that fails. A Desktop run from a checkout
+(`bun run start`, or any build that is not the stable channel) never updates itself, and
+**Machines** says so. The new
 Desktop then upgrades your released Machines to its version as they connect.
 
 The Machines are this computer and every machine enabled in `herdr machine list`; Collie
@@ -883,9 +890,11 @@ Desktop keeps the Flock on its own build. When a Machine on a release older than
 connects, Desktop runs `collie upgrade --to <its version>` there through the same route
 as the bridge. No prompt is shown, and a notice says "vm-mk upgraded 0.26.0 → 0.27.0".
 Desktop then opens the Machine again, and the new build replaces the old host, as any
-newer `collie` does. Desktop never stops, signals or restarts a host itself. It asks each
-Machine once per launch, and a Machine that would not move says why in a notice and is
-shown as it is. A Machine on a development checkout (a non-release branch or tag,
+newer `collie` does. Desktop never stops, signals or restarts a host itself. It asks a
+Machine at most once each time it connects. One whose upgrade failed says why in a notice,
+is shown as it is, and is asked again the next time it connects, so a Machine out of reach
+at launch follows Desktop once it is back. One that upgraded but did not move is shown as
+it is. A Machine on a development checkout (a non-release branch or tag,
 uncommitted changes, or commits its remote lacks) is never upgraded. It is named above the
 board with its build, "development build <version>+<sha>". Desktop reads any host inside
 the protocol window ([ADR-0038](adr/0038-the-host-builds-and-serves-the-board.md) D5): its
@@ -1060,7 +1069,9 @@ session's socket. Desktop never starts, signals or connects to a host by any oth
 
 ### The Flock chat
 
-Right of the board is a conversation about the whole Flock. Ask what is happening anywhere
+Right of the board is a conversation about the whole Flock, 32rem wide but never more than
+40% of the window. It follows what arrives while you are near the bottom, and stays where
+you are once you scroll up. Ask what is happening anywhere
 and have it act on any Machine: it reaches Collie through the same tools as Native chat,
 answered by each Machine's host over that Machine's `chat` channel, and carries out what
 you ask at once. Everything it names is `<machine>:<id>`, as in `vm-mk:run-04ab8fe5`; a bare
@@ -1083,8 +1094,9 @@ keeps a style, and a web link opens in your browser. Each tool call is one row �
 reached and what it was asked — that opens to what the tool answered, and thinking is a
 collapsed **Thinking** you can open. When the chat needs you to choose, it asks with choice
 buttons, and goes on when you click; any other permission it asks for is refused. Type
-while it is working and your message waits as **Queued** until the turn ends, or drop it
-with its ✕.
+while it is working and Enter queues your message as **Queued** until the turn ends, or
+drop it with its ✕. Ctrl+Enter sends it now instead: the turn under way, yours or one of
+Desktop's own, is interrupted and your message starts the next.
 
 Click a card and it becomes a chip above the input ("About: vm-mk › Fix board bugs"): your
 next message goes with it, so "this one" means that card, and sending uses it up. Clear it
@@ -1123,15 +1135,8 @@ cd desktop
 bun install
 bun run start       # build the view and run Desktop from the checkout
 bun run typecheck
-bun run test        # build with CEF's debugging port open, then drive the app with Playwright
+bun run test        # Desktop's unit tests
 ```
-
-`bun run test` starts the built app under Xvfb when there is no display, against scripted
-hosts (`desktop/test/support/scripted-host.ts`): this computer's behind a local bridge, and
-each herdr machine's behind scripted `herdr` and `ssh` commands put first on its PATH, so
-it needs neither herdr, SSH nor a real host. The app links the system's WebKitGTK and
-AppIndicator libraries even though it renders with its bundled Chromium; on a computer
-without them, put them on `LD_LIBRARY_PATH`.
 
 ## Talking to Collie about a Herd
 
@@ -1203,7 +1208,11 @@ Nothing is yours alone ([`AGENTS.md`](../AGENTS.md), invariant 1). What no Colli
 does — setting what a Run, or every Run, may do without asking, reconciling a delivery
 nobody can account for, recording evidence with `collie verify`, switching the chat
 harness — chat runs with the `collie` CLI, through the same validation and executors as
-when you type it. What proves a Run is chat's to choose too: a start you ask chat for
+when you type it. A start chat makes names its checkout by a workspace, a path, or just the
+repository's name: "monorepo" is the one checkout of that name under the
+[Projects root](../CONTEXT.md), opened if no workspace is on it, from the Home's chat and
+the Flock chat alike. Two checkouts of one name are refused with both paths. What proves a
+Run is chat's to choose too: a start you ask chat for
 carries the checks chat chose (`start` with `verify`), and chat adds or withdraws a running
 Run's (`set_verification`) at once. Collie runs those commands itself, outside any agent's
 permission rules; the merge request lists each one with its command, and you verify the

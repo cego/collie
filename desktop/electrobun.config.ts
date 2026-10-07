@@ -1,9 +1,6 @@
 import type { ElectrobunConfig } from "electrobun";
 import manifest from "../herdr-plugin.toml";
 
-// A port here opens CEF's debugging protocol on it, so Playwright can drive the built app.
-const cdp = Bun.env.COLLIE_DESKTOP_CDP;
-
 export default {
   app: {
     // Names the update archives; scripts/name-desktop-entry.ts sets what people see.
@@ -29,7 +26,6 @@ export default {
       defaultRenderer: "cef",
       // The launcher entry's icon and every window's.
       icon: "../assets/brand/logos/collie-mark-256.png",
-      chromiumFlags: cdp === undefined ? {} : { "remote-debugging-port": cdp },
     },
     win: { bundleCEF: false },
   },

@@ -84,6 +84,7 @@ const served = (main: Channel<ToView, ToMain>) =>
         openLink: () => Effect.die("not asked"),
         updates: () => Stream.die("not asked"),
         restart: () => Effect.die("not asked"),
+        checkForUpdates: () => Effect.die("not asked"),
         onboard: () => Effect.die("not asked"),
         addMachine: () => Effect.die("not asked"),
         answerHerdr: () => Effect.die("not asked"),

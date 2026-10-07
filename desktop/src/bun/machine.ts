@@ -7,6 +7,7 @@ import {
   Clock,
   Deferred,
   Effect,
+  Exit,
   Fiber,
   Layer,
   Option,
@@ -510,7 +511,8 @@ export const flockStream = <D extends BoardSource>(
       const done = new Set<number>();
       // The installation each merged route reaches, by its place.
       const merged = new Map<number, string>();
-      // Each installation is asked to upgrade once, so one that did not move is shown as it is.
+      // Asked to upgrade at most once per connection. One that upgraded but did not move is
+      // shown as it is; one that failed is asked again when it next connects.
       const upgrading = new Set<string>();
       const owns = (at: number, { machine, message }: MachineMessage) =>
         Effect.gen(function* () {
@@ -588,7 +590,8 @@ export const flockStream = <D extends BoardSource>(
                   if (
                     message._tag !== "Snapshot" ||
                     buildVerdict(message, version) !== "upgrade" ||
-                    upgrading.has(machine.installation)
+                    upgrading.has(machine.installation) ||
+                    (yield* Deferred.isDone(due))
                   )
                     return;
                   upgrading.add(machine.installation);
@@ -607,7 +610,9 @@ export const flockStream = <D extends BoardSource>(
             );
             // Beside the board, which stays live while the Machine upgrades.
             const upgrade = Stream.unwrap(
-              Effect.map(Deferred.await(due), ({ from }) => upgradeThenReopen(route, from)),
+              Effect.map(Deferred.await(due), ({ installation, from }) =>
+                upgradeThenReopen(route, installation, from),
+              ),
             );
             return Stream.merge(board, upgrade, { haltStrategy: "left" });
           }),
@@ -618,9 +623,15 @@ export const flockStream = <D extends BoardSource>(
         text,
       });
       /** Upgrades the Machine, then opens it again so its new build replaces its host. */
-      const upgradeThenReopen = (route: Route<D>, from: string) =>
+      const upgradeThenReopen = (route: Route<D>, installation: string, from: string) =>
         Stream.unwrap(
           upgradeTo(route, version).pipe(
+            // Failed, or cut off with its connection: asked again when it next connects.
+            Effect.onExit((exit) =>
+              Exit.isSuccess(exit)
+                ? Effect.void
+                : Effect.sync(() => upgrading.delete(installation)),
+            ),
             Effect.match({
               onSuccess: () =>
                 Stream.make(
