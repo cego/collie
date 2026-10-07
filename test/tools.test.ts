@@ -3,7 +3,7 @@
 // of it. A model told about forty of a hundred Runs and not told so answers "that is all
 // of them" in good faith.
 
-import { Deferred, Effect, Fiber, FileSystem, Option, Schema, type Scope } from "effect";
+import { Crypto, Deferred, Effect, Fiber, FileSystem, Option, Schema, type Scope } from "effect";
 import type { BunServices } from "@effect/platform-bun/BunServices";
 import { expect, setDefaultTimeout, test } from "bun:test";
 import { readEnv, type PluginEnv } from "../src/env";
@@ -32,13 +32,23 @@ import {
   type ProposalRecord,
 } from "../src/proposals";
 import type { Action } from "../src/actions";
-import { herdOf } from "../src/steering";
+import { appendLine, herdOf, ledgerPath } from "../src/steering";
 import { chatPath, HEARD_MAX, hear, writeChat } from "../src/chat";
-import { readAudit } from "../src/audit";
 import { selectionPath, writeSelection } from "../src/selection";
 import { newTask, writeTask } from "../src/task";
 import { hosted, hostedRun, settledRun } from "./support/hosted";
-import type { World } from "./support/world";
+import { save, type World } from "./support/world";
+import { Herdr } from "../src/herdr";
+import { until } from "./support/host";
+import { exec } from "./support/command";
+import { connect, frontDoor } from "../src/host";
+import { runDir, type RunView } from "../src/engine";
+import { isSettled } from "../src/lifecycle";
+import { appendLog } from "../src/oversight";
+import { readAudit, trimAudit } from "../src/audit";
+import { writeMrStates } from "../src/merges";
+import { FrontDoorRpcs, mrLabel, type Declaration, type FLOCK_READS } from "../src/board-model";
+import { nothingApproved } from "../src/outcome";
 
 const encodeJson = Schema.encodeUnknownSync(Schema.fromJsonString(Schema.Any));
 
@@ -146,7 +156,13 @@ test("the Tasks a Run can be started into are something chat can read", () =>
       // `collie task list` is an operation a human has, so chat has to have one too —
       // and a Task with no Run yet is invisible in the Herd, which is the whole reason
       // this is not answered from the Run list.
-      const task = yield* newTask({ workspace: "w1", label: "picker", cwd: project, herd: null });
+      const app = yield* workspaceOn(project, "app");
+      const task = yield* newTask({
+        workspace: app.workspaceId,
+        label: "picker",
+        cwd: project,
+        herd: null,
+      });
       yield* writeTask(stateDir, task);
       const said = yield* call("collie_workspaces");
       expect(said).toContain(task.id);
@@ -174,7 +190,8 @@ test("one Run's detail names what it is for and what bounds it", () =>
       const run = yield* aRun("add a picker");
       const said = yield* call("collie_run", { run: run.id });
       expect(said).toContain("add a picker");
-      expect(said).toContain('is waiting on "decision"');
+      expect(said).toContain('"decision": What should this run do?');
+      expect(said).toContain("answered in words");
     }),
   ));
 
@@ -1146,5 +1163,444 @@ test("a proposal chat settles carries the words it was settled with", () =>
       ).toContain("decline: applied");
       const declined = (yield* readProposals(file)).find((line) => line.kind === "declined");
       expect(declined).toMatchObject({ conversation: NATIVE, said: "no, drop that" });
+    }),
+  ));
+
+/** A Run of `module`, started through the host, once `ready` holds of it. */
+const startedRun = Effect.fn("test.startedRun")(function* (
+  module: string,
+  input: JsonObject,
+  ready: (view: RunView) => boolean,
+  parent?: string,
+) {
+  const client = yield* connect(stateDir).pipe(Effect.orDie);
+  const { runId } = yield* client
+    .start({
+      project,
+      id: module,
+      request: yield* (yield* Crypto.Crypto).randomUUIDv4,
+      input,
+      parent,
+    })
+    .pipe(Effect.orDie);
+  yield* until(
+    () => client.run({ runId }).pipe(Effect.orDie),
+    (view) => view !== null && ready(view),
+  );
+  return { id: runId, dir: runDir(stateDir, runId) };
+});
+
+const asking = (name: string) => (view: RunView) =>
+  view.waiting.some((one) => one.name === name && one.answer === null);
+
+/** An answer given through the host, from a channel that declared itself `as`. */
+const answerAs = (as: typeof Declaration.Type, runId: string, decision: string, value: string) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const door = yield* frontDoor(stateDir);
+      yield* door.declare(as);
+      yield* door.answer({
+        runId,
+        decision,
+        value,
+        request: yield* (yield* Crypto.Crypto).randomUUIDv4,
+      });
+    }),
+  ).pipe(Effect.orDie);
+
+const waitingOnTheHuman = (receipts: string) => receipts.split("### Sent")[0]!;
+
+test("a Run waiting on a Choice says what it asks, every option, and how to answer it", () =>
+  inWorld(
+    Effect.gen(function* () {
+      yield* save(world.user, ["branches.workflow.ts"]);
+      const run = yield* startedRun("branches", { size: "big", goal: "pick" }, asking("approach"));
+
+      const said = yield* call("collie_run", { run: run.id });
+      expect(said).toContain('"approach": How should we tackle this?');
+      expect(said).toContain("Options: quick | review-first");
+      expect(said).toContain(
+        `{"kind":"answer","run":"${run.id}","choiceId":"approach","answer":"<one of the options>"}`,
+      );
+      expect(said).not.toContain("answered in words");
+
+      const waiting = waitingOnTheHuman(yield* call("collie_receipts", { run: run.id }));
+      expect(waiting).toContain('"approach": How should we tackle this?');
+      expect(waiting).toContain("Options: quick | review-first");
+      expect(waiting).not.toContain("- nothing");
+    }),
+  ));
+
+test("a Choice answered from Desktop says the answer, the computer and when, and what the Run ended with", () =>
+  inWorld(
+    Effect.gen(function* () {
+      yield* save(world.user, ["branches.workflow.ts"]);
+      const run = yield* startedRun("branches", { size: "big", goal: "pick" }, asking("approach"));
+      yield* answerAs(
+        { frontDoor: "desktop", from: { client: "mk-laptop" } },
+        run.id,
+        "approach",
+        "review-first",
+      );
+      const client = yield* connect(stateDir).pipe(Effect.orDie);
+      yield* until(
+        () => client.run({ runId: run.id }).pipe(Effect.orDie),
+        (view) => view !== null && isSettled(view),
+      );
+
+      const said = yield* call("collie_run", { run: run.id });
+      expect(said).toMatch(
+        /- "approach": review-first — desktop on mk-laptop at \d{4}-\d\d-\d\dT\d\d:\d\d/,
+      );
+      expect(said).toContain("Result: review-first");
+      expect(said).not.toContain("Options:");
+      expect(waitingOnTheHuman(yield* call("collie_receipts", { run: run.id }))).toContain(
+        "- nothing",
+      );
+    }),
+  ));
+
+test("each answer says who gave it, the newest five are listed, and an unrecorded one says so", () =>
+  inWorld(
+    Effect.gen(function* () {
+      yield* save(world.user, ["asks.workflow.ts"]);
+      const run = yield* startedRun("asks", { goal: "ask" }, asking("q1"));
+      const by: Array<typeof Declaration.Type> = [
+        { frontDoor: "cli" },
+        { frontDoor: "cli" },
+        { frontDoor: "chat", conversation: "flock@mk-pc" },
+        { frontDoor: "board" },
+        { frontDoor: "cli-tty" },
+        { frontDoor: "desktop", from: { client: "mk-laptop" } },
+      ];
+      const client = yield* connect(stateDir).pipe(Effect.orDie);
+      for (const [n, as] of by.entries()) {
+        yield* answerAs(as, run.id, `q${n + 1}`, "yes");
+        yield* until(
+          () => client.run({ runId: run.id }).pipe(Effect.orDie),
+          (view) => view !== null && (n === 5 ? isSettled(view) : asking(`q${n + 2}`)(view)),
+        );
+      }
+      // The trail keeps only the newest four answers, so q2's author is gone from it.
+      yield* trimAudit(run.dir, 4);
+
+      const said = yield* call("collie_run", { run: run.id });
+      expect(said).toContain('- "q6": yes — desktop on mk-laptop at ');
+      expect(said).toContain('- "q5": yes — cli at ');
+      expect(said).toContain('- "q4": yes — board at ');
+      expect(said).toContain('- "q3": yes — chat flock@mk-pc at ');
+      expect(said).toContain('- "q2": yes — who answered is not recorded');
+      expect(said).not.toContain('"q1"');
+    }),
+  ));
+
+test("a Run lists the Runs it started, each with its workflow and state", () =>
+  inWorld(
+    Effect.gen(function* () {
+      const parent = yield* aRun("start a child");
+      const child = yield* startedRun("hello", { name: "child" }, isSettled, parent.id);
+      expect(yield* call("collie_run", { run: parent.id })).toContain(
+        `- run ${child.id}: hello, succeeded`,
+      );
+    }),
+  ));
+
+test("a Run's own merge request is shown as recorded, with what the merge watch last said of it", () =>
+  inWorld(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const run = yield* settledRun(world, "hello");
+      const pull = "https://github.com/cego/collie/pull/61";
+      yield* fs.writeFileString(`${run.dir}/merge-request`, `${pull}\n`);
+      expect(yield* call("collie_run", { run: run.id })).toContain(
+        `Merge request: ${pull} — not watched`,
+      );
+
+      const label = mrLabel(pull);
+      yield* writeMrStates(
+        stateDir,
+        new Map([[label, "open"]]),
+        new Map([[label, { checks: { state: "failed", name: "test" }, head: null }]]),
+      );
+      expect(yield* call("collie_run", { run: run.id })).toContain(
+        `Merge request: ${pull} — open, checks failed (test)`,
+      );
+    }),
+  ));
+
+test("a Run shows its plan, findings, disposition, outcome and the last lines it recorded", () =>
+  inWorld(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const run = yield* settledRun(world, "hello", { outcome: "bug" });
+      yield* fs.makeDirectory(`${run.dir}/plan/issues`, { recursive: true });
+      yield* fs.writeFileString(`${run.dir}/plan/SPEC.md`, "# spec\n");
+      for (const name of ["01-a.md", "02-b.md"])
+        yield* fs.writeFileString(`${run.dir}/plan/issues/${name}`, "# ticket\n");
+      yield* fs.writeFileString(`${run.dir}/review.md`, "# review\n");
+      yield* fs.writeFileString(
+        `${run.dir}/findings.json`,
+        encodeJson(
+          Array.from({ length: 12 }, (_, n) => ({
+            severity: "major",
+            title: `f-${String(n + 1).padStart(2, "0")}`,
+          })),
+        ),
+      );
+      yield* call("collie_do", {
+        actions: [{ kind: "disposition", run: run.id, became: "merged", ref: "collie!151" }],
+      });
+      for (const line of ["step 1", "step 2", "step 3", "step 4", "x".repeat(300)])
+        yield* appendLog(run.dir, line);
+      yield* appendLog(run.dir, "hello picker, from hello");
+
+      const said = yield* call("collie_run", { run: run.id });
+      expect(said).toContain(`Plan: ${run.dir}/plan (2 tickets)`);
+      expect(said).toContain("- (major) f-01");
+      expect(said).toContain("- (major) f-10");
+      expect(said).not.toContain("f-11");
+      expect(said).toContain("(2 more)");
+      expect(said).toContain("Disposition: merged collie!151");
+      expect(said).toContain("Outcome to prove: bug");
+
+      const recorded = said.split("### Last recorded")[1]!;
+      expect(recorded).toContain("- step 1");
+      expect(recorded).toContain("- step 4");
+      expect(recorded).toContain(`- ${"x".repeat(200)}…`);
+      expect(recorded).not.toContain("x".repeat(201));
+      // Its first line falls outside the five, and the one repeating the result is left out.
+      expect(recorded).not.toContain("hello picker");
+      expect(said.split("hello picker, from hello").length).toBe(2);
+    }),
+  ));
+
+test("an evidence gate waits on the human with the checks it offers and how to approve them", () =>
+  inWorld(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* save(world.user, ["gated.workflow.ts"]);
+      const run = yield* startedRun(
+        "gated",
+        { note: "x" },
+        (view) => view.parked === nothingApproved(view.runId),
+      );
+      yield* fs.makeDirectory(`${project}/.collie`, { recursive: true });
+      yield* fs.writeFileString(
+        `${project}/.collie/verify.json`,
+        '[{"name":"unit","executable":"true","argv":[],"cwd":"worktree"}]',
+      );
+
+      const waiting = waitingOnTheHuman(yield* call("collie_receipts", { run: run.id }));
+      expect(waiting).toContain("evidence gate");
+      expect(waiting).toContain("unit");
+      expect(waiting).toContain(
+        `{"kind":"answer","run":"${run.id}","choiceId":"evidence-gate","answer":"approve"}`,
+      );
+      expect(waiting).toContain("approve:<name>,<name>");
+    }),
+  ));
+
+test("a Run with a branch and no merge request shows its branch", () =>
+  inWorld(
+    Effect.gen(function* () {
+      const git = ["git", "-c", "user.email=t@example.test", "-c", "user.name=t"];
+      yield* exec([...git, "commit", "-q", "--allow-empty", "-m", "init"], { cwd: project });
+      yield* save(world.user, ["builds.workflow.ts"]);
+      // The host this test starts names the branch under a login, as a desk's does.
+      yield* connect(stateDir, { hostEnv: { GITLAB_USER_LOGIN: "tester" } }).pipe(Effect.orDie);
+      const run = yield* startedRun(
+        "builds",
+        { work: "add a picker" },
+        (view) => view.branch !== null,
+      );
+      const said = yield* call("collie_run", { run: run.id });
+      expect(said).toMatch(/Branch: \S+/);
+      expect(said).not.toContain("Merge request:");
+    }),
+  ));
+
+/**
+ * A herdr workspace on `cwd`, made for the directory, in this world's own herdr, which
+ * the tools are pointed at from here on. The Projects root is the world's home.
+ */
+const workspaceOn = (cwd: string, label: string) =>
+  Effect.gen(function* () {
+    env = {
+      ...env,
+      binPath: Bun.env.HERDR_BIN_PATH ?? env.binPath,
+      raw: { ...env.raw, GITTE_CWD: world.home },
+    };
+    yield* (yield* FileSystem.FileSystem).makeDirectory(cwd, { recursive: true });
+    return yield* new Herdr(env).workspaceCreate({ cwd, label });
+  }).pipe(Effect.orDie);
+
+/** The tools reading this world's Projects root, the world's home, rather than the desk's. */
+const rootAtWorldHome = () => {
+  env = { ...env, raw: { ...env.raw, GITTE_CWD: world.home } };
+};
+
+test("where work can start lists the workspaces, the Home as no checkout, open Tasks, the Projects root and each workflow's Inputs", () =>
+  inWorld(
+    Effect.gen(function* () {
+      yield* save(world.user, ["branches.workflow.ts"]);
+      const home = yield* workspaceOn(`${stateDir}/home`, "🐕 Collie");
+      const app = yield* workspaceOn(project, "app");
+      const open = yield* newTask({
+        workspace: app.workspaceId,
+        label: "picker",
+        cwd: project,
+        herd: null,
+      });
+      const gone = yield* newTask({
+        workspace: "w-gone",
+        label: "closed",
+        cwd: project,
+        herd: null,
+      });
+      yield* writeTask(stateDir, open);
+      yield* writeTask(stateDir, gone);
+
+      const said = yield* call("collie_workspaces");
+      expect(said).toContain(`- workspace ${app.workspaceId} (app): ${project}`);
+      expect(said).toContain(
+        `- workspace ${home.workspaceId} (🐕 Collie): ${stateDir}/home — the Home, Collie's own namespace, no checkout`,
+      );
+      expect(said).toContain(open.id);
+      expect(said).not.toContain(gone.id);
+      expect(said).toContain(`Projects root: ${world.home}`);
+      expect(said).toContain("a checkout under it is named by its directory name");
+      expect(said).toContain("- proof (note)");
+      expect(said).toContain("- hello (name)");
+      expect(said).toContain("- branches (goal?, size)");
+    }),
+  ));
+
+test("a start naming a path this Machine does not have is refused as no directory there", () =>
+  inWorld(
+    Effect.gen(function* () {
+      rootAtWorldHome();
+      for (const named of ["/nowhere/monorepo", "~/nowhere", "src/nowhere"]) {
+        const refused = yield* workspaceNamed(env, named);
+        const error = refused !== null && "error" in refused ? refused.error : "";
+        expect(error).toContain(`no directory "${named}" on this Machine`);
+        expect(error).toContain(world.home);
+      }
+      const said = yield* call("collie_do", {
+        actions: [
+          {
+            kind: "start",
+            workflow: "proof",
+            inputs: { note: "x" },
+            workspace: "/nowhere/monorepo",
+          },
+        ],
+      });
+      expect(said).toContain('no directory "/nowhere/monorepo" on this Machine');
+      const proposed = yield* call("collie_propose", {
+        interpretation: "start a proof there",
+        actions: [
+          { kind: "start", workflow: "proof", inputs: { note: "x" }, workspace: "~/nowhere" },
+        ],
+      });
+      expect(proposed).toContain('no directory "~/nowhere" on this Machine');
+      expect(yield* listRuns(env)).toEqual([]);
+    }),
+  ));
+
+test("a name that matches nothing says what was searched", () =>
+  inWorld(
+    Effect.gen(function* () {
+      yield* workspaceOn(project, "app");
+      const refused = yield* workspaceNamed(env, "monorepo");
+      const error = refused !== null && "error" in refused ? refused.error : "";
+      expect(error).toContain(
+        `no workspace id, label, directory or checkout under the Projects root ${world.home} is named "monorepo"`,
+      );
+      expect(error).toContain("app");
+    }),
+  ));
+
+test("a start rooted in Collie's own state is refused, whether named by the Home's label or its path", () =>
+  inWorld(
+    Effect.gen(function* () {
+      yield* workspaceOn(`${stateDir}/home`, "🐕 Collie");
+      for (const named of ["🐕 Collie", `${stateDir}/home`]) {
+        const said = yield* call("collie_do", {
+          actions: [{ kind: "start", workflow: "proof", inputs: { note: "x" }, workspace: named }],
+        });
+        expect(said).toContain("Collie's own namespace, not a checkout");
+        expect(said).toContain("projects-root");
+      }
+      expect(yield* listRuns(env)).toEqual([]);
+    }),
+  ));
+
+/** A read the Flock chat asks of this world's host, through a front door. */
+const readThroughHost = (tool: (typeof FLOCK_READS)[number], input: JsonObject) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const door = yield* frontDoor(stateDir);
+      return yield* door.read({ tool, input });
+    }),
+  ).pipe(Effect.orDie);
+
+test("the host answers a Flock chat's read with Native chat's own answer, deliveries included", () =>
+  inWorld(
+    Effect.gen(function* () {
+      const run = yield* aRun("add a picker");
+      // Settled first: asking and suspending are two steps, and a read between them differs.
+      const native = yield* until(
+        () => call("collie_run", { run: run.id }),
+        (said) => said.includes("Status: waiting"),
+      );
+      expect(yield* readThroughHost("collie_run", { run: run.id })).toBe(native);
+
+      yield* appendLine(yield* ledgerPath(stateDir, "term-1"), {
+        id: "d-1",
+        at: "2026-10-07T10:00:00.000Z",
+        run: run.id,
+        incarnation: "term-1",
+        agent: "implementer-1",
+        causal_key: "k",
+        request_id: "q",
+        cause: { kind: "nudge", ref: "x" },
+        mode: "boundary",
+        text_hash: "h",
+        intent_version: 1,
+        attempt: 1,
+        state: "submitted",
+      });
+      expect(yield* readThroughHost("collie_receipts", { run: run.id })).toContain(
+        "- d-1: submitted, for nudge",
+      );
+    }),
+  ));
+
+test("a read through the host takes only the three reads, and no selection stands in for a run", () =>
+  inWorld(
+    Effect.gen(function* () {
+      const run = yield* aRun("the selected one");
+      yield* writeSelection(yield* selectionPath(stateDir, KEY), {
+        task: "t1",
+        run: run.id,
+        name: "Strapi prod seeder",
+      });
+      for (const tool of ["collie_run", "collie_receipts"] as const) {
+        const said = yield* readThroughHost(tool, {});
+        expect(said).toContain(`${tool} takes {"run": "<run id>"}`);
+        expect(said).not.toContain("the selected one");
+        expect(said).not.toContain("Strapi prod seeder");
+      }
+
+      // A write's name is not a payload the operation takes, so no client can send one.
+      const payload = FrontDoorRpcs.requests.get("read")!.payloadSchema;
+      const write = Schema.decodeUnknownExit(payload)({
+        tool: "collie_do",
+        input: { actions: [{ kind: "stop", run: run.id }] },
+      });
+      expect(write._tag).toBe("Failure");
+      expect(Schema.decodeUnknownExit(payload)({ tool: "collie_run", input: {} })._tag).toBe(
+        "Success",
+      );
     }),
   ));
