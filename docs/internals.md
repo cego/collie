@@ -202,7 +202,7 @@ herdr's list and nothing else. Routing them through `herdr.ts` would bring Colli
 into Desktop, which reaches a Machine only through `collie bridge`.
 
 Go to pane is the one place Desktop touches a session, and it does so for the human
-([ADR-0043](adr/0043-go-to-pane-opens-the-pane-in-desktop.md)): it runs herdr's terminal
+([ADR-0044](adr/0044-go-to-pane-opens-the-pane-in-desktop.md)): it runs herdr's terminal
 controller for the Run's pane, `herdr [--session <name>] terminal session control <pane>
 --takeover --cols C --rows R`, through the Machine's route — one more channel on the SSH
 master Desktop already holds, or a local process for Local — and draws what it prints in
@@ -213,6 +213,25 @@ to the renderer, and decides nothing from what the pane shows. Where there is no
 control, and for **Open in herdr**, it opens `herdr --remote <target> --session <name>` in
 a terminal of this computer's instead, a client the human then drives. The focus before
 either is the host's, through `herdr.ts`; its reply names the pane it focused.
+
+### Settings shared across a Flock
+
+Collie's settings are one list, `src/settings.ts`: each key with its kind, its choices, its
+default and what it refuses. It is pure, so Desktop's view bundles it, and the TUI's
+Settings, its `SetDefault` and the host's `setSettings` all decide through `parseSetting`.
+Every write of one goes through `setSetting` in `src/config.ts`, which records the time in
+`settings-set.json` beside `config.json`; a value written before anything recorded one is
+dated by the file's own time.
+
+Desktop keeps the Flock's settings in `flock-settings.json`
+(`desktop/src/bun/flock-settings.ts`). On each board Snapshot — a Machine connected or
+reconnected — and after an edit in its Settings, it reads the Machine's `settings`, takes
+each key whose edit is later than the one it holds (`takeFrom` in
+`desktop/src/shared/flock-settings.ts`), and gives the Machine what it lacks with
+`setSettings`, which the host writes only where that edit is later than its own. The latest
+edit of a key wins everywhere ([ADR-0043](adr/0043-a-shared-setting-is-its-latest-edit.md)).
+A Machine whose collie has no `settings` yet fails the read, is left alone, and is synced
+once Desktop has upgraded it and it connects again.
 
 ### Checking the boundary against herdr
 

@@ -25,7 +25,7 @@ export default {
       // bundleCEF alone still renders with WebKitGTK.
       defaultRenderer: "cef",
       // The launcher entry's icon and every window's.
-      icon: "../assets/brand/logos/collie-mark-256.png",
+      icon: "../assets/brand/logos/collie-tile-256.png",
     },
     win: { bundleCEF: false },
   },

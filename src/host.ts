@@ -79,6 +79,7 @@ import {
   HostRefused,
   NewsBatch,
   PaneAt,
+  SharedSettings,
   PROTOCOL,
   ProposalRefused,
   RUN_FILE_BYTES,
@@ -133,7 +134,7 @@ import { everyRegistered } from "./registry";
 import { readTask } from "./task";
 import { nowIso } from "./time";
 import { reason } from "./naming";
-import { loadDefaults } from "./config";
+import { loadDefaults, sharedSettings, takeShared } from "./config";
 import { factsOfView, settled } from "./runs";
 import { aliveIn, focusPane, herdChanges, liveHerds } from "./herds";
 import { currentPid, ensureLockDir, lockHolder, withLock, type LockHolder } from "./lock";
@@ -444,6 +445,9 @@ const sideJobsLayer = (dir: string, panels: MrPanels) =>
       );
     }),
   );
+
+/** How many of the settings operations a host keeps a record of. */
+const SETTINGS_TRAIL = 50;
 
 /** A Herd's key names one directory under the state directory, and nothing above it. */
 const isHerdName = (herd: string) => herd !== "." && herd !== ".." && /^[^/\\]+$/.test(herd);
@@ -781,6 +785,40 @@ const frontDoorHandlers = (
               })),
             ),
             Effect.provideContext(bun),
+          ),
+        settings: () =>
+          sharedSettings(env.userDir).pipe(
+            Effect.mapError((cause) => new HostRefused({ reason: reason(cause) })),
+            Effect.provideContext(bun),
+          ),
+        setSettings: ({ settings, request }, { client }) =>
+          plainly(
+            Effect.gen(function* () {
+              const who = whoOf(client);
+              const trail = (yield* Path.Path).join(env.stateDir, "settings");
+              const taken = yield* once(
+                trail,
+                {
+                  operation: "settings",
+                  request,
+                  ...who,
+                  asked: { settings },
+                  result: SharedSettings,
+                },
+                takeShared(
+                  env.userDir,
+                  settings,
+                  who.from?.client ?? who.origin,
+                  yield* nowIso(),
+                ).pipe(
+                  Effect.mapError(
+                    (reason) => new HostRefused({ reason: `${REFUSED_INPUT}: ${reason}` }),
+                  ),
+                ),
+              );
+              yield* trimAudit(trail, SETTINGS_TRAIL).pipe(Effect.orDie);
+              return taken;
+            }),
           ),
         invoke: ({ runId, offer, input, request }, { client }) =>
           fresh(

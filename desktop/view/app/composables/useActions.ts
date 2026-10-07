@@ -27,6 +27,7 @@ const removeMachineAtom = FlockClient.mutation("removeMachine");
 const saveGitlabAtom = FlockClient.mutation("saveGitlab");
 const saveGitlabHostAtom = FlockClient.mutation("saveGitlabHost");
 const saveHelleAtom = FlockClient.mutation("saveHelle");
+const setFlockSettingAtom = FlockClient.mutation("setFlockSetting");
 const checkHelleAtom = FlockClient.mutation("checkHelle");
 const openSlackAtom = FlockClient.mutation("openSlack");
 const copyTextAtom = FlockClient.mutation("copyText");
@@ -79,6 +80,7 @@ export const useActions = () => {
   const saveGitlab = useAtomSet(() => saveGitlabAtom, { mode: "promiseExit" });
   const saveGitlabHost = useAtomSet(() => saveGitlabHostAtom, { mode: "promiseExit" });
   const saveHelle = useAtomSet(() => saveHelleAtom, { mode: "promiseExit" });
+  const setFlockSetting = useAtomSet(() => setFlockSettingAtom, { mode: "promiseExit" });
   const checkHelle = useAtomSet(() => checkHelleAtom, { mode: "promiseExit" });
   const openSlack = useAtomSet(() => openSlackAtom, { mode: "promiseExit" });
   const copyText = useAtomSet(() => copyTextAtom, { mode: "promiseExit" });
@@ -205,6 +207,8 @@ export const useActions = () => {
     saveGitlab: (token: string) => saveGitlab({ payload: { token } }).then(kept),
     saveGitlabHost: (host: string) => saveGitlabHost({ payload: { host } }).then(kept),
     saveHelle: (token: string) => saveHelle({ payload: { token } }).then(kept),
+    setFlockSetting: (key: string, value: string) =>
+      setFlockSetting({ payload: { key, value } }).then(kept),
     /** Who the token belongs to, or why Helle would not say. */
     checkHelle: (token: string) =>
       checkHelle({ payload: { token } }).then((exit) =>

@@ -11,14 +11,9 @@ import type { Channel } from "./dispatcher";
 import type { Herdr, Submission } from "./herdr";
 import { ensureLockDir, withLock } from "./lock";
 import { reason } from "./naming";
+import { COMPACTION_OFF } from "./settings";
 
-/**
- * The user-wide threshold in current-context tokens, and the value that turns the
- * feature off. Absolute rather than a percentage of a window: the four harnesses
- * measure different windows, and one number is what a human can reason about.
- */
-export const COMPACT_AT_TOKENS = 372_000;
-export const COMPACTION_OFF = 0;
+export { COMPACT_AT_TOKENS, COMPACTION_OFF } from "./settings";
 
 /**
  * How long Collie waits for a compaction request to resolve before it pauses the Run.
