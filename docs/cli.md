@@ -1428,6 +1428,11 @@ sleeps. That host is `--gitlab-host`, else `GITLAB_HOST`, else the
 [`gitlab_host` setting](using.md#your-defaults). Any other host glab knows is named in one
 `other gitlabs` note, unchecked, and never fails the run.
 
+**Disk** covers each filesystem holding the state directory, `~/.cache/collie`, herdr's
+worktrees and the temporary directory, once each. One with less than 10% or 5 GiB free is a
+`!` warning naming it, with what [`collie cleanup`](#cleaning-up) would free where a host has
+served this state directory, and `collie cleanup --apply` as the fix. It never fails the run.
+
 Two more are optional, and reported rather than required. **Helle**, where a loaded
 workflow waits on it (`renovate` does): the credentials file the Helle MCP wrapper sources,
 `~/.config/helle/env` (or `HELLE_ENV_FILE`), whose token is tried against

@@ -210,3 +210,38 @@ test(
     ),
   60_000,
 );
+
+test(
+  "doctor's low-disk warning says what a sweep would free",
+  () =>
+    proves(
+      "collie-cleanup-doctor-",
+      (world) =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          yield* generation(world, "stale", 8, 64 * 1024);
+          // The host has served this state directory, so doctor may ask it.
+          yield* collie(world, ["cleanup"]);
+          const bin = `${world.home}/bin`;
+          yield* fs.makeDirectory(bin);
+          yield* fs.writeFileString(
+            `${bin}/df`,
+            "#!/bin/sh\nprintf 'Filesystem 1024-blocks Used Available Capacity Mounted on\\n/dev/sda1 104857600 96468992 8388608 92%% /\\n'\n",
+            { mode: 0o755 },
+          );
+
+          const doctor = yield* collie(world, ["doctor"], { PATH: `${bin}:/usr/bin:/bin` });
+          const checks = Schema.decodeUnknownSync(
+            Schema.Struct({
+              checks: Schema.Array(Schema.Struct({ name: Schema.String, detail: Schema.String })),
+            }),
+          )(doctor.envelope.data ?? doctor.envelope.error?.details);
+          const disk = checks.checks.find((check) => check.name === "disk");
+          expect(disk?.detail).toMatch(
+            /^\/ has 8\.0 GiB free \(8%\); `collie cleanup` would free \d/,
+          );
+        }),
+      [],
+    ),
+  60_000,
+);

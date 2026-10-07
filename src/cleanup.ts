@@ -19,6 +19,7 @@ import type { AgentEntry } from "./registry";
 import type { RunFacts } from "./runs";
 import { epochMs, nowIso } from "./time";
 import { judgeWorktrees } from "./worktree";
+import { CONTROL_DIR, putDownControl } from "./compaction";
 
 /** One kind of thing Collie cleans. */
 export interface Sweeper {
@@ -151,11 +152,12 @@ const trimJournal = (file: string) =>
     yield* fs.rename(tmp, file);
   }).pipe(Effect.ignore);
 
+/** Collie's own cache directory, `~/.cache/collie`. */
+export const collieCache = () =>
+  `${Bun.env.XDG_CACHE_HOME || `${Bun.env.HOME ?? Bun.env.TMPDIR ?? "/tmp"}/.cache`}/collie`;
+
 /** Where module generations are staged, as the engine stages them. */
-export const generationsDir = () => {
-  const cache = Bun.env.XDG_CACHE_HOME || `${Bun.env.HOME ?? Bun.env.TMPDIR ?? "/tmp"}/.cache`;
-  return `${cache}/collie/entries/generations`;
-};
+export const generationsDir = () => `${collieCache()}/entries/generations`;
 
 /**
  * Staged module generations, each gone 7 days after it was last used: a cache hit touches
@@ -240,5 +242,259 @@ export const worktreesSweeper = (opts: {
         if (one?.removed === true) return { freed: bytes };
         return { kept: one?.keep ?? (round.busy ? "another sweep is removing it" : "gone") };
       }),
+  };
+};
+
+const RECEIPT_KEEP_MS = 30 * DAY_MS;
+
+/** Whether anything at or under `path` changed in the last day; true where it cannot tell. */
+const changedToday = (path: string) =>
+  shell("find", [path, "-mmin", "-1440", "-print", "-quit"], "/").pipe(
+    Effect.map((found) => found.code !== 0 || found.stdout.trim() !== ""),
+  );
+
+/** What the state directory holds that is the host's own and never a sweeper's. */
+const KEPT_KINDS = new Set([
+  "host.db",
+  "host.db-wal",
+  "host.db-shm",
+  "host.db-journal",
+  "host.lock",
+  "host.sock",
+  "installation",
+  "installation.new",
+  "worktrees.json",
+  "worktrees.json.lock",
+  JOURNAL,
+  "cleanup",
+  "settings",
+  "tasks",
+  "herd",
+  "board",
+  "steering",
+  "compaction",
+  "compaction-locks",
+  "generations",
+  "renovate-repositories",
+  "claude.json.bak",
+]);
+const MARKER = /^(?:stop|hold|parked|notified)\.(.+)$/;
+/** Nothing reads these any more ([ADR-0027](../docs/adr/0027-one-engine-and-a-hard-cutover.md)). */
+const DEAD = /^(?:events\..*\.log|plans)$/;
+
+/**
+ * The state directory's own leftovers: whatever no `collie_runs` row owns, once it has not
+ * changed for a day, and CLI receipts 30 days on. An entry of a kind Collie does not know
+ * is kept and said.
+ */
+export const stateSweeper = (stateDir: string, rows: ReadonlySet<string>): Sweeper => {
+  const kind = "state";
+  /** A child's files are its root Run's as well. */
+  const owned = (run: string) => rows.has(run) || rows.has(run.split(".")[0] ?? run);
+  /** Gone once quiet for a day, for `why`. */
+  const quiet = (target: string, why: string) =>
+    Effect.map(changedToday(target), (changed) =>
+      changed ? { keep: "changed in the last day" } : { remove: why },
+    );
+  const rowless = "no Run has a row for it";
+
+  /** What becomes of one entry, or null where it is not this sweeper's to judge. */
+  const verdict = (
+    target: string,
+  ): Effect.Effect<{ remove: string } | { keep: string } | null, never, BunServices> =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const rel = target.slice(stateDir.length + 1).split("/");
+      const [top = "", name = "", file] = rel;
+      if (rel.length === 1) {
+        if (KEPT_KINDS.has(top) || /^worktree-[0-9a-f]+\.lock$/.test(top)) return null;
+        if (top === "runs" || top === "agents" || top === "evidence" || top === "requests")
+          return null;
+        if (top.startsWith(`${JOURNAL}.`)) return null;
+        if (DEAD.test(top)) return yield* quiet(target, "nothing reads it any more");
+        const marker = MARKER.exec(top)?.[1];
+        if (marker !== undefined) return owned(marker) ? null : yield* quiet(target, rowless);
+        return { keep: "not a kind Collie knows" };
+      }
+      if (top === "requests") {
+        if (file === undefined) return null;
+        const info = yield* fs.stat(target).pipe(Effect.option);
+        if (Option.isNone(info)) return null;
+        const written = Option.getOrNull(info.value.mtime)?.getTime() ?? 0;
+        return (yield* Clock.currentTimeMillis) - written > RECEIPT_KEEP_MS
+          ? { remove: "a receipt over 30 days old" }
+          : null;
+      }
+      if (rel.length !== 2) return null;
+      if (top === "runs" && name === ".seq")
+        return yield* quiet(target, "nothing reads it any more");
+      if (top === "agents") {
+        if (name.endsWith(".json") || name === "deliveries.log") return null;
+        const ledger = `${target}/deliveries.jsonl`;
+        if (yield* fs.exists(ledger).pipe(Effect.orElseSucceed(() => false))) {
+          const runs = yield* readJournal(ledger, LedgerRuns);
+          return runs.some((line) => owned(line.run))
+            ? null
+            : yield* quiet(target, "a ledger of Runs none of which has a row");
+        }
+      }
+      return owned(name) ? null : yield* quiet(target, rowless);
+    });
+
+  /** Every entry this sweeper might judge. */
+  const entries = Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const list = (dir: string) =>
+      fs.readDirectory(dir).pipe(
+        Effect.map((names) => names.map((name) => `${dir}/${name}`)),
+        Effect.orElseSucceed((): Array<string> => []),
+      );
+    const out = yield* list(stateDir);
+    for (const dir of ["runs", "agents", "evidence"])
+      out.push(...(yield* list(`${stateDir}/${dir}`)));
+    for (const op of yield* list(`${stateDir}/requests`)) out.push(...(yield* list(op)));
+    return out;
+  });
+
+  return {
+    judge: Effect.gen(function* () {
+      const remove: CleanupItem[] = [];
+      const keep: CleanupKept[] = [];
+      for (const target of yield* entries) {
+        const judged = yield* verdict(target);
+        if (judged === null) continue;
+        if ("keep" in judged) keep.push({ kind, target, reason: judged.keep });
+        else remove.push({ kind, target, bytes: 0, reason: judged.remove });
+      }
+      const sizes = yield* sizesOf(remove.map((item) => item.target));
+      return { remove: remove.map((item, at) => ({ ...item, bytes: sizes[at] ?? 0 })), keep };
+    }),
+    remove: (item) => removeIf(item.target, verdict(item.target)),
+  };
+};
+
+const LedgerRuns = Schema.fromJsonString(Schema.Struct({ run: Schema.String }));
+
+/** Removes `target` where `verdict`, asked now, still says it goes. */
+const removeIf = (
+  target: string,
+  verdict: Effect.Effect<{ remove: string } | { keep: string } | null, never, BunServices>,
+) =>
+  Effect.gen(function* () {
+    const now = yield* verdict;
+    if (now === null) return { kept: "nothing to remove any more" };
+    if ("keep" in now) return { kept: now.keep };
+    const bytes = yield* sizeOf(target);
+    const fs = yield* FileSystem.FileSystem;
+    const gone = yield* fs.remove(target, { recursive: true }).pipe(Effect.result);
+    return gone._tag === "Success" ? { freed: bytes } : { kept: String(gone.failure) };
+  });
+
+/**
+ * Compaction controls of agents no herdr session lists: their endpoint stopped and their
+ * state removed. Nothing is judged where herdr will not list its agents.
+ */
+export const compactionSweeper = (stateDir: string, sessions: ReadonlyArray<Herdr>): Sweeper => {
+  const kind = "compaction";
+  const root = `${stateDir}/${CONTROL_DIR}`;
+  /** Every agent any session lists, or null where one would not say. */
+  const listed = Effect.gen(function* () {
+    const names = new Set<string>();
+    for (const session of sessions) {
+      const agents = yield* session.agentList().pipe(Effect.option);
+      if (Option.isNone(agents)) return null;
+      for (const agent of agents.value) names.add(agent.name);
+    }
+    return names;
+  });
+  return {
+    judge: Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const names = yield* fs.readDirectory(root).pipe(Effect.orElseSucceed(() => []));
+      const live = yield* listed;
+      const remove: CleanupItem[] = [];
+      const keep: CleanupKept[] = [];
+      for (const name of names) {
+        const target = `${root}/${name}`;
+        if (live === null) keep.push({ kind, target, reason: "could not ask herdr what is live" });
+        else if (!live.has(name))
+          remove.push({ kind, target, bytes: 0, reason: "herdr no longer lists its agent" });
+      }
+      const sizes = yield* sizesOf(remove.map((item) => item.target));
+      return { remove: remove.map((item, at) => ({ ...item, bytes: sizes[at] ?? 0 })), keep };
+    }),
+    remove: (item) =>
+      Effect.gen(function* () {
+        const live = yield* listed;
+        const name = item.target.slice(root.length + 1);
+        if (live === null) return { kept: "could not ask herdr what is live" };
+        if (live.has(name)) return { kept: "herdr lists its agent again" };
+        const bytes = yield* sizeOf(item.target);
+        const done = yield* putDownControl(
+          { stateDir, log: () => Effect.void },
+          name,
+          Effect.map(listed, (now) => now === null || now.has(name)),
+        ).pipe(Effect.orElseSucceed(() => false));
+        return done ? { freed: bytes } : { kept: "its controls are in use" };
+      }),
+  };
+};
+
+/** Runner copies under `~/.cache/collie/runners`, but the running version's and the newest. */
+export const runnersSweeper = (dir: string, running: string): Sweeper => {
+  const kind = "runner";
+  const versionOf = (name: string) => /^collie-(.+)$/.exec(name)?.[1] ?? null;
+  const newer = (a: string, b: string) => {
+    const [x, y] = [a, b].map((v) =>
+      v.split(/[.+-]/).map((part) => Number.parseInt(part, 10) || 0),
+    );
+    for (let at = 0; at < Math.max(x!.length, y!.length); at++)
+      if ((x![at] ?? 0) !== (y![at] ?? 0)) return (x![at] ?? 0) > (y![at] ?? 0);
+    return false;
+  };
+  const verdicts = Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const names = (yield* fs.readDirectory(dir).pipe(Effect.orElseSucceed(() => []))).filter(
+      (name) => versionOf(name) !== null,
+    );
+    const versions = names.map((name) => versionOf(name)!);
+    const newest = versions.reduce<string | null>(
+      (best, v) => (best === null || newer(v, best) ? v : best),
+      null,
+    );
+    return names.map((name) => {
+      const version = versionOf(name)!;
+      const target = `${dir}/${name}`;
+      return version === running
+        ? { target, keep: "the running version" }
+        : version === newest
+          ? { target, keep: "the newest" }
+          : { target, remove: "neither the running version nor the newest" };
+    });
+  });
+  return {
+    judge: Effect.gen(function* () {
+      const all = yield* verdicts;
+      const remove = all.flatMap((one) =>
+        "remove" in one ? [{ kind, target: one.target, bytes: 0, reason: one.remove! }] : [],
+      );
+      const keep = all.flatMap((one) =>
+        "keep" in one ? [{ kind, target: one.target, reason: one.keep! }] : [],
+      );
+      const sizes = yield* sizesOf(remove.map((item) => item.target));
+      return { remove: remove.map((item, at) => ({ ...item, bytes: sizes[at] ?? 0 })), keep };
+    }),
+    remove: (item) =>
+      removeIf(
+        item.target,
+        Effect.map(verdicts, (all) => {
+          const one = all.find((each) => each.target === item.target);
+          return one === undefined
+            ? null
+            : "remove" in one
+              ? { remove: one.remove! }
+              : { keep: one.keep! };
+        }),
+      ),
   };
 };

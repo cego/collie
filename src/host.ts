@@ -61,6 +61,10 @@ import { configuredAgents } from "./agents";
 import { Catalogue, discover, searchPath } from "./discovery";
 import { sideJobs } from "./side-jobs";
 import {
+  collieCache,
+  compactionSweeper,
+  runnersSweeper,
+  stateSweeper,
   generationsDir,
   generationsSweeper,
   judge,
@@ -442,16 +446,21 @@ const hostBoard = (dir: string) =>
     const unattended = boardOf([]);
     /** Every kind of thing Collie cleans, judged against the Runs as they are now. */
     const sweepers = Effect.gen(function* () {
+      const sessions = (yield* liveHerds(herdr, env)).map((session) => session.herdr);
+      const all = yield* runs;
       return [
         worktreesSweeper({
           herdr,
-          sessions: (yield* liveHerds(herdr, env)).map((session) => session.herdr),
+          sessions,
           stateDir: env.stateDir,
-          runs: yield* runs,
+          runs: all,
           registered: yield* everyRegistered(env.stateDir),
           cwd: env.cwd,
         }),
         generationsSweeper(generationsDir()),
+        stateSweeper(env.stateDir, new Set(all.map((run) => run.id))),
+        compactionSweeper(env.stateDir, sessions),
+        runnersSweeper(`${collieCache()}/runners`, BUILD),
       ];
     });
     return { env, herdr, bun, runs, build, unattended, sweepers };

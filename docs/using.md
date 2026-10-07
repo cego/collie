@@ -1705,6 +1705,19 @@ every ten minutes, whether or not a pane is open. A sweep removes:
 - **Staged module generations** under `~/.cache/collie/entries`, once unused for 7 days.
   Loading a module again counts as using it, and one that is needed after it went is
   staged again.
+- **State no Run owns:** a Run's directories under `runs/`, `agents/` and `evidence/`, its
+  `stop.`, `hold.`, `parked.` and `notified.` markers and the steering ledgers of its
+  agents, once no Run has a row for them and nothing in them has changed for a day. That
+  includes what the previous engine left, and `events.*.log`, `plans/` and `runs/.seq`,
+  which nothing reads.
+- **CLI receipts** under `requests/`, 30 days after they were written.
+- **Compaction controls** of an agent no herdr session lists any more, with the endpoint it
+  held open.
+- **Runner copies** under `~/.cache/collie/runners`, but the running version's and the
+  newest.
+
+An entry of the state directory that is no kind Collie knows is listed as kept and never
+removed.
 
 `collie cleanup` lists what a sweep would remove now, with each item's size and the total,
 and what Collie keeps and why. `collie cleanup --apply` sweeps now; chat can do the same.
