@@ -24,7 +24,6 @@ import { Herdr } from "../../src/herdr";
 import { followBoard } from "../../src/lifecycle";
 import { scopeFor } from "../../src/registry";
 import { focus } from "../support/focus";
-import { stopHost } from "../support/host";
 import { collie, proves } from "../support/world";
 import { epochMs } from "../../src/time";
 
@@ -1129,6 +1128,22 @@ test("the record opens on Summary, with the merge request's own state in it", ()
     }),
   ));
 
+test("Summary lists what the Run was given with its path, and nothing for a Run given none", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const given = record({
+        attachments: [{ name: "shot.png", size: 2048, mediaType: "image/png" }],
+      });
+      const app = yield* opened(appState({ tasks: [task()], detail: given }));
+      expect(app.said()).toContain("ATTACHMENTS");
+      expect(app.said()).toContain("/state/runs/r1/attachments/shot.png");
+      expect(app.said()).toContain("2048 bytes");
+
+      const none = yield* opened(appState({ tasks: [task()], detail: record() }));
+      expect(none.said()).not.toContain("ATTACHMENTS");
+    }),
+  ));
+
 test("Review shows the verdict and findings, and says when it was cut short", () =>
   runEffect(
     Effect.gen(function* () {
@@ -1719,7 +1734,8 @@ test(
               times: 40,
             }),
           );
-          yield* stopHost(world.state);
+          // The host is left for `proves` to stop once this scope has closed: stopped here,
+          // the board followed above reconnects and starts another that outlives the test.
           const app = yield* mount(state);
           const said = app.said();
           expect(said).toContain("One task is waiting on you.");

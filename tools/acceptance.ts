@@ -74,11 +74,77 @@ const OPERATOR = "operator";
 const MODULES = "workflow modules (this MR)";
 const LAUNCH = "launch flow places human starts (this MR)";
 const RELEASE = "ready to release and checks you can see (this MR)";
+const ATTACHMENTS = "files in the Flock chat and its Runs (this MR)";
 const IN_APP_TERMINAL = "go to pane opens the pane in Desktop (this MR)";
 const MACHINE_RULE = "the Machine rule (this MR)";
 
 /** What the front door owes a person, and cannot be settled below the front door. */
 const FRONT_DOOR: readonly Check[] = [
+  {
+    id: "front-door/a-file-too-large-for-a-message-is-refused",
+    statement:
+      "The Flock chat's composer refuses a file over 20 MB, or one that takes a message's files over 30 MB, naming the file or the total and the cap.",
+    owner: ATTACHMENTS,
+    needs: "ui",
+    proof: {
+      kind: "test",
+      layer: "ui",
+      file: "test/desktop-attachments.test.ts",
+      name: "a file over 20 MB, or a message over 30 MB, is refused naming the file or the total and the cap",
+    },
+  },
+  {
+    id: "front-door/a-pasted-image-is-attached-and-pasted-text-stays-text",
+    statement:
+      "Of what is pasted into the Flock chat's composer, an image file becomes an attachment and text stays text.",
+    owner: ATTACHMENTS,
+    needs: "ui",
+    proof: {
+      kind: "test",
+      layer: "ui",
+      file: "test/desktop-attachments.test.ts",
+      name: "a pasted image file becomes an attachment, and pasted text stays text",
+    },
+  },
+  {
+    id: "front-door/a-large-image-is-scaled-for-the-model",
+    statement:
+      "An image attached in the Flock chat is scaled to 2000 px on its long edge for the model, and never up.",
+    owner: ATTACHMENTS,
+    needs: "ui",
+    proof: {
+      kind: "test",
+      layer: "ui",
+      file: "test/desktop-attachments.test.ts",
+      name: "an image is scaled to 2000 px on its long edge, and never up",
+    },
+  },
+  {
+    id: "front-door/the-tui-summary-lists-what-a-run-was-given",
+    statement:
+      "The TUI's Summary of a card lists the files the Run was given, each with its path and size.",
+    owner: ATTACHMENTS,
+    needs: "ui",
+    proof: {
+      kind: "test",
+      layer: "ui",
+      file: "test/ui/board.test.tsx",
+      name: "Summary lists what the Run was given with its path, and nothing for a Run given none",
+    },
+  },
+  {
+    id: "front-door/desktop-shows-what-a-run-was-given",
+    statement:
+      "Desktop's record of a Run shows each PNG, JPEG, GIF or WebP image it was given as a thumbnail and any other file by name.",
+    owner: ATTACHMENTS,
+    needs: "ui",
+    proof: {
+      kind: "test",
+      layer: "ui",
+      file: "desktop/test/evidence.test.ts",
+      name: "a Run's attached images the view can show are thumbnails, and every other file is by name",
+    },
+  },
   {
     id: "front-door/a-running-check-says-its-pass-reason-and-timing",
     statement:
@@ -525,6 +591,7 @@ const BACKEND: readonly Check[] = [
       name: "the CLI records a disposition and leaves the Run's status as it was",
     },
   },
+
   {
     id: "desktop/go-to-pane-rides-the-machines-master",
     statement:
@@ -536,6 +603,47 @@ const BACKEND: readonly Check[] = [
       layer: "backend",
       file: "test/desktop-terminal.test.ts",
       name: "Go to pane on a Machine runs its controller as one more channel on the master Desktop holds, and gives the pane back",
+    },
+  },
+
+  // ── Attachments: files a Run is given, in its own directory and every prompt ──
+  {
+    id: "backend/an-upload-reaches-a-machine-once",
+    statement:
+      "A file sent to a Machine's host arrives once: its parts are checked against its size and sha256, a digest the host holds is answered at the first part, a bad hash leaves nothing, and a start can name the path it answered.",
+    owner: ATTACHMENTS,
+    needs: "backend",
+    proof: {
+      kind: "test",
+      layer: "backend",
+      file: "test/host-files.test.ts",
+      name: "a file reaches a Machine once through its host's upload, and a start can name the path it answered",
+    },
+  },
+  {
+    id: "backend/a-started-runs-attachments-are-there-before-its-first-prompt",
+    statement:
+      "A Run started with `--attach` has a copy of each file in its own directory before its first agent starts, and that agent's prompt lists each with its absolute path.",
+    owner: ATTACHMENTS,
+    needs: "backend",
+    proof: {
+      kind: "test",
+      layer: "backend",
+      file: "test/attachments.test.ts",
+      name: "a start's attachments are in the Run's directory and its first prompt before it runs, and on its audit line",
+    },
+  },
+  {
+    id: "backend/a-follow-up-inherits-its-runs-attachments",
+    statement:
+      "A follow-up of a Run that was given files starts with copies of them in its own directory, beside any it was given itself, and its first prompt lists them.",
+    owner: ATTACHMENTS,
+    needs: "backend",
+    proof: {
+      kind: "test",
+      layer: "backend",
+      file: "test/attachments.test.ts",
+      name: "an offer invoked from a Run with attachments gives the new Run copies of them beside its own",
     },
   },
 ];
@@ -703,6 +811,49 @@ const WORKFLOWS: readonly Check[] = [
 /** What only a person at a terminal can settle. */
 const OPERATOR_CHECKS: readonly Check[] = [
   {
+    id: "flock-chat/a-machine-on-an-older-collie-is-told-to-upgrade",
+    statement:
+      "A Machine whose Collie predates files is told to upgrade when the Flock chat reads a file there or starts work carrying one, and nothing starts there.",
+    owner: ATTACHMENTS,
+    needs: "operator",
+    proof: {
+      kind: "operator",
+      how: "In Desktop with a Machine on a Collie release before this one, ask the chat to read a file there and to start a plan there with a pasted screenshot; record both answers naming the upgrade, and that no Run started, with the revision.",
+    },
+  },
+  {
+    id: "flock-chat/start-a-plan-for-this-carries-the-screenshot",
+    statement:
+      '"Start a plan for this" with a pasted screenshot starts a Run on vm-mk whose grill prompt names its `attachments/` copy, the agent opens it, and the card\'s drawer shows the thumbnail.',
+    owner: ATTACHMENTS,
+    needs: "operator",
+    proof: {
+      kind: "operator",
+      how: "In Desktop with vm-mk reached, paste a screenshot and send \"start a plan for this\" naming vm-mk; record the Run's id, the line of its grill prompt that names `runs/<id>/attachments/<name>`, that the agent opened it, and the thumbnail in the card's drawer, with the revision.",
+    },
+  },
+  {
+    id: "flock-chat/a-file-copied-in-gnome-files-pastes-as-a-chip",
+    statement: "A file copied in GNOME Files and pasted into the Flock chat becomes a chip.",
+    owner: ATTACHMENTS,
+    needs: "operator",
+    proof: {
+      kind: "operator",
+      how: "In Desktop on GNOME, copy a PDF and a text file in Files, press Ctrl+V in the chat's input, and record the two chips and what the model says of each once sent, with the revision.",
+    },
+  },
+  {
+    id: "flock-chat/a-pasted-screenshot-is-seen-and-kept",
+    statement:
+      "A screenshot pasted with Ctrl+V in the popped-out Flock chat is described correctly by the model, and after a restart the message still shows its thumbnail.",
+    owner: ATTACHMENTS,
+    needs: "operator",
+    proof: {
+      kind: "operator",
+      how: "In Desktop, pop the chat out, paste a screenshot of something distinctive with Ctrl+V, send it with no words, and record the model's description; quit and start Desktop, reopen the conversation, and record that the message shows the thumbnail, with the revision.",
+    },
+  },
+  {
     id: "desktop/a-flock-chat-start-goes-where-the-machine-rule-says",
     statement:
       'A Flock chat start goes where the Machine rule says: with the rule "frontend work is on the laptop, everything else is on the vm", a review of a frontend merge request lands on Local and a plan for Collie on vm-mk; with vm-mk unreachable, the plan is declined in words and nothing starts on the laptop; and Go to pane on each opens in Desktop with no new SSO approval.',
@@ -722,6 +873,17 @@ const OPERATOR_CHECKS: readonly Check[] = [
     proof: {
       kind: "operator",
       how: "Against vm-mk: connect Desktop (one SSO approval), Go to pane on a working Run, type to the agent, press Esc (the agent gets it and the drawer stays open) and paste two lines (they arrive as one paste), close the drawer, Go to pane again. Record that sso.cego.dk asked nothing after the first approval, that an open herdr window showed the pane at its own size again once the drawer closed, and the revision.",
+    },
+  },
+  {
+    id: "flock-chat/reads-greps-and-edits-a-file-on-a-machine",
+    statement:
+      "The Flock chat reads, greps and edits a file on vm-mk with no prompt, and its edit is in vm-mk's host log with the chat's voice.",
+    owner: ATTACHMENTS,
+    needs: "operator",
+    proof: {
+      kind: "operator",
+      how: "In Desktop with vm-mk reached, ask the chat to read a scratch file on vm-mk, grep its directory for a word in it, and change that word; record the three tool rows, the file's new content on vm-mk, and the edit's line in vm-mk's `files/operations.jsonl` with its Actor, with the revision.",
     },
   },
   {

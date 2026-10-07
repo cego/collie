@@ -143,6 +143,7 @@ collie --json run start <workflow> --inputs-json '{"goal":"ship it"}'
 | `--harness <h>`   | The harness this Run's agents run on, over the workflow's own preference.   |
 | `--model <m>`     | The model this Run's agents run on, over the workflow's own preference.     |
 | `--effort <e>`    | The effort this Run's agents are asked for, over the workflow's own.        |
+| `--attach <file>` | Repeatable. A file to give the Run — see [Attachments](#attachments).       |
 | `--request-id`    | Idempotency key — see [Retrying safely](#retrying-safely).                  |
 
 `--harness`, `--model` and `--effort` reach every agent the Run starts, and its children,
@@ -150,6 +151,38 @@ without the workflow doing anything for them; a piece of work that names its own
 wins. They are resolved together before anything starts, so a model the harness does not
 take is `invalid_input` naming what it would take. [Which agent does the
 work](sdk.md#which-agent-does-the-work) is the whole order.
+
+### Attachments
+
+```sh
+collie --json run start plan --input goal="the picker is cut off" --attach shot.png
+collie --json run steer <run-id> "this is what it does now" --attach after.png
+collie --json run action <run-id> carry-on --input work="still cut off" --attach log.txt
+```
+
+`--attach` names a file to give the work, and is repeatable on `run start`, `run steer`
+and `run action`. A relative path is resolved against where the command runs; the CLI
+sends the absolute path and uploads nothing, so the file has to be on the host's Machine.
+The host copies each into the Run's own `runs/<id>/attachments/` — a copy, never a link —
+before its first step, or for a steer before the message is delivered, and every step's
+prompt lists the Run's attachments with their paths
+([`sdk.md`](sdk.md#what-every-step-prompt-is-given)). A steer's message gains an
+`Attached: <path>` line for each file it brought. A Run started from another — a
+follow-up, a child, an implementation of a plan Run — starts with copies of that Run's
+attachments. Two files of one name and different content are both kept, the later under a
+short sha256 prefix.
+
+A path that does not exist, is not a regular file, cannot be read or is larger than
+100 MB is `invalid_input` naming it, before anything is claimed: no Run, Task, worktree or
+workspace is made. The files are part of the request: at the host, the same request id with other
+attachments is `RequestConflict`, and with the same ones it is the same Run. The CLI
+answers a `--request-id` it already has a receipt for from that receipt, before the host
+is asked, so there it is the first Run whatever is attached. They are not
+an Input, so the Workflow's own input, and with it the execution, is the same either way.
+The operation's line in the Run's `operations.jsonl` names each file under `asked`, by the
+name the Run keeps it under and the path it came from. Chat's `start`, `followup` and
+`deliver` actions take the same paths as `attachments`
+([ADR-0046](adr/0046-an-attachment-is-uploaded-once-and-belongs-to-the-run.md)).
 
 ### A workflow saved as a module
 
@@ -271,7 +304,7 @@ A **Task** is the work itself, and the Runs it takes: a plan, the implementation
 into, the review of that. A fresh start about a branch an open Task's checkout has out —
 the branch it is placed on, or the one its diff target names; never merely the branch the
 caller is standing on — is that Task's, and opens in its workspace wherever it was started from. Any other fresh
-start is a new Task, and gets a herdr workspace of its own, created and focused. The
+start is a new Task, and gets a herdr workspace of its own, created and never focused. The
 default branch names no one piece of work, so a start on it is always new. Chains,
 follow-ups and resumes stay in the Task they came from.
 
@@ -1260,6 +1293,44 @@ to every Machine: the latest edit of a key wins
 ([ADR-0043](adr/0043-a-shared-setting-is-its-latest-edit.md)). Remembered answers and
 anything else in `config.json` are not settings and are refused.
 
+## Cleaning up
+
+```sh
+collie cleanup
+collie cleanup --apply [--request-id <id>]
+```
+
+`cleanup` lists exactly what the host's sweep would remove now: one line per item with its
+kind, what it is, its size and why it goes, then one line per thing Collie made and keeps,
+with the one condition that keeps it, then the total a sweep would free. `--apply` sweeps
+now, through the host, and prints what it removed and what it freed. There is no
+confirmation: the host sweeps the same way on its own every ten minutes. What each kind
+keeps, and why, is [ADR-0045](adr/0045-collie-removes-what-it-made-once-nothing-needs-it.md);
+[Cleanup](using.md#cleanup) says what a sweep covers.
+
+Under `--json`, both answer with the same `data`:
+
+```json
+{
+  "remove": [
+    {
+      "kind": "generation",
+      "target": "/home/me/.cache/collie/entries/generations/…",
+      "bytes": 81920,
+      "reason": "unused for 8 days"
+    }
+  ],
+  "keep": [
+    { "kind": "worktree", "target": "/home/me/.herdr/worktrees/…", "reason": "uncommitted changes" }
+  ],
+  "bytes": 81920
+}
+```
+
+`remove` is what a sweep would remove, or, with `--apply`, what it removed, each with the
+bytes it freed; `bytes` is their total. A thing a sweep could not judge — herdr not
+answering, say — is in `keep` with that reason, never removed.
+
 ## Upgrading
 
 ```sh
@@ -1398,6 +1469,11 @@ sleeps. That host is `--gitlab-host`, else `GITLAB_HOST`, else the
 [`gitlab_host` setting](using.md#your-defaults). Any other host glab knows is named in one
 `other gitlabs` note, unchecked, and never fails the run.
 
+**Disk** covers each filesystem holding the state directory, `~/.cache/collie`, herdr's
+worktrees and the temporary directory, once each. One with less than 10% or 5 GiB free is a
+`!` warning naming it, with what [`collie cleanup`](#cleaning-up) would free where a host has
+served this state directory, and `collie cleanup --apply` as the fix. It never fails the run.
+
 Two more are optional, and reported rather than required. **Helle**, where a loaded
 workflow waits on it (`renovate` does): the credentials file the Helle MCP wrapper sources,
 `~/.config/helle/env` (or `HELLE_ENV_FILE`), whose token is tried against
@@ -1452,7 +1528,8 @@ host asks the engine about the work it has not finished, on a schedule every cli
 and speaks up when anything a run shows has changed, so watching costs the same whether one
 client is looking or the whole board is. Closing a client cancels nothing it started;
 stopping the host with `kill` leaves suspended work suspended, and the next client starts a
-host that picks it up.
+host that picks it up. A stopped host gives running steps five seconds to finish and then
+exits regardless, letting go of its lock; a step it cut short runs again under the next.
 
 The operations above are `HostRpcs`: internal, and a Collie client of another build stops
 before sending them anything. Beside them on the same socket is `FrontDoorRpcs`, the door
@@ -1469,8 +1546,8 @@ the first host to own the directory, and survives restarts and upgrades.
 
 The host also runs what nobody has to have a pane open for: the merge watch, which asks
 GitLab about each waiting merge request every 5 minutes and records a merge; each Herd's
-News, which it also supersedes once an item's cause no longer holds; and worktree
-pruning, every 3 minutes.
+News, which it also supersedes once an item's cause no longer holds; and the
+[cleanup](#cleaning-up) sweep, every ten minutes.
 
 The operations that change a Run are on `FrontDoorRpcs` too: `start`, `answer`, `control`
 (a hold or a stop, set or cleared, and every watcher hears about it), `resume` and
@@ -1478,7 +1555,9 @@ The operations that change a Run are on `FrontDoorRpcs` too: `start`, `answer`, 
 `offers`, what a Run offers to do next as its module decides now, with each offer's
 arguments as JSON Schema; and `workflows`, what may be started in a project and the Inputs
 each asks for. `start` then takes what a human typed in `text`, and the host settles it
-against the workflow's own schema. `grant` and `steer` stay on `HostRpcs`. Each takes a request id, and the same id twice is one operation. A
+against the workflow's own schema. `cleanup` reads what a sweep would remove and keep, and
+`sweep` sweeps now, recorded with its Actor in the state directory's `cleanup/operations.jsonl`
+as well as in `cleanup.jsonl`. `grant` and `steer` stay on `HostRpcs`. Each takes a request id, and the same id twice is one operation. A
 channel first sends `declare` with its front door, and the host stamps every operation on
 it with that, as a line in the Run's `operations.jsonl`: the operation, the request, the
 Actor and what came of it ([ADR-0039](adr/0039-every-operation-records-who-asked.md)). A
@@ -1546,12 +1625,41 @@ again. An untracked file reached through a link, or that is not a regular file, 
 without being read. The review's findings come as
 a list. The merge request is what the merge watch last read, asked again after 5 minutes or
 when `refreshMr` is set. Large items are fetched by reference with `runFile`: `log`,
-`review`, `diff:<path>`, `evidence:<name>`, `verification:<id>`, `plan:<file>`, `file:<path>` (read
+`review`, `diff:<path>`, `evidence:<name>`, `verification:<id>`, `plan:<file>`, `attachment:<name>` (one of the Run's attachments), `file:<path>` (read
 only, from the Run's checkout) and `pipeline:<url>` (the status glab reads for that pipeline), text as it is and anything else as base64. Each answer is
 at most 4 MiB from `offset` (or `length` bytes where asked) and says the item's whole
 `size`, so a long log or a video is read in parts. A part of an item is base64 whatever it
 is, so a character split across two parts is whole once they are joined. A reference is refused where it leaves
 the directory it belongs to, links followed, or where it is not a regular file.
+
+Five more answer a front door about the Machine's own files, every path absolute; the Flock
+chat's file tools use them ([ADR-0011](adr/0011-the-conversation-is-a-native-harness.md#amended-2026-10-07-the-flock-chat-reaches-files)).
+`readFile` hands over a part of a file, at most 4 MiB from `offset`, as base64 with its
+media type and whole `size`. `glob` answers the files a pattern matches under a directory,
+newest first, at most 100 and how many it `omitted`. `grep` takes Claude Code Grep's
+arguments that make sense on a host (`glob`, `type`, `outputMode`, `ignoreCase`,
+`lineNumbers`, `before`, `after`, `context`, `headLimit`, `multiline`), runs ripgrep where it
+is on `PATH` and `grep -r` otherwise, and answers at most 100 lines. `writeFile` writes a
+whole file, making its directory, and `editFile` replaces `oldString` with `newString`,
+refusing one that is missing or, without `replaceAll`, not unique. Both take a request id,
+the same id twice being one operation, are recorded with the Actor in
+`files/operations.jsonl` under the state directory (its newest 1000), and are refused where
+the file's real path is inside the state directory. The `Snapshot` carries `files: true`
+from a host that has these; a client sends files to no host without it.
+
+`upload` takes a file sent to this Machine in parts: its `name`, `size`, `sha256`, an
+`offset` and one base64 part of at most 4 MiB. The host appends the parts under
+`uploads/<sha256>/` in its state directory, checks the size and the digest on the last, and
+answers the file's path, which a `start`, an `invoke` or a steer can then name as an
+attachment; before the last part it answers `null`. A digest it already holds whole is
+answered with its path at the first part, so the rest is never sent, under the name it was
+asked for, and a part sent again is the same part, so a retry needs no request id. Parts are
+taken one at a time. A mismatched digest or size removes what arrived and is refused, as is
+a part at an offset other than what arrived (send it again from the start) and a file over
+100 MB. Each upload is recorded with its Actor in `uploads/operations.jsonl`. Being asked
+for a held digest renews its age, and the host's cleanup sweep removes an upload a week after it
+was last asked for; Desktop trusts an upload's path for a day before it asks again. A `chat` channel's `declare` may also carry `attachments`, the names of the files
+the human's message carried, which the host records beside `said`.
 
 `protocol` is an integer, also in `identity`. An optional field, a new operation or a new
 kind of message does not change it, and a client reads a kind it does not know as
@@ -1581,21 +1689,28 @@ died mid-start; sending it with other arguments is `RequestConflict` rather than
 change of mind. A host that died after asking for the run's checkout or workspace, and
 before recording what it got, cannot tell whether one was made: that start is refused
 with what may be left behind, and keeps its claim, so the same request never makes a
-second one. The rows behind that are in the same SQLite file as the engine's own, and
+second one. A start the engine does not take within thirty seconds is refused saying so,
+and stays recorded: the next host start hands it over under the same claim. The rows behind
+that are in the same SQLite file as the engine's own, and
 [ADR-0017](adr/0017-one-request-is-one-run.md) is why each of them is there.
 
 It says which build it is, and which installation it serves. A client newer than the host,
 from the same installation (after `collie upgrade`), stops it and starts itself in its
-place. Any other client of another build is told which build is running and which pid to
+place; a host still there five seconds past its stop grace is killed, and its work is
+recovered by the one that replaces it. A host that does not answer is replaced the same way
+when the build it recorded in `host.build` is older. Any other client of another build is told which build is running and which pid to
 stop, and sends nothing else. That includes a checkout under development, which is pointed
 at a state directory of its own rather than replacing the installed host. Such a
 checkout's host also says `development: "<version>+<sha>"`; a release's does not.
-A host that cannot be started at all is `HostUnavailable`, with whether anything owns the
-directory. [ADR-0015](adr/0015-one-local-host-owns-a-state-directory.md) is why each of
+A host that cannot be started at all, or that takes a connection and does not answer within
+five seconds, is `HostUnavailable`, with whether anything owns the directory. [ADR-0015](adr/0015-one-local-host-owns-a-state-directory.md) is why each of
 those is the way it is.
 
 `COLLIE_HOST` names the command a client starts a host with — one path, or a JSON array of
 the executable and its arguments. Unset, it is this executable.
+
+`COLLIE_HOST_STOP_GRACE` is how long a stopped host waits for running steps before it exits
+anyway, as a duration (`5 seconds` unset).
 
 `COLLIE_HOST_CRASH_AT=admitted|executed` is for the recovery proof alone: the host kills
 itself in one of the two windows a start has — with the run recorded and the engine not yet

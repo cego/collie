@@ -30,7 +30,7 @@ const MR = "https://gitlab.cego.dk/mk/collie/-/merge_requests/65";
 
 const seeded = Effect.fn("merges.seeded")(function* () {
   const fs = yield* FileSystem.FileSystem;
-  const stateDir = yield* fs.makeTempDirectory({ prefix: "collie-merges-" });
+  const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-merges-" });
   const env = readEnv({ HERDR_PLUGIN_STATE_DIR: stateDir, COLLIE_CWD: "/project" });
   const run = yield* madeRun(stateDir, {
     state: "succeeded",
@@ -208,7 +208,7 @@ test("what is working, or already disposed of, is not asked about", () =>
   runEffect(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const stateDir = yield* fs.makeTempDirectory({ prefix: "collie-merges-" });
+      const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-merges-" });
       const log: string[] = [];
       yield* settleMerges({
         stateDir,
@@ -284,7 +284,7 @@ const pull = (state: string, rollup: ReadonlyArray<Rollup>, merged: string | nul
 /** The card after one round of the watch, read back the way the CLI's board reads it. */
 const cardAfter = Effect.fn("merges.cardAfter")(function* (mr: string, run: Runner) {
   const fs = yield* FileSystem.FileSystem;
-  const stateDir = yield* fs.makeTempDirectory({ prefix: "collie-forge-" });
+  const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-forge-" });
   const env = readEnv({ HERDR_PLUGIN_STATE_DIR: stateDir, COLLIE_CWD: "/project" });
   const made = yield* madeRun(stateDir, {
     state: "succeeded",
@@ -406,7 +406,7 @@ test("green forge checks with Collie's evidence at an older head pass on the for
   runEffect(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const stateDir = yield* fs.makeTempDirectory({ prefix: "collie-forge-older-" });
+      const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-forge-older-" });
       const env = readEnv({ HERDR_PLUGIN_STATE_DIR: stateDir, COLLIE_CWD: "/project" });
       const made = yield* madeRun(stateDir, { state: "succeeded", mr: PR });
       // Red, but on a tree the pull request has moved past.

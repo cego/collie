@@ -152,6 +152,14 @@ export function Drawer(props: DrawerProps) {
     ];
   };
 
+  /** What the Run was given, where its agents read it. */
+  const attached = (): Line[] =>
+    (props.detail?.attachments ?? []).map((file) => ({
+      text: `${props.detail!.dir}/attachments/${file.name}`,
+      mark: "•",
+      right: `${file.size} bytes`,
+    }));
+
   const branch = (): Line[] => [
     { text: props.view.branch ?? "no branch of its own", mark: "⎇", markFg: C.dim },
   ];
@@ -315,6 +323,9 @@ export function Drawer(props: DrawerProps) {
             <Section title="proposal" lines={proposed()} />
           </Show>
           <Section title="intent" lines={intent()} />
+          <Show when={attached().length > 0}>
+            <Section title="attachments" lines={attached()} />
+          </Show>
           <Section title="steps" lines={steps()} />
           <Section title="agents" lines={agents()} />
           <Section title="branch" lines={branch()} />

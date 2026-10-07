@@ -228,7 +228,7 @@ test("a finding filed again after the Intent moves is still one open report", ()
   runEffect(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const dir = yield* fs.makeTempDirectory({ prefix: "hw-refile-" });
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "hw-refile-" });
       const intent = intentWith({ kind: "protected_paths", globs: ["src/**"] });
       const [onFile] = checkRules(intent, facts({ changedFiles: ["docs/using.md"] }), "t");
       yield* appendDrift(dir, onFile!);
@@ -276,7 +276,7 @@ test("the journal is append-only, so the newest line is the state", () =>
   runEffect(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const dir = yield* fs.makeTempDirectory({ prefix: "hw-drift-" });
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "hw-drift-" });
       const intent = intentWith({ kind: "protected_paths", globs: ["src/**"] });
       const [report] = checkRules(intent, facts({ changedFiles: ["docs/using.md"] }), "t");
 
@@ -294,8 +294,6 @@ test("the journal is append-only, so the newest line is the state", () =>
       const lines = yield* readDrift(dir);
       expect(lines.at(-1)).toMatchObject({ kind: "skipped", reason: "budget_exhausted" });
       expect(currentReports(lines)).toHaveLength(1);
-
-      yield* fs.remove(dir, { recursive: true, force: true });
     }),
   ));
 
@@ -304,7 +302,7 @@ test("evidence is the actual diff, from the actual tree", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const repo = yield* fs.makeTempDirectory({ prefix: "hw-drift-repo-" });
+      const repo = yield* fs.makeTempDirectoryScoped({ prefix: "hw-drift-repo-" });
       const git = (args: string[]) => exec(["git", ...args], { cwd: repo });
       yield* git(["init", "-q"]);
       yield* git(["config", "user.email", "t@example.com"]);
@@ -320,8 +318,6 @@ test("evidence is the actual diff, from the actual tree", () =>
       expect(evidence.blocks[0]?.diff).toContain("+two");
       expect(evidence.truncated).toBe(false);
       expect(MAX_FILES).toBeGreaterThan(0);
-
-      yield* fs.remove(repo, { recursive: true, force: true });
     }),
   ));
 
@@ -396,7 +392,7 @@ test("nothing to judge is never a judgement that happened", () =>
   runEffect(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const dir = yield* fs.makeTempDirectory({ prefix: "hw-judge-" });
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "hw-judge-" });
       // No semantic constraint and no goal: `alignment` never asks, so a call would buy
       // nothing but its own cost.
       const bare = { ...seedIntent("r1", {}), goal: null };
@@ -415,7 +411,7 @@ test("a judgement with no evaluator is skipped, and skipped is not passed", () =
   runEffect(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const dir = yield* fs.makeTempDirectory({ prefix: "hw-judge-" });
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "hw-judge-" });
       const out = yield* judge(judgementDeps(dir, "--print"), semanticIntent(), {
         runDir: dir,
         worktree: dir,
@@ -437,7 +433,7 @@ test("what the model returns is filed against this Run, at this version, and now
   runEffect(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const dir = yield* fs.makeTempDirectory({ prefix: "hw-judge-" });
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "hw-judge-" });
       const evaluator = yield* fakeEvaluator(dir);
       // The model is asked which constraint and how bad. It does not get to say which
       // Run, which Intent version, when, or whether the thing is still open — a report
@@ -501,7 +497,7 @@ test("every judgement is made and recorded; none is refused over how many came b
   runEffect(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const dir = yield* fs.makeTempDirectory({ prefix: "hw-judge-" });
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "hw-judge-" });
       const evaluator = yield* fakeEvaluator(dir);
       yield* evaluator.reply(envelope({ result: { reports: [] }, total_cost_usd: 0.02 }));
 

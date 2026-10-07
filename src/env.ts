@@ -188,6 +188,9 @@ const environmentKeys = [
   "GITLAB_USER_LOGIN",
   // gitte's folder, which is the Projects root where `projects.root` names none.
   "GITTE_CWD",
+  // Where Desktop keeps its own on this computer, which cleanup reads.
+  "XDG_DATA_HOME",
+  "XDG_STATE_HOME",
 ] as const;
 
 export const currentEnv = Effect.gen(function* () {

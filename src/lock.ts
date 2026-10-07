@@ -192,7 +192,7 @@ export const holdsLock = Effect.fn("holdsLock")(function* (lock: string) {
 });
 
 /** Removes the lock only while it is still this process's own. */
-const releaseOwnLock = Effect.fn("releaseOwnLock")(function* (lock: string) {
+export const releaseOwnLock = Effect.fn("releaseOwnLock")(function* (lock: string) {
   const fs = yield* FileSystem.FileSystem;
   if (yield* holdsLock(lock)) yield* fs.remove(lock, { force: true });
 });
@@ -282,7 +282,8 @@ export const lockWriteIsFresh = Effect.fn("lockWriteIsFresh")(function* (lock: s
   return at - (Option.isSome(stat.mtime) ? stat.mtime.value.getTime() : at) <= LOCK_WRITE_GRACE_MS;
 });
 
-const holderLives = Effect.fn("holderLives")(function* (holder: LockHolder) {
+/** Whether the process a claim names is still the one that made it. */
+export const holderLives = Effect.fn("holderLives")(function* (holder: LockHolder) {
   if (!(yield* signalProcess(holder.pid))) return false;
   if (holder.start === null) return true;
   const start = yield* processStartTime(holder.pid);

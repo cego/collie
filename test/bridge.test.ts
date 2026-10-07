@@ -11,7 +11,7 @@ import { BRIDGE_READY, FrontDoorRpcs } from "../src/board-model";
 import { runDir } from "../src/engine";
 import { ownerOf } from "../src/host";
 import { actorName } from "../src/proposals";
-import { watchedBy } from "./support/effect";
+import { suiteEnv } from "./support/effect";
 import { root, stopHost } from "./support/host";
 import { proves, type World } from "./support/world";
 
@@ -57,7 +57,7 @@ const bridged = Effect.fn("BridgeTest.bridged")(function* (
         HERDR_PLUGIN_STATE_DIR: world.state,
         COLLIE_USER_DIR: world.config,
         COLLIE_HOST: asCommand(command),
-        COLLIE_HOST_WATCH_PID: yield* watchedBy,
+        ...(yield* suiteEnv),
         HERDR_BIN_PATH: Bun.env.HERDR_BIN_PATH,
         FAKE_HERDR_LOG: Bun.env.FAKE_HERDR_LOG,
         ...extra,

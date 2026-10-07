@@ -56,6 +56,7 @@ const SettledSchema = Schema.Struct({
   by: Schema.String,
   conversation: Schema.optionalKey(Schema.String),
   said: Schema.optionalKey(Schema.String),
+  attachments: Schema.optionalKey(Schema.Array(Schema.String)),
 });
 
 /**
@@ -205,15 +206,20 @@ export interface Actor extends Voice {
 export interface Voice {
   readonly conversation?: string;
   readonly said?: string;
+  /** The names of the files the human's message carried. */
+  readonly attachments?: ReadonlyArray<string>;
 }
 
 /** Who asks, as a channel declares it: a front door and, for a chat, its voice. */
 export type Asker = Omit<Actor, "requestId">;
 
 /** Just the voice of anything that carries one, with no key for what it lacks. */
-export function voiceOf({ conversation, said }: Voice): Voice {
-  if (conversation === undefined) return said === undefined ? {} : { said };
-  return said === undefined ? { conversation } : { conversation, said };
+export function voiceOf({ conversation, said, attachments }: Voice): Voice {
+  let voice: Voice = {};
+  if (conversation !== undefined) voice = { ...voice, conversation };
+  if (said !== undefined) voice = { ...voice, said };
+  if (attachments !== undefined && attachments.length > 0) voice = { ...voice, attachments };
+  return voice;
 }
 
 export function isHuman(actor: Actor): boolean {
@@ -554,6 +560,7 @@ const NOT_ABOUT_A_RUN: ReadonlySet<ActionKind> = new Set([
   "update_defaults",
   "fork_definition",
   "home_cleanup",
+  "cleanup",
   "upgrade",
   "onboard",
 ]);

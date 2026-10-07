@@ -3,6 +3,7 @@
 
 import { Option, Schema } from "effect";
 import { isString } from "../../../src/schema";
+import { AttachmentPart } from "./attachments";
 
 /** The board's card a message goes with, named as the chat's tools name it. */
 export const About = Schema.Struct({
@@ -72,6 +73,7 @@ export const toolRow = (name: string, args: string) => {
 
 const Part = Schema.Union([
   Schema.Struct({ type: Schema.Literals(["text", "thinking"]), content: Schema.String }),
+  AttachmentPart,
   Schema.Struct({
     type: Schema.Literal("tool-call"),
     id: Schema.String,

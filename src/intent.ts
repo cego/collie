@@ -54,6 +54,7 @@ const IntentSchema = Schema.Struct({
       by: Schema.String,
       conversation: Schema.optionalKey(Schema.String),
       said: Schema.optionalKey(Schema.String),
+      attachments: Schema.optionalKey(Schema.Array(Schema.String)),
       change: Schema.String,
     }),
   ),

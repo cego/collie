@@ -213,8 +213,8 @@ see [CLI](cli.md).
 
 ### Tasks: one workspace per piece of work
 
-Starting a workflow starts a **task**, and a task gets a herdr workspace of its own —
-created and focused, so you land on the work. Everything the task takes stays there: the
+Starting a workflow starts a **task**, and a task gets a herdr workspace of its own. It is
+never focused: starting work does not take you away from what you are looking at. Everything the task takes stays there: the
 plan's tabs, the implementation it chains into, the review of that, and any follow-up.
 A start about a branch a task already works — one placed on it, or reviewing it — joins
 that task wherever you start it from. Any other fresh start, including one from
@@ -350,16 +350,18 @@ reuses only the checkout it recorded itself, and never claims a new one.
 The worktree outlives the merge request: it is still there when the run ends, so you can
 look at what it built. It is removed only once **settled** — the tree is clean, it holds
 no commit that is not on the remote already, nothing is working in it or could be resumed
-in it, and its merge request is merged or closed (or its remote branch is gone). A
+in it while its work has not landed, its merge request is merged or closed on GitHub or
+GitLab (or a Disposition says what became of it, or its remote branch is gone), and its
+Task's workspace has closed. A squash merge counts: the head that merged is on the remote. A
 `renovate` checkout has no branch to ask either question about, so a clean one nothing is
-working in is settled, and there is no branch to delete with it. Pruning happens every 3 minutes in the
-host, whether or not a pane is open. The board says both what went and what is being held on to, with
+working in is settled, and there is no branch to delete with it. Pruning is part of the
+host's [cleanup](#cleanup) sweep, every ten minutes, whether or not a pane is open. The board says both what went and what is being held on to, with
 the reason:
 
 ```
 Worktrees
   ♻ removed add-a-picker · merged in !14
-  kept fix-the-parser · 2 commit(s) unpushed
+  kept fix-the-parser · 2 commit(s) on no remote
 ```
 
 Nothing is ever removed with a force flag, and a checkout you made yourself is never
@@ -614,6 +616,7 @@ closes it, as does Esc, and the key beside each item does it from the keyboard:
 | `enter` | Open record        | always                                                   |
 | `g`     | Go to its tab      | always                                                   |
 | `s`     | Steer…             | while something is still driving it                      |
+| `a`     | Attach files…      | while something is still driving it                      |
 | `w`     | Open merge request | when there is one                                        |
 | `i`     | its first offer    | a plan that is ready, by its title                       |
 | `o`     | What it offers…    | always: the workflow's own offers                        |
@@ -636,6 +639,13 @@ above** instead, which closes the drawer to the card whose buttons answer it.
 **Steer…** opens the record with the keyboard in the field at its foot; type and press
 Enter, and Collie answers with a proposal on that Task's card. The field is not there for a
 run nothing is driving.
+
+**Attach files…** asks which files to give the Run: paths separated by spaces, quoted as a
+shell quotes them where a name has a space, and relative to the board's own directory.
+They go to the Run's newest live agent as a steer with no words of its own, the steer
+`collie run steer --attach` makes: the host copies each into the Run's `attachments/`, the
+agent is told each path, and every later step's prompt lists them. A Run with no live
+agent left is told so, with the follow-up that would carry the files on instead.
 
 Every action says what it did in one line at the foot of the board, which goes when you do
 anything else.
@@ -689,7 +699,8 @@ other. `close` or Esc puts it away. Under the name and the buttons are five tabs
 is showing at a time:
 
 - **Summary** — what it is for and where it has got to: the intent (its goal, and each
-  constraint marked `¬`), the steps with a duration each, the live agents — each saying
+  constraint marked `¬`), the files the Run was given, each with its size and its path
+  in the Run's directory where its agents read it, the steps with a duration each, the live agents — each saying
   what it is doing right now, from the terminal title its harness publishes, so progress is
   visible without opening the pane — the branch, and the merge request behind it: state,
   pipeline, approvals, unresolved threads, and what has moved since this review finished.
@@ -866,6 +877,14 @@ announced through later checks, even one that fails. A Desktop run from a checko
 (`bun run start`, or any build that is not the stable channel) never updates itself, and
 **Settings** says so. The new
 Desktop then upgrades your released Machines to its version as they connect.
+
+Desktop keeps only what it uses. When it starts it removes every staged update but the one
+it is running, which is the base the next update is patched from, and one staged and not yet
+installed; every runner copy but its own version's and the newest; usage lines over 30
+days old; and the SSH control directories, with their masters, of a Desktop that is no
+longer running. [`collie cleanup`](cli.md#cleaning-up) lists the same files of Desktop's, as
+the kind `desktop`, on a computer that has Desktop
+([ADR-0045](adr/0045-collie-removes-what-it-made-once-nothing-needs-it.md)).
 
 The Machines are this computer and every machine enabled in `herdr machine list`; Collie
 keeps no list of its own. At launch Desktop opens one SSH master per herdr machine, from
@@ -1083,7 +1102,7 @@ as you left it while the drawer is open. Shiki colours each side of a hunk as on
 a comment spanning its lines is coloured on all of them. A file is read from the host when
 it is opened, and again when the Run changes how many lines it adds or removes, with no
 line cap; a file with more than
-500 changed lines, or a binary one, starts collapsed. **Evidence** is the Run's
+500 changed lines, or a binary one, starts collapsed. **Evidence** shows the Run's
 verifications as a checklist, those that did not do what they were expected to first and
 already open with their output in its terminal colours; then every web link the Run's
 Outputs, handoffs, review and findings name, as a card: a Claude artifact by the title its
@@ -1097,8 +1116,9 @@ searchable; and its metrics as a table. A report that keeps its attachments in f
 it shows without them. **Log**
 follows the end of the Run's log as it is written, with a search that keeps only the lines
 that match. **Merge request** shows what the host's merge watch last read — title, state,
-pipeline, approvals and comments — with Open in browser. **Facts** shows the Run's intent,
-its steering cards and the card's TaskView as the host sent it. Markdown is rendered with
+pipeline, approvals and comments — with Open in browser. **Facts** shows the files the Run was
+given, when it was given any (an image as a thumbnail, any other file by its name, type and
+size), its intent, its steering cards and the card's TaskView as the host sent it. Markdown is rendered with
 Comark: tables, Shiki-highlighted code and mermaid diagrams, with anything that could run
 and every inline style removed, because agents write it. The view's own policy lets nothing
 on a page load from the network, and nothing may move Desktop's window off its own page;
@@ -1138,10 +1158,26 @@ are answered by the Machine's own host exactly as its Home's chat would answer t
 with the Machine's name. A Machine whose Collie is too old to answer is named with "upgrade
 Collie on <machine>", and the others still answer.
 
+It reaches files as you could, and asks first for none of it. On this computer it has
+Claude Code's own Read, Glob, Grep, Write, Edit and Bash, naming files by absolute path: its
+working directory is Desktop's state directory, where Claude Code keeps the transcript. On
+every Machine it has `collie_read`, `collie_glob`, `collie_grep`, `collie_write` and
+`collie_edit`, which take the arguments Claude Code's tools of those names take, with a path
+written `vm-mk:/var/log/app.log`. That Machine's host answers each over the chat's channel,
+never ssh around it. A read gives numbered lines, from at most the first 8 MB and 2000
+characters of each line; an image as the image where it is at most 2000 px on its long
+edge, and otherwise, like any other binary, by its name, size and type. A glob or a grep
+answers at most 100 paths or lines, newest first for a glob, cuts a line at 500
+characters, answers what it found after 20 seconds, and says how many it left out; a file
+it cannot read is passed by. An edit of a file that is not UTF-8 is refused. A write or an edit is recorded in the
+host's `files/operations.jsonl` with the chat's voice, and is refused inside the host's
+state directory, links followed, because a Run's state changes only through the host. A
+Machine whose Collie is too old for files is told to upgrade. There is no shell on a
+Machine.
+
 It is a session of your own Claude Code, on your own Claude seat, driven through the Agent
-SDK in Desktop's main process: `opus` at medium effort with summarised thinking, Claude
-Code's built-in tools off but AskUserQuestion, and none of your settings, hooks, skills or
-CLAUDE.md. Your first message starts it, and it stays warm until Desktop quits. Its session
+SDK in Desktop's main process: `opus` at medium effort with summarised thinking, and none
+of your settings, hooks, skills or CLAUDE.md. Your first message starts it, and it stays warm until Desktop quits. Its session
 id is minted once and kept in `$XDG_STATE_HOME/collie-desktop/flock-chat.json` (or
 `~/.local/state/collie-desktop/`), so a restart resumes the same conversation; Claude Code
 keeps and compacts the transcript on this computer.
@@ -1154,6 +1190,38 @@ buttons, and goes on when you click; any other permission it asks for is refused
 while it is working and Enter queues your message as **Queued** until the turn ends, or
 drop it with its ✕. Ctrl+Enter sends it now instead: the turn under way, yours or one of
 Desktop's own, is interrupted and your message starts the next.
+
+Paste a screenshot with Ctrl+V, in the docked or the popped-out chat, and it goes with your
+next message: a chip above the input with its thumbnail, name and size, which its ✕ removes.
+Pasted text still pastes as text. Files copied in a file manager and pasted attach the same
+way: they arrive as `file://` URIs, which Desktop's main process reads from disk, and where
+the window is handed nothing at all on a paste, main reads the system clipboard instead.
+Files dropped on the chat attach too, and the paperclip beside the input opens a file
+dialog where several can be chosen. A URI that is not a file on this computer, a directory,
+or a file that cannot be read is said in the composer and never becomes a chip. The chips are shared by both windows, so popping the chat
+out or back in keeps them, and sending uses them up; a message can be files alone, queued or
+sent now like any other. A file over 20 MB, or files over 30 MB together, are refused in the
+composer with the reason. Desktop keeps one copy of each file, by its sha256, under its state
+directory's `attachments/`. The model is handed your words, then a block of Desktop's own
+listing each file's name, type, size and the path of that copy, then each image as an image,
+each PDF up to 4 MB as a document, and each UTF-8 text up to 100 KB as text headed with its
+name; anything else, or anything larger, is in the listing alone, so the model can Read it
+there. An image whose long edge is over 2000 px is scaled to 2000 px first, and never up, and the
+original is what a Run gets. The message shows its chips at once, and again when the
+conversation is read back after a restart; a copy Desktop no longer has shows its name alone. An image
+whose size Desktop cannot read, or that is still over 2000 px, goes by the listing alone.
+[Cleanup](#cleanup) removes a copy 30 days after it was last used, as Claude Code prunes
+the transcripts that name it.
+
+When the chat starts a Run, follows one up or steers one because you asked, the work
+carries the files of your message: you need not say so. The model can name others instead —
+any file of the conversation, a path on this computer, or `vm-mk:/var/log/app.log` — or `[]`
+for none, and a turn Desktop started of its own carries none. A file already on the Run's
+Machine is handed over where it is; any other is read, here or from its own Machine's host,
+and sent once through the Run's Machine's host, however many Runs it goes to. The host
+copies each into the Run's directory before the work starts, where its agents' prompts name
+it. A Machine whose Collie is too old for files is told to upgrade, and nothing starts or is
+steered there. What the host records of your words also names the files they carried.
 
 Click a card and it becomes a chip above the input ("About: vm-mk › Fix board bugs"): your
 next message goes with it, so "this one" means that card, and sending uses it up. Clear it
@@ -1746,6 +1814,54 @@ Settings, where you would put it right, and starts agents in `auto` until you do
 
 Trust is unaffected and still answered first: it decides whether the harness will work in
 the directory at all, and permissions only decide what it asks about once it does.
+
+## Cleanup
+
+Collie removes what it made once nothing needs it, and only what it can show it made
+([ADR-0045](adr/0045-collie-removes-what-it-made-once-nothing-needs-it.md)). The host sweeps
+every ten minutes, whether or not a pane is open. A sweep removes:
+
+- **Task workspaces**, an hour after the first sweep or listing that saw their Task
+  **Finished**. One herdr has in focus at
+  that moment is kept, and so is one holding a pane Collie did not open — your own shell or
+  dev server — until you close it yourself. The Home, and a workspace that is no Task's,
+  are never closed. The Task's agents close with it, including any of its panes left in
+  another workspace. A Task that stops being Finished, because a new Run joined it or a
+  steer reopened it, starts its hour again. Continue task, or a Follow-up Run, reopens a
+  closed workspace on the Task's checkout.
+- **Worktrees** Collie made, once they are **Settled** (see
+  [What a run does to your repository](#what-a-run-does-to-your-repository)).
+- **Staged module generations** under `~/.cache/collie/entries`, once unused for 7 days.
+  Loading a module again counts as using it, and one that is needed after it went is
+  staged again.
+- **State no Run owns:** a Run's directories under `runs/`, `agents/` and `evidence/`, its
+  `stop.`, `hold.`, `parked.` and `notified.` markers and the steering ledgers of its
+  agents, once no Run has a row for them and nothing in them has changed for a day. That
+  includes what the previous engine left, and `events.*.log`, `plans/` and `runs/.seq`,
+  which nothing reads.
+- **CLI receipts** under `requests/`, 30 days after they were written.
+- **Uploads** under `uploads/`, a week after a front door last asked for them; a Run given
+  one holds its own copy.
+- **Compaction controls** of an agent no herdr session lists any more, with the endpoint it
+  held open.
+- **Runner copies** under `~/.cache/collie/runners`, but the running version's and the
+  newest.
+- **Desktop's own files**, on a computer with Desktop: staged updates, runner copies, usage
+  lines, chat attachments unused for 30 days and transfers abandoned for a day, which
+  Desktop also removes itself as it starts (see [Collie Desktop](#collie-desktop)).
+- **Renovate clones** under the state directory's `renovate-repositories/`, once no Run uses
+  one and no checkout of it is left.
+- **Tasks**, 30 days after their last Run ended, with every one of their Runs, once nothing
+  — a workspace, an agent, a checkout, another Run — needs them.
+
+An entry of the state directory that is no kind Collie knows is listed as kept and never
+removed.
+
+`collie cleanup` lists what a sweep would remove now, with each item's size and the total,
+and what Collie keeps and why. `collie cleanup --apply` sweeps now; chat can do the same.
+Every removal is judged again at the moment it is made, never forced, and recorded in the
+state directory's `cleanup.jsonl` with when, what, how big, why and who asked, for 30 days.
+Anything a sweep cannot judge is kept, with the reason.
 
 ## Troubleshooting
 

@@ -138,7 +138,7 @@ export function causalKey(run: string, cause: Cause, intentVersion: number): str
   return digest(`${run}\u0000${cause.kind}\u0000${cause.ref}\u0000${intentVersion}`);
 }
 
-const LEDGER_FILE = "deliveries.jsonl";
+export const LEDGER_FILE = "deliveries.jsonl";
 
 /** The directory an incarnation's ledger lives in, keyed by herdr's own identity. */
 export function incarnationKey(terminalId: string): string {

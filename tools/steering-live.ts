@@ -57,6 +57,10 @@ const live = Effect.fn("live.run")(function* (harness: string, agent: string, ke
     return { version: "not installed", rows: allNotRun(`${harness} is not on PATH`) };
 
   const scratch = yield* fs.makeTempDirectory({ prefix: `collie-live-${harness}-` });
+  if (!keep)
+    yield* Effect.addFinalizer(() =>
+      fs.remove(scratch, { recursive: true, force: true }).pipe(Effect.ignore),
+    );
   const runDir = path.join(scratch, "run");
   yield* fs.makeDirectory(path.join(runDir, "steering", "acks"), { recursive: true });
 
@@ -159,7 +163,6 @@ const live = Effect.fn("live.run")(function* (harness: string, agent: string, ke
     });
   }
 
-  if (!keep) yield* fs.remove(scratch, { recursive: true, force: true });
   return { version, rows };
 });
 
@@ -204,7 +207,7 @@ const report = Effect.fn("live.report")(function* (harness: string) {
 
 const harness = Bun.argv[2];
 process.exitCode = harness
-  ? await runtime.runPromise(report(harness).pipe(Effect.orDie))
+  ? await runtime.runPromise(report(harness).pipe(Effect.scoped, Effect.orDie))
   : await runtime.runPromise(
       Effect.logError("usage: bun run tools/steering-live.ts <harness> --agent <name>").pipe(
         Effect.as(2),

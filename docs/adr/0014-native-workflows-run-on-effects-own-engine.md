@@ -35,6 +35,10 @@ vocabulary and no second scheduler.
 | `preemptiveShutdown`        | false  | true             | A host told to stop must not take a running workflow down with it. What it was doing finishes; what is left is the next host's.                                 |
 | `entityRegistrationTimeout` | ∞      | 1 minute         | A workflow whose module is missing has no entity to receive its messages. Failing them after a minute turns "the file is not there yet" into a terminal result. |
 
+Amended 2026-10-07: the finishing is bounded. A host gives running steps five seconds after
+a stop signal and then exits, because upstream waits on each step and one that never yields
+kept an old host — and its lock — alive past every client that tried to replace it.
+
 **D3. The binary serves the SDK to the module it loads.** An external file's `effect`
 resolves from its own directory — a second copy, whose `Effect.succeed` builds values this
 process's runtime does not recognise and whose service keys are not the host's. A Bun

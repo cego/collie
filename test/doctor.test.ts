@@ -56,7 +56,15 @@ const healthy = Effect.fn("doctorTest.healthy")(function* () {
     `case "$*" in "auth status --json") printf '{\\n  "loggedIn": true\\n}\\n' ;; *) exit 0 ;; esac`,
   );
   yield* installFakeSkills(rig.root);
+  yield* freeSpace(50);
 });
+
+/** A `df` that says the one filesystem it is asked about is `percent` free, of 100 GiB. */
+const freeSpace = (percent: number) =>
+  bin.add(
+    "df",
+    `printf 'Filesystem 1024-blocks Used Available Capacity Mounted on\\n/dev/sda1 104857600 %d %d %d%%%% /\\n' ${(100 - percent) * 1048576} ${percent * 1048576} ${100 - percent}`,
+  );
 
 /** A glab logged in to one GitLab host, whose token expires on `expires` (or never). */
 const gitlab = (opts: { expires: string | null }) =>
@@ -145,6 +153,7 @@ test("a healthy machine passes every check and says so", () =>
         "workflows",
         "personas",
         "projects root",
+        "disk",
         "glab",
         "gitlab token",
         "git push",
@@ -152,6 +161,30 @@ test("a healthy machine passes every check and says so", () =>
         "linear mcp",
       ]);
       expect(check(result, "workflows").detail).toBe("every workflow here is the one Collie ships");
+    }),
+  ));
+
+test("a filesystem Collie writes to with under a tenth free is a warning, with the fix", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* healthy();
+      yield* freeSpace(8);
+
+      const disk = check(yield* report(), "disk");
+      expect(disk).toMatchObject({ ok: true, warn: true, fix: "collie cleanup --apply" });
+      expect(disk.detail).toBe("/ has 8.0 GiB free (8%)");
+    }),
+  ));
+
+test("a filesystem with room to spare passes the disk check", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* healthy();
+
+      const disk = check(yield* report(), "disk");
+      expect(disk).toMatchObject({ ok: true, fix: "" });
+      expect(disk.warn).toBeUndefined();
+      expect(disk.detail).toBe("/ has 50.0 GiB free (50%)");
     }),
   ));
 

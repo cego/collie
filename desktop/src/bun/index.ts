@@ -1,7 +1,7 @@
 // Desktop's main process: one window on the view, every Machine's board relayed to it as
 // Effect RPC over Electrobun's message channel, and the Flock chat beside them.
 
-import { homedir, hostname } from "node:os";
+import { homedir, hostname, tmpdir } from "node:os";
 import { BunRuntime, BunServices } from "@effect/platform-bun";
 import {
   Clock,
@@ -49,7 +49,10 @@ import {
   type TerminalCommand,
 } from "../shared/flock";
 import { RELEASE_PUBLIC_KEY } from "../../../src/signing";
+import { pruneDesktop, sshControlsPrefix, sweepSshControls } from "../../../src/desktop";
 import { appWindowFor } from "./browser";
+import { clipboardPaths } from "../shared/attachments";
+import { readAttachment, stageAttachment, stagePath } from "./attachments";
 import { type FlockConversation, openFlockChat, refusal } from "./chat";
 import { claudeCode } from "./claude";
 import { chatDoor } from "./flock-tools";
@@ -197,6 +200,13 @@ const main = Effect.gen(function* () {
           Config.withDefault(RELEASE_PUBLIC_KEY),
         );
   const own = (yield* Path.Path).join(yield* StateDir, "collie-desktop");
+  // Started on this bundle, so every other staged update has been applied or passed over.
+  yield* pruneDesktop({
+    root: Utils.paths.userData,
+    state: own,
+    hash: yield* updater.hash,
+    version: manifest.version,
+  }).pipe(Effect.ignore);
   let settings = yield* readSettings(own);
   const saved = yield* readFlockSettings(own);
   // The GitLab host an earlier Desktop kept as its own becomes the Flock's.
@@ -249,7 +259,9 @@ const main = Effect.gen(function* () {
   );
   const fs = yield* FileSystem.FileSystem;
   // Short, because a control socket's path is capped at about 100 bytes.
-  const controls = yield* fs.makeTempDirectoryScoped({ prefix: "collie-ssh-" });
+  // A Desktop that was killed left its own, and the masters in them, behind.
+  yield* sweepSshControls(tmpdir()).pipe(Effect.ignore);
+  const controls = yield* fs.makeTempDirectoryScoped({ prefix: sshControlsPrefix(process.pid) });
   // herdr's list is the only list of Machines there is.
   const listed = yield* herdrMachines("herdr").pipe(Effect.result);
   const now = yield* Clock.currentTimeMillis;
@@ -488,6 +500,14 @@ const main = Effect.gen(function* () {
         ),
       );
     }).pipe(settingsWrite.withPermits(1), Effect.orDie);
+
+  /** Files named by path, each copied in or refused in words. */
+  const stagedFrom = (paths: ReadonlyArray<string>) =>
+    Effect.forEach(paths, (path) =>
+      stagePath(own, path).pipe(
+        Effect.catch((cause) => Effect.succeed({ refused: `${path}: ${cause.message}` })),
+      ),
+    ).pipe(Effect.provide(BunServices.layer));
 
   // The Flock as the board was last sent it, so the chat names its Machines as the cards do.
   let shown = EMPTY_FLOCK;
@@ -797,11 +817,43 @@ const main = Effect.gen(function* () {
       doorTo(doors, installation).pipe(
         Effect.flatMap((door) => runFileOn(door.desktop, runId, ref, offset)),
       ),
-    say: ({ text, about, now }) =>
+    stage: (part) =>
+      stageAttachment(own, part).pipe(
+        Effect.mapError(
+          (cause) =>
+            new ActionFailed({
+              reason: cause._tag === "AttachmentRefused" ? cause.reason : cause.message,
+            }),
+        ),
+        Effect.provide(BunServices.layer),
+      ),
+    stagePaths: ({ paths }) => stagedFrom(paths),
+    pickFiles: () =>
+      Effect.promise(() =>
+        Utils.openFileDialog({ canChooseDirectory: false, allowsMultipleSelection: true }),
+      ).pipe(Effect.flatMap((paths) => stagedFrom(paths.filter((path) => path !== "")))),
+    clipboardFiles: () =>
+      Effect.sync(() =>
+        Utils.clipboardAvailableFormats().includes("files")
+          ? (Utils.clipboardReadText() ?? "")
+          : "",
+      ).pipe(Effect.flatMap((text) => stagedFrom(clipboardPaths(text)))),
+    attachmentFile: ({ id, offset }) =>
+      readAttachment(own, id, offset).pipe(
+        Effect.mapError(
+          (cause) =>
+            new ActionFailed({
+              reason: cause._tag === "AttachmentRefused" ? cause.reason : cause.message,
+            }),
+        ),
+        Effect.provide(BunServices.layer),
+      ),
+    say: ({ text, about, now, attachments }) =>
       Stream.unwrap(
         Effect.map(chat, (opened) =>
           Result.match(opened, {
-            onSuccess: (conversation) => conversation.send(text, about, now === true),
+            onSuccess: (conversation) =>
+              conversation.send(text, about, now === true, attachments ?? []),
             onFailure: (cause) =>
               Stream.make(refusal(`The Flock chat could not start: ${String(cause)}`)),
           }),

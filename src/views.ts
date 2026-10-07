@@ -5,6 +5,7 @@
 // the tab slow the day it became useful.
 
 import { Effect, FileSystem, Path, Stream } from "effect";
+import { attachmentsDir, listAttachments } from "./attachments";
 import { attentionFor } from "./attention";
 import { configValue, readConfig, readSettingsSet } from "./config";
 import { settingOf, SETTINGS } from "./settings";
@@ -394,6 +395,9 @@ export const buildRunDetail = Effect.fn("Views.buildRunDetail")(function* (opts:
       }),
     ),
     evidence: yield* evidenceIn(run.evidence),
+    attachments: (yield* listAttachments(attachmentsDir(run.dir))).map(
+      ({ name, size, mediaType }) => ({ name, size, mediaType }),
+    ),
     diff: yield* diffOf(run),
   } satisfies RunDetail;
 });

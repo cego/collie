@@ -16,7 +16,7 @@ import {
   type Route,
 } from "../desktop/src/bun/machine";
 import type { FlockItem } from "../desktop/src/shared/flock";
-import { fastForward, watchedBy } from "./support/effect";
+import { fastForward, suiteEnv } from "./support/effect";
 import { root, stopHost } from "./support/host";
 import { proves } from "./support/world";
 
@@ -40,7 +40,7 @@ test(
             HERDR_PLUGIN_STATE_DIR: world.state,
             COLLIE_USER_DIR: world.config,
             COLLIE_HOST: asCommand(collie),
-            COLLIE_HOST_WATCH_PID: yield* watchedBy,
+            ...(yield* suiteEnv),
             HERDR_BIN_PATH: Bun.env.HERDR_BIN_PATH ?? "",
             FAKE_HERDR_LOG: Bun.env.FAKE_HERDR_LOG ?? "",
           });

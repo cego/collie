@@ -189,11 +189,10 @@ test("a directory outside the Run is refused, and one inside it is not", () =>
       expect(yield* insideRun(repo, run)).toBe(true);
       yield* fs.makeDirectory(path.join(repo, "src"), { recursive: true });
       expect(yield* insideRun(path.join(repo, "src"), run)).toBe(true);
-      const elsewhere = yield* fs.makeTempDirectory({ prefix: "hw-verify-other-" });
+      const elsewhere = yield* fs.makeTempDirectoryScoped({ prefix: "hw-verify-other-" });
       expect(yield* insideRun(elsewhere, run)).toBe(false);
       // A sibling whose path merely starts with the Run's is not inside it.
       expect(yield* insideRun(`${repo}-next-door`, run)).toBe(false);
-      yield* fs.remove(elsewhere, { recursive: true, force: true });
     }),
   ));
 
@@ -314,7 +313,7 @@ test("a verification is stale the moment the tree it ran on moves", () =>
       const path = yield* Path.Path;
       // Outside the repository, as a real run directory is: a journal written inside the
       // tree would move the fingerprint of the very tree it is recording.
-      const runDir = yield* fs.makeTempDirectory({ prefix: "hw-verify-run-" });
+      const runDir = yield* fs.makeTempDirectoryScoped({ prefix: "hw-verify-run-" });
       const record = yield* collect(runDir, {
         run: "r1",
         name: "tests",
@@ -355,7 +354,7 @@ test("both streams go to the log as they arrive, readable while the command runs
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const tmp = yield* fs.makeTempDirectory({ prefix: "hw-verify-log-" });
+      const tmp = yield* fs.makeTempDirectoryScoped({ prefix: "hw-verify-log-" });
       const runDir = path.join(tmp, ".run");
       const log = path.join(tmp, "checks", "unit.log");
       const running = yield* Effect.forkChild(
@@ -386,7 +385,7 @@ test("a log past its bound is cut, and says it was", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const tmp = yield* fs.makeTempDirectory({ prefix: "hw-verify-log-" });
+      const tmp = yield* fs.makeTempDirectoryScoped({ prefix: "hw-verify-log-" });
       const log = path.join(tmp, "checks", "loud.log");
       yield* collect(path.join(tmp, ".run"), {
         run: "r1",

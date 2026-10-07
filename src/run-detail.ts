@@ -6,12 +6,13 @@ import * as Base64 from "effect/encoding/Base64";
 import type { ChildProcessSpawner } from "effect/process";
 import {
   HostRefused,
-  RUN_FILE_BYTES,
+  PART_BYTES,
   RunDiff,
   type DiffFile,
   type RunDetail,
   type RunFile,
 } from "./board-model";
+import { attachmentsDir } from "./attachments";
 import { pipelineStatus, shell } from "./mr";
 import { REVIEW_FILE } from "./output";
 import { settled, type RunFacts } from "./runs";
@@ -240,7 +241,7 @@ export const fetchRef = Effect.fn("RunDetail.fetchRef")(function* (
   ref: string,
   range: { readonly offset: number; readonly length: number } = {
     offset: 0,
-    length: RUN_FILE_BYTES,
+    length: PART_BYTES,
   },
   /** Where glab runs: not the Run's checkout, which is removed once the Run settles. */
   glabCwd: string = run.dir,
@@ -251,7 +252,7 @@ export const fetchRef = Effect.fn("RunDetail.fetchRef")(function* (
 > {
   const part = {
     offset: Math.max(0, range.offset),
-    length: Math.min(Math.max(0, range.length), RUN_FILE_BYTES),
+    length: Math.min(Math.max(0, range.length), PART_BYTES),
   };
   const fs = yield* FileSystem.FileSystem;
   // A part of a text is bytes too: a character across the seam is whole once the parts are joined.
@@ -327,6 +328,8 @@ export const fetchRef = Effect.fn("RunDetail.fetchRef")(function* (
       return yield* under(run.dir, REVIEW_FILE, "review");
     case "evidence":
       return yield* under(run.evidence, name, "evidence called");
+    case "attachment":
+      return yield* under(attachmentsDir(run.dir), name, "attachment");
     case "plan": {
       const dir = yield* planDirOf(run).pipe(Effect.orElseSucceed(() => null));
       if (dir === null) return yield* refused(`${run.id} has no plan`);
