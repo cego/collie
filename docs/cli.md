@@ -179,7 +179,7 @@ an Input, so the Workflow's own input, and with it the execution, is the same ei
 The operation's line in the Run's `operations.jsonl` names each file under `asked`, by the
 name the Run keeps it under and the path it came from. Chat's `start`, `followup` and
 `deliver` actions take the same paths as `attachments`
-([ADR-0044](adr/0044-an-attachment-is-uploaded-once-and-belongs-to-the-run.md)).
+([ADR-0046](adr/0046-an-attachment-is-uploaded-once-and-belongs-to-the-run.md)).
 
 ### A workflow saved as a module
 
@@ -1537,7 +1537,8 @@ carries it out; `act`, which carries out the board's own actions on a Run (`stop
 being refused as `propose`'s; `reconcile`, which settles a proposal step nobody can account
 for; `settleDelivery`, which does the same for a message to an agent; `focus`, which focuses
 a Run's newest live agent, or its workspace, on the host's own herdr and answers with the
-session, workspace and tab it is in; `setSettings`, which writes the Flock's settings into
+session, workspace and tab it is in, and the focused agent's pane id where it found one
+(an older host's reply has none, and is read as naming no pane); `setSettings`, which writes the Flock's settings into
 the Machine's `config.json`, each with its own edit's time and only where that is later than
 the Machine's own last edit of the key, records when each was set in `settings-set.json`
 and, when Desktop asks, that a Desktop gave them, and refuses the whole batch over any value the TUI's Settings

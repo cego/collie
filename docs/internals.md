@@ -207,10 +207,51 @@ answered by the host's `readFile`, `glob`, `grep`, `writeFile` and `editFile` ov
 chat's channel (`src/host-files.ts`), never by ssh or scp beside the bridge. They are
 Desktop's own tools, not the Toolkit's, so Native chat's reach is unchanged.
 
-Go to pane is the one place Desktop touches a session, and it does so as the human would:
-it opens a terminal running `herdr --remote <target> --session <name>`
-(`desktop/src/bun/terminal.ts`), a client the human then drives. Desktop asks it nothing
-and reads nothing from it. The focus before it is the host's, through `herdr.ts`.
+Go to pane is the one place Desktop touches a session, and it does so for the human
+([ADR-0044](adr/0044-go-to-pane-opens-the-pane-in-desktop.md)): it runs herdr's terminal
+controller for the Run's pane, `herdr [--session <name>] terminal session control <pane>
+--takeover --cols C --rows R`, through the Machine's route — one more channel on the SSH
+master Desktop already holds, or a local process for Local — and draws what it prints in
+the drawer's Terminal tab (`desktop/src/bun/terminal.ts`). The human's keys, pastes,
+resizes, wheel and clicks go back to it as herdr's own controller commands, and leaving
+the tab sends `terminal.release`. Desktop decodes each line only to hand the frame's bytes
+to the renderer, and decides nothing from what the pane shows. Where there is no pane to
+control, and for **Open in herdr**, it opens `herdr --remote <target> --session <name>` in
+a terminal of this computer's instead, a client the human then drives. The focus before
+either is the host's, through `herdr.ts`; its reply names the pane it focused.
+
+### Settings shared across a Flock
+
+Collie's settings are one list, `src/settings.ts`: each key with its kind, its choices, its
+default and what it refuses. It is pure, so Desktop's view bundles it, and the TUI's
+Settings, its `SetDefault` and the host's `setSettings` all decide through `parseSetting`.
+Every write of one goes through `setSetting` in `src/config.ts`, which records the time in
+`settings-set.json` beside `config.json`; a value written before anything recorded one is
+dated by the file's own time.
+
+Desktop keeps the Flock's settings in `flock-settings.json`
+(`desktop/src/bun/flock-settings.ts`). On each board Snapshot — a Machine connected or
+reconnected — and after an edit in its Settings, it reads the Machine's `settings`, takes
+each key whose edit is later than the one it holds (`takeFrom` in
+`desktop/src/shared/flock-settings.ts`), and gives the Machine what it lacks with
+`setSettings`, which the host writes only where that edit is later than its own. The latest
+edit of a key wins everywhere ([ADR-0043](adr/0043-a-shared-setting-is-its-latest-edit.md)).
+A Machine whose collie has no `settings` yet fails the read, is left alone, and is synced
+once Desktop has upgraded it and it connects again.
+
+### The Flock chat's Machine rule
+
+The Machine rule (`machineRule` in Desktop's own `settings.json`, beside `proactive`) is not
+one of the Flock's settings: only the Flock chat chooses between Machines, so no Machine is
+given it. Every turn's `UserPromptSubmit` hook (`desktop/src/bun/session.ts`) adds it as
+context, built fresh from the saved text and the Machines Desktop reaches at that moment,
+named as the cards name them, with Local marked as this computer; a turn Desktop starts
+with News goes through the same hook. An empty rule adds nothing. The system prompt says
+what the chat does with it, and Collie never parses it: a start still names
+`<machine>:<workspace>`, and one that names no Machine while several are reachable is
+refused as before. `collie_machine_rule` (`desktop/src/bun/flock-tools.ts`) reads the rule
+back or replaces it, through the one write Settings uses; it is in the Flock chat's toolkit
+only, not among the Collie tools both chats share.
 
 ### Settings shared across a Flock
 

@@ -143,6 +143,8 @@ const ON_DISK = new Map([
   ["/tmp/shot.png", ["image/png", "PNG!"]],
   ["/tmp/trace.zip", ["application/zip", "PK\u0003\u0004"]],
 ]);
+let saved: string | undefined;
+const savedRule = () => saved;
 
 const flockOf = (asked: Asked[]) => ({
   machines: () => [
@@ -158,6 +160,8 @@ const flockOf = (asked: Asked[]) => ({
   ],
   conversation: "flock@mk-pc",
   said: () => "stop the board bugs one",
+  machineRule: () => saved,
+  setMachineRule: (rule: string) => Effect.sync(() => (saved = rule)),
 });
 
 const call = (asked: Asked[], name: string, input: JsonObject) =>
@@ -290,6 +294,8 @@ test("a Machine whose host is older than the Flock chat is written to by nothing
       const flock = {
         machines: () => [machine("old-pc", [task({ id: "t-a", run: "r-1" })], asked, 1)],
         conversation: "flock@mk-pc",
+        machineRule: () => undefined,
+        setMachineRule: () => Effect.void,
         said: () => "hold it",
       };
       const hold = yield* callFlockTool(flock, "collie_hold", {
@@ -313,6 +319,8 @@ test("a Machine that stops answering costs a look for News its time, and the oth
           { ...wedged, door: { ...wedged.door, news: () => Effect.never } },
         ],
         conversation: "flock@mk-pc",
+        machineRule: () => undefined,
+        setMachineRule: () => Effect.void,
         said: () => undefined,
       };
       const looking = yield* callFlockTool(flock, "collie_news", {}).pipe(Effect.forkChild);
@@ -334,6 +342,8 @@ test("a Machine whose board could not be read is written to by nothing, and a ba
           { ...unreadable, door: { ...unreadable.door, board: () => Stream.empty } },
         ],
         conversation: "flock@mk-pc",
+        machineRule: () => undefined,
+        setMachineRule: () => Effect.void,
         said: () => "hold it",
       };
       const bare = yield* callFlockTool(flock, "collie_hold", { run: "r-1" });
@@ -435,5 +445,40 @@ test("collie_write and collie_edit go to the Machine's host in the human's words
         ignoreCase: true,
         outputMode: "content",
       });
+    }),
+  ));
+
+test("the Machine rule is read back as saved, and replaced with what the human asked for", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      saved = undefined;
+      expect(yield* call([], "collie_machine_rule", {})).toBe(
+        "There is no Machine rule: the human has not said which Machine work goes to.",
+      );
+      expect(
+        yield* call([], "collie_machine_rule", { rule: " Frontend work is on the laptop\n" }),
+      ).toBe('The Machine rule is now: "Frontend work is on the laptop"');
+      expect(savedRule()).toBe("Frontend work is on the laptop");
+      expect(yield* call([], "collie_machine_rule", {})).toBe(
+        'The Machine rule is: "Frontend work is on the laptop"',
+      );
+      expect(yield* call([], "collie_machine_rule", { rule: "" })).toBe(
+        "The Machine rule is cleared.",
+      );
+      expect(savedRule()).toBe("");
+    }),
+  ));
+
+test("a start that names no Machine while several are reachable is still refused, rule or no rule", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      saved = "Everything is on the vm";
+      const asked: Asked[] = [];
+      const said = yield* call(asked, "collie_do", {
+        actions: [{ kind: "start", workflow: "plan", inputs: {} }],
+      });
+      expect(said).toBe("start: failed — name the Machine it is for, as <machine>:<workspace>");
+      expect(asked).toEqual([]);
+      saved = undefined;
     }),
   ));

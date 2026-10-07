@@ -4,7 +4,7 @@ import { NO_FLOCK_SETTINGS, settingRows } from "../../../src/shared/flock-settin
 import { flockSettingsAtom } from "../flock";
 
 const open = defineModel<boolean>("open", { required: true });
-const { openLink, saveGitlabHost, setFlockSetting } = useActions();
+const { openLink, saveGitlabHost, setFlockSetting, machineRule, saveMachineRule } = useActions();
 const { credentials } = useCredentials();
 const held = useAtomValue(() => flockSettingsAtom);
 // Asked again on opening, which syncs every connected Machine and so shows their edits.
@@ -19,6 +19,22 @@ const rows = computed(() =>
 const host = ref("");
 const saveHost = async () => {
   if (await saveGitlabHost(host.value.trim())) host.value = "";
+};
+
+/** As saved, read again each time Settings opens, since the Flock chat may have changed it. */
+const rule = ref("");
+const savedRule = ref("");
+watch(
+  open,
+  async (shown) => {
+    if (!shown) return;
+    savedRule.value = await machineRule();
+    rule.value = savedRule.value;
+  },
+  { immediate: true },
+);
+const saveRule = async () => {
+  if (await saveMachineRule(rule.value.trim())) savedRule.value = rule.value.trim();
 };
 
 /** What is typed into a field, until it is set. */
@@ -138,6 +154,31 @@ const set = async (key: string, value: string) => {
                 @click="set(row.key, '')"
               />
             </div>
+          </UFormField>
+        </section>
+        <section class="flex flex-col gap-3" data-testid="flock-chat-settings">
+          <h3 class="text-sm font-semibold">Flock chat</h3>
+          <UFormField
+            label="Machine rule"
+            help="Which Machine each kind of work goes to, in your own words. The Flock chat starts work where it says, and asks where it does not say."
+          >
+            <form class="flex flex-col gap-2" @submit.prevent="saveRule">
+              <UTextarea
+                v-model="rule"
+                :rows="3"
+                autoresize
+                placeholder="Frontend work is on the laptop, everything else is on the vm"
+                data-testid="machine-rule"
+              />
+              <UButton
+                type="submit"
+                size="sm"
+                class="self-end"
+                label="Save"
+                data-testid="save-machine-rule"
+                :disabled="rule.trim() === savedRule"
+              />
+            </form>
           </UFormField>
         </section>
         <section class="flex flex-col gap-3" data-testid="about">

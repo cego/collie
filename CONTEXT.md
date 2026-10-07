@@ -34,7 +34,7 @@ asked for it unless it names others. Not an **Input**: no Workflow declares one,
 Workflow gets them unchanged. Not **Evidence**: it is what the work was given, not what it
 proved. In the Flock chat it is also what the model is shown — an image, a PDF, a text, or
 a name, size and path — and Desktop keeps a copy, so the conversation still shows it after a
-restart ([ADR-0044](docs/adr/0044-an-attachment-is-uploaded-once-and-belongs-to-the-run.md)).
+restart ([ADR-0046](docs/adr/0046-an-attachment-is-uploaded-once-and-belongs-to-the-run.md)).
 
 **Output** — A structured JSON file an agent writes to the Run directory for one operation (e.g. a review verdict + findings). It is decoded against the Workflow's schema before anything believes it, and one that does not decode buys one repair. Workflows read Outputs, never terminal text.
 
@@ -61,6 +61,15 @@ named by its hostname. Otherwise no different from any other Machine.
 **Desktop** — The Collie desktop app: one more front door over each Machine's board, which it
 reaches through `collie bridge` started as `desktop`. Not "native", which already means
 harness-native (**Native chat**) and Effect-native.
+
+**Machine rule** — The human's own words, kept in Desktop's settings, about which Machine
+work goes to: "frontend work is on the laptop, everything else is on the vm". The **Flock
+chat** is given it with every message, beside the Machines Desktop reaches at that moment and
+which of them is this computer, and names the Machine a start goes to from it. Collie never
+interprets the words itself, and a start that names no Machine while several are reachable
+is still refused. Only the Flock chat chooses between Machines, so the rule is Desktop's
+and no Machine is given it. Where the Run lands on the chosen Machine is still decided by
+placement ([ADR-0033](docs/adr/0033-a-run-started-from-the-home-is-placed-not-asked.md)).
 
 **Home** — The Herd's dedicated Collie workspace, owned by a record plus proof: a live
 `collie_home` token, or the recorded pane still carrying its recorded `terminal_id`. A

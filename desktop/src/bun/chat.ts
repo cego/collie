@@ -161,6 +161,8 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* <Server>(opts
   readonly machines: FlockChat["machines"];
   /** Whether Desktop may start a turn about News nobody asked for. */
   readonly proactive: () => boolean;
+  readonly machineRule: FlockChat["machineRule"];
+  readonly setMachineRule: FlockChat["setMachineRule"];
 }) {
   const fs = yield* FileSystem.FileSystem;
   const scope = yield* Effect.scope;
@@ -183,6 +185,8 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* <Server>(opts
     machines: opts.machines,
     conversation: opts.conversation,
     said: () => said,
+    machineRule: opts.machineRule,
+    setMachineRule: opts.setMachineRule,
   };
   const server = opts.claude.server(flock, run);
   const usage = (yield* Path.Path).join(opts.dir, "flock-usage.jsonl");
@@ -218,6 +222,18 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* <Server>(opts
         ask,
         about: () => attached,
         noticed: () => (noticed === undefined ? undefined : flockNewsText(noticed)),
+        placement: () => {
+          const rule = opts.machineRule()?.trim() ?? "";
+          return rule === ""
+            ? undefined
+            : {
+                rule,
+                machines: opts.machines().map(({ name, local }) => ({
+                  name,
+                  local: local === true,
+                })),
+              };
+        },
       }),
     });
     let lastResult: typeof TurnResult.Type | undefined;

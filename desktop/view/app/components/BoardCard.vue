@@ -19,7 +19,7 @@ const props = defineProps<{
   cardKey: string;
   machine: string;
 }>();
-const { run, openLink, goToPane } = useActions();
+const { run, openLink } = useActions();
 const toast = useToast();
 const { open } = useDrawer();
 // A dialog opened before its Machine dropped is outside the card's disabled controls.
@@ -91,31 +91,18 @@ const toggle = (name: string, on: boolean | "indeterminate") => {
   );
 };
 
-/** Where Go to pane last found this card's pane, and the herdr client that attaches to it. */
-const pane = ref<{ where: string; command: string; opened: boolean } | null>(null);
+const panes = usePanes();
+const pane = computed(() => panes.shownFor(props.cardKey));
 watch(
   () => props.task.run,
-  () => (pane.value = null),
+  () => panes.forget(props.cardKey),
 );
 const copy = (text: string) =>
   navigator.clipboard.writeText(text).then(
     () => toast.add({ title: "Copied", color: "success" }),
     () => toast.add({ title: "Could not copy the command", color: "error" }),
   );
-const goTo = async () => {
-  if (props.asOf !== null) return;
-  const went = await goToPane(props.installation, props.task.run);
-  if (went === null) return;
-  const where = [props.machine, went.at.workspace, went.at.tab]
-    .filter((part) => part !== null)
-    .join(" › ");
-  pane.value = { where, command: went.command, opened: went.opened };
-  toast.add(
-    went.opened
-      ? { title: `Opened ${where} in a terminal`, color: "success" }
-      : { title: "No terminal found: copy the command on the card", color: "warning" },
-  );
-};
+const goTo = () => props.asOf === null && open(props.cardKey, "terminal");
 
 /**
  * A card action as this board does it, or null where Desktop has no way to yet: a check's
@@ -126,7 +113,7 @@ const doing = (action: CardAction, primary: boolean) => {
   const runId = view.run;
   switch (action.kind) {
     case "go-to-tab":
-      return { label: "Go to pane", press: () => void goTo() };
+      return { label: "Go to pane", press: goTo };
     case "check-output":
     case "attach":
       return null;
@@ -340,7 +327,7 @@ const menu = computed(() =>
 
       <div v-if="pane" class="mt-3 flex flex-col gap-1 text-sm" data-testid="pane">
         <span data-testid="pane-where">{{ pane.where }}</span>
-        <div v-if="!pane.opened" class="flex items-center gap-1">
+        <div v-if="pane.command !== null" class="flex items-center gap-1">
           <code class="truncate text-xs" data-testid="pane-command">{{ pane.command }}</code>
           <UButton
             icon="i-lucide-copy"

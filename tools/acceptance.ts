@@ -75,6 +75,8 @@ const MODULES = "workflow modules (this MR)";
 const LAUNCH = "launch flow places human starts (this MR)";
 const RELEASE = "ready to release and checks you can see (this MR)";
 const ATTACHMENTS = "files in the Flock chat and its Runs (this MR)";
+const IN_APP_TERMINAL = "go to pane opens the pane in Desktop (this MR)";
+const MACHINE_RULE = "the Machine rule (this MR)";
 
 /** What the front door owes a person, and cannot be settled below the front door. */
 const FRONT_DOOR: readonly Check[] = [
@@ -538,6 +540,20 @@ const BACKEND: readonly Check[] = [
     },
   },
 
+  {
+    id: "desktop/go-to-pane-rides-the-machines-master",
+    statement:
+      "Go to pane in Desktop starts herdr's terminal controller as one more channel on the SSH master Desktop already holds for the Machine, never a login of its own, and gives the pane back when the terminal closes: going to the pane twice opens no second master.",
+    owner: IN_APP_TERMINAL,
+    needs: "backend",
+    proof: {
+      kind: "test",
+      layer: "backend",
+      file: "test/desktop-terminal.test.ts",
+      name: "Go to pane on a Machine runs its controller as one more channel on the master Desktop holds, and gives the pane back",
+    },
+  },
+
   // ── Attachments: files a Run is given, in its own directory and every prompt ──
   {
     id: "backend/a-started-runs-attachments-are-there-before-its-first-prompt",
@@ -729,6 +745,28 @@ const WORKFLOWS: readonly Check[] = [
 
 /** What only a person at a terminal can settle. */
 const OPERATOR_CHECKS: readonly Check[] = [
+  {
+    id: "desktop/a-flock-chat-start-goes-where-the-machine-rule-says",
+    statement:
+      'A Flock chat start goes where the Machine rule says: with the rule "frontend work is on the laptop, everything else is on the vm", a review of a frontend merge request lands on Local and a plan for Collie on vm-mk; with vm-mk unreachable, the plan is declined in words and nothing starts on the laptop; and Go to pane on each opens in Desktop with no new SSO approval.',
+    owner: MACHINE_RULE,
+    needs: "operator",
+    proof: {
+      kind: "operator",
+      how: 'In Desktop with Local and vm-mk connected, save the rule "frontend work is on the laptop, everything else is on the vm" in Settings. Ask the Flock chat to start a review of a frontend merge request and a plan for Collie, and record the Machine each Run landed on. Disconnect vm-mk, ask for the plan again, and record the chat\'s words and that nothing started on Local. Go to pane on each Run, and record that sso.cego.dk asked nothing new. Record the revision.',
+    },
+  },
+  {
+    id: "desktop/go-to-pane-shows-the-pane-in-desktop-without-a-new-login",
+    statement:
+      "Go to pane shows the pane in Desktop without a new login: after the one SSO approval Desktop's connection to a Machine needed, going to a working Run's pane, typing to its agent, closing the drawer and going to the pane again asks sso.cego.dk nothing more, and an open herdr window shows the pane at its own size again once the drawer is closed.",
+    owner: IN_APP_TERMINAL,
+    needs: "operator",
+    proof: {
+      kind: "operator",
+      how: "Against vm-mk: connect Desktop (one SSO approval), Go to pane on a working Run, type to the agent, press Esc (the agent gets it and the drawer stays open) and paste two lines (they arrive as one paste), close the drawer, Go to pane again. Record that sso.cego.dk asked nothing after the first approval, that an open herdr window showed the pane at its own size again once the drawer closed, and the revision.",
+    },
+  },
   {
     id: "flock-chat/reads-greps-and-edits-a-file-on-a-machine",
     statement:
