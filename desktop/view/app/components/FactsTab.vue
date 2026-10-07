@@ -1,11 +1,43 @@
 <script setup lang="ts">
 import type { RunDetail, TaskView } from "../../../../src/board-model";
+import { attachmentsShown } from "../../../src/shared/attachments";
 
-defineProps<{ task: TaskView; detail: RunDetail | null }>();
+const props = defineProps<{ task: TaskView; detail: RunDetail | null; installation: string }>();
+const attached = computed(() => attachmentsShown(props.detail?.attachments ?? []));
 </script>
 
 <template>
   <div data-testid="facts" class="flex flex-col gap-4 text-sm">
+    <section
+      v-if="detail && attached.thumbnails.length + attached.named.length > 0"
+      class="flex flex-col gap-2"
+      data-testid="attachments"
+    >
+      <h3 class="font-semibold">Attachments</h3>
+      <div
+        v-if="attached.thumbnails.length > 0"
+        class="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-3"
+      >
+        <EvidenceImage
+          v-for="file in attached.thumbnails"
+          :key="file.name"
+          :file="file"
+          kind="attachment"
+          :installation="installation"
+          :run-id="detail.id"
+        />
+      </div>
+      <p
+        v-for="file in attached.named"
+        :key="file.name"
+        :data-testid="`attachment-${file.name}`"
+        class="flex justify-between gap-2"
+      >
+        <span class="truncate">{{ file.name }}</span>
+        <small class="text-muted">{{ file.mediaType }} · {{ file.size }} bytes</small>
+      </p>
+    </section>
+
     <section v-if="detail?.intent" data-testid="intent">
       <h3 class="font-semibold">Intent</h3>
       <p v-if="detail.intent.goal">{{ detail.intent.goal }}</p>

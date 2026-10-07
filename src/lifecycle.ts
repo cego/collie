@@ -62,6 +62,7 @@ import { defaultsPath, readDefaults, readIntent, type IntentSeed } from "./inten
 import { scopeFor, scopeKey } from "./registry";
 import { PROJECTS_ROOT_OPTION, projectsRoot } from "./projects";
 import { reason } from "./naming";
+import { attachmentRefusal } from "./attachments";
 
 export { savedModules } from "./discovery";
 
@@ -217,8 +218,15 @@ export const startRun = Effect.fn("Lifecycle.startRun")(function* (
     readonly intent?: Pick<IntentSeed, "goal" | "constraints">;
     /** The approved set given with the start, over the project's and the user's files. */
     readonly verify?: ReadonlyArray<VerifySpec> | undefined;
+    /** Paths on this Machine, which the host copies into the Run. */
+    readonly attachments?: ReadonlyArray<string> | undefined;
   },
 ) {
+  // Refused before a Task is opened for it, as the host would refuse it before the claim.
+  const unattachable = yield* attachmentRefusal(options.attachments ?? []).pipe(
+    Effect.orElseSucceed(() => null),
+  );
+  if (unattachable !== null) return err("invalid_input", unattachable);
   // The defaults of the workspace this was started from, which only a front door knows.
   const defaults = yield* readDefaults(
     yield* defaultsPath(env.stateDir, scopeKey(scopeFor(env, env.cwd))),
@@ -250,6 +258,7 @@ export const startRun = Effect.fn("Lifecycle.startRun")(function* (
         parent: options.parent ?? undefined,
         intent: defaults === null ? { ...options.intent } : { ...options.intent, defaults },
         verify: options.verify,
+        attachments: options.attachments,
       }),
     options.door,
   ).pipe(
@@ -752,6 +761,7 @@ export const steerRun = (
     readonly operation?: string;
     readonly agent?: string;
     readonly mode?: "boundary" | "now" | "interrupt";
+    readonly attachments?: ReadonlyArray<string> | undefined;
     readonly door: Door;
   },
 ): Effect.Effect<OpResult, never, Client> =>
@@ -766,6 +776,7 @@ export const steerRun = (
           operation: options.operation,
           agent: options.agent,
           mode: options.mode,
+          attachments: options.attachments,
         });
         // Only an agent that is gone is carried on elsewhere: a refused send to a live one may
         // still be working the text, and a follow-up beside it would be a second copy.
@@ -915,6 +926,7 @@ export const invokeOffer = (
     readonly offer: string;
     readonly input: Readonly<Record<string, Schema.Json>>;
     readonly request: string;
+    readonly attachments?: ReadonlyArray<string> | undefined;
   },
 ): Effect.Effect<OpResult, never, Client> =>
   asks(
@@ -925,6 +937,7 @@ export const invokeOffer = (
         offer: options.offer,
         input: options.input,
         request: options.request,
+        attachments: options.attachments,
       }),
     options.door,
   ).pipe(
@@ -1230,12 +1243,18 @@ export const followUpRun = (
     readonly runId: string;
     readonly text: string;
     readonly request: string;
+    readonly attachments?: ReadonlyArray<string> | undefined;
   },
 ): Effect.Effect<OpResult, never, Client> =>
   asks(
     env,
     (client) =>
-      client.followUp({ runId: options.runId, text: options.text, request: options.request }),
+      client.followUp({
+        runId: options.runId,
+        text: options.text,
+        request: options.request,
+        attachments: options.attachments,
+      }),
     options.door,
   ).pipe(
     Effect.map((answered) =>

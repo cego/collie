@@ -82,6 +82,13 @@ herdr actions, and the `collie` CLI.
   `desktop/src/shared/chat-view.ts` what the window says of a tool call and the card a
   message is about, and `src/toolkit.ts` the Toolkit both chats share
   ([ADR-0011](docs/adr/0011-the-conversation-is-a-native-harness.md#amended-2026-10-05-a-herds-chat-per-home-and-one-flock-chat-per-desktop)).
+- **Changing what files a Run, or the Flock chat, is given** →
+  [ADR-0046](docs/adr/0046-an-attachment-is-uploaded-once-and-belongs-to-the-run.md), alongside
+  `src/attachments.ts` (a Run's copies and its prompts' list), `src/uploads.ts` and
+  `src/host-files.ts` (what a host takes and reads), and in Desktop `bun/attachments.ts`
+  (its copies), `bun/carried.ts` (files to a Run's Machine), `bun/file-tools.ts` and
+  `shared/attachments.ts`, with `test/attachments.test.ts`, `test/host-files.test.ts` and
+  `test/flock-*.test.ts`.
 - **Adding a setting, or changing how settings are shared across a Flock** →
   [ADR-0043](docs/adr/0043-a-shared-setting-is-its-latest-edit.md), alongside
   `src/settings.ts` (the one list the TUI, Desktop and the host read), `setSetting` and

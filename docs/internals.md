@@ -243,6 +243,15 @@ program, usually on another computer, and it is not talking to a session either:
 herdr's list and nothing else. Routing them through `herdr.ts` would bring Collie's locks
 into Desktop, which reaches a Machine only through `collie bridge`.
 
+Files reach a Machine the same way. The Flock chat's `collie_read`, `collie_glob`,
+`collie_grep`, `collie_write` and `collie_edit` (`desktop/src/bun/file-tools.ts`) are
+answered by the host's `readFile`, `glob`, `grep`, `writeFile` and `editFile` over the
+chat's channel (`src/host-files.ts`), never by ssh or scp beside the bridge. A file a start, a follow-up or a steer carries goes
+the same way: through the Run's Machine's `upload`, once a day per file and Machine
+(`desktop/src/bun/carried.ts`, `src/uploads.ts`), so a host only ever receives paths on its
+own Machine. The file tools are
+Desktop's own tools, not the Toolkit's, so Native chat's reach is unchanged.
+
 Go to pane is the one place Desktop touches a session, and it does so for the human
 ([ADR-0044](adr/0044-go-to-pane-opens-the-pane-in-desktop.md)): it runs herdr's terminal
 controller for the Run's pane, `herdr [--session <name>] terminal session control <pane>

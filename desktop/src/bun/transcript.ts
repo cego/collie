@@ -3,6 +3,7 @@
 
 import { Option, Schema } from "effect";
 import { isString } from "../../../src/schema";
+import { attachmentPart, fromListing } from "../shared/attachments";
 import type { ChatMessage } from "../shared/chat-view";
 
 const Text = Schema.Struct({ type: Schema.Literal("text"), text: Schema.String });
@@ -65,6 +66,24 @@ const textOf = (
     ? content
     : content.flatMap((part) => (isString(part.text) ? [part.text] : [])).join("\n");
 
+/**
+ * The human's words, then the files Desktop listed after them; the images and documents
+ * the model was handed with them are not the view's.
+ */
+const humanParts = (content: Parameters<typeof textOf>[0]): Part[] => {
+  if (isString(content)) return content === "" ? [] : [{ type: "text", content }];
+  const texts = content.flatMap((part) =>
+    part.type === "text" && isString(part.text) ? [part.text] : [],
+  );
+  const at = texts.findIndex((text) => fromListing(text) !== null);
+  const words = (at < 0 ? texts : texts.slice(0, at)).join("\n");
+  const files = at < 0 ? [] : (fromListing(texts[at]!) ?? []);
+  return [
+    ...(words === "" ? [] : [{ type: "text" as const, content: words }]),
+    ...files.map(attachmentPart),
+  ];
+};
+
 /** The human's messages and the answers, each answer one message however many model turns it took. */
 export const transcriptOf = (entries: ReadonlyArray<unknown>): ReadonlyArray<ChatMessage> => {
   const messages: Array<{ id: string; role: ChatMessage["role"]; parts: Part[] }> = [];
@@ -81,8 +100,9 @@ export const transcriptOf = (entries: ReadonlyArray<unknown>): ReadonlyArray<Cha
         const call = answering[at];
         if (call?.type === "tool-call") answering[at] = { ...call, output: textOf(part.content) };
       }
-      if (said !== "" && !INTERRUPTED.test(said))
-        messages.push({ id: entry.uuid, role: "user", parts: [{ type: "text", content: said }] });
+      if (INTERRUPTED.test(said)) continue;
+      const parts = humanParts(content);
+      if (parts.length > 0) messages.push({ id: entry.uuid, role: "user", parts });
       continue;
     }
     const parts = entry.message.content.flatMap((block): Part[] =>

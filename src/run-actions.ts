@@ -186,6 +186,7 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
           text: action.text,
           request: by.requestId,
           mode: action.mode,
+          attachments: action.attachments,
           door: by,
         });
       }),
@@ -313,6 +314,7 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
         runId: action.run,
         text: action.text,
         request: by.requestId,
+        attachments: action.attachments,
       }),
     ),
   );
@@ -350,6 +352,7 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
         options: atRoot ? { workspace: PROJECTS_ROOT_OPTION } : {},
         task: action.here === true ? { mode: "here" } : { mode: "new" },
         verify: action.verify,
+        attachments: action.attachments,
       });
       return started.ok
         ? { state: "applied" as const, note: `started ${started.runId}` }

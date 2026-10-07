@@ -26,6 +26,7 @@ import {
 } from "effect";
 import type { BunServices } from "@effect/platform-bun/BunServices";
 import * as Activity from "effect/unstable/workflow/Activity";
+import { attachmentsDir, listAttachments, type Attachment } from "./attachments";
 import * as Workflow from "effect/unstable/workflow/Workflow";
 import * as WorkflowEngine from "effect/unstable/workflow/WorkflowEngine";
 import {
@@ -173,6 +174,8 @@ export interface AgentsApi {
    * path that is not there.
    */
   readonly skills: (names: ReadonlyArray<string>) => Effect.Effect<ReadonlyMap<string, string>>;
+  /** What this Run's `attachments/` holds now, which its next prompt lists. */
+  readonly attachments: (runId: string) => Effect.Effect<ReadonlyArray<Attachment>>;
   /**
    * What an agent is told about asking for a decision its work does not cover: the pane
    * of whoever is live in that role in this Run's lineage — `Place.lineage` — and
@@ -395,6 +398,7 @@ export const agentWork = <
       cwd: work.cwd,
       output,
       contract: plain ? null : jsonSchemaFor(work.output),
+      attachments: yield* agents.attachments(runId),
     });
     if (prompt.unfilled.length > 0) {
       return yield* new WorkflowError({
@@ -736,6 +740,8 @@ export interface PromptParts {
   /** Where each mentioned skill is installed; a mention of one that is not says so. */
   readonly skills?: ReadonlyMap<string, string>;
   readonly cwd?: string;
+  /** The Run's attachments when this step is launched. */
+  readonly attachments?: ReadonlyArray<Attachment>;
 }
 
 /**
@@ -765,12 +771,21 @@ function renderPrompt(parts: PromptParts) {
   ];
   const text = [
     rendered.text.trim(),
+    attachmentsSection(parts.attachments ?? []),
     `When you are done, write your result ${parts.contract === null ? "as plain text" : "as JSON"} to the path below. Nothing else may go in that file.\nOUTPUT_PATH: ${parts.output}`,
     parts.contract === null ? "" : contractSection(parts.contract),
   ]
     .filter((part) => part !== "")
     .join("\n\n");
   return { text, unfilled };
+}
+
+function attachmentsSection(attachments: ReadonlyArray<Attachment>): string {
+  if (attachments.length === 0) return "";
+  return [
+    "Files given to this Run, which you can open like any other:",
+    ...attachments.map((one) => `- ${one.name} (${one.mediaType}, ${one.size} bytes): ${one.path}`),
+  ].join("\n");
 }
 
 /**
@@ -1661,6 +1676,10 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
   return {
     outputFor,
     skills: (names) => under(skills(names)),
+    attachments: (runId) =>
+      under(listAttachments(attachmentsDir(`${host.dir}/runs/${runId}`))).pipe(
+        Effect.orElseSucceed(() => []),
+      ),
     askRoute: (role, lineage) =>
       under(
         Effect.gen(function* () {

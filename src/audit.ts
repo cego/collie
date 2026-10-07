@@ -17,6 +17,7 @@ export const AuditLine = Schema.Struct({
     from: Schema.optionalKey(Where),
     conversation: Schema.optionalKey(Schema.String),
     said: Schema.optionalKey(Schema.String),
+    attachments: Schema.optionalKey(Schema.Array(Schema.String)),
   }),
   /** Why, in the asker's own words, where they gave one. */
   reason: Schema.optionalKey(Schema.String),

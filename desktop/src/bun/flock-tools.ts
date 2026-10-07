@@ -4,10 +4,22 @@
 // candidates where several do. The human's words go with each write as the channel's
 // declaration, attached here and never by the model.
 
-import { Cause, Clock, Crypto, Effect, Exit, Option, Result, Schema, Stream } from "effect";
+import {
+  Cause,
+  Clock,
+  Crypto,
+  Effect,
+  Exit,
+  FileSystem,
+  Option,
+  Result,
+  Schema,
+  Stream,
+} from "effect";
 import * as Tool from "effect/unstable/ai/Tool";
 import * as Toolkit from "effect/unstable/ai/Toolkit";
 import {
+  type Declaration,
   type FLOCK_READS,
   HostRefused,
   NEWS_BATCH,
@@ -28,6 +40,8 @@ import {
   RunInput,
   TAKES,
 } from "../../../src/toolkit";
+import type { Staged } from "../shared/attachments";
+import { carriedPaths } from "./carried";
 import type { Door } from "./machine";
 
 /** What the Flock chat asks of a Machine's host, over the channel the bridge declared `chat`. */
@@ -41,6 +55,12 @@ export const chatDoor = (door: Door) => ({
   dispose: (asked: Parameters<Door["dispose"]>[0]) => door.dispose(asked),
   news: (asked: Parameters<Door["news"]>[0]) => door.news(asked),
   propose: (asked: Parameters<Door["propose"]>[0]) => door.propose(asked),
+  readFile: (asked: Parameters<Door["readFile"]>[0]) => door.readFile(asked),
+  glob: (asked: Parameters<Door["glob"]>[0]) => door.glob(asked),
+  grep: (asked: Parameters<Door["grep"]>[0]) => door.grep(asked),
+  writeFile: (asked: Parameters<Door["writeFile"]>[0]) => door.writeFile(asked),
+  editFile: (asked: Parameters<Door["editFile"]>[0]) => door.editFile(asked),
+  upload: (asked: Parameters<Door["upload"]>[0]) => door.upload(asked),
   read: (asked: Parameters<Door["read"]>[0]) => door.read(asked),
 });
 
@@ -60,6 +80,10 @@ export interface FlockChat {
   readonly conversation: string;
   /** The human's message this turn, where there is one. */
   readonly said: () => string | undefined;
+  /** Desktop's copies of the files the human's message this turn carried. */
+  readonly attachments: () => ReadonlyArray<Staged> | undefined;
+  /** What this session uploaded to each Machine: path there, and when, by sha256. */
+  readonly uploaded: Map<string, Map<string, { readonly path: string; readonly at: number }>>;
   readonly machineRule: () => string | undefined;
   readonly setMachineRule: (rule: string) => Effect.Effect<void>;
 }
@@ -104,7 +128,7 @@ const firstOf = <A, E>(stream: Stream.Stream<A, E>) =>
   stream.pipe(Stream.runHead, Effect.timeout(ANSWER_WITHIN));
 
 /** A Machine's board as its host has it now, or why it could not be read. */
-const boardOf = (machine: ChatMachine) =>
+export const boardOf = (machine: ChatMachine) =>
   firstOf(machine.door.board()).pipe(
     Effect.map((first) =>
       Option.isSome(first) && first.value._tag === "Snapshot" ? first.value : null,
@@ -189,15 +213,15 @@ const FLOCK_PROTOCOL = 2;
 /** Says, before a write, who is asking and what the human said that turn. */
 const declareVoice = (flock: FlockChat, machine: ChatMachine) => {
   const said = flock.said();
-  return machine.door.declare(
-    said === undefined
-      ? { frontDoor: "chat", conversation: flock.conversation }
-      : { frontDoor: "chat", conversation: flock.conversation, said },
-  );
+  const files = flock.attachments()?.map(({ name }) => name) ?? [];
+  let voice: Declaration = { frontDoor: "chat", conversation: flock.conversation };
+  if (said !== undefined) voice = { ...voice, said };
+  if (files.length > 0) voice = { ...voice, attachments: files };
+  return machine.door.declare(voice);
 };
 
 /** `declareVoice`, refused where the host is too old to record the turn's words. */
-const speaking = (flock: FlockChat, machine: ChatMachine, known: Boards) => {
+export const speaking = (flock: FlockChat, machine: ChatMachine, known: Boards) => {
   const board = known.find((one) => one.machine === machine)?.board ?? null;
   const refused =
     board === null
@@ -210,10 +234,10 @@ const speaking = (flock: FlockChat, machine: ChatMachine, known: Boards) => {
     : Effect.fail(new HostRefused({ reason: refused }));
 };
 
-const newRequest = Effect.flatMap(Crypto.Crypto, (crypto) => crypto.randomUUIDv4);
+export const newRequest = Effect.flatMap(Crypto.Crypto, (crypto) => crypto.randomUUIDv4);
 
 /** Why a host said no, in its own words. */
-const reasonOf = (error: { readonly message: string }) =>
+export const reasonOf = (error: { readonly message: string }) =>
   "reason" in error && isString(error.reason)
     ? error.reason
     : "detail" in error && isString(error.detail)
@@ -522,8 +546,9 @@ const carryOut = Effect.fn("FlockTools.do")(function* (flock: FlockChat, input: 
       break;
     }
     const step = `${request}-${index}`;
-    const done = yield* speaking(flock, machine, known).pipe(
-      Effect.andThen(doOne(machine, kind, local, step)),
+    const done = yield* withFiles(flock, machine, known, local).pipe(
+      Effect.tap(() => speaking(flock, machine, known)),
+      Effect.flatMap((sent) => doOne(machine, kind, sent, step)),
       Effect.catch((error) => Effect.succeed({ state: "failed", note: reasonOf(error) })),
     );
     said.push(`${kind}: ${done.state}${done.note ? ` — ${done.note}` : ""}`);
@@ -532,6 +557,22 @@ const carryOut = Effect.fn("FlockTools.do")(function* (flock: FlockChat, input: 
   }
   return said.join("\n");
 });
+
+/** The kinds of action that carry files to the work they start or steer. */
+const CARRIES = new Set(["start", "followup", "deliver"]);
+
+/** The action with the files it carries as paths on its Machine. */
+const withFiles = (flock: FlockChat, machine: ChatMachine, known: Boards, action: JsonObject) => {
+  if (!CARRIES.has(textAt(action, "kind"))) return Effect.succeed(action);
+  const named = action["attachments"];
+  const given = Array.isArray(named) ? named.filter(isString) : undefined;
+  const board = known.find((one) => one.machine === machine)?.board ?? null;
+  return carriedPaths(flock, machine, board, given).pipe(
+    Effect.map((paths): JsonObject =>
+      paths === undefined ? action : { ...action, attachments: paths },
+    ),
+  );
+};
 
 const doOne = (machine: ChatMachine, kind: string, action: JsonObject, request: string) => {
   const door = machine.door;
@@ -595,11 +636,14 @@ const propose = Effect.fn("FlockTools.propose")(
         ? `These actions are on ${named.map((one) => one.name).join(" and ")}; propose each Machine's separately. Nothing was done.`
         : "Name the Machine this is for, as <machine>:<run> or <machine>:<workspace>. Nothing was done.";
     const request = request_id ?? (yield* newRequest);
+    const carrying = yield* Effect.forEach(placed, ({ action }) =>
+      withFiles(flock, machine, known, action),
+    );
     yield* speaking(flock, machine, known);
     const done = yield* machine.door.propose({
       herd: null,
       interpretation,
-      actions: placed.map(({ action }) => action),
+      actions: carrying,
       request,
     });
     return `Request: ${request}\n${done.human}`;
@@ -631,8 +675,8 @@ const machineRule = (flock: FlockChat, asked: string | undefined) => {
 /** The handlers for one call, which take the input as it was sent once the Toolkit has decoded it. */
 const handlersFor = (flock: FlockChat, sent: JsonObject) =>
   Effect.gen(function* () {
-    const services = yield* Effect.context<Crypto.Crypto>();
-    const answer = <E>(effect: Effect.Effect<string, E, Crypto.Crypto>) =>
+    const services = yield* Effect.context<Crypto.Crypto | FileSystem.FileSystem>();
+    const answer = <E>(effect: Effect.Effect<string, E, Crypto.Crypto | FileSystem.FileSystem>) =>
       effect.pipe(
         Effect.catch((cause) => Effect.succeed(`Collie could not answer: ${String(cause)}`)),
         Effect.provideContext(services),

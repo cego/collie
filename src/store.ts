@@ -97,7 +97,17 @@ export interface Admission {
   readonly parent: string | null;
   /** What the host places it from, as JSON; absent for work that is placed already. */
   readonly placing?: string;
+  /** Paths on this Machine copied into the Run before it is handed over. */
+  readonly attachments?: ReadonlyArray<string>;
 }
+
+/** What a retry of a claim has to ask again; attachments only where there were some. */
+type AskedFor = {
+  readonly options: Readonly<Record<string, string>>;
+  readonly task: string | null;
+  readonly parent: string | null;
+  attachments?: ReadonlyArray<string>;
+};
 
 export interface StoreApi {
   readonly remember: (generation: GenerationRow) => Effect.Effect<void>;
@@ -360,11 +370,13 @@ function makeStore(): Effect.Effect<StoreApi, never, SqlClient.SqlClient | React
 
       admit: Effect.fn("Store.admit")(function* (admission: Admission) {
         const input = canonical(admission.input);
-        const asked = canonical({
+        const askedFor: AskedFor = {
           options: { ...admission.options },
           task: admission.task,
           parent: admission.parent,
-        });
+        };
+        if (admission.attachments?.length) askedFor.attachments = [...admission.attachments];
+        const asked = canonical(askedFor);
         const at = yield* nowIso();
         // The claim is the insert, and what it returns is whether this caller made it:
         // one request id, one row, decided by the database rather than by a read another
