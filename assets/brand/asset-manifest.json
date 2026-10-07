@@ -189,6 +189,20 @@
       "height": 1160
     },
     {
+      "file": "logos/collie-tile-256.png",
+      "bytes": 35750,
+      "sha256": "fd6ee7dd0bb263cb43e8ca9534f041c688342c8b79256adb5ba4b1b25d2faa8c",
+      "width": 256,
+      "height": 256
+    },
+    {
+      "file": "logos/collie-tile-512.png",
+      "bytes": 133681,
+      "sha256": "d1b22a2f8f5328fbe9cd51b47f7a381103241da515274b81ca9b4fa8fe556551",
+      "width": 512,
+      "height": 512
+    },
+    {
       "file": "source/collie-master.png",
       "bytes": 911519,
       "sha256": "71e889a7c28540d00f672c3025b0786ccff8ffcf779611d0bcd58e56cb2d1830",

@@ -846,8 +846,9 @@ curl -fsSL https://github.com/cego/collie/releases/latest/download/install-deskt
 The script downloads the latest release's installer and runs it only once the download
 verifies against Collie's release key. Checking needs OpenSSL 3.0 or later.
 
-It shows up as **Collie**, with the Collie mark, in your app launcher, on its window and in
-the taskbar.
+It shows up as **Collie**, with the Collie mark — the dog on the white tile the TUI board
+shows, which reads on a dark taskbar too — in your app launcher, on its window, in the
+taskbar and at the top left of the board.
 
 Desktop then keeps itself up to date. It checks the latest release when it starts and every
 hour after, and downloads an update in the background. **Settings**, under **About**, shows
