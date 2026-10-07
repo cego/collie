@@ -1,4 +1,4 @@
-// A file's patch as the drawer draws it: hunks of numbered lines, paired for side by side.
+// A file's patch as the record draws it: hunks of numbered lines, paired for side by side.
 
 import { expect, test } from "bun:test";
 import { parsePatch, sideBySide, sides } from "../src/shared/patch";

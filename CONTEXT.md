@@ -440,7 +440,10 @@ stable id — a Task id, a Run id — never an index, because the sections re-so
 Changing it is a change in what is read, not in what is true: the record and the one merge
 request behind it are produced for the Selection, and a read superseded by a newer one is
 interrupted rather than finished. An action is never applied to it: every action on the
-board belongs to the card it is on.
+board belongs to the card it is on. In **Desktop** it is the card last clicked, whether or
+not its record is open, and it is what the Flock chat's chip is about: opening a card's
+record selects that card, and a click on the board's background, Escape on the board or a
+message sent clears it.
 
 **Focus** — What the Collie tab is being looked at as: the showing View, every View shown
 at least once, the Selection, and whether the panel's log tail is open. It is what decides

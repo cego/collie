@@ -68,11 +68,13 @@ herdr actions, and the `collie` CLI.
 - **Changing Desktop** → [`docs/using.md`](docs/using.md#collie-desktop), alongside
   `desktop/src/bun/machine.ts` (a Machine reached through `collie bridge`, never the host
   client) and `desktop/src/shared/` (the view's RPC and the Flock it folds), with the main
-  process's behaviour tested in `test/desktop-*.test.ts`. A card's drawer is
-  `desktop/view/app/components/RunDrawer.vue`; what agent markdown may keep is
-  `desktop/src/shared/markdown.ts` with `desktop/test/markdown.test.ts`; whether a Machine
-  is In sync is `desktop/src/shared/in-sync.ts`, tested in `test/desktop-view.test.ts`; and
-  the window's navigation rule is in
+  process's behaviour tested in `test/desktop-*.test.ts`. A card's record is
+  `desktop/view/app/components/RunRecord.vue`, opened through `useRecord`; what agent
+  markdown may keep is `desktop/src/shared/markdown.ts` with `desktop/test/markdown.test.ts`; what a click,
+  a double-click and Escape do to the selected card is `desktop/src/shared/board-clicks.ts`
+  with `desktop/test/board-clicks.test.ts`; whether a Machine is In sync is
+  `desktop/src/shared/in-sync.ts`, tested in `test/desktop-view.test.ts`; and the window's
+  navigation rule is in
   `desktop/src/bun/index.ts`. Desktop has its own `package.json`; Effect is the root's, so
   the board's Schemas exist once. The
   Flock chat is `desktop/src/bun/chat.ts` (the session and its turns), `claude.ts` (the

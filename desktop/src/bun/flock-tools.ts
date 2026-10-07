@@ -232,7 +232,7 @@ const herd = Effect.fn("FlockTools.herd")(function* (flock: FlockChat) {
   return [herdLines(prefixed, yield* Clock.currentTimeMillis), ...lost].join("\n");
 });
 
-/** One Run in detail, as its drawer has it. */
+/** One Run in detail, as its record has it. */
 const detailLines = (machine: string, detail: RunDetail) =>
   [
     `${machine}:${detail.id}: ${detail.title} — ${detail.status}`,

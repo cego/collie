@@ -16,7 +16,7 @@ const props = defineProps<{
   target: DiffTarget | null;
 }>();
 
-// Each diff read has the host run git again, so this drawer's are four at a time.
+// Each diff read has the host run git again, so this record's are four at a time.
 provide("diffReads", Semaphore.makeUnsafe(4));
 
 /** A file with more changed lines than this, or a binary one, starts collapsed. */

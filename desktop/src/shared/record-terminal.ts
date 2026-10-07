@@ -1,4 +1,4 @@
-// What a card's drawer decides about its Terminal tab.
+// What a card's record decides about its Terminal tab.
 
 /**
  * Offered while the Run's Machine is reached, and kept while it is the tab shown, so a
