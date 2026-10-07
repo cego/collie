@@ -38,7 +38,7 @@ const DEFAULT_QUIET_MS = 5 * 60_000;
 
 /** What identifies a Session: one herdr session and one workspace. */
 export interface SessionKey {
-  /** The herdr session, as its socket path — 0.8.2 exposes no session id. */
+  /** The herdr session, as its socket path — 0.9.3 exposes no session id. */
   session: string | null;
   workspaceId: string | null;
   /** The live workspace's label, which is how a recycled workspace id is caught. */
