@@ -36,12 +36,14 @@ import {
 import {
   ActionFailed,
   applyItem,
+  CREDENTIALS,
   type Credentials,
   DesktopRpcs,
   EMPTY_FLOCK,
   type FlockItem,
   type KnownMachine,
   machineRows,
+  type MachineSynced,
   nameAsShown,
   type OnboardRun,
   type OnboardStep,
@@ -318,6 +320,8 @@ const main = Effect.gen(function* () {
   const runners = `${Utils.paths.userData}/runners`;
   const scope = yield* Effect.scope;
   const uuid = (yield* Crypto.Crypto).randomUUIDv4.pipe(Effect.orDie);
+  /** Each route's latest settings sync, told again to a view that subscribes. */
+  const synced = new Map<string, MachineSynced>();
   const settingsOf = (door: Doors) => ({
     name: door.machine.name,
     door: door.desktop,
@@ -331,7 +335,11 @@ const main = Effect.gen(function* () {
     save: (flock) => writeFlockSettings(own, flock).pipe(Effect.provide(BunServices.layer)),
     request: uuid,
     told: ({ machine }, failed) =>
-      PubSub.publish(news, { _tag: "Synced", machine, failed }).pipe(Effect.asVoid),
+      Effect.suspend(() => {
+        const item = { _tag: "Synced", machine, failed } as const;
+        synced.set(machine.profile, item);
+        return PubSub.publish(news, item);
+      }).pipe(Effect.asVoid),
   });
   const firstFailure = (each: ReadonlyArray<{ readonly failed: string | null }>) =>
     each[0]?.failed ?? null;
@@ -407,7 +415,7 @@ const main = Effect.gen(function* () {
         tell(job, machine),
         start,
       );
-      if (run.ready === true) yield* given.handed(machine, handed);
+      if (run.ready === true && secrets !== "") yield* given.handed(machine, handed);
       // Kept as skipped where the run ended before it, so the next run skips it too.
       const unreached = skip
         .filter((step) => !run.steps.some((one) => one.step === step))
@@ -563,6 +571,7 @@ const main = Effect.gen(function* () {
             ...(yield* savedBoards(boards)).filter(listed),
             ...(yield* savedOnboardings(onboardings)).filter(listed),
             ...(yield* given.states(reachable.map(({ machine }) => machine))),
+            ...[...synced.values()].filter(listed),
           ];
           return Stream.fromIterable(before).pipe(
             Stream.concat(
@@ -732,17 +741,16 @@ const main = Effect.gen(function* () {
         if (route === undefined || row === undefined)
           return yield* new ActionFailed({ reason: "that Machine is not in herdr's list" });
         const texts = yield* given.held;
-        const held = (["gitlab", "helle"] as const).filter((one) => texts[one] !== undefined);
+        const held = CREDENTIALS.filter((one) => texts[one] !== undefined);
         const { behind } = inSync(row, { version: manifest.version, credentials: held });
         const door = [...doors.values()].find((one) => one.machine.profile === profile);
         const parts = behind.map(({ part }) => part);
-        if (door === undefined && !parts.includes("version"))
-          return yield* new ActionFailed({
-            reason: `${route.machine.name} isn't connected; it is synced when it connects`,
-          });
         return yield* syncNow(route.machine, parts, {
           reopen: PubSub.publish(changes, { _tag: "Reopen", profile }),
-          sync: door === undefined ? Effect.succeed(null) : syncOn(settingsOf(door)),
+          sync:
+            door === undefined
+              ? Effect.succeed("it isn't connected; it is synced when it connects")
+              : syncOn(settingsOf(door)),
           give: given.giveLacking(route),
         });
       }),

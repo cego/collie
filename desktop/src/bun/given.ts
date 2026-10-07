@@ -3,7 +3,12 @@
 
 import { createHash } from "node:crypto";
 import { Effect, FileSystem, Path, Schema, Semaphore } from "effect";
-import type { Credential, KnownMachine, MachineGiven } from "../shared/flock";
+import {
+  CREDENTIALS,
+  type Credential,
+  type KnownMachine,
+  type MachineGiven,
+} from "../shared/flock";
 import type { Keyring, KeyringEntry } from "./credentials";
 import type { ShellRoute } from "./machine";
 
@@ -11,7 +16,6 @@ const ENTRY = { gitlab: "gitlab-token", helle: "helle-token" } satisfies Record<
   Credential,
   KeyringEntry
 >;
-const CREDENTIALS: ReadonlyArray<Credential> = ["gitlab", "helle"];
 
 /** Each Machine's fingerprints, by herdr profile and then credential. */
 const GivenFile = Schema.fromJsonString(
@@ -91,10 +95,19 @@ export const givenCredentials = Effect.fn("Given.open")(function* (options: {
         yield* options.tell(stateOf(machine, credential, text));
       }),
     );
+  /** One give at a time per Machine and credential, so the last given is the last recorded. */
+  const giving = new Map<string, Semaphore.Semaphore>();
   const giveOne = (route: ShellRoute, credential: Credential, text: string) =>
-    options.give[credential](route, text).pipe(
-      Effect.tap((failed) => recorded(route.machine, credential, text, failed)),
-    );
+    Effect.suspend(() => {
+      const key = `${route.machine.profile} ${credential}`;
+      const one = giving.get(key) ?? Semaphore.makeUnsafe(1);
+      giving.set(key, one);
+      return one.withPermits(1)(
+        options.give[credential](route, text).pipe(
+          Effect.tap((failed) => recorded(route.machine, credential, text, failed)),
+        ),
+      );
+    });
 
   return {
     held,

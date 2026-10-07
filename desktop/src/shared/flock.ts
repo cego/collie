@@ -144,6 +144,7 @@ export type MachineSynced = typeof MachineSynced.Type;
 /** A credential Desktop gives every Machine. */
 export const Credential = Schema.Literals(["gitlab", "helle"]);
 export type Credential = typeof Credential.Type;
+export const CREDENTIALS = Credential.literals;
 
 /** Whether a Machine has the credential Desktop holds now, and why its last give failed. */
 export const MachineGiven = Schema.TaggedStruct("Given", {

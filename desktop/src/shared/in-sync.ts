@@ -1,6 +1,13 @@
 // Whether each Machine is In sync with Desktop (CONTEXT.md), and the Flock's line about it.
 
-import { type Credential, type MachineRow, type NotLive, type OnboardStep, SETTLED } from "./flock";
+import {
+  CREDENTIALS,
+  type Credential,
+  type MachineRow,
+  type NotLive,
+  type OnboardStep,
+  SETTLED,
+} from "./flock";
 
 /** What a Machine lags on, in words, with the steps that fix onboarding. */
 export interface Lag {
@@ -103,9 +110,9 @@ export const flockInSync = (rows: ReadonlyArray<MachineRow>, desktop: DesktopHol
       `${row.name}: ${state === "behind" ? `behind on ${[...new Set(behind.map(({ part }) => part))].join(" and ")}` : NOT_LIVE_SAID[state]}`,
     ];
   });
-  const none = (["gitlab", "helle"] as const)
-    .filter((credential) => !desktop.credentials.includes(credential))
-    .map((credential) => `Desktop has no ${CREDENTIAL_SAID[credential].none} to give`);
+  const none = CREDENTIALS.filter((credential) => !desktop.credentials.includes(credential)).map(
+    (credential) => `Desktop has no ${CREDENTIAL_SAID[credential].none} to give`,
+  );
   return {
     said: [
       lagging.length === 0

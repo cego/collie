@@ -521,6 +521,8 @@ export const flockStream = <D extends BoardSource>(
       // Asked to upgrade at most once per connection. One that upgraded but did not move is
       // shown as it is; one that failed is asked again when it next connects.
       const upgrading = new Set<string>();
+      // Upgrading right now, which a reopen would cut off; the upgrade reopens by itself.
+      const upgradingNow = new Set<string>();
       const owns = (at: number, { machine, message }: MachineMessage) =>
         Effect.gen(function* () {
           const [owner, before] = yield* Ref.modify(owners, (now) => {
@@ -640,7 +642,9 @@ export const flockStream = <D extends BoardSource>(
       /** Upgrades the Machine, then opens it again so its new build replaces its host. */
       const upgradeThenReopen = (route: Route<D>, installation: string, from: string) =>
         Stream.unwrap(
-          upgradeTo(route, version).pipe(
+          Effect.sync(() => upgradingNow.add(installation)).pipe(
+            Effect.andThen(upgradeTo(route, version)),
+            Effect.ensuring(Effect.sync(() => upgradingNow.delete(installation))),
             // Failed, or cut off with its connection: asked again when it next connects.
             Effect.onExit((exit) =>
               Exit.isSuccess(exit)
@@ -686,7 +690,11 @@ export const flockStream = <D extends BoardSource>(
                     // A route that reaches a Machine already shown is not lost: it is done.
                     if (done.has(at) || (yield* Deferred.isDone(displaced[at]!)))
                       return Stream.empty;
-                    if (failure.state === "reopen") return afterFailures(0);
+                    if (failure.state === "reopen")
+                      return Stream.unwrap(
+                        // A reopen wakes a route in backoff; one that was live needs no wake.
+                        Effect.as(Queue.clear(wakes[at]!), afterFailures(0)),
+                      );
                     const lost = Stream.fromEffect(lostItem(route, failure.state, failure.reason));
                     if (failure.state === "update-desktop") {
                       done.add(at);
@@ -744,8 +752,12 @@ export const flockStream = <D extends BoardSource>(
             ? Stream.empty
             : Stream.fromEffectDrain(
                 Effect.gen(function* () {
-                  for (const [installation, owner] of yield* Ref.get(owners))
-                    if (owner === at) upgrading.delete(installation);
+                  const owned = [...(yield* Ref.get(owners))]
+                    .filter(([, owner]) => owner === at)
+                    .map(([installation]) => installation);
+                  if (owned.some((installation) => upgradingNow.has(installation))) return;
+                  // Asked again even where the last upgrade succeeded and did not move.
+                  for (const installation of owned) upgrading.delete(installation);
                   yield* Queue.offer(reopens[at]!, undefined);
                   yield* Queue.offer(wakes[at]!, undefined);
                 }),
