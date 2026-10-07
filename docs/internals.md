@@ -123,18 +123,32 @@ Requiring them refused the run its checkout over a tab it can do without. `open`
 carries them, because the workspace it reuses is not the run's to rearrange, and a
 git-managed checkout opens no workspace at all, so it has none.
 
-A worktree is **settled**, and only then removed, when all four hold:
+A worktree is **settled**, and only then removed, when all five hold
+([ADR-0045](adr/0045-collie-removes-what-it-made-once-nothing-needs-it.md) D4):
 
 1. `git status --porcelain` in it is empty;
-2. it holds no commit of its own: `git rev-list @{u}..HEAD` is empty where the branch
-   has an upstream, and `git rev-list origin/<default>..HEAD` is empty where it does
-   not — a branch merged and deleted loses its upstream ref to the next
-   `git fetch --prune`, and condition 4's second half would otherwise be unreachable
-   in exactly the case it names;
+2. it holds no commit of its own: `git rev-list HEAD --not --remotes=<remote>` is empty,
+   where `<remote>` is its upstream's remote, or every remote where it tracks none — never
+   a hard-coded `origin`. A branch merged and deleted loses its own ref to the next
+   `git fetch --prune`, and the default branch's ref still holds its commits. Where
+   commits remain, HEAD being the head its merged merge request was merged at, as the
+   merge watch recorded it, counts as pushed: a squash merge leaves the branch's commits
+   on no branch at all;
 3. nothing is in it: no live agent's pane (its start directory, the directory it has
    moved to, or its workspace) other than the idle agents of the runs that finished there,
-   no run still going there, and no stopped run a resume would carry on there;
-4. its merge request is merged or closed, or its remote branch is gone.
+   no run still going there, and no stopped or failed run a resume would carry on there
+   while its work has not landed;
+4. its work has landed: the merge watch read its merge request as merged or closed, on
+   GitHub or GitLab (`board/mr-states.json`), a Disposition of merged, abandoned or
+   superseded was recorded on a Run that recorded it, or, with neither, its branch is gone
+   from the remote; an open merge request keeps it;
+5. its Task's workspace has closed — by cleanup or by a human — so a checkout never goes
+   from under a workspace someone is looking at.
+
+A checkout Collie made whose branch was switched since is still a candidate, by its path
+and the moment git wrote its `.git`, and is judged on what it holds now; `git branch -d`
+then runs on the branch it now has. The plugin root and any repository's main checkout
+(whose `.git` is a directory) are never candidates, whatever a record says.
 
 The checks run in that order and the first failure is what the board reports, so a kept
 worktree always says which condition kept it — including a round that could not ask
@@ -157,10 +171,8 @@ Once the checkout has gone the entry is a removal whatever happens to the branch
 branch `git branch -d` refuses is what is left to look at, so the board says which branch
 and what git said about it, for as long as a removal is news.
 
-Note what condition 2 does not do on its
-own: a checkout with no upstream is still only removed once 3 and 4 hold too, so the
-branch has to be gone from the remote — or its merge request merged or closed — before
-"holds no commit of its own" removes anything. Never `--force`, never `-D`, whichever
+Note what condition 2 does not do on its own: a checkout is still only removed once 3, 4
+and 5 hold too. Never `--force`, never `-D`, whichever
 manager removes it: git's refusals are the last guard, so a wrong judgement here can only
 fail to clean, never delete work. Only paths some run recorded with `created_by_collie`
 are candidates.
@@ -171,6 +183,9 @@ sweep judges every candidate without removing anything, then removes each settle
 after judging it again on its own. A board shows what the last sweep said, read from
 `worktrees.json`, and never sweeps itself. One sweep runs at a time, and its clock starts
 when it finishes. `worktrees.json` is rewritten only when something moved.
+
+A Renovate clone under `renovate-repositories/` is its own kind of the same sweep: it goes
+once no Run with a row cut a checkout from it and no checkout cut from it is left on disk.
 
 Two things are deliberately not conditions. A `run start` names the checkout it is about
 to work in, and that one is held whatever its state, because the run resolving its branch

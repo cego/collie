@@ -7,6 +7,7 @@ import { Clock, Effect, FileSystem, Option, Path, Schema, Semaphore } from "effe
 import type { BunServices } from "@effect/platform-bun/BunServices";
 import {
   FrontDoor,
+  mrLabel,
   sectionOf,
   Where,
   type Section,
@@ -22,7 +23,10 @@ import { shell } from "./mr";
 import type { AgentEntry } from "./registry";
 import type { RunFacts } from "./runs";
 import { epochMs, nowIso } from "./time";
-import { judgeWorktrees } from "./worktree";
+import { judgeWorktrees, type Landed, type Settling } from "./worktree";
+import { readForge, readMrStates } from "./merges";
+import { latest, readDispositions } from "./disposition";
+import { gitlabRepositoryOf } from "./strategies";
 import { CONTROL_DIR, putDownControl } from "./compaction";
 
 /** One kind of thing Collie cleans. */
@@ -209,6 +213,74 @@ export const generationsSweeper = (dir: string): Sweeper => {
   };
 };
 
+/**
+ * What the settled rule reads beside the checkout: whose work has landed, by the merge
+ * watch's answers or a Disposition; which branch's merge request is still open; and which
+ * checkouts' Tasks still have their workspace open.
+ */
+export const settlingOf = (opts: {
+  stateDir: string;
+  runs: ReadonlyArray<RunFacts>;
+  tasks: ReadonlyArray<TaskRecord>;
+  sessions: ReadonlyArray<Herdr>;
+  protect: ReadonlyArray<string>;
+}) =>
+  Effect.gen(function* () {
+    const states = yield* readMrStates(opts.stateDir);
+    const forge = yield* readForge(opts.stateDir);
+    const landedAt = new Map<string, Landed>();
+    const landedOn = new Map<string, Landed>();
+    const openOn = new Map<string, string>();
+    for (const run of opts.runs) {
+      const disposed = latest(
+        yield* readDispositions(run.dir).pipe(Effect.orElseSucceed(() => [])),
+      );
+      const label = run.mr === null ? null : mrLabel(run.mr);
+      const state = label === null ? undefined : states.get(label);
+      const head = label === null ? null : (forge.get(label)?.head ?? null);
+      const landed: Landed | null =
+        disposed !== null
+          ? { why: `${disposed.kind}, as recorded`, heads: head === null ? [] : [head] }
+          : state === undefined || state === "open"
+            ? null
+            : {
+                why: `${state === "closed" ? "closed" : "merged"} in ${label}`,
+                heads: head === null ? [] : [head],
+              };
+      const branch = run.branch ?? run.worktree?.branch ?? "";
+      if (landed === null) {
+        if (state === "open" && branch !== "" && label !== null) openOn.set(branch, label);
+        continue;
+      }
+      if (run.worktree !== null) landedAt.set(run.worktree.path, landed);
+      if (branch !== "") landedOn.set(branch, landed);
+    }
+    const open = new Set<string>();
+    let unknown = false;
+    for (const session of opts.sessions) {
+      const listed = yield* session.workspaceList().pipe(Effect.option);
+      if (Option.isNone(listed)) unknown = true;
+      else for (const one of listed.value) open.add(one.workspaceId);
+    }
+    const workspaceHolds = new Map<string, string>();
+    for (const run of opts.runs) {
+      if (run.worktree?.created_by_collie !== true || run.task === null) continue;
+      const task = opts.tasks.find((one) => one.id === run.task);
+      if (task === undefined) continue;
+      if (unknown)
+        workspaceHolds.set(run.worktree.path, "could not ask herdr which workspaces are open");
+      else if (open.has(task.workspace))
+        workspaceHolds.set(run.worktree.path, "its Task's workspace is still open");
+    }
+    return {
+      landedAt,
+      landedOn,
+      openOn,
+      workspaceHolds,
+      protect: new Set(opts.protect),
+    } satisfies Settling;
+  });
+
 /** Worktrees Collie made, judged by the settled rule in `worktree.ts`. */
 export const worktreesSweeper = (opts: {
   herdr: Herdr;
@@ -217,11 +289,14 @@ export const worktreesSweeper = (opts: {
   runs: ReadonlyArray<RunFacts>;
   registered: ReadonlyArray<AgentEntry>;
   cwd: string;
+  /** Read when it judges, so a workspace closed earlier in the same sweep counts as closed. */
+  settling?: Effect.Effect<Settling, never, BunServices>;
 }): Sweeper => {
   const kind = "worktree";
   return {
     judge: Effect.gen(function* () {
-      const round = yield* judgeWorktrees({ ...opts, dryRun: true });
+      const settling = opts.settling === undefined ? undefined : yield* opts.settling;
+      const round = yield* judgeWorktrees({ ...opts, settling, dryRun: true });
       const remove: CleanupItem[] = [];
       const keep: CleanupKept[] = [];
       if (round.busy)
@@ -241,7 +316,8 @@ export const worktreesSweeper = (opts: {
     remove: (item) =>
       Effect.gen(function* () {
         const bytes = yield* sizeOf(item.target);
-        const round = yield* judgeWorktrees({ ...opts, only: item.target });
+        const settling = opts.settling === undefined ? undefined : yield* opts.settling;
+        const round = yield* judgeWorktrees({ ...opts, settling, only: item.target });
         const one = round.judged.find((judged) => judged.path === item.target);
         if (one?.removed === true) return { freed: bytes };
         return { kept: one?.keep ?? (round.busy ? "another sweep is removing it" : "gone") };
@@ -637,5 +713,58 @@ export const taskWorkspacesSweeper = (opts: {
         }
         return { freed: 0 };
       }),
+  };
+};
+
+/**
+ * Renovate's clones in the state directory, each removed once no Run with a row cut a
+ * checkout from it and no checkout cut from it is left on disk.
+ */
+export const renovateClonesSweeper = (stateDir: string, runs: ReadonlyArray<RunFacts>): Sweeper => {
+  const kind = "renovate-clone";
+  const root = `${stateDir}/renovate-repositories`;
+  const used = new Set(
+    runs.flatMap((run) => {
+      const repository = gitlabRepositoryOf(run.settled)?.value ?? "";
+      return repository === "" ? [] : [Bun.hash(repository).toString(16)];
+    }),
+  );
+  const verdict = (
+    target: string,
+  ): Effect.Effect<{ remove: string } | { keep: string } | null, never, BunServices> =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      if (!(yield* fs.exists(target).pipe(Effect.orElseSucceed(() => false)))) return null;
+      if (used.has(target.slice(root.length + 1)))
+        return { keep: "a Run with a row cut a checkout from it" };
+      const listed = yield* shell("git", ["worktree", "list", "--porcelain"], target);
+      if (listed.code !== 0) return { keep: "git could not list its checkouts" };
+      const checkouts = listed.stdout
+        .split("\n")
+        .filter((line) => line.startsWith("worktree "))
+        .map((line) => line.slice("worktree ".length))
+        .filter((path) => path !== target);
+      for (const path of checkouts)
+        if (yield* fs.exists(path).pipe(Effect.orElseSucceed(() => true)))
+          return { keep: `a checkout cut from it is still on disk (${path})` };
+      return { remove: "no Run uses it and no checkout of it is left" };
+    });
+  return {
+    judge: Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const names = yield* fs.readDirectory(root).pipe(Effect.orElseSucceed(() => []));
+      const remove: CleanupItem[] = [];
+      const keep: CleanupKept[] = [];
+      for (const name of names) {
+        const target = `${root}/${name}`;
+        const judged = yield* verdict(target);
+        if (judged === null) continue;
+        if ("keep" in judged) keep.push({ kind, target, reason: judged.keep });
+        else remove.push({ kind, target, bytes: 0, reason: judged.remove });
+      }
+      const sizes = yield* sizesOf(remove.map((item) => item.target));
+      return { remove: remove.map((item, at) => ({ ...item, bytes: sizes[at] ?? 0 })), keep };
+    }),
+    remove: (item) => removeIf(item.target, verdict(item.target)),
   };
 };

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { Clock, Effect, FileSystem, Option } from "effect";
+import { Clock, DateTime, Effect, FileSystem, Option } from "effect";
 import { runEffect } from "./support/effect";
 import { Rig, TEST_LOGIN as LOGIN } from "./support/recorder";
 import { FakeBin } from "./support/bin";
@@ -18,7 +18,8 @@ import {
 import type { AgentEntry } from "../src/registry";
 import type { RunFacts } from "../src/runs";
 import { runFacts } from "./support/records";
-import { sweep, worktreesSweeper } from "../src/cleanup";
+import { renovateClonesSweeper, settlingOf, sweep, worktreesSweeper } from "../src/cleanup";
+import { NOTHING_SETTLING, type Settling } from "../src/worktree";
 import { shell } from "../src/mr";
 import { Herdr } from "../src/herdr";
 
@@ -27,6 +28,8 @@ let bin: FakeBin;
 /** The Runs and registered agents this test has, which is what pruning is given. */
 let recorded: RunFacts[];
 let registered: AgentEntry[];
+/** What the merge watch and the Tasks say, beside the checkouts themselves. */
+let settling: Settling;
 
 const join = (...parts: string[]) => parts.join("/").replace(/\/+/g, "/");
 
@@ -56,6 +59,7 @@ beforeEach(() =>
       bin = yield* FakeBin.make(join(rig.root, "bin"));
       recorded = [];
       registered = [];
+      settling = NOTHING_SETTLING;
     }),
   ),
 );
@@ -661,7 +665,8 @@ const settledGit = (
     {
       "status --porcelain": "",
       "rev-parse --abbrev-ref --symbolic-full-name @{u}": "origin/wt",
-      "rev-list @{u}..HEAD": "",
+      "rev-list HEAD --not": "",
+      remote: "origin",
       "ls-remote --heads origin": "",
       "worktree remove": "",
       "branch -d": "Deleted branch.",
@@ -670,7 +675,15 @@ const settledGit = (
     refusals,
   );
 
-const mergedMr = () => bin.add("glab", `echo '{"state": "merged", "iid": 14}'`);
+/** The merge watch read the branch's merge request as merged. */
+const mergedMr = (head?: string) =>
+  Effect.sync(() => {
+    const landed = { why: "merged in !14", heads: head === undefined ? [] : [head] };
+    settling = {
+      ...settling,
+      landedOn: new Map(recorded.map((run) => [run.worktree?.branch ?? "", landed])),
+    };
+  });
 
 const prune = () =>
   pruneWorktrees({
@@ -679,6 +692,7 @@ const prune = () =>
     runs: recorded,
     registered,
     cwd: rig.projectDir,
+    settling,
   });
 
 test("a settled worktree is removed, and the board says why", () =>
@@ -706,7 +720,7 @@ test("a Renovate Run's detached checkout is pruned by the same sweep, with no br
       // the default branch does not already have.
       yield* settledGit({
         "rev-parse --abbrev-ref --symbolic-full-name @{u}": "",
-        "rev-list origin/master..HEAD": "",
+        "rev-list HEAD --not": "",
       });
 
       expect(yield* prune()).toEqual(["♻ removed roaming · its Run is over and it holds nothing"]);
@@ -745,22 +759,26 @@ test("a branch with commits the remote has not seen keeps its worktree", () =>
     Effect.gen(function* () {
       yield* collieWorktree("wt");
       yield* mergedMr();
-      yield* settledGit({ "rev-list @{u}..HEAD": "a1\\nb2" });
+      yield* settledGit({ "rev-list HEAD --not": "a1\\nb2" });
 
-      expect(yield* prune()).toEqual(["kept wt · 2 commit(s) unpushed"]);
+      expect(yield* prune()).toEqual(["kept wt · 2 commit(s) on no remote"]);
     }),
   ));
 
-test("with no upstream and no default branch to compare against, the checkout stays", () =>
+test("with no upstream, commits no remote has keep the checkout", () =>
   runEffect(
     Effect.gen(function* () {
       yield* collieWorktree("wt");
       yield* mergedMr();
-      // No upstream, and this git cannot say what the default branch is either, so
-      // there is nothing to establish that the commits here exist anywhere else.
-      yield* settledGit({ "rev-parse --abbrev-ref --symbolic-full-name @{u}": "" });
+      yield* settledGit({
+        "rev-parse --abbrev-ref --symbolic-full-name @{u}": "",
+        "rev-list HEAD --not": "a1",
+      });
 
-      expect(yield* prune()).toEqual(["kept wt · no upstream to compare against"]);
+      expect(yield* prune()).toEqual(["kept wt · 1 commit(s) on no remote"]);
+      expect((yield* askedIn()).map((asked) => asked.command)).toContain(
+        "rev-list HEAD --not --remotes",
+      );
     }),
   ));
 
@@ -781,7 +799,7 @@ test("an open merge request keeps the worktree it was built in", () =>
     Effect.gen(function* () {
       yield* collieWorktree("wt");
       yield* settledGit();
-      yield* bin.add("glab", `echo '{"state": "opened", "iid": 14}'`);
+      settling = { ...settling, openOn: new Map([["wt", "!14"]]) };
 
       expect(yield* prune()).toEqual(["kept wt · !14 is still open"]);
     }),
@@ -881,6 +899,7 @@ test("a dead tab herdr would not close is reported, because nothing comes back f
           runs: recorded,
           registered,
           cwd: rig.projectDir,
+          settling,
         }),
       ).toEqual(["♻ removed wt · merged in !14 · 1 tab(s) left open"]);
       // The checkout itself still went: a tab that will not close is not a reason to
@@ -960,6 +979,7 @@ test("a checkout herdr will not remove is kept, in the words it refused with", (
           runs: recorded,
           registered,
           cwd: rig.projectDir,
+          settling,
         }),
       ).toEqual([
         `kept wt · herdr worktree remove failed (exit 1): fatal: ${worktreePath} contains modified files`,
@@ -1005,6 +1025,7 @@ test("a run starting in a checkout keeps it; its own board may still remove it",
           registered,
           cwd: worktreePath,
           keep: worktreePath,
+          settling,
         }),
       ).toEqual(["kept wt · a run is starting in it"]);
       expect((yield* rig.cmds()).includes("worktree remove")).toBe(false);
@@ -1019,6 +1040,7 @@ test("a run starting in a checkout keeps it; its own board may still remove it",
           registered,
           cwd: worktreePath,
           now: (yield* Clock.currentTimeMillis) + 10 * 60_000,
+          settling,
         }),
       ).toEqual(["♻ removed wt · merged in !14"]);
     }),
@@ -1056,6 +1078,7 @@ test("a checkout an agent in another herdr session works in is kept", () =>
         runs: recorded,
         registered,
         cwd: rig.projectDir,
+        settling,
       });
 
       expect(said).toEqual(["kept wt · an agent is working in it"]);
@@ -1080,6 +1103,7 @@ test("a herdr that will not list panes judges nothing, and says so", () =>
           runs: recorded,
           registered,
           cwd: rig.projectDir,
+          settling,
         }),
       ).toEqual(["kept wt · could not ask herdr what is live"]);
       expect((yield* rig.cmds()).includes("worktree remove")).toBe(false);
@@ -1094,6 +1118,7 @@ test("a herdr that will not list panes judges nothing, and says so", () =>
           runs: recorded,
           registered,
           cwd: rig.projectDir,
+          settling,
         }),
       ).toEqual(["♻ removed wt · merged in !14"]);
     }),
@@ -1115,6 +1140,7 @@ test("a run still going keeps its checkout, whether or not an agent is in it", (
           runs: recorded,
           registered,
           cwd: rig.projectDir,
+          settling,
         }),
       ).toEqual(["kept wt · a run is still working in it"]);
     }),
@@ -1916,6 +1942,7 @@ test("a board outside any repository still sweeps the checkouts the Runs recorde
           runs: recorded,
           registered,
           cwd: home,
+          settling,
         }),
       ).toEqual(["♻ removed wt · merged in !14"]);
       expect(yield* asked()).toContain(`worktree remove ${worktreePath}`);
@@ -1946,7 +1973,7 @@ test("a merged branch whose remote-tracking ref was pruned away is settled", () 
       yield* settledGit({
         "rev-parse --abbrev-ref --symbolic-full-name @{u}": "",
         "symbolic-ref --short refs/remotes/origin/HEAD": "origin/master",
-        "rev-list origin/master..HEAD": "",
+        "rev-list HEAD --not": "",
       });
 
       expect(yield* prune()).toEqual(["♻ removed wt · merged in !14"]);
@@ -1961,10 +1988,10 @@ test("without an upstream, a commit that is on no other branch keeps the checkou
       yield* settledGit({
         "rev-parse --abbrev-ref --symbolic-full-name @{u}": "",
         "symbolic-ref --short refs/remotes/origin/HEAD": "origin/master",
-        "rev-list origin/master..HEAD": "c1\\nc2",
+        "rev-list HEAD --not": "c1\\nc2",
       });
 
-      expect(yield* prune()).toEqual(["kept wt · 2 commit(s) on no branch but this one"]);
+      expect(yield* prune()).toEqual(["kept wt · 2 commit(s) on no remote"]);
     }),
   ));
 
@@ -2028,14 +2055,18 @@ test("a run parked for a human keeps the checkout it will carry on in", () =>
     }),
   ));
 
-test("a stopped run keeps the checkout a resume carries on in", () =>
+test("a stopped run keeps the checkout a resume carries on in, until its work lands", () =>
   runEffect(
     Effect.gen(function* () {
-      yield* collieWorktree("wt");
+      const at = yield* collieWorktree("wt");
       recorded = recorded.map((run) => ({ ...run, state: "stopped" as const }));
       yield* settledGit();
-      yield* mergedMr();
+      settling = { ...settling, openOn: new Map([["wt", "!14"]]) };
       expect(yield* prune()).toEqual(["kept wt · a stopped run can resume in it"]);
+
+      yield* mergedMr();
+      // Judged afresh, past the verdict the last round left standing.
+      expect((yield* sweeper().judge).remove.map((item) => item.target)).toEqual([at]);
     }),
   ));
 
@@ -2063,7 +2094,7 @@ test("with no upstream, a branch the remote still has is kept", () =>
       yield* settledGit({
         "rev-parse --abbrev-ref --symbolic-full-name @{u}": "",
         "symbolic-ref --short refs/remotes/origin/HEAD": "origin/master",
-        "rev-list origin/master..HEAD": "",
+        "rev-list HEAD --not": "",
         "ls-remote --heads origin": "deadbeef refs/heads/wt",
       });
 
@@ -2094,6 +2125,7 @@ test("one repository's board neither forgets nor reports another's", () =>
           runs: recorded,
           registered,
           cwd: elsewhere,
+          settling,
         }),
       ).toEqual([]);
 
@@ -2228,6 +2260,7 @@ const sweeper = (herdr = new Herdr(rig.pluginEnv())) =>
     runs: recorded,
     registered,
     cwd: rig.projectDir,
+    settling: Effect.sync(() => settling),
   });
 
 test("cleanup lists a settled worktree as removable, and sweeping removes it", () =>
@@ -2279,5 +2312,160 @@ test("cleanup keeps every worktree when herdr will not list panes, and says why"
         { kind: "worktree", target: at, reason: "could not ask herdr what is live" },
       ]);
       expect((yield* rig.cmds()).includes("worktree remove")).toBe(false);
+    }),
+  ));
+
+test("a merge the merge watch recorded on GitHub settles a branch still on the remote", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const at = yield* collieWorktree("wt");
+      recorded = recorded.map((run) => ({ ...run, mr: "https://github.com/o/r/pull/5" }));
+      yield* settledGit({ "ls-remote --heads origin": "deadbeef refs/heads/wt" });
+      yield* fs.makeDirectory(`${rig.stateDir}/board`, { recursive: true });
+      yield* fs.writeFileString(
+        `${rig.stateDir}/board/mr-states.json`,
+        '{"o/r#5":{"state":"merged","checks":{"state":"passed"},"head":"abc"}}',
+      );
+      settling = yield* settlingOf({
+        stateDir: rig.stateDir,
+        runs: recorded,
+        tasks: [],
+        sessions: [new Herdr(rig.pluginEnv())],
+        protect: [],
+      });
+
+      expect(yield* prune()).toEqual(["♻ removed wt · merged in o/r#5"]);
+      expect(yield* asked()).not.toContain(`ls-remote --heads origin wt`);
+      expect(
+        (yield* askedIn()).some((one) => one.cwd === at && one.command === "status --porcelain"),
+      ).toBe(true);
+    }),
+  ));
+
+test("a squash-merged branch goes when its head is the head that merged", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* collieWorktree("wt");
+      yield* mergedMr("abc123");
+      yield* settledGit({
+        "rev-parse --abbrev-ref --symbolic-full-name @{u}": "",
+        "rev-list HEAD --not": "c1\\nc2",
+        "rev-parse HEAD": "abc123",
+      });
+
+      expect(yield* prune()).toEqual(["♻ removed wt · merged in !14"]);
+    }),
+  ));
+
+test("a squash-merged branch whose head moved on since keeps its checkout", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* collieWorktree("wt");
+      yield* mergedMr("abc123");
+      yield* settledGit({
+        "rev-parse --abbrev-ref --symbolic-full-name @{u}": "",
+        "rev-list HEAD --not": "c3",
+        "rev-parse HEAD": "fff999",
+      });
+
+      expect(yield* prune()).toEqual(["kept wt · 1 commit(s) on no remote"]);
+    }),
+  ));
+
+test("a checkout whose Task's workspace is still open is kept, as the last condition", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const at = yield* collieWorktree("wt");
+      yield* settledGit();
+      yield* mergedMr();
+      settling = {
+        ...settling,
+        workspaceHolds: new Map([[at, "its Task's workspace is still open"]]),
+      };
+
+      expect(yield* prune()).toEqual(["kept wt · its Task's workspace is still open"]);
+    }),
+  ));
+
+test("the plugin root is never removed, even where a Run recorded it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const at = yield* collieWorktree("wt");
+      yield* settledGit();
+      yield* mergedMr();
+      settling = { ...settling, protect: new Set([at]) };
+
+      expect(yield* prune()).toEqual([]);
+      expect((yield* rig.cmds()).includes("worktree remove")).toBe(false);
+    }),
+  ));
+
+test("a Collie checkout whose branch was switched is judged, and removed, as it is now", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const at = yield* collieWorktree("wt");
+      const made = recorded[0]!.worktree!.made_at!;
+      yield* rig.setWorktrees([{ branch: "other", path: at, open_workspace_id: "w7" }]);
+      // The same checkout git wrote: only the branch in it changed.
+      const when = DateTime.toDateUtc(DateTime.makeUnsafe(made));
+      yield* fs.utimes(`${at}/.git`, when, when);
+      yield* settledGit();
+      settling = {
+        ...settling,
+        landedOn: new Map([["other", { why: "merged in !15", heads: [] }]]),
+      };
+
+      expect(yield* prune()).toEqual(["♻ removed other · merged in !15"]);
+      expect(yield* asked()).toContain("branch -d other");
+    }),
+  ));
+
+test("a remote named other than origin settles a branch it no longer has", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* collieWorktree("wt");
+      yield* settledGit({
+        "rev-parse --abbrev-ref --symbolic-full-name @{u}": "",
+        remote: "gitlab",
+        "ls-remote --heads gitlab": "",
+      });
+
+      expect(yield* prune()).toEqual(["♻ removed wt · its remote branch is gone"]);
+      expect(yield* asked()).toContain("ls-remote --heads gitlab wt");
+    }),
+  ));
+
+test("a Renovate clone no Run uses and no checkout is left of goes; one a Run used stays", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const root = `${rig.stateDir}/renovate-repositories`;
+      const repository = "gitlab.example/group/kept";
+      const used = `${root}/${Bun.hash(repository).toString(16)}`;
+      const unused = `${root}/abc`;
+      for (const clone of [used, unused]) yield* fs.makeDirectory(clone, { recursive: true });
+      yield* fakeGitAnswering({ "worktree list --porcelain": "worktree $PWD\\n" });
+      const runs = [
+        runFacts({
+          id: "r-renovate",
+          settled: {
+            inputs: { repository },
+            strategies: { repository: "gitlab-repository" },
+          },
+        }),
+      ];
+
+      const report = yield* sweep(
+        [renovateClonesSweeper(rig.stateDir, runs)],
+        rig.stateDir,
+        "host",
+      );
+      expect(report.remove.map((item) => item.target)).toEqual([unused]);
+      expect(report.keep).toEqual([
+        { kind: "renovate-clone", target: used, reason: "a Run with a row cut a checkout from it" },
+      ]);
+      expect(yield* fs.exists(unused)).toBe(false);
     }),
   ));

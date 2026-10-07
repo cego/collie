@@ -63,7 +63,9 @@ import { sideJobs } from "./side-jobs";
 import {
   collieCache,
   compactionSweeper,
+  renovateClonesSweeper,
   runnersSweeper,
+  settlingOf,
   stateSweeper,
   taskWorkspacesSweeper,
   generationsDir,
@@ -452,12 +454,13 @@ const hostBoard = (dir: string) =>
       const herds = yield* liveHerds(herdr, env);
       const sessions = herds.map((session) => session.herdr);
       const all = yield* runs;
+      const tasks = yield* listTasks(env.stateDir);
       return [
         // Before the worktrees: a checkout goes only once its Task's workspace has closed.
         taskWorkspacesSweeper({
           stateDir: env.stateDir,
           sessions: herds,
-          tasks: yield* listTasks(env.stateDir),
+          tasks,
           // No board, no Task judged Finished, so nothing closed.
           views: yield* build.pipe(Effect.orElseSucceed(() => [])),
           runs: all,
@@ -470,11 +473,19 @@ const hostBoard = (dir: string) =>
           runs: all,
           registered: yield* everyRegistered(env.stateDir),
           cwd: env.cwd,
+          settling: settlingOf({
+            stateDir: env.stateDir,
+            runs: all,
+            tasks,
+            sessions,
+            protect: [env.pluginRoot],
+          }),
         }),
         generationsSweeper(generationsDir()),
         stateSweeper(env.stateDir, new Set(all.map((run) => run.id))),
         compactionSweeper(env.stateDir, sessions),
         runnersSweeper(`${collieCache()}/runners`, BUILD),
+        renovateClonesSweeper(env.stateDir, all),
       ];
     });
     return { env, herdr, bun, runs, build, unattended, sweepers };

@@ -350,7 +350,9 @@ reuses only the checkout it recorded itself, and never claims a new one.
 The worktree outlives the merge request: it is still there when the run ends, so you can
 look at what it built. It is removed only once **settled** — the tree is clean, it holds
 no commit that is not on the remote already, nothing is working in it or could be resumed
-in it, and its merge request is merged or closed (or its remote branch is gone). A
+in it while its work has not landed, its merge request is merged or closed on GitHub or
+GitLab (or a Disposition says what became of it, or its remote branch is gone), and its
+Task's workspace has closed. A squash merge counts: the head that merged is on the remote. A
 `renovate` checkout has no branch to ask either question about, so a clean one nothing is
 working in is settled, and there is no branch to delete with it. Pruning is part of the
 host's [cleanup](#cleanup) sweep, every ten minutes, whether or not a pane is open. The board says both what went and what is being held on to, with
@@ -359,7 +361,7 @@ the reason:
 ```
 Worktrees
   ♻ removed add-a-picker · merged in !14
-  kept fix-the-parser · 2 commit(s) unpushed
+  kept fix-the-parser · 2 commit(s) on no remote
 ```
 
 Nothing is ever removed with a force flag, and a checkout you made yourself is never
