@@ -103,3 +103,48 @@ test(
     ),
   30_000,
 );
+
+test(
+  "the chat follows what arrives while the reader is near the bottom, and stays put once they scroll up",
+  () =>
+    run(
+      Effect.gen(function* () {
+        const list = app!.page.getByTestId("chat-messages");
+        const arrive = (count: number) =>
+          Effect.promise(() =>
+            list.evaluate((ol, n) => {
+              for (let i = 0; i < n; i++) {
+                const said = document.createElement("li");
+                said.textContent = "one more line of the conversation";
+                said.style.minHeight = "48px";
+                ol.append(said);
+              }
+            }, count),
+          );
+        const fromBottom = () =>
+          settled("the list scrolled", () =>
+            list.evaluate((ol) => ol.scrollHeight - ol.scrollTop - ol.clientHeight),
+          );
+        /** Scrolls to `gap` pixels above the bottom, as the reader would. */
+        const scrollUp = (gap: number) =>
+          Effect.promise(() =>
+            list.evaluate((ol, by) => {
+              ol.scrollTop = Math.max(0, ol.scrollHeight - ol.clientHeight - by);
+              ol.dispatchEvent(new Event("scroll"));
+            }, gap),
+          );
+
+        yield* arrive(40);
+        expect(yield* fromBottom()).toBeLessThanOrEqual(1);
+
+        yield* scrollUp(100_000);
+        yield* arrive(5);
+        expect(yield* Effect.promise(() => list.evaluate((ol) => ol.scrollTop))).toBe(0);
+
+        yield* scrollUp(40);
+        yield* arrive(5);
+        expect(yield* fromBottom()).toBeLessThanOrEqual(1);
+      }),
+    ),
+  30_000,
+);

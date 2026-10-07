@@ -1064,7 +1064,9 @@ session's socket. Desktop never starts, signals or connects to a host by any oth
 
 ### The Flock chat
 
-Right of the board is a conversation about the whole Flock. Ask what is happening anywhere
+Right of the board is a conversation about the whole Flock, 32rem wide but never more than
+40% of the window. It follows what arrives while you are near the bottom, and stays where
+you are once you scroll up. Ask what is happening anywhere
 and have it act on any Machine: it reaches Collie through the same tools as Native chat,
 answered by each Machine's host over that Machine's `chat` channel, and carries out what
 you ask at once. Everything it names is `<machine>:<id>`, as in `vm-mk:run-04ab8fe5`; a bare

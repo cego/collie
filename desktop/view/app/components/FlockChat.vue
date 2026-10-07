@@ -32,6 +32,22 @@ const desktopSaid = (message: Message) => {
     ? first.content.slice(DESKTOP_SAID.length).trim()
     : null;
 };
+// Follows what arrives while the reader is near the bottom; scrolled up, it stays put.
+const NEAR_BOTTOM = 80;
+const list = ref<HTMLOListElement>();
+let following = true;
+const follow = () => {
+  const at = list.value;
+  if (at !== undefined) following = at.scrollHeight - at.scrollTop - at.clientHeight <= NEAR_BOTTOM;
+};
+const arrived = new MutationObserver(() => {
+  if (following && list.value !== undefined) list.value.scrollTop = list.value.scrollHeight;
+});
+onMounted(() => {
+  if (list.value !== undefined)
+    arrived.observe(list.value, { childList: true, subtree: true, characterData: true });
+});
+onBeforeUnmount(() => arrived.disconnect());
 const { chip, choose } = useChip();
 const { popIn } = usePopOut();
 const draft = ref("");
@@ -70,7 +86,7 @@ const queuedText = ({ content }: QueuedMessage) => (isString(content) ? content 
 
 <template>
   <aside data-testid="flock-chat" class="flex h-full flex-col border-l border-default">
-    <header class="flex items-center gap-1 border-b border-default px-4 py-2">
+    <header class="flex items-center gap-1 border-b border-default px-6 py-2">
       <UIcon name="i-lucide-messages-square" class="size-4 text-primary" />
       <strong class="mr-auto ml-1 text-sm">Flock chat</strong>
       <UButton
@@ -139,7 +155,12 @@ const queuedText = ({ content }: QueuedMessage) => (isString(content) ? content 
         />
       </template>
     </header>
-    <ol class="flex flex-1 flex-col gap-3 overflow-y-auto p-4">
+    <ol
+      ref="list"
+      data-testid="chat-messages"
+      class="flex flex-1 flex-col gap-3 overflow-y-auto px-6 py-4"
+      @scroll="follow"
+    >
       <template v-for="message in messages" :key="message.id">
         <li
           v-if="desktopSaid(message) !== null"
@@ -217,8 +238,8 @@ const queuedText = ({ content }: QueuedMessage) => (isString(content) ? content 
         />
       </li>
     </ol>
-    <p v-if="error" class="px-4 text-sm text-error">{{ error.message }}</p>
-    <div v-if="chip !== null" class="px-3 pt-2">
+    <p v-if="error" class="px-6 text-sm text-error">{{ error.message }}</p>
+    <div v-if="chip !== null" class="px-6 pt-2">
       <UBadge data-testid="chat-chip" color="primary" variant="subtle" class="max-w-full gap-1">
         <span class="truncate">About: {{ aboutLine(chip) }}</span>
         <UButton
@@ -232,7 +253,7 @@ const queuedText = ({ content }: QueuedMessage) => (isString(content) ? content 
         />
       </UBadge>
     </div>
-    <form class="flex gap-2 border-t border-default p-3" @submit.prevent="send">
+    <form class="flex gap-2 border-t border-default px-6 py-3" @submit.prevent="send">
       <UTextarea
         v-model="draft"
         data-testid="chat-input"
