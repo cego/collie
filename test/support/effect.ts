@@ -1,11 +1,14 @@
 import * as BunServices from "@effect/platform-bun/BunServices";
-import { Clock, Config, Effect, ManagedRuntime } from "effect";
+import { Clock, Config, Effect, ManagedRuntime, Scope } from "effect";
 import { TestClock } from "effect/testing";
 
 const runtime = ManagedRuntime.make(BunServices.layer);
 
-export function runEffect<A, E>(effect: Effect.Effect<A, E, BunServices.BunServices>): Promise<A> {
-  return runtime.runPromise(effect);
+/** Runs `effect` in a scope of its own, closed when it ends. */
+export function runEffect<A, E>(
+  effect: Effect.Effect<A, E, BunServices.BunServices | Scope.Scope>,
+): Promise<A> {
+  return runtime.runPromise(Effect.scoped(effect));
 }
 
 /**

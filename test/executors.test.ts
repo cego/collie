@@ -86,7 +86,8 @@ beforeEach(() =>
       stateDir = yield* fs.makeTempDirectory({ prefix: "hw-executors-" });
       // The baseline layer is the repository's own definitions, so there is a Workflow to
       // fork; the user layer is a temp directory, so forking one writes nowhere real.
-      const userDir = yield* fs.makeTempDirectory({ prefix: "hw-executors-config-" });
+      const userDir = `${stateDir}/config`;
+      yield* fs.makeDirectory(userDir);
       const binPath = yield* fakeHerdrOn(stateDir, [
         { pane_id: "p-collie", tab_id: "t-1", label: "collie" },
         { pane_id: "p-shared", tab_id: "t-2", label: "collie" },

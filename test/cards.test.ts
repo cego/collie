@@ -216,7 +216,7 @@ test("the newest card per slice is what a reader sees, and the journal keeps the
   runEffect(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const dir = yield* fs.makeTempDirectory({ prefix: "hw-cards-" });
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "hw-cards-" });
       const base = (over: Partial<Card>): Card => ({
         id: "c1",
         run: "r1",
@@ -250,8 +250,6 @@ test("the newest card per slice is what a reader sees, and the journal keeps the
       expect(yield* readCards(dir)).toHaveLength(3);
       const shown = newest(yield* readCards(dir));
       expect(shown.map((card) => card.id)).toEqual(["c2", "c3"]);
-
-      yield* fs.remove(dir, { recursive: true, force: true });
     }),
   ));
 
@@ -260,7 +258,7 @@ test("a checkpoint is read as claims, and one nobody can decode is skipped", () 
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const dir = yield* fs.makeTempDirectory({ prefix: "hw-checkpoints-" });
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "hw-checkpoints-" });
       const progress = path.join(dir, "steering", "progress");
       yield* fs.makeDirectory(progress, { recursive: true });
       yield* fs.writeFileString(
@@ -272,7 +270,5 @@ test("a checkpoint is read as claims, and one nobody can decode is skipped", () 
       const found = yield* readCheckpoints(dir);
       expect(found.map((entry) => entry.checkpoint.ticket)).toEqual(["001-intent.md"]);
       expect(found[0]?.checkpoint.claims).toEqual(["the schema round trips"]);
-
-      yield* fs.remove(dir, { recursive: true, force: true });
     }),
   ));

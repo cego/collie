@@ -11,6 +11,7 @@ import {
   PlatformError,
   Queue,
   Schema,
+  Scope,
 } from "effect";
 import { readEnv, type PluginEnv } from "../../src/env";
 import { Herdr } from "../../src/herdr";
@@ -214,6 +215,11 @@ export class Rig {
       yield* rig.setup();
       return rig;
     });
+  }
+
+  /** A Rig closed when its scope is, whatever the test did. */
+  static scoped(): Effect.Effect<Rig, RigError, RigServices | Scope.Scope> {
+    return Effect.acquireRelease(Rig.make(), (rig) => Effect.ignore(rig.close()));
   }
 
   private setup(): Effect.Effect<void, PlatformError.PlatformError, FileSystem.FileSystem> {

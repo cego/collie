@@ -59,7 +59,7 @@ test("a terminal that fails as it starts, or is not there, did not open", () =>
   runEffect(
     Effect.gen(function* () {
       expect(yield* launched(["true"])).toBe(true);
-      expect(yield* launched(["sleep", "5"])).toBe(true);
+      expect(yield* launched(["sleep", "1.5"])).toBe(true);
       expect(yield* launched(["false"])).toBe(false);
       expect(yield* launched(["/nonexistent/terminal"])).toBe(false);
     }),

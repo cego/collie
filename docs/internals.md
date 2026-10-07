@@ -672,10 +672,18 @@ The individual scripts in `package.json` still work for focused feedback.
 Desktop has an install of its own, so its types are checked apart, with
 `cd desktop && bun install && bun run typecheck`; CI runs that as a job of its own.
 
-Every host a test starts ends with that test. `test/support/hosts.ts`, a preload, gives
-each test file a temporary root of its own and tells every host started under it
-(`COLLIE_HOST_WATCH_PID`) to live no longer than the test process; after each test, a host
-still holding a directory under that root is killed and fails the test that left it.
+A test leaves nothing behind. `test/support/hosts.ts`, a preload, gives each test file a
+temporary root of its own, `TMPDIR` inside it, and removes it when the file ends. Every
+process a test starts carries `COLLIE_TEST_ROOT` naming that root, and every host is told
+(`COLLIE_HOST_WATCH_PID`) to live no longer than the test process. After each test, a host
+still holding a directory under the root is killed and whatever the test made directly
+under the root is removed; either fails the test, naming what it left. After the file, a
+process still carrying the marker is killed and fails the file, as does what a `beforeAll`
+made and left. A test that failed or timed out is cleaned up the same way, because Bun
+does not interrupt a timed-out test's own scope. `bun run test` first removes every
+`collie-test-<pid>-*` root whose pid is dead, and kills what still carries its marker, so
+a killed suite is cleaned up by the next one; a live pid's root is another suite's and is
+left alone.
 
 The same preload keeps the suite out of the operator's herd. Before any test file loads it
 drops `COLLIE_USER_DIR`, `COLLIE_CWD` and every `HERDR_*` variable but `HERDR_API_SCHEMA`,

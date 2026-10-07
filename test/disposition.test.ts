@@ -134,7 +134,7 @@ test("a correction is a new line, so what people believed before is still there"
   runEffect(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const dir = yield* fs.makeTempDirectory({ prefix: "hw-disposition-" });
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "hw-disposition-" });
 
       yield* recordDisposition(dir, line({ kind: "abandoned", ref: "", note: "dropped" }));
       yield* recordDisposition(dir, line({ at: "2026-09-12T08:00:00.000Z", by: "mk" }));
@@ -144,8 +144,6 @@ test("a correction is a new line, so what people believed before is still there"
       expect(latest(lines)?.ref).toBe("cego/collie!43");
       // An abandoned Run with nothing to point at still reads without a dangling space.
       expect(statusLine("failed", lines[0]!)).toBe("failed · abandoned by mk");
-
-      yield* fs.remove(dir, { recursive: true, force: true });
     }),
   ));
 
@@ -153,9 +151,8 @@ test("a Run nobody recorded a disposition for reads exactly as it always did", (
   runEffect(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const dir = yield* fs.makeTempDirectory({ prefix: "hw-disposition-" });
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "hw-disposition-" });
       expect(yield* readDispositions(dir)).toEqual([]);
       expect(statusLine("done", latest(yield* readDispositions(dir)))).toBe("done");
-      yield* fs.remove(dir, { recursive: true, force: true });
     }),
   ));
