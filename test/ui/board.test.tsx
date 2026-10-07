@@ -24,7 +24,6 @@ import { Herdr } from "../../src/herdr";
 import { followBoard } from "../../src/lifecycle";
 import { scopeFor } from "../../src/registry";
 import { focus } from "../support/focus";
-import { stopHost } from "../support/host";
 import { collie, proves } from "../support/world";
 import { epochMs } from "../../src/time";
 
@@ -1719,7 +1718,8 @@ test(
               times: 40,
             }),
           );
-          yield* stopHost(world.state);
+          // The host is left for `proves` to stop once this scope has closed: stopped here,
+          // the board followed above reconnects and starts another that outlives the test.
           const app = yield* mount(state);
           const said = app.said();
           expect(said).toContain("One task is waiting on you.");

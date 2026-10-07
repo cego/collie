@@ -22,6 +22,9 @@ import { alive, kill, MARKER, marked } from "./sweep";
 const root = mkdtempSync(join(tmpdir(), `collie-test-${process.pid}-`));
 process.env.TMPDIR = root;
 process.env.COLLIE_HOST_WATCH_PID = String(process.pid);
+// A stopped host waits this long for its steps before exiting; well inside `settled` below,
+// so a host told to stop is gone before the check, not reported as left behind.
+process.env.COLLIE_HOST_STOP_GRACE ??= "500 millis";
 process.env[MARKER] = root;
 for (const key of Object.keys(process.env))
   if (key.startsWith("HERDR_") && key !== "HERDR_API_SCHEMA") delete process.env[key];
