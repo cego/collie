@@ -760,6 +760,21 @@ export const PaneAt = Schema.Struct({
 });
 export type PaneAt = typeof PaneAt.Type;
 
+/** One of Collie's settings as a Machine has it, and when it was last set; null is unset. */
+export const SharedSetting = Schema.Struct({
+  key: Schema.String,
+  value: Schema.NullOr(Schema.Json),
+  at: Schema.String,
+});
+export type SharedSetting = typeof SharedSetting.Type;
+
+/** A Machine's settings that a Flock shares, and the Desktop that last gave it the Flock's. */
+export const SharedSettings = Schema.Struct({
+  settings: Schema.Array(SharedSetting),
+  flock: Schema.NullOr(Schema.Struct({ by: Schema.String, at: Schema.String })),
+});
+export type SharedSettings = typeof SharedSettings.Type;
+
 /**
  * What any front door, on this computer or another, may ask a host. Every operation takes
  * a request id: the same one twice is one operation, and with other arguments is refused.
@@ -983,6 +998,17 @@ export const FrontDoorRpcs = RpcGroup.make(
   Rpc.make("focus", {
     payload: { runId: Schema.String, request: Schema.String },
     success: PaneAt,
+    error: Schema.Union([HostRefused, RequestConflict]),
+  }),
+  /** This Machine's settings that a Flock shares: those ever set, each with when. */
+  Rpc.make("settings", { success: SharedSettings, error: HostRefused }),
+  /**
+   * The Flock's settings, each written with its own edit's time, where it is newer than
+   * this Machine's last edit of that key.
+   */
+  Rpc.make("setSettings", {
+    payload: { settings: Schema.Array(SharedSetting), request: Schema.String },
+    success: SharedSettings,
     error: Schema.Union([HostRefused, RequestConflict]),
   }),
   /** Carries out what a finished Run offers, as a Run of its own. */

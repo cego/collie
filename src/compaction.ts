@@ -11,14 +11,7 @@ import type { Channel } from "./dispatcher";
 import type { Herdr, Submission } from "./herdr";
 import { ensureLockDir, withLock } from "./lock";
 import { reason } from "./naming";
-
-/**
- * The user-wide threshold in current-context tokens, and the value that turns the
- * feature off. Absolute rather than a percentage of a window: the four harnesses
- * measure different windows, and one number is what a human can reason about.
- */
-export const COMPACT_AT_TOKENS = 372_000;
-export const COMPACTION_OFF = 0;
+import { COMPACTION_OFF } from "./settings";
 
 /**
  * How long Collie waits for a compaction request to resolve before it pauses the Run.
@@ -51,11 +44,6 @@ export function threshold(configured: number): Threshold {
     };
   }
   return { tokens: configured };
-}
-
-/** Whether a configured value is one a Run can use, for the writers that refuse it. */
-export function validThreshold(configured: number): boolean {
-  return !("bad" in threshold(configured));
 }
 
 /**

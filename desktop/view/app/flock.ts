@@ -68,6 +68,10 @@ export const credentialsAtom = FlockClient.runtime
     Stream.unwrap(FlockClient.use((client) => Effect.succeed(client("credentials", undefined)))),
   )
   .pipe(Atom.keepAlive);
+/** The Flock's settings; asking syncs every connected Machine first. */
+export const flockSettingsAtom = FlockClient.runtime.atom(
+  Stream.unwrap(FlockClient.use((client) => Effect.succeed(client("flockSettings", undefined)))),
+);
 /** A Run's details while some record shows them, keyed by `runDetailKey`. */
 export const runDetailAtom = Atom.family((key: string) => {
   const { installation, runId } = Schema.decodeSync(RunOn)(key);

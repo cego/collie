@@ -1,0 +1,190 @@
+// The Flock's settings as Desktop keeps them: each key decided by its latest edit, wherever
+// that was made, and given to every Machine through its host.
+
+import { expect, test } from "bun:test";
+import { Effect, SubscriptionRef } from "effect";
+import type { SharedSetting, SharedSettings } from "../src/board-model";
+import {
+  editSetting,
+  type FlockSettings,
+  NO_FLOCK_SETTINGS,
+  settingRows,
+  takeFrom,
+} from "../desktop/src/shared/flock-settings";
+import { flockSync } from "../desktop/src/bun/flock-settings";
+
+const at = (hour: number) => `2026-10-07T${String(hour).padStart(2, "0")}:00:00.000Z`;
+const set = (key: string, value: SharedSetting["value"], hour: number): SharedSetting => ({
+  key,
+  value,
+  at: at(hour),
+});
+
+test("the first sync takes a key set on only one Machine from it", () => {
+  const { flock, give } = takeFrom(NO_FLOCK_SETTINGS, "vm-a", [set("model", "sonnet", 9)]);
+
+  expect(flock.settings.model).toEqual({
+    value: "sonnet",
+    at: at(9),
+    from: "vm-a",
+    differed: false,
+  });
+  expect(give).toEqual([]);
+  // The next Machine is given what the Flock has, with its edit's time.
+  expect(takeFrom(flock, "vm-b", []).give).toEqual([set("model", "sonnet", 9)]);
+});
+
+test("a key set differently on several Machines takes the latest, and says where from", () => {
+  const first = takeFrom(NO_FLOCK_SETTINGS, "vm-a", [set("scope", "all", 9)]).flock;
+  const { flock, give } = takeFrom(first, "vm-b", [set("scope", "local", 11)]);
+
+  expect(flock.settings.scope).toMatchObject({ value: "local", from: "vm-b", differed: true });
+  expect(give).toEqual([]);
+  // Said once: a later edit on a Machine already synced is just the latest.
+  const later = takeFrom(flock, "vm-a", [set("scope", "all", 12)]).flock;
+  expect(later.settings.scope).toMatchObject({ value: "all", from: "vm-a", differed: false });
+  // vm-a has the older value, so it is given vm-b's when it is next seen.
+  expect(takeFrom(flock, "vm-a", [set("scope", "all", 9)]).give).toEqual([
+    set("scope", "local", 11),
+  ]);
+  // An older value elsewhere loses to the Flock's, which keeps saying where it came from.
+  const older = takeFrom(flock, "vm-c", [set("scope", "all", 8)]);
+  expect(older.flock.settings.scope).toMatchObject({ value: "local", from: "vm-b" });
+  expect(older.give).toEqual([set("scope", "local", 11)]);
+});
+
+test("an edit in Desktop is the latest, is checked as the TUI checks it, and differs from nothing", () => {
+  const first = takeFrom(NO_FLOCK_SETTINGS, "vm-a", [set("scope", "all", 9)]).flock;
+  const edited = editSetting(first, "max_iterations", " 8 ", at(12));
+  expect(edited).toMatchObject({
+    settings: { max_iterations: { value: 8, at: at(12), from: "Desktop", differed: false } },
+  });
+  expect(editSetting(first, "max_iterations", "eight", at(12))).toEqual({
+    refused: 'max_iterations has to be a whole number, not "eight"',
+  });
+  // Cleared is an edit too: it unsets the key on every Machine.
+  expect(editSetting(first, "scope", "", at(12))).toMatchObject({
+    settings: { scope: { value: null, from: "Desktop" } },
+  });
+});
+
+test("Settings shows every setting with its control, its value and its default", () => {
+  const flock = takeFrom(NO_FLOCK_SETTINGS, "vm-a", [
+    set("scope", "all", 9),
+    set("models.claude", ["claude-x"], 9),
+  ]).flock;
+  const rows = settingRows(takeFrom(flock, "vm-b", [set("scope", "local", 11)]).flock);
+
+  expect(rows.find((row) => row.key === "scope")).toMatchObject({
+    kind: "choice",
+    choices: ["local", "all"],
+    value: "local",
+    fallback: "local",
+    from: "vm-b",
+  });
+  expect(rows.find((row) => row.key === "max_iterations")).toMatchObject({
+    kind: "number",
+    value: "",
+    fallback: "5",
+    from: null,
+  });
+  expect(rows.find((row) => row.key === "models.claude")).toMatchObject({ value: "claude-x" });
+  expect(rows.find((row) => row.key === "proactive")).toMatchObject({ kind: "boolean" });
+  // The GitLab host is shared too, but beside the tokens made for it.
+  expect(rows.map((row) => row.key)).not.toContain("gitlab_host");
+});
+
+test("a Machine's GitLab host and a value its setting refuses are not the Flock's", () => {
+  const { flock } = takeFrom(NO_FLOCK_SETTINGS, "vm-a", [
+    set("gitlab_host", "gitlab.elsewhere.com", 9),
+    set("scope", "everywhere", 9),
+    set("model", "sonnet", 9),
+  ]);
+  expect(Object.keys(flock.settings)).toEqual(["model"]);
+});
+
+/** A Machine's host as Collie's answers: each key written only where the given edit is later. */
+const machine = (name: string, held: ReadonlyArray<SharedSetting>, meanwhile = Effect.void) => {
+  const asked: Array<ReadonlyArray<SharedSetting>> = [];
+  let has = [...held];
+  const answer = (): SharedSettings => ({ settings: has, flock: null });
+  const door = {
+    settings: () => meanwhile.pipe(Effect.map(answer)),
+    setSettings: ({ settings }: { settings: ReadonlyArray<SharedSetting> }) =>
+      Effect.sync(() => {
+        asked.push(settings);
+        for (const given of settings) {
+          const own = has.find(({ key }) => key === given.key);
+          if (own === undefined || own.at < given.at)
+            has = [...has.filter(({ key }) => key !== given.key), given];
+        }
+        return answer();
+      }),
+  };
+  return { name, door, asked };
+};
+
+const syncer = (flock: SubscriptionRef.SubscriptionRef<FlockSettings>, ...machines: Machine[]) =>
+  flockSync({
+    flock,
+    machines: () => machines,
+    save: () => Effect.void,
+    request: Effect.succeed("r"),
+  });
+
+type Machine = ReturnType<typeof machine>;
+
+test("a Machine is synced through its host: given what it lacks, and asked even with nothing to give", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const edited = editSetting(NO_FLOCK_SETTINGS, "scope", "all", at(12));
+      if ("refused" in edited) return yield* Effect.die(edited.refused);
+      const flock = yield* SubscriptionRef.make(edited);
+      const vmA = machine("vm-a", [set("model", "sonnet", 9)]);
+      const { syncOn } = yield* syncer(flock, vmA);
+
+      yield* syncOn(vmA);
+      expect(vmA.asked).toEqual([[set("scope", "all", 12)]]);
+      expect(Object.keys((yield* SubscriptionRef.get(flock)).settings).sort()).toEqual([
+        "model",
+        "scope",
+      ]);
+      // Nothing left to give, yet asked, so the Machine records that a Desktop shares them.
+      yield* syncOn(vmA);
+      expect(vmA.asked).toEqual([[set("scope", "all", 12)], []]);
+    }),
+  ));
+
+test("an edit made in Desktop during a sync survives it", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const flock = yield* SubscriptionRef.make(NO_FLOCK_SETTINGS);
+      const editing = SubscriptionRef.update(flock, (now) => {
+        const edited = editSetting(now, "max_iterations", "8", at(14));
+        return "refused" in edited ? now : edited;
+      });
+      const vmA = machine("vm-a", [set("model", "sonnet", 9)], editing);
+      const { syncOn } = yield* syncer(flock, vmA);
+
+      yield* syncOn(vmA);
+      const after = yield* SubscriptionRef.get(flock);
+      expect(after.settings.max_iterations).toMatchObject({ value: 8, from: "Desktop" });
+      expect(after.settings.model).toMatchObject({ value: "sonnet", from: "vm-a" });
+    }),
+  ));
+
+test("an edit taken from one Machine goes on to every other connected Machine", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const flock = yield* SubscriptionRef.make(NO_FLOCK_SETTINGS);
+      const vmA = machine("vm-a", []);
+      const vmB = machine("vm-b", []);
+      const { syncOn, syncEvery } = yield* syncer(flock, vmA, vmB);
+      yield* syncEvery();
+
+      // Edited in vm-a's TUI.
+      yield* vmA.door.setSettings({ settings: [set("model", "haiku", 15)] });
+      yield* syncOn(vmA);
+      expect(vmB.asked.at(-1)).toEqual([set("model", "haiku", 15)]);
+    }),
+  ));

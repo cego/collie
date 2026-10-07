@@ -19,6 +19,7 @@ import type { PlanPanel } from "../../src/board-model";
 import { FINDINGS_FILE, FindingSchema, REVIEW_FILE } from "../../src/output";
 import type { RunFacts } from "../../src/runs";
 import { madeRun } from "../support/records";
+import { writeSettingsSet } from "../../src/config";
 
 let rig: Rig;
 const encodeFindings = Schema.encodeSync(Schema.fromJsonString(Schema.Array(FindingSchema)));
@@ -164,6 +165,18 @@ effectTest("Settings shows the defaults and remembered values it can write back"
   const after = yield* buildSettings(env);
   expect(after.defaults.find((d) => d.key === "model")!.value).toBe("opus");
   expect(after.remembered).toContainEqual({ key: "linear.team", value: "CEG" });
+});
+
+effectTest("Settings knows which Desktop shares them with the Flock", function* () {
+  const env = rig.pluginEnv();
+  expect((yield* buildSettings(env)).flock).toBeNull();
+
+  yield* writeSettingsSet(env.userDir, {
+    set: {},
+    flock: { by: "laptop", at: "2026-10-07T10:00:00Z" },
+  });
+
+  expect((yield* buildSettings(env)).flock).toBe("laptop");
 });
 
 effectTest("Settings offers every key loadDefaults reads, and repeats none of them", function* () {

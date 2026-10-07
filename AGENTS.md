@@ -78,6 +78,11 @@ herdr actions, and the `collie` CLI.
   `desktop/src/shared/chat-view.ts` what the window says of a tool call and the card a
   message is about, and `src/toolkit.ts` the Toolkit both chats share
   ([ADR-0011](docs/adr/0011-the-conversation-is-a-native-harness.md#amended-2026-10-05-a-herds-chat-per-home-and-one-flock-chat-per-desktop)).
+- **Adding a setting, or changing how settings are shared across a Flock** →
+  [ADR-0043](docs/adr/0043-a-shared-setting-is-its-latest-edit.md), alongside
+  `src/settings.ts` (the one list the TUI, Desktop and the host read), `setSetting` and
+  `takeShared` in `src/config.ts`, and `desktop/src/shared/flock-settings.ts` with
+  `test/desktop-settings.test.ts`. The latest edit of a key wins.
 - **Changing what a Run must prove, or what counts as proof** →
   [`docs/cli.md`](docs/cli.md#outcomes) and
   [ADR-0010](docs/adr/0010-a-run-proves-its-outcome.md), alongside `src/outcome.ts` (the

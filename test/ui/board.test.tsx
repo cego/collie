@@ -814,6 +814,7 @@ const SETTINGS = {
   ],
   remembered: [{ key: "linear.team", value: "Collie" }],
   trust: { cwd: "/w/collie", state: "trusted" },
+  flock: null,
 };
 
 const WORKFLOW = {
