@@ -1258,6 +1258,18 @@ interface PruneOptions {
   keep?: string;
   now?: number;
   run?: Runner<ChildProcessSpawner.ChildProcessSpawner>;
+  /** Judge only this checkout, now, whatever its last verdict said. */
+  only?: string;
+  /** Judge without removing; what is kept is still written down for the board. */
+  dryRun?: boolean;
+}
+
+/** One checkout's verdict: kept for `keep`, settled because of `why`, and whether it went. */
+export interface Judged {
+  path: string;
+  keep?: string;
+  why?: string;
+  removed: boolean;
 }
 
 /** One repository's round: what herdr lists for it, against what the Runs recorded. */
@@ -1294,6 +1306,7 @@ const prune = Effect.fn("worktree.prune")(function* (
   // hand-made checkout is never touched.
   const candidates: Array<WorktreeInfo & { branch: string }> = [];
   for (const worktree of listing?.worktrees ?? []) {
+    if (opts.only !== undefined && worktree.path !== opts.only) continue;
     // A detached checkout has no branch, which herdr reports as null or as empty; the
     // record of a roaming Run's checkout is empty for the same reason. Matching them
     // is what lets a Renovate Run's checkout be pruned like any other.
@@ -1316,16 +1329,18 @@ const prune = Effect.fn("worktree.prune")(function* (
   // only a removal is still worth saying, and only while it is news. Another
   // repository's entries are none of this sweep's business.
   for (const [known, entry] of Object.entries(state)) {
-    if (entry.repo !== repo) continue;
+    if (entry.repo !== repo || opts.only !== undefined) continue;
     if (candidates.some((worktree) => worktree.path === known)) continue;
     if (!entry.removed || now - entry.checked_at > REPORT_MS) delete state[known];
   }
 
+  const fresh = opts.dryRun === true || opts.only !== undefined;
   const due = candidates.filter((worktree) => {
     const entry = state[worktree.path];
-    return !entry || entry.removed || now - entry.checked_at >= RECHECK_MS;
+    return fresh || !entry || entry.removed || now - entry.checked_at >= RECHECK_MS;
   });
-  if (due.length === 0) return yield* conclude(round);
+  const judged: Judged[] = [];
+  if (due.length === 0) return { lines: yield* conclude(round), judged };
 
   // A herdr that will not answer is not proof that nothing is live in these checkouts,
   // and that is the one condition nothing else can establish — so nothing is judged
@@ -1340,15 +1355,20 @@ const prune = Effect.fn("worktree.prune")(function* (
   });
   if (!use) {
     const standing = yield* conclude(round);
-    return [
-      ...standing,
-      ...due.map((worktree) => `kept ${nameOf(worktree)} · could not ask herdr what is live`),
-    ];
+    const unknown = "could not ask herdr what is live";
+    return {
+      lines: [...standing, ...due.map((worktree) => `kept ${nameOf(worktree)} · ${unknown}`)],
+      judged: due.map((worktree) => ({ path: worktree.path, keep: unknown, removed: false })),
+    };
   }
 
   for (const worktree of due) {
     const name = nameOf(worktree);
     const verdict = yield* settled(worktree, { repo, use, run });
+    if (opts.dryRun === true && verdict.keep === undefined) {
+      judged.push({ path: worktree.path, why: verdict.why, removed: false });
+      continue;
+    }
     // Whoever made the checkout takes it away again. Then the branch itself, with
     // `-d`: git refuses an unmerged one, which is the guard.
     const outcome =
@@ -1368,9 +1388,18 @@ const prune = Effect.fn("worktree.prune")(function* (
           })
         : { line: `kept ${name} · ${verdict.keep}`, removed: false };
     state[worktree.path] = { checked_at: now, repo, ...outcome };
+    judged.push({
+      path: worktree.path,
+      removed: outcome.removed,
+      ...(verdict.keep !== undefined
+        ? { keep: verdict.keep }
+        : outcome.removed
+          ? { why: verdict.why }
+          : { keep: outcome.line.replace(/^kept [^·]* · /, "") }),
+    });
   }
 
-  return yield* conclude(round);
+  return { lines: yield* conclude(round), judged };
 });
 
 /**
@@ -1502,11 +1531,21 @@ const removeWorktree = Effect.fn("worktree.removeWorktree")(function* (
  * for.
  */
 export const pruneWorktrees = (opts: PruneOptions) =>
+  judgeWorktrees(opts).pipe(Effect.map((round) => round.lines));
+
+/**
+ * Every checkout's verdict, with what was removed: `dryRun` removes nothing, and `only`
+ * judges and removes that one checkout. Null when another pruner holds the lock.
+ */
+export const judgeWorktrees = (opts: PruneOptions) =>
   Effect.gen(function* () {
     const path = yield* Path.Path;
     const lock = path.join(opts.stateDir, `${PRUNE_FILE}.lock`);
-    return yield* withLock(lock, Effect.succeed<string[]>([]), sweep(opts));
-  }).pipe(Effect.catch(() => Effect.succeed<string[]>([])));
+    return yield* withLock(lock, Effect.succeed(null), sweep(opts));
+  }).pipe(
+    Effect.catch(() => Effect.succeed(null)),
+    Effect.map((round) => round ?? { lines: [], judged: [], busy: true }),
+  );
 
 /** What the host's sweeps last said, for a board to show without sweeping itself. */
 export const reportedWorktrees = Effect.fn("worktree.reportedWorktrees")(function* (
@@ -1532,6 +1571,7 @@ const sweep = Effect.fn("worktree.sweep")(function* (opts: PruneOptions) {
   const fs = yield* FileSystem.FileSystem;
   const recorded = fromRuns(opts.runs, opts.registered);
   const lines: string[] = [];
+  const judged: Judged[] = [];
   const listed = new Set<string>();
   // One `herdr worktree list` per live checkout, every sweep. Cheap while checkouts are few.
   for (const cwd of new Set([opts.cwd, ...recorded.mine.keys()])) {
@@ -1543,7 +1583,9 @@ const sweep = Effect.fn("worktree.sweep")(function* (opts: PruneOptions) {
       .pipe(Effect.catch(() => Effect.succeed<WorktreeListing | null>(null)));
     if (!own && (listing === null || listing.worktrees.every((w) => listed.has(w.path)))) continue;
     for (const worktree of listing?.worktrees ?? []) listed.add(worktree.path);
-    lines.push(...(yield* prune({ ...opts, cwd, recorded, listing })));
+    const round = yield* prune({ ...opts, cwd, recorded, listing });
+    lines.push(...round.lines);
+    judged.push(...round.judged);
   }
-  return lines;
+  return { lines, judged, busy: false };
 });

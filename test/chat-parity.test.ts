@@ -244,6 +244,8 @@ const INVENTORY: ReadonlyArray<readonly [string, Route]> = [
     "home cleanup --confirm",
     { route: "propose", kind: "home_cleanup", action: { kind: "home_cleanup" } },
   ],
+  ["cleanup", { route: "read", tool: "collie_installation" }],
+  ["cleanup --apply", { route: "propose", kind: "cleanup", action: { kind: "cleanup" } }],
   ["chat status", { route: "read", tool: "collie_installation" }],
   ["chat harness", { route: "shell" }],
   ["chat news", { route: "read", tool: "collie_news" }],

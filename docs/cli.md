@@ -1252,6 +1252,44 @@ to every Machine: the latest edit of a key wins
 ([ADR-0043](adr/0043-a-shared-setting-is-its-latest-edit.md)). Remembered answers and
 anything else in `config.json` are not settings and are refused.
 
+## Cleaning up
+
+```sh
+collie cleanup
+collie cleanup --apply [--request-id <id>]
+```
+
+`cleanup` lists exactly what the host's sweep would remove now: one line per item with its
+kind, what it is, its size and why it goes, then one line per thing Collie made and keeps,
+with the one condition that keeps it, then the total a sweep would free. `--apply` sweeps
+now, through the host, and prints what it removed and what it freed. There is no
+confirmation: the host sweeps the same way on its own every ten minutes. What each kind
+keeps, and why, is [ADR-0045](adr/0045-collie-removes-what-it-made-once-nothing-needs-it.md);
+[Cleanup](using.md#cleanup) says what a sweep covers.
+
+Under `--json`, both answer with the same `data`:
+
+```json
+{
+  "remove": [
+    {
+      "kind": "generation",
+      "target": "/home/me/.cache/collie/entries/generations/…",
+      "bytes": 81920,
+      "reason": "unused for 8 days"
+    }
+  ],
+  "keep": [
+    { "kind": "worktree", "target": "/home/me/.herdr/worktrees/…", "reason": "uncommitted changes" }
+  ],
+  "bytes": 81920
+}
+```
+
+`remove` is what a sweep would remove, or, with `--apply`, what it removed, each with the
+bytes it freed; `bytes` is their total. A thing a sweep could not judge — herdr not
+answering, say — is in `keep` with that reason, never removed.
+
 ## Upgrading
 
 ```sh
@@ -1461,8 +1499,8 @@ the first host to own the directory, and survives restarts and upgrades.
 
 The host also runs what nobody has to have a pane open for: the merge watch, which asks
 GitLab about each waiting merge request every 5 minutes and records a merge; each Herd's
-News, which it also supersedes once an item's cause no longer holds; and worktree
-pruning, every 3 minutes.
+News, which it also supersedes once an item's cause no longer holds; and the
+[cleanup](#cleaning-up) sweep, every ten minutes.
 
 The operations that change a Run are on `FrontDoorRpcs` too: `start`, `answer`, `control`
 (a hold or a stop, set or cleared, and every watcher hears about it), `resume` and
@@ -1470,7 +1508,9 @@ The operations that change a Run are on `FrontDoorRpcs` too: `start`, `answer`, 
 `offers`, what a Run offers to do next as its module decides now, with each offer's
 arguments as JSON Schema; and `workflows`, what may be started in a project and the Inputs
 each asks for. `start` then takes what a human typed in `text`, and the host settles it
-against the workflow's own schema. `grant` and `steer` stay on `HostRpcs`. Each takes a request id, and the same id twice is one operation. A
+against the workflow's own schema. `cleanup` reads what a sweep would remove and keep, and
+`sweep` sweeps now, recorded with its Actor in the state directory's `cleanup/operations.jsonl`
+as well as in `cleanup.jsonl`. `grant` and `steer` stay on `HostRpcs`. Each takes a request id, and the same id twice is one operation. A
 channel first sends `declare` with its front door, and the host stamps every operation on
 it with that, as a line in the Run's `operations.jsonl`: the operation, the request, the
 Actor and what came of it ([ADR-0039](adr/0039-every-operation-records-who-asked.md)). A

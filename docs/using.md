@@ -352,8 +352,8 @@ look at what it built. It is removed only once **settled** — the tree is clean
 no commit that is not on the remote already, nothing is working in it or could be resumed
 in it, and its merge request is merged or closed (or its remote branch is gone). A
 `renovate` checkout has no branch to ask either question about, so a clean one nothing is
-working in is settled, and there is no branch to delete with it. Pruning happens every 3 minutes in the
-host, whether or not a pane is open. The board says both what went and what is being held on to, with
+working in is settled, and there is no branch to delete with it. Pruning is part of the
+host's [cleanup](#cleanup) sweep, every ten minutes, whether or not a pane is open. The board says both what went and what is being held on to, with
 the reason:
 
 ```
@@ -1693,6 +1693,24 @@ Settings, where you would put it right, and starts agents in `auto` until you do
 
 Trust is unaffected and still answered first: it decides whether the harness will work in
 the directory at all, and permissions only decide what it asks about once it does.
+
+## Cleanup
+
+Collie removes what it made once nothing needs it, and only what it can show it made
+([ADR-0045](adr/0045-collie-removes-what-it-made-once-nothing-needs-it.md)). The host sweeps
+every ten minutes, whether or not a pane is open. A sweep removes:
+
+- **Worktrees** Collie made, once they are **Settled** (see
+  [What a run does to your repository](#what-a-run-does-to-your-repository)).
+- **Staged module generations** under `~/.cache/collie/entries`, once unused for 7 days.
+  Loading a module again counts as using it, and one that is needed after it went is
+  staged again.
+
+`collie cleanup` lists what a sweep would remove now, with each item's size and the total,
+and what Collie keeps and why. `collie cleanup --apply` sweeps now; chat can do the same.
+Every removal is judged again at the moment it is made, never forced, and recorded in the
+state directory's `cleanup.jsonl` with when, what, how big, why and who asked, for 30 days.
+Anything a sweep cannot judge is kept, with the reason.
 
 ## Troubleshooting
 

@@ -36,8 +36,11 @@ import {
   runViews,
   isSettled,
   settleNewsFor,
+  anyRuns,
+  cleanupListing,
   type Door,
 } from "./lifecycle";
+import { humanBytes } from "./cleanup";
 import { taskOfWorkspace } from "./task";
 import { pendingFor, proposalsPath, read as readProposals } from "./proposals";
 import { statusLine } from "./disposition";
@@ -569,6 +572,8 @@ const installationFacts = Effect.fn("Tools.installation")(function* (env: Plugin
   );
   const harness = yield* chatHarnessOf(env.userDir);
   const chat = key === null ? null : yield* readChat(yield* chatPath(env.stateDir, key));
+  // Only where a host has served this directory: reading is no reason to start one.
+  const sweepable = (yield* anyRuns(env)) ? yield* cleanupListing(env, "chat") : null;
   return [
     `health: ${health === null ? "could not be checked" : health.ok ? health.human : health.error.message}`,
     "",
@@ -581,6 +586,13 @@ const installationFacts = Effect.fn("Tools.installation")(function* (env: Plugin
     }`,
     `ownership: ${ownership === null ? "herdr could not be asked" : ownership.kind}`,
     `panes an older release left: ${close.length} closable, ${listed.length} sharing a tab`,
+    `cleanup: ${
+      sweepable === null
+        ? "nothing swept here yet"
+        : sweepable.ok
+          ? `a sweep would remove ${sweepable.value.remove.length} item(s), freeing ${humanBytes(sweepable.value.bytes)}, and keeps ${sweepable.value.keep.length}; \`collie cleanup\` lists each`
+          : sweepable.error.message
+    }`,
     "",
     "every new Run begins with, by the workspace it is started in:",
     ...(defaults.length > 0 ? defaults : ["- (no workspaces)"]),

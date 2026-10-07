@@ -17,6 +17,7 @@ import {
   Context,
   Crypto,
   Data,
+  DateTime,
   Duration,
   Effect,
   Exit,
@@ -1432,7 +1433,12 @@ const stagedEntry = Effect.fn("Engine.stagedEntry")(function* (file: string, rev
   const name = `${Bun.hash(dir).toString(16)}-${revision ?? (yield* revisionOf(dir))}`;
   const root = `${entries}/generations/${name}`;
   const staged = { root, file: `${root}${file}` };
-  if (yield* fs.exists(staged.file).pipe(Effect.orElseSucceed(() => false))) return staged;
+  if (yield* fs.exists(staged.file).pipe(Effect.orElseSucceed(() => false))) {
+    // Its age is its last use, which is what cleanup removes it by (ADR-0045).
+    const now = DateTime.toDateUtc(yield* DateTime.now);
+    yield* fs.utimes(root, now, now).pipe(Effect.ignore);
+    return staged;
+  }
   const draft = `${name}.${yield* Random.nextInt}`;
   yield* stageGeneration({ dir: entries, name: draft, entry: file }).pipe(
     Effect.provide(Path.layer),

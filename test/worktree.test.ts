@@ -18,6 +18,7 @@ import {
 import type { AgentEntry } from "../src/registry";
 import type { RunFacts } from "../src/runs";
 import { runFacts } from "./support/records";
+import { sweep, worktreesSweeper } from "../src/cleanup";
 import { shell } from "../src/mr";
 import { Herdr } from "../src/herdr";
 
@@ -2214,6 +2215,69 @@ test("a checkout made again by hand at the same path and branch is not a candida
       yield* fs.writeFileString(`${worktreePath}/.git`, `gitdir: ${worktreePath}/.gitdir\n`);
 
       expect(yield* prune()).toEqual([]);
+      expect((yield* rig.cmds()).includes("worktree remove")).toBe(false);
+    }),
+  ));
+
+/** The cleanup sweep's worktree kind, over what this test recorded. */
+const sweeper = (herdr = new Herdr(rig.pluginEnv())) =>
+  worktreesSweeper({
+    herdr,
+    sessions: [],
+    stateDir: rig.stateDir,
+    runs: recorded,
+    registered,
+    cwd: rig.projectDir,
+  });
+
+test("cleanup lists a settled worktree as removable, and sweeping removes it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const at = yield* collieWorktree("wt");
+      yield* settledGit();
+      yield* mergedMr();
+
+      const judged = yield* sweeper().judge;
+      expect(judged.remove).toEqual([
+        { kind: "worktree", target: at, bytes: expect.any(Number), reason: "merged in !14" },
+      ]);
+      // Judging removes nothing.
+      expect((yield* rig.cmds()).includes("worktree remove")).toBe(false);
+
+      const report = yield* sweep([sweeper()], rig.stateDir, "host");
+      expect(report.remove.map((item) => item.target)).toEqual([at]);
+      expect((yield* rig.cmds()).includes("worktree remove")).toBe(true);
+    }),
+  ));
+
+test("cleanup keeps an unsettled worktree, naming the first condition it fails", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const at = yield* collieWorktree("wt");
+      yield* settledGit({ "status --porcelain": " M src/a.ts" });
+      yield* mergedMr();
+
+      const judged = yield* sweeper().judge;
+      expect(judged.remove).toEqual([]);
+      expect(judged.keep).toEqual([
+        { kind: "worktree", target: at, reason: "uncommitted changes" },
+      ]);
+    }),
+  ));
+
+test("cleanup keeps every worktree when herdr will not list panes, and says why", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const at = yield* collieWorktree("wt");
+      yield* settledGit();
+      yield* mergedMr();
+      const herdr = new Herdr(rig.pluginEnv({ FAKE_HERDR_FAIL: '{"pane list":"herdr is gone"}' }));
+
+      const report = yield* sweep([sweeper(herdr)], rig.stateDir, "host");
+      expect(report.remove).toEqual([]);
+      expect(report.keep).toEqual([
+        { kind: "worktree", target: at, reason: "could not ask herdr what is live" },
+      ]);
       expect((yield* rig.cmds()).includes("worktree remove")).toBe(false);
     }),
   ));

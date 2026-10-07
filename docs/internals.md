@@ -165,13 +165,12 @@ manager removes it: git's refusals are the last guard, so a wrong judgement here
 fail to clean, never delete work. Only paths some run recorded with `created_by_collie`
 are candidates.
 
-Pruning runs every 3 minutes in the host, beside its merge watch and
-News, so it happens with no pane open. A board shows what the last sweep said, read from
+Pruning is the worktree kind of the host's cleanup sweep (`src/cleanup.ts`), which runs
+every ten minutes beside its merge watch and News, so it happens with no pane open. A
+sweep judges every candidate without removing anything, then removes each settled one
+after judging it again on its own. A board shows what the last sweep said, read from
 `worktrees.json`, and never sweeps itself. One sweep runs at a time, and its clock starts
-when it finishes. Each
-worktree's verdict is also kept for a few minutes in `worktrees.json` in the state
-directory, so a due check is the only thing that shells out to git and glab, and the state
-file is rewritten only when something moved.
+when it finishes. `worktrees.json` is rewritten only when something moved.
 
 Two things are deliberately not conditions. A `run start` names the checkout it is about
 to work in, and that one is held whatever its state, because the run resolving its branch

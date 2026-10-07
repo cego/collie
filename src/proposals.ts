@@ -554,6 +554,7 @@ const NOT_ABOUT_A_RUN: ReadonlySet<ActionKind> = new Set([
   "update_defaults",
   "fork_definition",
   "home_cleanup",
+  "cleanup",
   "upgrade",
   "onboard",
 ]);
