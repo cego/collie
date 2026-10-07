@@ -1586,16 +1586,20 @@ second one. The rows behind that are in the same SQLite file as the engine's own
 
 It says which build it is, and which installation it serves. A client newer than the host,
 from the same installation (after `collie upgrade`), stops it and starts itself in its
-place. Any other client of another build is told which build is running and which pid to
+place; a host still there ten seconds after it was asked to stop is killed, and its work is
+recovered by the one that replaces it. Any other client of another build is told which build is running and which pid to
 stop, and sends nothing else. That includes a checkout under development, which is pointed
 at a state directory of its own rather than replacing the installed host. Such a
 checkout's host also says `development: "<version>+<sha>"`; a release's does not.
-A host that cannot be started at all is `HostUnavailable`, with whether anything owns the
-directory. [ADR-0015](adr/0015-one-local-host-owns-a-state-directory.md) is why each of
+A host that cannot be started at all, or that takes a connection and does not answer within
+five seconds, is `HostUnavailable`, with whether anything owns the directory. [ADR-0015](adr/0015-one-local-host-owns-a-state-directory.md) is why each of
 those is the way it is.
 
 `COLLIE_HOST` names the command a client starts a host with — one path, or a JSON array of
 the executable and its arguments. Unset, it is this executable.
+
+`COLLIE_HOST_STOP_GRACE` is how long a stopped host waits for running steps before it exits
+anyway, as a duration (`5 seconds` unset).
 
 `COLLIE_HOST_CRASH_AT=admitted|executed` is for the recovery proof alone: the host kills
 itself in one of the two windows a start has — with the run recorded and the engine not yet

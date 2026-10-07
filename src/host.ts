@@ -23,6 +23,7 @@ import {
   Crypto,
   Data,
   Deferred,
+  Duration,
   Effect,
   Exit,
   FileSystem,
@@ -140,8 +141,10 @@ import { aliveIn, focusPane, herdChanges, liveHerds } from "./herds";
 import {
   currentPid,
   ensureLockDir,
+  holderLives,
   holdsLock,
   lockHolder,
+  signalProcess,
   withLock,
   type LockHolder,
 } from "./lock";
@@ -1319,7 +1322,10 @@ export const serve = (dir: string): Effect.Effect<void, never, BunServices | Sco
   }).pipe(Effect.orDie);
 
 /** How long a host told to stop waits for running steps before it exits anyway. */
-const STOP_GRACE = "5 seconds";
+const stopGrace = Config.Duration("COLLIE_HOST_STOP_GRACE").pipe(
+  Config.withDefault(Duration.seconds(5)),
+  Effect.orDie,
+);
 const STOP_SIGNALS = ["SIGTERM", "SIGINT"] as const;
 
 /**
@@ -1331,10 +1337,11 @@ const STOP_SIGNALS = ["SIGTERM", "SIGINT"] as const;
 const boundedStop = (lock: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
+    const grace = yield* stopGrace;
     const stopping = yield* Deferred.make<void>();
     // In the outer scope, which closes only once the shutdown it bounds has finished.
     yield* Deferred.await(stopping).pipe(
-      Effect.andThen(Effect.sleep(STOP_GRACE)),
+      Effect.andThen(Effect.sleep(grace)),
       Effect.andThen(holdsLock(lock)),
       Effect.flatMap((ours) => (ours ? fs.remove(lock, { force: true }) : Effect.void)),
       Effect.ignore,
@@ -1518,20 +1525,26 @@ export const connect = (
     return client;
   });
 
-/** Stops the host at `pid` and waits for it to let go of the directory. */
+/**
+ * Stops the host at `pid` and waits for it to let go of the directory, by the clock rather
+ * than by a count of polls so that load cannot stretch it. One that is still there after
+ * its stop grace is killed: its work is durable, and the next host recovers it.
+ */
 const stopOwner = Effect.fn("Host.stopOwner")(function* (dir: string, pid: number) {
-  try {
-    process.kill(pid, "SIGTERM");
-  } catch {
-    // Already gone, which is what this is for.
-  }
-  yield* ownerOf(dir).pipe(
-    Effect.filterOrFail(
-      (owner) => owner?.pid !== pid,
-      () => unavailable(dir, `pid ${pid} is an older host and did not stop`),
-    ),
-    Effect.retry({ times: 100, schedule: Schedule.spaced("100 millis") }),
-  );
+  const goneWithin = (duration: Duration.Input) =>
+    liveOwner(dir).pipe(
+      Effect.repeat({
+        until: (owner) => owner?.pid !== pid,
+        schedule: Schedule.spaced("100 millis"),
+      }),
+      Effect.timeoutOption(duration),
+      Effect.map(Option.isSome),
+    );
+  yield* signalProcess(pid, "SIGTERM");
+  if (yield* goneWithin("10 seconds")) return;
+  yield* signalProcess(pid, "SIGKILL");
+  if (yield* goneWithin("5 seconds")) return;
+  return yield* unavailable(dir, `pid ${pid} is an older host and did not stop`);
 });
 
 /** One connection, in the caller's scope: theirs to keep, and theirs to close. */
@@ -1561,6 +1574,16 @@ export const ownerOf = (
   dir: string,
 ): Effect.Effect<LockHolder | null, never, FileSystem.FileSystem> => lockHolder(lockOf(dir));
 
+/** The owner of this directory while it lives; a claim a dead host left is nobody's. */
+const liveOwner = (dir: string) =>
+  ownerOf(dir).pipe(
+    Effect.flatMap((owner) =>
+      owner === null
+        ? Effect.succeed(null)
+        : Effect.map(holderLives(owner), (lives) => (lives ? owner : null)),
+    ),
+  );
+
 /**
  * A host answering at this directory, started here if there was none, and asked who it
  * is. Several clients may arrive at once and all start one; the lock decides which of
@@ -1575,31 +1598,47 @@ const ensureRunning = Effect.fn("Host.ensureRunning")(function* (
 ) {
   const first = yield* ask(dir).pipe(Effect.result);
   if (first._tag === "Success") return first.success;
-  return yield* Effect.scoped(
+  const started = Effect.scoped(
     Effect.gen(function* () {
-      const started = yield* spawnHost(dir, hostEnv);
+      const host = yield* spawnHost(dir, hostEnv);
       // The host this started has ended and nothing owns the directory: no answer is
       // coming, so it is said now rather than after every retry. A host that lost the
       // race to another starter ends too, but then the winner owns the lock.
       const coming = Effect.all([
-        started.isRunning.pipe(Effect.orElseSucceed(() => true)),
-        ownerOf(dir),
+        host.isRunning.pipe(Effect.orElseSucceed(() => true)),
+        liveOwner(dir),
       ]).pipe(Effect.map(([running, owner]) => running || owner !== null));
       return yield* ask(dir).pipe(
-        Effect.retry({ times: 100, schedule: Schedule.spaced("100 millis"), while: () => coming }),
-        Effect.catch(() => diagnose(dir)),
+        Effect.retry({ schedule: Schedule.spaced("100 millis"), while: () => coming }),
       );
     }),
   );
+  return yield* started.pipe(
+    // The owner this one lost to has since gone — stopped, or killed mid-stop — so
+    // nothing is starting: start again rather than report an empty directory.
+    Effect.retry({ times: 2, while: () => Effect.map(liveOwner(dir), (owner) => owner === null) }),
+    Effect.timeoutOrElse({ duration: HOST_START_TIMEOUT, orElse: () => diagnose(dir) }),
+    Effect.catch(() => diagnose(dir)),
+  );
 });
+
+/** How long a client waits for a host to answer before it says why none does. */
+const HOST_START_TIMEOUT = "30 seconds";
+/** A host that takes longer than this to say who it is cannot serve anything anyway. */
+const ASK_TIMEOUT = "5 seconds";
 
 /** One question, and hang up: the connection a client keeps is opened once it is theirs. */
 const ask = (dir: string) =>
-  Effect.scoped(open(dir).pipe(Effect.flatMap((client) => client.identity())));
+  Effect.scoped(open(dir).pipe(Effect.flatMap((client) => client.identity()))).pipe(
+    Effect.timeoutOrElse({
+      duration: ASK_TIMEOUT,
+      orElse: () => unavailable(dir, `no answer on ${socketOf(dir)} within ${ASK_TIMEOUT}`),
+    }),
+  );
 
 /** Why nothing answered, said with what can be seen from here. */
 const diagnose = Effect.fn("Host.diagnose")(function* (dir: string) {
-  const owner = yield* ownerOf(dir);
+  const owner = yield* liveOwner(dir);
   return yield* unavailable(
     dir,
     owner === null

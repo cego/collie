@@ -282,7 +282,8 @@ export const lockWriteIsFresh = Effect.fn("lockWriteIsFresh")(function* (lock: s
   return at - (Option.isSome(stat.mtime) ? stat.mtime.value.getTime() : at) <= LOCK_WRITE_GRACE_MS;
 });
 
-const holderLives = Effect.fn("holderLives")(function* (holder: LockHolder) {
+/** Whether the process a claim names is still the one that made it. */
+export const holderLives = Effect.fn("holderLives")(function* (holder: LockHolder) {
   if (!(yield* signalProcess(holder.pid))) return false;
   if (holder.start === null) return true;
   const start = yield* processStartTime(holder.pid);
