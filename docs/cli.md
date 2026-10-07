@@ -693,18 +693,18 @@ when the turn ends, and a message from any other Claude session is not used.
 reach. Claude gets it over a local MCP server (`collie mcp`, which you never type) and Pi
 through a generated extension; this is the third way in.
 
-| tool                  | What it does                                                                                |
-| --------------------- | ------------------------------------------------------------------------------------------- |
-| `collie_herd`         | Every run in the Herd, bounded, saying how many it left out                                 |
-| `collie_run`          | One run: its goal, constraints, steps, cards and open drift                                 |
-| `collie_workspaces`   | The workspaces this session has, and the workflows that can be started                      |
-| `collie_receipts`     | One run's pending proposals, and what state each message to its agents actually reached     |
-| `collie_definitions`  | The Workflows and Personas there are; one resolved and checked, or one Persona's body       |
-| `collie_installation` | What Collie needs, which workspace the Home is, what a cleanup would close, the defaults    |
-| `collie_news`         | What this conversation has not been told; reading it settles those items for it             |
-| `collie_hold`         | Hold a run, or every unfinished run in a workspace, until someone releases it               |
-| `collie_do`           | Carry out, at once, a board action or decision on a named run the human asked for           |
-| `collie_propose`      | Carry out the rest of what the human can ask for, with a request id that makes retries safe |
+| tool                  | What it does                                                                                                                                                                                                                                 |
+| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `collie_herd`         | Every run in the Herd, bounded, saying how many it left out                                                                                                                                                                                  |
+| `collie_run`          | One run: its goal, constraints, the Choice it waits on and how to answer it, its answers with who and when, its result, the Runs it started, its merge request and branch, plan, findings, disposition, last log lines, cards and open drift |
+| `collie_workspaces`   | The workspaces this session has, and the workflows that can be started                                                                                                                                                                       |
+| `collie_receipts`     | What one run waits on the human for — its Choice, an evidence gate, proposals — and what state each message to its agents actually reached                                                                                                   |
+| `collie_definitions`  | The Workflows and Personas there are; one resolved and checked, or one Persona's body                                                                                                                                                        |
+| `collie_installation` | What Collie needs, which workspace the Home is, what a cleanup would close, the defaults                                                                                                                                                     |
+| `collie_news`         | What this conversation has not been told; reading it settles those items for it                                                                                                                                                              |
+| `collie_hold`         | Hold a run, or every unfinished run in a workspace, until someone releases it                                                                                                                                                                |
+| `collie_do`           | Carry out, at once, a board action or decision on a named run the human asked for                                                                                                                                                            |
+| `collie_propose`      | Carry out the rest of what the human can ask for, with a request id that makes retries safe                                                                                                                                                  |
 
 The reads are Herd-wide and are never narrowed **implicitly**: no read is filtered by what
 the board is showing or which card is open. The selection is an **input** a tool may be

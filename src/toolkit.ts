@@ -200,9 +200,14 @@ export const CollieTools = Toolkit.make(
     readOnly: true,
     title: "One Run",
     description:
-      "One Run in detail: its goal, the constraints bounding it, the work it " +
-      "has handed over with the evidence and the gaps in it, and any drift nobody has " +
-      "settled. Use it when a question is about a particular Run rather than the flock. " +
+      "One Run in detail: its goal, the constraints bounding it, the Choice it is waiting " +
+      "on with every option and the collie_do action that answers it, each Choice already " +
+      "answered with who answered it and when, what it ended with, the Runs it started, " +
+      "its merge request with the state and checks the merge watch last recorded and its " +
+      "branch, where its plan is, its findings, disposition and outcome to prove, the last " +
+      "lines it recorded, the work it has handed over with the evidence and the gaps in it, " +
+      "and any drift nobody has settled. Use it when a question is about a particular Run " +
+      "rather than the flock. " +
       "Name the Run; with no `run` it answers about whatever the board has selected, and " +
       "says which that was.",
     parameters: RunInput.mapFields((fields) => ({
@@ -228,7 +233,9 @@ export const CollieTools = Toolkit.make(
     readOnly: true,
     title: "What actually happened",
     description:
-      "One Run's proposals still waiting on the human, and every message that has been sent " +
+      "Everything one Run is waiting on the human for — the Choice it asks with how to " +
+      "answer it, an evidence gate with the checks it offers and how to approve them, and " +
+      "the proposals with their id and hash — and every message that has been sent " +
       "to its agents with the state each actually reached. `submitted` is that herdr took " +
       "it, `acknowledged` is that the agent wrote back, `verified` is that something " +
       "independent checked — they are three different facts and none of them stands in for " +

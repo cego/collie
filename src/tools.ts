@@ -24,7 +24,14 @@ import type { BunServices } from "@effect/platform-bun/BunServices";
 import { Clock, Crypto, Effect, Result, Schema } from "effect";
 import { ChildProcessSpawner } from "effect/unstable/process";
 import type { PluginEnv } from "./env";
-import { newRequestId, runFacts, workspaceCwdFromPanes } from "./operations";
+import {
+  answerAction,
+  choiceLines,
+  newRequestId,
+  runFacts,
+  workspaceCwdFromPanes,
+} from "./operations";
+import { gateOf } from "./board";
 import type { Action } from "./actions";
 import {
   boardSnapshot,
@@ -42,7 +49,7 @@ import { taskOfWorkspace } from "./task";
 import { pendingFor, proposalsPath, read as readProposals } from "./proposals";
 import { statusLine } from "./disposition";
 import { Herdr } from "./herdr";
-import { ASKED_KINDS } from "./board-model";
+import { ASKED_KINDS, EVIDENCE_GATE } from "./board-model";
 import { asText as newsText, NATIVE } from "./news";
 import { findRun, listRuns, type RunFacts } from "./runs";
 import { donePasses, markersOf, runningCheck } from "./checks";
@@ -272,7 +279,7 @@ export const checkLines = Effect.fn("Tools.checkLines")(function* (
 
 /** One Run in detail, led by the check Collie is running for it, then where each finished one's output is. */
 const runAnswer = Effect.fn("Tools.runAnswer")(function* (env: PluginEnv, run: RunFacts) {
-  const facts = yield* runFacts(run);
+  const facts = yield* runFacts(env, run);
   const running = yield* checkLines(run, yield* listRuns(env), yield* Clock.currentTimeMillis);
   const kept = (yield* donePasses(run)).filter((one) => one.log !== null);
   const done =
@@ -459,14 +466,29 @@ const receiptFacts = Effect.fn("Tools.receipts")(function* (env: PluginEnv, run:
   // Every delivery is on the ledger now: the one sender writes there before it sends,
   // so there is no second place a steer can be sitting unrecorded.
   const unread: string[] = [];
+  const gate = yield* gateOf(found, env.userDir);
+  const waiting = [
+    ...found.asking.flatMap((asked) =>
+      choiceLines(run, asked).map((line, n) => (n === 0 ? `- ${line}` : `  ${line}`)),
+    ),
+    ...(gate === null
+      ? []
+      : gate.verifications.length === 0
+        ? [
+            "- the evidence gate, with no checks configured to approve: add them to the project's .collie/verify.json",
+          ]
+        : [
+            `- the evidence gate, offering the checks ${gate.verifications.join(", ")}`,
+            `  Approve them all with the collie_do action ${answerAction(run, EVIDENCE_GATE, "approve")}, or some with "approve:<name>,<name>"`,
+          ]),
+    ...proposals.map(
+      (p) => `- ${p.id} (${p.content_hash}): ${p.interpretation} — expires ${p.expires_at}`,
+    ),
+  ];
   return [
     "### Waiting on the human",
     "",
-    ...(proposals.length === 0
-      ? ["- nothing"]
-      : proposals.map(
-          (p) => `- ${p.id} (${p.content_hash}): ${p.interpretation} — expires ${p.expires_at}`,
-        )),
+    ...(waiting.length === 0 ? ["- nothing"] : waiting),
     "",
     "### Sent to this Run's agents",
     "",
