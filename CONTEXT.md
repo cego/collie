@@ -48,6 +48,15 @@ named by its hostname. Otherwise no different from any other Machine.
 reaches through `collie bridge` started as `desktop`. Not "native", which already means
 harness-native (**Native chat**) and Effect-native.
 
+**Machine rule** — The human's own words, kept in Desktop's settings, about which Machine
+work goes to: "frontend work is on the laptop, everything else is on the vm". The **Flock
+chat** is given it with every message, beside the Machines Desktop reaches at that moment and
+which of them is this computer, and names the Machine a start goes to from it. Collie never
+interprets the words itself, and a start that names no Machine while several are reachable
+is still refused. Only the Flock chat chooses between Machines, so the rule is Desktop's
+and no Machine is given it. Where the Run lands on the chosen Machine is still decided by
+placement ([ADR-0033](docs/adr/0033-a-run-started-from-the-home-is-placed-not-asked.md)).
+
 **Home** — The Herd's dedicated Collie workspace, owned by a record plus proof: a live
 `collie_home` token, or the recorded pane still carrying its recorded `terminal_id`. A
 label is never proof. Anything uncertain is `ownership_unknown` and waits for a human; a

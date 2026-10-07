@@ -777,11 +777,15 @@ export const NewsBatch = Schema.Struct({
   omitted: Schema.Int,
 });
 
-/** Where a host focused a Run's pane. `session` is null for herdr's default. */
+/**
+ * Where a host focused a Run's pane. `session` is null for herdr's default; `pane` is the
+ * focused agent's pane id in it, absent where only a workspace was found or the host is older.
+ */
 export const PaneAt = Schema.Struct({
   session: Schema.NullOr(Schema.String),
   workspace: Schema.String,
   tab: Schema.NullOr(Schema.String),
+  pane: Schema.optionalKey(Schema.String),
 });
 export type PaneAt = typeof PaneAt.Type;
 

@@ -395,7 +395,7 @@ export const isToolName = (name: string): name is ToolName =>
 export const answerWith = Effect.fn("Toolkit.answer")(function* <
   Tools extends Record<string, Tool.Any>,
 >(toolkit: Toolkit.WithHandler<Tools>, name: string, input: JsonObject) {
-  if (!isToolName(name) || !Object.hasOwn(toolkit.tools, name)) return "";
+  if (!Object.hasOwn(toolkit.tools, name)) return "";
   // SAFETY: `handle` decodes it, which is what makes untrusted JSON a tool's parameters.
   const results = yield* toolkit.handle(name, input as never, undefined, STRICT);
   const last = yield* Stream.runLast(results);
@@ -407,7 +407,7 @@ export const answerWith = Effect.fn("Toolkit.answer")(function* <
     : result.reason._tag === "ToolParameterValidationError"
       ? result.reason.description
       : result.message;
-  return refusedActions(name, input, why, TAKES[name]);
+  return refusedActions(name, input, why, isToolName(name) ? TAKES[name] : "");
 });
 
 /** A tool as an MCP server lists it: its name, words, input schema and whether it only reads. */

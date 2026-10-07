@@ -923,16 +923,32 @@ the card's first action is the TUI card's own. Following a check's output is not
 yet. Open merge request opens it in your browser.
 
 **Go to pane** asks the card's Machine to focus the Run's newest live agent, or its
-workspace where it has none, on that Machine's own herdr. An open herdr window does not
-follow a focus, because herdr gives each client its own view, so Desktop then opens a new
-herdr client in this computer's terminal, attached to that Machine's session:
-`herdr --remote <target> --session <session>`, or `herdr --session <session>` for this
-computer, with no `--session` for herdr's default session. It lands on the focused pane.
-The terminal is `x-terminal-emulator` where it exists, else the first of `gnome-terminal`,
-`konsole`, `kitty`, `alacritty` and `xterm` on PATH; on macOS it is Terminal.app. The card
-then says where the pane is, as "vm-mk › workspace 3 › tab 2", and where no terminal was
-found, or it failed as it started, it shows the command to copy. A Run with no live agent is
-looked for only in its Task's own Herd, since workspace ids are only unique within one. **New run** asks a Machine what a project
+workspace where it has none, on that Machine's own herdr, and opens the card's drawer on
+its **Terminal** tab, which shows that agent's pane. It is herdr's own controller for the
+pane, run over the connection Desktop already holds to the Machine: one more channel on
+its SSH master, so going to a pane never asks for another login or SSO approval, or a
+local process for this computer. Nothing beyond Desktop is needed on this computer. Type
+into it as into herdr — Esc and Ctrl+C go to the agent, not to the drawer, and Ctrl+C
+copies instead while text is selected; a multi-line paste arrives as one paste; the wheel
+scrolls the pane's own history; and the pane follows the drawer's size, which widens while
+the tab is shown. A link in it opens in your browser. A pane cannot write your clipboard.
+Leaving the tab or closing the drawer gives the pane back, so a herdr window showing it
+returns to its own size. A terminal that ends says why — the pane closed, another client
+took it over, the Machine's connection dropped, or herdr refused — and **Reattach** finds
+the Run's newest live agent again. The tab stays while its Machine is away, and Reattach
+says that Machine is not connected until it is back. The card and the tab say where the pane is, as
+"vm-mk › workspace 3 › tab 2".
+
+Where there is no pane to show — a Run with no live agent, or a Machine on a Collie whose
+focus does not name one — Go to pane does what it did before, and **Open in herdr** on the
+tab does it on purpose, for the full herdr UI: a new herdr client in this computer's
+terminal, attached to that Machine's session: `herdr --remote <target> --session
+<session>`, or `herdr --session <session>` for this computer, with no `--session` for
+herdr's default session. The terminal is `x-terminal-emulator` where it exists, else the
+first of `gnome-terminal`, `konsole`, `kitty`, `alacritty` and `xterm` on PATH; on macOS it
+is Terminal.app. Where no terminal was found, or it failed as it started, the card shows
+the command to copy. A Run with no live agent is looked for only in its Task's own Herd,
+since workspace ids are only unique within one. **New run** asks a Machine what a project
 can start, then starts it with what you typed for its inputs. What came of each, or the
 host's own words for why not, is said in a toast, and **Try again** on a failure sends the
 same request again, so a host that took it before the answer was lost does it once; the card then changes from the host's
@@ -1014,6 +1030,23 @@ spreads it. Each key is decided by whichever edit was made last, wherever it was
 on one Machine only is taken from it, and a key set differently on several takes the latest,
 with Settings saying beside it which Machine that came from. A value a Machine holds that
 its setting refuses, written into its file by hand, is not taken. What stays each Machine's own
+is everything else in its `config.json`: remembered answers such as `linear.team` and
+`gitlab.assignee`, `chat_harness`, and `projects.root`, which is a path on that Machine.
+
+**Settings** also holds **Collie**: every setting the TUI's Settings offers — each default a
+Run reads, `proactive`, the extra `models.<harness>` and each `notifications.<kind>` — with
+a control that fits it (a choice, a number, a switch, or text), its default beside it, and
+the same refusals as the TUI. Both read one list of settings (`src/settings.ts`), so a new
+setting shows up in both. These are the Flock's: Desktop keeps them in
+`flock-settings.json` beside its chat, and gives them to every Machine through that
+Machine's host, never by editing a file over SSH. A Machine is synced each time it
+connects and after every edit in Settings, so one out of reach gets an edit when it is
+back, the way upgrades reach it. An edit on one Machine's own TUI Settings counts the
+same: Desktop takes it the next time it sees that Machine, or when Settings is opened, and
+spreads it. Each key is decided by whichever edit was made last, wherever it was made
+([ADR-0043](adr/0043-a-shared-setting-is-its-latest-edit.md)); on the first sync a key set
+on one Machine only is taken from it, and a key set differently on several takes the latest,
+with Settings saying beside it which Machine that came from. What stays each Machine's own
 is everything else in its `config.json`: remembered answers such as `linear.team` and
 `gitlab.assignee`, `chat_harness`, and `projects.root`, which is a path on that Machine.
 
@@ -1138,6 +1171,21 @@ rather than holding up the rest, and one whose Collie is older than Desktop's ch
 whose board could not be read, is written to by nothing. The bell turns Desktop's own
 turns off (and on again); it is on by default, and kept in `settings.json` beside the
 session.
+
+**Settings** has a **Flock chat** section with the **Machine rule**: which Machine each kind
+of work goes to, in your own words — "Frontend work is on the laptop, everything else is on
+the vm". It is kept in `settings.json` on this computer, and given to no Machine. The chat
+gets it with every message, its own turns included, beside the Machines Desktop reaches at
+that moment, named as the cards name them, with this computer marked as the one Desktop
+runs on, so "the laptop" can mean it. When it starts work it names the Machine from the
+rule, unless your message names one, which wins. When the rule's Machine is not reachable,
+it says so and starts nothing elsewhere; when the rule does not cover the work, it asks.
+An empty rule changes nothing. You can also tell the chat to change it ("from now on,
+frontend goes on the laptop") or ask what it is; it saves through the same setting, and
+Settings shows the new text the next time it opens. The rule informs the chat's choice and
+nothing more: a start that names no Machine while several are reachable is still refused,
+and a Run the rule placed on another Machine still opens with Go to pane over that
+Machine's own connection.
 
 **Start fresh** (the pen) mints a new session and makes it current; the history (the clock)
 lists the earlier ones on this computer, newest first, and reopens one. Either way the

@@ -9,6 +9,11 @@ import type { About } from "../desktop/src/shared/chat-view";
 
 let about: About | undefined;
 let noticed: string | undefined;
+let rule: string | undefined;
+const machines = [
+  { name: "mk-pc", local: true },
+  { name: "vm-mk", local: false },
+];
 const asked: string[] = [];
 const options = sessionOptions({
   cwd: "/state/collie-desktop",
@@ -21,6 +26,7 @@ const options = sessionOptions({
   },
   about: () => about,
   noticed: () => noticed,
+  placement: () => (rule === undefined ? undefined : { rule, machines }),
 });
 const permission = {
   signal: new AbortController().signal,
@@ -124,6 +130,7 @@ test("a question in a turn nobody is watching is refused, so the turn ends rathe
         ask: () => Promise.resolve(null),
         about: () => undefined,
         noticed: () => undefined,
+        placement: () => undefined,
       });
       const answer = yield* Effect.promise(() =>
         unwatched.canUseTool("AskUserQuestion", { questions: [] }, permission),
@@ -134,3 +141,32 @@ test("a question in a turn nobody is watching is refused, so the turn ends rathe
       });
     }),
   ));
+
+test("the Machine rule goes with every message, in the human's words, beside the Machines reachable now", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      about = undefined;
+      rule = undefined;
+      expect(yield* submitted()).toEqual({});
+      rule = "Frontend work is on the laptop machine and everything else is on the vm";
+      const first = (yield* submitted()).hookSpecificOutput?.additionalContext ?? "";
+      expect(first).toContain(
+        "The human's Machine rule, in their own words from Desktop's Settings:\nFrontend work is on the laptop machine and everything else is on the vm",
+      );
+      expect(first).toContain("mk-pc (this computer, where Desktop runs), vm-mk");
+      // Edited between two turns, the second has the new words.
+      rule = "Everything is on the vm";
+      const second = (yield* submitted()).hookSpecificOutput?.additionalContext ?? "";
+      expect(second).toContain("Everything is on the vm");
+      expect(second).not.toContain("Frontend");
+      rule = undefined;
+    }),
+  ));
+
+test("the system prompt tells the chat to start where the rule says, and how to keep to it", () => {
+  const prompt = options.systemPrompt.replace(/\s+/g, " ");
+  expect(prompt).toContain("Machine rule: their own instruction");
+  expect(prompt).toContain("name its Machine from the rule, unless the human's message names one");
+  expect(prompt).toContain("not among those reachable, say so and start nothing elsewhere");
+  expect(prompt).toContain("When the rule does not cover the work, ask");
+});
