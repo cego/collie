@@ -1109,7 +1109,10 @@ const frontDoorHandlers = (
                 operation: "write",
                 request,
                 ...whoOf(client),
-                asked: { path, sha256: new Bun.CryptoHasher("sha256").update(content).digest("hex") },
+                asked: {
+                  path,
+                  sha256: new Bun.CryptoHasher("sha256").update(content).digest("hex"),
+                },
                 result: Written,
               },
               writeWhole(path, content, env.stateDir),
