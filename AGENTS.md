@@ -126,7 +126,7 @@ herdr actions, and the `collie` CLI.
   assume about suspension and recovery** →
   [ADR-0014](docs/adr/0014-native-workflows-run-on-effects-own-engine.md), alongside
   `src/engine.ts` and `test/engine.test.ts`. The two non-default cluster settings
-  and the four upstream behaviours the proof measured are recorded there; an Effect
+  and the five upstream behaviours the proof measured are recorded there; an Effect
   upgrade rechecks them rather than assuming them.
 - **Naming something, or writing a test that needs a real host** →
   [ADR-0028](docs/adr/0028-names-are-the-domains-and-the-proof-drives-the-shipped-host.md),

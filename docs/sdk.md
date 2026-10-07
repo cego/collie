@@ -986,7 +986,7 @@ and `collie.d.ts` — into the directory, merging what it needs into a `package.
 `tsconfig.json` you already have without replacing anything of yours, and installs the toolchain with the executable's own embedded Bun, so neither Bun nor Node has
 to be on the machine. The `effect` it pins is the one the host runs.
 
-Effect 4.0.1 moved the workflow modules from `effect/unstable/workflow` to
+Effect 4.0.0 moved the workflow modules from rc.117's `effect/unstable/workflow` to
 `effect/workflow`. A module still on the old path loads and runs until Collie 0.41.0, and
 `collie workflow check` reports the old path as a problem, which is how you hear of it.
 

@@ -1,4 +1,4 @@
-// A module saved before Effect 4.0.1 moved the workflow modules out of `unstable`, beside
+// A module saved before Effect 4.0.0 moved the workflow modules out of `unstable`, beside
 // one written after: both paths have to be the host's own objects, or the old one breaks.
 
 import { Host, Run, defineWorkflow } from "collie";
