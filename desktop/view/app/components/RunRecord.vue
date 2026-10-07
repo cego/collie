@@ -9,6 +9,14 @@ import type { DiffTarget } from "./DiffTab.vue";
 const props = defineProps<{ placed: PlacedTask }>();
 const emit = defineEmits<{ close: [] }>();
 
+// The board goes inert under the record, so focus moves in, and back to where it was after.
+const back = useTemplateRef<{ $el: HTMLElement }>("back");
+const focusedBefore = document.activeElement;
+onMounted(() => back.value?.$el.focus());
+onUnmounted(() => {
+  if (focusedBefore instanceof HTMLElement) void nextTick(() => focusedBefore.focus());
+});
+
 const result = useAtomValue(() =>
   runDetailAtom(
     runDetailKey({ installation: props.placed.installation, runId: props.placed.task.run }),
@@ -84,6 +92,7 @@ const locationOf = (file: string, line: number | null) =>
   <section data-testid="record" class="flex flex-col bg-default">
     <header class="flex shrink-0 items-start gap-3 border-b border-default px-4 py-3">
       <UButton
+        ref="back"
         icon="i-lucide-arrow-left"
         color="neutral"
         variant="ghost"
