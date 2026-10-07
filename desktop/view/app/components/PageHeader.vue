@@ -1,15 +1,12 @@
 <script setup lang="ts">
-/** A page's back button and title; the back button takes focus as the page opens. */
+/** A page's back button and title. */
 defineProps<{ title: string }>();
 const emit = defineEmits<{ back: [] }>();
-const back = useTemplateRef<{ $el: HTMLElement }>("back");
-onMounted(() => back.value?.$el.focus());
 </script>
 
 <template>
   <header class="flex shrink-0 items-start gap-3 border-b border-default px-4 py-3">
     <UButton
-      ref="back"
       icon="i-lucide-arrow-left"
       color="neutral"
       variant="ghost"

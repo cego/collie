@@ -1122,8 +1122,9 @@ its sections open or closed as they were, and the card still selected.
 
 The record is one of Desktop's **pages**, with **Settings**: each takes the board's column in
 the same way, one at a time, so opening Settings with a record open replaces the record, and
-back always returns to the board. Opening a page moves focus to its back button. The header's
-Settings button opens its page and shows as pressed while it is open.
+back always returns to the board. Opening a page moves focus to its back button, and back returns focus to where it was. The
+header's Settings button opens its page and shows as pressed while it is open; pressed again,
+it returns to the board.
 
 **Escape** backs out one level: an open dialog, menu or popover closes first, then the
 open page, and on the board Escape lets the selected card go. Escape typed in a field, such as

@@ -47,15 +47,15 @@ const tabs = computed(() => {
 });
 /** The tab the human chose while it is there, else the first: Plan, where there is one. */
 const chosen = ref<string>();
-const record = usePage();
+const { asked: tabAsked, taken } = usePage();
 const wentToPane = ref(false);
 watch(
-  record.asked,
+  tabAsked,
   (asked) => {
     if (asked === null) return;
     chosen.value = asked;
     wentToPane.value = opensHerdrWithoutPane(asked);
-    record.taken();
+    taken();
   },
   { immediate: true },
 );

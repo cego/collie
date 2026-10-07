@@ -19,6 +19,16 @@ const opened = computed(() =>
 );
 // A record closes when its card leaves the Flock.
 watch(opened, (now) => now === undefined && page.value?.kind === "record" && back());
+const pageShown = computed(() => opened.value !== undefined || page.value?.kind === "settings");
+// A page opened takes focus to its back button; back returns it to where it was.
+let focusedBefore: Element | null = null;
+watch(page, async (now, before) => {
+  if (before === null) focusedBefore = document.activeElement;
+  await nextTick();
+  const target =
+    now === null ? focusedBefore : document.querySelector('[data-testid="page-back"]');
+  if (target instanceof HTMLElement && target.isConnected) target.focus();
+});
 
 const { choose } = useChip();
 /** A click on the board's own area, on no card and no control, lets the selected card go. */
@@ -130,7 +140,7 @@ watch(update, (now) => {
           :active="page?.kind === 'settings'"
           active-variant="solid"
           :aria-pressed="page?.kind === 'settings'"
-          @click="open('settings')"
+          @click="page?.kind === 'settings' ? back() : open('settings')"
         />
         <OnboardDialog />
         <UButton
@@ -154,7 +164,7 @@ watch(update, (now) => {
       <div class="relative min-h-0 flex-1">
         <main
           class="flex h-full flex-col gap-6 overflow-y-auto p-4"
-          :inert="page !== null"
+          :inert="pageShown"
           @click="background"
         >
           <p v-if="connecting" class="text-muted">Connecting…</p>
