@@ -198,7 +198,7 @@ export class ToolchainError extends Data.TaggedError("ToolchainError")<{
 const NAMESPACES = [
   ["effect", EffectRoot],
   ["effect/workflow", WorkflowModules],
-  // rc.117's path, so a module saved before 4.0.0 moved it still loads. Goes in Collie 0.41.0.
+  // rc.117's path, so a module saved before 4.0.0 moved it still loads. Goes in Collie 0.42.0.
   ["effect/unstable/workflow", WorkflowModules],
 ] as const;
 

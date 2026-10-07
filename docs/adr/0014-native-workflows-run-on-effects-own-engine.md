@@ -12,7 +12,7 @@ what this page calls `collie native`, `src/native.ts`, `test/native-runtime.test
 **Amended 2026-10-07: Effect 4.0.1.** The proof is now `test/engine.test.ts`
 (`test/native-runtime.test.ts` was removed in abd9fa0), and it was rerun on 4.0.1. Effect
 4.0.0 moved the workflow modules from rc.117's `effect/unstable/workflow` to `effect/workflow`,
-so D3 serves the new path, and serves the old one as an alias until Collie 0.41.0 so a module
+so D3 serves the new path, and serves the old one as an alias until Collie 0.42.0 so a module
 saved before the upgrade still loads. That alias is a time-boxed exception to ADR-0028's "No
 aliases": it spares an author's saved module, not a name of Collie's. The upgrade found a fifth upstream behaviour, below.
 
@@ -97,7 +97,7 @@ Five things the proof measured rather than assumed. Each is a test.
    workflow's execution id from its payload differently from rc.117 (Effect-TS/effect
    #8455), so a parent resumed after the upgrade that derived its child's id again would run
    a finished child a second time. A child is resumed under the execution Collie recorded
-   for it instead (`test/child-execution.test.ts`). Going back is not covered: Collie 0.39.0
+   for it instead (`test/child-execution.test.ts`). Going back is not covered: Collie 0.40.0
    and earlier derive the id again, so none of them may take over a state directory with
    Runs in flight whose children a 4.0.1 host started. The cluster's and workflow engine's
    SQL tables are identical between rc.117 and 4.0.1, so a database an rc.117 host wrote is
