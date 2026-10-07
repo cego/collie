@@ -13,7 +13,7 @@ import { runCommand, type ControlSession } from "../../src/flows";
 import type { Jump } from "../../src/ui/state";
 import { Herdr } from "../../src/herdr";
 import { registerAgent, registryPath, scopeFor } from "../../src/registry";
-import { loadDefaults, readConfig } from "../../src/config";
+import { loadDefaults, readConfig, readSettingsSet } from "../../src/config";
 import type { RunFacts } from "../../src/runs";
 import { madeRun } from "../support/records";
 import { Path, FileSystem } from "effect";
@@ -146,6 +146,20 @@ effectTest("a default is written without the whitespace around it", function* ()
 
   expect(note).toBe("harness is now codex");
   expect((yield* loadDefaults(rig.pluginEnv().userDir)).harness).toBe("codex");
+});
+
+effectTest("a setting records when it was set, and proactive is one", function* () {
+  const userDir = rig.pluginEnv().userDir;
+
+  expect(yield* set("proactive", "false")).toBe("proactive is now false");
+
+  expect((yield* loadDefaults(userDir)).proactive).toBe(false);
+  // When, because the latest edit of a key is what a Flock shares.
+  expect(Object.keys((yield* readSettingsSet(userDir)).set)).toEqual(["proactive"]);
+  expect(yield* set("models.claude", "claude-x, claude-y")).toContain("claude-x, claude-y");
+  expect((yield* loadDefaults(userDir)).models).toEqual({ claude: ["claude-x", "claude-y"] });
+  // A remembered answer is a Run's own note, never a setting.
+  expect(yield* set("linear.team", "CEG")).toContain("not one of Collie's settings");
 });
 
 /** One run of another workspace, with an agent, a tab and whatever else a test needs. */

@@ -17,7 +17,7 @@ import type { Mode } from "../flows";
 import type { DefinitionRow, SettingsView } from "../views";
 import { MAX_AGENTS, type AgentRow, type RunRow } from "../workspace";
 import type { WideGroup, WideView, WorkspaceView } from "../workspace";
-import type { Density, Scope } from "../config";
+import type { Density, Scope } from "../settings";
 import {
   type CardAction,
   cardActions,

@@ -6,7 +6,8 @@
 
 import { Effect, FileSystem, Path, Stream } from "effect";
 import { attentionFor } from "./attention";
-import { loadDefaults, readConfig } from "./config";
+import { configValue, readConfig } from "./config";
+import { settingOf, SETTINGS } from "./settings";
 import { readIntent } from "./intent";
 import { savedModules } from "./discovery";
 import { checkModule, readModule } from "./authoring";
@@ -429,41 +430,8 @@ function scalar(value: YamlValue | undefined): string {
   return isString(value) ? value : (JSON.stringify(value) ?? "");
 }
 
-/**
- * The config keys `loadDefaults` actually reads, which are the only ones worth offering
- * to change. They are snake_case on disk and camelCase on `Defaults`, and Settings used
- * to name the camelCase ones — so editing "maxIterations" reported success, wrote a key
- * nothing reads, and left the effective default exactly where it was.
- */
-const DEFAULT_KEYS = [
-  "harness",
-  "model",
-  "effort",
-  "trust",
-  "permissions",
-  "scope",
-  "questions",
-  "density",
-  "gitlab_host",
-  "max_iterations",
-  "handoff_timeout_ms",
-  "quiet_ms",
-  "board_quiet_ms",
-  "compact_at_tokens",
-] as const;
-
-/** The ones `loadDefaults` reads with `isNumber`: a string there is ignored. */
-export const NUMERIC_DEFAULTS: ReadonlyArray<string> = [
-  "max_iterations",
-  "handoff_timeout_ms",
-  "quiet_ms",
-  "board_quiet_ms",
-  "compact_at_tokens",
-];
-
 export const buildSettings = Effect.fn("Views.buildSettings")(function* (env: PluginEnv) {
   const path = yield* Path.Path;
-  const defaults = yield* loadDefaults(env.userDir);
   const raw = yield* readConfig(env.userDir);
   const state = yield* claudeTrust(env.home, env.stateDir)
     .state(env.cwd)
@@ -471,29 +439,15 @@ export const buildSettings = Effect.fn("Views.buildSettings")(function* (env: Pl
 
   return {
     configPath: path.join(env.userDir, "config.json"),
-    // Named one by one rather than looked up: these are the keys Settings writes back
-    // through `config.ts`, and a dictionary would let one drift out of `Defaults`.
-    defaults: [
-      { key: "harness", value: defaults.harness },
-      { key: "model", value: defaults.model },
-      { key: "effort", value: defaults.effort ?? "" },
-      { key: "trust", value: defaults.trust },
-      { key: "permissions", value: defaults.permissions },
-      { key: "scope", value: defaults.scope },
-      { key: "questions", value: defaults.questions },
-      { key: "density", value: defaults.density },
-      { key: "gitlab_host", value: defaults.gitlabHost },
-      { key: "max_iterations", value: String(defaults.maxIterations) },
-      { key: "handoff_timeout_ms", value: String(defaults.handoffTimeoutMs) },
-      { key: "quiet_ms", value: String(defaults.quietMs) },
-      { key: "board_quiet_ms", value: String(defaults.boardQuietMs) },
-      { key: "compact_at_tokens", value: String(defaults.compactAtTokens) },
-    ],
+    // As written where it is set, so a hand-edited value that loadDefaults would
+    // coerce is shown here, where it is put right.
+    defaults: SETTINGS.map(({ key, fallback }) => {
+      const written = configValue(raw, key);
+      return { key, value: written === undefined ? fallback : scalar(written) };
+    }),
     // Everything else the file holds: remembered answers, per-harness model lists, the
     // notification kinds someone turned off. Shown as written rather than interpreted.
-    remembered: flatten(raw).filter(
-      (entry) => !DEFAULT_KEYS.some((key) => entry.key === String(key)),
-    ),
+    remembered: flatten(raw).filter((entry) => settingOf(entry.key) === undefined),
     trust: { cwd: env.cwd, state },
   } satisfies SettingsView;
 });

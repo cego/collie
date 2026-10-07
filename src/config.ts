@@ -1,119 +1,20 @@
 // User defaults from the plugin config dir. Optional; the baseline is neutral.
 
 import { Effect, FileSystem, Option, Path, Schema } from "effect";
-import { COMPACT_AT_TOKENS } from "./compaction";
-import { GITLAB_HOST, isHostName } from "./gitlab-token";
+import { isHostName } from "./gitlab-token";
 import { permissionsAsWritten } from "./harness";
 import { isNumber, isString } from "./schema";
+import {
+  type Defaults,
+  FALLBACK_DEFAULTS,
+  isDensity,
+  isQuestionMode,
+  isScope,
+  type SettingValue,
+} from "./settings";
 import { isYamlMap, YamlMapSchema, type YamlMap, type YamlValue } from "./yaml";
 
-/**
- * What the Control Plane's Runs view is a board of: `local` is this Session's own
- * workspace, the board as it has always been; `all` is every workspace of this herdr
- * session that Collie has work in. Here rather than in the board, because it is a
- * default a human sets and every other reader takes the type from `Defaults`.
- */
-export type Scope = "local" | "all";
-
-/** How many cards the board fits across. A Setting, and the pane's width overrules it. */
-export type Density = "comfortable" | "compact";
-export const DENSITIES: ReadonlyArray<Density> = ["comfortable", "compact"];
-export function isDensity(value: string): value is Density {
-  return DENSITIES.some((density) => density === value);
-}
-export const SCOPES: ReadonlyArray<Scope> = ["local", "all"];
-export function isScope(value: string): value is Scope {
-  return SCOPES.some((scope) => scope === value);
-}
-
-/**
- * How a Run's question reaches the human. `focus` brings the Session's Collie tab to
- * the front the moment a Choice opens — the behavior every install has had. `notify`
- * leaves the toast and the board's own `asks you` alone but takes no focus, so a
- * question arriving mid-thought does not move the human off what they are doing.
- */
-export type Questions = "focus" | "notify";
-export const QUESTION_MODES: ReadonlyArray<Questions> = ["focus", "notify"];
-export function isQuestionMode(value: string): value is Questions {
-  return QUESTION_MODES.some((mode) => mode === value);
-}
-
-export interface Defaults {
-  harness: string;
-  model: string;
-  /** Reasoning effort for every step that does not name its own; unset means the harness decides. */
-  effort?: string;
-  maxIterations: number;
-  /** How long a Step may wait for the human after the agent hands off. */
-  handoffTimeoutMs: number;
-  /**
-   * How long an agent may produce nothing before it is nudged. Nudged again at
-   * double, given up on at triple. `0` waits for as long as it takes.
-   */
-  quietMs: number;
-  /**
-   * How long a running run's directory may go unchanged before the board calls it quiet.
-   * Separate from `quietMs`, which is what the Driver holds one step's agent to: this is
-   * a whole run writing nothing, read from the outside, and the two are worth different
-   * numbers.
-   */
-  boardQuietMs: number;
-  /**
-   * Current-context tokens at or above which a reused agent is asked to compact before
-   * it is given its next piece of work. `0` turns the feature off. As written rather
-   * than coerced: the fallback would be the default, so a value someone meant as a
-   * lower limit would silently compact an agent they had tried to leave alone.
-   */
-  compactAtTokens: number;
-  /** Extra models to accept per harness, for models the adapter table does not list. */
-  models: Readonly<Record<string, ReadonlyArray<string>>>;
-  /** What to do about a directory the harness has not been trusted with yet. */
-  trust: "auto" | "never";
-  /**
-   * Whether the harness reviews an agent's tool calls itself, or asks in its pane. As
-   * written, like `harness` and `model`: validation names an unknown one, and the engine
-   * starts an agent it cannot resolve in `auto`, the default.
-   */
-  permissions: string;
-  /** Which scope the Control Plane opens on. `g` changes it for that tab only. */
-  scope: Scope;
-  /** How many cards the board fits across, where the pane is wide enough for a choice. */
-  density: Density;
-  /** `notifications.<kind>: false` turns that kind of toast off; absent means on. */
-  notifications: Readonly<Record<string, boolean>>;
-  /** Whether a new question takes the human's focus, or only says so. */
-  questions: Questions;
-  /**
-   * Whether Collie starts a turn of its own when something meaningful happens — a Run
-   * stopping, asking, going round, or claiming to be finished without proving it. On by
-   * default: a conversation you have to start every time is polling by hand.
-   *
-   * It changes what is *said*, never what may be *done*: a proposal from a proactive
-   * turn goes through the same authority path as one you typed.
-   */
-  proactive: boolean;
-  /** The one GitLab doctor and onboard check a Machine against. */
-  gitlabHost: string;
-}
-
-export const FALLBACK_DEFAULTS: Defaults = {
-  harness: "claude",
-  model: "opus",
-  maxIterations: 5,
-  handoffTimeoutMs: 2 * 60 * 60 * 1000,
-  quietMs: 10 * 60 * 1000,
-  boardQuietMs: 5 * 60 * 1000,
-  compactAtTokens: COMPACT_AT_TOKENS,
-  models: {},
-  trust: "auto",
-  permissions: "auto",
-  scope: "local",
-  density: "comfortable",
-  notifications: {},
-  questions: "focus",
-  proactive: true,
-  gitlabHost: GITLAB_HOST,
-};
+export { type Defaults, FALLBACK_DEFAULTS } from "./settings";
 
 const ConfigJson = Schema.fromJsonString(YamlMapSchema);
 const Models = Schema.Record(Schema.String, Schema.Array(Schema.String));
@@ -153,7 +54,7 @@ export function configValue(raw: YamlMap, dotted: string): YamlValue | undefined
 export const writeConfigValue = Effect.fn("Config.writeConfigValue")(function* (
   userDir: string,
   dotted: string,
-  value: string | number | null,
+  value: SettingValue | null,
 ) {
   const fs = yield* FileSystem.FileSystem;
   const paths = yield* Path.Path;
@@ -175,6 +76,54 @@ export const writeConfigValue = Effect.fn("Config.writeConfigValue")(function* (
     paths.join(userDir, "config.json"),
     `${Schema.encodeSync(ConfigJson)(raw)}\n`,
   );
+});
+
+/** When each setting was last set, beside config.json, and which Desktop shares them. */
+export const SettingsSet = Schema.Struct({
+  set: Schema.Record(Schema.String, Schema.String),
+  /** The Desktop that last gave this Machine the Flock's settings. */
+  flock: Schema.optionalKey(Schema.Struct({ by: Schema.String, at: Schema.String })),
+});
+export type SettingsSet = typeof SettingsSet.Type;
+const SettingsSetJson = Schema.fromJsonString(SettingsSet);
+const SET_FILE = "settings-set.json";
+
+/** What `settings-set.json` holds, or nothing set where there is none or it cannot be read. */
+export const readSettingsSet = Effect.fn("Config.readSettingsSet")(function* (userDir: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const paths = yield* Path.Path;
+  return yield* fs.readFileString(paths.join(userDir, SET_FILE)).pipe(
+    Effect.flatMap(Schema.decodeUnknownEffect(SettingsSetJson)),
+    Effect.orElseSucceed((): SettingsSet => ({ set: {} })),
+  );
+});
+
+export const writeSettingsSet = Effect.fn("Config.writeSettingsSet")(function* (
+  userDir: string,
+  stamps: SettingsSet,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const paths = yield* Path.Path;
+  yield* fs.makeDirectory(userDir, { recursive: true });
+  yield* fs.writeFileString(
+    paths.join(userDir, SET_FILE),
+    `${Schema.encodeSync(SettingsSetJson)(stamps)}\n`,
+  );
+});
+
+/**
+ * Writes one of Collie's settings and records `at` as when it was set, which is what
+ * decides it across a Flock: the latest edit of a key wins.
+ */
+export const setSetting = Effect.fn("Config.setSetting")(function* (
+  userDir: string,
+  key: string,
+  value: SettingValue | null,
+  at: string,
+) {
+  yield* writeConfigValue(userDir, key, value);
+  const stamps = yield* readSettingsSet(userDir);
+  yield* writeSettingsSet(userDir, { ...stamps, set: { ...stamps.set, [key]: at } });
 });
 
 /** The GitLab this run works against: `GITLAB_HOST` where it names a host, else the setting. */
