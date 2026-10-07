@@ -2,7 +2,7 @@
 // while unset and what is refused. The TUI's Settings and Desktop's both read this list,
 // so a setting added here is offered by both. Pure: Desktop's view bundles it.
 
-import { Schema } from "effect";
+import { Option, Schema } from "effect";
 import { GITLAB_HOST, isHostName } from "./gitlab-token";
 import { NOTIFICATION_KINDS } from "./notify";
 import { isString } from "./schema";
@@ -242,4 +242,15 @@ export function settingText(value: SettingValue | null): string {
   if (value === null) return "";
   if (isString(value)) return value;
   return Array.isArray(value) ? value.join(", ") : String(value);
+}
+
+/** A value one Machine shares for `key`, checked as an edit of it would be. */
+export function parseShared(
+  key: string,
+  value: Schema.Json | null,
+): { readonly value: SettingValue | null } | { readonly refused: string } {
+  const typed = Schema.decodeUnknownOption(Schema.NullOr(SettingValue))(value);
+  return Option.isSome(typed)
+    ? parseSetting(key, settingText(typed.value))
+    : { refused: `${key} cannot take that value` };
 }
