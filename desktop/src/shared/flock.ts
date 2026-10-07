@@ -750,6 +750,8 @@ export interface MachineRow {
   /** How its latest settings sync ended; null until one has. */
   readonly settings: { readonly failed: string | null } | null;
   readonly credentials: CredentialsGiven;
+  /** Why it isn't live; null while it is, or is connecting. */
+  readonly reason: string | null;
 }
 
 /**
@@ -781,16 +783,19 @@ export const machineRows = (flock: Flock): ReadonlyArray<MachineRow> =>
     const seen = [...flock.machines.values()].filter(({ machine }) => machine.profile === profile);
     const shown =
       seen.find(({ asOf }) => asOf === null) ?? seen.sort((a, b) => b.asOf! - a.asOf!)[0];
+    const live = shown?.asOf === null;
+    const lost = flock.lost.get(profile);
     return {
       profile,
       name,
       target: target ?? null,
-      state: shown?.asOf === null ? "live" : (flock.lost.get(profile)?.state ?? "connecting"),
+      state: live ? "live" : (lost?.state ?? "connecting"),
       onboarded: standing(flock.onboarded.get(profile), flock.doctored.get(profile)),
       build: shown?.build ?? null,
       development: shown?.development ?? null,
       settings: flock.synced.has(profile) ? { failed: flock.synced.get(profile)! } : null,
       credentials: flock.given.get(profile) ?? {},
+      reason: live ? null : (lost?.reason ?? null),
     };
   });
 

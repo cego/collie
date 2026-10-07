@@ -276,6 +276,18 @@ test("a route out of reach is said by name until its Machine reports through it 
   expect([...applyItem(after, snapshot(vm, [])).lost]).toEqual([]);
 });
 
+test("a Machine's row says why it isn't live, and nothing once it is", () => {
+  const lost = [routed(vm), lostVm("unreachable")].reduce(applyItem, EMPTY_FLOCK);
+  expect(machineRows(lost)[0]).toMatchObject({
+    state: "unreachable",
+    reason: "ssh: connection refused",
+  });
+  expect(machineRows(applyItem(lost, snapshot(vm, [])))[0]).toMatchObject({
+    state: "live",
+    reason: null,
+  });
+});
+
 test("a Machine that drops keeps its cards as of when, off the machines a run can start on, until it is live again", () => {
   const dropped = [
     snapshot(pc, [asking]),
@@ -377,6 +389,7 @@ const row = (over: Partial<MachineRow> = {}): MachineRow => ({
   development: null,
   settings: null,
   credentials: {},
+  reason: null,
   ...over,
 });
 const doctored = (ready: boolean) => ({

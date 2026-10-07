@@ -970,7 +970,8 @@ The page opens with one line saying whether the whole Flock is **In sync** with 
 it lags on. Each Machine's row shows the Collie it runs — "Collie 0.35.0", "development build
 0.35.0+abc1234", or "Build not known yet" for one never seen live — and one state: **In
 sync**, **Behind**, **Connecting**, or why it isn't live (**Out of reach**, **Waiting for
-SSO**, **Collie isn't installed**, **Update Desktop**). A live Machine is behind on its
+SSO**, **Collie isn't installed**, **Update Desktop**) with what it said, and **Check for
+updates** where it needs a newer Desktop. A live Machine is behind on its
 version when it runs a release older than Desktop's, which the row says with both versions;
 never on a development checkout, and never while Desktop itself isn't a release. It is
 behind on settings when its last settings sync failed, with the host's reason; behind on

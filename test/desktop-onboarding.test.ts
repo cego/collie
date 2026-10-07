@@ -446,6 +446,7 @@ test("a removed Machine leaves the board, its routes and what onboarding left of
       development: null,
       settings: null,
       credentials: {},
+      reason: null,
     },
     {
       profile: "p-vm",
@@ -457,6 +458,7 @@ test("a removed Machine leaves the board, its routes and what onboarding left of
       development: null,
       settings: null,
       credentials: {},
+      reason: null,
     },
   ]);
   const after = applyItem(before, { _tag: "Removed", machine });

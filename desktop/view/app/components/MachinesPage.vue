@@ -4,7 +4,7 @@ import { type InSync, NOT_LIVE_SAID } from "../../../src/shared/in-sync";
 
 const emit = defineEmits<{ back: [] }>();
 const { machines, summary } = useInSync();
-const { removeMachine, syncNow } = useActions();
+const { checkForUpdates, removeMachine, syncNow } = useActions();
 const { onboardOn, loginOn } = useOnboarding();
 const adding = ref(false);
 
@@ -66,8 +66,11 @@ const missing = (run: OnboardRun) => run.steps.filter(({ status }) => !SETTLED.i
               :label="badgeOf(verdict.state).label"
             />
           </div>
+          <p v-if="row.reason !== null" class="text-sm text-warning" data-testid="reason">
+            {{ row.reason }}
+          </p>
           <p class="text-sm text-muted" data-testid="build">{{ buildOf(row) }}</p>
-          <template v-for="lag in verdict.behind" :key="lag.part">
+          <template v-for="lag in verdict.behind" :key="lag.said">
             <p class="text-sm text-warning" :data-testid="`behind-${lag.part}`">{{ lag.said }}</p>
             <OnboardSteps
               v-if="lag.part === 'onboarding'"
@@ -105,6 +108,15 @@ const missing = (run: OnboardRun) => run.steps.filter(({ status }) => !SETTLED.i
               label="Sync now"
               data-testid="sync-now"
               @click="syncNow(row.profile)"
+            />
+            <UButton
+              v-if="row.state === 'update-desktop'"
+              color="neutral"
+              variant="outline"
+              icon="i-lucide-circle-arrow-up"
+              label="Check for updates"
+              data-testid="check-updates"
+              @click="checkForUpdates()"
             />
             <UButton
               v-if="row.target !== null"
