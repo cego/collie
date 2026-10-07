@@ -53,12 +53,12 @@ const { popIn } = usePopOut();
 const draft = ref("");
 onMounted(reload);
 
-/** The message goes with the chip, which it uses up. */
-const send = () => {
+/** The message goes with the chip, which it uses up; `now` pushes it past the turn under way. */
+const send = (now = false) => {
   const text = draft.value.trim();
   if (text === "") return;
   draft.value = "";
-  void say(text, chip.value);
+  void say(text, chip.value, now);
   choose(null);
 };
 
@@ -253,15 +253,18 @@ const queuedText = ({ content }: QueuedMessage) => (isString(content) ? content 
         />
       </UBadge>
     </div>
-    <form class="flex gap-2 border-t border-default px-6 py-3" @submit.prevent="send">
+    <form class="flex gap-2 border-t border-default px-6 py-3" @submit.prevent="send()">
       <UTextarea
         v-model="draft"
         data-testid="chat-input"
         class="flex-1"
         :rows="2"
         autoresize
-        placeholder="Ask about the Flock"
-        @keydown.enter.exact.prevent="send"
+        :placeholder="
+          isLoading ? 'Enter queues it, Ctrl+Enter sends it now' : 'Ask about the Flock'
+        "
+        @keydown.enter.exact.prevent="send()"
+        @keydown.ctrl.enter.exact.prevent="send(true)"
       />
       <UButton type="submit" icon="i-lucide-send" aria-label="Send" />
     </form>

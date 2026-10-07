@@ -355,8 +355,13 @@ export const DesktopRpcs = RpcGroup.make(
     error: ActionFailed,
   }),
   /** One message from the human to the Flock chat, and the turn it starts as it streams. */
+  /** `now` interrupts the turn under way rather than waiting behind it. */
   Rpc.make("say", {
-    payload: { text: Schema.String, about: Schema.NullOr(About) },
+    payload: {
+      text: Schema.String,
+      about: Schema.NullOr(About),
+      now: Schema.optionalKey(Schema.Boolean),
+    },
     success: AguiEvent,
     stream: true,
   }),

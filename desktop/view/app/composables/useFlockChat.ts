@@ -38,12 +38,12 @@ const lastSaid = (messages: ReadonlyArray<UIMessage | ModelMessage>) => {
 
 export const useFlockChat = () => {
   const registry = injectRegistry();
-  const turn = (text: string, about: About | null) =>
+  const turn = (text: string, about: About | null, now: boolean) =>
     Stream.unwrap(
       AtomRegistry.getResult(registry, FlockClient.runtime).pipe(
         Effect.map((context) =>
           Stream.unwrap(
-            FlockClient.use((client) => Effect.succeed(client("say", { text, about }))),
+            FlockClient.use((client) => Effect.succeed(client("say", { text, about, now }))),
           ).pipe(Stream.provideContext(context)),
         ),
       ),
@@ -53,7 +53,7 @@ export const useFlockChat = () => {
       // SAFETY: AG-UI's event types are string enums whose values are these events' `type`s.
       connect: (messages, body) =>
         Stream.toAsyncIterable(
-          turn(lastSaid(messages), Option.getOrNull(decodeAbout(body?.about))),
+          turn(lastSaid(messages), Option.getOrNull(decodeAbout(body?.about)), body?.now === true),
         ) as AsyncIterable<StreamChunk>,
     },
   });
@@ -100,8 +100,12 @@ export const useFlockChat = () => {
       writeSettings({ payload: { proactive: on } }).then((exit) => {
         if (Exit.isSuccess(exit)) proactive.value = on;
       }),
-    /** Sends a message with the card it is about, queued while a turn is under way. */
-    say: (text: string, about: About | null) => chat.sendMessage(text, { body: { about } }),
+    /**
+     * Sends a message with the card it is about: queued while a turn is under way, or `now`,
+     * interrupting it.
+     */
+    say: (text: string, about: About | null, now = false) =>
+      chat.sendMessage(text, { body: { about, now }, whenBusy: now ? "interrupt" : "queue" }),
     answer: (toolCallId: string, answers: Answers) => answer({ payload: { toolCallId, answers } }),
     reload,
     conversations: () =>

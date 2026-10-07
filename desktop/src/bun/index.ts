@@ -682,11 +682,11 @@ const main = Effect.gen(function* () {
       doorTo(doors, installation).pipe(
         Effect.flatMap((door) => runFileOn(door.desktop, runId, ref, offset)),
       ),
-    say: ({ text, about }) =>
+    say: ({ text, about, now }) =>
       Stream.unwrap(
         Effect.map(chat, (opened) =>
           Result.match(opened, {
-            onSuccess: (conversation) => conversation.send(text, about),
+            onSuccess: (conversation) => conversation.send(text, about, now === true),
             onFailure: (cause) =>
               Stream.make(refusal(`The Flock chat could not start: ${String(cause)}`)),
           }),

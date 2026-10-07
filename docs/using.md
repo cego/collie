@@ -1089,8 +1089,9 @@ keeps a style, and a web link opens in your browser. Each tool call is one row �
 reached and what it was asked — that opens to what the tool answered, and thinking is a
 collapsed **Thinking** you can open. When the chat needs you to choose, it asks with choice
 buttons, and goes on when you click; any other permission it asks for is refused. Type
-while it is working and your message waits as **Queued** until the turn ends, or drop it
-with its ✕.
+while it is working and Enter queues your message as **Queued** until the turn ends, or
+drop it with its ✕. Ctrl+Enter sends it now instead: the turn under way, yours or one of
+Desktop's own, is interrupted and your message starts the next.
 
 Click a card and it becomes a chip above the input ("About: vm-mk › Fix board bugs"): your
 next message goes with it, so "this one" means that card, and sending uses it up. Clear it
