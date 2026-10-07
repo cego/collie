@@ -919,16 +919,31 @@ the card's first action is the TUI card's own. Following a check's output is not
 yet. Open merge request opens it in your browser.
 
 **Go to pane** asks the card's Machine to focus the Run's newest live agent, or its
-workspace where it has none, on that Machine's own herdr. An open herdr window does not
-follow a focus, because herdr gives each client its own view, so Desktop then opens a new
-herdr client in this computer's terminal, attached to that Machine's session:
-`herdr --remote <target> --session <session>`, or `herdr --session <session>` for this
-computer, with no `--session` for herdr's default session. It lands on the focused pane.
-The terminal is `x-terminal-emulator` where it exists, else the first of `gnome-terminal`,
-`konsole`, `kitty`, `alacritty` and `xterm` on PATH; on macOS it is Terminal.app. The card
-then says where the pane is, as "vm-mk › workspace 3 › tab 2", and where no terminal was
-found, or it failed as it started, it shows the command to copy. A Run with no live agent is
-looked for only in its Task's own Herd, since workspace ids are only unique within one. **New run** asks a Machine what a project
+workspace where it has none, on that Machine's own herdr, and opens the card's drawer on
+its **Terminal** tab, which shows that agent's pane. It is herdr's own controller for the
+pane, run over the connection Desktop already holds to the Machine: one more channel on
+its SSH master, so going to a pane never asks for another login or SSO approval, or a
+local process for this computer. Nothing beyond Desktop is needed on this computer. Type
+into it as into herdr — Esc and Ctrl+C go to the agent, not to the drawer, and Ctrl+C
+copies instead while text is selected; a multi-line paste arrives as one paste; the wheel
+scrolls the pane's own history; and the pane follows the drawer's size, which widens while
+the tab is shown. A link in it opens in your browser. A pane cannot write your clipboard.
+Leaving the tab or closing the drawer gives the pane back, so a herdr window showing it
+returns to its own size. A terminal that ends says why — the pane closed, another client
+took it over, the Machine's connection dropped, or herdr refused — and **Reattach** finds
+the Run's newest live agent again. The card and the tab say where the pane is, as
+"vm-mk › workspace 3 › tab 2".
+
+Where there is no pane to show — a Run with no live agent, or a Machine on a Collie whose
+focus does not name one — Go to pane does what it did before, and **Open in herdr** on the
+tab does it on purpose, for the full herdr UI: a new herdr client in this computer's
+terminal, attached to that Machine's session: `herdr --remote <target> --session
+<session>`, or `herdr --session <session>` for this computer, with no `--session` for
+herdr's default session. The terminal is `x-terminal-emulator` where it exists, else the
+first of `gnome-terminal`, `konsole`, `kitty`, `alacritty` and `xterm` on PATH; on macOS it
+is Terminal.app. Where no terminal was found, or it failed as it started, the card shows
+the command to copy. A Run with no live agent is looked for only in its Task's own Herd,
+since workspace ids are only unique within one. **New run** asks a Machine what a project
 can start, then starts it with what you typed for its inputs. What came of each, or the
 host's own words for why not, is said in a toast, and **Try again** on a failure sends the
 same request again, so a host that took it before the answer was lost does it once; the card then changes from the host's

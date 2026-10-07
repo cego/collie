@@ -44,6 +44,7 @@ import {
   type OnboardRun,
   type OnboardStep,
   Skippable,
+  type TerminalCommand,
 } from "../shared/flock";
 import { RELEASE_PUBLIC_KEY } from "../../../src/signing";
 import { appWindowFor } from "./browser";
@@ -70,7 +71,7 @@ import {
   removeFromHerdr,
   type RouteChange,
 } from "./machine";
-import { attachCommand, inTerminal, launched, shellLine } from "./terminal";
+import { attachCommand, inTerminal, launched, openTerminal, shellLine } from "./terminal";
 import { addToHerdr, doctorOn, NOT_STARTED, onboardThrough, RELEASES, tracked } from "./onboarding";
 import {
   claudeLoginThrough,
@@ -455,6 +456,13 @@ const main = Effect.gen(function* () {
     chat.pipe(
       Effect.flatMap(Result.match({ onSuccess: use, onFailure: () => Effect.succeed(unstarted) })),
     );
+  /** The terminal open in the window, and what ends it. */
+  let shownTerminal:
+    | {
+        readonly send: (command: TerminalCommand) => Effect.Effect<void>;
+        readonly ended: Deferred.Deferred<void>;
+      }
+    | undefined;
   let popped:
     | { readonly window: BrowserWindow; readonly closed: Deferred.Deferred<void> }
     | undefined;
@@ -651,6 +659,34 @@ const main = Effect.gen(function* () {
         const opened = terminal !== null && (yield* launched(terminal));
         return { at, command: shellLine(attach), opened };
       }),
+    terminal: ({ installation, runId, cols, rows }) =>
+      Stream.unwrap(
+        Effect.gen(function* () {
+          const door = yield* doorTo(doors, installation);
+          const route = routes.get(door.machine.profile)?.route;
+          if (route === undefined)
+            return yield* new ActionFailed({ reason: "that Machine is not connected" });
+          const request = yield* uuid;
+          const opened = yield* openTerminal(
+            focusOn(door.desktop, request, runId),
+            route,
+            cols,
+            rows,
+          );
+          // One at a time: a newer terminal ends this one.
+          if (shownTerminal !== undefined) Deferred.doneUnsafe(shownTerminal.ended, Effect.void);
+          const mine = { send: opened.send, ended: Deferred.makeUnsafe<void>() };
+          shownTerminal = mine;
+          yield* Effect.addFinalizer(() =>
+            Effect.sync(() => shownTerminal === mine && (shownTerminal = undefined)),
+          );
+          return opened.events.pipe(Stream.interruptWhen(Deferred.await(mine.ended)));
+        }),
+      ),
+    terminalSend: ({ command }) =>
+      shownTerminal === undefined
+        ? Effect.fail(new ActionFailed({ reason: "no terminal is open" }))
+        : shownTerminal.send(command),
     openLink: ({ url }) =>
       appWindowFor(url).pipe(
         Effect.flatMap(Effect.fromNullishOr),

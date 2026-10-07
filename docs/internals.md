@@ -201,10 +201,18 @@ program, usually on another computer, and it is not talking to a session either:
 herdr's list and nothing else. Routing them through `herdr.ts` would bring Collie's locks
 into Desktop, which reaches a Machine only through `collie bridge`.
 
-Go to pane is the one place Desktop touches a session, and it does so as the human would:
-it opens a terminal running `herdr --remote <target> --session <name>`
-(`desktop/src/bun/terminal.ts`), a client the human then drives. Desktop asks it nothing
-and reads nothing from it. The focus before it is the host's, through `herdr.ts`.
+Go to pane is the one place Desktop touches a session, and it does so for the human
+([ADR-0043](adr/0043-go-to-pane-opens-the-pane-in-desktop.md)): it runs herdr's terminal
+controller for the Run's pane, `herdr [--session <name>] terminal session control <pane>
+--takeover --cols C --rows R`, through the Machine's route — one more channel on the SSH
+master Desktop already holds, or a local process for Local — and draws what it prints in
+the drawer's Terminal tab (`desktop/src/bun/terminal.ts`). The human's keys, pastes,
+resizes, wheel and clicks go back to it as herdr's own controller commands, and leaving
+the tab sends `terminal.release`. Desktop decodes each line only to hand the frame's bytes
+to the renderer, and decides nothing from what the pane shows. Where there is no pane to
+control, and for **Open in herdr**, it opens `herdr --remote <target> --session <name>` in
+a terminal of this computer's instead, a client the human then drives. The focus before
+either is the host's, through `herdr.ts`; its reply names the pane it focused.
 
 ### Checking the boundary against herdr
 
