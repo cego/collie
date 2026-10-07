@@ -7,10 +7,10 @@
 import { Cause, Clock, Crypto, Effect, Exit, Option, Result, Schema, Stream } from "effect";
 import * as Toolkit from "effect/unstable/ai/Toolkit";
 import {
+  type FLOCK_READS,
   HostRefused,
   NEWS_BATCH,
   type NewsBatch,
-  type RunDetail,
   type Significance,
   type TaskView,
 } from "../../../src/board-model";
@@ -40,8 +40,7 @@ export const chatDoor = (door: Door) => ({
   dispose: (asked: Parameters<Door["dispose"]>[0]) => door.dispose(asked),
   news: (asked: Parameters<Door["news"]>[0]) => door.news(asked),
   propose: (asked: Parameters<Door["propose"]>[0]) => door.propose(asked),
-  runDetail: (asked: Parameters<Door["runDetail"]>[0]) => door.runDetail(asked),
-  workflows: (asked: Parameters<Door["workflows"]>[0]) => door.workflows(asked),
+  read: (asked: Parameters<Door["read"]>[0]) => door.read(asked),
 });
 
 export type ChatDoor = ReturnType<typeof chatDoor>;
@@ -211,27 +210,6 @@ const herd = Effect.fn("FlockTools.herd")(function* (flock: FlockChat) {
   return [herdLines(prefixed, yield* Clock.currentTimeMillis), ...lost].join("\n");
 });
 
-/** One Run in detail, as its drawer has it. */
-const detailLines = (machine: string, detail: RunDetail) =>
-  [
-    `${machine}:${detail.id}: ${detail.title} — ${detail.status}`,
-    detail.intent?.goal ? `goal: ${detail.intent.goal}` : null,
-    ...(detail.intent?.constraints ?? []).map((constraint) => `constraint: ${constraint}`),
-    `attention: ${detail.attention.category} — ${detail.attention.reason}`,
-    ...detail.steps.map(
-      (step) => `- step ${step.id}: ${step.status}${step.note ? ` (${step.note})` : ""}`,
-    ),
-    ...detail.handoffs.map((handoff) => `handed over: ${handoff}`),
-    detail.outcome.kind === null ? null : `outcome to prove: ${detail.outcome.kind}`,
-    ...detail.outcome.gaps.map((gap) => `not yet shown: ${gap}`),
-    detail.outcome.obstacle === null ? null : `in the way: ${detail.outcome.obstacle}`,
-    detail.outcome.next === null ? null : `next: ${detail.outcome.next}`,
-    detail.outcome.delivered === null ? null : `delivered: ${detail.outcome.delivered}`,
-    ...detail.findings.map((finding) => `finding (${finding.severity}): ${finding.title}`),
-  ]
-    .filter((line) => line !== null)
-    .join("\n");
-
 const onRun = Effect.fn("FlockTools.onRun")(function* (
   flock: FlockChat,
   input: typeof RunInput.Type,
@@ -245,64 +223,38 @@ const onRun = Effect.fn("FlockTools.onRun")(function* (
   return Result.isFailure(placed) ? placed.failure : yield* answer(placed.success, known);
 });
 
-const run = (flock: FlockChat, input: typeof RunInput.Type) =>
-  onRun(flock, input, "collie_run", ({ machine, id }) =>
-    firstOf(machine.door.runDetail({ runId: id, tail: false, pages: 0, refreshMr: false })).pipe(
-      Effect.map((first) =>
-        Option.isSome(first) && first.value !== null
-          ? detailLines(machine.name, first.value)
-          : `No Run "${id}" on ${machine.name}.`,
+/** A Machine's own answer to one of its reads, headed with its name. */
+const readOn = (machine: ChatMachine, tool: (typeof FLOCK_READS)[number], input: JsonObject) =>
+  machine.door.read({ tool, input }).pipe(
+    Effect.timeout(ANSWER_WITHIN),
+    Effect.map((text) => `## ${machine.name}\n\n${text}`),
+    Effect.catch(() =>
+      Effect.succeed(
+        `## ${machine.name}\n\n${machine.name} did not answer; its Collie may be older than Desktop's; upgrade Collie on ${machine.name}.`,
       ),
-      Effect.catch((cause) => Effect.succeed(`${machine.name} could not say: ${String(cause)}`)),
     ),
   );
 
+const run = (flock: FlockChat, input: typeof RunInput.Type) =>
+  onRun(flock, input, "collie_run", ({ machine, id }) =>
+    readOn(machine, "collie_run", { run: id }),
+  );
+
 const receipts = (flock: FlockChat, input: typeof RunInput.Type) =>
-  onRun(flock, input, "collie_receipts", ({ machine, id }, known) =>
-    Effect.sync(() => {
-      const tasks = known.find((one) => one.machine === machine)?.board?.tasks ?? [];
-      const waiting = tasks.flatMap((task) =>
-        task.runs.includes(id) && task.decision?.kind === "proposal" ? [task.decision] : [],
-      );
-      return [
-        "### Waiting on the human",
-        "",
-        ...(waiting.length === 0
-          ? ["- nothing"]
-          : waiting.map((p) => `- ${machine.name}:${p.id} (${p.hash}): ${p.text}`)),
-        "",
-        `What was sent to ${machine.name}:${id}'s agents is recorded on ${machine.name}, which Desktop does not read.`,
-      ].join("\n");
-    }),
+  onRun(flock, input, "collie_receipts", ({ machine, id }) =>
+    readOn(machine, "collie_receipts", { run: id }),
   );
 
 const workspaces = Effect.fn("FlockTools.workspaces")(function* (flock: FlockChat) {
-  const known = yield* boards(flock);
-  const lines = yield* Effect.forEach(known, ({ machine, board }) =>
-    Effect.gen(function* () {
-      if (board === null) return [`## ${machine.name}`, "- (its board could not be read)"];
-      const projects = [...new Set(board.tasks.map((task) => task.project))].sort();
-      const each = yield* Effect.forEach(projects, (project) =>
-        machine.door.workflows({ project }).pipe(
-          Effect.map(
-            (startable) =>
-              `- ${project}: ${startable.map((one) => one.id).join(", ") || "nothing to start"}`,
-          ),
-          Effect.catch(() => Effect.succeed(`- ${project}`)),
-        ),
-      );
-      return [
-        `## ${machine.name}`,
-        ...board.herds.map((one) => `herd ${one.name ?? one.id}`),
-        ...each,
-      ];
-    }),
+  const sections = yield* Effect.forEach(
+    flock.machines(),
+    (machine) => readOn(machine, "collie_workspaces", {}),
+    { concurrency: "unbounded" },
   );
   return [
-    ...lines.flat(),
-    "",
-    'a start names its workspace as <machine>:<workspace or checkout path>, for example "vm-mk:/home/mk/src/collie".',
-  ].join("\n");
+    ...sections,
+    "a start names its workspace as <machine>: followed by a workspace id, a label, a checkout's path on that Machine, or a repository's directory name under that Machine's Projects root.",
+  ].join("\n\n");
 });
 
 type NewsItem = (typeof NewsBatch.Type)["items"][number];

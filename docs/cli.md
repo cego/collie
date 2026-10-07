@@ -1528,6 +1528,11 @@ JSON and the host decodes them. `collie confirm`, `decline`, `steer`, `run dispo
 chat's tools all go through these, so the host is the only writer of what they record
 ([ADR-0040](adr/0040-the-host-is-the-only-writer.md)).
 
+`read` answers `collie_run`, `collie_receipts` or `collie_workspaces` — and no other tool —
+for the asking channel exactly as the Machine's Native chat would, with no board selection
+standing in for a Run nobody named. It records nothing. Desktop's Flock chat reads through
+it.
+
 `runDetail` streams one Run's details while a drawer is open — intent, plan, review,
 log tail, verifications, metrics, steering cards, the files it kept as evidence, its diff
 and its merge request — current first, then again whenever they change. The diff is the

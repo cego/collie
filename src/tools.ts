@@ -51,7 +51,7 @@ import { taskOfWorkspace } from "./task";
 import { pendingFor, proposalsPath, read as readProposals } from "./proposals";
 import { statusLine } from "./disposition";
 import { Herdr } from "./herdr";
-import { ASKED_KINDS, EVIDENCE_GATE } from "./board-model";
+import { ASKED_KINDS, EVIDENCE_GATE, type FLOCK_READS } from "./board-model";
 import { asText as newsText, NATIVE } from "./news";
 import { findRun, listRuns, type RunFacts } from "./runs";
 import { donePasses, markersOf, runningCheck } from "./checks";
@@ -100,7 +100,11 @@ const said = <E, R>(effect: Effect.Effect<string, E, R>) =>
     Effect.catch((cause) => Effect.succeed(`Collie could not read that: ${String(cause)}`)),
   );
 
-const handlersFor = Effect.fn("Tools.handlers")(function* (env: PluginEnv) {
+const handlersFor = Effect.fn("Tools.handlers")(function* (
+  env: PluginEnv,
+  /** Whether the board's selection may stand in for a Run nobody named. */
+  selected: boolean,
+) {
   const services = yield* Effect.context<BunServices | ChildProcessSpawner.ChildProcessSpawner>();
   const answer = <E>(
     effect: Effect.Effect<string, E, BunServices | ChildProcessSpawner.ChildProcessSpawner>,
@@ -108,11 +112,13 @@ const handlersFor = Effect.fn("Tools.handlers")(function* (env: PluginEnv) {
   return CollieTools.of({
     collie_herd: () => answer(boardFacts(env)),
     collie_run: (input) =>
-      answer(onSelectedRun(env, input, "collie_run", (run) => said(runAnswer(env, run)))),
+      answer(onSelectedRun(env, selected, input, "collie_run", (run) => said(runAnswer(env, run)))),
     collie_workspaces: () => answer(workspaceFacts(env)),
     collie_receipts: (input) =>
       answer(
-        onSelectedRun(env, input, "collie_receipts", (run) => said(receiptFacts(env, run.id))),
+        onSelectedRun(env, selected, input, "collie_receipts", (run) =>
+          said(receiptFacts(env, run.id)),
+        ),
       ),
     collie_news: () => answer(newsFacts(env)),
     collie_definitions: (input) => answer(definitionFacts(env, input)),
@@ -144,7 +150,23 @@ const handlersFor = Effect.fn("Tools.handlers")(function* (env: PluginEnv) {
 export const callTool = Effect.fn("Tools.call")(
   function* (env: PluginEnv, name: string, input: JsonObject) {
     if (!isToolName(name)) return "";
-    const toolkit = yield* CollieTools.pipe(Effect.provide(CollieTools.toLayer(handlersFor(env))));
+    const toolkit = yield* CollieTools.pipe(
+      Effect.provide(CollieTools.toLayer(handlersFor(env, true))),
+    );
+    return yield* answerWith(toolkit, name, input);
+  },
+  Effect.catch((cause) => Effect.succeed(`Collie could not answer: ${String(cause)}`)),
+);
+
+/**
+ * One of the reads a Flock chat has this Machine's host answer, as Native chat answers
+ * it, except that the Home board's selection never stands in for a Run (ADR-0012).
+ */
+export const answerRead = Effect.fn("Tools.answerRead")(
+  function* (env: PluginEnv, name: (typeof FLOCK_READS)[number], input: JsonObject) {
+    const toolkit = yield* CollieTools.pipe(
+      Effect.provide(CollieTools.toLayer(handlersFor(env, false))),
+    );
     return yield* answerWith(toolkit, name, input);
   },
   Effect.catch((cause) => Effect.succeed(`Collie could not answer: ${String(cause)}`)),
@@ -337,6 +359,7 @@ const onSelection = Effect.fn("Tools.onSelection")(function* (env: PluginEnv, in
  */
 const onSelectedRun = Effect.fn("Tools.onSelectedRun")(function* (
   env: PluginEnv,
+  selected: boolean,
   input: typeof RunInput.Type,
   tool: string,
   answer: (run: RunFacts) => ToolAnswer,
@@ -344,8 +367,9 @@ const onSelectedRun = Effect.fn("Tools.onSelectedRun")(function* (
   const named = input.run ?? null;
   // Non-null exactly when the selection was what this answer is about, which is what the
   // sentences below turn on.
-  const on = named === null ? yield* selectionOf(env) : null;
+  const on = named === null && selected ? yield* selectionOf(env) : null;
   const id = named ?? on?.run ?? null;
+  if (id === null && !selected) return `${tool} takes {"run": "<run id>"}.`;
   if (id === null)
     return `${tool} takes {"run": "<run id>"}, or answers about the board's selection when there is one. The board has nothing selected — collie_herd lists the Runs there are.`;
   const run = yield* findRun(env, id);

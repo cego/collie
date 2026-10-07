@@ -32,7 +32,7 @@ import {
   type ProposalRecord,
 } from "../src/proposals";
 import type { Action } from "../src/actions";
-import { herdOf } from "../src/steering";
+import { appendLine, herdOf, ledgerPath } from "../src/steering";
 import { chatPath, HEARD_MAX, hear, writeChat } from "../src/chat";
 import { selectionPath, writeSelection } from "../src/selection";
 import { newTask, writeTask } from "../src/task";
@@ -47,7 +47,7 @@ import { isSettled } from "../src/lifecycle";
 import { appendLog } from "../src/oversight";
 import { readAudit, trimAudit } from "../src/audit";
 import { writeMrStates } from "../src/merges";
-import { mrLabel, type Declaration } from "../src/board-model";
+import { FrontDoorRpcs, mrLabel, type Declaration } from "../src/board-model";
 import { nothingApproved } from "../src/outcome";
 
 const encodeJson = Schema.encodeUnknownSync(Schema.fromJsonString(Schema.Any));
@@ -1532,5 +1532,75 @@ test("a start rooted in Collie's own state is refused, whether named by the Home
         expect(said).toContain("projects-root");
       }
       expect(yield* listRuns(env)).toEqual([]);
+    }),
+  ));
+
+/** A read the Flock chat asks of this world's host, through a front door. */
+const readThroughHost = (
+  tool: "collie_run" | "collie_receipts" | "collie_workspaces",
+  input: JsonObject,
+) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const door = yield* frontDoor(stateDir);
+      return yield* door.read({ tool, input });
+    }),
+  ).pipe(Effect.orDie);
+
+test("the host answers a Flock chat's read with Native chat's own answer, deliveries included", () =>
+  inWorld(
+    Effect.gen(function* () {
+      const run = yield* aRun("add a picker");
+      expect(yield* readThroughHost("collie_run", { run: run.id })).toBe(
+        yield* call("collie_run", { run: run.id }),
+      );
+
+      yield* appendLine(yield* ledgerPath(stateDir, "term-1"), {
+        id: "d-1",
+        at: "2026-10-07T10:00:00.000Z",
+        run: run.id,
+        incarnation: "term-1",
+        agent: "implementer-1",
+        causal_key: "k",
+        request_id: "q",
+        cause: { kind: "nudge", ref: "x" },
+        mode: "boundary",
+        text_hash: "h",
+        intent_version: 1,
+        attempt: 1,
+        state: "submitted",
+      });
+      expect(yield* readThroughHost("collie_receipts", { run: run.id })).toContain(
+        "- d-1: submitted, for nudge",
+      );
+    }),
+  ));
+
+test("a read through the host takes only the three reads, and no selection stands in for a run", () =>
+  inWorld(
+    Effect.gen(function* () {
+      const run = yield* aRun("the selected one");
+      yield* writeSelection(yield* selectionPath(stateDir, KEY), {
+        task: "t1",
+        run: run.id,
+        name: "Strapi prod seeder",
+      });
+      for (const tool of ["collie_run", "collie_receipts"] as const) {
+        const said = yield* readThroughHost(tool, {});
+        expect(said).toContain(`${tool} takes {"run": "<run id>"}`);
+        expect(said).not.toContain("the selected one");
+        expect(said).not.toContain("Strapi prod seeder");
+      }
+
+      // A write's name is not a payload the operation takes, so no client can send one.
+      const payload = FrontDoorRpcs.requests.get("read")!.payloadSchema;
+      const write = Schema.decodeUnknownExit(payload)({
+        tool: "collie_do",
+        input: { actions: [{ kind: "stop", run: run.id }] },
+      });
+      expect(write._tag).toBe("Failure");
+      expect(Schema.decodeUnknownExit(payload)({ tool: "collie_run", input: {} })._tag).toBe(
+        "Success",
+      );
     }),
   ));

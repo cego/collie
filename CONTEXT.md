@@ -100,7 +100,8 @@ check and the same executors the CLI and the board use. What Collie wants of its
 accord is a Proposal because of where it came from, never because of who confirms it. Reached over a local MCP server by Claude and a generated
 extension by Pi, and by `collie tools call` from a terminal. Desktop's Flock chat takes
 the same Toolkit's tools that a host's front door can answer, in-process, each answered by
-the host of the Machine it names (`desktop/src/bun/flock-tools.ts`).
+the host of the Machine it names (`desktop/src/bun/flock-tools.ts`); `collie_run`,
+`collie_receipts` and `collie_workspaces` with that Machine's Native chat's own reading.
 
 **Redirect notice** — What a per-workspace Collie pane from an older release shows on its
 next launch: one line and "Open Collie". No board, no chat.
