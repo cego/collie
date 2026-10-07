@@ -94,8 +94,10 @@ const live = Effect.fn("live.run")(function* (harness: string, keep: boolean) {
   const rows: Row[] = [];
   const say = (check: string, result: Result, note: string) => rows.push({ check, result, note });
 
-  const stateDir = yield* fs.makeTempDirectory({ prefix: "collie-chat-live-state-" });
-  const userDir = yield* fs.makeTempDirectory({ prefix: "collie-chat-live-config-" });
+  const temporary = (prefix: string) =>
+    keep ? fs.makeTempDirectory({ prefix }) : fs.makeTempDirectoryScoped({ prefix });
+  const stateDir = yield* temporary("collie-chat-live-state-");
+  const userDir = yield* temporary("collie-chat-live-config-");
   yield* writeConfigValue(userDir, "chat_harness", harness);
 
   const env = readEnv({
@@ -109,6 +111,15 @@ const live = Effect.fn("live.run")(function* (harness: string, keep: boolean) {
   // A Herd identity of its own, so this never adopts, tokens or reconciles the Home the
   // human's own Collie is using on the same herdr session.
   const key = `probe-${(yield* Clock.currentTimeMillis).toString(36)}`;
+  yield* Effect.addFinalizer(() =>
+    keep
+      ? Effect.log(`kept ${stateDir} and ${userDir}`)
+      : Effect.gen(function* () {
+          const record = yield* readHome(yield* homePath(stateDir, key));
+          if (record !== null && record !== UNREADABLE)
+            yield* herdr.cli(["workspace", "close", record.workspaceId]).pipe(Effect.ignore);
+        }).pipe(Effect.ignore),
+  );
   const namespaceDir = yield* herdDir(stateDir, key);
   const ensured = yield* ensureHome(
     stateDir,
@@ -354,15 +365,6 @@ const live = Effect.fn("live.run")(function* (harness: string, keep: boolean) {
   yield* Effect.log(
     `--- ${pane} tail ---\n${yield* herdr.paneRead(pane, 60).pipe(Effect.catch(() => Effect.succeed("(nothing)")))}`,
   );
-  if (!keep) {
-    const record = yield* readHome(yield* homePath(stateDir, key));
-    if (record !== null && record !== UNREADABLE)
-      yield* herdr.cli(["workspace", "close", record.workspaceId]).pipe(Effect.ignore);
-    yield* fs.remove(stateDir, { recursive: true, force: true });
-    yield* fs.remove(userDir, { recursive: true, force: true });
-  } else {
-    yield* Effect.log(`kept ${stateDir} and ${userDir}`);
-  }
   return rows;
 });
 
@@ -372,7 +374,9 @@ const flag = (name: string, fallback: string) => {
   return at === -1 ? fallback : (argv[at + 1] ?? fallback);
 };
 
-const rows = await runtime.runPromise(live(flag("harness", "claude"), argv.includes("--keep")));
+const rows = await runtime.runPromise(
+  Effect.scoped(live(flag("harness", "claude"), argv.includes("--keep"))),
+);
 await runtime.runPromise(
   Effect.log(
     [

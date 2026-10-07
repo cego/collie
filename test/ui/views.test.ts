@@ -225,6 +225,24 @@ effectTest("a run's detail is its inputs and its review", function* () {
   }
 });
 
+effectTest(
+  "a run's detail lists what it was given, and nothing for a Run given none",
+  function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const given = yield* seed({ workflow: "plan" });
+    const none = yield* seed({ workflow: "plan" });
+    yield* fs.makeDirectory(`${given.dir}/attachments`);
+    yield* fs.writeFileString(`${given.dir}/attachments/shot.png`, "png!");
+    yield* fs.writeFileString(`${given.dir}/attachments/notes.txt`, "hello");
+
+    expect((yield* detailOf(given))?.attachments).toEqual([
+      { name: "notes.txt", size: 5, mediaType: "text/plain" },
+      { name: "shot.png", size: 4, mediaType: "image/png" },
+    ]);
+    expect((yield* detailOf(none))?.attachments).toEqual([]);
+  },
+);
+
 effectTest("a run with no review says so", function* () {
   const run = yield* seed({ workflow: "review", target: "worktree" });
 

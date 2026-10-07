@@ -171,6 +171,33 @@ test("the contract an agent is held to is in the prompt it is sent, with the jud
   expect(prompt).toContain("it is asking for your judgment");
 });
 
+test("a Run's attachments are listed between the instructions and the Output, and none means no section", () => {
+  const parts = {
+    role: "implementer",
+    instructions: "Fix the picker.",
+    output: "/state/agents/r1/build.json",
+    contract: null,
+  };
+  const prompt = promptFor({
+    ...parts,
+    attachments: [
+      {
+        name: "shot.png",
+        mediaType: "image/png",
+        size: 2048,
+        path: "/state/runs/r1/attachments/shot.png",
+      },
+    ],
+  });
+  const listed = prompt.indexOf(
+    "- shot.png (image/png, 2048 bytes): /state/runs/r1/attachments/shot.png",
+  );
+  expect(listed).toBeGreaterThan(prompt.indexOf("Fix the picker."));
+  expect(listed).toBeLessThan(prompt.indexOf("OUTPUT_PATH:"));
+  expect(promptFor(parts)).not.toContain("attachments");
+  expect(promptFor({ ...parts, attachments: [] })).toBe(promptFor(parts));
+});
+
 test("what a schema cannot be drawn from is still checked, and the prompt says so", () => {
   const opaque = Schema.declare(Schema.is(Schema.String));
   const prompt = promptFor({
@@ -1958,6 +1985,7 @@ test("a fresh start only names its Task, and a continuation goes where its Task 
       expect(fresh._tag === "Ok" ? fresh.label : null).toEqual(expect.any(String));
       expect(yield* rig.cmds()).not.toContain("workspace create");
 
+      yield* rig.startSocket();
       yield* rig.addWorkspace("wT", "Project | Work", rig.projectDir);
       const task = {
         id: "task-1",
@@ -1973,6 +2001,15 @@ test("a fresh start only names its Task, and a continuation goes where its Task 
       );
       expect(again._tag === "Ok" && again.task).toEqual(task);
       expect(again._tag === "Ok" ? again.label : "").toBeNull();
+      expect(yield* rig.cmds()).not.toContain("workspace.focus");
+      // One cleanup closed is continued all the same: its first agent reopens it.
+      const closed = { ...task, workspace: "wGone" };
+      const reopening = yield* taskFor(
+        env,
+        { mode: "continue", task: closed },
+        { workflow: "review", named: "" },
+      );
+      expect(reopening._tag === "Ok" && reopening.task).toEqual(closed);
 
       // Outside herdr there is nowhere to open one, and a Run that starts no agent needs none.
       const outside = { ...env, workspaceId: null, socketPath: null };

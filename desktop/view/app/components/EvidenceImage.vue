@@ -1,8 +1,18 @@
 <script setup lang="ts">
 import type { EvidenceFile } from "../../../../src/board-model";
 
-const props = defineProps<{ file: EvidenceFile; installation: string; runId: string }>();
-const { url, state, load } = useEvidenceUrl(props.installation, props.runId, props.file.name);
+const props = defineProps<{
+  file: Pick<EvidenceFile, "name">;
+  installation: string;
+  runId: string;
+  kind?: "evidence" | "attachment";
+}>();
+const { url, state, load } = useEvidenceUrl(
+  props.installation,
+  props.runId,
+  props.file.name,
+  props.kind,
+);
 load();
 </script>
 

@@ -3,7 +3,12 @@
 
 import { mediaType } from "../../../src/shared/evidence";
 
-export const useEvidenceUrl = (installation: string, runId: string, name: string) => {
+export const useEvidenceUrl = (
+  installation: string,
+  runId: string,
+  name: string,
+  kind: "evidence" | "attachment" = "evidence",
+) => {
   const { bytesOf } = useActions();
   const url = ref<string | null>(null);
   const state = ref<"idle" | "reading" | "failed">("idle");
@@ -11,7 +16,7 @@ export const useEvidenceUrl = (installation: string, runId: string, name: string
   const load = () => {
     if (state.value === "reading" || url.value !== null) return;
     state.value = "reading";
-    void bytesOf(installation, runId, `evidence:${name}`).then((bytes) => {
+    void bytesOf(installation, runId, `${kind}:${name}`).then((bytes) => {
       state.value = bytes === null ? "failed" : "idle";
       if (bytes === null || gone) return;
       const type = mediaType(name) ?? "application/octet-stream";

@@ -30,6 +30,21 @@ gone with the state directory it was in — there is nothing left for it to serv
 socket makes the directory again — or once the process named in `COLLIE_HOST_WATCH_PID`,
 where one is, has exited.
 
+A stopped host gives its running steps a grace (`COLLIE_HOST_STOP_GRACE`, five seconds) and
+then exits whatever is left, letting go of its lock: upstream's shutdown waits on each
+step, and one that never yields kept an old host past every client that tried to replace
+it. A newer client that asked a host to stop kills it five seconds after its grace. A host
+that does not say who it is within five seconds is replaced too when `host.build`, which it
+writes as it starts, names an older build of the same installation; otherwise the client
+reports it as `HostUnavailable` with its pid.
+
+The host writes what it does to `host.log` in its state directory — its start, a stop and
+whether the grace ran out, every warning the engine and the registry log — since its own
+stdout and stderr go nowhere. Lines are flushed every 100 ms, so a host killed outright can
+lose its last few. Past 1 MiB the file starts again and the previous one is kept as
+`host.log.1`. Look there first when a host
+stops answering.
+
 A workflow is a TypeScript module, and the host runs it on Effect's own engine
 ([ADR-0014](adr/0014-native-workflows-run-on-effects-own-engine.md)): a
 `ClusterWorkflowEngine` over a `SingleRunner`, with execution state in `host.db`, a Bun
@@ -58,7 +73,20 @@ checkout gone — parks with the reason and the repair, and `run resume` picks i
 Beside the database, a Run's files are its audit trail: `agents/<run>/<operation>.prompt.md`
 with the Output it came back with, `evidence/<run>/` with the verifications it was granted
 and the ones collected, and `runs/<run>/` with its cards, its `plan/` and the review it left.
-Nothing an older Collie recorded is read ([ADR-0027](adr/0027-one-engine-and-a-hard-cutover.md)).
+Nothing an older Collie recorded is read ([ADR-0027](adr/0027-one-engine-and-a-hard-cutover.md)),
+and the host's cleanup sweep removes it once it has not changed for a day.
+
+None of it is kept for ever ([ADR-0045](adr/0045-collie-removes-what-it-made-once-nothing-needs-it.md)
+D5). A Task and every one of its Runs are forgotten together once the Task is Finished, no
+workspace of it is open, no agent it launched is alive, no checkout it made is on disk, no
+Run outside it names one of its Runs as parent or points an input into one of its run
+directories, and its last Run ended more than 30 days ago — the board's finish time, else the
+newest of its files. The rows go first, in one transaction under the Task's lock: each
+execution's messages and replies, through `MessageStorage.clearAddress`, then its decisions
+and its `collie_runs` row; a row the engine never accepted is left for recovery. Then its
+`runs/`, `agents/` and `evidence/` directories, its markers, the steering ledgers that name
+only its Runs, and the Task's record. A file a failure leaves behind has no row any more,
+and the next sweep's no-row rule removes it.
 
 <!-- prettier-ignore -->
 > [!IMPORTANT]
@@ -123,18 +151,32 @@ Requiring them refused the run its checkout over a tab it can do without. `open`
 carries them, because the workspace it reuses is not the run's to rearrange, and a
 git-managed checkout opens no workspace at all, so it has none.
 
-A worktree is **settled**, and only then removed, when all four hold:
+A worktree is **settled**, and only then removed, when all five hold
+([ADR-0045](adr/0045-collie-removes-what-it-made-once-nothing-needs-it.md) D4):
 
 1. `git status --porcelain` in it is empty;
-2. it holds no commit of its own: `git rev-list @{u}..HEAD` is empty where the branch
-   has an upstream, and `git rev-list origin/<default>..HEAD` is empty where it does
-   not — a branch merged and deleted loses its upstream ref to the next
-   `git fetch --prune`, and condition 4's second half would otherwise be unreachable
-   in exactly the case it names;
+2. it holds no commit of its own: `git rev-list HEAD --not --remotes=<remote>` is empty,
+   where `<remote>` is its upstream's remote, or every remote where it tracks none — never
+   a hard-coded `origin`. A branch merged and deleted loses its own ref to the next
+   `git fetch --prune`, and the default branch's ref still holds its commits. Where
+   commits remain, HEAD being the head its merged merge request was merged at, as the
+   merge watch recorded it, counts as pushed: a squash merge leaves the branch's commits
+   on no branch at all;
 3. nothing is in it: no live agent's pane (its start directory, the directory it has
    moved to, or its workspace) other than the idle agents of the runs that finished there,
-   no run still going there, and no stopped run a resume would carry on there;
-4. its merge request is merged or closed, or its remote branch is gone.
+   no run still going there, and no stopped or failed run a resume would carry on there
+   while its work has not landed;
+4. its work has landed: the merge watch read its merge request as merged or closed, on
+   GitHub or GitLab (`board/mr-states.json`), a Disposition of merged, abandoned or
+   superseded was recorded on a Run that recorded it, or, with neither, its branch is gone
+   from the remote; an open merge request keeps it;
+5. its Task's workspace has closed — by cleanup or by a human — so a checkout never goes
+   from under a workspace someone is looking at.
+
+A checkout Collie made whose branch was switched since is still a candidate, by its path
+and the moment git wrote its `.git`, and is judged on what it holds now; `git branch -d`
+then runs on the branch it now has. The plugin root and any repository's main checkout
+(whose `.git` is a directory) are never candidates, whatever a record says.
 
 The checks run in that order and the first failure is what the board reports, so a kept
 worktree always says which condition kept it — including a round that could not ask
@@ -157,21 +199,21 @@ Once the checkout has gone the entry is a removal whatever happens to the branch
 branch `git branch -d` refuses is what is left to look at, so the board says which branch
 and what git said about it, for as long as a removal is news.
 
-Note what condition 2 does not do on its
-own: a checkout with no upstream is still only removed once 3 and 4 hold too, so the
-branch has to be gone from the remote — or its merge request merged or closed — before
-"holds no commit of its own" removes anything. Never `--force`, never `-D`, whichever
+Note what condition 2 does not do on its own: a checkout is still only removed once 3, 4
+and 5 hold too. Never `--force`, never `-D`, whichever
 manager removes it: git's refusals are the last guard, so a wrong judgement here can only
 fail to clean, never delete work. Only paths some run recorded with `created_by_collie`
 are candidates.
 
-Pruning runs every 3 minutes in the host, beside its merge watch and
-News, so it happens with no pane open. A board shows what the last sweep said, read from
+Pruning is the worktree kind of the host's cleanup sweep (`src/cleanup.ts`), which runs
+every ten minutes beside its merge watch and News, so it happens with no pane open. A
+sweep judges every candidate without removing anything, then removes each settled one
+after judging it again on its own. A board shows what the last sweep said, read from
 `worktrees.json`, and never sweeps itself. One sweep runs at a time, and its clock starts
-when it finishes. Each
-worktree's verdict is also kept for a few minutes in `worktrees.json` in the state
-directory, so a due check is the only thing that shells out to git and glab, and the state
-file is rewritten only when something moved.
+when it finishes. `worktrees.json` is rewritten only when something moved.
+
+A Renovate clone under `renovate-repositories/` is its own kind of the same sweep: it goes
+once no Run with a row cut a checkout from it and no checkout cut from it is left on disk.
 
 Two things are deliberately not conditions. A `run start` names the checkout it is about
 to work in, and that one is held whatever its state, because the run resolving its branch
@@ -200,6 +242,15 @@ run under `script` so herdr has the terminal its questions need. Desktop is anot
 program, usually on another computer, and it is not talking to a session either: it keeps
 herdr's list and nothing else. Routing them through `herdr.ts` would bring Collie's locks
 into Desktop, which reaches a Machine only through `collie bridge`.
+
+Files reach a Machine the same way. The Flock chat's `collie_read`, `collie_glob`,
+`collie_grep`, `collie_write` and `collie_edit` (`desktop/src/bun/file-tools.ts`) are
+answered by the host's `readFile`, `glob`, `grep`, `writeFile` and `editFile` over the
+chat's channel (`src/host-files.ts`), never by ssh or scp beside the bridge. A file a start, a follow-up or a steer carries goes
+the same way: through the Run's Machine's `upload`, once a day per file and Machine
+(`desktop/src/bun/carried.ts`, `src/uploads.ts`), so a host only ever receives paths on its
+own Machine. The file tools are
+Desktop's own tools, not the Toolkit's, so Native chat's reach is unchanged.
 
 Go to pane is the one place Desktop touches a session, and it does so for the human
 ([ADR-0044](adr/0044-go-to-pane-opens-the-pane-in-desktop.md)): it runs herdr's terminal
@@ -713,10 +764,18 @@ The individual scripts in `package.json` still work for focused feedback.
 Desktop has an install of its own, so its types are checked apart, with
 `cd desktop && bun install && bun run typecheck`; CI runs that as a job of its own.
 
-Every host a test starts ends with that test. `test/support/hosts.ts`, a preload, gives
-each test file a temporary root of its own and tells every host started under it
-(`COLLIE_HOST_WATCH_PID`) to live no longer than the test process; after each test, a host
-still holding a directory under that root is killed and fails the test that left it.
+A test leaves nothing behind. `test/support/hosts.ts`, a preload, gives each test file a
+temporary root of its own, `TMPDIR` inside it, and removes it when the file ends. Every
+process a test starts carries `COLLIE_TEST_ROOT` naming that root, and every host is told
+(`COLLIE_HOST_WATCH_PID`) to live no longer than the test process. After each test, a host
+still holding a directory under the root is killed and whatever the test made directly
+under the root is removed; either fails the test, naming what it left. After the file, a
+process still carrying the marker is killed and fails the file, as does what a `beforeAll`
+made and left. A test that failed or timed out is cleaned up the same way, because Bun
+does not interrupt a timed-out test's own scope. `bun run test` first removes every
+`collie-test-<pid>-*` root whose pid is dead, and kills what still carries its marker, so
+a killed suite is cleaned up by the next one; a live pid's root is another suite's and is
+left alone.
 
 The same preload keeps the suite out of the operator's herd. Before any test file loads it
 drops `COLLIE_USER_DIR`, `COLLIE_CWD` and every `HERDR_*` variable but `HERDR_API_SCHEMA`,
@@ -763,8 +822,8 @@ its time.
   `COLLIE_TEST_BINARY` when it is set, as `test/support/host.ts` does, and the sources only
   without it. A start from source is most of a second of CPU, and the suite makes over a
   thousand.
-- **A host is stopped while its run waits.** Stopped mid-step, it sits out upstream's
-  15-second `entityTerminationTimeout` before it exits.
+- **A host is stopped while its run waits.** Stopped mid-step, it waits out its five-second
+  stop grace before it exits.
 - **A test can go red.** Break `src/` the way its name says and watch it fail before relying
   on it. A test that cannot fail, or whose every failure another test already has, is
   deleted.

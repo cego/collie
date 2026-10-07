@@ -52,6 +52,7 @@ interface FakeWorkspace {
   cwd?: string | null;
   /** As on a pane: what `workspace.report_metadata` attached. */
   tokens?: Record<string, string>;
+  focused?: boolean;
 }
 
 interface FakeWorktree {
@@ -122,6 +123,7 @@ const FakeWorkspaceSchema = Schema.Struct({
   cwd: Schema.optionalKey(Schema.NullOr(Schema.String)),
   /** As on a pane: what `workspace.report_metadata` attached, which is what owns a Home. */
   tokens: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
+  focused: Schema.optionalKey(Schema.Boolean),
 });
 const FakeWorktreeSchema = Schema.Struct({
   path: Schema.String,

@@ -209,6 +209,17 @@ function unsupportedDecide(decide: ReadonlyArray<string>): Failure | null {
   );
 }
 
+const attachFlag = Flag.String("attach").pipe(
+  Flag.withDescription("A file to give the Run, repeatable; the host copies it into the Run"),
+  Flag.atLeast(0),
+);
+
+/** Each `--attach` as an absolute path, resolved against where the command runs. */
+const absolute = (files: ReadonlyArray<string>) =>
+  Effect.map(Path.Path, (path) =>
+    files.length === 0 ? undefined : files.map((file) => path.resolve(file)),
+  );
+
 const runStart = Command.make(
   "start",
   {
@@ -279,6 +290,7 @@ const runStart = Command.make(
       Flag.withDescription("The effort this Run's agents are asked for, over the workflow's own"),
       Flag.optional,
     ),
+    attach: attachFlag,
     requestId: requestIdFlag,
   },
   ({
@@ -296,6 +308,7 @@ const runStart = Command.make(
     harness,
     model,
     effort,
+    attach,
     requestId: request,
   }) =>
     Effect.gen(function* () {
@@ -353,6 +366,7 @@ const runStart = Command.make(
                     ? { goal: goal.value, constraints: named.constraints }
                     : { constraints: named.constraints },
                   verify: given.specs.length > 0 ? given.specs : undefined,
+                  attachments: yield* absolute(attach),
                 });
                 if (!started.ok) return started;
                 return {
@@ -979,9 +993,10 @@ const runSteer = Command.make(
       Flag.withDescription("Which of the Run's agents; the one most recently launched by default"),
       Flag.optional,
     ),
+    attach: attachFlag,
     requestId: requestIdFlag,
   },
-  ({ runId, text, operation, requestId }) =>
+  ({ runId, text, operation, attach, requestId }) =>
     Effect.gen(function* () {
       const global = yield* root;
       yield* attempt(
@@ -992,12 +1007,14 @@ const runSteer = Command.make(
             return err("run_not_found", `No workflow host has a Run "${runId}".`, { run: runId });
           }
           const door = yield* cliDoor(resolved.env);
+          const attachments = yield* absolute(attach);
           return yield* mutation(resolved.env, "run-steer", requestId, (id) =>
             steerRun(resolved.env, {
               runId,
               text,
               request: id,
               operation: Option.getOrNull(operation) ?? undefined,
+              attachments,
               door,
             }),
           );
@@ -1315,12 +1332,14 @@ const runAction = Command.make(
       Flag.withDescription("key=value, repeatable: what the offer's own arguments take"),
       Flag.atLeast(0),
     ),
+    attach: attachFlag,
     requestId: requestIdFlag,
   },
-  ({ runId, offer, input, requestId }) =>
+  ({ runId, offer, input, attach, requestId }) =>
     runMutationCommand("run-action", runId, requestId, (env, id) =>
-      Effect.flatMap(cliDoor(env), (door) =>
+      Effect.flatMap(Effect.zip(cliDoor(env), absolute(attach)), ([door, attachments]) =>
         invokeOffer(env, {
+          attachments,
           door,
           runId,
           offer,

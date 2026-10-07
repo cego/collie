@@ -45,8 +45,11 @@ import {
   runViews,
   isSettled,
   settleNewsFor,
+  anyRuns,
+  cleanupListing,
   type Door,
 } from "./lifecycle";
+import { cleanupLines } from "./cleanup";
 import { taskOfWorkspace } from "./task";
 import { pendingFor, proposalsPath, read as readProposals } from "./proposals";
 import { statusLine } from "./disposition";
@@ -600,6 +603,17 @@ const moduleFacts = (one: Described, checked: ModuleCheck): string =>
     `defined in: ${one.path}`,
   ].join("\n");
 
+/** How much of the cleanup listing chat is given; the CLI has the rest. */
+const CLEANUP_LINES = 60;
+
+/** The first `most` lines of `text`, and how many more there are. */
+const shortened = (text: string, most: number) => {
+  const lines = text.split("\n");
+  return lines.length <= most
+    ? text
+    : [...lines.slice(0, most), `(${lines.length - most} more lines)`].join("\n");
+};
+
 /** What `collie_installation` answers with: everything that is not about a Run. */
 const installationFacts = Effect.fn("Tools.installation")(function* (env: PluginEnv) {
   const herdr = new Herdr(env);
@@ -627,6 +641,8 @@ const installationFacts = Effect.fn("Tools.installation")(function* (env: Plugin
   );
   const harness = yield* chatHarnessOf(env.userDir);
   const chat = key === null ? null : yield* readChat(yield* chatPath(env.stateDir, key));
+  // Only where a host has served this directory: reading is no reason to start one.
+  const sweepable = (yield* anyRuns(env)) ? yield* cleanupListing(env, "chat") : null;
   return [
     `health: ${health === null ? "could not be checked" : health.ok ? health.human : health.error.message}`,
     "",
@@ -639,6 +655,11 @@ const installationFacts = Effect.fn("Tools.installation")(function* (env: Plugin
     }`,
     `ownership: ${ownership === null ? "herdr could not be asked" : ownership.kind}`,
     `panes an older release left: ${close.length} closable, ${listed.length} sharing a tab`,
+    sweepable === null
+      ? "cleanup: nothing swept here yet"
+      : sweepable.ok
+        ? `cleanup, as \`collie cleanup\` lists it:\n${shortened(cleanupLines(sweepable.value, false), CLEANUP_LINES)}`
+        : `cleanup: ${sweepable.error.message}`,
     "",
     "every new Run begins with, by the workspace it is started in:",
     ...(defaults.length > 0 ? defaults : ["- (no workspaces)"]),

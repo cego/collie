@@ -395,6 +395,14 @@ export type SteeringCard = typeof SteeringCard.Type;
 export const EvidenceFile = Schema.Struct({ name: Schema.String, bytes: Schema.Int });
 export type EvidenceFile = typeof EvidenceFile.Type;
 
+/** A file the Run was given, fetched as `attachment:<name>`. */
+export const AttachmentFile = Schema.Struct({
+  name: Schema.String,
+  size: Schema.Int,
+  mediaType: Schema.String,
+});
+export type AttachmentFile = typeof AttachmentFile.Type;
+
 /** What a reference fetches: text as it is, anything else as base64. */
 export const RunFile = Schema.Struct({
   ref: Schema.String,
@@ -404,8 +412,17 @@ export const RunFile = Schema.Struct({
   size: Schema.Int,
 });
 
-/** How much of an item one `runFile` hands over when no length is asked for. */
-export const RUN_FILE_BYTES = 4 * 1024 * 1024;
+/** Part of a file on a host's Machine: `content` is base64, `size` the whole file's. */
+export const HostFile = Schema.Struct({
+  path: Schema.String,
+  size: Schema.Int,
+  mediaType: Schema.String,
+  content: Schema.String,
+});
+export type HostFile = typeof HostFile.Type;
+
+/** The most one part of a file carries: of a `runFile` item, a read, an upload or a staging. */
+export const PART_BYTES = 4 * 1024 * 1024;
 
 export type RunFile = typeof RunFile.Type;
 
@@ -474,6 +491,8 @@ export const RunDetail = Schema.Struct({
   verifications: Schema.Array(VerificationView),
   steering: Schema.Array(SteeringCard),
   evidence: Schema.Array(EvidenceFile),
+  /** Absent from a host older than attachments. */
+  attachments: Schema.optional(Schema.Array(AttachmentFile)),
   /** Null for a Run with no branch or no checkout left to compare. */
   diff: Schema.NullOr(RunDiff),
 });
@@ -532,6 +551,8 @@ export const BoardSnapshot = Schema.TaggedStruct("Snapshot", {
   /** `<version>+<sha>` for a development checkout, which nothing upgrades; absent for a release. */
   development: Schema.optionalKey(Schema.String),
   protocol: Schema.Int,
+  /** Whether this host takes files: its file operations, uploads and attachments. */
+  files: Schema.optionalKey(Schema.Boolean),
   herds: Schema.Array(Herd),
   tasks: Schema.Array(TaskView),
   seq: Schema.Int,
@@ -693,6 +714,31 @@ export const ActionResult = Schema.Struct({
 });
 export type ActionResult = typeof ActionResult.Type;
 
+/** One thing Collie made that a sweep removes, its size in bytes, and why it goes. */
+export const CleanupItem = Schema.Struct({
+  kind: Schema.String,
+  target: Schema.String,
+  bytes: Schema.Number,
+  reason: Schema.String,
+});
+export type CleanupItem = typeof CleanupItem.Type;
+
+/** One thing Collie made and keeps, with the one condition that keeps it. */
+export const CleanupKept = Schema.Struct({
+  kind: Schema.String,
+  target: Schema.String,
+  reason: Schema.String,
+});
+export type CleanupKept = typeof CleanupKept.Type;
+
+/** A cleanup listing, or what a sweep did: `remove` is what it would remove, or removed. */
+export const CleanupReport = Schema.Struct({
+  remove: Schema.Array(CleanupItem),
+  keep: Schema.Array(CleanupKept),
+  bytes: Schema.Number,
+});
+export type CleanupReport = typeof CleanupReport.Type;
+
 /** Which front door is acting: what a channel declares, and what its operations are stamped with. */
 export const FrontDoor = Schema.Literals([
   "cli",
@@ -724,6 +770,8 @@ export const Declaration = Schema.Struct({
   /** A chat's conversation, and the human's message that turn, as its tool host heard it. */
   conversation: Schema.optionalKey(Schema.String),
   said: Schema.optionalKey(Schema.String),
+  /** The names of the files the human's message carried. */
+  attachments: Schema.optionalKey(Schema.Array(Schema.String)),
 });
 export type Declaration = typeof Declaration.Type;
 
@@ -779,6 +827,9 @@ export const SharedSettings = Schema.Struct({
 });
 export type SharedSettings = typeof SharedSettings.Type;
 
+/** Files given with a request, as paths on the host's own Machine, copied into the Run. */
+export const Attachments = Schema.Array(Schema.String);
+
 /** The Collie tools a Flock chat has a Machine's host answer, all of them reads. */
 export const FLOCK_READS = ["collie_run", "collie_receipts", "collie_workspaces"] as const;
 
@@ -819,6 +870,7 @@ export const FrontDoorRpcs = RpcGroup.make(
       intent: Schema.optional(IntentSeedSchema),
       /** The approved set given with the start, over the project's and the user's files. */
       verify: Schema.optional(Schema.Array(VerifySpecSchema)),
+      attachments: Schema.optional(Attachments),
     },
     success: Started,
     error: Schema.Union([HostRefused, RequestConflict]),
@@ -879,7 +931,7 @@ export const FrontDoorRpcs = RpcGroup.make(
       ref: Schema.String,
       /** Where in the item to start, in bytes. */
       offset: Schema.optional(Schema.Int),
-      /** How many bytes from there: `RUN_FILE_BYTES` when not given, and at most. */
+      /** How many bytes from there: `PART_BYTES` when not given, and at most. */
       length: Schema.optional(Schema.Int),
     },
     success: RunFile,
@@ -965,7 +1017,12 @@ export const FrontDoorRpcs = RpcGroup.make(
   }),
   /** A child Run on a finished one, through the follow-up its Workflow declares. */
   Rpc.make("followUp", {
-    payload: { runId: Schema.String, text: Schema.String, request: Schema.String },
+    payload: {
+      runId: Schema.String,
+      text: Schema.String,
+      request: Schema.String,
+      attachments: Schema.optional(Attachments),
+    },
     success: Started,
     error: Schema.Union([HostRefused, RequestConflict]),
   }),
@@ -1018,6 +1075,14 @@ export const FrontDoorRpcs = RpcGroup.make(
     success: SharedSettings,
     error: Schema.Union([HostRefused, RequestConflict]),
   }),
+  /** What a sweep would remove now, and what Collie keeps and why (ADR-0045). */
+  Rpc.make("cleanup", { success: CleanupReport, error: HostRefused }),
+  /** Sweeps now: what was removed, and what was kept and why. */
+  Rpc.make("sweep", {
+    payload: { request: Schema.String },
+    success: CleanupReport,
+    error: Schema.Union([HostRefused, RequestConflict]),
+  }),
   /**
    * A read-only Collie tool answered for the asking channel as this Machine's Native chat
    * answers it, with no board selection standing in for a Run. Records nothing.
@@ -1036,8 +1101,77 @@ export const FrontDoorRpcs = RpcGroup.make(
       offer: Schema.String,
       input: Schema.Record(Schema.String, Schema.Json),
       request: Schema.String,
+      attachments: Schema.optional(Attachments),
     },
     success: Started,
+    error: Schema.Union([HostRefused, RequestConflict]),
+  }),
+  /**
+   * One part of a file sent to this Machine, kept once by its sha256. Answers the file's
+   * path once it is whole, at once where it already is, and null before then.
+   */
+  Rpc.make("upload", {
+    payload: {
+      name: Schema.String,
+      size: Schema.Int,
+      sha256: Schema.String,
+      offset: Schema.Int,
+      content: Schema.String,
+    },
+    success: Schema.Struct({ path: Schema.NullOr(Schema.String) }),
+    error: HostRefused,
+  }),
+  /** Part of a file on this host's Machine, by absolute path, as base64. */
+  Rpc.make("readFile", {
+    payload: {
+      path: Schema.String,
+      offset: Schema.optional(Schema.Int),
+      length: Schema.optional(Schema.Int),
+    },
+    success: HostFile,
+    error: HostRefused,
+  }),
+  /** The files a pattern matches under a directory, newest first, bounded. */
+  Rpc.make("glob", {
+    payload: { pattern: Schema.String, path: Schema.optional(Schema.String) },
+    success: Schema.Struct({ paths: Schema.Array(Schema.String), omitted: Schema.Int }),
+    error: HostRefused,
+  }),
+  /** What a search of files finds, as ripgrep or `grep -r` says it, bounded by lines. */
+  Rpc.make("grep", {
+    payload: {
+      pattern: Schema.String,
+      path: Schema.optional(Schema.String),
+      glob: Schema.optional(Schema.String),
+      type: Schema.optional(Schema.String),
+      outputMode: Schema.optional(Schema.Literals(["content", "files_with_matches", "count"])),
+      ignoreCase: Schema.optional(Schema.Boolean),
+      lineNumbers: Schema.optional(Schema.Boolean),
+      before: Schema.optional(Schema.Int),
+      after: Schema.optional(Schema.Int),
+      context: Schema.optional(Schema.Int),
+      headLimit: Schema.optional(Schema.Int),
+      multiline: Schema.optional(Schema.Boolean),
+    },
+    success: Schema.Struct({ text: Schema.String, omitted: Schema.Int }),
+    error: HostRefused,
+  }),
+  /** A file written whole, never inside the host's state directory. */
+  Rpc.make("writeFile", {
+    payload: { path: Schema.String, content: Schema.String, request: Schema.String },
+    success: Schema.Struct({ path: Schema.String, bytes: Schema.Int }),
+    error: Schema.Union([HostRefused, RequestConflict]),
+  }),
+  /** One string of a file replaced, as Claude Code's Edit replaces it. */
+  Rpc.make("editFile", {
+    payload: {
+      path: Schema.String,
+      oldString: Schema.String,
+      newString: Schema.String,
+      replaceAll: Schema.optional(Schema.Boolean),
+      request: Schema.String,
+    },
+    success: Schema.Struct({ path: Schema.String, replaced: Schema.Int }),
     error: Schema.Union([HostRefused, RequestConflict]),
   }),
 );
@@ -1134,6 +1268,7 @@ type DispositionKind = "merged" | "abandoned" | "superseded";
 export type CardAction =
   | { readonly kind: "go-to-tab" }
   | { readonly kind: "steer" }
+  | { readonly kind: "attach" }
   | { readonly kind: "open-mr"; readonly mr: MrRef }
   | { readonly kind: "offer"; readonly offer: BoardOffer }
   | { readonly kind: "check-output" }
@@ -1160,7 +1295,7 @@ const dispose = (view: TaskView, disposition: DispositionKind): CardAction => {
  */
 export function cardActions(view: TaskView): CardAction[] {
   const actions: CardAction[] = [{ kind: "go-to-tab" }];
-  if (!isSettled(view.state)) actions.push({ kind: "steer" });
+  if (!isSettled(view.state)) actions.push({ kind: "steer" }, { kind: "attach" });
   const mr = mrRefOf(view.mr);
   if (mr !== null) actions.push({ kind: "open-mr", mr });
   if (view.offer !== null) actions.push({ kind: "offer", offer: view.offer });

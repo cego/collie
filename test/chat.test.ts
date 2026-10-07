@@ -86,7 +86,7 @@ test("Claude Code is what opens, whatever the workers are on", () =>
   runEffect(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const userDir = yield* fs.makeTempDirectory({ prefix: "hw-chat-config-" });
+      const userDir = yield* fs.makeTempDirectoryScoped({ prefix: "hw-chat-config-" });
       // An existing installation: workers on another harness, and a `scope` from before
       // any of this existed. Neither says anything about which chat opens.
       yield* writeConfigValue(userDir, "harness", "codex");
@@ -255,7 +255,7 @@ test("both adapters are told about the same Collie, in one place", () =>
   runEffect(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const dir = yield* fs.makeTempDirectory({ prefix: "hw-chat-launch-" });
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "hw-chat-launch-" });
       const serverEnv = {
         HERDR_PLUGIN_STATE_DIR: "/state",
         COLLIE_USER_DIR: "/config",
@@ -306,6 +306,5 @@ test("both adapters are told about the same Collie, in one place", () =>
         expect(extension).toContain(`"${key}":"${value}"`);
         expect(config).toMatchObject({ mcpServers: { collie: { env: { [key]: value } } } });
       }
-      yield* fs.remove(dir, { recursive: true, force: true });
     }),
   ));

@@ -18,7 +18,7 @@ import { Herdr } from "../src/herdr";
 import { connect } from "../src/host";
 import { runViews } from "../src/lifecycle";
 import { exec } from "./support/command";
-import { runEffect } from "./support/effect";
+import { runEffect, suiteEnv } from "./support/effect";
 import { fixtures, root, stopHost, until } from "./support/host";
 
 const Envelope = Schema.fromJsonString(
@@ -46,6 +46,7 @@ const collie = Effect.fn("TypedTest.collie")(function* (world: World, args: Read
       HERDR_PLUGIN_STATE_DIR: world.state,
       COLLIE_CWD: world.project,
       COLLIE_HOST: asCommand(command),
+      ...(yield* suiteEnv),
     },
     stdout: "pipe",
     stderr: "pipe",

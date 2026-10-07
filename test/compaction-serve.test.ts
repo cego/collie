@@ -13,7 +13,6 @@ let rig: Rig;
 let fs: FileSystem.FileSystem;
 let path: Path.Path;
 let dir: string;
-const started: number[] = [];
 
 /** Whether a pid is still there, which is what a stopped server is not. */
 function alive(pid: number): boolean {
@@ -30,9 +29,15 @@ function alive(pid: number): boolean {
  * wait, and then stays up like a real one. A script rather than a shell one-liner
  * because `command` is one command — the seam adds the `exec` and the redirect.
  */
+const pids = () => path.join(dir, "pids");
+
 const stand = Effect.fn("test.stand")(function* (says: string, after = "0") {
   const script = path.join(dir, "stand-in.sh");
-  yield* fs.writeFileString(script, `#!/bin/sh\nsleep ${after}\necho '${says}'\nsleep 30\n`);
+  // Its pid recorded by itself, so one that never said it was up is still stopped.
+  yield* fs.writeFileString(
+    script,
+    `#!/bin/sh\necho $$ >> ${pids()}\nsleep ${after}\necho '${says}'\nexec sleep 30\n`,
+  );
   return `sh ${script}`;
 });
 
@@ -44,13 +49,7 @@ const serve = (command: string, listening: RegExp, startMs = 5_000) =>
     listening,
     startMs,
     what: "the stand-in server",
-  }).pipe(
-    Effect.tap((served) =>
-      Effect.sync(() => {
-        started.push(served.pid);
-      }),
-    ),
-  );
+  });
 
 beforeEach(() =>
   runEffect(
@@ -60,7 +59,6 @@ beforeEach(() =>
       rig = yield* Rig.make();
       dir = path.join(rig.root, "controls", "build-r1");
       yield* fs.makeDirectory(dir, { recursive: true });
-      started.length = 0;
     }),
   ),
 );
@@ -68,8 +66,9 @@ beforeEach(() =>
 afterEach(() =>
   runEffect(
     Effect.gen(function* () {
-      for (const pid of started) {
-        yield* Effect.ignore(Effect.sync(() => process.kill(pid, "SIGKILL")));
+      const recorded = (yield* fs.exists(pids())) ? yield* fs.readFileString(pids()) : "";
+      for (const pid of recorded.split("\n").filter(Boolean)) {
+        yield* Effect.ignore(Effect.sync(() => process.kill(Number(pid), "SIGKILL")));
       }
       yield* rig.close();
     }),

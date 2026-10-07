@@ -7,6 +7,9 @@
 // `COLLIE_TEST_BINARY` and `COLLIE_TEST_FAKE_HERDR` naming them. `bun test <file>` on its
 // own still runs the sources, which is the quicker loop for one file.
 //
+// A suite that was killed left its files' roots, and maybe processes carrying their marker:
+// those whose pid is dead are removed before this one starts.
+//
 // One suite runs at a time on a machine; the next waits for its turn. Several Runs each
 // running the whole suite at once loaded vm-mk past 50 on 16 cores, and every one of them
 // took longer than it would have in a queue.
@@ -21,6 +24,9 @@ import { BunRuntime, BunServices } from "@effect/platform-bun";
 import solidPlugin from "@opentui/solid/bun-plugin";
 import { Effect } from "effect";
 import { lockHolder, withLock } from "../src/lock";
+import { sweepDeadRoots } from "../test/support/sweep";
+
+sweepDeadRoots(tmpdir());
 
 const out = resolve(".scratch/test-bin");
 const collie = `${out}/collie`;

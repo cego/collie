@@ -17,6 +17,7 @@ import {
   Context,
   Crypto,
   Data,
+  DateTime,
   Duration,
   Effect,
   Exit,
@@ -117,6 +118,7 @@ import { budgetPath, herdOf } from "./steering";
 import type { JudgementDeps } from "./drift";
 import { finishedOnRecord, type Card } from "./cards";
 import { reason } from "./naming";
+import { attachmentRefusal, attachmentsDir, copyInto, listAttachments } from "./attachments";
 import {
   fromWorkSource,
   propagate,
@@ -130,7 +132,7 @@ import { openFindingsIn } from "./output";
 import { isSingleRepo, planIssuesIn, planReposOf } from "./plan";
 import { SELF, inputsFor, offersFrom, type Declared, type Offer } from "./offers";
 import { isOutcome, needsApproved, nothingApprovedToStart } from "./outcome";
-import { Store, storeLayer, type Admission, type RunRow } from "./store";
+import { Store, storeLayer, type Admission, type RunRow, type StoreApi } from "./store";
 import {
   Answered,
   Controlled,
@@ -161,6 +163,7 @@ import {
 } from "./verify";
 import * as Workflow from "effect/unstable/workflow/Workflow";
 import * as WorkflowEngine from "effect/unstable/workflow/WorkflowEngine";
+import type * as MessageStorage from "effect/unstable/cluster/MessageStorage";
 
 /** A module that cannot be loaded, named by its own file. Schema-backed, so the local
  *  host can fail a client with the same value rather than a copy of it. */
@@ -1432,7 +1435,12 @@ const stagedEntry = Effect.fn("Engine.stagedEntry")(function* (file: string, rev
   const name = `${Bun.hash(dir).toString(16)}-${revision ?? (yield* revisionOf(dir))}`;
   const root = `${entries}/generations/${name}`;
   const staged = { root, file: `${root}${file}` };
-  if (yield* fs.exists(staged.file).pipe(Effect.orElseSucceed(() => false))) return staged;
+  if (yield* fs.exists(staged.file).pipe(Effect.orElseSucceed(() => false))) {
+    // Its age is its last use, which is what cleanup removes it by (ADR-0045).
+    const now = DateTime.toDateUtc(yield* DateTime.now);
+    yield* fs.utimes(root, now, now).pipe(Effect.ignore);
+    return staged;
+  }
   const draft = `${name}.${yield* Random.nextInt}`;
   yield* stageGeneration({ dir: entries, name: draft, entry: file }).pipe(
     Effect.provide(Path.layer),
@@ -1651,7 +1659,10 @@ export const clearGenerations = (dir: string): Effect.Effect<void, never, FileSy
 export function engineLayer(options: {
   readonly dir: string;
 }): Layer.Layer<
-  WorkflowEngine.WorkflowEngine | SqlClient.SqlClient | Reactivity.Reactivity,
+  | WorkflowEngine.WorkflowEngine
+  | MessageStorage.MessageStorage
+  | SqlClient.SqlClient
+  | Reactivity.Reactivity,
   ConfigError
 > {
   // One connection, two halves: the engine's own tables and the rows Collie keeps beside
@@ -1680,12 +1691,16 @@ export function engineLayer(options: {
             entityRegistrationTimeout: Duration.infinity,
           },
         }).pipe(Layer.provide([sql, BunCrypto.layer]));
-        return ClusterWorkflowEngine.layer.pipe(Layer.provide(cluster));
+        // The message storage too: forgetting a Run clears what the engine kept of it.
+        return ClusterWorkflowEngine.layer.pipe(Layer.provideMerge(cluster));
       }),
     ),
   );
   return engine.pipe(Layer.provideMerge(sql));
 }
+
+/** How long a start waits for the engine to take its Run before it is refused. */
+const HAND_OVER_TIMEOUT = "30 seconds";
 
 export const HOLD = "hold";
 export const STOP = "stop";
@@ -1727,6 +1742,30 @@ export const runDir = (dir: string, runId: string): string => `${dir}/runs/${run
 /** The Run whose own plan directory this Input value is, and null where it is none. */
 const planRunOf = (value: string): string | null =>
   /(?:^|\/)runs\/([^/]+)\/plan\/?$/.exec(value)?.[1] ?? null;
+
+/**
+ * A Run, then the Runs it came from: its parent and the Run whose plan it builds. Stops at
+ * a Run the store has no row for, and at a cycle.
+ */
+const lineageIn = (store: StoreApi) =>
+  Effect.fn("Engine.lineageOf")(function* (runId: string) {
+    const lineage = [runId];
+    for (let at = 0; at < lineage.length; at++) {
+      const row = yield* store.run(lineage[at]!);
+      if (row === null) continue;
+      const input = yield* decodeInput(row.input).pipe(Effect.orElseSucceed(() => ({})));
+      const plan = Object.values(input).filter(Schema.is(Schema.String)).map(planRunOf);
+      for (const from of [row.parent, ...plan])
+        if (from != null && !lineage.includes(from)) lineage.push(from);
+    }
+    return lineage;
+  });
+
+const decodeAskedAttachments = Schema.decodeUnknownOption(
+  Schema.fromJsonString(
+    Schema.Struct({ attachments: Schema.optional(Schema.Array(Schema.String)) }),
+  ),
+);
 
 /** Where a Run keeps the merge request it opened. */
 const mergeRequestPath = (dir: string, runId: string) => `${runDir(dir, runId)}/merge-request`;
@@ -1978,20 +2017,7 @@ export const hostLayer = (options: {
                 );
               }),
             ).pipe(Effect.ignore);
-      // A Run came from its parent and from the Run whose plan it builds. Stops at a Run
-      // the store has no row for, and at a cycle.
-      const lineageOf = Effect.fn("Engine.lineageOf")(function* (runId: string) {
-        const lineage = [runId];
-        for (let at = 0; at < lineage.length; at++) {
-          const row = yield* store.run(lineage[at]!);
-          if (row === null) continue;
-          const input = yield* decodeInput(row.input).pipe(Effect.orElseSucceed(() => ({})));
-          const plan = Object.values(input).filter(Schema.is(Schema.String)).map(planRunOf);
-          for (const from of [row.parent, ...plan])
-            if (from != null && !lineage.includes(from)) lineage.push(from);
-        }
-        return lineage;
-      });
+      const lineageOf = lineageIn(store);
       /** Runs one approved command for a Run, under the pass it was asked for (ADR-0042). */
       const check = (asked: Parameters<Sdk.HostApi["verify"]>[0], recorded: CheckPass) =>
         under(
@@ -3213,6 +3239,8 @@ export interface RegistryApi {
     readonly intent?: IntentSeed;
     /** The approved set given with the start, over the project's and the user's files. */
     readonly verify?: ReadonlyArray<VerifySpec> | undefined;
+    /** Paths on this Machine, copied into the Run before its first step. */
+    readonly attachments?: ReadonlyArray<string> | undefined;
   }) => Effect.Effect<Admitted, HostRefused | RequestConflict, HostServices>;
   readonly status: (
     runId: string,
@@ -3261,6 +3289,14 @@ export interface RegistryApi {
   readonly view: (runId: string) => Effect.Effect<RunView | null>;
   /** Every run this host has rows for, newest last, narrowed to one Task where named. */
   readonly views: (task: string | null) => Effect.Effect<ReadonlyArray<RunView>>;
+  /**
+   * Forgets these Runs' rows, and what the engine keeps of their executions, in one
+   * transaction (ADR-0045 D5). Answers with the Runs it forgot; a row the engine never
+   * accepted is left.
+   */
+  readonly retire: (
+    runs: ReadonlyArray<string>,
+  ) => Effect.Effect<ReadonlyArray<string>, never, MessageStorage.MessageStorage>;
   /** The same run, again, whenever anything about it changes. */
   readonly watch: (runId: string) => Stream.Stream<RunView | null>;
   /**
@@ -3286,6 +3322,7 @@ export interface RegistryApi {
     readonly offer: string;
     readonly input: Readonly<Record<string, Schema.Json>>;
     readonly request: string;
+    readonly attachments?: ReadonlyArray<string> | undefined;
   }) => Effect.Effect<Admitted, HostRefused | RequestConflict, HostServices>;
   /** The generation a run is on and the execution it was admitted as. */
   readonly routed: (
@@ -3366,6 +3403,7 @@ export const foundationLayer = (options: {
   | Oversight
   | Store
   | WorkflowEngine.WorkflowEngine
+  | MessageStorage.MessageStorage
   | SqlClient.SqlClient
   | Reactivity.Reactivity,
   ConfigError,
@@ -3638,10 +3676,7 @@ const makeRegistry: (
     // of its merge request, a fix of that review — is that Task's, wherever it came from.
     if (ask.workspace === undefined && opened === null) {
       const joined = yield* taskWorking(generation, ask, placed);
-      if (joined !== null) {
-        yield* Effect.ignore(placing.herdr.workspaceFocus(joined.workspace));
-        return { placed, task: joined.id };
-      }
+      if (joined !== null) return { placed, task: joined.id };
     }
     const label = opened?.label ?? ask.taskLabel;
     const openWorkspace = Effect.gen(function* () {
@@ -3685,8 +3720,6 @@ const makeRegistry: (
         Effect.flatMap((made) => writeTask(placing.env.stateDir, made)),
         Effect.orDie,
       ));
-    // Focused, not just created: a human who started work is taken to it.
-    yield* Effect.ignore(placing.herdr.workspaceFocus(workspace));
     return { placed, task: task.id };
   }, Effect.provideContext(bun));
 
@@ -3885,6 +3918,7 @@ const makeRegistry: (
       Effect.provideContext(bun),
       Effect.ignore,
     );
+    if (claimed.row.accepted === null) yield* attachInto(claimed.row);
     // The parent hands its own children over, so the receipt is written here: a host
     // sweep dispatching one would give the engine a child with no parent to wake.
     yield* store.accepted(claimed.row.run);
@@ -3967,25 +4001,65 @@ const makeRegistry: (
     if (generation === undefined || unplaced(row)) return;
     const payload = yield* payloadOf(generation, row).pipe(Effect.result);
     if (payload._tag === "Failure") return;
+    yield* attachInto(row);
     yield* crash("admitted");
+    // Upstream retries a send it cannot route without end; the row stays unaccepted for the next host.
     yield* engine
       .execute(generation.registration.workflow, {
         executionId: row.execution,
         payload: payload.success,
         discard: true,
       })
-      .pipe(Effect.orDie);
+      .pipe(
+        Effect.orDie,
+        Effect.timeoutOrElse({
+          duration: HAND_OVER_TIMEOUT,
+          orElse: () => {
+            const refusal = `the engine did not take ${row.run} within ${HAND_OVER_TIMEOUT}; it is recorded, and the next host start hands it over`;
+            return Effect.logWarning(refusal).pipe(
+              Effect.andThen(Effect.fail(new HostRefused({ reason: refusal }))),
+            );
+          },
+        }),
+      );
     yield* crash("executed");
     yield* store.accepted(row.run);
   });
 
-  /** Admitted work a host did not live to place or hand over, finished under its claim. */
+  /** A Run's own attachments, then its Lineage's, copied in before its first step. */
+  const attachInto = (row: RunRow) =>
+    Effect.gen(function* () {
+      const own = Option.match(decodeAskedAttachments(row.asked ?? "{}"), {
+        onNone: () => [],
+        onSome: (asked) => asked.attachments ?? [],
+      });
+      const inherited: string[] = [];
+      for (const from of (yield* lineageIn(store)(row.run)).slice(1))
+        for (const one of yield* listAttachments(attachmentsDir(runDir(dir, from))))
+          inherited.push(one.path);
+      yield* copyInto(attachmentsDir(runDir(dir, row.run)), [...own, ...inherited]);
+    }).pipe(
+      Effect.provideContext(bun),
+      // ponytail: a file gone since it was checked starts the Run without it; refuse instead if that bites.
+      Effect.catch((cause) =>
+        Effect.logWarning(`${row.run}'s attachments could not be copied: ${reason(cause)}`),
+      ),
+    );
+
+  /**
+   * Admitted work a host did not live to place or hand over, finished under its claim. The
+   * row is read again under the claim: another pass may have placed or handed it over since.
+   */
   const recoverAdmission = (row: RunRow) =>
     claimingOf(row.request).withPermits(1)(
-      placeClaimed(row, false).pipe(
-        Effect.flatMap(handOver),
+      store.run(row.run).pipe(
+        Effect.flatMap((now) =>
+          now === null || now.accepted !== null
+            ? Effect.void
+            : placeClaimed(now, false).pipe(Effect.flatMap(handOver)),
+        ),
         Effect.catchTag("HostRefused", (failure) =>
-          Effect.logWarning(`${row.run} could not be placed: ${failure.reason}`),
+          Effect.logWarning(`${row.run} was not started: ${failure.reason}`),
         ),
       ),
     );
@@ -4013,8 +4087,13 @@ const makeRegistry: (
   });
 
   // What a host admitted and did not live to hand over. Every crash window ends here.
-  for (const row of yield* store.pending) yield* recoverAdmission(row);
-  yield* reconcileAnswers;
+  // Forked, so a hand-over that stalls does not keep the host from serving.
+  yield* Effect.forkScoped(
+    Effect.gen(function* () {
+      for (const row of yield* store.pending) yield* recoverAdmission(row);
+      yield* reconcileAnswers;
+    }),
+  );
 
   /** The file a generation was built from, which a row keeps naming after it has gone. */
   const entryOf = (name: string) => known.find((route) => route.name === name)?.entry ?? "";
@@ -4425,6 +4504,7 @@ const makeRegistry: (
     readonly parent?: string | null;
     readonly intent?: IntentSeed;
     readonly verify?: ReadonlyArray<VerifySpec> | undefined;
+    readonly attachments?: ReadonlyArray<string> | undefined;
   }) {
     const generation = options.generation;
     const runId =
@@ -4432,6 +4512,11 @@ const makeRegistry: (
     const asked = options.options ?? {};
     yield* refuseOptions(generation, asked);
     yield* refuseAgent(generation, asked);
+    const unattachable = yield* attachmentRefusal(options.attachments ?? []).pipe(
+      Effect.provideContext(bun),
+    );
+    if (unattachable !== null)
+      return yield* new HostRefused({ reason: `${REFUSED_INPUT}: ${unattachable}` });
     const request = yield* checkoutRequest(generation, asked, options.root ?? null);
     const launch = launchOptions(generation, asked);
     // An empty set given is none given, so the project's verify.json still applies.
@@ -4493,6 +4578,7 @@ const makeRegistry: (
       execution: yield* generation.registration.workflow.executionId(payload),
       task: options.task ?? null,
       parent: options.parent ?? null,
+      attachments: options.attachments,
     });
     // Frozen with the Run, so editing the project's list changes the next one.
     yield* freezeApproved({
@@ -4530,6 +4616,32 @@ const makeRegistry: (
 
     waiting: asked,
     view,
+    retire: (runs) =>
+      Effect.gen(function* () {
+        const [cluster, entity, ids, types, shard] = yield* Effect.promise(() =>
+          Promise.all([
+            import("effect/unstable/cluster/MessageStorage"),
+            import("effect/unstable/cluster/EntityAddress"),
+            import("effect/unstable/cluster/EntityId"),
+            import("effect/unstable/cluster/EntityType"),
+            import("effect/unstable/cluster/ShardId"),
+          ]),
+        );
+        const storage = yield* cluster.MessageStorage;
+        // Messages are found by entity type and id; the shard is part of the address only.
+        const address = (entityType: string, execution: string) =>
+          entity.EntityAddress.make({
+            entityType: types.make(entityType),
+            entityId: ids.make(execution),
+            shardId: shard.make("default", 0),
+          });
+        return yield* store.retire(runs, (row) =>
+          Effect.all([
+            storage.clearAddress(address(`Workflow/${row.generation}`, row.execution)),
+            storage.clearAddress(address("Workflow/-/DurableClock", row.execution)),
+          ]).pipe(Effect.orDie, Effect.asVoid),
+        );
+      }),
     views: (task: string | null) =>
       store.runs.pipe(
         Effect.flatMap((rows) =>
@@ -4588,6 +4700,7 @@ const makeRegistry: (
       readonly offer: string;
       readonly input: Readonly<Record<string, Schema.Json>>;
       readonly request: string;
+      readonly attachments?: ReadonlyArray<string> | undefined;
     }) {
       const { row, generation, facts, where, refused, input } = yield* offeredBy(options.runId);
       // Asked again here, of the module as it is now: the card this was read from may
@@ -4620,6 +4733,7 @@ const makeRegistry: (
         task: row.task,
         parent: row.run,
         verify: inherited,
+        attachments: options.attachments,
         // A follow-up carries on the parent's work, so it is on the parent's branch.
         options:
           offer.kind === "follow-up" && facts.branch !== null ? { branch: facts.branch } : {},

@@ -458,7 +458,9 @@ test("a step nobody named a verb for says what it is doing, never its id", () =>
 // Runs are handed in, which is what a caller drawing several views does.
 
 const scratch = Effect.fn("board.scratch")(function* () {
-  const dir = yield* (yield* FileSystem.FileSystem).makeTempDirectory({ prefix: "collie-board-" });
+  const dir = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped({
+    prefix: "collie-board-",
+  });
   return { dir, env: readEnv({ HERDR_PLUGIN_STATE_DIR: dir, COLLIE_CWD: "/project" }) };
 });
 
@@ -1382,7 +1384,7 @@ const checked = (name: string, head: string, result: "pass" | "fail" = "pass"): 
 /** A checkout with `branch` at a commit of its own, and that commit's sha. */
 const checkout = Effect.fn("board.checkout")(function* (branch: string) {
   const fs = yield* FileSystem.FileSystem;
-  const repo = yield* fs.makeTempDirectory({ prefix: "collie-board-repo-" });
+  const repo = yield* fs.makeTempDirectoryScoped({ prefix: "collie-board-repo-" });
   const git = (...args: string[]) =>
     Effect.promise(() => Bun.$`git ${args}`.cwd(repo).quiet().text());
   yield* git("init", "-q", "-b", branch);

@@ -369,3 +369,27 @@ test("a reference never follows a link out of the directory it belongs to", () =
       }),
     ),
   ));
+
+test("an attachment is fetched by name, and never from outside the Run's attachments", () =>
+  runEffect(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const state = yield* fs.makeTempDirectoryScoped({ prefix: "collie-ref-" });
+        const run = yield* madeRun(state, {});
+        yield* fs.makeDirectory(`${run.dir}/attachments`);
+        yield* fs.writeFile(`${run.dir}/attachments/shot.png`, new Uint8Array([1, 2, 3]));
+        yield* fs.writeFileString(`${state}/secret`, "key\n");
+        yield* fs.symlink(`${state}/secret`, `${run.dir}/attachments/linked.png`);
+
+        expect(yield* fetchRef(run, "attachment:shot.png", { offset: 1, length: 1 })).toEqual({
+          ref: "attachment:shot.png",
+          encoding: "base64",
+          content: "Ag==",
+          size: 3,
+        });
+        for (const ref of ["attachment:linked.png", "attachment:../log.txt"])
+          expect((yield* fetchRef(run, ref).pipe(Effect.flip))._tag).toBe("HostRefused");
+      }),
+    ),
+  ));
