@@ -71,8 +71,10 @@ herdr actions, and the `collie` CLI.
   process's behaviour tested in `test/desktop-*.test.ts`. A card's record is
   `desktop/view/app/components/RunRecord.vue`, opened through `useRecord`; what agent
   markdown may keep is `desktop/src/shared/markdown.ts` with `desktop/test/markdown.test.ts`; what a click,
-  a double-click and Escape do to the selected card is `desktop/src/shared/board-clicks.ts`
-  with `desktop/test/board-clicks.test.ts`; and the window's
+  a double-click, a name, the record's back button and Escape do to the selected card and
+  the open record is `afterGesture` in `desktop/src/shared/board-clicks.ts`, tested in
+  `test/desktop-view.test.ts`, with where a gesture landed read in
+  `desktop/test/board-clicks.test.ts`; and the window's
   navigation rule is in
   `desktop/src/bun/index.ts`. Desktop has its own `package.json`; Effect is the root's, so
   the board's Schemas exist once. The

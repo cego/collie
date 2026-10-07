@@ -10,7 +10,7 @@ import {
 } from "../../../../src/board-model";
 import { DateTime } from "effect";
 import type { DesktopAction } from "../../../src/shared/flock";
-import { opensOnDoubleClick, placeOf, targetOf } from "../../../src/shared/board-clicks";
+import type { Gesture } from "../../../src/shared/board-clicks";
 
 const props = defineProps<{
   task: TaskView;
@@ -22,7 +22,8 @@ const props = defineProps<{
 }>();
 const { run, openLink } = useActions();
 const toast = useToast();
-const record = useRecord();
+// SAFETY: FlockBoard provides it to every card it draws.
+const gesture = inject<(done: Gesture, tab?: string) => void>("gesture")!;
 // A dialog opened before its Machine dropped is outside the card's disabled controls.
 const act = (action: DesktopAction) =>
   props.asOf === null ? run(props.installation, action) : Promise.resolve(false);
@@ -36,24 +37,11 @@ const asOfLabel = computed(() => {
   return `as of ${two(hour)}:${two(minute)}`;
 });
 
-const { chip, choose } = useChip();
+const { chip } = useChip();
 const chosen = computed(
   () => chip.value?.machine === props.machine && chip.value.task === props.task.id,
 );
-const about = () => ({
-  machine: props.machine,
-  task: props.task.id,
-  run: props.task.run,
-  name: props.task.name,
-});
-const select = () => choose(about());
-const openRecord = () => record.open(props.cardKey, about());
-const selectOnBody = (event: MouseEvent) => {
-  if (placeOf(targetOf(event)) === "card") select();
-};
-const openOnBody = (event: MouseEvent) => {
-  if (opensOnDoubleClick(targetOf(event), props.asOf)) openRecord();
-};
+const openRecord = () => gesture({ kind: "name", card: props.cardKey });
 
 const STATES: Record<
   TaskView["state"],
@@ -106,7 +94,8 @@ const copy = (text: string) =>
     () => toast.add({ title: "Copied", color: "success" }),
     () => toast.add({ title: "Could not copy the command", color: "error" }),
   );
-const goTo = () => props.asOf === null && record.open(props.cardKey, about(), "terminal");
+const goTo = () =>
+  props.asOf === null && gesture({ kind: "name", card: props.cardKey }, "terminal");
 
 /**
  * A card action as this board does it, or null where Desktop has no way to yet: a check's
@@ -192,11 +181,10 @@ const menu = computed(() =>
   <fieldset :disabled="asOf !== null" class="contents">
     <UCard
       :data-testid="`card-${task.id}`"
-      data-card
+      :data-card="cardKey"
+      :data-as-of="asOf === null ? undefined : ''"
       :variant="task.state === 'blocked' ? 'soft' : 'outline'"
       :class="{ 'opacity-50': asOf !== null, 'ring-2 ring-primary': chosen }"
-      @click="selectOnBody"
-      @dblclick="openOnBody"
     >
       <template #header>
         <div class="flex items-start justify-between gap-2">

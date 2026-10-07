@@ -2,7 +2,7 @@
 import { SECTIONS } from "../../../../src/board-model";
 import { AsyncResult, useAtomValue } from "@effect/atom-vue";
 import type { NotLive } from "../../../src/shared/flock";
-import { escapeBacksOut, placeOf, targetOf } from "../../../src/shared/board-clicks";
+import { afterGesture, escapeOn, type Gesture, landedOn } from "../../../src/shared/board-clicks";
 import { updatesAtom } from "../flock";
 import tile from "../../../../assets/brand/logos/collie-tile-256.png";
 
@@ -18,6 +18,7 @@ const {
   header,
   waiting,
   placedBy,
+  placedAt,
 } = useFlock();
 const starting = ref(false);
 const listing = ref(false);
@@ -28,18 +29,39 @@ const record = useRecord();
 const opened = computed(() =>
   record.opened.value === null ? undefined : placedBy(record.opened.value),
 );
-watch(opened, (now) => now === undefined && record.close());
 
-const { choose } = useChip();
-/** A click on the board's own area, on no card and no control, lets the selected card go. */
-const background = (event: MouseEvent) => {
-  if (placeOf(targetOf(event)) === "board") choose(null);
+const { chip, choose } = useChip();
+/** Every board gesture, decided by `afterGesture` and applied to the chip and the record. */
+const gesture = (done: Gesture, tab: string | null = null) => {
+  const selected = chip.value === null ? undefined : placedAt(chip.value.machine, chip.value.task);
+  const before = { selected: selected?.key ?? null, record: record.opened.value };
+  const after = afterGesture(before, done);
+  if (after.selected === null) {
+    if (chip.value !== null) choose(null);
+  } else if (after.selected !== before.selected) {
+    const card = placedBy(after.selected);
+    if (card !== undefined)
+      choose({
+        machine: card.machine,
+        task: card.task.id,
+        run: card.task.run,
+        name: card.task.name,
+      });
+  }
+  if (after.record !== before.record) record.show(after.record, tab);
 };
+provide("gesture", gesture);
+watch(
+  opened,
+  (now) => now === undefined && record.opened.value !== null && gesture({ kind: "close" }),
+);
+
+const targetOf = (event: Event) => (event.target instanceof Element ? event.target : null);
+const click = (event: MouseEvent) => gesture({ kind: "click", landed: landedOn(targetOf(event)) });
+const doubleClick = (event: MouseEvent) =>
+  gesture({ kind: "double-click", landed: landedOn(targetOf(event)) });
 const escape = (event: KeyboardEvent) => {
-  if (event.key !== "Escape") return;
-  const backOut = escapeBacksOut(targetOf(event), document, opened.value !== undefined);
-  if (backOut === "close-record") record.close();
-  if (backOut === "let-go") choose(null);
+  if (event.key === "Escape") gesture(escapeOn(targetOf(event), document));
 };
 // Captured, so it runs before an overlay closes on the same key.
 onMounted(() => window.addEventListener("keydown", escape, { capture: true }));
@@ -154,7 +176,8 @@ watch(update, (now) => {
         <main
           class="flex h-full flex-col gap-6 overflow-y-auto p-4"
           :inert="opened !== undefined"
-          @click="background"
+          @click="click"
+          @dblclick="doubleClick"
         >
           <p v-if="connecting" class="text-muted">Connecting…</p>
           <UAlert
@@ -238,7 +261,7 @@ watch(update, (now) => {
           :key="`${opened.key} ${opened.task.run}`"
           :placed="opened"
           class="absolute inset-0"
-          @close="record.close()"
+          @close="gesture({ kind: 'close' })"
         />
       </div>
     </div>
