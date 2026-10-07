@@ -91,6 +91,7 @@ test(
           session: "work",
           workspace: "workspace 3",
           tab: "tab 2",
+          pane: paneId,
         });
         expect((yield* rig.cmds()).filter((cmd) => cmd.includes("focus"))).toEqual(["agent focus"]);
 
@@ -124,6 +125,7 @@ test(
         expect((yield* rig.cmds()).filter((cmd) => cmd.includes("focus"))).toEqual([
           "workspace.focus",
         ]);
+        expect(yield* focusPane(sessions, ["impl-1"], "w7", null)).not.toHaveProperty("pane");
         expect(yield* focusPane(sessions, ["impl-1"], "w-gone", null)).toBeNull();
       }),
     ),
