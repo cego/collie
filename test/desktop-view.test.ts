@@ -324,13 +324,19 @@ test("a Machine without Collie is known by its herdr profile until its host name
   expect([...merged.machines.keys()]).toEqual(["inst-pc"]);
 });
 
-const built = (machine: Machine, build: string, development?: string): FlockItem => {
-  const { message } = snapshot(machine, []);
-  return {
-    machine,
-    message: { ...message, build, ...(development === undefined ? {} : { development }) },
-  } as FlockItem;
-};
+const built = (machine: Machine, build: string, development: string): MachineMessage => ({
+  machine,
+  message: {
+    _tag: "Snapshot",
+    installation: machine.installation,
+    build,
+    development,
+    protocol: 1,
+    herds: [],
+    tasks: [],
+    seq: 0,
+  },
+});
 const routed = (machine: Machine): FlockItem => ({
   _tag: "Routed",
   machine: { profile: machine.profile, name: machine.name, target: machine.target },
