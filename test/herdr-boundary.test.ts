@@ -259,7 +259,7 @@ test("workspace replies may omit a working directory", () =>
       }
 
       expect(yield* new CurrentHerdr(rig.pluginEnv()).workspaceList()).toEqual([
-        { workspaceId: "wT", label: "Collie", cwd: "", worktree: null, tokens: {} },
+        { workspaceId: "wT", label: "Collie", cwd: "", worktree: null, tokens: {}, focused: false },
       ]);
     }),
   ));

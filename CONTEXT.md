@@ -207,8 +207,11 @@ and then it is that Task's: one workspace per Task. Anything else joins a Task o
 explicit **Continue task**.
 
 **Task workspace** — The herdr workspace a Task's Runs, tabs and agents live in. One per
-Task, made and focused when its first Run is admitted, on the checkout that Run is given,
-and kept when the work is finished until the human closes it. Its label is inferred once, at creation — `<Project or theme> | <what
+Task, made when its first Run is admitted, on the checkout that Run is given. It is never
+focused: a start does not take the human away from what they are doing. Collie closes it
+an hour after its Task is **Finished**, unless herdr has it in focus at that moment or it
+holds a pane Collie did not open, which keeps it open until the human closes it (see
+**Cleanup**). Its label is inferred once, at creation — `<Project or theme> | <what
 this work is>`, from the work and from the names already live in the session — and is
 display only: a label never decides membership, and a label a human changed is theirs,
 never written again. It is where Collie scopes a Run lookup: a workspace that is not a
@@ -267,7 +270,9 @@ agents for as long as one is alive; a gone pane is the Follow-up Run's job (ADR-
 **Disposition** was recorded — merged, abandoned or superseded — the Run succeeded at a
 Workflow that produces nothing to land, such as a review, or it ended with nothing anyone
 could file: no branch, no merge request, no plan, no question. A Task whose work has landed
-is **Finished**, the board's last section.
+is **Finished**, the board's last section, as long as none of its Runs is still going,
+asking or stalled and none of its agents is working. Finished is what **Cleanup** waits
+for before it closes anything of a Task.
 
 **Held** — A Task whose Runs are under a **Hold**, drawn as a `⏸` line under its sentence
 and lifted by a human.
@@ -314,17 +319,43 @@ human later made at the same path on the same branch. Where herdr opened a works
 it, that workspace's shell tab is left where it is, as a Task workspace's is. A checkout a
 human made is never removed.
 
-**Settled** — A Collie-created Worktree that holds nothing which exists only there: the
-tree is clean, it holds no commit that is not on the remote already, nothing is working in
-it or could be resumed in it, and its merge request is merged or closed (or its remote
-branch is gone). "No commit of its own" is the branch's upstream where it has one, and the
-default branch where it does not — a branch merged and deleted loses its upstream ref to
-the next `git fetch --prune`, and requiring one would make the gone-branch case
-unreachable. Only then is it removed, through herdr, and only ever without a force flag:
+**Settled** — A Collie-created Worktree that holds nothing which exists only there:
+
+- The tree is clean.
+- It holds no commit that is not on the remote already.
+- Nothing is working in it, and no Run whose work has not landed could be resumed in it.
+- Its work has landed: the merge watch read its merge request as merged or closed, on
+  GitHub or GitLab; a **Disposition** was recorded; or its remote branch is gone.
+- Its Task's workspace has closed.
+
+A commit is on the remote when a remote-tracking ref contains it, or when it is the head
+its merged merge request was merged at. A squash merge leaves the branch's commits on no
+branch, and "on the default branch" would keep that checkout for ever. A checkout Collie
+made whose branch was switched since is still Collie's, by its path and the moment git
+wrote it, and is judged on what it holds now. The plugin root, a repository's main checkout
+and any checkout a running host serves from are never removed ([ADR-0045](docs/adr/0045-collie-removes-what-it-made-once-nothing-needs-it.md)).
+Only then is it removed, through herdr, and only ever without a force flag:
 git's own refusal to drop a dirty or unmerged checkout is the last guard, so a wrong
 judgement can fail to clean but never delete work. Removal is never forced whichever
 manager does it. The conditions and their order are canonical in `src/worktree.ts` and
 `docs/internals.md`.
+
+**Cleanup** — What Collie removes once nothing needs it, and only what it made and can
+show it made. Its own directories (the state directory, `~/.cache/collie` and Desktop's)
+are its own by where they are, and only kinds it knows are removed from them. A Worktree,
+a Task workspace, a pane and a process are proved by Collie's own record of making them.
+The host sweeps every ten minutes. `collie cleanup` lists what a sweep would remove now,
+how much space that frees, and what Collie keeps and why. `collie cleanup --apply` sweeps
+now. In order:
+
+1. A **Finished** Task's workspace closes after an hour.
+2. Its Worktrees go once **Settled**.
+3. Thirty days after its last Run ended, the Task and every one of its Runs are forgotten
+   together: rows first, then files.
+
+What each kind keeps and why is canonical in
+[ADR-0045](docs/adr/0045-collie-removes-what-it-made-once-nothing-needs-it.md). Every
+removal is recorded with who asked, and none is forced.
 
 **Renovate Run** — One execution of the `renovate` Workflow: one repository, from claiming
 it in Helle to checking it off in Linear. Its Worktree is detached and roams — it holds no
@@ -473,7 +504,7 @@ does with each outcome, and what a five-minute unresolved attempt stops:
 
 **Notification** — The only channel from an unattended Run to the person who started it, so what is not worth interrupting for is not sent at all. One title shape — `<repo> · <slug> <what happened>` — one taxonomy in `src/notify.ts`, once per `(run, kind, step)`, and never a reason for a Run to fail.
 
-**Host** — The one background process that runs work for a state directory. CLI, board and chat all reach it over the same local RPC, and closing any of them leaves its work running. It owns the directory under `host.lock`, keeps its Runs in SQLite, and on restart hands every accepted Run back to the engine, so completed work is reused rather than repeated. A client of another build is told to restart it before `HostRpcs` (ADR-0015); `FrontDoorRpcs` serves any build (ADR-0038).
+**Host** — The one background process that runs work for a state directory. CLI, board and chat all reach it over the same local RPC, and closing any of them leaves its work running. It owns the directory under `host.lock`, keeps its Runs in SQLite until **Cleanup** forgets them, and on restart hands every accepted Run back to the engine, so completed work is reused rather than repeated. A client of another build is told to restart it before `HostRpcs` (ADR-0015); `FrontDoorRpcs` serves any build (ADR-0038).
 
 **Ownership** — Who holds something that must have one owner. A claim stands while its process answers and is still the one that wrote it, and one whose process answers but whose identity cannot be read stands too: "I could not tell" is not permission to take over. It decides which process may be the host for a state directory; canonical in `src/lock.ts`.
 

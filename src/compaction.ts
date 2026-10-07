@@ -408,22 +408,42 @@ const putDownStaleControls = Effect.fn("Compaction.putDownStaleControls")(functi
   const live = new Set((yield* deps.herdr.agentList()).map((agent) => agent.name));
   for (const name of yield* fs.readDirectory(root)) {
     if (name === launching || live.has(name)) continue;
-    yield* withControlLock(
-      deps.stateDir,
-      name,
-      Effect.gen(function* () {
-        // A launch may have finished while we waited for its lock. The earlier list
-        // cannot prove this agent is still absent.
-        if ((yield* deps.herdr.agentList()).some((agent) => agent.name === name)) return;
-        const pid = yield* endpointPid(yield* readControl(deps.stateDir, name));
-        if (pid !== null) {
-          yield* Effect.ignore(Effect.sync(() => process.kill(pid, "SIGTERM")));
-          yield* deps.log(`${name}: stopped its compaction endpoint (pid ${pid})`);
-        }
-        yield* fs.remove(path.join(root, name), { recursive: true });
-      }),
-    ).pipe(Effect.ignore);
+    const listed = deps.herdr.agentList().pipe(
+      Effect.map((agents) => agents.some((agent) => agent.name === name)),
+      Effect.orElseSucceed(() => true),
+    );
+    yield* putDownControl(deps, name, listed).pipe(Effect.ignore);
   }
+});
+
+/**
+ * Stops the endpoint of one agent herdr does not list and removes its controls, under
+ * its control lock. False where herdr lists it after all, or the lock is taken.
+ */
+export const putDownControl = Effect.fn("Compaction.putDownControl")(function* <R>(
+  deps: Pick<CompactionDeps, "stateDir" | "log">,
+  name: string,
+  /** Whether herdr lists this agent now; true where it cannot tell. */
+  listed: Effect.Effect<boolean, never, R>,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  return yield* withControlLock(
+    deps.stateDir,
+    name,
+    Effect.gen(function* () {
+      // A launch may have finished while we waited for its lock. The earlier list
+      // cannot prove this agent is still absent.
+      if (yield* listed) return false;
+      const pid = yield* endpointPid(yield* readControl(deps.stateDir, name));
+      if (pid !== null) {
+        yield* Effect.ignore(Effect.sync(() => process.kill(pid, "SIGTERM")));
+        yield* deps.log(`${name}: stopped its compaction endpoint (pid ${pid})`);
+      }
+      yield* fs.remove(path.join(deps.stateDir, CONTROL_DIR, name), { recursive: true });
+      return true;
+    }),
+  );
 });
 
 /**

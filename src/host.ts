@@ -23,10 +23,12 @@ import {
   Crypto,
   Data,
   Deferred,
+  Duration,
   Effect,
   Exit,
   FileSystem,
   Layer,
+  Logger,
   Option,
   Path,
   Schedule,
@@ -58,8 +60,29 @@ import {
   type Locate,
 } from "./engine";
 import { configuredAgents } from "./agents";
+import { hostLogger } from "./host-log";
 import { Catalogue, discover, searchPath } from "./discovery";
 import { sideJobs } from "./side-jobs";
+import { dataHomeOf, desktopRootOf } from "./desktop";
+import type * as MessageStorage from "effect/unstable/cluster/MessageStorage";
+import {
+  collieCache,
+  compactionSweeper,
+  desktopSweeper,
+  renovateClonesSweeper,
+  retentionSweeper,
+  runnersSweeper,
+  settlingOf,
+  stateSweeper,
+  taskWorkspacesSweeper,
+  generationsDir,
+  generationsSweeper,
+  judge,
+  sweep,
+  sweeping,
+  worktreesSweeper,
+  type SweptBy,
+} from "./cleanup";
 import { once, recordAudit, trimAudit } from "./audit";
 import { currentEnv } from "./env";
 import { installation as installedRelease } from "./release";
@@ -72,6 +95,7 @@ import { buildRunDetail } from "./views";
 import {
   Answered,
   ASKED_KINDS,
+  CleanupReport,
   Controlled,
   Disposition,
   EVIDENCE_GATE,
@@ -131,19 +155,39 @@ import { carryOut, carryOutAsked, followUpField } from "./run-actions";
 import { nothingApproved } from "./outcome";
 import { approvedFrom, VerifySpecSchema, type VerifySpec } from "./verify-spec";
 import { everyRegistered } from "./registry";
-import { readTask } from "./task";
+import { listTasks, readTask } from "./task";
 import { nowIso } from "./time";
 import { reason } from "./naming";
 import { loadDefaults, SettingRefused, sharedSettings, takeShared } from "./config";
 import { factsOfView, settled } from "./runs";
 import { aliveIn, focusPane, herdChanges, liveHerds } from "./herds";
-import { currentPid, ensureLockDir, lockHolder, withLock, type LockHolder } from "./lock";
+import {
+  currentPid,
+  ensureLockDir,
+  holderLives,
+  lockHolder,
+  releaseOwnLock,
+  signalProcess,
+  withLock,
+  type LockHolder,
+} from "./lock";
 
 /** What a host says it is. A client that is not this stops rather than guessing. */
 export const BUILD: string = manifest.version;
 
 export const socketOf = (dir: string) => `${dir}/host.sock`;
 const lockOf = (dir: string) => `${dir}/host.lock`;
+const logOf = (dir: string) => `${dir}/host.log`;
+/** Which build owns the directory, written down for a client the host does not answer. */
+const recordOf = (dir: string) => `${dir}/host.build`;
+const HostRecord = Schema.fromJsonString(
+  Schema.Struct({ pid: Schema.Int, build: Schema.String, root: Schema.String }),
+);
+const encodeRecord = Schema.encodeSync(HostRecord);
+
+/** Whether `build` is a newer release than `than`. */
+const newer = (build: string, than: string) =>
+  build !== than && Bun.semver.order(build, than) === 1;
 
 export class HostUnavailable extends Data.TaggedError("HostUnavailable")<{
   readonly dir: string;
@@ -430,21 +474,81 @@ const hostBoard = (dir: string) =>
     );
     // What ended and what it opened needs no herdr: the merge watch asks nobody's panes.
     const unattended = boardOf([]);
-    return { env, herdr, bun, runs, build, unattended };
+    /** When each Task was first seen Finished, for as long as this host runs. */
+    const seen = new Map<string, number>();
+    const storage = yield* Effect.context<MessageStorage.MessageStorage>();
+    /** Every kind of thing Collie cleans, judged against the Runs as they are now. */
+    const sweepers = Effect.gen(function* () {
+      const herds = yield* liveHerds(herdr, env);
+      const sessions = herds.map((session) => session.herdr);
+      const all = yield* runs;
+      const tasks = yield* listTasks(env.stateDir);
+      return [
+        // Before the worktrees: a checkout goes only once its Task's workspace has closed.
+        taskWorkspacesSweeper({
+          stateDir: env.stateDir,
+          sessions: herds,
+          tasks,
+          // No board, no Task judged Finished, so nothing closed.
+          views: yield* build.pipe(Effect.orElseSucceed(() => [])),
+          runs: all,
+          seen,
+        }),
+        worktreesSweeper({
+          herdr,
+          sessions,
+          stateDir: env.stateDir,
+          runs: all,
+          registered: yield* everyRegistered(env.stateDir),
+          cwd: env.cwd,
+          settling: settlingOf({
+            stateDir: env.stateDir,
+            runs: all,
+            tasks,
+            sessions,
+            protect: [env.pluginRoot],
+          }),
+        }),
+        generationsSweeper(generationsDir()),
+        stateSweeper(env.stateDir, new Set(all.map((run) => run.id))),
+        compactionSweeper(env.stateDir, sessions),
+        runnersSweeper(`${collieCache()}/runners`, BUILD),
+        renovateClonesSweeper(env.stateDir, all),
+        desktopSweeper(
+          desktopRootOf(dataHomeOf(env.home, env.raw["XDG_DATA_HOME"])),
+          `${env.raw["XDG_STATE_HOME"] || `${env.home}/.local/state`}/collie-desktop`,
+        ),
+        // Last: a Task is kept while a workspace or a checkout of it is still there.
+        retentionSweeper({
+          stateDir: env.stateDir,
+          sessions,
+          // Every read or none: a Task judged without its Runs would look forgettable.
+          facts: Effect.all({ tasks: listTasks(env.stateDir), views: build, runs }).pipe(
+            Effect.orElseSucceed(() => ({ tasks: [], views: [], runs: [] })),
+            Effect.provideContext(bun),
+          ),
+          retire: (ids) => registry.retire(ids).pipe(Effect.provideContext(storage)),
+        }),
+      ];
+    });
+    return { env, herdr, bun, runs, build, unattended, sweepers };
   });
 
-/** The merge watch, News, pruning and the Home's tokens, for as long as this host runs. */
+/** The merge watch, News, the cleanup sweep and the Home's tokens, for as long as this host runs. */
 const sideJobsLayer = (dir: string, panels: MrPanels) =>
   Layer.effectDiscard(
     Effect.gen(function* () {
-      const { env, herdr, bun, runs, build, unattended } = yield* hostBoard(dir);
+      const { env, herdr, bun, runs, build, unattended, sweepers } = yield* hostBoard(dir);
       yield* Effect.forkScoped(
-        sideJobs({ env, herdr, runs, board: unattended, liveBoard: build, panels }).pipe(
+        sideJobs({ env, herdr, runs, board: unattended, liveBoard: build, panels, sweepers }).pipe(
           Effect.provideContext(bun),
         ),
       );
     }),
   );
+
+/** How many sweeps a front door asked for that a host keeps a record of. */
+const CLEANUP_TRAIL = 50;
 
 /** How many of the settings operations a host keeps a record of. */
 const SETTINGS_TRAIL = 50;
@@ -468,7 +572,7 @@ const frontDoorHandlers = (
       const fs = yield* FileSystem.FileSystem;
       const registry = yield* Registry;
       const hosted = yield* Effect.context<HostServices>();
-      const { env, herdr, bun, build } = yield* hostBoard(dir);
+      const { env, herdr, bun, build, sweepers } = yield* hostBoard(dir);
       // A finished Run's plan cannot change, so every drawer on it shares one read.
       // ponytail: kept for the host's life; evict by age if a host lives for months.
       const plans = new Map<string, PlanPanel | null>();
@@ -824,6 +928,26 @@ const frontDoorHandlers = (
               );
               yield* trimAudit(trail, SETTINGS_TRAIL).pipe(Effect.orDie);
               return taken;
+            }),
+          ),
+        cleanup: () => plainly(Effect.flatMap(sweepers, judge)),
+        sweep: ({ request }, { client }) =>
+          plainly(
+            Effect.gen(function* () {
+              const who = whoOf(client);
+              const spoken = { origin: who.origin, request, ...voiceOf(who) };
+              const actor: SweptBy =
+                who.from === undefined ? spoken : { ...spoken, from: who.from };
+              const trail = (yield* Path.Path).join(env.stateDir, "cleanup");
+              const swept = yield* once(
+                trail,
+                { operation: "cleanup", request, ...who, asked: {}, result: CleanupReport },
+                sweeping.withPermit(
+                  Effect.flatMap(sweepers, (all) => sweep(all, env.stateDir, actor)),
+                ),
+              );
+              yield* trimAudit(trail, CLEANUP_TRAIL).pipe(Effect.orDie);
+              return swept;
             }),
           ),
         invoke: ({ runId, offer, input, request }, { client }) =>
@@ -1303,8 +1427,55 @@ export const serve = (dir: string): Effect.Effect<void, never, BunServices | Sco
     yield* ensureLockDir(lock);
     // `withLock` breaks a claim whose holder is gone before its last attempt, so a host
     // that crashed leaves nothing for a human to clear.
-    return yield* withLock(lock, Effect.void, Effect.race(own(dir), orphaned(dir)), 0);
+    return yield* withLock(
+      lock,
+      Effect.void,
+      boundedStop(lock).pipe(
+        Effect.andThen(Effect.logInfo(`collie ${BUILD} host started, pid ${process.pid}`)),
+        Effect.andThen(Effect.race(own(dir), orphaned(dir))),
+        Effect.provide(Logger.layer([hostLogger(logOf(dir))], { mergeWithExisting: true })),
+      ),
+      0,
+    );
   }).pipe(Effect.orDie);
+
+/** How long a host told to stop waits for running steps before it exits anyway. */
+const stopGrace = Config.Duration("COLLIE_HOST_STOP_GRACE").pipe(
+  Config.withDefault(Duration.seconds(5)),
+  Effect.orDie,
+);
+const STOP_SIGNALS = ["SIGTERM", "SIGINT"] as const;
+/** Long enough for the log's next flush, which an exit does not wait for. */
+const LOG_FLUSH = "200 millis";
+
+/** A stop signal gives the shutdown the grace, then exits however far it got (ADR-0014). */
+const boundedStop = (lock: string) =>
+  Effect.gen(function* () {
+    const grace = yield* stopGrace;
+    const stopping = yield* Deferred.make<void>();
+    // In the outer scope, which closes only once the shutdown it bounds has finished.
+    yield* Deferred.await(stopping).pipe(
+      Effect.andThen(Effect.logInfo("asked to stop")),
+      Effect.andThen(Effect.sleep(grace)),
+      Effect.andThen(Effect.logWarning(`still stopping after ${Duration.format(grace)}; exiting`)),
+      Effect.andThen(Effect.sleep(LOG_FLUSH)),
+      // Let go of here rather than left for the next host to judge stale.
+      Effect.andThen(releaseOwnLock(lock)),
+      Effect.ignore,
+      Effect.andThen(Effect.sync(() => process.exit(1))),
+      Effect.forkScoped,
+    );
+    const signalled = () => Deferred.doneUnsafe(stopping, Effect.void);
+    yield* Effect.acquireRelease(
+      Effect.sync(() => {
+        for (const signal of STOP_SIGNALS) process.once(signal, signalled);
+      }),
+      () =>
+        Effect.sync(() => {
+          for (const signal of STOP_SIGNALS) process.off(signal, signalled);
+        }),
+    );
+  });
 
 /**
  * Resolves once nothing is left for this host to serve: its lock is gone with the state
@@ -1380,6 +1551,12 @@ const own = (dir: string) =>
     // Under the lock, so anything at this path belongs to a host that is gone: a unix
     // socket cannot be bound while its file is there, and a dead host's is still there.
     yield* fs.remove(socketOf(dir), { force: true }).pipe(Effect.orDie);
+    yield* fs
+      .writeFileString(
+        recordOf(dir),
+        encodeRecord({ pid: yield* currentPid, build: BUILD, root: env.pluginRoot }),
+      )
+      .pipe(Effect.orDie);
     const installation = yield* installationOf(dir).pipe(Effect.orDie);
     const installed = yield* installedRelease(env.pluginRoot, BUILD);
     const development: Development = installed.release ? {} : { development: installed.build };
@@ -1423,9 +1600,9 @@ const own = (dir: string) =>
  * A client of the host that owns `dir`, starting one if nothing is there. Every client
  * gets the same host, and the first of them pays for it.
  *
- * `build` is what this client is. A host older than it is replaced: stopped, started
- * again as this build, and asked to recover, so an upgrade can never leave the two
- * apart. A host newer than it is reported rather than talked to — the client is what is
+ * `build` is what this client is. A host older than it is replaced: stopped and started
+ * again as this build, which recovers what the old one left, so an upgrade can never
+ * leave the two apart. A host newer than it is reported rather than talked to — the client is what is
  * stale, and it must not take the host back down to its own build.
  */
 export const connect = (
@@ -1443,14 +1620,14 @@ export const connect = (
   Effect.gen(function* () {
     const build = options?.build ?? BUILD;
     const hostEnv = options?.hostEnv ?? {};
-    let who = yield* ensureRunning(dir, hostEnv);
+    let who = yield* ensureRunning(dir, hostEnv, build);
     // Only a newer copy of the same installation upgrades the host; a dev checkout is not one.
     const install = (yield* currentEnv.pipe(Effect.orDie)).pluginRoot;
     const ours = who.root === undefined || who.root === install;
-    const replaced = ours && who.build !== build && Bun.semver.order(build, who.build) === 1;
+    const replaced = ours && newer(build, who.build);
     if (replaced) {
       yield* stopOwner(dir, who.pid);
-      who = yield* ensureRunning(dir, hostEnv);
+      who = yield* ensureRunning(dir, hostEnv, build);
     }
     if (who.build !== build) {
       return yield* new HostVersionMismatch({
@@ -1463,28 +1640,33 @@ export const connect = (
           : `the host for ${dir} serves ${who.root} and this is collie ${build} from ${install}: point HERDR_PLUGIN_STATE_DIR at a directory of its own, or stop that host (pid ${who.pid}) and run this again`,
       });
     }
-    const client = yield* open(dir);
-    // The engine is durable, so what the old host was doing is picked up, not lost.
-    if (replaced) {
-      yield* client.recover().pipe(Effect.mapError((cause) => unavailable(dir, String(cause))));
-    }
-    return client;
+    // What the old host was doing is the new one's startup recovery, not this client's wait.
+    return yield* open(dir);
   });
 
-/** Stops the host at `pid` and waits for it to let go of the directory. */
+/** What a stopping host is given beyond its grace, and a killed one to be gone. */
+const STOP_SLACK = Duration.seconds(5);
+
+/**
+ * Stops the host at `pid` and waits for it to let go of the directory, by the clock rather
+ * than by a count of polls so that load cannot stretch it. One that is still there after
+ * its stop grace is killed: its work is durable, and the next host recovers it.
+ */
 const stopOwner = Effect.fn("Host.stopOwner")(function* (dir: string, pid: number) {
-  try {
-    process.kill(pid, "SIGTERM");
-  } catch {
-    // Already gone, which is what this is for.
-  }
-  yield* ownerOf(dir).pipe(
-    Effect.filterOrFail(
-      (owner) => owner?.pid !== pid,
-      () => unavailable(dir, `pid ${pid} is an older host and did not stop`),
-    ),
-    Effect.retry({ times: 100, schedule: Schedule.spaced("100 millis") }),
-  );
+  const goneWithin = (duration: Duration.Input) =>
+    liveOwner(dir).pipe(
+      Effect.repeat({
+        until: (owner) => owner?.pid !== pid,
+        schedule: Schedule.spaced("100 millis"),
+      }),
+      Effect.timeoutOption(duration),
+      Effect.map(Option.isSome),
+    );
+  yield* signalProcess(pid, "SIGTERM");
+  if (yield* goneWithin(Duration.sum(yield* stopGrace, STOP_SLACK))) return;
+  yield* signalProcess(pid, "SIGKILL");
+  if (yield* goneWithin(STOP_SLACK)) return;
+  return yield* unavailable(dir, `pid ${pid} is an older host and did not stop`);
 });
 
 /** One connection, in the caller's scope: theirs to keep, and theirs to close. */
@@ -1514,6 +1696,37 @@ export const ownerOf = (
   dir: string,
 ): Effect.Effect<LockHolder | null, never, FileSystem.FileSystem> => lockHolder(lockOf(dir));
 
+/** The owner of this directory while it lives; a claim a dead host left is nobody's. */
+const liveOwner = (dir: string) =>
+  ownerOf(dir).pipe(
+    Effect.flatMap((owner) =>
+      owner === null
+        ? Effect.succeed(null)
+        : Effect.map(holderLives(owner), (lives) => (lives ? owner : null)),
+    ),
+  );
+
+/** How long a client waits for a host to answer before it says why none does. */
+const HOST_START_TIMEOUT = "30 seconds";
+/** A host that takes longer than this to say who it is cannot serve anything anyway. */
+const ASK_TIMEOUT = "5 seconds";
+
+/**
+ * The owner of `dir` when it does not answer and recorded itself as an older build of this
+ * installation: a client that cannot ask it can still replace it.
+ */
+const olderSilentOwner = Effect.fn("Host.olderSilentOwner")(function* (dir: string, build: string) {
+  const owner = yield* liveOwner(dir);
+  if (owner === null) return null;
+  const fs = yield* FileSystem.FileSystem;
+  const recorded = yield* fs
+    .readFileString(recordOf(dir))
+    .pipe(Effect.flatMap(Schema.decodeUnknownEffect(HostRecord)), Effect.option);
+  if (Option.isNone(recorded) || recorded.value.pid !== owner.pid) return null;
+  const install = (yield* currentEnv.pipe(Effect.orDie)).pluginRoot;
+  return recorded.value.root === install && newer(build, recorded.value.build) ? owner.pid : null;
+});
+
 /**
  * A host answering at this directory, started here if there was none, and asked who it
  * is. Several clients may arrive at once and all start one; the lock decides which of
@@ -1525,34 +1738,47 @@ export const ownerOf = (
 const ensureRunning = Effect.fn("Host.ensureRunning")(function* (
   dir: string,
   hostEnv: Readonly<Record<string, string>>,
+  build: string,
 ) {
   const first = yield* ask(dir).pipe(Effect.result);
   if (first._tag === "Success") return first.success;
-  return yield* Effect.scoped(
+  const silent = yield* olderSilentOwner(dir, build);
+  if (silent !== null) yield* stopOwner(dir, silent);
+  const started = Effect.scoped(
     Effect.gen(function* () {
-      const started = yield* spawnHost(dir, hostEnv);
+      const host = yield* spawnHost(dir, hostEnv);
       // The host this started has ended and nothing owns the directory: no answer is
       // coming, so it is said now rather than after every retry. A host that lost the
       // race to another starter ends too, but then the winner owns the lock.
       const coming = Effect.all([
-        started.isRunning.pipe(Effect.orElseSucceed(() => true)),
-        ownerOf(dir),
+        host.isRunning.pipe(Effect.orElseSucceed(() => true)),
+        liveOwner(dir),
       ]).pipe(Effect.map(([running, owner]) => running || owner !== null));
       return yield* ask(dir).pipe(
-        Effect.retry({ times: 100, schedule: Schedule.spaced("100 millis"), while: () => coming }),
-        Effect.catch(() => diagnose(dir)),
+        Effect.retry({ schedule: Schedule.spaced("100 millis"), while: () => coming }),
       );
     }),
+  );
+  return yield* started.pipe(
+    // The owner it lost to has gone since, so nothing is starting.
+    Effect.retry({ times: 2, while: () => Effect.map(liveOwner(dir), (owner) => owner === null) }),
+    Effect.timeoutOrElse({ duration: HOST_START_TIMEOUT, orElse: () => diagnose(dir) }),
+    Effect.catch(() => diagnose(dir)),
   );
 });
 
 /** One question, and hang up: the connection a client keeps is opened once it is theirs. */
 const ask = (dir: string) =>
-  Effect.scoped(open(dir).pipe(Effect.flatMap((client) => client.identity())));
+  Effect.scoped(open(dir).pipe(Effect.flatMap((client) => client.identity()))).pipe(
+    Effect.timeoutOrElse({
+      duration: ASK_TIMEOUT,
+      orElse: () => unavailable(dir, `no answer on ${socketOf(dir)} within ${ASK_TIMEOUT}`),
+    }),
+  );
 
 /** Why nothing answered, said with what can be seen from here. */
 const diagnose = Effect.fn("Host.diagnose")(function* (dir: string) {
-  const owner = yield* ownerOf(dir);
+  const owner = yield* liveOwner(dir);
   return yield* unavailable(
     dir,
     owner === null

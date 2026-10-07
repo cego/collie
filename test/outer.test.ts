@@ -15,7 +15,7 @@ const fakeProc = Effect.fn("test.fakeProc")(function* (
   procs: ReadonlyArray<{ cmdline: string[]; term: string | null }>,
 ) {
   const fs = yield* FileSystem.FileSystem;
-  const root = yield* fs.makeTempDirectory({ prefix: "collie-proc-" });
+  const root = yield* fs.makeTempDirectoryScoped({ prefix: "collie-proc-" });
   let pid = 100;
   for (const proc of procs) {
     const dir = `${root}/${pid++}`;

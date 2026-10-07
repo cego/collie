@@ -39,3 +39,10 @@ a new Run of the same workflow against the same work source.
 
 `collie doctor` still names any Markdown workflow files left in the operator's own layer,
 and does not interpret one.
+
+## Amended 2026-10-07: the old directories are removed
+
+"Neither read nor deleted" kept about 1G of run directories that nothing reads, on a
+Machine whose disk had filled. They are still never read. The host's cleanup now removes
+them as a state-directory entry that no row owns, a day after the last change to it
+([ADR-0045](0045-collie-removes-what-it-made-once-nothing-needs-it.md) D5).

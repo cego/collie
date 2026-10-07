@@ -1,18 +1,25 @@
 import * as BunServices from "@effect/platform-bun/BunServices";
-import { Clock, Config, Effect, ManagedRuntime } from "effect";
+import { Clock, Config, Effect, ManagedRuntime, Scope } from "effect";
 import { TestClock } from "effect/testing";
 
 const runtime = ManagedRuntime.make(BunServices.layer);
 
-export function runEffect<A, E>(effect: Effect.Effect<A, E, BunServices.BunServices>): Promise<A> {
-  return runtime.runPromise(effect);
+/** Runs `effect` in a scope of its own, closed when it ends. */
+export function runEffect<A, E>(
+  effect: Effect.Effect<A, E, BunServices.BunServices | Scope.Scope>,
+): Promise<A> {
+  return runtime.runPromise(Effect.scoped(effect));
 }
 
 /**
- * The process a host a test starts may live no longer than, as the test preload set it:
- * handed to every program a test runs with an environment of its own.
+ * The process a host a test starts may live no longer than, and the marker proving a process
+ * is the test's, as the test preload set them: handed to every program a test runs with an
+ * environment of its own.
  */
-export const watchedBy = Config.String("COLLIE_HOST_WATCH_PID").pipe(Config.withDefault(""));
+export const suiteEnv = Config.all({
+  COLLIE_HOST_WATCH_PID: Config.String("COLLIE_HOST_WATCH_PID").pipe(Config.withDefault("")),
+  COLLIE_TEST_ROOT: Config.String("COLLIE_TEST_ROOT").pipe(Config.withDefault("")),
+});
 
 /**
  * Runs `effect` on a test clock that a fiber of its own keeps moving, `tick` of it for

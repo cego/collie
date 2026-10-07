@@ -6,7 +6,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, FileSystem, Path, Schedule, Schema } from "effect";
 import { Rig } from "./support/recorder";
 import { runEffect } from "./support/effect";
-import { onMachineWith } from "./support/live";
+import { onMachineWith, removesCache } from "./support/live";
 import { fakeChannel } from "./support/compaction";
 import { atLeast, COMPACTION_PORTS, VERIFIED_VERSIONS } from "../src/compactors";
 import type { AgentContext } from "../src/compaction";
@@ -319,6 +319,7 @@ onMachineWith("pi")(
   () =>
     runEffect(
       Effect.gen(function* () {
+        yield* removesCache("jiti");
         const { args } = yield* pi.install({
           agent: "reuse-run-two-r1",
           harness: "pi",

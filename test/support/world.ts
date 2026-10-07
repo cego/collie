@@ -7,9 +7,9 @@
 import { Config, ConfigProvider, Effect, FileSystem, Option, Schema, Scope } from "effect";
 import type { BunServices } from "@effect/platform-bun/BunServices";
 import { exec } from "./command";
-import { runEffect, watchedBy } from "./effect";
+import { runEffect, suiteEnv } from "./effect";
 import { fakeHerdrCommand } from "./fake-herdr-core";
-import { fixtures, root } from "./host";
+import { fixtures, root, stopHost } from "./host";
 
 export interface World {
   /** The installation whose user directory an author saves into. */
@@ -47,7 +47,7 @@ export const collie = Effect.fn("World.collie")(function* (
 ) {
   const binary = yield* Config.option(Config.String("COLLIE_TEST_BINARY"));
   const command = Option.isSome(binary) ? [binary.value] : [process.execPath, `${root}src/main.ts`];
-  const watch = yield* watchedBy;
+  const suite = yield* suiteEnv;
   const child = Bun.spawn([...command, "--json", ...args], {
     cwd: world.project,
     env: {
@@ -59,7 +59,7 @@ export const collie = Effect.fn("World.collie")(function* (
       COLLIE_CWD: world.project,
       // The host a client starts is this same program, as an installation's would be.
       COLLIE_HOST: asCommand(command),
-      COLLIE_HOST_WATCH_PID: watch,
+      ...suite,
       // The world's own herdr, which `proves` set: this env is otherwise built from nothing.
       HERDR_BIN_PATH: Bun.env.HERDR_BIN_PATH,
       FAKE_HERDR_LOG: Bun.env.FAKE_HERDR_LOG,
@@ -139,6 +139,8 @@ export const proves = <A, E>(
         home: `${dir}/home`,
         project: `${dir}/project`,
       };
+      // Before the directory goes, or a host left running can write it back.
+      yield* Effect.addFinalizer(() => Effect.ignore(stopHost(world.state)));
       for (const made of [
         world.user,
         `${world.install}/workflows`,

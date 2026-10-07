@@ -33,6 +33,7 @@ const workspace = (id: string, tokens: Record<string, string> = {}): WorkspaceIn
   cwd: "/ns",
   worktree: null,
   tokens,
+  focused: false,
 });
 
 const pane = (over: Partial<PaneInfo> = {}): PaneInfo => ({

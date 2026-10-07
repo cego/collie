@@ -11,6 +11,7 @@ import {
   PlatformError,
   Queue,
   Schema,
+  Scope,
 } from "effect";
 import { readEnv, type PluginEnv } from "../../src/env";
 import { Herdr } from "../../src/herdr";
@@ -216,6 +217,11 @@ export class Rig {
     });
   }
 
+  /** A Rig closed when its scope is, whatever the test did. */
+  static scoped(): Effect.Effect<Rig, RigError, RigServices | Scope.Scope> {
+    return Effect.acquireRelease(Rig.make(), (rig) => Effect.ignore(rig.close()));
+  }
+
   private setup(): Effect.Effect<void, PlatformError.PlatformError, FileSystem.FileSystem> {
     const dirs = [this.stateDir, this.userDir, this.baselineDir, this.projectDir];
     const binPath = this.binPath;
@@ -319,8 +325,13 @@ export class Rig {
    * A workspace herdr has. None by default: `workspace list` answers with an empty
    * session, so only a test about several workspaces has to say what is in one.
    */
-  addWorkspace(workspaceId: string, label: string, cwd?: string) {
-    return this.appendState("workspaces", { workspace_id: workspaceId, label, cwd: cwd ?? null });
+  addWorkspace(workspaceId: string, label: string, cwd?: string, focused = false) {
+    return this.appendState("workspaces", {
+      workspace_id: workspaceId,
+      label,
+      cwd: cwd ?? null,
+      focused,
+    });
   }
 
   /** An agent herdr already has, matching one an earlier run started. */
