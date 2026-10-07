@@ -33,13 +33,16 @@ where one is, has exited.
 A stopped host gives its running steps a grace (`COLLIE_HOST_STOP_GRACE`, five seconds) and
 then exits whatever is left, letting go of its lock: upstream's shutdown waits on each
 step, and one that never yields kept an old host past every client that tried to replace
-it. A newer client that asked a host to stop kills it ten seconds later, and every question
-a client asks a host is answered within five seconds or is `HostUnavailable`.
+it. A newer client that asked a host to stop kills it five seconds after its grace. A host
+that does not say who it is within five seconds is replaced too when `host.build`, which it
+writes as it starts, names an older build of the same installation; otherwise the client
+reports it as `HostUnavailable` with its pid.
 
 The host writes what it does to `host.log` in its state directory — its start, a stop and
 whether the grace ran out, every warning the engine and the registry log — since its own
-stdout and stderr go nowhere. Past 1 MiB the file starts again and the previous one is kept
-as `host.log.1`, so the two together are the most it holds. Look there first when a host
+stdout and stderr go nowhere. Lines are flushed every 100 ms, so a host killed outright can
+lose its last few. Past 1 MiB the file starts again and the previous one is kept as
+`host.log.1`. Look there first when a host
 stops answering.
 
 A workflow is a TypeScript module, and the host runs it on Effect's own engine

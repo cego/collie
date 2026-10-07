@@ -1588,8 +1588,9 @@ that are in the same SQLite file as the engine's own, and
 
 It says which build it is, and which installation it serves. A client newer than the host,
 from the same installation (after `collie upgrade`), stops it and starts itself in its
-place; a host still there ten seconds after it was asked to stop is killed, and its work is
-recovered by the one that replaces it. Any other client of another build is told which build is running and which pid to
+place; a host still there five seconds past its stop grace is killed, and its work is
+recovered by the one that replaces it. A host that does not answer is replaced the same way
+when the build it recorded in `host.build` is older. Any other client of another build is told which build is running and which pid to
 stop, and sends nothing else. That includes a checkout under development, which is pointed
 at a state directory of its own rather than replacing the installed host. Such a
 checkout's host also says `development: "<version>+<sha>"`; a release's does not.

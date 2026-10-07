@@ -416,6 +416,29 @@ test(
 );
 
 test(
+  "a newer client replaces an older host that does not answer, by the build it recorded",
+  () =>
+    proves(
+      Effect.gen(function* () {
+        const { state } = yield* workspace("collie-host-silent-older-");
+        const old = yield* Effect.scoped(
+          connect(state).pipe(Effect.flatMap((client) => client.identity())),
+        ).pipe(Effect.orDie);
+        yield* signalProcess(old.pid, "SIGSTOP");
+
+        const refused = yield* Effect.scoped(connect(state, { build: "999.0.0" })).pipe(
+          Effect.flip,
+        );
+        expect(refused._tag).toBe("HostVersionMismatch");
+        expect(yield* signalProcess(old.pid)).toBe(false);
+        expect((yield* ownerOf(state))?.pid).not.toBe(old.pid);
+        yield* stopHost(state);
+      }),
+    ),
+  120_000,
+);
+
+test(
   "a newer client from another installation leaves the host running and says why",
   () =>
     proves(

@@ -144,8 +144,8 @@ import {
   currentPid,
   ensureLockDir,
   holderLives,
-  holdsLock,
   lockHolder,
+  releaseOwnLock,
   signalProcess,
   withLock,
   type LockHolder,
@@ -157,6 +157,16 @@ export const BUILD: string = manifest.version;
 export const socketOf = (dir: string) => `${dir}/host.sock`;
 const lockOf = (dir: string) => `${dir}/host.lock`;
 const logOf = (dir: string) => `${dir}/host.log`;
+/** Which build owns the directory, written down for a client the host does not answer. */
+const recordOf = (dir: string) => `${dir}/host.build`;
+const HostRecord = Schema.fromJsonString(
+  Schema.Struct({ pid: Schema.Int, build: Schema.String, root: Schema.String }),
+);
+const encodeRecord = Schema.encodeSync(HostRecord);
+
+/** Whether `build` is a newer release than `than`. */
+const newer = (build: string, than: string) =>
+  build !== than && Bun.semver.order(build, than) === 1;
 
 export class HostUnavailable extends Data.TaggedError("HostUnavailable")<{
   readonly dir: string;
@@ -1334,16 +1344,12 @@ const stopGrace = Config.Duration("COLLIE_HOST_STOP_GRACE").pipe(
   Effect.orDie,
 );
 const STOP_SIGNALS = ["SIGTERM", "SIGINT"] as const;
+/** Long enough for the log's next flush, which an exit does not wait for. */
+const LOG_FLUSH = "200 millis";
 
-/**
- * A stop signal gives the host's shutdown the grace, then exits however far it got:
- * upstream waits on each running step, and one that never yields would keep the
- * directory forever. What did not finish is recovered by the next host, which is why
- * the lock is let go of here rather than left for it to judge stale.
- */
+/** A stop signal gives the shutdown the grace, then exits however far it got (ADR-0014). */
 const boundedStop = (lock: string) =>
   Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
     const grace = yield* stopGrace;
     const stopping = yield* Deferred.make<void>();
     // In the outer scope, which closes only once the shutdown it bounds has finished.
@@ -1351,10 +1357,9 @@ const boundedStop = (lock: string) =>
       Effect.andThen(Effect.logInfo("asked to stop")),
       Effect.andThen(Effect.sleep(grace)),
       Effect.andThen(Effect.logWarning(`still stopping after ${Duration.format(grace)}; exiting`)),
-      // Long enough for the log's next flush, which an exit does not wait for.
-      Effect.andThen(Effect.sleep("200 millis")),
-      Effect.andThen(holdsLock(lock)),
-      Effect.flatMap((ours) => (ours ? fs.remove(lock, { force: true }) : Effect.void)),
+      Effect.andThen(Effect.sleep(LOG_FLUSH)),
+      // Let go of here rather than left for the next host to judge stale.
+      Effect.andThen(releaseOwnLock(lock)),
       Effect.ignore,
       Effect.andThen(Effect.sync(() => process.exit(1))),
       Effect.forkScoped,
@@ -1445,6 +1450,12 @@ const own = (dir: string) =>
     // Under the lock, so anything at this path belongs to a host that is gone: a unix
     // socket cannot be bound while its file is there, and a dead host's is still there.
     yield* fs.remove(socketOf(dir), { force: true }).pipe(Effect.orDie);
+    yield* fs
+      .writeFileString(
+        recordOf(dir),
+        encodeRecord({ pid: yield* currentPid, build: BUILD, root: env.pluginRoot }),
+      )
+      .pipe(Effect.orDie);
     const installation = yield* installationOf(dir).pipe(Effect.orDie);
     const installed = yield* installedRelease(env.pluginRoot, BUILD);
     const development: Development = installed.release ? {} : { development: installed.build };
@@ -1508,14 +1519,14 @@ export const connect = (
   Effect.gen(function* () {
     const build = options?.build ?? BUILD;
     const hostEnv = options?.hostEnv ?? {};
-    let who = yield* ensureRunning(dir, hostEnv);
+    let who = yield* ensureRunning(dir, hostEnv, build);
     // Only a newer copy of the same installation upgrades the host; a dev checkout is not one.
     const install = (yield* currentEnv.pipe(Effect.orDie)).pluginRoot;
     const ours = who.root === undefined || who.root === install;
-    const replaced = ours && who.build !== build && Bun.semver.order(build, who.build) === 1;
+    const replaced = ours && newer(build, who.build);
     if (replaced) {
       yield* stopOwner(dir, who.pid);
-      who = yield* ensureRunning(dir, hostEnv);
+      who = yield* ensureRunning(dir, hostEnv, build);
     }
     if (who.build !== build) {
       return yield* new HostVersionMismatch({
@@ -1536,6 +1547,9 @@ export const connect = (
     return client;
   });
 
+/** What a stopping host is given beyond its grace, and a killed one to be gone. */
+const STOP_SLACK = Duration.seconds(5);
+
 /**
  * Stops the host at `pid` and waits for it to let go of the directory, by the clock rather
  * than by a count of polls so that load cannot stretch it. One that is still there after
@@ -1552,9 +1566,9 @@ const stopOwner = Effect.fn("Host.stopOwner")(function* (dir: string, pid: numbe
       Effect.map(Option.isSome),
     );
   yield* signalProcess(pid, "SIGTERM");
-  if (yield* goneWithin("10 seconds")) return;
+  if (yield* goneWithin(Duration.sum(yield* stopGrace, STOP_SLACK))) return;
   yield* signalProcess(pid, "SIGKILL");
-  if (yield* goneWithin("5 seconds")) return;
+  if (yield* goneWithin(STOP_SLACK)) return;
   return yield* unavailable(dir, `pid ${pid} is an older host and did not stop`);
 });
 
@@ -1595,6 +1609,27 @@ const liveOwner = (dir: string) =>
     ),
   );
 
+/** How long a client waits for a host to answer before it says why none does. */
+const HOST_START_TIMEOUT = "30 seconds";
+/** A host that takes longer than this to say who it is cannot serve anything anyway. */
+const ASK_TIMEOUT = "5 seconds";
+
+/**
+ * The owner of `dir` when it does not answer and recorded itself as an older build of this
+ * installation: a client that cannot ask it can still replace it.
+ */
+const olderSilentOwner = Effect.fn("Host.olderSilentOwner")(function* (dir: string, build: string) {
+  const owner = yield* liveOwner(dir);
+  if (owner === null) return null;
+  const fs = yield* FileSystem.FileSystem;
+  const recorded = yield* fs
+    .readFileString(recordOf(dir))
+    .pipe(Effect.flatMap(Schema.decodeUnknownEffect(HostRecord)), Effect.option);
+  if (Option.isNone(recorded) || recorded.value.pid !== owner.pid) return null;
+  const install = (yield* currentEnv.pipe(Effect.orDie)).pluginRoot;
+  return recorded.value.root === install && newer(build, recorded.value.build) ? owner.pid : null;
+});
+
 /**
  * A host answering at this directory, started here if there was none, and asked who it
  * is. Several clients may arrive at once and all start one; the lock decides which of
@@ -1606,9 +1641,12 @@ const liveOwner = (dir: string) =>
 const ensureRunning = Effect.fn("Host.ensureRunning")(function* (
   dir: string,
   hostEnv: Readonly<Record<string, string>>,
+  build: string,
 ) {
   const first = yield* ask(dir).pipe(Effect.result);
   if (first._tag === "Success") return first.success;
+  const silent = yield* olderSilentOwner(dir, build);
+  if (silent !== null) yield* stopOwner(dir, silent);
   const started = Effect.scoped(
     Effect.gen(function* () {
       const host = yield* spawnHost(dir, hostEnv);
@@ -1625,18 +1663,12 @@ const ensureRunning = Effect.fn("Host.ensureRunning")(function* (
     }),
   );
   return yield* started.pipe(
-    // The owner this one lost to has since gone — stopped, or killed mid-stop — so
-    // nothing is starting: start again rather than report an empty directory.
+    // The owner it lost to has gone since, so nothing is starting.
     Effect.retry({ times: 2, while: () => Effect.map(liveOwner(dir), (owner) => owner === null) }),
     Effect.timeoutOrElse({ duration: HOST_START_TIMEOUT, orElse: () => diagnose(dir) }),
     Effect.catch(() => diagnose(dir)),
   );
 });
-
-/** How long a client waits for a host to answer before it says why none does. */
-const HOST_START_TIMEOUT = "30 seconds";
-/** A host that takes longer than this to say who it is cannot serve anything anyway. */
-const ASK_TIMEOUT = "5 seconds";
 
 /** One question, and hang up: the connection a client keeps is opened once it is theirs. */
 const ask = (dir: string) =>

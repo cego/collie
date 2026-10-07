@@ -11,13 +11,13 @@ export const hostLogger = (file: string, maxBytes: number = MAX_BYTES) =>
     const fs = yield* FileSystem.FileSystem;
     const append = (lines: ReadonlyArray<string>) =>
       Effect.gen(function* () {
-        const text = `${lines.join("\n")}\n`;
+        const bytes = new TextEncoder().encode(`${lines.join("\n")}\n`);
         const size = yield* fs.stat(file).pipe(
           Effect.map((info) => Number(info.size)),
           Effect.orElseSucceed(() => 0),
         );
-        if (size > 0 && size + text.length > maxBytes) yield* fs.rename(file, `${file}.1`);
-        yield* fs.writeFileString(file, text, { flag: "a" });
+        if (size > 0 && size + bytes.length > maxBytes) yield* fs.rename(file, `${file}.1`);
+        yield* fs.writeFile(file, bytes, { flag: "a" });
       }).pipe(Effect.ignore);
     // Flushed often, because a host stopped past its grace exits without flushing.
     return yield* Logger.batched(Logger.formatLogFmt, { window: "100 millis", flush: append });

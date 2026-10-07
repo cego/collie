@@ -192,7 +192,7 @@ export const holdsLock = Effect.fn("holdsLock")(function* (lock: string) {
 });
 
 /** Removes the lock only while it is still this process's own. */
-const releaseOwnLock = Effect.fn("releaseOwnLock")(function* (lock: string) {
+export const releaseOwnLock = Effect.fn("releaseOwnLock")(function* (lock: string) {
   const fs = yield* FileSystem.FileSystem;
   if (yield* holdsLock(lock)) yield* fs.remove(lock, { force: true });
 });

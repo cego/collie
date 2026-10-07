@@ -3971,9 +3971,7 @@ const makeRegistry: (
     const payload = yield* payloadOf(generation, row).pipe(Effect.result);
     if (payload._tag === "Failure") return;
     yield* crash("admitted");
-    // Bounded, because upstream retries a send it cannot route without end. The row stays
-    // unaccepted, so the next host start hands it over under the same identity.
-    const stuck = `the engine did not take ${row.run} within ${HAND_OVER_TIMEOUT}; it is recorded, and the next host start hands it over`;
+    // Upstream retries a send it cannot route without end; the row stays unaccepted for the next host.
     yield* engine
       .execute(generation.registration.workflow, {
         executionId: row.execution,
@@ -3984,10 +3982,12 @@ const makeRegistry: (
         Effect.orDie,
         Effect.timeoutOrElse({
           duration: HAND_OVER_TIMEOUT,
-          orElse: () =>
-            Effect.logWarning(stuck).pipe(
-              Effect.andThen(Effect.fail(new HostRefused({ reason: stuck }))),
-            ),
+          orElse: () => {
+            const refusal = `the engine did not take ${row.run} within ${HAND_OVER_TIMEOUT}; it is recorded, and the next host start hands it over`;
+            return Effect.logWarning(refusal).pipe(
+              Effect.andThen(Effect.fail(new HostRefused({ reason: refusal }))),
+            );
+          },
         }),
       );
     yield* crash("executed");
@@ -4000,7 +4000,7 @@ const makeRegistry: (
       placeClaimed(row, false).pipe(
         Effect.flatMap(handOver),
         Effect.catchTag("HostRefused", (failure) =>
-          Effect.logWarning(`${row.run} could not be placed: ${failure.reason}`),
+          Effect.logWarning(`${row.run} was not started: ${failure.reason}`),
         ),
       ),
     );
@@ -4028,8 +4028,13 @@ const makeRegistry: (
   });
 
   // What a host admitted and did not live to hand over. Every crash window ends here.
-  for (const row of yield* store.pending) yield* recoverAdmission(row);
-  yield* reconcileAnswers;
+  // Forked, so a hand-over that stalls does not keep the host from serving.
+  yield* Effect.forkScoped(
+    Effect.gen(function* () {
+      for (const row of yield* store.pending) yield* recoverAdmission(row);
+      yield* reconcileAnswers;
+    }),
+  );
 
   /** The file a generation was built from, which a row keeps naming after it has gone. */
   const entryOf = (name: string) => known.find((route) => route.name === name)?.entry ?? "";
