@@ -152,6 +152,26 @@ test(
 
           // Held already: answered at its first part, whatever that part holds.
           expect((yield* door.upload({ ...asked, offset: 0, content: "" })).path).toBe(last.path);
+          // The same bytes under another name are found under that name.
+          const again = yield* door.upload({ ...asked, name: "again.png", offset: 0, content: "" });
+          expect(again.path).toBe(`${world.state}/uploads/${digest}/again.png`);
+
+          const twice = new TextEncoder().encode("sent by two starts at once");
+          const both = { name: "both.png", size: twice.length, sha256: sha256(twice) };
+          const send = Effect.gen(function* () {
+            yield* door.upload({ ...both, offset: 0, content: base64(twice.subarray(0, 10)) });
+            return (yield* door.upload({
+              ...both,
+              offset: 10,
+              content: base64(twice.subarray(10)),
+            })).path;
+          });
+          const sent = yield* Effect.all([send, send], { concurrency: 2 });
+          expect(sent).toEqual([
+            `${world.state}/uploads/${both.sha256}/both.png`,
+            `${world.state}/uploads/${both.sha256}/both.png`,
+          ]);
+          expect(yield* fs.readFile(sent[0]!)).toEqual(twice);
 
           const other = new TextEncoder().encode("not what the hash says");
           const lied = { name: "lie.png", size: other.length, sha256: sha256(bytes.subarray(1)) };
@@ -173,8 +193,10 @@ test(
           );
 
           const trail = yield* readAudit(`${world.state}/uploads`);
-          // Once as it arrived, and once as what this host already held.
+          // As each arrived, and as what this host already held.
           expect(trail.map(({ operation, actor }) => [operation, actor.said])).toEqual([
+            ["upload", "upload"],
+            ["upload", "upload"],
             ["upload", "upload"],
             ["upload", "upload"],
           ]);

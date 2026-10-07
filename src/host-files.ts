@@ -179,7 +179,7 @@ const realOf = Effect.fn("HostFiles.realOf")(function* (path: string) {
   const paths = yield* Path.Path;
   let existing = path;
   let rest = "";
-  for (let links = 0; ; ) {
+  for (let links = 0; ;) {
     const real = yield* fs.realPath(existing).pipe(Effect.option);
     if (real._tag === "Some") return rest === "" ? real.value : paths.join(real.value, rest);
     // A link to nothing yet is where a write through it lands.
@@ -242,6 +242,9 @@ export const editString = Effect.fn("HostFiles.edit")(function* (
     return yield* refused(
       `old_string is in ${path} ${replaced} times: give more of the text around it to make it unique, or set replace_all`,
     );
-  yield* fs.writeFileString(path, text.replaceAll(asked.oldString, () => asked.newString));
+  yield* fs.writeFileString(
+    path,
+    text.replaceAll(asked.oldString, () => asked.newString),
+  );
   return { path, replaced };
 });

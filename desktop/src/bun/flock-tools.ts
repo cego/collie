@@ -82,8 +82,8 @@ export interface FlockChat {
   readonly said: () => string | undefined;
   /** Desktop's copies of the files the human's message this turn carried. */
   readonly attachments: () => ReadonlyArray<Staged> | undefined;
-  /** What this session uploaded to each Machine: path there by sha256. */
-  readonly uploaded: Map<string, Map<string, string>>;
+  /** What this session uploaded to each Machine: path there, and when, by sha256. */
+  readonly uploaded: Map<string, Map<string, { readonly path: string; readonly at: number }>>;
   readonly machineRule: () => string | undefined;
   readonly setMachineRule: (rule: string) => Effect.Effect<void>;
 }

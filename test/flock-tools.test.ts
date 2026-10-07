@@ -171,7 +171,7 @@ const flockOf = (asked: Asked[]) => ({
   machineRule: () => saved,
   setMachineRule: (rule: string) => Effect.sync(() => (saved = rule)),
   attachments: () => undefined,
-  uploaded: new Map<string, Map<string, string>>(),
+  uploaded: new Map(),
 });
 
 const call = (asked: Asked[], name: string, input: JsonObject) =>
@@ -529,7 +529,7 @@ test("a Machine whose host cannot answer a read is told to upgrade, and the rest
         machineRule: () => undefined,
         setMachineRule: () => Effect.void,
         attachments: () => undefined,
-        uploaded: new Map<string, Map<string, string>>(),
+        uploaded: new Map(),
       };
       const reading = yield* callFlockTool(flock, "collie_workspaces", {}).pipe(Effect.forkChild);
       yield* TestClock.adjust("1 minute");
@@ -596,7 +596,7 @@ const carrying = (asked: Asked[], dir: string, files: { readonly vm?: boolean } 
       path: `${dir}/shot.png`,
     },
   ],
-  uploaded: new Map<string, Map<string, string>>(),
+  uploaded: new Map(),
 });
 
 const withShot = <A>(body: (dir: string) => Effect.Effect<A, unknown, FileSystem.FileSystem>) =>
@@ -644,6 +644,12 @@ test("a start carries the turn's files, uploaded to its Machine once and handed 
 
       yield* callFlockTool(flock, "collie_do", start()).pipe(Effect.provide(BunServices.layer));
       expect(asked.filter(({ op }) => op === "upload")).toHaveLength(1);
+
+      // A day on, the host may have pruned it, so it is uploaded again.
+      const held = flock.uploaded.get("vm-mk")!.get(shotSha)!;
+      flock.uploaded.get("vm-mk")!.set(shotSha, { ...held, at: held.at - 2 * 24 * 60 * 60 * 1000 });
+      yield* callFlockTool(flock, "collie_do", start()).pipe(Effect.provide(BunServices.layer));
+      expect(asked.filter(({ op }) => op === "upload")).toHaveLength(2);
     }),
   ));
 
@@ -714,7 +720,7 @@ test("a Machine whose Collie has no such operation is told to upgrade, and the r
         machineRule: () => undefined,
         setMachineRule: () => Effect.void,
         attachments: () => undefined,
-        uploaded: new Map<string, Map<string, string>>(),
+        uploaded: new Map(),
       };
       const said = yield* callFlockTool(flock, "collie_workspaces", {});
       expect(said).toContain("upgrade Collie on vm-mk");

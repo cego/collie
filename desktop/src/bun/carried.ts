@@ -1,10 +1,8 @@
-// The files a start, a follow-up or a steer carries from the Flock chat, as paths on the
-// Machine it goes to. A file already there goes as its own path; any other is read, here
-// or from its own Machine's host, and uploaded through that Machine's host once per
-// session (ADR-0045). A host only ever receives paths on its own Machine.
+// The files a Flock chat action carries, as paths on the Machine it goes to (ADR-0045).
 
 import { createHash } from "node:crypto";
-import { Effect, Encoding, FileSystem, Result } from "effect";
+import { Clock, Effect, Encoding, FileSystem, Result } from "effect";
+import { ATTACHMENT_BYTES } from "../../../src/attachments";
 import {
   type BoardSnapshot,
   HostRefused,
@@ -13,11 +11,15 @@ import {
 } from "../../../src/board-model";
 import type { ChatMachine, FlockChat } from "./flock-tools";
 
-/** The whole file, part by part, or as much as `enough` wants. */
+const tooLarge = (path: string) =>
+  new HostRefused({ reason: `${path} is larger than ${ATTACHMENT_BYTES / 1024 / 1024} MB` });
+
+/** The whole file, part by part, or until `enough` says of the latest part. */
 export const readWhole = Effect.fn("Carried.readWhole")(function* (
   machine: ChatMachine,
   path: string,
-  enough: (bytes: Uint8Array) => boolean = () => false,
+  enough: (part: Uint8Array) => boolean = () => false,
+  most = Number.POSITIVE_INFINITY,
 ) {
   const parts: Uint8Array[] = [];
   let first: HostFile | null = null;
@@ -25,18 +27,21 @@ export const readWhole = Effect.fn("Carried.readWhole")(function* (
   for (;;) {
     const part = yield* machine.door.readFile({ path, offset, length: RUN_FILE_BYTES });
     first ??= part;
+    if (part.size > most) return yield* tooLarge(`${machine.name}:${path}`);
     const bytes = Encoding.decodeBase64(part.content).pipe(
       Result.getOrElse(() => new Uint8Array()),
     );
     parts.push(bytes);
     offset += bytes.length;
-    const all = Buffer.concat(parts);
-    if (bytes.length === 0 || offset >= part.size || enough(all))
-      return { file: first, bytes: new Uint8Array(all) };
+    if (bytes.length === 0 || offset >= part.size || enough(bytes))
+      return { file: first, bytes: new Uint8Array(Buffer.concat(parts)) };
   }
 });
 
-/** `bytes` on `machine`, uploaded unless this session already did, and their path there. */
+/** How long an upload is taken as still held: well inside the week a host keeps one. */
+const REMEMBERED = 24 * 60 * 60 * 1000;
+
+/** `bytes` on `machine`, uploaded unless this session did today, and their path there. */
 const uploaded = Effect.fn("Carried.upload")(function* (
   flock: FlockChat,
   machine: ChatMachine,
@@ -44,10 +49,11 @@ const uploaded = Effect.fn("Carried.upload")(function* (
   bytes: Uint8Array,
 ) {
   const sha256 = createHash("sha256").update(bytes).digest("hex");
-  const known = flock.uploaded.get(machine.name) ?? new Map<string, string>();
+  const known = flock.uploaded.get(machine.name) ?? new Map();
   flock.uploaded.set(machine.name, known);
+  const now = yield* Clock.currentTimeMillis;
   const held = known.get(sha256);
-  if (held !== undefined) return held;
+  if (held !== undefined && now - held.at < REMEMBERED) return held.path;
   for (let offset = 0; ; offset += RUN_FILE_BYTES) {
     const part = bytes.subarray(offset, offset + RUN_FILE_BYTES);
     const { path } = yield* machine.door.upload({
@@ -58,7 +64,7 @@ const uploaded = Effect.fn("Carried.upload")(function* (
       content: Encoding.encodeBase64(part),
     });
     if (path !== null) {
-      known.set(sha256, path);
+      known.set(sha256, { path, at: now });
       return path;
     }
     if (offset + RUN_FILE_BYTES >= bytes.length)
@@ -96,15 +102,21 @@ export const carriedPaths = Effect.fn("Carried.paths")(function* (
     const name = path.split("/").at(-1) ?? path;
     if (on?.name === machine.name) paths.push(path);
     else if (on !== undefined)
-      paths.push(yield* uploaded(flock, machine, name, (yield* readWhole(on, path)).bytes));
+      paths.push(
+        yield* uploaded(
+          flock,
+          machine,
+          name,
+          (yield* readWhole(on, path, undefined, ATTACHMENT_BYTES)).bytes,
+        ),
+      );
     else if (path.startsWith("/")) {
-      const bytes = yield* fs
-        .readFile(path)
-        .pipe(
-          Effect.mapError(
-            () => new HostRefused({ reason: `${path} cannot be read on this computer` }),
-          ),
-        );
+      const unreadable = () =>
+        new HostRefused({ reason: `${path} cannot be read on this computer` });
+      const info = yield* fs.stat(path).pipe(Effect.mapError(unreadable));
+      if (info.type !== "File") return yield* unreadable();
+      if (Number(info.size) > ATTACHMENT_BYTES) return yield* tooLarge(path);
+      const bytes = yield* fs.readFile(path).pipe(Effect.mapError(unreadable));
       paths.push(yield* uploaded(flock, machine, name, bytes));
     } else
       return yield* new HostRefused({

@@ -187,7 +187,12 @@ const read = Effect.fn("FileTools.read")(function* (
       },
     ] as const;
   if (!textual) return text(`${named} is ${mediaType}, ${size} bytes.`);
-  const { file, bytes } = yield* readWhole(machine, path, (all) => newlines(all) >= from + limit);
+  let seen = 0;
+  const { file, bytes } = yield* readWhole(
+    machine,
+    path,
+    (part) => (seen += newlines(part)) >= from + limit,
+  );
   if (file.size === 0) return text(`${named} is empty.`);
   const lines = new TextDecoder().decode(bytes).replace(/\n$/, "").split("\n");
   const shown = lines.slice(from - 1, from - 1 + limit);
