@@ -3,8 +3,9 @@
 // model, a thumbnail or a Run (ADR-0046).
 
 import { Clock, Effect, FileSystem, Option, Path, Result, Schema } from "effect";
-import { Base64 } from "effect/encoding";
+import * as Base64 from "effect/encoding/Base64";
 import { PART_BYTES } from "../../../src/board-model";
+import { sha256Hex } from "../../../src/attachments";
 import { capRefusal, type Staged } from "../shared/attachments";
 
 export class AttachmentRefused extends Schema.TaggedError<AttachmentRefused>()(
@@ -82,7 +83,7 @@ const keep = Effect.fn("Attachments.keep")(function* (
   mediaType: string,
 ) {
   const fs = yield* FileSystem.FileSystem;
-  const id = `${new Bun.CryptoHasher("sha256").update(bytes).digest("hex")}/${name}`;
+  const id = `${sha256Hex(bytes)}/${name}`;
   const kept = `${storeOf(dir)}/${id}`;
   yield* fs.makeDirectory(kept.slice(0, kept.lastIndexOf("/")), { recursive: true });
   yield* fs.writeFile(kept, bytes);

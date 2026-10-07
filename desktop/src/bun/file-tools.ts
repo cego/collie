@@ -1,7 +1,7 @@
 // Claude Code's file tools for a path on a Machine, answered by its host (ADR-0011).
 
 import { Effect, Result, Schema } from "effect";
-import { Base64 } from "effect/encoding";
+import * as Base64 from "effect/encoding/Base64";
 import { HostRefused } from "../../../src/board-model";
 import type { JsonObject } from "../../../src/schema";
 import { decodeStrict, jsonSchemaOf } from "../../../src/toolkit";

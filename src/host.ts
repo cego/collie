@@ -122,6 +122,7 @@ import {
   attachmentsDir,
   copyInto,
   namesIn,
+  sha256Hex,
   type Attached,
 } from "./attachments";
 import { boardMessages } from "./board-stream";
@@ -1111,7 +1112,7 @@ const frontDoorHandlers = (
                 ...whoOf(client),
                 asked: {
                   path,
-                  sha256: new Bun.CryptoHasher("sha256").update(content).digest("hex"),
+                  sha256: sha256Hex(content),
                 },
                 result: Written,
               },

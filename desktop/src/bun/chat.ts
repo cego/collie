@@ -21,7 +21,7 @@ import {
   Semaphore,
   Stream,
 } from "effect";
-import { Base64 } from "effect/encoding";
+import * as Base64 from "effect/encoding/Base64";
 import { type AguiEvent, ends } from "../shared/agui";
 import {
   IMAGE_BYTES,

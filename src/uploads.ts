@@ -3,8 +3,8 @@
 // same part, so no request id is needed. Removed a week after it was last asked for.
 
 import { Clock, Effect, FileSystem, Path, Result, Semaphore } from "effect";
-import { Base64 } from "effect/encoding";
-import { ATTACHMENT_BYTES } from "./attachments";
+import * as Base64 from "effect/encoding/Base64";
+import { ATTACHMENT_BYTES, sha256Hex } from "./attachments";
 import { HostRefused, PART_BYTES } from "./board-model";
 
 export const uploadsDir = (stateDir: string) => `${stateDir}/uploads`;
@@ -73,7 +73,7 @@ const receivePart = Effect.fn("Uploads.receive")(function* (stateDir: string, pa
   yield* fs.writeFile(partial, bytes, { flag: part.offset === 0 ? "w" : "a" });
   if (part.offset + bytes.length < part.size) return { path: null, complete: false };
   const all = yield* fs.readFile(partial);
-  const digest = new Bun.CryptoHasher("sha256").update(all).digest("hex");
+  const digest = sha256Hex(all);
   if (all.length !== part.size || digest !== part.sha256) {
     yield* fs.remove(dir, { recursive: true });
     return yield* refused(

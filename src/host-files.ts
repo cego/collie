@@ -3,7 +3,7 @@
 // files). Paths are absolute on this Machine; nothing is written inside the host's state.
 
 import { Effect, FileSystem, Option, Path, Schema, Stream } from "effect";
-import { Base64 } from "effect/encoding";
+import * as Base64 from "effect/encoding/Base64";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { mediaTypeOf } from "./attachments";
 import { HostRefused, PART_BYTES, type HostFile } from "./board-model";

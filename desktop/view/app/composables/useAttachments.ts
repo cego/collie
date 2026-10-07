@@ -4,7 +4,7 @@
 
 import { useAtomSet } from "@effect/atom-vue";
 import { DateTime, Effect, Exit, Option, Random, Schema, Semaphore } from "effect";
-import { Base64 } from "effect/encoding";
+import * as Base64 from "effect/encoding/Base64";
 import {
   type Attached,
   capRefusal,
