@@ -4,15 +4,16 @@
 import { expect, test } from "bun:test";
 import { BunServices } from "@effect/platform-bun";
 import { Effect, FileSystem, SubscriptionRef } from "effect";
-import type { SharedSetting, SharedSettings } from "../src/board-model";
+import { HostRefused, type SharedSetting, type SharedSettings } from "../src/board-model";
 import {
   editSetting,
   type FlockSettings,
   NO_FLOCK_SETTINGS,
-  settingRows,
+  settingSections,
   takeFrom,
 } from "../desktop/src/shared/flock-settings";
 import { flockSync } from "../desktop/src/bun/flock-settings";
+import { settingStored } from "../src/settings";
 import { readSettings, writeSettings } from "../desktop/src/bun/settings";
 
 const at = (hour: number) => `2026-10-07T${String(hour).padStart(2, "0")}:00:00.000Z`;
@@ -74,26 +75,85 @@ test("Settings shows every setting with its control, its value and its default",
   const flock = takeFrom(NO_FLOCK_SETTINGS, "vm-a", [
     set("scope", "all", 9),
     set("models.claude", ["claude-x"], 9),
+    set("quiet_ms", 90000, 9),
   ]).flock;
-  const rows = settingRows(takeFrom(flock, "vm-b", [set("scope", "local", 11)]).flock);
+  const sections = settingSections(takeFrom(flock, "vm-b", [set("scope", "local", 11)]).flock, {
+    proactive: false,
+  });
+  const rows = sections.flatMap((section) => section.rows);
+  const row = (key: string, shared = true) =>
+    rows.find((one) => one.key === key && one.shared === shared);
 
-  expect(rows.find((row) => row.key === "scope")).toMatchObject({
+  expect(sections.map((section) => section.group)).toEqual([
+    "Agents",
+    "Runs",
+    "Board",
+    "Chat",
+    "Notifications",
+  ]);
+  expect(row("scope")).toMatchObject({
+    label: "Board scope",
     kind: "choice",
     choices: ["local", "all"],
     value: "local",
     fallback: "local",
+    set: true,
     from: "vm-b",
   });
-  expect(rows.find((row) => row.key === "max_iterations")).toMatchObject({
+  expect(row("max_iterations")).toMatchObject({
     kind: "number",
     value: "",
     fallback: "5",
+    set: false,
     from: null,
   });
-  expect(rows.find((row) => row.key === "models.claude")).toMatchObject({ value: "claude-x" });
-  expect(rows.find((row) => row.key === "proactive")).toMatchObject({ kind: "boolean" });
+  // In its unit: the value and the default both.
+  expect(row("quiet_ms")).toMatchObject({
+    value: "1.5",
+    fallback: "10",
+    unit: "minutes",
+    defaultSaid: "Default: 10 minutes",
+  });
+  expect(row("effort")).toMatchObject({ defaultSaid: "Unset: the harness decides" });
+  expect(row("models.claude")).toMatchObject({ value: "claude-x" });
+  expect(row("proactive")).toMatchObject({ kind: "boolean", shared: true });
+  // The Flock chat's own switch is this computer's, under Chat.
+  expect(sections.find((section) => section.group === "Chat")!.rows).toContainEqual(
+    expect.objectContaining({
+      key: "proactive",
+      shared: false,
+      value: "false",
+      fallback: "true",
+      set: true,
+    }),
+  );
+  // As is the Machine rule, which no Machine is given.
+  expect(row("machineRule", false)).toMatchObject({
+    group: "Chat",
+    kind: "text",
+    value: "",
+    set: false,
+    defaultSaid: "Unset: no rule",
+  });
   // The GitLab host is shared too, but beside the tokens made for it.
-  expect(rows.map((row) => row.key)).not.toContain("gitlab_host");
+  expect(rows.map((one) => one.key)).not.toContain("gitlab_host");
+});
+
+test("a duration typed in minutes is the Flock's in milliseconds, and Reset unsets it", () => {
+  const quiet = (flock: FlockSettings) =>
+    settingSections(flock, { proactive: true })
+      .flatMap((section) => section.rows)
+      .find((row) => row.key === "quiet_ms")!;
+  const typed = settingStored("quiet_ms", "15");
+  if ("refused" in typed) throw new Error(typed.refused);
+  const edited = editSetting(NO_FLOCK_SETTINGS, "quiet_ms", typed.stored, at(12));
+  if ("refused" in edited) throw new Error(edited.refused);
+
+  expect(edited.settings.quiet_ms!.value).toBe(900000);
+  expect(quiet(edited)).toMatchObject({ value: "15", set: true });
+  const reset = editSetting(edited, "quiet_ms", "", at(13));
+  if ("refused" in reset) throw new Error(reset.refused);
+  expect(quiet(reset)).toMatchObject({ value: "", fallback: "10", set: false });
 });
 
 test("a Machine's GitLab host and a value its setting refuses are not the Flock's", () => {
@@ -127,11 +187,19 @@ const machine = (name: string, held: ReadonlyArray<SharedSetting>, meanwhile = E
 };
 
 const syncer = (flock: SubscriptionRef.SubscriptionRef<FlockSettings>, ...machines: Machine[]) =>
+  syncerTelling(flock, () => Effect.void, ...machines);
+
+const syncerTelling = (
+  flock: SubscriptionRef.SubscriptionRef<FlockSettings>,
+  told: (machine: Machine, failed: string | null) => Effect.Effect<void>,
+  ...machines: Machine[]
+) =>
   flockSync({
     flock,
     machines: () => machines,
     save: () => Effect.void,
     request: Effect.succeed("r"),
+    told,
   });
 
 type Machine = ReturnType<typeof machine>;
@@ -188,6 +256,30 @@ test("an edit taken from one Machine goes on to every other connected Machine", 
       yield* vmA.door.setSettings({ settings: [set("model", "haiku", 15)] });
       yield* syncOn(vmA);
       expect(vmB.asked.at(-1)).toEqual([set("model", "haiku", 15)]);
+    }),
+  ));
+
+test("each sync tells how it ended for its Machine: synced, or failed in its host's words", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const flock = yield* SubscriptionRef.make(NO_FLOCK_SETTINGS);
+      const told: Array<readonly [string, string | null]> = [];
+      const vmA = machine("vm-a", []);
+      // A host that refuses, as one on a collie without the operation does.
+      const vmB = machine("vm-b", [], Effect.die(new HostRefused({ reason: "no such operation" })));
+      const { syncOn } = yield* syncerTelling(
+        flock,
+        (one, failed) => Effect.sync(() => void told.push([one.name, failed])),
+        vmA,
+        vmB,
+      );
+
+      expect(yield* syncOn(vmA)).toBeNull();
+      expect(yield* syncOn(vmB)).toBe("no such operation");
+      expect(told).toEqual([
+        ["vm-a", null],
+        ["vm-b", "no such operation"],
+      ]);
     }),
   ));
 

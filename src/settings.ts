@@ -141,6 +141,20 @@ export const FALLBACK_DEFAULTS: Defaults = {
  */
 export type SettingKind = "choice" | "number" | "text" | "boolean" | "list";
 
+/** Where a setting is shown, in the order it is shown. */
+export const SETTING_GROUPS = [
+  "Agents",
+  "Runs",
+  "Board",
+  "Chat",
+  "Notifications",
+  "GitLab and credentials",
+] as const;
+export type SettingGroup = (typeof SETTING_GROUPS)[number];
+
+/** What a number is shown and typed in: `minutes` of a value stored in milliseconds, or a label. */
+export type SettingUnit = "minutes" | "tokens";
+
 export interface Setting {
   /** As config.json holds it, dotted where it is nested. */
   readonly key: string;
@@ -148,6 +162,11 @@ export interface Setting {
   readonly choices: ReadonlyArray<string>;
   /** What a Run uses while it is unset, as text; empty where the harness decides. */
   readonly fallback: string;
+  readonly group: SettingGroup;
+  readonly label: string;
+  /** What it changes, in a sentence or two. */
+  readonly description: string;
+  readonly unit?: SettingUnit;
 }
 
 export const SettingValue = Schema.Union([
@@ -158,38 +177,153 @@ export const SettingValue = Schema.Union([
 ]);
 export type SettingValue = typeof SettingValue.Type;
 
-const choice = (key: string, choices: ReadonlyArray<string>, fallback: string): Setting => ({
-  key,
-  kind: "choice",
-  choices,
-  fallback,
-});
-const of = (key: string, kind: SettingKind, fallback: string): Setting => ({
+type Explained = Pick<Setting, "group" | "label" | "description" | "unit">;
+
+const choice = (
+  key: string,
+  choices: ReadonlyArray<string>,
+  fallback: string,
+  explained: Explained,
+): Setting => ({ key, kind: "choice", choices, fallback, ...explained });
+const of = (key: string, kind: SettingKind, fallback: string, explained: Explained): Setting => ({
   key,
   kind,
   choices: [],
   fallback,
+  ...explained,
 });
 const D = FALLBACK_DEFAULTS;
 
+const HARNESS_TITLES = {
+  claude: "Claude Code",
+  codex: "Codex",
+  opencode: "OpenCode",
+  pi: "Pi",
+} satisfies Record<(typeof HARNESS_NAMES)[number], string>;
+
+const NOTIFICATION_WORDS = {
+  "needs-you": ["A Run needs you", "a Run stops to ask you something"],
+  "run-done": ["A Run finished", "a Run finishes well"],
+  "run-failed": ["A Run failed", "a Run fails"],
+  "output-unusable": ["An Output was unusable", "a Run stops on an agent's Output it cannot read"],
+  "mr-opened": ["A merge request opened", "a Run opens a merge request"],
+  "drift-unresolved": [
+    "Drift nobody settled",
+    "a Run drifted from what it was asked and Collie could not correct it",
+  ],
+  "correction-sent": ["A correction was sent", "Collie corrects an agent by itself"],
+  "proposal-pending": [
+    "Something waits for a yes",
+    "something waits for your yes or no before anything else happens",
+  ],
+  "slice-ready": ["A slice to try", "a Run has a slice of work you can try"],
+  "intent-changed": ["The Intent changed", "a Run is given a new Intent"],
+} satisfies Record<(typeof NOTIFICATION_KINDS)[number], readonly [string, string]>;
+
 export const SETTINGS: ReadonlyArray<Setting> = [
-  choice("harness", HARNESS_NAMES, D.harness),
-  of("model", "text", D.model),
-  of("effort", "text", ""),
-  choice("trust", ["auto", "never"], D.trust),
-  choice("permissions", PERMISSION_MODES, D.permissions),
-  choice("scope", SCOPES, D.scope),
-  choice("questions", QUESTION_MODES, D.questions),
-  choice("density", DENSITIES, D.density),
-  of("gitlab_host", "text", D.gitlabHost),
-  of("max_iterations", "number", String(D.maxIterations)),
-  of("handoff_timeout_ms", "number", String(D.handoffTimeoutMs)),
-  of("quiet_ms", "number", String(D.quietMs)),
-  of("board_quiet_ms", "number", String(D.boardQuietMs)),
-  of("compact_at_tokens", "number", String(D.compactAtTokens)),
-  of("proactive", "boolean", String(D.proactive)),
-  ...HARNESS_NAMES.map((harness) => of(`models.${harness}`, "list", "")),
-  ...NOTIFICATION_KINDS.map((kind) => of(`notifications.${kind}`, "boolean", "true")),
+  choice("harness", HARNESS_NAMES, D.harness, {
+    group: "Agents",
+    label: "Harness",
+    description: "The coding agent every step runs in, unless the step names its own.",
+  }),
+  of("model", "text", D.model, {
+    group: "Agents",
+    label: "Model",
+    description: "The model every step's agent uses, unless the step names its own.",
+  }),
+  of("effort", "text", "", {
+    group: "Agents",
+    label: "Reasoning effort",
+    description:
+      "How hard every step's agent thinks, unless the step names its own. Unset leaves it to the harness.",
+  }),
+  ...HARNESS_NAMES.map((harness) =>
+    of(`models.${harness}`, "list", "", {
+      group: "Agents",
+      label: `More ${HARNESS_TITLES[harness]} models`,
+      description: `Model names ${HARNESS_TITLES[harness]} is allowed to run beyond the ones Collie knows, separated by commas.`,
+    }),
+  ),
+  choice("permissions", PERMISSION_MODES, D.permissions, {
+    group: "Agents",
+    label: "Tool permissions",
+    description:
+      "Who decides whether an agent's tool call runs: the harness's own review (auto), no one (bypass), or a prompt in the agent's pane (harness).",
+  }),
+  choice("trust", ["auto", "never"], D.trust, {
+    group: "Agents",
+    label: "Trust new folders",
+    description:
+      "Whether Collie trusts a folder the harness has not been trusted with yet (auto), or leaves the harness to ask (never).",
+  }),
+  of("compact_at_tokens", "number", String(D.compactAtTokens), {
+    group: "Agents",
+    label: "Compact at",
+    description:
+      "A reused agent whose context reaches this many tokens is asked to compact before its next piece of work. 0 turns compaction off.",
+    unit: "tokens",
+  }),
+  of("quiet_ms", "number", String(D.quietMs), {
+    group: "Agents",
+    label: "Quiet before a nudge",
+    description:
+      "An agent that produces nothing this long is nudged, nudged again at double and given up on at triple. 0 waits as long as it takes.",
+    unit: "minutes",
+  }),
+  of("max_iterations", "number", String(D.maxIterations), {
+    group: "Runs",
+    label: "Rounds of review",
+    description: "How many review-and-fix rounds a Run goes before it stops and asks you.",
+  }),
+  of("handoff_timeout_ms", "number", String(D.handoffTimeoutMs), {
+    group: "Runs",
+    label: "Wait for you",
+    description: "How long a step waits for you after its agent hands off, before it gives up.",
+    unit: "minutes",
+  }),
+  choice("scope", SCOPES, D.scope, {
+    group: "Board",
+    label: "Board scope",
+    description:
+      "Whether the TUI's board opens on this workspace's Runs (local) or every workspace's (all). Desktop's board is not changed.",
+  }),
+  choice("density", DENSITIES, D.density, {
+    group: "Board",
+    label: "Card density",
+    description:
+      "How many cards the TUI's board fits across where its pane is wide enough. Desktop's board is not changed.",
+  }),
+  of("board_quiet_ms", "number", String(D.boardQuietMs), {
+    group: "Board",
+    label: "Quiet Run",
+    description: "How long a running Run may write nothing before its card calls it quiet.",
+    unit: "minutes",
+  }),
+  of("proactive", "boolean", String(D.proactive), {
+    group: "Chat",
+    label: "Native chat speaks first",
+    description:
+      "Whether each Machine's Native chat starts a turn when a Run stops, asks or goes round. The Flock chat has its own switch.",
+  }),
+  choice("questions", QUESTION_MODES, D.questions, {
+    group: "Notifications",
+    label: "A new question",
+    description:
+      "Whether a Run's question brings the TUI's Collie tab to the front (focus) or only says so (notify).",
+  }),
+  ...NOTIFICATION_KINDS.map((kind) =>
+    of(`notifications.${kind}`, "boolean", "true", {
+      group: "Notifications",
+      label: NOTIFICATION_WORDS[kind][0],
+      description: `A toast when ${NOTIFICATION_WORDS[kind][1]}.`,
+    }),
+  ),
+  of("gitlab_host", "text", D.gitlabHost, {
+    group: "GitLab and credentials",
+    label: "GitLab host",
+    description:
+      "The GitLab every Machine is onboarded and checked against, and the one its token is made on.",
+  }),
 ];
 
 export const settingOf = (key: string) => SETTINGS.find((setting) => setting.key === key);
@@ -235,6 +369,28 @@ export function parseSetting(
           }
         : { value: said };
   }
+}
+
+const msPer = (key: string) => (settingOf(key)?.unit === "minutes" ? 60_000 : undefined);
+
+/** A stored value as typed in its unit: a duration in minutes, decimals only where needed. */
+export function settingShown(key: string, stored: string): string {
+  const per = msPer(key);
+  return per === undefined || stored.trim() === "" ? stored : String(Number(stored) / per);
+}
+
+/** A value typed in its unit as the text `parseSetting` takes: a duration in whole milliseconds. */
+export function settingStored(
+  key: string,
+  typed: string,
+): { readonly stored: string } | { readonly refused: string } {
+  const per = msPer(key);
+  const said = typed.trim();
+  if (per === undefined || said === "") return { stored: said };
+  const minutes = Number(said);
+  return Number.isFinite(minutes) && minutes >= 0
+    ? { stored: String(Math.round(minutes * per)) }
+    : { refused: `${key} has to be a number of minutes, not "${typed}"` };
 }
 
 /** A setting's value as one line of text, which `parseSetting` reads back to the same value. */

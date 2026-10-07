@@ -11,7 +11,6 @@ const {
   failure,
   lost,
   machines,
-  developments,
   notices,
   tasks,
   sections,
@@ -20,18 +19,32 @@ const {
   placedBy,
   placedAt,
 } = useFlock();
+const { summary } = useInSync();
 const starting = ref(false);
-const listing = ref(false);
-const setting = ref(false);
 const { onboardOn } = useOnboarding();
 const { renewBy } = useCredentials();
-const record = useRecord();
+const { page, asked, open, back, toggle, showRecord } = usePage();
 const opened = computed(() =>
-  record.opened.value === null ? undefined : placedBy(record.opened.value),
+  page.value?.kind === "record" ? placedBy(page.value.key) : undefined,
 );
+const pageShown = computed(
+  () => page.value !== null && (page.value.kind !== "record" || opened.value !== undefined),
+);
+// A page opened takes focus to its back button, but Go to pane leaves it in the pane; back
+// returns it to where it was.
+let focusedBefore: Element | null = null;
+watch(page, async (now, before) => {
+  if (before === null) focusedBefore = document.activeElement;
+  if (now !== null && asked.value === "terminal") return;
+  await nextTick();
+  const target = now === null ? focusedBefore : document.querySelector('[data-testid="page-back"]');
+  if (target instanceof HTMLElement && target.isConnected) target.focus();
+});
 
 const { chip, choose } = useChip();
-/** Every board gesture, decided by `afterGesture` and applied to the chip and the record. */
+const pageId = (open: typeof page.value) =>
+  open === null ? null : open.kind === "record" ? open.key : open.kind;
+/** Every board gesture, decided by `afterGesture` and applied to the chip and the page. */
 const gesture = (done: Gesture, tab: string | null = null) => {
   const about = chip.value;
   // A chip whose card has left the board stays selected under a key no card has.
@@ -39,7 +52,7 @@ const gesture = (done: Gesture, tab: string | null = null) => {
     about === null
       ? null
       : (placedAt(about.machine, about.task)?.key ?? `gone:${about.machine}:${about.task}`);
-  const before = { selected, record: record.opened.value };
+  const before = { selected, page: pageId(page.value) };
   const after = afterGesture(before, done);
   if (after.selected === null) {
     if (before.selected !== null) choose(null);
@@ -54,12 +67,15 @@ const gesture = (done: Gesture, tab: string | null = null) => {
         name: card.task.name,
       });
   }
-  if (after.record !== before.record) record.show(after.record, tab);
+  if (after.page === before.page) return;
+  if (after.page === null) back();
+  else showRecord(after.page, tab);
 };
 provide("gesture", gesture);
+// A record closes when its card leaves the Flock.
 watch(
   opened,
-  (now) => now === undefined && record.opened.value !== null && gesture({ kind: "close" }),
+  (now) => now === undefined && page.value?.kind === "record" && gesture({ kind: "close" }),
 );
 
 const targetOf = (event: Event) => (event.target instanceof Element ? event.target : null);
@@ -145,20 +161,33 @@ watch(update, (now) => {
           color="neutral"
           variant="outline"
           icon="i-lucide-server"
-          label="Machines"
           data-testid="machines"
-          @click="listing = true"
-        />
-        <MachinesPanel v-model:open="listing" />
+          :active="page?.kind === 'machines'"
+          active-variant="solid"
+          :aria-pressed="page?.kind === 'machines'"
+          @click="toggle('machines')"
+        >
+          Machines
+          <UBadge
+            v-if="(summary?.count ?? 0) > 0"
+            size="sm"
+            color="warning"
+            :label="String(summary?.count)"
+            :aria-label="`${summary?.count} not in sync`"
+            data-testid="machines-behind"
+          />
+        </UButton>
         <UButton
           color="neutral"
           variant="outline"
           icon="i-lucide-settings"
           label="Settings"
           data-testid="settings"
-          @click="setting = true"
+          :active="page?.kind === 'settings'"
+          active-variant="solid"
+          :aria-pressed="page?.kind === 'settings'"
+          @click="toggle('settings')"
         />
-        <SettingsPanel v-model:open="setting" />
         <OnboardDialog />
         <UButton
           icon="i-lucide-plus"
@@ -181,7 +210,7 @@ watch(update, (now) => {
       <div class="relative min-h-0 flex-1">
         <main
           class="flex h-full flex-col gap-6 overflow-y-auto p-4"
-          :inert="opened !== undefined"
+          :inert="pageShown"
           @click="click"
           @dblclick="doubleClick"
         >
@@ -202,7 +231,7 @@ watch(update, (now) => {
               icon="i-lucide-key-round"
               :title="`The GitLab token expires on ${renewBy}`"
               description="Make a new one and Renew it, and every Machine gets it."
-              :actions="[{ label: 'Renew', onClick: () => void (setting = true) }]"
+              :actions="[{ label: 'Renew', onClick: () => void open('settings') }]"
             />
             <UAlert
               v-for="[profile, { name, state, reason }] in lost"
@@ -218,16 +247,6 @@ watch(update, (now) => {
                   ? [{ label: 'Onboard', onClick: () => onboardOn(profile) }]
                   : []
               "
-            />
-            <UAlert
-              v-for="{ name, development } in developments"
-              :key="name"
-              :data-testid="`development-${name}`"
-              color="neutral"
-              variant="subtle"
-              icon="i-lucide-flask-conical"
-              :title="name"
-              :description="`development build ${development}`"
             />
             <p v-if="tasks.length === 0" class="text-muted">Nothing on the board yet.</p>
             <template v-for="[section, label] in SECTIONS" :key="section">
@@ -268,6 +287,16 @@ watch(update, (now) => {
           :placed="opened"
           class="absolute inset-0"
           @close="gesture({ kind: 'close' })"
+        />
+        <SettingsPage
+          v-if="page?.kind === 'settings'"
+          class="absolute inset-0"
+          @back="gesture({ kind: 'close' })"
+        />
+        <MachinesPage
+          v-if="page?.kind === 'machines'"
+          class="absolute inset-0"
+          @back="gesture({ kind: 'close' })"
         />
       </div>
     </div>

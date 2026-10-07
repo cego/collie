@@ -918,8 +918,8 @@ Machine at most once each time it connects. One whose upgrade failed says why in
 is shown as it is, and is asked again the next time it connects, so a Machine out of reach
 at launch follows Desktop once it is back. One that upgraded but did not move is shown as
 it is. A Machine on a development checkout (a non-release branch or tag,
-uncommitted changes, or commits its remote lacks) is never upgraded. It is named above the
-board with its build, "development build <version>+<sha>". Desktop reads any host inside
+uncommitted changes, or commits its remote lacks) is never upgraded. **Machines** shows its
+build as "development build <version>+<sha>", and never counts it behind on its version. Desktop reads any host inside
 the protocol window ([ADR-0038](adr/0038-the-host-builds-and-serves-the-board.md) D5): its
 own protocol version and the one after it. A host whose board is newer than that, or one a
 newer collie serves that Desktop cannot decode, is not shown, and its row says **Update
@@ -974,16 +974,39 @@ same request again, so a host that took it before the answer was lost does it on
 stream like any other change. Every one is recorded on that Machine as `desktop`, with this
 computer's name.
 
-**Machines** lists every Machine Desktop reaches — this computer first, then herdr's — with
-how it stands, and is where Machines join the Flock. Each joins the same way:
+**Machines** is a page that lists every Machine Desktop reaches — this computer first, then
+herdr's — with how it stands, and is where Machines join the Flock. Each joins the same way:
 
-- **Add Machine** takes an SSH target, a label and a herdr session (`default` unless you
-  say), and runs `herdr machine add` in a terminal Desktop drives. herdr's own questions —
-  whether to install herdr there, whether to replace a running server — are dialogs, and
+- **Add Machine** opens a dialog that takes an SSH target, a label and a herdr session
+  (`default` unless you say), all three needed; adding closes it and runs `herdr machine
+add` in a terminal Desktop drives. herdr's own questions — whether to install herdr there, whether to replace a running server — are dialogs, and
   closing one answers herdr's default, which for replacing a server is No. herdr saves the
   machine, so its list stays the only one, and Desktop then onboards it.
 - **Onboard** on a Machine herdr already has, or on this computer, onboards it there and
   then. It is the same button on a Machine whose Collie isn't installed.
+
+The page opens with one line saying whether the whole Flock is **In sync** with Desktop
+("Every Machine is in sync with Desktop 0.35.0"), or naming each Machine that isn't and what
+it lags on. Each Machine's row shows the Collie it runs — "Collie 0.35.0", "development build
+0.35.0+abc1234", or "Build not known yet" for one never seen live — and one state: **In
+sync**, **Behind**, **Connecting**, or why it isn't live (**Out of reach**, **Waiting for
+SSO**, **Collie isn't installed**, **Update Desktop**) with what it said, and **Check for
+updates** where it needs a newer Desktop. A live Machine is behind on its
+version when it runs a release older than Desktop's, which the row says with both versions;
+never on a development checkout, and never while Desktop itself isn't a release. It is
+behind on settings when its last settings sync failed, with the host's reason; behind on
+credentials for each credential Desktop holds that it lacks, with why the last give failed
+where one did, though never on one its onboarding skipped, which Desktop gives only when the
+token is saved or renewed; and behind on onboarding when `collie doctor` doesn't find it onboarded, and
+the row lists the missing steps with their fixes. A part not known yet, such as a first sync
+not finished or doctor not having answered, is not counted, and a credential Desktop holds
+none of is no Machine's to lack: the summary says "Desktop has no GitLab token to give"
+instead. **Sync now** on a Machine behind on its version, settings or credentials does what
+connecting would: behind on its version, it reopens the Machine's connection, which asks the
+upgrade again and then syncs and gives on the new one; otherwise it syncs its settings and
+gives it what it lacks. A toast says what it did, red where a part of it failed. The Flock
+chat reads the same standing and does the same Sync now through `collie_in_sync`. The header's **Machines** button shows how many Machines aren't in sync, those
+still connecting left out.
 
 Onboarding downloads the runner of Desktop's own version for that Machine from the GitHub
 release, with its `.sig`, and verifies it against Collie's release key before it goes
@@ -1005,7 +1028,7 @@ absent or not working, and a Linear login onboarding left unfinished. **Skip on 
 Machine** on either step onboards it again with `--skip`, and every later onboarding of
 that Machine skips it too.
 
-What only you can give is asked once, in **Settings** under **Shared by every Machine**, and
+What only you can give is asked once, in **Settings** under **GitLab and credentials**, and
 never pasted on a command line. Desktop keeps the Flock's credentials in a file of Desktop's own,
 `$XDG_CONFIG_HOME/collie-desktop/credentials` (`~/.config/collie-desktop/credentials`
 unless that is set), readable by you alone and replaced whole on every save — the way glab,
@@ -1018,11 +1041,16 @@ GitLab token, made on GitLab's own page — **Make one on GitLab** opens it with
 accepts it with those scopes, and gives it at once to glab on every Machine it reaches
 (`glab auth login --hostname <host> --stdin`); Helle's goes to each Machine's
 credentials file, owner-only, the same way. Every onboarding gets what is kept on its stdin (`--secrets-stdin`), so a second
-Machine asks for neither, and one that was out of reach when a token was renewed gets the
-new one the next time it is onboarded. A step that needs one you have not given yet takes it
+Machine asks for neither. A Machine that lacks a credential Desktop holds is given it each
+time it connects, the way its settings are synced, so one that was out of reach when a token
+was renewed gets the new one when it is back. Desktop knows which Machine has which by a
+fingerprint of what it gave each — the first 16 hex digits of its SHA-256, never the secret
+— kept in `given.json` beside `flock-settings.json`; a give, a save or renewal that reached
+the Machine, and an onboarding that ended ready all record one, and removing a Machine drops
+its record. A Machine given the current one is not touched again. A step that needs one you have not given yet takes it
 there and onboards again. Desktop asks GitLab when the token expires, at launch and when it
-is saved, and warns above the board from 14 days before; **Renew** with a new one replaces
-it on every Machine.
+is saved, and warns above the board from 14 days before, where **Renew** opens Settings;
+**Renew** there with a new one replaces it on every Machine.
 
 That GitLab is one host for the whole Flock, `gitlab.cego.dk` unless you name another in
 **Settings** (**Use this GitLab**), which is the Flock's `gitlab_host` setting below. It is the token
@@ -1034,11 +1062,24 @@ make a new one on the new host's page and save it. The GitLab host is given to e
 Machine but never taken from one: an edit of `gitlab_host` in a Machine's TUI stays that
 Machine's.
 
-**Settings** also holds **Collie**: every setting the TUI's Settings offers — each default a
-Run reads, `proactive`, the extra `models.<harness>` and each `notifications.<kind>` — with
-a control that fits it (a choice, a number, a switch, or text), its default beside it, and
-the same refusals as the TUI. Both read one list of settings (`src/settings.ts`), so a new
-setting shows up in both. These are the Flock's: Desktop keeps them in
+**Settings** is a page in the board's column, at a readable line length, and re-reads the
+Flock's settings each time it opens. It is grouped under headings, in order: **Agents**, **Runs**, **Board**, **Chat**,
+**Notifications**, **GitLab and credentials** and **About**. It holds every setting the TUI's
+Settings offers — each default a Run reads, `proactive`, the extra `models.<harness>` and each
+`notifications.<kind>` — and the Flock chat's own speak-first switch. Each setting has a plain
+name with its config key in small print, a sentence or two on what it changes (what 0 or
+unset means where that matters, and that `scope`, `density` and `questions` change the TUI's
+board, not Desktop's), a control that fits it (a choice, a number, a switch, or text), its
+default, and the same refusals as the TUI. Durations — `quiet_ms`, `handoff_timeout_ms` and
+`board_quiet_ms` — are shown and typed in minutes, decimals where a value is not a whole
+number of them, and still stored in milliseconds, so `config.json` and `collie settings` are
+unchanged. **Reset to default**, shown while a setting is set, unsets it. Each says whether
+**Every Machine** shares it or it is for **This computer only**: the Flock chat's switch,
+like the bell in the chat's header, is this computer's. The groups, names, descriptions and
+units live with each key in the one list of settings (`src/settings.ts`) that the TUI's
+Settings reads too, so a new setting shows up in both, except the two for this computer only,
+whose are in `DESKTOP_SETTINGS` (`desktop/src/shared/flock-settings.ts`); the TUI does not show the names,
+descriptions or minutes yet. The ones every Machine shares are the Flock's: Desktop keeps them in
 `flock-settings.json` beside its chat, and gives them to every Machine through that
 Machine's host, never by editing a file over SSH. A Machine is synced each time it
 connects and after every edit in Settings, so one out of reach gets an edit when it is
@@ -1101,13 +1142,18 @@ chat, so you can ask the chat about the Run you are reading while its diff has t
 whole width — the window's, with the chat collapsed or popped out. Diff, Evidence and Log
 use that width; Plan, Review and Facts keep a readable line length. The record's back button
 returns to the board, which was never taken down: it comes back scrolled where you left it,
-its sections open or closed as they were, and the card still selected. Opening the record
-puts the keyboard's focus on its back button, except that Go to pane leaves it in the pane,
-and closing it returns focus to where it was.
+its sections open or closed as they were, and the card still selected.
+
+The record is one of Desktop's **pages**, with **Settings** and **Machines**: each takes the
+board's column in the same way, one at a time, so opening Settings with a record open replaces
+the record, and back always returns to the board. Opening a page moves focus to its back
+button, except that Go to pane leaves it in the pane, and back returns focus to where it was. The header's Settings and Machines buttons
+each open their page and show as pressed while it is open; pressed again, they return to the
+board.
 
 **Escape** backs out one level: an open dialog, menu or popover closes first, then the
-record, and on the board Escape lets the selected card go. Escape typed in a field, such as
-the Log search, stays with the field.
+open page, and with no page open Escape lets the selected card go, wherever the focus is in
+the window. Escape typed in a field, such as the Log search, stays with the field.
 
 The record's **Plan** tab renders the spec, read whole from the host where it is longer than the
 details carry, and lists the tickets, each expanding
@@ -1244,7 +1290,7 @@ steered there. What the host records of your words also names the files they car
 
 Click a card and it becomes a chip above the input ("About: vm-mk › Fix board bugs"): your
 next message goes with it, so "this one" means that card, and sending uses it up. Clear it
-with its ✕, a click on the board's background, or Escape on the board; a chat popped out
+with its ✕, a click on the board's background, or Escape outside a field; a chat popped out
 into its own window clears with it. The chip is attached as context for the turn, never as your words.
 
 News reaches it from every Herd on every Machine as one batch: what matters most first —
@@ -1265,7 +1311,7 @@ whose board could not be read, is written to by nothing. The bell turns Desktop'
 turns off (and on again); it is on by default, and kept in `settings.json` beside the
 session.
 
-**Settings** has a **Flock chat** section with the **Machine rule**: which Machine each kind
+**Settings** has the **Machine rule** under **Chat**, for **This computer only**: which Machine each kind
 of work goes to, in your own words — "Frontend work is on the laptop, everything else is on
 the vm". It is kept in `settings.json` on this computer, and given to no Machine. The chat
 gets it with every message, its own turns included, beside the Machines Desktop reaches at

@@ -23,8 +23,6 @@ const transcriptAtom = FlockClient.mutation("transcript");
 const conversationsAtom = FlockClient.mutation("conversations");
 const reopenAtom = FlockClient.mutation("reopen");
 const popOutAtom = FlockClient.mutation("popOut");
-const settingsAtom = FlockClient.mutation("settings");
-const setSettingsAtom = FlockClient.mutation("setSettings");
 const popInAtom = FlockClient.mutation("popIn");
 
 const decodeAbout = Schema.decodeUnknownOption(About);
@@ -84,12 +82,7 @@ export const useFlockChat = () => {
   const desktopSpeaking = computed(
     () => AsyncResult.getOrElse(turns.value, () => "ended" as const) === "started",
   );
-  const readSettings = useAtomSet(() => settingsAtom, { mode: "promiseExit" });
-  const writeSettings = useAtomSet(() => setSettingsAtom, { mode: "promiseExit" });
-  const proactive = ref(true);
-  void readSettings({ payload: undefined }).then((exit) => {
-    if (Exit.isSuccess(exit)) proactive.value = exit.value.proactive;
-  });
+  const { desktopSettings, setProactive } = useDesktopSettings();
 
   const reload = () =>
     transcript({ payload: undefined }).then((exit) => {
@@ -111,12 +104,8 @@ export const useFlockChat = () => {
   return {
     ...chat,
     desktopSpeaking,
-    proactive: readonly(proactive),
-    /** Lets Desktop speak first about News that matters, or not. */
-    setProactive: (on: boolean) =>
-      writeSettings({ payload: { proactive: on } }).then((exit) => {
-        if (Exit.isSuccess(exit)) proactive.value = on;
-      }),
+    proactive: computed(() => desktopSettings.value.proactive),
+    setProactive,
     /**
      * Sends a message with the card it is about: queued while a turn is under way, or `now`,
      * interrupting it.

@@ -22,9 +22,19 @@ import {
   flockCards,
   flockOf,
   type Machine,
+  machineRows,
+  type MachineRow,
   nameAsShown,
   type MachineMessage,
+  machineToAdd,
 } from "../desktop/src/shared/flock";
+import {
+  buildOf,
+  flockInSync,
+  flockInSyncSaid,
+  inSync,
+  syncable,
+} from "../desktop/src/shared/in-sync";
 import { task } from "./support/task";
 
 const asJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
@@ -90,6 +100,7 @@ const served = (main: Channel<ToView, ToMain>) =>
         addMachine: () => Effect.die("not asked"),
         answerHerdr: () => Effect.die("not asked"),
         removeMachine: () => Effect.die("not asked"),
+        syncNow: () => Effect.die("not asked"),
         credentials: () => Stream.die("not asked"),
         flockSettings: () => Stream.die("not asked"),
         setFlockSetting: () => Effect.die("not asked"),
@@ -285,6 +296,18 @@ test("a route out of reach is said by name until its Machine reports through it 
   expect([...applyItem(after, snapshot(vm, [])).lost]).toEqual([]);
 });
 
+test("a Machine's row says why it isn't live, and nothing once it is", () => {
+  const lost = [routed(vm), lostVm("unreachable")].reduce(applyItem, EMPTY_FLOCK);
+  expect(machineRows(lost)[0]).toMatchObject({
+    state: "unreachable",
+    reason: "ssh: connection refused",
+  });
+  expect(machineRows(applyItem(lost, snapshot(vm, [])))[0]).toMatchObject({
+    state: "live",
+    reason: null,
+  });
+});
+
 test("a Machine that drops keeps its cards as of when, off the machines a run can start on, until it is live again", () => {
   const dropped = [
     snapshot(pc, [asking]),
@@ -337,9 +360,236 @@ test("a Machine without Collie is known by its herdr profile until its host name
   expect([...merged.machines.keys()]).toEqual(["inst-pc"]);
 });
 
-const none: BoardState = { selected: null, record: null };
-const picked: BoardState = { selected: "pc:a", record: null };
-const reading: BoardState = { selected: "pc:a", record: "pc:a" };
+const built = (machine: Machine, build: string, development: string): MachineMessage => ({
+  machine,
+  message: {
+    _tag: "Snapshot",
+    installation: machine.installation,
+    build,
+    development,
+    protocol: 1,
+    herds: [],
+    tasks: [],
+    seq: 0,
+  },
+});
+const routed = (machine: Machine): FlockItem => ({
+  _tag: "Routed",
+  machine: { profile: machine.profile, name: machine.name, target: machine.target },
+});
+
+test("a Machine's build is kept from its Snapshot, and a saved board's stands in until it is live", () => {
+  const saved: FlockItem = {
+    _tag: "Saved",
+    machine: vm,
+    herds: [],
+    tasks: [],
+    build: "0.34.0",
+    development: null,
+    at: 7,
+  };
+  const rowOf = (items: ReadonlyArray<FlockItem>) =>
+    machineRows(items.reduce(applyItem, EMPTY_FLOCK)).find(({ profile }) => profile === vm.profile);
+  expect(rowOf([routed(vm)])).toMatchObject({ build: null, development: null });
+  expect(rowOf([routed(vm), saved])).toMatchObject({ build: "0.34.0", development: null });
+  expect(rowOf([routed(vm), saved, built(vm, "0.35.0+abc1234", "0.35.0+abc1234")])).toMatchObject({
+    state: "live",
+    build: "0.35.0+abc1234",
+    development: "0.35.0+abc1234",
+  });
+});
+
+const row = (over: Partial<MachineRow> = {}): MachineRow => ({
+  profile: "p-vm",
+  name: "vm-mk",
+  target: "mk@vm-mk",
+  state: "live",
+  onboarded: null,
+  build: "0.35.0",
+  development: null,
+  settings: null,
+  credentials: {},
+  reason: null,
+  ...over,
+});
+const doctored = (ready: boolean) => ({
+  steps: ready
+    ? []
+    : [{ step: "helle", title: "Helle", status: "failed" as const, command: "collie onboard" }],
+  asked: null,
+  ready,
+  reason: null,
+  at: 1,
+});
+const DESKTOP = { version: "0.35.0", credentials: ["gitlab", "helle"] as const };
+
+test("a live Machine on Desktop's release, doctored onboarded, is in sync", () => {
+  expect(inSync(row({ onboarded: doctored(true) }), DESKTOP)).toEqual({
+    state: "in-sync",
+    behind: [],
+  });
+});
+
+test("an older release is behind on its version, saying both", () => {
+  expect(inSync(row({ build: "0.34.0" }), DESKTOP)).toEqual({
+    state: "behind",
+    behind: [{ part: "version", said: "Runs Collie 0.34.0; Desktop is 0.35.0", steps: [] }],
+  });
+  expect(inSync(row({ build: "0.9.0" }), { ...DESKTOP, version: "0.10.0" }).state).toBe("behind");
+  expect(inSync(row({ build: "0.36.0" }), DESKTOP).state).toBe("in-sync");
+});
+
+test("a development checkout, or a Desktop that isn't a release, is never behind on its version", () => {
+  expect(
+    inSync(row({ build: "0.34.0+abc1234", development: "0.34.0+abc1234" }), DESKTOP).state,
+  ).toBe("in-sync");
+  expect(inSync(row({ build: "0.34.0" }), { ...DESKTOP, version: "0.35.0+def5678" }).state).toBe(
+    "in-sync",
+  );
+});
+
+test("a Machine doctor doesn't find onboarded is behind on onboarding, with its steps; one not yet doctored isn't", () => {
+  const verdict = inSync(row({ onboarded: doctored(false) }), DESKTOP);
+  expect(verdict.state).toBe("behind");
+  expect(verdict.behind).toEqual([
+    expect.objectContaining({ part: "onboarding", steps: doctored(false).steps }),
+  ]);
+  expect(inSync(row({ onboarded: null }), DESKTOP).state).toBe("in-sync");
+});
+
+test("a Machine not live is its state, and one connecting has no verdict", () => {
+  for (const state of ["unreachable", "sso", "no-collie", "update-desktop"] as const)
+    expect(inSync(row({ state, build: "0.30.0" }), DESKTOP)).toEqual({ state, behind: [] });
+  expect(inSync(row({ state: "connecting" }), DESKTOP)).toEqual({
+    state: "connecting",
+    behind: [],
+  });
+});
+
+test("the Flock's summary names Desktop's version, or each Machine that lags and how", () => {
+  const level = flockInSync(
+    [row({ name: "mk-pc" }), row({ state: "connecting", name: "vm-b" })],
+    DESKTOP,
+  );
+  expect(level).toEqual({ said: "Every Machine is in sync with Desktop 0.35.0", count: 0 });
+  const mixed = flockInSync(
+    [
+      row({ name: "mk-pc" }),
+      row({ build: "0.34.0", onboarded: doctored(false) }),
+      row({ name: "vm-c", state: "unreachable" }),
+      row({ name: "vm-d", state: "connecting" }),
+    ],
+    DESKTOP,
+  );
+  expect(mixed).toEqual({
+    said: "Not in sync with Desktop 0.35.0: vm-mk: behind on version and onboarding; vm-c: Out of reach",
+    count: 2,
+  });
+});
+
+test("a row says the Collie it runs, a development build's own, or that it isn't known yet", () => {
+  expect(buildOf(row())).toBe("Collie 0.35.0");
+  expect(buildOf(row({ development: "0.35.0+abc1234" }))).toBe("development build 0.35.0+abc1234");
+  expect(buildOf(row({ build: null }))).toBe("Build not known yet");
+});
+
+test("Sync now is offered for what connecting redoes, and not for onboarding alone", () => {
+  expect(syncable(inSync(row({ build: "0.34.0" }), DESKTOP))).toBe(true);
+  expect(syncable(inSync(row({ settings: { failed: "host refused" } }), DESKTOP))).toBe(true);
+  expect(syncable(inSync(row({ onboarded: doctored(false) }), DESKTOP))).toBe(false);
+  expect(syncable(inSync(row(), DESKTOP))).toBe(false);
+});
+
+test("the Flock chat reads the summary, then why each lagging Machine is behind", () => {
+  expect(
+    flockInSyncSaid(
+      [row({ name: "mk-pc" }), row({ settings: { failed: "host refused" } })],
+      DESKTOP,
+    ),
+  ).toBe(
+    "Not in sync with Desktop 0.35.0: vm-mk: behind on settings. vm-mk: Settings didn't sync: host refused",
+  );
+});
+
+test("a Machine whose last settings sync failed is behind on settings, with why; one not yet synced isn't", () => {
+  expect(inSync(row({ settings: { failed: "host refused" } }), DESKTOP)).toEqual({
+    state: "behind",
+    behind: [{ part: "settings", said: "Settings didn't sync: host refused", steps: [] }],
+  });
+  expect(inSync(row({ settings: { failed: null } }), DESKTOP).state).toBe("in-sync");
+  expect(inSync(row({ settings: null }), DESKTOP).state).toBe("in-sync");
+});
+
+test("a Machine lacking a credential Desktop holds is behind on it, naming it and why a give failed", () => {
+  const holds = DESKTOP;
+  const lacking = row({
+    credentials: {
+      gitlab: { given: false, failed: "glab: not found" },
+      helle: { given: false, failed: null },
+    },
+  });
+  expect(inSync(lacking, holds)).toEqual({
+    state: "behind",
+    behind: [
+      { part: "credentials", said: "Lacks the GitLab token: glab: not found", steps: [] },
+      { part: "credentials", said: "Lacks Helle's token", steps: [] },
+    ],
+  });
+  // A credential Desktop doesn't hold is never a Machine's to lack.
+  expect(inSync(lacking, { ...DESKTOP, credentials: [] }).state).toBe("in-sync");
+  expect(inSync(row({ credentials: { gitlab: { given: true, failed: null } } }), holds).state).toBe(
+    "in-sync",
+  );
+  // Not told yet is not behind.
+  expect(inSync(row({ credentials: {} }), holds).state).toBe("in-sync");
+});
+
+test("the summary says which credentials Desktop has none of to give, and blames no Machine for them", () => {
+  const rows = [row({ credentials: { gitlab: { given: false, failed: null } } })];
+  expect(flockInSync(rows, { ...DESKTOP, credentials: ["helle"] })).toEqual({
+    said: "Every Machine is in sync with Desktop 0.35.0. Desktop has no GitLab token to give",
+    count: 0,
+  });
+  expect(flockInSync(rows, { ...DESKTOP, credentials: ["gitlab"] })).toEqual({
+    said: "Not in sync with Desktop 0.35.0: vm-mk: behind on credentials. Desktop has no Helle token to give",
+    count: 1,
+  });
+});
+
+test("a Machine's settings sync and its credentials are kept on its row, and dropped with it", () => {
+  const items: FlockItem[] = [
+    routed(vm),
+    { _tag: "Synced", machine: vm, failed: "host refused" },
+    { _tag: "Given", machine: vm, credential: "gitlab", given: false, failed: "nope" },
+    { _tag: "Given", machine: vm, credential: "gitlab", given: true, failed: null },
+  ];
+  const flock = items.reduce(applyItem, EMPTY_FLOCK);
+  expect(machineRows(flock)[0]).toMatchObject({
+    settings: { failed: "host refused" },
+    credentials: { gitlab: { given: true, failed: null } },
+  });
+  const removed = applyItem(flock, {
+    _tag: "Removed",
+    machine: { profile: vm.profile, name: vm.name },
+  });
+  expect(removed.synced.size + removed.given.size).toBe(0);
+});
+
+test("Add Machine takes a Machine only once its SSH target, label and session are filled", () => {
+  expect(machineToAdd({ target: " mk@vm ", label: "vm ", session: " default" })).toEqual({
+    target: "mk@vm",
+    label: "vm",
+    session: "default",
+  });
+  for (const blank of ["target", "label", "session"] as const)
+    expect(
+      machineToAdd({ target: "mk@vm", label: "vm", session: "default", [blank]: "  " }),
+    ).toBeNull();
+});
+
+const none: BoardState = { selected: null, page: null };
+const picked: BoardState = { selected: "pc:a", page: null };
+const reading: BoardState = { selected: "pc:a", page: "pc:a" };
 const card = (key: string, asOf = false) => ({ on: "card", card: key, asOf }) as const;
 const control = { on: "control" } as const;
 const background = { on: "background" } as const;
@@ -349,14 +599,14 @@ test("a click on a card selects it, again on it keeps it, and on another moves t
   expect(afterGesture(picked, { kind: "click", landed: card("pc:a") })).toEqual(picked);
   expect(afterGesture(picked, { kind: "click", landed: card("pc:b") })).toEqual({
     selected: "pc:b",
-    record: null,
+    page: null,
   });
 });
 
 test("a click on a card leaves an open record as it is", () => {
   expect(afterGesture(reading, { kind: "click", landed: card("pc:b") })).toEqual({
     selected: "pc:b",
-    record: "pc:a",
+    page: "pc:a",
   });
 });
 
@@ -367,7 +617,7 @@ test("a click or double-click on a control does only what the control does", () 
   }
 });
 
-test("a click or double-click on the background lets the card go, unless a record is open", () => {
+test("a click or double-click on the background lets the card go, unless a page is open", () => {
   for (const kind of ["click", "double-click"] as const) {
     expect(afterGesture(picked, { kind, landed: background })).toEqual(none);
     expect(afterGesture(reading, { kind, landed: background })).toEqual(reading);
@@ -383,7 +633,7 @@ test("a double-click on a card shown as of selects it and opens nothing", () => 
 });
 
 test("pressing a card's name selects it and opens its record", () => {
-  expect(afterGesture({ selected: "pc:b", record: null }, { kind: "name", card: "pc:a" })).toEqual(
+  expect(afterGesture({ selected: "pc:b", page: null }, { kind: "name", card: "pc:a" })).toEqual(
     reading,
   );
 });
@@ -399,8 +649,14 @@ test("Escape with an overlay open or while typing is theirs", () => {
   }
 });
 
-test("Escape closes an open record and keeps the card selected", () => {
+test("Escape closes an open page and keeps the card selected", () => {
   expect(afterGesture(reading, { kind: "escape", overlay: false, typing: false })).toEqual(picked);
+  expect(
+    afterGesture(
+      { ...picked, page: "settings" },
+      { kind: "escape", overlay: false, typing: false },
+    ),
+  ).toEqual(picked);
 });
 
 test("Escape on the board lets the selected card go", () => {

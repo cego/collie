@@ -40,7 +40,6 @@ export const useFlock = () => {
     ),
     lost: computed(() => [...told.value.lost]),
     machines: computed(() => board.value.machines),
-    developments: computed(() => board.value.developments),
     notices: computed(() => told.value.notices),
     /** Now, as of the last minute. */
     now,

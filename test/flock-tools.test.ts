@@ -188,6 +188,8 @@ const flockOf = (asked: Asked[]) => ({
   said: () => "stop the board bugs one",
   machineRule: () => saved,
   setMachineRule: (rule: string) => Effect.sync(() => (saved = rule)),
+  inSync: (sync: string | undefined) =>
+    Effect.succeed(sync === undefined ? "every Machine is in sync" : `synced ${sync}`),
   attachments: () => undefined,
   uploaded: new Map(),
 });
@@ -324,6 +326,7 @@ test("a Machine whose host is older than the Flock chat is written to by nothing
         conversation: "flock@mk-pc",
         machineRule: () => undefined,
         setMachineRule: () => Effect.void,
+        inSync: () => Effect.succeed(""),
         attachments: () => undefined,
         uploaded: new Map(),
         said: () => "hold it",
@@ -351,6 +354,7 @@ test("a Machine that stops answering costs a look for News its time, and the oth
         conversation: "flock@mk-pc",
         machineRule: () => undefined,
         setMachineRule: () => Effect.void,
+        inSync: () => Effect.succeed(""),
         attachments: () => undefined,
         uploaded: new Map(),
         said: () => undefined,
@@ -376,6 +380,7 @@ test("a Machine whose board could not be read is written to by nothing, and a ba
         conversation: "flock@mk-pc",
         machineRule: () => undefined,
         setMachineRule: () => Effect.void,
+        inSync: () => Effect.succeed(""),
         attachments: () => undefined,
         uploaded: new Map(),
         said: () => "hold it",
@@ -563,6 +568,7 @@ test("a Machine whose host cannot answer a read is told to upgrade, and the rest
         said: () => undefined,
         machineRule: () => undefined,
         setMachineRule: () => Effect.void,
+        inSync: () => Effect.succeed(""),
         attachments: () => undefined,
         uploaded: new Map(),
       };
@@ -572,6 +578,14 @@ test("a Machine whose host cannot answer a read is told to upgrade, and the rest
       expect(said).toContain("upgrade Collie on vm-mk");
       expect(said).toContain("collie_workspaces answered by mk-pc");
     }).pipe(Effect.provide([BunServices.layer, TestClock.layer()])),
+  ));
+
+test("the chat reads whether each Machine is in sync, and syncs the one it names", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      expect(yield* call([], "collie_in_sync", {})).toBe("every Machine is in sync");
+      expect(yield* call([], "collie_in_sync", { sync: "vm-mk" })).toBe("synced vm-mk");
+    }),
   ));
 
 test("the Machine rule is read back as saved, and replaced with what the human asked for", () =>
@@ -793,6 +807,7 @@ test("a Machine whose Collie has no such operation is told to upgrade, and the r
         said: () => undefined,
         machineRule: () => undefined,
         setMachineRule: () => Effect.void,
+        inSync: () => Effect.succeed(""),
         attachments: () => undefined,
         uploaded: new Map(),
       };

@@ -195,7 +195,7 @@ const onEvery = (routes: ReadonlyArray<ShellRoute>, script: string, stdin: strin
         ),
         Effect.timeoutOrElse({
           duration: GIVE_LIMIT,
-          orElse: () => Effect.fail("not reached; it is given when it is next onboarded"),
+          orElse: () => Effect.fail("not reached; it is given when it next connects"),
         }),
         Effect.catch((failed) => Effect.succeed(failed)),
         Effect.map((failed) => ({ name: route.machine.name, failed })),

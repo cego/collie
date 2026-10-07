@@ -38,6 +38,7 @@ Desktop reaches now. When you start work, name its Machine from the rule, unless
 human's message names one. When the rule's Machine is not among those reachable, say so and
 start nothing elsewhere. When the rule does not cover the work, ask which Machine.
 collie_machine_rule reads the rule, and replaces it when the human asks you to change it.
+collie_in_sync says which Machines are behind Desktop and why, and syncs one you name.
 
 A message that starts "${DESKTOP_SAID}" is Desktop handing you News, not the human
 speaking: tell them briefly what in it needs them, and do nothing they have not asked for.`;
