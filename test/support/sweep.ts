@@ -57,6 +57,26 @@ export const sweepDeadRoots = (dir: string): ReadonlyArray<string> =>
     if (pid <= 0 || alive(pid)) return [];
     const root = join(dir, name);
     for (const one of marked(root)) kill(one.pid);
-    rmSync(root, { recursive: true, force: true });
-    return [root];
+    return removed(root) ? [root] : [];
   });
+
+/**
+ * Removes `root`, giving its owner back write access first where a test took it away (a Go
+ * module cache is read-only). A root that still will not go is reported, never thrown: one
+ * leftover is no reason not to run the suite.
+ */
+const removed = (root: string) => {
+  try {
+    rmSync(root, { recursive: true, force: true });
+    return true;
+  } catch {
+    Bun.spawnSync(["chmod", "-R", "u+rwX", root]);
+  }
+  try {
+    rmSync(root, { recursive: true, force: true });
+    return true;
+  } catch (cause) {
+    console.error(`test: could not remove ${root}: ${String(cause)}`);
+    return false;
+  }
+};

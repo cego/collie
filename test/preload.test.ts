@@ -118,6 +118,9 @@ describe("the start-of-suite sweep", () => {
         const live = `collie-test-${process.pid}-x`;
         yield* fs.makeDirectory(dead);
         yield* fs.makeDirectory(`${dir}/${live}`);
+        // Read-only inside, as a Go module cache is: it still goes.
+        yield* fs.makeDirectory(`${dead}/cache/pkg`, { recursive: true });
+        yield* fs.chmod(`${dead}/cache`, 0o555);
         const orphan = Bun.spawn(["sh", "-c", "echo up; exec sleep 63"], {
           env: { ...process.env, [MARKER]: dead },
           stdout: "pipe",
