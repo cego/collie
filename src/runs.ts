@@ -46,6 +46,8 @@ export interface RunFacts {
   /** Where its verifications are kept. */
   readonly evidence: string;
   readonly asking: ReadonlyArray<Asked>;
+  /** The questions it has been answered, oldest first. */
+  readonly answered: ReadonlyArray<Asked & { readonly answer: string }>;
   readonly held: boolean;
   /** The repository of a fan-out this Run builds, or null for a Run that is no Repo run. */
   readonly repo: string | null;
@@ -110,6 +112,9 @@ export const factsOfView = (stateDir: string, view: RunView): RunFacts => ({
   asking: view.waiting
     .filter((one) => one.answer === null)
     .map((one) => ({ name: one.name, prompt: one.prompt, options: one.options })),
+  answered: view.waiting.flatMap(({ name, prompt, options, answer }) =>
+    answer === null ? [] : [{ name, prompt, options, answer }],
+  ),
   held: view.controls.includes(HOLD),
   repo: view.options.repo ?? null,
   parked: view.parked,

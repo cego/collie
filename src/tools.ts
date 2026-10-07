@@ -24,7 +24,16 @@ import type { BunServices } from "@effect/platform-bun/BunServices";
 import { Clock, Crypto, Effect, Result, Schema } from "effect";
 import { ChildProcessSpawner } from "effect/process";
 import type { PluginEnv } from "./env";
-import { newRequestId, runFacts, workspaceCwdFromPanes } from "./operations";
+import {
+  answerAction,
+  choiceLines,
+  inCollieState,
+  newRequestId,
+  runFacts,
+  workspaceCwdFromPanes,
+} from "./operations";
+import { gateOf } from "./board";
+import { projectsRoot } from "./projects";
 import type { Action } from "./actions";
 import {
   boardSnapshot,
@@ -42,7 +51,7 @@ import { taskOfWorkspace } from "./task";
 import { pendingFor, proposalsPath, read as readProposals } from "./proposals";
 import { statusLine } from "./disposition";
 import { Herdr } from "./herdr";
-import { ASKED_KINDS } from "./board-model";
+import { ASKED_KINDS, EVIDENCE_GATE, type FLOCK_READS } from "./board-model";
 import { asText as newsText, NATIVE } from "./news";
 import { findRun, listRuns, type RunFacts } from "./runs";
 import { donePasses, markersOf, runningCheck } from "./checks";
@@ -73,6 +82,7 @@ import {
   type Settle,
   SETTLE_KINDS,
   TAKES,
+  type ToolName,
 } from "./toolkit";
 
 /**
@@ -91,7 +101,11 @@ const said = <E, R>(effect: Effect.Effect<string, E, R>) =>
     Effect.catch((cause) => Effect.succeed(`Collie could not read that: ${String(cause)}`)),
   );
 
-const handlersFor = Effect.fn("Tools.handlers")(function* (env: PluginEnv) {
+const handlersFor = Effect.fn("Tools.handlers")(function* (
+  env: PluginEnv,
+  /** Whether the board's selection may stand in for a Run nobody named. */
+  selected: boolean,
+) {
   const services = yield* Effect.context<BunServices | ChildProcessSpawner.ChildProcessSpawner>();
   const answer = <E>(
     effect: Effect.Effect<string, E, BunServices | ChildProcessSpawner.ChildProcessSpawner>,
@@ -99,11 +113,13 @@ const handlersFor = Effect.fn("Tools.handlers")(function* (env: PluginEnv) {
   return CollieTools.of({
     collie_herd: () => answer(boardFacts(env)),
     collie_run: (input) =>
-      answer(onSelectedRun(env, input, "collie_run", (run) => said(runAnswer(env, run)))),
+      answer(onSelectedRun(env, selected, input, "collie_run", (run) => said(runAnswer(env, run)))),
     collie_workspaces: () => answer(workspaceFacts(env)),
     collie_receipts: (input) =>
       answer(
-        onSelectedRun(env, input, "collie_receipts", (run) => said(receiptFacts(env, run.id))),
+        onSelectedRun(env, selected, input, "collie_receipts", (run) =>
+          said(receiptFacts(env, run.id)),
+        ),
       ),
     collie_news: () => answer(newsFacts(env)),
     collie_definitions: (input) => answer(definitionFacts(env, input)),
@@ -128,18 +144,30 @@ const handlersFor = Effect.fn("Tools.handlers")(function* (env: PluginEnv) {
   });
 });
 
-/**
- * One call to a Collie tool, decoded strictly by the Toolkit. Input it will not take is a
- * refusal in the tool's own terms, and a tool this build does not have answers nothing.
- */
-export const callTool = Effect.fn("Tools.call")(
-  function* (env: PluginEnv, name: string, input: JsonObject) {
-    if (!isToolName(name)) return "";
-    const toolkit = yield* CollieTools.pipe(Effect.provide(CollieTools.toLayer(handlersFor(env))));
+/** One call to the Toolkit, with or without the board's selection standing in for a Run. */
+const answered = Effect.fn("Tools.answered")(
+  function* (env: PluginEnv, name: ToolName, input: JsonObject, selected: boolean) {
+    const toolkit = yield* CollieTools.pipe(
+      Effect.provide(CollieTools.toLayer(handlersFor(env, selected))),
+    );
     return yield* answerWith(toolkit, name, input);
   },
   Effect.catch((cause) => Effect.succeed(`Collie could not answer: ${String(cause)}`)),
 );
+
+/**
+ * One call to a Collie tool, decoded strictly by the Toolkit. Input it will not take is a
+ * refusal in the tool's own terms, and a tool this build does not have answers nothing.
+ */
+export const callTool = (env: PluginEnv, name: string, input: JsonObject) =>
+  isToolName(name) ? answered(env, name, input, true) : Effect.succeed("");
+
+/**
+ * One of the reads a Flock chat has this Machine's host answer, as Native chat answers
+ * it, except that the Home board's selection never stands in for a Run (ADR-0012).
+ */
+export const answerRead = (env: PluginEnv, name: (typeof FLOCK_READS)[number], input: JsonObject) =>
+  answered(env, name, input, false);
 
 /**
  * Drawn the first time a tool list is read rather than when this file loads: every
@@ -272,7 +300,7 @@ export const checkLines = Effect.fn("Tools.checkLines")(function* (
 
 /** One Run in detail, led by the check Collie is running for it, then where each finished one's output is. */
 const runAnswer = Effect.fn("Tools.runAnswer")(function* (env: PluginEnv, run: RunFacts) {
-  const facts = yield* runFacts(run);
+  const facts = yield* runFacts(env, run);
   const running = yield* checkLines(run, yield* listRuns(env), yield* Clock.currentTimeMillis);
   const kept = (yield* donePasses(run)).filter((one) => one.log !== null);
   const done =
@@ -328,6 +356,7 @@ const onSelection = Effect.fn("Tools.onSelection")(function* (env: PluginEnv, in
  */
 const onSelectedRun = Effect.fn("Tools.onSelectedRun")(function* (
   env: PluginEnv,
+  selected: boolean,
   input: typeof RunInput.Type,
   tool: string,
   answer: (run: RunFacts) => ToolAnswer,
@@ -335,8 +364,9 @@ const onSelectedRun = Effect.fn("Tools.onSelectedRun")(function* (
   const named = input.run ?? null;
   // Non-null exactly when the selection was what this answer is about, which is what the
   // sentences below turn on.
-  const on = named === null ? yield* selectionOf(env) : null;
+  const on = named === null && selected ? yield* selectionOf(env) : null;
   const id = named ?? on?.run ?? null;
+  if (id === null && !selected) return `${tool} takes {"run": "<run id>"}.`;
   if (id === null)
     return `${tool} takes {"run": "<run id>"}, or answers about the board's selection when there is one. The board has nothing selected — collie_herd lists the Runs there are.`;
   const run = yield* findRun(env, id);
@@ -397,30 +427,43 @@ const workspaceFacts = Effect.fn("Tools.workspaces")(function* (env: PluginEnv) 
   const all = yield* herdr.workspaceList().pipe(Effect.catch(() => Effect.succeed([])));
   const panes = yield* herdr.paneList().pipe(Effect.catch(() => Effect.succeed([])));
   const saved = (yield* savedModules(env)).entries;
-  const lines = all.map((workspace) => {
-    const cwd =
-      workspace.cwd !== "" ? workspace.cwd : workspaceCwdFromPanes(workspace.workspaceId, panes);
-    return `- workspace ${workspace.workspaceId} (${workspace.label}): ${cwd || "no directory"}`;
-  });
+  const lines = yield* Effect.forEach(all, (workspace) =>
+    Effect.gen(function* () {
+      const cwd =
+        workspace.cwd !== "" ? workspace.cwd : workspaceCwdFromPanes(workspace.workspaceId, panes);
+      const home = cwd !== "" && (yield* inCollieState(env, cwd));
+      return `- workspace ${workspace.workspaceId} (${workspace.label}): ${cwd || "no directory"}${home ? " — the Home, Collie's own namespace, no checkout" : ""}`;
+    }),
+  );
   // The Tasks too: a Task with no Run yet is in no Herd listing, so this is the only
   // place a conversation can find out the work a new Run could join.
-  const tasks = yield* listTasks(env.stateDir).pipe(Effect.catch(() => Effect.succeed([])));
+  const open = new Set(all.map((workspace) => workspace.workspaceId));
+  const tasks = (yield* listTasks(env.stateDir).pipe(
+    Effect.catch(() => Effect.succeed([])),
+  )).filter((task) => open.has(task.workspace));
+  const root = yield* projectsRoot(env).pipe(Effect.orElseSucceed(() => null));
   return [
     ...(lines.length > 0 ? lines : ["- (no workspaces)"]),
     "",
     ...tasks.map((task) => `- task ${task.id} (${task.label}) in workspace ${task.workspace}`),
-    ...(tasks.length === 0 ? ["- (no Tasks)"] : []),
+    ...(tasks.length === 0 ? ["- (no Tasks with an open workspace)"] : []),
     "",
-    `workflows: ${
-      saved
-        .map((one) => one.id)
-        .sort()
-        .join(", ") || "none"
-    }`,
+    root === null
+      ? "Projects root: none"
+      : `Projects root: ${root.path} — a checkout under it is named by its directory name`,
     "",
-    "a start names its workspace — an id, its label, the path of a checkout or a repository's",
-    "name under the Projects root (one with no workspace open on it gets one), or projects-root",
-    "— and every Input, an optional",
+    "workflows, with the Inputs each takes (? is optional):",
+    ...[...saved]
+      .sort((a, b) => a.id.localeCompare(b.id))
+      .map(
+        (one) =>
+          `- ${one.id} (${one.inputs.map((input) => `${input.name}${input.required ? "" : "?"}`).join(", ")})`,
+      ),
+    ...(saved.length === 0 ? ["- none"] : []),
+    "",
+    "a start names its workspace — an id, its label, the path of a checkout on this Machine or a",
+    "repository's directory name under the Projects root (one with no workspace open on it gets",
+    "one), or projects-root — and every Input, an optional",
     'one left empty as "". Nothing is inferred; a start missing any is refused with each listed.',
   ].join("\n");
 });
@@ -459,14 +502,29 @@ const receiptFacts = Effect.fn("Tools.receipts")(function* (env: PluginEnv, run:
   // Every delivery is on the ledger now: the one sender writes there before it sends,
   // so there is no second place a steer can be sitting unrecorded.
   const unread: string[] = [];
+  const gate = yield* gateOf(found, env.userDir);
+  const waiting = [
+    ...found.asking.flatMap((asked) =>
+      choiceLines(run, asked).map((line, n) => (n === 0 ? `- ${line}` : `  ${line}`)),
+    ),
+    ...(gate === null
+      ? []
+      : gate.verifications.length === 0
+        ? [
+            "- the evidence gate, with no checks configured to approve: add them to the project's .collie/verify.json",
+          ]
+        : [
+            `- the evidence gate, offering the checks ${gate.verifications.join(", ")}`,
+            `  Approve them all with the collie_do action ${answerAction(run, EVIDENCE_GATE, "approve")}, or some with "approve:<name>,<name>"`,
+          ]),
+    ...proposals.map(
+      (p) => `- ${p.id} (${p.content_hash}): ${p.interpretation} — expires ${p.expires_at}`,
+    ),
+  ];
   return [
     "### Waiting on the human",
     "",
-    ...(proposals.length === 0
-      ? ["- nothing"]
-      : proposals.map(
-          (p) => `- ${p.id} (${p.content_hash}): ${p.interpretation} — expires ${p.expires_at}`,
-        )),
+    ...(waiting.length === 0 ? ["- nothing"] : waiting),
     "",
     "### Sent to this Run's agents",
     "",
