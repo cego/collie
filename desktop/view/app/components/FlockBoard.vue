@@ -2,6 +2,7 @@
 import { SECTIONS } from "../../../../src/board-model";
 import { AsyncResult, useAtomValue } from "@effect/atom-vue";
 import type { NotLive } from "../../../src/shared/flock";
+import { escapeLetsGo, placeOf, targetOf } from "../../../src/shared/selection";
 import { updatesAtom } from "../flock";
 
 const {
@@ -29,22 +30,10 @@ const opened = computed(() =>
 const { choose } = useChip();
 /** A click on the board's own area, on no card and no control, lets the selected card go. */
 const background = (event: MouseEvent) => {
-  const onCard = event.target instanceof Element && event.target.closest("[data-card]") !== null;
-  if (!onControl(event) && !onCard) choose(null);
+  if (placeOf(targetOf(event)) === "board") choose(null);
 };
-/** Escape backs out one level: an overlay closes itself, and the board lets its card go. */
 const escape = (event: KeyboardEvent) => {
-  if (event.key !== "Escape") return;
-  const typing = event.target;
-  if (
-    typing instanceof HTMLElement &&
-    (typing.isContentEditable || typing.closest("input, textarea, select") !== null)
-  )
-    return;
-  // Overlays close on Escape themselves, without marking it handled.
-  const overlay = '[data-state="open"]:is([role="dialog"], [role="alertdialog"], [role="menu"])';
-  if (document.querySelector(overlay) !== null) return;
-  choose(null);
+  if (event.key === "Escape" && escapeLetsGo(targetOf(event), document)) choose(null);
 };
 // Captured, so it runs before an overlay closes on the same key.
 onMounted(() => window.addEventListener("keydown", escape, { capture: true }));

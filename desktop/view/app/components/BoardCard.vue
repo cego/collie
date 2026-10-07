@@ -10,6 +10,7 @@ import {
 } from "../../../../src/board-model";
 import { DateTime } from "effect";
 import type { DesktopAction } from "../../../src/shared/flock";
+import { placeOf, targetOf } from "../../../src/shared/selection";
 
 const props = defineProps<{
   task: TaskView;
@@ -52,10 +53,10 @@ const openDrawer = () => {
 };
 /** A click on the card itself, not on one of its controls, is what the next chat message is about. */
 const clicked = (event: MouseEvent) => {
-  if (!onControl(event)) select();
+  if (placeOf(targetOf(event)) === "card") select();
 };
 const doubleClicked = (event: MouseEvent) => {
-  if (!onControl(event) && props.asOf === null) openDrawer();
+  if (placeOf(targetOf(event)) === "card" && props.asOf === null) openDrawer();
 };
 
 const STATES: Record<

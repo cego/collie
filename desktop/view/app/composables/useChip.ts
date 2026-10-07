@@ -19,8 +19,3 @@ export const useChip = () => ({
     windows.postMessage(about);
   },
 });
-
-/** A click on a control does only what the control does: it never selects or lets go of a card. */
-export const onControl = (event: Event) =>
-  event.target instanceof Element &&
-  event.target.closest("button, a, input, label, form, summary") !== null;
