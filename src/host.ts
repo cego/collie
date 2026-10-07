@@ -145,7 +145,7 @@ import { readTask } from "./task";
 import { nowIso } from "./time";
 import { reason } from "./naming";
 import { editString, globFiles, grepFiles, readPart, writeWhole } from "./host-files";
-import { pruneUploads, receive, uploadsDir } from "./uploads";
+import { receive, uploadsDir } from "./uploads";
 import { loadDefaults, SettingRefused, sharedSettings, takeShared } from "./config";
 import { factsOfView, settled } from "./runs";
 import { aliveIn, focusPane, herdChanges, liveHerds } from "./herds";
@@ -360,7 +360,20 @@ const handlers = (
           ).pipe(Effect.provideContext(bun)),
         steer: ({ runId, text, request, operation, agent, mode, attachments }, { client }) => {
           const into = attachmentsDir(runDir(dir, runId));
-          return attachedAs(into, attachments).pipe(
+          // Files go only into a Run this host has.
+          const known =
+            (attachments ?? []).length === 0
+              ? Effect.void
+              : Effect.flatMap(FileSystem.FileSystem, (fs) => fs.exists(runDir(dir, runId))).pipe(
+                  Effect.orElseSucceed(() => false),
+                  Effect.flatMap((exists) =>
+                    exists && !/[/\\]/.test(runId) && runId !== ".." && runId !== "."
+                      ? Effect.void
+                      : Effect.fail(new HostRefused({ reason: `There is no Run ${runId} here.` })),
+                  ),
+                );
+          return known.pipe(
+            Effect.andThen(attachedAs(into, attachments)),
             Effect.flatMap((attached) => {
               const asked: SteerAsked = {
                 text,

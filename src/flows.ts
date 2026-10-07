@@ -1372,14 +1372,14 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
       return resumed.ok ? resumed.human : resumed.error.message;
     }
 
+    case "AttachFiles":
+      return yield* attachFiles(env, prompts, command.runId);
+
     /** A finished plan, built: the same launch "Implement now" runs, from the card. */
     /**
      * A child Run on a finished one's outcome. What it should do is asked for here rather
      * than guessed from the parent: a follow-up with no words is a Run with no spec.
      */
-    case "AttachFiles":
-      return yield* attachFiles(env, prompts, command.runId);
-
     case "FollowUp": {
       const text = yield* prompts.ask(`What still needs doing on ${command.runId}?`);
       if (text === null || text.trim() === "") return null;

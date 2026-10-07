@@ -25,6 +25,7 @@ import {
 import { type AguiEvent, ends } from "../shared/agui";
 import {
   IMAGE_BYTES,
+  INLINE_BUDGET,
   listing,
   shownAs,
   type ShownImage,
@@ -226,6 +227,13 @@ const contentOf = Effect.fnUntraced(function* (
   const images: ContentBlock[] = [];
   const documents: ContentBlock[] = [];
   const texts: ContentBlock[] = [];
+  let budget = INLINE_BUDGET;
+  // What does not fit goes by its listed path alone.
+  const fits = (data: string) => {
+    if (data.length > budget) return false;
+    budget -= data.length;
+    return true;
+  };
   for (const file of files) {
     const media = shownAs(file.mediaType);
     const read = (path: string) =>
@@ -233,21 +241,21 @@ const contentOf = Effect.fnUntraced(function* (
     if (media !== undefined) {
       const scaled = yield* scaledCopy(dir, file.id).pipe(Effect.orElseSucceed(() => null));
       const bytes = yield* read(scaled ?? file.path);
-      if (bytes.length <= IMAGE_BYTES)
-        images.push({
-          type: "image",
-          source: { type: "base64", media_type: media, data: Encoding.encodeBase64(bytes) },
-        });
+      const data = bytes.length <= IMAGE_BYTES ? Encoding.encodeBase64(bytes) : null;
+      if (data !== null && fits(data))
+        images.push({ type: "image", source: { type: "base64", media_type: media, data } });
     } else if (file.mediaType === "application/pdf" && file.size <= PDF_BYTES) {
       const data = Encoding.encodeBase64(yield* read(file.path));
-      documents.push({
-        type: "document",
-        source: { type: "base64", media_type: "application/pdf", data },
-        title: file.name,
-      });
+      if (fits(data))
+        documents.push({
+          type: "document",
+          source: { type: "base64", media_type: "application/pdf", data },
+          title: file.name,
+        });
     } else if (file.size <= TEXT_BYTES && TEXTUAL.test(file.mediaType)) {
       const text = utf8(yield* read(file.path));
-      if (text !== null) texts.push({ type: "text", text: `${file.name}:\n\n${text}` });
+      if (text !== null && fits(text))
+        texts.push({ type: "text", text: `${file.name}:\n\n${text}` });
     }
   }
   const blocks: Array<ContentBlock> = [

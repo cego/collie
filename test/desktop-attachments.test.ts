@@ -80,13 +80,14 @@ test("Desktop's listing of a message's files reads back as the files it lists", 
 test("copied files arrive as a uri-list of file:// URIs, read as paths, and anything else is refused", () => {
   expect(
     uriListPaths(
-      "# copied\r\nfile:///home/mk/Pictures/my%20shot.png\r\nfile://localhost/tmp/log.txt\r\nhttps://example.com/x.png\r\nfile://other-host/etc/passwd\r\n",
+      "# copied\r\nfile:///home/mk/Pictures/my%20shot.png\r\nfile://localhost/tmp/log.txt\r\nhttps://example.com/x.png\r\nfile://other-host/etc/passwd\r\nfile:///tmp/50%off.png\r\n",
     ),
   ).toEqual({
     paths: ["/home/mk/Pictures/my shot.png", "/tmp/log.txt"],
     refused: [
       "https://example.com/x.png is not a file on this computer",
       "file://other-host/etc/passwd is not a file on this computer",
+      "file:///tmp/50%off.png is not a file on this computer",
     ],
   });
 });

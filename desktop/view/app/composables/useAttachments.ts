@@ -3,7 +3,7 @@
 // main process in parts as it is added, scaled first where it is a large image.
 
 import { useAtomSet } from "@effect/atom-vue";
-import { DateTime, Effect, Encoding, Exit, Option, Random, Schema } from "effect";
+import { DateTime, Effect, Encoding, Exit, Option, Random, Schema, Semaphore } from "effect";
 import {
   type Attached,
   capRefusal,
@@ -34,6 +34,9 @@ const share = (next: ReadonlyArray<Staged>) => {
 const holding = (file: Staged) => {
   if (!pending.value.some(({ id }) => id === file.id)) share([...pending.value, file]);
 };
+
+/** One add at a time, so each is held to the cap with those before it. */
+const adding = Semaphore.makeUnsafe(1);
 
 /** How much of a file goes to main in one frame. */
 const PART = 1024 * 1024;
@@ -73,12 +76,12 @@ export const useAttachments = () => {
   /** A copy of a large image, scaled down for the model; the original is what a Run gets. */
   const scaled = Effect.fnUntraced(function* (file: Blob, staged: Staged) {
     if (!REDRAWN.has(file.type)) return;
-    const image = yield* Effect.promise(() => createImageBitmap(file));
+    const image = yield* Effect.tryPromise(() => createImageBitmap(file));
     const size = scaledSize(image);
     if (size === null) return;
     const canvas = new OffscreenCanvas(size.width, size.height);
     canvas.getContext("2d")?.drawImage(image, 0, 0, size.width, size.height);
-    const smaller = yield* Effect.promise(() => canvas.convertToBlob({ type: file.type }));
+    const smaller = yield* Effect.tryPromise(() => canvas.convertToBlob({ type: file.type }));
     yield* send(yield* bytesIn(smaller), staged.name, file.type, staged.id);
   });
 
@@ -107,7 +110,8 @@ export const useAttachments = () => {
     if (why !== null) return;
     const staged = yield* send(yield* bytesIn(file), name, file.type);
     if (staged === null) return;
-    yield* scaled(file, staged);
+    // An image the window cannot redraw goes as it is.
+    yield* scaled(file, staged).pipe(Effect.ignore);
     holding(staged);
   });
 
@@ -144,26 +148,26 @@ export const useAttachments = () => {
   return {
     pending: readonly(pending),
     refused: readonly(refused),
-    add: (file: File, pasted: boolean) => run(add(file, pasted)),
+    add: (file: File, pasted: boolean) => run(adding.withPermit(add(file, pasted))),
     /** Files named by path, as a file manager copies or drops them; `also` are refusals of its own. */
     addPaths: (paths: ReadonlyArray<string>, also: ReadonlyArray<string> = []) =>
       run(
         Effect.promise(() => stagePaths({ payload: { paths } })).pipe(
-          Effect.flatMap((exit) => took(exit, also)),
+          Effect.flatMap((exit) => adding.withPermit(took(exit, also))),
         ),
       ),
     /** The files a dialog lets the human choose. */
     pick: () =>
       run(
         Effect.promise(() => pick({ payload: undefined })).pipe(
-          Effect.flatMap((exit) => took(exit)),
+          Effect.flatMap((exit) => adding.withPermit(took(exit))),
         ),
       ),
     /** The files on the system clipboard, where a paste handed the view none. */
     fromClipboard: () =>
       run(
         Effect.promise(() => fromClipboard({ payload: undefined })).pipe(
-          Effect.flatMap((exit) => took(exit)),
+          Effect.flatMap((exit) => adding.withPermit(took(exit))),
         ),
       ),
     remove: (id: string) => share(pending.value.filter((one) => one.id !== id)),

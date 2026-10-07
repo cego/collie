@@ -42,8 +42,7 @@ export const attachmentRefusal = Effect.fn("attachments.refusal")(function* (
 
 const digest = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 
-const sameBytes = (a: Uint8Array, b: Uint8Array) =>
-  a.length === b.length && a.every((byte, at) => byte === b[at]);
+const sameBytes = (a: Uint8Array, b: Uint8Array) => Buffer.from(a).equals(b);
 
 /**
  * The name each source takes in `dir`, or in an empty directory where that is null: its

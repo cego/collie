@@ -23,8 +23,9 @@ export const StagedOrRefused = Schema.Union([Staged, Schema.Struct({ refused: Sc
 export type StagedOrRefused = typeof StagedOrRefused.Type;
 
 export const FILE_CAP = 20 * 1024 * 1024;
-/** Under the API's 32 MB request, with room for the words and the listing. */
 export const MESSAGE_CAP = 30 * 1024 * 1024;
+/** The most base64 a message hands the model inline: under the API's 32 MB request. */
+export const INLINE_BUDGET = 24 * 1024 * 1024;
 /** The longest edge the API takes in a request of more than 20 images. */
 export const LONG_EDGE = 2000;
 
@@ -66,6 +67,14 @@ export const pastedImages = (
 ) =>
   items.flatMap((item, at) => (item.kind === "file" && item.type.startsWith("image/") ? [at] : []));
 
+const decoded = (text: string) => {
+  try {
+    return decodeURIComponent(text);
+  } catch {
+    return null;
+  }
+};
+
 /**
  * The paths of a `text/uri-list` of files copied or dropped, and why any other line is
  * not one. A file manager names files as `file://` URIs, which only main can read.
@@ -76,8 +85,11 @@ export const uriListPaths = (text: string) => {
   for (const line of text.split(/\r?\n/).map((one) => one.trim())) {
     if (line === "" || line.startsWith("#")) continue;
     const url = URL.parse(line);
-    if (url?.protocol === "file:" && (url.host === "" || url.host === "localhost"))
-      paths.push(decodeURIComponent(url.pathname));
+    const path =
+      url?.protocol === "file:" && (url.host === "" || url.host === "localhost")
+        ? decoded(url.pathname)
+        : null;
+    if (path !== null) paths.push(path);
     else refused.push(`${line} is not a file on this computer`);
   }
   return { paths, refused };

@@ -232,6 +232,12 @@ test(
           attachments: [{ name: "late.png", from: `${world.project}/late.png` }],
         });
 
+        const astray = yield* cli(["run", "steer", "no-such-run", "this", "--attach", "late.png"]);
+        expect(astray.envelope.error?.message).toContain("There is no Run no-such-run here.");
+        expect(
+          yield* Effect.promise(() => Bun.file(runDir(world.state, "no-such-run")).exists()),
+        ).toBe(false);
+
         yield* answer(world, runId);
         expect(yield* read(`${world.state}/agents/${runId}/check.prompt.md`)).toContain(copy);
       }),

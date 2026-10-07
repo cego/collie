@@ -24,7 +24,6 @@ export interface StagedPart {
   readonly offset: number;
   /** This part's bytes, as base64. */
   readonly content: string;
-  /** The original this is a scaled copy of, by id. */
   readonly scaledOf?: string | undefined;
 }
 
