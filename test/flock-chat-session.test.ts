@@ -1,6 +1,6 @@
 // The Flock chat runs on the user's own Claude Code with nothing of theirs loaded: no
-// built-in tools, no settings, hooks, skills or CLAUDE.md, and Collie's tools as its only
-// tools.
+// settings, hooks, skills or CLAUDE.md. It has Collie's tools, Claude Code's own file tools
+// and Bash on this computer, and Collie's file tools on every Machine.
 
 import { expect, test } from "bun:test";
 import { Effect } from "effect";
@@ -37,8 +37,10 @@ test("the session is opus at medium effort, resumed, on the user's own Claude Co
   });
 });
 
-test("built-in tools are off but AskUserQuestion, no setting source is read, and Collie's server is the only one", () => {
-  expect(options.tools).toEqual(["AskUserQuestion"]);
+const BUILT_IN = ["Read", "Glob", "Grep", "Write", "Edit", "Bash"];
+
+test("this computer's file tools and Bash are on and allowed, no setting source is read, and Collie's server is the only one", () => {
+  expect(options.tools).toEqual(["AskUserQuestion", ...BUILT_IN]);
   expect(options.settingSources).toEqual([]);
   expect(options.strictMcpConfig).toBe(true);
   expect(Object.keys(options.mcpServers)).toEqual(["collie"]);
@@ -47,10 +49,24 @@ test("built-in tools are off but AskUserQuestion, no setting source is read, and
     name: "collie",
     instance: "the in-process server",
   });
-  expect(options.allowedTools.every((name) => name.startsWith("mcp__collie__collie_"))).toBe(true);
-  expect(options.allowedTools).toContain("mcp__collie__collie_do");
+  for (const name of [...BUILT_IN, "mcp__collie__collie_do", "mcp__collie__collie_read"])
+    expect(options.allowedTools).toContain(name);
+  // Allowed outright, it would never be put to the human.
   expect(options.allowedTools).not.toContain("AskUserQuestion");
+  expect(options.systemPrompt).not.toContain("no shell and no file access");
+  expect(options.systemPrompt).toContain("<machine>:<path>");
 });
+
+test("a built-in file tool or Bash that asks anyway is allowed as it was asked", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      for (const name of BUILT_IN) {
+        const input = { file_path: "/etc/hosts" };
+        const answer = yield* Effect.promise(() => options.canUseTool(name, input, permission));
+        expect(answer).toEqual({ behavior: "allow", updatedInput: input });
+      }
+    }),
+  ));
 
 test("AskUserQuestion is put to the human, and goes on with their answers", () =>
   Effect.runPromise(
@@ -76,7 +92,7 @@ test("AskUserQuestion is put to the human, and goes on with their answers", () =
 
 test("anything else that asks permission is refused", () =>
   Effect.runPromise(
-    Effect.promise(() => options.canUseTool("Bash", {}, permission)).pipe(
+    Effect.promise(() => options.canUseTool("WebFetch", {}, permission)).pipe(
       Effect.map((answer) => expect(answer).toMatchObject({ behavior: "deny" })),
     ),
   ));

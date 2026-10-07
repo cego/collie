@@ -412,6 +412,15 @@ export const RunFile = Schema.Struct({
   size: Schema.Int,
 });
 
+/** Part of a file on a host's Machine: `content` is base64, `size` the whole file's. */
+export const HostFile = Schema.Struct({
+  path: Schema.String,
+  size: Schema.Int,
+  mediaType: Schema.String,
+  content: Schema.String,
+});
+export type HostFile = typeof HostFile.Type;
+
 /** How much of an item one `runFile` hands over when no length is asked for. */
 export const RUN_FILE_BYTES = 4 * 1024 * 1024;
 
@@ -542,6 +551,8 @@ export const BoardSnapshot = Schema.TaggedStruct("Snapshot", {
   /** `<version>+<sha>` for a development checkout, which nothing upgrades; absent for a release. */
   development: Schema.optionalKey(Schema.String),
   protocol: Schema.Int,
+  /** Whether this host takes files: its file operations, uploads and attachments. */
+  files: Schema.optionalKey(Schema.Boolean),
   herds: Schema.Array(Herd),
   tasks: Schema.Array(TaskView),
   seq: Schema.Int,
@@ -1040,6 +1051,59 @@ export const FrontDoorRpcs = RpcGroup.make(
       attachments: Schema.optional(Attachments),
     },
     success: Started,
+    error: Schema.Union([HostRefused, RequestConflict]),
+  }),
+  /** Part of a file on this host's Machine, by absolute path, as base64. */
+  Rpc.make("readFile", {
+    payload: {
+      path: Schema.String,
+      offset: Schema.optional(Schema.Int),
+      length: Schema.optional(Schema.Int),
+    },
+    success: HostFile,
+    error: HostRefused,
+  }),
+  /** The files a pattern matches under a directory, newest first, bounded. */
+  Rpc.make("glob", {
+    payload: { pattern: Schema.String, path: Schema.optional(Schema.String) },
+    success: Schema.Struct({ paths: Schema.Array(Schema.String), omitted: Schema.Int }),
+    error: HostRefused,
+  }),
+  /** What a search of files finds, as ripgrep or `grep -r` says it, bounded by lines. */
+  Rpc.make("grep", {
+    payload: {
+      pattern: Schema.String,
+      path: Schema.optional(Schema.String),
+      glob: Schema.optional(Schema.String),
+      type: Schema.optional(Schema.String),
+      outputMode: Schema.optional(Schema.Literals(["content", "files_with_matches", "count"])),
+      ignoreCase: Schema.optional(Schema.Boolean),
+      lineNumbers: Schema.optional(Schema.Boolean),
+      before: Schema.optional(Schema.Int),
+      after: Schema.optional(Schema.Int),
+      context: Schema.optional(Schema.Int),
+      headLimit: Schema.optional(Schema.Int),
+      multiline: Schema.optional(Schema.Boolean),
+    },
+    success: Schema.Struct({ text: Schema.String, omitted: Schema.Int }),
+    error: HostRefused,
+  }),
+  /** A file written whole, never inside the host's state directory. */
+  Rpc.make("writeFile", {
+    payload: { path: Schema.String, content: Schema.String, request: Schema.String },
+    success: Schema.Struct({ path: Schema.String, bytes: Schema.Int }),
+    error: Schema.Union([HostRefused, RequestConflict]),
+  }),
+  /** One string of a file replaced, as Claude Code's Edit replaces it. */
+  Rpc.make("editFile", {
+    payload: {
+      path: Schema.String,
+      oldString: Schema.String,
+      newString: Schema.String,
+      replaceAll: Schema.optional(Schema.Boolean),
+      request: Schema.String,
+    },
+    success: Schema.Struct({ path: Schema.String, replaced: Schema.Int }),
     error: Schema.Union([HostRefused, RequestConflict]),
   }),
 );

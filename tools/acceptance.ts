@@ -730,6 +730,17 @@ const WORKFLOWS: readonly Check[] = [
 /** What only a person at a terminal can settle. */
 const OPERATOR_CHECKS: readonly Check[] = [
   {
+    id: "flock-chat/reads-greps-and-edits-a-file-on-a-machine",
+    statement:
+      "The Flock chat reads, greps and edits a file on vm-mk with no prompt, and its edit is in vm-mk's host log with the chat's voice.",
+    owner: ATTACHMENTS,
+    needs: "operator",
+    proof: {
+      kind: "operator",
+      how: "In Desktop with vm-mk reached, ask the chat to read a scratch file on vm-mk, grep its directory for a word in it, and change that word; record the three tool rows, the file's new content on vm-mk, and the edit's line in vm-mk's `files/operations.jsonl` with its Actor, with the revision.",
+    },
+  },
+  {
     id: "checks/a-running-checks-output-opens-live-from-the-board",
     statement:
       "While Collie runs a check for a Run, the drawer shows its last lines, and Open check output opens a pane in the Task's workspace that prints the output as it is written and says how the check ended.",

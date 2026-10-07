@@ -42,6 +42,11 @@ export const chatDoor = (door: Door) => ({
   propose: (asked: Parameters<Door["propose"]>[0]) => door.propose(asked),
   runDetail: (asked: Parameters<Door["runDetail"]>[0]) => door.runDetail(asked),
   workflows: (asked: Parameters<Door["workflows"]>[0]) => door.workflows(asked),
+  readFile: (asked: Parameters<Door["readFile"]>[0]) => door.readFile(asked),
+  glob: (asked: Parameters<Door["glob"]>[0]) => door.glob(asked),
+  grep: (asked: Parameters<Door["grep"]>[0]) => door.grep(asked),
+  writeFile: (asked: Parameters<Door["writeFile"]>[0]) => door.writeFile(asked),
+  editFile: (asked: Parameters<Door["editFile"]>[0]) => door.editFile(asked),
 });
 
 export type ChatDoor = ReturnType<typeof chatDoor>;
@@ -84,7 +89,7 @@ const firstOf = <A, E>(stream: Stream.Stream<A, E>) =>
   stream.pipe(Stream.runHead, Effect.timeout(ANSWER_WITHIN));
 
 /** A Machine's board as its host has it now, or why it could not be read. */
-const boardOf = (machine: ChatMachine) =>
+export const boardOf = (machine: ChatMachine) =>
   firstOf(machine.door.board()).pipe(
     Effect.map((first) =>
       Option.isSome(first) && first.value._tag === "Snapshot" ? first.value : null,
@@ -177,7 +182,7 @@ const declareVoice = (flock: FlockChat, machine: ChatMachine) => {
 };
 
 /** `declareVoice`, refused where the host is too old to record the turn's words. */
-const speaking = (flock: FlockChat, machine: ChatMachine, known: Boards) => {
+export const speaking = (flock: FlockChat, machine: ChatMachine, known: Boards) => {
   const board = known.find((one) => one.machine === machine)?.board ?? null;
   const refused =
     board === null
@@ -193,7 +198,7 @@ const speaking = (flock: FlockChat, machine: ChatMachine, known: Boards) => {
 const newRequest = Effect.flatMap(Crypto.Crypto, (crypto) => crypto.randomUUIDv4);
 
 /** Why a host said no, in its own words. */
-const reasonOf = (error: { readonly message: string }) =>
+export const reasonOf = (error: { readonly message: string }) =>
   "reason" in error && isString(error.reason)
     ? error.reason
     : "detail" in error && isString(error.detail)

@@ -1111,10 +1111,23 @@ do. Every action is recorded on its Machine as `chat`, under the conversation
 tools except `collie_definitions` and `collie_installation`, and holds one Run at a time,
 because those read a Machine's own files, which no host operation hands over.
 
+It reaches files as you could, and asks first for none of it. On this computer it has
+Claude Code's own Read, Glob, Grep, Write, Edit and Bash, naming files by absolute path: its
+working directory is Desktop's state directory, where Claude Code keeps the transcript. On
+every Machine it has `collie_read`, `collie_glob`, `collie_grep`, `collie_write` and
+`collie_edit`, which take the arguments Claude Code's tools of those names take, with a path
+written `vm-mk:/var/log/app.log`. That Machine's host answers each over the chat's channel,
+never ssh around it. A read gives numbered lines, an image as the image and any other binary
+by its name, size and type; a glob or a grep answers at most 100 paths or lines, newest
+first for a glob, and says how many it left out. A write or an edit is recorded in the
+host's `files/operations.jsonl` with the chat's voice, and is refused inside the host's
+state directory, links followed, because a Run's state changes only through the host. A
+Machine whose Collie is too old for files is told to upgrade. There is no shell on a
+Machine.
+
 It is a session of your own Claude Code, on your own Claude seat, driven through the Agent
-SDK in Desktop's main process: `opus` at medium effort with summarised thinking, Claude
-Code's built-in tools off but AskUserQuestion, and none of your settings, hooks, skills or
-CLAUDE.md. Your first message starts it, and it stays warm until Desktop quits. Its session
+SDK in Desktop's main process: `opus` at medium effort with summarised thinking, and none
+of your settings, hooks, skills or CLAUDE.md. Your first message starts it, and it stays warm until Desktop quits. Its session
 id is minted once and kept in `$XDG_STATE_HOME/collie-desktop/flock-chat.json` (or
 `~/.local/state/collie-desktop/`), so a restart resumes the same conversation; Claude Code
 keeps and compacts the transcript on this computer.

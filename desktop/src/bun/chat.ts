@@ -83,7 +83,7 @@ export interface ClaudeCode<Server> {
   /** Collie's tools as an MCP server in this process. */
   readonly server: (
     flock: FlockChat,
-    run: (effect: Effect.Effect<string, never, Crypto.Crypto>) => Promise<string>,
+    run: <A>(effect: Effect.Effect<A, never, Crypto.Crypto>) => Promise<A>,
   ) => Server;
 }
 
@@ -177,7 +177,7 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* <Server>(opts
   let noticed: FlockBatch | undefined;
   const asking = new Map<string, Deferred.Deferred<Answers>>();
   const services = yield* Effect.context<Crypto.Crypto | FileSystem.FileSystem | Path.Path>();
-  const run = (effect: Effect.Effect<string, never, Crypto.Crypto>) =>
+  const run = <A>(effect: Effect.Effect<A, never, Crypto.Crypto>) =>
     Effect.runPromise(effect.pipe(Effect.provideContext(services)));
   const flock: FlockChat = {
     machines: opts.machines,

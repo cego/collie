@@ -78,10 +78,13 @@ last in a directory. Its whole reach is **Collie tools**.
 
 **Flock chat** — Desktop's conversation about the **Flock**: one live per Desktop (earlier
 ones can be reopened, never two at once), a session of
-the user's own Claude Code driven through the Agent SDK in Desktop's main process, with
-**Collie tools** as its whole reach. Its tools are answered by each Machine's host over that
-Machine's `chat` channel, and name everything `<machine>:<id>`. Beside each Home's Native
-chat, never instead of it.
+the user's own Claude Code driven through the Agent SDK in Desktop's main process. It
+reaches Collie through **Collie tools**, this computer through Claude Code's own Read, Glob,
+Grep, Write, Edit and Bash, and each Machine's files through `collie_read`, `collie_glob`,
+`collie_grep`, `collie_write` and `collie_edit`; none of them asks first. Its Collie and file
+tools are answered by each Machine's host over that Machine's `chat` channel, and name
+everything `<machine>:<id>`, a file `<machine>:<path>`. Beside each Home's Native chat, never
+instead of it.
 
 **Chat harness** — Which native chat Collie opens with, `claude` (the default, on an
 existing installation as much as a new one) or `pi`, from `chat_harness` in `config.json`.
@@ -114,7 +117,8 @@ check and the same executors the CLI and the board use. What Collie wants of its
 accord is a Proposal because of where it came from, never because of who confirms it. Reached over a local MCP server by Claude and a generated
 extension by Pi, and by `collie tools call` from a terminal. Desktop's Flock chat takes
 the same Toolkit's tools that a host's front door can answer, in-process, each answered by
-the host of the Machine it names (`desktop/src/bun/flock-tools.ts`).
+the host of the Machine it names (`desktop/src/bun/flock-tools.ts`), and five file tools of
+its own that are not the Toolkit's, so Native chat's reach is unchanged.
 
 **Redirect notice** — What a per-workspace Collie pane from an older release shows on its
 next launch: one line and "Open Collie". No board, no chat.

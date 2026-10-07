@@ -1570,6 +1570,21 @@ at most 4 MiB from `offset` (or `length` bytes where asked) and says the item's 
 is, so a character split across two parts is whole once they are joined. A reference is refused where it leaves
 the directory it belongs to, links followed, or where it is not a regular file.
 
+Five more answer a front door about the Machine's own files, every path absolute; the Flock
+chat's file tools use them ([ADR-0011](adr/0011-the-conversation-is-a-native-harness.md#amended-2026-10-07-the-flock-chat-reaches-files)).
+`readFile` hands over a part of a file, at most 4 MiB from `offset`, as base64 with its
+media type and whole `size`. `glob` answers the files a pattern matches under a directory,
+newest first, at most 100 and how many it `omitted`. `grep` takes Claude Code Grep's
+arguments that make sense on a host (`glob`, `type`, `outputMode`, `ignoreCase`,
+`lineNumbers`, `before`, `after`, `context`, `headLimit`, `multiline`), runs ripgrep where it
+is on `PATH` and `grep -r` otherwise, and answers at most 100 lines. `writeFile` writes a
+whole file, making its directory, and `editFile` replaces `oldString` with `newString`,
+refusing one that is missing or, without `replaceAll`, not unique. Both take a request id,
+the same id twice being one operation, are recorded with the Actor in
+`files/operations.jsonl` under the state directory (its newest 1000), and are refused where
+the file's real path is inside the state directory. The `Snapshot` carries `files: true`
+from a host that has these; a client sends files to no host without it.
+
 `protocol` is an integer, also in `identity`. An optional field, a new operation or a new
 kind of message does not change it, and a client reads a kind it does not know as
 `Unknown` and skips it. A removal or a change of meaning bumps it, and from then on the

@@ -10,6 +10,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { isJsonObject } from "../../../src/schema";
 import type { ClaudeCode } from "./chat";
+import { callFileTool, FILE_TOOLS, isFileTool } from "./file-tools";
 import { callFlockTool, FLOCK_TOOLS } from "./flock-tools";
 
 export const claudeCode: ClaudeCode<McpServer> = {
@@ -17,7 +18,7 @@ export const claudeCode: ClaudeCode<McpServer> = {
   getSessionInfo,
   getSessionMessages,
   listSessions,
-  // Listed from the Toolkit, and every call decoded by it.
+  // The Toolkit's tools and Desktop's file tools, every call decoded by its own.
   server: (flock, run) => {
     const server = new McpServer(
       { name: "collie", version: "1" },
@@ -25,7 +26,7 @@ export const claudeCode: ClaudeCode<McpServer> = {
     );
     server.server.setRequestHandler(ListToolsRequestSchema, () =>
       Promise.resolve({
-        tools: FLOCK_TOOLS.map((tool) => ({
+        tools: [...FLOCK_TOOLS, ...FILE_TOOLS].map((tool) => ({
           name: tool.name,
           title: tool.title,
           description: tool.description,
@@ -35,15 +36,15 @@ export const claudeCode: ClaudeCode<McpServer> = {
         })),
       }),
     );
-    server.server.setRequestHandler(CallToolRequestSchema, (request) =>
-      run(
-        callFlockTool(
-          flock,
-          request.params.name,
-          isJsonObject(request.params.arguments) ? request.params.arguments : {},
-        ),
-      ).then((text) => ({ content: [{ type: "text" as const, text }] })),
-    );
+    server.server.setRequestHandler(CallToolRequestSchema, (request) => {
+      const { name } = request.params;
+      const input = isJsonObject(request.params.arguments) ? request.params.arguments : {};
+      return isFileTool(name)
+        ? run(callFileTool(flock, name, input)).then((content) => ({ content: [...content] }))
+        : run(callFlockTool(flock, name, input)).then((text) => ({
+            content: [{ type: "text" as const, text }],
+          }));
+    });
     return server;
   },
 };

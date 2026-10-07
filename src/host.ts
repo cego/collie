@@ -143,6 +143,7 @@ import { everyRegistered } from "./registry";
 import { readTask } from "./task";
 import { nowIso } from "./time";
 import { reason } from "./naming";
+import { editString, globFiles, grepFiles, readPart, writeWhole } from "./host-files";
 import { loadDefaults, SettingRefused, sharedSettings, takeShared } from "./config";
 import { factsOfView, settled } from "./runs";
 import { aliveIn, focusPane, herdChanges, liveHerds } from "./herds";
@@ -507,6 +508,10 @@ const sideJobsLayer = (dir: string, panels: MrPanels) =>
 
 /** How many of the settings operations a host keeps a record of. */
 const SETTINGS_TRAIL = 50;
+/** How many of the chat's writes to files the host keeps a record of. */
+const FILES_TRAIL = 1000;
+const Written = Schema.Struct({ path: Schema.String, bytes: Schema.Int });
+const Edited = Schema.Struct({ path: Schema.String, replaced: Schema.Int });
 
 /** A Herd's key names one directory under the state directory, and nothing above it. */
 const isHerdName = (herd: string) => herd !== "." && herd !== ".." && /^[^/\\]+$/.test(herd);
@@ -633,6 +638,27 @@ const frontDoorHandlers = (
             ),
           ).pipe(Effect.provideContext(hosted));
       /** Only the refusals a front door can act on keep their shape; anything else is said in a sentence. */
+      /** A file operation's failure as the host's refusal, in its own words. */
+      const refusedPlainly = <A, E, R extends BunServices>(effect: Effect.Effect<A, E, R>) =>
+        effect.pipe(
+          Effect.mapError((cause) =>
+            Schema.is(RequestConflict)(cause) || Schema.is(HostRefused)(cause)
+              ? cause
+              : new HostRefused({ reason: reason(cause) }),
+          ),
+          Effect.provideContext(bun),
+        );
+      /** A write to a file, once per request, recorded in the host's own trail. */
+      const filesOnce = <A, I extends Schema.Json, E, R>(
+        line: Parameters<typeof once<A, I, E, R>>[1],
+        act: Effect.Effect<A, E, R>,
+      ) =>
+        Effect.gen(function* () {
+          const trail = (yield* Path.Path).join(env.stateDir, "files");
+          const done = yield* once(trail, line, act);
+          yield* trimAudit(trail, FILES_TRAIL).pipe(Effect.orDie);
+          return done;
+        });
       const plainly = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
         effect.pipe(
           Effect.mapError((cause) =>
@@ -907,6 +933,37 @@ const frontDoorHandlers = (
               () => runId,
               { operation: "invoke", request, ...whoOf(client), asked, result: Started },
               registry.invoke({ runId, offer, input, request, attachments }),
+            ),
+          ),
+        readFile: ({ path, offset, length }) =>
+          readPart(path, offset, length).pipe(Effect.provideContext(bun)),
+        glob: ({ pattern, path }) => refusedPlainly(globFiles(pattern, path ?? env.home)),
+        grep: ({ path, ...asked }) =>
+          refusedPlainly(grepFiles({ ...asked, path: path ?? env.home })),
+        writeFile: ({ path, content, request }, { client }) =>
+          refusedPlainly(
+            filesOnce(
+              {
+                operation: "write",
+                request,
+                ...whoOf(client),
+                asked: { path, content },
+                result: Written,
+              },
+              writeWhole(path, content, env.stateDir),
+            ),
+          ),
+        editFile: ({ path, oldString, newString, replaceAll, request }, { client }) =>
+          refusedPlainly(
+            filesOnce(
+              {
+                operation: "edit",
+                request,
+                ...whoOf(client),
+                asked: { path, oldString, newString, replaceAll: replaceAll ?? false },
+                result: Edited,
+              },
+              editString({ path, oldString, newString, replaceAll }, env.stateDir),
             ),
           ),
         confirm: ({ proposal, hash, request }, { client }) =>
@@ -1334,6 +1391,7 @@ const frontDoorHandlers = (
                     build: BUILD,
                     ...development,
                     protocol: PROTOCOL,
+                    files: true,
                     herds: sessions.flatMap(({ herd, name }) =>
                       herd === null ? [] : [name === undefined ? { id: herd } : { id: herd, name }],
                     ),

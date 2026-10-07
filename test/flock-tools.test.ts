@@ -7,6 +7,7 @@ import { Effect, Fiber, Stream } from "effect";
 import { TestClock } from "effect/testing";
 import { type BoardMessage, type Declaration, PROTOCOL, type TaskView } from "../src/board-model";
 import type { JsonObject } from "../src/schema";
+import { callFileTool, type ToolContent } from "../desktop/src/bun/file-tools";
 import { callFlockTool, type ChatDoor, type ChatMachine } from "../desktop/src/bun/flock-tools";
 import { task } from "./support/task";
 
@@ -16,11 +17,16 @@ interface Asked {
   readonly payload: unknown;
 }
 
-const snapshot = (tasks: ReadonlyArray<TaskView>, protocol: number): BoardMessage => ({
+const snapshot = (
+  tasks: ReadonlyArray<TaskView>,
+  protocol: number,
+  files: boolean,
+): BoardMessage => ({
   _tag: "Snapshot",
   installation: "i",
   build: "0.32.0",
   protocol,
+  files,
   herds: [{ id: "h1" }],
   tasks,
   seq: 0,
@@ -32,10 +38,11 @@ const machine = (
   tasks: ReadonlyArray<TaskView>,
   asked: Asked[],
   protocol = PROTOCOL,
+  files = true,
 ): ChatMachine => {
   const note = <P>(op: string, payload: P) => asked.push({ machine: name, op, payload });
   const door: ChatDoor = {
-    board: () => Stream.make(snapshot(tasks, protocol)).pipe(Stream.concat(Stream.never)),
+    board: () => Stream.make(snapshot(tasks, protocol, files)).pipe(Stream.concat(Stream.never)),
     declare: (payload: Declaration) =>
       Effect.sync(() => {
         note("declare", payload);
@@ -95,9 +102,47 @@ const machine = (
       }),
     runDetail: () => Stream.make(null),
     workflows: () => Effect.succeed([]),
+    readFile: (payload) =>
+      Effect.sync(() => {
+        note("readFile", payload);
+        const [mediaType = "text/plain", bytes = ""] = ON_DISK.get(payload.path) ?? [];
+        return {
+          path: payload.path,
+          size: bytes.length,
+          mediaType,
+          content: Buffer.from(bytes).toString("base64"),
+        };
+      }),
+    glob: (payload) =>
+      Effect.sync(() => {
+        note("glob", payload);
+        return { paths: ["/src/a.ts"], omitted: 0 };
+      }),
+    grep: (payload) =>
+      Effect.sync(() => {
+        note("grep", payload);
+        return { text: "/src/a.ts", omitted: 0 };
+      }),
+    writeFile: (payload) =>
+      Effect.sync(() => {
+        note("writeFile", payload);
+        return { path: payload.path, bytes: payload.content.length };
+      }),
+    editFile: (payload) =>
+      Effect.sync(() => {
+        note("editFile", payload);
+        return { path: payload.path, replaced: 1 };
+      }),
   };
   return { name, door };
 };
+
+/** What a fake Machine's files hold: a media type and the bytes. */
+const ON_DISK = new Map([
+  ["/var/log/app.log", ["text/plain", "one\ntwo\nthree\nfour\n"]],
+  ["/tmp/shot.png", ["image/png", "PNG!"]],
+  ["/tmp/trace.zip", ["application/zip", "PK\u0003\u0004"]],
+]);
 
 const flockOf = (asked: Asked[]) => ({
   machines: () => [
@@ -298,4 +343,97 @@ test("a Machine whose board could not be read is written to by nothing, and a ba
       expect(named).toContain("its board could not be read");
       expect(asked).toEqual([]);
     }).pipe(Effect.provide(BunServices.layer)),
+  ));
+
+/** What a file tool said in words, its images left out. */
+const textOf = (content: ReadonlyArray<ToolContent>) =>
+  content.map((one) => (one.type === "text" ? one.text : "")).join("\n");
+
+const callFile = (asked: Asked[], name: string, input: JsonObject, files = true) =>
+  callFileTool(
+    {
+      ...flockOf(asked),
+      machines: () => [machine("vm-mk", [], asked, PROTOCOL, files)],
+    },
+    name,
+    input,
+  ).pipe(Effect.provide(BunServices.layer));
+
+test("collie_read reaches the named Machine's host with the bare path, and answers numbered lines", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const asked: Asked[] = [];
+      const read = yield* callFile(asked, "collie_read", {
+        file_path: "vm-mk:/var/log/app.log",
+        offset: 2,
+        limit: 2,
+      });
+      expect(read).toEqual([{ type: "text", text: "     2\ttwo\n     3\tthree" }]);
+      expect(asked.find(({ op }) => op === "readFile")?.payload).toMatchObject({
+        path: "/var/log/app.log",
+      });
+    }),
+  ));
+
+test("collie_read of an image is the image, and of another binary its name, size and type", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      expect(yield* callFile([], "collie_read", { file_path: "vm-mk:/tmp/shot.png" })).toEqual([
+        { type: "image", data: Buffer.from("PNG!").toString("base64"), mimeType: "image/png" },
+      ]);
+      const zip = yield* callFile([], "collie_read", { file_path: "vm-mk:/tmp/trace.zip" });
+      expect(zip[0]).toMatchObject({ type: "text" });
+      expect(textOf(zip)).toContain("vm-mk:/tmp/trace.zip is application/zip, 4 bytes");
+    }),
+  ));
+
+test("a file tool on a Machine without them is told to upgrade, and a bare path to name one", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const asked: Asked[] = [];
+      const old = yield* callFile(
+        asked,
+        "collie_glob",
+        { pattern: "*.ts", path: "vm-mk:/src" },
+        false,
+      );
+      expect(textOf(old)).toContain("upgrade Collie on vm-mk");
+      const bare = yield* callFile(asked, "collie_read", { file_path: "/var/log/app.log" });
+      expect(textOf(bare)).toContain("<machine>:<path>");
+      expect(asked.filter(({ op }) => op !== "declare")).toEqual([]);
+    }),
+  ));
+
+test("collie_write and collie_edit go to the Machine's host in the human's words, under a request", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const asked: Asked[] = [];
+      yield* callFile(asked, "collie_edit", {
+        file_path: "vm-mk:/etc/app.ini",
+        old_string: "a=1",
+        new_string: "a=2",
+        replace_all: true,
+      });
+      expect(asked.map(({ op }) => op)).toEqual(["declare", "editFile"]);
+      expect(asked[0]!.payload).toMatchObject({ said: "stop the board bugs one" });
+      expect(asked[1]!.payload).toMatchObject({
+        path: "/etc/app.ini",
+        oldString: "a=1",
+        newString: "a=2",
+        replaceAll: true,
+      });
+      const grep = yield* callFile(asked, "collie_grep", {
+        pattern: "TODO",
+        path: "vm-mk:/src",
+        "-i": true,
+        output_mode: "content",
+      });
+      expect(grep).toEqual([{ type: "text", text: "vm-mk:/src/a.ts" }]);
+      expect(asked.at(-1)?.payload).toMatchObject({
+        pattern: "TODO",
+        path: "/src",
+        ignoreCase: true,
+        outputMode: "content",
+      });
+    }),
   ));

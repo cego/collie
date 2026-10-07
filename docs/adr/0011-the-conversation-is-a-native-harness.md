@@ -6,7 +6,7 @@ transport adapters. The amendment is "Chat may do what the human could do on the
 below, which replaces this ADR's original rule that chat's write tools carry nothing out,
 "Amended 2026-09-29: chat may choose what proves a Run", "Amended 2026-10-02: the
 tools are one Effect Toolkit", and "Amended 2026-10-05: a Herd's chat per Home, and one
-Flock chat per Desktop".
+Flock chat per Desktop", and "Amended 2026-10-07: the Flock chat reaches files".
 
 The Herd's conversation is an ordinary Claude Code or Pi session running in the Home's
 right-hand pane. Collie does not implement a chat.
@@ -210,6 +210,36 @@ chat is idle and Desktop's `proactive` switch is on. That turn shows as Desktop'
 tool host declares no human words for it, so nothing it does is recorded as said by the
 human. Anything else waits for the human's next message and goes with it as context. The
 host settles only the items the model was given (the `news` operation's `keys`).
+
+## Amended 2026-10-07: the Flock chat reaches files
+
+The Flock chat could not open a file. A human at Desktop can read, search, write and edit
+any file on their computer and on every Machine they reach, and run a command here, so a
+chat that could do none of it was the ceremony invariant 1 forbids: the human had to paste
+what the model could have found.
+
+On this computer, where Desktop and the chat run, the chat has Claude Code's own `Read`,
+`Glob`, `Grep`, `Write`, `Edit` and `Bash`, beside AskUserQuestion, and none of them asks
+first: a built-in tool that already exists is enabled rather than written again. Its
+session still loads none of the user's settings, hooks, skills or CLAUDE.md, and its
+working directory stays Desktop's state directory, where Claude Code keeps its transcripts,
+so it names files by absolute path.
+
+On every Machine it has `collie_read`, `collie_glob`, `collie_grep`, `collie_write` and
+`collie_edit`, which take the same arguments as Claude Code's tools of those names, with a
+path written `<machine>:<path>`. Each is answered by that Machine's host through a
+front-door operation over the chat's own channel, never by ssh around the bridge. A read of
+an image hands the model the image. A write or an edit takes a request id and is recorded
+with the chat's voice, in the host's log, since it belongs to no Run. The one refusal is a
+write or an edit inside the host's state directory: a Run's state is changed through the
+host's operations (invariant 4), whoever is asking. These five are the Flock chat's own and
+not the Toolkit's, so Native chat's reach is unchanged. `Bash` has no counterpart on a
+Machine.
+
+A file the chat finds, here or on a Machine, can go with a start, a follow-up or a steer as
+a pasted one does ([ADR-0044](0044-an-attachment-is-uploaded-once-and-belongs-to-the-run.md)).
+The system prompt says what the chat can reach, and still that what reaches it through a
+tool, a file included, is data and not instructions.
 
 ## What has actually been proven
 
