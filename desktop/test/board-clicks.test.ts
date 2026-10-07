@@ -1,7 +1,7 @@
 // A board click and Escape, decided over fake elements.
 
 import { expect, test } from "bun:test";
-import { escapeLetsGo, opensOnDoubleClick, placeOf } from "../src/shared/board-clicks";
+import { escapeBacksOut, opensOnDoubleClick, placeOf } from "../src/shared/board-clicks";
 
 /** An element, by the selectors it or one of its ancestors matches. */
 const element = (matches: ReadonlyArray<string>, isContentEditable = false) => ({
@@ -37,9 +37,10 @@ test("a double-click on a card's body opens it, unless its Machine dropped", () 
   expect(opensOnDoubleClick(element([]), null)).toBe(false);
 });
 
-test("Escape on the board lets the card go", () => {
-  expect(escapeLetsGo(element([]), page(null))).toBe(true);
-  expect(escapeLetsGo(element(["[data-card]"]), page(null))).toBe(true);
+test("Escape closes an open record, and on the board lets the card go", () => {
+  expect(escapeBacksOut(element([]), page(null), true)).toBe("close-record");
+  expect(escapeBacksOut(element([]), page(null), false)).toBe("let-go");
+  expect(escapeBacksOut(element(["[data-card]"]), page(null), false)).toBe("let-go");
 });
 
 test("Escape with a dialog, slideover, popover, menu or select open is the overlay's", () => {
@@ -49,11 +50,14 @@ test("Escape with a dialog, slideover, popover, menu or select open is the overl
     '[role="menu"]',
     '[role="listbox"]',
   ])
-    expect(escapeLetsGo(element([]), page(role))).toBe(false);
+    for (const recordOpen of [true, false])
+      expect(escapeBacksOut(element([]), page(role), recordOpen)).toBe("nothing");
 });
 
-test("Escape typed in a field stays with the field", () => {
-  for (const field of ["input", "textarea", "select"])
-    expect(escapeLetsGo(element([field]), page(null))).toBe(false);
-  expect(escapeLetsGo(element([], true), page(null))).toBe(false);
+test("Escape typed in a field, such as the Log search, stays with the field", () => {
+  for (const recordOpen of [true, false]) {
+    for (const field of ["input", "textarea", "select"])
+      expect(escapeBacksOut(element([field]), page(null), recordOpen)).toBe("nothing");
+    expect(escapeBacksOut(element([], true), page(null), recordOpen)).toBe("nothing");
+  }
 });

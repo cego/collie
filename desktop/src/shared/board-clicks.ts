@@ -30,7 +30,17 @@ export const placeOf = (target: Target): "control" | "card" | "board" => {
 export const opensOnDoubleClick = (target: Target, asOf: number | null) =>
   placeOf(target) === "card" && asOf === null;
 
-/** Escape belongs to a field typed in and to an open overlay, which closes itself on it. */
-export const escapeLetsGo = (target: Target, page: Page) =>
-  !(target !== null && (target.isContentEditable === true || target.closest(FIELD) !== null)) &&
-  page.querySelector(OVERLAY) === null;
+/**
+ * Escape backs out one level: a field typed in and an open overlay keep it, the overlay closing
+ * itself, then an open record closes, then the board lets its card go.
+ */
+export const escapeBacksOut = (
+  target: Target,
+  page: Page,
+  recordOpen: boolean,
+): "nothing" | "close-record" | "let-go" => {
+  const typing =
+    target !== null && (target.isContentEditable === true || target.closest(FIELD) !== null);
+  if (typing || page.querySelector(OVERLAY) !== null) return "nothing";
+  return recordOpen ? "close-record" : "let-go";
+};

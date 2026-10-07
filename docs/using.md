@@ -1014,14 +1014,24 @@ to it and drops its saved board. It never stops a host, a Run or herdr there, an
 uninstalls Collie. This computer is not in herdr's list, so it has no Remove.
 
 Click a card to select it; clicking it again keeps it selected. Double-click a card, or press
-its name, to open its drawer, which selects the card too and follows its Run on its host for
+its name, to open its record, which selects the card too and follows its Run on its host for
 as long as it is open. A click or double-click on one of a card's buttons does only what that
 button does, and a card whose Machine dropped can be selected but not opened. A click on the
 board's own area below the header, between cards or on a section heading, lets the selected
-card go. **Escape** backs out one level: an open dialog, menu, popover or drawer closes first, and
-with none open it lets the selected card go. Escape typed in a field stays with the field.
+card go.
 
-The drawer's **Plan** tab renders the spec, read whole from the host where it is longer than the
+The record takes the board's place in its column, under the header bar and beside the Flock
+chat, so you can ask the chat about the Run you are reading while its diff has the column's
+whole width — the window's, with the chat collapsed or popped out. Diff, Evidence and Log
+use that width; Plan, Review and Facts keep a readable line length. The record's back button
+returns to the board, which was never taken down: it comes back scrolled where you left it,
+its sections open or closed as they were, and the card still selected.
+
+**Escape** backs out one level: an open dialog, menu or popover closes first, then the
+record, and on the board Escape lets the selected card go. Escape typed in a field, such as
+the Log search, stays with the field.
+
+The record's **Plan** tab renders the spec, read whole from the host where it is longer than the
 details carry, and lists the tickets, each expanding
 in place, read from the host when first opened; a link from one plan file to another opens
 that file at the top of the tab. **Review** renders the review, read whole the same way, and lists its findings; a
@@ -1029,7 +1039,7 @@ that file at the top of the tab. **Review** renders the review, read whole the s
 **Diff** at that line, or a read-only view of the file from the Run's checkout where no
 hunk shows it. **Diff** is the Run's branch against its merge base — live while the Run
 works, final after — as a file tree beside each file's diff, unified or side by side, kept
-as you left it while the drawer is open. Shiki colours each side of a hunk as one text, so
+as you left it while the record is open. Shiki colours each side of a hunk as one text, so
 a comment spanning its lines is coloured on all of them. A file is read from the host when
 it is opened, and again when the Run changes how many lines it adds or removes, with no
 line cap; a file with more than
@@ -1091,7 +1101,7 @@ id is minted once and kept in `$XDG_STATE_HOME/collie-desktop/flock-chat.json` (
 `~/.local/state/collie-desktop/`), so a restart resumes the same conversation; Claude Code
 keeps and compacts the transcript on this computer.
 
-Replies stream in as Markdown, rendered as the drawer renders it: nothing in it runs or
+Replies stream in as Markdown, rendered as the record renders it: nothing in it runs or
 keeps a style, and a web link opens in your browser. Each tool call is one row — the tool, the Machine it
 reached and what it was asked — that opens to what the tool answered, and thinking is a
 collapsed **Thinking** you can open. When the chat needs you to choose, it asks with choice

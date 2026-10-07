@@ -22,7 +22,7 @@ const props = defineProps<{
 }>();
 const { run, openLink, goToPane } = useActions();
 const toast = useToast();
-const { open } = useDrawer();
+const record = useRecord();
 // A dialog opened before its Machine dropped is outside the card's disabled controls.
 const act = (action: DesktopAction) =>
   props.asOf === null ? run(props.installation, action) : Promise.resolve(false);
@@ -40,22 +40,19 @@ const { chip, choose } = useChip();
 const chosen = computed(
   () => chip.value?.machine === props.machine && chip.value.task === props.task.id,
 );
-const select = () =>
-  choose({
-    machine: props.machine,
-    task: props.task.id,
-    run: props.task.run,
-    name: props.task.name,
-  });
-const openDrawer = () => {
-  select();
-  open(props.cardKey);
-};
+const about = () => ({
+  machine: props.machine,
+  task: props.task.id,
+  run: props.task.run,
+  name: props.task.name,
+});
+const select = () => choose(about());
+const openRecord = () => record.open(props.cardKey, about());
 const selectOnBody = (event: MouseEvent) => {
   if (placeOf(targetOf(event)) === "card") select();
 };
 const openOnBody = (event: MouseEvent) => {
-  if (opensOnDoubleClick(targetOf(event), props.asOf)) openDrawer();
+  if (opensOnDoubleClick(targetOf(event), props.asOf)) openRecord();
 };
 
 const STATES: Record<
@@ -220,7 +217,7 @@ const menu = computed(() =>
             type="button"
             class="cursor-pointer text-left font-semibold hover:underline"
             data-testid="name"
-            @click="openDrawer"
+            @click="openRecord"
           >
             {{ task.name }}
           </button>
