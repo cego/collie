@@ -1,10 +1,10 @@
 // Whether each Machine is In sync with Desktop (CONTEXT.md), and the Flock's line about it.
 
-import { type MachineRow, type NotLive, type OnboardStep, SETTLED } from "./flock";
+import { type Credential, type MachineRow, type NotLive, type OnboardStep, SETTLED } from "./flock";
 
 /** What a Machine lags on, in words, with the steps that fix onboarding. */
 export interface Lag {
-  readonly part: "version" | "onboarding";
+  readonly part: "version" | "settings" | "credentials" | "onboarding";
   readonly said: string;
   readonly steps: ReadonlyArray<OnboardStep>;
 }
@@ -17,7 +17,13 @@ export interface InSync {
 /** What Desktop gives its Flock; a version that isn't a release asks nothing of one. */
 export interface DesktopHolds {
   readonly version: string;
+  readonly credentials: ReadonlyArray<Credential>;
 }
+
+export const CREDENTIAL_SAID = {
+  gitlab: { lacks: "the GitLab token", none: "GitLab token" },
+  helle: { lacks: "Helle's token", none: "Helle token" },
+} satisfies Record<Credential, { lacks: string; none: string }>;
 
 export const NOT_LIVE_SAID = {
   unreachable: "Out of reach",
@@ -61,7 +67,24 @@ const lags = (row: MachineRow, desktop: DesktopHolds): ReadonlyArray<Lag> => {
           },
         ]
       : [];
-  return [...version, ...onboarding];
+  const failed = row.settings?.failed ?? null;
+  const settings: ReadonlyArray<Lag> =
+    failed === null
+      ? []
+      : [{ part: "settings", said: `Settings didn't sync: ${failed}`, steps: [] }];
+  const credentials = desktop.credentials.flatMap((credential): ReadonlyArray<Lag> => {
+    const held = row.credentials[credential];
+    if (held === undefined || held.given) return [];
+    const lacks = `Lacks ${CREDENTIAL_SAID[credential].lacks}`;
+    return [
+      {
+        part: "credentials",
+        said: held.failed === null ? lacks : `${lacks}: ${held.failed}`,
+        steps: [],
+      },
+    ];
+  });
+  return [...version, ...settings, ...credentials, ...onboarding];
 };
 
 /** A part not known yet is not behind. */
@@ -77,14 +100,19 @@ export const flockInSync = (rows: ReadonlyArray<MachineRow>, desktop: DesktopHol
     const { state, behind } = inSync(row, desktop);
     if (state === "in-sync" || state === "connecting") return [];
     return [
-      `${row.name}: ${state === "behind" ? `behind on ${behind.map(({ part }) => part).join(" and ")}` : NOT_LIVE_SAID[state]}`,
+      `${row.name}: ${state === "behind" ? `behind on ${[...new Set(behind.map(({ part }) => part))].join(" and ")}` : NOT_LIVE_SAID[state]}`,
     ];
   });
+  const none = (["gitlab", "helle"] as const)
+    .filter((credential) => !desktop.credentials.includes(credential))
+    .map((credential) => `Desktop has no ${CREDENTIAL_SAID[credential].none} to give`);
   return {
-    said:
+    said: [
       lagging.length === 0
         ? `Every Machine is in sync with Desktop ${desktop.version}`
         : `Not in sync with Desktop ${desktop.version}: ${lagging.join("; ")}`,
+      ...none,
+    ].join(". "),
     count: lagging.length,
   };
 };

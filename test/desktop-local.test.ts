@@ -2,7 +2,7 @@
 // as `desktop`, never through Collie's own host client.
 
 import { expect, test } from "bun:test";
-import { Config, Deferred, Effect, Option, Schedule, Schema, Stream } from "effect";
+import { Config, Deferred, Effect, Option, Queue, Schedule, Schema, Stream } from "effect";
 import { type BoardMessage, type BoardSnapshot, PROTOCOL } from "../src/board-model";
 import { readAudit } from "../src/audit";
 import { runDir } from "../src/engine";
@@ -14,6 +14,8 @@ import {
   buildVerdict,
   openBridge,
   type Route,
+  type RouteChange,
+  syncNow,
 } from "../desktop/src/bun/machine";
 import type { FlockItem } from "../desktop/src/shared/flock";
 import { fastForward, watchedBy } from "./support/effect";
@@ -518,4 +520,76 @@ test("an upgrade cut off by its connection dropping is tried again when the Mach
       yield* Deferred.succeed(drops[0]!, undefined);
       yield* until(() => asked === 2);
     }).pipe(Effect.scoped, fastForward),
+  ));
+
+test("Sync now on a Machine behind on its version reopens its route, which asks the upgrade again", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      let connections = 0;
+      let asked = 0;
+      const told: string[] = [];
+      const behind: Route<Fake> = {
+        machine: { profile: "p-vm", name: "vm", target: "mk@vm" },
+        open: () =>
+          Effect.sync((): Fake => {
+            connections++;
+            return {
+              name: "vm",
+              board: () =>
+                Stream.make<[BoardMessage]>({ ...snapshot("vm"), build: "0.30.2" }).pipe(
+                  Stream.concat(Stream.never),
+                ),
+            };
+          }),
+        collie: () =>
+          Effect.sync(() => {
+            asked++;
+            return { out: "", err: "disk full", code: 1 };
+          }),
+      };
+      const changes = yield* Queue.unbounded<RouteChange<Fake>>();
+      yield* flockStream([behind], new Map(), "0.31.0", Stream.fromQueue(changes)).pipe(
+        Stream.runForEach((item) => Effect.sync(() => told.push(toldWithNotices(item)))),
+        Effect.forkScoped,
+      );
+      yield* until(() => told.includes("Could not upgrade vm to 0.31.0: disk full"));
+      expect([connections, asked]).toEqual([1, 1]);
+
+      const answer = yield* syncNow(behind.machine, ["version", "settings"], {
+        reopen: Queue.offer(changes, { _tag: "Reopen", profile: "p-vm" }),
+        sync: Effect.die("not synced while it reconnects"),
+        give: Effect.die("not given while it reconnects"),
+      });
+      expect(answer).toBe(
+        "Reopening vm to upgrade it; its settings and credentials follow once it connects",
+      );
+      yield* until(() => connections === 2 && asked === 2);
+      // Reopened, not lost.
+      expect(told.filter((one) => one.endsWith("Lost"))).toEqual([]);
+    }).pipe(Effect.scoped),
+  ));
+
+test("Sync now on a Machine behind on settings or credentials syncs and gives, and says what came of each", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const did: string[] = [];
+      const steps = (failed: string | null) => ({
+        reopen: Effect.die("not reopened"),
+        sync: Effect.sync(() => void did.push("sync")).pipe(Effect.as(failed)),
+        give: Effect.sync(() => void did.push("give")).pipe(
+          Effect.as([
+            { credential: "gitlab" as const, failed: null },
+            { credential: "helle" as const, failed: "ssh: connection reset" },
+          ]),
+        ),
+      });
+      const vm = { profile: "p-vm", name: "vm" };
+      expect(yield* syncNow(vm, ["credentials"], steps(null))).toBe(
+        "vm: settings synced; the GitLab token given; Helle's token not given: ssh: connection reset",
+      );
+      expect(yield* syncNow(vm, ["settings"], steps("host refused"))).toBe(
+        "vm: settings didn't sync: host refused; the GitLab token given; Helle's token not given: ssh: connection reset",
+      );
+      expect(did).toEqual(["sync", "give", "sync", "give"]);
+    }),
   ));

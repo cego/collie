@@ -444,6 +444,8 @@ test("a removed Machine leaves the board, its routes and what onboarding left of
       onboarded: null,
       build: null,
       development: null,
+      settings: null,
+      credentials: {},
     },
     {
       profile: "p-vm",
@@ -453,6 +455,8 @@ test("a removed Machine leaves the board, its routes and what onboarding left of
       onboarded: run,
       build: "0.31.0",
       development: null,
+      settings: null,
+      credentials: {},
     },
   ]);
   const after = applyItem(before, { _tag: "Removed", machine });

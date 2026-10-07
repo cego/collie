@@ -92,6 +92,7 @@ const served = (main: Channel<ToView, ToMain>) =>
         addMachine: () => Effect.die("not asked"),
         answerHerdr: () => Effect.die("not asked"),
         removeMachine: () => Effect.die("not asked"),
+        syncNow: () => Effect.die("not asked"),
         credentials: () => Stream.die("not asked"),
         flockSettings: () => Stream.die("not asked"),
         setFlockSetting: () => Effect.die("not asked"),
@@ -371,6 +372,8 @@ const row = (over: Partial<MachineRow> = {}): MachineRow => ({
   onboarded: null,
   build: "0.35.0",
   development: null,
+  settings: null,
+  credentials: {},
   ...over,
 });
 const doctored = (ready: boolean) => ({
@@ -382,7 +385,7 @@ const doctored = (ready: boolean) => ({
   reason: null,
   at: 1,
 });
-const DESKTOP = { version: "0.35.0" };
+const DESKTOP = { version: "0.35.0", credentials: ["gitlab", "helle"] as const };
 
 test("a live Machine on Desktop's release, doctored onboarded, is in sync", () => {
   expect(inSync(row({ onboarded: doctored(true) }), DESKTOP)).toEqual({
@@ -396,7 +399,7 @@ test("an older release is behind on its version, saying both", () => {
     state: "behind",
     behind: [{ part: "version", said: "Runs Collie 0.34.0; Desktop is 0.35.0", steps: [] }],
   });
-  expect(inSync(row({ build: "0.9.0" }), { version: "0.10.0" }).state).toBe("behind");
+  expect(inSync(row({ build: "0.9.0" }), { ...DESKTOP, version: "0.10.0" }).state).toBe("behind");
   expect(inSync(row({ build: "0.36.0" }), DESKTOP).state).toBe("in-sync");
 });
 
@@ -404,7 +407,9 @@ test("a development checkout, or a Desktop that isn't a release, is never behind
   expect(
     inSync(row({ build: "0.34.0+abc1234", development: "0.34.0+abc1234" }), DESKTOP).state,
   ).toBe("in-sync");
-  expect(inSync(row({ build: "0.34.0" }), { version: "0.35.0+def5678" }).state).toBe("in-sync");
+  expect(inSync(row({ build: "0.34.0" }), { ...DESKTOP, version: "0.35.0+def5678" }).state).toBe(
+    "in-sync",
+  );
 });
 
 test("a Machine doctor doesn't find onboarded is behind on onboarding, with its steps; one not yet doctored isn't", () => {
@@ -444,4 +449,68 @@ test("the Flock's summary names Desktop's version, or each Machine that lags and
     said: "Not in sync with Desktop 0.35.0: vm-mk: behind on version and onboarding; vm-c: Out of reach",
     count: 2,
   });
+});
+
+test("a Machine whose last settings sync failed is behind on settings, with why; one not yet synced isn't", () => {
+  expect(inSync(row({ settings: { failed: "host refused" } }), DESKTOP)).toEqual({
+    state: "behind",
+    behind: [{ part: "settings", said: "Settings didn't sync: host refused", steps: [] }],
+  });
+  expect(inSync(row({ settings: { failed: null } }), DESKTOP).state).toBe("in-sync");
+  expect(inSync(row({ settings: null }), DESKTOP).state).toBe("in-sync");
+});
+
+test("a Machine lacking a credential Desktop holds is behind on it, naming it and why a give failed", () => {
+  const holds = DESKTOP;
+  const lacking = row({
+    credentials: {
+      gitlab: { given: false, failed: "glab: not found" },
+      helle: { given: false, failed: null },
+    },
+  });
+  expect(inSync(lacking, holds)).toEqual({
+    state: "behind",
+    behind: [
+      { part: "credentials", said: "Lacks the GitLab token: glab: not found", steps: [] },
+      { part: "credentials", said: "Lacks Helle's token", steps: [] },
+    ],
+  });
+  // A credential Desktop doesn't hold is never a Machine's to lack.
+  expect(inSync(lacking, { ...DESKTOP, credentials: [] }).state).toBe("in-sync");
+  expect(inSync(row({ credentials: { gitlab: { given: true, failed: null } } }), holds).state).toBe(
+    "in-sync",
+  );
+  // Not told yet is not behind.
+  expect(inSync(row({ credentials: {} }), holds).state).toBe("in-sync");
+});
+
+test("the summary says which credentials Desktop has none of to give, and blames no Machine for them", () => {
+  const rows = [row({ credentials: { gitlab: { given: false, failed: null } } })];
+  expect(flockInSync(rows, { ...DESKTOP, credentials: ["helle"] })).toEqual({
+    said: "Every Machine is in sync with Desktop 0.35.0. Desktop has no GitLab token to give",
+    count: 0,
+  });
+  expect(flockInSync(rows, { ...DESKTOP, credentials: ["gitlab"] })).toEqual({
+    said: "Not in sync with Desktop 0.35.0: vm-mk: behind on credentials. Desktop has no Helle token to give",
+    count: 1,
+  });
+});
+
+test("a Machine's settings sync and its credentials are kept on its row, and dropped with it", () => {
+  const items: FlockItem[] = [
+    routed(vm),
+    { _tag: "Synced", machine: vm, failed: "host refused" },
+    { _tag: "Given", machine: vm, credential: "gitlab", given: false, failed: "nope" },
+    { _tag: "Given", machine: vm, credential: "gitlab", given: true, failed: null },
+  ];
+  const flock = items.reduce(applyItem, EMPTY_FLOCK);
+  expect(machineRows(flock)[0]).toMatchObject({
+    settings: { failed: "host refused" },
+    credentials: { gitlab: { given: true, failed: null } },
+  });
+  const removed = applyItem(flock, {
+    _tag: "Removed",
+    machine: { profile: vm.profile, name: vm.name },
+  });
+  expect(removed.synced.size + removed.given.size).toBe(0);
 });

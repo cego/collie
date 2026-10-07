@@ -3,7 +3,7 @@
 
 import { expect, test } from "bun:test";
 import { Effect, SubscriptionRef } from "effect";
-import type { SharedSetting, SharedSettings } from "../src/board-model";
+import { HostRefused, type SharedSetting, type SharedSettings } from "../src/board-model";
 import {
   editSetting,
   type FlockSettings,
@@ -177,11 +177,19 @@ const machine = (name: string, held: ReadonlyArray<SharedSetting>, meanwhile = E
 };
 
 const syncer = (flock: SubscriptionRef.SubscriptionRef<FlockSettings>, ...machines: Machine[]) =>
+  syncerTelling(flock, () => Effect.void, ...machines);
+
+const syncerTelling = (
+  flock: SubscriptionRef.SubscriptionRef<FlockSettings>,
+  told: (machine: Machine, failed: string | null) => Effect.Effect<void>,
+  ...machines: Machine[]
+) =>
   flockSync({
     flock,
     machines: () => machines,
     save: () => Effect.void,
     request: Effect.succeed("r"),
+    told,
   });
 
 type Machine = ReturnType<typeof machine>;
@@ -238,5 +246,29 @@ test("an edit taken from one Machine goes on to every other connected Machine", 
       yield* vmA.door.setSettings({ settings: [set("model", "haiku", 15)] });
       yield* syncOn(vmA);
       expect(vmB.asked.at(-1)).toEqual([set("model", "haiku", 15)]);
+    }),
+  ));
+
+test("each sync tells how it ended for its Machine: synced, or failed in its host's words", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const flock = yield* SubscriptionRef.make(NO_FLOCK_SETTINGS);
+      const told: Array<readonly [string, string | null]> = [];
+      const vmA = machine("vm-a", []);
+      // A host that refuses, as one on a collie without the operation does.
+      const vmB = machine("vm-b", [], Effect.die(new HostRefused({ reason: "no such operation" })));
+      const { syncOn } = yield* syncerTelling(
+        flock,
+        (one, failed) => Effect.sync(() => void told.push([one.name, failed])),
+        vmA,
+        vmB,
+      );
+
+      expect(yield* syncOn(vmA)).toBeNull();
+      expect(yield* syncOn(vmB)).toBe("no such operation");
+      expect(told).toEqual([
+        ["vm-a", null],
+        ["vm-b", "no such operation"],
+      ]);
     }),
   ));

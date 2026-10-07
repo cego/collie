@@ -4,7 +4,7 @@ import { type InSync, NOT_LIVE_SAID } from "../../../src/shared/in-sync";
 
 const open = defineModel<boolean>("open", { required: true });
 const { machines, summary } = useInSync();
-const { addMachine, removeMachine } = useActions();
+const { addMachine, removeMachine, syncNow } = useActions();
 const { job, onboardOn, loginOn } = useOnboarding();
 
 const target = ref("");
@@ -19,6 +19,8 @@ const badgeOf = (state: InSync["state"]) =>
       : state === "connecting"
         ? { label: "Connecting", color: "neutral" as const }
         : { label: NOT_LIVE_SAID[state], color: "warning" as const };
+/** What Sync now redoes; onboarding has its own steps. */
+const syncable = (verdict: InSync) => verdict.behind.some(({ part }) => part !== "onboarding");
 const buildOf = ({ build, development }: MachineRow) =>
   development !== null
     ? `development build ${development}`
@@ -117,6 +119,14 @@ const add = async () => {
             />
           </template>
           <div class="flex justify-end gap-2">
+            <UButton
+              v-if="syncable(verdict)"
+              color="warning"
+              icon="i-lucide-refresh-cw"
+              label="Sync now"
+              data-testid="sync-now"
+              @click="syncNow(row.profile)"
+            />
             <UButton
               v-if="row.target !== null"
               color="neutral"

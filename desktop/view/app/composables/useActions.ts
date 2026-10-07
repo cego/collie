@@ -18,6 +18,7 @@ const onboardAtom = FlockClient.mutation("onboard");
 const addMachineAtom = FlockClient.mutation("addMachine");
 const answerHerdrAtom = FlockClient.mutation("answerHerdr");
 const removeMachineAtom = FlockClient.mutation("removeMachine");
+const syncNowAtom = FlockClient.mutation("syncNow");
 const saveGitlabAtom = FlockClient.mutation("saveGitlab");
 const saveGitlabHostAtom = FlockClient.mutation("saveGitlabHost");
 const saveHelleAtom = FlockClient.mutation("saveHelle");
@@ -70,6 +71,7 @@ export const useActions = () => {
   const addMachine = useAtomSet(() => addMachineAtom, { mode: "promiseExit" });
   const answerHerdr = useAtomSet(() => answerHerdrAtom, { mode: "promiseExit" });
   const removeMachine = useAtomSet(() => removeMachineAtom, { mode: "promiseExit" });
+  const syncNow = useAtomSet(() => syncNowAtom, { mode: "promiseExit" });
   const saveGitlab = useAtomSet(() => saveGitlabAtom, { mode: "promiseExit" });
   const saveGitlabHost = useAtomSet(() => saveGitlabHostAtom, { mode: "promiseExit" });
   const saveHelle = useAtomSet(() => saveHelleAtom, { mode: "promiseExit" });
@@ -202,6 +204,11 @@ export const useActions = () => {
     /** The job logging Claude Code in on that route's Machine. */
     claudeLogin: (profile: string) => claudeLogin({ payload: { profile } }).then(read),
     pasteCode: (job: string, code: string) => pasteCode({ payload: { job, code } }),
+    syncNow: (profile: string) =>
+      syncNow({ payload: { profile } }).then((exit) => {
+        const said = read(exit);
+        if (said !== null) toast.add({ title: said, color: "success" });
+      }),
     removeMachine: (profile: string) =>
       removeMachine({ payload: { profile } }).then((exit) => {
         const said = read(exit);

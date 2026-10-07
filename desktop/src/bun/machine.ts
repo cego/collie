@@ -34,6 +34,7 @@ import {
 import type * as RpcClientError from "effect/unstable/rpc/RpcClientError";
 import {
   ActionFailed,
+  type Credential,
   type DesktopAction,
   type FlockItem,
   type KnownMachine,
@@ -42,6 +43,7 @@ import {
   type MachineMessage,
   type NotLive,
 } from "../shared/flock";
+import { CREDENTIAL_SAID, type Lag } from "../shared/in-sync";
 
 const children = new Set<Bun.Subprocess>();
 export const endChildren = () => {
@@ -476,12 +478,16 @@ const upgradeTo = (route: Route<BoardSource>, version: string) =>
 /** How long a route waits before it tries again, after so many tries in a row failed. */
 const backoff = (failures: number) => Math.min(1000 * 2 ** failures, 60_000);
 
-/** A route added, one removed, or one woken to try again now rather than after its backoff. */
+/**
+ * A route added, one removed, one woken to try again now rather than after its backoff, or
+ * one reopened, which asks a Machine's upgrade again.
+ */
 export type RouteChange<D extends BoardSource = Doors> =
   | { readonly _tag: "Add"; readonly route: Route<D> }
   /** `done` once its stream has ended and its Machine is said to be removed. */
   | { readonly _tag: "Remove"; readonly profile: string; readonly done: Deferred.Deferred<void> }
-  | { readonly _tag: "Wake"; readonly profile: string };
+  | { readonly _tag: "Wake"; readonly profile: string }
+  | { readonly _tag: "Reopen"; readonly profile: string };
 
 /**
  * Every route's board, one stream per installation. Routes earlier in the list are
@@ -505,6 +511,7 @@ export const flockStream = <D extends BoardSource>(
       const removed: Array<Deferred.Deferred<void>> = [];
       const ended: Array<Deferred.Deferred<void>> = [];
       const wakes: Array<Queue.Queue<void>> = [];
+      const reopens: Array<Queue.Queue<void>> = [];
       const places = new Map<string, number>();
       const routeAt: Array<Route<D>> = [];
       // Routes with nothing more to show: merged into another, or too new to read.
@@ -556,6 +563,8 @@ export const flockStream = <D extends BoardSource>(
       const live = (route: Route<D>, at: number, waitingOnSso: WaitingOnSso) =>
         Stream.unwrap(
           Effect.gen(function* () {
+            // A reopen asked while it was not live is this opening.
+            yield* Queue.clear(reopens[at]!);
             const door = yield* route.open(waitingOnSso);
             // The build of a release older than Desktop, once its board is shown.
             const due = yield* Deferred.make<{
@@ -614,7 +623,13 @@ export const flockStream = <D extends BoardSource>(
                 upgradeThenReopen(route, installation, from),
               ),
             );
-            return Stream.merge(board, upgrade, { haltStrategy: "left" });
+            return Stream.merge(board, upgrade, { haltStrategy: "left" }).pipe(
+              Stream.interruptWhen(
+                Queue.take(reopens[at]!).pipe(
+                  Effect.andThen(Effect.fail<RouteFailure>({ state: "reopen", reason: "asked" })),
+                ),
+              ),
+            );
           }),
         );
       const notice = (route: Route<D>, text: string): FlockItem => ({
@@ -700,6 +715,7 @@ export const flockStream = <D extends BoardSource>(
           removed.push(yield* Deferred.make<void>());
           ended.push(yield* Deferred.make<void>());
           wakes.push(yield* Queue.sliding<void>(1));
+          reopens.push(yield* Queue.sliding<void>(1));
           places.set(route.machine.profile, at);
           routeAt.push(route);
           const notices = yield* Queue.unbounded<FlockItem>();
@@ -723,6 +739,17 @@ export const flockStream = <D extends BoardSource>(
           return at === undefined
             ? Stream.empty
             : Stream.fromEffectDrain(Queue.offer(wakes[at]!, undefined));
+        if (change._tag === "Reopen")
+          return at === undefined
+            ? Stream.empty
+            : Stream.fromEffectDrain(
+                Effect.gen(function* () {
+                  for (const [installation, owner] of yield* Ref.get(owners))
+                    if (owner === at) upgrading.delete(installation);
+                  yield* Queue.offer(reopens[at]!, undefined);
+                  yield* Queue.offer(wakes[at]!, undefined);
+                }),
+              );
         if (at === undefined)
           return Stream.fromEffectDrain(Deferred.succeed(change.done, undefined));
         places.delete(change.profile);
@@ -885,3 +912,36 @@ export const runDetailOn = (door: Door, runId: string) =>
 
 export const runFileOn = (door: Door, runId: string, ref: string, offset?: number) =>
   door.runFile({ runId, ref, offset }).pipe(Effect.mapError(refusal()));
+
+/**
+ * What connecting would do for a Machine that lags on `behind`: reopen its route, which
+ * asks its upgrade again and syncs and gives on the new connection, where it is behind on
+ * its version; else sync its settings and give it what it lacks. Answers what it did.
+ */
+export const syncNow = (
+  machine: KnownMachine,
+  behind: ReadonlyArray<Lag["part"]>,
+  steps: {
+    readonly reopen: Effect.Effect<unknown>;
+    readonly sync: Effect.Effect<string | null>;
+    readonly give: Effect.Effect<
+      ReadonlyArray<{ readonly credential: Credential; readonly failed: string | null }>
+    >;
+  },
+) =>
+  Effect.gen(function* () {
+    if (behind.includes("version")) {
+      yield* steps.reopen;
+      return `Reopening ${machine.name} to upgrade it; its settings and credentials follow once it connects`;
+    }
+    const failed = yield* steps.sync;
+    const gave = yield* steps.give;
+    return [
+      `${machine.name}: ${failed === null ? "settings synced" : `settings didn't sync: ${failed}`}`,
+      ...gave.map(({ credential, failed: why }) =>
+        why === null
+          ? `${CREDENTIAL_SAID[credential].lacks} given`
+          : `${CREDENTIAL_SAID[credential].lacks} not given: ${why}`,
+      ),
+    ].join("; ");
+  });

@@ -41,6 +41,7 @@ import {
   EMPTY_FLOCK,
   type FlockItem,
   type KnownMachine,
+  machineRows,
   nameAsShown,
   type OnboardRun,
   type OnboardStep,
@@ -75,7 +76,10 @@ import {
   remoteRoute,
   removeFromHerdr,
   type RouteChange,
+  syncNow,
 } from "./machine";
+import { givenCredentials } from "./given";
+import { inSync } from "../shared/in-sync";
 import { attachCommand, inTerminal, launched, shellLine } from "./terminal";
 import { addToHerdr, doctorOn, NOT_STARTED, onboardThrough, RELEASES, tracked } from "./onboarding";
 import {
@@ -314,7 +318,11 @@ const main = Effect.gen(function* () {
   const runners = `${Utils.paths.userData}/runners`;
   const scope = yield* Effect.scope;
   const uuid = (yield* Crypto.Crypto).randomUUIDv4.pipe(Effect.orDie);
-  const settingsOf = (door: Doors) => ({ name: door.machine.name, door: door.desktop });
+  const settingsOf = (door: Doors) => ({
+    name: door.machine.name,
+    door: door.desktop,
+    machine: door.machine,
+  });
   // A Machine out of reach, or on a collie without the operation until it is upgraded, is
   // synced when it next connects.
   const { syncOn, syncEvery } = yield* flockSync({
@@ -322,6 +330,19 @@ const main = Effect.gen(function* () {
     machines: () => [...doors.values()].map(settingsOf),
     save: (flock) => writeFlockSettings(own, flock).pipe(Effect.provide(BunServices.layer)),
     request: uuid,
+    told: ({ machine }, failed) =>
+      PubSub.publish(news, { _tag: "Synced", machine, failed }).pipe(Effect.asVoid),
+  });
+  const firstFailure = (each: ReadonlyArray<{ readonly failed: string | null }>) =>
+    each[0]?.failed ?? null;
+  const given = yield* givenCredentials({
+    dir: own,
+    keyring,
+    give: {
+      gitlab: (route, text) => Effect.map(giveToken([route], gitlabHost(), text), firstFailure),
+      helle: (route, text) => Effect.map(giveHelle([route], helle, text), firstFailure),
+    },
+    tell: (item) => PubSub.publish(news, item).pipe(Effect.asVoid),
   });
 
   // The job onboarding each route, and its fiber, while one runs; and the question each job waits on.
@@ -362,6 +383,7 @@ const main = Effect.gen(function* () {
     return Effect.gen(function* () {
       // Without its credentials file, a Machine is onboarded as far as it goes with none.
       const secrets = yield* secretsFor(keyring).pipe(Effect.orElseSucceed(() => ""));
+      const handed = yield* given.held;
       const before = (yield* savedOnboardings(onboardings)).find(
         (saved) => saved.machine.profile === machine.profile,
       );
@@ -385,6 +407,7 @@ const main = Effect.gen(function* () {
         tell(job, machine),
         start,
       );
+      if (run.ready === true) yield* given.handed(machine, handed);
       // Kept as skipped where the run ended before it, so the next run skips it too.
       const unreached = skip
         .filter((step) => !run.steps.some((one) => one.step === step))
@@ -447,7 +470,7 @@ const main = Effect.gen(function* () {
     });
 
   const everyRoute = () => [...routes.values()].map(({ route }) => route);
-  const given = (
+  const gave = (
     what: string,
     each: ReadonlyArray<{ readonly name: string; readonly failed: string | null }>,
   ) => {
@@ -520,19 +543,26 @@ const main = Effect.gen(function* () {
             checked.add(once);
             return doctored(route).pipe(Effect.forkIn(scope));
           };
-          // Each Snapshot is a Machine (re)connected, so whatever changed while apart is synced.
+          // Each Snapshot is a Machine (re)connected, so whatever changed while apart is synced
+          // and given.
           const syncOnceLive = (item: FlockItem) => {
             if ("_tag" in item || item.message._tag !== "Snapshot") return Effect.void;
             const door = doors.get(item.machine.installation);
-            return door === undefined
-              ? Effect.void
-              : syncOn(settingsOf(door)).pipe(Effect.forkIn(scope));
+            const route = routes.get(item.machine.profile)?.route;
+            return Effect.all(
+              [
+                door === undefined ? Effect.void : syncOn(settingsOf(door)),
+                route === undefined ? Effect.void : given.giveLacking(route),
+              ],
+              { concurrency: "unbounded", discard: true },
+            ).pipe(Effect.forkIn(scope));
           };
           shown = EMPTY_FLOCK;
           const before: ReadonlyArray<FlockItem> = [
             ...reachable.map(({ machine }): FlockItem => ({ _tag: "Routed", machine })),
             ...(yield* savedBoards(boards)).filter(listed),
             ...(yield* savedOnboardings(onboardings)).filter(listed),
+            ...(yield* given.states(reachable.map(({ machine }) => machine))),
           ];
           return Stream.fromIterable(before).pipe(
             Stream.concat(
@@ -605,7 +635,7 @@ const main = Effect.gen(function* () {
         const { expires } = yield* gitlabToken(gitlab(), said);
         yield* keyring.store("gitlab-token", `Collie's GitLab token for ${gitlabHost()}`, said);
         yield* SubscriptionRef.update(credentials, (now) => ({ ...now, gitlab: { expires } }));
-        return given("GitLab token", yield* giveToken(everyRoute(), gitlabHost(), said));
+        return gave("GitLab token", yield* given.giveEvery(everyRoute(), "gitlab", said));
       }).pipe(Effect.mapError((reason) => new ActionFailed({ reason }))),
     saveGitlabHost: ({ host }) =>
       Effect.gen(function* () {
@@ -639,7 +669,7 @@ const main = Effect.gen(function* () {
         yield* helleOwner(helle, said);
         yield* keyring.store("helle-token", "Collie's Helle token", said);
         yield* SubscriptionRef.update(credentials, (now) => ({ ...now, helle: true }));
-        return given("Helle's token", yield* giveHelle(everyRoute(), helle, said));
+        return gave("Helle's token", yield* given.giveEvery(everyRoute(), "helle", said));
       }).pipe(Effect.mapError((reason) => new ActionFailed({ reason }))),
     claudeLogin: ({ profile }) =>
       Effect.gen(function* () {
@@ -691,8 +721,30 @@ const main = Effect.gen(function* () {
         yield* Effect.all([
           dropOnboarding(onboardings, profile),
           dropBoardsOf(boards, profile),
+          given.drop(profile),
         ]).pipe(Effect.provide(BunServices.layer));
         return `Removed ${known.route.machine.name}`;
+      }),
+    syncNow: ({ profile }) =>
+      Effect.gen(function* () {
+        const route = routes.get(profile)?.route;
+        const row = machineRows(shown).find((one) => one.profile === profile);
+        if (route === undefined || row === undefined)
+          return yield* new ActionFailed({ reason: "that Machine is not in herdr's list" });
+        const texts = yield* given.held;
+        const held = (["gitlab", "helle"] as const).filter((one) => texts[one] !== undefined);
+        const { behind } = inSync(row, { version: manifest.version, credentials: held });
+        const door = [...doors.values()].find((one) => one.machine.profile === profile);
+        const parts = behind.map(({ part }) => part);
+        if (door === undefined && !parts.includes("version"))
+          return yield* new ActionFailed({
+            reason: `${route.machine.name} isn't connected; it is synced when it connects`,
+          });
+        return yield* syncNow(route.machine, parts, {
+          reopen: PubSub.publish(changes, { _tag: "Reopen", profile }),
+          sync: door === undefined ? Effect.succeed(null) : syncOn(settingsOf(door)),
+          give: given.giveLacking(route),
+        });
       }),
     act: ({ installation, action, request: again }) =>
       Effect.gen(function* () {

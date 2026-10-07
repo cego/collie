@@ -134,6 +134,26 @@ export const MachineDoctored = Schema.TaggedStruct("Doctored", {
 });
 export type MachineDoctored = typeof MachineDoctored.Type;
 
+/** How a Machine's latest settings sync ended: null where it synced, else why not. */
+export const MachineSynced = Schema.TaggedStruct("Synced", {
+  machine: KnownMachine,
+  failed: Schema.NullOr(Schema.String),
+});
+export type MachineSynced = typeof MachineSynced.Type;
+
+/** A credential Desktop gives every Machine. */
+export const Credential = Schema.Literals(["gitlab", "helle"]);
+export type Credential = typeof Credential.Type;
+
+/** Whether a Machine has the credential Desktop holds now, and why its last give failed. */
+export const MachineGiven = Schema.TaggedStruct("Given", {
+  machine: KnownMachine,
+  credential: Credential,
+  given: Schema.Boolean,
+  failed: Schema.NullOr(Schema.String),
+});
+export type MachineGiven = typeof MachineGiven.Type;
+
 /** Which credentials Desktop holds for every Machine, and nothing of the secrets themselves. */
 export const Credentials = Schema.Struct({
   gitlab: Schema.NullOr(Schema.Struct({ expires: Schema.NullOr(Schema.String) })),
@@ -162,6 +182,8 @@ export const FlockItem = Schema.Union([
   MachineRemoved,
   MachineOnboarding,
   MachineDoctored,
+  MachineSynced,
+  MachineGiven,
 ]);
 export type FlockItem = typeof FlockItem.Type;
 
@@ -349,6 +371,12 @@ export const DesktopRpcs = RpcGroup.make(
     success: Schema.String,
     error: ActionFailed,
   }),
+  /** Does for a lagging Machine what connecting would, and says what it did. */
+  Rpc.make("syncNow", {
+    payload: { profile: Schema.String },
+    success: Schema.String,
+    error: ActionFailed,
+  }),
   /** One Run's details while its drawer is open, with its log's tail, again as they change. */
   Rpc.make("runDetail", {
     payload: { installation: Schema.String, runId: Schema.String },
@@ -429,7 +457,15 @@ export interface Flock {
   readonly onboarded: ReadonlyMap<string, OnboardRun>;
   /** Doctor's latest reading of each route, by herdr profile. */
   readonly doctored: ReadonlyMap<string, OnboardRun>;
+  /** How each route's latest settings sync ended, by herdr profile. */
+  readonly synced: ReadonlyMap<string, string | null>;
+  /** Each route's credentials, by herdr profile. */
+  readonly given: ReadonlyMap<string, CredentialsGiven>;
 }
+
+export type CredentialsGiven = Partial<
+  Record<Credential, { readonly given: boolean; readonly failed: string | null }>
+>;
 
 export const EMPTY_FLOCK: Flock = {
   machines: new Map(),
@@ -439,6 +475,8 @@ export const EMPTY_FLOCK: Flock = {
   onboarding: new Map(),
   onboarded: new Map(),
   doctored: new Map(),
+  synced: new Map(),
+  given: new Map(),
 };
 
 /**
@@ -459,6 +497,17 @@ export const applyItem = (flock: Flock, item: FlockItem): Flock => {
     };
   if ("_tag" in item && item._tag === "Doctored")
     return { ...flock, doctored: new Map(flock.doctored).set(item.machine.profile, item.run) };
+  if ("_tag" in item && item._tag === "Synced")
+    return { ...flock, synced: new Map(flock.synced).set(item.machine.profile, item.failed) };
+  if ("_tag" in item && item._tag === "Given") {
+    const { machine, credential, given, failed } = item;
+    const { profile } = machine;
+    const had = flock.given.get(profile);
+    return {
+      ...flock,
+      given: new Map(flock.given).set(profile, { ...had, [credential]: { given, failed } }),
+    };
+  }
   if ("_tag" in item && item._tag === "Removed") {
     const { profile } = item.machine;
     const without = <V>(map: ReadonlyMap<string, V>) => {
@@ -472,6 +521,8 @@ export const applyItem = (flock: Flock, item: FlockItem): Flock => {
       lost: without(flock.lost),
       onboarded: without(flock.onboarded),
       doctored: without(flock.doctored),
+      synced: without(flock.synced),
+      given: without(flock.given),
       machines: new Map(
         [...flock.machines].filter(([, { machine }]) => machine.profile !== profile),
       ),
@@ -615,6 +666,9 @@ export interface MachineRow {
   /** The Collie it runs, as it was last seen; null where it never was. */
   readonly build: string | null;
   readonly development: string | null;
+  /** How its latest settings sync ended; null until one has. */
+  readonly settings: { readonly failed: string | null } | null;
+  readonly credentials: CredentialsGiven;
 }
 
 /**
@@ -654,6 +708,8 @@ export const machineRows = (flock: Flock): ReadonlyArray<MachineRow> =>
       onboarded: standing(flock.onboarded.get(profile), flock.doctored.get(profile)),
       build: shown?.build ?? null,
       development: shown?.development ?? null,
+      settings: flock.synced.has(profile) ? { failed: flock.synced.get(profile)! } : null,
+      credentials: flock.given.get(profile) ?? {},
     };
   });
 

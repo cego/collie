@@ -958,9 +958,16 @@ sync**, **Behind**, **Connecting**, or why it isn't live (**Out of reach**, **Wa
 SSO**, **Collie isn't installed**, **Update Desktop**). A live Machine is behind on its
 version when it runs a release older than Desktop's, which the row says with both versions;
 never on a development checkout, and never while Desktop itself isn't a release. It is
-behind on onboarding when `collie doctor` doesn't find it onboarded, and the row lists the
-missing steps with their fixes. A part not known yet, such as doctor not having answered, is
-not counted. The header's **Machines** button shows how many Machines aren't in sync, those
+behind on settings when its last settings sync failed, with the host's reason; behind on
+credentials for each credential Desktop holds that it lacks, with why the last give failed
+where one did; and behind on onboarding when `collie doctor` doesn't find it onboarded, and
+the row lists the missing steps with their fixes. A part not known yet, such as a first sync
+not finished or doctor not having answered, is not counted, and a credential Desktop holds
+none of is no Machine's to lack: the summary says "Desktop has no GitLab token to give"
+instead. **Sync now** on a Machine behind on its version, settings or credentials does what
+connecting would: behind on its version, it reopens the Machine's connection, which asks the
+upgrade again and then syncs and gives on the new one; otherwise it syncs its settings and
+gives it what it lacks. A toast says what it did. The header's **Machines** button shows how many Machines aren't in sync, those
 still connecting left out.
 
 Onboarding downloads the runner of Desktop's own version for that Machine from the GitHub
@@ -996,8 +1003,13 @@ GitLab token, made on GitLab's own page — **Make one on GitLab** opens it with
 accepts it with those scopes, and gives it at once to glab on every Machine it reaches
 (`glab auth login --hostname <host> --stdin`); Helle's goes to each Machine's
 credentials file, owner-only, the same way. Every onboarding gets what is kept on its stdin (`--secrets-stdin`), so a second
-Machine asks for neither, and one that was out of reach when a token was renewed gets the
-new one the next time it is onboarded. A step that needs one you have not given yet takes it
+Machine asks for neither. A Machine that lacks a credential Desktop holds is given it each
+time it connects, the way its settings are synced, so one that was out of reach when a token
+was renewed gets the new one when it is back. Desktop knows which Machine has which by a
+fingerprint of what it gave each — the first 16 hex digits of its SHA-256, never the secret
+— kept in `given.json` beside `flock-settings.json`; a give, a save or renewal that reached
+the Machine, and an onboarding that ended ready all record one, and removing a Machine drops
+its record. A Machine given the current one is not touched again. A step that needs one you have not given yet takes it
 there and onboards again. Desktop asks GitLab when the token expires, at launch and when it
 is saved, and warns above the board from 14 days before; **Renew** with a new one replaces
 it on every Machine.
