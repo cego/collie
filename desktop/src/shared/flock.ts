@@ -281,6 +281,8 @@ export const DesktopSettings = Schema.Struct({
   proactive: Schema.Boolean.pipe(Schema.withDecodingDefaultKey(Effect.succeed(true))),
   /** The GitLab every Machine is onboarded and doctored against; unset is the default one. */
   gitlabHost: Schema.optionalKey(Schema.String),
+  /** Which Machine each kind of work goes to, in the human's words; empty is no rule. */
+  machineRule: Schema.optionalKey(Schema.String),
 });
 export type DesktopSettings = typeof DesktopSettings.Type;
 

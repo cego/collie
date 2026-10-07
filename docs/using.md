@@ -1151,6 +1151,21 @@ whose board could not be read, is written to by nothing. The bell turns Desktop'
 turns off (and on again); it is on by default, and kept in `settings.json` beside the
 session.
 
+**Settings** has a **Flock chat** section with the **Machine rule**: which Machine each kind
+of work goes to, in your own words — "Frontend work is on the laptop, everything else is on
+the vm". It is kept in `settings.json` on this computer, and given to no Machine. The chat
+gets it with every message, its own turns included, beside the Machines Desktop reaches at
+that moment, named as the cards name them, with this computer marked as the one Desktop
+runs on, so "the laptop" can mean it. When it starts work it names the Machine from the
+rule, unless your message names one, which wins. When the rule's Machine is not reachable,
+it says so and starts nothing elsewhere; when the rule does not cover the work, it asks.
+An empty rule changes nothing. You can also tell the chat to change it ("from now on,
+frontend goes on the laptop") or ask what it is; it saves through the same setting, and
+Settings shows the new text the next time it opens. The rule informs the chat's choice and
+nothing more: a start that names no Machine while several are reachable is still refused,
+and a Run the rule placed on another Machine still opens with Go to pane over that
+Machine's own connection.
+
 **Start fresh** (the pen) mints a new session and makes it current; the history (the clock)
 lists the earlier ones on this computer, newest first, and reopens one. Either way the
 session before it ends: there is only ever one live conversation. **Pop out** moves the

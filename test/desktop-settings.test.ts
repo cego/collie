@@ -2,7 +2,8 @@
 // that was made, and given to every Machine through its host.
 
 import { expect, test } from "bun:test";
-import { Effect } from "effect";
+import { BunServices } from "@effect/platform-bun";
+import { Effect, FileSystem } from "effect";
 import type { SharedSetting, SharedSettings } from "../src/board-model";
 import {
   editSetting,
@@ -11,6 +12,7 @@ import {
   takeFrom,
 } from "../desktop/src/shared/flock-settings";
 import { syncSettings } from "../desktop/src/bun/flock-settings";
+import { readSettings, writeSettings } from "../desktop/src/bun/settings";
 
 const at = (hour: number) => `2026-10-07T${String(hour).padStart(2, "0")}:00:00.000Z`;
 const set = (key: string, value: SharedSetting["value"], hour: number): SharedSetting => ({
@@ -119,4 +121,19 @@ test("a Machine is synced through its host: read, then given only what it lacks"
       yield* syncSettings(after, "vm-a", door, "r-2");
       expect(asked).toHaveLength(1);
     }),
+  ));
+
+test("the Machine rule is kept on this computer with Desktop's own settings, and a file from before it still reads", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "desktop-settings-" });
+      const rule = "Frontend work is on the laptop, everything else is on the vm";
+      yield* writeSettings(dir, { proactive: false, machineRule: rule });
+      // As a restarted Desktop reads it.
+      expect(yield* readSettings(dir)).toEqual({ proactive: false, machineRule: rule });
+
+      yield* fs.writeFileString(`${dir}/settings.json`, '{"proactive":true}');
+      expect((yield* readSettings(dir)).machineRule).toBeUndefined();
+    }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
   ));

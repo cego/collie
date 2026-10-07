@@ -233,6 +233,20 @@ edit of a key wins everywhere ([ADR-0043](adr/0043-a-shared-setting-is-its-lates
 A Machine whose collie has no `settings` yet fails the read, is left alone, and is synced
 once Desktop has upgraded it and it connects again.
 
+### The Flock chat's Machine rule
+
+The Machine rule (`machineRule` in Desktop's own `settings.json`, beside `proactive`) is not
+one of the Flock's settings: only the Flock chat chooses between Machines, so no Machine is
+given it. Every turn's `UserPromptSubmit` hook (`desktop/src/bun/session.ts`) adds it as
+context, built fresh from the saved text and the Machines Desktop reaches at that moment,
+named as the cards name them, with Local marked as this computer; a turn Desktop starts
+with News goes through the same hook. An empty rule adds nothing. The system prompt says
+what the chat does with it, and Collie never parses it: a start still names
+`<machine>:<workspace>`, and one that names no Machine while several are reachable is
+refused as before. `collie_machine_rule` (`desktop/src/bun/flock-tools.ts`) reads the rule
+back or replaces it, through the one write Settings uses; it is in the Flock chat's toolkit
+only, not among the Collie tools both chats share.
+
 ### Checking the boundary against herdr
 
 The reply structs in `herdr.ts` are hand-written, and herdr releases often. `herdr api

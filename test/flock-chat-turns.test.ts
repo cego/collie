@@ -178,6 +178,8 @@ const withChat = <A, E>(
         conversation: "flock@mk-pc",
         machines: () => [machine(opts.items, read)],
         proactive: () => opts.proactive,
+        machineRule: () => "Everything is on the vm",
+        setMachineRule: () => Effect.void,
       });
       return yield* body({ conversation, seen, read, dir });
     }).pipe(Effect.scoped, Effect.provide([BunServices.layer, TestClock.layer()])),
@@ -197,6 +199,8 @@ test("Desktop speaks first only about what matters, and the rest goes with the h
         expect(seen.prompts[0]).toStartWith(DESKTOP_SAID);
         expect(seen.prompts[0]).toContain("r1:asking happened.");
         expect(seen.prompts[0]).not.toContain("r2:ended");
+        // Desktop's own turn knows where work goes, as the human's would.
+        expect(seen.context[0]).toContain("Everything is on the vm");
         expect(read).toEqual(["r1:asking"]);
         // Nobody is there to click an answer, so the question is refused rather than waited on.
         expect(seen.refusals).toEqual(seen.prompts.slice(0, 1));

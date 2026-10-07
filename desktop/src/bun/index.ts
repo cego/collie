@@ -38,6 +38,7 @@ import {
   applyItem,
   type Credentials,
   DesktopRpcs,
+  type DesktopSettings,
   EMPTY_FLOCK,
   type FlockItem,
   type KnownMachine,
@@ -506,6 +507,19 @@ const main = Effect.gen(function* () {
       yield* Fiber.join(yield* onboardAs(job, route, run));
     });
 
+  /** Desktop's own settings, written as Settings and the Flock chat both change them. */
+  const saveSettings = (changed: Partial<DesktopSettings>) => {
+    const merged = { ...settings, ...changed };
+    return writeSettings(own, merged).pipe(
+      Effect.andThen(
+        Effect.sync(() => {
+          settings = merged;
+        }),
+      ),
+      Effect.orDie,
+    );
+  };
+
   // The Flock as the board was last sent it, so the chat names its Machines as the cards do.
   let shown = EMPTY_FLOCK;
   // Opened by the view's first ask, in Desktop's own scope; its session starts with the first message.
@@ -514,11 +528,15 @@ const main = Effect.gen(function* () {
     dir: own,
     conversation: `flock@${local}`,
     proactive: () => settings.proactive,
+    machineRule: () => settings.machineRule,
+    setMachineRule: (machineRule) =>
+      saveSettings({ machineRule }).pipe(Effect.provide(BunServices.layer)),
     machines: () => {
       const named = nameAsShown(shown);
       return [...doors].map(([installation, held]) => ({
         name: named({ ...held.machine, installation }),
         door: chatDoor(held.chat),
+        local: held.machine.profile === "local",
       }));
     },
   }).pipe(Scope.provide(scope), Effect.result, Effect.cached);
@@ -848,17 +866,7 @@ const main = Effect.gen(function* () {
     desktopTurns: () =>
       Stream.unwrap(withChat((opened) => Effect.succeed(opened.desktopTurns), Stream.empty)),
     settings: () => Effect.sync(() => settings),
-    setSettings: (changed) => {
-      const merged = { ...settings, ...changed };
-      return writeSettings(own, merged).pipe(
-        Effect.andThen(
-          Effect.sync(() => {
-            settings = merged;
-          }),
-        ),
-        Effect.orDie,
-      );
-    },
+    setSettings: saveSettings,
   });
   const servedOn = (channel: Channel<ToView, ToMain>) =>
     RpcServer.layer(DesktopRpcs).pipe(

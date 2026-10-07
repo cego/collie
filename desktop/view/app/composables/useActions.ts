@@ -18,6 +18,8 @@ const workflowsAtom = FlockClient.mutation("workflows");
 const openLinkAtom = FlockClient.mutation("openLink");
 const goToPaneAtom = FlockClient.mutation("goToPane");
 const terminalSendAtom = FlockClient.mutation("terminalSend");
+const desktopSettingsAtom = FlockClient.mutation("settings");
+const setDesktopSettingsAtom = FlockClient.mutation("setSettings");
 const restartAtom = FlockClient.mutation("restart");
 const checkForUpdatesAtom = FlockClient.mutation("checkForUpdates");
 const onboardAtom = FlockClient.mutation("onboard");
@@ -71,6 +73,8 @@ export const useActions = () => {
   const openLink = useAtomSet(() => openLinkAtom, { mode: "promiseExit" });
   const goToPane = useAtomSet(() => goToPaneAtom, { mode: "promiseExit" });
   const terminalSend = useAtomSet(() => terminalSendAtom, { mode: "promiseExit" });
+  const desktopSettings = useAtomSet(() => desktopSettingsAtom, { mode: "promiseExit" });
+  const setDesktopSettings = useAtomSet(() => setDesktopSettingsAtom, { mode: "promiseExit" });
   const restart = useAtomSet(() => restartAtom, { mode: "promiseExit" });
   const checkForUpdates = useAtomSet(() => checkForUpdatesAtom, { mode: "promiseExit" });
   const onboard = useAtomSet(() => onboardAtom, { mode: "promiseExit" });
@@ -193,6 +197,24 @@ export const useActions = () => {
       ),
     /** One command to the open terminal; one sent before it opened or after it ended is dropped. */
     terminalSend: (command: TerminalCommand) => terminalSend({ payload: { command } }),
+    /** The Machine rule as Desktop has it saved, which the Flock chat may have changed. */
+    machineRule: () =>
+      desktopSettings({ payload: undefined }).then((exit) => read(exit)?.machineRule ?? ""),
+    /** Whether the rule was kept, alongside the rest of Desktop's settings as they are. */
+    saveMachineRule: (machineRule: string) =>
+      desktopSettings({ payload: undefined })
+        .then((exit) => {
+          const settings = read(exit);
+          return settings === null
+            ? false
+            : setDesktopSettings({ payload: { ...settings, machineRule } }).then(
+                (saved) => read(saved) !== null,
+              );
+        })
+        .then((kept) => {
+          if (kept) toast.add({ title: "Machine rule saved", color: "success" });
+          return kept;
+        }),
     offersOf: (installation: string, runId: string) =>
       offers({ payload: { installation, runId } }).then(read),
     workflowsIn: (installation: string, project: string) =>

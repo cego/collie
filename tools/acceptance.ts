@@ -75,6 +75,7 @@ const MODULES = "workflow modules (this MR)";
 const LAUNCH = "launch flow places human starts (this MR)";
 const RELEASE = "ready to release and checks you can see (this MR)";
 const IN_APP_TERMINAL = "go to pane opens the pane in Desktop (this MR)";
+const MACHINE_RULE = "the Machine rule (this MR)";
 
 /** What the front door owes a person, and cannot be settled below the front door. */
 const FRONT_DOOR: readonly Check[] = [
@@ -701,6 +702,17 @@ const WORKFLOWS: readonly Check[] = [
 
 /** What only a person at a terminal can settle. */
 const OPERATOR_CHECKS: readonly Check[] = [
+  {
+    id: "desktop/a-flock-chat-start-goes-where-the-machine-rule-says",
+    statement:
+      'A Flock chat start goes where the Machine rule says: with the rule "frontend work is on the laptop, everything else is on the vm", a review of a frontend merge request lands on Local and a plan for Collie on vm-mk; with vm-mk unreachable, the plan is declined in words and nothing starts on the laptop; and Go to pane on each opens in Desktop with no new SSO approval.',
+    owner: MACHINE_RULE,
+    needs: "operator",
+    proof: {
+      kind: "operator",
+      how: 'In Desktop with Local and vm-mk connected, save the rule "frontend work is on the laptop, everything else is on the vm" in Settings. Ask the Flock chat to start a review of a frontend merge request and a plan for Collie, and record the Machine each Run landed on. Disconnect vm-mk, ask for the plan again, and record the chat\'s words and that nothing started on Local. Go to pane on each Run, and record that sso.cego.dk asked nothing new. Record the revision.',
+    },
+  },
   {
     id: "desktop/go-to-pane-shows-the-pane-in-desktop-without-a-new-login",
     statement:

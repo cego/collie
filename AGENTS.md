@@ -78,7 +78,7 @@ herdr actions, and the `collie` CLI.
   Agent SDK it runs on, and Collie's tools served to it), `session.ts` (what it
   runs with), `flock-tools.ts` (the Toolkit over each Machine's `chat` channel), `agui.ts`
   (SDK messages as AG-UI), `transcript.ts` (a conversation read back) and `settings.ts`
-  (Desktop's own switches, the proactive one among them), with
+  (Desktop's own switches, the proactive one and the Machine rule among them), with
   `desktop/src/shared/chat-view.ts` what the window says of a tool call and the card a
   message is about, and `src/toolkit.ts` the Toolkit both chats share
   ([ADR-0011](docs/adr/0011-the-conversation-is-a-native-harness.md#amended-2026-10-05-a-herds-chat-per-home-and-one-flock-chat-per-desktop)).
