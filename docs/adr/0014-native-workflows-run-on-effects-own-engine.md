@@ -12,7 +12,7 @@ what this page calls `collie native`, `src/native.ts`, `test/native-runtime.test
 **Amended 2026-10-07: Effect 4.0.1.** The proof is now `test/engine.test.ts`
 (`test/native-runtime.test.ts` was removed in abd9fa0), and it was rerun on 4.0.1. Effect
 4.0.1 moved the workflow modules from `effect/unstable/workflow` to `effect/workflow`, so D3
-serves the new path, and serves the old one as an alias until Collie 0.38.0 so a module
+serves the new path, and serves the old one as an alias until Collie 0.39.0 so a module
 saved before the upgrade still loads. The upgrade found a fifth upstream behaviour, below.
 
 A workflow will be a TypeScript file an author writes, outside this repository, and Collie
