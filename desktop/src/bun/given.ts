@@ -8,6 +8,7 @@ import {
   type Credential,
   type KnownMachine,
   type MachineGiven,
+  type OnboardStep,
 } from "../shared/flock";
 import type { Keyring, KeyringEntry } from "./credentials";
 import type { ShellRoute } from "./machine";
@@ -34,6 +35,8 @@ export const givenCredentials = Effect.fn("Given.open")(function* (options: {
   readonly keyring: Keyring;
   readonly give: Record<Credential, Give>;
   readonly tell: (item: MachineGiven) => Effect.Effect<void>;
+  /** The steps a Machine's saved onboarding skipped: their credentials aren't Desktop's to give it. */
+  readonly skipped: (profile: string) => Effect.Effect<ReadonlyArray<string>>;
 }) {
   const fs = yield* FileSystem.FileSystem;
   const file = (yield* Path.Path).join(options.dir, FILE);
@@ -63,6 +66,16 @@ export const givenCredentials = Effect.fn("Given.open")(function* (options: {
     }
     return texts;
   });
+  /** What Desktop holds that is its to give `machine`. */
+  const heldFor = (machine: KnownMachine) =>
+    Effect.zipWith(held, options.skipped(machine.profile), (texts, skipped) =>
+      CREDENTIALS.flatMap((credential) => {
+        const text = texts[credential];
+        return text === undefined || skipped.includes(credential)
+          ? []
+          : [[credential, text] as const];
+      }),
+    );
   const stateOf = (machine: KnownMachine, credential: Credential, text: string): MachineGiven => {
     const print = fingerprint(text);
     const given = record[machine.profile]?.[credential] === print;
@@ -123,37 +136,40 @@ export const givenCredentials = Effect.fn("Given.open")(function* (options: {
       ),
     /** Gives the route each credential Desktop holds whose current one it was not given. */
     giveLacking: (route: ShellRoute) =>
-      Effect.flatMap(held, (texts) =>
+      Effect.flatMap(heldFor(route.machine), (texts) =>
         Effect.forEach(
-          CREDENTIALS.flatMap((credential) => {
-            const text = texts[credential];
-            return text === undefined || stateOf(route.machine, credential, text).given
-              ? []
-              : [[credential, text] as const];
-          }),
+          texts.filter(([credential, text]) => !stateOf(route.machine, credential, text).given),
           ([credential, text]) =>
             giveOne(route, credential, text).pipe(Effect.map((failed) => ({ credential, failed }))),
         ),
       ),
-    /** Counts what an onboarding that ended ready was handed as given. */
-    handed: (machine: KnownMachine, texts: Partial<Record<Credential, string>>) =>
+    /** Counts as given what an onboarding that ended ready was handed and set up. */
+    handed: (
+      machine: KnownMachine,
+      texts: Partial<Record<Credential, string>>,
+      steps: ReadonlyArray<OnboardStep>,
+    ) =>
       Effect.forEach(
         CREDENTIALS.flatMap((credential) => {
           const text = texts[credential];
-          return text === undefined ? [] : [[credential, text] as const];
+          const set = steps.some(
+            ({ step, status }) =>
+              step === credential && (status === "done" || status === "in_place"),
+          );
+          return text === undefined || !set ? [] : [[credential, text] as const];
         }),
         ([credential, text]) => recorded(machine, credential, text, null),
         { discard: true },
       ),
-    /** Each Machine's standing on every credential Desktop holds. */
+    /** Each Machine's standing on every credential Desktop holds and is its to give. */
     states: (machines: ReadonlyArray<KnownMachine>) =>
-      Effect.map(held, (texts) =>
-        machines.flatMap((machine) =>
-          CREDENTIALS.flatMap((credential) => {
-            const text = texts[credential];
-            return text === undefined ? [] : [stateOf(machine, credential, text)];
-          }),
+      Effect.map(
+        Effect.forEach(machines, (machine) =>
+          Effect.map(heldFor(machine), (texts) =>
+            texts.map(([credential, text]) => stateOf(machine, credential, text)),
+          ),
         ),
+        (each) => each.flat(),
       ),
     drop: (profile: string) =>
       lock.withPermits(1)(

@@ -365,6 +365,17 @@ const main = Effect.gen(function* () {
       helle: (route, text) => Effect.map(giveHelle([route], helle, text), firstFailure),
     },
     tell: (item) => PubSub.publish(news, item).pipe(Effect.asVoid),
+    skipped: (profile) =>
+      savedOnboardings(onboardings).pipe(
+        Effect.map(
+          (all) =>
+            all
+              .find((saved) => saved.machine.profile === profile)
+              ?.run.steps.filter(({ status }) => status === "skipped")
+              .map(({ step }) => step) ?? [],
+        ),
+        Effect.provide(BunServices.layer),
+      ),
   });
 
   // The job onboarding each route, and its fiber, while one runs; and the question each job waits on.
@@ -429,7 +440,7 @@ const main = Effect.gen(function* () {
         tell(job, machine),
         start,
       );
-      if (run.ready === true && secrets !== "") yield* given.handed(machine, handed);
+      if (run.ready === true && secrets !== "") yield* given.handed(machine, handed, run.steps);
       // Kept as skipped where the run ended before it, so the next run skips it too.
       const unreached = skip
         .filter((step) => !run.steps.some((one) => one.step === step))

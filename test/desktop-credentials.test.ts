@@ -397,6 +397,7 @@ const givenIn = (
   dir: string,
   keyring: Keyring,
   failing: Partial<Record<Credential, string>> = {},
+  skipped: ReadonlyArray<string> = [],
 ) =>
   Effect.gen(function* () {
     const gave: string[] = [];
@@ -411,6 +412,7 @@ const givenIn = (
       keyring,
       give: { gitlab: giver("gitlab"), helle: giver("helle") },
       tell: (item) => Effect.sync(() => void told.push(item)),
+      skipped: () => Effect.succeed(skipped),
     });
     return { given, gave, told };
   });
@@ -475,7 +477,8 @@ test("a give that failed keeps why, and the Machine still lacks it", () =>
   run(
     Effect.gen(function* () {
       const dir = yield* scratch;
-      const { given, told } = yield* givenIn(dir, keyringOf({ "gitlab-token": "glpat-1" }), {
+      const held: Partial<Record<KeyringEntry, string>> = { "gitlab-token": "glpat-1" };
+      const { given, told } = yield* givenIn(dir, keyringOf(held), {
         gitlab: "glab: not found",
       });
       expect(yield* given.giveLacking(vmRoute)).toEqual([
@@ -490,6 +493,9 @@ test("a give that failed keeps why, and the Machine still lacks it", () =>
       };
       expect(told).toEqual([lacking]);
       expect(yield* given.states([vmRoute.machine])).toEqual([lacking]);
+      // A renewed token's state is not the older one's failure.
+      held["gitlab-token"] = "glpat-2";
+      expect(yield* given.states([vmRoute.machine])).toEqual([{ ...lacking, failed: null }]);
     }),
   ));
 
@@ -499,7 +505,10 @@ test("an onboarding that ended ready counts as given what it was handed, and a r
       const dir = yield* scratch;
       const keyring = keyringOf({ "gitlab-token": "glpat-1", "helle-token": "h-1" });
       const { given, gave } = yield* givenIn(dir, keyring);
-      yield* given.handed(vmRoute.machine, yield* given.held);
+      yield* given.handed(vmRoute.machine, yield* given.held, [
+        { step: "gitlab", title: "GitLab", status: "in_place" },
+        { step: "helle", title: "Helle", status: "done" },
+      ]);
       expect(yield* given.giveLacking(vmRoute)).toEqual([]);
       expect(gave).toEqual([]);
 
@@ -512,6 +521,29 @@ test("an onboarding that ended ready counts as given what it was handed, and a r
       expect((yield* after.given.states([vmRoute.machine])).map((one) => one.given)).toEqual([
         false,
         false,
+      ]);
+    }),
+  ));
+
+test("a credential the Machine's onboarding skipped is neither given on connect nor lacked, nor counted as handed", () =>
+  run(
+    Effect.gen(function* () {
+      const dir = yield* scratch;
+      const keyring = keyringOf({ "gitlab-token": "glpat-1", "helle-token": "h-1" });
+      const { given, gave } = yield* givenIn(dir, keyring, {}, ["helle"]);
+      yield* given.handed(vmRoute.machine, yield* given.held, [
+        { step: "gitlab", title: "GitLab", status: "done" },
+        { step: "helle", title: "Helle", status: "skipped" },
+      ]);
+      expect(yield* given.giveLacking(vmRoute)).toEqual([]);
+      expect(gave).toEqual([]);
+      expect((yield* given.states([vmRoute.machine])).map((one) => one.credential)).toEqual([
+        "gitlab",
+      ]);
+
+      const unskipped = yield* givenIn(dir, keyring);
+      expect(yield* unskipped.given.giveLacking(vmRoute)).toEqual([
+        { credential: "helle", failed: null },
       ]);
     }),
   ));
