@@ -83,6 +83,10 @@
     "effecttsgo/instance-of-schema": "error",
     "effecttsgo/new-promise": "error",
     "effecttsgo/node-builtin-import": "error",
+    // Collie decodes synchronously at a boundary on purpose.
+    "effecttsgo/schema-sync": "off",
+    // Collie runs on Effect's workflow and cluster modules by decision (ADR-0014).
+    "effecttsgo/unstable-api-usage": "off",
     "effecttsgo/prefer-schema-over-json": "error",
     "effecttsgo/process-env": "error",
     "effecttsgo/process-env-in-effect": "error",
@@ -118,6 +122,20 @@
     ]
   },
   "overrides": [
+    {
+      // Effect's `Crypto` has digest and random, but no Ed25519 sign, verify or keypair.
+      "files": [
+        "src/signing.ts",
+        "test/desktop-credentials.test.ts",
+        "test/desktop-onboarding.test.ts",
+        "test/desktop-updates.test.ts",
+        "test/desktop-upgrade.test.ts",
+        "test/install-desktop.test.ts",
+        "test/prepare.test.ts",
+        "test/signing.test.ts"
+      ],
+      "rules": { "effecttsgo/node-builtin-import": "off" }
+    },
     {
       // Every `collie` start, hook and board pays for what loads before its first line runs.
       "files": ["src/**"],

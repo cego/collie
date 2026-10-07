@@ -113,7 +113,7 @@ ignore the others; an outcome not given means only the approved verifications ha
   review has to be able to say the agreed scope was met.
 - **bug** — reproduce it first. Write the failing test, record it as a verification that is
   _supposed_ to fail — `collie verify --run {{run.id}} --cwd {{cwd}} --name regression
---expect fail -- <command>` — and only then fix it. When it is fixed, record `regression`
+  --expect fail -- <command>` — and only then fix it. When it is fixed, record `regression`
   again, without `--expect`, so there is a fail and then a pass on two different trees.
   Name it in your Output as `"reproduced": "regression"`.
 - **refactor** — behaviour is identical. Say what you ran; the review has to be able to say

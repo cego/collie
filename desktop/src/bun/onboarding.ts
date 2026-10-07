@@ -2,8 +2,7 @@
 // of the human; Desktop's own version of the runner goes there only once its signature
 // verifies; and `collie onboard` runs with it, each step told as it comes.
 
-import { createHash } from "node:crypto";
-import { Clock, Effect, FileSystem, Option, Schema, Stream } from "effect";
+import { Clock, Crypto, Effect, FileSystem, Option, Schema, Stream } from "effect";
 import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import { RELEASE_PUBLIC_KEY, SIGNATURE_SUFFIX, verifyRelease } from "../../../src/signing";
@@ -82,7 +81,10 @@ export const verifiedRunner = Effect.fn("Desktop.verifiedRunner")(function* (
       fs.writeFileString(`${file}${SIGNATURE_SUFFIX}`, signature ?? ""),
     ]).pipe(Effect.mapError((error) => `could not keep ${asset}: ${error.message}`));
   }
-  return { asset, bytes, sha256: createHash("sha256").update(bytes).digest("hex") };
+  const digest = yield* (yield* Crypto.Crypto)
+    .digest("SHA-256", bytes)
+    .pipe(Effect.mapError((error) => `could not hash ${asset}: ${error.message}`));
+  return { asset, bytes, sha256: Buffer.from(digest).toString("hex") };
 });
 
 /** What a command said and how it exited, `stdin` given to it whole. */

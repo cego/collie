@@ -55,7 +55,7 @@ that is the usual reason one is slow.
 ## Consequences
 
 - A long gate reads as what it is: `Running test again on the same tree to rule out a
-flake, 12 min of a usual 20.`
+  flake, 12 min of a usual 20.`
 - A check's full output survives it, up to the bound, so a red gate can be read after the
   fact rather than from a 4 KiB tail.
 - Limiting how many checks the host runs at once is a separate decision. This one only
