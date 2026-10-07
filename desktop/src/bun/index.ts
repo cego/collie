@@ -52,8 +52,8 @@ import { type FlockConversation, openFlockChat, refusal } from "./chat";
 import { claudeCode } from "./claude";
 import { chatDoor } from "./flock-tools";
 import { readSettings, writeSettings } from "./settings";
-import { readFlockSettings, syncSettings, writeFlockSettings } from "./flock-settings";
-import { editSetting, takeFrom } from "../shared/flock-settings";
+import { flockSync, readFlockSettings, writeFlockSettings } from "./flock-settings";
+import { editSetting } from "../shared/flock-settings";
 import { nowIso } from "../../../src/time";
 import { SettingValue, settingText } from "../../../src/settings";
 import { isString } from "../../../src/schema";
@@ -292,47 +292,6 @@ const main = Effect.gen(function* () {
   const changes = yield* PubSub.unbounded<RouteChange>();
   const news = yield* PubSub.unbounded<FlockItem>();
   const doors = new Map<string, Doors>();
-  const syncing = yield* Semaphore.make(1);
-  /**
-   * Syncs a connected Machine with the Flock's settings. One out of reach, or on a collie
-   * without the operation until it is upgraded, is synced when it next connects.
-   */
-  const syncOn = (door: Doors): Effect.Effect<void> =>
-    syncing
-      .withPermits(1)(
-        Effect.gen(function* () {
-          const has = yield* syncSettings(
-            yield* SubscriptionRef.get(flockSettings),
-            door.machine.name,
-            door.desktop,
-            yield* uuid,
-          );
-          // Taken into the settings as they are now, so an edit made meanwhile survives.
-          const [before, after] = yield* SubscriptionRef.modify(flockSettings, (now) => {
-            const taken = takeFrom(now, door.machine.name, has).flock;
-            return [[now, taken] as const, taken];
-          });
-          yield* writeFlockSettings(own, after);
-          // An edit made on this Machine goes on to every other.
-          const took = Object.entries(after.settings).some(
-            ([key, { at }]) => before.settings[key]?.at !== at,
-          );
-          if (took)
-            yield* Effect.forEach(
-              [...doors.values()].filter((other) => other !== door),
-              (other) => syncOn(other).pipe(Effect.forkIn(scope)),
-              { discard: true },
-            );
-        }),
-      )
-      .pipe(
-        Effect.catchCause((cause) =>
-          Effect.logWarning(`Settings not synced with ${door.machine.name}`, cause),
-        ),
-        Effect.provide(BunServices.layer),
-      );
-  const syncEvery = () =>
-    Effect.forEach([...doors.values()], syncOn, { concurrency: "unbounded", discard: true });
   /** Keeps an edit made here, then gives it to every connected Machine. */
   const editFlock = (key: string, typed: string) =>
     Effect.gen(function* () {
@@ -355,6 +314,15 @@ const main = Effect.gen(function* () {
   const runners = `${Utils.paths.userData}/runners`;
   const scope = yield* Effect.scope;
   const uuid = (yield* Crypto.Crypto).randomUUIDv4.pipe(Effect.orDie);
+  const settingsOf = (door: Doors) => ({ name: door.machine.name, door: door.desktop });
+  // A Machine out of reach, or on a collie without the operation until it is upgraded, is
+  // synced when it next connects.
+  const { syncOn, syncEvery } = yield* flockSync({
+    flock: flockSettings,
+    machines: () => [...doors.values()].map(settingsOf),
+    save: (flock) => writeFlockSettings(own, flock).pipe(Effect.provide(BunServices.layer)),
+    request: uuid,
+  });
 
   // The job onboarding each route, and its fiber, while one runs; and the question each job waits on.
   const onboarding = new Map<string, { job: string; fiber?: Fiber.Fiber<unknown, unknown> }>();
@@ -556,7 +524,9 @@ const main = Effect.gen(function* () {
           const syncOnceLive = (item: FlockItem) => {
             if ("_tag" in item || item.message._tag !== "Snapshot") return Effect.void;
             const door = doors.get(item.machine.installation);
-            return door === undefined ? Effect.void : syncOn(door).pipe(Effect.forkIn(scope));
+            return door === undefined
+              ? Effect.void
+              : syncOn(settingsOf(door)).pipe(Effect.forkIn(scope));
           };
           shown = EMPTY_FLOCK;
           const before: ReadonlyArray<FlockItem> = [
