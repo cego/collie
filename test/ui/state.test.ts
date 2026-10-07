@@ -534,6 +534,39 @@ test("a History row is not somewhere to jump: its run is a record, not a pane", 
   expect(rows[0]!.jump).toBeNull();
 });
 
+test("a setting a Desktop shares with the Flock says so, and a remembered one does not", () => {
+  const rows = viewRows({
+    view: "settings",
+    filter: { kind: "workspace", id: "w1" },
+    tasks: [],
+    now: 0,
+    density: "comfortable",
+    wide: null,
+    board: board(),
+    note: null,
+    history: null,
+    definitions: null,
+    settings: {
+      configPath: "/u/config.json",
+      defaults: [{ key: "model", value: "opus" }],
+      remembered: [{ key: "linear.team", value: "CEG" }],
+      trust: { cwd: "/w", state: "trusted" },
+      flock: "laptop",
+    },
+    detail: null,
+    marks: {},
+    live: null,
+    previewing: null,
+    stopping: [],
+  });
+
+  expect(rows.map((row) => row.detail)).toEqual([
+    "opus · shared with the Flock by laptop",
+    "CEG",
+    "trusted · /w",
+  ]);
+});
+
 test("the keys that start something are this Session's, not a wide board's", () => {
   // They act on this workspace's checkout rather than on the selected row, so the spec
   // keeps them on the local board — where `g local` is how you get back to one.

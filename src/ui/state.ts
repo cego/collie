@@ -592,13 +592,20 @@ function definitionRow(d: DefinitionRow): Row {
  * id, so clicking one selected both and `current()` resolved the first — every key after
  * that acted on the editable default rather than the row that was clicked.
  */
-function settingRow(id: string, key: string, value: string, writable: boolean): Row {
+function settingRow(
+  id: string,
+  key: string,
+  value: string,
+  writable: boolean,
+  shared?: string,
+): Row {
+  const shown = value === "" ? "(unset)" : value;
   return {
     ...BLANK,
     id: `setting:${id}`,
     kind: "setting",
     title: key,
-    detail: value === "" ? "(unset)" : value,
+    detail: shared === undefined ? shown : `${shown} · ${shared}`,
     setting: { key, value, writable },
   };
 }
@@ -910,7 +917,15 @@ export function viewRows(state: AppState): Row[] {
       const settings = state.settings;
       if (!settings) return [];
       return [
-        ...settings.defaults.map((d) => settingRow(d.key, d.key, d.value, true)),
+        ...settings.defaults.map((d) =>
+          settingRow(
+            d.key,
+            d.key,
+            d.value,
+            true,
+            settings.flock === null ? undefined : `shared with the Flock by ${settings.flock}`,
+          ),
+        ),
         ...settings.remembered.map((d) => settingRow(`remembered:${d.key}`, d.key, d.value, false)),
         settingRow(
           "trust-here",

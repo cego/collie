@@ -10,8 +10,13 @@ import {
   isDensity,
   isQuestionMode,
   isScope,
+  parseSetting,
+  SETTINGS,
+  settingText,
   type SettingValue,
 } from "./settings";
+import type { SharedSetting, SharedSettings } from "./board-model";
+import { epochMs } from "./time";
 import { isYamlMap, YamlMapSchema, type YamlMap, type YamlValue } from "./yaml";
 
 export { type Defaults, FALLBACK_DEFAULTS } from "./settings";
@@ -124,6 +129,61 @@ export const setSetting = Effect.fn("Config.setSetting")(function* (
   yield* writeConfigValue(userDir, key, value);
   const stamps = yield* readSettingsSet(userDir);
   yield* writeSettingsSet(userDir, { ...stamps, set: { ...stamps.set, [key]: at } });
+});
+
+const SharedValue = Schema.NullOr(
+  Schema.Union([Schema.String, Schema.Number, Schema.Boolean, Schema.Array(Schema.String)]),
+);
+
+/** This Machine's settings a Flock shares: each ever set, and when, the file's time where unrecorded. */
+export const sharedSettings = Effect.fn("Config.sharedSettings")(function* (userDir: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const paths = yield* Path.Path;
+  const raw = yield* readConfig(userDir);
+  const stamps = yield* readSettingsSet(userDir);
+  const written = yield* fs.stat(paths.join(userDir, "config.json")).pipe(
+    Effect.map((info) => Option.getOrUndefined(info.mtime)?.toISOString()),
+    Effect.orElseSucceed(() => undefined),
+  );
+  const settings = SETTINGS.flatMap(({ key }): ReadonlyArray<SharedSetting> => {
+    const value = configValue(raw, key) ?? null;
+    const at = stamps.set[key] ?? (value === null ? undefined : written);
+    return at === undefined ? [] : [{ key, value, at }];
+  });
+  return { settings, flock: stamps.flock ?? null } satisfies SharedSettings;
+});
+
+/**
+ * The Flock's settings, given by the Desktop `by`: each written where its edit is newer
+ * than this Machine's last edit of it. Refused whole, with why, where any one is not a
+ * value its setting takes.
+ */
+export const takeShared = Effect.fn("Config.takeShared")(function* (
+  userDir: string,
+  given: ReadonlyArray<SharedSetting>,
+  by: string,
+  now: string,
+) {
+  const parsed = [];
+  for (const { key, value, at } of given) {
+    const typed = Schema.decodeUnknownOption(SharedValue)(value);
+    const one = Option.isSome(typed)
+      ? parseSetting(key, settingText(typed.value))
+      : { refused: `${key} cannot take that value` };
+    if ("refused" in one) return yield* Effect.fail(one.refused);
+    parsed.push({ key, value: one.value, at });
+  }
+  const before = (yield* readSettingsSet(userDir)).set;
+  for (const { key, value, at } of parsed) {
+    const last = before[key];
+    if (last === undefined || epochMs(at) > epochMs(last))
+      yield* setSetting(userDir, key, value, at);
+  }
+  yield* writeSettingsSet(userDir, {
+    ...(yield* readSettingsSet(userDir)),
+    flock: { by, at: now },
+  });
+  return yield* sharedSettings(userDir);
 });
 
 /** The GitLab this run works against: `GITLAB_HOST` where it names a host, else the setting. */

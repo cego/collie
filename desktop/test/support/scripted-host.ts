@@ -57,7 +57,14 @@ if (
 /** What an operation was asked with, as it is logged. */
 type Asked = Parameters<typeof asLine>[0];
 
-const Served = FrontDoorRpcs.omit("propose", "act", "reconcile", "settleDelivery");
+const Served = FrontDoorRpcs.omit(
+  "propose",
+  "act",
+  "reconcile",
+  "settleDelivery",
+  "settings",
+  "setSettings",
+);
 
 const handlers = Served.toLayer(
   Effect.gen(function* () {

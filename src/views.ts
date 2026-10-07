@@ -6,7 +6,7 @@
 
 import { Effect, FileSystem, Path, Stream } from "effect";
 import { attentionFor } from "./attention";
-import { configValue, readConfig } from "./config";
+import { configValue, readConfig, readSettingsSet } from "./config";
 import { settingOf, SETTINGS } from "./settings";
 import { readIntent } from "./intent";
 import { savedModules } from "./discovery";
@@ -407,6 +407,8 @@ export interface SettingsView {
   remembered: Array<{ key: string; value: string }>;
   /** Whether the harness will work in this directory without stopping to ask. */
   trust: { cwd: string; state: string };
+  /** The Desktop that shares the defaults with its Flock, where one does. */
+  flock: string | null;
 }
 
 /** Every leaf of the config file as a dotted key, so a nested value still has a name. */
@@ -449,5 +451,6 @@ export const buildSettings = Effect.fn("Views.buildSettings")(function* (env: Pl
     // notification kinds someone turned off. Shown as written rather than interpreted.
     remembered: flatten(raw).filter((entry) => settingOf(entry.key) === undefined),
     trust: { cwd: env.cwd, state },
+    flock: (yield* readSettingsSet(env.userDir)).flock?.by ?? null,
   } satisfies SettingsView;
 });
