@@ -4,10 +4,12 @@
 // as it installs its own: on Restart Desktop, or as it next starts. Nothing here replaces a
 // Desktop, running or not.
 
-import { Effect, FileSystem, Option, Path, Schema } from "effect";
+import { Clock, Effect, FileSystem, Option, Path, Schema } from "effect";
 import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import { RELEASE_TAG } from "./release";
+import { epochMs } from "./time";
+import { signalProcess } from "./lock";
 import { appliedSignatureOf, RELEASE_PUBLIC_KEY, verifyRelease } from "./signing";
 
 const IDENTIFIER = "dk.cego.collie.desktop";
@@ -229,4 +231,128 @@ export const updateDesktop = Effect.fn("desktop.update")(function* (
       }),
     }),
   );
+});
+
+/** Electrobun's folder for Desktop's stable channel, which is its `userData` too. */
+export const desktopRootOf = (dataHome: string) => `${dataHome}/${IDENTIFIER}/stable`;
+
+/** What Desktop keeps of its own, and which bundle and version it runs. */
+export interface DesktopOwn {
+  /** Electrobun's channel folder: its staged updates and Desktop's runner copies. */
+  readonly root: string;
+  /** Desktop's own state directory, where its usage log is. */
+  readonly state: string;
+  /** The running bundle's hash, or null where that cannot be told. */
+  readonly hash: string | null;
+  /** The running Desktop's version, or null where that cannot be told. */
+  readonly version: string | null;
+}
+
+const USAGE_KEEP_MS = 30 * 24 * 60 * 60_000;
+const UsageAt = Schema.fromJsonString(Schema.Struct({ at: Schema.String }));
+
+/**
+ * Which of Desktop's files may go (ADR-0045 D5): staged update tars and their rollback copies
+ * but the running bundle's own and one prepared and not yet applied; runner copies but the
+ * running version's and the newest; and usage lines over 30 days old.
+ */
+export const desktopVerdicts = Effect.fn("desktop.verdicts")(function* (own: DesktopOwn) {
+  const fs = yield* FileSystem.FileSystem;
+  const remove: Array<{ target: string; reason: string }> = [];
+  const keep: Array<{ target: string; reason: string }> = [];
+  const list = (dir: string) => fs.readDirectory(dir).pipe(Effect.orElseSucceed(() => []));
+
+  const extraction = `${own.root}/self-extraction`;
+  const prepared = yield* fs
+    .readFileString(preparedRecordOf(own.root))
+    .pipe(Effect.flatMap(Schema.decodeUnknownEffect(PreparedRecord)), Effect.option);
+  const waiting = Option.match(prepared, {
+    onNone: () => null,
+    onSome: (record) => (record.hash === own.hash ? null : `${record.hash}.tar`),
+  });
+  for (const name of yield* list(extraction)) {
+    if (!/\.tar(?:\.(?:previous|preprevious))?$/.test(name)) continue;
+    const target = `${extraction}/${name}`;
+    if (own.hash === null) keep.push({ target, reason: "which bundle Desktop runs is not known" });
+    else if (name === `${own.hash}.tar`)
+      keep.push({ target, reason: "the running bundle's, the base for its next update" });
+    else if (name === waiting) keep.push({ target, reason: "an update not yet applied" });
+    else remove.push({ target, reason: "a staged update Desktop no longer runs" });
+  }
+
+  const runners = `${own.root}/runners`;
+  const versions = (yield* list(runners)).filter((name) => Bun.semver.satisfies(name, "*"));
+  const newest = versions.reduce<string | null>(
+    (best, one) => (best === null || Bun.semver.order(one, best) > 0 ? one : best),
+    null,
+  );
+  for (const version of versions) {
+    const target = `${runners}/${version}`;
+    if (version === own.version) keep.push({ target, reason: "the running version's" });
+    else if (version === newest) keep.push({ target, reason: "the newest" });
+    else remove.push({ target, reason: "a runner copy neither running nor newest" });
+  }
+
+  const log = `${own.state}/flock-usage.jsonl`;
+  const text = yield* fs.readFileString(log).pipe(Effect.orElseSucceed(() => ""));
+  const since = (yield* Clock.currentTimeMillis) - USAGE_KEEP_MS;
+  const lines = text.split("\n").filter((line) => line.trim() !== "");
+  const recent = lines.filter((line) =>
+    Option.match(Schema.decodeUnknownOption(UsageAt)(line), {
+      onNone: () => true,
+      onSome: ({ at }) => epochMs(at) >= since,
+    }),
+  );
+  const usage =
+    recent.length === lines.length
+      ? null
+      : { target: log, dropped: lines.length - recent.length, kept: recent };
+  return { remove, keep, usage };
+});
+
+/** Removes what `desktopVerdicts` says may go, and trims the usage log; what failed stays. */
+export const pruneDesktop = Effect.fn("desktop.prune")(function* (own: DesktopOwn) {
+  const fs = yield* FileSystem.FileSystem;
+  const verdicts = yield* desktopVerdicts(own);
+  for (const { target } of verdicts.remove)
+    yield* fs.remove(target, { recursive: true, force: true }).pipe(Effect.ignore);
+  if (verdicts.usage !== null)
+    yield* fs
+      .writeFileString(
+        verdicts.usage.target,
+        verdicts.usage.kept.map((line) => `${line}\n`).join(""),
+      )
+      .pipe(Effect.ignore);
+  return verdicts;
+});
+
+/** What Desktop's control directory is called, with the pid that owns it. */
+export const sshControlsPrefix = (pid: number) => `collie-ssh-${pid}-`;
+
+/**
+ * The `ssh` control directories of Desktops that are no longer running, each master asked to
+ * exit first; a live Desktop's are never touched. Answers with the directories removed.
+ */
+export const sweepSshControls = Effect.fn("desktop.sweepSshControls")(function* (
+  tmp: string,
+  alive: (pid: number) => Effect.Effect<boolean> = (pid) => signalProcess(pid),
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const gone: string[] = [];
+  for (const name of yield* fs.readDirectory(tmp).pipe(Effect.orElseSucceed(() => []))) {
+    const pid = Number(/^collie-ssh-(\d+)-/.exec(name)?.[1] ?? 0);
+    if (pid <= 0 || (yield* alive(pid))) continue;
+    const dir = `${tmp}/${name}`;
+    for (const socket of yield* fs.readDirectory(dir).pipe(Effect.orElseSucceed(() => [])))
+      yield* Effect.promise(
+        () =>
+          Bun.spawn(["ssh", "-S", `${dir}/${socket}`, "-O", "exit", "collie-desktop"], {
+            stdout: "ignore",
+            stderr: "ignore",
+          }).exited,
+      );
+    yield* fs.remove(dir, { recursive: true, force: true }).pipe(Effect.ignore);
+    gone.push(dir);
+  }
+  return gone;
 });

@@ -60,10 +60,12 @@ import {
 import { configuredAgents } from "./agents";
 import { Catalogue, discover, searchPath } from "./discovery";
 import { sideJobs } from "./side-jobs";
+import { dataHomeOf, desktopRootOf } from "./desktop";
 import type * as MessageStorage from "effect/unstable/cluster/MessageStorage";
 import {
   collieCache,
   compactionSweeper,
+  desktopSweeper,
   renovateClonesSweeper,
   retentionSweeper,
   runnersSweeper,
@@ -489,6 +491,10 @@ const hostBoard = (dir: string) =>
         compactionSweeper(env.stateDir, sessions),
         runnersSweeper(`${collieCache()}/runners`, BUILD),
         renovateClonesSweeper(env.stateDir, all),
+        desktopSweeper(
+          desktopRootOf(dataHomeOf(env.home, env.raw["XDG_DATA_HOME"])),
+          `${env.raw["XDG_STATE_HOME"] || `${env.home}/.local/state`}/collie-desktop`,
+        ),
         // Last: a Task is kept while a workspace or a checkout of it is still there.
         retentionSweeper({
           stateDir: env.stateDir,

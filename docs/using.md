@@ -869,6 +869,14 @@ announced through later checks, even one that fails. A Desktop run from a checko
 **Settings** says so. The new
 Desktop then upgrades your released Machines to its version as they connect.
 
+Desktop keeps only what it uses. When it starts it removes every staged update but the one
+it is running, which is the base the next update is patched from, and one staged and not yet
+installed; every runner copy but its own version's and the newest; usage lines over 30
+days old; and the SSH control directories, with their masters, of a Desktop that is no
+longer running. [`collie cleanup`](cli.md#cleaning-up) lists the same files of Desktop's, as
+the kind `desktop`, on a computer that has Desktop
+([ADR-0045](adr/0045-collie-removes-what-it-made-once-nothing-needs-it.md)).
+
 The Machines are this computer and every machine enabled in `herdr machine list`; Collie
 keeps no list of its own. At launch Desktop opens one SSH master per herdr machine, from
 its target and your own SSH config, so an SSO check is made once per machine, and keeps it
@@ -1772,6 +1780,12 @@ every ten minutes, whether or not a pane is open. A sweep removes:
   held open.
 - **Runner copies** under `~/.cache/collie/runners`, but the running version's and the
   newest.
+- **Desktop's own files**, on a computer with Desktop: staged updates, runner copies and
+  usage lines Desktop would remove itself as it starts (see [Collie Desktop](#collie-desktop)).
+- **Renovate clones** under the state directory's `renovate-repositories/`, once no Run uses
+  one and no checkout of it is left.
+- **Tasks**, 30 days after their last Run ended, with every one of their Runs, once nothing
+  — a workspace, an agent, a checkout, another Run — needs them.
 
 An entry of the state directory that is no kind Collie knows is listed as kept and never
 removed.

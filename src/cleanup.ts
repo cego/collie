@@ -27,6 +27,7 @@ import { judgeWorktrees, type Landed, type Settling } from "./worktree";
 import { readForge, readMrStates } from "./merges";
 import { latest, readDispositions } from "./disposition";
 import { gitlabRepositoryOf } from "./strategies";
+import { desktopVerdicts, type DesktopOwn } from "./desktop";
 import { CONTROL_DIR, putDownControl } from "./compaction";
 
 /** One kind of thing Collie cleans. */
@@ -923,6 +924,66 @@ export const retentionSweeper = (opts: {
             return { freed };
           }),
         ).pipe(Effect.orElseSucceed(() => ({ kept: "its Task is in use" })));
+      }),
+  };
+};
+
+const DesktopInstalled = Schema.fromJsonString(
+  Schema.Struct({ version: Schema.String, hash: Schema.optionalKey(Schema.String) }),
+);
+
+/**
+ * Desktop's own files on this computer, by the rule Desktop applies at its start; none where
+ * Desktop has no data folder here. A tar is kept wherever the running bundle is not known.
+ */
+export const desktopSweeper = (root: string, state: string): Sweeper => {
+  const kind = "desktop";
+  const own = Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const installed = yield* fs
+      .readFileString(`${root}/app/Resources/version.json`)
+      .pipe(Effect.flatMap(Schema.decodeUnknownEffect(DesktopInstalled)), Effect.option);
+    return {
+      root,
+      state,
+      hash: Option.match(installed, { onNone: () => null, onSome: (one) => one.hash ?? null }),
+      version: Option.match(installed, { onNone: () => null, onSome: (one) => one.version }),
+    } satisfies DesktopOwn;
+  });
+  const verdicts = Effect.flatMap(own, desktopVerdicts).pipe(
+    Effect.orElseSucceed(() => ({ remove: [], keep: [], usage: null })),
+  );
+  return {
+    judge: Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      if (!(yield* fs.exists(root).pipe(Effect.orElseSucceed(() => false))))
+        return { remove: [], keep: [] };
+      const found = yield* verdicts;
+      const sizes = yield* sizesOf(found.remove.map((one) => one.target));
+      const remove = found.remove.map((one, at) => ({ kind, ...one, bytes: sizes[at] ?? 0 }));
+      if (found.usage !== null)
+        remove.push({
+          kind,
+          target: found.usage.target,
+          bytes: 0,
+          reason: `${found.usage.dropped} usage line(s) over 30 days old`,
+        });
+      return { remove, keep: found.keep.map((one) => ({ kind, ...one })) };
+    }),
+    remove: (item) =>
+      Effect.gen(function* () {
+        const found = yield* verdicts;
+        const fs = yield* FileSystem.FileSystem;
+        if (found.usage !== null && found.usage.target === item.target) {
+          const before = yield* sizeOf(item.target);
+          yield* fs
+            .writeFileString(item.target, found.usage.kept.map((line) => `${line}\n`).join(""))
+            .pipe(Effect.ignore);
+          return { freed: Math.max(0, before - (yield* sizeOf(item.target))) };
+        }
+        const now = found.remove.find((one) => one.target === item.target);
+        if (now === undefined) return { kept: "Desktop keeps it now" };
+        return yield* removeIf(item.target, Effect.succeed({ remove: now.reason }));
       }),
   };
 };
