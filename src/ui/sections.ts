@@ -5,7 +5,7 @@
 
 import { GLYPH_FOR, STEP_GLYPH_FOR } from "../board";
 import type { StepState, TaskState, TaskView } from "../board-model";
-import type { Density } from "../config";
+import type { Density } from "../settings";
 
 /** Below this two columns are two unreadable half-cards rather than one readable one. */
 const TWO_COLUMN_MIN = 80;

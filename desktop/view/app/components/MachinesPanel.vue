@@ -3,17 +3,12 @@ import { type OnboardRun, SETTLED } from "../../../src/shared/flock";
 
 const open = defineModel<boolean>("open", { required: true });
 const { rows } = useFlock();
-const { addMachine, removeMachine, openLink, saveGitlabHost } = useActions();
+const { addMachine, removeMachine } = useActions();
 const { job, onboardOn, loginOn } = useOnboarding();
-const { credentials } = useCredentials();
 
 const target = ref("");
 const label = ref("");
 const session = ref("default");
-const host = ref("");
-const saveHost = async () => {
-  if (await saveGitlabHost(host.value.trim())) host.value = "";
-};
 
 const STATE = {
   live: { label: "Live", color: "success" },
@@ -37,57 +32,6 @@ const add = async () => {
   <USlideover v-model:open="open" title="Machines">
     <template #body>
       <div class="flex flex-col gap-6">
-        <DesktopVersion />
-        <section v-if="credentials" class="flex flex-col gap-3" data-testid="credentials">
-          <h3 class="text-sm font-semibold">Given to every Machine</h3>
-          <form class="flex gap-2" data-testid="gitlab-host-form" @submit.prevent="saveHost">
-            <UInput
-              v-model="host"
-              class="flex-1"
-              :placeholder="`GitLab host: ${credentials.host}`"
-              data-testid="gitlab-host"
-            />
-            <UButton
-              type="submit"
-              size="sm"
-              label="Use this GitLab"
-              data-testid="save-gitlab-host"
-              :disabled="host.trim() === ''"
-            />
-          </form>
-          <div class="flex items-center gap-2">
-            <span class="font-medium">GitLab token</span>
-            <span class="text-sm text-muted" data-testid="gitlab-state">
-              {{
-                credentials.gitlab === null
-                  ? "none yet"
-                  : credentials.gitlab.expires === null
-                    ? "kept"
-                    : `expires ${credentials.gitlab.expires}`
-              }}
-            </span>
-            <UButton
-              class="ml-auto"
-              size="xs"
-              variant="outline"
-              icon="i-lucide-external-link"
-              label="Make one on GitLab"
-              data-testid="token-page"
-              @click="openLink(credentials.tokenPage)"
-            />
-          </div>
-          <CredentialFields
-            which="gitlab"
-            :label="credentials.gitlab === null ? 'Save' : 'Renew'"
-          />
-          <div class="flex items-center gap-2">
-            <span class="font-medium">Helle</span>
-            <span class="text-sm text-muted" data-testid="helle-state">
-              {{ credentials.helle ? "kept" : "none yet" }}
-            </span>
-          </div>
-          <CredentialFields which="helle" label="Save" />
-        </section>
         <form class="flex flex-col gap-2" data-testid="add-form" @submit.prevent="add">
           <UFormField label="SSH target" help="As ssh reaches it, such as mk@vm-mk.example">
             <UInput v-model="target" class="w-full" data-testid="add-target" />

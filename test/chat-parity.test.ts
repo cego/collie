@@ -227,6 +227,8 @@ const INVENTORY: ReadonlyArray<readonly [string, Route]> = [
   ],
   ["run intent defaults set-authority", { route: "shell" }],
   ["task list", { route: "read", tool: "collie_workspaces" }],
+  ["settings list", { route: "shell" }],
+  ["settings set", { route: "shell" }],
   ["run output", { route: "read", tool: "collie_run", input: { run: RUN } }],
   ["steer", { route: "write", tool: "collie_do" }],
   ["confirm", { route: "write", tool: "collie_do" }],

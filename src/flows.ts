@@ -19,17 +19,8 @@ import { PROJECTS_ROOT_OPTION, projectsRoot } from "./projects";
 import { insideCheckout } from "./agent-start";
 import { placeableUnder, placedByUrl, routed, routerDeps } from "./route";
 import { offerFields, offerInput, StepResult, type RunDetail } from "./board-model";
-import {
-  DENSITIES,
-  isDensity,
-  isQuestionMode,
-  isScope,
-  loadDefaults,
-  QUESTION_MODES,
-  SCOPES,
-  writeConfigValue,
-} from "./config";
-import { COMPACTION_OFF, validThreshold } from "./compaction";
+import { loadDefaults, setSetting } from "./config";
+import { parseSetting, settingText } from "./settings";
 import { herdOf } from "./steering";
 import { chatHarnessOf, ensureChatFor } from "./chat";
 import {
@@ -91,9 +82,8 @@ import {
   type Command,
 } from "./ui/state";
 import type { Focus } from "./ui/bridge";
-import { buildHistory, buildSettings, buildWorkflows, NUMERIC_DEFAULTS } from "./views";
-import { isPermissionMode, PERMISSION_MODES } from "./harness";
-import { isHostName } from "./gitlab-token";
+import { buildHistory, buildSettings, buildWorkflows } from "./views";
+import { nowIso } from "./time";
 import { repoArgs, shell } from "./mr";
 import { parseMrTarget } from "./board-model";
 import type { ChildProcessSpawner } from "effect/unstable/process";
@@ -1320,48 +1310,11 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
     }
 
     case "SetDefault": {
-      // Three ways this used to write a default no Run could use: an empty string, which
-      // `loadDefaults` reads as configured rather than unset; a string on one of the two
-      // keys it reads with `isNumber`, which every Run then ignores; and a value written
-      // with the whitespace around it, so `codex ` displayed as `codex` and then failed
-      // harness validation. Hence: trim, then unset on empty, then reject a non-number.
-      const typed = command.value.trim();
-      const numeric = NUMERIC_DEFAULTS.includes(command.key);
-      if (typed !== "" && numeric && !/^\d+$/.test(typed)) {
-        return `${command.key} has to be a whole number, not "${command.value}"`;
-      }
-      // The one key `loadDefaults` fails on rather than falling back: written wrong, it
-      // would break every later run — and the Settings view used to put it right.
-      if (typed !== "" && command.key === "permissions" && !isPermissionMode(typed)) {
-        return `permissions has to be one of ${PERMISSION_MODES.join(", ")}, not "${command.value}"`;
-      }
-      // The board has to open on one of the two, so a typo is refused here rather
-      // than silently opening local for ever after.
-      if (typed !== "" && command.key === "scope" && !isScope(typed)) {
-        return `scope has to be one of ${SCOPES.join(", ")}, not "${command.value}"`;
-      }
-      // Same reason as `scope`: the board draws two cards across or three, so a typo
-      // is refused here rather than quietly leaving it on the wider one.
-      if (typed !== "" && command.key === "density" && !isDensity(typed)) {
-        return `density has to be one of ${DENSITIES.join(", ")}, not "${command.value}"`;
-      }
-      // Same reason as `scope`: a Driver has to either take focus or not, so a typo
-      // is refused here rather than quietly leaving every question stealing focus.
-      if (typed !== "" && command.key === "questions" && !isQuestionMode(typed)) {
-        return `questions has to be one of ${QUESTION_MODES.join(", ")}, not "${command.value}"`;
-      }
-      if (typed !== "" && command.key === "gitlab_host" && !isHostName(typed)) {
-        return `gitlab_host has to be a host name, such as gitlab.example.com, not "${command.value}"`;
-      }
-      // A threshold no Run can use fails every step that would launch an agent, so
-      // it is refused where it is written rather than at the next launch.
-      if (typed !== "" && command.key === "compact_at_tokens" && !validThreshold(Number(typed))) {
-        return `compact_at_tokens has to be a whole number of tokens above zero, or ${COMPACTION_OFF} to turn compaction off, not "${command.value}"`;
-      }
-      const value = typed === "" ? null : numeric ? Number(typed) : typed;
-      return yield* writeConfigValue(env.userDir, command.key, value).pipe(
+      const parsed = parseSetting(command.key, command.value);
+      if ("refused" in parsed) return parsed.refused;
+      return yield* setSetting(env.userDir, command.key, parsed.value, yield* nowIso()).pipe(
         // What was written, so the note cannot disagree with the file.
-        Effect.as(`${command.key} is now ${value ?? "unset"}`),
+        Effect.as(`${command.key} is now ${settingText(parsed.value) || "unset"}`),
         Effect.catch((cause) => Effect.succeed(`${command.key}: ${reason(cause)}`)),
       );
     }

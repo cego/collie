@@ -660,7 +660,10 @@ board; what each agent is doing is herdr's own agent-status column in the sideba
 workflow with its layer, inputs, decisions and whatever validation says is wrong with it —
 workflows only, because a persona is instructions rather than something to run; `f` is
 where personas are acted on. **Settings** is the defaults and remembered values in
-`config.json`, and whether the harness is trusted here. Each fills the pane, `close` or
+`config.json`, and whether the harness is trusted here. The defaults are every setting
+`src/settings.ts` lists — `proactive`, `models.<harness>` and `notifications.<kind>` among
+them — and once a Desktop shares them with its Flock each says "shared with the Flock by"
+that Desktop's computer: an edit here then reaches every Machine. Each fills the pane, `close` or
 Esc brings the board back exactly as you left it, and neither is read until it is first
 opened.
 
@@ -843,12 +846,13 @@ curl -fsSL https://github.com/cego/collie/releases/latest/download/install-deskt
 The script downloads the latest release's installer and runs it only once the download
 verifies against Collie's release key. Checking needs OpenSSL 3.0 or later.
 
-It shows up as **Collie**, with the Collie mark, in your app launcher, on its window and in
-the taskbar.
+It shows up as **Collie**, with the Collie mark — the dog on the white tile the TUI board
+shows, which reads on a dark taskbar too — in your app launcher, on its window, in the
+taskbar and at the top left of the board.
 
 Desktop then keeps itself up to date. It checks the latest release when it starts and every
-hour after, and downloads an update in the background. **Machines** shows Desktop's own
-version with **Check for updates**, which checks now and says what it found: "Collie 0.34.0
+hour after, and downloads an update in the background. **Settings**, under **About**, shows
+Desktop's own version with **Check for updates**, which checks now and says what it found: "Collie 0.34.0
 is up to date", "Downloading 0.35.0", the ready notice below, or why the check failed. A
 check asked for while one runs joins it rather than downloading twice. It installs nothing until the
 tar it would install verifies against the same key, because Electrobun's bundle hash is
@@ -860,7 +864,7 @@ on this computer stages the same update for Desktop, verified the same way, so t
 Desktop move together; a running Desktop announces it within a minute. A ready update stays
 announced through later checks, even one that fails. A Desktop run from a checkout
 (`bun run start`, or any build that is not the stable channel) never updates itself, and
-**Machines** says so. The new
+**Settings** says so. The new
 Desktop then upgrades your released Machines to its version as they connect.
 
 The Machines are this computer and every machine enabled in `herdr machine list`; Collie
@@ -966,8 +970,8 @@ absent or not working, and a Linear login onboarding left unfinished. **Skip on 
 Machine** on either step onboards it again with `--skip`, and every later onboarding of
 that Machine skips it too.
 
-What only you can give is asked once, here, and never pasted on a command line. **Machines**
-keeps the Flock's credentials in a file of Desktop's own,
+What only you can give is asked once, in **Settings** under **Shared by every Machine**, and
+never pasted on a command line. Desktop keeps the Flock's credentials in a file of Desktop's own,
 `$XDG_CONFIG_HOME/collie-desktop/credentials` (`~/.config/collie-desktop/credentials`
 unless that is set), readable by you alone and replaced whole on every save — the way glab,
 gh and Helle already keep the same tokens on every Machine, so nothing has to be installed
@@ -986,12 +990,32 @@ is saved, and warns above the board from 14 days before; **Renew** with a new on
 it on every Machine.
 
 That GitLab is one host for the whole Flock, `gitlab.cego.dk` unless you name another in
-**Machines** (**Use this GitLab**, kept in Desktop's own `settings.json`). It is the token
+**Settings** (**Use this GitLab**), which is the Flock's `gitlab_host` setting below. It is the token
 page Desktop opens, the GitLab a token is checked against and logged in to, and the
 `--gitlab-host` every Machine is onboarded and doctored with, so each Machine's readiness
 is that host's. A change applies at once, without a restart, and every Machine is doctored
 again. It also forgets the GitLab token Desktop kept, since a token is made for one GitLab:
-make a new one on the new host's page and save it.
+make a new one on the new host's page and save it. The GitLab host is given to every
+Machine but never taken from one: an edit of `gitlab_host` in a Machine's TUI stays that
+Machine's.
+
+**Settings** also holds **Collie**: every setting the TUI's Settings offers — each default a
+Run reads, `proactive`, the extra `models.<harness>` and each `notifications.<kind>` — with
+a control that fits it (a choice, a number, a switch, or text), its default beside it, and
+the same refusals as the TUI. Both read one list of settings (`src/settings.ts`), so a new
+setting shows up in both. These are the Flock's: Desktop keeps them in
+`flock-settings.json` beside its chat, and gives them to every Machine through that
+Machine's host, never by editing a file over SSH. A Machine is synced each time it
+connects and after every edit in Settings, so one out of reach gets an edit when it is
+back, the way upgrades reach it. An edit on one Machine's own TUI Settings counts the
+same: Desktop takes it the next time it sees that Machine, or when Settings is opened, and
+spreads it. Each key is decided by whichever edit was made last, wherever it was made
+([ADR-0043](adr/0043-a-shared-setting-is-its-latest-edit.md)); on the first sync a key set
+on one Machine only is taken from it, and a key set differently on several takes the latest,
+with Settings saying beside it which Machine that came from. A value a Machine holds that
+its setting refuses, written into its file by hand, is not taken. What stays each Machine's own
+is everything else in its `config.json`: remembered answers such as `linear.team` and
+`gitlab.assignee`, `chat_harness`, and `projects.root`, which is a path on that Machine.
 
 Helle makes tokens only in Slack, so its step walks you there: **Open Slack** opens the
 Slack app, or Slack on the web where the app does not open; run `/helle token` (the copy

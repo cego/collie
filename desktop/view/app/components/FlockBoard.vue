@@ -3,6 +3,7 @@ import { SECTIONS } from "../../../../src/board-model";
 import { AsyncResult, useAtomValue } from "@effect/atom-vue";
 import type { NotLive } from "../../../src/shared/flock";
 import { updatesAtom } from "../flock";
+import tile from "../../../../assets/brand/logos/collie-tile-256.png";
 
 const {
   connecting,
@@ -19,6 +20,7 @@ const {
 } = useFlock();
 const starting = ref(false);
 const listing = ref(false);
+const setting = ref(false);
 const { onboardOn } = useOnboarding();
 const { renewBy } = useCredentials();
 const drawer = useDrawer();
@@ -87,7 +89,8 @@ watch(update, (now) => {
   <div class="flex h-screen">
     <div class="flex min-w-0 flex-1 flex-col overflow-y-auto">
       <header class="flex items-center gap-3 border-b border-default px-4 py-3">
-        <UIcon name="i-lucide-dog" class="size-5 text-primary" />
+        <!-- The ring keeps the white tile's edge on a light header. -->
+        <img :src="tile" alt="" class="size-6 rounded-md ring-1 ring-default" />
         <strong>Collie</strong>
         <p data-testid="header" :class="header.urgent ? 'text-warning font-medium' : 'text-muted'">
           {{ connecting || failure !== null ? "" : header.text }}
@@ -102,6 +105,15 @@ watch(update, (now) => {
           @click="listing = true"
         />
         <MachinesPanel v-model:open="listing" />
+        <UButton
+          color="neutral"
+          variant="outline"
+          icon="i-lucide-settings"
+          label="Settings"
+          data-testid="settings"
+          @click="setting = true"
+        />
+        <SettingsPanel v-model:open="setting" />
         <OnboardDialog />
         <UButton
           icon="i-lucide-plus"
@@ -139,7 +151,7 @@ watch(update, (now) => {
             icon="i-lucide-key-round"
             :title="`The GitLab token expires on ${renewBy}`"
             description="Make a new one and Renew it, and every Machine gets it."
-            :actions="[{ label: 'Renew', onClick: () => void (listing = true) }]"
+            :actions="[{ label: 'Renew', onClick: () => void (setting = true) }]"
           />
           <UAlert
             v-for="[profile, { name, state, reason }] in lost"
