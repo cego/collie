@@ -92,9 +92,11 @@ Five things the proof measured rather than assumed. Each is a test.
    workflow's execution id from its payload differently from rc.117 (Effect-TS/effect
    #8455), so a parent resumed after the upgrade that derived its child's id again would run
    a finished child a second time. A child is resumed under the execution Collie recorded
-   for it instead (`test/child-execution.test.ts`). The cluster's and workflow engine's SQL
-   tables are identical between rc.117 and 4.0.1, so a database an rc.117 host wrote is read
-   as it is: every `CREATE` and `ALTER` statement in `cluster/SqlMessageStorage.js` and
+   for it instead (`test/child-execution.test.ts`). Going back is not covered: Collie 0.37.0
+   and earlier derive the id again, so none of them may take over a state directory with
+   Runs in flight whose children a 4.0.1 host started. The cluster's and workflow engine's
+   SQL tables are identical between rc.117 and 4.0.1, so a database an rc.117 host wrote is
+   read as it is: every `CREATE` and `ALTER` statement in `cluster/SqlMessageStorage.js` and
    `cluster/SqlRunnerStorage.js` was compared between the two packages.
 
 ## What this does not decide
@@ -111,5 +113,5 @@ the same registry for as many clients as ask.
   `@effect/sql-sqlite-bun` at one version — and an upgrade rechecks this proof.
 - `bun run test` carries about two minutes of real subprocesses and SQLite files. The
   questions being asked have no answer in an in-memory engine.
-- `COLLIE_TEST_BINARY=bin/collie bun test test/engine.test.ts` runs the same proof
+- `COLLIE_TEST_BINARY=$PWD/bin/collie bun test test/engine.test.ts` runs the same proof
   against the compiled executable, which is the one that matters.
