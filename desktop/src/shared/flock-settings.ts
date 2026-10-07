@@ -100,7 +100,13 @@ export const editSetting = (
 };
 
 /** Desktop's own settings, which no Machine has. */
-const DESKTOP_SETTINGS = [
+interface DesktopSetting extends Setting {
+  readonly read: (desktop: DesktopSettings) => string;
+  /** What Settings says of it while it is unset, where its default says nothing. */
+  readonly unset?: string;
+}
+
+const DESKTOP_SETTINGS: ReadonlyArray<DesktopSetting> = [
   {
     key: "proactive",
     kind: "boolean",
@@ -112,7 +118,19 @@ const DESKTOP_SETTINGS = [
       "Whether the Flock chat starts a turn about News that matters, as the bell in its header does.",
     read: (desktop: DesktopSettings) => String(desktop.proactive),
   },
-] satisfies ReadonlyArray<Setting & { read: (desktop: DesktopSettings) => string }>;
+  {
+    key: "machineRule",
+    kind: "text",
+    choices: [],
+    fallback: "",
+    group: "Chat",
+    label: "Machine rule",
+    description:
+      "Which Machine each kind of work goes to, in your own words. The Flock chat starts work where it says, and asks where it does not say.",
+    read: (desktop: DesktopSettings) => desktop.machineRule ?? "",
+    unset: "Unset: no rule",
+  },
+];
 
 /** One setting as Settings shows it, its value and default in its unit. */
 export interface SettingRow {
@@ -182,13 +200,13 @@ export const settingSections = (
 ): ReadonlyArray<SettingSection> => {
   const rows = [
     ...SETTINGS.filter(({ key }) => key !== GIVEN_ONLY).map((setting) => flockRow(flock, setting)),
-    ...DESKTOP_SETTINGS.map(({ read, ...setting }): SettingRow => {
+    ...DESKTOP_SETTINGS.map(({ read, unset, ...setting }): SettingRow => {
       const value = read(desktop);
       return {
         ...rowOf(setting),
         value,
         fallback: setting.fallback,
-        defaultSaid: defaultSaid(setting, setting.fallback),
+        defaultSaid: unset ?? defaultSaid(setting, setting.fallback),
         set: value !== setting.fallback,
         from: null,
         shared: false,

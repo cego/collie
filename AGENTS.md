@@ -18,6 +18,12 @@ herdr actions, and the `collie` CLI.
   alongside `src/authoring.ts` and `src/commands/workflow.ts`. One reading answers `list`,
   `show`, `collie_definitions` and a `needs_input` refusal, and a check keeps a problem, a
   projection limit and an absent toolchain apart.
+- **Changing Go to pane, or the terminal Desktop shows a pane in** →
+  [ADR-0044](docs/adr/0044-go-to-pane-opens-the-pane-in-desktop.md), alongside
+  `desktop/src/bun/terminal.ts` (the controller run over the Machine's route),
+  `desktop/view/app/components/TerminalTab.vue` and `desktop/src/shared/terminal-input.ts`
+  (what the human does, as herdr is told it), with `test/desktop-terminal.test.ts` and
+  `desktop/test/terminal-input.test.ts`. Desktop draws the pane and decides nothing from it.
 - **Changing where a start runs — placement from the Home, the Projects root, or what an
   agent's start must name** → [ADR-0033](docs/adr/0033-a-run-started-from-the-home-is-placed-not-asked.md),
   alongside `src/flows.ts`, `src/route.ts`, `src/projects.ts` and `src/agent-start.ts`.
@@ -73,7 +79,7 @@ herdr actions, and the `collie` CLI.
   Agent SDK it runs on, and Collie's tools served to it), `session.ts` (what it
   runs with), `flock-tools.ts` (the Toolkit over each Machine's `chat` channel), `agui.ts`
   (SDK messages as AG-UI), `transcript.ts` (a conversation read back) and `settings.ts`
-  (Desktop's own switches, the proactive one among them), with
+  (Desktop's own switches, the proactive one and the Machine rule among them), with
   `desktop/src/shared/chat-view.ts` what the window says of a tool call and the card a
   message is about, and `src/toolkit.ts` the Toolkit both chats share
   ([ADR-0011](docs/adr/0011-the-conversation-is-a-native-harness.md#amended-2026-10-05-a-herds-chat-per-home-and-one-flock-chat-per-desktop)).
@@ -254,8 +260,9 @@ of the view is covered by testing the logic it renders.
    adapters over the same Effect services ([ADR-0003](docs/adr/0003-collie-is-one-effect-program.md)).
 3. All herdr communication goes through `src/herdr.ts`. The exceptions never talk to a
    session for Collie: `tools/herdr-schema.ts`, which runs a downloaded release offline to
-   print its schema; Desktop's `herdr machine list`, `add` and `remove`; and the herdr
-   client Go to pane opens in a terminal for the human — see
+   print its schema; Desktop's `herdr machine list`, `add` and `remove`; and, for the
+   human, herdr's terminal controller whose pane Go to pane shows in Desktop, and the herdr
+   client it opens in a terminal where there is no pane to show — see
    [`docs/internals.md`](docs/internals.md#the-herdr-boundary).
 4. One host owns a state directory and everything it is running
    ([ADR-0015](docs/adr/0015-one-local-host-owns-a-state-directory.md)). Mutate a Run

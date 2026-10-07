@@ -11,13 +11,15 @@ import { flockSettingsAtom } from "../flock";
 const open = defineModel<boolean>("open", { required: true });
 const { openLink, saveGitlabHost, setFlockSetting } = useActions();
 const { credentials } = useCredentials();
-const { desktopSettings, setProactive } = useDesktopSettings();
+const { desktopSettings, reread, change } = useDesktopSettings();
 const toast = useToast();
 const held = useAtomValue(() => flockSettingsAtom);
 // Asked again on opening, which syncs every connected Machine and so shows their edits.
 const registry = injectRegistry();
 watch(open, (opened) => {
-  if (opened) registry.refresh(flockSettingsAtom);
+  if (!opened) return;
+  registry.refresh(flockSettingsAtom);
+  void reread();
 });
 const sections = computed(() =>
   settingSections(
@@ -37,10 +39,14 @@ const drafts = ref<Record<string, string>>({});
 const shown = (row: SettingRow) => drafts.value[idOf(row)] ?? row.value;
 /** `typed` in the row's unit; empty unsets it. */
 const set = async (row: SettingRow, typed: string) => {
-  // Desktop's own list is the Flock chat's switch alone.
   if (!row.shared) {
-    if (!(await setProactive((typed || row.fallback) === "true")))
-      toast.add({ title: "Desktop could not keep that", color: "error" });
+    const kept = await change(
+      row.key === "proactive"
+        ? { proactive: (typed || row.fallback) === "true" }
+        : { machineRule: typed.trim() },
+    );
+    if (kept) delete drafts.value[idOf(row)];
+    else toast.add({ title: "Desktop could not keep that", color: "error" });
     return;
   }
   const stored = settingStored(row.key, typed);
@@ -100,7 +106,19 @@ const gitlabHostSaid = settingOf("gitlab_host")?.description;
                 class="flex flex-1 items-center gap-2"
                 @submit.prevent="set(row, shown(row))"
               >
+                <UTextarea
+                  v-if="!row.shared && row.kind === 'text'"
+                  class="flex-1"
+                  :rows="3"
+                  autoresize
+                  :model-value="shown(row)"
+                  placeholder="Frontend work is on the laptop, everything else is on the vm"
+                  :aria-label="row.label"
+                  :data-testid="`${idOf(row)}-text`"
+                  @update:model-value="(typed) => (drafts[idOf(row)] = String(typed))"
+                />
                 <UInput
+                  v-else
                   class="flex-1"
                   :type="row.kind === 'number' ? 'number' : 'text'"
                   :step="row.kind === 'number' ? 'any' : undefined"

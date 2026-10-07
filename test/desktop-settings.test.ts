@@ -2,7 +2,8 @@
 // that was made, and given to every Machine through its host.
 
 import { expect, test } from "bun:test";
-import { Effect, SubscriptionRef } from "effect";
+import { BunServices } from "@effect/platform-bun";
+import { Effect, FileSystem, SubscriptionRef } from "effect";
 import { HostRefused, type SharedSetting, type SharedSettings } from "../src/board-model";
 import {
   editSetting,
@@ -13,6 +14,7 @@ import {
 } from "../desktop/src/shared/flock-settings";
 import { flockSync } from "../desktop/src/bun/flock-settings";
 import { settingStored } from "../src/settings";
+import { readSettings, writeSettings } from "../desktop/src/bun/settings";
 
 const at = (hour: number) => `2026-10-07T${String(hour).padStart(2, "0")}:00:00.000Z`;
 const set = (key: string, value: SharedSetting["value"], hour: number): SharedSetting => ({
@@ -125,6 +127,14 @@ test("Settings shows every setting with its control, its value and its default",
       set: true,
     }),
   );
+  // As is the Machine rule, which no Machine is given.
+  expect(row("machineRule", false)).toMatchObject({
+    group: "Chat",
+    kind: "text",
+    value: "",
+    set: false,
+    defaultSaid: "Unset: no rule",
+  });
   // The GitLab host is shared too, but beside the tokens made for it.
   expect(rows.map((one) => one.key)).not.toContain("gitlab_host");
 });
@@ -271,4 +281,19 @@ test("each sync tells how it ended for its Machine: synced, or failed in its hos
         ["vm-b", "no such operation"],
       ]);
     }),
+  ));
+
+test("the Machine rule is kept on this computer with Desktop's own settings, and a file from before it still reads", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "desktop-settings-" });
+      const rule = "Frontend work is on the laptop, everything else is on the vm";
+      yield* writeSettings(dir, { proactive: false, machineRule: rule });
+      // As a restarted Desktop reads it.
+      expect(yield* readSettings(dir)).toEqual({ proactive: false, machineRule: rule });
+
+      yield* fs.writeFileString(`${dir}/settings.json`, '{"proactive":true}');
+      expect((yield* readSettings(dir)).machineRule).toBeUndefined();
+    }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
   ));

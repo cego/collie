@@ -104,6 +104,8 @@ const served = (main: Channel<ToView, ToMain>) =>
         copyText: () => Effect.die("not asked"),
         claudeLogin: () => Effect.die("not asked"),
         pasteCode: () => Effect.die("not asked"),
+        terminal: () => Stream.die("not asked"),
+        terminalSend: () => Effect.die("not asked"),
         runDetail: () => Stream.die("not asked"),
         runFile: () => Effect.die("not asked"),
         answer: () => Effect.die("not asked"),

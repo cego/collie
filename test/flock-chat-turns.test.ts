@@ -155,6 +155,7 @@ const withChat = <A, E>(
     readonly items: ReadonlyArray<Item>;
     readonly proactive: boolean;
     readonly holds?: (text: string) => boolean;
+    readonly rule?: string;
   },
   reply: (text: string) => ReadonlyArray<SdkMessage>,
   body: (chat: {
@@ -178,6 +179,8 @@ const withChat = <A, E>(
         conversation: "flock@mk-pc",
         machines: () => [machine(opts.items, read)],
         proactive: () => opts.proactive,
+        machineRule: () => opts.rule ?? "Everything is on the vm",
+        setMachineRule: () => Effect.void,
       });
       return yield* body({ conversation, seen, read, dir });
     }).pipe(Effect.scoped, Effect.provide([BunServices.layer, TestClock.layer()])),
@@ -197,12 +200,16 @@ test("Desktop speaks first only about what matters, and the rest goes with the h
         expect(seen.prompts[0]).toStartWith(DESKTOP_SAID);
         expect(seen.prompts[0]).toContain("r1:asking happened.");
         expect(seen.prompts[0]).not.toContain("r2:ended");
+        // Desktop's own turn knows where work goes, as the human's would.
+        expect(seen.context[0]).toContain("Everything is on the vm");
         expect(read).toEqual(["r1:asking"]);
         // Nobody is there to click an answer, so the question is refused rather than waited on.
         expect(seen.refusals).toEqual(seen.prompts.slice(0, 1));
-        const usage = yield* (yield* FileSystem.FileSystem).readFileString(
-          `${dir}/flock-usage.jsonl`,
-        );
+        const fs = yield* FileSystem.FileSystem;
+        // Recorded once the turn has drained, after its News was marked read.
+        for (let tries = 0; tries < 200 && !(yield* fs.exists(`${dir}/flock-usage.jsonl`)); tries++)
+          yield* TestClock.withLive(Effect.sleep("10 millis"));
+        const usage = yield* fs.readFileString(`${dir}/flock-usage.jsonl`);
         expect(usage.trim().split("\n")).toHaveLength(1);
 
         yield* Stream.runDrain(conversation.send("what's new?", null, false));
@@ -211,6 +218,14 @@ test("Desktop speaks first only about what matters, and the rest goes with the h
         expect(seen.context[1]).not.toContain("r1:asking");
         yield* eventually(() => read.includes("r2:ended"));
       }),
+  ));
+
+test("a rule left blank adds nothing to a turn", () =>
+  withChat({ items: [], proactive: false, rule: "  \n" }, answered, ({ conversation, seen }) =>
+    Effect.gen(function* () {
+      yield* Stream.runDrain(conversation.send("start a review", null, false));
+      expect(seen.context).toEqual([""]);
+    }),
   ));
 
 test("a message sent now interrupts the turn under way, even Desktop's own, and starts the next", () =>
