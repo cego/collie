@@ -2,6 +2,7 @@
 // while unset and what is refused. The TUI's Settings and Desktop's both read this list,
 // so a setting added here is offered by both. Pure: Desktop's view bundles it.
 
+import { Schema } from "effect";
 import { GITLAB_HOST, isHostName } from "./gitlab-token";
 import { NOTIFICATION_KINDS } from "./notify";
 import { isString } from "./schema";
@@ -149,7 +150,13 @@ export interface Setting {
   readonly fallback: string;
 }
 
-export type SettingValue = string | number | boolean | ReadonlyArray<string>;
+export const SettingValue = Schema.Union([
+  Schema.String,
+  Schema.Number,
+  Schema.Boolean,
+  Schema.Array(Schema.String),
+]);
+export type SettingValue = typeof SettingValue.Type;
 
 const choice = (key: string, choices: ReadonlyArray<string>, fallback: string): Setting => ({
   key,

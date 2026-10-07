@@ -7,6 +7,7 @@ import * as Rpc from "effect/unstable/rpc/Rpc";
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
 import { AguiEvent } from "./agui";
 import { About, Answers, ChatMessage, Conversations, DesktopTurn } from "./chat-view";
+import { FlockSettings } from "./flock-settings";
 import {
   BoardMessage,
   Herd,
@@ -278,6 +279,17 @@ export const DesktopRpcs = RpcGroup.make(
   }),
   /** The human's answer to the question herdr asks in a job. */
   Rpc.make("answerHerdr", { payload: { job: Schema.String, yes: Schema.Boolean } }),
+  /**
+   * The Flock's settings, now and whenever they change. Asking syncs every connected
+   * Machine, so an edit made on one since it connected is picked up.
+   */
+  Rpc.make("flockSettings", { success: FlockSettings, stream: true }),
+  /** One of Collie's settings, as typed, for every Machine; what came of it in a line. */
+  Rpc.make("setFlockSetting", {
+    payload: { key: Schema.String, value: Schema.String },
+    success: Schema.String,
+    error: ActionFailed,
+  }),
   /** Which credentials Desktop holds, now and whenever that changes. */
   Rpc.make("credentials", { success: Credentials, stream: true }),
   /** Keeps the Flock's GitLab token once GitLab accepts it, and gives it to every Machine. */

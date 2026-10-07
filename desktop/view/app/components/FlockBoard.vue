@@ -19,6 +19,7 @@ const {
 } = useFlock();
 const starting = ref(false);
 const listing = ref(false);
+const setting = ref(false);
 const { onboardOn } = useOnboarding();
 const { renewBy } = useCredentials();
 const drawer = useDrawer();
@@ -96,6 +97,15 @@ watch(update, (now) => {
           @click="listing = true"
         />
         <MachinesPanel v-model:open="listing" />
+        <UButton
+          color="neutral"
+          variant="outline"
+          icon="i-lucide-settings"
+          label="Settings"
+          data-testid="settings"
+          @click="setting = true"
+        />
+        <SettingsPanel v-model:open="setting" />
         <OnboardDialog />
         <UButton
           icon="i-lucide-plus"
@@ -133,7 +143,7 @@ watch(update, (now) => {
             icon="i-lucide-key-round"
             :title="`The GitLab token expires on ${renewBy}`"
             description="Make a new one and Renew it, and every Machine gets it."
-            :actions="[{ label: 'Renew', onClick: () => void (listing = true) }]"
+            :actions="[{ label: 'Renew', onClick: () => void (setting = true) }]"
           />
           <UAlert
             v-for="[profile, { name, state, reason }] in lost"

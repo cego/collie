@@ -13,7 +13,7 @@ import {
   parseSetting,
   SETTINGS,
   settingText,
-  type SettingValue,
+  SettingValue,
 } from "./settings";
 import type { SharedSetting, SharedSettings } from "./board-model";
 import { epochMs } from "./time";
@@ -131,10 +131,6 @@ export const setSetting = Effect.fn("Config.setSetting")(function* (
   yield* writeSettingsSet(userDir, { ...stamps, set: { ...stamps.set, [key]: at } });
 });
 
-const SharedValue = Schema.NullOr(
-  Schema.Union([Schema.String, Schema.Number, Schema.Boolean, Schema.Array(Schema.String)]),
-);
-
 /** This Machine's settings a Flock shares: each ever set, and when, the file's time where unrecorded. */
 export const sharedSettings = Effect.fn("Config.sharedSettings")(function* (userDir: string) {
   const fs = yield* FileSystem.FileSystem;
@@ -166,7 +162,7 @@ export const takeShared = Effect.fn("Config.takeShared")(function* (
 ) {
   const parsed = [];
   for (const { key, value, at } of given) {
-    const typed = Schema.decodeUnknownOption(SharedValue)(value);
+    const typed = Schema.decodeUnknownOption(Schema.NullOr(SettingValue))(value);
     const one = Option.isSome(typed)
       ? parseSetting(key, settingText(typed.value))
       : { refused: `${key} cannot take that value` };

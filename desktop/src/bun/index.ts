@@ -20,6 +20,7 @@ import {
   Result,
   Schema,
   Scope,
+  Semaphore,
   Stream,
   SubscriptionRef,
 } from "effect";
@@ -52,6 +53,11 @@ import { type FlockConversation, openFlockChat, refusal } from "./chat";
 import { claudeCode } from "./claude";
 import { chatDoor } from "./flock-tools";
 import { readSettings, writeSettings } from "./settings";
+import { readFlockSettings, syncSettings, writeFlockSettings } from "./flock-settings";
+import { editSetting } from "../shared/flock-settings";
+import { nowIso } from "../../../src/time";
+import { SettingValue, settingText } from "../../../src/settings";
+import { isString } from "../../../src/schema";
 import {
   act,
   type Doors,
@@ -195,13 +201,16 @@ const main = Effect.gen(function* () {
         );
   const own = (yield* Path.Path).join(yield* StateDir, "collie-desktop");
   let settings = yield* readSettings(own);
+  const flockSettings = yield* SubscriptionRef.make(yield* readFlockSettings(own));
   const defaultGitlab = yield* Config.String("COLLIE_DESKTOP_GITLAB").pipe(
     Config.withDefault(GITLAB),
   );
-  const gitlab = () =>
-    settings.gitlabHost !== undefined && isHostName(settings.gitlabHost)
-      ? `https://${settings.gitlabHost}`
-      : defaultGitlab;
+  // The Flock's gitlab_host, else what an earlier Desktop kept as its own.
+  const gitlab = () => {
+    const shared = SubscriptionRef.getUnsafe(flockSettings).settings.gitlab_host?.value;
+    const host = isString(shared) ? shared : settings.gitlabHost;
+    return host !== undefined && isHostName(host) ? `https://${host}` : defaultGitlab;
+  };
   const gitlabHost = () => new URL(gitlab()).host;
   const gitlabPages = () => ({ host: gitlabHost(), tokenPage: tokenPage(gitlabHost()) });
   const helle = yield* Config.String("COLLIE_HELLE_URL").pipe(Config.withDefault(HELLE_URL));
@@ -284,6 +293,46 @@ const main = Effect.gen(function* () {
   const changes = yield* PubSub.unbounded<RouteChange>();
   const news = yield* PubSub.unbounded<FlockItem>();
   const doors = new Map<string, Doors>();
+  const syncing = yield* Semaphore.make(1);
+  /**
+   * Syncs a connected Machine with the Flock's settings. One out of reach, or on a collie
+   * without the operation until it is upgraded, is synced when it next connects.
+   */
+  const syncOn = (door: Doors) =>
+    syncing
+      .withPermits(1)(
+        Effect.gen(function* () {
+          const before = yield* SubscriptionRef.get(flockSettings);
+          const after = yield* syncSettings(before, door.machine.name, door.desktop, yield* uuid);
+          yield* writeFlockSettings(own, after);
+          yield* SubscriptionRef.set(flockSettings, after);
+        }),
+      )
+      .pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning(`Settings not synced with ${door.machine.name}`, cause),
+        ),
+        Effect.provide(BunServices.layer),
+      );
+  const syncEvery = () =>
+    Effect.forEach([...doors.values()], syncOn, { concurrency: "unbounded", discard: true });
+  /** Keeps an edit made here, then gives it to every connected Machine. */
+  const editFlock = (key: string, typed: string) =>
+    Effect.gen(function* () {
+      const edited = editSetting(
+        yield* SubscriptionRef.get(flockSettings),
+        key,
+        typed,
+        yield* nowIso(),
+      );
+      if ("refused" in edited) return yield* new ActionFailed({ reason: edited.refused });
+      yield* writeFlockSettings(own, edited).pipe(
+        Effect.mapError((error) => new ActionFailed({ reason: error.message })),
+      );
+      yield* SubscriptionRef.set(flockSettings, edited);
+      yield* syncEvery().pipe(Effect.forkIn(scope));
+      return edited;
+    });
   const boards = `${Utils.paths.userData}/machines`;
   const onboardings = `${Utils.paths.userData}/onboarding`;
   const runners = `${Utils.paths.userData}/runners`;
@@ -486,6 +535,12 @@ const main = Effect.gen(function* () {
             checked.add(once);
             return doctored(route).pipe(Effect.forkIn(scope));
           };
+          // Each Snapshot is a Machine (re)connected, so whatever changed while apart is synced.
+          const syncOnceLive = (item: FlockItem) => {
+            if ("_tag" in item || item.message._tag !== "Snapshot") return Effect.void;
+            const door = doors.get(item.machine.installation);
+            return door === undefined ? Effect.void : syncOn(door).pipe(Effect.forkIn(scope));
+          };
           shown = EMPTY_FLOCK;
           const before: ReadonlyArray<FlockItem> = [
             ...reachable.map(({ machine }): FlockItem => ({ _tag: "Routed", machine })),
@@ -502,7 +557,7 @@ const main = Effect.gen(function* () {
                     doors,
                     manifest.version,
                     Stream.fromSubscription(changed),
-                  ).pipe(Stream.tap(doctorOnceLive)),
+                  ).pipe(Stream.tap(doctorOnceLive), Stream.tap(syncOnceLive)),
                   Stream.fromSubscription(told),
                 ],
                 { concurrency: "unbounded" },
@@ -541,6 +596,21 @@ const main = Effect.gen(function* () {
         return job;
       }),
     credentials: () => SubscriptionRef.changes(credentials),
+    flockSettings: () =>
+      Stream.unwrap(
+        syncEvery().pipe(Effect.forkIn(scope), Effect.as(SubscriptionRef.changes(flockSettings))),
+      ),
+    setFlockSetting: ({ key, value }) =>
+      editFlock(key, value).pipe(
+        Effect.map((edited) => {
+          const now = settingText(
+            Option.getOrNull(
+              Schema.decodeUnknownOption(SettingValue)(edited.settings[key]?.value ?? null),
+            ),
+          );
+          return `${key} is ${now === "" ? "unset" : `now ${now}`} on every Machine`;
+        }),
+      ),
     saveGitlab: ({ token }) =>
       Effect.gen(function* () {
         const said = token.trim();
@@ -560,9 +630,7 @@ const main = Effect.gen(function* () {
         // Without a keyring there is none to go.
         const token = yield* keyring.lookup("gitlab-token").pipe(Effect.orElseSucceed(() => null));
         if (token !== null) yield* keyring.clear("gitlab-token");
-        const changed = { ...settings, gitlabHost: named };
-        yield* writeSettings(own, changed).pipe(Effect.mapError((error) => error.message));
-        settings = changed;
+        yield* editFlock("gitlab_host", named).pipe(Effect.mapError((failed) => failed.reason));
         yield* SubscriptionRef.update(credentials, (now) => ({
           ...now,
           ...gitlabPages(),
