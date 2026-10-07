@@ -26,6 +26,7 @@ const record = useRecord();
 const opened = computed(() =>
   record.opened.value === null ? undefined : placedBy(record.opened.value),
 );
+watch(opened, (now) => now === undefined && record.close());
 
 const { choose } = useChip();
 /** A click on the board's own area, on no card and no control, lets the selected card go. */
@@ -219,7 +220,7 @@ watch(update, (now) => {
             </template>
           </template>
         </main>
-        <!-- Over the board rather than instead of it, so the board comes back as it was left. -->
+        <!-- Over the board, not instead of it, so the board keeps its scroll and folds. -->
         <RunRecord
           v-if="opened"
           :key="`${opened.key} ${opened.task.run}`"
