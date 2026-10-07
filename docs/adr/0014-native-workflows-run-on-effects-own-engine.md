@@ -9,10 +9,16 @@ a Markdown workflow yet; converting those is later work.
 what this page calls `collie native`, `src/native.ts`, `test/native-runtime.test.ts` and
 `native.db`, and the proof now drives `collie host`.
 
+**Amended 2026-10-07: Effect 4.0.1.** The proof is now `test/engine.test.ts`
+(`test/native-runtime.test.ts` was removed in abd9fa0), and it was rerun on 4.0.1. Effect
+4.0.1 moved the workflow modules from `effect/unstable/workflow` to `effect/workflow`, so D3
+serves the new path, and serves the old one as an alias until Collie 0.38.0 so a module
+saved before the upgrade still loads. The upgrade found a fifth upstream behaviour, below.
+
 A workflow will be a TypeScript file an author writes, outside this repository, and Collie
 will run it. That means Collie either builds durability, replay, suspension and recovery,
 or it uses Effect's. This says it uses Effect's, records exactly which settings that takes,
-and records the four upstream behaviours the proof found rather than assumed.
+and records the five upstream behaviours the proof found rather than assumed.
 
 ## Decision
 
@@ -32,7 +38,7 @@ vocabulary and no second scheduler.
 **D3. The binary serves the SDK to the module it loads.** An external file's `effect`
 resolves from its own directory — a second copy, whose `Effect.succeed` builds values this
 process's runtime does not recognise and whose service keys are not the host's. A Bun
-runtime plugin serves `effect`, its submodules, `effect/unstable/workflow`'s submodules and
+runtime plugin serves `effect`, its submodules, `effect/workflow`'s submodules and
 `collie/native` from the binary's own bundle, so what the module imports is what the host is
 running. The author's directory still holds an `effect` — that is where their declarations
 come from, which is exactly why serving the bundled one has to win.
@@ -70,7 +76,7 @@ yet is `toolchain_unavailable`, said out loud — never a module reported as fin
 
 ## What upstream actually does
 
-Four things the proof measured rather than assumed. Each is a test.
+Five things the proof measured rather than assumed. Each is a test.
 
 1. **Registering a name twice keeps the first.** It does not fail and it does not replace:
    the second registration is silently ignored. So duplicate registration is not a reload
@@ -82,6 +88,13 @@ Four things the proof measured rather than assumed. Each is a test.
 4. **Interruption is not promised.** Nothing here relies on native interrupt being prompt,
    terminal in every state, or resumable. Stop and hold are durable flags the workflow
    reads; what they suspend, it suspends itself.
+5. **A derived execution id is not stable across Effect releases.** 4.0.1 derives a
+   workflow's execution id from its payload differently from rc.117 (Effect-TS/effect
+   #8455), so a parent resumed after the upgrade that derived its child's id again would run
+   a finished child a second time. A child is resumed under the execution Collie recorded
+   for it instead (`test/child-execution.test.ts`). The cluster's and workflow engine's SQL
+   tables were checked and are identical between rc.117 and 4.0.1, so a database an rc.117
+   host wrote is read as it is.
 
 ## What this does not decide
 
@@ -97,5 +110,5 @@ the same registry for as many clients as ask.
   `@effect/sql-sqlite-bun` at one version — and an upgrade rechecks this proof.
 - `bun run test` carries about two minutes of real subprocesses and SQLite files. The
   questions being asked have no answer in an in-memory engine.
-- `COLLIE_TEST_BINARY=bin/collie bun test test/native-runtime.test.ts` runs the same proof
+- `COLLIE_TEST_BINARY=bin/collie bun test test/engine.test.ts` runs the same proof
   against the compiled executable, which is the one that matters.

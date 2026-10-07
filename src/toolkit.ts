@@ -4,9 +4,9 @@
 // Desktop's Flock chat serve the same definitions.
 
 import { Context, Effect, Option, Result, Schema, Stream } from "effect";
-import * as AiError from "effect/unstable/ai/AiError";
-import * as Tool from "effect/unstable/ai/Tool";
-import * as Toolkit from "effect/unstable/ai/Toolkit";
+import * as AiError from "effect/ai/AiError";
+import * as Tool from "effect/ai/Tool";
+import * as Toolkit from "effect/ai/Toolkit";
 import { ActionSchema } from "./actions";
 import {
   ASKED_KINDS,

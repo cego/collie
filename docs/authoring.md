@@ -29,7 +29,9 @@ which replaces any other version of it — and nothing else of yours is replaced
 `toolchain_unavailable`: the module still runs, and nothing was typechecked.
 
 `check` is the loop's other half. It imports the module, constructs it and runs the
-compiler over it, and never starts a run, takes an agent or opens a worktree. It keeps
+compiler over it, and never starts a run, takes an agent or opens a worktree. Where the
+`effect` installed beside it is not the one the host runs, as after an upgrade, it
+provisions the setup again first, so a module is checked against what it will run on. It keeps
 three answers apart: a problem stops the module running, `drawn without:` is a place the
 JSON Schema drawn for a prompt says less than your schema does, and `ok, not typechecked`
 means no compiler is installed in that directory.

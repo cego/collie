@@ -6,7 +6,7 @@
 // what this prints. One implementation, three ways in.
 
 import { Effect, Option, Schema } from "effect";
-import { Argument, Command, Flag } from "effect/unstable/cli";
+import { Argument, Command, Flag } from "effect/cli";
 import {
   CHAT_HARNESSES,
   CHAT_HARNESS_KEY,

@@ -5,8 +5,8 @@
 // declaration, attached here and never by the model.
 
 import { Cause, Clock, Crypto, Effect, Exit, Option, Result, Schema, Stream } from "effect";
-import * as Tool from "effect/unstable/ai/Tool";
-import * as Toolkit from "effect/unstable/ai/Toolkit";
+import * as Tool from "effect/ai/Tool";
+import * as Toolkit from "effect/ai/Toolkit";
 import {
   HostRefused,
   NEWS_BATCH,

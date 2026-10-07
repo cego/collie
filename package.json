@@ -19,12 +19,12 @@
   },
   "dependencies": {
     "@comark/ansi": "0.7.0",
-    "@effect/platform-bun": "4.0.0-rc.117",
-    "@effect/sql-sqlite-bun": "4.0.0-rc.117",
+    "@effect/platform-bun": "4.0.1",
+    "@effect/sql-sqlite-bun": "4.0.1",
     "@opentui/core": "^0.5.14",
     "@opentui/solid": "^0.5.14",
     "comark": "0.7.0",
-    "effect": "4.0.0-rc.117",
+    "effect": "4.0.1",
     "solid-js": "^1.9.16"
   },
   "devDependencies": {

@@ -5,8 +5,8 @@
 // Desktop, running or not.
 
 import { Effect, FileSystem, Option, Path, Schema } from "effect";
-import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
-import * as HttpClient from "effect/unstable/http/HttpClient";
+import * as FetchHttpClient from "effect/http/FetchHttpClient";
+import * as HttpClient from "effect/http/HttpClient";
 import { RELEASE_TAG } from "./release";
 import { appliedSignatureOf, RELEASE_PUBLIC_KEY, verifyRelease } from "./signing";
 

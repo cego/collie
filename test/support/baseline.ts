@@ -11,7 +11,7 @@
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, Fiber, FileSystem, Layer, Option, Path, Schedule, Schema } from "effect";
-import * as WorkflowEngine from "effect/unstable/workflow/WorkflowEngine";
+import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
 import { Rig, FakeHerdr } from "./recorder";
 import { exec } from "./command";
 import { fastForward, runEffect } from "./effect";

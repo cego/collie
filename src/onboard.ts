@@ -6,7 +6,7 @@
 import type { BunServices } from "@effect/platform-bun/BunServices";
 import { Effect, FileSystem, Option, Schedule, Schema, Stream } from "effect";
 import type { PlatformError } from "effect/PlatformError";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { hostname } from "node:os";
 import { doctor, glabHosts, onPath, pushCheck } from "./doctor";
 import { gitlabHostOf } from "./config";

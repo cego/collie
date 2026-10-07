@@ -8,7 +8,7 @@
         "@anthropic-ai/claude-agent-sdk": "0.3.292",
         "@comark/nuxt": "0.7.0",
         "@comark/vue": "0.7.0",
-        "@effect/atom-vue": "4.0.0-rc.117",
+        "@effect/atom-vue": "4.0.1",
         "@fontsource-variable/public-sans": "5.3.0",
         "@iconify-json/lucide": "1.2.140",
         "@modelcontextprotocol/sdk": "1.32.1",
@@ -135,7 +135,7 @@
 
     "@dxup/unimport": ["@dxup/unimport@0.1.2", "", {}, "sha512-/B8YJGPzaYq1NbsQmwgP8EZqg40NpTw4ZB3suuI0TplbxKHeK94jeaawLmVhCv+YwUnOpiWEz9U6SeThku/8JQ=="],
 
-    "@effect/atom-vue": ["@effect/atom-vue@4.0.0-rc.117", "", { "peerDependencies": { "effect": "^4.0.0-rc.117", "vue": ">=3.5.39 <4.0.0" } }, "sha512-J6we32ATcMO7tIEsLRNU1UH2dX7k7vpKxAJ5sMB6jDwt33X0HEHVLuMAL/zuXznL7megdlQCzBUoztqYw0ppbg=="],
+    "@effect/atom-vue": ["@effect/atom-vue@4.0.1", "", { "peerDependencies": { "effect": "^4.0.1", "vue": ">=3.5.39 <4.0.0" } }, "sha512-pYSTQv0/W/UkZasvV51B5MmNfYmkWJALUBsbVAHd0tNqALRAE3K5M6wGks7N29gnl6swQz3UkMYX9XWqHiMcCg=="],
 
     "@esbuild/aix-ppc64": ["@esbuild/aix-ppc64@0.27.7", "", { "os": "aix", "cpu": "ppc64" }, "sha512-EKX3Qwmhz1eMdEJokhALr0YiD0lhQNwDqkPYyPhiSwKrh7/4KRjQc04sZ8db+5DVVnZ1LmbNDI1uAMPEUBnQPg=="],
 

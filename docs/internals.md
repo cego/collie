@@ -776,6 +776,6 @@ its time.
   deleted.
 - **A front door loads what it runs.** `src/main.ts` imports each front door with
   `import()` once it knows which one runs, and `src/` imports `@effect/platform-bun` and
-  `effect/unstable/http` by module rather than through their index. `test/startup.test.ts`
+  `effect/http` by module rather than through their index. `test/startup.test.ts`
   holds the first and keeps the engine and the board out of the compaction helper; lint
   holds the second.

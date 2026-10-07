@@ -25,9 +25,9 @@ import {
   Schema,
 } from "effect";
 import type { BunServices } from "@effect/platform-bun/BunServices";
-import * as Activity from "effect/unstable/workflow/Activity";
-import * as Workflow from "effect/unstable/workflow/Workflow";
-import * as WorkflowEngine from "effect/unstable/workflow/WorkflowEngine";
+import * as Activity from "effect/workflow/Activity";
+import * as Workflow from "effect/workflow/Workflow";
+import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
 import {
   COMPACTION_WAIT_MS,
   atBoundary,

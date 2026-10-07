@@ -8,7 +8,7 @@
 
 import { expect, test } from "bun:test";
 import { Config, ConfigProvider, Effect, FileSystem, Layer, Option, Scope, Stream } from "effect";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { connect, ownerOf } from "../src/host";
 import { signalProcess } from "../src/lock";
 import { exec } from "./support/command";

@@ -8,7 +8,7 @@
 
 import { expect, test } from "bun:test";
 import { Config, ConfigProvider, Effect, FileSystem, Option, Schema, Scope } from "effect";
-import { ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcessSpawner } from "effect/process";
 import { connect } from "../src/host";
 import { runEffect } from "./support/effect";
 import { events, stopHost, until } from "./support/host";

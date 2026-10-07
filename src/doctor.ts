@@ -12,7 +12,7 @@
 // PATH at all.
 
 import { Clock, Effect, FileSystem, Option, Path, Result, Schema } from "effect";
-import type { ChildProcessSpawner } from "effect/unstable/process";
+import type { ChildProcessSpawner } from "effect/process";
 import { gitlabHostOf, loadDefaults } from "./config";
 import { savedModules } from "./discovery";
 import { layers, loadDefinitions, skillDirs, skillInstalled } from "./definitions";

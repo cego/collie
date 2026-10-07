@@ -22,8 +22,8 @@ import {
   Stream,
 } from "effect";
 import type { Scope } from "effect";
-import type { ChildProcessSpawner } from "effect/unstable/process";
-import type * as RpcClientError from "effect/unstable/rpc/RpcClientError";
+import type { ChildProcessSpawner } from "effect/process";
+import type * as RpcClientError from "effect/rpc/RpcClientError";
 import type { PluginEnv } from "./env";
 import { savedModules, type Fault, type Found } from "./discovery";
 import {

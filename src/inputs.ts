@@ -3,7 +3,7 @@
 
 import { Clock, Effect, FileSystem, Option, Path, Schema } from "effect";
 import type { PlatformError } from "effect/PlatformError";
-import type { ChildProcessSpawner } from "effect/unstable/process";
+import type { ChildProcessSpawner } from "effect/process";
 import type { InputStrategy } from "./definitions";
 import { diffTargetOf, targetKind, type TargetKind } from "./strategies";
 import type { RunFacts } from "./runs";

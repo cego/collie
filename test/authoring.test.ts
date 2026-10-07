@@ -19,6 +19,7 @@ import {
   typecheckEntry,
 } from "../src/engine";
 import { runEffect } from "./support/effect";
+import { exec } from "./support/command";
 import { stopHost } from "./support/host";
 import { collie, proves as provesWith } from "./support/world";
 
@@ -145,6 +146,34 @@ test(
       }).pipe(Effect.scoped),
     ),
   60_000,
+);
+
+test(
+  "checking a module where an older Effect was provisioned moves it to the host's, and reports the old path",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-authoring-stale-" });
+        yield* provisionToolchain(dir);
+        // As a release on Effect 4.0.0-rc.117 left it.
+        const pkg = yield* fs.readFileString(`${dir}/package.json`);
+        yield* fs.writeFileString(
+          `${dir}/package.json`,
+          pkg.replace(`"effect": "${TOOLCHAIN.effect}"`, '"effect": "4.0.0-rc.117"'),
+        );
+        expect((yield* exec([process.execPath, "install"], { cwd: dir })).exitCode).toBe(0);
+        yield* fs.copyFile(`${fixtures}paths.workflow.ts`, `${dir}/paths.workflow.ts`);
+
+        const checked = yield* checkModule({ path: `${dir}/paths.workflow.ts`, layer: "user" });
+
+        const installed = yield* fs.readFileString(`${dir}/node_modules/effect/package.json`);
+        expect(installed).toContain(`"version": "${TOOLCHAIN.effect}"`);
+        expect(checked.toolchain).toBeNull();
+        expect(checked.problems.join("\n")).toContain("effect/unstable/workflow/Activity");
+      }).pipe(Effect.scoped),
+    ),
+  180_000,
 );
 
 test("a typechecker that falls over is no typechecker, not a clean module", () =>

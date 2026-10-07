@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { Cause, Config, Effect, Fiber, FileSystem, Option, Queue, Schema, Stream } from "effect";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import manifest from "../herdr-plugin.toml";
 import type { JsonObject } from "../src/schema";
 import { TOOLS } from "../src/tools";

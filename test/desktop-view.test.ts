@@ -3,8 +3,8 @@
 
 import { expect, test } from "bun:test";
 import { Effect, Layer, Schema, Stream } from "effect";
-import * as RpcClient from "effect/unstable/rpc/RpcClient";
-import * as RpcServer from "effect/unstable/rpc/RpcServer";
+import * as RpcClient from "effect/rpc/RpcClient";
+import * as RpcServer from "effect/rpc/RpcServer";
 import { headerSentence, sectionsOf } from "../src/board-model";
 import {
   type Channel,
@@ -142,6 +142,14 @@ test("the view decodes every board message its main process relays, a reload inc
         expect(headerSentence(tasks).text).toBe("One task is waiting on you. 0 working.");
       }
     }).pipe(Effect.scoped),
+  ));
+
+test("a Flock that has heard nothing draws no board, not an empty one", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const boards = yield* flockOf(Stream.empty).pipe(Stream.runCollect);
+      expect(boards).toEqual([]);
+    }),
   ));
 
 const snapshot = (

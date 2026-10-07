@@ -3,8 +3,8 @@
 // verifies; and `collie onboard` runs with it, each step told as it comes.
 
 import { Clock, Crypto, Effect, FileSystem, Option, Schema, Stream } from "effect";
-import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
-import * as HttpClient from "effect/unstable/http/HttpClient";
+import * as FetchHttpClient from "effect/http/FetchHttpClient";
+import * as HttpClient from "effect/http/HttpClient";
 import { RELEASE_PUBLIC_KEY, SIGNATURE_SUFFIX, verifyRelease } from "../../../src/signing";
 import { type OnboardRun, type OnboardStep, SETTLED, type Skippable } from "../shared/flock";
 import { quoted, type Route, type ShellRoute, spawned } from "./machine";

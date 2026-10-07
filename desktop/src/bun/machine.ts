@@ -18,9 +18,9 @@ import {
   type Scope,
   Stream,
 } from "effect";
-import * as RpcClient from "effect/unstable/rpc/RpcClient";
-import * as RpcSerialization from "effect/unstable/rpc/RpcSerialization";
-import * as Socket from "effect/unstable/socket/Socket";
+import * as RpcClient from "effect/rpc/RpcClient";
+import * as RpcSerialization from "effect/rpc/RpcSerialization";
+import * as Socket from "effect/socket/Socket";
 import {
   BRIDGE_READY,
   type BoardMessage,
@@ -31,7 +31,7 @@ import {
   type ProposalRefused,
   type RequestConflict,
 } from "../../../src/board-model";
-import type * as RpcClientError from "effect/unstable/rpc/RpcClientError";
+import type * as RpcClientError from "effect/rpc/RpcClientError";
 import {
   ActionFailed,
   type DesktopAction,

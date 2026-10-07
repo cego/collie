@@ -8,7 +8,7 @@
 import { expect, test } from "bun:test";
 import * as SqliteClient from "@effect/sql-sqlite-bun/SqliteClient";
 import { Effect, Fiber, FileSystem, Layer, Stream } from "effect";
-import * as Reactivity from "effect/unstable/reactivity/Reactivity";
+import * as Reactivity from "effect/reactivity/Reactivity";
 import { Store, storeLayer } from "../src/store";
 import { runEffect } from "./support/effect";
 

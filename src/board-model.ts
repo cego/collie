@@ -3,8 +3,8 @@
 // Bun-only import: a browser bundle imports this too.
 
 import { Effect, Option, Schema, SchemaGetter } from "effect";
-import * as Rpc from "effect/unstable/rpc/Rpc";
-import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
+import * as Rpc from "effect/rpc/Rpc";
+import * as RpcGroup from "effect/rpc/RpcGroup";
 import { IntentSeedSchema } from "./intent-model";
 import { VerifySpecSchema } from "./verify-spec";
 

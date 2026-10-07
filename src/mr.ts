@@ -4,7 +4,7 @@
 
 import { Effect, FileSystem, Option, Path, Schema, Stream } from "effect";
 import type { PlatformError } from "effect/PlatformError";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import type { YamlValue } from "./yaml";
 import { isString } from "./schema";
 import { targetKind, workSourceOf, type Settled } from "./strategies";

@@ -10,7 +10,7 @@ import {
   Schedule,
   Stream,
 } from "effect";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 // Cooperative pid-lock files: `wx` creation is the claim; holder liveness, not age, decides
 // staleness. `withLock` is the way in: claiming, breaking and giving back stay in here.

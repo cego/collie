@@ -24,7 +24,7 @@ import {
   defineWorkflow,
 } from "collie";
 import { Effect, Schema } from "effect";
-import type { WorkflowEngine, WorkflowInstance } from "effect/unstable/workflow/WorkflowEngine";
+import type { WorkflowEngine, WorkflowInstance } from "effect/workflow/WorkflowEngine";
 import markdown from "./renovate.md" with { type: "text" };
 
 const content = contentOf(markdown);

@@ -2,10 +2,10 @@
 // JSON values. In the app that channel is Electrobun's own RPC, one `frame` message each way.
 
 import { Effect, Option, Queue, Schema } from "effect";
-import * as RpcClient from "effect/unstable/rpc/RpcClient";
-import type * as RpcMessage from "effect/unstable/rpc/RpcMessage";
-import * as RpcServer from "effect/unstable/rpc/RpcServer";
-import type * as RpcSerialization from "effect/unstable/rpc/RpcSerialization";
+import * as RpcClient from "effect/rpc/RpcClient";
+import type * as RpcMessage from "effect/rpc/RpcMessage";
+import * as RpcServer from "effect/rpc/RpcServer";
+import type * as RpcSerialization from "effect/rpc/RpcSerialization";
 
 /** One end of the channel: what it sends, and what it hears from the other end. */
 export interface Channel<Out, In> {

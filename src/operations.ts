@@ -5,7 +5,7 @@
 
 import type { BunServices } from "@effect/platform-bun/BunServices";
 import { Crypto, Effect, FileSystem, Path, Schema } from "effect";
-import { ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcessSpawner } from "effect/process";
 import { nowIso } from "./time";
 import { attentionFor } from "./attention";
 import type { PluginEnv } from "./env";

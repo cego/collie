@@ -18,8 +18,8 @@ import {
   Stream,
 } from "effect";
 import * as BunSocket from "@effect/platform-bun/BunSocket";
-import * as Socket from "effect/unstable/socket/Socket";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import * as Socket from "effect/socket/Socket";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import type { PlatformError } from "effect/PlatformError";
 import type { PluginEnv } from "./env";
 import { isString } from "./schema";

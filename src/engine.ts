@@ -33,14 +33,14 @@ import {
   Semaphore,
   Stream,
 } from "effect";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import type { ConfigError } from "effect/Config";
 import type { PlatformError } from "effect/PlatformError";
-import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
-import * as Reactivity from "effect/unstable/reactivity/Reactivity";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
-import * as DurableDeferred from "effect/unstable/workflow/DurableDeferred";
-import * as WorkflowModules from "effect/unstable/workflow";
+import * as FetchHttpClient from "effect/http/FetchHttpClient";
+import * as Reactivity from "effect/reactivity/Reactivity";
+import * as SqlClient from "effect/sql/SqlClient";
+import * as DurableDeferred from "effect/workflow/DurableDeferred";
+import * as WorkflowModules from "effect/workflow";
 import * as EffectRoot from "effect";
 import * as AgentsSdk from "./agents";
 import { Agents } from "./agents";
@@ -159,8 +159,8 @@ import {
   type CheckPass,
   type Verification,
 } from "./verify";
-import * as Workflow from "effect/unstable/workflow/Workflow";
-import * as WorkflowEngine from "effect/unstable/workflow/WorkflowEngine";
+import * as Workflow from "effect/workflow/Workflow";
+import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
 
 /** A module that cannot be loaded, named by its own file. Schema-backed, so the local
  *  host can fail a client with the same value rather than a copy of it. */
@@ -190,10 +190,12 @@ export class ToolchainError extends Data.TaggedError("ToolchainError")<{
  * which is exactly why serving the bundled namespaces has to win.
  *
  * Each index module is expanded into its members, so `effect/Effect` and
- * `effect/unstable/workflow/Workflow` are the binary's objects as surely as `effect` is.
+ * `effect/workflow/Workflow` are the binary's objects as surely as `effect` is.
  */
 const NAMESPACES = [
   ["effect", EffectRoot],
+  ["effect/workflow", WorkflowModules],
+  // Effect 4.0.0's path, so a module saved before 4.0.1 still loads. Goes in Collie 0.38.0.
   ["effect/unstable/workflow", WorkflowModules],
 ] as const;
 
@@ -213,7 +215,7 @@ export const sdkModules = (): ReadonlyArray<readonly [string, object]> => {
 /** Kept in step with package.json, which `engine.test.ts` checks: the host and an
  *  author's declarations have to be the same Effect, or the types are about another one. */
 export const TOOLCHAIN = {
-  effect: "4.0.0-rc.117",
+  effect: "4.0.1",
   typescript: "^7.0.2",
 } as const;
 
@@ -225,11 +227,11 @@ export const TOOLCHAIN = {
 export const SDK_DECLARATIONS = `declare module "collie" {
   import type { Context, Effect, FileSystem, Layer, Path, Schema } from "effect";
   import type { PlatformError } from "effect/PlatformError";
-  import type { Workflow } from "effect/unstable/workflow/Workflow";
+  import type { Workflow } from "effect/workflow/Workflow";
   import type {
     WorkflowEngine,
     WorkflowInstance,
-  } from "effect/unstable/workflow/WorkflowEngine";
+  } from "effect/workflow/WorkflowEngine";
 
   /** What this working tree was when a command ran on it. */
   export interface Snapshot {
@@ -1656,7 +1658,9 @@ export function engineLayer(options: {
 > {
   // One connection, two halves: the engine's own tables and the rows Collie keeps beside
   // them are in the same file, written by the same process.
+  // A host that cannot open its own database has nothing to serve.
   const sql = SqliteClient.layer({ filename: `${options.dir}/host.db` }).pipe(
+    Layer.orDie,
     Layer.provideMerge(Reactivity.layer),
   );
   // Loaded when a host builds it, not when anything imports this file: the cluster is
@@ -1664,8 +1668,8 @@ export function engineLayer(options: {
   const engine = Layer.unwrap(
     Effect.promise(() =>
       Promise.all([
-        import("effect/unstable/cluster/SingleRunner"),
-        import("effect/unstable/cluster/ClusterWorkflowEngine"),
+        import("effect/cluster/SingleRunner"),
+        import("effect/cluster/ClusterWorkflowEngine"),
       ]),
     ).pipe(
       Effect.map(([SingleRunner, ClusterWorkflowEngine]) => {
@@ -4926,6 +4930,22 @@ export const provisionToolchain: (
     return yield* unavailable(
       `${unmerged.join(" and ")} in ${dir} is not plain JSON, so nothing was merged into it: add "effect" and "typescript" to package.json and map "collie" to ./collie.d.ts under compilerOptions.paths`,
     );
+  }
+});
+
+const InstalledPackage = Schema.fromJsonString(Schema.Struct({ version: Schema.String }));
+
+/**
+ * Provisions again where the installed Effect is not the host's, as after an upgrade, so
+ * a module is checked against the Effect it will run on. Nothing installed is left alone.
+ */
+export const refreshToolchain = Effect.fn("Engine.refreshToolchain")(function* (dir: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const installed = yield* fs
+    .readFileString(`${dir}/node_modules/effect/package.json`)
+    .pipe(Effect.flatMap(Schema.decodeUnknownEffect(InstalledPackage)), Effect.option);
+  if (Option.isSome(installed) && installed.value.version !== TOOLCHAIN.effect) {
+    yield* provisionToolchain(dir);
   }
 });
 

@@ -3,7 +3,7 @@
 
 import { Host, Run, defineWorkflow } from "collie";
 import { Effect, Schema } from "effect";
-import * as Activity from "effect/unstable/workflow/Activity";
+import * as Activity from "effect/workflow/Activity";
 
 export default defineWorkflow({
   id: "share",

@@ -2,7 +2,7 @@
 // agent can do what the TUI's and Desktop's Settings do.
 
 import { Effect } from "effect";
-import { Argument, Command } from "effect/unstable/cli";
+import { Argument, Command } from "effect/cli";
 import { readConfig, configValue } from "../config";
 import { setSharedSetting } from "../lifecycle";
 import { parseSetting, SETTINGS } from "../settings";

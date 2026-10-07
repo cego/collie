@@ -19,9 +19,9 @@ import { Context, Effect, FileSystem, Layer, Path, Predicate, Schema } from "eff
 import type { CheckEvidence } from "./output";
 import type { Verification } from "./verify";
 import type { VerifySpec } from "./verify-spec";
-import { WorkflowInstance, type WorkflowEngine } from "effect/unstable/workflow/WorkflowEngine";
-import * as DurableDeferred from "effect/unstable/workflow/DurableDeferred";
-import * as Workflow from "effect/unstable/workflow/Workflow";
+import { WorkflowInstance, type WorkflowEngine } from "effect/workflow/WorkflowEngine";
+import * as DurableDeferred from "effect/workflow/DurableDeferred";
+import * as Workflow from "effect/workflow/Workflow";
 import type { Agents } from "./agents";
 import { bodySections, INPUT_STRATEGIES, type InputStrategy } from "./definitions";
 import { exclusiveClashes, launchInputProblem } from "./strategies";
