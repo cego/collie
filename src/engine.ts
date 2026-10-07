@@ -3910,7 +3910,19 @@ const makeRegistry: (
     // parent and interrupting the parent reaches the child.
     const workflow = found.generation.registration.workflow;
     const written = Schema.encodeUnknownOption(Schema.toCodecJson(workflow.errorSchema));
-    return yield* workflow.execute(payload).pipe(
+    // A release that derives ids differently would otherwise run a finished child again.
+    // ponytail: the engine registers the child with the parent a few synchronous steps
+    // later than `workflow.execute` would; a yield in between re-executes the same id.
+    const derived = row.execution === (yield* workflow.executionId(payload));
+    return yield* Effect.suspend(() =>
+      derived
+        ? workflow.execute(payload)
+        : engine.execute(workflow, {
+            executionId: row.execution,
+            payload,
+            suspendedRetrySchedule: workflow.suspendedRetrySchedule,
+          }),
+    ).pipe(
       Effect.mapError((failure) => {
         if (isWorkflowError(failure)) return failure;
         // A child's own typed failure, as its error schema writes it.

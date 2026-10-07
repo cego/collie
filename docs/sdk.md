@@ -583,7 +583,9 @@ purpose: the file decides, and no lookup happens at all.
 - **`invocation` is the identity.** The child's Run id is your Run id and this name, so
   replaying your body asks for the child you already have rather than a second one, and a
   different name is a different child. Giving one invocation different input later is
-  refused, not run twice.
+  refused, not run twice. The child is reached under the execution it was admitted with,
+  so a Collie upgrade that derives executions differently resumes it rather than starting
+  it again.
 - **The child's schema decides.** Your input is decoded against the child before anything
   exists. A value it will not take is your workflow's failure, naming the field, with no
   child Run and nothing to clean up.
