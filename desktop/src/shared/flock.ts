@@ -318,6 +318,20 @@ export const DesktopSettingsChange = Schema.Struct({
 });
 export type DesktopSettingsChange = typeof DesktopSettingsChange.Type;
 
+export interface MachineToAdd {
+  readonly target: string;
+  readonly label: string;
+  readonly session: string;
+}
+
+/** What Add Machine sends, trimmed, once every field is filled. */
+export const machineToAdd = (typed: MachineToAdd): MachineToAdd | null => {
+  const [target, label, session] = [typed.target, typed.label, typed.session].map((one) =>
+    one.trim(),
+  );
+  return target && label && session ? { target, label, session } : null;
+};
+
 export const DesktopRpcs = RpcGroup.make(
   Rpc.make("flock", { success: FlockItem, stream: true }),
   /** A retry names the request that failed; a first try leaves it to the main process. */

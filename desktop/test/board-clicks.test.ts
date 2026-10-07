@@ -37,7 +37,7 @@ test("a double-click on a card's body opens it, unless its Machine dropped", () 
   expect(opensOnDoubleClick(element([]), null)).toBe(false);
 });
 
-test("Escape backs out of an open page, a record, Settings or Machines, and on the board lets the card go", () => {
+test("Escape backs out of an open page, a record or Settings, and on the board lets the card go", () => {
   expect(escapeBacksOut(element([]), page(null), true)).toBe("back");
   expect(escapeBacksOut(element([]), page(null), false)).toBe("let-go");
   expect(escapeBacksOut(element(["[data-card]"]), page(null), false)).toBe("let-go");

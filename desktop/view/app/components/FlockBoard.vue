@@ -12,7 +12,7 @@ const { summary } = useInSync();
 const starting = ref(false);
 const { onboardOn } = useOnboarding();
 const { renewBy } = useCredentials();
-const { page, open, back } = usePage();
+const { page, open, back, toggle } = usePage();
 const opened = computed(() =>
   page.value?.kind === "record" ? placedBy(page.value.key) : undefined,
 );
@@ -121,7 +121,7 @@ watch(update, (now) => {
           :active="page?.kind === 'machines'"
           active-variant="solid"
           :aria-pressed="page?.kind === 'machines'"
-          @click="page?.kind === 'machines' ? back() : open('machines')"
+          @click="toggle('machines')"
         >
           Machines
           <UBadge
@@ -142,7 +142,7 @@ watch(update, (now) => {
           :active="page?.kind === 'settings'"
           active-variant="solid"
           :aria-pressed="page?.kind === 'settings'"
-          @click="page?.kind === 'settings' ? back() : open('settings')"
+          @click="toggle('settings')"
         />
         <OnboardDialog />
         <UButton

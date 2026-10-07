@@ -958,8 +958,8 @@ computer's name.
 herdr's — with how it stands, and is where Machines join the Flock. Each joins the same way:
 
 - **Add Machine** opens a dialog that takes an SSH target, a label and a herdr session
-  (`default` unless you say), all three needed; adding closes it and runs `herdr machine add` in a terminal Desktop drives. herdr's own questions —
-  whether to install herdr there, whether to replace a running server — are dialogs, and
+  (`default` unless you say), all three needed; adding closes it and runs `herdr machine
+add` in a terminal Desktop drives. herdr's own questions — whether to install herdr there, whether to replace a running server — are dialogs, and
   closing one answers herdr's default, which for replacing a server is No. herdr saves the
   machine, so its list stays the only one, and Desktop then onboards it.
 - **Onboard** on a Machine herdr already has, or on this computer, onboards it there and

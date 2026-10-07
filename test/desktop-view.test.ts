@@ -25,6 +25,7 @@ import {
   type MachineRow,
   nameAsShown,
   type MachineMessage,
+  machineToAdd,
 } from "../desktop/src/shared/flock";
 import { flockInSync, inSync } from "../desktop/src/shared/in-sync";
 import { task } from "./support/task";
@@ -515,4 +516,16 @@ test("a Machine's settings sync and its credentials are kept on its row, and dro
     machine: { profile: vm.profile, name: vm.name },
   });
   expect(removed.synced.size + removed.given.size).toBe(0);
+});
+
+test("Add Machine takes a Machine only once its SSH target, label and session are filled", () => {
+  expect(machineToAdd({ target: " mk@vm ", label: "vm ", session: " default" })).toEqual({
+    target: "mk@vm",
+    label: "vm",
+    session: "default",
+  });
+  for (const blank of ["target", "label", "session"] as const)
+    expect(
+      machineToAdd({ target: "mk@vm", label: "vm", session: "default", [blank]: "  " }),
+    ).toBeNull();
 });

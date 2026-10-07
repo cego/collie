@@ -24,6 +24,9 @@ export const usePage = () => {
       asked.value = tab;
     },
     open: (kind: "settings" | "machines") => (page.value = { kind }),
+    /** Opens it, or goes back if it is the page open. */
+    toggle: (kind: "settings" | "machines") =>
+      (page.value = page.value?.kind === kind ? null : { kind }),
     taken: () => (asked.value = null),
     back: () => (page.value = null),
   };

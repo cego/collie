@@ -1,21 +1,19 @@
 <script setup lang="ts">
+import { machineToAdd } from "../../../src/shared/flock";
+
 const open = defineModel<boolean>("open", { required: true });
 const { addMachine } = useActions();
 const { job } = useOnboarding();
 
-const target = ref("");
-const label = ref("");
-const session = ref("default");
-const filled = computed(
-  () => target.value.trim() !== "" && label.value.trim() !== "" && session.value.trim() !== "",
-);
+const typed = reactive({ target: "", label: "", session: "default" });
+watch(open, (now) => now && Object.assign(typed, { target: "", label: "", session: "default" }));
+const adding = computed(() => machineToAdd(typed));
 const add = async () => {
-  if (!filled.value) return;
+  const machine = adding.value;
+  if (machine === null) return;
   open.value = false;
-  const started = await addMachine(target.value.trim(), label.value.trim(), session.value.trim());
+  const started = await addMachine(machine.target, machine.label, machine.session);
   if (started !== null) job.value = started;
-  target.value = "";
-  label.value = "";
 };
 </script>
 
@@ -24,14 +22,14 @@ const add = async () => {
     <template #body>
       <form class="flex flex-col gap-2" data-testid="add-form" @submit.prevent="add">
         <UFormField label="SSH target" help="As ssh reaches it, such as mk@vm-mk.example">
-          <UInput v-model="target" autofocus class="w-full" data-testid="add-target" />
+          <UInput v-model="typed.target" autofocus class="w-full" data-testid="add-target" />
         </UFormField>
         <div class="flex gap-2">
           <UFormField label="Label" class="flex-1">
-            <UInput v-model="label" class="w-full" data-testid="add-label" />
+            <UInput v-model="typed.label" class="w-full" data-testid="add-label" />
           </UFormField>
           <UFormField label="herdr session" class="flex-1">
-            <UInput v-model="session" class="w-full" data-testid="add-session" />
+            <UInput v-model="typed.session" class="w-full" data-testid="add-session" />
           </UFormField>
         </div>
         <UButton
@@ -40,7 +38,7 @@ const add = async () => {
           icon="i-lucide-plus"
           label="Add Machine"
           data-testid="add-submit"
-          :disabled="!filled"
+          :disabled="adding === null"
         />
       </form>
     </template>
