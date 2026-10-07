@@ -1004,8 +1004,13 @@ again.
 to it and drops its saved board. It never stops a host, a Run or herdr there, and never
 uninstalls Collie. This computer is not in herdr's list, so it has no Remove.
 
-Pressing a card's name opens its drawer, which follows the card's Run on its host for as
-long as it is open. Its **Plan** tab renders the spec, read whole from the host where it is longer than the
+Click a card to select it; clicking it again keeps it selected. Double-click a card, or press
+its name, to open its drawer, which selects the card too and follows its Run on its host for
+as long as it is open. A click or double-click on one of a card's buttons does only what that
+button does, and a card whose Machine dropped can be selected but not opened. A click on the
+board's own area below the header, between cards or on a section heading, lets the selected
+card go. **Escape** backs out one level: an open dialog, menu or drawer closes first, and
+with none open it lets the selected card go. Escape typed in a field stays with the field. Its **Plan** tab renders the spec, read whole from the host where it is longer than the
 details carry, and lists the tickets, each expanding
 in place, read from the host when first opened; a link from one plan file to another opens
 that file at the top of the tab. **Review** renders the review, read whole the same way, and lists its findings; a
@@ -1083,7 +1088,8 @@ with its ✕.
 
 Click a card and it becomes a chip above the input ("About: vm-mk › Fix board bugs"): your
 next message goes with it, so "this one" means that card, and sending uses it up. Clear it
-with its ✕. The chip is attached as context for the turn, never as your words.
+with its ✕, a click on the board's background, or Escape on the board; a chat popped out
+into its own window clears with it. The chip is attached as context for the turn, never as your words.
 
 News reaches it from every Herd on every Machine as one batch: what matters most first —
 decisions, then consequential outcomes, then what is worth trying, then the routine — and

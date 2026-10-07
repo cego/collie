@@ -26,6 +26,30 @@ const opened = computed(() =>
   drawer.opened.value === null ? undefined : placedBy(drawer.opened.value),
 );
 
+const { choose } = useChip();
+/** A click on the board's own area, on no card and no control, lets the selected card go. */
+const background = (event: MouseEvent) => {
+  const onCard = event.target instanceof Element && event.target.closest("[data-card]") !== null;
+  if (!onControl(event) && !onCard) choose(null);
+};
+/** Escape backs out one level: an overlay closes itself, and the board lets its card go. */
+const escape = (event: KeyboardEvent) => {
+  if (event.key !== "Escape") return;
+  const typing = event.target;
+  if (
+    typing instanceof HTMLElement &&
+    (typing.isContentEditable || typing.closest("input, textarea, select") !== null)
+  )
+    return;
+  // Overlays close on Escape themselves, without marking it handled.
+  const overlay = '[data-state="open"]:is([role="dialog"], [role="alertdialog"], [role="menu"])';
+  if (document.querySelector(overlay) !== null) return;
+  choose(null);
+};
+// Captured, so it runs before an overlay closes on the same key.
+onMounted(() => window.addEventListener("keydown", escape, { capture: true }));
+onUnmounted(() => window.removeEventListener("keydown", escape, { capture: true }));
+
 const chatShown = ref(true);
 const popped = ref(false);
 const { popOut } = usePopOut();
@@ -115,7 +139,7 @@ watch(update, (now) => {
           @click="chatShown = true"
         />
       </header>
-      <main class="flex flex-col gap-6 p-4">
+      <main class="flex flex-1 flex-col gap-6 p-4" @click="background">
         <p v-if="connecting" class="text-muted">Connecting…</p>
         <UAlert
           v-else-if="failure !== null"

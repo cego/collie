@@ -6,6 +6,7 @@ import { afterAll, beforeAll, expect, test } from "bun:test";
 import { hostname } from "node:os";
 import { BunServices } from "@effect/platform-bun";
 import { Clock, Effect, FileSystem } from "effect";
+import type { Locator } from "playwright-core";
 import { task } from "../../test/support/task";
 import { type App, LOCAL, launch, quit, reads, run, serve, settled } from "./support/app";
 
@@ -197,6 +198,139 @@ test(
         yield* reads(chip, "About: vm-mk › Reseed staging");
         yield* Effect.promise(() => page.getByTestId("chat-chip-clear").click());
         yield* Effect.promise(() => chip.waitFor({ state: "detached" }));
+      }),
+    ),
+  30_000,
+);
+
+const chip = () => app!.page.getByTestId("chat-chip");
+const press = (key: string) => Effect.promise(() => app!.page.keyboard.press(key));
+const click = (locator: Locator) => Effect.promise(() => locator.click());
+const ringed = (locator: Locator) =>
+  Effect.promise(() => locator.getAttribute("class")).pipe(
+    Effect.map((classes) => classes?.split(" ").includes("ring-primary") ?? false),
+  );
+const selectVm = Effect.gen(function* () {
+  yield* click(card("working", "t-vm").getByTestId("sentence"));
+  yield* reads(chip(), "About: vm-mk › Reseed staging");
+});
+const letGo = Effect.promise(() => chip().waitFor({ state: "detached" }));
+const stillSelected = Effect.gen(function* () {
+  yield* reads(chip(), "About: vm-mk › Reseed staging");
+  expect(yield* ringed(card("working", "t-vm"))).toBe(true);
+});
+const drawer = () => app!.page.getByTestId("drawer");
+/** Closed, and done handing focus back to the button that opened it. */
+const menuClosed = Effect.promise(() => app!.page.getByRole("menu").waitFor({ state: "detached" }));
+
+test(
+  "a click selects a card, and a second click keeps it selected",
+  () =>
+    run(
+      Effect.gen(function* () {
+        yield* selectVm;
+        yield* stillSelected;
+        yield* click(card("working", "t-vm").getByTestId("sentence"));
+        yield* stillSelected;
+      }),
+    ),
+  30_000,
+);
+
+test(
+  "a click on the board's background lets the card go, and a click on a control doesn't",
+  () =>
+    run(
+      Effect.gen(function* () {
+        const { page } = app!;
+        yield* selectVm;
+        yield* click(page.getByTestId("finished").locator("summary"));
+        yield* stillSelected;
+        yield* click(page.getByTestId("machines"));
+        yield* press("Escape");
+        yield* stillSelected;
+        yield* click(card("working", "t-vm").getByTestId("menu"));
+        yield* press("Escape");
+        yield* stillSelected;
+        yield* click(page.getByTestId("working").getByRole("heading"));
+        yield* letGo;
+        expect(yield* ringed(card("working", "t-vm"))).toBe(false);
+
+        yield* selectVm;
+        const box = yield* Effect.promise(() => card("working", "t-vm").boundingBox());
+        yield* Effect.promise(() => page.mouse.click(box!.x + box!.width + 6, box!.y + 10));
+        yield* letGo;
+      }),
+    ),
+  30_000,
+);
+
+test(
+  "Escape on the board lets the card go, but not while a menu is open or the chat is typed in",
+  () =>
+    run(
+      Effect.gen(function* () {
+        yield* selectVm;
+        yield* click(card("working", "t-vm").getByTestId("menu"));
+        yield* press("Escape");
+        yield* menuClosed;
+        yield* stillSelected;
+        yield* click(app!.page.getByPlaceholder("Ask about the Flock"));
+        yield* press("Escape");
+        yield* stillSelected;
+        yield* click(card("working", "t-vm").getByTestId("sentence"));
+        yield* press("Escape");
+        yield* letGo;
+      }),
+    ),
+  30_000,
+);
+
+test(
+  "a double-click opens a card's drawer and selects it, and Escape backs out one level at a time",
+  () =>
+    run(
+      Effect.gen(function* () {
+        yield* Effect.promise(() => card("working", "t-vm").getByTestId("sentence").dblclick());
+        yield* Effect.promise(() => drawer().waitFor());
+        yield* stillSelected;
+        yield* press("Escape");
+        yield* Effect.promise(() => drawer().waitFor({ state: "detached" }));
+        yield* stillSelected;
+        yield* press("Escape");
+        yield* letGo;
+      }),
+    ),
+  30_000,
+);
+
+test(
+  "a double-click on a card's button does only what the button does",
+  () =>
+    run(
+      Effect.gen(function* () {
+        yield* Effect.promise(() => card("working", "t-vm").getByTestId("menu").dblclick());
+        yield* press("Escape");
+        yield* menuClosed;
+        expect(yield* Effect.promise(() => drawer().count())).toBe(0);
+        expect(yield* Effect.promise(() => chip().count())).toBe(0);
+      }),
+    ),
+  30_000,
+);
+
+test(
+  "pressing a card's name opens its drawer and selects it",
+  () =>
+    run(
+      Effect.gen(function* () {
+        yield* click(card("working", "t-vm").getByTestId("name"));
+        yield* Effect.promise(() => drawer().waitFor());
+        yield* stillSelected;
+        yield* press("Escape");
+        yield* Effect.promise(() => drawer().waitFor({ state: "detached" }));
+        yield* press("Escape");
+        yield* letGo;
       }),
     ),
   30_000,

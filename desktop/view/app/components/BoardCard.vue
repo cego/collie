@@ -39,16 +39,23 @@ const { chip, choose } = useChip();
 const chosen = computed(
   () => chip.value?.machine === props.machine && chip.value.task === props.task.id,
 );
-/** A click on the card itself, not on one of its controls, is what the next chat message is about. */
-const chooseForChat = (event: MouseEvent) => {
-  if (event.target instanceof Element && event.target.closest("button, a, input, label, form"))
-    return;
+const select = () =>
   choose({
     machine: props.machine,
     task: props.task.id,
     run: props.task.run,
     name: props.task.name,
   });
+const openDrawer = () => {
+  select();
+  open(props.cardKey);
+};
+/** A click on the card itself, not on one of its controls, is what the next chat message is about. */
+const clicked = (event: MouseEvent) => {
+  if (!onControl(event)) select();
+};
+const doubleClicked = (event: MouseEvent) => {
+  if (!onControl(event) && props.asOf === null) openDrawer();
 };
 
 const STATES: Record<
@@ -201,9 +208,11 @@ const menu = computed(() =>
   <fieldset :disabled="asOf !== null" class="contents">
     <UCard
       :data-testid="`card-${task.id}`"
+      data-card
       :variant="task.state === 'blocked' ? 'soft' : 'outline'"
       :class="{ 'opacity-50': asOf !== null, 'ring-2 ring-primary': chosen }"
-      @click="chooseForChat"
+      @click="clicked"
+      @dblclick="doubleClicked"
     >
       <template #header>
         <div class="flex items-start justify-between gap-2">
@@ -211,7 +220,7 @@ const menu = computed(() =>
             type="button"
             class="cursor-pointer text-left font-semibold hover:underline"
             data-testid="name"
-            @click="open(cardKey)"
+            @click="openDrawer"
           >
             {{ task.name }}
           </button>
