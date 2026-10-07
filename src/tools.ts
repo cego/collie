@@ -418,8 +418,9 @@ const workspaceFacts = Effect.fn("Tools.workspaces")(function* (env: PluginEnv) 
         .join(", ") || "none"
     }`,
     "",
-    "a start names its workspace — an id, its label, the path of a checkout (a directory",
-    "with no workspace open on it gets one), or projects-root — and every Input, an optional",
+    "a start names its workspace — an id, its label, the path of a checkout or a repository's",
+    "name under the Projects root (one with no workspace open on it gets one), or projects-root",
+    "— and every Input, an optional",
     'one left empty as "". Nothing is inferred; a start missing any is refused with each listed.',
   ].join("\n");
 });

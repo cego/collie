@@ -22,7 +22,7 @@ const CHECKOUT_MEANING = `Which checkout the Run starts in: its absolute path, o
 export const CLI_CHECKOUT_FIX = `Name the checkout with --input workspace=<absolute path> or workspace=${PROJECTS_ROOT_OPTION}.`;
 
 /** How a chat start names its checkout. */
-export const CHAT_CHECKOUT_FIX = `Name the checkout in the action's workspace: a workspace id, its label, an absolute path, or ${PROJECTS_ROOT_OPTION}.`;
+export const CHAT_CHECKOUT_FIX = `Name the checkout in the action's workspace: a workspace id, its label, an absolute path, a repository's name under the Projects root, or ${PROJECTS_ROOT_OPTION}.`;
 
 /** Whether a start from `cwd` has named its checkout by being in one. */
 export const insideCheckout = (cwd: string) =>

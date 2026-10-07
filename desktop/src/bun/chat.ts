@@ -90,8 +90,11 @@ export interface ClaudeCode<Server> {
 const SessionFile = Schema.fromJsonString(Schema.Struct({ session: Schema.String }));
 
 export interface FlockConversation {
-  /** One message from the human, about a card or none, and the events of the turn it starts. */
-  readonly send: (text: string, about: About | null) => Stream.Stream<AguiEvent>;
+  /**
+   * One message from the human, about a card or none, and the events of the turn it starts:
+   * after the turn under way, or `now`, interrupting it.
+   */
+  readonly send: (text: string, about: About | null, now: boolean) => Stream.Stream<AguiEvent>;
   /** Answers the question the chat asked in that tool call, if it is still asking. */
   readonly answer: (toolCallId: string, answers: Answers) => Effect.Effect<void>;
   readonly transcript: Effect.Effect<ReadonlyArray<ChatMessage>>;
@@ -382,9 +385,12 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* <Server>(opts
   }).pipe(Effect.andThen(nudge), Effect.repeat(Schedule.spaced(LOOK_AGAIN)), Effect.forkIn(scope));
 
   const conversation: FlockConversation = {
-    send: (text, about) =>
+    send: (text, about, now) =>
       Stream.unwrap(
         Effect.gen(function* () {
+          const claude = turning?.claude;
+          if (now && claude !== undefined)
+            yield* Effect.tryPromise(() => claude.interrupt()).pipe(Effect.ignore);
           yield* Effect.acquireRelease(turns.take(1), () => turns.release(1));
           const running = yield* warm;
           const ended = running.ended();

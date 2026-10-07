@@ -54,17 +54,24 @@ interface Seen {
   /** What each turn's message went with, as the UserPromptSubmit hook adds it. */
   readonly context: string[];
   readonly refusals: string[];
+  /** Each time the session was interrupted. */
+  readonly interrupts: string[];
 }
 
 const SAID = { type: "stream_event", parent_tool_use_id: null };
 
-/** Claude Code answering each message with `reply`'s messages. */
+/**
+ * Claude Code answering each message with `reply`'s messages; one `holds` names answers only
+ * once it is interrupted.
+ */
 const scripted = (
   seen: Seen,
   reply: (text: string) => ReadonlyArray<SdkMessage>,
+  holds: (text: string) => boolean = () => false,
 ): ClaudeCode<string> => ({
   query: ({ prompt, options }) => {
     const closed = Deferred.makeUnsafe<void>();
+    let interrupted = Deferred.makeUnsafe<void>();
     const turns = Stream.fromAsyncIterable(prompt, String).pipe(
       Stream.interruptWhen(Deferred.await(closed)),
       Stream.mapEffect((message) =>
@@ -89,13 +96,21 @@ const scripted = (
             );
             if (asked.behavior === "deny") seen.refusals.push(text);
           }
+          if (holds(text)) {
+            yield* Deferred.await(interrupted);
+            interrupted = Deferred.makeUnsafe<void>();
+          }
           return reply(text);
         }),
       ),
       Stream.flatMap(Stream.fromIterable),
     );
     return Object.assign(Stream.toAsyncIterable(turns), {
-      interrupt: () => Promise.resolve(),
+      interrupt: () => {
+        seen.interrupts.push("interrupt");
+        Deferred.doneUnsafe(interrupted, Effect.void);
+        return Promise.resolve();
+      },
       close: () => Deferred.doneUnsafe(closed, Effect.void),
     });
   },
@@ -136,7 +151,11 @@ const eventually = (check: () => boolean) =>
   });
 
 const withChat = <A, E>(
-  opts: { readonly items: ReadonlyArray<Item>; readonly proactive: boolean },
+  opts: {
+    readonly items: ReadonlyArray<Item>;
+    readonly proactive: boolean;
+    readonly holds?: (text: string) => boolean;
+  },
   reply: (text: string) => ReadonlyArray<SdkMessage>,
   body: (chat: {
     readonly conversation: Effect.Success<ReturnType<typeof openFlockChat<string>>>;
@@ -151,10 +170,10 @@ const withChat = <A, E>(
       const dir = yield* fs.makeTempDirectoryScoped({
         prefix: "flock-chat-turns-",
       });
-      const seen: Seen = { prompts: [], context: [], refusals: [] };
+      const seen: Seen = { prompts: [], context: [], refusals: [], interrupts: [] };
       const read: string[] = [];
       const conversation = yield* openFlockChat({
-        claude: scripted(seen, reply),
+        claude: scripted(seen, reply, opts.holds),
         dir,
         conversation: "flock@mk-pc",
         machines: () => [machine(opts.items, read)],
@@ -186,11 +205,34 @@ test("Desktop speaks first only about what matters, and the rest goes with the h
         );
         expect(usage.trim().split("\n")).toHaveLength(1);
 
-        yield* Stream.runDrain(conversation.send("what's new?", null));
+        yield* Stream.runDrain(conversation.send("what's new?", null, false));
         expect(seen.prompts[1]).toBe("what's new?");
         expect(seen.context[1]).toContain("r2:ended happened.");
         expect(seen.context[1]).not.toContain("r1:asking");
         yield* eventually(() => read.includes("r2:ended"));
+      }),
+  ));
+
+test("a message sent now interrupts the turn under way, even Desktop's own, and starts the next", () =>
+  withChat(
+    {
+      items: [item("r1:asking", "decision")],
+      proactive: true,
+      holds: (text) => text.startsWith(DESKTOP_SAID),
+    },
+    answered,
+    ({ conversation, seen }) =>
+      Effect.gen(function* () {
+        yield* TestClock.adjust("3 seconds");
+        yield* eventually(() => seen.prompts.length === 1);
+        expect(seen.interrupts).toEqual([]);
+
+        const pushed = yield* Stream.runCollect(
+          conversation.send("figure it out yourself", null, true),
+        );
+        expect(seen.interrupts).toEqual(["interrupt"]);
+        expect(seen.prompts[1]).toBe("figure it out yourself");
+        expect(pushed.at(-1)).toMatchObject({ type: "RUN_FINISHED" });
       }),
   ));
 
@@ -223,14 +265,14 @@ test("a turn that fails before the model's first word ends, leaves its News wait
         : answered(text),
     ({ conversation, seen, read }) =>
       Effect.gen(function* () {
-        const first = yield* Stream.runCollect(conversation.send("first", null));
+        const first = yield* Stream.runCollect(conversation.send("first", null, false));
         expect(first.at(-1)).toMatchObject({
           type: "RUN_ERROR",
           message: "API Error: rate limited",
         });
         yield* TestClock.withLive(Effect.sleep("50 millis"));
         expect(read).toEqual([]);
-        const second = yield* Stream.runCollect(conversation.send("second", null));
+        const second = yield* Stream.runCollect(conversation.send("second", null, false));
         expect(second.at(-1)).toMatchObject({ type: "RUN_FINISHED" });
         expect(seen.prompts).toEqual(["first", "second"]);
         expect(seen.context[1]).toContain("r2:ended happened.");

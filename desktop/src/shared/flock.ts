@@ -213,12 +213,25 @@ export const WentToPane = Schema.Struct({
 });
 export type WentToPane = typeof WentToPane.Type;
 
-/** Desktop's own update: downloaded and verified, or refused, and why. */
+/** What Desktop's latest check for its own update found, or is finding. */
 export const UpdateNews = Schema.Union([
+  Schema.TaggedStruct("Checking", {}),
+  /** `version` is this Desktop's own. */
+  Schema.TaggedStruct("UpToDate", { version: Schema.String }),
+  Schema.TaggedStruct("Downloading", { version: Schema.String }),
+  /** Downloaded and verified, waiting on Restart Desktop. */
   Schema.TaggedStruct("Ready", { version: Schema.String }),
   Schema.TaggedStruct("Refused", { version: Schema.String, reason: Schema.String }),
+  /** The check or the download failed, and is tried again at the next one. */
+  Schema.TaggedStruct("Failed", { reason: Schema.String }),
+  /** This Desktop never updates itself. */
+  Schema.TaggedStruct("Never", { reason: Schema.String }),
 ]);
 export type UpdateNews = typeof UpdateNews.Type;
+
+/** This Desktop's version, and what its latest check for an update found. */
+export const DesktopUpdates = Schema.Struct({ version: Schema.String, news: UpdateNews });
+export type DesktopUpdates = typeof DesktopUpdates.Type;
 /** What the human set in Desktop. */
 export const DesktopSettings = Schema.Struct({
   /** Whether the Flock chat may start a turn about News nobody asked for. */
@@ -257,8 +270,10 @@ export const DesktopRpcs = RpcGroup.make(
     success: Schema.Array(Startable),
     error: ActionFailed,
   }),
-  /** Desktop's own update news, the latest first. */
-  Rpc.make("updates", { success: UpdateNews, stream: true }),
+  /** Desktop's own version and update news, the latest first. */
+  Rpc.make("updates", { success: DesktopUpdates, stream: true }),
+  /** Checks for Desktop's own update now, or joins the check already running. */
+  Rpc.make("checkForUpdates", { success: UpdateNews }),
   /** Installs the update that is ready, which quits Desktop and starts the new one. */
   Rpc.make("restart", { error: ActionFailed }),
   /**
@@ -340,8 +355,13 @@ export const DesktopRpcs = RpcGroup.make(
     error: ActionFailed,
   }),
   /** One message from the human to the Flock chat, and the turn it starts as it streams. */
+  /** `now` interrupts the turn under way rather than waiting behind it. */
   Rpc.make("say", {
-    payload: { text: Schema.String, about: Schema.NullOr(About) },
+    payload: {
+      text: Schema.String,
+      about: Schema.NullOr(About),
+      now: Schema.optionalKey(Schema.Boolean),
+    },
     success: AguiEvent,
     stream: true,
   }),

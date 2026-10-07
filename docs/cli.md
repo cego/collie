@@ -1258,6 +1258,21 @@ so "nothing to do" reads differently from "the runner updated but the skills ste
 not run". A skipped step is not a failure: `upgrade` still succeeds. Under `--json` the
 same steps are in `data.steps`.
 
+The last step, `desktop`, brings [Collie Desktop](using.md#collie-desktop) on this computer
+to the version `upgrade` moved to, where this user has a released Desktop installed that
+is older. It downloads that release's Desktop update and stages it where Desktop's own
+updater would (`$XDG_DATA_HOME/dk.cego.collie.desktop/stable/self-extraction/`, else under
+`~/.local/share`), only once its tar verifies against the release key, as Desktop's own
+updates are checked. A Desktop that is running is never replaced underneath it: the step
+says the update "applies when you restart Desktop", and Desktop announces it as ready within
+a minute. Otherwise it installs when Desktop next starts. An update already staged that is
+newer, by Desktop's own download or an earlier `upgrade`, is never replaced by an older one,
+and one it replaces has its tar removed. A download that does not verify is not
+staged, and the step is `failed` with the reason. A Desktop already at the version is
+`already in place`, so Desktop upgrading this computer to its own version changes nothing.
+There is no `desktop` step where no released Desktop is installed, where Desktop runs from
+a checkout, or on a platform Desktop is not released for (only `linux-x64` is).
+
 ```sh
 collie upgrade --to 0.27.0
 ```

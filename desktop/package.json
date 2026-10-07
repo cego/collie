@@ -7,7 +7,7 @@
     "start": "bun run view && electrobun dev",
     "build": "bun run view && electrobun build --env=stable",
     "typecheck": "electrobun prepare && tsc --noEmit && nuxi typecheck view",
-    "test": "bun run view && COLLIE_DESKTOP_CDP=9333 electrobun build && bun test"
+    "test": "bun test"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.3.289",
@@ -31,7 +31,6 @@
   "devDependencies": {
     "@anthropic-ai/sdk": "0.131.0",
     "@types/bun": "latest",
-    "playwright-core": "1.63.0",
     "typescript": "5.9.3",
     "vue-tsc": "3.3.12"
   }
