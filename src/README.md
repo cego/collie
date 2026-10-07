@@ -24,6 +24,7 @@ Runner source (Bun/TypeScript). Compiled to `bin/collie` per platform; see ADR-0
 | `board.ts`         | Builds the board from the files: one TaskView per Task and a card's sentence                          |
 | `board-model.ts`   | The board's Schemas and `FrontDoorRpcs`, and the pure section and header rules                        |
 | `audit.ts`         | A Run's audit trail: each operation, the Actor that asked for it, and what came of it                 |
+| `attachments.ts`   | Files a Run is given: refused or copied into `runs/<id>/attachments/`, and listed for its prompts     |
 | `bridge.ts`        | `collie bridge`: a front door's stdio piped to this Machine's host, declared as it                    |
 | `board-stream.ts`  | The board a host serves one client: a snapshot, then each Task that changed                           |
 | `herds.ts`         | Every running herdr session the host reads, its agents, and the events it pushes                      |
@@ -56,6 +57,8 @@ Runner source (Bun/TypeScript). Compiled to `bin/collie` per platform; see ADR-0
 | `mcp.ts`           | That Toolkit over MCP on stdio, which is how Claude Code reaches it                                   |
 | `engine.ts`        | Effect's workflow engine, the SDK the binary serves a module, and where generations live              |
 | `host.ts`          | The one host per state directory: who owns it, the board it serves, every operation                   |
+| `host-files.ts`    | A Machine's files for a front door: read in parts, glob, grep, write and edit, never into its state   |
+| `uploads.ts`       | Files a front door sends this Machine, kept once by sha256, swept a week after last use               |
 | `host-log.ts`      | The host's own log file beside its state, bounded and rotated                                         |
 | `run-detail.ts`    | One Run's diff against its merge base, items by reference, and a drawer's subscription                |
 | `side-jobs.ts`     | What the host does with no pane open: the merge watch, each Herd's News, cleanup and Home tokens      |

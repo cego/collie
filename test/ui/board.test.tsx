@@ -1128,6 +1128,22 @@ test("the record opens on Summary, with the merge request's own state in it", ()
     }),
   ));
 
+test("Summary lists what the Run was given with its path, and nothing for a Run given none", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const given = record({
+        attachments: [{ name: "shot.png", size: 2048, mediaType: "image/png" }],
+      });
+      const app = yield* opened(appState({ tasks: [task()], detail: given }));
+      expect(app.said()).toContain("ATTACHMENTS");
+      expect(app.said()).toContain("/state/runs/r1/attachments/shot.png");
+      expect(app.said()).toContain("2048 bytes");
+
+      const none = yield* opened(appState({ tasks: [task()], detail: record() }));
+      expect(none.said()).not.toContain("ATTACHMENTS");
+    }),
+  ));
+
 test("Review shows the verdict and findings, and says when it was cut short", () =>
   runEffect(
     Effect.gen(function* () {

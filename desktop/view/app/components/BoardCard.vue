@@ -99,7 +99,7 @@ const goTo = () =>
 
 /**
  * A card action as this board does it, or null where Desktop has no way to yet: a check's
- * output is a tab the TUI board opens on the Machine.
+ * output is a tab the TUI board opens on the Machine, and attaching is the chat's.
  */
 const doing = (action: CardAction, primary: boolean) => {
   const view = props.task;
@@ -108,6 +108,7 @@ const doing = (action: CardAction, primary: boolean) => {
     case "go-to-tab":
       return { label: "Go to pane", press: goTo };
     case "check-output":
+    case "attach":
       return null;
     case "steer":
       return {

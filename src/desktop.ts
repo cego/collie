@@ -248,12 +248,16 @@ export interface DesktopOwn {
 }
 
 const USAGE_KEEP_MS = 30 * 24 * 60 * 60_000;
+/** As long as Claude Code keeps the transcripts that name a chat attachment. */
+const ATTACHMENT_KEEP_MS = 30 * 24 * 60 * 60_000;
+const PARTIAL_KEEP_MS = 24 * 60 * 60_000;
 const UsageAt = Schema.fromJsonString(Schema.Struct({ at: Schema.String }));
 
 /**
  * Which of Desktop's files may go (ADR-0045 D5): staged update tars and their rollback copies
  * but the running bundle's own and one prepared and not yet applied; runner copies but the
- * running version's and the newest; and usage lines over 30 days old.
+ * running version's and the newest; chat attachments unused for 30 days and transfers
+ * abandoned for a day; and usage lines over 30 days old.
  */
 export const desktopVerdicts = Effect.fn("desktop.verdicts")(function* (own: DesktopOwn) {
   const fs = yield* FileSystem.FileSystem;
@@ -292,9 +296,27 @@ export const desktopVerdicts = Effect.fn("desktop.verdicts")(function* (own: Des
     else remove.push({ target, reason: "a runner copy neither running nor newest" });
   }
 
+  const now = yield* Clock.currentTimeMillis;
+  const unchangedFor = (target: string) =>
+    fs.stat(target).pipe(
+      Effect.map((info) => now - (Option.getOrNull(info.mtime)?.getTime() ?? now)),
+      Effect.orElseSucceed(() => 0),
+    );
+  const attachments = `${own.state}/attachments`;
+  for (const name of yield* list(attachments)) {
+    const target = `${attachments}/${name}`;
+    if (/^[0-9a-f]{64}$/.test(name) && (yield* unchangedFor(target)) > ATTACHMENT_KEEP_MS)
+      remove.push({ target, reason: "a chat attachment unused for 30 days" });
+  }
+  for (const name of yield* list(`${attachments}/.partial`)) {
+    const target = `${attachments}/.partial/${name}`;
+    if ((yield* unchangedFor(target)) > PARTIAL_KEEP_MS)
+      remove.push({ target, reason: "an attachment's transfer abandoned a day ago" });
+  }
+
   const log = `${own.state}/flock-usage.jsonl`;
   const text = yield* fs.readFileString(log).pipe(Effect.orElseSucceed(() => ""));
-  const since = (yield* Clock.currentTimeMillis) - USAGE_KEEP_MS;
+  const since = now - USAGE_KEEP_MS;
   const lines = text.split("\n").filter((line) => line.trim() !== "");
   const recent = lines.filter((line) =>
     Option.match(Schema.decodeUnknownOption(UsageAt)(line), {

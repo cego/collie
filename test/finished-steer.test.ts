@@ -11,6 +11,8 @@ import { connect } from "../src/host";
 import { isSettled } from "../src/lifecycle";
 import { carryOutAsked } from "../src/run-actions";
 import { DELIVERY_TOKEN } from "../src/dispatcher";
+import { runDir } from "../src/engine";
+import { attachFiles, type FlowPrompts } from "../src/flows";
 import { appendLine, deliveriesOf, ledgerPath, readLedger } from "../src/steering";
 import { Herdr } from "../src/herdr";
 import { stopHost, until } from "./support/host";
@@ -344,6 +346,68 @@ test(
           expect(held.envelope.error?.message).toContain("a finished Run has no step left to hold");
         }),
       [],
+    ),
+  120_000,
+);
+
+/** The board's prompts, answering the one question with `typed`. */
+const typing = (typed: string): FlowPrompts => ({
+  menu: () => Effect.succeed(null),
+  ask: () => Effect.succeed(typed),
+});
+
+test(
+  "the board's Attach files… hands the typed files to the Run's live agent",
+  () =>
+    steerable("collie-attach-board-", (world) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const { env, runId } = yield* finishedWithAgent(world);
+        yield* fs.writeFileString(`${world.project}/my shot.png`, "png").pipe(Effect.orDie);
+        yield* fs.writeFileString(`${world.project}/log.txt`, "log").pipe(Effect.orDie);
+
+        const note = yield* attachFiles(
+          { ...env, cwd: world.project },
+          typing(`'my shot.png' ${world.project}/log.txt`),
+          runId,
+        );
+        expect(note).toStartWith("Told ");
+        const dir = `${runDir(world.state, runId)}/attachments`;
+        expect(yield* fs.readFileString(`${dir}/my shot.png`).pipe(Effect.orDie)).toBe("png");
+        const told = (yield* fs.readFileString(Bun.env.FAKE_HERDR_LOG!).pipe(Effect.orDie))
+          .split("\n")
+          .filter((line) => line !== "")
+          .map((line) => Schema.decodeUnknownSync(CallLine)(line))
+          .filter((call) => call.cmd === "agent prompt")
+          .map((call) => call.argv.join(" "))
+          .find((text) => text.includes("Attached:"));
+        expect(told).toContain(`Attached: ${dir}/my shot.png`);
+        expect(told).toContain(`Attached: ${dir}/log.txt`);
+
+        expect(yield* attachFiles(env, typing("/nowhere/at-all.png"), runId)).toContain(
+          "attachment /nowhere/at-all.png does not exist",
+        );
+      }),
+    ),
+  120_000,
+);
+
+test(
+  "the board's Attach files… on a Run with no live agent says to use Follow up",
+  () =>
+    steerable("collie-attach-board-gone-", (world) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const { env, runId, agent } = yield* finishedWithAgent(world);
+        yield* Effect.promise(() =>
+          Bun.$`${Bun.env.HERDR_BIN_PATH!} pane close ${agent.pane_id}`.quiet(),
+        );
+        yield* fs.writeFileString(`${world.project}/shot.png`, "png").pipe(Effect.orDie);
+
+        const note = yield* attachFiles(env, typing(`${world.project}/shot.png`), runId);
+        expect(note).toContain("Nothing was delivered");
+        expect(note).toContain('follow-up offer "carry-on"');
+      }),
     ),
   120_000,
 );

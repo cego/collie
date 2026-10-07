@@ -22,6 +22,20 @@
 
 **Input** — A value a Workflow needs (plan directory, diff target, goal). Only the **Launch flow** infers one, for a human, from context (branch, cwd, earlier plan Runs, glab), and a Run records which of its Inputs were inferred and which were given. An agent's start — chat's Collie tools or `collie run start` — gives every Input explicitly, an optional one as an explicit empty, and a start missing one is refused with what would fill it.
 
+**Attachment** — A file given to a Run beside the words that asked for the work: a
+screenshot pasted into the Flock chat, a file a chat found on this computer or a Machine, a
+file named with `--attach`. Named by its path on the Run's Machine — a file that is not
+there yet is uploaded once, through that Machine's host — and copied by the host into the
+Run's own directory before the work it came with starts or the steer it came with is
+delivered. Every agent prompt of the Run lists each one with its path on that Machine, and
+a Run starts with copies of the attachments of every Run in its **Lineage**. A start,
+follow-up or steer a chat carries out takes the attachments of the human's message that
+asked for it unless it names others. Not an **Input**: no Workflow declares one, so every
+Workflow gets them unchanged. Not **Evidence**: it is what the work was given, not what it
+proved. In the Flock chat it is also what the model is shown — an image, a PDF, a text, or
+a name, size and path — and Desktop keeps a copy, so the conversation still shows it after a
+restart ([ADR-0046](docs/adr/0046-an-attachment-is-uploaded-once-and-belongs-to-the-run.md)).
+
 **Output** — A structured JSON file an agent writes to the Run directory for one operation (e.g. a review verdict + findings). It is decoded against the Workflow's schema before anything believes it, and one that does not decode buys one repair. Workflows read Outputs, never terminal text.
 
 **Herd** — One herdr session: every workspace in it. The scope of the Collie tab, the
@@ -73,10 +87,13 @@ last in a directory. Its whole reach is **Collie tools**.
 
 **Flock chat** — Desktop's conversation about the **Flock**: one live per Desktop (earlier
 ones can be reopened, never two at once), a session of
-the user's own Claude Code driven through the Agent SDK in Desktop's main process, with
-**Collie tools** as its whole reach. Its tools are answered by each Machine's host over that
-Machine's `chat` channel, and name everything `<machine>:<id>`. Beside each Home's Native
-chat, never instead of it.
+the user's own Claude Code driven through the Agent SDK in Desktop's main process. It
+reaches Collie through **Collie tools**, this computer through Claude Code's own Read, Glob,
+Grep, Write, Edit and Bash, and each Machine's files through `collie_read`, `collie_glob`,
+`collie_grep`, `collie_write` and `collie_edit`; none of them asks first. Its Collie and file
+tools are answered by each Machine's host over that Machine's `chat` channel, and name
+everything `<machine>:<id>`, a file `<machine>:<path>`. Beside each Home's Native chat, never
+instead of it.
 
 **Chat harness** — Which native chat Collie opens with, `claude` (the default, on an
 existing installation as much as a new one) or `pi`, from `chat_harness` in `config.json`.
@@ -111,6 +128,8 @@ extension by Pi, and by `collie tools call` from a terminal. Desktop's Flock cha
 the same Toolkit's tools that a host's front door can answer, in-process, each answered by
 the host of the Machine it names (`desktop/src/bun/flock-tools.ts`); `collie_run`,
 `collie_receipts` and `collie_workspaces` with that Machine's Native chat's own reading.
+It also has five file tools of its own that are not the Toolkit's, so Native chat's reach
+is unchanged.
 
 **Redirect notice** — What a per-workspace Collie pane from an older release shows on its
 next launch: one line and "Open Collie". No board, no chat.
@@ -130,7 +149,8 @@ disposition and follow-up. `board`, `desktop` and
 reached through `collie bridge` is the front door it was started as, and `desktop` adds
 where it came from: the computer it named and the SSH client the bridge saw. A chat's
 `collie_do` also names its conversation and carries the human's message from that turn,
-attached by the tool host and never by the model.
+with the names of the **Attachments** it carried, attached by the tool host and never by
+the model.
 
 **Confirmation** — A command naming a Proposal's id **and** its content hash. A yes to a
 summary is not consent to a payload nobody read. Anyone may give one — a human at a

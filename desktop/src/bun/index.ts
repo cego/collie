@@ -51,6 +51,8 @@ import {
 import { RELEASE_PUBLIC_KEY } from "../../../src/signing";
 import { pruneDesktop, sshControlsPrefix, sweepSshControls } from "../../../src/desktop";
 import { appWindowFor } from "./browser";
+import { clipboardPaths } from "../shared/attachments";
+import { readAttachment, stageAttachment, stagePath } from "./attachments";
 import { type FlockConversation, openFlockChat, refusal } from "./chat";
 import { claudeCode } from "./claude";
 import { chatDoor } from "./flock-tools";
@@ -499,6 +501,14 @@ const main = Effect.gen(function* () {
       );
     }).pipe(settingsWrite.withPermits(1), Effect.orDie);
 
+  /** Files named by path, each copied in or refused in words. */
+  const stagedFrom = (paths: ReadonlyArray<string>) =>
+    Effect.forEach(paths, (path) =>
+      stagePath(own, path).pipe(
+        Effect.catch((cause) => Effect.succeed({ refused: `${path}: ${cause.message}` })),
+      ),
+    ).pipe(Effect.provide(BunServices.layer));
+
   // The Flock as the board was last sent it, so the chat names its Machines as the cards do.
   let shown = EMPTY_FLOCK;
   // Opened by the view's first ask, in Desktop's own scope; its session starts with the first message.
@@ -807,11 +817,43 @@ const main = Effect.gen(function* () {
       doorTo(doors, installation).pipe(
         Effect.flatMap((door) => runFileOn(door.desktop, runId, ref, offset)),
       ),
-    say: ({ text, about, now }) =>
+    stage: (part) =>
+      stageAttachment(own, part).pipe(
+        Effect.mapError(
+          (cause) =>
+            new ActionFailed({
+              reason: cause._tag === "AttachmentRefused" ? cause.reason : cause.message,
+            }),
+        ),
+        Effect.provide(BunServices.layer),
+      ),
+    stagePaths: ({ paths }) => stagedFrom(paths),
+    pickFiles: () =>
+      Effect.promise(() =>
+        Utils.openFileDialog({ canChooseDirectory: false, allowsMultipleSelection: true }),
+      ).pipe(Effect.flatMap((paths) => stagedFrom(paths.filter((path) => path !== "")))),
+    clipboardFiles: () =>
+      Effect.sync(() =>
+        Utils.clipboardAvailableFormats().includes("files")
+          ? (Utils.clipboardReadText() ?? "")
+          : "",
+      ).pipe(Effect.flatMap((text) => stagedFrom(clipboardPaths(text)))),
+    attachmentFile: ({ id, offset }) =>
+      readAttachment(own, id, offset).pipe(
+        Effect.mapError(
+          (cause) =>
+            new ActionFailed({
+              reason: cause._tag === "AttachmentRefused" ? cause.reason : cause.message,
+            }),
+        ),
+        Effect.provide(BunServices.layer),
+      ),
+    say: ({ text, about, now, attachments }) =>
       Stream.unwrap(
         Effect.map(chat, (opened) =>
           Result.match(opened, {
-            onSuccess: (conversation) => conversation.send(text, about, now === true),
+            onSuccess: (conversation) =>
+              conversation.send(text, about, now === true, attachments ?? []),
             onFailure: (cause) =>
               Stream.make(refusal(`The Flock chat could not start: ${String(cause)}`)),
           }),

@@ -35,6 +35,7 @@ import { gitlabRepositoryOf } from "./strategies";
 import { LEDGER_FILE } from "./steering";
 import { desktopVerdicts, trimUsage, type DesktopOwn } from "./desktop";
 import { CONTROL_DIR, putDownControl } from "./compaction";
+import { uploadsDir } from "./uploads";
 
 /** One kind of thing Collie cleans. */
 export interface Sweeper {
@@ -52,6 +53,7 @@ export interface Sweeper {
 const DAY_MS = 24 * 60 * 60_000;
 const GENERATION_UNUSED_MS = 7 * DAY_MS;
 const JOURNAL_KEEP_MS = 30 * DAY_MS;
+const UPLOAD_KEEP_MS = 7 * DAY_MS;
 export const JOURNAL = "cleanup.jsonl";
 
 /** What each of `paths` takes on disk, links not followed; 0 where one cannot be read. */
@@ -381,6 +383,8 @@ const KEPT_KINDS = new Set([
   "compaction-locks",
   "generations",
   "renovate-repositories",
+  "uploads",
+  "files",
   "claude.json.bak",
 ]);
 const MARKER_KINDS = ["stop", "hold", "parked", "notified"];
@@ -475,6 +479,37 @@ export const stateSweeper = (stateDir: string, rows: ReadonlySet<string>): Sweep
       }
       const sizes = yield* sizesOf(remove.map((item) => item.target));
       return { remove: remove.map((item, at) => ({ ...item, bytes: sizes[at] ?? 0 })), keep };
+    }),
+    remove: (item) => removeIf(item.target, verdict(item.target)),
+  };
+};
+
+/** Uploads not asked for in a week: a Run given one holds its own copy (ADR-0046). */
+export const uploadsSweeper = (stateDir: string): Sweeper => {
+  const kind = "upload";
+  const root = uploadsDir(stateDir);
+  const verdict = (target: string) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const info = yield* fs.stat(target).pipe(Effect.option);
+      const at = Option.getOrNull(Option.flatMap(info, (one) => one.mtime));
+      if (at === null) return null;
+      return (yield* Clock.currentTimeMillis) - at.getTime() > UPLOAD_KEEP_MS
+        ? { remove: "not asked for in a week" }
+        : null;
+    });
+  return {
+    judge: Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const remove: CleanupItem[] = [];
+      for (const name of yield* fs.readDirectory(root).pipe(Effect.orElseSucceed(() => []))) {
+        if (!/^[0-9a-f]{64}$/.test(name)) continue;
+        const target = `${root}/${name}`;
+        const judged = yield* verdict(target);
+        if (judged !== null)
+          remove.push({ kind, target, bytes: yield* sizeOf(target), reason: judged.remove });
+      }
+      return { remove, keep: [] };
     }),
     remove: (item) => removeIf(item.target, verdict(item.target)),
   };

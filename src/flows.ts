@@ -11,6 +11,7 @@ import {
   Effect,
   FileSystem,
   Option,
+  Path,
   Schedule,
   Schema,
 } from "effect";
@@ -59,6 +60,7 @@ import {
   savedModules,
   startRun,
   steerAbout,
+  steerRun,
 } from "./lifecycle";
 import { releaseKeyboard, startKeyboard, takeKey } from "./keys";
 import { forkResolvedDefinition, type DefinitionKind } from "./fork";
@@ -73,6 +75,7 @@ import { selectionPath, writeSelection } from "./selection";
 import { everyViewerPaints } from "./outer";
 import { listTasks, taskOfWorkspace, type TaskChoice, type TaskRecord } from "./task";
 import { newRequestId } from "./operations";
+import { typedPaths } from "./attachments";
 import {
   answerFor,
   openingFilter,
@@ -690,6 +693,29 @@ const offerArguments = Effect.fn("Flows.offerArguments")(function* (
     typed[name] = answer;
   }
   return offerInput(drawn, typed);
+});
+
+/**
+ * Files handed to the Run's newest live agent: the steer `run steer --attach` makes, with
+ * no words of its own. The note for the footer, or null where nothing was typed.
+ */
+export const attachFiles = Effect.fn("Flows.attachFiles")(function* (
+  env: PluginEnv,
+  prompts: FlowPrompts,
+  runId: string,
+) {
+  const typed = yield* prompts.ask(`Which files go to ${runId}? Paths, separated by spaces`);
+  const paths = typedPaths(typed ?? "");
+  if (paths.length === 0) return null;
+  const path = yield* Path.Path;
+  const done = yield* steerRun(env, {
+    door: "board",
+    runId,
+    text: "",
+    attachments: paths.map((one) => path.resolve(env.cwd, one)),
+    request: yield* newRequestId(),
+  });
+  return done.ok ? done.human : done.error.message;
 });
 
 /**
@@ -1345,6 +1371,9 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
       });
       return resumed.ok ? resumed.human : resumed.error.message;
     }
+
+    case "AttachFiles":
+      return yield* attachFiles(env, prompts, command.runId);
 
     /** A finished plan, built: the same launch "Implement now" runs, from the card. */
     /**

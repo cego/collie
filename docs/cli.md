@@ -142,6 +142,7 @@ collie --json run start <workflow> --inputs-json '{"goal":"ship it"}'
 | `--harness <h>`   | The harness this Run's agents run on, over the workflow's own preference.   |
 | `--model <m>`     | The model this Run's agents run on, over the workflow's own preference.     |
 | `--effort <e>`    | The effort this Run's agents are asked for, over the workflow's own.        |
+| `--attach <file>` | Repeatable. A file to give the Run — see [Attachments](#attachments).       |
 | `--request-id`    | Idempotency key — see [Retrying safely](#retrying-safely).                  |
 
 `--harness`, `--model` and `--effort` reach every agent the Run starts, and its children,
@@ -149,6 +150,38 @@ without the workflow doing anything for them; a piece of work that names its own
 wins. They are resolved together before anything starts, so a model the harness does not
 take is `invalid_input` naming what it would take. [Which agent does the
 work](sdk.md#which-agent-does-the-work) is the whole order.
+
+### Attachments
+
+```sh
+collie --json run start plan --input goal="the picker is cut off" --attach shot.png
+collie --json run steer <run-id> "this is what it does now" --attach after.png
+collie --json run action <run-id> carry-on --input work="still cut off" --attach log.txt
+```
+
+`--attach` names a file to give the work, and is repeatable on `run start`, `run steer`
+and `run action`. A relative path is resolved against where the command runs; the CLI
+sends the absolute path and uploads nothing, so the file has to be on the host's Machine.
+The host copies each into the Run's own `runs/<id>/attachments/` — a copy, never a link —
+before its first step, or for a steer before the message is delivered, and every step's
+prompt lists the Run's attachments with their paths
+([`sdk.md`](sdk.md#what-every-step-prompt-is-given)). A steer's message gains an
+`Attached: <path>` line for each file it brought. A Run started from another — a
+follow-up, a child, an implementation of a plan Run — starts with copies of that Run's
+attachments. Two files of one name and different content are both kept, the later under a
+short sha256 prefix.
+
+A path that does not exist, is not a regular file, cannot be read or is larger than
+100 MB is `invalid_input` naming it, before anything is claimed: no Run, Task, worktree or
+workspace is made. The files are part of the request: at the host, the same request id with other
+attachments is `RequestConflict`, and with the same ones it is the same Run. The CLI
+answers a `--request-id` it already has a receipt for from that receipt, before the host
+is asked, so there it is the first Run whatever is attached. They are not
+an Input, so the Workflow's own input, and with it the execution, is the same either way.
+The operation's line in the Run's `operations.jsonl` names each file under `asked`, by the
+name the Run keeps it under and the path it came from. Chat's `start`, `followup` and
+`deliver` actions take the same paths as `attachments`
+([ADR-0046](adr/0046-an-attachment-is-uploaded-once-and-belongs-to-the-run.md)).
 
 ### A workflow saved as a module
 
@@ -1591,12 +1624,41 @@ again. An untracked file reached through a link, or that is not a regular file, 
 without being read. The review's findings come as
 a list. The merge request is what the merge watch last read, asked again after 5 minutes or
 when `refreshMr` is set. Large items are fetched by reference with `runFile`: `log`,
-`review`, `diff:<path>`, `evidence:<name>`, `verification:<id>`, `plan:<file>`, `file:<path>` (read
+`review`, `diff:<path>`, `evidence:<name>`, `verification:<id>`, `plan:<file>`, `attachment:<name>` (one of the Run's attachments), `file:<path>` (read
 only, from the Run's checkout) and `pipeline:<url>` (the status glab reads for that pipeline), text as it is and anything else as base64. Each answer is
 at most 4 MiB from `offset` (or `length` bytes where asked) and says the item's whole
 `size`, so a long log or a video is read in parts. A part of an item is base64 whatever it
 is, so a character split across two parts is whole once they are joined. A reference is refused where it leaves
 the directory it belongs to, links followed, or where it is not a regular file.
+
+Five more answer a front door about the Machine's own files, every path absolute; the Flock
+chat's file tools use them ([ADR-0011](adr/0011-the-conversation-is-a-native-harness.md#amended-2026-10-07-the-flock-chat-reaches-files)).
+`readFile` hands over a part of a file, at most 4 MiB from `offset`, as base64 with its
+media type and whole `size`. `glob` answers the files a pattern matches under a directory,
+newest first, at most 100 and how many it `omitted`. `grep` takes Claude Code Grep's
+arguments that make sense on a host (`glob`, `type`, `outputMode`, `ignoreCase`,
+`lineNumbers`, `before`, `after`, `context`, `headLimit`, `multiline`), runs ripgrep where it
+is on `PATH` and `grep -r` otherwise, and answers at most 100 lines. `writeFile` writes a
+whole file, making its directory, and `editFile` replaces `oldString` with `newString`,
+refusing one that is missing or, without `replaceAll`, not unique. Both take a request id,
+the same id twice being one operation, are recorded with the Actor in
+`files/operations.jsonl` under the state directory (its newest 1000), and are refused where
+the file's real path is inside the state directory. The `Snapshot` carries `files: true`
+from a host that has these; a client sends files to no host without it.
+
+`upload` takes a file sent to this Machine in parts: its `name`, `size`, `sha256`, an
+`offset` and one base64 part of at most 4 MiB. The host appends the parts under
+`uploads/<sha256>/` in its state directory, checks the size and the digest on the last, and
+answers the file's path, which a `start`, an `invoke` or a steer can then name as an
+attachment; before the last part it answers `null`. A digest it already holds whole is
+answered with its path at the first part, so the rest is never sent, under the name it was
+asked for, and a part sent again is the same part, so a retry needs no request id. Parts are
+taken one at a time. A mismatched digest or size removes what arrived and is refused, as is
+a part at an offset other than what arrived (send it again from the start) and a file over
+100 MB. Each upload is recorded with its Actor in `uploads/operations.jsonl`. Being asked
+for a held digest renews its age, and the host's cleanup sweep removes an upload a week after it
+was last asked for; Desktop trusts an upload's path for a day before it asks again. A `chat` channel's `declare` may also carry `attachments`, the names of the files
+the human's message carried, which the host records beside `said`.
 
 `protocol` is an integer, also in `identity`. An optional field, a new operation or a new
 kind of message does not change it, and a client reads a kind it does not know as

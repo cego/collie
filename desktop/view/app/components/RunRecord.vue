@@ -181,7 +181,13 @@ const locationOf = (file: string, line: number | null) =>
           :target="target"
         />
       </template>
-      <FactsTab v-if="tab === 'facts'" class="max-w-3xl" :task="placed.task" :detail="detail" />
+      <FactsTab
+        v-if="tab === 'facts'"
+        class="max-w-3xl"
+        :task="placed.task"
+        :detail="detail"
+        :installation="placed.installation"
+      />
       <TerminalTab v-if="tab === 'terminal'" :placed="placed" :went-to-pane="wentToPane" />
     </div>
   </section>

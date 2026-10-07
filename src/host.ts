@@ -14,6 +14,7 @@
 // machine. `docs/adr/0015-one-local-host-owns-a-state-directory.md` is why each of those
 // is the way it is.
 
+import { createHash } from "node:crypto";
 import * as BunSocket from "@effect/platform-bun/BunSocket";
 import type { BunServices } from "@effect/platform-bun/BunServices";
 import * as BunSocketServer from "@effect/platform-bun/BunSocketServer";
@@ -74,6 +75,7 @@ import {
   runnersSweeper,
   settlingOf,
   stateSweeper,
+  uploadsSweeper,
   taskWorkspacesSweeper,
   generationsDir,
   generationsSweeper,
@@ -106,14 +108,23 @@ import {
   SharedSettings,
   PROTOCOL,
   ProposalRefused,
-  RUN_FILE_BYTES,
+  PART_BYTES,
   RequestConflict,
   Started,
   SteerOutcome,
+  Attachments,
   type FrontDoor,
   type PlanPanel,
   type Where,
 } from "./board-model";
+import {
+  attachedLine,
+  attachmentRefusal,
+  attachmentsDir,
+  copyInto,
+  namesIn,
+  type Attached,
+} from "./attachments";
 import { boardMessages } from "./board-stream";
 import { recordDisposition } from "./disposition";
 import {
@@ -158,6 +169,8 @@ import { everyRegistered } from "./registry";
 import { listTasks, readTask } from "./task";
 import { nowIso } from "./time";
 import { reason } from "./naming";
+import { editString, globFiles, grepFiles, readPart, writeWhole } from "./host-files";
+import { receive, uploadsDir } from "./uploads";
 import { loadDefaults, SettingRefused, sharedSettings, takeShared } from "./config";
 import { factsOfView, settled } from "./runs";
 import { aliveIn, focusPane, herdChanges, liveHerds } from "./herds";
@@ -284,6 +297,7 @@ export const HostRpcs = RpcGroup.make(
       operation: Schema.optional(Schema.String),
       agent: Schema.optional(Schema.String),
       mode: Schema.optional(Schema.Literals(["boundary", "now", "interrupt"])),
+      attachments: Schema.optional(Attachments),
     },
     success: Steered,
     error: Schema.Union([HostRefused, RequestConflict]),
@@ -389,25 +403,87 @@ const handlers = (
             },
             registry.grant({ runId, name, command }),
           ).pipe(Effect.provideContext(bun)),
-        steer: ({ runId, text, request, operation, agent, mode }, { client }) =>
-          once(
-            runDir(dir, runId),
-            {
-              operation: "deliver",
-              request,
-              ...stampIn(declared, client),
-              asked: {
+        steer: ({ runId, text, request, operation, agent, mode, attachments }, { client }) => {
+          const into = attachmentsDir(runDir(dir, runId));
+          // Files go only into a Run this host has.
+          const known =
+            (attachments ?? []).length === 0
+              ? Effect.void
+              : Effect.flatMap(FileSystem.FileSystem, (fs) => fs.exists(runDir(dir, runId))).pipe(
+                  Effect.orElseSucceed(() => false),
+                  Effect.flatMap((exists) =>
+                    exists && !/[/\\]/.test(runId) && runId !== ".." && runId !== "."
+                      ? Effect.void
+                      : Effect.fail(new HostRefused({ reason: `There is no Run ${runId} here.` })),
+                  ),
+                );
+          return known.pipe(
+            Effect.andThen(attachedAs(into, attachments)),
+            Effect.flatMap((attached) => {
+              const asked: SteerAsked = {
                 text,
                 operation: operation ?? null,
                 agent: agent ?? null,
                 mode: mode ?? null,
-              },
-              result: Steered,
-            },
-            registry.steer({ runId, text, request, operation, agent, mode }),
-          ).pipe(Effect.provideContext(bun)),
+              };
+              if (attached !== undefined) asked.attachments = attached;
+              return once(
+                runDir(dir, runId),
+                {
+                  operation: "deliver",
+                  request,
+                  ...stampIn(declared, client),
+                  asked,
+                  result: Steered,
+                },
+                copyInto(into, attachments ?? []).pipe(
+                  Effect.mapError((cause) => new HostRefused({ reason: reason(cause) })),
+                  Effect.flatMap((copied) =>
+                    registry.steer({
+                      runId,
+                      text: [text, ...copied.map((one) => attachedLine(`${into}/${one.name}`))]
+                        .filter((line) => line !== "")
+                        .join("\n"),
+                      request,
+                      operation,
+                      agent,
+                      mode,
+                    }),
+                  ),
+                ),
+              );
+            }),
+            Effect.provideContext(bun),
+          );
+        },
       });
     }),
+  );
+
+/** What a steer's request has to ask again, as `AskedFor` is a start's. */
+type SteerAsked = {
+  readonly text: string;
+  readonly operation: string | null;
+  readonly agent: string | null;
+  readonly mode: string | null;
+  attachments?: ReadonlyArray<Attached>;
+};
+
+/**
+ * What a request's attachments are recorded as: the name each is kept under in `into`
+ * (an empty directory where null), and where it came from. Refused, naming the path, where
+ * one cannot be attached.
+ */
+const attachedAs = (into: string | null, paths: ReadonlyArray<string> | undefined) =>
+  Effect.gen(function* () {
+    if (paths === undefined || paths.length === 0) return undefined;
+    const refused = yield* attachmentRefusal(paths);
+    if (refused !== null) return yield* new HostRefused({ reason: `${REFUSED_INPUT}: ${refused}` });
+    return (yield* namesIn(into, paths)).map(({ name, from }) => ({ name, from }));
+  }).pipe(
+    Effect.mapError((cause) =>
+      Schema.is(HostRefused)(cause) ? cause : new HostRefused({ reason: reason(cause) }),
+    ),
   );
 
 /** A steer that came to nothing, which is told to the caller but not kept as its request's answer. */
@@ -511,6 +587,7 @@ const hostBoard = (dir: string) =>
         }),
         generationsSweeper(generationsDir()),
         stateSweeper(env.stateDir, new Set(all.map((run) => run.id))),
+        uploadsSweeper(env.stateDir),
         compactionSweeper(env.stateDir, sessions),
         runnersSweeper(`${collieCache()}/runners`, BUILD),
         renovateClonesSweeper(env.stateDir, all),
@@ -552,6 +629,12 @@ const CLEANUP_TRAIL = 50;
 
 /** How many of the settings operations a host keeps a record of. */
 const SETTINGS_TRAIL = 50;
+/** How many of the chat's writes to files the host keeps a record of. */
+const FILES_TRAIL = 1000;
+/** How many uploads the host keeps a record of. */
+const UPLOADS_TRAIL = 1000;
+const Written = Schema.Struct({ path: Schema.String, bytes: Schema.Int });
+const Edited = Schema.Struct({ path: Schema.String, replaced: Schema.Int });
 
 /** A Herd's key names one directory under the state directory, and nothing above it. */
 const isHerdName = (herd: string) => herd !== "." && herd !== ".." && /^[^/\\]+$/.test(herd);
@@ -619,6 +702,7 @@ const frontDoorHandlers = (
           readonly request: string;
           readonly origin: FrontDoor;
           readonly from?: Where | undefined;
+          readonly asked?: Schema.Json | undefined;
           readonly result: Schema.Codec<A, I>;
         },
         act: Effect.Effect<A, E, HostServices>,
@@ -630,6 +714,17 @@ const frontDoorHandlers = (
               : Effect.void,
           ),
           Effect.provideContext(hosted),
+        );
+      /** A new Run's attachments, refused before anything is claimed, as its audit line asks them. */
+      const attachedFor = <A, E, R>(
+        paths: ReadonlyArray<string> | undefined,
+        act: (asked: { readonly attachments: Schema.Json } | undefined) => Effect.Effect<A, E, R>,
+      ) =>
+        attachedAs(null, paths).pipe(
+          Effect.provideContext(bun),
+          Effect.flatMap((attached) =>
+            act(attached === undefined ? undefined : { attachments: attached }),
+          ),
         );
       const known = (runId: string) =>
         registry
@@ -665,6 +760,27 @@ const frontDoorHandlers = (
               act,
             ),
           ).pipe(Effect.provideContext(hosted));
+      /** A file operation's failure as the host's refusal, in its own words. */
+      const refusedPlainly = <A, E, R extends BunServices>(effect: Effect.Effect<A, E, R>) =>
+        effect.pipe(
+          Effect.mapError((cause) =>
+            Schema.is(RequestConflict)(cause) || Schema.is(HostRefused)(cause)
+              ? cause
+              : new HostRefused({ reason: reason(cause) }),
+          ),
+          Effect.provideContext(bun),
+        );
+      /** A write to a file, once per request, recorded in the host's own trail. */
+      const filesOnce = <A, I extends Schema.Json, E, R>(
+        line: Parameters<typeof once<A, I, E, R>>[1],
+        act: Effect.Effect<A, E, R>,
+      ) =>
+        Effect.gen(function* () {
+          const trail = (yield* Path.Path).join(env.stateDir, "files");
+          const done = yield* once(trail, line, act);
+          yield* trimAudit(trail, FILES_TRAIL).pipe(Effect.orDie);
+          return done;
+        });
       /** Only the refusals a front door can act on keep their shape; anything else is said in a sentence. */
       const plainly = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
         effect.pipe(
@@ -823,29 +939,33 @@ const frontDoorHandlers = (
             parent,
             intent,
             verify,
+            attachments,
           },
           { client },
         ) =>
-          fresh(
-            (started) => started.runId,
-            { operation: "start", request, ...whoOf(client), result: Started },
-            registry.resolve({ project, id }).pipe(
-              Effect.flatMap((generation) =>
-                registry.start({
-                  generation,
-                  project,
-                  request,
-                  input,
-                  text,
-                  inferred,
-                  root,
-                  options,
-                  task,
-                  taskLabel,
-                  parent,
-                  intent,
-                  verify,
-                }),
+          attachedFor(attachments, (asked) =>
+            fresh(
+              (started) => started.runId,
+              { operation: "start", request, ...whoOf(client), asked, result: Started },
+              registry.resolve({ project, id }).pipe(
+                Effect.flatMap((generation) =>
+                  registry.start({
+                    generation,
+                    project,
+                    request,
+                    input,
+                    text,
+                    inferred,
+                    root,
+                    options,
+                    task,
+                    taskLabel,
+                    parent,
+                    intent,
+                    verify,
+                    attachments,
+                  }),
+                ),
               ),
             ),
           ),
@@ -950,11 +1070,64 @@ const frontDoorHandlers = (
               return swept;
             }),
           ),
-        invoke: ({ runId, offer, input, request }, { client }) =>
-          fresh(
-            () => runId,
-            { operation: "invoke", request, ...whoOf(client), result: Started },
-            registry.invoke({ runId, offer, input, request }),
+        invoke: ({ runId, offer, input, request, attachments }, { client }) =>
+          attachedFor(attachments, (asked) =>
+            fresh(
+              () => runId,
+              { operation: "invoke", request, ...whoOf(client), asked, result: Started },
+              registry.invoke({ runId, offer, input, request, attachments }),
+            ),
+          ),
+        upload: (part, { client }) =>
+          refusedPlainly(
+            Effect.gen(function* () {
+              const got = yield* receive(env.stateDir, part);
+              // Logged once a file arrives, or is answered from what this host already held.
+              if (got.path !== null && (got.complete || part.offset === 0))
+                yield* recordAudit(uploadsDir(env.stateDir), {
+                  operation: "upload",
+                  request: part.sha256,
+                  ...whoOf(client),
+                  asked: { name: part.name, size: part.size, sha256: part.sha256 },
+                  result: Schema.String,
+                  value: got.path,
+                }).pipe(
+                  Effect.andThen(trimAudit(uploadsDir(env.stateDir), UPLOADS_TRAIL)),
+                  Effect.orDie,
+                );
+              return { path: got.path };
+            }),
+          ),
+        readFile: ({ path, offset, length }) =>
+          readPart(path, offset, length).pipe(Effect.provideContext(bun)),
+        glob: ({ pattern, path }) => refusedPlainly(globFiles(pattern, path ?? env.home)),
+        grep: ({ path, ...asked }) =>
+          refusedPlainly(grepFiles({ ...asked, path: path ?? env.home })),
+        writeFile: ({ path, content, request }, { client }) =>
+          refusedPlainly(
+            filesOnce(
+              {
+                operation: "write",
+                request,
+                ...whoOf(client),
+                asked: { path, sha256: createHash("sha256").update(content).digest("hex") },
+                result: Written,
+              },
+              writeWhole(path, content, env.stateDir),
+            ),
+          ),
+        editFile: ({ path, oldString, newString, replaceAll, request }, { client }) =>
+          refusedPlainly(
+            filesOnce(
+              {
+                operation: "edit",
+                request,
+                ...whoOf(client),
+                asked: { path, oldString, newString, replaceAll: replaceAll ?? false },
+                result: Edited,
+              },
+              editString({ path, oldString, newString, replaceAll }, env.stateDir),
+            ),
           ),
         confirm: ({ proposal, hash, request }, { client }) =>
           answeredOnce(proposal, hash, request, "confirmed", (file, lines) =>
@@ -1301,35 +1474,38 @@ const frontDoorHandlers = (
             ),
             Effect.provideContext(bun),
           ),
-        followUp: ({ runId, text, request }, { client }) =>
-          fresh(
-            () => runId,
-            { operation: "followup", request, ...whoOf(client), result: Started },
-            Effect.gen(function* () {
-              const view = yield* known(runId);
-              if (!settled(factsOfView(env.stateDir, view)))
-                return yield* new HostRefused({
-                  reason: "a follow-up is a child of a finished run, and this one is still going",
+        followUp: ({ runId, text, request, attachments }, { client }) =>
+          attachedFor(attachments, (asked) =>
+            fresh(
+              () => runId,
+              { operation: "followup", request, ...whoOf(client), asked, result: Started },
+              Effect.gen(function* () {
+                const view = yield* known(runId);
+                if (!settled(factsOfView(env.stateDir, view)))
+                  return yield* new HostRefused({
+                    reason: "a follow-up is a child of a finished run, and this one is still going",
+                  });
+                const offered = (yield* registry.offers(runId)).find(
+                  (one) => one.kind === "follow-up",
+                );
+                if (offered === undefined)
+                  return yield* new HostRefused({
+                    reason: `${runId} declares no follow-up, so there is nothing to carry on with`,
+                  });
+                const into = followUpField(offered.arguments);
+                if ("refused" in into)
+                  return yield* new HostRefused({
+                    reason: `${runId}'s follow-up "${offered.id}" ${into.refused}`,
+                  });
+                return yield* registry.invoke({
+                  runId,
+                  offer: offered.id,
+                  input: { [into.field]: text },
+                  request,
+                  attachments,
                 });
-              const offered = (yield* registry.offers(runId)).find(
-                (one) => one.kind === "follow-up",
-              );
-              if (offered === undefined)
-                return yield* new HostRefused({
-                  reason: `${runId} declares no follow-up, so there is nothing to carry on with`,
-                });
-              const into = followUpField(offered.arguments);
-              if ("refused" in into)
-                return yield* new HostRefused({
-                  reason: `${runId}'s follow-up "${offered.id}" ${into.refused}`,
-                });
-              return yield* registry.invoke({
-                runId,
-                offer: offered.id,
-                input: { [into.field]: text },
-                request,
-              });
-            }),
+              }),
+            ),
           ),
         read: ({ tool, input }, { client }) =>
           Effect.promise(() => import("./tools")).pipe(
@@ -1367,7 +1543,7 @@ const frontDoorHandlers = (
                 : fetchRef(
                     factsOfView(env.stateDir, view),
                     ref,
-                    { offset: offset ?? 0, length: length ?? RUN_FILE_BYTES },
+                    { offset: offset ?? 0, length: length ?? PART_BYTES },
                     env.cwd,
                   ),
             ),
@@ -1383,6 +1559,7 @@ const frontDoorHandlers = (
                     build: BUILD,
                     ...development,
                     protocol: PROTOCOL,
+                    files: true,
                     herds: sessions.flatMap(({ herd, name }) =>
                       herd === null ? [] : [name === undefined ? { id: herd } : { id: herd, name }],
                     ),
