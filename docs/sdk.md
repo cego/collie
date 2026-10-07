@@ -987,7 +987,7 @@ and `collie.d.ts` — into the directory, merging what it needs into a `package.
 to be on the machine. The `effect` it pins is the one the host runs.
 
 Effect 4.0.1 moved the workflow modules from `effect/unstable/workflow` to
-`effect/workflow`. A module still on the old path loads and runs until Collie 0.39.0, and
+`effect/workflow`. A module still on the old path loads and runs until Collie 0.41.0, and
 `collie workflow check` reports the old path as a problem, which is how you hear of it.
 
 ## Effect stays yours

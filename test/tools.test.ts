@@ -1416,7 +1416,7 @@ test("a Run with a branch and no merge request shows its branch", () =>
       const said = yield* call("collie_run", { run: run.id });
       expect(said).toMatch(/Branch: \S+/);
       expect(said).not.toContain("Merge request:");
-      // A host stopped mid-launch still calls herdr, which writes into the world once it is gone.
+      // Let the launch reach herdr before the world goes.
       const fs = yield* FileSystem.FileSystem;
       yield* until(
         () => fs.readFileString(Bun.env.FAKE_HERDR_LOG!).pipe(Effect.orDie),
