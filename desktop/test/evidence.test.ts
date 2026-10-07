@@ -1,4 +1,4 @@
-// What the drawer makes of a Run's evidence: terminal colours, and its files sorted into
+// What the record makes of a Run's evidence: terminal colours, and its files sorted into
 // a gallery of before/after pairs, videos, reports and logs.
 
 import { expect, test } from "bun:test";

@@ -195,7 +195,7 @@ onBeforeUnmount(() => {
     <p v-if="noPane" class="text-muted text-sm" data-testid="terminal-no-pane">
       This Run has no live agent's pane to show here; Open in herdr shows its workspace.
     </p>
-    <!-- Esc and Ctrl+C are the pane's while it has focus, not the drawer's. -->
+    <!-- Esc and Ctrl+C are the pane's while it has focus, not the record's. -->
     <div
       v-show="!noPane"
       ref="host"

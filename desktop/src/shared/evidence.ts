@@ -1,4 +1,4 @@
-// A Run's evidence files as the drawer shows them. No Bun-only import: the view bundles this.
+// A Run's evidence files as the record shows them. No Bun-only import: the view bundles this.
 
 import type { EvidenceFile } from "../../../src/board-model";
 

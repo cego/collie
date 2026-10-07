@@ -1,4 +1,4 @@
-// The web links a Run produced, as the drawer's cards show them.
+// The web links a Run produced, as the record's cards show them.
 
 import { expect, test } from "bun:test";
 import { webLinks } from "../src/shared/links";

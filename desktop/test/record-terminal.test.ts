@@ -1,7 +1,7 @@
-// What a card's drawer decides about its Terminal tab.
+// What a card's record decides about its Terminal tab.
 
 import { expect, test } from "bun:test";
-import { offersTerminal, opensHerdrWithoutPane } from "../src/shared/drawer";
+import { offersTerminal, opensHerdrWithoutPane } from "../src/shared/record-terminal";
 
 test("the Terminal tab is offered on a reached Machine and kept while shown after it drops", () => {
   expect(offersTerminal(null, undefined)).toBe(true);
