@@ -13,8 +13,6 @@ import { ensureLockDir, withLock } from "./lock";
 import { reason } from "./naming";
 import { COMPACTION_OFF } from "./settings";
 
-export { COMPACT_AT_TOKENS, COMPACTION_OFF } from "./settings";
-
 /**
  * How long Collie waits for a compaction request to resolve before it pauses the Run.
  * Fixed: no workflow, step or harness shortens it. A Run that waited less would send
@@ -46,11 +44,6 @@ export function threshold(configured: number): Threshold {
     };
   }
   return { tokens: configured };
-}
-
-/** Whether a configured value is one a Run can use, for the writers that refuse it. */
-export function validThreshold(configured: number): boolean {
-  return !("bad" in threshold(configured));
 }
 
 /**
