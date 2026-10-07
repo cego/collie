@@ -1,5 +1,5 @@
 // What a Run was given beside its words: files the host copies into the Run's own
-// directory, and every prompt of the Run lists (ADR-0045).
+// directory, and every prompt of the Run lists (ADR-0046).
 
 import { createHash } from "node:crypto";
 import { Effect, FileSystem, Path } from "effect";

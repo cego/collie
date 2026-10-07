@@ -8,7 +8,8 @@ import { HostRefused } from "../src/board-model";
 import { readAudit } from "../src/audit";
 import { connect, frontDoor } from "../src/host";
 import { globFiles, grepFiles } from "../src/host-files";
-import { pruneUploads, receive } from "../src/uploads";
+import { receive } from "../src/uploads";
+import { uploadsSweeper } from "../src/cleanup";
 import { proves } from "./support/world";
 
 /** Why the host refused, where it did; anything else fails the test. */
@@ -303,7 +304,8 @@ test("a part at the wrong offset clears what arrived, and asking for a held file
       const weekAgo = now / 1000 - 8 * 24 * 60 * 60;
       yield* fs.utimes(dir, weekAgo, weekAgo);
       yield* receive(state, { ...asked, offset: 0, content: "" });
-      yield* pruneUploads(state, now);
-      expect(yield* fs.exists(`${dir}/shot.png`)).toBe(true);
+      expect((yield* uploadsSweeper(state).judge).remove).toEqual([]);
+      yield* fs.utimes(dir, weekAgo, weekAgo);
+      expect((yield* uploadsSweeper(state).judge).remove.map((item) => item.target)).toEqual([dir]);
     }),
   ));

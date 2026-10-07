@@ -83,7 +83,7 @@ herdr actions, and the `collie` CLI.
   message is about, and `src/toolkit.ts` the Toolkit both chats share
   ([ADR-0011](docs/adr/0011-the-conversation-is-a-native-harness.md#amended-2026-10-05-a-herds-chat-per-home-and-one-flock-chat-per-desktop)).
 - **Changing what files a Run, or the Flock chat, is given** →
-  [ADR-0045](docs/adr/0045-an-attachment-is-uploaded-once-and-belongs-to-the-run.md), alongside
+  [ADR-0046](docs/adr/0046-an-attachment-is-uploaded-once-and-belongs-to-the-run.md), alongside
   `src/attachments.ts` (a Run's copies and its prompts' list), `src/uploads.ts` and
   `src/host-files.ts` (what a host takes and reads), and in Desktop `bun/attachments.ts`
   (its copies), `bun/carried.ts` (files to a Run's Machine), `bun/file-tools.ts` and

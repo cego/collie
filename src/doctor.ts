@@ -26,6 +26,9 @@ import { probeHelle, probeLinearMcp, type Probe } from "./optional";
 import { projectsRoot } from "./projects";
 import { claudeSettingsPath, readStatusLine, STATUS_LINE_ARGS } from "./statusline";
 import { daysLeft, RENEW_WITHIN_DAYS, TokenSelf, tokenPage } from "./gitlab-token";
+import { collieCache, humanBytes } from "./cleanup";
+import { anyRuns, cleanupListing } from "./lifecycle";
+import { tmpdir } from "node:os";
 
 export interface Check {
   /** How the check is named, in the rendering and in `--json`. */
@@ -534,6 +537,7 @@ export const doctor = Effect.fn("Doctor.doctor")(function* (
   checks.push({ name: "workflows", ...(yield* overrides(env)) });
   checks.push({ name: "personas", ...(yield* personas(env)) });
   checks.push({ name: "projects root", ...(yield* projects(env)) });
+  checks.push({ name: "disk", ...(yield* diskSpace(env, run)) });
 
   checks.push({
     name: "glab",
@@ -584,6 +588,51 @@ export const doctor = Effect.fn("Doctor.doctor")(function* (
     checks.push({ name: "linear mcp", ...optional(yield* probeLinearMcp(env)) });
 
   return report(checks);
+});
+
+/** Below either is low: a share of the filesystem, or a size (ADR-0045 D7). */
+const LOW_SHARE = 0.1;
+const LOW_BYTES = 5 * 1024 ** 3;
+
+/**
+ * Free space on each filesystem Collie writes to — the state directory, its cache, herdr's
+ * worktrees and the temporary directory — each filesystem once. Low is a warning, with what
+ * a sweep would free where a host has served this state directory.
+ */
+const diskSpace = Effect.fn("Doctor.diskSpace")(function* (
+  env: PluginEnv,
+  run: Runner<ChildProcessSpawner.ChildProcessSpawner>,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const wanted = [env.stateDir, collieCache(), `${env.home}/.herdr/worktrees`, tmpdir()];
+  const dirs: string[] = [];
+  for (const dir of wanted)
+    if (yield* fs.exists(dir).pipe(Effect.orElseSucceed(() => false))) dirs.push(dir);
+  const df = yield* run("df", ["-Pk", ...dirs], "/");
+  const mounts = new Map<string, { size: number; free: number }>();
+  for (const line of df.stdout.split("\n").slice(1)) {
+    const [, blocks, , available, , ...mount] = line.trim().split(/\s+/);
+    // A line of df's complaints, not a filesystem.
+    if (mount.length === 0 || !/^\d+$/.test(blocks ?? "") || !/^\d+$/.test(available ?? ""))
+      continue;
+    mounts.set(mount.join(" "), {
+      size: Number(blocks) * 1024,
+      free: Number(available) * 1024,
+    });
+  }
+  if (mounts.size === 0) return noted("could not read how much space is free", "df -h");
+  const low = [...mounts].filter(
+    ([, one]) => one.free < LOW_BYTES || one.free < one.size * LOW_SHARE,
+  );
+  const said = ([mount, one]: [string, { size: number; free: number }]) =>
+    `${mount} has ${humanBytes(one.free)} free (${Math.floor((one.free / one.size) * 100)}%)`;
+  if (low.length === 0) return passed([...mounts].map(said).join("; "));
+  const listing = (yield* anyRuns(env)) ? yield* cleanupListing(env, "cli") : null;
+  const frees =
+    listing !== null && listing.ok
+      ? `; \`collie cleanup\` would free ${humanBytes(listing.value.bytes)}`
+      : "";
+  return warned(`${low.map(said).join("; ")}${frees}`, "collie cleanup --apply");
 });
 
 /** One line per check, and under it the command to run where there is one. */

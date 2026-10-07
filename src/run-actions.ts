@@ -28,7 +28,9 @@ import {
   steerRun,
   resumeRun,
   runViews,
+  sweepNow,
 } from "./lifecycle";
+import { humanBytes } from "./cleanup";
 import { agentStartRefusal, CHAT_CHECKOUT_FIX } from "./agent-start";
 import { PROJECTS_ROOT_OPTION, projectsRoot } from "./projects";
 import { listTasks, removeTask } from "./task";
@@ -445,6 +447,18 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
         note: `closed ${close.length}, left ${listed.length} sharing a tab, forgot ${gone.length} Tasks whose workspace is gone`,
       };
     }).pipe(Effect.catch((cause) => Effect.succeed(failed(String(cause))))),
+  );
+  registerExecutor("cleanup", (_action, by, env) =>
+    sweepNow(env, { door: by, request: by.requestId }).pipe(
+      Effect.map((swept) =>
+        swept.ok
+          ? {
+              state: "applied" as const,
+              note: `removed ${swept.value.remove.length} item(s), freeing ${humanBytes(swept.value.bytes)}; kept ${swept.value.keep.length}`,
+            }
+          : failed(swept.error.message),
+      ),
+    ),
   );
   registerExecutor("upgrade", (_action, _by, env) =>
     upgrade(env).pipe(

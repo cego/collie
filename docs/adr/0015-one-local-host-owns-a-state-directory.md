@@ -55,6 +55,16 @@ never takes the host back down to its own build.
 `HostUnavailable` with what can be seen from here — nothing owns the directory, or a pid
 owns it and is not answering — after a bounded wait.
 
+Amended 2026-10-07: D2's "nothing here ever sends a signal" and D5's "waits for the lock to
+go" held a client indefinitely on an old host whose stop waited on a running step, so every
+command hung after an upgrade. D5 now waits by the clock: a client that asked an older host
+to stop kills it five seconds past its stop grace (ADR-0014), and a lock whose holder is
+dead counts as gone. A host also writes its build to `host.build` as it starts, so an owner
+that does not say who it is within five seconds is replaced the same way when that file
+names an older build of the same installation. The replacement recovers at its own start;
+the client no longer asks it to. D2 still holds for recovery: only an owner this client
+identified as an older build is ever signalled.
+
 ## What this does not decide
 
 Which state directory a client uses, and what a Run does with a host: the production Run

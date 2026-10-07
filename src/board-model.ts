@@ -714,6 +714,31 @@ export const ActionResult = Schema.Struct({
 });
 export type ActionResult = typeof ActionResult.Type;
 
+/** One thing Collie made that a sweep removes, its size in bytes, and why it goes. */
+export const CleanupItem = Schema.Struct({
+  kind: Schema.String,
+  target: Schema.String,
+  bytes: Schema.Number,
+  reason: Schema.String,
+});
+export type CleanupItem = typeof CleanupItem.Type;
+
+/** One thing Collie made and keeps, with the one condition that keeps it. */
+export const CleanupKept = Schema.Struct({
+  kind: Schema.String,
+  target: Schema.String,
+  reason: Schema.String,
+});
+export type CleanupKept = typeof CleanupKept.Type;
+
+/** A cleanup listing, or what a sweep did: `remove` is what it would remove, or removed. */
+export const CleanupReport = Schema.Struct({
+  remove: Schema.Array(CleanupItem),
+  keep: Schema.Array(CleanupKept),
+  bytes: Schema.Number,
+});
+export type CleanupReport = typeof CleanupReport.Type;
+
 /** Which front door is acting: what a channel declares, and what its operations are stamped with. */
 export const FrontDoor = Schema.Literals([
   "cli",
@@ -1048,6 +1073,14 @@ export const FrontDoorRpcs = RpcGroup.make(
   Rpc.make("setSettings", {
     payload: { settings: Schema.Array(SharedSetting), request: Schema.String },
     success: SharedSettings,
+    error: Schema.Union([HostRefused, RequestConflict]),
+  }),
+  /** What a sweep would remove now, and what Collie keeps and why (ADR-0045). */
+  Rpc.make("cleanup", { success: CleanupReport, error: HostRefused }),
+  /** Sweeps now: what was removed, and what was kept and why. */
+  Rpc.make("sweep", {
+    payload: { request: Schema.String },
+    success: CleanupReport,
     error: Schema.Union([HostRefused, RequestConflict]),
   }),
   /**

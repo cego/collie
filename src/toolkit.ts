@@ -277,7 +277,8 @@ export const CollieTools = Toolkit.make(
     description:
       "Everything that is not about a Run: what Collie needs and whether it is there, " +
       "which workspace this Herd's Home is and what proves it, the panes an older " +
-      "release left that a cleanup would close, the constraints every new Run begins " +
+      "release left that a cleanup would close, what a cleanup sweep would remove and keep, " +
+      "the constraints every new Run begins " +
       "with, and which harness this conversation is running in. Read this before " +
       "proposing an upgrade, an onboarding, a cleanup or a change to the defaults.",
     parameters: Tool.EmptyParams,

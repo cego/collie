@@ -7,7 +7,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, expect, test } from "bun:te
 import { Effect, FileSystem, Path, Result } from "effect";
 import { Rig } from "./support/recorder";
 import { runEffect } from "./support/effect";
-import { onMachineWith } from "./support/live";
+import { onMachineWith, removesCache } from "./support/live";
 import { fakeChannel } from "./support/compaction";
 import { reason } from "../src/naming";
 import { COMPACTION_PORTS, VERIFIED_VERSIONS, writeEvent } from "../src/compactors";
@@ -545,6 +545,7 @@ onMachineWith("opencode")(
   () =>
     runEffect(
       Effect.gen(function* () {
+        yield* removesCache("opencode");
         const port = 39_517;
         // One `sh`, not Bun's shell: this needs a background job, `$!` and a poll,
         // none of which Bun's own parser takes.
@@ -598,6 +599,7 @@ onMachineWith("opencode")(
   () =>
     runEffect(
       Effect.gen(function* () {
+        yield* removesCache("opencode");
         const wanted = VERIFIED_VERSIONS.get("opencode") ?? "";
         const version = yield* Effect.promise(() =>
           Bun.$`opencode --version 2>&1`.nothrow().text(),

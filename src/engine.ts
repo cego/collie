@@ -17,6 +17,7 @@ import {
   Context,
   Crypto,
   Data,
+  DateTime,
   Duration,
   Effect,
   Exit,
@@ -162,6 +163,7 @@ import {
 } from "./verify";
 import * as Workflow from "effect/unstable/workflow/Workflow";
 import * as WorkflowEngine from "effect/unstable/workflow/WorkflowEngine";
+import type * as MessageStorage from "effect/unstable/cluster/MessageStorage";
 
 /** A module that cannot be loaded, named by its own file. Schema-backed, so the local
  *  host can fail a client with the same value rather than a copy of it. */
@@ -1433,7 +1435,12 @@ const stagedEntry = Effect.fn("Engine.stagedEntry")(function* (file: string, rev
   const name = `${Bun.hash(dir).toString(16)}-${revision ?? (yield* revisionOf(dir))}`;
   const root = `${entries}/generations/${name}`;
   const staged = { root, file: `${root}${file}` };
-  if (yield* fs.exists(staged.file).pipe(Effect.orElseSucceed(() => false))) return staged;
+  if (yield* fs.exists(staged.file).pipe(Effect.orElseSucceed(() => false))) {
+    // Its age is its last use, which is what cleanup removes it by (ADR-0045).
+    const now = DateTime.toDateUtc(yield* DateTime.now);
+    yield* fs.utimes(root, now, now).pipe(Effect.ignore);
+    return staged;
+  }
   const draft = `${name}.${yield* Random.nextInt}`;
   yield* stageGeneration({ dir: entries, name: draft, entry: file }).pipe(
     Effect.provide(Path.layer),
@@ -1652,7 +1659,10 @@ export const clearGenerations = (dir: string): Effect.Effect<void, never, FileSy
 export function engineLayer(options: {
   readonly dir: string;
 }): Layer.Layer<
-  WorkflowEngine.WorkflowEngine | SqlClient.SqlClient | Reactivity.Reactivity,
+  | WorkflowEngine.WorkflowEngine
+  | MessageStorage.MessageStorage
+  | SqlClient.SqlClient
+  | Reactivity.Reactivity,
   ConfigError
 > {
   // One connection, two halves: the engine's own tables and the rows Collie keeps beside
@@ -1681,12 +1691,16 @@ export function engineLayer(options: {
             entityRegistrationTimeout: Duration.infinity,
           },
         }).pipe(Layer.provide([sql, BunCrypto.layer]));
-        return ClusterWorkflowEngine.layer.pipe(Layer.provide(cluster));
+        // The message storage too: forgetting a Run clears what the engine kept of it.
+        return ClusterWorkflowEngine.layer.pipe(Layer.provideMerge(cluster));
       }),
     ),
   );
   return engine.pipe(Layer.provideMerge(sql));
 }
+
+/** How long a start waits for the engine to take its Run before it is refused. */
+const HAND_OVER_TIMEOUT = "30 seconds";
 
 export const HOLD = "hold";
 export const STOP = "stop";
@@ -3275,6 +3289,14 @@ export interface RegistryApi {
   readonly view: (runId: string) => Effect.Effect<RunView | null>;
   /** Every run this host has rows for, newest last, narrowed to one Task where named. */
   readonly views: (task: string | null) => Effect.Effect<ReadonlyArray<RunView>>;
+  /**
+   * Forgets these Runs' rows, and what the engine keeps of their executions, in one
+   * transaction (ADR-0045 D5). Answers with the Runs it forgot; a row the engine never
+   * accepted is left.
+   */
+  readonly retire: (
+    runs: ReadonlyArray<string>,
+  ) => Effect.Effect<ReadonlyArray<string>, never, MessageStorage.MessageStorage>;
   /** The same run, again, whenever anything about it changes. */
   readonly watch: (runId: string) => Stream.Stream<RunView | null>;
   /**
@@ -3381,6 +3403,7 @@ export const foundationLayer = (options: {
   | Oversight
   | Store
   | WorkflowEngine.WorkflowEngine
+  | MessageStorage.MessageStorage
   | SqlClient.SqlClient
   | Reactivity.Reactivity,
   ConfigError,
@@ -3653,10 +3676,7 @@ const makeRegistry: (
     // of its merge request, a fix of that review — is that Task's, wherever it came from.
     if (ask.workspace === undefined && opened === null) {
       const joined = yield* taskWorking(generation, ask, placed);
-      if (joined !== null) {
-        yield* Effect.ignore(placing.herdr.workspaceFocus(joined.workspace));
-        return { placed, task: joined.id };
-      }
+      if (joined !== null) return { placed, task: joined.id };
     }
     const label = opened?.label ?? ask.taskLabel;
     const openWorkspace = Effect.gen(function* () {
@@ -3700,8 +3720,6 @@ const makeRegistry: (
         Effect.flatMap((made) => writeTask(placing.env.stateDir, made)),
         Effect.orDie,
       ));
-    // Focused, not just created: a human who started work is taken to it.
-    yield* Effect.ignore(placing.herdr.workspaceFocus(workspace));
     return { placed, task: task.id };
   }, Effect.provideContext(bun));
 
@@ -3985,13 +4003,25 @@ const makeRegistry: (
     if (payload._tag === "Failure") return;
     yield* attachInto(row);
     yield* crash("admitted");
+    // Upstream retries a send it cannot route without end; the row stays unaccepted for the next host.
     yield* engine
       .execute(generation.registration.workflow, {
         executionId: row.execution,
         payload: payload.success,
         discard: true,
       })
-      .pipe(Effect.orDie);
+      .pipe(
+        Effect.orDie,
+        Effect.timeoutOrElse({
+          duration: HAND_OVER_TIMEOUT,
+          orElse: () => {
+            const refusal = `the engine did not take ${row.run} within ${HAND_OVER_TIMEOUT}; it is recorded, and the next host start hands it over`;
+            return Effect.logWarning(refusal).pipe(
+              Effect.andThen(Effect.fail(new HostRefused({ reason: refusal }))),
+            );
+          },
+        }),
+      );
     yield* crash("executed");
     yield* store.accepted(row.run);
   });
@@ -4016,13 +4046,20 @@ const makeRegistry: (
       ),
     );
 
-  /** Admitted work a host did not live to place or hand over, finished under its claim. */
+  /**
+   * Admitted work a host did not live to place or hand over, finished under its claim. The
+   * row is read again under the claim: another pass may have placed or handed it over since.
+   */
   const recoverAdmission = (row: RunRow) =>
     claimingOf(row.request).withPermits(1)(
-      placeClaimed(row, false).pipe(
-        Effect.flatMap(handOver),
+      store.run(row.run).pipe(
+        Effect.flatMap((now) =>
+          now === null || now.accepted !== null
+            ? Effect.void
+            : placeClaimed(now, false).pipe(Effect.flatMap(handOver)),
+        ),
         Effect.catchTag("HostRefused", (failure) =>
-          Effect.logWarning(`${row.run} could not be placed: ${failure.reason}`),
+          Effect.logWarning(`${row.run} was not started: ${failure.reason}`),
         ),
       ),
     );
@@ -4050,8 +4087,13 @@ const makeRegistry: (
   });
 
   // What a host admitted and did not live to hand over. Every crash window ends here.
-  for (const row of yield* store.pending) yield* recoverAdmission(row);
-  yield* reconcileAnswers;
+  // Forked, so a hand-over that stalls does not keep the host from serving.
+  yield* Effect.forkScoped(
+    Effect.gen(function* () {
+      for (const row of yield* store.pending) yield* recoverAdmission(row);
+      yield* reconcileAnswers;
+    }),
+  );
 
   /** The file a generation was built from, which a row keeps naming after it has gone. */
   const entryOf = (name: string) => known.find((route) => route.name === name)?.entry ?? "";
@@ -4574,6 +4616,32 @@ const makeRegistry: (
 
     waiting: asked,
     view,
+    retire: (runs) =>
+      Effect.gen(function* () {
+        const [cluster, entity, ids, types, shard] = yield* Effect.promise(() =>
+          Promise.all([
+            import("effect/unstable/cluster/MessageStorage"),
+            import("effect/unstable/cluster/EntityAddress"),
+            import("effect/unstable/cluster/EntityId"),
+            import("effect/unstable/cluster/EntityType"),
+            import("effect/unstable/cluster/ShardId"),
+          ]),
+        );
+        const storage = yield* cluster.MessageStorage;
+        // Messages are found by entity type and id; the shard is part of the address only.
+        const address = (entityType: string, execution: string) =>
+          entity.EntityAddress.make({
+            entityType: types.make(entityType),
+            entityId: ids.make(execution),
+            shardId: shard.make("default", 0),
+          });
+        return yield* store.retire(runs, (row) =>
+          Effect.all([
+            storage.clearAddress(address(`Workflow/${row.generation}`, row.execution)),
+            storage.clearAddress(address("Workflow/-/DurableClock", row.execution)),
+          ]).pipe(Effect.orDie, Effect.asVoid),
+        );
+      }),
     views: (task: string | null) =>
       store.runs.pipe(
         Effect.flatMap((rows) =>

@@ -1,9 +1,9 @@
-// Files a front door sends this Machine, so a Run here can be given them by path (ADR-0045).
+// Files a front door sends this Machine, so a Run here can be given them by path (ADR-0046).
 // Kept once by sha256: a digest held whole is answered at once, and a retried part is the
 // same part, so no request id is needed. Removed a week after it was last asked for.
 
 import { createHash } from "node:crypto";
-import { Clock, Effect, Encoding, FileSystem, Option, Path, Result, Semaphore } from "effect";
+import { Clock, Effect, Encoding, FileSystem, Path, Result, Semaphore } from "effect";
 import { ATTACHMENT_BYTES } from "./attachments";
 import { HostRefused, RUN_FILE_BYTES } from "./board-model";
 
@@ -82,22 +82,4 @@ const receivePart = Effect.fn("Uploads.receive")(function* (stateDir: string, pa
   }
   yield* fs.rename(partial, whole);
   return { path: whole, complete: true };
-});
-
-/** How long an upload is kept after it was last asked for. */
-const KEPT_FOR = 7 * 24 * 60 * 60 * 1000;
-
-/** Removes every upload last asked for more than a week before `now`. */
-export const pruneUploads = Effect.fn("Uploads.prune")(function* (stateDir: string, now: number) {
-  const fs = yield* FileSystem.FileSystem;
-  const root = uploadsDir(stateDir);
-  for (const entry of yield* fs.readDirectory(root).pipe(Effect.orElseSucceed(() => []))) {
-    if (!/^[0-9a-f]{64}$/.test(entry)) continue;
-    const at = Option.flatMap(
-      yield* fs.stat(`${root}/${entry}`).pipe(Effect.option),
-      (info) => info.mtime,
-    );
-    if (Option.isSome(at) && now - at.value.getTime() > KEPT_FOR)
-      yield* fs.remove(`${root}/${entry}`, { recursive: true });
-  }
 });

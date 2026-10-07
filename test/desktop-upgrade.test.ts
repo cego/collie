@@ -325,7 +325,7 @@ test("collie upgrade shows the Desktop step in its text and steps, and stages no
   const other = pair();
   return runEffect(
     Effect.gen(function* () {
-      const rig = yield* Rig.make();
+      const rig = yield* Rig.scoped();
       const bin = yield* FakeBin.make(`${rig.root}/bin`);
       yield* bin.add("git", `exit 1`);
       yield* bin.add("sh", `echo "prepare: runner: done"`);
@@ -349,7 +349,6 @@ test("collie upgrade shows the Desktop step in its text and steps, and stages no
       );
       expect(yield* staged(data)).toBeNull();
       yield* bin.restore();
-      yield* rig.close();
     }).pipe(Effect.scoped),
   );
 });

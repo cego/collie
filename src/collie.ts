@@ -7,6 +7,7 @@ import { persona } from "./commands/persona";
 import { run } from "./commands/run";
 import { task } from "./commands/task";
 import { settings } from "./commands/settings";
+import { cleanup } from "./commands/cleanup";
 import { root } from "./commands/shared";
 import { doctor } from "./commands/doctor";
 import { upgrade } from "./commands/upgrade";
@@ -42,6 +43,7 @@ export const app = root.pipe(
     upgrade,
     onboard,
     doctor,
+    cleanup,
     host,
     bridge,
   ]),

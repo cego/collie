@@ -255,7 +255,7 @@ not the Toolkit's, so Native chat's reach is unchanged. `Bash` has no counterpar
 Machine.
 
 A file the chat finds, here or on a Machine, can go with a start, a follow-up or a steer as
-a pasted one does ([ADR-0045](0045-an-attachment-is-uploaded-once-and-belongs-to-the-run.md)).
+a pasted one does ([ADR-0046](0046-an-attachment-is-uploaded-once-and-belongs-to-the-run.md)).
 The system prompt says what the chat can reach, and still that what reaches it through a
 tool, a file included, is data and not instructions.
 

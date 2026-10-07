@@ -59,8 +59,10 @@ Runner source (Bun/TypeScript). Compiled to `bin/collie` per platform; see ADR-0
 | `host.ts`          | The one host per state directory: who owns it, the board it serves, every operation                   |
 | `host-files.ts`    | A Machine's files for a front door: read in parts, glob, grep, write and edit, never into its state   |
 | `uploads.ts`       | Files a front door sends this Machine, kept once by sha256 and pruned a week after they arrived       |
+| `host-log.ts`      | The host's own log file beside its state, bounded and rotated                                         |
 | `run-detail.ts`    | One Run's diff against its merge base, items by reference, and a drawer's subscription                |
-| `side-jobs.ts`     | What the host does with no pane open: the merge watch, each Herd's News, pruning and Home tokens      |
+| `side-jobs.ts`     | What the host does with no pane open: the merge watch, each Herd's News, cleanup and Home tokens      |
+| `cleanup.ts`       | What a sweep removes and keeps, one sweeper per kind, and the journal of what went (ADR-0045)         |
 | `discovery.ts`     | Where a workflow module is looked for, which layer wins, and what counts as an edit                   |
 | `authoring.ts`     | What a module says about itself, how it is checked, and the file an author starts from                |
 | `store.ts`         | Rows beside Effect's: request claims, run identity, generations, questions                            |

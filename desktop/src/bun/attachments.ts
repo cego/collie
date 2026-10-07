@@ -1,6 +1,6 @@
 // Desktop's copies of the files the human gives the Flock chat: staged from the view in
 // parts, kept once by sha256 under Desktop's state directory, and read back by id for the
-// model, a thumbnail or a Run (ADR-0045).
+// model, a thumbnail or a Run (ADR-0046).
 
 import { createHash } from "node:crypto";
 import { Clock, Effect, Encoding, FileSystem, Option, Path, Result, Schema } from "effect";

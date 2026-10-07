@@ -89,7 +89,7 @@ afterEach(() => server.stop());
 const envFile = Effect.fn("test.envFile")(function* (token = "token-abc") {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const dir = yield* fs.makeTempDirectory();
+  const dir = yield* fs.makeTempDirectoryScoped();
   const file = path.join(dir, "env");
   yield* fs.writeFileString(
     file,
@@ -120,7 +120,7 @@ test("a missing token is a refusal, not an absent project", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const dir = yield* fs.makeTempDirectory();
+      const dir = yield* fs.makeTempDirectoryScoped();
       const file = path.join(dir, "env");
       yield* fs.writeFileString(file, `HELLE_API_URL=${HELLE_URL}\n`);
 

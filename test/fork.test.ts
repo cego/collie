@@ -23,11 +23,7 @@ const mkdirp = Effect.fn("test.mkdirp")(function* (path: string) {
 });
 const tempDir = Effect.fn("test.tempDir")(function* (prefix: string) {
   const fs = yield* FileSystem.FileSystem;
-  return yield* fs.makeTempDirectory({ prefix });
-});
-const removeTree = Effect.fn("test.removeTree")(function* (path: string) {
-  const fs = yield* FileSystem.FileSystem;
-  yield* fs.remove(path, { recursive: true, force: true });
+  return yield* fs.makeTempDirectoryScoped({ prefix });
 });
 const exists = Effect.fn("test.exists")(function* (path: string) {
   const fs = yield* FileSystem.FileSystem;
@@ -200,7 +196,6 @@ test("a target occupied while a fork is being prepared is never overwritten", ()
 
       expect(result).toContain("ok=false");
       expect(yield* readText(target)).toBe("winner\n");
-      yield* removeTree(root);
     }),
   ));
 
@@ -305,6 +300,5 @@ test("a full copy of a definition with a quoted name answers to the fork's name"
 
       expect(result.ok).toBe(true);
       expect(parseDocument(yield* readText(result.path)).data.name).toBe("other-flow");
-      yield* removeTree(root);
     }),
   ));

@@ -1045,6 +1045,16 @@ export const setSharedSetting = (
     options.door,
   );
 
+/** What a cleanup sweep would remove now, and what is kept and why. */
+export const cleanupListing = (env: PluginEnv, door: Door) =>
+  asks(env, (client) => client.cleanup(), door);
+
+/** Sweeps now, through the host, under the caller's request. */
+export const sweepNow = (
+  env: PluginEnv,
+  options: { readonly door: Door; readonly request: string },
+) => asks(env, (client) => client.sweep({ request: options.request }), options.door);
+
 /** Free words about one Run, which the host has the evaluator turn into what to do. */
 export const steerAbout = (
   env: PluginEnv,

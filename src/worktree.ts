@@ -84,6 +84,9 @@ const remoteRepository = (value: string) =>
 export const destinationLock = (stateDir: string, at: string) =>
   `${stateDir}/worktree-${Bun.hash(at).toString(16)}.lock`;
 
+/** Whether a state-directory entry is one of `destinationLock`'s. */
+export const isDestinationLock = (name: string) => /^worktree-[0-9a-f]+\.lock$/.test(name);
+
 const MrViewJson = Schema.fromJsonString(
   Schema.Struct({ source_branch: Schema.optionalKey(Schema.String) }),
 );
@@ -998,7 +1001,7 @@ export const checkoutFor = Effect.fn("worktree.checkoutFor")(function* (
 const RECHECK_MS = 3 * 60_000;
 /** How long a removal stays on the board after it happened. */
 const REPORT_MS = 60 * 60_000;
-const PRUNE_FILE = "worktrees.json";
+export const PRUNE_FILE = "worktrees.json";
 
 const PruneEntry = Schema.Struct({
   checked_at: Schema.Number,
@@ -1015,12 +1018,39 @@ const PruneStateJson = Schema.fromJsonString(
 );
 type PruneState = Schema.Schema.Type<typeof PruneStateJson>;
 
-const MrStateJson = Schema.fromJsonString(
-  Schema.Struct({
-    state: Schema.optionalKey(Schema.String),
-    iid: Schema.optionalKey(Schema.Union([Schema.String, Schema.Number])),
-  }),
-);
+/** Why a checkout's work has landed, and the heads its merge requests were merged at. */
+export interface Landed {
+  readonly why: string;
+  readonly heads: ReadonlyArray<string>;
+}
+
+/**
+ * What the settled rule reads that is not the checkout itself, gathered by the host's sweep:
+ * the merge watch's answers and the Dispositions, by checkout and by branch, and whether
+ * the Task a checkout belongs to still has its workspace open.
+ */
+export interface Settling {
+  readonly landedAt: ReadonlyMap<string, Landed>;
+  /** By `onBranch`: a branch name means nothing outside its repository. */
+  readonly landedOn: ReadonlyMap<string, Landed>;
+  /** By `onBranch`, a branch whose merge request the merge watch last read as open. */
+  readonly openOn: ReadonlyMap<string, string>;
+  /** Why a checkout's Task still holds it: its workspace is open, or herdr would not say. */
+  readonly workspaceHolds: ReadonlyMap<string, string>;
+  /** Checkouts never to remove: the plugin root and any a running host serves from. */
+  readonly protect: ReadonlySet<string>;
+}
+
+/** A branch of the project a Run was started for, as `Settling` keys one. */
+export const onBranch = (project: string, branch: string) => `${project}\n${branch}`;
+
+export const NOTHING_SETTLING: Settling = {
+  landedAt: new Map(),
+  landedOn: new Map(),
+  openOn: new Map(),
+  workspaceHolds: new Map(),
+  protect: new Set(),
+};
 
 /**
  * What is in use, and why. A directory holds a checkout it is inside — an agent
@@ -1137,14 +1167,21 @@ const settled = Effect.fn("worktree.settled")(function* (
     repo: string;
     use: InUse;
     run: Runner<ChildProcessSpawner.ChildProcessSpawner>;
+    settling: Settling;
+    /** The project the Run that made this checkout was started for. */
+    project: string;
   },
 ) {
-  const { run, repo } = opts;
+  const { run, repo, settling } = opts;
   const dirty = yield* run("git", ["status", "--porcelain"], worktree.path);
   if (dirty.code !== 0) return keepIt("could not read the working tree");
   if (dirty.stdout.trim() !== "") return keepIt("uncommitted changes");
 
-  const unpushed = yield* unpushedWork(worktree, run);
+  const landed =
+    settling.landedAt.get(worktree.path) ??
+    settling.landedOn.get(onBranch(opts.project, worktree.branch));
+  const upstream = yield* upstreamRemote(worktree, run);
+  const unpushed = yield* unpushedWork(worktree, run, upstream, landed?.heads ?? []);
   if (unpushed) return unpushed;
 
   const held = heldBy(opts.use, worktree);
@@ -1153,42 +1190,55 @@ const settled = Effect.fn("worktree.settled")(function* (
   // A roaming checkout has no branch to ask a merge request or the remote about: it
   // holds nothing of its own once it is clean and nothing is working in it, because
   // everything it did was pushed to the Renovate branches it moved across.
-  if (worktree.branch === "") return settledBecause("its Run is over and it holds nothing");
+  const settledBy = worktree.branch === "" ? null : yield* landedBy(worktree, landed, opts);
+  if (settledBy !== null && settledBy.keep !== undefined) return settledBy;
+  // Last: a checkout is never removed from under the workspace its Task is open in.
+  const workspace = settling.workspaceHolds.get(worktree.path);
+  if (workspace !== undefined) return keepIt(workspace);
+  return settledBy ?? settledBecause("its Run is over and it holds nothing");
+});
 
-  // Its merge request settles it where there is one: merged or closed means the work
-  // has landed somewhere that is not this checkout.
-  const view = yield* run("glab", ["mr", "view", worktree.branch, "--output", "json"], repo);
-  const mr =
-    view.code === 0
-      ? Schema.decodeUnknownOption(MrStateJson)(view.stdout).pipe(Option.getOrUndefined)
-      : undefined;
-  const state = mr?.state?.toLowerCase();
-  if (state === "merged" || state === "closed")
-    return settledBecause(`${state} in !${mr?.iid ?? "?"}`);
-  if (state !== undefined && mr?.iid !== undefined) return keepIt(`!${mr.iid} is still open`);
-
-  // No merge request to go by, so the remote branch is the question: gone means
-  // whatever this branch held is either merged or abandoned on purpose.
-  const remote = yield* run("git", ["ls-remote", "--heads", "origin", worktree.branch], repo);
-  if (remote.code !== 0) return keepIt("could not reach the remote");
-  if (remote.stdout.trim() !== "") return keepIt("still on the remote");
+/**
+ * Whether a branch's work has landed: the merge watch read its merge request as merged or
+ * closed, on GitHub or GitLab, or a Disposition says so. With neither, the remote branch is
+ * the question: gone means whatever it held is merged or abandoned on purpose.
+ */
+const landedBy = Effect.fn("worktree.landedBy")(function* (
+  worktree: { path: string; branch: string },
+  landed: Landed | undefined,
+  opts: {
+    repo: string;
+    run: Runner<ChildProcessSpawner.ChildProcessSpawner>;
+    settling: Settling;
+    project: string;
+  },
+) {
+  if (landed !== undefined) return settledBecause(landed.why);
+  const open = opts.settling.openOn.get(onBranch(opts.project, worktree.branch));
+  if (open !== undefined) return keepIt(`${open} is still open`);
+  const upstream = yield* upstreamRemote(worktree, opts.run);
+  const remotes =
+    upstream !== null
+      ? [upstream]
+      : (yield* opts.run("git", ["remote"], opts.repo)).stdout
+          .split("\n")
+          .map((line) => line.trim())
+          .filter((line) => line !== "");
+  if (remotes.length === 0) return keepIt("no remote to compare against");
+  for (const remote of remotes) {
+    const heads = yield* opts.run(
+      "git",
+      ["ls-remote", "--heads", remote, worktree.branch],
+      opts.repo,
+    );
+    if (heads.code !== 0) return keepIt("could not reach the remote");
+    if (heads.stdout.trim() !== "") return keepIt("still on the remote");
+  }
   return settledBecause("its remote branch is gone");
 });
 
-/** How many lines a `rev-list` answered with; each one is a commit. */
-function commits(result: { stdout: string }): number {
-  return result.stdout.split("\n").filter((line) => line.trim() !== "").length;
-}
-
-/**
- * Why this checkout may not go for the commits it holds, or null when it holds none
- * of its own. Its upstream is the question where it has one. Where it does not, that is
- * either a branch never pushed or one whose remote-tracking ref went with a
- * `git fetch --prune` after the branch was merged and deleted — the spec's own settled
- * case — so what matters instead is whether anything here is missing from the default
- * branch.
- */
-const unpushedWork = Effect.fn("worktree.unpushedWork")(function* (
+/** The remote this checkout's branch tracks, or null where it tracks none. */
+const upstreamRemote = Effect.fn("worktree.upstreamRemote")(function* (
   worktree: { path: string },
   run: Runner<ChildProcessSpawner.ChildProcessSpawner>,
 ) {
@@ -1197,17 +1247,38 @@ const unpushedWork = Effect.fn("worktree.unpushedWork")(function* (
     ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
     worktree.path,
   );
-  if (upstream.code === 0 && upstream.stdout.trim() !== "") {
-    const ahead = yield* run("git", ["rev-list", "@{u}..HEAD"], worktree.path);
-    if (ahead.code !== 0) return keepIt("could not read what is unpushed");
-    const count = commits(ahead);
-    return count > 0 ? keepIt(`${count} commit(s) unpushed`) : null;
-  }
-  const head = (yield* defaultBase(run, worktree.path)) ?? "master";
-  const unique = yield* run("git", ["rev-list", `origin/${head}..HEAD`], worktree.path);
-  if (unique.code !== 0) return keepIt("no upstream to compare against");
+  const name = upstream.code === 0 ? upstream.stdout.trim() : "";
+  return name === "" ? null : (name.split("/")[0] ?? null);
+});
+
+/** How many lines a `rev-list` answered with; each one is a commit. */
+function commits(result: { stdout: string }): number {
+  return result.stdout.split("\n").filter((line) => line.trim() !== "").length;
+}
+
+/**
+ * Why this checkout may not go for the commits it holds, or null when it holds none of its
+ * own: every commit is in a remote-tracking ref — of its upstream's remote, or of any remote
+ * where it tracks none — or HEAD is the head its merged merge request was merged at, which
+ * is all a squash merge leaves to go by. A branch merged and deleted keeps its commits in the
+ * default branch's ref after `git fetch --prune` takes its own.
+ */
+const unpushedWork = Effect.fn("worktree.unpushedWork")(function* (
+  worktree: { path: string },
+  run: Runner<ChildProcessSpawner.ChildProcessSpawner>,
+  upstream: string | null,
+  mergedHeads: ReadonlyArray<string>,
+) {
+  const remotes = upstream === null ? "--remotes" : `--remotes=${upstream}`;
+  const unique = yield* run("git", ["rev-list", "HEAD", "--not", remotes], worktree.path);
+  if (unique.code !== 0) return keepIt("could not read what is unpushed");
   const count = commits(unique);
-  return count > 0 ? keepIt(`${count} commit(s) on no branch but this one`) : null;
+  if (count === 0) return null;
+  if (mergedHeads.length > 0) {
+    const head = yield* run("git", ["rev-parse", "HEAD"], worktree.path);
+    if (head.code === 0 && mergedHeads.includes(head.stdout.trim())) return null;
+  }
+  return keepIt(`${count} commit(s) on no remote`);
 });
 
 /**
@@ -1215,27 +1286,37 @@ const unpushedWork = Effect.fn("worktree.unpushedWork")(function* (
  * and the ones a Run is still working in. A checkout a human made appears in no Run, so
  * it is never a candidate for removal.
  */
-function fromRuns(runs: ReadonlyArray<RunFacts>, registered: ReadonlyArray<AgentEntry>) {
+function fromRuns(
+  runs: ReadonlyArray<RunFacts>,
+  registered: ReadonlyArray<AgentEntry>,
+  settling: Settling,
+) {
   const mine = new Map<string, WorktreeRecord>();
+  /** The project each checkout's Run was started for. */
+  const projects = new Map<string, string>();
   const paths = new Map<string, string>();
   /** The panes each checkout's finished Runs left their agents in. */
   const panes = new Map<string, Set<string>>();
   for (const run of runs) {
     const going = run.state === "running" || run.state === "waiting";
-    // A stop suspends a live Run rather than ending it.
-    const resumable = run.state === "stopped";
+    // A stopped or failed Run can be resumed in its checkout, until its work lands anyway.
+    const landed =
+      (run.worktree !== null && settling.landedAt.has(run.worktree.path)) ||
+      settling.landedOn.has(onBranch(run.project, run.branch ?? run.worktree?.branch ?? ""));
+    const resumable = (run.state === "stopped" || run.state === "failed") && !landed;
     if (going) paths.set(run.cwd, "a run is still working in it");
-    else if (resumable) paths.set(run.cwd, "a stopped run can resume in it");
+    else if (resumable) paths.set(run.cwd, `a ${run.state} run can resume in it`);
     const worktree = run.worktree;
     if (!worktree?.created_by_collie) continue;
     mine.set(worktree.path, worktree);
+    projects.set(worktree.path, run.project);
     // A Run that may still go keeps its checkout anyway, so its agents are nobody's leftovers.
     if (going || resumable) continue;
     const left = panes.get(worktree.path) ?? new Set<string>();
     for (const entry of registered) if (entry.runId === run.id) left.add(entry.paneId);
     panes.set(worktree.path, left);
   }
-  return { mine, paths, panes };
+  return { mine, paths, panes, projects };
 }
 
 /**
@@ -1258,6 +1339,19 @@ interface PruneOptions {
   keep?: string;
   now?: number;
   run?: Runner<ChildProcessSpawner.ChildProcessSpawner>;
+  /** Judge only this checkout, now, whatever its last verdict said. */
+  only?: string;
+  /** Judge without removing; what is kept is still written down for the board. */
+  dryRun?: boolean;
+  settling?: Settling;
+}
+
+/** One checkout's verdict: kept for `keep`, settled because of `why`, and whether it went. */
+export interface Judged {
+  path: string;
+  keep?: string;
+  why?: string;
+  removed: boolean;
 }
 
 /** One repository's round: what herdr lists for it, against what the Runs recorded. */
@@ -1286,7 +1380,8 @@ const prune = Effect.fn("worktree.prune")(function* (
   );
   const before = `${Schema.encodeSync(PruneStateJson)(state)}\n`;
 
-  const { mine, paths, panes } = opts.recorded;
+  const { mine, paths, panes, projects } = opts.recorded;
+  const settling = opts.settling ?? NOTHING_SETTLING;
   const listing = opts.listing;
   // Path, branch and the moment git wrote the checkout, all from the record that made
   // it: a Collie worktree removed by hand and a human's worktree later made at the
@@ -1294,12 +1389,18 @@ const prune = Effect.fn("worktree.prune")(function* (
   // hand-made checkout is never touched.
   const candidates: Array<WorktreeInfo & { branch: string }> = [];
   for (const worktree of listing?.worktrees ?? []) {
+    if (opts.only !== undefined && worktree.path !== opts.only) continue;
     // A detached checkout has no branch, which herdr reports as null or as empty; the
     // record of a roaming Run's checkout is empty for the same reason. Matching them
     // is what lets a Renovate Run's checkout be pruned like any other.
     const branch = worktree.branch ?? "";
     const record = mine.get(worktree.path);
-    if (!record || record.branch !== branch || record.made_at === null) continue;
+    // Its branch may have been switched since: still Collie's checkout, judged as it is now.
+    if (!record || record.made_at === null) continue;
+    if (settling.protect.has(worktree.path)) continue;
+    // A repository's main checkout is never one Collie made, whatever a record says.
+    const git = yield* fs.stat(path.join(worktree.path, ".git")).pipe(Effect.option);
+    if (Option.isSome(git) && git.value.type === "Directory") continue;
     if ((yield* madeAt(worktree.path)) !== record.made_at) continue;
     candidates.push({ ...worktree, branch });
   }
@@ -1316,16 +1417,18 @@ const prune = Effect.fn("worktree.prune")(function* (
   // only a removal is still worth saying, and only while it is news. Another
   // repository's entries are none of this sweep's business.
   for (const [known, entry] of Object.entries(state)) {
-    if (entry.repo !== repo) continue;
+    if (entry.repo !== repo || opts.only !== undefined) continue;
     if (candidates.some((worktree) => worktree.path === known)) continue;
     if (!entry.removed || now - entry.checked_at > REPORT_MS) delete state[known];
   }
 
+  const fresh = opts.dryRun === true || opts.only !== undefined;
   const due = candidates.filter((worktree) => {
     const entry = state[worktree.path];
-    return !entry || entry.removed || now - entry.checked_at >= RECHECK_MS;
+    return fresh || !entry || entry.removed || now - entry.checked_at >= RECHECK_MS;
   });
-  if (due.length === 0) return yield* conclude(round);
+  const judged: Judged[] = [];
+  if (due.length === 0) return { lines: yield* conclude(round), judged };
 
   // A herdr that will not answer is not proof that nothing is live in these checkouts,
   // and that is the one condition nothing else can establish — so nothing is judged
@@ -1340,15 +1443,26 @@ const prune = Effect.fn("worktree.prune")(function* (
   });
   if (!use) {
     const standing = yield* conclude(round);
-    return [
-      ...standing,
-      ...due.map((worktree) => `kept ${nameOf(worktree)} · could not ask herdr what is live`),
-    ];
+    const unknown = "could not ask herdr what is live";
+    return {
+      lines: [...standing, ...due.map((worktree) => `kept ${nameOf(worktree)} · ${unknown}`)],
+      judged: due.map((worktree) => ({ path: worktree.path, keep: unknown, removed: false })),
+    };
   }
 
   for (const worktree of due) {
     const name = nameOf(worktree);
-    const verdict = yield* settled(worktree, { repo, use, run });
+    const verdict = yield* settled(worktree, {
+      repo,
+      use,
+      run,
+      settling,
+      project: projects.get(worktree.path) ?? "",
+    });
+    if (opts.dryRun === true && verdict.keep === undefined) {
+      judged.push({ path: worktree.path, why: verdict.why, removed: false });
+      continue;
+    }
     // Whoever made the checkout takes it away again. Then the branch itself, with
     // `-d`: git refuses an unmerged one, which is the guard.
     const outcome =
@@ -1368,9 +1482,18 @@ const prune = Effect.fn("worktree.prune")(function* (
           })
         : { line: `kept ${name} · ${verdict.keep}`, removed: false };
     state[worktree.path] = { checked_at: now, repo, ...outcome };
+    judged.push({
+      path: worktree.path,
+      removed: outcome.removed,
+      ...(verdict.keep !== undefined
+        ? { keep: verdict.keep }
+        : outcome.removed
+          ? { why: verdict.why }
+          : { keep: outcome.line.replace(/^kept [^·]* · /, "") }),
+    });
   }
 
-  return yield* conclude(round);
+  return { lines: yield* conclude(round), judged };
 });
 
 /**
@@ -1502,11 +1625,21 @@ const removeWorktree = Effect.fn("worktree.removeWorktree")(function* (
  * for.
  */
 export const pruneWorktrees = (opts: PruneOptions) =>
+  judgeWorktrees(opts).pipe(Effect.map((round) => round.lines));
+
+/**
+ * Every checkout's verdict, with what was removed: `dryRun` removes nothing, and `only`
+ * judges and removes that one checkout. Null when another pruner holds the lock.
+ */
+export const judgeWorktrees = (opts: PruneOptions) =>
   Effect.gen(function* () {
     const path = yield* Path.Path;
     const lock = path.join(opts.stateDir, `${PRUNE_FILE}.lock`);
-    return yield* withLock(lock, Effect.succeed<string[]>([]), sweep(opts));
-  }).pipe(Effect.catch(() => Effect.succeed<string[]>([])));
+    return yield* withLock(lock, Effect.succeed(null), sweep(opts));
+  }).pipe(
+    Effect.catch(() => Effect.succeed(null)),
+    Effect.map((round) => round ?? { lines: [], judged: [], busy: true }),
+  );
 
 /** What the host's sweeps last said, for a board to show without sweeping itself. */
 export const reportedWorktrees = Effect.fn("worktree.reportedWorktrees")(function* (
@@ -1530,8 +1663,9 @@ export const reportedWorktrees = Effect.fn("worktree.reportedWorktrees")(functio
  */
 const sweep = Effect.fn("worktree.sweep")(function* (opts: PruneOptions) {
   const fs = yield* FileSystem.FileSystem;
-  const recorded = fromRuns(opts.runs, opts.registered);
+  const recorded = fromRuns(opts.runs, opts.registered, opts.settling ?? NOTHING_SETTLING);
   const lines: string[] = [];
+  const judged: Judged[] = [];
   const listed = new Set<string>();
   // One `herdr worktree list` per live checkout, every sweep. Cheap while checkouts are few.
   for (const cwd of new Set([opts.cwd, ...recorded.mine.keys()])) {
@@ -1543,7 +1677,9 @@ const sweep = Effect.fn("worktree.sweep")(function* (opts: PruneOptions) {
       .pipe(Effect.catch(() => Effect.succeed<WorktreeListing | null>(null)));
     if (!own && (listing === null || listing.worktrees.every((w) => listed.has(w.path)))) continue;
     for (const worktree of listing?.worktrees ?? []) listed.add(worktree.path);
-    lines.push(...(yield* prune({ ...opts, cwd, recorded, listing })));
+    const round = yield* prune({ ...opts, cwd, recorded, listing });
+    lines.push(...round.lines);
+    judged.push(...round.judged);
   }
-  return lines;
+  return { lines, judged, busy: false };
 });

@@ -1,4 +1,4 @@
-// The files a Flock chat action carries, as paths on the Machine it goes to (ADR-0045).
+// The files a Flock chat action carries, as paths on the Machine it goes to (ADR-0046).
 
 import { createHash } from "node:crypto";
 import { Clock, Effect, Encoding, FileSystem, Result } from "effect";

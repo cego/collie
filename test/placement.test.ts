@@ -10,7 +10,8 @@
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import type { BunServices } from "@effect/platform-bun";
-import { Effect, FileSystem, Result, Schema } from "effect";
+import { Clock, Effect, FileSystem, Layer, Result, Schema } from "effect";
+import * as WorkflowEngine from "effect/unstable/workflow/WorkflowEngine";
 import { Rig, FakeHerdr } from "./support/recorder";
 import { exec } from "./support/command";
 import { fastForward, runEffect as runLive } from "./support/effect";
@@ -27,6 +28,8 @@ import {
   type HostServices,
 } from "../src/engine";
 import { Store } from "../src/store";
+import type * as MessageStorage from "effect/unstable/cluster/MessageStorage";
+import { SqlClient } from "effect/unstable/sql";
 import { VerifySpecSchema } from "../src/verify-spec";
 import { readTask, writeTask, type TaskRecord } from "../src/task";
 import type { Call } from "./support/recorder";
@@ -96,7 +99,11 @@ const runEffect = <A, E>(effect: Effect.Effect<A, E, BunServices.BunServices>) =
   runLive(fastForward(effect));
 
 const hosted = <A, E>(
-  run: Effect.Effect<A, E, Registry | Store | HostServices>,
+  run: Effect.Effect<
+    A,
+    E,
+    Registry | Store | HostServices | MessageStorage.MessageStorage | SqlClient.SqlClient
+  >,
   agents: Partial<AgentHost> = {},
 ) =>
   run.pipe(
@@ -455,6 +462,7 @@ test(
   () =>
     runEffect(
       Effect.gen(function* () {
+        yield* rig.startSocket();
         yield* rig.queueOutputs([{ verdict: "clean" }]);
         const view = yield* hosted(
           Effect.gen(function* () {
@@ -480,8 +488,10 @@ test(
         expect(task).toMatchObject({ label: "Project | Picker", cwd: worktree });
         const created = (yield* rig.calls()).filter((call) => call.cmd === "workspace create");
         expect(created.map((call) => call.argv)).toEqual([
-          expect.arrayContaining(["--cwd", worktree]),
+          expect.arrayContaining(["--cwd", worktree, "--no-focus"]),
         ]);
+        // A start never takes the human away from what they are looking at.
+        expect(yield* rig.cmds()).not.toContain("workspace.focus");
         // The first agent takes over the shell the workspace came with, rather than leaving
         // it an empty first tab beside one of its own.
         expect(tabs(yield* rig.calls())).toEqual([]);
@@ -1398,6 +1408,7 @@ test(
   () =>
     runEffect(
       Effect.gen(function* () {
+        yield* rig.startSocket();
         yield* rig.queueOutputs([{ verdict: "clean" }]);
         const views = yield* hosted(
           Effect.gen(function* () {
@@ -1447,6 +1458,161 @@ test(
         expect(hello?.task).not.toBe(build?.task);
         expect(there?.task).not.toBe(build?.task);
         expect((yield* rig.cmds()).filter((cmd) => cmd === "workspace create")).toHaveLength(3);
+        expect(yield* rig.cmds()).not.toContain("workspace.focus");
+      }),
+    ),
+  120_000,
+);
+
+test(
+  "forgetting a Run removes its row and what the engine kept of it, and leaves a claim alone",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* rig.queueOutputs([{ verdict: "clean" }]);
+        const seen = yield* hosted(
+          Effect.gen(function* () {
+            const registry = yield* Registry;
+            const store = yield* Store;
+            const sql = yield* SqlClient.SqlClient;
+            const [hello] = yield* loaded(registry, [`${fixtures}/hello.workflow.ts`]);
+            const ids: string[] = [];
+            for (const request of ["r1", "r2"]) {
+              const started = yield* start(hello!, { request, text: { name: "you" } });
+              if (started._tag === "Failure") return yield* Effect.die(started.failure);
+              ids.push(started.success.runId);
+              yield* finished(started.success.runId);
+            }
+            const gone = ids[0]!;
+            const kept = ids[1]!;
+            const execution = (yield* store.run(gone))!.execution;
+            // A claim the engine never accepted, which recovery would hand over.
+            yield* store.admit({
+              request: "r-claim",
+              run: "run-claimed",
+              workflow: hello!.id,
+              project: rig.projectDir,
+              input: {},
+              provenance: {},
+              options: {},
+              generation: hello!.name,
+              execution: "e-claimed",
+              task: null,
+              parent: null,
+            });
+
+            const count = sql<{
+              readonly n: number;
+            }>`SELECT count(*) AS n FROM cluster_messages WHERE entity_id = ${execution}`;
+            const before = (yield* count)[0]?.n;
+            const forgotten = yield* registry.retire([gone, "run-claimed"]);
+            const messages = yield* count;
+            return {
+              forgotten,
+              view: yield* registry.view(gone),
+              other: yield* registry.view(kept),
+              listed: (yield* registry.views(null)).map((one) => one.runId),
+              claim: yield* store.run("run-claimed"),
+              before,
+              messages: messages[0]?.n,
+            };
+          }),
+        );
+
+        expect(seen.forgotten).toHaveLength(1);
+        expect(seen.view).toBeNull();
+        // What every listing reads — the board, History, `run list` — no longer has it.
+        expect(seen.listed).not.toContain(seen.forgotten[0]);
+        expect(seen.listed).toContain(seen.other!.runId);
+        expect(seen.other?.status.status).toBe("complete");
+        expect(seen.claim).not.toBeNull();
+        expect(seen.before).toBeGreaterThan(0);
+        expect(seen.messages).toBe(0);
+      }),
+    ),
+  120_000,
+);
+
+/** An engine that takes nothing handed to it, the way the one that wedged did. */
+const stalled = Layer.effect(WorkflowEngine.WorkflowEngine)(
+  Effect.map(WorkflowEngine.WorkflowEngine, (engine) => ({
+    ...engine,
+    // SAFETY: the same arguments reach the real engine; only a discarded send stalls.
+    execute: ((workflow, options) =>
+      options.discard ? Effect.never : engine.execute(workflow, options)) as typeof engine.execute,
+  })),
+);
+
+test(
+  "a start the engine never takes is refused within a bound, and stays recorded for the next host",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const task = yield* aTask;
+        const outcome = yield* Effect.gen(function* () {
+          const registry = yield* Registry;
+          const [quiet] = yield* loaded(registry, [`${fixtures}/quiet.workflow.ts`]);
+          const started = yield* start(quiet!, { request: "r1", task: task.id });
+          const pending = yield* (yield* Store).pending;
+          return { reason: refusedWith(started), pending: pending.map((row) => row.request) };
+        }).pipe(
+          Effect.provide(registryLayer(dir(), { userDir: rig.userDir })),
+          Effect.provide(stalled),
+          Effect.provide(agentsLayer(hostOf())),
+          Effect.provide(foundationLayer({ dir: dir(), userDir: rig.userDir })),
+          Effect.scoped,
+          Effect.orDie,
+        );
+        expect(outcome.reason).toContain("the next host start hands it over");
+        expect(outcome.pending).toEqual(["r1"]);
+      }),
+    ),
+  120_000,
+);
+
+test(
+  "a host whose recovery stalls on the engine still serves before that hand-over gives up",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        // A Run a host admitted and died before handing over.
+        yield* hosted(
+          Effect.gen(function* () {
+            const registry = yield* Registry;
+            const [quiet] = yield* loaded(registry, [`${fixtures}/quiet.workflow.ts`]);
+            const payload = { runId: "run-left", input: {} };
+            yield* (yield* Store).admit({
+              request: "r1",
+              run: "run-left",
+              workflow: "quiet",
+              project: rig.projectDir,
+              input: payload.input,
+              provenance: {},
+              options: {},
+              generation: quiet!.name,
+              execution: yield* quiet!.registration.workflow.executionId(payload),
+              task: null,
+              parent: null,
+            });
+          }),
+        );
+
+        const before = yield* Clock.currentTimeMillis;
+        const served = yield* Effect.gen(function* () {
+          const held = yield* (yield* Registry).registrations;
+          const pending = yield* (yield* Store).pending;
+          return { live: held.live, pending: pending.map((row) => row.run) };
+        }).pipe(
+          Effect.provide(registryLayer(dir(), { userDir: rig.userDir })),
+          Effect.provide(stalled),
+          Effect.provide(agentsLayer(hostOf())),
+          Effect.provide(foundationLayer({ dir: dir(), userDir: rig.userDir })),
+          Effect.scoped,
+          Effect.orDie,
+        );
+        expect(served.live).toHaveLength(1);
+        expect(served.pending).toEqual(["run-left"]);
+        expect((yield* Clock.currentTimeMillis) - before).toBeLessThan(30_000);
       }),
     ),
   120_000,

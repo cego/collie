@@ -353,7 +353,7 @@ name, media type, size and absolute path, so an agent opens a screenshot like an
 file. The list is read when the step is launched: a file a steer brought is in every prompt
 after it. A Run with none gets no section. They are not an Input, so your schema declares
 nothing for them and every workflow gets them unchanged
-([ADR-0045](adr/0045-an-attachment-is-uploaded-once-and-belongs-to-the-run.md)).
+([ADR-0046](adr/0046-an-attachment-is-uploaded-once-and-belongs-to-the-run.md)).
 
 `promptFor` builds the same prompt without launching anything — its `attachments` is that
 list — and `decodeOutput` reads a file against a contract. Both are plain functions, so a

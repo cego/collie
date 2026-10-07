@@ -190,24 +190,3 @@ test(
     ),
   120_000,
 );
-
-test(
-  "with no pane open the host sweeps the checkouts it might prune",
-  () =>
-    proves(
-      "collie-side-prune-",
-      (world) =>
-        Effect.gen(function* () {
-          const fs = yield* FileSystem.FileSystem;
-          expect((yield* collie(world, ["board"])).envelope.ok).toBe(true);
-          const log = yield* until(
-            fs.readFileString(Bun.env.FAKE_HERDR_LOG!).pipe(Effect.orElseSucceed(() => "")),
-            (text) => text.includes(`"cmd":"worktree list"`),
-          );
-          yield* stopHost(world.state);
-          expect(log).toContain(`"cmd":"worktree list"`);
-        }),
-      [],
-    ),
-  120_000,
-);

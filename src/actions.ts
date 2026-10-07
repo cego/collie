@@ -134,6 +134,7 @@ export const ActionSchema = Schema.Union([
     mode: Schema.optionalKey(Schema.Literals(["extends", "copy"])),
   }),
   Schema.Struct({ kind: Schema.Literal("home_cleanup") }),
+  Schema.Struct({ kind: Schema.Literal("cleanup") }),
   Schema.Struct({ kind: Schema.Literal("upgrade") }),
   Schema.Struct({
     kind: Schema.Literal("onboard"),
