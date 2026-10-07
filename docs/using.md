@@ -949,7 +949,8 @@ its SSH master, so going to a pane never asks for another login or SSO approval,
 local process for this computer. Nothing beyond Desktop is needed on this computer. Type
 into it as into herdr — Esc and Ctrl+C go to the agent, not to the record, and Ctrl+C
 copies instead while text is selected; a multi-line paste arrives as one paste; the wheel
-scrolls the pane's own history; and the pane follows the record's size. A link in it opens in your browser. A pane cannot write your clipboard.
+scrolls the pane's own history; and the pane follows the record's size. A link in it opens
+in your browser. A pane cannot write your clipboard.
 Leaving the tab or closing the record gives the pane back, so a herdr window showing it
 returns to its own size. A terminal that ends says why — the pane closed, another client
 took it over, the Machine's connection dropped, or herdr refused — and **Reattach** finds
@@ -1146,7 +1147,7 @@ its sections open or closed as they were, and the card still selected.
 The record is one of Desktop's **pages**, with **Settings** and **Machines**: each takes the
 board's column in the same way, one at a time, so opening Settings with a record open replaces
 the record, and back always returns to the board. Opening a page moves focus to its back
-button, and back returns focus to where it was. The header's Settings and Machines buttons
+button, except that Go to pane leaves it in the pane, and back returns focus to where it was. The header's Settings and Machines buttons
 each open their page and show as pressed while it is open; pressed again, they return to the
 board.
 

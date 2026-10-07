@@ -6,6 +6,7 @@ import { Effect, Layer, Schema, Stream } from "effect";
 import * as RpcClient from "effect/unstable/rpc/RpcClient";
 import * as RpcServer from "effect/unstable/rpc/RpcServer";
 import { headerSentence, sectionsOf } from "../src/board-model";
+import { afterGesture, type BoardState } from "../desktop/src/shared/board-clicks";
 import {
   type Channel,
   clientProtocol,
@@ -576,4 +577,77 @@ test("Add Machine takes a Machine only once its SSH target, label and session ar
     expect(
       machineToAdd({ target: "mk@vm", label: "vm", session: "default", [blank]: "  " }),
     ).toBeNull();
+});
+
+const none: BoardState = { selected: null, page: null };
+const picked: BoardState = { selected: "pc:a", page: null };
+const reading: BoardState = { selected: "pc:a", page: "pc:a" };
+const card = (key: string, asOf = false) => ({ on: "card", card: key, asOf }) as const;
+const control = { on: "control" } as const;
+const background = { on: "background" } as const;
+
+test("a click on a card selects it, again on it keeps it, and on another moves to that one", () => {
+  expect(afterGesture(none, { kind: "click", landed: card("pc:a") })).toEqual(picked);
+  expect(afterGesture(picked, { kind: "click", landed: card("pc:a") })).toEqual(picked);
+  expect(afterGesture(picked, { kind: "click", landed: card("pc:b") })).toEqual({
+    selected: "pc:b",
+    page: null,
+  });
+});
+
+test("a click on a card leaves an open record as it is", () => {
+  expect(afterGesture(reading, { kind: "click", landed: card("pc:b") })).toEqual({
+    selected: "pc:b",
+    page: "pc:a",
+  });
+});
+
+test("a click or double-click on a control does only what the control does", () => {
+  for (const kind of ["click", "double-click"] as const) {
+    expect(afterGesture(picked, { kind, landed: control })).toEqual(picked);
+    expect(afterGesture(reading, { kind, landed: control })).toEqual(reading);
+  }
+});
+
+test("a click or double-click on the background lets the card go, unless a page is open", () => {
+  for (const kind of ["click", "double-click"] as const) {
+    expect(afterGesture(picked, { kind, landed: background })).toEqual(none);
+    expect(afterGesture(reading, { kind, landed: background })).toEqual(reading);
+  }
+});
+
+test("a double-click on a card selects it and opens its record", () => {
+  expect(afterGesture(none, { kind: "double-click", landed: card("pc:a") })).toEqual(reading);
+});
+
+test("a double-click on a card shown as of selects it and opens nothing", () => {
+  expect(afterGesture(none, { kind: "double-click", landed: card("pc:a", true) })).toEqual(picked);
+});
+
+test("pressing a card's name selects it and opens its record", () => {
+  expect(afterGesture({ selected: "pc:b", page: null }, { kind: "name", card: "pc:a" })).toEqual(
+    reading,
+  );
+});
+
+test("closing the record keeps the card selected", () => {
+  expect(afterGesture(reading, { kind: "close" })).toEqual(picked);
+});
+
+test("Escape with an overlay open or while typing is theirs", () => {
+  for (const state of [none, picked, reading]) {
+    expect(afterGesture(state, { kind: "escape", overlay: true, typing: false })).toEqual(state);
+    expect(afterGesture(state, { kind: "escape", overlay: false, typing: true })).toEqual(state);
+  }
+});
+
+test("Escape closes an open page and keeps the card selected", () => {
+  expect(afterGesture(reading, { kind: "escape", overlay: false, typing: false })).toEqual(picked);
+  expect(
+    afterGesture({ ...picked, page: "settings" }, { kind: "escape", overlay: false, typing: false }),
+  ).toEqual(picked);
+});
+
+test("Escape on the board lets the selected card go", () => {
+  expect(afterGesture(picked, { kind: "escape", overlay: false, typing: false })).toEqual(none);
 });

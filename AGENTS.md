@@ -72,8 +72,10 @@ herdr actions, and the `collie` CLI.
   `desktop/view/app/components/RunRecord.vue`, one of the pages `usePage` lays over the
   board's column, with `SettingsPage.vue` and `MachinesPage.vue`; what agent
   markdown may keep is `desktop/src/shared/markdown.ts` with `desktop/test/markdown.test.ts`; what a click,
-  a double-click and Escape do to the selected card is `desktop/src/shared/board-clicks.ts`
-  with `desktop/test/board-clicks.test.ts`; whether a Machine is In sync is
+  a double-click, a name, a page's back button and Escape do to the selected card and
+  the open page is `afterGesture` in `desktop/src/shared/board-clicks.ts`, tested in
+  `test/desktop-view.test.ts`, with where a gesture landed read in
+  `desktop/test/board-clicks.test.ts`; whether a Machine is In sync is
   `desktop/src/shared/in-sync.ts`, tested in `test/desktop-view.test.ts`; and the window's
   navigation rule is in
   `desktop/src/bun/index.ts`. Desktop has its own `package.json`; Effect is the root's, so
