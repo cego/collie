@@ -77,9 +77,10 @@ recorded with their words says what came with them
 
 ## Consequences
 
-- The host prunes its upload store a week after a file arrived: a Run holds its own copy,
-  and a file uploaded for a start that was refused does not stay for ever. A proposal
-  confirmed later than that is refused naming the file, and Desktop uploads it again.
+- The host's cleanup sweep removes an upload a week after it was last asked for: a Run
+  holds its own copy, and a file uploaded for a start that was refused does not stay for
+  ever. A proposal confirmed later than that is refused naming the file, and Desktop
+  uploads it again.
 - Desktop prunes its copies after 30 days, as Claude Code prunes the transcripts that name
   them. A conversation older than that shows the attachment's name without its thumbnail.
 - A conversation that accumulates more than the API's 32 MB request size in images and

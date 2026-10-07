@@ -141,8 +141,21 @@ test(
 test(
   "the same request with another file is a conflict, and with the same file is the same Run",
   () =>
-    attending("collie-attach-conflict-", (world) =>
+    attending("collie-attach-conflict-", (world, cli) =>
       Effect.gen(function* () {
+        // Through the CLI, so the host it starts gives the fake agents their Outputs.
+        const started = yield* cli([
+          "run",
+          "start",
+          "attended",
+          "--input",
+          "work=the picker",
+          "--attach",
+          "shot.png",
+          "--request-id",
+          "req-attach",
+        ]);
+        expect(started.envelope.error).toBeUndefined();
         const client = yield* connect(world.state).pipe(Effect.orDie);
         const start = (file: string) =>
           client.start({
@@ -152,11 +165,12 @@ test(
             input: { work: "the picker" },
             attachments: [`${world.project}/${file}`],
           });
-        const first = yield* start("shot.png").pipe(Effect.orDie);
+        const runId = payloadOf(started.envelope).runId!;
         const again = yield* start("shot.png").pipe(Effect.orDie);
-        expect(again).toMatchObject({ runId: first.runId, fresh: false });
+        expect(again).toMatchObject({ runId, fresh: false });
         const other = yield* start("notes.txt").pipe(Effect.flip, Effect.orDie);
         expect(other._tag).toBe("RequestConflict");
+        yield* viewOf(world, runId, asking);
       }),
     ),
   120_000,
