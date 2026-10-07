@@ -4,6 +4,7 @@
 
 import { Effect, Encoding, FileSystem, Option, Path, Schema, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { mediaTypeOf } from "./attachments";
 import { HostRefused, RUN_FILE_BYTES, type HostFile } from "./board-model";
 
 /** The most paths a glob answers, and lines a grep does, unless asked for fewer. */
@@ -19,9 +20,6 @@ const absolute = Effect.fn("HostFiles.absolute")(function* (path: string) {
     ? paths.normalize(path)
     : yield* refused(`${path} is not absolute: a path on a Machine is named from its root`);
 });
-
-const mediaTypeOf = (path: string) =>
-  Bun.file(path).type.split(";")[0] || "application/octet-stream";
 
 export const readPart = Effect.fn("HostFiles.read")(function* (
   asked: string,
@@ -138,7 +136,7 @@ const searched = (cmd: string, args: ReadonlyArray<string>, cwd: string, limit: 
       Stream.filter((line) => line !== ""),
       Stream.take(SEARCH_LIMIT),
       Stream.runFold(
-        () => ({ lines: [] as string[], seen: 0 }),
+        (): { lines: string[]; seen: number } => ({ lines: [], seen: 0 }),
         (acc, line) => {
           if (acc.seen < limit) acc.lines.push(line);
           return { lines: acc.lines, seen: acc.seen + 1 };

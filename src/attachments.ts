@@ -102,7 +102,7 @@ export const listAttachments = Effect.fn("attachments.list")(function* (dir: str
   return found;
 });
 
-const mediaTypeOf = (file: string) =>
+export const mediaTypeOf = (file: string) =>
   Bun.file(file).type.split(";")[0] || "application/octet-stream";
 
 /** The line a steer's text gains for each file it brought. */
