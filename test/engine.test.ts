@@ -384,8 +384,7 @@ test(
         expect(loaded.ok).toBe(true);
         yield* host.ask({ op: "start", id: "paths", runId: "r1", input: { note: "n" } });
         const done = yield* host.until({ op: "poll", id: "paths", runId: "r1" }, complete);
-        // An Activity from each path ran on the host's engine, and the two paths are one
-        // set of objects rather than a copy the host's services would not recognise.
+        // One set of objects, not a copy the host's services would not recognise.
         expect(done.value).toBe("n:before+after:same");
         const ran = (yield* events(state, "r1")).filter((line) => !line.startsWith("aligned"));
         expect(ran).toEqual(["before", "after"]);

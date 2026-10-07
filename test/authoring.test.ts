@@ -13,6 +13,7 @@ import {
   TOOLCHAIN,
   loadEntry,
   provisionToolchain,
+  refreshToolchain,
   revisionOf,
   stageGeneration,
   clearGenerations,
@@ -175,6 +176,27 @@ test(
     ),
   180_000,
 );
+
+test("a toolchain on the host's Effect, or with none installed, is not provisioned again", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const current = yield* fs.makeTempDirectoryScoped({ prefix: "collie-authoring-current-" });
+      yield* fs.makeDirectory(`${current}/node_modules/effect`, { recursive: true });
+      yield* fs.writeFileString(
+        `${current}/node_modules/effect/package.json`,
+        `{"version":"${TOOLCHAIN.effect}"}`,
+      );
+      const bare = yield* fs.makeTempDirectoryScoped({ prefix: "collie-authoring-bare-" });
+
+      for (const dir of [current, bare]) {
+        yield* refreshToolchain(dir);
+        // Provisioning writes these first, so neither being there means it never ran.
+        expect(yield* fs.exists(`${dir}/package.json`)).toBe(false);
+        expect(yield* fs.exists(`${dir}/collie.d.ts`)).toBe(false);
+      }
+    }).pipe(Effect.scoped),
+  ));
 
 test("a typechecker that falls over is no typechecker, not a clean module", () =>
   runEffect(

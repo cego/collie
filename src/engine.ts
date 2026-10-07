@@ -4937,7 +4937,8 @@ const InstalledPackage = Schema.fromJsonString(Schema.Struct({ version: Schema.S
 
 /**
  * Provisions again where the installed Effect is not the host's, as after an upgrade, so
- * a module is checked against the Effect it will run on. Nothing installed is left alone.
+ * a module is checked against the Effect it will run on. A directory with no Effect
+ * installed is left alone.
  */
 export const refreshToolchain = Effect.fn("Engine.refreshToolchain")(function* (dir: string) {
   const fs = yield* FileSystem.FileSystem;

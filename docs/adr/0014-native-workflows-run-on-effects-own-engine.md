@@ -93,8 +93,9 @@ Five things the proof measured rather than assumed. Each is a test.
    #8455), so a parent resumed after the upgrade that derived its child's id again would run
    a finished child a second time. A child is resumed under the execution Collie recorded
    for it instead (`test/child-execution.test.ts`). The cluster's and workflow engine's SQL
-   tables were checked and are identical between rc.117 and 4.0.1, so a database an rc.117
-   host wrote is read as it is.
+   tables are identical between rc.117 and 4.0.1, so a database an rc.117 host wrote is read
+   as it is: every `CREATE` and `ALTER` statement in `cluster/SqlMessageStorage.js` and
+   `cluster/SqlRunnerStorage.js` was compared between the two packages.
 
 ## What this does not decide
 
