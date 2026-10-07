@@ -33,11 +33,16 @@ const opened = computed(() =>
 const { chip, choose } = useChip();
 /** Every board gesture, decided by `afterGesture` and applied to the chip and the record. */
 const gesture = (done: Gesture, tab: string | null = null) => {
-  const selected = chip.value === null ? undefined : placedAt(chip.value.machine, chip.value.task);
-  const before = { selected: selected?.key ?? null, record: record.opened.value };
+  const about = chip.value;
+  // A chip whose card has left the board stays selected under a key no card has.
+  const selected =
+    about === null
+      ? null
+      : (placedAt(about.machine, about.task)?.key ?? `gone:${about.machine}:${about.task}`);
+  const before = { selected, record: record.opened.value };
   const after = afterGesture(before, done);
   if (after.selected === null) {
-    if (chip.value !== null) choose(null);
+    if (before.selected !== null) choose(null);
   } else {
     // Chosen again even when unchanged, so the chip follows the card's latest Run and name.
     const card = placedBy(after.selected);

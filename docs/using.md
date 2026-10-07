@@ -1083,7 +1083,8 @@ whole width — the window's, with the chat collapsed or popped out. Diff, Evide
 use that width; Plan, Review and Facts keep a readable line length. The record's back button
 returns to the board, which was never taken down: it comes back scrolled where you left it,
 its sections open or closed as they were, and the card still selected. Opening the record
-puts the keyboard's focus on its back button, and closing it returns focus to where it was.
+puts the keyboard's focus on its back button, except that Go to pane leaves it in the pane,
+and closing it returns focus to where it was.
 
 **Escape** backs out one level: an open dialog, menu or popover closes first, then the
 record, and on the board Escape lets the selected card go. Escape typed in a field, such as
