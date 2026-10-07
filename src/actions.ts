@@ -4,6 +4,9 @@
 import { Effect, Schema, Struct } from "effect";
 import { VerifySpecSchema } from "./verify-spec";
 
+/** Files the work is given, as paths on the Machine of the host that carries it out. */
+const Attachments = Schema.Array(Schema.String);
+
 /**
  * Everything the model may propose, and nothing else. A closed union is the security
  * boundary, with one deliberate hole: `set_verification.command` and `start.verify` are an
@@ -45,6 +48,7 @@ export const ActionSchema = Schema.Union([
     mode: Schema.Literals(["boundary", "now", "interrupt"]).pipe(
       Schema.withDecodingDefaultKey(Effect.succeed("now" as const)),
     ),
+    attachments: Schema.optionalKey(Attachments),
   }),
   Schema.Struct({
     kind: Schema.Literal("hold"),
@@ -81,9 +85,15 @@ export const ActionSchema = Schema.Union([
     here: Schema.optionalKey(Schema.Boolean),
     /** Checks Collie may run to prove it, over the project's and the user's verify.json. */
     verify: Schema.optionalKey(Schema.Array(VerifySpecSchema)),
+    attachments: Schema.optionalKey(Attachments),
   }),
   Schema.Struct({ kind: Schema.Literal("resume"), run: Schema.String }),
-  Schema.Struct({ kind: Schema.Literal("followup"), run: Schema.String, text: Schema.String }),
+  Schema.Struct({
+    kind: Schema.Literal("followup"),
+    run: Schema.String,
+    text: Schema.String,
+    attachments: Schema.optionalKey(Attachments),
+  }),
   Schema.Struct({
     kind: Schema.Literal("navigate"),
     run: Schema.String,

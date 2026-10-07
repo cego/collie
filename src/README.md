@@ -24,6 +24,7 @@ Runner source (Bun/TypeScript). Compiled to `bin/collie` per platform; see ADR-0
 | `board.ts`         | Builds the board from the files: one TaskView per Task and a card's sentence                          |
 | `board-model.ts`   | The board's Schemas and `FrontDoorRpcs`, and the pure section and header rules                        |
 | `audit.ts`         | A Run's audit trail: each operation, the Actor that asked for it, and what came of it                 |
+| `attachments.ts`   | Files a Run is given: refused or copied into `runs/<id>/attachments/`, and listed for its prompts     |
 | `bridge.ts`        | `collie bridge`: a front door's stdio piped to this Machine's host, declared as it                    |
 | `board-stream.ts`  | The board a host serves one client: a snapshot, then each Task that changed                           |
 | `herds.ts`         | Every running herdr session the host reads, its agents, and the events it pushes                      |

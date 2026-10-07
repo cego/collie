@@ -86,10 +86,19 @@ import {
   RequestConflict,
   Started,
   SteerOutcome,
+  Attachments,
   type FrontDoor,
   type PlanPanel,
   type Where,
 } from "./board-model";
+import {
+  attachedLine,
+  attachmentRefusal,
+  attachmentsDir,
+  copyInto,
+  namesIn,
+  type Attached,
+} from "./attachments";
 import { boardMessages } from "./board-stream";
 import { recordDisposition } from "./disposition";
 import {
@@ -240,6 +249,7 @@ export const HostRpcs = RpcGroup.make(
       operation: Schema.optional(Schema.String),
       agent: Schema.optional(Schema.String),
       mode: Schema.optional(Schema.Literals(["boundary", "now", "interrupt"])),
+      attachments: Schema.optional(Attachments),
     },
     success: Steered,
     error: Schema.Union([HostRefused, RequestConflict]),
@@ -345,25 +355,75 @@ const handlers = (
             },
             registry.grant({ runId, name, command }),
           ).pipe(Effect.provideContext(bun)),
-        steer: ({ runId, text, request, operation, agent, mode }, { client }) =>
-          once(
-            runDir(dir, runId),
-            {
-              operation: "deliver",
-              request,
-              ...stampIn(declared, client),
-              asked: {
+        steer: ({ runId, text, request, operation, agent, mode, attachments }, { client }) => {
+          const into = attachmentsDir(runDir(dir, runId));
+          return attachedAs(into, attachments).pipe(
+            Effect.flatMap((attached) => {
+              const asked: SteerAsked = {
                 text,
                 operation: operation ?? null,
                 agent: agent ?? null,
                 mode: mode ?? null,
-              },
-              result: Steered,
-            },
-            registry.steer({ runId, text, request, operation, agent, mode }),
-          ).pipe(Effect.provideContext(bun)),
+              };
+              if (attached !== undefined) asked.attachments = attached;
+              return once(
+                runDir(dir, runId),
+                {
+                  operation: "deliver",
+                  request,
+                  ...stampIn(declared, client),
+                  asked,
+                  result: Steered,
+                },
+                copyInto(into, attachments ?? []).pipe(
+                  Effect.mapError((cause) => new HostRefused({ reason: reason(cause) })),
+                  Effect.flatMap((copied) =>
+                    registry.steer({
+                      runId,
+                      text:
+                        copied.length === 0
+                          ? text
+                          : `${text}\n\n${copied.map((one) => attachedLine(`${into}/${one.name}`)).join("\n")}`,
+                      request,
+                      operation,
+                      agent,
+                      mode,
+                    }),
+                  ),
+                ),
+              );
+            }),
+            Effect.provideContext(bun),
+          );
+        },
       });
     }),
+  );
+
+/** What a steer's request has to ask again; attachments only where there were some. */
+type SteerAsked = {
+  readonly text: string;
+  readonly operation: string | null;
+  readonly agent: string | null;
+  readonly mode: string | null;
+  attachments?: ReadonlyArray<Attached>;
+};
+
+/**
+ * What a request's attachments are recorded as: the name each is kept under in `into`
+ * (an empty directory where null), and where it came from. Refused, naming the path, where
+ * one cannot be attached.
+ */
+const attachedAs = (into: string | null, paths: ReadonlyArray<string> | undefined) =>
+  Effect.gen(function* () {
+    if (paths === undefined || paths.length === 0) return undefined;
+    const refused = yield* attachmentRefusal(paths);
+    if (refused !== null) return yield* new HostRefused({ reason: `${REFUSED_INPUT}: ${refused}` });
+    return (yield* namesIn(into, paths)).map(({ name, from }) => ({ name, from }));
+  }).pipe(
+    Effect.mapError((cause) =>
+      Schema.is(HostRefused)(cause) ? cause : new HostRefused({ reason: reason(cause) }),
+    ),
   );
 
 /** A steer that came to nothing, which is told to the caller but not kept as its request's answer. */
@@ -515,6 +575,7 @@ const frontDoorHandlers = (
           readonly request: string;
           readonly origin: FrontDoor;
           readonly from?: Where | undefined;
+          readonly asked?: Schema.Json | undefined;
           readonly result: Schema.Codec<A, I>;
         },
         act: Effect.Effect<A, E, HostServices>,
@@ -526,6 +587,17 @@ const frontDoorHandlers = (
               : Effect.void,
           ),
           Effect.provideContext(hosted),
+        );
+      /** A new Run's attachments, refused before anything is claimed, as its audit line asks them. */
+      const attachedFor = <A, E, R>(
+        paths: ReadonlyArray<string> | undefined,
+        act: (asked: { readonly attachments: Schema.Json } | undefined) => Effect.Effect<A, E, R>,
+      ) =>
+        attachedAs(null, paths).pipe(
+          Effect.provideContext(bun),
+          Effect.flatMap((attached) =>
+            act(attached === undefined ? undefined : { attachments: attached }),
+          ),
         );
       const known = (runId: string) =>
         registry
@@ -719,29 +791,33 @@ const frontDoorHandlers = (
             parent,
             intent,
             verify,
+            attachments,
           },
           { client },
         ) =>
-          fresh(
-            (started) => started.runId,
-            { operation: "start", request, ...whoOf(client), result: Started },
-            registry.resolve({ project, id }).pipe(
-              Effect.flatMap((generation) =>
-                registry.start({
-                  generation,
-                  project,
-                  request,
-                  input,
-                  text,
-                  inferred,
-                  root,
-                  options,
-                  task,
-                  taskLabel,
-                  parent,
-                  intent,
-                  verify,
-                }),
+          attachedFor(attachments, (asked) =>
+            fresh(
+              (started) => started.runId,
+              { operation: "start", request, ...whoOf(client), asked, result: Started },
+              registry.resolve({ project, id }).pipe(
+                Effect.flatMap((generation) =>
+                  registry.start({
+                    generation,
+                    project,
+                    request,
+                    input,
+                    text,
+                    inferred,
+                    root,
+                    options,
+                    task,
+                    taskLabel,
+                    parent,
+                    intent,
+                    verify,
+                    attachments,
+                  }),
+                ),
               ),
             ),
           ),
@@ -826,11 +902,13 @@ const frontDoorHandlers = (
               return taken;
             }),
           ),
-        invoke: ({ runId, offer, input, request }, { client }) =>
-          fresh(
-            () => runId,
-            { operation: "invoke", request, ...whoOf(client), result: Started },
-            registry.invoke({ runId, offer, input, request }),
+        invoke: ({ runId, offer, input, request, attachments }, { client }) =>
+          attachedFor(attachments, (asked) =>
+            fresh(
+              () => runId,
+              { operation: "invoke", request, ...whoOf(client), asked, result: Started },
+              registry.invoke({ runId, offer, input, request, attachments }),
+            ),
           ),
         confirm: ({ proposal, hash, request }, { client }) =>
           answeredOnce(proposal, hash, request, "confirmed", (file, lines) =>
@@ -1177,35 +1255,38 @@ const frontDoorHandlers = (
             ),
             Effect.provideContext(bun),
           ),
-        followUp: ({ runId, text, request }, { client }) =>
-          fresh(
-            () => runId,
-            { operation: "followup", request, ...whoOf(client), result: Started },
-            Effect.gen(function* () {
-              const view = yield* known(runId);
-              if (!settled(factsOfView(env.stateDir, view)))
-                return yield* new HostRefused({
-                  reason: "a follow-up is a child of a finished run, and this one is still going",
+        followUp: ({ runId, text, request, attachments }, { client }) =>
+          attachedFor(attachments, (asked) =>
+            fresh(
+              () => runId,
+              { operation: "followup", request, ...whoOf(client), asked, result: Started },
+              Effect.gen(function* () {
+                const view = yield* known(runId);
+                if (!settled(factsOfView(env.stateDir, view)))
+                  return yield* new HostRefused({
+                    reason: "a follow-up is a child of a finished run, and this one is still going",
+                  });
+                const offered = (yield* registry.offers(runId)).find(
+                  (one) => one.kind === "follow-up",
+                );
+                if (offered === undefined)
+                  return yield* new HostRefused({
+                    reason: `${runId} declares no follow-up, so there is nothing to carry on with`,
+                  });
+                const into = followUpField(offered.arguments);
+                if ("refused" in into)
+                  return yield* new HostRefused({
+                    reason: `${runId}'s follow-up "${offered.id}" ${into.refused}`,
+                  });
+                return yield* registry.invoke({
+                  runId,
+                  offer: offered.id,
+                  input: { [into.field]: text },
+                  request,
+                  attachments,
                 });
-              const offered = (yield* registry.offers(runId)).find(
-                (one) => one.kind === "follow-up",
-              );
-              if (offered === undefined)
-                return yield* new HostRefused({
-                  reason: `${runId} declares no follow-up, so there is nothing to carry on with`,
-                });
-              const into = followUpField(offered.arguments);
-              if ("refused" in into)
-                return yield* new HostRefused({
-                  reason: `${runId}'s follow-up "${offered.id}" ${into.refused}`,
-                });
-              return yield* registry.invoke({
-                runId,
-                offer: offered.id,
-                input: { [into.field]: text },
-                request,
-              });
-            }),
+              }),
+            ),
           ),
         runDetail: ({ runId, tail, pages, refreshMr }) => {
           let fresh = refreshMr;

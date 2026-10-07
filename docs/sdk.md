@@ -344,8 +344,20 @@ an agent already there by that name is reattached to, and a herdr that cannot sa
 has stops the work with that as the reason rather than starting a second agent.
 [ADR-0020](adr/0020-an-agent-is-launched-once-and-its-output-is-decoded.md) is why.
 
-`promptFor` builds the same prompt without launching anything, and `decodeOutput` reads a
-file against a contract. Both are plain functions, so a test of yours can use them.
+### What every step prompt is given
+
+A Run's attachments — the files given with its start, a steer or a follow-up, and copies of
+those of every Run in its Lineage — are the files in its own `runs/<id>/attachments/`, and
+every step's prompt lists them, between the instructions and the Output, each with its
+name, media type, size and absolute path, so an agent opens a screenshot like any other
+file. The list is read when the step is launched: a file a steer brought is in every prompt
+after it. A Run with none gets no section. They are not an Input, so your schema declares
+nothing for them and every workflow gets them unchanged
+([ADR-0044](adr/0044-an-attachment-is-uploaded-once-and-belongs-to-the-run.md)).
+
+`promptFor` builds the same prompt without launching anything — its `attachments` is that
+list — and `decodeOutput` reads a file against a contract. Both are plain functions, so a
+test of yours can use them.
 
 ## Which agent does the work
 

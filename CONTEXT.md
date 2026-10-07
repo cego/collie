@@ -22,6 +22,20 @@
 
 **Input** — A value a Workflow needs (plan directory, diff target, goal). Only the **Launch flow** infers one, for a human, from context (branch, cwd, earlier plan Runs, glab), and a Run records which of its Inputs were inferred and which were given. An agent's start — chat's Collie tools or `collie run start` — gives every Input explicitly, an optional one as an explicit empty, and a start missing one is refused with what would fill it.
 
+**Attachment** — A file given to a Run beside the words that asked for the work: a
+screenshot pasted into the Flock chat, a file a chat found on this computer or a Machine, a
+file named with `--attach`. Named by its path on the Run's Machine — a file that is not
+there yet is uploaded once, through that Machine's host — and copied by the host into the
+Run's own directory before the work it came with starts or the steer it came with is
+delivered. Every agent prompt of the Run lists each one with its path on that Machine, and
+a Run starts with copies of the attachments of every Run in its **Lineage**. A start,
+follow-up or steer a chat carries out takes the attachments of the human's message that
+asked for it unless it names others. Not an **Input**: no Workflow declares one, so every
+Workflow gets them unchanged. Not **Evidence**: it is what the work was given, not what it
+proved. In the Flock chat it is also what the model is shown — an image, a PDF, a text, or
+a name, size and path — and Desktop keeps a copy, so the conversation still shows it after a
+restart ([ADR-0044](docs/adr/0044-an-attachment-is-uploaded-once-and-belongs-to-the-run.md)).
+
 **Output** — A structured JSON file an agent writes to the Run directory for one operation (e.g. a review verdict + findings). It is decoded against the Workflow's schema before anything believes it, and one that does not decode buys one repair. Workflows read Outputs, never terminal text.
 
 **Herd** — One herdr session: every workspace in it. The scope of the Collie tab, the

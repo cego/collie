@@ -74,6 +74,7 @@ const OPERATOR = "operator";
 const MODULES = "workflow modules (this MR)";
 const LAUNCH = "launch flow places human starts (this MR)";
 const RELEASE = "ready to release and checks you can see (this MR)";
+const ATTACHMENTS = "files in the Flock chat and its Runs (this MR)";
 
 /** What the front door owes a person, and cannot be settled below the front door. */
 const FRONT_DOOR: readonly Check[] = [
@@ -521,6 +522,34 @@ const BACKEND: readonly Check[] = [
       layer: "backend",
       file: "test/disposition.test.ts",
       name: "the CLI records a disposition and leaves the Run's status as it was",
+    },
+  },
+
+  // ── Attachments: files a Run is given, in its own directory and every prompt ──
+  {
+    id: "backend/a-started-runs-attachments-are-there-before-its-first-prompt",
+    statement:
+      "A Run started with `--attach` has a copy of each file in its own directory before its first agent starts, and that agent's prompt lists each with its absolute path.",
+    owner: ATTACHMENTS,
+    needs: "backend",
+    proof: {
+      kind: "test",
+      layer: "backend",
+      file: "test/attachments.test.ts",
+      name: "a start's attachments are in the Run's directory and its first prompt before it runs, and on its audit line",
+    },
+  },
+  {
+    id: "backend/a-follow-up-inherits-its-runs-attachments",
+    statement:
+      "A follow-up of a Run that was given files starts with copies of them in its own directory, beside any it was given itself, and its first prompt lists them.",
+    owner: ATTACHMENTS,
+    needs: "backend",
+    proof: {
+      kind: "test",
+      layer: "backend",
+      file: "test/attachments.test.ts",
+      name: "an offer invoked from a Run with attachments gives the new Run copies of them beside its own",
     },
   },
 ];

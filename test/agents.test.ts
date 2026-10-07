@@ -171,6 +171,33 @@ test("the contract an agent is held to is in the prompt it is sent, with the jud
   expect(prompt).toContain("it is asking for your judgment");
 });
 
+test("a Run's attachments are listed between the instructions and the Output, and none means no section", () => {
+  const parts = {
+    role: "implementer",
+    instructions: "Fix the picker.",
+    output: "/state/agents/r1/build.json",
+    contract: null,
+  };
+  const prompt = promptFor({
+    ...parts,
+    attachments: [
+      {
+        name: "shot.png",
+        mediaType: "image/png",
+        size: 2048,
+        path: "/state/runs/r1/attachments/shot.png",
+      },
+    ],
+  });
+  const listed = prompt.indexOf(
+    "- shot.png (image/png, 2048 bytes): /state/runs/r1/attachments/shot.png",
+  );
+  expect(listed).toBeGreaterThan(prompt.indexOf("Fix the picker."));
+  expect(listed).toBeLessThan(prompt.indexOf("OUTPUT_PATH:"));
+  expect(promptFor(parts)).not.toContain("attachments");
+  expect(promptFor({ ...parts, attachments: [] })).toBe(promptFor(parts));
+});
+
 test("what a schema cannot be drawn from is still checked, and the prompt says so", () => {
   const opaque = Schema.declare(Schema.is(Schema.String));
   const prompt = promptFor({

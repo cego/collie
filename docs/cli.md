@@ -142,6 +142,7 @@ collie --json run start <workflow> --inputs-json '{"goal":"ship it"}'
 | `--harness <h>`   | The harness this Run's agents run on, over the workflow's own preference.   |
 | `--model <m>`     | The model this Run's agents run on, over the workflow's own preference.     |
 | `--effort <e>`    | The effort this Run's agents are asked for, over the workflow's own.        |
+| `--attach <file>` | Repeatable. A file to give the Run — see [Attachments](#attachments).       |
 | `--request-id`    | Idempotency key — see [Retrying safely](#retrying-safely).                  |
 
 `--harness`, `--model` and `--effort` reach every agent the Run starts, and its children,
@@ -149,6 +150,36 @@ without the workflow doing anything for them; a piece of work that names its own
 wins. They are resolved together before anything starts, so a model the harness does not
 take is `invalid_input` naming what it would take. [Which agent does the
 work](sdk.md#which-agent-does-the-work) is the whole order.
+
+### Attachments
+
+```sh
+collie --json run start plan --input goal="the picker is cut off" --attach shot.png
+collie --json run steer <run-id> "this is what it does now" --attach after.png
+collie --json run action <run-id> carry-on --input work="still cut off" --attach log.txt
+```
+
+`--attach` names a file to give the work, and is repeatable on `run start`, `run steer`
+and `run action`. A relative path is resolved against where the command runs; the CLI
+sends the absolute path and uploads nothing, so the file has to be on the host's Machine.
+The host copies each into the Run's own `runs/<id>/attachments/` — a copy, never a link —
+before its first step, or for a steer before the message is delivered, and every step's
+prompt lists the Run's attachments with their paths
+([`sdk.md`](sdk.md#what-every-step-prompt-is-given)). A steer's message gains an
+`Attached: <path>` line for each file it brought. A Run started from another — a
+follow-up, a child, an implementation of a plan Run — starts with copies of that Run's
+attachments. Two files of one name and different content are both kept, the later under a
+short sha256 prefix.
+
+A path that does not exist, is not a regular file, cannot be read or is larger than
+100 MB is `invalid_input` naming it, before anything is claimed: no Run, Task, worktree or
+workspace is made. The files are part of the request: the same `--request-id` with other
+attachments is `RequestConflict`, and with the same ones it is the same Run. They are not
+an Input, so the Workflow's own input, and with it the execution, is the same either way.
+The operation's line in the Run's `operations.jsonl` names each file under `asked`, by the
+name the Run keeps it under and the path it came from. Chat's `start`, `followup` and
+`deliver` actions take the same paths as `attachments`
+([ADR-0044](adr/0044-an-attachment-is-uploaded-once-and-belongs-to-the-run.md)).
 
 ### A workflow saved as a module
 

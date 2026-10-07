@@ -775,6 +775,9 @@ export const SharedSettings = Schema.Struct({
 });
 export type SharedSettings = typeof SharedSettings.Type;
 
+/** Files given with a request, as paths on the host's own Machine, copied into the Run. */
+export const Attachments = Schema.Array(Schema.String);
+
 /**
  * What any front door, on this computer or another, may ask a host. Every operation takes
  * a request id: the same one twice is one operation, and with other arguments is refused.
@@ -812,6 +815,7 @@ export const FrontDoorRpcs = RpcGroup.make(
       intent: Schema.optional(IntentSeedSchema),
       /** The approved set given with the start, over the project's and the user's files. */
       verify: Schema.optional(Schema.Array(VerifySpecSchema)),
+      attachments: Schema.optional(Attachments),
     },
     success: Started,
     error: Schema.Union([HostRefused, RequestConflict]),
@@ -958,7 +962,12 @@ export const FrontDoorRpcs = RpcGroup.make(
   }),
   /** A child Run on a finished one, through the follow-up its Workflow declares. */
   Rpc.make("followUp", {
-    payload: { runId: Schema.String, text: Schema.String, request: Schema.String },
+    payload: {
+      runId: Schema.String,
+      text: Schema.String,
+      request: Schema.String,
+      attachments: Schema.optional(Attachments),
+    },
     success: Started,
     error: Schema.Union([HostRefused, RequestConflict]),
   }),
@@ -1018,6 +1027,7 @@ export const FrontDoorRpcs = RpcGroup.make(
       offer: Schema.String,
       input: Schema.Record(Schema.String, Schema.Json),
       request: Schema.String,
+      attachments: Schema.optional(Attachments),
     },
     success: Started,
     error: Schema.Union([HostRefused, RequestConflict]),
