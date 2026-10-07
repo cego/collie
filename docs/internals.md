@@ -58,7 +58,20 @@ checkout gone — parks with the reason and the repair, and `run resume` picks i
 Beside the database, a Run's files are its audit trail: `agents/<run>/<operation>.prompt.md`
 with the Output it came back with, `evidence/<run>/` with the verifications it was granted
 and the ones collected, and `runs/<run>/` with its cards, its `plan/` and the review it left.
-Nothing an older Collie recorded is read ([ADR-0027](adr/0027-one-engine-and-a-hard-cutover.md)).
+Nothing an older Collie recorded is read ([ADR-0027](adr/0027-one-engine-and-a-hard-cutover.md)),
+and the host's cleanup sweep removes it once it has not changed for a day.
+
+None of it is kept for ever ([ADR-0045](adr/0045-collie-removes-what-it-made-once-nothing-needs-it.md)
+D5). A Task and every one of its Runs are forgotten together once the Task is Finished, no
+workspace of it is open, no agent it launched is alive, no checkout it made is on disk, no
+Run outside it names one of its Runs as parent or points an input into one of its run
+directories, and its last Run ended more than 30 days ago — the board's finish time, else the
+newest of its files. The rows go first, in one transaction under the Task's lock: each
+execution's messages and replies, through `MessageStorage.clearAddress`, then its decisions
+and its `collie_runs` row; a row the engine never accepted is left for recovery. Then its
+`runs/`, `agents/` and `evidence/` directories, its markers, the steering ledgers that name
+only its Runs, and the Task's record. A file a failure leaves behind has no row any more,
+and the next sweep's no-row rule removes it.
 
 <!-- prettier-ignore -->
 > [!IMPORTANT]

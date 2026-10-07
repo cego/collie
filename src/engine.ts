@@ -162,6 +162,7 @@ import {
 } from "./verify";
 import * as Workflow from "effect/unstable/workflow/Workflow";
 import * as WorkflowEngine from "effect/unstable/workflow/WorkflowEngine";
+import type * as MessageStorage from "effect/unstable/cluster/MessageStorage";
 
 /** A module that cannot be loaded, named by its own file. Schema-backed, so the local
  *  host can fail a client with the same value rather than a copy of it. */
@@ -1657,7 +1658,10 @@ export const clearGenerations = (dir: string): Effect.Effect<void, never, FileSy
 export function engineLayer(options: {
   readonly dir: string;
 }): Layer.Layer<
-  WorkflowEngine.WorkflowEngine | SqlClient.SqlClient | Reactivity.Reactivity,
+  | WorkflowEngine.WorkflowEngine
+  | MessageStorage.MessageStorage
+  | SqlClient.SqlClient
+  | Reactivity.Reactivity,
   ConfigError
 > {
   // One connection, two halves: the engine's own tables and the rows Collie keeps beside
@@ -1686,7 +1690,8 @@ export function engineLayer(options: {
             entityRegistrationTimeout: Duration.infinity,
           },
         }).pipe(Layer.provide([sql, BunCrypto.layer]));
-        return ClusterWorkflowEngine.layer.pipe(Layer.provide(cluster));
+        // The message storage too: forgetting a Run clears what the engine kept of it.
+        return ClusterWorkflowEngine.layer.pipe(Layer.provideMerge(cluster));
       }),
     ),
   );
@@ -3267,6 +3272,14 @@ export interface RegistryApi {
   readonly view: (runId: string) => Effect.Effect<RunView | null>;
   /** Every run this host has rows for, newest last, narrowed to one Task where named. */
   readonly views: (task: string | null) => Effect.Effect<ReadonlyArray<RunView>>;
+  /**
+   * Forgets these Runs' rows, and what the engine keeps of their executions, in one
+   * transaction (ADR-0045 D5). Answers with the Runs it forgot; a row the engine never
+   * accepted is left.
+   */
+  readonly retire: (
+    runs: ReadonlyArray<string>,
+  ) => Effect.Effect<ReadonlyArray<string>, never, MessageStorage.MessageStorage>;
   /** The same run, again, whenever anything about it changes. */
   readonly watch: (runId: string) => Stream.Stream<RunView | null>;
   /**
@@ -3372,6 +3385,7 @@ export const foundationLayer = (options: {
   | Oversight
   | Store
   | WorkflowEngine.WorkflowEngine
+  | MessageStorage.MessageStorage
   | SqlClient.SqlClient
   | Reactivity.Reactivity,
   ConfigError,
@@ -4531,6 +4545,32 @@ const makeRegistry: (
 
     waiting: asked,
     view,
+    retire: (runs) =>
+      Effect.gen(function* () {
+        const [cluster, entity, ids, types, shard] = yield* Effect.promise(() =>
+          Promise.all([
+            import("effect/unstable/cluster/MessageStorage"),
+            import("effect/unstable/cluster/EntityAddress"),
+            import("effect/unstable/cluster/EntityId"),
+            import("effect/unstable/cluster/EntityType"),
+            import("effect/unstable/cluster/ShardId"),
+          ]),
+        );
+        const storage = yield* cluster.MessageStorage;
+        // Messages are found by entity type and id; the shard is part of the address only.
+        const address = (entityType: string, execution: string) =>
+          entity.EntityAddress.make({
+            entityType: types.make(entityType),
+            entityId: ids.make(execution),
+            shardId: shard.make("default", 0),
+          });
+        return yield* store.retire(runs, (row) =>
+          Effect.all([
+            storage.clearAddress(address(`Workflow/${row.generation}`, row.execution)),
+            storage.clearAddress(address("Workflow/-/DurableClock", row.execution)),
+          ]).pipe(Effect.orDie, Effect.asVoid),
+        );
+      }),
     views: (task: string | null) =>
       store.runs.pipe(
         Effect.flatMap((rows) =>

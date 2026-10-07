@@ -141,6 +141,15 @@ export interface StoreApi {
   readonly recordPlacing: (run: string, placing: string) => Effect.Effect<void>;
   /** A claim whose placement was refused, withdrawn so the request can be made again. */
   readonly forget: (run: string) => Effect.Effect<void>;
+  /**
+   * Forgets these Runs' rows in one transaction: `clear` first, for what the engine keeps
+   * of each, then its decisions and its row. A row the engine never accepted is left, for
+   * recovery to hand over (ADR-0017 D4). Answers with the Runs it forgot.
+   */
+  readonly retire: <E>(
+    runs: ReadonlyArray<string>,
+    clear: (row: RunRow) => Effect.Effect<void, E>,
+  ) => Effect.Effect<ReadonlyArray<string>, E>;
   /** The engine has this work: the receipt a crash before it is what recovery looks for. */
   readonly accepted: (run: string) => Effect.Effect<void>;
   readonly pending: Effect.Effect<ReadonlyArray<RunRow>>;
@@ -436,6 +445,26 @@ function makeStore(): Effect.Effect<StoreApi, never, SqlClient.SqlClient | React
         reactivity
           .mutation(RUNS, sql`DELETE FROM collie_runs WHERE run = ${run} AND accepted IS NULL`)
           .pipe(Effect.asVoid, Effect.orDie),
+      retire: <E>(runs: ReadonlyArray<string>, clear: (row: RunRow) => Effect.Effect<void, E>) =>
+        reactivity
+          .mutation(
+            RUNS,
+            sql.withTransaction(
+              Effect.gen(function* () {
+                const gone: string[] = [];
+                for (const run of runs) {
+                  const row = (yield* byRun(run).pipe(Effect.orDie))[0];
+                  if (row === undefined || row.accepted === null) continue;
+                  yield* clear(row);
+                  yield* sql`DELETE FROM collie_decisions WHERE run = ${run}`.pipe(Effect.orDie);
+                  yield* sql`DELETE FROM collie_runs WHERE run = ${run}`.pipe(Effect.orDie);
+                  gone.push(run);
+                }
+                return gone;
+              }),
+            ),
+          )
+          .pipe(Effect.catchTag("SqlError", Effect.die)),
       pending: unaccepted().pipe(Effect.orDie),
       runs: all,
       run: (run: string) =>

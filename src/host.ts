@@ -60,10 +60,12 @@ import {
 import { configuredAgents } from "./agents";
 import { Catalogue, discover, searchPath } from "./discovery";
 import { sideJobs } from "./side-jobs";
+import type * as MessageStorage from "effect/unstable/cluster/MessageStorage";
 import {
   collieCache,
   compactionSweeper,
   renovateClonesSweeper,
+  retentionSweeper,
   runnersSweeper,
   settlingOf,
   stateSweeper,
@@ -450,6 +452,7 @@ const hostBoard = (dir: string) =>
     /** Every kind of thing Collie cleans, judged against the Runs as they are now. */
     /** When each Task was first seen Finished, for as long as this host runs. */
     const seen = new Map<string, number>();
+    const storage = yield* Effect.context<MessageStorage.MessageStorage>();
     const sweepers = Effect.gen(function* () {
       const herds = yield* liveHerds(herdr, env);
       const sessions = herds.map((session) => session.herdr);
@@ -486,6 +489,15 @@ const hostBoard = (dir: string) =>
         compactionSweeper(env.stateDir, sessions),
         runnersSweeper(`${collieCache()}/runners`, BUILD),
         renovateClonesSweeper(env.stateDir, all),
+        // Last: a Task is kept while a workspace or a checkout of it is still there.
+        retentionSweeper({
+          stateDir: env.stateDir,
+          sessions,
+          tasks,
+          views: yield* build.pipe(Effect.orElseSucceed(() => [])),
+          runs: all,
+          retire: (ids) => registry.retire(ids).pipe(Effect.provideContext(storage)),
+        }),
       ];
     });
     return { env, herdr, bun, runs, build, unattended, sweepers };

@@ -17,7 +17,7 @@ import {
   type CleanupReport,
 } from "./board-model";
 import { herdrFailureReason, type Herdr } from "./herdr";
-import type { TaskRecord } from "./task";
+import { removeTask, withTaskLock, type TaskRecord } from "./task";
 import { appendJournal, readJournal } from "./journal";
 import { shell } from "./mr";
 import type { AgentEntry } from "./registry";
@@ -766,5 +766,163 @@ export const renovateClonesSweeper = (stateDir: string, runs: ReadonlyArray<RunF
       return { remove: remove.map((item, at) => ({ ...item, bytes: sizes[at] ?? 0 })), keep };
     }),
     remove: (item) => removeIf(item.target, verdict(item.target)),
+  };
+};
+
+const RETAIN_MS = 30 * DAY_MS;
+
+/**
+ * Tasks, each forgotten with every one of its Runs once nothing can need them and its last
+ * Run ended 30 days ago (ADR-0045 D5): the rows in one transaction through `retire`, then
+ * the files, which a failure between leaves for the state sweeper's no-row rule.
+ */
+export const retentionSweeper = (opts: {
+  stateDir: string;
+  sessions: ReadonlyArray<Herdr>;
+  tasks: ReadonlyArray<TaskRecord>;
+  views: ReadonlyArray<TaskView>;
+  runs: ReadonlyArray<RunFacts>;
+  retire: (runs: ReadonlyArray<string>) => Effect.Effect<ReadonlyArray<string>, never, BunServices>;
+}): Sweeper => {
+  const kind = "task";
+  const runsOf = (task: TaskRecord) => opts.runs.filter((run) => run.task === task.id);
+  const filesOf = (ids: ReadonlyArray<string>) =>
+    ids.flatMap((id) =>
+      ["runs", "agents", "evidence"].map((dir) => `${opts.stateDir}/${dir}/${id}`),
+    );
+
+  /** When its last Run ended: the board's own reading, else the newest of its files. */
+  const endedAt = (view: TaskView, ids: ReadonlyArray<string>) =>
+    Effect.gen(function* () {
+      if (view.ended !== null) return view.ended;
+      const fs = yield* FileSystem.FileSystem;
+      let newest = 0;
+      for (const dir of filesOf(ids)) {
+        const info = yield* fs.stat(dir).pipe(Effect.option);
+        if (Option.isSome(info))
+          newest = Math.max(newest, Option.getOrNull(info.value.mtime)?.getTime() ?? 0);
+      }
+      return newest;
+    });
+
+  const verdict = (
+    task: TaskRecord,
+  ): Effect.Effect<
+    { keep: string } | { remove: string; ids: ReadonlyArray<string> } | null,
+    never,
+    BunServices
+  > =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const view = opts.views.find((one) => one.id === task.id);
+      if (view === undefined) return null;
+      const section = sectionOf(view);
+      if (section !== "finished") return { keep: SECTION_SAID[section] };
+      const workspaces: string[] = [];
+      const terminals: string[] = [];
+      for (const session of opts.sessions) {
+        const listed = yield* session.workspaceList().pipe(Effect.option);
+        const panes = yield* session.paneList().pipe(Effect.option);
+        if (Option.isNone(listed) || Option.isNone(panes))
+          return { keep: "could not ask herdr what is open" };
+        workspaces.push(...listed.value.map((one) => one.workspaceId));
+        for (const pane of panes.value)
+          if (pane.terminalId !== null) terminals.push(pane.terminalId);
+      }
+      if (workspaces.includes(task.workspace)) return { keep: "its workspace is open" };
+      const mine = runsOf(task);
+      const ids = mine.map((run) => run.id);
+      const launched = yield* launchedTerminals(opts.stateDir, ids);
+      if (terminals.some((terminal) => launched.has(terminal)))
+        return { keep: "an agent of it is alive" };
+      for (const run of mine)
+        if (
+          run.worktree?.created_by_collie === true &&
+          (yield* fs.exists(run.worktree.path).pipe(Effect.orElseSucceed(() => true)))
+        )
+          return { keep: `a checkout it made is on disk (${run.worktree.path})` };
+      const dirs = ids.map((id) => `${opts.stateDir}/runs/${id}`);
+      const pointing = opts.runs.find(
+        (run) =>
+          run.task !== task.id &&
+          ((run.parent !== null && ids.includes(run.parent)) ||
+            Object.values(run.settled.inputs).some((value) =>
+              dirs.some((dir) => value === dir || value.startsWith(`${dir}/`)),
+            )),
+      );
+      if (pointing !== undefined) return { keep: `${pointing.id} still points into it` };
+      const ended = yield* endedAt(view, ids);
+      const days = Math.floor(((yield* Clock.currentTimeMillis) - ended) / DAY_MS);
+      if ((yield* Clock.currentTimeMillis) - ended < RETAIN_MS)
+        return { keep: `its last Run ended ${days} day(s) ago` };
+      return { remove: `its last Run ended ${days} days ago`, ids };
+    });
+
+  /** The steering ledgers whose every line is about one of `gone`. */
+  const ledgersOf = (gone: ReadonlySet<string>) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const root = `${opts.stateDir}/agents`;
+      const names = yield* fs.readDirectory(root).pipe(Effect.orElseSucceed(() => []));
+      const found: string[] = [];
+      for (const name of names) {
+        const ledger = `${root}/${name}/deliveries.jsonl`;
+        if (!(yield* fs.exists(ledger).pipe(Effect.orElseSucceed(() => false)))) continue;
+        const lines = yield* readJournal(ledger, LedgerRuns);
+        if (lines.length > 0 && lines.every((line) => gone.has(line.run)))
+          found.push(`${root}/${name}`);
+      }
+      return found;
+    });
+
+  return {
+    judge: Effect.gen(function* () {
+      const remove: CleanupItem[] = [];
+      const keep: CleanupKept[] = [];
+      for (const task of opts.tasks) {
+        const judged = yield* verdict(task);
+        if (judged === null) continue;
+        if ("keep" in judged) {
+          keep.push({ kind, target: task.id, reason: judged.keep });
+          continue;
+        }
+        const sizes = yield* sizesOf(filesOf(judged.ids));
+        remove.push({
+          kind,
+          target: task.id,
+          bytes: sizes.reduce((sum, one) => sum + one, 0),
+          reason: judged.remove,
+        });
+      }
+      return { remove, keep };
+    }),
+    remove: (item) =>
+      Effect.gen(function* () {
+        const task = opts.tasks.find((one) => one.id === item.target);
+        if (task === undefined) return { kept: "no such Task any more" };
+        return yield* withTaskLock(
+          opts.stateDir,
+          task.id,
+          Effect.gen(function* () {
+            const judged = yield* verdict(task);
+            if (judged === null) return { kept: "nothing to forget any more" };
+            if ("keep" in judged) return { kept: judged.keep };
+            const fs = yield* FileSystem.FileSystem;
+            const freed = (yield* sizesOf(filesOf(judged.ids))).reduce((sum, one) => sum + one, 0);
+            // Rows first: a file left behind without its row is the no-row rule's next sweep.
+            const gone = yield* opts.retire(judged.ids);
+            const goneSet = new Set(gone);
+            const markers = gone.flatMap((id) =>
+              ["stop", "hold", "parked", "notified"].map((one) => `${opts.stateDir}/${one}.${id}`),
+            );
+            for (const path of [...filesOf(gone), ...markers, ...(yield* ledgersOf(goneSet))])
+              yield* fs.remove(path, { recursive: true, force: true }).pipe(Effect.ignore);
+            if (gone.length < judged.ids.length)
+              return { kept: "a Run of it was never accepted by the engine" };
+            yield* removeTask(opts.stateDir, task.id).pipe(Effect.ignore);
+            return { freed };
+          }),
+        ).pipe(Effect.orElseSucceed(() => ({ kept: "its Task is in use" })));
+      }),
   };
 };

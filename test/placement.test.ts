@@ -27,6 +27,8 @@ import {
   type HostServices,
 } from "../src/engine";
 import { Store } from "../src/store";
+import type * as MessageStorage from "effect/unstable/cluster/MessageStorage";
+import { SqlClient } from "effect/unstable/sql";
 import { VerifySpecSchema } from "../src/verify-spec";
 import { readTask, writeTask, type TaskRecord } from "../src/task";
 import type { Call } from "./support/recorder";
@@ -96,7 +98,11 @@ const runEffect = <A, E>(effect: Effect.Effect<A, E, BunServices.BunServices>) =
   runLive(fastForward(effect));
 
 const hosted = <A, E>(
-  run: Effect.Effect<A, E, Registry | Store | HostServices>,
+  run: Effect.Effect<
+    A,
+    E,
+    Registry | Store | HostServices | MessageStorage.MessageStorage | SqlClient.SqlClient
+  >,
   agents: Partial<AgentHost> = {},
 ) =>
   run.pipe(
@@ -1452,6 +1458,71 @@ test(
         expect(there?.task).not.toBe(build?.task);
         expect((yield* rig.cmds()).filter((cmd) => cmd === "workspace create")).toHaveLength(3);
         expect(yield* rig.cmds()).not.toContain("workspace.focus");
+      }),
+    ),
+  120_000,
+);
+
+test(
+  "forgetting a Run removes its row and what the engine kept of it, and leaves a claim alone",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* rig.queueOutputs([{ verdict: "clean" }]);
+        const seen = yield* hosted(
+          Effect.gen(function* () {
+            const registry = yield* Registry;
+            const store = yield* Store;
+            const sql = yield* SqlClient.SqlClient;
+            const [hello] = yield* loaded(registry, [`${fixtures}/hello.workflow.ts`]);
+            const ids: string[] = [];
+            for (const request of ["r1", "r2"]) {
+              const started = yield* start(hello!, { request, text: { name: "you" } });
+              if (started._tag === "Failure") return yield* Effect.die(started.failure);
+              ids.push(started.success.runId);
+              yield* finished(started.success.runId);
+            }
+            const gone = ids[0]!;
+            const kept = ids[1]!;
+            const execution = (yield* store.run(gone))!.execution;
+            // A claim the engine never accepted, which recovery would hand over.
+            yield* store.admit({
+              request: "r-claim",
+              run: "run-claimed",
+              workflow: hello!.id,
+              project: rig.projectDir,
+              input: {},
+              provenance: {},
+              options: {},
+              generation: hello!.name,
+              execution: "e-claimed",
+              task: null,
+              parent: null,
+            });
+
+            const count = sql<{
+              readonly n: number;
+            }>`SELECT count(*) AS n FROM cluster_messages WHERE entity_id = ${execution}`;
+            const before = (yield* count)[0]?.n;
+            const forgotten = yield* registry.retire([gone, "run-claimed"]);
+            const messages = yield* count;
+            return {
+              forgotten,
+              view: yield* registry.view(gone),
+              other: yield* registry.view(kept),
+              claim: yield* store.run("run-claimed"),
+              before,
+              messages: messages[0]?.n,
+            };
+          }),
+        );
+
+        expect(seen.forgotten).toHaveLength(1);
+        expect(seen.view).toBeNull();
+        expect(seen.other?.status.status).toBe("complete");
+        expect(seen.claim).not.toBeNull();
+        expect(seen.before).toBeGreaterThan(0);
+        expect(seen.messages).toBe(0);
       }),
     ),
   120_000,
