@@ -805,6 +805,9 @@ export type SharedSettings = typeof SharedSettings.Type;
 /** Files given with a request, as paths on the host's own Machine, copied into the Run. */
 export const Attachments = Schema.Array(Schema.String);
 
+/** The Collie tools a Flock chat has a Machine's host answer, all of them reads. */
+export const FLOCK_READS = ["collie_run", "collie_receipts", "collie_workspaces"] as const;
+
 /**
  * What any front door, on this computer or another, may ask a host. Every operation takes
  * a request id: the same one twice is one operation, and with other arguments is refused.
@@ -1046,6 +1049,17 @@ export const FrontDoorRpcs = RpcGroup.make(
     payload: { settings: Schema.Array(SharedSetting), request: Schema.String },
     success: SharedSettings,
     error: Schema.Union([HostRefused, RequestConflict]),
+  }),
+  /**
+   * A read-only Collie tool answered for the asking channel as this Machine's Native chat
+   * answers it, with no board selection standing in for a Run. Records nothing.
+   */
+  Rpc.make("read", {
+    payload: {
+      tool: Schema.Literals(FLOCK_READS),
+      input: Schema.Record(Schema.String, Schema.Json),
+    },
+    success: Schema.String,
   }),
   /** Carries out what a finished Run offers, as a Run of its own. */
   Rpc.make("invoke", {

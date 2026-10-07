@@ -100,8 +100,6 @@ const machine = (
           omitted: 0,
         };
       }),
-    runDetail: () => Stream.make(null),
-    workflows: () => Effect.succeed([]),
     readFile: (payload) =>
       Effect.sync(() => {
         note("readFile", payload);
@@ -137,6 +135,11 @@ const machine = (
       Effect.sync(() => {
         note("editFile", payload);
         return { path: payload.path, replaced: 1 };
+      }),
+    read: (payload) =>
+      Effect.sync(() => {
+        note("read", payload);
+        return `${payload.tool} answered by ${name}`;
       }),
   };
   return { name, door };
@@ -461,6 +464,81 @@ test("collie_write and collie_edit go to the Machine's host in the human's words
     }),
   ));
 
+const reads = (asked: Asked[]) =>
+  asked.filter(({ op }) => op === "read").map(({ machine, payload }) => ({ machine, payload }));
+
+test("a Run named on a Machine is read by that Machine's host, under its own id, and headed with its name", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const asked: Asked[] = [];
+      const said = yield* call(asked, "collie_run", { run: "vm-mk:r-2" });
+      expect(reads(asked)).toEqual([
+        { machine: "vm-mk", payload: { tool: "collie_run", input: { run: "r-2" } } },
+      ]);
+      expect(said).toBe("## vm-mk\n\ncollie_run answered by vm-mk");
+    }),
+  ));
+
+test("a bare id only one Machine has is read there", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const asked: Asked[] = [];
+      const said = yield* call(asked, "collie_receipts", { run: "r-2" });
+      expect(reads(asked)).toEqual([
+        { machine: "vm-mk", payload: { tool: "collie_receipts", input: { run: "r-2" } } },
+      ]);
+      expect(said).toStartWith("## vm-mk");
+      // Ambiguous still refuses, asking nothing.
+      const both: Asked[] = [];
+      expect(yield* call(both, "collie_run", { run: "r-1" })).toContain(
+        "is on more than one Machine",
+      );
+      expect(reads(both)).toEqual([]);
+    }),
+  ));
+
+test("where work can start is every Machine's own answer, a section each, and a naming rule with no example path", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const asked: Asked[] = [];
+      const said = yield* call(asked, "collie_workspaces", {});
+      expect(
+        reads(asked)
+          .map(({ machine }) => machine)
+          .sort(),
+      ).toEqual(["mk-pc", "vm-mk"]);
+      expect(said).toContain("## mk-pc\n\ncollie_workspaces answered by mk-pc");
+      expect(said).toContain("## vm-mk\n\ncollie_workspaces answered by vm-mk");
+      expect(said).toContain("as <machine>: followed by a workspace id");
+      expect(said).not.toContain("/home/");
+    }),
+  ));
+
+test("a Machine whose host cannot answer a read is told to upgrade, and the rest still answer", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const asked: Asked[] = [];
+      const old = machine("vm-mk", [], asked);
+      const flock = {
+        machines: () => [
+          machine("mk-pc", [], asked),
+          { ...old, door: { ...old.door, read: () => Effect.never } },
+        ],
+        conversation: "flock@mk-pc",
+        said: () => undefined,
+        machineRule: () => undefined,
+        setMachineRule: () => Effect.void,
+        attachments: () => undefined,
+        uploaded: new Map<string, Map<string, string>>(),
+      };
+      const reading = yield* callFlockTool(flock, "collie_workspaces", {}).pipe(Effect.forkChild);
+      yield* TestClock.adjust("1 minute");
+      const said = yield* Fiber.join(reading);
+      expect(said).toContain("upgrade Collie on vm-mk");
+      expect(said).toContain("collie_workspaces answered by mk-pc");
+    }).pipe(Effect.provide([BunServices.layer, TestClock.layer()])),
+  ));
+
 test("the Machine rule is read back as saved, and replaced with what the human asked for", () =>
   Effect.runPromise(
     Effect.gen(function* () {
@@ -619,4 +697,27 @@ test("a start carrying files to a Machine whose Collie predates them is refused,
       expect(said).toContain("upgrade Collie on vm-mk");
       expect(asked.filter(({ op }) => op === "act" || op === "upload")).toEqual([]);
     }),
+  ));
+
+test("a Machine whose Collie has no such operation is told to upgrade, and the rest still answer", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const asked: Asked[] = [];
+      const old = machine("vm-mk", [], asked);
+      const flock = {
+        machines: () => [
+          machine("mk-pc", [], asked),
+          { ...old, door: { ...old.door, read: () => Effect.die("Unknown request tag: read") } },
+        ],
+        conversation: "flock@mk-pc",
+        said: () => undefined,
+        machineRule: () => undefined,
+        setMachineRule: () => Effect.void,
+        attachments: () => undefined,
+        uploaded: new Map<string, Map<string, string>>(),
+      };
+      const said = yield* callFlockTool(flock, "collie_workspaces", {});
+      expect(said).toContain("upgrade Collie on vm-mk");
+      expect(said).toContain("collie_workspaces answered by mk-pc");
+    }).pipe(Effect.provide(BunServices.layer)),
   ));

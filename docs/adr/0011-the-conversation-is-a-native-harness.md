@@ -211,6 +211,24 @@ tool host declares no human words for it, so nothing it does is recorded as said
 human. Anything else waits for the human's next message and goes with it as context. The
 host settles only the items the model was given (the `news` operation's `keys`).
 
+## Amended 2026-10-07: a Machine's host answers the Flock chat's reads
+
+Desktop answered `collie_run`, `collie_receipts` and `collie_workspaces` with renderings of
+its own, drawn from the drawer's details and the board. They fell behind Native chat's: a
+waiting Run said `attention: question` and nothing of what it asked, what was sent to a
+remote Machine's agents could not be read at all, and starting named directories the
+Machine did not have. Those three are now answered by the Machine's own host with Native
+chat's own reading, through one read-only front-door operation, `read`, that takes exactly
+those three tool names and records nothing. Desktop places the Run as before, sends the
+bare id, and heads the answer with the Machine's name; `collie_workspaces` asks every
+Machine at once, a section each. A Machine that does not answer is named with "upgrade
+Collie on <machine>". The Home board's selection never stands in for a Run through `read`:
+it is an input for the Home's own chat
+([ADR-0012](0012-the-boards-selection-is-an-explicit-chat-input.md)). The cost is that
+Desktop cannot restyle an answer, and the ids inside it are bare; the heading names the
+Machine. One reading of a Run, on the host, is what keeps the two chats from drifting apart
+again.
+
 ## Amended 2026-10-07: the Flock chat reaches files
 
 The Flock chat could not open a file. A human at Desktop can read, search, write and edit

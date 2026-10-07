@@ -19,7 +19,7 @@ import { workSourceOf } from "./strategies";
 import { readVerifications } from "./verify";
 
 /** What a Run's own plan directory is called inside it (ADR-0002). */
-const PLAN_DIR = "plan";
+export const PLAN_DIR = "plan";
 
 /** Which directory holds this run's plan, or `null` when it has none behind it. */
 export const planDirOf = Effect.fn("RunDetail.planDirOf")(function* (run: RunFacts) {

@@ -620,7 +620,7 @@ function agentsOf(
 }
 
 /** A Run parked at its evidence gate, with the checks its checkout and config would approve. */
-const gateOf = Effect.fn("Board.gateOf")(function* (run: RunFacts, userDir: string) {
+export const gateOf = Effect.fn("Board.gateOf")(function* (run: RunFacts, userDir: string) {
   if (run.parked !== nothingApproved(run.id)) return null;
   const offered = yield* approvedFrom({ cwd: run.cwd, userDir }).pipe(
     Effect.orElseSucceed((): ReadonlyArray<VerifySpec> => []),

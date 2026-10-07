@@ -171,7 +171,7 @@ const capped = Effect.fn("Views.capped")(function* (file: string, cap: number) {
  * offset rather than read and sliced: a run dir can hold a 40 MB log, and the panel
  * asking for one is not a reason to hold it in memory.
  */
-const tailed = Effect.fn("Views.tailed")(function* (file: string, cap: number) {
+export const tailed = Effect.fn("Views.tailed")(function* (file: string, cap: number) {
   const fs = yield* FileSystem.FileSystem;
   const info = yield* fs.stat(file).pipe(Effect.catch(() => Effect.succeed(null)));
   if (info === null) return null;

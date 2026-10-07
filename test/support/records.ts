@@ -28,6 +28,7 @@ export function runFacts(over: Partial<RunFacts> = {}): RunFacts {
     dir: `/state/runs/${id}`,
     evidence: `/state/evidence/${id}`,
     asking: [],
+    answered: [],
     held: false,
     repo: null,
     parked: null,
