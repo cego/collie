@@ -3994,11 +3994,18 @@ const makeRegistry: (
     yield* store.accepted(row.run);
   });
 
-  /** Admitted work a host did not live to place or hand over, finished under its claim. */
+  /**
+   * Admitted work a host did not live to place or hand over, finished under its claim. The
+   * row is read again under the claim: another pass may have placed or handed it over since.
+   */
   const recoverAdmission = (row: RunRow) =>
     claimingOf(row.request).withPermits(1)(
-      placeClaimed(row, false).pipe(
-        Effect.flatMap(handOver),
+      store.run(row.run).pipe(
+        Effect.flatMap((now) =>
+          now === null || now.accepted !== null
+            ? Effect.void
+            : placeClaimed(now, false).pipe(Effect.flatMap(handOver)),
+        ),
         Effect.catchTag("HostRefused", (failure) =>
           Effect.logWarning(`${row.run} was not started: ${failure.reason}`),
         ),

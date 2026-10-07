@@ -1499,9 +1499,9 @@ const own = (dir: string) =>
  * A client of the host that owns `dir`, starting one if nothing is there. Every client
  * gets the same host, and the first of them pays for it.
  *
- * `build` is what this client is. A host older than it is replaced: stopped, started
- * again as this build, and asked to recover, so an upgrade can never leave the two
- * apart. A host newer than it is reported rather than talked to — the client is what is
+ * `build` is what this client is. A host older than it is replaced: stopped and started
+ * again as this build, which recovers what the old one left, so an upgrade can never
+ * leave the two apart. A host newer than it is reported rather than talked to — the client is what is
  * stale, and it must not take the host back down to its own build.
  */
 export const connect = (
@@ -1539,12 +1539,8 @@ export const connect = (
           : `the host for ${dir} serves ${who.root} and this is collie ${build} from ${install}: point HERDR_PLUGIN_STATE_DIR at a directory of its own, or stop that host (pid ${who.pid}) and run this again`,
       });
     }
-    const client = yield* open(dir);
-    // The engine is durable, so what the old host was doing is picked up, not lost.
-    if (replaced) {
-      yield* client.recover().pipe(Effect.mapError((cause) => unavailable(dir, String(cause))));
-    }
-    return client;
+    // What the old host was doing is the new one's startup recovery, not this client's wait.
+    return yield* open(dir);
   });
 
 /** What a stopping host is given beyond its grace, and a killed one to be gone. */
