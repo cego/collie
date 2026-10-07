@@ -2,12 +2,14 @@
 // Grep, Write and Edit on a Machine it does not run on (ADR-0011, the Flock chat reaches
 // files). Paths are absolute on this Machine; nothing is written inside the host's state.
 
-import { Effect, Encoding, FileSystem, Option, Path, Schema } from "effect";
+import { Effect, Encoding, FileSystem, Option, Path, Schema, Stream } from "effect";
+import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { HostRefused, RUN_FILE_BYTES, type HostFile } from "./board-model";
-import { shell } from "./mr";
 
 /** The most paths a glob answers, and lines a grep does, unless asked for fewer. */
 export const FOUND_LIMIT = 100;
+/** Where a search stops looking; `omitted` past it is a lower bound. */
+export const SEARCH_LIMIT = 10_000;
 
 const refused = (reason: string) => new HostRefused({ reason });
 
@@ -51,9 +53,12 @@ export const readPart = Effect.fn("HostFiles.read")(function* (
 export const globFiles = Effect.fn("HostFiles.glob")(function* (pattern: string, dir: string) {
   const fs = yield* FileSystem.FileSystem;
   const root = yield* absolute(dir);
+  const found = yield* Stream.fromAsyncIterable(
+    new Bun.Glob(pattern).scan({ cwd: root, absolute: true }),
+    (cause) => refused(`the search of ${root} failed: ${String(cause)}`),
+  ).pipe(Stream.take(SEARCH_LIMIT), Stream.runCollect);
   const matched: Array<{ readonly path: string; readonly at: number }> = [];
-  // ponytail: every match is stat'ed to sort by age; stop scanning early if trees get huge.
-  for (const path of new Bun.Glob(pattern).scanSync({ cwd: root, absolute: true })) {
+  for (const path of found) {
     const info = yield* fs.stat(path).pipe(Effect.option);
     if (info._tag === "Some")
       matched.push({
@@ -118,6 +123,31 @@ const grepArgs = (asked: GrepAsked, mode: string) => [
   asked.pattern,
 ];
 
+/** The first `limit` lines a search prints, and how many more, counted to SEARCH_LIMIT. */
+const searched = (cmd: string, args: ReadonlyArray<string>, cwd: string, limit: number) =>
+  Effect.gen(function* () {
+    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const handle = yield* spawner.spawn(
+      ChildProcess.make(cmd, args, { cwd, stdout: "pipe", stderr: "ignore", extendEnv: true }),
+    );
+    const { lines, seen } = yield* handle.stdout.pipe(
+      Stream.decodeText(),
+      Stream.splitLines,
+      Stream.filter((line) => line !== ""),
+      Stream.take(SEARCH_LIMIT),
+      Stream.runFold(
+        () => ({ lines: [] as string[], seen: 0 }),
+        (acc, line) => {
+          if (acc.seen < limit) acc.lines.push(line);
+          return { lines: acc.lines, seen: acc.seen + 1 };
+        },
+      ),
+    );
+    // Cut short, the search is stopped rather than waited on.
+    const code = seen >= SEARCH_LIMIT ? 0 : Number(yield* handle.exitCode);
+    return { lines, omitted: seen - lines.length, code };
+  }).pipe(Effect.scoped);
+
 export const grepFiles = Effect.fn("HostFiles.grep")(function* (asked: GrepAsked) {
   const root = yield* absolute(asked.path);
   const mode = asked.outputMode ?? "files_with_matches";
@@ -129,18 +159,15 @@ export const grepFiles = Effect.fn("HostFiles.grep")(function* (asked: GrepAsked
   ))
     ? root
     : (yield* Path.Path).dirname(root);
-  const found =
+  const limit = Math.min(asked.headLimit ?? FOUND_LIMIT, FOUND_LIMIT);
+  const found = yield* (
     rg === null
-      ? yield* shell("grep", [...grepArgs(asked, mode), root], cwd)
-      : yield* shell(rg, [...rgArgs(asked, mode), root], cwd);
+      ? searched("grep", [...grepArgs(asked, mode), root], cwd, limit)
+      : searched(rg, [...rgArgs(asked, mode), root], cwd, limit)
+  ).pipe(Effect.mapError((cause) => refused(`the search of ${root} failed: ${String(cause)}`)));
   // Exit 1 is "nothing matched"; anything above it is the search's own failure.
   if (found.code > 1) return yield* refused(`the search of ${root} failed (exit ${found.code})`);
-  const lines = found.stdout.split("\n").filter((line) => line !== "");
-  const limit = Math.min(asked.headLimit ?? FOUND_LIMIT, FOUND_LIMIT);
-  return {
-    text: lines.slice(0, limit).join("\n"),
-    omitted: Math.max(0, lines.length - limit),
-  };
+  return { text: found.lines.join("\n"), omitted: found.omitted };
 });
 
 /**
@@ -152,9 +179,16 @@ const realOf = Effect.fn("HostFiles.realOf")(function* (path: string) {
   const paths = yield* Path.Path;
   let existing = path;
   let rest = "";
-  for (;;) {
+  for (let links = 0; ; ) {
     const real = yield* fs.realPath(existing).pipe(Effect.option);
     if (real._tag === "Some") return rest === "" ? real.value : paths.join(real.value, rest);
+    // A link to nothing yet is where a write through it lands.
+    const target = yield* fs.readLink(existing).pipe(Effect.option);
+    if (target._tag === "Some") {
+      if (++links > 40) return yield* refused(`${path} has too many links to follow`);
+      existing = paths.resolve(paths.dirname(existing), target.value);
+      continue;
+    }
     const parent = paths.dirname(existing);
     if (parent === existing) return path;
     rest = rest === "" ? paths.basename(existing) : paths.join(paths.basename(existing), rest);
@@ -208,6 +242,6 @@ export const editString = Effect.fn("HostFiles.edit")(function* (
     return yield* refused(
       `old_string is in ${path} ${replaced} times: give more of the text around it to make it unique, or set replace_all`,
     );
-  yield* fs.writeFileString(path, text.replaceAll(asked.oldString, asked.newString));
+  yield* fs.writeFileString(path, text.replaceAll(asked.oldString, () => asked.newString));
   return { path, replaced };
 });

@@ -81,10 +81,22 @@ test(
           });
           expect(edited).toEqual({ path: config, replaced: 2 });
           expect(yield* fs.readFileString(config)).toBe("a=2\na=2\n");
+          yield* door.editFile({
+            path: config,
+            oldString: "a=2",
+            newString: "b=$$VAR $& $' $`",
+            replaceAll: true,
+            request: "e-3",
+          });
+          expect(yield* fs.readFileString(config)).toBe("b=$$VAR $& $' $`\nb=$$VAR $& $' $`\n");
 
-          for (const path of [`${world.state}/runs/planted.txt`, `${world.project}/state/x.txt`]) {
-            if (path.includes("/project/"))
-              yield* fs.symlink(world.state, `${world.project}/state`);
+          yield* fs.symlink(world.state, `${world.project}/state`);
+          yield* fs.symlink(`${world.state}/runs/planted.txt`, `${world.project}/dangling`);
+          for (const path of [
+            `${world.state}/runs/planted.txt`,
+            `${world.project}/state/x.txt`,
+            `${world.project}/dangling`,
+          ]) {
             const refused = yield* door
               .writeFile({ path, content: "x", request: `w-${path}` })
               .pipe(Effect.flip);
@@ -97,6 +109,7 @@ test(
             trail.map(({ operation, actor }) => [operation, actor.origin, actor.said]),
           ).toEqual([
             ["write", "chat", "fix the config"],
+            ["edit", "chat", "fix the config"],
             ["edit", "chat", "fix the config"],
           ]);
         }).pipe(Effect.orDie),
