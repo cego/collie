@@ -1201,7 +1201,11 @@ Nothing is yours alone ([`AGENTS.md`](../AGENTS.md), invariant 1). What no Colli
 does — setting what a Run, or every Run, may do without asking, reconciling a delivery
 nobody can account for, recording evidence with `collie verify`, switching the chat
 harness — chat runs with the `collie` CLI, through the same validation and executors as
-when you type it. What proves a Run is chat's to choose too: a start you ask chat for
+when you type it. A start chat makes names its checkout by a workspace, a path, or just the
+repository's name: "monorepo" is the one checkout of that name under the
+[Projects root](../CONTEXT.md), opened if no workspace is on it, from the Home's chat and
+the Flock chat alike. Two checkouts of one name are refused with both paths. What proves a
+Run is chat's to choose too: a start you ask chat for
 carries the checks chat chose (`start` with `verify`), and chat adds or withdraws a running
 Run's (`set_verification`) at once. Collie runs those commands itself, outside any agent's
 permission rules; the merge request lists each one with its command, and you verify the

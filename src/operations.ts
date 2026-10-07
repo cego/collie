@@ -21,6 +21,7 @@ import {
 import { carriedBefore, carryOutProposal } from "./run-actions";
 export { carryOutProposal, registerRunExecutors } from "./run-actions";
 import { shell, type Runner } from "./mr";
+import { checkoutsUnder, projectsRoot } from "./projects";
 import { installation, manifestField, RELEASE_TAG } from "./release";
 import manifest from "../herdr-plugin.toml";
 import { everyRegistered, type AgentEntry } from "./registry";
@@ -162,6 +163,13 @@ export const workspaceNamed = Effect.fn("operations.workspaceNamed")(function* (
   if (matched.length === 0) {
     const opened = yield* workspaceForDirectory(env, wanted, all, panes);
     if (opened !== null) return opened;
+    const checkouts = yield* checkoutsNamed(env, wanted);
+    if (checkouts.paths.length === 1)
+      return yield* workspaceForDirectory(env, checkouts.paths[0]!, all, panes);
+    if (checkouts.paths.length > 1)
+      return refused(
+        `"${named}" names ${checkouts.paths.length} checkouts under ${checkouts.root} (${checkouts.paths.join(", ")}); say which`,
+      );
     return refused(`no workspace "${named}"; ${all.map((w) => w.label).join(", ") || "none"}`);
   }
   if (matched.length > 1)
@@ -175,6 +183,22 @@ export const workspaceNamed = Effect.fn("operations.workspaceNamed")(function* (
     workspace.cwd !== "" ? workspace.cwd : workspaceCwdFromPanes(workspace.workspaceId, panes);
   if (cwd === "") return refused(`workspace "${named}" has no directory to run in`);
   return { found: { ...workspace, cwd } };
+});
+
+/**
+ * The checkouts under the Projects root a repository name names, so a start says "monorepo"
+ * from any chat, wherever that chat runs, as it would from the Home.
+ */
+const checkoutsNamed = Effect.fn("operations.checkoutsNamed")(function* (
+  env: PluginEnv,
+  name: string,
+) {
+  const path = yield* Path.Path;
+  const root = yield* projectsRoot(env).pipe(Effect.orElseSucceed(() => null));
+  if (root === null || name.includes("/")) return { root: "", paths: [] };
+  const all = yield* checkoutsUnder(root.path).pipe(Effect.orElseSucceed(() => []));
+  const paths = all.filter((dir) => path.basename(dir).toLowerCase() === name.toLowerCase());
+  return { root: root.path, paths };
 });
 
 /**
