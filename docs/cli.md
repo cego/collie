@@ -1494,7 +1494,8 @@ host asks the engine about the work it has not finished, on a schedule every cli
 and speaks up when anything a run shows has changed, so watching costs the same whether one
 client is looking or the whole board is. Closing a client cancels nothing it started;
 stopping the host with `kill` leaves suspended work suspended, and the next client starts a
-host that picks it up.
+host that picks it up. A stopped host gives running steps five seconds to finish and then
+exits regardless, letting go of its lock; a step it cut short runs again under the next.
 
 The operations above are `HostRpcs`: internal, and a Collie client of another build stops
 before sending them anything. Beside them on the same socket is `FrontDoorRpcs`, the door
@@ -1625,21 +1626,28 @@ died mid-start; sending it with other arguments is `RequestConflict` rather than
 change of mind. A host that died after asking for the run's checkout or workspace, and
 before recording what it got, cannot tell whether one was made: that start is refused
 with what may be left behind, and keeps its claim, so the same request never makes a
-second one. The rows behind that are in the same SQLite file as the engine's own, and
+second one. A start the engine does not take within thirty seconds is refused saying so,
+and stays recorded: the next host start hands it over under the same claim. The rows behind
+that are in the same SQLite file as the engine's own, and
 [ADR-0017](adr/0017-one-request-is-one-run.md) is why each of them is there.
 
 It says which build it is, and which installation it serves. A client newer than the host,
 from the same installation (after `collie upgrade`), stops it and starts itself in its
-place. Any other client of another build is told which build is running and which pid to
+place; a host still there five seconds past its stop grace is killed, and its work is
+recovered by the one that replaces it. A host that does not answer is replaced the same way
+when the build it recorded in `host.build` is older. Any other client of another build is told which build is running and which pid to
 stop, and sends nothing else. That includes a checkout under development, which is pointed
 at a state directory of its own rather than replacing the installed host. Such a
 checkout's host also says `development: "<version>+<sha>"`; a release's does not.
-A host that cannot be started at all is `HostUnavailable`, with whether anything owns the
-directory. [ADR-0015](adr/0015-one-local-host-owns-a-state-directory.md) is why each of
+A host that cannot be started at all, or that takes a connection and does not answer within
+five seconds, is `HostUnavailable`, with whether anything owns the directory. [ADR-0015](adr/0015-one-local-host-owns-a-state-directory.md) is why each of
 those is the way it is.
 
 `COLLIE_HOST` names the command a client starts a host with — one path, or a JSON array of
 the executable and its arguments. Unset, it is this executable.
+
+`COLLIE_HOST_STOP_GRACE` is how long a stopped host waits for running steps before it exits
+anyway, as a duration (`5 seconds` unset).
 
 `COLLIE_HOST_CRASH_AT=admitted|executed` is for the recovery proof alone: the host kills
 itself in one of the two windows a start has — with the run recorded and the engine not yet

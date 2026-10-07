@@ -1698,6 +1698,9 @@ export function engineLayer(options: {
   return engine.pipe(Layer.provideMerge(sql));
 }
 
+/** How long a start waits for the engine to take its Run before it is refused. */
+const HAND_OVER_TIMEOUT = "30 seconds";
+
 export const HOLD = "hold";
 export const STOP = "stop";
 /** Not a control: the Run's own word on why it parked, which only the Run writes. */
@@ -3983,24 +3986,43 @@ const makeRegistry: (
     const payload = yield* payloadOf(generation, row).pipe(Effect.result);
     if (payload._tag === "Failure") return;
     yield* crash("admitted");
+    // Upstream retries a send it cannot route without end; the row stays unaccepted for the next host.
     yield* engine
       .execute(generation.registration.workflow, {
         executionId: row.execution,
         payload: payload.success,
         discard: true,
       })
-      .pipe(Effect.orDie);
+      .pipe(
+        Effect.orDie,
+        Effect.timeoutOrElse({
+          duration: HAND_OVER_TIMEOUT,
+          orElse: () => {
+            const refusal = `the engine did not take ${row.run} within ${HAND_OVER_TIMEOUT}; it is recorded, and the next host start hands it over`;
+            return Effect.logWarning(refusal).pipe(
+              Effect.andThen(Effect.fail(new HostRefused({ reason: refusal }))),
+            );
+          },
+        }),
+      );
     yield* crash("executed");
     yield* store.accepted(row.run);
   });
 
-  /** Admitted work a host did not live to place or hand over, finished under its claim. */
+  /**
+   * Admitted work a host did not live to place or hand over, finished under its claim. The
+   * row is read again under the claim: another pass may have placed or handed it over since.
+   */
   const recoverAdmission = (row: RunRow) =>
     claimingOf(row.request).withPermits(1)(
-      placeClaimed(row, false).pipe(
-        Effect.flatMap(handOver),
+      store.run(row.run).pipe(
+        Effect.flatMap((now) =>
+          now === null || now.accepted !== null
+            ? Effect.void
+            : placeClaimed(now, false).pipe(Effect.flatMap(handOver)),
+        ),
         Effect.catchTag("HostRefused", (failure) =>
-          Effect.logWarning(`${row.run} could not be placed: ${failure.reason}`),
+          Effect.logWarning(`${row.run} was not started: ${failure.reason}`),
         ),
       ),
     );
@@ -4028,8 +4050,13 @@ const makeRegistry: (
   });
 
   // What a host admitted and did not live to hand over. Every crash window ends here.
-  for (const row of yield* store.pending) yield* recoverAdmission(row);
-  yield* reconcileAnswers;
+  // Forked, so a hand-over that stalls does not keep the host from serving.
+  yield* Effect.forkScoped(
+    Effect.gen(function* () {
+      for (const row of yield* store.pending) yield* recoverAdmission(row);
+      yield* reconcileAnswers;
+    }),
+  );
 
   /** The file a generation was built from, which a row keeps naming after it has gone. */
   const entryOf = (name: string) => known.find((route) => route.name === name)?.entry ?? "";

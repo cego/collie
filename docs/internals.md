@@ -30,6 +30,21 @@ gone with the state directory it was in — there is nothing left for it to serv
 socket makes the directory again — or once the process named in `COLLIE_HOST_WATCH_PID`,
 where one is, has exited.
 
+A stopped host gives its running steps a grace (`COLLIE_HOST_STOP_GRACE`, five seconds) and
+then exits whatever is left, letting go of its lock: upstream's shutdown waits on each
+step, and one that never yields kept an old host past every client that tried to replace
+it. A newer client that asked a host to stop kills it five seconds after its grace. A host
+that does not say who it is within five seconds is replaced too when `host.build`, which it
+writes as it starts, names an older build of the same installation; otherwise the client
+reports it as `HostUnavailable` with its pid.
+
+The host writes what it does to `host.log` in its state directory — its start, a stop and
+whether the grace ran out, every warning the engine and the registry log — since its own
+stdout and stderr go nowhere. Lines are flushed every 100 ms, so a host killed outright can
+lose its last few. Past 1 MiB the file starts again and the previous one is kept as
+`host.log.1`. Look there first when a host
+stops answering.
+
 A workflow is a TypeScript module, and the host runs it on Effect's own engine
 ([ADR-0014](adr/0014-native-workflows-run-on-effects-own-engine.md)): a
 `ClusterWorkflowEngine` over a `SingleRunner`, with execution state in `host.db`, a Bun
@@ -798,8 +813,8 @@ its time.
   `COLLIE_TEST_BINARY` when it is set, as `test/support/host.ts` does, and the sources only
   without it. A start from source is most of a second of CPU, and the suite makes over a
   thousand.
-- **A host is stopped while its run waits.** Stopped mid-step, it sits out upstream's
-  15-second `entityTerminationTimeout` before it exits.
+- **A host is stopped while its run waits.** Stopped mid-step, it waits out its five-second
+  stop grace before it exits.
 - **A test can go red.** Break `src/` the way its name says and watch it fail before relying
   on it. A test that cannot fail, or whose every failure another test already has, is
   deleted.

@@ -10,7 +10,8 @@
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import type { BunServices } from "@effect/platform-bun";
-import { Effect, FileSystem, Result, Schema } from "effect";
+import { Clock, Effect, FileSystem, Layer, Result, Schema } from "effect";
+import * as WorkflowEngine from "effect/unstable/workflow/WorkflowEngine";
 import { Rig, FakeHerdr } from "./support/recorder";
 import { exec } from "./support/command";
 import { fastForward, runEffect as runLive } from "./support/effect";
@@ -1527,6 +1528,91 @@ test(
         expect(seen.claim).not.toBeNull();
         expect(seen.before).toBeGreaterThan(0);
         expect(seen.messages).toBe(0);
+      }),
+    ),
+  120_000,
+);
+
+/** An engine that takes nothing handed to it, the way the one that wedged did. */
+const stalled = Layer.effect(WorkflowEngine.WorkflowEngine)(
+  Effect.map(WorkflowEngine.WorkflowEngine, (engine) => ({
+    ...engine,
+    // SAFETY: the same arguments reach the real engine; only a discarded send stalls.
+    execute: ((workflow, options) =>
+      options.discard ? Effect.never : engine.execute(workflow, options)) as typeof engine.execute,
+  })),
+);
+
+test(
+  "a start the engine never takes is refused within a bound, and stays recorded for the next host",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const task = yield* aTask;
+        const outcome = yield* Effect.gen(function* () {
+          const registry = yield* Registry;
+          const [quiet] = yield* loaded(registry, [`${fixtures}/quiet.workflow.ts`]);
+          const started = yield* start(quiet!, { request: "r1", task: task.id });
+          const pending = yield* (yield* Store).pending;
+          return { reason: refusedWith(started), pending: pending.map((row) => row.request) };
+        }).pipe(
+          Effect.provide(registryLayer(dir(), { userDir: rig.userDir })),
+          Effect.provide(stalled),
+          Effect.provide(agentsLayer(hostOf())),
+          Effect.provide(foundationLayer({ dir: dir(), userDir: rig.userDir })),
+          Effect.scoped,
+          Effect.orDie,
+        );
+        expect(outcome.reason).toContain("the next host start hands it over");
+        expect(outcome.pending).toEqual(["r1"]);
+      }),
+    ),
+  120_000,
+);
+
+test(
+  "a host whose recovery stalls on the engine still serves before that hand-over gives up",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        // A Run a host admitted and died before handing over.
+        yield* hosted(
+          Effect.gen(function* () {
+            const registry = yield* Registry;
+            const [quiet] = yield* loaded(registry, [`${fixtures}/quiet.workflow.ts`]);
+            const payload = { runId: "run-left", input: {} };
+            yield* (yield* Store).admit({
+              request: "r1",
+              run: "run-left",
+              workflow: "quiet",
+              project: rig.projectDir,
+              input: payload.input,
+              provenance: {},
+              options: {},
+              generation: quiet!.name,
+              execution: yield* quiet!.registration.workflow.executionId(payload),
+              task: null,
+              parent: null,
+            });
+          }),
+        );
+
+        const before = yield* Clock.currentTimeMillis;
+        const served = yield* Effect.gen(function* () {
+          const held = yield* (yield* Registry).registrations;
+          const pending = yield* (yield* Store).pending;
+          return { live: held.live, pending: pending.map((row) => row.run) };
+        }).pipe(
+          Effect.provide(registryLayer(dir(), { userDir: rig.userDir })),
+          Effect.provide(stalled),
+          Effect.provide(agentsLayer(hostOf())),
+          Effect.provide(foundationLayer({ dir: dir(), userDir: rig.userDir })),
+          Effect.scoped,
+          Effect.orDie,
+        );
+        expect(served.live).toHaveLength(1);
+        expect(served.pending).toEqual(["run-left"]);
+        expect((yield* Clock.currentTimeMillis) - before).toBeLessThan(30_000);
       }),
     ),
   120_000,

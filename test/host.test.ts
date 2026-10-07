@@ -52,7 +52,7 @@ const workspace = Effect.fn("HostTest.workspace")(function* (prefix: string) {
   const wf = `${dir}/project/.collie/workflows`;
   yield* fs.makeDirectory(wf, { recursive: true });
   yield* fs.makeDirectory(`${dir}/state`, { recursive: true });
-  for (const name of ["proof.workflow.ts", "helper.ts", "notes.md"]) {
+  for (const name of ["proof.workflow.ts", "stubborn.workflow.ts", "helper.ts", "notes.md"]) {
     yield* fs.copyFile(`${fixtures}/${name}`, `${wf}/${name}`);
   }
   return { wf, project: `${dir}/project`, state: `${dir}/state` };
@@ -236,6 +236,38 @@ test(
 );
 
 test(
+  "a host told to stop while a step will not end is gone within seconds, and lets go",
+  () =>
+    proves(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const { project, state } = yield* workspace("collie-host-stubborn-");
+        const marker = `${state}/started`;
+        const who = yield* Effect.scoped(
+          Effect.gen(function* () {
+            const client = yield* connect(state);
+            yield* client.start({ project, id: "stubborn", request: "req-1", input: { marker } });
+            return yield* client.identity();
+          }),
+        ).pipe(Effect.orDie);
+        yield* until(() => fs.exists(marker), Boolean);
+
+        yield* signalProcess(who.pid, "SIGTERM");
+        yield* until(
+          () => signalProcess(who.pid),
+          (alive) => !alive,
+        );
+        expect(yield* ownerOf(state)).toBeNull();
+        // And it said so where the next human to look will find it.
+        const log = yield* fs.readFileString(`${state}/host.log`);
+        expect(log).toContain("host started");
+        expect(log).toContain("still stopping after");
+      }),
+    ),
+  120_000,
+);
+
+test(
   "a lock left by a dead host is recovered without touching the process that has its pid",
   () =>
     proves(
@@ -321,6 +353,85 @@ test(
         const now = yield* ownerOf(state);
         expect(now?.pid).not.toBe(old.pid);
         expect(yield* signalProcess(old.pid)).toBe(false);
+        yield* stopHost(state);
+      }),
+    ),
+  120_000,
+);
+
+test(
+  "a newer client replaces a host that does not stop when asked, within seconds",
+  () =>
+    proves(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const { project, state } = yield* workspace("collie-host-wedged-");
+        const marker = `${state}/started`;
+        // A host whose stop waits on its running step for as long as that takes, the way
+        // one from before the stop grace does.
+        const old = yield* Effect.scoped(
+          Effect.gen(function* () {
+            const client = yield* connect(state, { hostEnv: { COLLIE_HOST_STOP_GRACE: "1 hour" } });
+            yield* client.start({ project, id: "stubborn", request: "req-1", input: { marker } });
+            return yield* client.identity();
+          }),
+        ).pipe(Effect.orDie);
+        yield* until(() => fs.exists(marker), Boolean);
+
+        const refused = yield* Effect.scoped(connect(state, { build: "999.0.0" })).pipe(
+          Effect.flip,
+        );
+        expect(refused._tag).toBe("HostVersionMismatch");
+        expect(yield* signalProcess(old.pid)).toBe(false);
+        expect((yield* ownerOf(state))?.pid).not.toBe(old.pid);
+        yield* stopHost(state);
+      }),
+    ),
+  120_000,
+);
+
+test(
+  "a host that takes the connection and never answers is reported rather than waited on",
+  () =>
+    proves(
+      Effect.gen(function* () {
+        const { state } = yield* workspace("collie-host-silent-");
+        const who = yield* Effect.scoped(
+          connect(state).pipe(Effect.flatMap((client) => client.identity())),
+        ).pipe(Effect.orDie);
+        // Its socket still accepts, and nothing behind it reads.
+        yield* signalProcess(who.pid, "SIGSTOP");
+        const refused = yield* Effect.scoped(connect(state)).pipe(
+          Effect.flip,
+          Effect.ensuring(signalProcess(who.pid, "SIGCONT")),
+        );
+        if (refused._tag !== "HostUnavailable") {
+          throw new Error(`connected, or refused with ${refused._tag}`);
+        }
+        expect(refused.reason).toContain(`pid ${who.pid} owns the directory and is not answering`);
+        yield* stopHost(state);
+      }),
+    ),
+  120_000,
+);
+
+test(
+  "a newer client replaces an older host that does not answer, by the build it recorded",
+  () =>
+    proves(
+      Effect.gen(function* () {
+        const { state } = yield* workspace("collie-host-silent-older-");
+        const old = yield* Effect.scoped(
+          connect(state).pipe(Effect.flatMap((client) => client.identity())),
+        ).pipe(Effect.orDie);
+        yield* signalProcess(old.pid, "SIGSTOP");
+
+        const refused = yield* Effect.scoped(connect(state, { build: "999.0.0" })).pipe(
+          Effect.flip,
+        );
+        expect(refused._tag).toBe("HostVersionMismatch");
+        expect(yield* signalProcess(old.pid)).toBe(false);
+        expect((yield* ownerOf(state))?.pid).not.toBe(old.pid);
         yield* stopHost(state);
       }),
     ),
