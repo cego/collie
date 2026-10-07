@@ -1451,7 +1451,8 @@ host asks the engine about the work it has not finished, on a schedule every cli
 and speaks up when anything a run shows has changed, so watching costs the same whether one
 client is looking or the whole board is. Closing a client cancels nothing it started;
 stopping the host with `kill` leaves suspended work suspended, and the next client starts a
-host that picks it up.
+host that picks it up. A stopped host gives running steps five seconds to finish and then
+exits regardless, letting go of its lock; a step it cut short runs again under the next.
 
 The operations above are `HostRpcs`: internal, and a Collie client of another build stops
 before sending them anything. Beside them on the same socket is `FrontDoorRpcs`, the door

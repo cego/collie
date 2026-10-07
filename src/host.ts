@@ -137,7 +137,14 @@ import { reason } from "./naming";
 import { loadDefaults, SettingRefused, sharedSettings, takeShared } from "./config";
 import { factsOfView, settled } from "./runs";
 import { aliveIn, focusPane, herdChanges, liveHerds } from "./herds";
-import { currentPid, ensureLockDir, lockHolder, withLock, type LockHolder } from "./lock";
+import {
+  currentPid,
+  ensureLockDir,
+  holdsLock,
+  lockHolder,
+  withLock,
+  type LockHolder,
+} from "./lock";
 
 /** What a host says it is. A client that is not this stops rather than guessing. */
 export const BUILD: string = manifest.version;
@@ -1303,8 +1310,48 @@ export const serve = (dir: string): Effect.Effect<void, never, BunServices | Sco
     yield* ensureLockDir(lock);
     // `withLock` breaks a claim whose holder is gone before its last attempt, so a host
     // that crashed leaves nothing for a human to clear.
-    return yield* withLock(lock, Effect.void, Effect.race(own(dir), orphaned(dir)), 0);
+    return yield* withLock(
+      lock,
+      Effect.void,
+      boundedStop(lock).pipe(Effect.andThen(Effect.race(own(dir), orphaned(dir)))),
+      0,
+    );
   }).pipe(Effect.orDie);
+
+/** How long a host told to stop waits for running steps before it exits anyway. */
+const STOP_GRACE = "5 seconds";
+const STOP_SIGNALS = ["SIGTERM", "SIGINT"] as const;
+
+/**
+ * A stop signal gives the host's shutdown the grace, then exits however far it got:
+ * upstream waits on each running step, and one that never yields would keep the
+ * directory forever. What did not finish is recovered by the next host, which is why
+ * the lock is let go of here rather than left for it to judge stale.
+ */
+const boundedStop = (lock: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const stopping = yield* Deferred.make<void>();
+    // In the outer scope, which closes only once the shutdown it bounds has finished.
+    yield* Deferred.await(stopping).pipe(
+      Effect.andThen(Effect.sleep(STOP_GRACE)),
+      Effect.andThen(holdsLock(lock)),
+      Effect.flatMap((ours) => (ours ? fs.remove(lock, { force: true }) : Effect.void)),
+      Effect.ignore,
+      Effect.andThen(Effect.sync(() => process.exit(1))),
+      Effect.forkScoped,
+    );
+    const signalled = () => Deferred.doneUnsafe(stopping, Effect.void);
+    yield* Effect.acquireRelease(
+      Effect.sync(() => {
+        for (const signal of STOP_SIGNALS) process.once(signal, signalled);
+      }),
+      () =>
+        Effect.sync(() => {
+          for (const signal of STOP_SIGNALS) process.off(signal, signalled);
+        }),
+    );
+  });
 
 /**
  * Resolves once nothing is left for this host to serve: its lock is gone with the state

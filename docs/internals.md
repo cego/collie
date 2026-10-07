@@ -763,8 +763,8 @@ its time.
   `COLLIE_TEST_BINARY` when it is set, as `test/support/host.ts` does, and the sources only
   without it. A start from source is most of a second of CPU, and the suite makes over a
   thousand.
-- **A host is stopped while its run waits.** Stopped mid-step, it sits out upstream's
-  15-second `entityTerminationTimeout` before it exits.
+- **A host is stopped while its run waits.** Stopped mid-step, it waits out its five-second
+  stop grace before it exits.
 - **A test can go red.** Break `src/` the way its name says and watch it fail before relying
   on it. A test that cannot fail, or whose every failure another test already has, is
   deleted.

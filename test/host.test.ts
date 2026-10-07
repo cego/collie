@@ -52,7 +52,7 @@ const workspace = Effect.fn("HostTest.workspace")(function* (prefix: string) {
   const wf = `${dir}/project/.collie/workflows`;
   yield* fs.makeDirectory(wf, { recursive: true });
   yield* fs.makeDirectory(`${dir}/state`, { recursive: true });
-  for (const name of ["proof.workflow.ts", "helper.ts", "notes.md"]) {
+  for (const name of ["proof.workflow.ts", "stubborn.workflow.ts", "helper.ts", "notes.md"]) {
     yield* fs.copyFile(`${fixtures}/${name}`, `${wf}/${name}`);
   }
   return { wf, project: `${dir}/project`, state: `${dir}/state` };
@@ -233,6 +233,34 @@ test(
       }),
     ),
   180_000,
+);
+
+test(
+  "a host told to stop while a step will not end is gone within seconds, and lets go",
+  () =>
+    proves(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const { project, state } = yield* workspace("collie-host-stubborn-");
+        const marker = `${state}/started`;
+        const who = yield* Effect.scoped(
+          Effect.gen(function* () {
+            const client = yield* connect(state);
+            yield* client.start({ project, id: "stubborn", request: "req-1", input: { marker } });
+            return yield* client.identity();
+          }),
+        ).pipe(Effect.orDie);
+        yield* until(() => fs.exists(marker), Boolean);
+
+        yield* signalProcess(who.pid, "SIGTERM");
+        yield* until(
+          () => signalProcess(who.pid),
+          (alive) => !alive,
+        );
+        expect(yield* ownerOf(state)).toBeNull();
+      }),
+    ),
+  120_000,
 );
 
 test(
