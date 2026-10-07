@@ -19,7 +19,7 @@ const Payload = Schema.Struct({
   run: Schema.optional(Schema.String),
 });
 const payloadOf = (envelope: { readonly data?: unknown }) =>
-  Schema.decodeUnknownSync(Payload)(envelope);
+  Schema.decodeUnknownSync(Payload)(envelope.data);
 const CallLine = Schema.fromJsonString(
   Schema.Struct({ cmd: Schema.String, argv: Schema.Array(Schema.String) }),
 );
@@ -49,6 +49,7 @@ const attending = <A, E>(
           yield* fs.writeFileString(`${world.project}/${name}`, text!).pipe(Effect.orDie);
         const extra = { FAKE_HERDR_OUTPUTS: outputs };
         return yield* body(world, (args) => collie(world, args, extra)).pipe(
+          Effect.tapCause((c) => Effect.sync(() => console.log("FULL", require("effect").Cause.pretty(c), JSON.stringify((c as any).reasons?.map((r: any) => String(r.defect?.cause ?? r.defect?.message)))))),
           Effect.ensuring(stopHost(world.state)),
         );
       }),
