@@ -205,9 +205,11 @@ test("Desktop speaks first only about what matters, and the rest goes with the h
         expect(read).toEqual(["r1:asking"]);
         // Nobody is there to click an answer, so the question is refused rather than waited on.
         expect(seen.refusals).toEqual(seen.prompts.slice(0, 1));
-        const usage = yield* (yield* FileSystem.FileSystem).readFileString(
-          `${dir}/flock-usage.jsonl`,
-        );
+        const fs = yield* FileSystem.FileSystem;
+        // Recorded once the turn has drained, after its News was marked read.
+        for (let tries = 0; tries < 200 && !(yield* fs.exists(`${dir}/flock-usage.jsonl`)); tries++)
+          yield* TestClock.withLive(Effect.sleep("10 millis"));
+        const usage = yield* fs.readFileString(`${dir}/flock-usage.jsonl`);
         expect(usage.trim().split("\n")).toHaveLength(1);
 
         yield* Stream.runDrain(conversation.send("what's new?", null, false));
