@@ -3,7 +3,8 @@
 
 import { expect, test } from "bun:test";
 import { ansiLines, ansiSpans } from "../src/shared/ansi";
-import { attachmentsShown, mediaType, sortEvidence } from "../src/shared/evidence";
+import { attachmentsShown } from "../src/shared/attachments";
+import { mediaType, sortEvidence } from "../src/shared/evidence";
 
 test("terminal colours become styled spans, and a reset ends them", () => {
   expect(ansiSpans("ok \x1b[31;1mFAIL\x1b[0m done")).toEqual([

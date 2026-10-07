@@ -81,9 +81,9 @@ const MACHINE_RULE = "the Machine rule (this MR)";
 /** What the front door owes a person, and cannot be settled below the front door. */
 const FRONT_DOOR: readonly Check[] = [
   {
-    id: "front-door/a-pasted-image-is-attached-and-a-file-too-large-is-refused",
+    id: "front-door/a-file-too-large-for-a-message-is-refused",
     statement:
-      "In the Flock chat's composer a pasted image becomes an attachment while pasted text stays text, a file over 20 MB or a message over 30 MB is refused naming the file or the total and the cap, and an image is scaled to 2000 px on its long edge and never up.",
+      "The Flock chat's composer refuses a file over 20 MB, or one that takes a message's files over 30 MB, naming the file or the total and the cap.",
     owner: ATTACHMENTS,
     needs: "ui",
     proof: {
@@ -94,9 +94,35 @@ const FRONT_DOOR: readonly Check[] = [
     },
   },
   {
-    id: "front-door/a-drawer-lists-what-a-run-was-given",
+    id: "front-door/a-pasted-image-is-attached-and-pasted-text-stays-text",
     statement:
-      "A card's record lists the files the Run was given: the TUI's Summary with each one's path and size, and Desktop's Evidence tab with an image as a thumbnail and anything else by name.",
+      "Of what is pasted into the Flock chat's composer, an image file becomes an attachment and text stays text.",
+    owner: ATTACHMENTS,
+    needs: "ui",
+    proof: {
+      kind: "test",
+      layer: "ui",
+      file: "test/desktop-attachments.test.ts",
+      name: "a pasted image file becomes an attachment, and pasted text stays text",
+    },
+  },
+  {
+    id: "front-door/a-large-image-is-scaled-for-the-model",
+    statement:
+      "An image attached in the Flock chat is scaled to 2000 px on its long edge for the model, and never up.",
+    owner: ATTACHMENTS,
+    needs: "ui",
+    proof: {
+      kind: "test",
+      layer: "ui",
+      file: "test/desktop-attachments.test.ts",
+      name: "an image is scaled to 2000 px on its long edge, and never up",
+    },
+  },
+  {
+    id: "front-door/the-tui-summary-lists-what-a-run-was-given",
+    statement:
+      "The TUI's Summary of a card lists the files the Run was given, each with its path and size.",
     owner: ATTACHMENTS,
     needs: "ui",
     proof: {
@@ -104,6 +130,19 @@ const FRONT_DOOR: readonly Check[] = [
       layer: "ui",
       file: "test/ui/board.test.tsx",
       name: "Summary lists what the Run was given with its path, and nothing for a Run given none",
+    },
+  },
+  {
+    id: "front-door/desktop-shows-what-a-run-was-given",
+    statement:
+      "Desktop's record of a Run shows each image it was given as a thumbnail and any other file by name.",
+    owner: ATTACHMENTS,
+    needs: "ui",
+    proof: {
+      kind: "test",
+      layer: "ui",
+      file: "desktop/test/evidence.test.ts",
+      name: "a Run's attached images show as thumbnails, and every other file by name",
     },
   },
   {

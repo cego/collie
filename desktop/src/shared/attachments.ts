@@ -3,6 +3,7 @@
 // the view bundles this.
 
 import { Option, Schema } from "effect";
+import type { AttachmentFile } from "../../../src/board-model";
 
 /** A file a message carried, as the conversation shows it. */
 export const Attached = Schema.Struct({
@@ -158,3 +159,10 @@ export const attachedIn = (part: { readonly type: string }): Option.Option<Attac
     size: metadata.size,
     mediaType: source.mimeType,
   }));
+
+/** A Run's attachments: images as thumbnails, everything else by name. */
+export const attachmentsShown = (files: ReadonlyArray<AttachmentFile>) => {
+  const sorted = [...files].sort((a, b) => a.name.localeCompare(b.name));
+  const image = (file: AttachmentFile) => file.mediaType.startsWith("image/");
+  return { thumbnails: sorted.filter(image), named: sorted.filter((file) => !image(file)) };
+};

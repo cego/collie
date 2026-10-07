@@ -1092,9 +1092,7 @@ as you left it while the drawer is open. Shiki colours each side of a hunk as on
 a comment spanning its lines is coloured on all of them. A file is read from the host when
 it is opened, and again when the Run changes how many lines it adds or removes, with no
 line cap; a file with more than
-500 changed lines, or a binary one, starts collapsed. **Evidence** opens with the files the
-Run was given, when it was given any: an image as a thumbnail, any other file by its name,
-type and size. Then come the Run's
+500 changed lines, or a binary one, starts collapsed. **Evidence** shows the Run's
 verifications as a checklist, those that did not do what they were expected to first and
 already open with their output in its terminal colours; then every web link the Run's
 Outputs, handoffs, review and findings name, as a card: a Claude artifact by the title its
@@ -1108,8 +1106,9 @@ searchable; and its metrics as a table. A report that keeps its attachments in f
 it shows without them. **Log**
 follows the end of the Run's log as it is written, with a search that keeps only the lines
 that match. **Merge request** shows what the host's merge watch last read — title, state,
-pipeline, approvals and comments — with Open in browser. **Facts** shows the Run's intent,
-its steering cards and the card's TaskView as the host sent it. Markdown is rendered with
+pipeline, approvals and comments — with Open in browser. **Facts** shows the files the Run was
+given, when it was given any (an image as a thumbnail, any other file by its name, type and
+size), its intent, its steering cards and the card's TaskView as the host sent it. Markdown is rendered with
 Comark: tables, Shiki-highlighted code and mermaid diagrams, with anything that could run
 and every inline style removed, because agents write it. The view's own policy lets nothing
 on a page load from the network, and nothing may move Desktop's window off its own page;
