@@ -200,7 +200,7 @@ watch(update, (now) => {
     <FlockChat
       v-if="!popped"
       v-show="chatShown"
-      class="w-96 shrink-0"
+      class="w-[min(32rem,40vw)] shrink-0"
       @pop-out="popChatOut"
       @collapse="chatShown = false"
     />

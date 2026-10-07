@@ -203,6 +203,51 @@ test(
 );
 
 test(
+  "the docked chat is 32rem wide, and never more than 40% of the window",
+  () =>
+    run(
+      Effect.gen(function* () {
+        const { page } = app!;
+        const chat = page.getByTestId("flock-chat");
+        const widthAt = (width: number) =>
+          Effect.promise(() => page.setViewportSize({ width, height: 800 })).pipe(
+            Effect.andThen(Effect.promise(() => chat.boundingBox())),
+            Effect.map((box) => box?.width),
+          );
+        expect(yield* widthAt(1600)).toBeCloseTo(512, 0);
+        expect(yield* widthAt(1000)).toBeCloseTo(400, 0);
+      }),
+    ),
+  30_000,
+);
+
+test(
+  "Machines shows Desktop's own version, and a checkout Desktop says it never updates itself",
+  () =>
+    run(
+      Effect.gen(function* () {
+        const { page } = app!;
+        yield* Effect.promise(() => page.getByTestId("machines").click());
+        const version = page.getByTestId("desktop-version");
+        yield* settled("Desktop's version", () =>
+          version
+            .textContent()
+            .then((text) => (/Collie Desktop \d+\.\d+\.\d+/.test(text ?? "") ? true : undefined)),
+        );
+        yield* reads(
+          version.getByTestId("update-state"),
+          "This Desktop runs from a checkout, which never updates itself.",
+        );
+        expect(
+          yield* Effect.promise(() => version.getByTestId("check-for-updates").isDisabled()),
+        ).toBe(true);
+        yield* Effect.promise(() => page.keyboard.press("Escape"));
+      }),
+    ),
+  30_000,
+);
+
+test(
   "quitting Desktop closes every master it opened",
   () =>
     run(
