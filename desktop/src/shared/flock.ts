@@ -415,7 +415,7 @@ export const DesktopRpcs = RpcGroup.make(
     success: Schema.String,
     error: ActionFailed,
   }),
-  /** One Run's details while its drawer is open, with its log's tail, again as they change. */
+  /** One Run's details while its record is open, with its log's tail, again as they change. */
   Rpc.make("runDetail", {
     payload: { installation: Schema.String, runId: Schema.String },
     success: Schema.NullOr(RunDetail),

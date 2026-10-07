@@ -72,7 +72,7 @@ export const credentialsAtom = FlockClient.runtime
 export const flockSettingsAtom = FlockClient.runtime.atom(
   Stream.unwrap(FlockClient.use((client) => Effect.succeed(client("flockSettings", undefined)))),
 );
-/** A Run's details while some drawer shows them, keyed by `runDetailKey`. */
+/** A Run's details while some record shows them, keyed by `runDetailKey`. */
 export const runDetailAtom = Atom.family((key: string) => {
   const { installation, runId } = Schema.decodeSync(RunOn)(key);
   return FlockClient.runtime.atom(

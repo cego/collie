@@ -1,4 +1,4 @@
-// A file's unified patch, as the drawer draws it. No Bun-only import: the view bundles this.
+// A file's unified patch, as the record draws it. No Bun-only import: the view bundles this.
 
 export interface PatchLine {
   readonly kind: "context" | "add" | "del";

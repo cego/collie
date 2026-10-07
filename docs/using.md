@@ -942,16 +942,16 @@ the card's first action is the TUI card's own. Following a check's output is not
 yet. Open merge request opens it in your browser.
 
 **Go to pane** asks the card's Machine to focus the Run's newest live agent, or its
-workspace where it has none, on that Machine's own herdr, and opens the card's drawer on
+workspace where it has none, on that Machine's own herdr, and opens the card's record on
 its **Terminal** tab, which shows that agent's pane. It is herdr's own controller for the
 pane, run over the connection Desktop already holds to the Machine: one more channel on
 its SSH master, so going to a pane never asks for another login or SSO approval, or a
 local process for this computer. Nothing beyond Desktop is needed on this computer. Type
-into it as into herdr — Esc and Ctrl+C go to the agent, not to the drawer, and Ctrl+C
+into it as into herdr — Esc and Ctrl+C go to the agent, not to the record, and Ctrl+C
 copies instead while text is selected; a multi-line paste arrives as one paste; the wheel
-scrolls the pane's own history; and the pane follows the drawer's size, which widens while
-the tab is shown. A link in it opens in your browser. A pane cannot write your clipboard.
-Leaving the tab or closing the drawer gives the pane back, so a herdr window showing it
+scrolls the pane's own history; and the pane follows the record's size. A link in it opens
+in your browser. A pane cannot write your clipboard.
+Leaving the tab or closing the record gives the pane back, so a herdr window showing it
 returns to its own size. A terminal that ends says why — the pane closed, another client
 took it over, the Machine's connection dropped, or herdr refused — and **Reattach** finds
 the Run's newest live agent again. The tab stays while its Machine is away, and Reattach
@@ -1089,8 +1089,27 @@ again.
 to it and drops its saved board. It never stops a host, a Run or herdr there, and never
 uninstalls Collie. This computer is not in herdr's list, so it has no Remove.
 
-Pressing a card's name opens its drawer, which follows the card's Run on its host for as
-long as it is open. Its **Plan** tab renders the spec, read whole from the host where it is longer than the
+Click a card to select it; clicking it again keeps it selected. Double-click a card, or press
+its name, to open its record, which selects the card too and follows its Run on its host for
+as long as it is open. A click or double-click on one of a card's buttons does only what that
+button does, and a card whose Machine dropped can be selected but not opened. A click on the
+board's own area below the header, between cards or on a section heading, lets the selected
+card go.
+
+The record takes the board's place in its column, under the header bar and beside the Flock
+chat, so you can ask the chat about the Run you are reading while its diff has the column's
+whole width — the window's, with the chat collapsed or popped out. Diff, Evidence and Log
+use that width; Plan, Review and Facts keep a readable line length. The record's back button
+returns to the board, which was never taken down: it comes back scrolled where you left it,
+its sections open or closed as they were, and the card still selected. Opening the record
+puts the keyboard's focus on its back button, except that Go to pane leaves it in the pane,
+and closing it returns focus to where it was.
+
+**Escape** backs out one level: an open dialog, menu or popover closes first, then the
+record, and on the board Escape lets the selected card go. Escape typed in a field, such as
+the Log search, stays with the field.
+
+The record's **Plan** tab renders the spec, read whole from the host where it is longer than the
 details carry, and lists the tickets, each expanding
 in place, read from the host when first opened; a link from one plan file to another opens
 that file at the top of the tab. **Review** renders the review, read whole the same way, and lists its findings; a
@@ -1098,7 +1117,7 @@ that file at the top of the tab. **Review** renders the review, read whole the s
 **Diff** at that line, or a read-only view of the file from the Run's checkout where no
 hunk shows it. **Diff** is the Run's branch against its merge base — live while the Run
 works, final after — as a file tree beside each file's diff, unified or side by side, kept
-as you left it while the drawer is open. Shiki colours each side of a hunk as one text, so
+as you left it while the record is open. Shiki colours each side of a hunk as one text, so
 a comment spanning its lines is coloured on all of them. A file is read from the host when
 it is opened, and again when the Run changes how many lines it adds or removes, with no
 line cap; a file with more than
@@ -1182,7 +1201,7 @@ id is minted once and kept in `$XDG_STATE_HOME/collie-desktop/flock-chat.json` (
 `~/.local/state/collie-desktop/`), so a restart resumes the same conversation; Claude Code
 keeps and compacts the transcript on this computer.
 
-Replies stream in as Markdown, rendered as the drawer renders it: nothing in it runs or
+Replies stream in as Markdown, rendered as the record renders it: nothing in it runs or
 keeps a style, and a web link opens in your browser. Each tool call is one row — the tool, the Machine it
 reached and what it was asked — that opens to what the tool answered, and thinking is a
 collapsed **Thinking** you can open. When the chat needs you to choose, it asks with choice
@@ -1225,7 +1244,8 @@ steered there. What the host records of your words also names the files they car
 
 Click a card and it becomes a chip above the input ("About: vm-mk › Fix board bugs"): your
 next message goes with it, so "this one" means that card, and sending uses it up. Clear it
-with its ✕. The chip is attached as context for the turn, never as your words.
+with its ✕, a click on the board's background, or Escape on the board; a chat popped out
+into its own window clears with it. The chip is attached as context for the turn, never as your words.
 
 News reaches it from every Herd on every Machine as one batch: what matters most first —
 decisions, then consequential outcomes, then what is worth trying, then the routine — and

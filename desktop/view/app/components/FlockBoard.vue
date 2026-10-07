@@ -2,6 +2,7 @@
 import { SECTIONS } from "../../../../src/board-model";
 import { AsyncResult, useAtomValue } from "@effect/atom-vue";
 import type { NotLive } from "../../../src/shared/flock";
+import { afterGesture, escapeOn, type Gesture, landedOn } from "../../../src/shared/board-clicks";
 import { updatesAtom } from "../flock";
 import tile from "../../../../assets/brand/logos/collie-tile-256.png";
 
@@ -17,16 +18,60 @@ const {
   header,
   waiting,
   placedBy,
+  placedAt,
 } = useFlock();
 const starting = ref(false);
 const listing = ref(false);
 const setting = ref(false);
 const { onboardOn } = useOnboarding();
 const { renewBy } = useCredentials();
-const drawer = useDrawer();
+const record = useRecord();
 const opened = computed(() =>
-  drawer.opened.value === null ? undefined : placedBy(drawer.opened.value),
+  record.opened.value === null ? undefined : placedBy(record.opened.value),
 );
+
+const { chip, choose } = useChip();
+/** Every board gesture, decided by `afterGesture` and applied to the chip and the record. */
+const gesture = (done: Gesture, tab: string | null = null) => {
+  const about = chip.value;
+  // A chip whose card has left the board stays selected under a key no card has.
+  const selected =
+    about === null
+      ? null
+      : (placedAt(about.machine, about.task)?.key ?? `gone:${about.machine}:${about.task}`);
+  const before = { selected, record: record.opened.value };
+  const after = afterGesture(before, done);
+  if (after.selected === null) {
+    if (before.selected !== null) choose(null);
+  } else {
+    // Chosen again even when unchanged, so the chip follows the card's latest Run and name.
+    const card = placedBy(after.selected);
+    if (card !== undefined)
+      choose({
+        machine: card.machine,
+        task: card.task.id,
+        run: card.task.run,
+        name: card.task.name,
+      });
+  }
+  if (after.record !== before.record) record.show(after.record, tab);
+};
+provide("gesture", gesture);
+watch(
+  opened,
+  (now) => now === undefined && record.opened.value !== null && gesture({ kind: "close" }),
+);
+
+const targetOf = (event: Event) => (event.target instanceof Element ? event.target : null);
+const click = (event: MouseEvent) => gesture({ kind: "click", landed: landedOn(targetOf(event)) });
+const doubleClick = (event: MouseEvent) =>
+  gesture({ kind: "double-click", landed: landedOn(targetOf(event)) });
+const escape = (event: KeyboardEvent) => {
+  if (event.key === "Escape") gesture(escapeOn(targetOf(event), document));
+};
+// Captured, so it runs before an overlay closes on the same key.
+onMounted(() => window.addEventListener("keydown", escape, { capture: true }));
+onUnmounted(() => window.removeEventListener("keydown", escape, { capture: true }));
 
 const chatShown = ref(true);
 const popped = ref(false);
@@ -87,7 +132,7 @@ watch(update, (now) => {
 
 <template>
   <div class="flex h-screen">
-    <div class="flex min-w-0 flex-1 flex-col overflow-y-auto">
+    <div class="flex min-w-0 flex-1 flex-col">
       <header class="flex items-center gap-3 border-b border-default px-4 py-3">
         <!-- The ring keeps the white tile's edge on a light header. -->
         <img :src="tile" alt="" class="size-6 rounded-md ring-1 ring-default" />
@@ -133,81 +178,98 @@ watch(update, (now) => {
           @click="chatShown = true"
         />
       </header>
-      <main class="flex flex-col gap-6 p-4">
-        <p v-if="connecting" class="text-muted">Connecting…</p>
-        <UAlert
-          v-else-if="failure !== null"
-          color="error"
-          icon="i-lucide-triangle-alert"
-          title="Collie is out of reach"
-          :description="failure"
-        />
-        <template v-else>
+      <div class="relative min-h-0 flex-1">
+        <main
+          class="flex h-full flex-col gap-6 overflow-y-auto p-4"
+          :inert="opened !== undefined"
+          @click="click"
+          @dblclick="doubleClick"
+        >
+          <p v-if="connecting" class="text-muted">Connecting…</p>
           <UAlert
-            v-if="renewBy !== null"
-            data-testid="renew-gitlab"
-            color="warning"
-            variant="subtle"
-            icon="i-lucide-key-round"
-            :title="`The GitLab token expires on ${renewBy}`"
-            description="Make a new one and Renew it, and every Machine gets it."
-            :actions="[{ label: 'Renew', onClick: () => void (setting = true) }]"
+            v-else-if="failure !== null"
+            color="error"
+            icon="i-lucide-triangle-alert"
+            title="Collie is out of reach"
+            :description="failure"
           />
-          <UAlert
-            v-for="[profile, { name, state, reason }] in lost"
-            :key="profile"
-            :data-testid="`lost-${name}`"
-            color="warning"
-            variant="subtle"
-            :icon="NOT_LIVE[state].icon"
-            :title="NOT_LIVE[state].title(name)"
-            :description="reason"
-            :actions="
-              state === 'no-collie' ? [{ label: 'Onboard', onClick: () => onboardOn(profile) }] : []
-            "
-          />
-          <UAlert
-            v-for="{ name, development } in developments"
-            :key="name"
-            :data-testid="`development-${name}`"
-            color="neutral"
-            variant="subtle"
-            icon="i-lucide-flask-conical"
-            :title="name"
-            :description="`development build ${development}`"
-          />
-          <p v-if="tasks.length === 0" class="text-muted">Nothing on the board yet.</p>
-          <template v-for="[section, label] in SECTIONS" :key="section">
-            <section
-              v-if="sections[section].length > 0"
-              :data-testid="section"
-              class="flex flex-col gap-2"
-            >
-              <details v-if="section === 'finished'">
-                <summary class="cursor-pointer text-sm font-semibold text-muted">
-                  {{ label }} · {{ sections.finished.length }}
-                </summary>
-                <BoardGrid :tasks="sections.finished" class="mt-2" />
-              </details>
-              <template v-else>
-                <h2
-                  class="text-sm font-semibold"
-                  :class="section === 'needs-you' ? 'text-warning' : 'text-muted'"
-                >
-                  {{ label }}
-                </h2>
-                <BoardGrid :tasks="section === 'waiting' ? waiting.recent : sections[section]" />
-                <details v-if="section === 'waiting' && waiting.older.length > 0">
-                  <summary class="cursor-pointer text-sm text-muted">
-                    {{ waiting.older.length }} older than a week
+          <template v-else>
+            <UAlert
+              v-if="renewBy !== null"
+              data-testid="renew-gitlab"
+              color="warning"
+              variant="subtle"
+              icon="i-lucide-key-round"
+              :title="`The GitLab token expires on ${renewBy}`"
+              description="Make a new one and Renew it, and every Machine gets it."
+              :actions="[{ label: 'Renew', onClick: () => void (setting = true) }]"
+            />
+            <UAlert
+              v-for="[profile, { name, state, reason }] in lost"
+              :key="profile"
+              :data-testid="`lost-${name}`"
+              color="warning"
+              variant="subtle"
+              :icon="NOT_LIVE[state].icon"
+              :title="NOT_LIVE[state].title(name)"
+              :description="reason"
+              :actions="
+                state === 'no-collie'
+                  ? [{ label: 'Onboard', onClick: () => onboardOn(profile) }]
+                  : []
+              "
+            />
+            <UAlert
+              v-for="{ name, development } in developments"
+              :key="name"
+              :data-testid="`development-${name}`"
+              color="neutral"
+              variant="subtle"
+              icon="i-lucide-flask-conical"
+              :title="name"
+              :description="`development build ${development}`"
+            />
+            <p v-if="tasks.length === 0" class="text-muted">Nothing on the board yet.</p>
+            <template v-for="[section, label] in SECTIONS" :key="section">
+              <section
+                v-if="sections[section].length > 0"
+                :data-testid="section"
+                class="flex flex-col gap-2"
+              >
+                <details v-if="section === 'finished'">
+                  <summary class="cursor-pointer text-sm font-semibold text-muted">
+                    {{ label }} · {{ sections.finished.length }}
                   </summary>
-                  <BoardGrid :tasks="waiting.older" class="mt-2" />
+                  <BoardGrid :tasks="sections.finished" class="mt-2" />
                 </details>
-              </template>
-            </section>
+                <template v-else>
+                  <h2
+                    class="text-sm font-semibold"
+                    :class="section === 'needs-you' ? 'text-warning' : 'text-muted'"
+                  >
+                    {{ label }}
+                  </h2>
+                  <BoardGrid :tasks="section === 'waiting' ? waiting.recent : sections[section]" />
+                  <details v-if="section === 'waiting' && waiting.older.length > 0">
+                    <summary class="cursor-pointer text-sm text-muted">
+                      {{ waiting.older.length }} older than a week
+                    </summary>
+                    <BoardGrid :tasks="waiting.older" class="mt-2" />
+                  </details>
+                </template>
+              </section>
+            </template>
           </template>
-        </template>
-      </main>
+        </main>
+        <!-- Over the board, not instead of it, so the board keeps its scroll and folds. -->
+        <RunRecord
+          v-if="opened"
+          :key="`${opened.key} ${opened.task.run}`"
+          :placed="opened"
+          class="absolute inset-0"
+          @close="gesture({ kind: 'close' })"
+        />
+      </div>
     </div>
     <FlockChat
       v-if="!popped"
@@ -215,12 +277,6 @@ watch(update, (now) => {
       class="w-[min(32rem,40vw)] shrink-0"
       @pop-out="popChatOut"
       @collapse="chatShown = false"
-    />
-    <RunDrawer
-      v-if="opened"
-      :key="`${opened.key} ${opened.task.run}`"
-      :placed="opened"
-      @close="drawer.close()"
     />
   </div>
 </template>
