@@ -69,7 +69,8 @@ export const ActionSchema = Schema.Union([
     decisions: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
     /**
      * Which checkout the Run is for: a workspace id, its label, the path of the checkout
-     * itself — a directory no workspace is open on gets one opened — or `projects-root`.
+     * itself or its repository's name under the Projects root — a checkout no workspace is
+     * open on gets one opened — or `projects-root`.
      * Required: an agent's start is refused without one rather than rooted where it asks.
      */
     workspace: Schema.optionalKey(Schema.String),

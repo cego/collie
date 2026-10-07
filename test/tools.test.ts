@@ -657,6 +657,28 @@ test("a launch names the workspace it is for, and an unknown one is refused", ()
     }),
   ));
 
+test("a start naming a repository finds its checkout under the Projects root, as the Home's chat would", () =>
+  inWorld(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const root = (yield* fs.makeTempDirectoryScoped()) + "/projects";
+      for (const checkout of ["cego/monorepo", "cego/engage", "forks/engage"])
+        yield* fs.makeDirectory(`${root}/${checkout}/.git`, { recursive: true });
+      // A Machine's chat channel runs from somewhere else than its checkouts.
+      const elsewhere = { ...env, cwd: "/", raw: { ...env.raw, GITTE_CWD: root } };
+
+      expect(yield* workspaceNamed(elsewhere, "monorepo")).toMatchObject({
+        found: { label: "monorepo", cwd: `${root}/cego/monorepo` },
+      });
+      expect(yield* workspaceNamed(elsewhere, "engage")).toEqual({
+        error: `"engage" names 2 checkouts under ${root} (${root}/cego/engage, ${root}/forks/engage); say which`,
+      });
+      expect(yield* workspaceNamed(elsewhere, "no-such-repo")).toMatchObject({
+        error: expect.stringContaining("no workspace"),
+      });
+    }),
+  ));
+
 test("a chat request amends Intent without a second confirmation", () =>
   inWorld(
     Effect.gen(function* () {

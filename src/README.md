@@ -66,6 +66,7 @@ Runner source (Bun/TypeScript). Compiled to `bin/collie` per platform; see ADR-0
 | `run-actions.ts`   | What a confirmed action does to a Run, and the one place each kind is carried out                     |
 | `lifecycle.ts`     | A front door's side of every host operation, the board and a drawer's details                         |
 | `signing.ts`       | The release key: signing a runner or Desktop's update in CI, and the check before either is installed |
+| `desktop.ts`       | `collie upgrade`'s Desktop step: a verified Desktop update, staged as Electrobun would                |
 | `sdk.ts`           | `collie`: what a module exports, declares, waits on, and starts as a child                            |
 | `agents.ts`        | What a workflow does with an agent: one launch, one collection, one repair                            |
 | `proactive.ts`     | What is worth Collie starting a turn about, and what it has already said                              |

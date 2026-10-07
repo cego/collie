@@ -135,6 +135,10 @@ const set = async (key: string, value: string) => {
             </div>
           </UFormField>
         </section>
+        <section class="flex flex-col gap-3" data-testid="about">
+          <h3 class="text-sm font-semibold">About</h3>
+          <DesktopVersion />
+        </section>
       </div>
     </template>
   </USlideover>

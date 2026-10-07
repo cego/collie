@@ -53,9 +53,15 @@ watch(notices, (now, before) => {
 
 const update = useAtomValue(() => updatesAtom);
 const { restart } = useActions();
+// Each check says its finding again; a toast is for news not yet told.
+const told = new Set<string>();
 watch(update, (now) => {
   if (!AsyncResult.isSuccess(now)) return;
-  const news = now.value;
+  const { news } = now.value;
+  if (news._tag !== "Ready" && news._tag !== "Refused") return;
+  const id = `${news._tag} ${news.version}`;
+  if (told.has(id)) return;
+  told.add(id);
   if (news._tag === "Refused") {
     toast.add({
       title: `Desktop ${news.version} was not installed: ${news.reason}`,
@@ -204,7 +210,7 @@ watch(update, (now) => {
     <FlockChat
       v-if="!popped"
       v-show="chatShown"
-      class="w-96 shrink-0"
+      class="w-[min(32rem,40vw)] shrink-0"
       @pop-out="popChatOut"
       @collapse="chatShown = false"
     />
