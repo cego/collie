@@ -130,6 +130,7 @@ describe("Each setting explains itself", () => {
     expect(settingStored("quiet_ms", "10")).toEqual({ stored: "600000" });
     expect(settingStored("handoff_timeout_ms", "1.5")).toEqual({ stored: "90000" });
     expect(settingStored("quiet_ms", "")).toEqual({ stored: "" });
+    expect(settingStored("quiet_ms", ".5")).toEqual({ stored: "30000" });
     expect(parseSetting("quiet_ms", "900000")).toEqual({ value: 900000 });
     for (const typed of ["-1", "ten"])
       expect(settingStored("board_quiet_ms", typed)).toEqual({

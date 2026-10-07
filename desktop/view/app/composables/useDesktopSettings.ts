@@ -18,6 +18,7 @@ export const useDesktopSettings = () => {
     read = true;
     void readSettings({ payload: undefined }).then((exit) => {
       if (Exit.isSuccess(exit)) settings.value = exit.value;
+      else read = false;
     });
   }
   return {

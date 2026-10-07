@@ -127,6 +127,8 @@ export interface SettingRow {
   /** What a Run uses while it is unset. */
   readonly fallback: string;
   readonly unit: SettingUnit | undefined;
+  /** The default as Settings says it, in the row's unit. */
+  readonly defaultSaid: string;
   readonly set: boolean;
   /** The Machine its value was taken from over a different one, where it was. */
   readonly from: string | null;
@@ -146,10 +148,18 @@ const flockRow = (flock: FlockSettings, setting: Setting): SettingRow => {
     ...rowOf(setting),
     value: settingShown(setting.key, value),
     fallback: settingShown(setting.key, setting.fallback),
+    defaultSaid: defaultSaid(setting, settingShown(setting.key, setting.fallback)),
     set: value !== "",
     from: held?.differed === true ? held.from : null,
     shared: true,
   };
+};
+
+const defaultSaid = ({ kind, unit }: Setting, fallback: string) => {
+  if (kind === "list") return "Default: none";
+  if (fallback === "") return "Unset: the harness decides";
+  if (kind === "boolean") return `Default: ${fallback === "true" ? "on" : "off"}`;
+  return `Default: ${fallback}${unit === undefined ? "" : ` ${unit}`}`;
 };
 
 const rowOf = ({ key, group, label, description, kind, choices, unit }: Setting) => ({
@@ -166,7 +176,7 @@ const rowOf = ({ key, group, label, description, kind, choices, unit }: Setting)
  * Every setting of Collie's and Desktop's own, under its group in order, but the GitLab
  * host, which Settings keeps beside its tokens.
  */
-export const settingRows = (
+export const settingSections = (
   flock: FlockSettings,
   desktop: DesktopSettings,
 ): ReadonlyArray<SettingSection> => {
@@ -178,6 +188,7 @@ export const settingRows = (
         ...rowOf(setting),
         value,
         fallback: setting.fallback,
+        defaultSaid: defaultSaid(setting, setting.fallback),
         set: value !== setting.fallback,
         from: null,
         shared: false,

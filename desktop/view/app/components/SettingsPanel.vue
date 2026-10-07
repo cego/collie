@@ -4,7 +4,7 @@ import { settingOf, settingStored } from "../../../../src/settings";
 import {
   NO_FLOCK_SETTINGS,
   type SettingRow,
-  settingRows,
+  settingSections,
 } from "../../../src/shared/flock-settings";
 import { flockSettingsAtom } from "../flock";
 
@@ -20,7 +20,7 @@ watch(open, (opened) => {
   if (opened) registry.refresh(flockSettingsAtom);
 });
 const sections = computed(() =>
-  settingRows(
+  settingSections(
     AsyncResult.getOrElse(held.value, () => NO_FLOCK_SETTINGS),
     desktopSettings.value,
   ),
@@ -38,19 +38,15 @@ const shown = (row: SettingRow) => drafts.value[idOf(row)] ?? row.value;
 /** `typed` in the row's unit; empty unsets it. */
 const set = async (row: SettingRow, typed: string) => {
   // Desktop's own list is the Flock chat's switch alone.
-  if (!row.shared) return void setProactive((typed || row.fallback) === "true");
+  if (!row.shared) {
+    if (!(await setProactive((typed || row.fallback) === "true")))
+      toast.add({ title: "Desktop could not keep that", color: "error" });
+    return;
+  }
   const stored = settingStored(row.key, typed);
   if ("refused" in stored) return void toast.add({ title: stored.refused, color: "error" });
   if (await setFlockSetting(row.key, stored.stored)) delete drafts.value[idOf(row)];
 };
-const shownAs = (row: SettingRow, value: string) =>
-  row.kind === "boolean"
-    ? value === "true"
-      ? "on"
-      : "off"
-    : row.unit === undefined
-      ? value
-      : `${value} ${row.unit}`;
 const gitlabHostSaid = settingOf("gitlab_host")?.description;
 </script>
 
@@ -118,13 +114,7 @@ const gitlabHostSaid = settingOf("gitlab_host")?.description;
               </form>
             </div>
             <div class="flex items-center gap-2 text-xs text-muted">
-              <span>{{
-                row.kind === "list"
-                  ? "Default: none"
-                  : row.fallback === ""
-                    ? "Unset: the harness decides"
-                    : `Default: ${shownAs(row, row.fallback)}`
-              }}</span>
+              <span>{{ row.defaultSaid }}</span>
               <span v-if="row.from !== null">from {{ row.from }}</span>
               <UButton
                 v-if="row.set"
@@ -139,78 +129,80 @@ const gitlabHostSaid = settingOf("gitlab_host")?.description;
             </div>
           </div>
         </section>
-        <section v-if="credentials" class="flex flex-col gap-4" data-testid="credentials">
+        <section class="flex flex-col gap-4" data-testid="credentials">
           <h3 class="text-sm font-semibold">GitLab and credentials</h3>
-          <div class="flex flex-col gap-1">
-            <div class="flex items-baseline gap-2">
-              <span class="font-medium">GitLab host</span>
-              <code class="text-xs text-muted">gitlab_host</code>
-              <UBadge class="ml-auto" size="sm" variant="subtle" label="Every Machine" />
+          <template v-if="credentials">
+            <div class="flex flex-col gap-1">
+              <div class="flex items-baseline gap-2">
+                <span class="font-medium">GitLab host</span>
+                <code class="text-xs text-muted">gitlab_host</code>
+                <UBadge class="ml-auto" size="sm" variant="subtle" label="Every Machine" />
+              </div>
+              <p class="text-sm text-muted">{{ gitlabHostSaid }}</p>
+              <form class="flex gap-2" data-testid="gitlab-host-form" @submit.prevent="saveHost">
+                <UInput
+                  v-model="host"
+                  class="flex-1"
+                  :placeholder="`GitLab host: ${credentials.host}`"
+                  data-testid="gitlab-host"
+                />
+                <UButton
+                  type="submit"
+                  size="sm"
+                  label="Use this GitLab"
+                  data-testid="save-gitlab-host"
+                  :disabled="host.trim() === ''"
+                />
+              </form>
             </div>
-            <p class="text-sm text-muted">{{ gitlabHostSaid }}</p>
-            <form class="flex gap-2" data-testid="gitlab-host-form" @submit.prevent="saveHost">
-              <UInput
-                v-model="host"
-                class="flex-1"
-                :placeholder="`GitLab host: ${credentials.host}`"
-                data-testid="gitlab-host"
+            <div class="flex flex-col gap-1">
+              <div class="flex items-center gap-2">
+                <span class="font-medium">GitLab token</span>
+                <span class="text-sm text-muted" data-testid="gitlab-state">
+                  {{
+                    credentials.gitlab === null
+                      ? "none yet"
+                      : credentials.gitlab.expires === null
+                        ? "kept"
+                        : `expires ${credentials.gitlab.expires}`
+                  }}
+                </span>
+                <UBadge class="ml-auto" size="sm" variant="subtle" label="Every Machine" />
+              </div>
+              <p class="text-sm text-muted">
+                Logs glab in on every Machine, so Runs can push branches and open merge requests.
+                Desktop gives it to each Machine and keeps it on this computer alone.
+              </p>
+              <div>
+                <UButton
+                  size="xs"
+                  variant="outline"
+                  icon="i-lucide-external-link"
+                  label="Make one on GitLab"
+                  data-testid="token-page"
+                  @click="openLink(credentials.tokenPage)"
+                />
+              </div>
+              <CredentialFields
+                which="gitlab"
+                :label="credentials.gitlab === null ? 'Save' : 'Renew'"
               />
-              <UButton
-                type="submit"
-                size="sm"
-                label="Use this GitLab"
-                data-testid="save-gitlab-host"
-                :disabled="host.trim() === ''"
-              />
-            </form>
-          </div>
-          <div class="flex flex-col gap-1">
-            <div class="flex items-center gap-2">
-              <span class="font-medium">GitLab token</span>
-              <span class="text-sm text-muted" data-testid="gitlab-state">
-                {{
-                  credentials.gitlab === null
-                    ? "none yet"
-                    : credentials.gitlab.expires === null
-                      ? "kept"
-                      : `expires ${credentials.gitlab.expires}`
-                }}
-              </span>
-              <UBadge class="ml-auto" size="sm" variant="subtle" label="Every Machine" />
             </div>
-            <p class="text-sm text-muted">
-              Logs glab in on every Machine, so Runs can push branches and open merge requests.
-              Desktop gives it to each Machine and keeps it on this computer alone.
-            </p>
-            <div>
-              <UButton
-                size="xs"
-                variant="outline"
-                icon="i-lucide-external-link"
-                label="Make one on GitLab"
-                data-testid="token-page"
-                @click="openLink(credentials.tokenPage)"
-              />
+            <div class="flex flex-col gap-1">
+              <div class="flex items-center gap-2">
+                <span class="font-medium">Helle</span>
+                <span class="text-sm text-muted" data-testid="helle-state">
+                  {{ credentials.helle ? "kept" : "none yet" }}
+                </span>
+                <UBadge class="ml-auto" size="sm" variant="subtle" label="Every Machine" />
+              </div>
+              <p class="text-sm text-muted">
+                Lets agents on every Machine reach Helle. Desktop gives it to each Machine's
+                credentials file and keeps it on this computer alone.
+              </p>
+              <CredentialFields which="helle" label="Save" />
             </div>
-            <CredentialFields
-              which="gitlab"
-              :label="credentials.gitlab === null ? 'Save' : 'Renew'"
-            />
-          </div>
-          <div class="flex flex-col gap-1">
-            <div class="flex items-center gap-2">
-              <span class="font-medium">Helle</span>
-              <span class="text-sm text-muted" data-testid="helle-state">
-                {{ credentials.helle ? "kept" : "none yet" }}
-              </span>
-              <UBadge class="ml-auto" size="sm" variant="subtle" label="Every Machine" />
-            </div>
-            <p class="text-sm text-muted">
-              Lets agents on every Machine reach Helle. Desktop gives it to each Machine's
-              credentials file and keeps it on this computer alone.
-            </p>
-            <CredentialFields which="helle" label="Save" />
-          </div>
+          </template>
         </section>
         <section class="flex flex-col gap-3" data-testid="about">
           <h3 class="text-sm font-semibold">About</h3>

@@ -387,8 +387,9 @@ export function settingStored(
   const per = msPer(key);
   const said = typed.trim();
   if (per === undefined || said === "") return { stored: said };
-  return /^\d+(\.\d+)?$/.test(said)
-    ? { stored: String(Math.round(Number(said) * per)) }
+  const minutes = Number(said);
+  return Number.isFinite(minutes) && minutes >= 0
+    ? { stored: String(Math.round(minutes * per)) }
     : { refused: `${key} has to be a number of minutes, not "${typed}"` };
 }
 

@@ -1012,8 +1012,9 @@ number of them, and still stored in milliseconds, so `config.json` and `collie s
 unchanged. **Reset to default**, shown while a setting is set, unsets it. Each says whether
 **Every Machine** shares it or it is for **This computer only**: the Flock chat's switch,
 like the bell in the chat's header, is this computer's. The groups, names, descriptions and
-units live with each key in one list of settings (`src/settings.ts`) that the TUI reads too,
-so a new setting shows up in both. The ones every Machine shares are the Flock's: Desktop keeps them in
+units live with each key in the one list of settings (`src/settings.ts`) that the TUI's
+Settings reads too, so a new setting shows up in both; the TUI does not show the names,
+descriptions or minutes yet. The ones every Machine shares are the Flock's: Desktop keeps them in
 `flock-settings.json` beside its chat, and gives them to every Machine through that
 Machine's host, never by editing a file over SSH. A Machine is synced each time it
 connects and after every edit in Settings, so one out of reach gets an edit when it is

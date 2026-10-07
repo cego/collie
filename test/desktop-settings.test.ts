@@ -8,10 +8,11 @@ import {
   editSetting,
   type FlockSettings,
   NO_FLOCK_SETTINGS,
-  settingRows,
+  settingSections,
   takeFrom,
 } from "../desktop/src/shared/flock-settings";
 import { flockSync } from "../desktop/src/bun/flock-settings";
+import { settingStored } from "../src/settings";
 
 const at = (hour: number) => `2026-10-07T${String(hour).padStart(2, "0")}:00:00.000Z`;
 const set = (key: string, value: SharedSetting["value"], hour: number): SharedSetting => ({
@@ -74,7 +75,7 @@ test("Settings shows every setting with its control, its value and its default",
     set("models.claude", ["claude-x"], 9),
     set("quiet_ms", 90000, 9),
   ]).flock;
-  const sections = settingRows(takeFrom(flock, "vm-b", [set("scope", "local", 11)]).flock, {
+  const sections = settingSections(takeFrom(flock, "vm-b", [set("scope", "local", 11)]).flock, {
     proactive: false,
   });
   const rows = sections.flatMap((section) => section.rows);
@@ -105,7 +106,13 @@ test("Settings shows every setting with its control, its value and its default",
     from: null,
   });
   // In its unit: the value and the default both.
-  expect(row("quiet_ms")).toMatchObject({ value: "1.5", fallback: "10", unit: "minutes" });
+  expect(row("quiet_ms")).toMatchObject({
+    value: "1.5",
+    fallback: "10",
+    unit: "minutes",
+    defaultSaid: "Default: 10 minutes",
+  });
+  expect(row("effort")).toMatchObject({ defaultSaid: "Unset: the harness decides" });
   expect(row("models.claude")).toMatchObject({ value: "claude-x" });
   expect(row("proactive")).toMatchObject({ kind: "boolean", shared: true });
   // The Flock chat's own switch is this computer's, under Chat.
@@ -120,6 +127,23 @@ test("Settings shows every setting with its control, its value and its default",
   );
   // The GitLab host is shared too, but beside the tokens made for it.
   expect(rows.map((one) => one.key)).not.toContain("gitlab_host");
+});
+
+test("a duration typed in minutes is the Flock's in milliseconds, and Reset unsets it", () => {
+  const quiet = (flock: FlockSettings) =>
+    settingSections(flock, { proactive: true })
+      .flatMap((section) => section.rows)
+      .find((row) => row.key === "quiet_ms")!;
+  const typed = settingStored("quiet_ms", "15");
+  if ("refused" in typed) throw new Error(typed.refused);
+  const edited = editSetting(NO_FLOCK_SETTINGS, "quiet_ms", typed.stored, at(12));
+  if ("refused" in edited) throw new Error(edited.refused);
+
+  expect(edited.settings.quiet_ms!.value).toBe(900000);
+  expect(quiet(edited)).toMatchObject({ value: "15", set: true });
+  const reset = editSetting(edited, "quiet_ms", "", at(13));
+  if ("refused" in reset) throw new Error(reset.refused);
+  expect(quiet(reset)).toMatchObject({ value: "", fallback: "10", set: false });
 });
 
 test("a Machine's GitLab host and a value its setting refuses are not the Flock's", () => {
