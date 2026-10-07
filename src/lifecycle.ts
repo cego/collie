@@ -8,6 +8,7 @@
 // What a Run is and what became of it stays Collie's; what a workflow has done stays
 // Effect's. Nothing here copies the second into the first.
 
+import type { SettingValue } from "./settings";
 import {
   Cause,
   Deferred,
@@ -1005,6 +1006,27 @@ export const disposeRun = (
         kind: options.kind,
         ref: options.ref,
         note: options.note,
+        request: options.request,
+      }),
+    options.door,
+  );
+
+/** One of Collie's settings, set on this Machine through its host as an edit made now. */
+export const setSharedSetting = (
+  env: PluginEnv,
+  options: {
+    readonly door: Door;
+    readonly key: string;
+    readonly value: SettingValue | null;
+    readonly at: string;
+    readonly request: string;
+  },
+) =>
+  asks(
+    env,
+    (client) =>
+      client.setSettings({
+        settings: [{ key: options.key, value: options.value, at: options.at }],
         request: options.request,
       }),
     options.door,

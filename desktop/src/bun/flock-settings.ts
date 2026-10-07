@@ -38,8 +38,8 @@ export interface SettingsDoor<E> {
 }
 
 /**
- * Takes what the Machine `name` has into the Flock's settings and gives it what it lacks,
- * then takes what its host kept, which holds any edit made there meanwhile.
+ * Gives the Machine `name` what it lacks of the Flock's settings, and answers with what its
+ * host then holds, any edit made there meanwhile among it, for the caller to take in.
  */
 export const syncSettings = <E>(
   flock: FlockSettings,
@@ -48,8 +48,9 @@ export const syncSettings = <E>(
   request: string,
 ) =>
   Effect.gen(function* () {
-    const read = takeFrom(flock, name, (yield* door.settings()).settings);
-    if (read.give.length === 0) return read.flock;
-    const kept = yield* door.setSettings({ settings: read.give, request });
-    return takeFrom(read.flock, name, kept.settings).flock;
+    const has = (yield* door.settings()).settings;
+    const { give } = takeFrom(flock, name, has);
+    return give.length === 0
+      ? has
+      : (yield* door.setSettings({ settings: give, request })).settings;
   });

@@ -146,6 +146,13 @@ export const sharedSettings = Effect.fn("Config.sharedSettings")(function* (user
     const at = stamps.set[key] ?? (value === null ? undefined : written);
     return at === undefined ? [] : [{ key, value, at }];
   });
+  // Recorded the first time, so a later write to the file does not make them newer.
+  const unstamped = settings.filter(({ key }) => stamps.set[key] === undefined);
+  if (unstamped.length > 0)
+    yield* writeSettingsSet(userDir, {
+      ...stamps,
+      set: { ...stamps.set, ...Object.fromEntries(unstamped.map(({ key, at }) => [key, at])) },
+    });
   return { settings, flock: stamps.flock ?? null } satisfies SharedSettings;
 });
 

@@ -7,7 +7,7 @@ import { Effect } from "effect";
 import { loadDefaults, readSettingsSet, setSetting, writeConfigValue } from "../src/config";
 import { connect } from "../src/host";
 import { stopHost } from "./support/host";
-import { proves } from "./support/world";
+import { collie, proves } from "./support/world";
 
 test(
   "a host shares its settings with when each was set, and keeps the latest edit of each",
@@ -32,7 +32,9 @@ test(
             value: "sonnet",
             at: "2026-10-07T10:00:00.000Z",
           });
-          expect(shared.settings.find(({ key }) => key === "scope")!.at).not.toBe("");
+          const dated = shared.settings.find(({ key }) => key === "scope")!.at;
+          // Dated once, so a later write to the file cannot make the old value newer.
+          expect((yield* readSettingsSet(world.config)).set.scope).toBe(dated);
 
           const after = yield* client.setSettings({
             request: "s-1",
@@ -73,6 +75,13 @@ test(
             })
             .pipe(Effect.flip);
           expect(notOne).toMatchObject({ _tag: "HostRefused" });
+
+          // An agent sets one as a human would, through the host.
+          const said = yield* collie(world, ["settings", "set", "max_iterations", "9"]);
+          expect(said.envelope).toMatchObject({ ok: true });
+          expect((yield* loadDefaults(world.config)).maxIterations).toBe(9);
+          const nine = yield* collie(world, ["settings", "set", "max_iterations", "nine"]);
+          expect(nine.envelope).toMatchObject({ ok: false });
           yield* stopHost(world.state);
         }),
       [],

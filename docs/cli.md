@@ -1238,6 +1238,20 @@ question, so retrying cannot repeat the earlier actions.
 `run start` and `run answer` are the two worth being careful with: without a request id, a
 retried `run start` is a second run.
 
+## Settings
+
+```sh
+collie settings list
+collie settings set <key> <value> [--request-id <id>]
+```
+
+`list` prints every one of Collie's settings as this Machine has it, with its default.
+`set` sets one through the host, refused as the TUI's Settings refuses it; an empty value
+unsets it. It is an edit made now, so a Desktop that shares settings with its Flock gives it
+to every Machine: the latest edit of a key wins
+([ADR-0043](adr/0043-a-shared-setting-is-its-latest-edit.md)). Remembered answers and
+anything else in `config.json` are not settings and are refused.
+
 ## Upgrading
 
 ```sh

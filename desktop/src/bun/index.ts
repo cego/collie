@@ -53,7 +53,7 @@ import { claudeCode } from "./claude";
 import { chatDoor } from "./flock-tools";
 import { readSettings, writeSettings } from "./settings";
 import { readFlockSettings, syncSettings, writeFlockSettings } from "./flock-settings";
-import { editSetting } from "../shared/flock-settings";
+import { editSetting, takeFrom } from "../shared/flock-settings";
 import { nowIso } from "../../../src/time";
 import { SettingValue, settingText } from "../../../src/settings";
 import { isString } from "../../../src/schema";
@@ -196,15 +196,19 @@ const main = Effect.gen(function* () {
         );
   const own = (yield* Path.Path).join(yield* StateDir, "collie-desktop");
   let settings = yield* readSettings(own);
-  const flockSettings = yield* SubscriptionRef.make(yield* readFlockSettings(own));
+  const saved = yield* readFlockSettings(own);
+  // The GitLab host an earlier Desktop kept as its own becomes the Flock's.
+  const seeded =
+    settings.gitlabHost === undefined || saved.settings.gitlab_host !== undefined
+      ? saved
+      : editSetting(saved, "gitlab_host", settings.gitlabHost, yield* nowIso());
+  const flockSettings = yield* SubscriptionRef.make("refused" in seeded ? saved : seeded);
   const defaultGitlab = yield* Config.String("COLLIE_DESKTOP_GITLAB").pipe(
     Config.withDefault(GITLAB),
   );
-  // The Flock's gitlab_host, else what an earlier Desktop kept as its own.
   const gitlab = () => {
-    const shared = SubscriptionRef.getUnsafe(flockSettings).settings.gitlab_host?.value;
-    const host = isString(shared) ? shared : settings.gitlabHost;
-    return host !== undefined && isHostName(host) ? `https://${host}` : defaultGitlab;
+    const host = SubscriptionRef.getUnsafe(flockSettings).settings.gitlab_host?.value;
+    return isString(host) && isHostName(host) ? `https://${host}` : defaultGitlab;
   };
   const gitlabHost = () => new URL(gitlab()).host;
   const gitlabPages = () => ({ host: gitlabHost(), tokenPage: tokenPage(gitlabHost()) });
@@ -293,14 +297,32 @@ const main = Effect.gen(function* () {
    * Syncs a connected Machine with the Flock's settings. One out of reach, or on a collie
    * without the operation until it is upgraded, is synced when it next connects.
    */
-  const syncOn = (door: Doors) =>
+  const syncOn = (door: Doors): Effect.Effect<void> =>
     syncing
       .withPermits(1)(
         Effect.gen(function* () {
-          const before = yield* SubscriptionRef.get(flockSettings);
-          const after = yield* syncSettings(before, door.machine.name, door.desktop, yield* uuid);
+          const has = yield* syncSettings(
+            yield* SubscriptionRef.get(flockSettings),
+            door.machine.name,
+            door.desktop,
+            yield* uuid,
+          );
+          // Taken into the settings as they are now, so an edit made meanwhile survives.
+          const [before, after] = yield* SubscriptionRef.modify(flockSettings, (now) => {
+            const taken = takeFrom(now, door.machine.name, has).flock;
+            return [[now, taken] as const, taken];
+          });
           yield* writeFlockSettings(own, after);
-          yield* SubscriptionRef.set(flockSettings, after);
+          // An edit made on this Machine goes on to every other.
+          const took = Object.entries(after.settings).some(
+            ([key, { at }]) => before.settings[key]?.at !== at,
+          );
+          if (took)
+            yield* Effect.forEach(
+              [...doors.values()].filter((other) => other !== door),
+              (other) => syncOn(other).pipe(Effect.forkIn(scope)),
+              { discard: true },
+            );
         }),
       )
       .pipe(
@@ -603,7 +625,7 @@ const main = Effect.gen(function* () {
               Schema.decodeUnknownOption(SettingValue)(edited.settings[key]?.value ?? null),
             ),
           );
-          return `${key} is ${now === "" ? "unset" : `now ${now}`} on every Machine`;
+          return `${key} is ${now === "" ? "unset" : `now ${now}`}; connected Machines are given it now, the rest when they connect`;
         }),
       ),
     saveGitlab: ({ token }) =>

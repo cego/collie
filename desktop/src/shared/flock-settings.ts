@@ -1,7 +1,7 @@
 // The Flock's settings, as Desktop keeps them: each key is decided by its latest edit,
 // made in Desktop or on any Machine, and every Machine is given what it lacks.
 
-import { Option, Schema } from "effect";
+import { Effect, Option, Schema } from "effect";
 import type { SharedSetting } from "../../../src/board-model";
 import {
   parseSetting,
@@ -27,10 +27,12 @@ export type FlockSetting = typeof FlockSetting.Type;
 
 export const FlockSettings = Schema.Struct({
   settings: Schema.Record(Schema.String, FlockSetting),
+  /** The Machines synced at least once: only a first sync says where a value came from. */
+  synced: Schema.Array(Schema.String).pipe(Schema.withDecodingDefaultKey(Effect.succeed([]))),
 });
 export type FlockSettings = typeof FlockSettings.Type;
 
-export const NO_FLOCK_SETTINGS: FlockSettings = { settings: {} };
+export const NO_FLOCK_SETTINGS: FlockSettings = { settings: {}, synced: [] };
 
 const valueOf = (value: Schema.Json | null) =>
   Option.getOrNull(Schema.decodeUnknownOption(SettingValue)(value));
@@ -48,6 +50,7 @@ export const takeFrom = (
   has: ReadonlyArray<SharedSetting>,
 ) => {
   const settings = { ...flock.settings };
+  const first = !flock.synced.includes(machine);
   for (const { key, value, at } of has) {
     const kept = settings[key];
     if (kept !== undefined && epochMs(at) <= epochMs(kept.at)) continue;
@@ -55,14 +58,15 @@ export const takeFrom = (
       value,
       at,
       from: machine,
-      differed: kept !== undefined && kept.from !== machine && !same(kept.value, value),
+      differed: first && kept !== undefined && kept.from !== machine && !same(kept.value, value),
     };
   }
   const give = Object.entries(settings).flatMap(([key, { value, at }]): SharedSetting[] => {
     const theirs = has.find((one) => one.key === key);
     return theirs !== undefined && epochMs(theirs.at) >= epochMs(at) ? [] : [{ key, value, at }];
   });
-  return { flock: { settings } satisfies FlockSettings, give };
+  const synced = first ? [...flock.synced, machine] : flock.synced;
+  return { flock: { settings, synced } satisfies FlockSettings, give };
 };
 
 /** An edit made in Desktop's Settings, checked as the TUI checks one, at `now`. */
@@ -75,6 +79,7 @@ export const editSetting = (
   const parsed = parseSetting(key, typed);
   if ("refused" in parsed) return parsed;
   return {
+    ...flock,
     settings: {
       ...flock.settings,
       [key]: { value: parsed.value, at: now, from: DESKTOP, differed: false },

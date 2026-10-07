@@ -39,6 +39,9 @@ test("a key set differently on several Machines takes the latest, and says where
 
   expect(flock.settings.scope).toMatchObject({ value: "local", from: "vm-b", differed: true });
   expect(give).toEqual([]);
+  // Said once: a later edit on a Machine already synced is just the latest.
+  const later = takeFrom(flock, "vm-a", [set("scope", "all", 12)]).flock;
+  expect(later.settings.scope).toMatchObject({ value: "all", from: "vm-a", differed: false });
   // vm-a has the older value, so it is given vm-b's when it is next seen.
   expect(takeFrom(flock, "vm-a", [set("scope", "all", 9)]).give).toEqual([
     set("scope", "local", 11),
@@ -107,9 +110,10 @@ test("a Machine is synced through its host: read, then given only what it lacks"
       const flock = editSetting(NO_FLOCK_SETTINGS, "scope", "all", at(12));
       if ("refused" in flock) return yield* Effect.die(flock.refused);
 
-      const after = yield* syncSettings(flock, "vm-a", door, "r-1");
+      const has = yield* syncSettings(flock, "vm-a", door, "r-1");
 
       expect(asked).toEqual([[set("scope", "all", 12)]]);
+      const after = takeFrom(flock, "vm-a", has).flock;
       expect(Object.keys(after.settings).sort()).toEqual(["model", "scope"]);
       // Nothing left to give, so a second sync asks nothing of the host.
       yield* syncSettings(after, "vm-a", door, "r-2");
