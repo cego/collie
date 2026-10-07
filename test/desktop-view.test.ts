@@ -644,7 +644,10 @@ test("Escape with an overlay open or while typing is theirs", () => {
 test("Escape closes an open page and keeps the card selected", () => {
   expect(afterGesture(reading, { kind: "escape", overlay: false, typing: false })).toEqual(picked);
   expect(
-    afterGesture({ ...picked, page: "settings" }, { kind: "escape", overlay: false, typing: false }),
+    afterGesture(
+      { ...picked, page: "settings" },
+      { kind: "escape", overlay: false, typing: false },
+    ),
   ).toEqual(picked);
 });
 
