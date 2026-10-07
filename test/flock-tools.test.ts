@@ -421,3 +421,24 @@ test("a start that names no Machine while several are reachable is still refused
       saved = undefined;
     }),
   ));
+
+test("a Machine whose Collie has no such operation is told to upgrade, and the rest still answer", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const asked: Asked[] = [];
+      const old = machine("vm-mk", [], asked);
+      const flock = {
+        machines: () => [
+          machine("mk-pc", [], asked),
+          { ...old, door: { ...old.door, read: () => Effect.die("Unknown request tag: read") } },
+        ],
+        conversation: "flock@mk-pc",
+        said: () => undefined,
+        machineRule: () => undefined,
+        setMachineRule: () => Effect.void,
+      };
+      const said = yield* callFlockTool(flock, "collie_workspaces", {});
+      expect(said).toContain("upgrade Collie on vm-mk");
+      expect(said).toContain("collie_workspaces answered by mk-pc");
+    }).pipe(Effect.provide(BunServices.layer)),
+  ));

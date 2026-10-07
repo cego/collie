@@ -47,7 +47,7 @@ import { isSettled } from "../src/lifecycle";
 import { appendLog } from "../src/oversight";
 import { readAudit, trimAudit } from "../src/audit";
 import { writeMrStates } from "../src/merges";
-import { FrontDoorRpcs, mrLabel, type Declaration } from "../src/board-model";
+import { FrontDoorRpcs, mrLabel, type Declaration, type FLOCK_READS } from "../src/board-model";
 import { nothingApproved } from "../src/outcome";
 
 const encodeJson = Schema.encodeUnknownSync(Schema.fromJsonString(Schema.Any));
@@ -1536,10 +1536,7 @@ test("a start rooted in Collie's own state is refused, whether named by the Home
   ));
 
 /** A read the Flock chat asks of this world's host, through a front door. */
-const readThroughHost = (
-  tool: "collie_run" | "collie_receipts" | "collie_workspaces",
-  input: JsonObject,
-) =>
+const readThroughHost = (tool: (typeof FLOCK_READS)[number], input: JsonObject) =>
   Effect.scoped(
     Effect.gen(function* () {
       const door = yield* frontDoor(stateDir);
@@ -1551,9 +1548,12 @@ test("the host answers a Flock chat's read with Native chat's own answer, delive
   inWorld(
     Effect.gen(function* () {
       const run = yield* aRun("add a picker");
-      expect(yield* readThroughHost("collie_run", { run: run.id })).toBe(
-        yield* call("collie_run", { run: run.id }),
+      // Settled first: asking and suspending are two steps, and a read between them differs.
+      const native = yield* until(
+        () => call("collie_run", { run: run.id }),
+        (said) => said.includes("Status: waiting"),
       );
+      expect(yield* readThroughHost("collie_run", { run: run.id })).toBe(native);
 
       yield* appendLine(yield* ledgerPath(stateDir, "term-1"), {
         id: "d-1",

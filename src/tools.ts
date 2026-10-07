@@ -82,6 +82,7 @@ import {
   type Settle,
   SETTLE_KINDS,
   TAKES,
+  type ToolName,
 } from "./toolkit";
 
 /**
@@ -143,15 +144,11 @@ const handlersFor = Effect.fn("Tools.handlers")(function* (
   });
 });
 
-/**
- * One call to a Collie tool, decoded strictly by the Toolkit. Input it will not take is a
- * refusal in the tool's own terms, and a tool this build does not have answers nothing.
- */
-export const callTool = Effect.fn("Tools.call")(
-  function* (env: PluginEnv, name: string, input: JsonObject) {
-    if (!isToolName(name)) return "";
+/** One call to the Toolkit, with or without the board's selection standing in for a Run. */
+const answered = Effect.fn("Tools.answered")(
+  function* (env: PluginEnv, name: ToolName, input: JsonObject, selected: boolean) {
     const toolkit = yield* CollieTools.pipe(
-      Effect.provide(CollieTools.toLayer(handlersFor(env, true))),
+      Effect.provide(CollieTools.toLayer(handlersFor(env, selected))),
     );
     return yield* answerWith(toolkit, name, input);
   },
@@ -159,18 +156,18 @@ export const callTool = Effect.fn("Tools.call")(
 );
 
 /**
+ * One call to a Collie tool, decoded strictly by the Toolkit. Input it will not take is a
+ * refusal in the tool's own terms, and a tool this build does not have answers nothing.
+ */
+export const callTool = (env: PluginEnv, name: string, input: JsonObject) =>
+  isToolName(name) ? answered(env, name, input, true) : Effect.succeed("");
+
+/**
  * One of the reads a Flock chat has this Machine's host answer, as Native chat answers
  * it, except that the Home board's selection never stands in for a Run (ADR-0012).
  */
-export const answerRead = Effect.fn("Tools.answerRead")(
-  function* (env: PluginEnv, name: (typeof FLOCK_READS)[number], input: JsonObject) {
-    const toolkit = yield* CollieTools.pipe(
-      Effect.provide(CollieTools.toLayer(handlersFor(env, false))),
-    );
-    return yield* answerWith(toolkit, name, input);
-  },
-  Effect.catch((cause) => Effect.succeed(`Collie could not answer: ${String(cause)}`)),
-);
+export const answerRead = (env: PluginEnv, name: (typeof FLOCK_READS)[number], input: JsonObject) =>
+  answered(env, name, input, false);
 
 /**
  * Drawn the first time a tool list is read rather than when this file loads: every

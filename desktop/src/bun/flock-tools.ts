@@ -235,13 +235,13 @@ const onRun = Effect.fn("FlockTools.onRun")(function* (
   flock: FlockChat,
   input: typeof RunInput.Type,
   tool: string,
-  answer: (placed: Placed, known: Boards) => Effect.Effect<string>,
+  answer: (placed: Placed) => Effect.Effect<string>,
 ) {
   if (input.run === undefined)
     return `${tool} takes {"run": "<machine>:<run id>"}; Desktop's chat has no board selection to stand in.`;
   const known = yield* boards(flock);
   const placed = place(input.run, owning(known, runsOf), "Run");
-  return Result.isFailure(placed) ? placed.failure : yield* answer(placed.success, known);
+  return Result.isFailure(placed) ? placed.failure : yield* answer(placed.success);
 });
 
 /** A Machine's own answer to one of its reads, headed with its name. */
@@ -249,10 +249,13 @@ const readOn = (machine: ChatMachine, tool: (typeof FLOCK_READS)[number], input:
   machine.door.read({ tool, input }).pipe(
     Effect.timeout(ANSWER_WITHIN),
     Effect.map((text) => `## ${machine.name}\n\n${text}`),
-    Effect.catch(() =>
-      Effect.succeed(
-        `## ${machine.name}\n\n${machine.name} did not answer; its Collie may be older than Desktop's; upgrade Collie on ${machine.name}.`,
-      ),
+    // A host without `read` answers with a defect, not a failure.
+    Effect.catchCause((cause) =>
+      Cause.hasInterruptsOnly(cause)
+        ? Effect.interrupt
+        : Effect.succeed(
+            `## ${machine.name}\n\n${machine.name} did not answer; its Collie may be older than Desktop's; upgrade Collie on ${machine.name}.`,
+          ),
     ),
   );
 
@@ -274,7 +277,7 @@ const workspaces = Effect.fn("FlockTools.workspaces")(function* (flock: FlockCha
   );
   return [
     ...sections,
-    "a start names its workspace as <machine>: followed by a workspace id, a label, a checkout's path on that Machine, or a repository's directory name under that Machine's Projects root.",
+    "a start names its workspace as <machine>: followed by a workspace id, a label, a checkout's path on that Machine, a repository's directory name under that Machine's Projects root, or projects-root.",
   ].join("\n\n");
 });
 
