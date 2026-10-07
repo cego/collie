@@ -234,7 +234,7 @@ export const speaking = (flock: FlockChat, machine: ChatMachine, known: Boards) 
     : Effect.fail(new HostRefused({ reason: refused }));
 };
 
-const newRequest = Effect.flatMap(Crypto.Crypto, (crypto) => crypto.randomUUIDv4);
+export const newRequest = Effect.flatMap(Crypto.Crypto, (crypto) => crypto.randomUUIDv4);
 
 /** Why a host said no, in its own words. */
 export const reasonOf = (error: { readonly message: string }) =>

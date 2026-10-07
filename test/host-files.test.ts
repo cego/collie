@@ -64,6 +64,12 @@ test(
             lineNumbers: true,
           });
           expect(lines.text).toContain("f7.ts:1:needle 7");
+          const one = yield* door.grep({
+            pattern: "needle",
+            path: `${world.project}/many/f7.ts`,
+            outputMode: "content",
+          });
+          expect(one.text).toBe(`${world.project}/many/f7.ts:needle 7`);
 
           const config = `${world.project}/conf/app.ini`;
           yield* door.writeFile({ path: config, content: "a=1\na=1\n", request: "w-1" });

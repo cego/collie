@@ -27,6 +27,15 @@ export const MESSAGE_CAP = 30 * 1024 * 1024;
 /** The longest edge the API takes in a request of more than 20 images. */
 export const LONG_EDGE = 2000;
 
+/** The image types the model is shown as images. */
+export const SHOWN = ["image/png", "image/jpeg", "image/gif", "image/webp"] as const;
+export type ShownImage = (typeof SHOWN)[number];
+export const shownAs = (mediaType: string) => SHOWN.find((one) => one === mediaType);
+/** The largest image shown: 5 MB once base64, the API's limit for one. */
+export const IMAGE_BYTES = 3.75 * 1024 * 1024;
+/** What may be text; a file of unknown type is, where its bytes say so. */
+export const TEXTUAL = /^text\/|json|xml|javascript|yaml|toml|x-sh|^application\/octet-stream$/;
+
 const megabytes = (bytes: number) => `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 
 /** Why `adding` cannot go with a message already holding `held`, or null where it can. */

@@ -1,14 +1,19 @@
-// The Flock chat's files on a Machine: Claude Code's Read, Glob, Grep, Write and Edit,
-// answered by that Machine's host over the chat's own channel, with each path written
-// `<machine>:<path>`. Desktop's own tools, not the Toolkit's, so Native chat's reach is
-// unchanged (ADR-0011, the Flock chat reaches files).
+// Claude Code's file tools for a path on a Machine, answered by its host (ADR-0011).
 
-import { Crypto, Effect, Encoding, Result, Schema } from "effect";
-import { HostRefused, RUN_FILE_BYTES, type HostFile } from "../../../src/board-model";
+import { Effect, Encoding, Result, Schema } from "effect";
+import { HostRefused } from "../../../src/board-model";
 import type { JsonObject } from "../../../src/schema";
-import { decodeStrict } from "../../../src/toolkit";
+import { decodeStrict, jsonSchemaOf } from "../../../src/toolkit";
+import { IMAGE_BYTES, shownAs, TEXTUAL } from "../shared/attachments";
 import { readWhole } from "./carried";
-import { boardOf, type ChatMachine, type FlockChat, reasonOf, speaking } from "./flock-tools";
+import {
+  boardOf,
+  type ChatMachine,
+  type FlockChat,
+  newRequest,
+  reasonOf,
+  speaking,
+} from "./flock-tools";
 
 /** What a file tool hands the model: text, or an image it can see. */
 export type ToolContent =
@@ -76,11 +81,7 @@ const tool = (
   name,
   title,
   description,
-  input: (): JsonObject => {
-    const document = Schema.toJsonSchemaDocument(input, { onExcessProperty: "error" });
-    // SAFETY: a JSON Schema document is JSON, which is what JsonObject says.
-    return { ...document.schema, $defs: document.definitions } as JsonObject;
-  },
+  input: () => jsonSchemaOf(input),
   readOnly,
 });
 
@@ -153,10 +154,6 @@ const takingFiles = Effect.fn("FileTools.takingFiles")(function* (machine: ChatM
   return [{ machine, board }];
 });
 
-const TEXTUAL = /^text\/|json|xml|javascript|yaml|toml|x-sh/;
-/** The images the model is shown as images, and the most of one it takes. */
-const SHOWN = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
-const IMAGE_BYTES = 5 * 1024 * 1024;
 /** How many lines a read gives when it is not told. */
 const READ_LINES = 2000;
 
@@ -175,10 +172,8 @@ const read = Effect.fn("FileTools.read")(function* (
   // The first part says what the file is, so only what is shown is read whole.
   const head = yield* readWhole(machine, path, () => true);
   const { mediaType, size } = head.file;
-  const textual =
-    TEXTUAL.test(mediaType) ||
-    (mediaType === "application/octet-stream" && !head.bytes.subarray(0, 8192).includes(0));
-  if (SHOWN.has(mediaType) && size <= IMAGE_BYTES)
+  const textual = TEXTUAL.test(mediaType) && !head.bytes.subarray(0, 8192).includes(0);
+  if (shownAs(mediaType) !== undefined && size <= IMAGE_BYTES)
     return [
       {
         type: "image",
@@ -221,8 +216,6 @@ const answered = (
           ...(omitted > 0 ? [`(and ${omitted} more)`] : []),
         ].join("\n"),
   );
-
-const newRequest = Effect.flatMap(Crypto.Crypto, (crypto) => crypto.randomUUIDv4);
 
 const answer = Effect.fn("FileTools.answer")(function* (
   flock: FlockChat,

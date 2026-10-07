@@ -409,7 +409,7 @@ test("a message with an image hands the SDK the words, Desktop's listing and the
   );
 });
 
-test("a PDF goes as a document, a small text as text headed with its name, and a large text or a zip only by name", () =>
+test("a PDF goes as a document, a small text as text headed with its name, and a large text, image or a zip only by name", () =>
   withChat({ items: [], proactive: false }, answered, ({ conversation, seen, dir }) =>
     Effect.gen(function* () {
       const bytes = (text: string) => new TextEncoder().encode(text);
@@ -417,13 +417,14 @@ test("a PDF goes as a document, a small text as text headed with its name, and a
       const log = yield* staged(dir, "app.log", "text/plain", bytes("one\ntwo\n"));
       const big = yield* staged(dir, "big.txt", "text/plain", bytes("x".repeat(100 * 1024 + 1)));
       const zip = yield* staged(dir, "trace.zip", "application/zip", bytes("PK\u0003\u0004"));
+      const gif = yield* staged(dir, "rec.gif", "image/gif", new Uint8Array(4 * 1024 * 1024));
 
       yield* Stream.runDrain(
-        conversation.send("look", null, false, [pdf.id, log.id, big.id, zip.id]),
+        conversation.send("look", null, false, [pdf.id, log.id, big.id, zip.id, gif.id]),
       );
       expect(seen.contents[0]).toEqual([
         { type: "text", text: "look" },
-        { type: "text", text: listing([pdf, log, big, zip]) },
+        { type: "text", text: listing([pdf, log, big, zip, gif]) },
         {
           type: "document",
           source: {

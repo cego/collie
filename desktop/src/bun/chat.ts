@@ -23,7 +23,14 @@ import {
   Stream,
 } from "effect";
 import { type AguiEvent, ends } from "../shared/agui";
-import { listing, type Staged } from "../shared/attachments";
+import {
+  IMAGE_BYTES,
+  listing,
+  shownAs,
+  type ShownImage,
+  type Staged,
+  TEXTUAL,
+} from "../shared/attachments";
 import { isString } from "../../../src/schema";
 import { describeAttachment, scaledCopy } from "./attachments";
 import {
@@ -185,15 +192,9 @@ const HISTORY = 10;
 
 export const refusal = (message: string): AguiEvent => ({ type: "RUN_ERROR", runId: "", message });
 
-/** The image types the model is shown as images. */
-const SHOWN = ["image/png", "image/jpeg", "image/gif", "image/webp"] as const;
-type ShownImage = (typeof SHOWN)[number];
-const shownAs = (mediaType: string) => SHOWN.find((one) => one === mediaType);
 /** The largest PDF handed over as a document, and text as text; anything larger goes by name. */
 const PDF_BYTES = 4 * 1024 * 1024;
 const TEXT_BYTES = 100 * 1024;
-/** What may be text; a file of unknown type is, where its bytes are UTF-8. */
-const TEXTUAL = /^text\/|json|xml|javascript|yaml|toml|x-sh|^application\/octet-stream$/;
 const strictly = new TextDecoder("utf-8", { fatal: true });
 /** The file as text, or null where it is not UTF-8 or holds a NUL. */
 const utf8 = (bytes: Uint8Array) => {
@@ -207,7 +208,8 @@ const utf8 = (bytes: Uint8Array) => {
 
 /**
  * The human's message as the model is handed it: their words, Desktop's listing of the
- * files apart from them, and each image as an image. Why not, where a file is gone.
+ * files apart from them, and what of each fits as an image, document or text. Why not,
+ * where a file is gone.
  */
 const contentOf = Effect.fnUntraced(function* (
   dir: string,
@@ -230,8 +232,12 @@ const contentOf = Effect.fnUntraced(function* (
       fs.readFile(path).pipe(Effect.orElseSucceed(() => new Uint8Array()));
     if (media !== undefined) {
       const scaled = yield* scaledCopy(dir, file.id).pipe(Effect.orElseSucceed(() => null));
-      const data = Encoding.encodeBase64(yield* read(scaled ?? file.path));
-      images.push({ type: "image", source: { type: "base64", media_type: media, data } });
+      const bytes = yield* read(scaled ?? file.path);
+      if (bytes.length <= IMAGE_BYTES)
+        images.push({
+          type: "image",
+          source: { type: "base64", media_type: media, data: Encoding.encodeBase64(bytes) },
+        });
     } else if (file.mediaType === "application/pdf" && file.size <= PDF_BYTES) {
       const data = Encoding.encodeBase64(yield* read(file.path));
       documents.push({

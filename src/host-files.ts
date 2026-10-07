@@ -93,6 +93,7 @@ const count = (flag: string, value: number | undefined) =>
 
 /** Ripgrep's arguments for a search, as Claude Code's Grep asks it. */
 const rgArgs = (asked: GrepAsked, mode: string) => [
+  "--with-filename",
   ...(mode === "files_with_matches"
     ? ["--files-with-matches"]
     : mode === "count"
@@ -112,6 +113,7 @@ const rgArgs = (asked: GrepAsked, mode: string) => [
 /** The same with `grep -r`, which has no file types and no multiline. */
 const grepArgs = (asked: GrepAsked, mode: string) => [
   "-r",
+  "-H",
   "-E",
   ...(mode === "files_with_matches" ? ["-l"] : mode === "count" ? ["-c"] : []),
   ...(asked.ignoreCase ? ["-i"] : []),
