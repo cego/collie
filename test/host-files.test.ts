@@ -246,7 +246,13 @@ test("a glob stops listing, and a grep stops its search, at the bound, and a glo
         ["**/.env", [`${dir}/.env`]],
         ["**/*.yml", []],
       ] as const)
-        expect((yield* globFiles(pattern, dir)).paths).toEqual([...found]);
+        for (const root of [dir, `${dir}/`])
+          expect((yield* globFiles(pattern, root)).paths).toEqual([...found]);
+      expect((yield* globFiles("a/*.ts", `${dir}/`)).paths).toHaveLength(4);
+      // A directory below the root that cannot be read is passed by.
+      yield* fs.makeDirectory(`${dir}/locked`, { mode: 0o000 });
+      expect((yield* globFiles("**/*.nomatch", dir)).paths).toEqual([]);
+      yield* fs.chmod(`${dir}/locked`, 0o755);
       const grepped = yield* grepFiles(
         { pattern: "needle", path: dir, outputMode: "content", headLimit: 2 },
         5,

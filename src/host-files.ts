@@ -72,21 +72,27 @@ export const globFiles = Effect.fn("HostFiles.glob")(function* (
 ) {
   const fs = yield* FileSystem.FileSystem;
   const root = yield* absolute(dir);
-  const keep = reaches(pattern);
-  const relative = (line: string) => line.slice(root === "/" ? 1 : root.length + 1);
+  const paths = yield* Path.Path;
+  const matches = reaches(pattern);
+  const keep = (line: string) => matches(paths.relative(root, line));
+  const dotted = pattern.split("/").filter((segment) => segment.startsWith("."));
   const rg = Bun.which("rg");
-  const hidden = pattern.split("/").some((segment) => segment.startsWith("."));
-  // Links are not followed, so a loop of them ends; dot directories are entered only for a
-  // pattern that names one.
+  // Links are not followed, so a loop of them ends, and a dot directory is entered only
+  // where the pattern names it: find prunes by those names, so it takes a dotted pattern.
+  // An unreadable root fails as the search's working directory; any other is passed by.
   const listed = yield* (
-    rg === null
+    rg === null || dotted.length > 0
       ? searched(
           "find",
           [
             root,
             "-mindepth",
             "1",
-            ...(hidden ? [] : ["-name", ".*", "-prune", "-o"]),
+            "-name",
+            ".*",
+            ...dotted.flatMap((segment) => ["!", "-name", segment]),
+            "-prune",
+            "-o",
             "-type",
             "f",
             "-print",
@@ -94,20 +100,10 @@ export const globFiles = Effect.fn("HostFiles.glob")(function* (
           root,
           bound,
           bound,
-          (line) => keep(relative(line)),
+          keep,
         )
-      : searched(
-          rg,
-          ["--files", "--no-ignore", "--no-messages", ...(hidden ? ["--hidden"] : []), root],
-          root,
-          bound,
-          bound,
-          (line) => keep(relative(line)),
-        )
+      : searched(rg, ["--files", "--no-ignore", "--no-messages", root], root, bound, bound, keep)
   ).pipe(Effect.mapError((cause) => refused(`the search of ${root} failed: ${String(cause)}`)));
-  // An unreadable directory below the root is passed by; an unreadable root is the failure.
-  if (listed.lines.length === 0 && listed.code > 1)
-    return yield* refused(`the search of ${root} failed (exit ${listed.code})`);
   const found = listed.lines;
   const matched: Array<{ readonly path: string; readonly at: number }> = [];
   for (const path of found) {
