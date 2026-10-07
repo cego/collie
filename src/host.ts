@@ -65,6 +65,7 @@ import {
   compactionSweeper,
   runnersSweeper,
   stateSweeper,
+  taskWorkspacesSweeper,
   generationsDir,
   generationsSweeper,
   judge,
@@ -145,7 +146,7 @@ import { carryOut, carryOutAsked, followUpField } from "./run-actions";
 import { nothingApproved } from "./outcome";
 import { approvedFrom, VerifySpecSchema, type VerifySpec } from "./verify-spec";
 import { everyRegistered } from "./registry";
-import { readTask } from "./task";
+import { listTasks, readTask } from "./task";
 import { nowIso } from "./time";
 import { reason } from "./naming";
 import { loadDefaults, SettingRefused, sharedSettings, takeShared } from "./config";
@@ -445,10 +446,23 @@ const hostBoard = (dir: string) =>
     // What ended and what it opened needs no herdr: the merge watch asks nobody's panes.
     const unattended = boardOf([]);
     /** Every kind of thing Collie cleans, judged against the Runs as they are now. */
+    /** When each Task was first seen Finished, for as long as this host runs. */
+    const seen = new Map<string, number>();
     const sweepers = Effect.gen(function* () {
-      const sessions = (yield* liveHerds(herdr, env)).map((session) => session.herdr);
+      const herds = yield* liveHerds(herdr, env);
+      const sessions = herds.map((session) => session.herdr);
       const all = yield* runs;
       return [
+        // Before the worktrees: a checkout goes only once its Task's workspace has closed.
+        taskWorkspacesSweeper({
+          stateDir: env.stateDir,
+          sessions: herds,
+          tasks: yield* listTasks(env.stateDir),
+          // No board, no Task judged Finished, so nothing closed.
+          views: yield* build.pipe(Effect.orElseSucceed(() => [])),
+          runs: all,
+          seen,
+        }),
         worktreesSweeper({
           herdr,
           sessions,

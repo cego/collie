@@ -7,12 +7,16 @@ import { Clock, Effect, FileSystem, Option, Path, Schema, Semaphore } from "effe
 import type { BunServices } from "@effect/platform-bun/BunServices";
 import {
   FrontDoor,
+  sectionOf,
   Where,
+  type Section,
+  type TaskView,
   type CleanupItem,
   type CleanupKept,
   type CleanupReport,
 } from "./board-model";
-import type { Herdr } from "./herdr";
+import { herdrFailureReason, type Herdr } from "./herdr";
+import type { TaskRecord } from "./task";
 import { appendJournal, readJournal } from "./journal";
 import { shell } from "./mr";
 import type { AgentEntry } from "./registry";
@@ -496,5 +500,142 @@ export const runnersSweeper = (dir: string, running: string): Sweeper => {
               : { keep: one.keep! };
         }),
       ),
+  };
+};
+
+const FINISHED_GRACE_MS = 60 * 60_000;
+const SECTION_SAID: Record<Section, string> = {
+  "needs-you": "needs you",
+  waiting: "waiting on you",
+  working: "working",
+  finished: "Finished",
+};
+
+const LaunchedTerminal = Schema.fromJsonString(
+  Schema.Struct({ terminalId: Schema.optionalKey(Schema.String) }),
+);
+
+/** The terminals of every agent `runs` launched, from their launch records. */
+const launchedTerminals = (stateDir: string, runs: ReadonlyArray<string>) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const terminals = new Set<string>();
+    for (const run of runs) {
+      const dir = `${stateDir}/agents/${run}`;
+      const names = yield* fs.readDirectory(dir).pipe(Effect.orElseSucceed(() => []));
+      for (const name of names.filter((one) => one.endsWith(".launch.json"))) {
+        const text = yield* fs
+          .readFileString(`${dir}/${name}`)
+          .pipe(Effect.orElseSucceed(() => ""));
+        const launched = Schema.decodeUnknownOption(LaunchedTerminal)(text);
+        if (Option.isSome(launched) && launched.value.terminalId !== undefined)
+          terminals.add(launched.value.terminalId);
+      }
+    }
+    return terminals;
+  });
+
+/**
+ * Task workspaces, each closed an hour after its Task became Finished, unless herdr has it in
+ * focus or it holds a pane Collie did not open (ADR-0045 D3). `seen` is when each Task was
+ * first seen Finished, kept by the host across sweeps; a host restart only delays a close.
+ */
+export const taskWorkspacesSweeper = (opts: {
+  stateDir: string;
+  sessions: ReadonlyArray<{ readonly herd: string | null; readonly herdr: Herdr }>;
+  tasks: ReadonlyArray<TaskRecord>;
+  views: ReadonlyArray<TaskView>;
+  runs: ReadonlyArray<RunFacts>;
+  seen: Map<string, number>;
+}): Sweeper => {
+  const kind = "workspace";
+  const named = new Map<string, number>();
+  for (const task of opts.tasks) named.set(task.workspace, (named.get(task.workspace) ?? 0) + 1);
+
+  /** The session a Task's workspace is in: its recorded Herd's, else the first. */
+  const sessionOf = (task: TaskRecord) =>
+    opts.sessions.find((one) => one.herd !== null && one.herd === task.herd) ?? opts.sessions[0];
+
+  /** What becomes of one Task's workspace now, or null where it has none open to close. */
+  const verdict = (
+    task: TaskRecord,
+  ): Effect.Effect<
+    { keep: string } | { remove: string; terminals: ReadonlySet<string> } | null,
+    never,
+    BunServices
+  > =>
+    Effect.gen(function* () {
+      const session = sessionOf(task);
+      if (session === undefined) return null;
+      const view = opts.views.find((one) => one.id === task.id);
+      if (view === undefined) return null;
+      const now = yield* Clock.currentTimeMillis;
+      const section = sectionOf(view);
+      if (section !== "finished") {
+        opts.seen.delete(task.id);
+        return { keep: SECTION_SAID[section] };
+      }
+      const since = opts.seen.get(task.id) ?? now;
+      opts.seen.set(task.id, since);
+      const workspaces = yield* session.herdr.workspaceList().pipe(Effect.option);
+      const panes = yield* session.herdr.paneList().pipe(Effect.option);
+      if (Option.isNone(workspaces) || Option.isNone(panes))
+        return { keep: "could not ask herdr what is open" };
+      const open = workspaces.value.find((one) => one.workspaceId === task.workspace);
+      if (open === undefined) return null;
+      if ((named.get(task.workspace) ?? 0) > 1) return { keep: "another Task names it too" };
+      if ("collie_home" in open.tokens) return { keep: "it is the Home" };
+      const minutes = Math.floor((now - since) / 60_000);
+      if (now - since < FINISHED_GRACE_MS) return { keep: `Finished ${minutes} min ago` };
+      if (open.focused) return { keep: "in focus" };
+      const terminals = yield* launchedTerminals(
+        opts.stateDir,
+        opts.runs.filter((run) => run.task === task.id).map((run) => run.id),
+      );
+      const foreign = panes.value.find(
+        (pane) =>
+          pane.workspaceId === task.workspace &&
+          pane.paneId !== task.root_pane &&
+          (pane.terminalId === null || !terminals.has(pane.terminalId)),
+      );
+      if (foreign !== undefined)
+        return { keep: `holds a pane Collie did not open (${foreign.paneId})` };
+      return { remove: `Finished ${minutes} min ago`, terminals };
+    });
+
+  const taskAt = (target: string) => opts.tasks.find((task) => task.workspace === target);
+
+  return {
+    judge: Effect.gen(function* () {
+      const remove: CleanupItem[] = [];
+      const keep: CleanupKept[] = [];
+      for (const task of opts.tasks) {
+        const judged = yield* verdict(task);
+        if (judged === null) continue;
+        if ("keep" in judged) keep.push({ kind, target: task.workspace, reason: judged.keep });
+        else remove.push({ kind, target: task.workspace, bytes: 0, reason: judged.remove });
+      }
+      return { remove, keep };
+    }),
+    remove: (item) =>
+      Effect.gen(function* () {
+        const task = taskAt(item.target);
+        const session = task === undefined ? undefined : sessionOf(task);
+        if (task === undefined || session === undefined)
+          return { kept: "no Task names it any more" };
+        const judged = yield* verdict(task);
+        if (judged === null) return { kept: "already closed" };
+        if ("keep" in judged) return { kept: judged.keep };
+        const closed = yield* session.herdr.workspaceClose(task.workspace).pipe(Effect.result);
+        if (closed._tag === "Failure") return { kept: herdrFailureReason(closed.failure) };
+        // Its agents left in another workspace go with it, matched by terminal as a stop does.
+        for (const other of opts.sessions) {
+          const panes = yield* other.herdr.paneList().pipe(Effect.orElseSucceed(() => []));
+          for (const pane of panes)
+            if (pane.terminalId !== null && judged.terminals.has(pane.terminalId))
+              yield* other.herdr.paneClose(pane.paneId).pipe(Effect.ignore);
+        }
+        return { freed: 0 };
+      }),
   };
 };

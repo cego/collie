@@ -95,6 +95,8 @@ const WorkspaceReply = Schema.Struct({
    * same thing.
    */
   tokens: Schema.optionalKey(Schema.NullOr(Schema.Record(Schema.String, Schema.String))),
+  /** Whether it is the workspace herdr has in focus, which cleanup never closes. */
+  focused: Schema.optionalKey(Schema.Boolean),
 });
 const WorkspaceCreateReply = Schema.Struct({
   result: Schema.Struct({
@@ -251,6 +253,7 @@ const PluginPaneReply = Schema.Struct({
  */
 export const SOCKET_METHODS = [
   "workspace.focus",
+  "workspace.close",
   "tab.move",
   "agent.view.set",
   "agent.view.clear",
@@ -475,6 +478,7 @@ export interface WorkspaceInfo {
   worktree: string | null;
   /** What a plugin has attached to it. Collie's Home ownership rests on one of these. */
   tokens: Readonly<Record<string, string>>;
+  focused: boolean;
 }
 
 /** One checkout of a repository, as `herdr worktree list` reports it. */
@@ -606,6 +610,7 @@ export const decodeWorkspaceList = (res: BoundaryValue) =>
           cwd: workspace.cwd ?? workspace.working_directory ?? worktree ?? "",
           worktree,
           tokens: workspace.tokens ?? {},
+          focused: workspace.focused ?? false,
         };
       }),
     ),
@@ -788,6 +793,11 @@ export class Herdr {
    */
   workspaceFocus(workspaceId: string): HerdrEffect<void> {
     return this.rpc("workspace.focus", { workspace_id: workspaceId }).pipe(Effect.asVoid);
+  }
+
+  /** Closes a workspace and every pane in it. */
+  workspaceClose(workspaceId: string): HerdrEffect<void> {
+    return this.rpc("workspace.close", { workspace_id: workspaceId }).pipe(Effect.asVoid);
   }
 
   /** Reorders a tab within its workspace; 0 is first. No CLI for it in 0.8.2. */

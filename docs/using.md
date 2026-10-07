@@ -1700,6 +1700,13 @@ Collie removes what it made once nothing needs it, and only what it can show it 
 ([ADR-0045](adr/0045-collie-removes-what-it-made-once-nothing-needs-it.md)). The host sweeps
 every ten minutes, whether or not a pane is open. A sweep removes:
 
+- **Task workspaces**, an hour after their Task is **Finished**. One herdr has in focus at
+  that moment is kept, and so is one holding a pane Collie did not open — your own shell or
+  dev server — until you close it yourself. The Home, and a workspace that is no Task's,
+  are never closed. The Task's agents close with it, including any of its panes left in
+  another workspace. A Task that stops being Finished, because a new Run joined it or a
+  steer reopened it, starts its hour again. Continue task, or a Follow-up Run, reopens a
+  closed workspace on the Task's checkout.
 - **Worktrees** Collie made, once they are **Settled** (see
   [What a run does to your repository](#what-a-run-does-to-your-repository)).
 - **Staged module generations** under `~/.cache/collie/entries`, once unused for 7 days.
