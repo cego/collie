@@ -11,14 +11,14 @@ const { connecting, failure, lost, machines, notices, tasks, sections, header, w
 const { summary } = useInSync();
 const starting = ref(false);
 const listing = ref(false);
-const setting = ref(false);
 const { onboardOn } = useOnboarding();
 const { renewBy } = useCredentials();
-const record = useRecord();
+const { page, open, back } = usePage();
 const opened = computed(() =>
-  record.opened.value === null ? undefined : placedBy(record.opened.value),
+  page.value?.kind === "record" ? placedBy(page.value.key) : undefined,
 );
-watch(opened, (now) => now === undefined && record.close());
+// A record closes when its card leaves the Flock.
+watch(opened, (now) => now === undefined && page.value?.kind === "record" && back());
 
 const { choose } = useChip();
 /** A click on the board's own area, on no card and no control, lets the selected card go. */
@@ -27,8 +27,8 @@ const background = (event: MouseEvent) => {
 };
 const escape = (event: KeyboardEvent) => {
   if (event.key !== "Escape") return;
-  const backOut = escapeBacksOut(targetOf(event), document, opened.value !== undefined);
-  if (backOut === "close-record") record.close();
+  const backOut = escapeBacksOut(targetOf(event), document, page.value !== null);
+  if (backOut === "back") back();
   if (backOut === "let-go") choose(null);
 };
 // Captured, so it runs before an overlay closes on the same key.
@@ -127,9 +127,11 @@ watch(update, (now) => {
           icon="i-lucide-settings"
           label="Settings"
           data-testid="settings"
-          @click="setting = true"
+          :active="page?.kind === 'settings'"
+          active-variant="solid"
+          :aria-pressed="page?.kind === 'settings'"
+          @click="open('settings')"
         />
-        <SettingsPanel v-model:open="setting" />
         <OnboardDialog />
         <UButton
           icon="i-lucide-plus"
@@ -152,7 +154,7 @@ watch(update, (now) => {
       <div class="relative min-h-0 flex-1">
         <main
           class="flex h-full flex-col gap-6 overflow-y-auto p-4"
-          :inert="opened !== undefined"
+          :inert="page !== null"
           @click="background"
         >
           <p v-if="connecting" class="text-muted">Connecting…</p>
@@ -172,7 +174,7 @@ watch(update, (now) => {
               icon="i-lucide-key-round"
               :title="`The GitLab token expires on ${renewBy}`"
               description="Make a new one and Renew it, and every Machine gets it."
-              :actions="[{ label: 'Renew', onClick: () => void (setting = true) }]"
+              :actions="[{ label: 'Renew', onClick: () => void open('settings') }]"
             />
             <UAlert
               v-for="[profile, { name, state, reason }] in lost"
@@ -227,8 +229,9 @@ watch(update, (now) => {
           :key="`${opened.key} ${opened.task.run}`"
           :placed="opened"
           class="absolute inset-0"
-          @close="record.close()"
+          @close="back()"
         />
+        <SettingsPage v-if="page?.kind === 'settings'" class="absolute inset-0" @back="back()" />
       </div>
     </div>
     <FlockChat

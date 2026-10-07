@@ -22,7 +22,7 @@ const props = defineProps<{
 }>();
 const { run, openLink } = useActions();
 const toast = useToast();
-const record = useRecord();
+const record = usePage();
 // A dialog opened before its Machine dropped is outside the card's disabled controls.
 const act = (action: DesktopAction) =>
   props.asOf === null ? run(props.installation, action) : Promise.resolve(false);
@@ -47,7 +47,7 @@ const about = () => ({
   name: props.task.name,
 });
 const select = () => choose(about());
-const openRecord = () => record.open(props.cardKey, about());
+const openRecord = () => record.openRecord(props.cardKey, about());
 const selectOnBody = (event: MouseEvent) => {
   if (placeOf(targetOf(event)) === "card") select();
 };
@@ -106,7 +106,7 @@ const copy = (text: string) =>
     () => toast.add({ title: "Copied", color: "success" }),
     () => toast.add({ title: "Could not copy the command", color: "error" }),
   );
-const goTo = () => props.asOf === null && record.open(props.cardKey, about(), "terminal");
+const goTo = () => props.asOf === null && record.openRecord(props.cardKey, about(), "terminal");
 
 /**
  * A card action as this board does it, or null where Desktop has no way to yet: a check's

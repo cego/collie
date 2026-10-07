@@ -8,7 +8,7 @@ import {
 } from "../../../src/shared/flock-settings";
 import { flockSettingsAtom } from "../flock";
 
-const open = defineModel<boolean>("open", { required: true });
+const emit = defineEmits<{ back: [] }>();
 const { openLink, saveGitlabHost, setFlockSetting } = useActions();
 const { credentials } = useCredentials();
 const { desktopSettings, reread, change } = useDesktopSettings();
@@ -16,8 +16,7 @@ const toast = useToast();
 const held = useAtomValue(() => flockSettingsAtom);
 // Asked again on opening, which syncs every connected Machine and so shows their edits.
 const registry = injectRegistry();
-watch(open, (opened) => {
-  if (!opened) return;
+onMounted(() => {
   registry.refresh(flockSettingsAtom);
   void reread();
 });
@@ -57,9 +56,10 @@ const gitlabHostSaid = settingOf("gitlab_host")?.description;
 </script>
 
 <template>
-  <USlideover v-model:open="open" title="Settings">
-    <template #body>
-      <div class="flex flex-col gap-6">
+  <section data-testid="settings-page" class="flex flex-col bg-default">
+    <PageHeader title="Settings" @back="emit('back')" />
+    <div class="min-h-0 flex-1 overflow-y-auto p-4">
+      <div class="flex max-w-3xl flex-col gap-6">
         <section
           v-for="section in sections"
           :key="section.group"
@@ -227,6 +227,6 @@ const gitlabHostSaid = settingOf("gitlab_host")?.description;
           <DesktopVersion />
         </section>
       </div>
-    </template>
-  </USlideover>
+    </div>
+  </section>
 </template>

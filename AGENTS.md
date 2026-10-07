@@ -69,7 +69,8 @@ herdr actions, and the `collie` CLI.
   `desktop/src/bun/machine.ts` (a Machine reached through `collie bridge`, never the host
   client) and `desktop/src/shared/` (the view's RPC and the Flock it folds), with the main
   process's behaviour tested in `test/desktop-*.test.ts`. A card's record is
-  `desktop/view/app/components/RunRecord.vue`, opened through `useRecord`; what agent
+  `desktop/view/app/components/RunRecord.vue`, one of the pages `usePage` lays over the
+  board's column, with `SettingsPage.vue`; what agent
   markdown may keep is `desktop/src/shared/markdown.ts` with `desktop/test/markdown.test.ts`; what a click,
   a double-click and Escape do to the selected card is `desktop/src/shared/board-clicks.ts`
   with `desktop/test/board-clicks.test.ts`; whether a Machine is In sync is

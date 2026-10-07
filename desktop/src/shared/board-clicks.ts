@@ -32,15 +32,15 @@ export const opensOnDoubleClick = (target: Target, asOf: number | null) =>
 
 /**
  * Escape backs out one level: a field typed in and an open overlay keep it, the overlay closing
- * itself, then an open record closes, then the board lets its card go.
+ * itself, then an open page goes back to the board, then the board lets its card go.
  */
 export const escapeBacksOut = (
   target: Target,
   page: Page,
-  recordOpen: boolean,
-): "nothing" | "close-record" | "let-go" => {
+  pageOpen: boolean,
+): "nothing" | "back" | "let-go" => {
   const typing =
     target !== null && (target.isContentEditable === true || target.closest(FIELD) !== null);
   if (typing || page.querySelector(OVERLAY) !== null) return "nothing";
-  return recordOpen ? "close-record" : "let-go";
+  return pageOpen ? "back" : "let-go";
 };

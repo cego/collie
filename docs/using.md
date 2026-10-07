@@ -1026,8 +1026,8 @@ fingerprint of what it gave each — the first 16 hex digits of its SHA-256, nev
 the Machine, and an onboarding that ended ready all record one, and removing a Machine drops
 its record. A Machine given the current one is not touched again. A step that needs one you have not given yet takes it
 there and onboards again. Desktop asks GitLab when the token expires, at launch and when it
-is saved, and warns above the board from 14 days before; **Renew** with a new one replaces
-it on every Machine.
+is saved, and warns above the board from 14 days before, where **Renew** opens Settings;
+**Renew** there with a new one replaces it on every Machine.
 
 That GitLab is one host for the whole Flock, `gitlab.cego.dk` unless you name another in
 **Settings** (**Use this GitLab**), which is the Flock's `gitlab_host` setting below. It is the token
@@ -1039,7 +1039,8 @@ make a new one on the new host's page and save it. The GitLab host is given to e
 Machine but never taken from one: an edit of `gitlab_host` in a Machine's TUI stays that
 Machine's.
 
-**Settings** is grouped under headings, in order: **Agents**, **Runs**, **Board**, **Chat**,
+**Settings** is a page in the board's column, at a readable line length, and re-reads the
+Flock's settings each time it opens. It is grouped under headings, in order: **Agents**, **Runs**, **Board**, **Chat**,
 **Notifications**, **GitLab and credentials** and **About**. It holds every setting the TUI's
 Settings offers — each default a Run reads, `proactive`, the extra `models.<harness>` and each
 `notifications.<kind>` — and the Flock chat's own speak-first switch. Each setting has a plain
@@ -1119,8 +1120,13 @@ use that width; Plan, Review and Facts keep a readable line length. The record's
 returns to the board, which was never taken down: it comes back scrolled where you left it,
 its sections open or closed as they were, and the card still selected.
 
+The record is one of Desktop's **pages**, with **Settings**: each takes the board's column in
+the same way, one at a time, so opening Settings with a record open replaces the record, and
+back always returns to the board. Opening a page moves focus to its back button. The header's
+Settings button opens its page and shows as pressed while it is open.
+
 **Escape** backs out one level: an open dialog, menu or popover closes first, then the
-record, and on the board Escape lets the selected card go. Escape typed in a field, such as
+open page, and on the board Escape lets the selected card go. Escape typed in a field, such as
 the Log search, stays with the field.
 
 The record's **Plan** tab renders the spec, read whole from the host where it is longer than the

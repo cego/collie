@@ -47,7 +47,7 @@ const tabs = computed(() => {
 });
 /** The tab the human chose while it is there, else the first: Plan, where there is one. */
 const chosen = ref<string>();
-const record = useRecord();
+const record = usePage();
 const wentToPane = ref(false);
 watch(
   record.asked,
@@ -82,22 +82,11 @@ const locationOf = (file: string, line: number | null) =>
 
 <template>
   <section data-testid="record" class="flex flex-col bg-default">
-    <header class="flex shrink-0 items-start gap-3 border-b border-default px-4 py-3">
-      <UButton
-        icon="i-lucide-arrow-left"
-        color="neutral"
-        variant="ghost"
-        aria-label="Back to the board"
-        data-testid="record-back"
-        @click="emit('close')"
-      />
-      <div class="min-w-0">
-        <h2 class="font-semibold" data-testid="record-title">{{ placed.task.name }}</h2>
-        <p class="text-sm text-muted" data-testid="record-description">
-          {{ detail?.title ?? placed.task.run }}
-        </p>
-      </div>
-    </header>
+    <PageHeader :title="placed.task.name" @back="emit('close')">
+      <p class="text-sm text-muted" data-testid="record-description">
+        {{ detail?.title ?? placed.task.run }}
+      </p>
+    </PageHeader>
     <div class="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4">
       <UAlert v-if="failure !== null" color="error" :title="failure" />
       <p v-else-if="AsyncResult.isInitial(result)" class="text-muted text-sm">Loading…</p>

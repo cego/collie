@@ -37,8 +37,8 @@ test("a double-click on a card's body opens it, unless its Machine dropped", () 
   expect(opensOnDoubleClick(element([]), null)).toBe(false);
 });
 
-test("Escape closes an open record, and on the board lets the card go", () => {
-  expect(escapeBacksOut(element([]), page(null), true)).toBe("close-record");
+test("Escape backs out of an open page, a record or Settings, and on the board lets the card go", () => {
+  expect(escapeBacksOut(element([]), page(null), true)).toBe("back");
   expect(escapeBacksOut(element([]), page(null), false)).toBe("let-go");
   expect(escapeBacksOut(element(["[data-card]"]), page(null), false)).toBe("let-go");
 });
@@ -50,14 +50,14 @@ test("Escape with a dialog, slideover, popover, menu or select open is the overl
     '[role="menu"]',
     '[role="listbox"]',
   ])
-    for (const recordOpen of [true, false])
-      expect(escapeBacksOut(element([]), page(role), recordOpen)).toBe("nothing");
+    for (const pageOpen of [true, false])
+      expect(escapeBacksOut(element([]), page(role), pageOpen)).toBe("nothing");
 });
 
 test("Escape typed in a field, such as the Log search, stays with the field", () => {
-  for (const recordOpen of [true, false]) {
+  for (const pageOpen of [true, false]) {
     for (const field of ["input", "textarea", "select"])
-      expect(escapeBacksOut(element([field]), page(null), recordOpen)).toBe("nothing");
-    expect(escapeBacksOut(element([], true), page(null), recordOpen)).toBe("nothing");
+      expect(escapeBacksOut(element([field]), page(null), pageOpen)).toBe("nothing");
+    expect(escapeBacksOut(element([], true), page(null), pageOpen)).toBe("nothing");
   }
 });
