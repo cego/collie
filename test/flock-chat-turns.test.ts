@@ -191,6 +191,7 @@ const withChat = <A, E>(
         proactive: () => opts.proactive,
         machineRule: () => opts.rule ?? "Everything is on the vm",
         setMachineRule: () => Effect.void,
+        inSync: () => Effect.succeed(""),
       });
       return yield* body({ conversation, seen, read, dir });
     }).pipe(Effect.scoped, Effect.provide([BunServices.layer, TestClock.layer()])),

@@ -1,6 +1,15 @@
 // The Flock's settings on this computer, and each Machine synced with them through its host.
 
-import { Effect, FileSystem, Path, Schema, Semaphore, SubscriptionRef } from "effect";
+import {
+  Cause,
+  Effect,
+  FileSystem,
+  Option,
+  Path,
+  Schema,
+  Semaphore,
+  SubscriptionRef,
+} from "effect";
 import type { SharedSetting, SharedSettings } from "../../../src/board-model";
 import { FlockSettings, NO_FLOCK_SETTINGS, takeFrom } from "../shared/flock-settings";
 
@@ -59,20 +68,31 @@ export interface SettingsMachine<E> {
   readonly door: SettingsDoor<E>;
 }
 
+const Refusal = Schema.Struct({ reason: Schema.String });
+
+/** Why a sync failed, in its host's words where it gave some. */
+const reasonOf = (cause: Cause.Cause<unknown>) => {
+  const error = Cause.squash(cause);
+  return Option.match(Schema.decodeUnknownOption(Refusal)(error), {
+    onSome: ({ reason }) => reason,
+    onNone: () => (error instanceof Error ? error.message : String(error)),
+  });
+};
 /**
  * Syncs connected Machines with the Flock's settings, one at a time. What a Machine answers
  * is taken into the settings as they are by then, so an edit made meanwhile survives, and an
- * edit taken from it goes on to every other connected Machine.
+ * edit taken from it goes on to every other connected Machine. Each sync tells how it ended.
  */
-export const flockSync = <E, S>(options: {
+export const flockSync = <E, S, M extends SettingsMachine<E>>(options: {
   readonly flock: SubscriptionRef.SubscriptionRef<FlockSettings>;
-  readonly machines: () => ReadonlyArray<SettingsMachine<E>>;
+  readonly machines: () => ReadonlyArray<M>;
   readonly save: (flock: FlockSettings) => Effect.Effect<void, S>;
   readonly request: Effect.Effect<string>;
+  readonly told: (machine: M, failed: string | null) => Effect.Effect<void>;
 }) =>
   Effect.gen(function* () {
     const syncing = yield* Semaphore.make(1);
-    const took = (machine: SettingsMachine<E>) =>
+    const took = (machine: M) =>
       syncing.withPermits(1)(
         Effect.gen(function* () {
           const has = yield* syncSettings(
@@ -91,8 +111,10 @@ export const flockSync = <E, S>(options: {
           );
         }),
       );
-    const syncOn = (machine: SettingsMachine<E>): Effect.Effect<void> =>
+    /** Why the sync with `machine` failed, or null. */
+    const syncOn = (machine: M): Effect.Effect<string | null> =>
       took(machine).pipe(
+        Effect.tap(() => options.told(machine, null)),
         Effect.flatMap((changed) =>
           changed
             ? Effect.forEach(
@@ -102,9 +124,14 @@ export const flockSync = <E, S>(options: {
               )
             : Effect.void,
         ),
-        Effect.catchCause((cause) =>
-          Effect.logWarning(`Settings not synced with ${machine.name}`, cause),
-        ),
+        Effect.as(null),
+        Effect.catchCause((cause) => {
+          const failed = reasonOf(cause);
+          return Effect.logWarning(`Settings not synced with ${machine.name}`, cause).pipe(
+            Effect.andThen(options.told(machine, failed)),
+            Effect.as(failed),
+          );
+        }),
       );
     const syncEvery = () =>
       Effect.forEach(options.machines(), syncOn, { concurrency: "unbounded", discard: true });

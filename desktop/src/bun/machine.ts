@@ -34,6 +34,7 @@ import {
 import type * as RpcClientError from "effect/unstable/rpc/RpcClientError";
 import {
   ActionFailed,
+  type Credential,
   type DesktopAction,
   type FlockItem,
   type KnownMachine,
@@ -42,6 +43,7 @@ import {
   type MachineMessage,
   type NotLive,
 } from "../shared/flock";
+import { CREDENTIAL_SAID, type Lag } from "../shared/in-sync";
 
 const children = new Set<Bun.Subprocess>();
 export const endChildren = () => {
@@ -476,12 +478,16 @@ const upgradeTo = (route: Route<BoardSource>, version: string) =>
 /** How long a route waits before it tries again, after so many tries in a row failed. */
 const backoff = (failures: number) => Math.min(1000 * 2 ** failures, 60_000);
 
-/** A route added, one removed, or one woken to try again now rather than after its backoff. */
+/**
+ * A route added, one removed, one woken to try again now rather than after its backoff, or
+ * one reopened, which asks a Machine's upgrade again.
+ */
 export type RouteChange<D extends BoardSource = Doors> =
   | { readonly _tag: "Add"; readonly route: Route<D> }
   /** `done` once its stream has ended and its Machine is said to be removed. */
   | { readonly _tag: "Remove"; readonly profile: string; readonly done: Deferred.Deferred<void> }
-  | { readonly _tag: "Wake"; readonly profile: string };
+  | { readonly _tag: "Wake"; readonly profile: string }
+  | { readonly _tag: "Reopen"; readonly profile: string };
 
 /**
  * Every route's board, one stream per installation. Routes earlier in the list are
@@ -505,6 +511,7 @@ export const flockStream = <D extends BoardSource>(
       const removed: Array<Deferred.Deferred<void>> = [];
       const ended: Array<Deferred.Deferred<void>> = [];
       const wakes: Array<Queue.Queue<void>> = [];
+      const reopens: Array<Queue.Queue<void>> = [];
       const places = new Map<string, number>();
       const routeAt: Array<Route<D>> = [];
       // Routes with nothing more to show: merged into another, or too new to read.
@@ -514,6 +521,8 @@ export const flockStream = <D extends BoardSource>(
       // Asked to upgrade at most once per connection. One that upgraded but did not move is
       // shown as it is; one that failed is asked again when it next connects.
       const upgrading = new Set<string>();
+      // Upgrading right now, which a reopen would cut off; the upgrade reopens by itself.
+      const upgradingNow = new Set<string>();
       const owns = (at: number, { machine, message }: MachineMessage) =>
         Effect.gen(function* () {
           const [owner, before] = yield* Ref.modify(owners, (now) => {
@@ -556,6 +565,8 @@ export const flockStream = <D extends BoardSource>(
       const live = (route: Route<D>, at: number, waitingOnSso: WaitingOnSso) =>
         Stream.unwrap(
           Effect.gen(function* () {
+            // A reopen asked while it was not live is this opening.
+            yield* Queue.clear(reopens[at]!);
             const door = yield* route.open(waitingOnSso);
             // The build of a release older than Desktop, once its board is shown.
             const due = yield* Deferred.make<{
@@ -614,7 +625,13 @@ export const flockStream = <D extends BoardSource>(
                 upgradeThenReopen(route, installation, from),
               ),
             );
-            return Stream.merge(board, upgrade, { haltStrategy: "left" });
+            return Stream.merge(board, upgrade, { haltStrategy: "left" }).pipe(
+              Stream.interruptWhen(
+                Queue.take(reopens[at]!).pipe(
+                  Effect.andThen(Effect.fail<RouteFailure>({ state: "reopen", reason: "asked" })),
+                ),
+              ),
+            );
           }),
         );
       const notice = (route: Route<D>, text: string): FlockItem => ({
@@ -625,7 +642,9 @@ export const flockStream = <D extends BoardSource>(
       /** Upgrades the Machine, then opens it again so its new build replaces its host. */
       const upgradeThenReopen = (route: Route<D>, installation: string, from: string) =>
         Stream.unwrap(
-          upgradeTo(route, version).pipe(
+          Effect.sync(() => upgradingNow.add(installation)).pipe(
+            Effect.andThen(upgradeTo(route, version)),
+            Effect.ensuring(Effect.sync(() => upgradingNow.delete(installation))),
             // Failed, or cut off with its connection: asked again when it next connects.
             Effect.onExit((exit) =>
               Exit.isSuccess(exit)
@@ -671,7 +690,11 @@ export const flockStream = <D extends BoardSource>(
                     // A route that reaches a Machine already shown is not lost: it is done.
                     if (done.has(at) || (yield* Deferred.isDone(displaced[at]!)))
                       return Stream.empty;
-                    if (failure.state === "reopen") return afterFailures(0);
+                    if (failure.state === "reopen")
+                      return Stream.unwrap(
+                        // A reopen wakes a route in backoff; one that was live needs no wake.
+                        Effect.as(Queue.clear(wakes[at]!), afterFailures(0)),
+                      );
                     const lost = Stream.fromEffect(lostItem(route, failure.state, failure.reason));
                     if (failure.state === "update-desktop") {
                       done.add(at);
@@ -700,6 +723,7 @@ export const flockStream = <D extends BoardSource>(
           removed.push(yield* Deferred.make<void>());
           ended.push(yield* Deferred.make<void>());
           wakes.push(yield* Queue.sliding<void>(1));
+          reopens.push(yield* Queue.sliding<void>(1));
           places.set(route.machine.profile, at);
           routeAt.push(route);
           const notices = yield* Queue.unbounded<FlockItem>();
@@ -723,6 +747,21 @@ export const flockStream = <D extends BoardSource>(
           return at === undefined
             ? Stream.empty
             : Stream.fromEffectDrain(Queue.offer(wakes[at]!, undefined));
+        if (change._tag === "Reopen")
+          return at === undefined
+            ? Stream.empty
+            : Stream.fromEffectDrain(
+                Effect.gen(function* () {
+                  const owned = [...(yield* Ref.get(owners))]
+                    .filter(([, owner]) => owner === at)
+                    .map(([installation]) => installation);
+                  if (owned.some((installation) => upgradingNow.has(installation))) return;
+                  // Asked again even where the last upgrade succeeded and did not move.
+                  for (const installation of owned) upgrading.delete(installation);
+                  yield* Queue.offer(reopens[at]!, undefined);
+                  yield* Queue.offer(wakes[at]!, undefined);
+                }),
+              );
         if (at === undefined)
           return Stream.fromEffectDrain(Deferred.succeed(change.done, undefined));
         places.delete(change.profile);
@@ -885,3 +924,36 @@ export const runDetailOn = (door: Door, runId: string) =>
 
 export const runFileOn = (door: Door, runId: string, ref: string, offset?: number) =>
   door.runFile({ runId, ref, offset }).pipe(Effect.mapError(refusal()));
+
+/** What connecting would do for a Machine that lags on `behind`, and whether any of it failed. */
+export const syncNow = (
+  machine: KnownMachine,
+  behind: ReadonlyArray<Lag["part"]>,
+  steps: {
+    readonly reopen: Effect.Effect<unknown>;
+    readonly sync: Effect.Effect<string | null>;
+    readonly give: Effect.Effect<
+      ReadonlyArray<{ readonly credential: Credential; readonly failed: string | null }>
+    >;
+  },
+) =>
+  Effect.gen(function* () {
+    if (behind.includes("version")) {
+      yield* steps.reopen;
+      return {
+        said: `Reopening ${machine.name} to upgrade it; its settings and credentials follow once it connects`,
+        failed: false,
+      };
+    }
+    const failed = yield* steps.sync;
+    const gave = yield* steps.give;
+    const said = [
+      `${machine.name}: ${failed === null ? "settings synced" : `settings didn't sync: ${failed}`}`,
+      ...gave.map(({ credential, failed: why }) =>
+        why === null
+          ? `${CREDENTIAL_SAID[credential].lacks} given`
+          : `${CREDENTIAL_SAID[credential].lacks} not given: ${why}`,
+      ),
+    ].join("; ");
+    return { said, failed: failed !== null || gave.some(({ failed: why }) => why !== null) };
+  });

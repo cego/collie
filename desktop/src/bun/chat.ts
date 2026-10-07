@@ -284,6 +284,7 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* <Server>(opts
   readonly proactive: () => boolean;
   readonly machineRule: FlockChat["machineRule"];
   readonly setMachineRule: FlockChat["setMachineRule"];
+  readonly inSync: FlockChat["inSync"];
 }) {
   const fs = yield* FileSystem.FileSystem;
   const scope = yield* Effect.scope;
@@ -311,6 +312,7 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* <Server>(opts
     uploaded: new Map(),
     machineRule: opts.machineRule,
     setMachineRule: opts.setMachineRule,
+    inSync: opts.inSync,
   };
   const server = opts.claude.server(flock, run);
   const usage = (yield* Path.Path).join(opts.dir, "flock-usage.jsonl");

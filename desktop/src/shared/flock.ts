@@ -59,6 +59,7 @@ export const MachineSaved = Schema.TaggedStruct("Saved", {
   machine: Machine,
   herds: Schema.Array(Herd),
   tasks: Schema.Array(TaskView),
+  build: Schema.optionalKey(Schema.NullOr(Schema.String)),
   development: Schema.optionalKey(Schema.NullOr(Schema.String)),
   at: Schema.Number,
 });
@@ -134,6 +135,27 @@ export const MachineDoctored = Schema.TaggedStruct("Doctored", {
 });
 export type MachineDoctored = typeof MachineDoctored.Type;
 
+/** How a Machine's latest settings sync ended: null where it synced, else why not. */
+export const MachineSynced = Schema.TaggedStruct("Synced", {
+  machine: KnownMachine,
+  failed: Schema.NullOr(Schema.String),
+});
+export type MachineSynced = typeof MachineSynced.Type;
+
+/** A credential Desktop gives every Machine. */
+export const Credential = Schema.Literals(["gitlab", "helle"]);
+export type Credential = typeof Credential.Type;
+export const CREDENTIALS = Credential.literals;
+
+/** Whether a Machine has the credential Desktop holds now, and why its last give failed. */
+export const MachineGiven = Schema.TaggedStruct("Given", {
+  machine: KnownMachine,
+  credential: Credential,
+  given: Schema.Boolean,
+  failed: Schema.NullOr(Schema.String),
+});
+export type MachineGiven = typeof MachineGiven.Type;
+
 /** Which credentials Desktop holds for every Machine, and nothing of the secrets themselves. */
 export const Credentials = Schema.Struct({
   gitlab: Schema.NullOr(Schema.Struct({ expires: Schema.NullOr(Schema.String) })),
@@ -162,6 +184,8 @@ export const FlockItem = Schema.Union([
   MachineRemoved,
   MachineOnboarding,
   MachineDoctored,
+  MachineSynced,
+  MachineGiven,
 ]);
 export type FlockItem = typeof FlockItem.Type;
 
@@ -295,6 +319,20 @@ export const DesktopSettingsChange = Schema.Struct({
 });
 export type DesktopSettingsChange = typeof DesktopSettingsChange.Type;
 
+export interface MachineToAdd {
+  readonly target: string;
+  readonly label: string;
+  readonly session: string;
+}
+
+/** What Add Machine sends, trimmed, once every field is filled. */
+export const machineToAdd = (typed: MachineToAdd): MachineToAdd | null => {
+  const [target, label, session] = [typed.target, typed.label, typed.session].map((one) =>
+    one.trim(),
+  );
+  return target && label && session ? { target, label, session } : null;
+};
+
 export const DesktopRpcs = RpcGroup.make(
   Rpc.make("flock", { success: FlockItem, stream: true }),
   /** A retry names the request that failed; a first try leaves it to the main process. */
@@ -415,6 +453,12 @@ export const DesktopRpcs = RpcGroup.make(
     success: Schema.String,
     error: ActionFailed,
   }),
+  /** Does for a lagging Machine what connecting would, and says what it did. */
+  Rpc.make("syncNow", {
+    payload: { profile: Schema.String },
+    success: Schema.Struct({ said: Schema.String, failed: Schema.Boolean }),
+    error: ActionFailed,
+  }),
   /** One Run's details while its record is open, with its log's tail, again as they change. */
   Rpc.make("runDetail", {
     payload: { installation: Schema.String, runId: Schema.String },
@@ -507,6 +551,8 @@ export interface FlockMachine {
   readonly herds: ReadonlyArray<Herd>;
   readonly tasks: ReadonlyMap<string, TaskView>;
   readonly asOf: number | null;
+  /** The Collie it runs; null where a saved board did not say. */
+  readonly build: string | null;
   /** `<version>+<sha>` where the Machine runs a development checkout. */
   readonly development: string | null;
 }
@@ -528,7 +574,15 @@ export interface Flock {
   readonly onboarded: ReadonlyMap<string, OnboardRun>;
   /** Doctor's latest reading of each route, by herdr profile. */
   readonly doctored: ReadonlyMap<string, OnboardRun>;
+  /** How each route's latest settings sync ended, by herdr profile. */
+  readonly synced: ReadonlyMap<string, string | null>;
+  /** Each route's credentials, by herdr profile. */
+  readonly given: ReadonlyMap<string, CredentialsGiven>;
 }
+
+export type CredentialsGiven = Partial<
+  Record<Credential, { readonly given: boolean; readonly failed: string | null }>
+>;
 
 export const EMPTY_FLOCK: Flock = {
   machines: new Map(),
@@ -538,6 +592,8 @@ export const EMPTY_FLOCK: Flock = {
   onboarding: new Map(),
   onboarded: new Map(),
   doctored: new Map(),
+  synced: new Map(),
+  given: new Map(),
 };
 
 /**
@@ -558,6 +614,17 @@ export const applyItem = (flock: Flock, item: FlockItem): Flock => {
     };
   if ("_tag" in item && item._tag === "Doctored")
     return { ...flock, doctored: new Map(flock.doctored).set(item.machine.profile, item.run) };
+  if ("_tag" in item && item._tag === "Synced")
+    return { ...flock, synced: new Map(flock.synced).set(item.machine.profile, item.failed) };
+  if ("_tag" in item && item._tag === "Given") {
+    const { machine, credential, given, failed } = item;
+    const { profile } = machine;
+    const had = flock.given.get(profile);
+    return {
+      ...flock,
+      given: new Map(flock.given).set(profile, { ...had, [credential]: { given, failed } }),
+    };
+  }
   if ("_tag" in item && item._tag === "Removed") {
     const { profile } = item.machine;
     const without = <V>(map: ReadonlyMap<string, V>) => {
@@ -571,6 +638,8 @@ export const applyItem = (flock: Flock, item: FlockItem): Flock => {
       lost: without(flock.lost),
       onboarded: without(flock.onboarded),
       doctored: without(flock.doctored),
+      synced: without(flock.synced),
+      given: without(flock.given),
       machines: new Map(
         [...flock.machines].filter(([, { machine }]) => machine.profile !== profile),
       ),
@@ -584,6 +653,7 @@ export const applyItem = (flock: Flock, item: FlockItem): Flock => {
       herds,
       tasks: new Map(tasks.map((task) => [task.id, task])),
       asOf: at,
+      build: item.build ?? null,
       development: item.development ?? null,
     };
     return { ...flock, machines: new Map(flock.machines).set(machine.installation, saved) };
@@ -611,6 +681,7 @@ export const applyItem = (flock: Flock, item: FlockItem): Flock => {
   if (message._tag === "Upsert") tasks.set(message.task.id, message.task);
   if (message._tag === "Remove") tasks.delete(message.id);
   const herds = message._tag === "Snapshot" ? message.herds : (known?.herds ?? []);
+  const build = message._tag === "Snapshot" ? message.build : (known?.build ?? null);
   const development =
     message._tag === "Snapshot" ? (message.development ?? null) : (known?.development ?? null);
   lost.delete(machine.profile);
@@ -621,6 +692,7 @@ export const applyItem = (flock: Flock, item: FlockItem): Flock => {
       herds,
       tasks,
       asOf: null,
+      build,
       development,
     }),
     lost,
@@ -698,10 +770,6 @@ export const flockCards = (flock: Flock) => {
         name: names.get(installation)!,
         projects: [...new Set([...tasks.values()].map((task) => task.project))].sort(),
       })),
-    /** Each Machine on a development build, by its display name, and which build it is. */
-    developments: [...flock.machines].flatMap(([installation, { development }]) =>
-      development === null ? [] : [{ name: names.get(installation)!, development }],
-    ),
   };
 };
 
@@ -712,6 +780,14 @@ export interface MachineRow {
   readonly target: string | null;
   readonly state: "live" | "connecting" | NotLive;
   readonly onboarded: OnboardRun | null;
+  /** The Collie it runs, as it was last seen; null where it never was. */
+  readonly build: string | null;
+  readonly development: string | null;
+  /** How its latest settings sync ended; null until one has. */
+  readonly settings: { readonly failed: string | null } | null;
+  readonly credentials: CredentialsGiven;
+  /** Why it isn't live; null while it is, or is connecting. */
+  readonly reason: string | null;
 }
 
 /**
@@ -740,15 +816,22 @@ const standing = (onboarding?: OnboardRun, doctor?: OnboardRun): OnboardRun | nu
 /** Every route, in the order Desktop opened them. */
 export const machineRows = (flock: Flock): ReadonlyArray<MachineRow> =>
   [...flock.routes.values()].map(({ profile, name, target }) => {
-    const live = [...flock.machines.values()].some(
-      ({ machine, asOf }) => machine.profile === profile && asOf === null,
-    );
+    const seen = [...flock.machines.values()].filter(({ machine }) => machine.profile === profile);
+    const shown =
+      seen.find(({ asOf }) => asOf === null) ?? seen.sort((a, b) => b.asOf! - a.asOf!)[0];
+    const live = shown?.asOf === null;
+    const lost = flock.lost.get(profile);
     return {
       profile,
       name,
       target: target ?? null,
-      state: live ? "live" : (flock.lost.get(profile)?.state ?? "connecting"),
+      state: live ? "live" : (lost?.state ?? "connecting"),
       onboarded: standing(flock.onboarded.get(profile), flock.doctored.get(profile)),
+      build: shown?.build ?? null,
+      development: shown?.development ?? null,
+      settings: flock.synced.has(profile) ? { failed: flock.synced.get(profile)! } : null,
+      credentials: flock.given.get(profile) ?? {},
+      reason: live ? null : (lost?.reason ?? null),
     };
   });
 

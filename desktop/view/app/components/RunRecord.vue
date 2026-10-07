@@ -9,15 +9,6 @@ import type { DiffTarget } from "./DiffTab.vue";
 const props = defineProps<{ placed: PlacedTask }>();
 const emit = defineEmits<{ close: [] }>();
 
-// The board goes inert under the record, so focus moves in, unless a tab such as the Terminal
-// already took it, and back to where it was after.
-const root = useTemplateRef<HTMLElement>("root");
-const back = useTemplateRef<{ $el: HTMLElement }>("back");
-onMounted(() => {
-  if (!root.value?.contains(document.activeElement)) back.value?.$el.focus();
-});
-onUnmounted(useRecord().returnFocus);
-
 const result = useAtomValue(() =>
   runDetailAtom(
     runDetailKey({ installation: props.placed.installation, runId: props.placed.task.run }),
@@ -56,15 +47,15 @@ const tabs = computed(() => {
 });
 /** The tab the human chose while it is there, else the first: Plan, where there is one. */
 const chosen = ref<string>();
-const record = useRecord();
+const { asked: tabAsked, taken } = usePage();
 const wentToPane = ref(false);
 watch(
-  record.asked,
+  tabAsked,
   (asked) => {
     if (asked === null) return;
     chosen.value = asked;
     wentToPane.value = opensHerdrWithoutPane(asked);
-    record.taken();
+    taken();
   },
   { immediate: true },
 );
@@ -90,24 +81,12 @@ const locationOf = (file: string, line: number | null) =>
 </script>
 
 <template>
-  <section ref="root" data-testid="record" class="flex flex-col bg-default">
-    <header class="flex shrink-0 items-start gap-3 border-b border-default px-4 py-3">
-      <UButton
-        ref="back"
-        icon="i-lucide-arrow-left"
-        color="neutral"
-        variant="ghost"
-        aria-label="Back to the board"
-        data-testid="record-back"
-        @click="emit('close')"
-      />
-      <div class="min-w-0">
-        <h2 class="font-semibold" data-testid="record-title">{{ placed.task.name }}</h2>
-        <p class="text-sm text-muted" data-testid="record-description">
-          {{ detail?.title ?? placed.task.run }}
-        </p>
-      </div>
-    </header>
+  <section data-testid="record" class="flex flex-col bg-default">
+    <PageHeader :title="placed.task.name" @back="emit('close')">
+      <p class="text-sm text-muted" data-testid="record-description">
+        {{ detail?.title ?? placed.task.run }}
+      </p>
+    </PageHeader>
     <div class="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4">
       <UAlert v-if="failure !== null" color="error" :title="failure" />
       <p v-else-if="AsyncResult.isInitial(result)" class="text-muted text-sm">Loading…</p>

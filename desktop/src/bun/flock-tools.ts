@@ -86,6 +86,8 @@ export interface FlockChat {
   readonly uploaded: Map<string, Map<string, { readonly path: string; readonly at: number }>>;
   readonly machineRule: () => string | undefined;
   readonly setMachineRule: (rule: string) => Effect.Effect<void>;
+  /** Each Machine's In sync standing; with a Machine's name, Sync now on it. */
+  readonly inSync: (sync: string | undefined) => Effect.Effect<string>;
 }
 
 /** Desktop's own: a Herd's chat never chooses between Machines. */
@@ -103,6 +105,21 @@ const MachineRuleTool = Tool.make("collie_machine_rule", {
   .annotate(Tool.Title, "The Machine rule")
   .annotate(Tool.Readonly, false);
 
+/** Desktop's own: what its Machines page says of each Machine, and its Sync now. */
+const InSyncTool = Tool.make("collie_in_sync", {
+  description:
+    "Whether each Machine is In sync with Desktop (its Collie version, settings, the " +
+    "credentials Desktop gives, onboarding) and why one is not. With `sync` naming a " +
+    "Machine, does what connecting would: reopens it to upgrade where it runs an older " +
+    "Collie, else syncs its settings and gives what it lacks, and says how that went.",
+  parameters: Schema.Struct({ sync: Schema.optionalKey(Schema.String) }),
+  success: Schema.String,
+  failureMode: "return",
+  needsApproval: false,
+})
+  .annotate(Tool.Title, "In sync")
+  .annotate(Tool.Readonly, false);
+
 /**
  * The Toolkit's tools a front door can answer. Definitions, the installation and
  * workspace-wide holds read a Machine's own files, which no host operation hands over.
@@ -117,6 +134,7 @@ export const FlockTools = Toolkit.make(
   CollieTools.tools.collie_do,
   CollieTools.tools.collie_propose,
   MachineRuleTool,
+  InSyncTool,
 );
 
 export const FLOCK_TOOLS = Object.values(FlockTools.tools).map(describeTool);
@@ -691,6 +709,7 @@ const handlersFor = (flock: FlockChat, sent: JsonObject) =>
       collie_do: () => answer(carryOut(flock, sent)),
       collie_propose: () => answer(propose(flock, sent)),
       collie_machine_rule: ({ rule }) => answer(machineRule(flock, rule)),
+      collie_in_sync: ({ sync }) => answer(flock.inSync(sync)),
     });
   });
 
