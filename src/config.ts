@@ -1,8 +1,9 @@
 // User defaults from the plugin config dir. Optional; the baseline is neutral.
 
-import { Effect, FileSystem, Option, Path, Schema } from "effect";
+import { Data, Effect, FileSystem, Option, Path, Schema } from "effect";
 import { isHostName } from "./gitlab-token";
 import { permissionsAsWritten } from "./harness";
+import { ensureLockDir, withLock } from "./lock";
 import { isNumber, isString } from "./schema";
 import {
   type Defaults,
@@ -10,10 +11,9 @@ import {
   isDensity,
   isQuestionMode,
   isScope,
-  parseSetting,
+  parseShared,
   SETTINGS,
-  settingText,
-  SettingValue,
+  type SettingValue,
 } from "./settings";
 import type { SharedSetting, SharedSettings } from "./board-model";
 import { epochMs } from "./time";
@@ -116,11 +116,19 @@ export const writeSettingsSet = Effect.fn("Config.writeSettingsSet")(function* (
   );
 });
 
-/**
- * Writes one of Collie's settings and records `at` as when it was set, which is what
- * decides it across a Flock: the latest edit of a key wins.
- */
-export const setSetting = Effect.fn("Config.setSetting")(function* (
+/** Held while config.json and its stamps are read and written, which the TUI and the host both do. */
+const settingsLocked = <A, E, R>(userDir: string, effect: Effect.Effect<A, E, R>) =>
+  Effect.gen(function* () {
+    const lock = (yield* Path.Path).join(userDir, "settings.lock");
+    yield* ensureLockDir(lock);
+    return yield* withLock(
+      lock,
+      Effect.fail(new Error(`${lock} could not be acquired; not writing unlocked`)),
+      effect,
+    );
+  });
+
+const writeSetting = Effect.fn("Config.writeSetting")(function* (
   userDir: string,
   key: string,
   value: SettingValue | null,
@@ -131,8 +139,14 @@ export const setSetting = Effect.fn("Config.setSetting")(function* (
   yield* writeSettingsSet(userDir, { ...stamps, set: { ...stamps.set, [key]: at } });
 });
 
-/** This Machine's settings a Flock shares: each ever set, and when, the file's time where unrecorded. */
-export const sharedSettings = Effect.fn("Config.sharedSettings")(function* (userDir: string) {
+/**
+ * Writes one of Collie's settings and records `at` as when it was set, which is what
+ * decides it across a Flock: the latest edit of a key wins.
+ */
+export const setSetting = (userDir: string, key: string, value: SettingValue | null, at: string) =>
+  settingsLocked(userDir, writeSetting(userDir, key, value, at));
+
+const readShared = Effect.fn("Config.sharedSettings")(function* (userDir: string) {
   const fs = yield* FileSystem.FileSystem;
   const paths = yield* Path.Path;
   const raw = yield* readConfig(userDir);
@@ -156,38 +170,48 @@ export const sharedSettings = Effect.fn("Config.sharedSettings")(function* (user
   return { settings, flock: stamps.flock ?? null } satisfies SharedSettings;
 });
 
+/** This Machine's settings a Flock shares: each ever set, and when, the file's time where unrecorded. */
+export const sharedSettings = (userDir: string) => settingsLocked(userDir, readShared(userDir));
+
+/** A shared value refused as one its setting does not take. */
+export class SettingRefused extends Data.TaggedError("SettingRefused")<{
+  readonly reason: string;
+}> {}
+
 /**
- * The Flock's settings, given by the Desktop `by`: each written where its edit is newer
- * than this Machine's last edit of it. Refused whole, with why, where any one is not a
- * value its setting takes.
+ * The Flock's settings, each written where its edit is newer than this Machine's last edit
+ * of it. Refused whole, with why, where any one is not a value its setting takes. `by` is
+ * the Desktop giving them, recorded so the TUI says they are shared; null for any other door.
  */
-export const takeShared = Effect.fn("Config.takeShared")(function* (
+export const takeShared = (
   userDir: string,
   given: ReadonlyArray<SharedSetting>,
-  by: string,
+  by: string | null,
   now: string,
-) {
-  const parsed = [];
-  for (const { key, value, at } of given) {
-    const typed = Schema.decodeUnknownOption(Schema.NullOr(SettingValue))(value);
-    const one = Option.isSome(typed)
-      ? parseSetting(key, settingText(typed.value))
-      : { refused: `${key} cannot take that value` };
-    if ("refused" in one) return yield* Effect.fail(one.refused);
-    parsed.push({ key, value: one.value, at });
-  }
-  const before = (yield* readSettingsSet(userDir)).set;
-  for (const { key, value, at } of parsed) {
-    const last = before[key];
-    if (last === undefined || epochMs(at) > epochMs(last))
-      yield* setSetting(userDir, key, value, at);
-  }
-  yield* writeSettingsSet(userDir, {
-    ...(yield* readSettingsSet(userDir)),
-    flock: { by, at: now },
-  });
-  return yield* sharedSettings(userDir);
-});
+) =>
+  settingsLocked(
+    userDir,
+    Effect.gen(function* () {
+      const parsed = [];
+      for (const { key, value, at } of given) {
+        const one = parseShared(key, value);
+        if ("refused" in one) return yield* new SettingRefused({ reason: one.refused });
+        parsed.push({ key, value: one.value, at });
+      }
+      const before = (yield* readSettingsSet(userDir)).set;
+      for (const { key, value, at } of parsed) {
+        const last = before[key];
+        if (last === undefined || epochMs(at) > epochMs(last))
+          yield* writeSetting(userDir, key, value, at);
+      }
+      if (by !== null)
+        yield* writeSettingsSet(userDir, {
+          ...(yield* readSettingsSet(userDir)),
+          flock: { by, at: now },
+        });
+      return yield* readShared(userDir);
+    }),
+  );
 
 /** The GitLab this run works against: `GITLAB_HOST` where it names a host, else the setting. */
 export const gitlabHostOf = Effect.fn("Config.gitlabHostOf")(function* (env: {

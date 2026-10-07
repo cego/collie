@@ -32,7 +32,9 @@ an older edit of, with that edit's own time. The host writes a key only where th
 edit is later than its own, so an edit made on the Machine while Desktop was syncing
 survives and comes back in the reply. On the first sync a key set on one Machine only is
 taken from it; a key set differently on several takes the latest, and Settings says which
-Machine that came from.
+Machine that came from. A value its setting refuses is not taken. `gitlab_host` is the one
+exception: Desktop gives it and never takes it, because the GitLab token Desktop holds was
+made for its host.
 
 **D4. Through the host, never over SSH.** `settings` and `setSettings` are front-door
 operations ([ADR-0038](0038-the-host-builds-and-serves-the-board.md)), recorded under the
@@ -46,5 +48,5 @@ synced after Desktop upgrades it, as every older Machine already is.
   does. An edit made on such a Machine meanwhile still wins if it was later.
 - Clocks decide. Machines whose clocks disagree by more than the time between two edits
   of one key can keep the earlier one. Collie does not correct for that.
-- A Machine's TUI Settings says a setting is shared with the Flock once a Desktop has given
-  it the Flock's, and an edit there spreads to every Machine.
+- A Machine's TUI Settings says a setting is shared with the Flock once a Desktop has synced
+  it, and an edit there spreads to every Machine. Only a Desktop's sync records that.

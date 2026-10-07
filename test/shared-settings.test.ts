@@ -80,6 +80,8 @@ test(
           const said = yield* collie(world, ["settings", "set", "max_iterations", "9"]);
           expect(said.envelope).toMatchObject({ ok: true });
           expect((yield* loadDefaults(world.config)).maxIterations).toBe(9);
+          // Only a Desktop marks the settings shared with the Flock.
+          expect((yield* readSettingsSet(world.config)).flock).toEqual(after.flock!);
           const nine = yield* collie(world, ["settings", "set", "max_iterations", "nine"]);
           expect(nine.envelope).toMatchObject({ ok: false });
           yield* stopHost(world.state);

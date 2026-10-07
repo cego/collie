@@ -134,7 +134,7 @@ import { everyRegistered } from "./registry";
 import { readTask } from "./task";
 import { nowIso } from "./time";
 import { reason } from "./naming";
-import { loadDefaults, sharedSettings, takeShared } from "./config";
+import { loadDefaults, SettingRefused, sharedSettings, takeShared } from "./config";
 import { factsOfView, settled } from "./runs";
 import { aliveIn, focusPane, herdChanges, liveHerds } from "./herds";
 import { currentPid, ensureLockDir, lockHolder, withLock, type LockHolder } from "./lock";
@@ -808,11 +808,17 @@ const frontDoorHandlers = (
                 takeShared(
                   env.userDir,
                   settings,
-                  who.from?.client ?? who.origin,
+                  who.origin === "desktop" ? (who.from?.client ?? who.origin) : null,
                   yield* nowIso(),
                 ).pipe(
                   Effect.mapError(
-                    (reason) => new HostRefused({ reason: `${REFUSED_INPUT}: ${reason}` }),
+                    (cause) =>
+                      new HostRefused({
+                        reason:
+                          cause instanceof SettingRefused
+                            ? `${REFUSED_INPUT}: ${cause.reason}`
+                            : reason(cause),
+                      }),
                   ),
                 ),
               );

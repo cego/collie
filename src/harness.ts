@@ -13,8 +13,6 @@ import type { YamlValue } from "./yaml";
  */
 export const DEFAULT_MODEL = "default";
 
-export { PERMISSION_MODES } from "./settings";
-
 export type PermissionMode = (typeof PERMISSION_MODES)[number];
 
 const PERMISSION_MODE_SET: ReadonlySet<string> = new Set(PERMISSION_MODES);

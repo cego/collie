@@ -1011,7 +1011,27 @@ page Desktop opens, the GitLab a token is checked against and logged in to, and 
 `--gitlab-host` every Machine is onboarded and doctored with, so each Machine's readiness
 is that host's. A change applies at once, without a restart, and every Machine is doctored
 again. It also forgets the GitLab token Desktop kept, since a token is made for one GitLab:
-make a new one on the new host's page and save it.
+make a new one on the new host's page and save it. The GitLab host is given to every
+Machine but never taken from one: an edit of `gitlab_host` in a Machine's TUI stays that
+Machine's.
+
+**Settings** also holds **Collie**: every setting the TUI's Settings offers — each default a
+Run reads, `proactive`, the extra `models.<harness>` and each `notifications.<kind>` — with
+a control that fits it (a choice, a number, a switch, or text), its default beside it, and
+the same refusals as the TUI. Both read one list of settings (`src/settings.ts`), so a new
+setting shows up in both. These are the Flock's: Desktop keeps them in
+`flock-settings.json` beside its chat, and gives them to every Machine through that
+Machine's host, never by editing a file over SSH. A Machine is synced each time it
+connects and after every edit in Settings, so one out of reach gets an edit when it is
+back, the way upgrades reach it. An edit on one Machine's own TUI Settings counts the
+same: Desktop takes it the next time it sees that Machine, or when Settings is opened, and
+spreads it. Each key is decided by whichever edit was made last, wherever it was made
+([ADR-0043](adr/0043-a-shared-setting-is-its-latest-edit.md)); on the first sync a key set
+on one Machine only is taken from it, and a key set differently on several takes the latest,
+with Settings saying beside it which Machine that came from. A value a Machine holds that
+its setting refuses, written into its file by hand, is not taken. What stays each Machine's own
+is everything else in its `config.json`: remembered answers such as `linear.team` and
+`gitlab.assignee`, `chat_harness`, and `projects.root`, which is a path on that Machine.
 
 **Settings** also holds **Collie**: every setting the TUI's Settings offers — each default a
 Run reads, `proactive`, the extra `models.<harness>` and each `notifications.<kind>` — with

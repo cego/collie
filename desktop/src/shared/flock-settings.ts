@@ -5,6 +5,7 @@ import { Effect, Option, Schema } from "effect";
 import type { SharedSetting } from "../../../src/board-model";
 import {
   parseSetting,
+  parseShared,
   SETTINGS,
   type SettingKind,
   SettingValue,
@@ -40,9 +41,13 @@ const valueOf = (value: Schema.Json | null) =>
 const same = (a: Schema.Json | null, b: Schema.Json | null) =>
   settingText(valueOf(a)) === settingText(valueOf(b));
 
+/** Desktop's own, given to every Machine and never taken from one: its token is made for it. */
+const GIVEN_ONLY = "gitlab_host";
+
 /**
- * What a Machine has, taken into the Flock's where it is the later edit, and what the
- * Machine should then be given: each key whose latest edit it lacks.
+ * What a Machine has, taken into the Flock's where it is the later edit and a value its
+ * setting takes, and what the Machine should then be given: each key whose latest edit it
+ * lacks.
  */
 export const takeFrom = (
   flock: FlockSettings,
@@ -53,6 +58,7 @@ export const takeFrom = (
   const first = !flock.synced.includes(machine);
   for (const { key, value, at } of has) {
     const kept = settings[key];
+    if (key === GIVEN_ONLY || "refused" in parseShared(key, value)) continue;
     if (kept !== undefined && epochMs(at) <= epochMs(kept.at)) continue;
     settings[key] = {
       value,
@@ -102,7 +108,7 @@ export interface SettingRow {
 
 /** Every setting of Collie's, but the GitLab host, which Settings keeps beside its tokens. */
 export const settingRows = (flock: FlockSettings): ReadonlyArray<SettingRow> =>
-  SETTINGS.filter(({ key }) => key !== "gitlab_host").map(({ key, kind, choices, fallback }) => {
+  SETTINGS.filter(({ key }) => key !== GIVEN_ONLY).map(({ key, kind, choices, fallback }) => {
     const held = flock.settings[key];
     return {
       key,

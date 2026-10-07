@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { AsyncResult, useAtomValue } from "@effect/atom-vue";
+import { AsyncResult, injectRegistry, useAtomValue } from "@effect/atom-vue";
 import { NO_FLOCK_SETTINGS, settingRows } from "../../../src/shared/flock-settings";
 import { flockSettingsAtom } from "../flock";
 
@@ -7,6 +7,11 @@ const open = defineModel<boolean>("open", { required: true });
 const { openLink, saveGitlabHost, setFlockSetting, machineRule, saveMachineRule } = useActions();
 const { credentials } = useCredentials();
 const held = useAtomValue(() => flockSettingsAtom);
+// Asked again on opening, which syncs every connected Machine and so shows their edits.
+const registry = injectRegistry();
+watch(open, (opened) => {
+  if (opened) registry.refresh(flockSettingsAtom);
+});
 const rows = computed(() =>
   settingRows(AsyncResult.getOrElse(held.value, () => NO_FLOCK_SETTINGS)),
 );

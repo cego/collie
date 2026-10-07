@@ -247,6 +247,31 @@ refused as before. `collie_machine_rule` (`desktop/src/bun/flock-tools.ts`) read
 back or replaces it, through the one write Settings uses; it is in the Flock chat's toolkit
 only, not among the Collie tools both chats share.
 
+### Settings shared across a Flock
+
+Collie's settings are one list, `src/settings.ts`: each key with its kind, its choices, its
+default and what it refuses. It is pure, so Desktop's view bundles it, and the TUI's
+Settings, its `SetDefault` and the host's `setSettings` all decide through `parseSetting`.
+Every write of one goes through `setSetting` in `src/config.ts`, which records the time in
+`settings-set.json` beside `config.json`; a value written before anything recorded one is
+dated by the file's own time.
+
+Desktop keeps the Flock's settings in `flock-settings.json`
+(`desktop/src/bun/flock-settings.ts`). On each board Snapshot — a Machine connected or
+reconnected — and after an edit in its Settings, it reads the Machine's `settings`, takes
+each key whose edit is later than the one it holds (`takeFrom` in
+`desktop/src/shared/flock-settings.ts`), and gives the Machine what it lacks with
+`setSettings`, which the host writes only where that edit is later than its own. It asks
+even with nothing to give, since that is what tells the host a Desktop shares its settings,
+which its TUI then says. It takes no value `parseShared` refuses, and never `gitlab_host`,
+whose token Desktop holds. A Machine's reply is taken into the settings as they are by then
+(`flockSync`), so an edit made during a sync survives, and an edit taken from one Machine
+goes on to every other connected one. Opening Settings syncs every connected Machine too.
+The latest
+edit of a key wins everywhere ([ADR-0043](adr/0043-a-shared-setting-is-its-latest-edit.md)).
+A Machine whose collie has no `settings` yet fails the read, is left alone, and is synced
+once Desktop has upgraded it and it connects again.
+
 ### Checking the boundary against herdr
 
 The reply structs in `herdr.ts` are hand-written, and herdr releases often. `herdr api
