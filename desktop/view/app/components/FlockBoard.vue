@@ -38,7 +38,8 @@ const gesture = (done: Gesture, tab: string | null = null) => {
   const after = afterGesture(before, done);
   if (after.selected === null) {
     if (chip.value !== null) choose(null);
-  } else if (after.selected !== before.selected) {
+  } else {
+    // Chosen again even when unchanged, so the chip follows the card's latest Run and name.
     const card = placedBy(after.selected);
     if (card !== undefined)
       choose({

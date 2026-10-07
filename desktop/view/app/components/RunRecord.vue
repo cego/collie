@@ -11,11 +11,7 @@ const emit = defineEmits<{ close: [] }>();
 
 // The board goes inert under the record, so focus moves in, and back to where it was after.
 const back = useTemplateRef<{ $el: HTMLElement }>("back");
-const focusedBefore = document.activeElement;
 onMounted(() => back.value?.$el.focus());
-onUnmounted(() => {
-  if (focusedBefore instanceof HTMLElement) void nextTick(() => focusedBefore.focus());
-});
 
 const result = useAtomValue(() =>
   runDetailAtom(
@@ -56,6 +52,7 @@ const tabs = computed(() => {
 /** The tab the human chose while it is there, else the first: Plan, where there is one. */
 const chosen = ref<string>();
 const record = useRecord();
+onUnmounted(record.returnFocus);
 const wentToPane = ref(false);
 watch(
   record.asked,

@@ -930,7 +930,8 @@ its SSH master, so going to a pane never asks for another login or SSO approval,
 local process for this computer. Nothing beyond Desktop is needed on this computer. Type
 into it as into herdr — Esc and Ctrl+C go to the agent, not to the record, and Ctrl+C
 copies instead while text is selected; a multi-line paste arrives as one paste; the wheel
-scrolls the pane's own history; and the pane follows the record's size. A link in it opens in your browser. A pane cannot write your clipboard.
+scrolls the pane's own history; and the pane follows the record's size. A link in it opens
+in your browser. A pane cannot write your clipboard.
 Leaving the tab or closing the record gives the pane back, so a herdr window showing it
 returns to its own size. A terminal that ends says why — the pane closed, another client
 took it over, the Machine's connection dropped, or herdr refused — and **Reattach** finds
