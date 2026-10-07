@@ -188,9 +188,8 @@ test("a controller's frames come through, then why it ended: its own reason, her
 test("what is sent reaches the controller, and closing the terminal releases the pane", () =>
   runEffect(
     Effect.gen(function* () {
-      const read = yield* Effect.promise(() => Bun.$`mktemp`.text()).pipe(
-        Effect.map((out) => out.trim()),
-      );
+      const fs = yield* FileSystem.FileSystem;
+      const read = `${yield* fs.makeTempDirectoryScoped({ prefix: "terminal-" })}/read`;
       yield* Effect.scoped(
         Effect.gen(function* () {
           const opened = yield* control(["/bin/sh", "-c", `cat > '${read}'`], "vm-mk");
