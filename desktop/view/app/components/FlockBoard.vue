@@ -10,7 +10,6 @@ const { connecting, failure, lost, machines, notices, tasks, sections, header, w
   useFlock();
 const { summary } = useInSync();
 const starting = ref(false);
-const listing = ref(false);
 const { onboardOn } = useOnboarding();
 const { renewBy } = useCredentials();
 const { page, open, back } = usePage();
@@ -19,7 +18,9 @@ const opened = computed(() =>
 );
 // A record closes when its card leaves the Flock.
 watch(opened, (now) => now === undefined && page.value?.kind === "record" && back());
-const pageShown = computed(() => opened.value !== undefined || page.value?.kind === "settings");
+const pageShown = computed(
+  () => page.value !== null && (page.value.kind !== "record" || opened.value !== undefined),
+);
 // A page opened takes focus to its back button; back returns it to where it was.
 let focusedBefore: Element | null = null;
 watch(page, async (now, before) => {
@@ -117,7 +118,10 @@ watch(update, (now) => {
           variant="outline"
           icon="i-lucide-server"
           data-testid="machines"
-          @click="listing = true"
+          :active="page?.kind === 'machines'"
+          active-variant="solid"
+          :aria-pressed="page?.kind === 'machines'"
+          @click="page?.kind === 'machines' ? back() : open('machines')"
         >
           Machines
           <UBadge
@@ -129,7 +133,6 @@ watch(update, (now) => {
             data-testid="machines-behind"
           />
         </UButton>
-        <MachinesPanel v-model:open="listing" />
         <UButton
           color="neutral"
           variant="outline"
@@ -241,6 +244,7 @@ watch(update, (now) => {
           @close="back()"
         />
         <SettingsPage v-if="page?.kind === 'settings'" class="absolute inset-0" @back="back()" />
+        <MachinesPage v-if="page?.kind === 'machines'" class="absolute inset-0" @back="back()" />
       </div>
     </div>
     <FlockChat

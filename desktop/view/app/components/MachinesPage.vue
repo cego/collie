@@ -2,14 +2,11 @@
 import { type MachineRow, type OnboardRun, SETTLED } from "../../../src/shared/flock";
 import { type InSync, NOT_LIVE_SAID } from "../../../src/shared/in-sync";
 
-const open = defineModel<boolean>("open", { required: true });
+const emit = defineEmits<{ back: [] }>();
 const { machines, summary } = useInSync();
-const { addMachine, removeMachine, syncNow } = useActions();
-const { job, onboardOn, loginOn } = useOnboarding();
-
-const target = ref("");
-const label = ref("");
-const session = ref("default");
+const { removeMachine, syncNow } = useActions();
+const { onboardOn, loginOn } = useOnboarding();
+const adding = ref(false);
 
 const badgeOf = (state: InSync["state"]) =>
   state === "in-sync"
@@ -29,18 +26,13 @@ const buildOf = ({ build, development }: MachineRow) =>
       : "Build not known yet";
 
 const missing = (run: OnboardRun) => run.steps.filter(({ status }) => !SETTLED.includes(status));
-const add = async () => {
-  const started = await addMachine(target.value.trim(), label.value.trim(), session.value.trim());
-  if (started !== null) job.value = started;
-  target.value = "";
-  label.value = "";
-};
 </script>
 
 <template>
-  <USlideover v-model:open="open" title="Machines">
-    <template #body>
-      <div class="flex flex-col gap-6">
+  <section data-testid="machines-page" class="flex flex-col bg-default">
+    <PageHeader title="Machines" @back="emit('back')" />
+    <div class="min-h-0 flex-1 overflow-y-auto p-4">
+      <div class="flex max-w-3xl flex-col gap-6">
         <p
           v-if="summary !== null"
           class="text-sm font-medium"
@@ -49,27 +41,14 @@ const add = async () => {
         >
           {{ summary.said }}
         </p>
-        <form class="flex flex-col gap-2" data-testid="add-form" @submit.prevent="add">
-          <UFormField label="SSH target" help="As ssh reaches it, such as mk@vm-mk.example">
-            <UInput v-model="target" class="w-full" data-testid="add-target" />
-          </UFormField>
-          <div class="flex gap-2">
-            <UFormField label="Label" class="flex-1">
-              <UInput v-model="label" class="w-full" data-testid="add-label" />
-            </UFormField>
-            <UFormField label="herdr session" class="flex-1">
-              <UInput v-model="session" class="w-full" data-testid="add-session" />
-            </UFormField>
-          </div>
-          <UButton
-            type="submit"
-            class="self-end"
-            icon="i-lucide-plus"
-            label="Add Machine"
-            data-testid="add-machine"
-            :disabled="target.trim() === '' || label.trim() === '' || session.trim() === ''"
-          />
-        </form>
+        <UButton
+          class="self-start"
+          icon="i-lucide-plus"
+          label="Add Machine"
+          data-testid="add-machine"
+          @click="adding = true"
+        />
+        <AddMachineDialog v-model:open="adding" />
         <section
           v-for="{ row, verdict } in machines"
           :key="row.profile"
@@ -139,6 +118,6 @@ const add = async () => {
           </div>
         </section>
       </div>
-    </template>
-  </USlideover>
+    </div>
+  </section>
 </template>

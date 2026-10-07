@@ -954,18 +954,18 @@ same request again, so a host that took it before the answer was lost does it on
 stream like any other change. Every one is recorded on that Machine as `desktop`, with this
 computer's name.
 
-**Machines** lists every Machine Desktop reaches — this computer first, then herdr's — with
-how it stands, and is where Machines join the Flock. Each joins the same way:
+**Machines** is a page that lists every Machine Desktop reaches — this computer first, then
+herdr's — with how it stands, and is where Machines join the Flock. Each joins the same way:
 
-- **Add Machine** takes an SSH target, a label and a herdr session (`default` unless you
-  say), and runs `herdr machine add` in a terminal Desktop drives. herdr's own questions —
+- **Add Machine** opens a dialog that takes an SSH target, a label and a herdr session
+  (`default` unless you say), all three needed; adding closes it and runs `herdr machine add` in a terminal Desktop drives. herdr's own questions —
   whether to install herdr there, whether to replace a running server — are dialogs, and
   closing one answers herdr's default, which for replacing a server is No. herdr saves the
   machine, so its list stays the only one, and Desktop then onboards it.
 - **Onboard** on a Machine herdr already has, or on this computer, onboards it there and
   then. It is the same button on a Machine whose Collie isn't installed.
 
-Machines opens with one line saying whether the whole Flock is **In sync** with Desktop
+The page opens with one line saying whether the whole Flock is **In sync** with Desktop
 ("Every Machine is in sync with Desktop 0.35.0"), or naming each Machine that isn't and what
 it lags on. Each Machine's row shows the Collie it runs — "Collie 0.35.0", "development build
 0.35.0+abc1234", or "Build not known yet" for one never seen live — and one state: **In
@@ -1120,11 +1120,12 @@ use that width; Plan, Review and Facts keep a readable line length. The record's
 returns to the board, which was never taken down: it comes back scrolled where you left it,
 its sections open or closed as they were, and the card still selected.
 
-The record is one of Desktop's **pages**, with **Settings**: each takes the board's column in
-the same way, one at a time, so opening Settings with a record open replaces the record, and
-back always returns to the board. Opening a page moves focus to its back button, and back returns focus to where it was. The
-header's Settings button opens its page and shows as pressed while it is open; pressed again,
-it returns to the board.
+The record is one of Desktop's **pages**, with **Settings** and **Machines**: each takes the
+board's column in the same way, one at a time, so opening Settings with a record open replaces
+the record, and back always returns to the board. Opening a page moves focus to its back
+button, and back returns focus to where it was. The header's Settings and Machines buttons
+each open their page and show as pressed while it is open; pressed again, they return to the
+board.
 
 **Escape** backs out one level: an open dialog, menu or popover closes first, then the
 open page, and on the board Escape lets the selected card go. Escape typed in a field, such as
