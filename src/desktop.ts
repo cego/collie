@@ -316,15 +316,21 @@ export const pruneDesktop = Effect.fn("desktop.prune")(function* (own: DesktopOw
   const verdicts = yield* desktopVerdicts(own);
   for (const { target } of verdicts.remove)
     yield* fs.remove(target, { recursive: true, force: true }).pipe(Effect.ignore);
-  if (verdicts.usage !== null)
-    yield* fs
-      .writeFileString(
-        verdicts.usage.target,
-        verdicts.usage.kept.map((line) => `${line}\n`).join(""),
-      )
-      .pipe(Effect.ignore);
+  if (verdicts.usage !== null) yield* trimUsage(verdicts.usage);
   return verdicts;
 });
+
+/** The usage log as `kept`, written beside it and renamed over it, so no reader sees half. */
+export const trimUsage = (usage: {
+  readonly target: string;
+  readonly kept: ReadonlyArray<string>;
+}) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const tmp = `${usage.target}.${process.pid}.tmp`;
+    yield* fs.writeFileString(tmp, usage.kept.map((line) => `${line}\n`).join(""));
+    yield* fs.rename(tmp, usage.target);
+  }).pipe(Effect.ignore);
 
 /** What Desktop's control directory is called, with the pid that owns it. */
 export const sshControlsPrefix = (pid: number) => `collie-ssh-${pid}-`;

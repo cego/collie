@@ -19,7 +19,7 @@ import type { AgentEntry } from "../src/registry";
 import type { RunFacts } from "../src/runs";
 import { runFacts } from "./support/records";
 import { renovateClonesSweeper, settlingOf, sweep, worktreesSweeper } from "../src/cleanup";
-import { NOTHING_SETTLING, type Settling } from "../src/worktree";
+import { NOTHING_SETTLING, onBranch, type Settling } from "../src/worktree";
 import { shell } from "../src/mr";
 import { Herdr } from "../src/herdr";
 
@@ -681,7 +681,9 @@ const mergedMr = (head?: string) =>
     const landed = { why: "merged in !14", heads: head === undefined ? [] : [head] };
     settling = {
       ...settling,
-      landedOn: new Map(recorded.map((run) => [run.worktree?.branch ?? "", landed])),
+      landedOn: new Map(
+        recorded.map((run) => [onBranch(run.project, run.worktree?.branch ?? ""), landed]),
+      ),
     };
   });
 
@@ -799,7 +801,7 @@ test("an open merge request keeps the worktree it was built in", () =>
     Effect.gen(function* () {
       yield* collieWorktree("wt");
       yield* settledGit();
-      settling = { ...settling, openOn: new Map([["wt", "!14"]]) };
+      settling = { ...settling, openOn: new Map([[onBranch(rig.projectDir, "wt"), "!14"]]) };
 
       expect(yield* prune()).toEqual(["kept wt · !14 is still open"]);
     }),
@@ -2061,7 +2063,7 @@ test("a stopped run keeps the checkout a resume carries on in, until its work la
       const at = yield* collieWorktree("wt");
       recorded = recorded.map((run) => ({ ...run, state: "stopped" as const }));
       yield* settledGit();
-      settling = { ...settling, openOn: new Map([["wt", "!14"]]) };
+      settling = { ...settling, openOn: new Map([[onBranch(rig.projectDir, "wt"), "!14"]]) };
       expect(yield* prune()).toEqual(["kept wt · a stopped run can resume in it"]);
 
       yield* mergedMr();
@@ -2414,7 +2416,9 @@ test("a Collie checkout whose branch was switched is judged, and removed, as it 
       yield* settledGit();
       settling = {
         ...settling,
-        landedOn: new Map([["other", { why: "merged in !15", heads: [] }]]),
+        landedOn: new Map([
+          [onBranch(rig.projectDir, "other"), { why: "merged in !15", heads: [] }],
+        ]),
       };
 
       expect(yield* prune()).toEqual(["♻ removed other · merged in !15"]);

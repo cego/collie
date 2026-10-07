@@ -57,9 +57,7 @@ const sweeper = (
   retentionSweeper({
     stateDir: rig.stateDir,
     sessions: [new Herdr(rig.pluginEnv())],
-    tasks: [record],
-    views,
-    runs,
+    facts: Effect.succeed({ tasks: [record], views, runs }),
     retire: (ids) =>
       Effect.sync(() => {
         forgotten.push([...ids]);

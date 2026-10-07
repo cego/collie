@@ -451,10 +451,10 @@ const hostBoard = (dir: string) =>
     );
     // What ended and what it opened needs no herdr: the merge watch asks nobody's panes.
     const unattended = boardOf([]);
-    /** Every kind of thing Collie cleans, judged against the Runs as they are now. */
     /** When each Task was first seen Finished, for as long as this host runs. */
     const seen = new Map<string, number>();
     const storage = yield* Effect.context<MessageStorage.MessageStorage>();
+    /** Every kind of thing Collie cleans, judged against the Runs as they are now. */
     const sweepers = Effect.gen(function* () {
       const herds = yield* liveHerds(herdr, env);
       const sessions = herds.map((session) => session.herdr);
@@ -499,9 +499,11 @@ const hostBoard = (dir: string) =>
         retentionSweeper({
           stateDir: env.stateDir,
           sessions,
-          tasks,
-          views: yield* build.pipe(Effect.orElseSucceed(() => [])),
-          runs: all,
+          // Every read or none: a Task judged without its Runs would look forgettable.
+          facts: Effect.all({ tasks: listTasks(env.stateDir), views: build, runs }).pipe(
+            Effect.orElseSucceed(() => ({ tasks: [], views: [], runs: [] })),
+            Effect.provideContext(bun),
+          ),
           retire: (ids) => registry.retire(ids).pipe(Effect.provideContext(storage)),
         }),
       ];
@@ -910,8 +912,9 @@ const frontDoorHandlers = (
           plainly(
             Effect.gen(function* () {
               const who = whoOf(client);
-              const actor: SweptBy = { origin: who.origin, request, ...voiceOf(who) };
-              if (who.from !== undefined) Object.assign(actor, { from: who.from });
+              const spoken = { origin: who.origin, request, ...voiceOf(who) };
+              const actor: SweptBy =
+                who.from === undefined ? spoken : { ...spoken, from: who.from };
               const trail = (yield* Path.Path).join(env.stateDir, "cleanup");
               const swept = yield* once(
                 trail,

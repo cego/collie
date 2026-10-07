@@ -1758,7 +1758,8 @@ Collie removes what it made once nothing needs it, and only what it can show it 
 ([ADR-0045](adr/0045-collie-removes-what-it-made-once-nothing-needs-it.md)). The host sweeps
 every ten minutes, whether or not a pane is open. A sweep removes:
 
-- **Task workspaces**, an hour after their Task is **Finished**. One herdr has in focus at
+- **Task workspaces**, an hour after the first sweep or listing that saw their Task
+  **Finished**. One herdr has in focus at
   that moment is kept, and so is one holding a pane Collie did not open — your own shell or
   dev server — until you close it yourself. The Home, and a workspace that is no Task's,
   are never closed. The Task's agents close with it, including any of its panes left in

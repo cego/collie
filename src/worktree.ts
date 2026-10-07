@@ -84,6 +84,9 @@ const remoteRepository = (value: string) =>
 export const destinationLock = (stateDir: string, at: string) =>
   `${stateDir}/worktree-${Bun.hash(at).toString(16)}.lock`;
 
+/** Whether a state-directory entry is one of `destinationLock`'s. */
+export const isDestinationLock = (name: string) => /^worktree-[0-9a-f]+\.lock$/.test(name);
+
 const MrViewJson = Schema.fromJsonString(
   Schema.Struct({ source_branch: Schema.optionalKey(Schema.String) }),
 );
@@ -998,7 +1001,7 @@ export const checkoutFor = Effect.fn("worktree.checkoutFor")(function* (
 const RECHECK_MS = 3 * 60_000;
 /** How long a removal stays on the board after it happened. */
 const REPORT_MS = 60 * 60_000;
-const PRUNE_FILE = "worktrees.json";
+export const PRUNE_FILE = "worktrees.json";
 
 const PruneEntry = Schema.Struct({
   checked_at: Schema.Number,
@@ -1028,14 +1031,18 @@ export interface Landed {
  */
 export interface Settling {
   readonly landedAt: ReadonlyMap<string, Landed>;
+  /** By `onBranch`: a branch name means nothing outside its repository. */
   readonly landedOn: ReadonlyMap<string, Landed>;
-  /** A branch whose merge request the merge watch last read as open, with its label. */
+  /** By `onBranch`, a branch whose merge request the merge watch last read as open. */
   readonly openOn: ReadonlyMap<string, string>;
   /** Why a checkout's Task still holds it: its workspace is open, or herdr would not say. */
   readonly workspaceHolds: ReadonlyMap<string, string>;
   /** Checkouts never to remove: the plugin root and any a running host serves from. */
   readonly protect: ReadonlySet<string>;
 }
+
+/** A branch of the project a Run was started for, as `Settling` keys one. */
+export const onBranch = (project: string, branch: string) => `${project}\n${branch}`;
 
 export const NOTHING_SETTLING: Settling = {
   landedAt: new Map(),
@@ -1161,6 +1168,8 @@ const settled = Effect.fn("worktree.settled")(function* (
     use: InUse;
     run: Runner<ChildProcessSpawner.ChildProcessSpawner>;
     settling: Settling;
+    /** The project the Run that made this checkout was started for. */
+    project: string;
   },
 ) {
   const { run, repo, settling } = opts;
@@ -1168,7 +1177,9 @@ const settled = Effect.fn("worktree.settled")(function* (
   if (dirty.code !== 0) return keepIt("could not read the working tree");
   if (dirty.stdout.trim() !== "") return keepIt("uncommitted changes");
 
-  const landed = settling.landedAt.get(worktree.path) ?? settling.landedOn.get(worktree.branch);
+  const landed =
+    settling.landedAt.get(worktree.path) ??
+    settling.landedOn.get(onBranch(opts.project, worktree.branch));
   const upstream = yield* upstreamRemote(worktree, run);
   const unpushed = yield* unpushedWork(worktree, run, upstream, landed?.heads ?? []);
   if (unpushed) return unpushed;
@@ -1199,10 +1210,11 @@ const landedBy = Effect.fn("worktree.landedBy")(function* (
     repo: string;
     run: Runner<ChildProcessSpawner.ChildProcessSpawner>;
     settling: Settling;
+    project: string;
   },
 ) {
   if (landed !== undefined) return settledBecause(landed.why);
-  const open = opts.settling.openOn.get(worktree.branch);
+  const open = opts.settling.openOn.get(onBranch(opts.project, worktree.branch));
   if (open !== undefined) return keepIt(`${open} is still open`);
   const upstream = yield* upstreamRemote(worktree, opts.run);
   const remotes =
@@ -1280,6 +1292,8 @@ function fromRuns(
   settling: Settling,
 ) {
   const mine = new Map<string, WorktreeRecord>();
+  /** The project each checkout's Run was started for. */
+  const projects = new Map<string, string>();
   const paths = new Map<string, string>();
   /** The panes each checkout's finished Runs left their agents in. */
   const panes = new Map<string, Set<string>>();
@@ -1288,20 +1302,21 @@ function fromRuns(
     // A stopped or failed Run can be resumed in its checkout, until its work lands anyway.
     const landed =
       (run.worktree !== null && settling.landedAt.has(run.worktree.path)) ||
-      settling.landedOn.has(run.branch ?? run.worktree?.branch ?? "");
+      settling.landedOn.has(onBranch(run.project, run.branch ?? run.worktree?.branch ?? ""));
     const resumable = (run.state === "stopped" || run.state === "failed") && !landed;
     if (going) paths.set(run.cwd, "a run is still working in it");
     else if (resumable) paths.set(run.cwd, `a ${run.state} run can resume in it`);
     const worktree = run.worktree;
     if (!worktree?.created_by_collie) continue;
     mine.set(worktree.path, worktree);
+    projects.set(worktree.path, run.project);
     // A Run that may still go keeps its checkout anyway, so its agents are nobody's leftovers.
     if (going || resumable) continue;
     const left = panes.get(worktree.path) ?? new Set<string>();
     for (const entry of registered) if (entry.runId === run.id) left.add(entry.paneId);
     panes.set(worktree.path, left);
   }
-  return { mine, paths, panes };
+  return { mine, paths, panes, projects };
 }
 
 /**
@@ -1365,7 +1380,7 @@ const prune = Effect.fn("worktree.prune")(function* (
   );
   const before = `${Schema.encodeSync(PruneStateJson)(state)}\n`;
 
-  const { mine, paths, panes } = opts.recorded;
+  const { mine, paths, panes, projects } = opts.recorded;
   const settling = opts.settling ?? NOTHING_SETTLING;
   const listing = opts.listing;
   // Path, branch and the moment git wrote the checkout, all from the record that made
@@ -1437,7 +1452,13 @@ const prune = Effect.fn("worktree.prune")(function* (
 
   for (const worktree of due) {
     const name = nameOf(worktree);
-    const verdict = yield* settled(worktree, { repo, use, run, settling });
+    const verdict = yield* settled(worktree, {
+      repo,
+      use,
+      run,
+      settling,
+      project: projects.get(worktree.path) ?? "",
+    });
     if (opts.dryRun === true && verdict.keep === undefined) {
       judged.push({ path: worktree.path, why: verdict.why, removed: false });
       continue;

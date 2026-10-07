@@ -1510,6 +1510,7 @@ test(
               forgotten,
               view: yield* registry.view(gone),
               other: yield* registry.view(kept),
+              listed: (yield* registry.views(null)).map((one) => one.runId),
               claim: yield* store.run("run-claimed"),
               before,
               messages: messages[0]?.n,
@@ -1519,6 +1520,9 @@ test(
 
         expect(seen.forgotten).toHaveLength(1);
         expect(seen.view).toBeNull();
+        // What every listing reads — the board, History, `run list` — no longer has it.
+        expect(seen.listed).not.toContain(seen.forgotten[0]);
+        expect(seen.listed).toContain(seen.other!.runId);
         expect(seen.other?.status.status).toBe("complete");
         expect(seen.claim).not.toBeNull();
         expect(seen.before).toBeGreaterThan(0);
