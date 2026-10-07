@@ -10,7 +10,8 @@
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import type { BunServices } from "@effect/platform-bun";
-import { Effect, FileSystem, Result, Schema } from "effect";
+import { Effect, FileSystem, Layer, Result, Schema } from "effect";
+import * as WorkflowEngine from "effect/unstable/workflow/WorkflowEngine";
 import { Rig, FakeHerdr } from "./support/recorder";
 import { exec } from "./support/command";
 import { fastForward, runEffect as runLive } from "./support/effect";
@@ -1447,6 +1448,44 @@ test(
         expect(hello?.task).not.toBe(build?.task);
         expect(there?.task).not.toBe(build?.task);
         expect((yield* rig.cmds()).filter((cmd) => cmd === "workspace create")).toHaveLength(3);
+      }),
+    ),
+  120_000,
+);
+
+test(
+  "a start the engine never takes is refused within a bound, and stays recorded for the next host",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const task = yield* aTask;
+        // An engine that takes nothing handed to it, the way the one that wedged did.
+        const stalled = Layer.effect(WorkflowEngine.WorkflowEngine)(
+          Effect.map(WorkflowEngine.WorkflowEngine, (engine) => ({
+            ...engine,
+            // SAFETY: the same arguments reach the real engine; only a discarded send stalls.
+            execute: ((workflow, options) =>
+              options.discard
+                ? Effect.never
+                : engine.execute(workflow, options)) as typeof engine.execute,
+          })),
+        );
+        const outcome = yield* Effect.gen(function* () {
+          const registry = yield* Registry;
+          const [quiet] = yield* loaded(registry, [`${fixtures}/quiet.workflow.ts`]);
+          const started = yield* start(quiet!, { request: "r1", task: task.id });
+          const pending = yield* (yield* Store).pending;
+          return { reason: refusedWith(started), pending: pending.map((row) => row.request) };
+        }).pipe(
+          Effect.provide(registryLayer(dir(), { userDir: rig.userDir })),
+          Effect.provide(stalled),
+          Effect.provide(agentsLayer(hostOf())),
+          Effect.provide(foundationLayer({ dir: dir(), userDir: rig.userDir })),
+          Effect.scoped,
+          Effect.orDie,
+        );
+        expect(outcome.reason).toContain("the next host start hands it over");
+        expect(outcome.pending).toEqual(["r1"]);
       }),
     ),
   120_000,

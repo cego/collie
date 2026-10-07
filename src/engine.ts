@@ -1687,6 +1687,9 @@ export function engineLayer(options: {
   return engine.pipe(Layer.provideMerge(sql));
 }
 
+/** How long a start waits for the engine to take its Run before it is refused. */
+const HAND_OVER_TIMEOUT = "30 seconds";
+
 export const HOLD = "hold";
 export const STOP = "stop";
 /** Not a control: the Run's own word on why it parked, which only the Run writes. */
@@ -3968,13 +3971,25 @@ const makeRegistry: (
     const payload = yield* payloadOf(generation, row).pipe(Effect.result);
     if (payload._tag === "Failure") return;
     yield* crash("admitted");
+    // Bounded, because upstream retries a send it cannot route without end. The row stays
+    // unaccepted, so the next host start hands it over under the same identity.
+    const stuck = `the engine did not take ${row.run} within ${HAND_OVER_TIMEOUT}; it is recorded, and the next host start hands it over`;
     yield* engine
       .execute(generation.registration.workflow, {
         executionId: row.execution,
         payload: payload.success,
         discard: true,
       })
-      .pipe(Effect.orDie);
+      .pipe(
+        Effect.orDie,
+        Effect.timeoutOrElse({
+          duration: HAND_OVER_TIMEOUT,
+          orElse: () =>
+            Effect.logWarning(stuck).pipe(
+              Effect.andThen(Effect.fail(new HostRefused({ reason: stuck }))),
+            ),
+        }),
+      );
     yield* crash("executed");
     yield* store.accepted(row.run);
   });

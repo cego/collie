@@ -1581,7 +1581,9 @@ died mid-start; sending it with other arguments is `RequestConflict` rather than
 change of mind. A host that died after asking for the run's checkout or workspace, and
 before recording what it got, cannot tell whether one was made: that start is refused
 with what may be left behind, and keeps its claim, so the same request never makes a
-second one. The rows behind that are in the same SQLite file as the engine's own, and
+second one. A start the engine does not take within thirty seconds is refused saying so,
+and stays recorded: the next host start hands it over under the same claim. The rows behind
+that are in the same SQLite file as the engine's own, and
 [ADR-0017](adr/0017-one-request-is-one-run.md) is why each of them is there.
 
 It says which build it is, and which installation it serves. A client newer than the host,
