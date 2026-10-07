@@ -1,7 +1,6 @@
 // Which credentials Desktop gave each Machine, kept as fingerprints of what it gave and
 // never the secrets, so a Machine that lacks the current one is given it when it connects.
 
-import { createHash } from "node:crypto";
 import { Effect, FileSystem, Path, Schema, Semaphore } from "effect";
 import {
   CREDENTIALS,
@@ -11,6 +10,7 @@ import {
   type OnboardStep,
 } from "../shared/flock";
 import type { Keyring, KeyringEntry } from "./credentials";
+import { sha256Hex } from "../../../src/attachments";
 import type { ShellRoute } from "./machine";
 
 const ENTRY = { gitlab: "gitlab-token", helle: "helle-token" } satisfies Record<
@@ -24,8 +24,7 @@ const GivenFile = Schema.fromJsonString(
 );
 const FILE = "given.json";
 
-export const fingerprint = (text: string) =>
-  createHash("sha256").update(text).digest("hex").slice(0, 16);
+export const fingerprint = (text: string) => sha256Hex(text).slice(0, 16);
 
 /** Gives one Machine a credential's text, and answers why it failed, or null. */
 export type Give = (route: ShellRoute, text: string) => Effect.Effect<string | null>;
