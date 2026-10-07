@@ -249,6 +249,7 @@ test("a glob stops listing, and a grep stops its search, at the bound, and a glo
         for (const root of [dir, `${dir}/`])
           expect((yield* globFiles(pattern, root)).paths).toEqual([...found]);
       expect((yield* globFiles("a/*.ts", `${dir}/`)).paths).toHaveLength(4);
+      expect((yield* globFiles("a/*{.ts,.js}", dir)).paths).toHaveLength(4);
       // A dot name inside braces is named too, and a linked root is followed.
       expect((yield* globFiles("{.env,.envrc}", dir)).paths).toEqual([`${dir}/.env`]);
       expect((yield* globFiles(".{github,gitlab}/**/*.yml", dir)).paths).toHaveLength(1);

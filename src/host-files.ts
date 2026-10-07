@@ -47,9 +47,23 @@ export const readPart = Effect.fn("HostFiles.read")(function* (
   );
 });
 
-/** The segments of `pattern` that name a dot path, `{.env,.envrc}` among them. */
-const dotSegments = (pattern: string) =>
-  pattern.split("/").filter((segment) => /^\.|[{,]\./.test(segment));
+/** Each name `segment` stands for, its braces expanded innermost first. */
+const expanded = (segment: string): ReadonlyArray<string> => {
+  const braces = /\{([^{}]*)\}/.exec(segment);
+  if (braces === null) return [segment];
+  const [before, after] = [
+    segment.slice(0, braces.index),
+    segment.slice(braces.index + braces[0].length),
+  ];
+  return braces[1]!.split(",").flatMap((one) => expanded(before + one + after));
+};
+
+/** The dot names `pattern` asks for, `{.env,.envrc}` as two. */
+const dotNames = (pattern: string) =>
+  pattern
+    .split("/")
+    .flatMap(expanded)
+    .filter((name) => name.startsWith("."));
 
 /**
  * Whether `pattern` reaches `relative`: it matches, and each dot-named segment is one the
@@ -57,7 +71,7 @@ const dotSegments = (pattern: string) =>
  */
 const reaches = (pattern: string) => {
   const glob = new Bun.Glob(pattern);
-  const dotted = dotSegments(pattern).map((segment) => new Bun.Glob(segment));
+  const dotted = dotNames(pattern).map((segment) => new Bun.Glob(segment));
   return (relative: string) =>
     glob.match(relative) &&
     relative
@@ -76,7 +90,7 @@ export const globFiles = Effect.fn("HostFiles.glob")(function* (
   const paths = yield* Path.Path;
   const matches = reaches(pattern);
   const keep = (line: string) => matches(paths.relative(root, line));
-  const dotted = dotSegments(pattern);
+  const dotted = dotNames(pattern);
   // The root must list; an unreadable directory below it is passed by.
   yield* fs
     .readDirectory(root)
@@ -84,15 +98,25 @@ export const globFiles = Effect.fn("HostFiles.glob")(function* (
   const rg = Bun.which("rg");
   // Links below the root are not followed, so a loop of them ends, and a dot directory is
   // entered only where the pattern names it: find prunes by those names, so it takes a
-  // dotted pattern. find's -name has no braces, so a braced one prunes nothing.
-  const prune = dotted.some((segment) => segment.includes("{"))
-    ? []
-    : ["-name", ".*", ...dotted.flatMap((segment) => ["!", "-name", segment]), "-prune", "-o"];
+  // dotted pattern.
   const listed = yield* (
     rg === null || dotted.length > 0
       ? searched(
           "find",
-          ["-H", root, "-mindepth", "1", ...prune, "-type", "f", "-print"],
+          [
+            "-H",
+            root,
+            "-mindepth",
+            "1",
+            "-name",
+            ".*",
+            ...dotted.flatMap((name) => ["!", "-name", name]),
+            "-prune",
+            "-o",
+            "-type",
+            "f",
+            "-print",
+          ],
           root,
           bound,
           bound,
