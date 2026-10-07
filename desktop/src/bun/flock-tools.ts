@@ -5,6 +5,7 @@
 // declaration, attached here and never by the model.
 
 import { Cause, Clock, Crypto, Effect, Exit, Option, Result, Schema, Stream } from "effect";
+import * as Tool from "effect/unstable/ai/Tool";
 import * as Toolkit from "effect/unstable/ai/Toolkit";
 import {
   type FLOCK_READS,
@@ -49,6 +50,8 @@ export type ChatDoor = ReturnType<typeof chatDoor>;
 export interface ChatMachine {
   readonly name: string;
   readonly door: ChatDoor;
+  /** This computer, where Desktop runs. */
+  readonly local?: boolean;
 }
 
 export interface FlockChat {
@@ -57,7 +60,24 @@ export interface FlockChat {
   readonly conversation: string;
   /** The human's message this turn, where there is one. */
   readonly said: () => string | undefined;
+  readonly machineRule: () => string | undefined;
+  readonly setMachineRule: (rule: string) => Effect.Effect<void>;
 }
+
+/** Desktop's own: a Herd's chat never chooses between Machines. */
+const MachineRuleTool = Tool.make("collie_machine_rule", {
+  description:
+    "The human's Machine rule: their own words, from Desktop's Settings, for which Machine " +
+    "each kind of work goes to. Without `rule` it is read back; with `rule` it is replaced " +
+    "by exactly that text, which Settings then shows, and an empty `rule` clears it. Replace " +
+    "it only when the human asks for the rule to change.",
+  parameters: Schema.Struct({ rule: Schema.optionalKey(Schema.String) }),
+  success: Schema.String,
+  failureMode: "return",
+  needsApproval: false,
+})
+  .annotate(Tool.Title, "The Machine rule")
+  .annotate(Tool.Readonly, false);
 
 /**
  * The Toolkit's tools a front door can answer. Definitions, the installation and
@@ -72,6 +92,7 @@ export const FlockTools = Toolkit.make(
   CollieTools.tools.collie_hold,
   CollieTools.tools.collie_do,
   CollieTools.tools.collie_propose,
+  MachineRuleTool,
 );
 
 export const FLOCK_TOOLS = Object.values(FlockTools.tools).map(describeTool);
@@ -585,6 +606,25 @@ const propose = Effect.fn("FlockTools.propose")(
   ),
 );
 
+const machineRule = (flock: FlockChat, asked: string | undefined) => {
+  if (asked !== undefined) {
+    const rule = asked.trim();
+    return flock
+      .setMachineRule(rule)
+      .pipe(
+        Effect.as(
+          rule === "" ? "The Machine rule is cleared." : `The Machine rule is now: "${rule}"`,
+        ),
+      );
+  }
+  const saved = flock.machineRule()?.trim() ?? "";
+  return Effect.succeed(
+    saved === ""
+      ? "There is no Machine rule: the human has not said which Machine work goes to."
+      : `The Machine rule is: "${saved}"`,
+  );
+};
+
 /** The handlers for one call, which take the input as it was sent once the Toolkit has decoded it. */
 const handlersFor = (flock: FlockChat, sent: JsonObject) =>
   Effect.gen(function* () {
@@ -603,6 +643,7 @@ const handlersFor = (flock: FlockChat, sent: JsonObject) =>
       collie_hold: (input) => answer(hold(flock, input)),
       collie_do: () => answer(carryOut(flock, sent)),
       collie_propose: () => answer(propose(flock, sent)),
+      collie_machine_rule: ({ rule }) => answer(machineRule(flock, rule)),
     });
   });
 

@@ -3,7 +3,7 @@
 
 import { expect, test } from "bun:test";
 import { Deferred, Effect, Fiber, Queue, Schedule, Schema, Stream } from "effect";
-import { BoardMessage, PROTOCOL, TaskView, type BoardSnapshot } from "../src/board-model";
+import { BoardMessage, PaneAt, PROTOCOL, TaskView, type BoardSnapshot } from "../src/board-model";
 import { boardMessages } from "../src/board-stream";
 import { recordDisposition } from "../src/disposition";
 import { currentEnv } from "../src/env";
@@ -151,6 +151,16 @@ test("a kind of message this client does not know is read, and a broken known on
     seq: 4,
   });
   expect(() => decode({ _tag: "Upsert", seq: 5 })).toThrow();
+});
+
+test("an older host's focus, which names no pane, still decodes", () => {
+  const decode = Schema.decodeUnknownSync(PaneAt);
+  expect(decode({ session: null, workspace: "w", tab: "t" })).toEqual({
+    session: null,
+    workspace: "w",
+    tab: "t",
+  });
+  expect(decode({ session: "work", workspace: "w", tab: "t", pane: "1-2" }).pane).toBe("1-2");
 });
 
 test("a Task that leaves the board is removed, and a build that fails is skipped", () =>

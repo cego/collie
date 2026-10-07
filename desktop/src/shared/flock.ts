@@ -214,6 +214,48 @@ export const WentToPane = Schema.Struct({
 });
 export type WentToPane = typeof WentToPane.Type;
 
+const Cell = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));
+const Positive = Schema.Int.check(Schema.isGreaterThan(0));
+
+/** What the human does in a pane's terminal, in herdr's controller's own words. */
+export const TerminalCommand = Schema.Union([
+  Schema.Struct({ type: Schema.Literal("terminal.input"), text: Schema.String }),
+  Schema.Struct({
+    type: Schema.Literal("terminal.resize"),
+    cols: Positive,
+    rows: Positive,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("terminal.scroll"),
+    direction: Schema.Literals(["up", "down"]),
+    lines: Positive,
+    column: Cell,
+    row: Cell,
+    modifiers: Cell,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("terminal.mouse"),
+    action: Schema.Literals(["down", "up", "drag", "move"]),
+    button: Schema.Literals(["left", "right", "middle"]),
+    column: Cell,
+    row: Cell,
+    modifiers: Cell,
+  }),
+]);
+export type TerminalCommand = typeof TerminalCommand.Type;
+
+/**
+ * A pane's terminal in Desktop: where it was opened, each of herdr's frames as base64 ANSI,
+ * and why it ended; or, where the host named no pane, only where it focused.
+ */
+export const TerminalEvent = Schema.Union([
+  Schema.TaggedStruct("Opened", { at: PaneAt }),
+  Schema.TaggedStruct("Frame", { bytes: Schema.String }),
+  Schema.TaggedStruct("Ended", { reason: Schema.String }),
+  Schema.TaggedStruct("NoPane", { at: PaneAt }),
+]);
+export type TerminalEvent = typeof TerminalEvent.Type;
+
 /** What Desktop's latest check for its own update found, or is finding. */
 export const UpdateNews = Schema.Union([
   Schema.TaggedStruct("Checking", {}),
@@ -239,8 +281,18 @@ export const DesktopSettings = Schema.Struct({
   proactive: Schema.Boolean.pipe(Schema.withDecodingDefaultKey(Effect.succeed(true))),
   /** The GitLab every Machine is onboarded and doctored against; unset is the default one. */
   gitlabHost: Schema.optionalKey(Schema.String),
+  /** Which Machine each kind of work goes to, in the human's words; empty is no rule. */
+  machineRule: Schema.optionalKey(Schema.String),
 });
 export type DesktopSettings = typeof DesktopSettings.Type;
+
+/** The settings a change sets; the rest stay as they are. */
+export const DesktopSettingsChange = Schema.Struct({
+  proactive: Schema.optionalKey(Schema.Boolean),
+  gitlabHost: Schema.optionalKey(Schema.String),
+  machineRule: Schema.optionalKey(Schema.String),
+});
+export type DesktopSettingsChange = typeof DesktopSettingsChange.Type;
 
 export const DesktopRpcs = RpcGroup.make(
   Rpc.make("flock", { success: FlockItem, stream: true }),
@@ -264,6 +316,20 @@ export const DesktopRpcs = RpcGroup.make(
     success: WentToPane,
     error: ActionFailed,
   }),
+  /** The Run's live agent's pane, held while the stream runs and released when it is interrupted. */
+  Rpc.make("terminal", {
+    payload: {
+      installation: Schema.String,
+      runId: Schema.String,
+      cols: Schema.Int,
+      rows: Schema.Int,
+    },
+    success: TerminalEvent,
+    error: ActionFailed,
+    stream: true,
+  }),
+  /** One command to the open terminal; never recorded anywhere. */
+  Rpc.make("terminalSend", { payload: { command: TerminalCommand }, error: ActionFailed }),
   /** A web page, opened in the human's own browser. */
   Rpc.make("openLink", { payload: { url: Schema.String } }),
   Rpc.make("workflows", {
@@ -393,7 +459,7 @@ export const DesktopRpcs = RpcGroup.make(
   /** When the Flock chat starts and ends a turn of Desktop's own. */
   Rpc.make("desktopTurns", { success: DesktopTurn, stream: true }),
   Rpc.make("settings", { success: DesktopSettings }),
-  Rpc.make("setSettings", { payload: DesktopSettings }),
+  Rpc.make("setSettings", { payload: DesktopSettingsChange }),
 );
 
 /**

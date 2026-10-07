@@ -84,11 +84,12 @@ export const focusPane = Effect.fn("Herds.focusPane")(function* (
         : ((yield* herdr.tabList(workspaceId).pipe(Effect.orElseSucceed(() => []))).find(
             (one) => one.tabId === pane.tabId,
           )?.label ?? null);
-    return {
+    const at: PaneAt = {
       session: session.default === true ? null : (session.name ?? null),
       workspace: named.label,
       tab,
-    } satisfies PaneAt;
+    };
+    return agent === undefined ? at : { ...at, pane: agent.paneId };
   }
   return null;
 });
