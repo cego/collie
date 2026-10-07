@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { AsyncResult, useAtomValue } from "@effect/atom-vue";
 import { Cause } from "effect";
+import { offersTerminal, opensHerdrWithoutPane } from "../../../src/shared/drawer";
 import type { PlacedTask } from "../../../src/shared/flock";
 import { runDetailAtom, runDetailKey } from "../flock";
 import type { DiffTarget } from "./DiffTab.vue";
@@ -37,7 +38,9 @@ const tabs = computed(() => {
     ...(shown?.diff ? [{ label: "Diff", value: "diff" }] : []),
     ...(shown !== null ? [{ label: "Evidence", value: "evidence" }] : []),
     { label: "Log", value: "log" },
-    ...(props.placed.asOf === null ? [{ label: "Terminal", value: "terminal" }] : []),
+    ...(offersTerminal(props.placed.asOf, chosen.value)
+      ? [{ label: "Terminal", value: "terminal" }]
+      : []),
     ...(shown?.mr ? [{ label: "Merge request", value: "mr" }] : []),
     { label: "Facts", value: "facts" },
   ];
@@ -45,14 +48,13 @@ const tabs = computed(() => {
 /** The tab the human chose while it is there, else the first: Plan, where there is one. */
 const chosen = ref<string>();
 const drawer = useDrawer();
-/** Opened by Go to pane, which falls back to herdr's own client where there is no pane. */
 const wentToPane = ref(false);
 watch(
   drawer.asked,
   (asked) => {
     if (asked === null) return;
     chosen.value = asked;
-    wentToPane.value = asked === "terminal";
+    wentToPane.value = opensHerdrWithoutPane(asked);
     drawer.taken();
   },
   { immediate: true },

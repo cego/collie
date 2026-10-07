@@ -155,6 +155,7 @@ const withChat = <A, E>(
     readonly items: ReadonlyArray<Item>;
     readonly proactive: boolean;
     readonly holds?: (text: string) => boolean;
+    readonly rule?: string;
   },
   reply: (text: string) => ReadonlyArray<SdkMessage>,
   body: (chat: {
@@ -178,7 +179,7 @@ const withChat = <A, E>(
         conversation: "flock@mk-pc",
         machines: () => [machine(opts.items, read)],
         proactive: () => opts.proactive,
-        machineRule: () => "Everything is on the vm",
+        machineRule: () => opts.rule ?? "Everything is on the vm",
         setMachineRule: () => Effect.void,
       });
       return yield* body({ conversation, seen, read, dir });
@@ -215,6 +216,14 @@ test("Desktop speaks first only about what matters, and the rest goes with the h
         expect(seen.context[1]).not.toContain("r1:asking");
         yield* eventually(() => read.includes("r2:ended"));
       }),
+  ));
+
+test("a rule left blank adds nothing to a turn", () =>
+  withChat({ items: [], proactive: false, rule: "  \n" }, answered, ({ conversation, seen }) =>
+    Effect.gen(function* () {
+      yield* Stream.runDrain(conversation.send("start a review", null, false));
+      expect(seen.context).toEqual([""]);
+    }),
   ));
 
 test("a message sent now interrupts the turn under way, even Desktop's own, and starts the next", () =>

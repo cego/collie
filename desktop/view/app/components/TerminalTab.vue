@@ -64,6 +64,8 @@ const linksOn = (line: number): ILink[] =>
 const shown = (event: TerminalEvent) => {
   switch (event._tag) {
     case "Opened":
+      // A resize sent while the controller was starting was refused.
+      if (term !== undefined) send({ type: "terminal.resize", cols: term.cols, rows: term.rows });
       return panes.showing(props.placed, event.at);
     case "Frame":
       return term?.write(

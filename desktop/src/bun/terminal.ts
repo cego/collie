@@ -17,8 +17,15 @@ export const controlCommand = (
 ) => [
   "herdr",
   ...(session === null ? [] : ["--session", session]),
-  ...["terminal", "session", "control", pane, "--takeover"],
-  ...["--cols", String(cols), "--rows", String(rows)],
+  "terminal",
+  "session",
+  "control",
+  pane,
+  "--takeover",
+  "--cols",
+  String(cols),
+  "--rows",
+  String(rows),
 ];
 
 const ControllerRecord = Schema.Union([
@@ -123,7 +130,7 @@ export const openTerminal = Effect.fn("Desktop.openTerminal")(function* (
   if (at.pane === undefined)
     return {
       events: Stream.succeed<TerminalEvent>({ _tag: "NoPane", at }),
-      send: (_: TerminalCommand) => Effect.void,
+      send: (): Effect.Effect<void> => Effect.void,
     };
   const command = yield* route
     .sh(shellLine(controlCommand(at.session, at.pane, cols, rows)))

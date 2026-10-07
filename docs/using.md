@@ -935,7 +935,8 @@ the tab is shown. A link in it opens in your browser. A pane cannot write your c
 Leaving the tab or closing the drawer gives the pane back, so a herdr window showing it
 returns to its own size. A terminal that ends says why — the pane closed, another client
 took it over, the Machine's connection dropped, or herdr refused — and **Reattach** finds
-the Run's newest live agent again. The card and the tab say where the pane is, as
+the Run's newest live agent again. The tab stays while its Machine is away, and Reattach
+says that Machine is not connected until it is back. The card and the tab say where the pane is, as
 "vm-mk › workspace 3 › tab 2".
 
 Where there is no pane to show — a Run with no live agent, or a Machine on a Collie whose

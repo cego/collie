@@ -80,6 +80,7 @@ export const mouseOf = (
 };
 
 /** A mouse report xterm.js writes itself; herdr is sent `terminal.mouse` instead. */
+// oxlint-disable-next-line no-control-regex
 export const isMouseReport = (text: string) => /^\u001b\[(<\d+;\d+;\d+[Mm]|M[\s\S]{3})$/.test(text);
 
 export interface Key {
