@@ -222,7 +222,7 @@ const local = <A, E>(
   effect: Effect.Effect<A, E, FileSystem.FileSystem | Scope.Scope | BunServices.BunServices>,
 ) => Effect.runPromise(effect.pipe(Effect.scoped, Effect.provide(BunServices.layer)));
 
-test("a glob stops walking, and a grep stops its search, at the bound", () =>
+test("a glob stops listing, and a grep stops its search, at the bound, and a glob reaches dot paths it names", () =>
   local(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -236,6 +236,17 @@ test("a glob stops walking, and a grep stops its search, at the bound", () =>
       const globbed = yield* globFiles("**/*.ts", dir, 5);
       expect(globbed.paths).toHaveLength(5);
       expect((yield* globFiles("**/*.ts", dir)).paths).toHaveLength(12);
+      yield* fs.makeDirectory(`${dir}/.github/workflows`, { recursive: true });
+      yield* fs.writeFileString(`${dir}/.github/workflows/ci.yml`, "on: push\n");
+      yield* fs.writeFileString(`${dir}/.env`, "KEY=1\n");
+      // A dot-named path is found where the pattern names it, and only there.
+      for (const [pattern, found] of [
+        [".github/**/*.yml", [`${dir}/.github/workflows/ci.yml`]],
+        [".env", [`${dir}/.env`]],
+        ["**/.env", [`${dir}/.env`]],
+        ["**/*.yml", []],
+      ] as const)
+        expect((yield* globFiles(pattern, dir)).paths).toEqual([...found]);
       const grepped = yield* grepFiles(
         { pattern: "needle", path: dir, outputMode: "content", headLimit: 2 },
         5,

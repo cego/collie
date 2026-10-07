@@ -47,37 +47,22 @@ export const readPart = Effect.fn("HostFiles.read")(function* (
   );
 });
 
-/** Files under `root` matching `pattern`, found a directory at a time until `bound` match. */
-const walk = Effect.fn("HostFiles.walk")(function* (root: string, pattern: string, bound: number) {
-  const fs = yield* FileSystem.FileSystem;
+/**
+ * Whether `pattern` reaches `relative`: it matches, and each dot-named segment is one the
+ * pattern names with a dot, as Glob leaves `.git` to a pattern that asks for it.
+ */
+const reaches = (pattern: string) => {
   const glob = new Bun.Glob(pattern);
-  const found: string[] = [];
-  const dirs = [""];
-  for (let at = 0; at < dirs.length && found.length < bound; at++) {
-    const dir = dirs[at]!;
-    const names = yield* fs.readDirectory(`${root}/${dir}`).pipe(
-      // Only the root unreadable is the search's failure; any other is passed by.
-      Effect.catch((cause) =>
-        dir === ""
-          ? Effect.fail(refused(`the search of ${root || "/"} failed: ${String(cause)}`))
-          : Effect.succeed([]),
-      ),
-    );
-    for (const name of names) {
-      if (name.startsWith(".")) continue;
-      const relative = dir === "" ? name : `${dir}/${name}`;
-      const path = `${root}/${relative}`;
-      const info = yield* fs.stat(path).pipe(Effect.option);
-      if (info._tag === "None") continue;
-      if (info.value.type === "Directory") {
-        // A link is not followed, so a loop of them ends.
-        const link = yield* fs.readLink(path).pipe(Effect.option);
-        if (link._tag === "None") dirs.push(relative);
-      } else if (glob.match(relative) && found.push(path) >= bound) break;
-    }
-  }
-  return found;
-});
+  const dotted = pattern
+    .split("/")
+    .filter((segment) => segment.startsWith("."))
+    .map((segment) => new Bun.Glob(segment));
+  return (relative: string) =>
+    glob.match(relative) &&
+    relative
+      .split("/")
+      .every((segment) => !segment.startsWith(".") || dotted.some((one) => one.match(segment)));
+};
 
 /** Files under `dir` matching `pattern`, newest first, and how many beyond the bound. */
 export const globFiles = Effect.fn("HostFiles.glob")(function* (
@@ -87,7 +72,43 @@ export const globFiles = Effect.fn("HostFiles.glob")(function* (
 ) {
   const fs = yield* FileSystem.FileSystem;
   const root = yield* absolute(dir);
-  const found = yield* walk(root === "/" ? "" : root, pattern, bound);
+  const keep = reaches(pattern);
+  const relative = (line: string) => line.slice(root === "/" ? 1 : root.length + 1);
+  const rg = Bun.which("rg");
+  const hidden = pattern.split("/").some((segment) => segment.startsWith("."));
+  // Links are not followed, so a loop of them ends; dot directories are entered only for a
+  // pattern that names one.
+  const listed = yield* (
+    rg === null
+      ? searched(
+          "find",
+          [
+            root,
+            "-mindepth",
+            "1",
+            ...(hidden ? [] : ["-name", ".*", "-prune", "-o"]),
+            "-type",
+            "f",
+            "-print",
+          ],
+          root,
+          bound,
+          bound,
+          (line) => keep(relative(line)),
+        )
+      : searched(
+          rg,
+          ["--files", "--no-ignore", "--no-messages", ...(hidden ? ["--hidden"] : []), root],
+          root,
+          bound,
+          bound,
+          (line) => keep(relative(line)),
+        )
+  ).pipe(Effect.mapError((cause) => refused(`the search of ${root} failed: ${String(cause)}`)));
+  // An unreadable directory below the root is passed by; an unreadable root is the failure.
+  if (listed.lines.length === 0 && listed.code > 1)
+    return yield* refused(`the search of ${root} failed (exit ${listed.code})`);
+  const found = listed.lines;
   const matched: Array<{ readonly path: string; readonly at: number }> = [];
   for (const path of found) {
     const info = yield* fs.stat(path).pipe(Effect.option);
@@ -163,6 +184,7 @@ const searched = (
   cwd: string,
   limit: number,
   bound: number,
+  keep: (line: string) => boolean = () => true,
 ) =>
   Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -173,7 +195,7 @@ const searched = (
     const seen = yield* handle.stdout.pipe(
       Stream.decodeText(),
       Stream.splitLines,
-      Stream.filter((line) => line !== ""),
+      Stream.filter((line) => line !== "" && keep(line)),
       Stream.take(bound),
       Stream.runFold(
         () => 0,
