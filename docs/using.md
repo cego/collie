@@ -1018,8 +1018,10 @@ its name, to open its drawer, which selects the card too and follows its Run on 
 as long as it is open. A click or double-click on one of a card's buttons does only what that
 button does, and a card whose Machine dropped can be selected but not opened. A click on the
 board's own area below the header, between cards or on a section heading, lets the selected
-card go. **Escape** backs out one level: an open dialog, menu or drawer closes first, and
-with none open it lets the selected card go. Escape typed in a field stays with the field. Its **Plan** tab renders the spec, read whole from the host where it is longer than the
+card go. **Escape** backs out one level: an open dialog, menu, popover or drawer closes first, and
+with none open it lets the selected card go. Escape typed in a field stays with the field.
+
+The drawer's **Plan** tab renders the spec, read whole from the host where it is longer than the
 details carry, and lists the tickets, each expanding
 in place, read from the host when first opened; a link from one plan file to another opens
 that file at the top of the tab. **Review** renders the review, read whole the same way, and lists its findings; a

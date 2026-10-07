@@ -10,7 +10,7 @@ import {
 } from "../../../../src/board-model";
 import { DateTime } from "effect";
 import type { DesktopAction } from "../../../src/shared/flock";
-import { placeOf, targetOf } from "../../../src/shared/selection";
+import { opensOnDoubleClick, placeOf, targetOf } from "../../../src/shared/board-clicks";
 
 const props = defineProps<{
   task: TaskView;
@@ -51,12 +51,11 @@ const openDrawer = () => {
   select();
   open(props.cardKey);
 };
-/** A click on the card itself, not on one of its controls, is what the next chat message is about. */
-const clicked = (event: MouseEvent) => {
+const selectOnBody = (event: MouseEvent) => {
   if (placeOf(targetOf(event)) === "card") select();
 };
-const doubleClicked = (event: MouseEvent) => {
-  if (placeOf(targetOf(event)) === "card" && props.asOf === null) openDrawer();
+const openOnBody = (event: MouseEvent) => {
+  if (opensOnDoubleClick(targetOf(event), props.asOf)) openDrawer();
 };
 
 const STATES: Record<
@@ -212,8 +211,8 @@ const menu = computed(() =>
       data-card
       :variant="task.state === 'blocked' ? 'soft' : 'outline'"
       :class="{ 'opacity-50': asOf !== null, 'ring-2 ring-primary': chosen }"
-      @click="clicked"
-      @dblclick="doubleClicked"
+      @click="selectOnBody"
+      @dblclick="openOnBody"
     >
       <template #header>
         <div class="flex items-start justify-between gap-2">

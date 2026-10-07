@@ -1,7 +1,7 @@
-// What a click, a double-click and Escape on the board do to the selected card.
+// A board click and Escape, decided over fake elements.
 
 import { expect, test } from "bun:test";
-import { escapeLetsGo, placeOf } from "../src/shared/selection";
+import { escapeLetsGo, opensOnDoubleClick, placeOf } from "../src/shared/board-clicks";
 
 /** An element, by the selectors it or one of its ancestors matches. */
 const element = (matches: ReadonlyArray<string>, isContentEditable = false) => ({
@@ -30,13 +30,25 @@ test("a click between cards or on a heading is the board's, and the Finished sum
   expect(placeOf(null)).toBe("board");
 });
 
+test("a double-click on a card's body opens it, unless its Machine dropped", () => {
+  expect(opensOnDoubleClick(element(["[data-card]"]), null)).toBe(true);
+  expect(opensOnDoubleClick(element(["[data-card]"]), 1_700_000_000_000)).toBe(false);
+  expect(opensOnDoubleClick(element(["button", "[data-card]"]), null)).toBe(false);
+  expect(opensOnDoubleClick(element([]), null)).toBe(false);
+});
+
 test("Escape on the board lets the card go", () => {
   expect(escapeLetsGo(element([]), page(null))).toBe(true);
   expect(escapeLetsGo(element(["[data-card]"]), page(null))).toBe(true);
 });
 
-test("Escape with a dialog, slideover, menu or popover open is the overlay's", () => {
-  for (const role of ['[role="dialog"]', '[role="alertdialog"]', '[role="menu"]'])
+test("Escape with a dialog, slideover, popover, menu or select open is the overlay's", () => {
+  for (const role of [
+    '[role="dialog"]',
+    '[role="alertdialog"]',
+    '[role="menu"]',
+    '[role="listbox"]',
+  ])
     expect(escapeLetsGo(element([]), page(role))).toBe(false);
 });
 

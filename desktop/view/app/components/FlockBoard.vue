@@ -2,7 +2,7 @@
 import { SECTIONS } from "../../../../src/board-model";
 import { AsyncResult, useAtomValue } from "@effect/atom-vue";
 import type { NotLive } from "../../../src/shared/flock";
-import { escapeLetsGo, placeOf, targetOf } from "../../../src/shared/selection";
+import { escapeLetsGo, placeOf, targetOf } from "../../../src/shared/board-clicks";
 import { updatesAtom } from "../flock";
 
 const {

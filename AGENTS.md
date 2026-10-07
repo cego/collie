@@ -64,7 +64,9 @@ herdr actions, and the `collie` CLI.
   client) and `desktop/src/shared/` (the view's RPC and the Flock it folds), with the main
   process's behaviour tested in `test/desktop-*.test.ts`. A card's drawer is
   `desktop/view/app/components/RunDrawer.vue`; what agent markdown may keep is
-  `desktop/src/shared/markdown.ts` with `desktop/test/markdown.test.ts`, and the window's
+  `desktop/src/shared/markdown.ts` with `desktop/test/markdown.test.ts`; what a click,
+  a double-click and Escape do to the selected card is `desktop/src/shared/board-clicks.ts`
+  with `desktop/test/board-clicks.test.ts`; and the window's
   navigation rule is in
   `desktop/src/bun/index.ts`. Desktop has its own `package.json`; Effect is the root's, so
   the board's Schemas exist once. The

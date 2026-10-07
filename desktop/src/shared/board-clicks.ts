@@ -1,4 +1,5 @@
-// What a click, a double-click and Escape on the board do to the selected card.
+// What a click, a double-click and Escape on the board do to the selected card. No Bun-only
+// import: the view bundles this.
 
 /** Where a click or a key landed: an element, or nothing that is one. */
 export type Target = {
@@ -15,7 +16,8 @@ interface Page {
 
 const CONTROL = "button, a, input, label, form, summary";
 const FIELD = "input, textarea, select";
-const OVERLAY = '[data-state="open"]:is([role="dialog"], [role="alertdialog"], [role="menu"])';
+const OVERLAY =
+  '[data-state="open"]:is([role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"])';
 
 /** A control does only what it does; a card's body selects it; the rest is the board's own. */
 export const placeOf = (target: Target): "control" | "card" | "board" => {
@@ -23,6 +25,10 @@ export const placeOf = (target: Target): "control" | "card" | "board" => {
   if (target.closest(CONTROL) !== null) return "control";
   return target.closest("[data-card]") !== null ? "card" : "board";
 };
+
+/** A card whose Machine dropped can be selected, but its record has nobody to read it from. */
+export const opensOnDoubleClick = (target: Target, asOf: number | null) =>
+  placeOf(target) === "card" && asOf === null;
 
 /** Escape belongs to a field typed in and to an open overlay, which closes itself on it. */
 export const escapeLetsGo = (target: Target, page: Page) =>
