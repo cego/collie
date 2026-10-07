@@ -644,7 +644,8 @@ const standing = (onboarding?: OnboardRun, doctor?: OnboardRun): OnboardRun | nu
 export const machineRows = (flock: Flock): ReadonlyArray<MachineRow> =>
   [...flock.routes.values()].map(({ profile, name, target }) => {
     const seen = [...flock.machines.values()].filter(({ machine }) => machine.profile === profile);
-    const shown = seen.find(({ asOf }) => asOf === null) ?? seen[0];
+    const shown =
+      seen.find(({ asOf }) => asOf === null) ?? seen.sort((a, b) => b.asOf! - a.asOf!)[0];
     return {
       profile,
       name,

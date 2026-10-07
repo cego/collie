@@ -441,7 +441,7 @@ test("the Flock's summary names Desktop's version, or each Machine that lags and
     DESKTOP,
   );
   expect(mixed).toEqual({
-    said: "Not in sync with Desktop 0.35.0: vm-mk is behind on version and onboarding; vm-c is out of reach",
+    said: "Not in sync with Desktop 0.35.0: vm-mk: behind on version and onboarding; vm-c: Out of reach",
     count: 2,
   });
 });

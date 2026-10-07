@@ -11,17 +11,14 @@ const target = ref("");
 const label = ref("");
 const session = ref("default");
 
-const STATE = {
-  "in-sync": { label: "In sync", color: "success" },
-  behind: { label: "Behind", color: "warning" },
-  live: { label: "Live", color: "success" },
-  connecting: { label: "Connecting", color: "neutral" },
-  unreachable: { label: NOT_LIVE_SAID.unreachable, color: "warning" },
-  sso: { label: NOT_LIVE_SAID.sso, color: "warning" },
-  "no-collie": { label: NOT_LIVE_SAID["no-collie"], color: "warning" },
-  "update-desktop": { label: NOT_LIVE_SAID["update-desktop"], color: "warning" },
-} as const;
-const stateOf = (row: MachineRow, verdict: InSync | null) => STATE[verdict?.state ?? row.state];
+const badgeOf = (state: InSync["state"]) =>
+  state === "in-sync"
+    ? { label: "In sync", color: "success" as const }
+    : state === "behind"
+      ? { label: "Behind", color: "warning" as const }
+      : state === "connecting"
+        ? { label: "Connecting", color: "neutral" as const }
+        : { label: NOT_LIVE_SAID[state], color: "warning" as const };
 const buildOf = ({ build, development }: MachineRow) =>
   development !== null
     ? `development build ${development}`
@@ -84,19 +81,23 @@ const add = async () => {
               class="ml-auto"
               variant="subtle"
               data-testid="state"
-              :color="stateOf(row, verdict).color"
-              :label="stateOf(row, verdict).label"
+              :color="badgeOf(verdict.state).color"
+              :label="badgeOf(verdict.state).label"
             />
           </div>
           <p class="text-sm text-muted" data-testid="build">{{ buildOf(row) }}</p>
-          <p
-            v-for="lag in verdict?.behind.filter(({ part }) => part !== 'onboarding') ?? []"
-            :key="lag.part"
-            class="text-sm text-warning"
-            :data-testid="`behind-${lag.part}`"
-          >
-            {{ lag.said }}
-          </p>
+          <template v-for="lag in verdict.behind" :key="lag.part">
+            <p class="text-sm text-warning" :data-testid="`behind-${lag.part}`">{{ lag.said }}</p>
+            <OnboardSteps
+              v-if="lag.part === 'onboarding'"
+              data-testid="missing"
+              :steps="lag.steps"
+              :ended="true"
+              @retry="onboardOn(row.profile)"
+              @login="loginOn(row.profile)"
+              @skip="(step) => onboardOn(row.profile, [step])"
+            />
+          </template>
           <p
             v-if="row.onboarded?.ready === true"
             class="text-sm text-success"
@@ -104,8 +105,8 @@ const add = async () => {
           >
             Onboarded
           </p>
-          <template v-else-if="row.onboarded?.ready === false">
-            <p class="text-sm text-warning" data-testid="behind-onboarding">Not onboarded yet:</p>
+          <template v-else-if="row.onboarded?.ready === false && verdict.state !== 'behind'">
+            <p class="text-sm text-warning">Not onboarded yet:</p>
             <OnboardSteps
               data-testid="missing"
               :steps="missing(row.onboarded)"

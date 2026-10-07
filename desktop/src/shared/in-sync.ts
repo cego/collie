@@ -14,7 +14,7 @@ export interface InSync {
   readonly behind: ReadonlyArray<Lag>;
 }
 
-/** What Desktop gives its Flock. */
+/** What Desktop gives its Flock; a version that isn't a release asks nothing of one. */
 export interface DesktopHolds {
   readonly version: string;
 }
@@ -56,7 +56,7 @@ const lags = (row: MachineRow, desktop: DesktopHolds): ReadonlyArray<Lag> => {
       ? [
           {
             part: "onboarding",
-            said: `Not onboarded: ${missing.map(({ title }) => title).join(", ") || onboarded.reason}`,
+            said: `Not onboarded: ${missing.map(({ title }) => title).join(", ") || (onboarded.reason ?? "doctor says it isn't ready")}`,
             steps: missing,
           },
         ]
@@ -77,9 +77,7 @@ export const flockInSync = (rows: ReadonlyArray<MachineRow>, desktop: DesktopHol
     const { state, behind } = inSync(row, desktop);
     if (state === "in-sync" || state === "connecting") return [];
     return [
-      state === "behind"
-        ? `${row.name} is behind on ${behind.map(({ part }) => part).join(" and ")}`
-        : `${row.name} is ${NOT_LIVE_SAID[state].toLowerCase()}`,
+      `${row.name}: ${state === "behind" ? `behind on ${behind.map(({ part }) => part).join(" and ")}` : NOT_LIVE_SAID[state]}`,
     ];
   });
   return {

@@ -11,12 +11,9 @@ export const useInSync = () => {
     AsyncResult.isSuccess(updates.value) ? { version: updates.value.value.version } : null,
   );
   return {
-    /** Each route's row and its verdict; none until Desktop's version is known. */
+    /** Each route's row and its verdict, on version too once Desktop's is known. */
     machines: computed(() =>
-      rows.value.map((row) => ({
-        row,
-        verdict: desktop.value === null ? null : inSync(row, desktop.value),
-      })),
+      rows.value.map((row) => ({ row, verdict: inSync(row, desktop.value ?? { version: "" }) })),
     ),
     summary: computed(() =>
       desktop.value === null ? null : flockInSync(rows.value, desktop.value),
