@@ -25,8 +25,7 @@ let focusedBefore: Element | null = null;
 watch(page, async (now, before) => {
   if (before === null) focusedBefore = document.activeElement;
   await nextTick();
-  const target =
-    now === null ? focusedBefore : document.querySelector('[data-testid="page-back"]');
+  const target = now === null ? focusedBefore : document.querySelector('[data-testid="page-back"]');
   if (target instanceof HTMLElement && target.isConnected) target.focus();
 });
 
