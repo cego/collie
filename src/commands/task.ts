@@ -1,7 +1,7 @@
 // The Tasks this Herd has: what `run start --task` names, and what a picker offers.
 
 import { Effect } from "effect";
-import { Command } from "effect/unstable/cli";
+import { Command } from "effect/cli";
 import { listRuns } from "../runs";
 import { listTasks } from "../task";
 import { answering } from "./shared";

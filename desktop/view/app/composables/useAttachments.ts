@@ -3,7 +3,8 @@
 // main process in parts as it is added, scaled first where it is a large image.
 
 import { useAtomSet } from "@effect/atom-vue";
-import { DateTime, Effect, Encoding, Exit, Option, Random, Schema, Semaphore } from "effect";
+import { DateTime, Effect, Exit, Option, Random, Schema, Semaphore } from "effect";
+import * as Base64 from "effect/encoding/Base64";
 import {
   type Attached,
   capRefusal,
@@ -63,7 +64,7 @@ export const useAttachments = () => {
   ) {
     const key = `${yield* Random.nextIntBetween(0, 2 ** 31)}-${bytes.length}`;
     for (let offset = 0; ; offset += PART) {
-      const content = Encoding.encodeBase64(bytes.subarray(offset, offset + PART));
+      const content = Base64.encode(bytes.subarray(offset, offset + PART));
       const payload = { key, name, mediaType, size: bytes.length, offset, content };
       const exit = yield* Effect.promise(() =>
         stage({ payload: scaledOf === undefined ? payload : { ...payload, scaledOf } }),
@@ -91,7 +92,7 @@ export const useAttachments = () => {
     for (let offset = 0; ;) {
       const exit = yield* Effect.promise(() => read({ payload: { id: file.id, offset } }));
       if (Exit.isFailure(exit)) return null;
-      const bytes = Encoding.decodeBase64(exit.value.content);
+      const bytes = Base64.decode(exit.value.content);
       if (bytes._tag === "Failure") return null;
       parts.push(new Uint8Array(bytes.success));
       offset += bytes.success.length;

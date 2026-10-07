@@ -2,8 +2,8 @@
 
 import { Effect, FileSystem, Option, Schema } from "effect";
 import { Updater } from "electrobun/bun";
-import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
-import * as HttpClient from "effect/unstable/http/HttpClient";
+import * as FetchHttpClient from "effect/http/FetchHttpClient";
+import * as HttpClient from "effect/http/HttpClient";
 import { PreparedRecord, preparedRecordOf, releaseOf } from "../../../src/desktop";
 import type { UpdaterPort } from "./updates";
 

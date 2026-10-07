@@ -2,7 +2,7 @@
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, FileSystem, Layer, Path, type Schema } from "effect";
-import * as WorkflowEngine from "effect/unstable/workflow/WorkflowEngine";
+import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
 import { NOTIFICATION_KINDS, notificationTitle, wanted } from "../src/notify";
 import { Rig, FakeHerdr } from "./support/recorder";
 import { Agents, agentsLayer } from "../src/agents";

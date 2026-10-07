@@ -2,9 +2,9 @@
 // Kept once by sha256: a digest held whole is answered at once, and a retried part is the
 // same part, so no request id is needed. Removed a week after it was last asked for.
 
-import { createHash } from "node:crypto";
-import { Clock, Effect, Encoding, FileSystem, Path, Result, Semaphore } from "effect";
-import { ATTACHMENT_BYTES } from "./attachments";
+import { Clock, Effect, FileSystem, Path, Result, Semaphore } from "effect";
+import * as Base64 from "effect/encoding/Base64";
+import { ATTACHMENT_BYTES, sha256Hex } from "./attachments";
 import { HostRefused, PART_BYTES } from "./board-model";
 
 export const uploadsDir = (stateDir: string) => `${stateDir}/uploads`;
@@ -51,7 +51,7 @@ const receivePart = Effect.fn("Uploads.receive")(function* (stateDir: string, pa
     yield* fs.utimes(dir, now, now);
     return { path: whole, complete: false };
   }
-  const decoded = Encoding.decodeBase64(part.content);
+  const decoded = Base64.decode(part.content);
   if (Result.isFailure(decoded)) return yield* refused(`a part of ${part.name} is not base64`);
   const bytes = decoded.success;
   if (bytes.length > PART_BYTES) return yield* refused(`a part is at most 4 MiB`);
@@ -73,7 +73,7 @@ const receivePart = Effect.fn("Uploads.receive")(function* (stateDir: string, pa
   yield* fs.writeFile(partial, bytes, { flag: part.offset === 0 ? "w" : "a" });
   if (part.offset + bytes.length < part.size) return { path: null, complete: false };
   const all = yield* fs.readFile(partial);
-  const digest = createHash("sha256").update(all).digest("hex");
+  const digest = sha256Hex(all);
   if (all.length !== part.size || digest !== part.sha256) {
     yield* fs.remove(dir, { recursive: true });
     return yield* refused(

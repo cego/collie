@@ -52,7 +52,7 @@ For one of those, the install finds a token in this order:
 
 2. The login the host's own CLI already holds. For a GitHub release that is
    `gh auth token --hostname <host>`, and for a GitLab one `glab config get token --host
-<host>`. Which of the two it asks comes from the release URL: GitLab download paths
+   <host>`. Which of the two it asks comes from the release URL: GitLab download paths
    carry `/-/releases/`, GitHub's carry `/releases/download/`, so a self-hosted instance of
    either is recognised by its shape rather than its hostname. If you have run
    `gh auth login`, the install needs nothing else from you.
@@ -761,7 +761,7 @@ the piece of work, the revision it was written against, and how
 - **claims** are what an agent said about its own work, always prefixed `claimed:` and
   never among the verifications. A claim is not a pass, and it never reads as one.
 - **missing** is what nobody checked. It is drawn even when it is empty — `missing: nothing
-was left unchecked` — because silently absent is exactly the reassurance a card exists to
+  was left unchecked` — because silently absent is exactly the reassurance a card exists to
   withhold.
 - **look at** lines are copyable text, never something Collie will run for you.
 - the **narrative** is last and dim, prefixed `Collie:`. It is prose a model wrote about its
@@ -979,7 +979,7 @@ herdr's — with how it stands, and is where Machines join the Flock. Each joins
 
 - **Add Machine** opens a dialog that takes an SSH target, a label and a herdr session
   (`default` unless you say), all three needed; adding closes it and runs `herdr machine
-add` in a terminal Desktop drives. herdr's own questions — whether to install herdr there, whether to replace a running server — are dialogs, and
+  add` in a terminal Desktop drives. herdr's own questions — whether to install herdr there, whether to replace a running server — are dialogs, and
   closing one answers herdr's default, which for replacing a server is No. herdr saves the
   machine, so its list stays the only one, and Desktop then onboards it.
 - **Onboard** on a Machine herdr already has, or on this computer, onboards it there and
@@ -1580,7 +1580,7 @@ is never the one asked or handed work.
 - **Fix findings in a full implement run** — starts `implement` with the review itself as
   the work source: `review.md` is the spec, the findings are the tickets, and the
   implementer works where the review was pointed — checking out the branch, or `glab mr
-checkout` for a merge request, so the fixes land on that MR's own branch and its merge
+  checkout` for a merge request, so the fixes land on that MR's own branch and its merge
   request is updated instead of a second one opened.
 - **Post to MR** — only for a merge request target: the review is posted to it.
 - **Don't post** — the run ends with its findings.

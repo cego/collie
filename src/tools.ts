@@ -22,7 +22,7 @@
 
 import type { BunServices } from "@effect/platform-bun/BunServices";
 import { Clock, Crypto, Effect, Result, Schema } from "effect";
-import { ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcessSpawner } from "effect/process";
 import type { PluginEnv } from "./env";
 import {
   answerAction,

@@ -10,7 +10,7 @@
 // checkout away again.
 
 import { Clock, Effect, FileSystem, Option, Path, Schema } from "effect";
-import type { ChildProcessSpawner } from "effect/unstable/process";
+import type { ChildProcessSpawner } from "effect/process";
 import {
   herdrFailureReason,
   type Herdr,

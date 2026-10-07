@@ -14,7 +14,6 @@
 // machine. `docs/adr/0015-one-local-host-owns-a-state-directory.md` is why each of those
 // is the way it is.
 
-import { createHash } from "node:crypto";
 import * as BunSocket from "@effect/platform-bun/BunSocket";
 import type { BunServices } from "@effect/platform-bun/BunServices";
 import * as BunSocketServer from "@effect/platform-bun/BunSocketServer";
@@ -38,13 +37,13 @@ import {
   Stream,
   Struct,
 } from "effect";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
-import * as Rpc from "effect/unstable/rpc/Rpc";
-import * as RpcClient from "effect/unstable/rpc/RpcClient";
-import type * as RpcClientError from "effect/unstable/rpc/RpcClientError";
-import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
-import * as RpcSerialization from "effect/unstable/rpc/RpcSerialization";
-import * as RpcServer from "effect/unstable/rpc/RpcServer";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
+import * as Rpc from "effect/rpc/Rpc";
+import * as RpcClient from "effect/rpc/RpcClient";
+import type * as RpcClientError from "effect/rpc/RpcClientError";
+import * as RpcGroup from "effect/rpc/RpcGroup";
+import * as RpcSerialization from "effect/rpc/RpcSerialization";
+import * as RpcServer from "effect/rpc/RpcServer";
 import manifest from "../herdr-plugin.toml";
 import {
   EntryError,
@@ -65,7 +64,7 @@ import { hostLogger } from "./host-log";
 import { Catalogue, discover, searchPath } from "./discovery";
 import { sideJobs } from "./side-jobs";
 import { dataHomeOf, desktopRootOf } from "./desktop";
-import type * as MessageStorage from "effect/unstable/cluster/MessageStorage";
+import type * as MessageStorage from "effect/cluster/MessageStorage";
 import {
   collieCache,
   compactionSweeper,
@@ -123,6 +122,7 @@ import {
   attachmentsDir,
   copyInto,
   namesIn,
+  sha256Hex,
   type Attached,
 } from "./attachments";
 import { boardMessages } from "./board-stream";
@@ -1110,7 +1110,10 @@ const frontDoorHandlers = (
                 operation: "write",
                 request,
                 ...whoOf(client),
-                asked: { path, sha256: createHash("sha256").update(content).digest("hex") },
+                asked: {
+                  path,
+                  sha256: sha256Hex(content),
+                },
                 result: Written,
               },
               writeWhole(path, content, env.stateDir),

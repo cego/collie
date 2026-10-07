@@ -1,5 +1,5 @@
 import { Effect, FileSystem, Path } from "effect";
-import type { ChildProcessSpawner } from "effect/unstable/process";
+import type { ChildProcessSpawner } from "effect/process";
 import { shell, type Runner } from "./mr";
 
 // ponytail: the one branch releases are cut from; read origin/HEAD if that ever varies.

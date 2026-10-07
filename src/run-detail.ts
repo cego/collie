@@ -1,8 +1,9 @@
 // One Run's details as the host serves a drawer: its diff, the large items a front door
 // fetches by reference, and the details themselves followed as they change.
 
-import { Effect, Encoding, FileSystem, Option, Path, Schema, Stream } from "effect";
-import type { ChildProcessSpawner } from "effect/unstable/process";
+import { Effect, FileSystem, Option, Path, Schema, Stream } from "effect";
+import * as Base64 from "effect/encoding/Base64";
+import type { ChildProcessSpawner } from "effect/process";
 import {
   HostRefused,
   PART_BYTES,
@@ -258,7 +259,7 @@ export const fetchRef = Effect.fn("RunDetail.fetchRef")(function* (
   const asked = (bytes: Uint8Array, size: number, file: string | null): RunFile =>
     bytes.length === size && (file === null || TEXT.test(file))
       ? { ref, encoding: "utf8", content: new TextDecoder().decode(bytes), size }
-      : { ref, encoding: "base64", content: Encoding.encodeBase64(bytes), size };
+      : { ref, encoding: "base64", content: Base64.encode(bytes), size };
   const text = (content: string): RunFile => {
     const bytes = new TextEncoder().encode(content);
     return asked(bytes.subarray(part.offset, part.offset + part.length), bytes.length, null);

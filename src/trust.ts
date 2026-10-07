@@ -3,7 +3,7 @@
 // Claude's, so unreadable data is always left untouched.
 
 import { Effect, FileSystem, Path, Schema, type PlatformError } from "effect";
-import type { ChildProcessSpawner } from "effect/unstable/process";
+import type { ChildProcessSpawner } from "effect/process";
 import { isYamlMap, YamlMapSchema, type YamlMap } from "./yaml";
 import { currentPid, withLock } from "./lock";
 

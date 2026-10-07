@@ -4,7 +4,7 @@
 
 import { createConnection } from "node:net";
 import { Config, Effect, Option, Schema } from "effect";
-import type * as RpcMessage from "effect/unstable/rpc/RpcMessage";
+import type * as RpcMessage from "effect/rpc/RpcMessage";
 import { BRIDGE_READY, type Declaration, type FrontDoor, type Where } from "./board-model";
 import { currentEnv } from "./env";
 import { Herdr } from "./herdr";

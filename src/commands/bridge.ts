@@ -4,7 +4,7 @@
 // past the ready marker and speaks the host's protocol from there.
 
 import { Option } from "effect";
-import { Command, Flag } from "effect/unstable/cli";
+import { Command, Flag } from "effect/cli";
 import { bridge as pipeToHost } from "../bridge";
 
 export const bridge = Command.make(

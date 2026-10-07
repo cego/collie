@@ -8,7 +8,7 @@
 // policy owns the threshold, the budget and what counts as an outcome.
 
 import { Clock, Data, Effect, FileSystem, Path, Schema } from "effect";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import {
   boundThread,
   compactionItems,

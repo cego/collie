@@ -228,6 +228,23 @@ test("a herdr older than the manifest's minimum is the reported problem", () =>
     }),
   ));
 
+test("the shipped manifest calls a herdr older than the pinned 0.9.3 stale, and 0.9.3 current", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* healthy();
+      const fs = yield* FileSystem.FileSystem;
+      const shipped = yield* fs.readFileString(`${import.meta.dir}/../herdr-plugin.toml`);
+      yield* fs.writeFileString(`${rig.baselineDir}/herdr-plugin.toml`, shipped);
+
+      const older = check(yield* report({ FAKE_HERDR_VERSION: "herdr 0.9.2" }), "herdr");
+      expect(older.ok).toBe(false);
+      expect(older.detail).toContain("0.9.3");
+
+      const pinned = check(yield* report({ FAKE_HERDR_VERSION: "herdr 0.9.3" }), "herdr");
+      expect(pinned).toMatchObject({ ok: true, detail: "0.9.3" });
+    }),
+  ));
+
 test("a shim whose directory is not on PATH is its own state, not 'installed'", () =>
   runEffect(
     Effect.gen(function* () {

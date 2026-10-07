@@ -21,9 +21,9 @@ import {
   Ref,
   Schema,
 } from "effect";
-import * as McpProtocol from "effect/unstable/ai/McpProtocol";
-import * as McpSchema from "effect/unstable/ai/McpSchema";
-import * as McpServer from "effect/unstable/ai/McpServer";
+import * as McpProtocol from "effect/ai/McpProtocol";
+import * as McpSchema from "effect/ai/McpSchema";
+import * as McpServer from "effect/ai/McpServer";
 import manifest from "../herdr-plugin.toml";
 import { currentEnv } from "./env";
 import { replacedOnDisk } from "./flows";

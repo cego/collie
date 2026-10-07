@@ -6,7 +6,8 @@
 import { FitAddon } from "@xterm/addon-fit";
 import { type IDisposable, type ILink, Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
-import { Cause, Effect, Encoding, Fiber, Result, Stream } from "effect";
+import { Cause, Effect, Fiber, Result, Stream } from "effect";
+import * as Base64 from "effect/encoding/Base64";
 import type { PlacedTask, TerminalCommand, TerminalEvent } from "../../../src/shared/flock";
 import {
   cellAt,
@@ -68,9 +69,7 @@ const shown = (event: TerminalEvent) => {
       if (term !== undefined) send({ type: "terminal.resize", cols: term.cols, rows: term.rows });
       return panes.showing(props.placed, event.at);
     case "Frame":
-      return term?.write(
-        Result.getOrElse(Encoding.decodeBase64(event.bytes), () => new Uint8Array()),
-      );
+      return term?.write(Result.getOrElse(Base64.decode(event.bytes), () => new Uint8Array()));
     case "Ended":
       ended.value = event.reason;
       return;

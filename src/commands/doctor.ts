@@ -1,5 +1,5 @@
 import { Effect } from "effect";
-import { Command } from "effect/unstable/cli";
+import { Command } from "effect/cli";
 import { doctor as checkInstallation } from "../doctor";
 import { attempt } from "../envelope";
 import { context, gitlabHostFlag, root, withGitlabHost } from "./shared";

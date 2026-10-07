@@ -9,7 +9,7 @@
 // resolved once and recorded as an absolute path, so what was approved is what ran.
 
 import { Data, Effect, FileSystem, Path, Schema } from "effect";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { Stream } from "effect";
 import type { VerifySpec } from "./intent";
 import { appendJournal, readJournal } from "./journal";

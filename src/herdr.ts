@@ -1,5 +1,5 @@
 // The only channel to herdr: the CLI at HERDR_BIN_PATH, plus the socket at
-// HERDR_SOCKET_PATH for the few methods 0.8.2 does not expose on the CLI — and herdr's
+// HERDR_SOCKET_PATH for the few methods 0.9.3 does not expose on the CLI — and herdr's
 // own `config.toml`, for the few things it settles but answers no question about. Every
 // fact about herdr is behind this one interface, which is what makes the fake herdr in
 // `test/support/` enough to test everything above it.
@@ -18,8 +18,8 @@ import {
   Stream,
 } from "effect";
 import * as BunSocket from "@effect/platform-bun/BunSocket";
-import * as Socket from "effect/unstable/socket/Socket";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import * as Socket from "effect/socket/Socket";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import type { PlatformError } from "effect/PlatformError";
 import type { PluginEnv } from "./env";
 import { isString } from "./schema";
@@ -800,7 +800,7 @@ export class Herdr {
     return this.rpc("workspace.close", { workspace_id: workspaceId }).pipe(Effect.asVoid);
   }
 
-  /** Reorders a tab within its workspace; 0 is first. No CLI for it in 0.8.2. */
+  /** Reorders a tab within its workspace; 0 is first. No CLI for it in 0.9.3. */
   tabMove(tabId: string, insertIndex: number): HerdrEffect<void> {
     return this.rpc("tab.move", { tab_id: tabId, insert_index: insertIndex }).pipe(Effect.asVoid);
   }
@@ -1332,7 +1332,7 @@ export class Herdr {
     });
   }
 
-  /** Filters the Agents sidebar to this run's panes. CLI has no equivalent in 0.8.2. */
+  /** Filters the Agents sidebar to this run's panes. CLI has no equivalent in 0.9.3. */
   agentViewSet(source: string, label: string, paneIds: string[]): HerdrEffect<void> {
     return this.rpc("agent.view.set", {
       source,

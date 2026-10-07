@@ -1,6 +1,7 @@
 // Claude Code's file tools for a path on a Machine, answered by its host (ADR-0011).
 
-import { Effect, Encoding, Result, Schema } from "effect";
+import { Effect, Result, Schema } from "effect";
+import * as Base64 from "effect/encoding/Base64";
 import { HostRefused } from "../../../src/board-model";
 import type { JsonObject } from "../../../src/schema";
 import { decodeStrict, jsonSchemaOf } from "../../../src/toolkit";
@@ -184,7 +185,7 @@ const read = Effect.fn("FileTools.read")(function* (
     const { bytes } = yield* readWhole(machine, path);
     const dimensions = imageSize(bytes);
     if (dimensions !== null && Math.max(dimensions.width, dimensions.height) <= LONG_EDGE)
-      return [{ type: "image", data: Encoding.encodeBase64(bytes), mimeType: mediaType }] as const;
+      return [{ type: "image", data: Base64.encode(bytes), mimeType: mediaType }] as const;
     return text(
       `${named} is ${mediaType}, ${size} bytes${dimensions === null ? "" : `, ${dimensions.width}×${dimensions.height}`}: not shown, as only an image of at most ${LONG_EDGE} px on its long edge can be.`,
     );

@@ -14,7 +14,7 @@ import {
   Stream,
 } from "effect";
 import type { BunServices } from "@effect/platform-bun/BunServices";
-import { Argument, Command, Flag } from "effect/unstable/cli";
+import { Argument, Command, Flag } from "effect/cli";
 import { clearOverride, err, type Failure } from "../operations";
 import { withDirLock } from "../lock";
 import { GIVEN, INFERRED, evidenceDir, runDir } from "../engine";

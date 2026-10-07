@@ -89,7 +89,7 @@ import { buildHistory, buildSettings, buildWorkflows } from "./views";
 import { nowIso } from "./time";
 import { repoArgs, shell } from "./mr";
 import { parseMrTarget } from "./board-model";
-import type { ChildProcessSpawner } from "effect/unstable/process";
+import type { ChildProcessSpawner } from "effect/process";
 import {
   agentForKey,
   askingRun,

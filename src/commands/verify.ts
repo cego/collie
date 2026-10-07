@@ -1,5 +1,5 @@
 import { Effect, Option, Stdio, Stream } from "effect";
-import { Argument, Command, Flag } from "effect/unstable/cli";
+import { Argument, Command, Flag } from "effect/cli";
 import type { PluginEnv } from "../env";
 import { err } from "../operations";
 import { runView, treeOf } from "../lifecycle";

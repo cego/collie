@@ -1,5 +1,5 @@
 import { Effect, Option, Schema } from "effect";
-import { Command, Flag } from "effect/unstable/cli";
+import { Command, Flag } from "effect/cli";
 import manifest from "../../herdr-plugin.toml";
 import { attempt, say } from "../envelope";
 import { onboard as onboardMachine, type OnboardEvent, type StepStatus } from "../onboard";

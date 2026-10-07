@@ -26,7 +26,7 @@ import {
   planReposOf,
 } from "collie";
 import { Effect, Schema } from "effect";
-import * as Activity from "effect/unstable/workflow/Activity";
+import * as Activity from "effect/workflow/Activity";
 import markdown from "./plan.md" with { type: "text" };
 
 const content = contentOf(markdown);

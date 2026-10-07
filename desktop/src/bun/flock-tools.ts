@@ -16,8 +16,8 @@ import {
   Schema,
   Stream,
 } from "effect";
-import * as Tool from "effect/unstable/ai/Tool";
-import * as Toolkit from "effect/unstable/ai/Toolkit";
+import * as Tool from "effect/ai/Tool";
+import * as Toolkit from "effect/ai/Toolkit";
 import {
   type Declaration,
   type FLOCK_READS,

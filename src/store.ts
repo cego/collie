@@ -12,10 +12,10 @@
 
 import { Context, Effect, Layer, Schema, Stream } from "effect";
 import * as SqliteMigrator from "@effect/sql-sqlite-bun/SqliteMigrator";
-import * as Migrator from "effect/unstable/sql/Migrator";
-import * as Reactivity from "effect/unstable/reactivity/Reactivity";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
-import * as SqlSchema from "effect/unstable/sql/SqlSchema";
+import * as Migrator from "effect/sql/Migrator";
+import * as Reactivity from "effect/reactivity/Reactivity";
+import * as SqlClient from "effect/sql/SqlClient";
+import * as SqlSchema from "effect/sql/SqlSchema";
 import { RequestConflict } from "./board-model";
 import { nowIso } from "./time";
 

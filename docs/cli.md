@@ -101,8 +101,9 @@ the same file, the same schemas and the same diagnostics.
 the SDK declarations, without starting a run, taking an agent or opening a worktree. It
 reports three different things and keeps them apart: `problem(s)` is what stops it running,
 `drawn without:` is a projection limit, and `ok, not typechecked` means no compiler was
-installed in that directory — never silence. It exits non-zero for problems, so it fits a
-pre-commit hook.
+installed in that directory — never silence. Where the `effect` installed there is not the
+host's, as after an upgrade, it provisions the toolchain again before typechecking. It
+exits non-zero for problems, so it fits a pre-commit hook.
 
 ## Write one
 

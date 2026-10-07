@@ -1,8 +1,8 @@
 // The files a Flock chat action carries, as paths on the Machine it goes to (ADR-0046).
 
-import { createHash } from "node:crypto";
-import { Clock, Effect, Encoding, FileSystem, Result } from "effect";
-import { ATTACHMENT_BYTES } from "../../../src/attachments";
+import { Clock, Effect, FileSystem, Result } from "effect";
+import * as Base64 from "effect/encoding/Base64";
+import { ATTACHMENT_BYTES, sha256Hex } from "../../../src/attachments";
 import {
   type BoardSnapshot,
   HostRefused,
@@ -28,9 +28,7 @@ export const readWhole = Effect.fn("Carried.readWhole")(function* (
     const part = yield* machine.door.readFile({ path, offset, length: PART_BYTES });
     first ??= part;
     if (part.size > most) return yield* tooLarge(`${machine.name}:${path}`);
-    const bytes = Encoding.decodeBase64(part.content).pipe(
-      Result.getOrElse(() => new Uint8Array()),
-    );
+    const bytes = Base64.decode(part.content).pipe(Result.getOrElse(() => new Uint8Array()));
     parts.push(bytes);
     offset += bytes.length;
     if (bytes.length === 0 || offset >= part.size || enough(bytes))
@@ -48,7 +46,7 @@ const uploaded = Effect.fn("Carried.upload")(function* (
   name: string,
   bytes: Uint8Array,
 ) {
-  const sha256 = createHash("sha256").update(bytes).digest("hex");
+  const sha256 = sha256Hex(bytes);
   const known = flock.uploaded.get(machine.name) ?? new Map();
   flock.uploaded.set(machine.name, known);
   const now = yield* Clock.currentTimeMillis;
@@ -61,7 +59,7 @@ const uploaded = Effect.fn("Carried.upload")(function* (
       size: bytes.length,
       sha256,
       offset,
-      content: Encoding.encodeBase64(part),
+      content: Base64.encode(part),
     });
     if (path !== null) {
       known.set(sha256, { path, at: now });

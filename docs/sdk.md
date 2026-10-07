@@ -15,7 +15,7 @@ is why.
 ```ts
 import { Host, Run, ask, defineWorkflow } from "collie";
 import { Effect, Schema } from "effect";
-import * as Activity from "effect/unstable/workflow/Activity";
+import * as Activity from "effect/workflow/Activity";
 
 export default defineWorkflow({
   id: "echo",
@@ -595,7 +595,9 @@ purpose: the file decides, and no lookup happens at all.
 - **`invocation` is the identity.** The child's Run id is your Run id and this name, so
   replaying your body asks for the child you already have rather than a second one, and a
   different name is a different child. Giving one invocation different input later is
-  refused, not run twice.
+  refused, not run twice. The child is reached under the execution it was admitted with,
+  so a Collie upgrade that derives executions differently resumes it rather than starting
+  it again.
 - **The child's schema decides.** Your input is decoded against the child before anything
   exists. A value it will not take is your workflow's failure, naming the field, with no
   child Run and nothing to clean up.
@@ -983,6 +985,10 @@ directory; nothing compiled it, and it says so rather than reading as fine.
 and `collie.d.ts` — into the directory, merging what it needs into a `package.json` or
 `tsconfig.json` you already have without replacing anything of yours, and installs the toolchain with the executable's own embedded Bun, so neither Bun nor Node has
 to be on the machine. The `effect` it pins is the one the host runs.
+
+Effect 4.0.0 moved the workflow modules from rc.117's `effect/unstable/workflow` to
+`effect/workflow`. A module still on the old path loads and runs until Collie 0.42.0, and
+`collie workflow check` reports the old path as a problem, which is how you hear of it.
 
 ## Effect stays yours
 

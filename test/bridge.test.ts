@@ -3,9 +3,9 @@
 
 import { expect, test } from "bun:test";
 import { Config, Effect, Layer, Option, Schema } from "effect";
-import * as RpcClient from "effect/unstable/rpc/RpcClient";
-import * as RpcSerialization from "effect/unstable/rpc/RpcSerialization";
-import * as Socket from "effect/unstable/socket/Socket";
+import * as RpcClient from "effect/rpc/RpcClient";
+import * as RpcSerialization from "effect/rpc/RpcSerialization";
+import * as Socket from "effect/socket/Socket";
 import { readAudit } from "../src/audit";
 import { BRIDGE_READY, FrontDoorRpcs } from "../src/board-model";
 import { runDir } from "../src/engine";

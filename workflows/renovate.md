@@ -111,7 +111,7 @@ Prove the batch branch deploys to stage without issue:
 - A failed deploy or a stage that misbehaves is handled **autonomously, in this order**:
   1. **Roll stage back** to the latest stable release first, so stage is never left broken
      while you debug: the newest tag whose `prod` deploy succeeded — `glab api
-projects/<id>/deployments?environment=<prod>&status=success&order_by=created_at&sort=desc&per_page=1`
+     projects/<id>/deployments?environment=<prod>&status=success&order_by=created_at&sort=desc&per_page=1`
      names its ref — and its pipeline's `stage` job, played or retried. Watch the rollback
      to success and say in your log what stage is running now.
   2. **Debug from the logs**: read the failed deploy's own pipeline job logs for the window

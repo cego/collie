@@ -2,8 +2,9 @@
 // said in a toast, in the host's own words when it said no.
 
 import { AtomRegistry, injectRegistry, useAtomSet } from "@effect/atom-vue";
-import { Cause, Effect, Encoding, Exit, Result, type Semaphore, Stream } from "effect";
-import type * as RpcClientError from "effect/unstable/rpc/RpcClientError";
+import { Cause, Effect, Exit, Result, type Semaphore, Stream } from "effect";
+import * as Base64 from "effect/encoding/Base64";
+import type * as RpcClientError from "effect/rpc/RpcClientError";
 import type {
   ActionFailed,
   DesktopAction,
@@ -108,9 +109,7 @@ export const useActions = () => {
         const part = yield* runFile({ installation, runId, ref, offset });
         if (part.encoding === "utf8" && offset === 0)
           return { _tag: "Text", text: part.content } as const;
-        const bytes = yield* Effect.fromResult(Encoding.decodeBase64(part.content)).pipe(
-          Effect.orDie,
-        );
+        const bytes = yield* Effect.fromResult(Base64.decode(part.content)).pipe(Effect.orDie);
         parts.push(bytes);
         offset += bytes.length;
         if (offset >= part.size || bytes.length === 0) return { _tag: "Bytes", parts } as const;

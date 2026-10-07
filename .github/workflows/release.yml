@@ -16,7 +16,7 @@ jobs:
       matrix:
         target: [linux-x64, linux-arm64, darwin-x64, darwin-arm64]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: "1.4"
@@ -31,7 +31,7 @@ jobs:
       # native build.
       - if: matrix.target == 'linux-x64'
         run: sh tools/smoke.sh ./collie-${{ matrix.target }}
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: collie-${{ matrix.target }}
           path: collie-${{ matrix.target }}
@@ -39,7 +39,7 @@ jobs:
   desktop:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: "1.4"
@@ -55,7 +55,7 @@ jobs:
       - run: |
           tar -xzf desktop/artifacts/linux-x64-collie-desktop-Setup.tar.gz -C "$RUNNER_TEMP" ./installer
           bun run tools/check-payload.ts "$RUNNER_TEMP/installer"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: collie-desktop
           path: desktop/artifacts/*
@@ -65,11 +65,11 @@ jobs:
     needs: [build, desktop]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           merge-multiple: true
       # Signed after the build matrix, in the one job that holds the secret.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           path: repo
       - uses: oven-sh/setup-bun@v2

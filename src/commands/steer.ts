@@ -7,7 +7,7 @@
 // reads through `collie tools` rather than paying for a model to be asked one here.
 
 import { Effect, Option } from "effect";
-import { Argument, Command, Flag } from "effect/unstable/cli";
+import { Argument, Command, Flag } from "effect/cli";
 import { err } from "../operations";
 import {
   confirmProposed,

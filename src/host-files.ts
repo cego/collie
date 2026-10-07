@@ -2,8 +2,9 @@
 // Grep, Write and Edit on a Machine it does not run on (ADR-0011, the Flock chat reaches
 // files). Paths are absolute on this Machine; nothing is written inside the host's state.
 
-import { Effect, Encoding, FileSystem, Option, Path, Schema, Stream } from "effect";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { Effect, FileSystem, Option, Path, Schema, Stream } from "effect";
+import * as Base64 from "effect/encoding/Base64";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { mediaTypeOf } from "./attachments";
 import { HostRefused, PART_BYTES, type HostFile } from "./board-model";
 
@@ -43,7 +44,7 @@ export const readPart = Effect.fn("HostFiles.read")(function* (
       const bytes = yield* handle.readAlloc(
         Math.min(Math.max(0, Math.min(length, PART_BYTES)), size - from),
       );
-      const content = Encoding.encodeBase64(Option.getOrElse(bytes, () => new Uint8Array()));
+      const content = Base64.encode(Option.getOrElse(bytes, () => new Uint8Array()));
       return { path, size, mediaType: mediaTypeOf(path), content } satisfies HostFile;
     }),
   ).pipe(

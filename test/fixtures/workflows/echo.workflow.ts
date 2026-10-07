@@ -4,7 +4,7 @@
 
 import { Host, Run, ask, defineWorkflow } from "collie";
 import { Context, Effect, Layer, Schema } from "effect";
-import * as Activity from "effect/unstable/workflow/Activity";
+import * as Activity from "effect/workflow/Activity";
 
 /** A service this module invented. Collie has no idea it exists, and needs none. */
 interface StampApi {

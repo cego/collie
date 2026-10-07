@@ -115,7 +115,7 @@ fi
 # this is an executable that runs unattended with your shell's privileges on every
 # install, upgrade and plugin build. `@latest` would run whatever was published this
 # morning. Bumping this line is a deliberate act, and a small visible diff.
-SKILLS_CLI="skills@1.5.23"
+SKILLS_CLI="skills@1.7.1"
 SKILL_SOURCES="https://github.com/mattpocock/skills/tree/main/skills/engineering
 https://github.com/mattpocock/skills/tree/main/skills/productivity
 https://github.com/addyosmani/agent-skills"

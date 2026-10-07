@@ -5,7 +5,7 @@
 // copy of itself. Typing it is still the way to watch a host in a terminal.
 
 import { Effect } from "effect";
-import { Command, Flag } from "effect/unstable/cli";
+import { Command, Flag } from "effect/cli";
 import { serve } from "../host";
 
 export const host = Command.make(

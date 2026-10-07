@@ -13,7 +13,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import type { BunServices } from "@effect/platform-bun";
 import { Duration, Effect, FileSystem, Layer, Schema } from "effect";
 import { TestClock } from "effect/testing";
-import * as WorkflowEngine from "effect/unstable/workflow/WorkflowEngine";
+import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
 import { Rig, FakeHerdr, type Call } from "./support/recorder";
 import { fastForward, runEffect as runLive } from "./support/effect";
 import { onMachineWith } from "./support/live";

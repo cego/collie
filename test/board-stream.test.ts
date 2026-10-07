@@ -116,6 +116,23 @@ test(
           expect(cards.map(({ id, name, sentence }) => ({ id, name, sentence }))).toEqual(
             again!.tasks.map(({ id, name, sentence }) => ({ id, name, sentence })),
           );
+
+          // Every subscriber has left; one that reconnects is still told what changes.
+          const retitled = (message: BoardMessage) =>
+            message._tag === "Upsert" && message.task.name === "Retitled";
+          const back = yield* (yield* frontDoor(world.state).pipe(Effect.orDie)).board().pipe(
+            Stream.tap((message) =>
+              message._tag === "Snapshot"
+                ? writeTask(world.state, { ...record!, label: "project | Retitled" }).pipe(
+                    Effect.orDie,
+                  )
+                : Effect.void,
+            ),
+            Stream.filter(retitled),
+            Stream.runHead,
+            Effect.forkScoped,
+          );
+          expect((yield* Fiber.join(back).pipe(Effect.timeout("20 seconds")))._tag).toBe("Some");
           yield* stopHost(world.state);
         }),
       ["plain.workflow.ts"],

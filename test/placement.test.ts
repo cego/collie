@@ -11,7 +11,7 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import type { BunServices } from "@effect/platform-bun";
 import { Clock, Effect, FileSystem, Layer, Result, Schema } from "effect";
-import * as WorkflowEngine from "effect/unstable/workflow/WorkflowEngine";
+import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
 import { Rig, FakeHerdr } from "./support/recorder";
 import { exec } from "./support/command";
 import { fastForward, runEffect as runLive } from "./support/effect";
@@ -28,8 +28,8 @@ import {
   type HostServices,
 } from "../src/engine";
 import { Store } from "../src/store";
-import type * as MessageStorage from "effect/unstable/cluster/MessageStorage";
-import { SqlClient } from "effect/unstable/sql";
+import type * as MessageStorage from "effect/cluster/MessageStorage";
+import { SqlClient } from "effect/sql";
 import { VerifySpecSchema } from "../src/verify-spec";
 import { readTask, writeTask, type TaskRecord } from "../src/task";
 import type { Call } from "./support/recorder";

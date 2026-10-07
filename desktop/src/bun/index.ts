@@ -24,7 +24,7 @@ import {
   Stream,
   SubscriptionRef,
 } from "effect";
-import * as RpcServer from "effect/unstable/rpc/RpcServer";
+import * as RpcServer from "effect/rpc/RpcServer";
 import Electrobun, { BrowserView, BrowserWindow, type RPCSchema, Utils } from "electrobun/bun";
 import {
   type Channel,

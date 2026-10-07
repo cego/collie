@@ -1,5 +1,5 @@
 import { Effect, Option } from "effect";
-import { Command, Flag } from "effect/unstable/cli";
+import { Command, Flag } from "effect/cli";
 import { upgrade as upgradeInstallation } from "../operations";
 import { attempt } from "../envelope";
 import { context, root } from "./shared";

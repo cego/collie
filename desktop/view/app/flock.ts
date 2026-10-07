@@ -3,7 +3,7 @@
 
 import { Atom, AtomRpc } from "@effect/atom-vue";
 import { Effect, Layer, Schema, Stream } from "effect";
-import * as RpcClient from "effect/unstable/rpc/RpcClient";
+import * as RpcClient from "effect/rpc/RpcClient";
 import { Electroview, type RPCSchema } from "electrobun/view";
 import {
   type Channel,

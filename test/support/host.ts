@@ -7,7 +7,7 @@
 // and against the sources otherwise.
 
 import { Config, Effect, FileSystem, Option, Schedule, Schema } from "effect";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import type { CrashPoint } from "../../src/engine";
 import { connect, ownerOf, type HostClient } from "../../src/host";
 import { collie, type World } from "./world";
@@ -500,6 +500,7 @@ export const workspace = Effect.fn("HostTest.workspace")(function* (prefix: stri
   for (const name of [
     "proof.workflow.ts",
     "plain.workflow.ts",
+    "paths.workflow.ts",
     "broken.workflow.ts",
     "echo.workflow.ts",
     "unwired.workflow.ts",

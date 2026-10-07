@@ -68,7 +68,7 @@ for the full herdr UI.
   but it is at 0.4.0 with `next` builds. Its better parser does not matter here, for the
   same reason as above. Because the API is the same, it can be swapped in later.
 - **The external terminal over Desktop's master** (`ssh -S <control> -t <target> herdr
---session <name>`). This is a small diff that ends the extra SSO. But the pane is still
+  --session <name>`). This is a small diff that ends the extra SSO. But the pane is still
   in a separate window, and the herdr UI runs on the Machine instead of the PC. The
   terminal also dies when Desktop quits, because the master has `ControlPersist=no`, and
   the command the card offers to copy would contain a temporary socket path.

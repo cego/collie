@@ -2,9 +2,10 @@
 // parts, kept once by sha256 under Desktop's state directory, and read back by id for the
 // model, a thumbnail or a Run (ADR-0046).
 
-import { createHash } from "node:crypto";
-import { Clock, Effect, Encoding, FileSystem, Option, Path, Result, Schema } from "effect";
+import { Clock, Effect, FileSystem, Option, Path, Result, Schema } from "effect";
+import * as Base64 from "effect/encoding/Base64";
 import { PART_BYTES } from "../../../src/board-model";
+import { sha256Hex } from "../../../src/attachments";
 import { capRefusal, type Staged } from "../shared/attachments";
 
 export class AttachmentRefused extends Schema.TaggedError<AttachmentRefused>()(
@@ -82,7 +83,7 @@ const keep = Effect.fn("Attachments.keep")(function* (
   mediaType: string,
 ) {
   const fs = yield* FileSystem.FileSystem;
-  const id = `${createHash("sha256").update(bytes).digest("hex")}/${name}`;
+  const id = `${sha256Hex(bytes)}/${name}`;
   const kept = `${storeOf(dir)}/${id}`;
   yield* fs.makeDirectory(kept.slice(0, kept.lastIndexOf("/")), { recursive: true });
   yield* fs.writeFile(kept, bytes);
@@ -134,7 +135,7 @@ export const stageAttachment = Effect.fn("Attachments.stage")(function* (
     return yield* refused(`${part.scaledOf} is not an attachment`);
   const why = capRefusal([], part);
   if (why !== null) return yield* refused(why);
-  const decoded = Encoding.decodeBase64(part.content);
+  const decoded = Base64.decode(part.content);
   if (Result.isFailure(decoded)) return yield* refused(`a part of ${part.name} is not base64`);
   const bytes = decoded.success;
   const partial = `${storeOf(dir)}/.partial/${part.key}`;
@@ -177,7 +178,7 @@ export const readAttachment = Effect.fn("Attachments.read")(function* (
       yield* handle.seek(BigInt(offset), "start");
       const bytes = yield* handle.readAlloc(Math.max(0, Math.min(PART_BYTES, held.size - offset)));
       return {
-        content: Encoding.encodeBase64(Option.getOrElse(bytes, () => new Uint8Array())),
+        content: Base64.encode(Option.getOrElse(bytes, () => new Uint8Array())),
         size: held.size,
       };
     }),

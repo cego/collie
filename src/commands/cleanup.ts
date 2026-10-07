@@ -2,7 +2,7 @@
 // (ADR-0045). No confirmation: the host does the same on its own every ten minutes.
 
 import { Effect } from "effect";
-import { Command, Flag } from "effect/unstable/cli";
+import { Command, Flag } from "effect/cli";
 import { cleanupLines } from "../cleanup";
 import { mutation } from "../envelope";
 import { cleanupListing, sweepNow } from "../lifecycle";

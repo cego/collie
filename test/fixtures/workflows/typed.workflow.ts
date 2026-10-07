@@ -6,7 +6,7 @@
 
 import { defineWorkflow } from "collie";
 import { Effect, Schema } from "effect";
-import * as Activity from "effect/unstable/workflow/Activity";
+import * as Activity from "effect/workflow/Activity";
 
 /** What the workflow was handed, as the type of each value rather than its text. */
 const shape = (given: {
