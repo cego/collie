@@ -73,7 +73,7 @@ export const bridgeCommand = (
 ) => [...collie, "bridge", "--as", as, "--client", client];
 
 /** The last of what a process has said on a stream so far, each chunk passed on as it comes. */
-const stderrTail = Effect.fnUntraced(function* (
+export const stderrTail = Effect.fnUntraced(function* (
   from: ReadableStream<Uint8Array>,
   echo: (chunk: Uint8Array) => void = () => {},
 ) {

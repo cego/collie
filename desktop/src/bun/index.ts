@@ -38,6 +38,7 @@ import {
   applyItem,
   type Credentials,
   DesktopRpcs,
+  type DesktopSettingsChange,
   EMPTY_FLOCK,
   type FlockItem,
   type KnownMachine,
@@ -45,6 +46,7 @@ import {
   type OnboardRun,
   type OnboardStep,
   Skippable,
+  type TerminalCommand,
 } from "../shared/flock";
 import { RELEASE_PUBLIC_KEY } from "../../../src/signing";
 import { appWindowFor } from "./browser";
@@ -76,7 +78,7 @@ import {
   removeFromHerdr,
   type RouteChange,
 } from "./machine";
-import { attachCommand, inTerminal, launched, shellLine } from "./terminal";
+import { attachCommand, inTerminal, launched, openTerminal, shellLine } from "./terminal";
 import { addToHerdr, doctorOn, NOT_STARTED, onboardThrough, RELEASES, tracked } from "./onboarding";
 import {
   claudeLoginThrough,
@@ -473,6 +475,20 @@ const main = Effect.gen(function* () {
       yield* Fiber.join(yield* onboardAs(job, route, run));
     });
 
+  /** Desktop's own settings, one change at a time, as Settings and the Flock chat make them. */
+  const settingsWrite = Semaphore.makeUnsafe(1);
+  const saveSettings = (changed: DesktopSettingsChange) =>
+    Effect.suspend(() => {
+      const merged = { ...settings, ...changed };
+      return writeSettings(own, merged).pipe(
+        Effect.andThen(
+          Effect.sync(() => {
+            settings = merged;
+          }),
+        ),
+      );
+    }).pipe(settingsWrite.withPermits(1), Effect.orDie);
+
   // The Flock as the board was last sent it, so the chat names its Machines as the cards do.
   let shown = EMPTY_FLOCK;
   // Opened by the view's first ask, in Desktop's own scope; its session starts with the first message.
@@ -481,11 +497,15 @@ const main = Effect.gen(function* () {
     dir: own,
     conversation: `flock@${local}`,
     proactive: () => settings.proactive,
+    machineRule: () => settings.machineRule,
+    setMachineRule: (machineRule) =>
+      saveSettings({ machineRule }).pipe(Effect.provide(BunServices.layer)),
     machines: () => {
       const named = nameAsShown(shown);
       return [...doors].map(([installation, held]) => ({
         name: named({ ...held.machine, installation }),
         door: chatDoor(held.chat),
+        local: held.machine.profile === "local",
       }));
     },
   }).pipe(Scope.provide(scope), Effect.result, Effect.cached);
@@ -494,6 +514,13 @@ const main = Effect.gen(function* () {
     chat.pipe(
       Effect.flatMap(Result.match({ onSuccess: use, onFailure: () => Effect.succeed(unstarted) })),
     );
+  /** The terminal open in the window, and what ends it. */
+  let shownTerminal:
+    | {
+        readonly send: (command: TerminalCommand) => Effect.Effect<void>;
+        readonly ended: Deferred.Deferred<void>;
+      }
+    | undefined;
   let popped:
     | { readonly window: BrowserWindow; readonly closed: Deferred.Deferred<void> }
     | undefined;
@@ -711,6 +738,34 @@ const main = Effect.gen(function* () {
         const opened = terminal !== null && (yield* launched(terminal));
         return { at, command: shellLine(attach), opened };
       }),
+    terminal: ({ installation, runId, cols, rows }) =>
+      Stream.unwrap(
+        Effect.gen(function* () {
+          const door = yield* doorTo(doors, installation);
+          const route = routes.get(door.machine.profile)?.route;
+          if (route === undefined)
+            return yield* new ActionFailed({ reason: "that Machine is not connected" });
+          const request = yield* uuid;
+          const opened = yield* openTerminal(
+            focusOn(door.desktop, request, runId),
+            route,
+            cols,
+            rows,
+          );
+          // One at a time: a newer terminal ends this one.
+          if (shownTerminal !== undefined) Deferred.doneUnsafe(shownTerminal.ended, Effect.void);
+          const mine = { send: opened.send, ended: Deferred.makeUnsafe<void>() };
+          shownTerminal = mine;
+          yield* Effect.addFinalizer(() =>
+            Effect.sync(() => shownTerminal === mine && (shownTerminal = undefined)),
+          );
+          return opened.events.pipe(Stream.interruptWhen(Deferred.await(mine.ended)));
+        }),
+      ),
+    terminalSend: ({ command }) =>
+      shownTerminal === undefined
+        ? Effect.fail(new ActionFailed({ reason: "no terminal is open" }))
+        : shownTerminal.send(command),
     openLink: ({ url }) =>
       appWindowFor(url).pipe(
         Effect.flatMap(Effect.fromNullishOr),
@@ -782,17 +837,7 @@ const main = Effect.gen(function* () {
     desktopTurns: () =>
       Stream.unwrap(withChat((opened) => Effect.succeed(opened.desktopTurns), Stream.empty)),
     settings: () => Effect.sync(() => settings),
-    setSettings: (changed) => {
-      const merged = { ...settings, ...changed };
-      return writeSettings(own, merged).pipe(
-        Effect.andThen(
-          Effect.sync(() => {
-            settings = merged;
-          }),
-        ),
-        Effect.orDie,
-      );
-    },
+    setSettings: saveSettings,
   });
   const servedOn = (channel: Channel<ToView, ToMain>) =>
     RpcServer.layer(DesktopRpcs).pipe(
