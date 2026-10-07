@@ -9,10 +9,14 @@ export function runEffect<A, E>(effect: Effect.Effect<A, E, BunServices.BunServi
 }
 
 /**
- * The process a host a test starts may live no longer than, as the test preload set it:
- * handed to every program a test runs with an environment of its own.
+ * The process a host a test starts may live no longer than, and the marker proving a process
+ * is the test's, as the test preload set them: handed to every program a test runs with an
+ * environment of its own.
  */
-export const watchedBy = Config.String("COLLIE_HOST_WATCH_PID").pipe(Config.withDefault(""));
+export const suiteEnv = Config.all({
+  COLLIE_HOST_WATCH_PID: Config.String("COLLIE_HOST_WATCH_PID").pipe(Config.withDefault("")),
+  COLLIE_TEST_ROOT: Config.String("COLLIE_TEST_ROOT").pipe(Config.withDefault("")),
+});
 
 /**
  * Runs `effect` on a test clock that a fiber of its own keeps moving, `tick` of it for

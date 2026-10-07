@@ -17,7 +17,7 @@ import {
 } from "../src/disposition";
 import type { Disposition } from "../src/board-model";
 import { hosted, settledRun } from "./support/hosted";
-import { runEffect, watchedBy } from "./support/effect";
+import { runEffect, suiteEnv } from "./support/effect";
 
 const root = new URL("../", import.meta.url).pathname;
 const join = (...parts: string[]) => parts.join("/").replace(/\/+/g, "/");
@@ -33,7 +33,7 @@ const parseEnvelope = Schema.decodeUnknownEffect(Envelope);
 
 /** The CLI as a person runs it, against a state directory that survives between calls. */
 const cli = Effect.fn("test.cli")(function* (args: string[], env: Record<string, string>) {
-  const watch = yield* watchedBy;
+  const suite = yield* suiteEnv;
   const binary = yield* Config.option(Config.String("COLLIE_TEST_BINARY"));
   const command = Option.isSome(binary)
     ? [binary.value]
@@ -43,7 +43,7 @@ const cli = Effect.fn("test.cli")(function* (args: string[], env: Record<string,
     env: {
       HERDR_PLUGIN_ROOT: root,
       PWD: root,
-      COLLIE_HOST_WATCH_PID: watch,
+      ...suite,
       ...env,
     },
     stdout: "pipe",

@@ -7,14 +7,20 @@
 // `COLLIE_TEST_BINARY` and `COLLIE_TEST_FAKE_HERDR` naming them. `bun test <file>` on its
 // own still runs the sources, which is the quicker loop for one file.
 //
+// A suite that was killed left its files' roots, and maybe processes carrying their marker:
+// those whose pid is dead are removed before this one starts.
+//
 // Workers: one for each core nothing else is using, so a suite on an idle machine uses all
 // of it and several Runs each running this suite share what is left. Never fewer than
 // four, which is what an idle machine used to get; a test's timeout is a hang's, not a
 // busy machine's, so a slower worker is never a failing one.
 
-import { availableParallelism, loadavg } from "node:os";
+import { availableParallelism, loadavg, tmpdir } from "node:os";
 import { resolve } from "node:path";
 import solidPlugin from "@opentui/solid/bun-plugin";
+import { sweepDeadRoots } from "../test/support/sweep";
+
+sweepDeadRoots(tmpdir());
 
 const out = resolve(".scratch/test-bin");
 const collie = `${out}/collie`;

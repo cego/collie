@@ -12,7 +12,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { connect, ownerOf } from "../src/host";
 import { signalProcess } from "../src/lock";
 import { exec } from "./support/command";
-import { runEffect } from "./support/effect";
+import { runEffect, suiteEnv } from "./support/effect";
 import { stopHost, until } from "./support/host";
 
 const root = new URL("../", import.meta.url).pathname;
@@ -391,6 +391,8 @@ test(
         // reaches, where a test process that exits is reaped by whoever started it.
         const detached = yield* exec(["sh", "-c", "sleep 60 >/dev/null 2>&1 & echo $!"]);
         const outlived = Number(detached.stdout.trim());
+        const suite = yield* suiteEnv;
+        yield* Effect.addFinalizer(() => signalProcess(outlived, "SIGKILL"));
         const hostFor = (state: string, watch: string) =>
           spawner.spawn(
             ChildProcess.make(executable, [...prefix, "host", "--dir", state], {
@@ -399,6 +401,7 @@ test(
                 PATH: "/usr/bin:/bin",
                 HERDR_PLUGIN_ROOT: root,
                 COLLIE_HOST_WATCH_PID: watch,
+                COLLIE_TEST_ROOT: suite.COLLIE_TEST_ROOT,
               },
               extendEnv: false,
               stdout: "ignore",

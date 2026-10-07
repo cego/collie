@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { Config, Effect, FileSystem, Option, Schema } from "effect";
 import { exec } from "./support/command";
-import { runEffect, watchedBy } from "./support/effect";
+import { runEffect, suiteEnv } from "./support/effect";
 import { installFakeSkills } from "./support/defs";
 import { readIntent, seedIntent, writeIntent } from "../src/intent";
 import { appendMetric } from "../src/metrics";
@@ -32,7 +32,7 @@ const cli = Effect.fn("test.cli")(function* (
   extraEnv: Record<string, string> = {},
 ) {
   const fs = yield* FileSystem.FileSystem;
-  const watch = yield* watchedBy;
+  const suite = yield* suiteEnv;
   const dir = yield* fs.makeTempDirectory({ prefix: "collie-cli-" });
   yield* fs.makeDirectory(join(dir, "config"), { recursive: true });
   yield* installFakeSkills(dir);
@@ -48,7 +48,7 @@ const cli = Effect.fn("test.cli")(function* (
       HERDR_PLUGIN_STATE_DIR: join(dir, "state"),
       HOME: dir,
       PWD: root,
-      COLLIE_HOST_WATCH_PID: watch,
+      ...suite,
       ...extraEnv,
     },
     stdout: "pipe",
