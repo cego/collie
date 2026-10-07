@@ -436,8 +436,24 @@ test("a removed Machine leaves the board, its routes and what onboarding left of
   ];
   const before = items.reduce(applyItem, EMPTY_FLOCK);
   expect(machineRows(before)).toEqual([
-    { profile: "local", name: "pc", target: null, state: "connecting", onboarded: null },
-    { profile: "p-vm", name: "vm", target: "mk@vm", state: "live", onboarded: run },
+    {
+      profile: "local",
+      name: "pc",
+      target: null,
+      state: "connecting",
+      onboarded: null,
+      build: null,
+      development: null,
+    },
+    {
+      profile: "p-vm",
+      name: "vm",
+      target: "mk@vm",
+      state: "live",
+      onboarded: run,
+      build: "0.31.0",
+      development: null,
+    },
   ]);
   const after = applyItem(before, { _tag: "Removed", machine });
   expect(after.machines.size).toBe(0);

@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { type OnboardRun, SETTLED } from "../../../src/shared/flock";
+import { type MachineRow, type OnboardRun, SETTLED } from "../../../src/shared/flock";
+import { type InSync, NOT_LIVE_SAID } from "../../../src/shared/in-sync";
 
 const open = defineModel<boolean>("open", { required: true });
-const { rows } = useFlock();
+const { machines, summary } = useInSync();
 const { addMachine, removeMachine } = useActions();
 const { job, onboardOn, loginOn } = useOnboarding();
 
@@ -11,13 +12,22 @@ const label = ref("");
 const session = ref("default");
 
 const STATE = {
+  "in-sync": { label: "In sync", color: "success" },
+  behind: { label: "Behind", color: "warning" },
   live: { label: "Live", color: "success" },
   connecting: { label: "Connecting", color: "neutral" },
-  unreachable: { label: "Out of reach", color: "warning" },
-  sso: { label: "Waiting for SSO", color: "warning" },
-  "no-collie": { label: "Collie isn't installed", color: "warning" },
-  "update-desktop": { label: "Update Desktop", color: "warning" },
+  unreachable: { label: NOT_LIVE_SAID.unreachable, color: "warning" },
+  sso: { label: NOT_LIVE_SAID.sso, color: "warning" },
+  "no-collie": { label: NOT_LIVE_SAID["no-collie"], color: "warning" },
+  "update-desktop": { label: NOT_LIVE_SAID["update-desktop"], color: "warning" },
 } as const;
+const stateOf = (row: MachineRow, verdict: InSync | null) => STATE[verdict?.state ?? row.state];
+const buildOf = ({ build, development }: MachineRow) =>
+  development !== null
+    ? `development build ${development}`
+    : build !== null
+      ? `Collie ${build}`
+      : "Build not known yet";
 
 const missing = (run: OnboardRun) => run.steps.filter(({ status }) => !SETTLED.includes(status));
 const add = async () => {
@@ -32,6 +42,14 @@ const add = async () => {
   <USlideover v-model:open="open" title="Machines">
     <template #body>
       <div class="flex flex-col gap-6">
+        <p
+          v-if="summary !== null"
+          class="text-sm font-medium"
+          :class="summary.count === 0 ? 'text-success' : 'text-warning'"
+          data-testid="in-sync"
+        >
+          {{ summary.said }}
+        </p>
         <form class="flex flex-col gap-2" data-testid="add-form" @submit.prevent="add">
           <UFormField label="SSH target" help="As ssh reaches it, such as mk@vm-mk.example">
             <UInput v-model="target" class="w-full" data-testid="add-target" />
@@ -54,7 +72,7 @@ const add = async () => {
           />
         </form>
         <section
-          v-for="row in rows"
+          v-for="{ row, verdict } in machines"
           :key="row.profile"
           :data-testid="`machine-${row.name}`"
           class="flex flex-col gap-2 border-t border-default pt-4"
@@ -66,10 +84,19 @@ const add = async () => {
               class="ml-auto"
               variant="subtle"
               data-testid="state"
-              :color="STATE[row.state].color"
-              :label="STATE[row.state].label"
+              :color="stateOf(row, verdict).color"
+              :label="stateOf(row, verdict).label"
             />
           </div>
+          <p class="text-sm text-muted" data-testid="build">{{ buildOf(row) }}</p>
+          <p
+            v-for="lag in verdict?.behind.filter(({ part }) => part !== 'onboarding') ?? []"
+            :key="lag.part"
+            class="text-sm text-warning"
+            :data-testid="`behind-${lag.part}`"
+          >
+            {{ lag.said }}
+          </p>
           <p
             v-if="row.onboarded?.ready === true"
             class="text-sm text-success"
@@ -78,7 +105,7 @@ const add = async () => {
             Onboarded
           </p>
           <template v-else-if="row.onboarded?.ready === false">
-            <p class="text-sm text-warning">Not onboarded yet:</p>
+            <p class="text-sm text-warning" data-testid="behind-onboarding">Not onboarded yet:</p>
             <OnboardSteps
               data-testid="missing"
               :steps="missing(row.onboarded)"

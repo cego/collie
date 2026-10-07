@@ -21,9 +21,12 @@ import {
   flockCards,
   flockOf,
   type Machine,
+  machineRows,
+  type MachineRow,
   nameAsShown,
   type MachineMessage,
 } from "../desktop/src/shared/flock";
+import { flockInSync, inSync } from "../desktop/src/shared/in-sync";
 import { task } from "./support/task";
 
 const asJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
@@ -319,4 +322,120 @@ test("a Machine without Collie is known by its herdr profile until its host name
   });
   expect([...merged.lost]).toEqual([]);
   expect([...merged.machines.keys()]).toEqual(["inst-pc"]);
+});
+
+const built = (machine: Machine, build: string, development?: string): FlockItem => {
+  const { message } = snapshot(machine, []);
+  return {
+    machine,
+    message: { ...message, build, ...(development === undefined ? {} : { development }) },
+  } as FlockItem;
+};
+const routed = (machine: Machine): FlockItem => ({
+  _tag: "Routed",
+  machine: { profile: machine.profile, name: machine.name, target: machine.target },
+});
+
+test("a Machine's build is kept from its Snapshot, and a saved board's stands in until it is live", () => {
+  const saved: FlockItem = {
+    _tag: "Saved",
+    machine: vm,
+    herds: [],
+    tasks: [],
+    build: "0.34.0",
+    development: null,
+    at: 7,
+  };
+  const rowOf = (items: ReadonlyArray<FlockItem>) =>
+    machineRows(items.reduce(applyItem, EMPTY_FLOCK)).find(({ profile }) => profile === vm.profile);
+  expect(rowOf([routed(vm)])).toMatchObject({ build: null, development: null });
+  expect(rowOf([routed(vm), saved])).toMatchObject({ build: "0.34.0", development: null });
+  expect(rowOf([routed(vm), saved, built(vm, "0.35.0+abc1234", "0.35.0+abc1234")])).toMatchObject({
+    state: "live",
+    build: "0.35.0+abc1234",
+    development: "0.35.0+abc1234",
+  });
+});
+
+const row = (over: Partial<MachineRow> = {}): MachineRow => ({
+  profile: "p-vm",
+  name: "vm-mk",
+  target: "mk@vm-mk",
+  state: "live",
+  onboarded: null,
+  build: "0.35.0",
+  development: null,
+  ...over,
+});
+const doctored = (ready: boolean) => ({
+  steps: ready
+    ? []
+    : [{ step: "helle", title: "Helle", status: "failed" as const, command: "collie onboard" }],
+  asked: null,
+  ready,
+  reason: null,
+  at: 1,
+});
+const DESKTOP = { version: "0.35.0" };
+
+test("a live Machine on Desktop's release, doctored onboarded, is in sync", () => {
+  expect(inSync(row({ onboarded: doctored(true) }), DESKTOP)).toEqual({
+    state: "in-sync",
+    behind: [],
+  });
+});
+
+test("an older release is behind on its version, saying both", () => {
+  expect(inSync(row({ build: "0.34.0" }), DESKTOP)).toEqual({
+    state: "behind",
+    behind: [{ part: "version", said: "Runs Collie 0.34.0; Desktop is 0.35.0", steps: [] }],
+  });
+  expect(inSync(row({ build: "0.9.0" }), { version: "0.10.0" }).state).toBe("behind");
+  expect(inSync(row({ build: "0.36.0" }), DESKTOP).state).toBe("in-sync");
+});
+
+test("a development checkout, or a Desktop that isn't a release, is never behind on its version", () => {
+  expect(
+    inSync(row({ build: "0.34.0+abc1234", development: "0.34.0+abc1234" }), DESKTOP).state,
+  ).toBe("in-sync");
+  expect(inSync(row({ build: "0.34.0" }), { version: "0.35.0+def5678" }).state).toBe("in-sync");
+});
+
+test("a Machine doctor doesn't find onboarded is behind on onboarding, with its steps; one not yet doctored isn't", () => {
+  const verdict = inSync(row({ onboarded: doctored(false) }), DESKTOP);
+  expect(verdict.state).toBe("behind");
+  expect(verdict.behind).toEqual([
+    expect.objectContaining({ part: "onboarding", steps: doctored(false).steps }),
+  ]);
+  expect(inSync(row({ onboarded: null }), DESKTOP).state).toBe("in-sync");
+});
+
+test("a Machine not live is its state, and one connecting has no verdict", () => {
+  for (const state of ["unreachable", "sso", "no-collie", "update-desktop"] as const)
+    expect(inSync(row({ state, build: "0.30.0" }), DESKTOP)).toEqual({ state, behind: [] });
+  expect(inSync(row({ state: "connecting" }), DESKTOP)).toEqual({
+    state: "connecting",
+    behind: [],
+  });
+});
+
+test("the Flock's summary names Desktop's version, or each Machine that lags and how", () => {
+  const level = flockInSync(
+    [row({ name: "mk-pc" }), row({ state: "connecting", name: "vm-b" })],
+    DESKTOP,
+  );
+  expect(level).toEqual({ said: "Every Machine is in sync with Desktop 0.35.0", count: 0 });
+  const mixed = flockInSync(
+    [
+      row({ name: "mk-pc" }),
+      row({ build: "0.34.0", onboarded: doctored(false) }),
+      row({ name: "vm-c", state: "unreachable" }),
+      row({ name: "vm-d", state: "connecting" }),
+    ],
+    DESKTOP,
+  );
+  expect(mixed).toEqual({
+    said: "Not in sync with Desktop 0.35.0: vm-mk is behind on version and onboarding; vm-c is out of reach",
+    count: 2,
+  });
 });

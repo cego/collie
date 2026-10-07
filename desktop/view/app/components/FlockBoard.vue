@@ -5,19 +5,9 @@ import type { NotLive } from "../../../src/shared/flock";
 import { updatesAtom } from "../flock";
 import tile from "../../../../assets/brand/logos/collie-tile-256.png";
 
-const {
-  connecting,
-  failure,
-  lost,
-  machines,
-  developments,
-  notices,
-  tasks,
-  sections,
-  header,
-  waiting,
-  placedBy,
-} = useFlock();
+const { connecting, failure, lost, machines, notices, tasks, sections, header, waiting, placedBy } =
+  useFlock();
+const { summary } = useInSync();
 const starting = ref(false);
 const listing = ref(false);
 const setting = ref(false);
@@ -100,10 +90,19 @@ watch(update, (now) => {
           color="neutral"
           variant="outline"
           icon="i-lucide-server"
-          label="Machines"
           data-testid="machines"
           @click="listing = true"
-        />
+        >
+          Machines
+          <UBadge
+            v-if="(summary?.count ?? 0) > 0"
+            size="sm"
+            color="warning"
+            :label="String(summary?.count)"
+            :aria-label="`${summary?.count} not in sync`"
+            data-testid="machines-behind"
+          />
+        </UButton>
         <MachinesPanel v-model:open="listing" />
         <UButton
           color="neutral"
@@ -165,16 +164,6 @@ watch(update, (now) => {
             :actions="
               state === 'no-collie' ? [{ label: 'Onboard', onClick: () => onboardOn(profile) }] : []
             "
-          />
-          <UAlert
-            v-for="{ name, development } in developments"
-            :key="name"
-            :data-testid="`development-${name}`"
-            color="neutral"
-            variant="subtle"
-            icon="i-lucide-flask-conical"
-            :title="name"
-            :description="`development build ${development}`"
           />
           <p v-if="tasks.length === 0" class="text-muted">Nothing on the board yet.</p>
           <template v-for="[section, label] in SECTIONS" :key="section">

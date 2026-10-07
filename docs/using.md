@@ -899,8 +899,8 @@ Machine at most once each time it connects. One whose upgrade failed says why in
 is shown as it is, and is asked again the next time it connects, so a Machine out of reach
 at launch follows Desktop once it is back. One that upgraded but did not move is shown as
 it is. A Machine on a development checkout (a non-release branch or tag,
-uncommitted changes, or commits its remote lacks) is never upgraded. It is named above the
-board with its build, "development build <version>+<sha>". Desktop reads any host inside
+uncommitted changes, or commits its remote lacks) is never upgraded. **Machines** shows its
+build as "development build <version>+<sha>", and never counts it behind on its version. Desktop reads any host inside
 the protocol window ([ADR-0038](adr/0038-the-host-builds-and-serves-the-board.md) D5): its
 own protocol version and the one after it. A host whose board is newer than that, or one a
 newer collie serves that Desktop cannot decode, is not shown, and its row says **Update
@@ -949,6 +949,19 @@ how it stands, and is where Machines join the Flock. Each joins the same way:
   machine, so its list stays the only one, and Desktop then onboards it.
 - **Onboard** on a Machine herdr already has, or on this computer, onboards it there and
   then. It is the same button on a Machine whose Collie isn't installed.
+
+Machines opens with one line saying whether the whole Flock is **In sync** with Desktop
+("Every Machine is in sync with Desktop 0.35.0"), or naming each Machine that isn't and what
+it lags on. Each Machine's row shows the Collie it runs — "Collie 0.35.0", "development build
+0.35.0+abc1234", or "Build not known yet" for one never seen live — and one state: **In
+sync**, **Behind**, **Connecting**, or why it isn't live (**Out of reach**, **Waiting for
+SSO**, **Collie isn't installed**, **Update Desktop**). A live Machine is behind on its
+version when it runs a release older than Desktop's, which the row says with both versions;
+never on a development checkout, and never while Desktop itself isn't a release. It is
+behind on onboarding when `collie doctor` doesn't find it onboarded, and the row lists the
+missing steps with their fixes. A part not known yet, such as doctor not having answered, is
+not counted. The header's **Machines** button shows how many Machines aren't in sync, those
+still connecting left out.
 
 Onboarding downloads the runner of Desktop's own version for that Machine from the GitHub
 release, with its `.sig`, and verifies it against Collie's release key before it goes

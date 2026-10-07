@@ -58,6 +58,7 @@ export const MachineSaved = Schema.TaggedStruct("Saved", {
   machine: Machine,
   herds: Schema.Array(Herd),
   tasks: Schema.Array(TaskView),
+  build: Schema.optionalKey(Schema.NullOr(Schema.String)),
   development: Schema.optionalKey(Schema.NullOr(Schema.String)),
   at: Schema.Number,
 });
@@ -405,6 +406,8 @@ export interface FlockMachine {
   readonly herds: ReadonlyArray<Herd>;
   readonly tasks: ReadonlyMap<string, TaskView>;
   readonly asOf: number | null;
+  /** The Collie it runs; null where a saved board did not say. */
+  readonly build: string | null;
   /** `<version>+<sha>` where the Machine runs a development checkout. */
   readonly development: string | null;
 }
@@ -482,6 +485,7 @@ export const applyItem = (flock: Flock, item: FlockItem): Flock => {
       herds,
       tasks: new Map(tasks.map((task) => [task.id, task])),
       asOf: at,
+      build: item.build ?? null,
       development: item.development ?? null,
     };
     return { ...flock, machines: new Map(flock.machines).set(machine.installation, saved) };
@@ -509,6 +513,7 @@ export const applyItem = (flock: Flock, item: FlockItem): Flock => {
   if (message._tag === "Upsert") tasks.set(message.task.id, message.task);
   if (message._tag === "Remove") tasks.delete(message.id);
   const herds = message._tag === "Snapshot" ? message.herds : (known?.herds ?? []);
+  const build = message._tag === "Snapshot" ? message.build : (known?.build ?? null);
   const development =
     message._tag === "Snapshot" ? (message.development ?? null) : (known?.development ?? null);
   lost.delete(machine.profile);
@@ -519,6 +524,7 @@ export const applyItem = (flock: Flock, item: FlockItem): Flock => {
       herds,
       tasks,
       asOf: null,
+      build,
       development,
     }),
     lost,
@@ -596,10 +602,6 @@ export const flockCards = (flock: Flock) => {
         name: names.get(installation)!,
         projects: [...new Set([...tasks.values()].map((task) => task.project))].sort(),
       })),
-    /** Each Machine on a development build, by its display name, and which build it is. */
-    developments: [...flock.machines].flatMap(([installation, { development }]) =>
-      development === null ? [] : [{ name: names.get(installation)!, development }],
-    ),
   };
 };
 
@@ -610,6 +612,9 @@ export interface MachineRow {
   readonly target: string | null;
   readonly state: "live" | "connecting" | NotLive;
   readonly onboarded: OnboardRun | null;
+  /** The Collie it runs, as it was last seen; null where it never was. */
+  readonly build: string | null;
+  readonly development: string | null;
 }
 
 /**
@@ -638,15 +643,16 @@ const standing = (onboarding?: OnboardRun, doctor?: OnboardRun): OnboardRun | nu
 /** Every route, in the order Desktop opened them. */
 export const machineRows = (flock: Flock): ReadonlyArray<MachineRow> =>
   [...flock.routes.values()].map(({ profile, name, target }) => {
-    const live = [...flock.machines.values()].some(
-      ({ machine, asOf }) => machine.profile === profile && asOf === null,
-    );
+    const seen = [...flock.machines.values()].filter(({ machine }) => machine.profile === profile);
+    const shown = seen.find(({ asOf }) => asOf === null) ?? seen[0];
     return {
       profile,
       name,
       target: target ?? null,
-      state: live ? "live" : (flock.lost.get(profile)?.state ?? "connecting"),
+      state: shown?.asOf === null ? "live" : (flock.lost.get(profile)?.state ?? "connecting"),
       onboarded: standing(flock.onboarded.get(profile), flock.doctored.get(profile)),
+      build: shown?.build ?? null,
+      development: shown?.development ?? null,
     };
   });
 

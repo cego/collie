@@ -48,6 +48,16 @@ named by its hostname. Otherwise no different from any other Machine.
 reaches through `collie bridge` started as `desktop`. Not "native", which already means
 harness-native (**Native chat**) and Effect-native.
 
+**In sync** — A Machine that has everything **Desktop** gives its Flock: it is live, it runs
+Desktop's Collie version, it holds the latest edit of every shared setting, it was given the
+credentials Desktop holds now, and `collie doctor` finds it onboarded. A Machine on a
+development checkout, which nothing upgrades, is never behind on its version. Each part is
+read from what the Machine's host and doctor last told Desktop, and from what Desktop last
+gave it. A Machine that is not in sync is **behind** on each part it lacks, and each has its
+own fix. Desktop brings a Machine level as it connects — upgrading it, syncing its settings,
+giving it credentials — so one that stays behind is one where that failed. Not "up to date",
+which is Desktop's own check for a newer release of itself.
+
 **Home** — The Herd's dedicated Collie workspace, owned by a record plus proof: a live
 `collie_home` token, or the recorded pane still carrying its recorded `terminal_id`. A
 label is never proof. Anything uncertain is `ownership_unknown` and waits for a human; a
