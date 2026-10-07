@@ -38,7 +38,9 @@ export const receive = Effect.fn("Uploads.receive")(function* (stateDir: string,
     (entry) => entry !== ".partial",
   );
   if (held !== undefined) return { path: path.join(dir, held), complete: false };
-  const bytes = Encoding.decodeBase64(part.content).pipe(Result.getOrElse(() => new Uint8Array()));
+  const decoded = Encoding.decodeBase64(part.content);
+  if (Result.isFailure(decoded)) return yield* refused(`a part of ${part.name} is not base64`);
+  const bytes = decoded.success;
   if (bytes.length > RUN_FILE_BYTES) return yield* refused(`a part is at most 4 MiB`);
   const partial = path.join(dir, ".partial");
   yield* fs.makeDirectory(dir, { recursive: true });

@@ -14,6 +14,7 @@
 // machine. `docs/adr/0015-one-local-host-owns-a-state-directory.md` is why each of those
 // is the way it is.
 
+import { createHash } from "node:crypto";
 import * as BunSocket from "@effect/platform-bun/BunSocket";
 import type { BunServices } from "@effect/platform-bun/BunServices";
 import * as BunSocketServer from "@effect/platform-bun/BunSocketServer";
@@ -638,7 +639,6 @@ const frontDoorHandlers = (
               act,
             ),
           ).pipe(Effect.provideContext(hosted));
-      /** Only the refusals a front door can act on keep their shape; anything else is said in a sentence. */
       /** A file operation's failure as the host's refusal, in its own words. */
       const refusedPlainly = <A, E, R extends BunServices>(effect: Effect.Effect<A, E, R>) =>
         effect.pipe(
@@ -660,6 +660,7 @@ const frontDoorHandlers = (
           yield* trimAudit(trail, FILES_TRAIL).pipe(Effect.orDie);
           return done;
         });
+      /** Only the refusals a front door can act on keep their shape; anything else is said in a sentence. */
       const plainly = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
         effect.pipe(
           Effect.mapError((cause) =>
@@ -940,7 +941,8 @@ const frontDoorHandlers = (
           refusedPlainly(
             Effect.gen(function* () {
               const got = yield* receive(env.stateDir, part);
-              if (got.complete && got.path !== null)
+              // Logged once a file arrives, or is answered from what this host already held.
+              if (got.path !== null && (got.complete || part.offset === 0))
                 yield* recordAudit(uploadsDir(env.stateDir), {
                   operation: "upload",
                   request: part.sha256,
@@ -964,7 +966,7 @@ const frontDoorHandlers = (
                 operation: "write",
                 request,
                 ...whoOf(client),
-                asked: { path, content },
+                asked: { path, sha256: createHash("sha256").update(content).digest("hex") },
                 result: Written,
               },
               writeWhole(path, content, env.stateDir),

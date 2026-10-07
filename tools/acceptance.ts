@@ -772,6 +772,17 @@ const WORKFLOWS: readonly Check[] = [
 /** What only a person at a terminal can settle. */
 const OPERATOR_CHECKS: readonly Check[] = [
   {
+    id: "flock-chat/a-machine-on-an-older-collie-is-told-to-upgrade",
+    statement:
+      "A Machine whose Collie predates files is told to upgrade when the Flock chat reads a file there or starts work carrying one, and nothing starts there.",
+    owner: ATTACHMENTS,
+    needs: "operator",
+    proof: {
+      kind: "operator",
+      how: "In Desktop with a Machine on a Collie release before this one, ask the chat to read a file there and to start a plan there with a pasted screenshot; record both answers naming the upgrade, and that no Run started, with the revision.",
+    },
+  },
+  {
     id: "flock-chat/start-a-plan-for-this-carries-the-screenshot",
     statement:
       '"Start a plan for this" with a pasted screenshot starts a Run on vm-mk whose grill prompt names its `attachments/` copy, the agent opens it, and the card\'s drawer shows the thumbnail.',

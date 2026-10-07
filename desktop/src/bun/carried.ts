@@ -78,7 +78,11 @@ export const carriedPaths = Effect.fn("Carried.paths")(function* (
 ) {
   const named = given ?? flock.attachments()?.map(({ path }) => path);
   if (named === undefined || named.length === 0) return given;
-  if (board?.files !== true)
+  if (board === null)
+    return yield* new HostRefused({
+      reason: `${machine.name}'s board could not be read, so Desktop cannot tell whether it takes files. Nothing was done there.`,
+    });
+  if (board.files !== true)
     return yield* new HostRefused({
       reason: `${machine.name}'s Collie does not take files; upgrade Collie on ${machine.name}. Nothing was done there.`,
     });

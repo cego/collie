@@ -160,7 +160,9 @@ test(
           );
 
           const trail = yield* readAudit(`${world.state}/uploads`);
+          // Once as it arrived, and once as what this host already held.
           expect(trail.map(({ operation, actor }) => [operation, actor.said])).toEqual([
+            ["upload", "upload"],
             ["upload", "upload"],
           ]);
         }).pipe(Effect.orDie),

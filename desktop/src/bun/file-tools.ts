@@ -154,6 +154,9 @@ const takingFiles = Effect.fn("FileTools.takingFiles")(function* (machine: ChatM
 });
 
 const TEXTUAL = /^text\/|json|xml|javascript|yaml|toml|x-sh/;
+/** The images the model is shown as images, and the most of one it takes. */
+const SHOWN = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+const IMAGE_BYTES = 5 * 1024 * 1024;
 /** How many lines a read gives when it is not told. */
 const READ_LINES = 2000;
 
@@ -169,15 +172,22 @@ const read = Effect.fn("FileTools.read")(function* (
   const from = Math.max(1, input.offset ?? 1);
   const limit = Math.max(1, input.limit ?? READ_LINES);
   const newlines = (bytes: Uint8Array) => bytes.filter((byte) => byte === 10).length;
-  const { file, bytes } = yield* readWhole(machine, path, (all) => newlines(all) >= from + limit);
-  if (file.mediaType.startsWith("image/"))
-    return [
-      { type: "image", data: Encoding.encodeBase64(bytes), mimeType: file.mediaType },
-    ] as const;
+  // The first part says what the file is, so only what is shown is read whole.
+  const head = yield* readWhole(machine, path, () => true);
+  const { mediaType, size } = head.file;
   const textual =
-    TEXTUAL.test(file.mediaType) ||
-    (file.mediaType === "application/octet-stream" && !bytes.subarray(0, 8192).includes(0));
-  if (!textual) return text(`${named} is ${file.mediaType}, ${file.size} bytes.`);
+    TEXTUAL.test(mediaType) ||
+    (mediaType === "application/octet-stream" && !head.bytes.subarray(0, 8192).includes(0));
+  if (SHOWN.has(mediaType) && size <= IMAGE_BYTES)
+    return [
+      {
+        type: "image",
+        data: Encoding.encodeBase64((yield* readWhole(machine, path)).bytes),
+        mimeType: mediaType,
+      },
+    ] as const;
+  if (!textual) return text(`${named} is ${mediaType}, ${size} bytes.`);
+  const { file, bytes } = yield* readWhole(machine, path, (all) => newlines(all) >= from + limit);
   if (file.size === 0) return text(`${named} is empty.`);
   const lines = new TextDecoder().decode(bytes).replace(/\n$/, "").split("\n");
   const shown = lines.slice(from - 1, from - 1 + limit);

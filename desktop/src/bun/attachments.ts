@@ -3,7 +3,7 @@
 // model, a thumbnail or a Run (ADR-0045).
 
 import { createHash } from "node:crypto";
-import { Effect, Encoding, FileSystem, Option, Path, Result, Schema } from "effect";
+import { Clock, Effect, Encoding, FileSystem, Option, Path, Result, Schema } from "effect";
 import { RUN_FILE_BYTES } from "../../../src/board-model";
 import { capRefusal, type Staged } from "../shared/attachments";
 
@@ -87,6 +87,9 @@ const keep = Effect.fn("Attachments.keep")(function* (
   const kept = `${storeOf(dir)}/${id}`;
   yield* fs.makeDirectory(kept.slice(0, kept.lastIndexOf("/")), { recursive: true });
   yield* fs.writeFile(kept, bytes);
+  // Attached again, a copy is kept another 30 days from now.
+  const now = (yield* Clock.currentTimeMillis) / 1000;
+  yield* fs.utimes(kept.slice(0, kept.lastIndexOf("/")), now, now);
   return {
     id,
     name,
@@ -148,7 +151,11 @@ export const stageAttachment = Effect.fn("Attachments.stage")(function* (
   if (!/^[\w-]+$/.test(part.key)) return yield* refused(`${part.key} is not a transfer's key`);
   if (part.scaledOf !== undefined && !validId(part.scaledOf))
     return yield* refused(`${part.scaledOf} is not an attachment`);
-  const bytes = Encoding.decodeBase64(part.content).pipe(Result.getOrElse(() => new Uint8Array()));
+  const why = capRefusal([], part);
+  if (why !== null) return yield* refused(why);
+  const decoded = Encoding.decodeBase64(part.content);
+  if (Result.isFailure(decoded)) return yield* refused(`a part of ${part.name} is not base64`);
+  const bytes = decoded.success;
   const partial = `${storeOf(dir)}/.partial/${part.key}`;
   yield* fs.makeDirectory(path.dirname(partial), { recursive: true });
   const held =

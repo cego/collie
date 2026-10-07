@@ -122,10 +122,17 @@ export const grepFiles = Effect.fn("HostFiles.grep")(function* (asked: GrepAsked
   const root = yield* absolute(asked.path);
   const mode = asked.outputMode ?? "files_with_matches";
   const rg = Bun.which("rg");
+  // A search of one file runs beside it: a file is no working directory.
+  const cwd = (yield* (yield* FileSystem.FileSystem).stat(root).pipe(
+    Effect.map((info) => info.type === "Directory"),
+    Effect.orElseSucceed(() => false),
+  ))
+    ? root
+    : (yield* Path.Path).dirname(root);
   const found =
     rg === null
-      ? yield* shell("grep", [...grepArgs(asked, mode), root], root)
-      : yield* shell(rg, [...rgArgs(asked, mode), root], root);
+      ? yield* shell("grep", [...grepArgs(asked, mode), root], cwd)
+      : yield* shell(rg, [...rgArgs(asked, mode), root], cwd);
   // Exit 1 is "nothing matched"; anything above it is the search's own failure.
   if (found.code > 1) return yield* refused(`the search of ${root} failed (exit ${found.code})`);
   const lines = found.stdout.split("\n").filter((line) => line !== "");
