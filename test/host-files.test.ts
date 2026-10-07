@@ -7,7 +7,7 @@ import { Clock, Effect, FileSystem, Result, Schema, type Scope, Stream } from "e
 import { HostRefused } from "../src/board-model";
 import { readAudit } from "../src/audit";
 import { connect, frontDoor } from "../src/host";
-import { globFiles, grepFiles } from "../src/host-files";
+import { editString, globFiles, grepFiles, LINE_LIMIT, writeWhole } from "../src/host-files";
 import { receive } from "../src/uploads";
 import { uploadsSweeper } from "../src/cleanup";
 import { proves } from "./support/world";
@@ -278,6 +278,58 @@ test("a glob stops listing, and a grep stops its search, at the bound, and a glo
       );
       expect(grepped.text.split("\n")).toHaveLength(2);
       expect(grepped.omitted).toBe(3);
+    }),
+  ));
+
+test("a grep answers its matches past a file it cannot read, and cuts a long line", () =>
+  local(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* inTemp("collie-grep-partial-");
+      yield* fs.writeFileString(`${dir}/a.txt`, "needle\n");
+      yield* fs.writeFileString(`${dir}/long.txt`, `needle${"x".repeat(1024 * 1024)}\n`);
+      yield* fs.writeFileString(`${dir}/locked.txt`, "needle\n");
+      yield* fs.chmod(`${dir}/locked.txt`, 0o000);
+      const content = yield* grepFiles({ pattern: "needle", path: dir, outputMode: "content" });
+      expect(content.text).toContain(`${dir}/a.txt:needle`);
+      for (const line of content.text.split("\n"))
+        expect(line.length).toBeLessThanOrEqual(LINE_LIMIT);
+      const files = yield* grepFiles({ pattern: "needle", path: dir });
+      expect(files.text).toContain(`${dir}/a.txt`);
+    }),
+  ));
+
+test("a write through a relative link to nothing is judged where the kernel would land it", () =>
+  local(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const root = yield* inTemp("collie-write-link-");
+      yield* fs.makeDirectory(`${root}/home/state`, { recursive: true });
+      yield* fs.makeDirectory(`${root}/home/proj/sub`, { recursive: true });
+      yield* fs.makeDirectory(`${root}/elsewhere`);
+      yield* fs.symlink(`${root}/home/proj/sub`, `${root}/elsewhere/a`);
+      yield* fs.symlink("../../state/x", `${root}/home/proj/sub/dl`);
+      const refused = yield* writeWhole(`${root}/elsewhere/a/dl`, "x", `${root}/home/state`).pipe(
+        Effect.flip,
+      );
+      expect(reasonOf(refused)).toContain("state directory");
+      expect(yield* fs.exists(`${root}/home/state/x`)).toBe(false);
+    }),
+  ));
+
+test("an edit refuses a file that is not UTF-8, so no byte outside the edit changes", () =>
+  local(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* inTemp("collie-edit-latin1-");
+      const bytes = new Uint8Array([0x61, 0x3d, 0x31, 0x0a, 0xe6, 0x0a]);
+      yield* fs.writeFile(`${dir}/conf`, bytes);
+      const refused = yield* editString(
+        { path: `${dir}/conf`, oldString: "a=1", newString: "a=2" },
+        `${dir}/state`,
+      ).pipe(Effect.flip);
+      expect(reasonOf(refused)).toContain("UTF-8");
+      expect(yield* fs.readFile(`${dir}/conf`)).toEqual(bytes);
     }),
   ));
 

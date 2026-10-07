@@ -11,6 +11,10 @@ import { HostRefused, RUN_FILE_BYTES, type HostFile } from "./board-model";
 export const FOUND_LIMIT = 100;
 /** Where a search stops looking; `omitted` past it is a lower bound. */
 export const SEARCH_LIMIT = 10_000;
+/** How long a search runs before it answers with what it has found. */
+const SEARCH_TIME = "20 seconds";
+/** The most characters of one line a grep answers, as Claude Code's Grep cuts them. */
+export const LINE_LIMIT = 500;
 
 const refused = (reason: string) => new HostRefused({ reason });
 
@@ -162,6 +166,10 @@ const count = (flag: string, value: number | undefined) =>
 /** Ripgrep's arguments for a search, as Claude Code's Grep asks it. */
 const rgArgs = (asked: GrepAsked, mode: string) => [
   "--with-filename",
+  "--no-messages",
+  "--max-columns",
+  String(LINE_LIMIT),
+  "--max-columns-preview",
   ...(mode === "files_with_matches"
     ? ["--files-with-matches"]
     : mode === "count"
@@ -181,6 +189,7 @@ const rgArgs = (asked: GrepAsked, mode: string) => [
 /** The same with `grep -r`, which has no file types and no multiline. */
 const grepArgs = (asked: GrepAsked, mode: string) => [
   "-r",
+  "-s",
   "-H",
   "-E",
   ...(mode === "files_with_matches" ? ["-l"] : mode === "count" ? ["-c"] : []),
@@ -208,21 +217,21 @@ const searched = (
       ChildProcess.make(cmd, args, { cwd, stdout: "pipe", stderr: "ignore", extendEnv: true }),
     );
     const lines: string[] = [];
-    const seen = yield* handle.stdout.pipe(
+    let seen = 0;
+    const done = yield* handle.stdout.pipe(
       Stream.decodeText(),
       Stream.splitLines,
       Stream.filter((line) => line !== "" && keep(line)),
       Stream.take(bound),
-      Stream.runFold(
-        () => 0,
-        (count, line) => {
-          if (count < limit) lines.push(line);
-          return count + 1;
-        },
+      Stream.runForEach((line) =>
+        Effect.sync(() => {
+          if (seen++ < limit) lines.push(line);
+        }),
       ),
+      Effect.timeoutOption(SEARCH_TIME),
     );
     // Cut short, the search is stopped rather than waited on.
-    const code = seen >= bound ? 0 : Number(yield* handle.exitCode);
+    const code = seen >= bound || Option.isNone(done) ? 0 : Number(yield* handle.exitCode);
     return { lines, omitted: seen - lines.length, code };
   }).pipe(Effect.scoped);
 
@@ -246,16 +255,24 @@ export const grepFiles = Effect.fn("HostFiles.grep")(function* (
       ? searched("grep", [...grepArgs(asked, mode), root], cwd, limit, bound)
       : searched(rg, [...rgArgs(asked, mode), root], cwd, limit, bound)
   ).pipe(Effect.mapError((cause) => refused(`the search of ${root} failed: ${String(cause)}`)));
-  // Exit 1 is "nothing matched"; anything above it is the search's own failure.
-  if (found.code > 1) return yield* refused(`the search of ${root} failed (exit ${found.code})`);
-  return { text: found.lines.join("\n"), omitted: found.omitted };
+  // Exit 1 is "nothing matched"; above it with matches, some files could not be read.
+  if (found.code > 1 && found.lines.length === 0)
+    return yield* refused(`the search of ${root} failed (exit ${found.code})`);
+  return {
+    text: found.lines.map((line) => line.slice(0, LINE_LIMIT)).join("\n"),
+    omitted: found.omitted,
+  };
 });
 
 /**
  * Where `path` really is: the nearest part of it that exists with every link followed,
  * and the rest as written.
  */
-const realOf = Effect.fn("HostFiles.realOf")(function* (path: string) {
+const realOf: (
+  path: string,
+) => Effect.Effect<string, HostRefused, FileSystem.FileSystem | Path.Path> = Effect.fn(
+  "HostFiles.realOf",
+)(function* (path: string) {
   const fs = yield* FileSystem.FileSystem;
   const paths = yield* Path.Path;
   let existing = path;
@@ -267,7 +284,7 @@ const realOf = Effect.fn("HostFiles.realOf")(function* (path: string) {
     const target = yield* fs.readLink(existing).pipe(Effect.option);
     if (target._tag === "Some") {
       if (++links > 40) return yield* refused(`${path} has too many links to follow`);
-      existing = paths.resolve(paths.dirname(existing), target.value);
+      existing = paths.resolve(yield* realOf(paths.dirname(existing)), target.value);
       continue;
     }
     const parent = paths.dirname(existing);
@@ -316,7 +333,14 @@ export const editString = Effect.fn("HostFiles.edit")(function* (
   const path = yield* writable(asked.path, state);
   if (asked.oldString === asked.newString)
     return yield* refused("old_string and new_string are the same: there is nothing to change");
-  const text = yield* fs.readFileString(path);
+  const text = yield* fs.readFile(path).pipe(
+    Effect.flatMap((bytes) =>
+      Effect.try({
+        try: () => new TextDecoder("utf-8", { fatal: true }).decode(bytes),
+        catch: () => refused(`${path} is not UTF-8 text, so it is not edited`),
+      }),
+    ),
+  );
   const replaced = asked.oldString === "" ? 0 : text.split(asked.oldString).length - 1;
   if (replaced === 0) return yield* refused(`old_string is not in ${path}`);
   if (replaced > 1 && !asked.replaceAll)

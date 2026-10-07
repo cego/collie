@@ -4,7 +4,7 @@ import { Effect, Encoding, Result, Schema } from "effect";
 import { HostRefused } from "../../../src/board-model";
 import type { JsonObject } from "../../../src/schema";
 import { decodeStrict, jsonSchemaOf } from "../../../src/toolkit";
-import { IMAGE_BYTES, shownAs, TEXTUAL } from "../shared/attachments";
+import { IMAGE_BYTES, imageSize, LONG_EDGE, shownAs, TEXTUAL } from "../shared/attachments";
 import { readWhole } from "./carried";
 import {
   boardOf,
@@ -156,9 +156,16 @@ const takingFiles = Effect.fn("FileTools.takingFiles")(function* (machine: ChatM
 
 /** How many lines a read gives when it is not told. */
 const READ_LINES = 2000;
+/** The most of a text file a read takes, so one with no newlines is not read whole. */
+const READ_BYTES = 8 * 1024 * 1024;
+
+/** The most of one line a read shows. */
+const LINE_CHARS = 2000;
 
 const numbered = (lines: ReadonlyArray<string>, from: number) =>
-  lines.map((line, at) => `${String(from + at).padStart(6)}\t${line}`).join("\n");
+  lines
+    .map((line, at) => `${String(from + at).padStart(6)}\t${line.slice(0, LINE_CHARS)}`)
+    .join("\n");
 
 const read = Effect.fn("FileTools.read")(function* (
   machine: ChatMachine,
@@ -173,21 +180,22 @@ const read = Effect.fn("FileTools.read")(function* (
   const head = yield* readWhole(machine, path, () => true);
   const { mediaType, size } = head.file;
   const textual = TEXTUAL.test(mediaType) && !head.bytes.subarray(0, 8192).includes(0);
-  if (shownAs(mediaType) !== undefined && size <= IMAGE_BYTES)
-    return [
-      {
-        type: "image",
-        data: Encoding.encodeBase64((yield* readWhole(machine, path)).bytes),
-        mimeType: mediaType,
-      },
-    ] as const;
+  if (shownAs(mediaType) !== undefined && size <= IMAGE_BYTES) {
+    const { bytes } = yield* readWhole(machine, path);
+    const dimensions = imageSize(bytes);
+    if (dimensions !== null && Math.max(dimensions.width, dimensions.height) <= LONG_EDGE)
+      return [{ type: "image", data: Encoding.encodeBase64(bytes), mimeType: mediaType }] as const;
+    return text(
+      `${named} is ${mediaType}, ${size} bytes${dimensions === null ? "" : `, ${dimensions.width}×${dimensions.height}`}: not shown, as only an image of at most ${LONG_EDGE} px on its long edge can be.`,
+    );
+  }
   if (!textual) return text(`${named} is ${mediaType}, ${size} bytes.`);
   let seen = 0;
-  const { file, bytes } = yield* readWhole(
-    machine,
-    path,
-    (part) => (seen += newlines(part)) >= from + limit,
-  );
+  let taken = 0;
+  const { file, bytes } = yield* readWhole(machine, path, (part) => {
+    taken += part.length;
+    return (seen += newlines(part)) >= from + limit || taken >= READ_BYTES;
+  });
   if (file.size === 0) return text(`${named} is empty.`);
   const lines = new TextDecoder().decode(bytes).replace(/\n$/, "").split("\n");
   const shown = lines.slice(from - 1, from - 1 + limit);

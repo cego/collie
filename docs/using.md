@@ -1164,9 +1164,12 @@ working directory is Desktop's state directory, where Claude Code keeps the tran
 every Machine it has `collie_read`, `collie_glob`, `collie_grep`, `collie_write` and
 `collie_edit`, which take the arguments Claude Code's tools of those names take, with a path
 written `vm-mk:/var/log/app.log`. That Machine's host answers each over the chat's channel,
-never ssh around it. A read gives numbered lines, an image as the image and any other binary
-by its name, size and type; a glob or a grep answers at most 100 paths or lines, newest
-first for a glob, and says how many it left out. A write or an edit is recorded in the
+never ssh around it. A read gives numbered lines, from at most the first 8 MB and 2000
+characters of each line; an image as the image where it is at most 2000 px on its long
+edge, and otherwise, like any other binary, by its name, size and type. A glob or a grep
+answers at most 100 paths or lines, newest first for a glob, cuts a line at 500
+characters, answers what it found after 20 seconds, and says how many it left out; a file
+it cannot read is passed by. An edit of a file that is not UTF-8 is refused. A write or an edit is recorded in the
 host's `files/operations.jsonl` with the chat's voice, and is refused inside the host's
 state directory, links followed, because a Run's state changes only through the host. A
 Machine whose Collie is too old for files is told to upgrade. There is no shell on a
@@ -1205,8 +1208,10 @@ each PDF up to 4 MB as a document, and each UTF-8 text up to 100 KB as text head
 name; anything else, or anything larger, is in the listing alone, so the model can Read it
 there. An image whose long edge is over 2000 px is scaled to 2000 px first, and never up, and the
 original is what a Run gets. The message shows its chips at once, and again when the
-conversation is read back after a restart; a copy Desktop no longer has shows its name alone. Desktop removes its copies 30 days after it
-made them, as Claude Code prunes the transcripts that name them.
+conversation is read back after a restart; a copy Desktop no longer has shows its name alone. An image
+whose size Desktop cannot read, or that is still over 2000 px, goes by the listing alone.
+[Cleanup](#cleanup) removes a copy 30 days after it was last used, as Claude Code prunes
+the transcripts that name it.
 
 When the chat starts a Run, follows one up or steers one because you asked, the work
 carries the files of your message: you need not say so. The model can name others instead —
@@ -1841,8 +1846,9 @@ every ten minutes, whether or not a pane is open. A sweep removes:
   held open.
 - **Runner copies** under `~/.cache/collie/runners`, but the running version's and the
   newest.
-- **Desktop's own files**, on a computer with Desktop: staged updates, runner copies and
-  usage lines Desktop would remove itself as it starts (see [Collie Desktop](#collie-desktop)).
+- **Desktop's own files**, on a computer with Desktop: staged updates, runner copies, usage
+  lines, chat attachments unused for 30 days and transfers abandoned for a day, which
+  Desktop also removes itself as it starts (see [Collie Desktop](#collie-desktop)).
 - **Renovate clones** under the state directory's `renovate-repositories/`, once no Run uses
   one and no checkout of it is left.
 - **Tasks**, 30 days after their last Run ended, with every one of their Runs, once nothing

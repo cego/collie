@@ -61,6 +61,53 @@ export const scaledSize = (image: { readonly width: number; readonly height: num
   return { width: Math.round(image.width * by), height: Math.round(image.height * by) };
 };
 
+/** An image's width and height from its PNG, GIF, JPEG or WebP header; null where unread. */
+export const imageSize = (bytes: Uint8Array) => {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const tag = (at: number, text: string) =>
+    [...text].every((c, i) => bytes[at + i] === c.charCodeAt(0));
+  const le24 = (at: number) => view.getUint16(at, true) + (view.getUint8(at + 2) << 16);
+  try {
+    if (bytes[0] === 0x89 && tag(1, "PNG") && tag(12, "IHDR"))
+      return { width: view.getUint32(16), height: view.getUint32(20) };
+    if (tag(0, "GIF8")) return { width: view.getUint16(6, true), height: view.getUint16(8, true) };
+    if (tag(0, "RIFF") && tag(8, "WEBP")) {
+      if (tag(12, "VP8X")) return { width: le24(24) + 1, height: le24(27) + 1 };
+      if (tag(12, "VP8 "))
+        return {
+          width: view.getUint16(26, true) & 0x3fff,
+          height: view.getUint16(28, true) & 0x3fff,
+        };
+      if (tag(12, "VP8L")) {
+        const bits = view.getUint32(21, true);
+        return { width: (bits & 0x3fff) + 1, height: ((bits >>> 14) & 0x3fff) + 1 };
+      }
+    }
+    if (bytes[0] === 0xff && bytes[1] === 0xd8)
+      for (let at = 2; at + 9 <= bytes.length;) {
+        if (bytes[at] !== 0xff) return null;
+        const marker = bytes[at + 1]!;
+        if (marker === 0xff) {
+          at += 1;
+          continue;
+        }
+        // Every start of frame but DHT (C4), JPG (C8) and DAC (CC).
+        if (marker >= 0xc0 && marker <= 0xcf && ![0xc4, 0xc8, 0xcc].includes(marker))
+          return { width: view.getUint16(at + 7), height: view.getUint16(at + 5) };
+        at += 2 + view.getUint16(at + 2);
+      }
+  } catch {
+    // A header cut short says nothing.
+  }
+  return null;
+};
+
+/** Whether an image may be shown to the model: its size is known and within `LONG_EDGE`. */
+export const showable = (bytes: Uint8Array) => {
+  const size = imageSize(bytes);
+  return size !== null && Math.max(size.width, size.height) <= LONG_EDGE;
+};
+
 /** Which of a paste's items become attachments: its image files. Anything else pastes as it did. */
 export const pastedImages = (
   items: ReadonlyArray<{ readonly kind: string; readonly type: string }>,

@@ -109,7 +109,13 @@ const machine = (
           path: payload.path,
           size: bytes.length,
           mediaType,
-          content: Buffer.from(bytes).toString("base64"),
+          content: Buffer.from(
+            bytes.slice(
+              payload.offset ?? 0,
+              (payload.offset ?? 0) + (payload.length ?? bytes.length),
+            ),
+            "latin1",
+          ).toString("base64"),
         };
       }),
     glob: (payload) =>
@@ -147,9 +153,20 @@ const machine = (
 };
 
 /** What a fake Machine's files hold: a media type and the bytes. */
+/** A PNG's header, as a string of bytes, for an image of that size. */
+const png = (width: number, height: number) => {
+  const header = Buffer.alloc(24);
+  Buffer.from("\x89PNG\r\n\x1a\n\0\0\0\rIHDR", "latin1").copy(header);
+  header.writeUInt32BE(width, 16);
+  header.writeUInt32BE(height, 20);
+  return header.toString("latin1");
+};
+
 const ON_DISK = new Map([
   ["/var/log/app.log", ["text/plain", "one\ntwo\nthree\nfour\n"]],
-  ["/tmp/shot.png", ["image/png", "PNG!"]],
+  ["/tmp/shot.png", ["image/png", png(640, 480)]],
+  ["/tmp/wide.png", ["image/png", png(2560, 1600)]],
+  ["/tmp/bundle.js", ["text/javascript", "x".repeat(20 * 1024 * 1024)]],
   ["/tmp/trace.zip", ["application/zip", "PK\u0003\u0004"]],
 ]);
 let saved: string | undefined;
@@ -406,11 +423,28 @@ test("collie_read of an image is the image, and of another binary its name, size
   Effect.runPromise(
     Effect.gen(function* () {
       expect(yield* callFile([], "collie_read", { file_path: "vm-mk:/tmp/shot.png" })).toEqual([
-        { type: "image", data: Buffer.from("PNG!").toString("base64"), mimeType: "image/png" },
+        {
+          type: "image",
+          data: Buffer.from(png(640, 480), "latin1").toString("base64"),
+          mimeType: "image/png",
+        },
       ]);
+      const wide = yield* callFile([], "collie_read", { file_path: "vm-mk:/tmp/wide.png" });
+      expect(textOf(wide)).toContain("2560×1600: not shown");
       const zip = yield* callFile([], "collie_read", { file_path: "vm-mk:/tmp/trace.zip" });
       expect(zip[0]).toMatchObject({ type: "text" });
       expect(textOf(zip)).toContain("vm-mk:/tmp/trace.zip is application/zip, 4 bytes");
+    }),
+  ));
+
+test("collie_read takes 8 MB of a text file with no newlines, and shows 2000 characters of its line", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const asked: Asked[] = [];
+      const read = yield* callFile(asked, "collie_read", { file_path: "vm-mk:/tmp/bundle.js" });
+      expect(textOf(read).length).toBeLessThan(2100);
+      // One part to say what it is, then 8 MB of its 20.
+      expect(asked.filter(({ op }) => op === "readFile")).toHaveLength(3);
     }),
   ));
 

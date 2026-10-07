@@ -31,6 +31,7 @@ import {
   type ShownImage,
   type Staged,
   TEXTUAL,
+  showable,
 } from "../shared/attachments";
 import { isString } from "../../../src/schema";
 import { describeAttachment, scaledCopy } from "./attachments";
@@ -241,7 +242,8 @@ const contentOf = Effect.fnUntraced(function* (
     if (media !== undefined) {
       const scaled = yield* scaledCopy(dir, file.id).pipe(Effect.orElseSucceed(() => null));
       const bytes = yield* read(scaled ?? file.path);
-      const data = bytes.length <= IMAGE_BYTES ? Encoding.encodeBase64(bytes) : null;
+      const data =
+        bytes.length <= IMAGE_BYTES && showable(bytes) ? Encoding.encodeBase64(bytes) : null;
       if (data !== null && fits(data))
         images.push({ type: "image", source: { type: "base64", media_type: media, data } });
     } else if (file.mediaType === "application/pdf" && file.size <= PDF_BYTES) {

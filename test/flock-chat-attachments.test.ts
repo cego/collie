@@ -4,7 +4,8 @@
 import { expect, test } from "bun:test";
 import { BunServices } from "@effect/platform-bun";
 import { Clock, Effect, FileSystem } from "effect";
-import { pruneAttachments, stagePath } from "../desktop/src/bun/attachments";
+import { stagePath } from "../desktop/src/bun/attachments";
+import { desktopVerdicts } from "../src/desktop";
 import type { StagedOrRefused } from "../desktop/src/shared/attachments";
 
 const inDir = <A, E>(body: (dir: string) => Effect.Effect<A, E, FileSystem.FileSystem>) =>
@@ -32,21 +33,32 @@ test("a file named by its path is copied in, and a directory or a missing file i
     }),
   ));
 
-test("a copy is pruned 30 days after it was made, and a newer one kept", () =>
+test("cleanup removes a copy unused for 30 days and a transfer abandoned for a day, and keeps a newer one", () =>
   inDir((dir) =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       yield* fs.writeFileString(`${dir}/old.txt`, "old");
       yield* fs.writeFileString(`${dir}/new.txt`, "new");
       const old = pathOf(yield* stagePath(dir, `${dir}/old.txt`));
-      const fresh = pathOf(yield* stagePath(dir, `${dir}/new.txt`));
+      yield* stagePath(dir, `${dir}/new.txt`);
+      yield* fs.makeDirectory(`${dir}/attachments/.partial`, { recursive: true });
+      yield* fs.writeFileString(`${dir}/attachments/.partial/1-5`, "half");
+      yield* fs.writeFileString(`${dir}/attachments/.partial/2-5`, "half");
       const now = yield* Clock.currentTimeMillis;
       // In seconds, as utimes takes a number.
-      const monthAgo = (now - 31 * 24 * 60 * 60 * 1000) / 1000;
-      yield* fs.utimes(old.slice(0, old.lastIndexOf("/")), monthAgo, monthAgo);
+      const daysAgo = (days: number) => (now - days * 24 * 60 * 60 * 1000) / 1000;
+      const copy = old.slice(0, old.lastIndexOf("/"));
+      yield* fs.utimes(copy, daysAgo(31), daysAgo(31));
+      yield* fs.utimes(`${dir}/attachments/.partial/1-5`, daysAgo(2), daysAgo(2));
 
-      yield* pruneAttachments(dir, now);
-      expect(yield* fs.exists(old)).toBe(false);
-      expect(yield* fs.exists(fresh)).toBe(true);
+      const verdicts = yield* desktopVerdicts({
+        root: `${dir}/none`,
+        state: dir,
+        hash: null,
+        version: null,
+      });
+      expect(verdicts.remove.map(({ target }) => target).sort()).toEqual(
+        [copy, `${dir}/attachments/.partial/1-5`].sort(),
+      );
     }),
   ));

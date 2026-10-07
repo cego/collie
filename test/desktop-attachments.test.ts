@@ -8,6 +8,7 @@ import {
   dropKind,
   uriListPaths,
   fromListing,
+  imageSize,
   listing,
   pastedImages,
   pastedName,
@@ -34,6 +35,50 @@ test("an image is scaled to 2000 px on its long edge, and never up", () => {
   expect(scaledSize({ width: 1080, height: 4320 })).toEqual({ width: 500, height: 2000 });
   expect(scaledSize({ width: 2000, height: 1200 })).toBeNull();
   expect(scaledSize({ width: 640, height: 480 })).toBeNull();
+});
+
+test("an image's size is read from its header, and null where the header says nothing", () => {
+  const be32 = (n: number) => [n >>> 24, (n >>> 16) & 255, (n >>> 8) & 255, n & 255];
+  const le16 = (n: number) => [n & 255, n >>> 8];
+  const le24 = (n: number) => [n & 255, (n >>> 8) & 255, n >>> 16];
+  const ascii = (text: string) => [...text].map((c) => c.charCodeAt(0));
+  const png = [
+    0x89,
+    ...ascii("PNG\r\n\x1a\n"),
+    0,
+    0,
+    0,
+    13,
+    ...ascii("IHDR"),
+    ...be32(2560),
+    ...be32(1600),
+  ];
+  const gif = [...ascii("GIF89a"), ...le16(640), ...le16(480)];
+  const jpeg = [0xff, 0xd8, 0xff, 0xe0, 0, 4, 0, 0, 0xff, 0xc0, 0, 17, 8, 0x0b, 0xb8, 0x0f, 0xa0];
+  const vp8x = [
+    ...ascii("RIFF"),
+    0,
+    0,
+    0,
+    0,
+    ...ascii("WEBPVP8X"),
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    ...le24(2999),
+    ...le24(1999),
+  ];
+  const of = (bytes: number[]) => imageSize(new Uint8Array(bytes));
+  expect(of(png)).toEqual({ width: 2560, height: 1600 });
+  expect(of(gif)).toEqual({ width: 640, height: 480 });
+  expect(of(jpeg)).toEqual({ width: 4000, height: 3000 });
+  expect(of(vp8x)).toEqual({ width: 3000, height: 2000 });
+  expect(of(ascii("PNG!"))).toBeNull();
 });
 
 test("a pasted image file becomes an attachment, and pasted text stays text", () => {

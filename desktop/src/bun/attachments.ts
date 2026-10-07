@@ -116,25 +116,6 @@ export const stagePath = Effect.fn("Attachments.stagePath")(function* (dir: stri
   return yield* keep(dir, name, bytes.value, "");
 });
 
-/** How long Desktop keeps a copy: as long as Claude Code keeps the transcripts naming it. */
-const KEPT_FOR = 30 * 24 * 60 * 60 * 1000;
-
-/** Removes every copy made more than 30 days before `now`. */
-export const pruneAttachments = Effect.fn("Attachments.prune")(function* (
-  dir: string,
-  now: number,
-) {
-  const fs = yield* FileSystem.FileSystem;
-  const store = storeOf(dir);
-  for (const entry of yield* fs.readDirectory(store).pipe(Effect.orElseSucceed(() => []))) {
-    if (!/^[0-9a-f]{64}$/.test(entry)) continue;
-    const made = yield* fs.stat(`${store}/${entry}`).pipe(Effect.option);
-    const at = Option.flatMap(made, (info) => info.mtime);
-    if (Option.isSome(at) && now - at.value.getTime() > KEPT_FOR)
-      yield* fs.remove(`${store}/${entry}`, { recursive: true });
-  }
-});
-
 /**
  * One part of a file the view stages, appended to what came before it. The last part is
  * checked against the size, kept under its sha256 and answered with its descriptor; null

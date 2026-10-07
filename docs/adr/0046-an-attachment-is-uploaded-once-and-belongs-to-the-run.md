@@ -65,7 +65,8 @@ and the path of Desktop's copy — so the model can name it later and a conversa
 back after a restart shows it again, from the transcript Claude Code already keeps. The
 model is also shown each one: an image scaled to at most 2000 px on its long edge, because
 a request with more than 20 images in it refuses anything larger and the conversation's
-history counts; a PDF up to 4 MB as a document; UTF-8 text up to 100 KB as text; anything
+history counts, so an image still larger, or one whose size Desktop cannot read, goes by
+the block alone, as an image `collie_read` finds does by its name; a PDF up to 4 MB as a document; UTF-8 text up to 100 KB as text; anything
 else, or anything larger, only by that block, and the chat reads it with its own tools.
 A start, follow-up or steer the chat carries out takes the attachments it is given — a path
 on this computer, `<machine>:<path>` for one on a Machine — and, given none, those of the
@@ -81,8 +82,9 @@ recorded with their words says what came with them
   holds its own copy, and a file uploaded for a start that was refused does not stay for
   ever. A proposal confirmed later than that is refused naming the file, and Desktop
   uploads it again.
-- Desktop prunes its copies after 30 days, as Claude Code prunes the transcripts that name
-  them. A conversation older than that shows the attachment's name without its thumbnail.
+- The cleanup sweep removes a Desktop copy unused for 30 days, as Claude Code prunes the
+  transcripts that name it
+  ([ADR-0045](0045-collie-removes-what-it-made-once-nothing-needs-it.md)). A conversation older than that shows the attachment's name without its thumbnail.
 - A conversation that accumulates more than the API's 32 MB request size in images and
   documents fails every turn until a fresh one is started. Scaling keeps an image small,
   and a large PDF or text goes by name, so it takes many attachments to get there.
