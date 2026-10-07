@@ -221,12 +221,13 @@ export const CollieTools = Toolkit.make(
     title: "Where work can be started",
     description:
       "The workspaces this herdr session has, with the directory each stands for, the Tasks " +
-      "their Runs belong to, and the workflows that can be started. Read this before " +
-      "proposing a launch: a Run belongs to " +
-      "the workspace whose repository it is about, and the Home is Collie's own namespace, " +
-      "not anybody's checkout. A start may also name a checkout's path instead of a " +
-      "workspace: a directory none is open on gets a workspace opened on it, so a " +
-      "repository missing from this list is no reason to send the human to the board.",
+      "whose workspace is still open, the Projects root, and each workflow that can be " +
+      "started with the Inputs it takes. Read this before proposing a launch: a Run belongs " +
+      "to the workspace whose repository it is about, and the Home is Collie's own " +
+      "namespace, not anybody's checkout. A start may also name a checkout's path — a path " +
+      "on the Machine the start goes to — or a repository's directory name under that " +
+      "Machine's Projects root: a directory none is open on gets a workspace opened on it, " +
+      "so a repository missing from this list is no reason to send the human to the board.",
     parameters: Tool.EmptyParams,
   }),
   collieTool("collie_receipts", {

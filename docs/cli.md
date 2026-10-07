@@ -697,7 +697,7 @@ through a generated extension; this is the third way in.
 | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `collie_herd`         | Every run in the Herd, bounded, saying how many it left out                                                                                                                                                                                  |
 | `collie_run`          | One run: its goal, constraints, the Choice it waits on and how to answer it, its answers with who and when, its result, the Runs it started, its merge request and branch, plan, findings, disposition, last log lines, cards and open drift |
-| `collie_workspaces`   | The workspaces this session has, and the workflows that can be started                                                                                                                                                                       |
+| `collie_workspaces`   | The workspaces this session has (the Home marked as no checkout), the Tasks whose workspace is open, the Projects root, and each workflow with its Inputs                                                                                    |
 | `collie_receipts`     | What one run waits on the human for — its Choice, an evidence gate, proposals — and what state each message to its agents actually reached                                                                                                   |
 | `collie_definitions`  | The Workflows and Personas there are; one resolved and checked, or one Persona's body                                                                                                                                                        |
 | `collie_installation` | What Collie needs, which workspace the Home is, what a cleanup would close, the defaults                                                                                                                                                     |
@@ -729,6 +729,13 @@ what became of a finished run's work. It answers a line per action saying what e
 came to. A kind outside that set is refused with the name of the tool that does take it:
 amending an Intent, forking a definition, changing the defaults, keeping a run's checks for
 its repository, a cleanup and an upgrade are `collie_propose`'s.
+
+A `start` names its workspace by id, label, a checkout's path on this Machine, or a
+repository's directory name under the Projects root (or `projects-root`). A path that is no
+directory here is refused as that, with the Projects root; any other name that matches
+nothing says what was searched. A workspace inside Collie's state directory — the Home's —
+is refused as Collie's own namespace, not a checkout
+([ADR-0033](adr/0033-a-run-started-from-the-home-is-placed-not-asked.md)).
 
 `collie_propose` takes the same closed action set a steer produces — `stop`, `resume`,
 `hold`, `release`, `answer`, `deliver`, `start`, `followup`, `update_intent`,

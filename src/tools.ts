@@ -27,11 +27,13 @@ import type { PluginEnv } from "./env";
 import {
   answerAction,
   choiceLines,
+  inCollieState,
   newRequestId,
   runFacts,
   workspaceCwdFromPanes,
 } from "./operations";
 import { gateOf } from "./board";
+import { projectsRoot } from "./projects";
 import type { Action } from "./actions";
 import {
   boardSnapshot,
@@ -404,30 +406,43 @@ const workspaceFacts = Effect.fn("Tools.workspaces")(function* (env: PluginEnv) 
   const all = yield* herdr.workspaceList().pipe(Effect.catch(() => Effect.succeed([])));
   const panes = yield* herdr.paneList().pipe(Effect.catch(() => Effect.succeed([])));
   const saved = (yield* savedModules(env)).entries;
-  const lines = all.map((workspace) => {
-    const cwd =
-      workspace.cwd !== "" ? workspace.cwd : workspaceCwdFromPanes(workspace.workspaceId, panes);
-    return `- workspace ${workspace.workspaceId} (${workspace.label}): ${cwd || "no directory"}`;
-  });
+  const lines = yield* Effect.forEach(all, (workspace) =>
+    Effect.gen(function* () {
+      const cwd =
+        workspace.cwd !== "" ? workspace.cwd : workspaceCwdFromPanes(workspace.workspaceId, panes);
+      const home = cwd !== "" && (yield* inCollieState(env, cwd));
+      return `- workspace ${workspace.workspaceId} (${workspace.label}): ${cwd || "no directory"}${home ? " — the Home, Collie's own namespace, no checkout" : ""}`;
+    }),
+  );
   // The Tasks too: a Task with no Run yet is in no Herd listing, so this is the only
   // place a conversation can find out the work a new Run could join.
-  const tasks = yield* listTasks(env.stateDir).pipe(Effect.catch(() => Effect.succeed([])));
+  const open = new Set(all.map((workspace) => workspace.workspaceId));
+  const tasks = (yield* listTasks(env.stateDir).pipe(
+    Effect.catch(() => Effect.succeed([])),
+  )).filter((task) => open.has(task.workspace));
+  const root = yield* projectsRoot(env).pipe(Effect.orElseSucceed(() => null));
   return [
     ...(lines.length > 0 ? lines : ["- (no workspaces)"]),
     "",
     ...tasks.map((task) => `- task ${task.id} (${task.label}) in workspace ${task.workspace}`),
-    ...(tasks.length === 0 ? ["- (no Tasks)"] : []),
+    ...(tasks.length === 0 ? ["- (no Tasks with an open workspace)"] : []),
     "",
-    `workflows: ${
-      saved
-        .map((one) => one.id)
-        .sort()
-        .join(", ") || "none"
-    }`,
+    root === null
+      ? "Projects root: none"
+      : `Projects root: ${root.path} — a checkout under it is named by its directory name`,
     "",
-    "a start names its workspace — an id, its label, the path of a checkout or a repository's",
-    "name under the Projects root (one with no workspace open on it gets one), or projects-root",
-    "— and every Input, an optional",
+    "workflows, with the Inputs each takes (? is optional):",
+    ...[...saved]
+      .sort((a, b) => a.id.localeCompare(b.id))
+      .map(
+        (one) =>
+          `- ${one.id} (${one.inputs.map((input) => `${input.name}${input.required ? "" : "?"}`).join(", ")})`,
+      ),
+    ...(saved.length === 0 ? ["- none"] : []),
+    "",
+    "a start names its workspace — an id, its label, the path of a checkout on this Machine or a",
+    "repository's directory name under the Projects root (one with no workspace open on it gets",
+    "one), or projects-root — and every Input, an optional",
     'one left empty as "". Nothing is inferred; a start missing any is refused with each listed.',
   ].join("\n");
 });

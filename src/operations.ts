@@ -169,6 +169,8 @@ export const workspaceNamed = Effect.fn("operations.workspaceNamed")(function* (
   if (matched.length === 0) {
     const opened = yield* workspaceForDirectory(env, wanted, all, panes);
     if (opened !== null) return opened;
+    if (wanted.includes("/"))
+      return refused(`no directory "${named}" on this Machine; ${yield* howToName(env)}`);
     const checkouts = yield* checkoutsNamed(env, wanted);
     if (checkouts.paths.length === 1)
       return yield* workspaceForDirectory(env, checkouts.paths[0]!, all, panes);
@@ -176,7 +178,10 @@ export const workspaceNamed = Effect.fn("operations.workspaceNamed")(function* (
       return refused(
         `"${named}" names ${checkouts.paths.length} checkouts under ${checkouts.root} (${checkouts.paths.join(", ")}); say which`,
       );
-    return refused(`no workspace "${named}"; ${all.map((w) => w.label).join(", ") || "none"}`);
+    const root = yield* projectsRoot(env).pipe(Effect.orElseSucceed(() => null));
+    return refused(
+      `no workspace id, label, directory${root === null ? "" : ` or checkout under the Projects root ${root.path}`} is named "${named}"; workspaces: ${all.map((w) => w.label).join(", ") || "none"}`,
+    );
   }
   if (matched.length > 1)
     return refused(
@@ -189,6 +194,33 @@ export const workspaceNamed = Effect.fn("operations.workspaceNamed")(function* (
     workspace.cwd !== "" ? workspace.cwd : workspaceCwdFromPanes(workspace.workspaceId, panes);
   if (cwd === "") return refused(`workspace "${named}" has no directory to run in`);
   return { found: { ...workspace, cwd } };
+});
+
+/** Whether `cwd` is in Collie's state directory, the Home's among it: no checkout (ADR-0033). */
+export const inCollieState = Effect.fn("operations.inCollieState")(function* (
+  env: PluginEnv,
+  cwd: string,
+) {
+  const path = yield* Path.Path;
+  const state = path.resolve(env.stateDir);
+  const dir = path.resolve(cwd);
+  return dir === state || dir.startsWith(`${state}${path.sep}`);
+});
+
+/** Why a start may not be rooted in `cwd`, or null where it may. */
+export const collieOwnRefusal = Effect.fn("operations.collieOwnRefusal")(function* (
+  env: PluginEnv,
+  named: string,
+  cwd: string,
+) {
+  if (!(yield* inCollieState(env, cwd))) return null;
+  return `"${named}" is ${cwd}, Collie's own namespace, not a checkout; ${yield* howToName(env)}, or projects-root`;
+});
+
+/** How a checkout is named instead, on this Machine. */
+const howToName = Effect.fn("operations.howToName")(function* (env: PluginEnv) {
+  const root = yield* projectsRoot(env).pipe(Effect.orElseSucceed(() => null));
+  return `name a checkout by its workspace, its path on this Machine${root === null ? "" : ` or its directory name under the Projects root ${root.path}`}`;
 });
 
 /**
