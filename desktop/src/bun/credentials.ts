@@ -11,7 +11,7 @@ import { GITLAB_HOST, SCOPES, TokenSelf } from "../../../src/gitlab-token";
 import { inTerminal } from "../../../src/in-terminal";
 import type { OnboardRun } from "../shared/flock";
 import { quoted, type ShellRoute, spawned } from "./machine";
-import { childEnv } from "./login-env";
+import { childEnv, which } from "./login-env";
 import { ranWith, shOn, tracked } from "./onboarding";
 
 export const GITLAB = `https://${GITLAB_HOST}`;
@@ -39,7 +39,7 @@ const parsed = (text: string) =>
 const fromSecretTool = (tool: string) =>
   Effect.gen(function* () {
     const found = new Map<string, string>();
-    if (Bun.which(tool) === null) return found;
+    if (which(tool) === null) return found;
     for (const key of ENTRIES) {
       // A locked keyring may wait on an unlock prompt; Desktop's launch does not.
       const ran = yield* ranWith([tool, "lookup", "service", "collie-desktop", "key", key]).pipe(
