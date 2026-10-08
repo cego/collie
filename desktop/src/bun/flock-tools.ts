@@ -142,33 +142,34 @@ export const FLOCK_TOOLS = Object.values(FlockTools.tools).map(describeTool);
 
 const ANSWER_WITHIN = "10 seconds";
 
-/** Why `machine` cannot be read now, or null where it can. */
-const unreadAt = (machine: ChatMachine, now: number) =>
-  machine.board._tag !== "Live"
-    ? unreadBecause(machine.name, machine.board, now)
-    : machine.door === undefined
-      ? `${machine.name}'s chat channel is not open yet`
-      : null;
-
 /** The Machine's live board and channel, or why it has none. */
+const reachedAt = (
+  { name, board, door }: ChatMachine,
+  now: number,
+): Result.Result<Reached, string> =>
+  board._tag !== "Live"
+    ? Result.fail(unreadBecause(name, board, now))
+    : door === undefined
+      ? Result.fail(`${name}'s chat channel is not open yet`)
+      : Result.succeed({ name, board, door });
+
 export const reach = (machine: ChatMachine) =>
-  Effect.flatMap(Clock.currentTimeMillis, (now) => {
-    const why = unreadAt(machine, now);
-    return why === null
-      ? // SAFETY: `unreadAt` is null only for a live board with a door.
-        Effect.succeed(machine as Reached)
-      : Effect.fail(new HostRefused({ reason: why }));
-  });
+  Effect.flatMap(Clock.currentTimeMillis, (now) =>
+    Result.match(reachedAt(machine, now), {
+      onSuccess: Effect.succeed,
+      onFailure: (reason) => Effect.fail(new HostRefused({ reason })),
+    }),
+  );
 
 /** Each Machine, and its live board or why it has none. */
 const boards = (flock: FlockChat) =>
   Effect.map(Clock.currentTimeMillis, (now) =>
-    flock.machines().map((machine) => {
-      const unread = unreadAt(machine, now);
-      return unread === null && machine.board._tag === "Live"
-        ? { machine, board: machine.board, unread }
-        : { machine, board: null, unread };
-    }),
+    flock.machines().map((machine) =>
+      Result.match(reachedAt(machine, now), {
+        onSuccess: ({ board }) => ({ machine, board, unread: null }),
+        onFailure: (unread) => ({ machine, board: null, unread }),
+      }),
+    ),
   );
 
 type Boards = Effect.Success<ReturnType<typeof boards>>;
@@ -189,7 +190,7 @@ export const place = (
   owners: ReadonlyArray<{
     readonly machine: ChatMachine;
     readonly ids: ReadonlySet<string> | null;
-    readonly unread?: string | null;
+    readonly unread: string | null;
   }>,
   what: string,
 ): Result.Result<Placed, string> => {
@@ -212,7 +213,7 @@ export const place = (
       `${what} "${named}" is on ${only.machine.name}, and ${unread
         .map(({ machine }) => machine.name)
         .join(", ")} could not be checked for one too (${unread
-        .map(({ machine, unread }) => unread ?? `${machine.name} could not be read`)
+        .map(({ unread }) => unread)
         .join("; ")}). Nothing was done; name it as ${only.machine.name}:${named}.`,
     );
   if (having.length === 1) return Result.succeed({ machine: having[0]!.machine, id: named });
@@ -430,7 +431,7 @@ export const heardNews = Effect.fn("FlockTools.heardNews")(function* (flock: Flo
   const told = yield* Effect.forEach(
     flock.machines(),
     (machine) =>
-      // Unread, it is said without the refusal a write would add.
+      // `reach` first, so an unread Machine's reason comes without a write's refusal.
       reach(machine)
         .pipe(
           Effect.andThen(speaking(flock, machine)),

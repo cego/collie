@@ -426,6 +426,22 @@ for (const [board, why] of UNREAD)
       }).pipe(Effect.provide([BunServices.layer, TestClock.layer()])),
     ));
 
+test("a live Machine whose chat channel is not open yet is still a Machine, and says so", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const asked: Asked[] = [];
+      const { door: _, ...doorless } = machine("vm-mk", [], asked);
+      const said = yield* callFlockTool(
+        { ...withUnread(asked, doorless.board), machines: () => [doorless] },
+        "collie_hold",
+        { run: "vm-mk:r-1" },
+      );
+      expect(said).toBe(
+        "hold: failed — vm-mk's chat channel is not open yet. Nothing was done on vm-mk.",
+      );
+    }).pipe(Effect.provide(BunServices.layer)),
+  ));
+
 test("a live Machine is read from the board Desktop follows, with no board of its host's", () =>
   Effect.runPromise(
     Effect.gen(function* () {

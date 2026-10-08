@@ -816,16 +816,18 @@ export const chatBoards = (flock: Flock, since: ReadonlyMap<string, number>) => 
       (other) => other.machine.profile === profile && other.asOf === null,
     );
     const board: ChatBoard =
-      known.asOf === null && known.protocol !== null
-        ? {
-            _tag: "Live",
-            herds: known.herds,
-            tasks: [...known.tasks.values()],
-            protocol: known.protocol,
-            files: known.files,
-          }
+      known.asOf === null
+        ? known.protocol === null
+          ? waiting(profile)
+          : {
+              _tag: "Live",
+              herds: known.herds,
+              tasks: [...known.tasks.values()],
+              protocol: known.protocol,
+              files: known.files,
+            }
         : liveThere || !flock.routes.has(profile)
-          ? { _tag: "Saved", at: known.asOf ?? 0 }
+          ? { _tag: "Saved", at: known.asOf }
           : waiting(profile);
     // SAFETY: `names` holds every Machine of this Flock.
     return { name: names.get(installation)!, profile, installation, board };
@@ -836,7 +838,7 @@ export const chatBoards = (flock: Flock, since: ReadonlyMap<string, number>) => 
   return [...shown, ...unshown];
 };
 
-const NOT_LIVE_SAID: Record<NotLive, (name: string) => string> = {
+const LOST_SAID: Record<NotLive, (name: string) => string> = {
   unreachable: (name) => `${name} is out of reach`,
   sso: (name) => `${name} is waiting for an SSO login`,
   "no-collie": (name) => `Collie isn't installed on ${name}`,
@@ -860,7 +862,7 @@ export const unreadBecause = (
         ? `${name} is still connecting; Desktop has had no board from it yet`
         : `${name} is still connecting; Desktop has waited ${waited(now - board.since)} for its first board`;
     case "Lost":
-      return `${NOT_LIVE_SAID[board.state](name)}: ${board.reason.replace(/\.$/, "")}`;
+      return `${LOST_SAID[board.state](name)}: ${board.reason.replace(/\.$/, "")}`;
     case "Saved":
       return `${name} is only a board Desktop saved at ${DateTime.formatIso(DateTime.makeUnsafe(board.at))}, with no live host since`;
   }

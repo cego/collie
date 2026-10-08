@@ -694,6 +694,8 @@ const main = Effect.gen(function* () {
           Effect.map(Clock.currentTimeMillis, (now) => {
             if ("_tag" in item && item._tag === "Routed" && !routedAt.has(item.machine.profile))
               routedAt.set(item.machine.profile, now);
+            // A lost route waits for its board again from then.
+            if ("_tag" in item && item._tag === "Lost") routedAt.set(item.machine.profile, item.at);
             shown = applyItem(shown, item);
           }),
         ),

@@ -1318,9 +1318,10 @@ for SSO, without Collie or needing a newer Desktop, in its connection's own word
 a board Desktop saved, and when. That reason is what `collie_herd`, `collie_workspaces` and
 `collie_news` say of it, and what a write to it is refused with ("… Nothing was done on
 vm-mk."); a bare id another Machine has is refused while that one cannot be checked. A
-Machine whose Collie is older than Desktop's chat is written to by nothing. The bell turns Desktop's own
-turns off (and on again); it is on by default, and kept in `settings.json` beside the
-session.
+Machine whose Collie is older than Desktop's chat is written to by nothing.
+
+The bell turns Desktop's own turns off (and on again); it is on by default, and kept in
+`settings.json` beside the session.
 
 **Settings** has the **Machine rule** under **Chat**, for **This computer only**: which Machine each kind
 of work goes to, in your own words — "Frontend work is on the laptop, everything else is on
