@@ -62,6 +62,11 @@ export const updatesAtom = FlockClient.runtime
   .atom(Stream.unwrap(FlockClient.use((client) => Effect.succeed(client("updates", undefined)))))
   .pipe(Atom.keepAlive);
 
+/** How the board's window is drawn, told again as its zoom is decided again. */
+export const drawnAtom = FlockClient.runtime.atom(
+  Stream.unwrap(FlockClient.use((client) => Effect.succeed(client("drawn", undefined)))),
+);
+
 /** Which credentials Desktop holds, kept alive so a token due for renewal is always heard. */
 export const credentialsAtom = FlockClient.runtime
   .atom(

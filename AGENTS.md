@@ -95,6 +95,12 @@ herdr actions, and the `collie` CLI.
   (its copies), `bun/carried.ts` (files to a Run's Machine), `bun/file-tools.ts` and
   `shared/attachments.ts`, with `test/attachments.test.ts`, `test/host-files.test.ts` and
   `test/flock-*.test.ts`.
+- **Changing how large Desktop draws, or its Zoom** →
+  [ADR-0047](docs/adr/0047-desktop-draws-at-its-monitors-own-scale.md), alongside
+  `desktop/src/shared/scale.ts` (the monitor of a window from `hyprctl -j`, the zoom and the
+  "Drawn at" line) and `desktop/src/bun/scale.ts` (reading the scales and setting each
+  window's page zoom as it moves), with `test/desktop-scale.test.ts`. Page zoom, never CSS
+  `zoom`.
 - **Adding a setting, or changing how settings are shared across a Flock** →
   [ADR-0043](docs/adr/0043-a-shared-setting-is-its-latest-edit.md), alongside
   `src/settings.ts` (the one list the TUI, Desktop and the host read), `setSetting` and

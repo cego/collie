@@ -60,6 +60,8 @@ import { type FlockConversation, openFlockChat, refusal } from "./chat";
 import { claudeCode } from "./claude";
 import { chatDoor } from "./flock-tools";
 import { readSettings, writeSettings } from "./settings";
+import { followWindow, zoomWindow } from "./scale";
+import type { Drawn } from "../shared/scale";
 import { flockSync, readFlockSettings, writeFlockSettings } from "./flock-settings";
 import { editSetting } from "../shared/flock-settings";
 import { nowIso } from "../../../src/time";
@@ -334,6 +336,31 @@ const main = Effect.gen(function* () {
   const onboardings = `${Utils.paths.userData}/onboarding`;
   const runners = `${Utils.paths.userData}/runners`;
   const scope = yield* Effect.scope;
+  /** How the board's window is drawn, which Settings says. */
+  const drawn = yield* SubscriptionRef.make<Drawn | null>(null);
+  /** Each open window's ask to be zoomed again. */
+  const zoomAgain = new Set<Effect.Effect<void>>();
+  /** Keeps `window` at its monitor's own scale until it closes, telling `told` how. */
+  const zoomed = (
+    window: BrowserWindow,
+    title: string,
+    told: (drawn: Drawn) => Effect.Effect<void> = () => Effect.void,
+  ) =>
+    Effect.gen(function* () {
+      const { again, asked } = yield* followWindow(window);
+      zoomAgain.add(again);
+      const closed = Deferred.makeUnsafe<void>();
+      window.on("close", () => Deferred.doneUnsafe(closed, Effect.void));
+      yield* asked.pipe(
+        Stream.runForEach(() =>
+          Effect.flatMap(zoomWindow(window, title, settings.zoom ?? 1), told),
+        ),
+        Effect.raceFirst(Deferred.await(closed)),
+        Effect.ensuring(Effect.sync(() => zoomAgain.delete(again))),
+        Effect.forkIn(scope),
+      );
+    });
+  yield* zoomed(board.window, "Collie", (now) => SubscriptionRef.set(drawn, now));
   const uuid = (yield* Crypto.Crypto).randomUUIDv4.pipe(Effect.orDie);
   /** Each route's latest settings sync, told again to a view that subscribes. */
   const synced = new Map<string, MachineSynced>();
@@ -540,6 +567,11 @@ const main = Effect.gen(function* () {
           Effect.sync(() => {
             settings = merged;
           }),
+        ),
+        Effect.andThen(
+          changed.zoom === undefined
+            ? Effect.void
+            : Effect.forEach(zoomAgain, (again) => again, { discard: true }),
         ),
       );
     }).pipe(settingsWrite.withPermits(1), Effect.orDie);
@@ -958,6 +990,7 @@ const main = Effect.gen(function* () {
           const closed = Deferred.makeUnsafe<void>();
           opened.window.on("close", () => Deferred.doneUnsafe(closed, Effect.void));
           popped = { window: opened.window, closed };
+          yield* zoomed(opened.window, "Flock chat");
           yield* Layer.launch(servedOn(opened.channel)).pipe(
             Effect.raceFirst(Deferred.await(closed)),
             Effect.ensuring(Effect.sync(() => (popped = undefined))),
@@ -970,6 +1003,7 @@ const main = Effect.gen(function* () {
     desktopTurns: () =>
       Stream.unwrap(withChat((opened) => Effect.succeed(opened.desktopTurns), Stream.empty)),
     settings: () => Effect.sync(() => settings),
+    drawn: () => SubscriptionRef.changes(drawn).pipe(Stream.filter((now) => now !== null)),
     setSettings: saveSettings,
   });
   const servedOn = (channel: Channel<ToView, ToMain>) =>

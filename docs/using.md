@@ -1077,7 +1077,7 @@ unchanged. **Reset to default**, shown while a setting is set, unsets it. Each s
 **Every Machine** shares it or it is for **This computer only**: the Flock chat's switch,
 like the bell in the chat's header, is this computer's. The groups, names, descriptions and
 units live with each key in the one list of settings (`src/settings.ts`) that the TUI's
-Settings reads too, so a new setting shows up in both, except the two for this computer only,
+Settings reads too, so a new setting shows up in both, except the three for this computer only,
 whose are in `DESKTOP_SETTINGS` (`desktop/src/shared/flock-settings.ts`); the TUI does not show the names,
 descriptions or minutes yet. The ones every Machine shares are the Flock's: Desktop keeps them in
 `flock-settings.json` beside its chat, and gives them to every Machine through that
@@ -1092,6 +1092,19 @@ with Settings saying beside it which Machine that came from. A value a Machine h
 its setting refuses, written into its file by hand, is not taken. What stays each Machine's own
 is everything else in its `config.json`: remembered answers such as `linear.team` and
 `gitlab.assignee`, `chat_harness`, and `projects.root`, which is a path on that Machine.
+
+**Zoom**, under **Board** and for **This computer only**, is how large Desktop draws: 80%,
+90%, 100%, 110%, 125% or 150%, where 100% is the size of the other apps on the same monitor.
+A change applies at once to every Desktop window, the popped-out Flock chat included.
+Desktop is drawn through XWayland, which renders it at one whole-number scale on every
+monitor, so on Hyprland Desktop reads the scale of the monitor holding each window from
+`hyprctl -j` and corrects for it with Chromium's own page zoom, again whenever a window
+moves, resizes or takes focus: moving one to another monitor resizes it, and text stays sharp
+([ADR-0047](adr/0047-desktop-draws-at-its-monitors-own-scale.md)). **About** says how the
+board's window is drawn — "Drawn at 1.5× on DP-1 (3840×2160, Hyprland scale 1.5). Rendered
+at 2×, so zoom 75% × your 100%." — and says so where the window's pixel ratio is not what
+that zoom should give. Where Desktop cannot read the monitor's scale, as on another
+compositor or an X11 session, it says the scale is not known and why, and Zoom alone applies.
 
 **Settings** also holds **Collie**: every setting the TUI's Settings offers — each default a
 Run reads, `proactive`, the extra `models.<harness>` and each `notifications.<kind>` — with

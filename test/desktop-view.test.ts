@@ -132,6 +132,7 @@ const served = (main: Channel<ToView, ToMain>) =>
         desktopTurns: () => Stream.die("not asked"),
         settings: () => Effect.die("not asked"),
         setSettings: () => Effect.die("not asked"),
+        drawn: () => Stream.die("not asked"),
       }),
     ),
     Layer.provide(Layer.effect(RpcServer.Protocol, serverProtocol(main))),

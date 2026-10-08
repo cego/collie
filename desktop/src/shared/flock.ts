@@ -8,6 +8,7 @@ import * as RpcGroup from "effect/rpc/RpcGroup";
 import { AguiEvent } from "./agui";
 import { Staged, StagedOrRefused } from "./attachments";
 import { About, Answers, ChatMessage, Conversations, DesktopTurn } from "./chat-view";
+import { Drawn } from "./scale";
 import { FlockSettings } from "./flock-settings";
 import {
   BoardMessage,
@@ -319,6 +320,8 @@ export const DesktopSettings = Schema.Struct({
   gitlabHost: Schema.optionalKey(Schema.String),
   /** Which Machine each kind of work goes to, in the human's words; empty is no rule. */
   machineRule: Schema.optionalKey(Schema.String),
+  /** The human's Zoom, 1 the size of the other apps on each monitor; unset is 1. */
+  zoom: Schema.optionalKey(Schema.Number),
 });
 export type DesktopSettings = typeof DesktopSettings.Type;
 
@@ -327,6 +330,7 @@ export const DesktopSettingsChange = Schema.Struct({
   proactive: Schema.optionalKey(Schema.Boolean),
   gitlabHost: Schema.optionalKey(Schema.String),
   machineRule: Schema.optionalKey(Schema.String),
+  zoom: Schema.optionalKey(Schema.Number),
 });
 export type DesktopSettingsChange = typeof DesktopSettingsChange.Type;
 
@@ -550,6 +554,8 @@ export const DesktopRpcs = RpcGroup.make(
   /** When the Flock chat starts and ends a turn of Desktop's own. */
   Rpc.make("desktopTurns", { success: DesktopTurn, stream: true }),
   Rpc.make("settings", { success: DesktopSettings }),
+  /** How the board's window is drawn, again whenever its zoom is decided again. */
+  Rpc.make("drawn", { success: Drawn, stream: true }),
   Rpc.make("setSettings", { payload: DesktopSettingsChange }),
 );
 
