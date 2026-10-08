@@ -534,7 +534,7 @@ const downloadable = Effect.fn("prepareTest.downloadable")(function* () {
     `${root}/release-p256.pub`,
     publicKey.export({ type: "spki", format: "pem" }).toString(),
   );
-  const asset = `${home}/release/collie-linux-${process.arch === "arm64" ? "arm64" : "x64"}`;
+  const asset = `${home}/release/collie-${process.platform}-${process.arch === "arm64" ? "arm64" : "x64"}`;
   const runner = new Uint8Array([0x7f, 0x45, 0x4c, 0x46, ...new TextEncoder().encode(" new")]);
   yield* fs.makeDirectory(`${home}/release`, { recursive: true });
   yield* fs.writeFile(asset, runner);
@@ -549,7 +549,7 @@ const downloadable = Effect.fn("prepareTest.downloadable")(function* () {
     run("install.sh", undefined, {
       COLLIE_RELEASE_BASE: `file://${home}/release`,
       COLLIE_PREPARING: "1",
-      COLLIE_OPENSSL: "openssl",
+      COLLIE_OPENSSL: Bun.env.COLLIE_OPENSSL ?? "openssl",
     });
   return { runner, signature, install };
 });

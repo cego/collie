@@ -45,14 +45,21 @@ const install = (dir: string, publicKey: string) =>
     const script = (yield* fs.readFileString(SCRIPT)).replace(KEY_BLOCK, publicKey.trim());
     const home = `${dir}/home`;
     yield* fs.makeDirectory(home, { recursive: true });
+    // The Linux x64 installer is the one released here, whatever runs the test.
+    yield* fs.writeFileString(
+      `${dir}/uname`,
+      `#!/bin/sh\ncase "$1" in -s) echo Linux ;; -m) echo x86_64 ;; esac\n`,
+      { mode: 0o755 },
+    );
     // Away from the checkout, as `curl … | sh` runs it: nothing beside it to lean on.
     yield* fs.writeFileString(`${dir}/install-desktop.sh`, script);
     const done = yield* exec(["sh", `${dir}/install-desktop.sh`], {
       cwd: home,
       env: {
-        PATH: Bun.env.PATH ?? "/usr/bin:/bin",
+        PATH: `${dir}:${Bun.env.PATH ?? "/usr/bin:/bin"}`,
         HOME: home,
         COLLIE_DESKTOP_BASE: `file://${dir}/release`,
+        COLLIE_OPENSSL: Bun.env.COLLIE_OPENSSL ?? "openssl",
       },
     });
     const ran = yield* fs.exists(`${home}/installed`);

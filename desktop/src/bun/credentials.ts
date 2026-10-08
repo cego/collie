@@ -8,6 +8,7 @@ import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientRequest from "effect/http/HttpClientRequest";
 import { GITLAB_HOST, SCOPES, TokenSelf } from "../../../src/gitlab-token";
+import { scriptLine } from "../../../src/script";
 import type { OnboardRun } from "../shared/flock";
 import { quoted, type ShellRoute, spawned } from "./machine";
 import { ranWith, shOn, tracked } from "./onboarding";
@@ -258,9 +259,7 @@ export const claudeLoginThrough = Effect.fn("Desktop.claudeLoginThrough")(functi
     yield* run.step({ ...login, status: "failed", detail: "could not start the login there" });
     return { ended: false, run: run.current() };
   }
-  const command = yield* route.sh(
-    `BROWSER=${SHIM} exec script -qefc 'claude auth login' /dev/null`,
-  );
+  const command = yield* route.sh(`export BROWSER=${SHIM}; ${scriptLine("claude auth login")}`);
   const child = yield* spawned(() =>
     Bun.spawn([...command], { stdin: "pipe", stdout: "pipe", stderr: "pipe" }),
   );

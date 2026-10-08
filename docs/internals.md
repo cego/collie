@@ -238,7 +238,10 @@ herdr what some other version's schema says.
 Desktop's main process runs three more, all on herdr's list of saved machines:
 `herdr machine list --json`, which machines to reach, and `herdr machine remove`
 (`desktop/src/bun/machine.ts`), and `herdr machine add` (`desktop/src/bun/onboarding.ts`),
-run under `script` so herdr has the terminal its questions need. Where the list fails, it
+run under `script` so herdr has the terminal its questions need. `src/script.ts` builds that
+command, for this and for the Claude and Linear logins: util-linux `script -qefc` on Linux,
+and BSD `script -q /dev/null /bin/sh -c` on macOS, whose `script` has no `-c`. A login run
+on another Machine picks between them there, by `uname`. Where the list fails, it
 also asks `herdr --version`, so a herdr too old to have `herdr machine` is named as one. Desktop is another
 program, usually on another computer, and it is not talking to a session either: it keeps
 herdr's list and nothing else. Routing them through `herdr.ts` would bring Collie's locks
@@ -508,7 +511,9 @@ for an answer that had already arrived. Installation through agent startup holds
 lock outside the controls directory. Cleanup takes the same lock and rechecks `agent
 list` before removing controls or stopping an endpoint. A parallel launch therefore
 cannot mistake an agent still starting for a stale one; a failed launch releases its
-lock, and the existing PID-lock recovery handles a process that crashes.
+lock, and the existing PID-lock recovery handles a process that crashes. An endpoint is
+stopped only while its recorded pid still runs the recorded command, read from
+`/proc/<pid>/cmdline`, or from `ps -ww -o command=` where there is no `/proc`, as on macOS.
 
 ## The registry and sessions
 

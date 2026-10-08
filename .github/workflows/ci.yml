@@ -29,6 +29,25 @@ jobs:
       # Proves the committed snapshot is what the pinned herdr really prints.
       - run: bun run contract:check
 
+  # The runner built and smoked on a Mac, and the installers' signature check run with the
+  # Mac's own LibreSSL. Not the whole suite: a Mac-only defect past these is when to add it.
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4"
+      - run: bun install --frozen-lockfile
+      - run: bun run build
+      - run: bun run smoke
+      - run: bun test test/install-desktop.test.ts
+        env:
+          COLLIE_OPENSSL: /usr/bin/openssl
+      - run: bun test test/prepare.test.ts -t "release key|another key signed|cannot be fetched|LibreSSL|no openssl"
+        env:
+          COLLIE_OPENSSL: /usr/bin/openssl
+
   # Desktop's own install and types, which the root check cannot see: the root installs none
   # of Desktop's dependencies.
   desktop:

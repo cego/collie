@@ -954,6 +954,28 @@ const OPERATOR_CHECKS: readonly Check[] = [
     },
   },
   {
+    id: "install/tui-installs-on-a-stock-mac",
+    statement:
+      "On an arm64 Mac with no Homebrew OpenSSL, `git clone … ~/.collie && ~/.collie/setup.sh` installs a runner that starts and passes `codesign --verify`, and `collie onboard` reaches the Linear login.",
+    owner: ON_A_MAC,
+    needs: "operator",
+    proof: {
+      kind: "operator",
+      how: "On a Mac without Homebrew's OpenSSL, run `git clone https://github.com/cego/collie.git ~/.collie && ~/.collie/setup.sh` from a release carrying this work. Record that `~/.collie/bin/collie --version` runs and is not killed, that `codesign --verify ~/.collie/bin/collie` passes, and that `collie onboard --skip helle` reaches the Linear login and prints its URL. Record the revision.",
+    },
+  },
+  {
+    id: "install/desktop-on-a-mac-finds-herdr-from-the-dock",
+    statement:
+      "Collie Desktop opened from the Dock finds `herdr`, `collie`, `claude`, `git` and `ssh` as the user's terminal does, so Local and a VM added as a herdr machine are on its board.",
+    owner: ON_A_MAC,
+    needs: "operator",
+    proof: {
+      kind: "operator",
+      how: "On a Mac whose shell adds `~/.local/bin` and Homebrew to PATH in `.zshrc` or `.zprofile`, open Collie Desktop from the Dock, not from a terminal. Record that Local is on the board, and with a VM added by `herdr machine add`, that the VM is too. Record the revision.",
+    },
+  },
+  {
     id: "install/old-herdr-is-explained-and-left-running",
     statement:
       "With a herdr older than Collie's minimum, `setup.sh` finishes everything it can, `collie doctor` says what upgrading will do to the running panes and when, and the herdr server and its panes are left running.",

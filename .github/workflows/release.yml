@@ -27,14 +27,55 @@ jobs:
       # The build script gates on the artifact embedding its own target's renderer, so a
       # cross-build that resolved the wrong native package fails here rather than shipping.
       - run: bun run tools/build.ts ${{ matrix.target }} collie-${{ matrix.target }}
-      # Only the runner's own target can be executed here; the others are smoked by ci.yml's
-      # native build.
+      # Only the runner's own target can be executed here; the darwin ones are smoked on a Mac
+      # below.
       - if: matrix.target == 'linux-x64'
         run: sh tools/smoke.sh ./collie-${{ matrix.target }}
       - uses: actions/upload-artifact@v7
         with:
           name: collie-${{ matrix.target }}
           path: collie-${{ matrix.target }}
+
+  # The darwin runners, run on a Mac before the release key signs them. Where Bun's
+  # cross-build carries a signature macOS refuses, it is signed ad hoc here, and those are
+  # the bytes the release signs and publishes.
+  macos-runner:
+    needs: build
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4"
+      - run: bun install --frozen-lockfile
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: collie-darwin-*
+          merge-multiple: true
+      - run: chmod +x collie-darwin-arm64 collie-darwin-x64
+      - id: codesign
+        run: |
+          if codesign --verify collie-darwin-arm64; then
+            echo "Bun's cross-build passes codesign --verify as it is" | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Bun's cross-build fails codesign --verify, so it is signed ad hoc" | tee -a "$GITHUB_STEP_SUMMARY"
+            codesign --force --sign - collie-darwin-arm64
+            codesign --verify collie-darwin-arm64
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+          fi
+      - run: sh tools/smoke.sh ./collie-darwin-arm64
+      - run: |
+          if arch -x86_64 /usr/bin/true 2>/dev/null; then
+            sh tools/smoke.sh ./collie-darwin-x64
+          else
+            echo "no Rosetta on this runner, so collie-darwin-x64 is published unsmoked"
+          fi
+      - if: steps.codesign.outputs.signed == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: collie-darwin-arm64
+          path: collie-darwin-arm64
+          overwrite: true
 
   desktop:
     runs-on: ubuntu-latest
@@ -62,7 +103,7 @@ jobs:
           if-no-files-found: error
 
   release:
-    needs: [build, desktop]
+    needs: [build, macos-runner, desktop]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v8

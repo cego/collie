@@ -47,6 +47,11 @@ upgrades herdr or stops its server itself: stopping it ends your work, so when i
 choose. Desktop says the same when its herdr has no `herdr machine`, and points at
 `collie doctor`.
 
+**On a Mac.** The same command installs the TUI plugin on macOS. Its `darwin-arm64` runner
+is the file a release ran on a Mac before signing it, signed ad hoc there if macOS would not
+start Bun's build as it was. The logins `collie onboard` and Desktop run use macOS's own BSD
+`script`, and nothing needs Homebrew's OpenSSL or GNU tools.
+
 Collie's releases are public, so the install needs no token. A project that is not public — a
 fork, or a mirror — answers an unauthenticated download with a sign-in page rather than a binary — with HTTP 200, which is why the install
 checks that what arrived is a program rather than trusting the status code. A downloaded
@@ -882,6 +887,12 @@ curl -fsSL https://github.com/cego/collie/releases/latest/download/install-deskt
 
 The script downloads the latest release's installer and runs it only once the download
 verifies against Collie's release key. Any `openssl` will do.
+
+On macOS, Desktop opened from Finder or the Dock starts with launchd's short PATH. So at
+start it asks your login shell (`$SHELL -ilc`) for its PATH and runs with that, finding
+`herdr`, `collie`, `claude`, `git` and `ssh` as your terminal does. If the shell does not
+answer within a few seconds, Desktop keeps the PATH it was given and logs why. On Linux it
+keeps the PATH its session gave it.
 
 It shows up as **Collie**, with the Collie mark — the dog on the white tile the TUI board
 shows, which reads on a dark taskbar too — in your app launcher, on its window, in the

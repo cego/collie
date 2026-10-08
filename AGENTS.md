@@ -250,7 +250,9 @@ herdr actions, and the `collie` CLI.
   alongside `tools/sign.ts`, `src/signing.ts`, `install.sh` and `install-desktop.sh`, with
   `test/signing.test.ts`, `test/prepare.test.ts` and `test/install-desktop.test.ts`. Every
   asset is signed twice: the shell installers check the P-256 signature, which any
-  `openssl` can, and the runner and Desktop the Ed25519 one.
+  `openssl` can, and the runner and Desktop the Ed25519 one. What runs differently on a Mac is
+  `src/script.ts` (a login's `script`), the `ps` fallback in `src/compaction.ts`'s
+  `endpointPid` and `desktop/src/bun/login-path.ts` (Desktop's PATH from the login shell).
 
 ## Commands
 

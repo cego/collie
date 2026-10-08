@@ -16,6 +16,7 @@ import { err, moveToRelease, prepareSteps, type OpResult } from "./operations";
 import { HELLE_TOKEN_STEPS, helleUrlOf } from "./helle-url";
 import { helleEnvPath, LINEAR_MCP_ADD, LINEAR_MCP_FIX, probeLinearMcp } from "./optional";
 import { installation, manifestField, RELEASE_TAG } from "./release";
+import { scriptCommand } from "./script";
 
 export type StepStatus = "done" | "in_place" | "skipped" | "needs_root" | "needs_human" | "failed";
 
@@ -525,8 +526,9 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
     const handed = `${shims}/url`;
     yield* fs.writeFileString(`${shims}/browser`, `#!/bin/sh\necho "$1" > '${handed}'\n`);
     yield* fs.chmod(`${shims}/browser`, 0o755);
+    const [script, ...args] = scriptCommand(LINEAR_LOGIN, process.platform);
     const handle = yield* spawner.spawn(
-      ChildProcess.make("script", ["-qefc", LINEAR_LOGIN, "/dev/null"], {
+      ChildProcess.make(script, args, {
         cwd: env.home,
         env: { ...childEnv, BROWSER: `${shims}/browser` },
         // It waits on stdin for a pasted redirect, and gives up when stdin ends.
