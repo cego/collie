@@ -36,6 +36,7 @@ import {
 import {
   ActionFailed,
   applyItem,
+  chatBoards,
   CREDENTIALS,
   type Credentials,
   DesktopRpcs,
@@ -45,7 +46,6 @@ import {
   type KnownMachine,
   machineRows,
   type MachineSynced,
-  nameAsShown,
   type OnboardRun,
   type OnboardStep,
   Skippable,
@@ -58,7 +58,7 @@ import { clipboardPaths } from "../shared/attachments";
 import { readAttachment, stageAttachment, stagePath } from "./attachments";
 import { type FlockConversation, openFlockChat, refusal } from "./chat";
 import { claudeCode } from "./claude";
-import { chatDoor } from "./flock-tools";
+import { type ChatMachine, chatDoor } from "./flock-tools";
 import { readSettings, writeSettings } from "./settings";
 import { flockSync, readFlockSettings, writeFlockSettings } from "./flock-settings";
 import { editSetting } from "../shared/flock-settings";
@@ -551,8 +551,10 @@ const main = Effect.gen(function* () {
       ),
     ).pipe(Effect.provide(BunServices.layer));
 
-  // The Flock as the board was last sent it, so the chat names its Machines as the cards do.
+  // The Flock as the board was last sent it: the chat reads its Machines and boards from it.
   let shown = EMPTY_FLOCK;
+  /** When Desktop began waiting on each route, by herdr profile. */
+  const routedAt = new Map<string, number>();
   const holds = Effect.map(given.held, (texts) => ({
     version: manifest.version,
     credentials: CREDENTIALS.filter((one) => texts[one] !== undefined),
@@ -600,14 +602,12 @@ const main = Effect.gen(function* () {
           Effect.catch(({ reason }) => Effect.succeed(reason)),
         );
       }),
-    machines: () => {
-      const named = nameAsShown(shown);
-      return [...doors].map(([installation, held]) => ({
-        name: named({ ...held.machine, installation }),
-        door: chatDoor(held.chat),
-        local: held.machine.profile === "local",
-      }));
-    },
+    machines: () =>
+      chatBoards(shown, routedAt).map(({ name, profile, installation, board }) => {
+        const held = installation === null ? undefined : doors.get(installation);
+        const machine: ChatMachine = { name, board, local: profile === "local" };
+        return held === undefined ? machine : { ...machine, door: chatDoor(held.chat) };
+      }),
   }).pipe(Scope.provide(scope), Effect.result, Effect.cached);
   // ponytail: a chat that could not start stays so until Desktop restarts.
   const withChat = <A>(use: (opened: FlockConversation) => Effect.Effect<A>, unstarted: A) =>
@@ -662,6 +662,7 @@ const main = Effect.gen(function* () {
             ).pipe(Effect.forkIn(scope));
           };
           shown = EMPTY_FLOCK;
+          routedAt.clear();
           const before: ReadonlyArray<FlockItem> = [
             ...reachable.map(({ machine }): FlockItem => ({ _tag: "Routed", machine })),
             ...(yield* savedBoards(boards)).filter(listed),
@@ -689,7 +690,13 @@ const main = Effect.gen(function* () {
         }),
       ).pipe(
         saving(boards),
-        Stream.tap((item) => Effect.sync(() => void (shown = applyItem(shown, item)))),
+        Stream.tap((item) =>
+          Effect.map(Clock.currentTimeMillis, (now) => {
+            if ("_tag" in item && item._tag === "Routed" && !routedAt.has(item.machine.profile))
+              routedAt.set(item.machine.profile, now);
+            shown = applyItem(shown, item);
+          }),
+        ),
         Stream.provide(BunServices.layer),
         Stream.tap(() => withChat((opened) => opened.nudge, undefined)),
       ),

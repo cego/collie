@@ -6,10 +6,17 @@ import { BunServices } from "@effect/platform-bun";
 import { Effect, Fiber, FileSystem, Stream } from "effect";
 import { TestClock } from "effect/testing";
 import { ATTACHMENT_BYTES } from "../src/attachments";
-import { type BoardMessage, type Declaration, PROTOCOL, type TaskView } from "../src/board-model";
+import { epochMs } from "../src/time";
+import { type Declaration, PROTOCOL, type TaskView } from "../src/board-model";
 import type { JsonObject } from "../src/schema";
 import { callFileTool, type ToolContent } from "../desktop/src/bun/file-tools";
-import { callFlockTool, type ChatDoor, type ChatMachine } from "../desktop/src/bun/flock-tools";
+import {
+  callFlockTool,
+  type ChatDoor,
+  type ChatMachine,
+  type Reached,
+} from "../desktop/src/bun/flock-tools";
+import type { ChatBoard } from "../desktop/src/shared/flock";
 import { task } from "./support/task";
 
 interface Asked {
@@ -18,32 +25,18 @@ interface Asked {
   readonly payload: unknown;
 }
 
-const snapshot = (
-  tasks: ReadonlyArray<TaskView>,
-  protocol: number,
-  files: boolean,
-): BoardMessage => ({
-  _tag: "Snapshot",
-  installation: "i",
-  build: "0.32.0",
-  protocol,
-  files,
-  herds: [{ id: "h1" }],
-  tasks,
-  seq: 0,
-});
-
-/** A host that answers from its board and writes down every operation it is asked. */
+/** A Machine whose board Desktop follows live, and whose host writes down every operation it is asked. */
 const machine = (
   name: string,
   tasks: ReadonlyArray<TaskView>,
   asked: Asked[],
   protocol = PROTOCOL,
   files = true,
-): ChatMachine => {
+): Reached => {
   const note = <P>(op: string, payload: P) => asked.push({ machine: name, op, payload });
-  const door: ChatDoor = {
-    board: () => Stream.make(snapshot(tasks, protocol, files)).pipe(Stream.concat(Stream.never)),
+  const door: ChatDoor & { readonly board: () => Stream.Stream<never> } = {
+    // The chat reads the board Desktop follows, never one of its own.
+    board: () => Stream.die("the chat subscribed to a host's board"),
     declare: (payload: Declaration) =>
       Effect.sync(() => {
         note("declare", payload);
@@ -149,8 +142,15 @@ const machine = (
         return `${payload.tool} answered by ${name}`;
       }),
   };
-  return { name, door };
+  return {
+    name,
+    door,
+    board: { _tag: "Live", herds: [{ id: "h1" }], tasks, protocol, files },
+  };
 };
+
+/** A Machine the window shows with no live board, and no channel to reach it by. */
+const unread = (name: string, board: ChatBoard): ChatMachine => ({ name, board });
 
 /** What a fake Machine's files hold: a media type and the bytes. */
 /** A PNG's header, as a string of bytes, for an image of that size. */
@@ -367,31 +367,76 @@ test("a Machine that stops answering costs a look for News its time, and the oth
     }).pipe(Effect.provide([BunServices.layer, TestClock.layer()])),
   ));
 
-test("a Machine whose board could not be read is written to by nothing, and a bare id it may have is not taken as unique", () =>
+const withUnread = (asked: Asked[], board: ChatBoard) => ({
+  machines: () => [
+    machine("mk-pc", [task({ id: "t-a", run: "r-1", runs: ["r-1"] })], asked),
+    unread("vm-mk", board),
+  ],
+  conversation: "flock@mk-pc",
+  machineRule: () => undefined,
+  setMachineRule: () => Effect.void,
+  inSync: () => Effect.succeed(""),
+  attachments: () => undefined,
+  uploaded: new Map(),
+  said: () => "hold it",
+});
+
+const UNREAD: ReadonlyArray<readonly [ChatBoard, string]> = [
+  [
+    { _tag: "Connecting", since: 0 },
+    "vm-mk is still connecting; Desktop has waited 1 min 30 s for its first board",
+  ],
+  [
+    {
+      _tag: "Lost",
+      state: "unreachable",
+      reason: "ssh: connect to host vm-mk: Connection refused",
+    },
+    "vm-mk is out of reach: ssh: connect to host vm-mk: Connection refused",
+  ],
+  [
+    { _tag: "Saved", at: epochMs("2026-10-07T12:00:00Z") },
+    "vm-mk is only a board Desktop saved at 2026-10-07T12:00:00.000Z, with no live host since",
+  ],
+];
+
+for (const [board, why] of UNREAD)
+  test(`a Machine with no live board (${board._tag}) is said with why in herd and News, and a write to it is refused with it`, () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        yield* TestClock.adjust("90 seconds");
+        const asked: Asked[] = [];
+        const flock = withUnread(asked, board);
+        const herd = yield* callFlockTool(flock, "collie_herd", {});
+        expect(herd).toContain("run mk-pc:r-1:");
+        expect(herd).toContain(`- (${why})`);
+        const news = yield* callFlockTool(flock, "collie_news", {});
+        expect(news).toContain(`- (vm-mk's News could not be read: ${why})`);
+        const named = yield* callFlockTool(flock, "collie_hold", { run: "vm-mk:r-1" });
+        expect(named).toBe(`hold: failed — ${why}. Nothing was done on vm-mk.`);
+        const bare = yield* callFlockTool(flock, "collie_hold", { run: "r-1" });
+        expect(bare).toContain(why);
+        expect(bare).toContain("name it as mk-pc:r-1");
+        const workspaces = yield* callFlockTool(flock, "collie_workspaces", {});
+        expect(workspaces).toContain(`## vm-mk\n\n${why}`);
+        expect(
+          asked.filter(({ op }) => op !== "news" && op !== "declare" && op !== "read"),
+        ).toEqual([]);
+        expect(asked.filter(({ machine }) => machine === "vm-mk")).toEqual([]);
+      }).pipe(Effect.provide([BunServices.layer, TestClock.layer()])),
+    ));
+
+test("a live Machine is read from the board Desktop follows, with no board of its host's", () =>
   Effect.runPromise(
     Effect.gen(function* () {
       const asked: Asked[] = [];
-      const unreadable = machine("vm-mk", [], asked);
-      const flock = {
-        machines: () => [
-          machine("mk-pc", [task({ id: "t-a", run: "r-1", runs: ["r-1"] })], asked),
-          { ...unreadable, door: { ...unreadable.door, board: () => Stream.empty } },
-        ],
-        conversation: "flock@mk-pc",
-        machineRule: () => undefined,
-        setMachineRule: () => Effect.void,
-        inSync: () => Effect.succeed(""),
-        attachments: () => undefined,
-        uploaded: new Map(),
-        said: () => "hold it",
-      };
-      const bare = yield* callFlockTool(flock, "collie_hold", { run: "r-1" });
-      const named = yield* callFlockTool(flock, "collie_hold", { run: "vm-mk:r-1" });
-      expect(bare).toContain("vm-mk could not be read");
-      expect(bare).toContain("mk-pc:r-1");
-      expect(named).toContain("its board could not be read");
-      expect(asked).toEqual([]);
-    }).pipe(Effect.provide(BunServices.layer)),
+      const herd = yield* call(asked, "collie_herd", {});
+      expect(herd).toContain("run vm-mk:r-2: Fix board bugs");
+      const workspaces = yield* call(asked, "collie_workspaces", {});
+      expect(workspaces).toContain("collie_workspaces answered by vm-mk");
+      const news = yield* call(asked, "collie_news", {});
+      expect(news).toContain("[consequential] vm-mk:r-1");
+    }),
   ));
 
 /** What a file tool said in words, its images left out. */

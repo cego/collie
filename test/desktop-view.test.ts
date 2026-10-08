@@ -16,6 +16,7 @@ import {
 } from "../desktop/src/shared/channel";
 import {
   applyItem,
+  chatBoards,
   DesktopRpcs,
   EMPTY_FLOCK,
   type FlockItem,
@@ -27,6 +28,7 @@ import {
   nameAsShown,
   type MachineMessage,
   machineToAdd,
+  unreadBecause,
 } from "../desktop/src/shared/flock";
 import {
   buildOf,
@@ -35,6 +37,7 @@ import {
   inSync,
   syncable,
 } from "../desktop/src/shared/in-sync";
+import { epochMs } from "../src/time";
 import { task } from "./support/task";
 
 const asJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
@@ -376,6 +379,54 @@ const built = (machine: Machine, build: string, development: string): MachineMes
 const routed = (machine: Machine): FlockItem => ({
   _tag: "Routed",
   machine: { profile: machine.profile, name: machine.name, target: machine.target },
+});
+
+test("the chat reads each Machine the window shows: a live one's board and protocol, or what stands in its way", () => {
+  const old = { ...vm, installation: "inst-old" };
+  const savedOld: FlockItem = { _tag: "Saved", machine: old, herds: [], tasks: [working], at: 7 };
+  const boards = (items: ReadonlyArray<FlockItem>, since = new Map<string, number>()) =>
+    chatBoards(items.reduce(applyItem, EMPTY_FLOCK), since).map(({ name, board }) => [name, board]);
+  expect(boards([routed(pc), snapshot(pc, [asking]), routed(vm), lostVm("unreachable")])).toEqual([
+    [
+      "mk-pc",
+      { _tag: "Live", herds: [{ id: "default" }], tasks: [asking], protocol: 1, files: false },
+    ],
+    ["vm-mk", { _tag: "Lost", state: "unreachable", reason: "ssh: connection refused" }],
+  ]);
+  expect(boards([routed(vm)], new Map([["p-vm", 1_000]]))).toEqual([
+    ["vm-mk", { _tag: "Connecting", since: 1_000 }],
+  ]);
+  // A saved board standing in while its route connects is still connecting.
+  expect(boards([routed(vm), savedOld], new Map([["p-vm", 1_000]]))).toEqual([
+    ["vm-mk", { _tag: "Connecting", since: 1_000 }],
+  ]);
+  // Its route now reaches another installation, so nothing will make that board live again.
+  expect(boards([routed(vm), snapshot(vm, []), savedOld]).map(([, board]) => board)).toEqual([
+    { _tag: "Live", herds: [{ id: "default" }], tasks: [], protocol: 1, files: false },
+    { _tag: "Saved", at: 7 },
+  ]);
+});
+
+test("a Machine with no live board is said with why, in its route's words where it was lost", () => {
+  expect(unreadBecause("vm-mk", { _tag: "Connecting", since: 1_000 }, 91_000)).toBe(
+    "vm-mk is still connecting; Desktop has waited 1 min 30 s for its first board",
+  );
+  expect(unreadBecause("vm-mk", { _tag: "Connecting", since: null }, 91_000)).toBe(
+    "vm-mk is still connecting; Desktop has had no board from it yet",
+  );
+  expect(
+    unreadBecause(
+      "vm-mk",
+      { _tag: "Lost", state: "unreachable", reason: "ssh: connection refused." },
+      0,
+    ),
+  ).toBe("vm-mk is out of reach: ssh: connection refused");
+  expect(
+    unreadBecause("vm-mk", { _tag: "Lost", state: "update-desktop", reason: "too new" }, 0),
+  ).toBe("vm-mk needs a newer Desktop: too new");
+  expect(unreadBecause("vm-mk", { _tag: "Saved", at: epochMs("2026-10-07T12:00:00Z") }, 0)).toBe(
+    "vm-mk is only a board Desktop saved at 2026-10-07T12:00:00.000Z, with no live host since",
+  );
 });
 
 test("a Machine's build is kept from its Snapshot, and a saved board's stands in until it is live", () => {
