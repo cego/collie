@@ -98,6 +98,7 @@ beforeEach(() =>
       yield* bin.add(
         "herdr",
         `case "$1 $2" in
+          "--version ") echo "herdr \${FAKE_HERDR_VERSION:-}" ;;
           "plugin list") cat "${home}/linked" 2>/dev/null || true ;;
           "plugin link") echo "cego.collie 0.1.0 [local:$3]" > "${home}/linked"; echo link >> "${home}/herdr-calls" ;;
         esac`,
@@ -164,6 +165,37 @@ test("a second run changes nothing and says every step is already in place", () 
       expect(again.code).toBe(0);
       // Linked once, not once per run: a re-link fires herdr's build hook.
       expect((yield* read(`${home}/herdr-calls`)).trim()).toBe("link");
+    }),
+  ));
+
+test("a herdr older than the manifest's minimum is not linked, and the rest still runs", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const done = yield* run("prepare.sh", undefined, { FAKE_HERDR_VERSION: "0.7.1" });
+
+      expect(done.out).toContain(
+        "prepare: plugin-link: skipped — herdr 0.7.1 is older than the 0.9.3 Collie needs; collie doctor says how to upgrade",
+      );
+      expect(yield* exists(`${home}/herdr-calls`)).toBe(false);
+      expect(done.out).toContain("prepare: runner: done");
+      expect(done.out).toContain("prepare: operator-skill: done");
+      expect(done.out).toContain("prepare: skills:");
+      expect(done.code).toBe(0);
+    }),
+  ));
+
+test("herdr's version is compared as numbers, part by part", () =>
+  runEffect(
+    Effect.gen(function* () {
+      for (const version of ["0.9.3", "0.9.10", "0.10.0", "1.0.0"]) {
+        yield* remove(`${home}/linked`);
+        const done = yield* run("prepare.sh", undefined, { FAKE_HERDR_VERSION: version });
+        expect(done.out).toContain("prepare: plugin-link: done");
+      }
+      for (const version of ["0.7.1", "0.9.2", "0.8.10"]) {
+        const done = yield* run("prepare.sh", undefined, { FAKE_HERDR_VERSION: version });
+        expect(done.out).toContain(`prepare: plugin-link: skipped — herdr ${version} is older`);
+      }
     }),
   ));
 

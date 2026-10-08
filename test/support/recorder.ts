@@ -627,6 +627,7 @@ export class Rig {
       "FAKE_HERDR_PLUGINS",
       "FAKE_HERDR_STATUS",
       "FAKE_HERDR_STATUS_SOCKET",
+      "FAKE_HERDR_SERVER_VERSION",
       "FAKE_HERDR_RUNTIME_MISSING",
     ]) {
       const value = env[key];

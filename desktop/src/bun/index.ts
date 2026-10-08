@@ -269,7 +269,7 @@ const main = Effect.gen(function* () {
   yield* sweepSshControls(tmpdir()).pipe(Effect.ignore);
   const controls = yield* fs.makeTempDirectoryScoped({ prefix: sshControlsPrefix(process.pid) });
   // herdr's list is the only list of Machines there is.
-  const listed = yield* herdrMachines("herdr").pipe(Effect.result);
+  const listed = yield* herdrMachines("herdr", manifest.min_herdr_version).pipe(Effect.result);
   const now = yield* Clock.currentTimeMillis;
   const [enabled, unlisted] = Result.match(listed, {
     onSuccess: (machines) => [machines, []] as const,
@@ -479,7 +479,7 @@ const main = Effect.gen(function* () {
         });
       const before = new Set(routes.keys());
       const added = yield* addToHerdr("herdr", target, label, session, ask).pipe(
-        Effect.andThen(herdrMachines("herdr")),
+        Effect.andThen(herdrMachines("herdr", manifest.min_herdr_version)),
         Effect.flatMap((machines) => {
           const found = machines.find(
             (machine) =>

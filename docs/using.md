@@ -19,12 +19,12 @@ everything else. That is the one routine that prepares a
 machine, and `collie upgrade` and herdr's plugin build hook end in it too, so a prerequisite
 is added in one place:
 
-| Step             | What it does                                                                                 |
-| ---------------- | -------------------------------------------------------------------------------------------- |
-| `plugin-link`    | `herdr plugin link` from this checkout, if it is not already linked from it                  |
-| `runner`         | `install.sh`: the runner in `bin/collie`, and a `collie` shim on your PATH                   |
-| `operator-skill` | Links the Collie operator skill into `~/.claude/skills/collie` and `~/.agents/skills/collie` |
-| `skills`         | Installs and updates the skills the workflows require (below)                                |
+| Step             | What it does                                                                                        |
+| ---------------- | --------------------------------------------------------------------------------------------------- |
+| `plugin-link`    | `herdr plugin link` from this checkout, if it is not already linked from it and herdr is new enough |
+| `runner`         | `install.sh`: the runner in `bin/collie`, and a `collie` shim on your PATH                          |
+| `operator-skill` | Links the Collie operator skill into `~/.claude/skills/collie` and `~/.agents/skills/collie`        |
+| `skills`         | Installs and updates the skills the workflows require (below)                                       |
 
 Every step skips what is already in place, so re-running is a reflex rather than a
 decision. `install.sh` writes the shim without changing PATH itself. Keybindings are the
@@ -34,6 +34,18 @@ plugin rebuild may do as a side effect, so `setup.sh` alone adds them.
 `setup.sh` ends by running [`collie doctor`](cli.md#checking-an-installation) and exits with
 its status, so an install's last word is either that everything is ready or what is missing
 with the fix for each.
+
+**An older herdr.** With a herdr older than the plugin manifest's `min_herdr_version`,
+`plugin-link` is skipped and says so, everything else still runs, and doctor says what
+upgrading herdr will do to the programs running in its panes, and when to do it
+([ADR-0048](adr/0048-collie-is-released-for-macos-on-apple-silicon.md), D4). From a herdr
+before 0.9.0 the running server must stop once, which ends every program in its panes, so do
+it when nothing is running there; `herdr update --handoff` is herdr's experimental way to
+carry them across. From 0.9.0 on, `herdr update` leaves the running server and its panes
+alone, and restarting the server when nothing is running picks up the rest. Collie never
+upgrades herdr or stops its server itself: stopping it ends your work, so when is yours to
+choose. Desktop says the same when its herdr has no `herdr machine`, and points at
+`collie doctor`.
 
 Collie's releases are public, so the install needs no token. A project that is not public — a
 fork, or a mirror — answers an unauthenticated download with a sign-in page rather than a binary — with HTTP 200, which is why the install

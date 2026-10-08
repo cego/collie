@@ -1454,7 +1454,8 @@ collie doctor --gitlab-host gitlab.example.com
 ```
 
 Every prerequisite in one pass, each with the command that fixes it: herdr present and at
-least the `min_herdr_version` the plugin manifest declares; the plugin linked from this
+least the `min_herdr_version` the plugin manifest declares, and a running herdr server, when
+there is one, at least that too; the plugin linked from this
 installation; the runner built and the `collie` shim on PATH (installed-but-not-on-PATH is
 its own reported state); every skill and every harness
 the loaded workflows and personas name; whether the checkout is behind its remote; the
@@ -1468,6 +1469,14 @@ forwarded into the session does not count, since it goes when the computer it ca
 sleeps. That host is `--gitlab-host`, else `GITLAB_HOST`, else the
 [`gitlab_host` setting](using.md#your-defaults). Any other host glab knows is named in one
 `other gitlabs` note, unchecked, and never fails the run.
+
+**herdr** names what upgrading does to the running panes. From a herdr before 0.9.0, the
+running server must stop once, which ends every program in its panes: `herdr update`, then
+`herdr server stop`, then `herdr`, when nothing is running there, or the experimental
+`herdr update --handoff`. From 0.9.0 on, `herdr update` leaves the running server and its
+panes alone, and a **herdr server** line fails while the server still runs an older herdr,
+until it is restarted when nothing is running. Each fix also offers the package manager
+that installed herdr. Collie never runs `herdr update` or `herdr server stop` itself.
 
 **Disk** covers each filesystem holding the state directory, `~/.cache/collie`, herdr's
 worktrees and the temporary directory, once each. One with less than 10% or 5 GiB free is a

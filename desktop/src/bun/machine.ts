@@ -275,8 +275,21 @@ const HerdrMachines = Schema.fromJsonString(Schema.Array(HerdrMachine));
  * The machines enabled in herdr. Asked here rather than through `src/herdr.ts`, which
  * would bring Collie's locks into Desktop, as are adding one and removing one.
  */
-export const herdrMachines = (herdr: string) =>
+export const herdrMachines = (herdr: string, minHerdr: string) =>
   output([herdr, "machine", "list", "--json"]).pipe(
+    Effect.catch((said) =>
+      output([herdr, "--version"]).pipe(
+        Effect.orElseSucceed(() => ""),
+        Effect.flatMap((answer) => {
+          const version = /\d+\.\d+\.\d+/.exec(answer)?.[0];
+          return Effect.fail(
+            version !== undefined && Bun.semver.order(version, minHerdr) < 0
+              ? `herdr ${version} has no \`herdr machine\`; Collie needs ${minHerdr} — run \`collie doctor\` on this computer`
+              : said,
+          );
+        }),
+      ),
+    ),
     Effect.flatMap((json) =>
       Schema.decodeUnknownEffect(HerdrMachines)(json).pipe(Effect.mapError((e) => e.message)),
     ),

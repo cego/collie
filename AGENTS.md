@@ -278,8 +278,9 @@ of the view is covered by testing the logic it renders.
    adapters over the same Effect services ([ADR-0003](docs/adr/0003-collie-is-one-effect-program.md)).
 3. All herdr communication goes through `src/herdr.ts`. The exceptions never talk to a
    session for Collie: `tools/herdr-schema.ts`, which runs a downloaded release offline to
-   print its schema; Desktop's `herdr machine list`, `add` and `remove`; and, for the
-   human, herdr's terminal controller whose pane Go to pane shows in Desktop, and the herdr
+   print its schema; Desktop's `herdr machine list`, `add` and `remove`, and the
+   `herdr --version` that says why a list failed; and, for the human, herdr's terminal
+   controller whose pane Go to pane shows in Desktop, and the herdr
    client it opens in a terminal where there is no pane to show — see
    [`docs/internals.md`](docs/internals.md#the-herdr-boundary).
 4. One host owns a state directory and everything it is running
