@@ -165,7 +165,9 @@ const fakeRoute = (
   collie: () => Effect.die("not asked"),
 });
 const toldOf = (item: FlockItem) =>
-  `${item.machine.name} ${"_tag" in item ? item._tag : item.message._tag}`;
+  "machine" in item
+    ? `${item.machine.name} ${"_tag" in item ? item._tag : item.message._tag}`
+    : item._tag;
 const until = (what: () => boolean) =>
   Effect.suspend(() => (what() ? Effect.void : Effect.fail("not yet"))).pipe(
     Effect.retry(Schedule.spaced("5 millis")),
