@@ -10,9 +10,8 @@ import { runFacts } from "../src/operations";
 import { findRun } from "../src/runs";
 import { exec } from "./support/command";
 import { runEffect, suiteEnv } from "./support/effect";
-import { root } from "./support/host";
 import { hosted, settledRun } from "./support/hosted";
-import { collie } from "./support/world";
+import { collie, collieCommand } from "./support/world";
 
 const launched = (runId: string, over: Partial<Launched>): Launched => ({
   agent: `${runId}-build-r1`,
@@ -74,6 +73,7 @@ test("a Run's agents are its launch records, in launch order, with what each ran
           effort: null,
           from: null,
           why: null,
+          at: null,
         },
         {
           operation: "build",
@@ -83,6 +83,7 @@ test("a Run's agents are its launch records, in launch order, with what each ran
           effort: "xhigh",
           from: null,
           why: null,
+          at: null,
         },
         {
           operation: "re-review",
@@ -92,6 +93,7 @@ test("a Run's agents are its launch records, in launch order, with what each ran
           effort: null,
           from: null,
           why: null,
+          at: null,
         },
       ]);
       expect(agentLines(agents)).toEqual([
@@ -117,12 +119,17 @@ test("a Fallback's launch says what it fell back from and why, and an earlier on
           effort: null,
           from: { harness: "claude", model: "opus", effort: null },
           why: "session 100%, resets 15:45",
+          at: 1791467100000, // 2026-10-08T13:45Z
         }),
         launched("r1", {}),
       ]);
       expect(agentLines(yield* runAgents(state, "r1"))).toEqual([
         "  review  codex/default (fell back from claude/opus: session 100%, resets 15:45)",
         "  build  claude/default",
+      ]);
+      expect((yield* runAgents(state, "r1")).map(({ at }) => at)).toEqual([
+        "2026-10-08T13:45:00.000Z",
+        null,
       ]);
     }),
   ));
@@ -158,7 +165,7 @@ test(
           ],
         });
 
-        const human = yield* exec([process.execPath, `${root}src/main.ts`, "run", "show", run.id], {
+        const human = yield* exec([...(yield* collieCommand), "run", "show", run.id], {
           cwd: world.project,
           env: {
             PATH: "/usr/bin:/bin",

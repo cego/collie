@@ -427,7 +427,6 @@ export const PART_BYTES = 4 * 1024 * 1024;
 
 export type RunFile = typeof RunFile.Type;
 
-/** One agent a Run started, and what it ran on. */
 /** The harness, model and effort an agent ran on. */
 export const RanOn = Schema.Struct({
   harness: Schema.String,
@@ -446,6 +445,8 @@ export const RunAgent = Schema.Struct({
   from: Schema.NullOr(RanOn),
   /** Why it fell back, or why nothing it could fall back to had room. */
   why: Schema.NullOr(Schema.String),
+  /** When it was given this work (ISO); null in a launch recorded before that was. */
+  at: Schema.NullOr(Schema.String),
 });
 export type RunAgent = typeof RunAgent.Type;
 

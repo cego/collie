@@ -1,7 +1,7 @@
 // What a Run's agents were launched on, as each launch recorded it. Apart from the agents
 // layer so the board and the CLI can read it without loading it.
 
-import { Effect, FileSystem, Schema } from "effect";
+import { DateTime, Effect, FileSystem, Schema } from "effect";
 import { RanOn, type RunAgent } from "./board-model";
 
 /**
@@ -85,6 +85,7 @@ export const runAgents = (stateDir: string, runId: string) =>
         effort: one.effort ?? null,
         from: one.from ?? null,
         why: one.why ?? null,
+        at: one.at === undefined ? null : DateTime.formatIso(DateTime.makeUnsafe(one.at)),
       })),
     ),
   );

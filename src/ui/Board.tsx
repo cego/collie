@@ -342,7 +342,6 @@ function Header(props: {
       <text fg={props.header.urgent ? C.amber : C.muted} wrapMode="none" style={{ flexShrink: 0 }}>
         {`  ${props.header.text}`}
       </text>
-      {/* Gives way before the sentence does: it shrinks and clips, the sentence never. */}
       <Show when={props.usage.text !== ""}>
         <box style={{ flexShrink: 1, overflow: "hidden" }}>
           <text fg={props.usage.warn ? C.amber : C.dim} wrapMode="none">

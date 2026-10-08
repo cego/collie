@@ -280,6 +280,6 @@ describe("usagePhrase", () => {
         window({ kind: "weekly-model", label: "Weekly Opus", model: "Opus", usedPercent: 100 }),
       ],
     });
-    expect(usagePhrase([opusOut], NOW)).toEqual({ text: "claude 10%", warn: false });
+    expect(usagePhrase([opusOut], NOW)).toEqual({ text: "claude Opus out", warn: true });
   });
 });

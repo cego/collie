@@ -74,6 +74,7 @@ import { agentName, agentTabLabel, reason, shellQuote, unsafePathComponent } fro
 import { askRouteTo } from "./handoff";
 import { nowIso } from "./time";
 import { roomFor, subscriptionOf, type UsageReading } from "./usage-model";
+import { ownCodexReading } from "./usage";
 import { lineageAgent, registerAgent, registryPath, scopeFor, verifyIncarnation } from "./registry";
 import {
   jsonSchemaFor,
@@ -213,8 +214,8 @@ export interface AgentsApi {
    * its Subscription reads Exhausted for it — why. Never succeeds otherwise.
    */
   readonly ranOut: (launched: Launched) => Effect.Effect<RanOut>;
-  /** Closes this one agent's pane, with `line` in the Run's log. */
-  readonly retire: (launched: Launched, line: string) => Effect.Effect<void>;
+  /** Closes this one agent's pane, with `line` in the Run's log; parks unless it is gone. */
+  readonly retire: (launched: Launched, line: string) => Effect.Effect<void, AgentParked>;
   /** A line in the Run's log. */
   readonly say: (runId: string, line: string) => Effect.Effect<void>;
   readonly launch: (ask: AgentAsk) => Effect.Effect<Launched, AgentUncertain | AgentParked>;
@@ -620,9 +621,14 @@ export const agentWork = <
       };
       yield* Activity.make({
         name: `${work.operation}.fallback-${n}.close`,
-        execute: agents.retire(
-          current,
-          `${work.operation}: ${said(on)} ran out (${out.why}) — continuing on ${said(next)} as ${successor}`,
+        error: AgentUncertain,
+        execute: parkedWhenStuck(
+          agents.retire(
+            current,
+            `${work.operation}: ${said(on)} ran out (${out.why}) — continuing on ${said(next)} as ${successor}`,
+          ),
+          host,
+          work.runId,
         ),
       });
       current = yield* Activity.make({
@@ -961,6 +967,8 @@ export interface AgentHost {
   readonly models?: Readonly<Record<string, ReadonlyArray<string>>>;
   /** This Machine's Usage readings; none where left out. */
   readonly readings?: Effect.Effect<ReadonlyArray<UsageReading>>;
+  /** A running agent's own reading, where its harness serves one; none where left out. */
+  readonly ownReading?: (agent: string) => Effect.Effect<UsageReading | null>;
   /** The human's Fallback chain; the configured `fallbacks`, read at every choice, where left out. */
   readonly fallbacks?: Effect.Effect<ReadonlyArray<string>>;
   readonly permissions: PermissionMode;
@@ -1733,7 +1741,14 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
           let exhausted: string | null = null;
           if (reported !== null || now - readAt >= READING_EVERY_MS) {
             readAt = now;
-            const judged = roomFor(yield* host.readings ?? Effect.succeed([]), now)(on, undefined);
+            const machine = yield* host.readings ?? Effect.succeed([]);
+            const own =
+              host.ownReading === undefined ? null : yield* host.ownReading(launched.agent);
+            const readings =
+              own === null
+                ? machine
+                : [own, ...machine.filter((one) => one.subscription !== own.subscription)];
+            const judged = roomFor(readings, now)(on, undefined);
             exhausted = judged.room ? null : judged.why;
           }
           if (reported !== null)
@@ -1747,29 +1762,37 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
   const retire = (launched: Launched, line: string) =>
     under(
       Effect.gen(function* () {
-        yield* log(launched.runId, line);
-        const listing = yield* host.herdr.agentList().pipe(Effect.orElseSucceed(() => []));
-        const one = listing.find((agent) => agent.name === launched.agent);
-        if (one === undefined) return;
-        // Another process under the same name is not the agent that ran out.
-        if (
-          launched.terminalId !== undefined &&
-          one.terminalId !== null &&
-          one.terminalId !== launched.terminalId
-        )
-          return;
-        const panes = yield* host.herdr.paneList().pipe(Effect.orElseSucceed(() => []));
-        yield* keepWorkspace(one.paneId, panes);
-        yield* host.herdr
-          .paneClose(one.paneId)
+        const parked = (why: string) =>
+          new AgentParked({
+            operation: launched.operation,
+            reason: `${launched.agent} ran out and must stop before another agent takes its work, but ${why}. Close it and resume.`,
+          });
+        const listing = yield* host.herdr
+          .agentList()
           .pipe(
-            Effect.catch((cause) =>
-              log(
-                launched.runId,
-                `${launched.agent}'s pane ${one.paneId} would not close (${reason(cause)})`,
-              ),
+            Effect.mapError((cause) =>
+              parked(`herdr cannot say whether it is running (${herdrFailureReason(cause)})`),
             ),
           );
+        const one = listing.find((agent) => agent.name === launched.agent);
+        // Another process under the same name is not the agent that ran out.
+        const running =
+          one !== undefined &&
+          (launched.terminalId === undefined ||
+            one.terminalId === null ||
+            one.terminalId === launched.terminalId);
+        if (running) {
+          const panes = yield* host.herdr.paneList().pipe(Effect.orElseSucceed(() => []));
+          yield* keepWorkspace(one.paneId, panes);
+          yield* host.herdr
+            .paneClose(one.paneId)
+            .pipe(
+              Effect.mapError((cause) =>
+                parked(`its pane ${one.paneId} would not close (${herdrFailureReason(cause)})`),
+              ),
+            );
+        }
+        yield* log(launched.runId, line);
       }),
     );
 
@@ -2098,6 +2121,7 @@ export const configuredAgents = Effect.fn("Agents.configured")(function* (
   readings: Effect.Effect<ReadonlyArray<UsageReading>>,
 ) {
   const env = yield* currentEnv.pipe(Effect.orDie);
+  const services = yield* Effect.context<FileSystem.FileSystem | Path.Path>();
   const defaults = yield* loadDefaults(env.userDir).pipe(
     Effect.orElseSucceed(() => FALLBACK_DEFAULTS),
   );
@@ -2113,5 +2137,7 @@ export const configuredAgents = Effect.fn("Agents.configured")(function* (
     trust: defaults.trust,
     compactAtTokens: defaults.compactAtTokens,
     readings,
+    ownReading: (agent) =>
+      ownCodexReading(env.stateDir, agent).pipe(Effect.provideContext(services)),
   });
 });

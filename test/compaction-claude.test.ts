@@ -494,7 +494,16 @@ test("a status line with a window at 100% is the agent running out, saying the w
       expect(yield* ranOutSince(dir, 0)).toBeNull();
       yield* recordClaudeEvent(dir, limited(fiveHour(100)));
       expect((yield* ranOutSince(dir, 0))?.why).toMatch(/^session 100%, resets .+ \(in .+\)$/);
-    }),
+    }).pipe(Effect.provide(TestClock.layer())),
+  ));
+
+test("a status line's full window whose reset has passed is not the agent running out", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* TestClock.setTime(1791457799 * 1000 + 60_000);
+      yield* recordClaudeEvent(dir, limited(fiveHour(100)));
+      expect(yield* ranOutSince(dir, 0)).toBeNull();
+    }).pipe(Effect.provide(TestClock.layer())),
   ));
 
 test("the StopFailure hook is installed only on a Claude known to have it", () => {

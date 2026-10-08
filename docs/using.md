@@ -530,7 +530,8 @@ The header sentence counts the whole Herd, not what the search left: `One task i
 waiting on you. 1 ready to release, 2 waiting on you. 4 working, 1 gone quiet.` — the
 middle counts being this week's endings, the older ones sitting behind the fold — amber while anything needs
 you and muted otherwise. After it, each Subscription's busiest window in a few characters —
-`claude 31% · chatgpt 2%` — amber at 90% or more and `out` once one is Exhausted; it is
+`claude 31% · chatgpt 2%`, naming the model where a model's own window is the busiest
+(`claude Opus out`) — amber at 90% or more and `out` once one is Exhausted; it is
 the first thing to give way on a narrow pane ([Usage](#usage)). Beside it, a search field (`/`) matching a task's name, its project, its branch
 and what its agents are called and are doing, and **New run**. At the left, the brand
 signature — the mascot and the lettering, drawn as a picture over the Kitty graphics protocol —
@@ -1013,7 +1014,8 @@ chat reads the same standing and does the same Sync now through `collie_in_sync`
 still connecting left out.
 
 Beside **Machines**, the header names each **Subscription** and account in use across the
-Flock with its busiest window, as in `Claude 72% · ChatGPT 2%`: amber at 90% or above, red
+Flock with its busiest window, as in `Claude 72% · ChatGPT 2%`, naming the model where it is
+a model's own (`Claude Opus out`): amber at 90% or above, red
 and "out" once it is **Exhausted**. Hovering an entry gives its account, when that window
 resets and which Machine read it how long ago, and clicking it opens Machines. Machines
 logged in to one account are one entry, matched by the account's id rather than its email,

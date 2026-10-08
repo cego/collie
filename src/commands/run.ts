@@ -436,11 +436,11 @@ const runList = Command.make("list", {}, () =>
   }),
 ).pipe(Command.withDescription("List Runs in the selected workspace, or everywhere without one"));
 
-/** The Run this command is about, and the environment it was resolved in. */
 /** `run show`'s line for each agent: `  review  claude/opus xhigh`. */
 export const agentLines = (agents: ReadonlyArray<RunAgent>) =>
   agents.map((agent) => `  ${agent.operation}  ${ranOn(agent)}`);
 
+/** The Run this command is about, and the environment it was resolved in. */
 const resolveCommandRun = Effect.fn("collie.resolveCommandRun")(function* (
   global: Global,
   runId: string,

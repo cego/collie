@@ -125,11 +125,15 @@ export interface UsagePhrase {
   readonly warn: boolean;
 }
 
-/** A reading's busiest window at `now` of those that apply to every model. */
-export function busiestGeneral(reading: UsageReading, now: number): Used | null {
-  // A model's own window says nothing about the Subscription's other models.
-  const general = reading.windows.filter((window) => window.model === null);
-  return busiest(general.map((window) => current(window, now)));
+/** A reading's busiest window at `now`. */
+export function busiestWindow(reading: UsageReading, now: number): Used | null {
+  return busiest(reading.windows.map((window) => current(window, now)));
+}
+
+/** `31%`, `out`, or `Opus out` where a model's own window is the busiest. */
+export function usedPhrase(used: Used): string {
+  const amount = used.exhausted ? "out" : `${Math.round(used.usedPercent)}%`;
+  return used.window.model === null ? amount : `${used.window.model} ${amount}`;
 }
 
 /** Each Subscription's busiest window, in a few characters. */
@@ -137,12 +141,10 @@ export function usagePhrase(readings: ReadonlyArray<UsageReading>, now: number):
   const parts: string[] = [];
   let warn = false;
   for (const reading of readings) {
-    const used = busiestGeneral(reading, now);
+    const used = busiestWindow(reading, now);
     if (used === null) continue;
     warn ||= used.usedPercent >= WARN_PERCENT;
-    parts.push(
-      `${reading.subscription} ${used.exhausted ? "out" : `${Math.round(used.usedPercent)}%`}`,
-    );
+    parts.push(`${reading.subscription} ${usedPhrase(used)}`);
   }
   return { text: parts.join(" · "), warn };
 }

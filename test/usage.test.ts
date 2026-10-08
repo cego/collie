@@ -120,6 +120,27 @@ describe("the call interval", () => {
       }),
     ));
 
+  test("a Retry-After shorter than five minutes still waits the five", () =>
+    onTestClock(
+      Effect.gen(function* () {
+        const claude = counted((_call, at) =>
+          Effect.succeed({
+            reading: { ...read("claude", at, 0), windows: [], problem: "refusing" },
+            called: true,
+            retryAfterMs: 60_000,
+          }),
+        );
+        const usage = yield* makeUsage({ ...quiet, claude: claude.ask });
+        yield* usage.readings;
+        yield* TestClock.adjust(60_000);
+        yield* usage.readings;
+        expect(claude.calls.count).toBe(1);
+        yield* TestClock.adjust(USAGE_INTERVAL_MS - 60_000);
+        yield* usage.readings;
+        expect(claude.calls.count).toBe(2);
+      }),
+    ));
+
   test("an endpoint that does not answer becomes a problem", () =>
     onTestClock(
       Effect.gen(function* () {

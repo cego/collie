@@ -4,13 +4,14 @@
 import { Schema } from "effect";
 import { ago, epochMs } from "../../../src/time";
 import {
-  busiestGeneral,
+  busiestWindow,
   current,
   isFull,
   resetPhrase,
   SUBSCRIPTIONS,
   type Subscription,
   UsageReading,
+  usedPhrase,
   WARN_PERCENT,
 } from "../../../src/usage-model";
 
@@ -78,7 +79,7 @@ export const usageEntries = (
   for (const [, { reading }] of shown)
     accounts.set(reading.subscription, (accounts.get(reading.subscription) ?? 0) + 1);
   return shown.flatMap(([key, { reading, machine }]) => {
-    const used = busiestGeneral(reading, now);
+    const used = busiestWindow(reading, now);
     if (used === null) return [];
     const label =
       accounts.get(reading.subscription)! > 1 && reading.accountLabel !== null
@@ -91,7 +92,7 @@ export const usageEntries = (
     return [
       {
         key,
-        text: `${NAMES[reading.subscription]}${label} ${used.exhausted ? "out" : `${Math.round(used.usedPercent)}%`}`,
+        text: `${NAMES[reading.subscription]}${label} ${usedPhrase(used)}`,
         level: levelOf(used.usedPercent, used.exhausted),
         title: [reading.accountLabel, reset, `read on ${machine} ${ago(reading.at, now)}`]
           .filter((part) => part !== null)

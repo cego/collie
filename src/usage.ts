@@ -120,7 +120,7 @@ const paced = Effect.fn("Usage.paced")(function* (
         good !== null && asked.reading.problem !== null
           ? { ...good, problem: asked.reading.problem }
           : asked.reading;
-      if (asked.called) until = now + (asked.retryAfterMs ?? USAGE_INTERVAL_MS);
+      if (asked.called) until = now + Math.max(USAGE_INTERVAL_MS, asked.retryAfterMs ?? 0);
       return shown;
     }),
   );
@@ -384,6 +384,19 @@ const viaEndpoint = (endpoint: string): CodexAsk =>
       rateLimits: client.call(RATE_LIMITS, {}),
       account: client.call(ACCOUNT, {}),
     }),
+  );
+
+/** This Codex agent's own reading from its app server; null where it has none or it fails. */
+export const ownCodexReading = (stateDir: string, agent: string) =>
+  readControl(stateDir, agent).pipe(
+    Effect.flatMap((control) =>
+      control?.harness !== "codex" || control.endpoint === null
+        ? Effect.succeed(null)
+        : codexReading(viaEndpoint(control.endpoint)).pipe(
+            Effect.map(({ reading }) => (reading.problem === null ? reading : null)),
+          ),
+    ),
+    Effect.orElseSucceed(() => null),
   );
 
 const RpcReply = Schema.fromJsonString(

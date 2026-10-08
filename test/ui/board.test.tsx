@@ -1206,6 +1206,7 @@ test("Summary says what each of the Run's agents ran on", () =>
             effort: "medium",
             from: null,
             why: null,
+            at: null,
           },
           {
             operation: "review",
@@ -1215,6 +1216,7 @@ test("Summary says what each of the Run's agents ran on", () =>
             effort: null,
             from: { harness: "claude", model: "opus", effort: "xhigh" },
             why: "session 100%",
+            at: null,
           },
         ],
       });

@@ -105,7 +105,7 @@ describe("the header", () => {
     ]);
   });
 
-  test("amber at 90%, red and out when Exhausted, and a model's own window does not count", () => {
+  test("amber at 90%, red and out when Exhausted, naming a model whose own window is the busiest", () => {
     const at = (windows: ReadonlyArray<UsageWindow>) =>
       usageEntries([machine("mk-pc", [reading({ windows })])], NOW).map(({ text, level }) => [
         text,
@@ -118,7 +118,7 @@ describe("the header", () => {
         window({ usedPercent: 10 }),
         window({ kind: "weekly-model", label: "Weekly Opus", model: "Opus", usedPercent: 100 }),
       ]),
-    ).toEqual([["Claude 10%", "ok"]]);
+    ).toEqual([["Claude Opus out", "out"]]);
   });
 
   test("a reading with only a problem makes no entry, and takes none from another Machine", () => {

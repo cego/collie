@@ -676,6 +676,7 @@ test("a record's Agents section is one row per agent, in launch order, saying wh
         effort: "medium",
         from: null,
         why: null,
+        at: null,
       },
       {
         operation: "review",
@@ -685,6 +686,7 @@ test("a record's Agents section is one row per agent, in launch order, saying wh
         effort: null,
         from: { harness: "claude", model: "opus", effort: "xhigh" },
         why: "session 100%, resets 15:45",
+        at: null,
       },
       {
         operation: "build",
@@ -694,6 +696,7 @@ test("a record's Agents section is one row per agent, in launch order, saying wh
         effort: "medium",
         from: null,
         why: null,
+        at: null,
       },
     ]),
   ).toEqual([

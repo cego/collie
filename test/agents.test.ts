@@ -133,7 +133,7 @@ const agentFor = (runId: string) => agentName(runId, "review", null, 1);
  * A parked Run picked up again, as a host's control does it: the execution is resumed and
  * then waited on. Nothing re-enters a suspended workflow on its own.
  */
-const releasedInto = (runId: string) =>
+const releasedInto = (runId: string, over?: Partial<AgentHost>) =>
   session(
     Effect.gen(function* () {
       const engine = yield* WorkflowEngine.WorkflowEngine;
@@ -141,6 +141,7 @@ const releasedInto = (runId: string) =>
       yield* engine.resume(work, yield* work.executionId(payload));
       return yield* work.execute(payload).pipe(Effect.result);
     }),
+    over,
   );
 
 const outputPath = (runId: string) => `${dir}/agents/${runId}/review.json`;
@@ -1019,6 +1020,79 @@ test("when nothing has room the agent that ran out is kept, and the Run parks sa
         .readFileString(controlPath(dir, PARKED, "r1"))
         .pipe(Effect.orElseSucceed(() => ""));
       expect(why).toContain("nothing has room; claude/opus: session 100%, resets");
+    }),
+  ));
+
+test(
+  "an agent that ran out and will not close parks the work, and no other agent starts beside it",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        yield* rig.queueOutputs([null, { verdict: "clean", note: "after it closed" }]);
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            yield* Effect.forkScoped(runsOut(agentFor("r1")));
+            yield* interrupted("r1", parked("r1"), {
+              ...chain,
+              herdr: new FakeHerdr(
+                rig.pluginEnv({ FAKE_HERDR_FAIL: `{"pane close":"pane is busy"}` }),
+              ),
+            });
+          }),
+        );
+        expect(harnessesStarted(yield* rig.calls())).toEqual(["claude"]);
+        expect(
+          yield* fs
+            .readFileString(controlPath(dir, PARKED, "r1"))
+            .pipe(Effect.orElseSucceed(() => "")),
+        ).toContain("would not close (herdr pane close failed (exit 1): pane is busy)");
+
+        const result = yield* releasedInto("r1", { ...chain, collectMs: 30_000 });
+        expect(result._tag === "Success" && result.success.note).toBe("after it closed");
+        expect(harnessesStarted(yield* rig.calls())).toEqual(["claude", "codex"]);
+      }),
+    ),
+  120_000,
+);
+
+test("a Codex agent whose own app server says its limit is reached is replaced", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([null, { verdict: "clean", note: "finished on claude" }]);
+      const reached: UsageReading = {
+        subscription: "chatgpt",
+        account: "acct",
+        accountLabel: null,
+        plan: "pro",
+        windows: [
+          {
+            kind: "weekly",
+            label: "Weekly",
+            model: null,
+            usedPercent: 100,
+            resetsAt: "2099-01-01T15:45:00Z",
+            reached: true,
+          },
+        ],
+        at: "2026-10-08T08:00:00Z",
+        source: "codex-app-server",
+        problem: null,
+      };
+      const result = yield* session(started("r1"), {
+        harness: "codex",
+        model: "default",
+        fallbacks: Effect.succeed(["claude/opus"]),
+        // The Machine's reading has not caught up; the agent's own server has.
+        readings: Effect.succeed([{ ...reached, windows: [] }]),
+        ownReading: (agent) => Effect.succeed(agent === agentFor("r1") ? reached : null),
+        collectMs: 30_000,
+      });
+      expect(result._tag === "Success" && result.success.note).toBe("finished on claude");
+      expect(harnessesStarted(yield* rig.calls())).toEqual(["codex", "claude"]);
+      expect(yield* read(`${dir}/agents/r1/agents.log`)).toContain(
+        "review: codex/default ran out (weekly 100%, resets",
+      );
     }),
   ));
 

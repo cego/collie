@@ -27,7 +27,14 @@ import {
   summarize,
   createSession,
 } from "./opencode";
-import { resetPhrase, StatusLineLimits, statusLineWindows, type StatusSample } from "./usage-model";
+import {
+  current,
+  isFull,
+  resetPhrase,
+  StatusLineLimits,
+  statusLineWindows,
+  type StatusSample,
+} from "./usage-model";
 import {
   CONTROL_DIR,
   Unsubmitted,
@@ -727,7 +734,8 @@ export const recordClaudeEvent = Effect.fn("Compactors.recordClaudeEvent")(funct
   yield* writeEvent(dir, { session, kind: "usage", tokens, ...(limits && { limits }) });
   // Once a session: a status line is redrawn on every event, and its `out` must not crowd
   // the compaction records out of the telemetry's cap.
-  const full = limits && statusLineWindows(limits).some((window) => window.usedPercent >= 100);
+  const now = yield* Clock.currentTimeMillis;
+  const full = limits && statusLineWindows(limits).some((window) => isFull(current(window, now)));
   const told = (yield* readEvents(dir).pipe(Effect.orElseSucceed(() => []))).some(
     (one) => one.kind === "out",
   );
@@ -815,14 +823,14 @@ const lastFullWindow = Effect.fn("Compactors.lastFullWindow")(function* (dir: st
   const sampled = (yield* readEvents(dir).pipe(Effect.orElseSucceed(() => []))).findLast(
     (one) => one.limits !== undefined,
   )?.limits;
+  const now = yield* Clock.currentTimeMillis;
   const [busiest] = sampled
-    ? statusLineWindows(sampled).toSorted((a, b) => b.usedPercent - a.usedPercent)
+    ? statusLineWindows(sampled)
+        .map((window) => current(window, now))
+        .toSorted((a, b) => b.usedPercent - a.usedPercent)
     : [];
   if (busiest === undefined) return null;
-  const reset =
-    busiest.resetsAt === null
-      ? ""
-      : `, ${resetPhrase(busiest.resetsAt, yield* Clock.currentTimeMillis)}`;
+  const reset = busiest.resetsAt === null ? "" : `, ${resetPhrase(busiest.resetsAt, now)}`;
   return `${busiest.label.toLowerCase()} ${Math.round(busiest.usedPercent)}%${reset}`;
 });
 
