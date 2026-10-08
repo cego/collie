@@ -4,7 +4,13 @@
 import { expect, test } from "bun:test";
 import { Clock, DateTime, Effect, FileSystem, Schema } from "effect";
 import { CleanupReport } from "../src/board-model";
-import { desktopRootOf, pruneDesktop, sshControlsPrefix, sweepSshControls } from "../src/desktop";
+import {
+  dataHomeOf,
+  desktopRootOf,
+  pruneDesktop,
+  sshControlsPrefix,
+  sweepSshControls,
+} from "../src/desktop";
 import { runEffect } from "./support/effect";
 import { collie, proves } from "./support/world";
 
@@ -14,7 +20,8 @@ const DAY_MS = 24 * 60 * 60_000;
 const installed = (dir: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
-    const root = desktopRootOf(`${dir}/data`);
+    // Where this platform's Desktop keeps it, as `collie cleanup` looks.
+    const root = desktopRootOf(dataHomeOf(dir, `${dir}/data`));
     yield* fs.makeDirectory(`${root}/app/Resources`, { recursive: true });
     yield* fs.writeFileString(
       `${root}/app/Resources/version.json`,
