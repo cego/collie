@@ -7,12 +7,14 @@ import { exec } from "./support/command";
 import { runEffect } from "./support/effect";
 
 /** Owner and group zeroed, in each tar's flags: a large UID does not fit a USTAR header. */
-const flavour = async (format: string) => {
-  const bsd = (await Bun.$`tar --version`.text()).includes("bsdtar");
-  return bsd
-    ? [`--format=${format === "gnu" ? "gnutar" : format}`, "--uid", "0", "--gid", "0"]
-    : [`--format=${format}`, "--owner=0", "--group=0"];
-};
+const flavour = (format: string) =>
+  exec(["tar", "--version"]).pipe(
+    Effect.map((done) =>
+      done.stdout.includes("bsdtar")
+        ? [`--format=${format === "gnu" ? "gnutar" : format}`, "--uid", "0", "--gid", "0"]
+        : [`--format=${format}`, "--owner=0", "--group=0"],
+    ),
+  );
 
 /** An installer as Electrobun lays one out: the extractor, its marker, then the zstd tar. */
 const installerWith = (dir: string, paths: ReadonlyArray<string>, format = "gnu") =>
@@ -23,7 +25,7 @@ const installerWith = (dir: string, paths: ReadonlyArray<string>, format = "gnu"
       yield* fs.makeDirectory(`${tree}/${path}`.replace(/\/[^/]*$/, ""), { recursive: true });
       yield* fs.writeFileString(`${tree}/${path}`, "x");
     }
-    const flags = yield* Effect.promise(() => flavour(format));
+    const flags = yield* flavour(format);
     const made = yield* exec(["tar", ...flags, "-cf", `${dir}/payload.tar`, "-C", tree, "."]);
     expect(made.exitCode).toBe(0);
     const tar = yield* fs.readFile(`${dir}/payload.tar`);
