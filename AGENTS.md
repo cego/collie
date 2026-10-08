@@ -253,6 +253,9 @@ herdr actions, and the `collie` CLI.
   `openssl` can, and the runner and Desktop the Ed25519 one. What runs differently on a Mac is
   `src/script.ts` (a login's `script`), the `ps` fallback in `src/compaction.ts`'s
   `endpointPid` and `desktop/src/bun/login-path.ts` (Desktop's PATH from the login shell).
+  Desktop's macOS build is `desktop/scripts/mac-signing.ts` (Developer ID or ad hoc) and
+  `tools/verify-mac-app.sh`, with `test/desktop-mac-signing.test.ts` and
+  `test/desktop-build-hook.test.ts`.
 
 ## Commands
 

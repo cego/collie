@@ -1,5 +1,6 @@
 import type { ElectrobunConfig } from "electrobun";
 import manifest from "../herdr-plugin.toml";
+import { macSigning } from "./scripts/mac-signing";
 
 export default {
   app: {
@@ -11,6 +12,7 @@ export default {
   },
   release: { baseUrl: "https://github.com/cego/collie/releases/latest/download" },
   scripts: {
+    preBuild: "scripts/mac-icons.ts",
     postBuild: "scripts/name-desktop-entry.ts",
     postWrap: "scripts/name-desktop-entry.ts",
   },
@@ -19,7 +21,7 @@ export default {
     bun: { entrypoint: "src/bun/index.ts" },
     copy: { "view/.output/public": "views/mainview" },
     watchIgnore: ["view/**"],
-    mac: { bundleCEF: false },
+    mac: { bundleCEF: false, icons: "mac.iconset", ...macSigning(process.env) },
     linux: {
       bundleCEF: true,
       // bundleCEF alone still renders with WebKitGTK.

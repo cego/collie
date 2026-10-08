@@ -976,6 +976,28 @@ const OPERATOR_CHECKS: readonly Check[] = [
     },
   },
   {
+    id: "install/desktop-installs-and-opens-on-a-mac",
+    statement:
+      "On an arm64 Mac, `curl -fsSL …/install-desktop.sh | sh` puts Collie Desktop in `~/Applications`, and it opens from Spotlight with no Gatekeeper prompt and Local on its board.",
+    owner: ON_A_MAC,
+    needs: "operator",
+    proof: {
+      kind: "operator",
+      how: "On an arm64 Mac, run `curl -fsSL https://github.com/cego/collie/releases/latest/download/install-desktop.sh | sh` from a release carrying this work. Record that `~/Applications/collie-desktop.app` is there, that it opens from Spotlight with no Gatekeeper prompt, that Local is on the board, and with a VM added by `herdr machine add`, that the VM is listed as a second Machine. Record the revision.",
+    },
+  },
+  {
+    id: "install/desktop-on-a-mac-updates-itself",
+    statement:
+      "Collie Desktop on a Mac finds the next release, says it is ready once its tar verifies, and Restart Desktop comes back on the new version.",
+    owner: ON_A_MAC,
+    needs: "operator",
+    proof: {
+      kind: "operator",
+      how: "With Desktop installed on a Mac by `install-desktop.sh`, wait for the next release. Record that Settings → About says the update is ready, that **Restart Desktop** comes back, and that Settings then shows the new version. Record both revisions.",
+    },
+  },
+  {
     id: "install/old-herdr-is-explained-and-left-running",
     statement:
       "With a herdr older than Collie's minimum, `setup.sh` finishes everything it can, `collie doctor` says what upgrading will do to the running panes and when, and the herdr server and its panes are left running.",

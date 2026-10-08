@@ -871,22 +871,36 @@ a run directory: an unsent answer is yours, not the run's.
 
 ## Collie Desktop
 
-**Desktop** is a desktop app, Linux first, that shows the **Flock** — every Herd on every
+**Desktop** is a desktop app, released for Linux (x64) and for Macs with Apple silicon, that shows the **Flock** — every Herd on every
 Machine it reaches — on one board. It lives in `desktop/` and is one more front door over
 the same board: it reads each host's stream and builds nothing of its own. The sections and
 the header sentence are counted across the Flock. Once there is more than one Machine, each
 card names its Machine, and its Herd too when that Machine runs more than one herdr
 session.
 
-Desktop is released with Collie, under the same tag and version. Install it on Linux (x64)
-for your user, with a desktop entry:
+Desktop is released with Collie, under the same tag and version. Install it for your user,
+on Linux with a desktop entry and on a Mac into `~/Applications`:
 
 ```sh
 curl -fsSL https://github.com/cego/collie/releases/latest/download/install-desktop.sh | sh
 ```
 
-The script downloads the latest release's installer and runs it only once the download
-verifies against Collie's release key. Any `openssl` will do.
+The script downloads the latest release's installer and uses it only once the download
+verifies against Collie's release key. Any `openssl` will do. On Linux it runs the installer.
+On a Mac it attaches the DMG without opening a Finder window, copies **collie-desktop**
+into `~/Applications`, replacing an older copy, and detaches it again; open it from
+Spotlight or the Dock. An Intel Mac is refused: Desktop is released for Apple silicon only,
+and the TUI plugin works there.
+
+Until a release is notarized by Apple, a DMG downloaded in a browser is quarantined and
+Gatekeeper refuses to open the app in it. The script avoids that: `curl` sets no quarantine,
+and the app it copies is signed. If you did download the DMG in a browser, install with the
+script instead.
+
+**On a Mac, the Mac is Local.** Agents run on it as they do on Linux. A VM is a second
+Machine only if you want agents to run there too: add it with `herdr machine add` and
+Desktop shows it beside Local. bodil's `--vm` backend is bodil's own business and not a
+Collie Machine, so a VM bodil uses needs no `herdr machine add` for that.
 
 On macOS, Desktop opened from Finder or the Dock starts with launchd's short PATH. So at
 start it asks your login shell (`$SHELL -ilc`) for its PATH and runs with that, finding
@@ -907,8 +921,9 @@ tar it would install verifies against the same key, because Electrobun's bundle 
 not authentication. An update that is unsigned or does not match is thrown away and said
 so. One that verifies is announced as "Collie 0.33.0 is ready, restart Desktop", and
 **Restart Desktop** installs it. Desktop never restarts itself: an update that is ready when
-you quit is installed the next time you start Desktop. [`collie upgrade`](cli.md#upgrading)
-on this computer stages the same update for Desktop, verified the same way, so the CLI and
+you quit is installed the next time you start Desktop. It updates itself the same way on a
+Mac. On Linux, [`collie upgrade`](cli.md#upgrading)
+on this computer also stages the same update for Desktop, verified the same way, so the CLI and
 Desktop move together; a running Desktop announces it within a minute. A ready update stays
 announced through later checks, even one that fails. A Desktop run from a checkout
 (`bun run start`, or any build that is not the stable channel) never updates itself, and

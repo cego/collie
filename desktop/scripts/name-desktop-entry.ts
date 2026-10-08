@@ -1,14 +1,26 @@
 // Electrobun's postBuild and postWrap hook: `app.name` also names the update archives, so
-// the launcher entry is renamed here instead.
+// the launcher entry is renamed here instead. On macOS without a Developer ID, it signs the
+// bundle ad hoc where Electrobun left it unsigned.
 
 import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { withCollieName } from "../src/desktop-entry";
+import { appsIn, macSigning, signAdHocWhereUnsigned } from "./mac-signing";
 
 const dir = process.env.ELECTROBUN_BUILD_DIR;
 const name = process.env.ELECTROBUN_APP_NAME;
 if (dir === undefined || name === undefined) {
   throw new Error("ELECTROBUN_BUILD_DIR and ELECTROBUN_APP_NAME must be set");
+}
+// A macOS app has no launcher entry; any other build keeps failing without one.
+if (process.env.ELECTROBUN_OS === "macos") {
+  if (!macSigning(process.env).codesign) {
+    const wrapper = process.env.ELECTROBUN_WRAPPER_BUNDLE_PATH;
+    for (const app of [...appsIn(dir), ...(wrapper === undefined ? [] : [wrapper])]) {
+      signAdHocWhereUnsigned(app);
+    }
+  }
+  process.exit(0);
 }
 let renamed = 0;
 for (const bundle of readdirSync(dir, { withFileTypes: true })) {
