@@ -19,12 +19,12 @@ everything else. That is the one routine that prepares a
 machine, and `collie upgrade` and herdr's plugin build hook end in it too, so a prerequisite
 is added in one place:
 
-| Step             | What it does                                                                                 |
-| ---------------- | -------------------------------------------------------------------------------------------- |
-| `plugin-link`    | `herdr plugin link` from this checkout, if it is not already linked from it                  |
-| `runner`         | `install.sh`: the runner in `bin/collie`, and a `collie` shim on your PATH                   |
-| `operator-skill` | Links the Collie operator skill into `~/.claude/skills/collie` and `~/.agents/skills/collie` |
-| `skills`         | Installs and updates the skills the workflows require (below)                                |
+| Step             | What it does                                                                                        |
+| ---------------- | --------------------------------------------------------------------------------------------------- |
+| `plugin-link`    | `herdr plugin link` from this checkout, if it is not already linked from it and herdr is new enough |
+| `runner`         | `install.sh`: the runner in `bin/collie`, and a `collie` shim on your PATH                          |
+| `operator-skill` | Links the Collie operator skill into `~/.claude/skills/collie` and `~/.agents/skills/collie`        |
+| `skills`         | Installs and updates the skills the workflows require (below)                                       |
 
 Every step skips what is already in place, so re-running is a reflex rather than a
 decision. `install.sh` writes the shim without changing PATH itself. Keybindings are the
@@ -35,12 +35,28 @@ plugin rebuild may do as a side effect, so `setup.sh` alone adds them.
 its status, so an install's last word is either that everything is ready or what is missing
 with the fix for each.
 
+**An older herdr.** With a herdr older than the plugin manifest's `min_herdr_version`,
+`plugin-link` is skipped and says so, everything else still runs, and doctor says what
+upgrading herdr will do to the programs running in its panes, and when to do it
+([ADR-0048](adr/0048-collie-is-released-for-macos-on-apple-silicon.md), D4). From a herdr
+before 0.9.0 the running server must stop once, which ends every program in its panes, so do
+it when nothing is running there; `herdr update --handoff` is herdr's experimental way to
+carry them across. From 0.9.0 on, `herdr update` leaves the running server and its panes
+alone, and restarting the server when nothing is running picks up the rest. Collie never
+upgrades herdr or stops its server itself: stopping it ends your work, so when is yours to
+choose. Desktop says the same when its herdr has no `herdr machine`, and points at
+`collie doctor`.
+
+**On a Mac.** The same command installs the TUI plugin on macOS. Its `darwin-arm64` runner
+is the file a release ran on a Mac before signing it, signed ad hoc there if macOS would not
+start Bun's build as it was. The logins `collie onboard` and Desktop run use macOS's own BSD
+`script`, and nothing needs Homebrew's OpenSSL or GNU tools.
+
 Collie's releases are public, so the install needs no token. A project that is not public — a
 fork, or a mirror — answers an unauthenticated download with a sign-in page rather than a binary — with HTTP 200, which is why the install
 checks that what arrived is a program rather than trusting the status code. A downloaded
-runner is installed only once its signature from Collie's release key checks out, which
-needs OpenSSL 3.0 or later: macOS's own LibreSSL and OpenSSL 1.1 cannot check it, so a Mac
-needs `brew install openssl` and a RHEL 8 Machine EPEL's `openssl3`.
+runner is installed only once its signature from Collie's release key checks out. Any
+`openssl` will do, macOS's own LibreSSL and OpenSSL 1.1 among them.
 
 For one of those, the install finds a token in this order:
 
@@ -143,6 +159,21 @@ the command above. Set up and not working is a `!`: a credentials file without a
 not valid JSON. Each names the file to look in. `collie run start` asks the same two
 questions for the workflow it is about to run and refuses with that detail when the answer
 is no — a Run that would only find out at its merge step is not started.
+
+### Working with bodil
+
+Collie has no bodil option. A `bodil` workflow wraps `implement`: it runs `bodil remote up`,
+has implement work in bodil's own worktree on bodil's branch, and runs `bodil remote down`
+once implement has settled. The module is in
+[`docs/sdk.md`](sdk.md#a-checkout-another-tool-makes). Save it as
+`~/.collie/user/workflows/bodil.workflow.ts` until bodil's own install script links it, then:
+
+```sh
+collie run start bodil --input plan=… --input brands=happytiger
+```
+
+`--input name=<name>` names the instance; without it the Run's task name does. A Run
+stopped part-way leaves the instance up, for `bodil remote down <name>`.
 
 ### Environment variables
 
@@ -840,22 +871,42 @@ a run directory: an unsent answer is yours, not the run's.
 
 ## Collie Desktop
 
-**Desktop** is a desktop app, Linux first, that shows the **Flock** — every Herd on every
+**Desktop** is a desktop app, released for Linux (x64) and for Macs with Apple silicon, that shows the **Flock** — every Herd on every
 Machine it reaches — on one board. It lives in `desktop/` and is one more front door over
 the same board: it reads each host's stream and builds nothing of its own. The sections and
 the header sentence are counted across the Flock. Once there is more than one Machine, each
 card names its Machine, and its Herd too when that Machine runs more than one herdr
 session.
 
-Desktop is released with Collie, under the same tag and version. Install it on Linux (x64)
-for your user, with a desktop entry:
+Desktop is released with Collie, under the same tag and version. Install it for your user,
+on Linux with a desktop entry and on a Mac into `~/Applications`:
 
 ```sh
 curl -fsSL https://github.com/cego/collie/releases/latest/download/install-desktop.sh | sh
 ```
 
-The script downloads the latest release's installer and runs it only once the download
-verifies against Collie's release key. Checking needs OpenSSL 3.0 or later.
+The script downloads the latest release's installer and uses it only once the download
+verifies against Collie's release key. Any `openssl` will do. On Linux it runs the installer.
+On a Mac it attaches the DMG without opening a Finder window, copies **collie-desktop**
+into `~/Applications`, replacing an older copy, and detaches it again; open it from
+Spotlight or the Dock. An Intel Mac is refused: Desktop is released for Apple silicon only,
+and the TUI plugin works there.
+
+Until a release is notarized by Apple, a DMG downloaded in a browser is quarantined and
+Gatekeeper refuses to open the app in it. The script avoids that: `curl` sets no quarantine,
+and the app it copies is signed. If you did download the DMG in a browser, install with the
+script instead.
+
+**On a Mac, the Mac is Local.** Agents run on it as they do on Linux. A VM is a second
+Machine only if you want agents to run there too: add it with `herdr machine add` and
+Desktop shows it beside Local. bodil's `--vm` backend is bodil's own business and not a
+Collie Machine, so a VM bodil uses needs no `herdr machine add` for that.
+
+On macOS, Desktop opened from Finder or the Dock starts with launchd's short PATH. So at
+start it asks your login shell (`$SHELL -ilc`) for its PATH and runs with that, finding
+`herdr`, `collie`, `claude`, `git` and `ssh` as your terminal does. If the shell does not
+answer within a few seconds, Desktop keeps the PATH it was given and logs why. On Linux it
+keeps the PATH its session gave it.
 
 It shows up as **Collie**, with the Collie mark — the dog on the white tile the TUI board
 shows, which reads on a dark taskbar too — in your app launcher, on its window, in the
@@ -870,8 +921,9 @@ tar it would install verifies against the same key, because Electrobun's bundle 
 not authentication. An update that is unsigned or does not match is thrown away and said
 so. One that verifies is announced as "Collie 0.33.0 is ready, restart Desktop", and
 **Restart Desktop** installs it. Desktop never restarts itself: an update that is ready when
-you quit is installed the next time you start Desktop. [`collie upgrade`](cli.md#upgrading)
-on this computer stages the same update for Desktop, verified the same way, so the CLI and
+you quit is installed the next time you start Desktop. It updates itself the same way on a
+Mac. On Linux, [`collie upgrade`](cli.md#upgrading)
+on this computer also stages the same update for Desktop, verified the same way, so the CLI and
 Desktop move together; a running Desktop announces it within a minute. A ready update stays
 announced through later checks, even one that fails. A Desktop run from a checkout
 (`bun run start`, or any build that is not the stable channel) never updates itself, and

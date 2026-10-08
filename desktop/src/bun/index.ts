@@ -108,6 +108,7 @@ import {
 import { isHostName, tokenPage } from "../../../src/gitlab-token";
 import { HELLE_URL } from "../../../src/helle-url";
 import { electrobunUpdater } from "./electrobun-updater";
+import { loginPath } from "./login-path";
 import {
   dropBoardsOf,
   dropOnboarding,
@@ -188,6 +189,9 @@ const StateDir = Config.String("XDG_STATE_HOME").pipe(
 );
 
 const main = Effect.gen(function* () {
+  // Before anything is spawned, so herdr, collie, claude, git and ssh resolve as in a terminal.
+  const path = yield* loginPath(process.platform, Bun.env.SHELL ?? "/bin/zsh");
+  if (path !== null) Bun.env.PATH = path;
   const updater = yield* electrobunUpdater;
   yield* applyAtLaunch(updater).pipe(
     Effect.catch((reason) => Effect.logWarning(`Desktop update not installed: ${reason}`)),
@@ -272,7 +276,7 @@ const main = Effect.gen(function* () {
   yield* sweepSshControls(tmpdir()).pipe(Effect.ignore);
   const controls = yield* fs.makeTempDirectoryScoped({ prefix: sshControlsPrefix(process.pid) });
   // herdr's list is the only list of Machines there is.
-  const listed = yield* herdrMachines("herdr").pipe(Effect.result);
+  const listed = yield* herdrMachines("herdr", manifest.min_herdr_version).pipe(Effect.result);
   const now = yield* Clock.currentTimeMillis;
   const [enabled, unlisted] = Result.match(listed, {
     onSuccess: (machines) => [machines, []] as const,
@@ -506,7 +510,7 @@ const main = Effect.gen(function* () {
         });
       const before = new Set(routes.keys());
       const added = yield* addToHerdr("herdr", target, label, session, ask).pipe(
-        Effect.andThen(herdrMachines("herdr")),
+        Effect.andThen(herdrMachines("herdr", manifest.min_herdr_version)),
         Effect.flatMap((machines) => {
           const found = machines.find(
             (machine) =>

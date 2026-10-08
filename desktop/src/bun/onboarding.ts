@@ -6,6 +6,7 @@ import { Clock, Crypto, Effect, FileSystem, Option, Schema, Stream } from "effec
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as HttpClient from "effect/http/HttpClient";
 import { RELEASE_PUBLIC_KEY, SIGNATURE_SUFFIX, verifyRelease } from "../../../src/signing";
+import { scriptCommand } from "../../../src/script";
 import { type OnboardRun, type OnboardStep, SETTLED, type Skippable } from "../shared/flock";
 import { quoted, type Route, type ShellRoute, spawned } from "./machine";
 
@@ -424,7 +425,7 @@ export const addToHerdr = Effect.fn("Desktop.addToHerdr")(function* (
     .map(quoted)
     .join(" ");
   const child = yield* spawned(() =>
-    Bun.spawn(["script", "-qefc", command, "/dev/null"], {
+    Bun.spawn(scriptCommand(command, process.platform), {
       stdin: "pipe",
       stdout: "pipe",
       stderr: "pipe",

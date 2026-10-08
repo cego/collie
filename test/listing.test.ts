@@ -10,6 +10,7 @@
 // The agents are herdr's through the real dispatcher, the engine is Effect's over real
 // SQLite in a directory, and every second pass below is a second host on the same file.
 
+import type { ChildProcessSpawner } from "effect/process";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, FileSystem, Layer, Path, Result, Schema } from "effect";
 import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
@@ -93,6 +94,7 @@ const session = <A, E>(
     | Store
     | FileSystem.FileSystem
     | Path.Path
+    | ChildProcessSpawner.ChildProcessSpawner
   >,
 ) =>
   run.pipe(

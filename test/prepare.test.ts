@@ -10,7 +10,7 @@ import { runEffect } from "./support/effect";
 import { FakeBin } from "./support/bin";
 import { generateKeyPairSync } from "node:crypto";
 import { prepareSteps } from "../src/operations";
-import { signRelease } from "../src/signing";
+import { signReleaseP256 } from "../src/signing";
 
 let home: string;
 let root: string;
@@ -82,7 +82,7 @@ beforeEach(() =>
         "install.sh",
         "setup.sh",
         "herdr-plugin.toml",
-        "release.pub",
+        "release-p256.pub",
       ]) {
         yield* fs.copyFile(`${repo}/${file}`, `${root}/${file}`);
       }
@@ -98,6 +98,7 @@ beforeEach(() =>
       yield* bin.add(
         "herdr",
         `case "$1 $2" in
+          "--version ") echo "herdr \${FAKE_HERDR_VERSION:-}" ;;
           "plugin list") cat "${home}/linked" 2>/dev/null || true ;;
           "plugin link") echo "cego.collie 0.1.0 [local:$3]" > "${home}/linked"; echo link >> "${home}/herdr-calls" ;;
         esac`,
@@ -164,6 +165,37 @@ test("a second run changes nothing and says every step is already in place", () 
       expect(again.code).toBe(0);
       // Linked once, not once per run: a re-link fires herdr's build hook.
       expect((yield* read(`${home}/herdr-calls`)).trim()).toBe("link");
+    }),
+  ));
+
+test("a herdr older than the manifest's minimum is not linked, and the rest still runs", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const done = yield* run("prepare.sh", undefined, { FAKE_HERDR_VERSION: "0.7.1" });
+
+      expect(done.out).toContain(
+        "prepare: plugin-link: skipped — herdr 0.7.1 is older than the 0.9.3 Collie needs; collie doctor says how to upgrade",
+      );
+      expect(yield* exists(`${home}/herdr-calls`)).toBe(false);
+      expect(done.out).toContain("prepare: runner: done");
+      expect(done.out).toContain("prepare: operator-skill: done");
+      expect(done.out).toContain("prepare: skills:");
+      expect(done.code).toBe(0);
+    }),
+  ));
+
+test("herdr's version is compared as numbers, part by part", () =>
+  runEffect(
+    Effect.gen(function* () {
+      for (const version of ["0.9.3", "0.9.10", "0.10.0", "1.0.0"]) {
+        yield* remove(`${home}/linked`);
+        const done = yield* run("prepare.sh", undefined, { FAKE_HERDR_VERSION: version });
+        expect(done.out).toContain("prepare: plugin-link: done");
+      }
+      for (const version of ["0.7.1", "0.9.2", "0.8.10"]) {
+        const done = yield* run("prepare.sh", undefined, { FAKE_HERDR_VERSION: version });
+        expect(done.out).toContain(`prepare: plugin-link: skipped — herdr ${version} is older`);
+      }
     }),
   ));
 
@@ -487,6 +519,8 @@ test("setup configures Claude Code's status line; prepare never touches it", () 
     }),
   ));
 
+const p256 = () => generateKeyPairSync("ec", { namedCurve: "prime256v1" });
+
 /**
  * A release to download from, as `install.sh` names its asset, and the runner already in
  * place. Not a checkout and no bun, so `install.sh` has nothing to build from.
@@ -495,12 +529,12 @@ const downloadable = Effect.fn("prepareTest.downloadable")(function* () {
   const fs = yield* FileSystem.FileSystem;
   yield* remove(`${root}/.git`);
   yield* remove(`${home}/stubs/bun`);
-  const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+  const { publicKey, privateKey } = p256();
   yield* fs.writeFileString(
-    `${root}/release.pub`,
+    `${root}/release-p256.pub`,
     publicKey.export({ type: "spki", format: "pem" }).toString(),
   );
-  const asset = `${home}/release/collie-linux-${process.arch === "arm64" ? "arm64" : "x64"}`;
+  const asset = `${home}/release/collie-${process.platform}-${process.arch === "arm64" ? "arm64" : "x64"}`;
   const runner = new Uint8Array([0x7f, 0x45, 0x4c, 0x46, ...new TextEncoder().encode(" new")]);
   yield* fs.makeDirectory(`${home}/release`, { recursive: true });
   yield* fs.writeFile(asset, runner);
@@ -508,15 +542,14 @@ const downloadable = Effect.fn("prepareTest.downloadable")(function* () {
   yield* fs.writeFileString(`${root}/bin/collie`, "the runner already here");
   const signature = (key = privateKey) =>
     fs.writeFileString(
-      `${asset}.sig`,
-      signRelease(runner, key.export({ type: "pkcs8", format: "pem" }).toString()),
+      `${asset}.p256.sig`,
+      signReleaseP256(runner, key.export({ type: "pkcs8", format: "pem" }).toString()),
     );
   const install = () =>
     run("install.sh", undefined, {
       COLLIE_RELEASE_BASE: `file://${home}/release`,
       COLLIE_PREPARING: "1",
-      // Only PATH's, so a Machine's own Homebrew or EPEL OpenSSL 3 cannot stand in for a stub.
-      COLLIE_OPENSSL: "openssl",
+      COLLIE_OPENSSL: Bun.env.COLLIE_OPENSSL ?? "openssl",
     });
   return { runner, signature, install };
 });
@@ -539,7 +572,7 @@ test("a download another key signed is refused before it replaces the runner", (
   runEffect(
     Effect.gen(function* () {
       const release = yield* downloadable();
-      yield* release.signature(generateKeyPairSync("ed25519").privateKey);
+      yield* release.signature(p256().privateKey);
 
       const done = yield* release.install();
 
@@ -563,22 +596,38 @@ test("a signature that cannot be fetched leaves the runner already there", () =>
     }),
   ));
 
-test("an OpenSSL that cannot check Ed25519 is named, not taken for a tampered download", () =>
+test("LibreSSL checks the signature as any openssl does", () =>
   runEffect(
     Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
       const release = yield* downloadable();
       yield* release.signature();
-      // macOS's LibreSSL: on PATH, answering, and with no `pkeyutl -rawin`.
       yield* bin.add(
         "openssl",
-        `case "$1" in version) echo "LibreSSL 3.3.6" ;; *) echo "pkeyutl: unknown option -rawin" >&2; exit 1 ;; esac`,
+        `case "$1" in version) echo "LibreSSL 3.3.6" ;; *) exec ${Bun.which("openssl")} "$@" ;; esac`,
       );
 
       const done = yield* release.install();
 
-      expect(done.out).toContain("no OpenSSL 3.0 or later");
+      expect(done.code).toBe(0);
+      expect(yield* fs.readFile(`${root}/bin/collie`)).toEqual(release.runner);
+    }),
+  ));
+
+test("no openssl is named, not taken for a tampered download", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const release = yield* downloadable();
+      yield* release.signature();
+
+      const done = yield* run("install.sh", undefined, {
+        COLLIE_RELEASE_BASE: `file://${home}/release`,
+        COLLIE_PREPARING: "1",
+        COLLIE_OPENSSL: `${home}/no-openssl-here`,
+      });
+
+      expect(done.out).toContain("no-openssl-here to check");
       expect(done.out).not.toContain("does not match");
-      expect(done.out).toContain("the download from");
       expect(done.out).toContain("was refused");
       expect(done.code).not.toBe(0);
       expect(yield* read(`${root}/bin/collie`)).toBe("the runner already here");

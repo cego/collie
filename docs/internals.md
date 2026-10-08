@@ -238,7 +238,11 @@ herdr what some other version's schema says.
 Desktop's main process runs three more, all on herdr's list of saved machines:
 `herdr machine list --json`, which machines to reach, and `herdr machine remove`
 (`desktop/src/bun/machine.ts`), and `herdr machine add` (`desktop/src/bun/onboarding.ts`),
-run under `script` so herdr has the terminal its questions need. Desktop is another
+run under `script` so herdr has the terminal its questions need. `src/script.ts` builds that
+command, for this and for the Claude and Linear logins: util-linux `script -qefc` on Linux,
+and BSD `script -q /dev/null /bin/sh -c` on macOS, whose `script` has no `-c`. A login run
+on another Machine picks between them there, by `uname`. Where the list fails, it
+also asks `herdr --version`, so a herdr too old to have `herdr machine` is named as one. Desktop is another
 program, usually on another computer, and it is not talking to a session either: it keeps
 herdr's list and nothing else. Routing them through `herdr.ts` would bring Collie's locks
 into Desktop, which reaches a Machine only through `collie bridge`.
@@ -516,7 +520,9 @@ for an answer that had already arrived. Installation through agent startup holds
 lock outside the controls directory. Cleanup takes the same lock and rechecks `agent
 list` before removing controls or stopping an endpoint. A parallel launch therefore
 cannot mistake an agent still starting for a stale one; a failed launch releases its
-lock, and the existing PID-lock recovery handles a process that crashes.
+lock, and the existing PID-lock recovery handles a process that crashes. An endpoint is
+stopped only while its recorded pid still runs the recorded command, read from
+`/proc/<pid>/cmdline`, or from `ps -ww -o command=` where there is no `/proc`, as on macOS.
 
 ## The registry and sessions
 
@@ -699,21 +705,24 @@ borrows the token `glab` or `gh` already holds for the release host — see
 with a sign-in page and HTTP 200, so the install checks the first bytes for an ELF or
 Mach-O header instead of trusting `curl -f`.
 
-Each runner binary is published with a detached ed25519 signature beside it, `<asset>.sig`.
-The release job signs with `tools/sign.ts`, which reads the private key from the
-`COLLIE_SIGNING_KEY` secret (PKCS#8 PEM). It refuses to run without that key, and refuses a
-key that does not match the public key built into `src/signing.ts`. The public key is
-`release.pub`, which `src/signing.ts` imports. Desktop checks a runner it downloads with
-`verifyRelease`, and `install.sh` checks one with `openssl pkeyutl` against the same file,
-fetching `<asset>.sig` with the same token as the asset, before it replaces `bin/collie`. A
-download that is unsigned, does not match, or whose signature cannot be fetched is never
-installed or run, and the runner already there stays. Checking needs OpenSSL 3.0 or later,
-found on PATH as `openssl` or `openssl3`, or in Homebrew's `openssl@3` (`COLLIE_OPENSSL` names the only one to try); without one, or with
-an OpenSSL that cannot do it, the download is refused as unchecked rather than mismatched.
+Every release asset is published with two detached signatures beside it
+([ADR-0048](adr/0048-collie-is-released-for-macos-on-apple-silicon.md), D3): Ed25519 as
+`<asset>.sig`, and ECDSA P-256 over SHA-256 (DER, base64) as `<asset>.p256.sig`. The
+release job signs with `tools/sign.ts`, which reads the private keys from the
+`COLLIE_SIGNING_KEY` and `COLLIE_SIGNING_KEY_P256` secrets (PKCS#8 PEM). It refuses to run
+without either key, and refuses a key that does not match its public key built into
+`src/signing.ts`: `release.pub` and `release-p256.pub`. Desktop checks a runner it downloads
+with `verifyRelease` against `release.pub`. `install.sh` checks one with
+`openssl dgst -sha256 -verify` against `release-p256.pub`, which any OpenSSL or LibreSSL can
+do, fetching `<asset>.p256.sig` with the same token as the asset, before it replaces
+`bin/collie`. A download that is unsigned, does not match, or whose signature cannot be
+fetched is never installed or run, and the runner already there stays. `COLLIE_OPENSSL`
+names the `openssl` to use; without one that answers `version`, the download is refused as
+unchecked rather than mismatched.
 So a Machine without bun can install a release only once it is signed. The check is the
 target release's own `install.sh`, so `upgrade --to` or `onboard --to` a release from before
-it installs that release's runner unchecked. Rotating the key means changing both the secret and
-`release.pub`, and
+it installs that release's runner unchecked. Rotating a key means changing both its secret and
+its public key file, and
 releases signed with the old key stop verifying.
 
 Collie Desktop is built by the same release, from the same tag, by the workflow's
@@ -723,10 +732,22 @@ Collie Desktop is built by the same release, from the same tag, by the workflow'
 `app.name`, so that stays `collie-desktop`, as do the keyring service and the state
 directory that hold Desktop's credentials and chat. The name people see is written into
 the launcher entry by `desktop/scripts/name-desktop-entry.ts`, Electrobun's postBuild and
-postWrap hook, before the bundle is packed; it fails the build if there is none to name. Electrobun's self-extractor cannot read a GNU long-name tar entry,
+postWrap hook, before the bundle is packed; it fails a Linux build if there is none to name.
+A macOS build has none. Electrobun signs the app itself, after it writes the release
+metadata into the bundle and before it archives it, with the identity in
+`ELECTROBUN_DEVELOPER_ID`: the release's Developer ID where that secret is set, and `-`,
+ad hoc, where it is not. `desktop/scripts/mac-signing.ts` turns `codesign` on with an
+identity, and `notarize` only with a real one and a complete Apple ID or API key set. The
+`desktop-macos` job builds the DMG, the `.app.tar.zst` update archive and the update
+manifest, and `tools/verify-mac-app.sh` fails it unless `codesign --verify --deep --strict`
+passes on both the DMG's app and the app the update archive unpacks to; CI runs the same
+build and gate on every push. Electrobun keeps its prepared-update record at
+`<appDataFolder>/self-extraction/.electrobun-prepared-update.json` on every platform, and
+Desktop asks Electrobun for that folder, so the record is found on macOS as on Linux. Electrobun's self-extractor cannot read a GNU long-name tar entry,
 so `tools/check-payload.ts` fails the job when any path in the installer's payload is over
 100 characters. The release job signs Desktop's installer, its update manifest, its update
-archive and `install-desktop.sh`, each as `<asset>.sig`. It also signs the archive as the
+archive, any delta patch and `install-desktop.sh`, each as `<asset>.sig` and `<asset>.p256.sig`;
+`install-desktop.sh` checks the installer's `.p256.sig` with `openssl dgst`. It also signs the archive as the
 tar it is applied as, `<name>.tar.sig` beside `<name>.tar.zst` (`appliedSignatureOf` in
 `src/signing.ts`). Desktop verifies that tar before it installs an update, whether
 Electrobun built it from the archive or from a delta patch

@@ -32,7 +32,7 @@ envelope() {
   status=$?
   set -e
   [ "$status" = "$wanted" ] || fail "$what exited $status, wanted $wanted"
-  [ "$(echo "$out" | wc -l)" = "1" ] || fail "$what wrote more than one line: $out"
+  [ "$(echo "$out" | wc -l)" -eq 1 ] || fail "$what wrote more than one line: $out"
   echo "$out" | grep -q "$pattern" || fail "$what does not match $pattern: $out"
 }
 

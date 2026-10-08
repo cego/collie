@@ -10,6 +10,8 @@ const name = process.env.ELECTROBUN_APP_NAME;
 if (dir === undefined || name === undefined) {
   throw new Error("ELECTROBUN_BUILD_DIR and ELECTROBUN_APP_NAME must be set");
 }
+// A macOS app has no launcher entry; any other build keeps failing without one.
+if (process.env.ELECTROBUN_OS === "macos") process.exit(0);
 let renamed = 0;
 for (const bundle of readdirSync(dir, { withFileTypes: true })) {
   if (!bundle.isDirectory()) continue;

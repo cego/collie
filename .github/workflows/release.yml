@@ -27,14 +27,55 @@ jobs:
       # The build script gates on the artifact embedding its own target's renderer, so a
       # cross-build that resolved the wrong native package fails here rather than shipping.
       - run: bun run tools/build.ts ${{ matrix.target }} collie-${{ matrix.target }}
-      # Only the runner's own target can be executed here; the others are smoked by ci.yml's
-      # native build.
+      # Only the runner's own target can be executed here; the darwin ones are smoked on a Mac
+      # below.
       - if: matrix.target == 'linux-x64'
         run: sh tools/smoke.sh ./collie-${{ matrix.target }}
       - uses: actions/upload-artifact@v7
         with:
           name: collie-${{ matrix.target }}
           path: collie-${{ matrix.target }}
+
+  # The darwin runners, run on a Mac before the release key signs them. Where Bun's
+  # cross-build carries a signature macOS refuses, it is signed ad hoc here, and those are
+  # the bytes the release signs and publishes.
+  macos-runner:
+    needs: build
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4"
+      - run: bun install --frozen-lockfile
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: collie-darwin-*
+          merge-multiple: true
+      - run: chmod +x collie-darwin-arm64 collie-darwin-x64
+      - id: codesign
+        run: |
+          if codesign --verify collie-darwin-arm64; then
+            echo "Bun's cross-build passes codesign --verify as it is" | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Bun's cross-build fails codesign --verify, so it is signed ad hoc" | tee -a "$GITHUB_STEP_SUMMARY"
+            codesign --force --sign - collie-darwin-arm64
+            codesign --verify collie-darwin-arm64
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+          fi
+      - run: sh tools/smoke.sh ./collie-darwin-arm64
+      - run: |
+          if arch -x86_64 /usr/bin/true 2>/dev/null; then
+            sh tools/smoke.sh ./collie-darwin-x64
+          else
+            echo "no Rosetta on this runner, so collie-darwin-x64 is published unsmoked"
+          fi
+      - if: steps.codesign.outputs.signed == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: collie-darwin-arm64
+          path: collie-darwin-arm64
+          overwrite: true
 
   desktop:
     runs-on: ubuntu-latest
@@ -61,8 +102,57 @@ jobs:
           path: desktop/artifacts/*
           if-no-files-found: error
 
+  # Desktop for Apple silicon: its DMG, update archive and update manifest. Signed with the
+  # Developer ID, and notarized, only when the Apple secrets are set; ad hoc otherwise.
+  desktop-macos:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4"
+      - run: bun install --frozen-lockfile
+      - run: bun install --frozen-lockfile
+        working-directory: desktop
+      # The Developer ID certificate, in a keychain of this job's own, only where it is set.
+      - run: |
+          [ -n "$CERTIFICATE" ] || exit 0
+          echo "$CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/developer-id.p12"
+          security create-keychain -p "" "$RUNNER_TEMP/signing.keychain-db"
+          security set-keychain-settings "$RUNNER_TEMP/signing.keychain-db"
+          security unlock-keychain -p "" "$RUNNER_TEMP/signing.keychain-db"
+          security import "$RUNNER_TEMP/developer-id.p12" -k "$RUNNER_TEMP/signing.keychain-db" -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -k "" "$RUNNER_TEMP/signing.keychain-db"
+          security list-keychains -d user -s "$RUNNER_TEMP/signing.keychain-db" $(security list-keychains -d user | tr -d '"')
+        env:
+          CERTIFICATE: ${{ secrets.APPLE_DEVELOPER_ID_P12 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_P12_PASSWORD }}
+      - run: |
+          [ -n "$API_KEY" ] || exit 0
+          printf '%s\n' "$API_KEY" > "$RUNNER_TEMP/AuthKey.p8"
+          echo "ELECTROBUN_APPLEAPIKEYPATH=$RUNNER_TEMP/AuthKey.p8" >> "$GITHUB_ENV"
+        env:
+          API_KEY: ${{ secrets.APPLE_API_KEY_P8 }}
+      - run: bun run build
+        working-directory: desktop
+        env:
+          # `-` signs ad hoc where there is no Developer ID.
+          ELECTROBUN_DEVELOPER_ID: ${{ secrets.ELECTROBUN_DEVELOPER_ID || '-' }}
+          ELECTROBUN_APPLEID: ${{ secrets.ELECTROBUN_APPLEID }}
+          ELECTROBUN_APPLEIDPASS: ${{ secrets.ELECTROBUN_APPLEIDPASS }}
+          ELECTROBUN_TEAMID: ${{ secrets.ELECTROBUN_TEAMID }}
+          ELECTROBUN_APPLEAPIKEY: ${{ secrets.ELECTROBUN_APPLEAPIKEY }}
+          ELECTROBUN_APPLEAPIISSUER: ${{ secrets.ELECTROBUN_APPLEAPIISSUER }}
+      # A bundle macOS would refuse to start is never published.
+      - run: sh tools/verify-mac-app.sh desktop
+      - uses: actions/upload-artifact@v7
+        with:
+          name: collie-desktop-macos
+          path: desktop/artifacts/*
+          if-no-files-found: error
+
   release:
-    needs: [build, desktop]
+    needs: [build, macos-runner, desktop, desktop-macos]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v8
@@ -79,16 +169,19 @@ jobs:
         working-directory: repo
       - run: cp repo/install-desktop.sh .
       # Desktop's installer, its update archive (also as the tar it is applied as, which is
-      # what Desktop verifies) and its update manifest, beside the runners.
-      - run: bun run tools/sign.ts ../collie-* ../*-collie-desktop* ../*-update.json ../install-desktop.sh
+      # what Desktop verifies), its update manifest and any delta patch, beside the runners.
+      - run: |
+          shopt -s nullglob
+          bun run tools/sign.ts ../collie-* ../*-collie-desktop* ../*-update.json ../*.patch ../install-desktop.sh
         working-directory: repo
         env:
           COLLIE_SIGNING_KEY: ${{ secrets.COLLIE_SIGNING_KEY }}
+          COLLIE_SIGNING_KEY_P256: ${{ secrets.COLLIE_SIGNING_KEY_P256 }}
       # The newest release is the one Desktop's updater and install-desktop.sh read, through
       # `releases/latest/download`.
       # A delta patch exists only once there is a release before this one.
       - run: |
           shopt -s nullglob
-          gh release create "$GITHUB_REF_NAME" collie-* *-collie-desktop* *-update.json* *.patch install-desktop.sh* --repo "$GITHUB_REPOSITORY" --title "Collie $GITHUB_REF_NAME" --notes "Collie $GITHUB_REF_NAME"
+          gh release create "$GITHUB_REF_NAME" collie-* *-collie-desktop* *-update.json* *.patch* install-desktop.sh* --repo "$GITHUB_REPOSITORY" --title "Collie $GITHUB_REF_NAME" --notes "Collie $GITHUB_REF_NAME"
         env:
           GH_TOKEN: ${{ github.token }}

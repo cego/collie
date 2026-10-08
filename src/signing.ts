@@ -3,12 +3,18 @@
 
 import { createPrivateKey, createPublicKey, sign, verify } from "node:crypto";
 import releaseKey from "../release.pub" with { type: "text" };
+import releaseP256Key from "../release-p256.pub" with { type: "text" };
 
-// `release.pub`, which `install.sh` also checks a downloaded runner with.
 export const RELEASE_PUBLIC_KEY: string = releaseKey;
+
+/** What `install.sh` and `install-desktop.sh` check a download with, since any openssl can. */
+export const RELEASE_P256_PUBLIC_KEY: string = releaseP256Key;
 
 /** The suffix a release asset's signature is published under, beside the asset. */
 export const SIGNATURE_SUFFIX = ".sig";
+
+/** The suffix of the P-256 signature, beside the Ed25519 one. */
+export const P256_SIGNATURE_SUFFIX = ".p256.sig";
 
 /**
  * The signature an update archive is applied under: `<name>.tar.sig` for `<name>.tar.zst`,
@@ -22,6 +28,15 @@ export type Verified = { ok: true } | { ok: false; reason: string };
 /** A detached ed25519 signature, base64, as published in `<asset>.sig`. */
 export function signRelease(bytes: Uint8Array, privateKeyPem: string): string {
   return sign(null, bytes, createPrivateKey(privateKeyPem)).toString("base64");
+}
+
+/** The public half of a PKCS#8 private key, as SPKI PEM. Throws where it is not one. */
+export const publicKeyOf = (privateKeyPem: string): string =>
+  createPublicKey(privateKeyPem).export({ type: "spki", format: "pem" }).toString();
+
+/** ECDSA P-256 over SHA-256, DER, base64, as published in `<asset>.p256.sig`. */
+export function signReleaseP256(bytes: Uint8Array, privateKeyPem: string): string {
+  return sign("sha256", bytes, createPrivateKey(privateKeyPem)).toString("base64");
 }
 
 /** `signature` is the `.sig` file's text, or null where the release has none. */

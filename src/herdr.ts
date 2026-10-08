@@ -1415,10 +1415,16 @@ export class Herdr {
    * at every ensure, so a version or protocol change is something the log can name
    * rather than something a human works out from a call that started failing.
    */
-  serverInfo(): HerdrEffect<{ socket: string; version: string; protocol: number }> {
+  serverInfo(): HerdrEffect<{
+    running: boolean;
+    socket: string;
+    version: string;
+    protocol: number;
+  }> {
     return this.cli(["status", "server", "--json"]).pipe(
       Effect.flatMap((res) => decodeBoundary("status server failed", HerdrStatusReply, res)),
       Effect.map((status) => ({
+        running: status.running,
         socket: status.socket ?? this.env.socketPath ?? "",
         version: status.version ?? "unknown",
         protocol: status.protocol ?? 0,
