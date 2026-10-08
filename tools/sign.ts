@@ -56,14 +56,14 @@ const program = Effect.gen(function* () {
     else refusals.push(refusal);
   }
   if (refusals.length > 0) return yield* new SigningRefused({ message: refusals.join("; ") });
-  const [ed25519] = keys;
+  const ed25519 = keys.find((key) => key.variable === "COLLIE_SIGNING_KEY")!;
   for (const file of process.argv.slice(2)) {
     const bytes = yield* fs.readFile(file);
     for (const key of keys) {
       yield* fs.writeFileString(`${file}${key.suffix}`, `${key.sign(bytes, key.privateKey)}\n`);
     }
     const applied = appliedSignatureOf(file);
-    if (applied !== null && ed25519 !== undefined) {
+    if (applied !== null) {
       const tar = Bun.zstdDecompressSync(bytes);
       yield* fs.writeFileString(applied, `${signRelease(tar, ed25519.privateKey)}\n`);
     }

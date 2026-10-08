@@ -273,11 +273,12 @@ test("missing git stops with the exact command to run as root, and changes nothi
 const systemWith = Effect.fn("onboardTest.systemWith")(function* (
   tools: Record<string, string>,
   manager: string,
+  env: Record<string, string> = {},
 ) {
   for (const [tool, body] of Object.entries({ ...tools, [manager]: "exit 0" })) {
     yield* bin.add(tool, body);
   }
-  const { events } = yield* onboarded({ PATH: `${home}/stubs` });
+  const { events } = yield* onboarded({ PATH: `${home}/stubs`, ...env });
   return results(events).find((event) => event.step === "system");
 });
 
@@ -289,6 +290,22 @@ test("any openssl will do, LibreSSL among them", () =>
         "brew",
       );
       expect(system).toMatchObject({ status: "in_place" });
+    }),
+  ));
+
+test("COLLIE_OPENSSL names the openssl there is, off PATH", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const named = `${home}/elsewhere/openssl`;
+      yield* fs.makeDirectory(`${home}/elsewhere`);
+      yield* fs.writeFileString(named, `#!/bin/sh\necho "LibreSSL 3.3.6"\n`);
+      yield* fs.chmod(named, 0o755);
+      const tools = { git: "exit 0", curl: "exit 0" };
+
+      expect(yield* systemWith(tools, "brew", { COLLIE_OPENSSL: named })).toMatchObject({
+        status: "in_place",
+      });
     }),
   ));
 

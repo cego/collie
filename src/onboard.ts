@@ -221,10 +221,12 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
     "system",
     "Checking for git, curl and openssl",
     Effect.gen(function* () {
+      const named = env.raw["COLLIE_OPENSSL"];
       const missing: string[] = [];
-      for (const tool of ["git", "curl", "openssl"]) {
+      for (const tool of named ? ["git", "curl"] : ["git", "curl", "openssl"]) {
         if ((yield* onPath(search, tool)) === null) missing.push(tool);
       }
+      if (named && (yield* exec(named, ["version"], env.home)).code !== 0) missing.push("openssl");
       if (missing.length > 0) return yield* needsRoot(search, missing);
       return inPlace("git, curl and openssl are installed");
     }),

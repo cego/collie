@@ -1,7 +1,7 @@
 // Release signatures, and the tool CI signs with.
 
 import { expect, test } from "bun:test";
-import { generateKeyPairSync } from "node:crypto";
+import { createPublicKey, generateKeyPairSync } from "node:crypto";
 import { Effect, FileSystem } from "effect";
 import { exec } from "./support/command";
 import { runEffect } from "./support/effect";
@@ -99,8 +99,10 @@ test("a P-256 signature is one any openssl checks with dgst", () =>
     }).pipe(Effect.scoped),
   ));
 
-test("the built-in P-256 release key parses as one", () => {
-  expect(RELEASE_P256_PUBLIC_KEY).toContain("BEGIN PUBLIC KEY");
+test("the built-in P-256 release key is a P-256 public key", () => {
+  expect(createPublicKey(RELEASE_P256_PUBLIC_KEY).asymmetricKeyDetails).toEqual({
+    namedCurve: "prime256v1",
+  });
 });
 
 const signTool = (file: string, keys: { ed25519?: string; p256?: string }) => {

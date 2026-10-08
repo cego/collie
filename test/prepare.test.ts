@@ -487,12 +487,12 @@ test("setup configures Claude Code's status line; prepare never touches it", () 
     }),
   ));
 
+const p256 = () => generateKeyPairSync("ec", { namedCurve: "prime256v1" });
+
 /**
  * A release to download from, as `install.sh` names its asset, and the runner already in
  * place. Not a checkout and no bun, so `install.sh` has nothing to build from.
  */
-const p256 = () => generateKeyPairSync("ec", { namedCurve: "prime256v1" });
-
 const downloadable = Effect.fn("prepareTest.downloadable")(function* () {
   const fs = yield* FileSystem.FileSystem;
   yield* remove(`${root}/.git`);

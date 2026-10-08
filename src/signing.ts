@@ -13,6 +13,7 @@ export const RELEASE_P256_PUBLIC_KEY: string = releaseP256Key;
 /** The suffix a release asset's signature is published under, beside the asset. */
 export const SIGNATURE_SUFFIX = ".sig";
 
+/** The suffix of the P-256 signature, beside the Ed25519 one. */
 export const P256_SIGNATURE_SUFFIX = ".p256.sig";
 
 /**
