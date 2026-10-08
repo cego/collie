@@ -23,7 +23,7 @@ const missing = (run: OnboardRun) => run.steps.filter(({ status }) => !SETTLED.i
 <template>
   <section data-testid="machines-page" class="flex flex-col bg-default">
     <PageHeader title="Machines" @back="emit('back')" />
-    <div class="min-h-0 flex-1 overflow-y-auto p-4">
+    <div class="min-h-0 flex-1 overflow-y-auto p-4 [scrollbar-gutter:stable]">
       <div class="flex flex-col gap-6" :class="columnClass('machines')">
         <p
           v-if="summary !== null"

@@ -58,7 +58,7 @@ const gitlabHostSaid = settingOf("gitlab_host")?.description;
 <template>
   <section data-testid="settings-page" class="flex flex-col bg-default">
     <PageHeader title="Settings" @back="emit('back')" />
-    <div class="min-h-0 flex-1 overflow-y-auto p-4">
+    <div class="min-h-0 flex-1 overflow-y-auto p-4 [scrollbar-gutter:stable]">
       <div class="flex flex-col gap-6" :class="columnClass('settings')">
         <section
           v-for="section in sections"
