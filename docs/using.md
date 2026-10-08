@@ -1086,7 +1086,7 @@ unchanged. **Reset to default**, shown while a setting is set, unsets it. Each s
 **Every Machine** shares it or it is for **This computer only**: the Flock chat's switch,
 like the bell in the chat's header, is this computer's. The groups, names, descriptions and
 units live with each key in the one list of settings (`src/settings.ts`) that the TUI's
-Settings reads too, so a new setting shows up in both, except the two for this computer only,
+Settings reads too, so a new setting shows up in both, except the three for this computer only,
 whose are in `DESKTOP_SETTINGS` (`desktop/src/shared/flock-settings.ts`); the TUI does not show the names,
 descriptions or minutes yet. The ones every Machine shares are the Flock's: Desktop keeps them in
 `flock-settings.json` beside its chat, and gives them to every Machine through that
@@ -1101,6 +1101,19 @@ with Settings saying beside it which Machine that came from. A value a Machine h
 its setting refuses, written into its file by hand, is not taken. What stays each Machine's own
 is everything else in its `config.json`: remembered answers such as `linear.team` and
 `gitlab.assignee`, `chat_harness`, and `projects.root`, which is a path on that Machine.
+
+**Zoom**, under **Board** and for **This computer only**, is how large Desktop draws: 80%,
+90%, 100%, 110%, 125% or 150%, where 100% is the size of the other apps on the same monitor.
+A change applies at once to every Desktop window, the popped-out Flock chat included.
+Desktop is drawn through XWayland, which renders it at one whole-number scale on every
+monitor, so on Hyprland Desktop reads the scale of the monitor holding each window from
+`hyprctl -j` and corrects for it with Chromium's own page zoom, again whenever a window
+moves, resizes or takes focus: moving one to another monitor resizes it, and text stays sharp
+([ADR-0047](adr/0047-desktop-draws-at-its-monitors-own-scale.md)). **About** says how the
+board's window is drawn — "Drawn at 1.5× on DP-1 (3840×2160, Hyprland scale 1.5). Rendered
+at 2×, so zoom 75% × your 100%." — and says so where the window's pixel ratio is not what
+that zoom should give. Where Desktop cannot read the monitor's scale, as on another
+compositor or an X11 session, it says the scale is not known and why, and Zoom alone applies.
 
 **Settings** also holds **Collie**: every setting the TUI's Settings offers — each default a
 Run reads, `proactive`, the extra `models.<harness>` and each `notifications.<kind>` — with
@@ -1148,10 +1161,32 @@ card go.
 
 The record takes the board's place in its column, under the header bar and beside the Flock
 chat, so you can ask the chat about the Run you are reading while its diff has the column's
-whole width — the window's, with the chat collapsed or popped out. Diff, Evidence and Log
-use that width; Plan, Review and Facts keep a readable line length. The record's back button
+whole width — the window's, with the chat collapsed or popped out. What you read is
+centred in one of three columns: Plan, Review, Facts and Merge request, like Settings and
+Machines, in a reading column of about 80 characters; Evidence and Log in a wider one, with
+room for a 120-column log line; and Diff and Terminal across the full width. The page's
+header, the record's banner and its tabs sit in the reading column on every tab, so they do
+not move as you switch, and a narrower window shrinks each column inside the page's margin
+rather than scrolling sideways. The record's back button
 returns to the board, which was never taken down: it comes back scrolled where you left it,
 its sections open or closed as they were, and the card still selected.
+
+A record outlives its Machine's connection. When that connection is renewed — it dropped,
+**Sync now** reopened it, or Desktop upgraded the Machine — the record keeps what it showed,
+says above it what the board says of that Machine ("vm-mk is out of reach; showing what it
+last said", with the reason, or "vm-mk is reconnecting"), and carries on by itself once the
+Machine is back. A record opened before its Machine connects fills in once it does. An
+action, the offers, the workflows, a Run's file or Go to pane cut off by a renewed
+connection says "vm-mk's connection was renewed before this finished", and **Try again**
+sends the action under the same request, so it is done once.
+
+Nothing in the window needs a restart. The board, a record, Settings, the credentials
+warning, update news and the chat's turn indicator each keep what they last showed when the
+stream behind them fails for any other reason — a host stopped, a refusal, Desktop's own
+main process — and say above it, as a warning, what went wrong and when they try again:
+after 1 s, then twice as long each time it fails again, up to a minute, and at once again
+after anything arrives. **Retry now** tries every one of them at once. A Flock chat that
+could not start, say before you logged in to Claude, starts again on your next message.
 
 The record is one of Desktop's **pages**, with **Settings** and **Machines**: each takes the
 board's column in the same way, one at a time, so opening Settings with a record open replaces

@@ -153,6 +153,21 @@ const eventually = (check: () => boolean) =>
     expect(check()).toBe(true);
   });
 
+/** Claude Code whose first `failed` sessions fail as they start, as one not logged in does. */
+const failingFirst = (claude: ClaudeCode<string>, failed: number): ClaudeCode<string> => {
+  let started = 0;
+  return {
+    ...claude,
+    query: (params) =>
+      started++ < failed
+        ? Object.assign(
+            Stream.toAsyncIterable(Stream.fail(new Error("Claude Code is not logged in"))),
+            { interrupt: () => Promise.resolve(), close: () => {} },
+          )
+        : claude.query(params),
+  };
+};
+
 const withChat = <A, E>(
   opts: {
     readonly items: ReadonlyArray<Item>;
@@ -160,6 +175,7 @@ const withChat = <A, E>(
     readonly holds?: (text: string) => boolean;
     readonly rule?: string;
     readonly declared?: Declaration[];
+    readonly failedStarts?: number;
   },
   reply: (text: string) => ReadonlyArray<SdkMessage>,
   body: (chat: {
@@ -178,7 +194,7 @@ const withChat = <A, E>(
       const seen: Seen = { prompts: [], contents: [], context: [], refusals: [], interrupts: [] };
       const read: string[] = [];
       const conversation = yield* openFlockChat({
-        claude: scripted(seen, reply, opts.holds),
+        claude: failingFirst(scripted(seen, reply, opts.holds), opts.failedStarts ?? 0),
         dir,
         conversation: "flock@mk-pc",
         machines: () => [machine(opts.items, read, opts.declared)],
@@ -488,4 +504,33 @@ test("a PDF goes as a document, a small text as text headed with its name, and a
         { type: "text", text: "app.log:\n\none\ntwo\n" },
       ]);
     }),
+  ));
+
+test("a session that fails as it starts is started again by the next message", () =>
+  withChat({ items: [], proactive: false, failedStarts: 1 }, answered, ({ conversation, seen }) =>
+    Effect.gen(function* () {
+      const first = yield* Stream.runCollect(conversation.send("first", null, false));
+      expect(first.at(-1)).toMatchObject({ type: "RUN_ERROR" });
+      const second = yield* Stream.runCollect(conversation.send("second", null, false));
+      expect(second.at(-1)).toMatchObject({ type: "RUN_FINISHED" });
+      expect(seen.prompts).toEqual(["second"]);
+    }),
+  ));
+
+test("a new subscriber to Desktop's turns is told the one under way", () =>
+  withChat(
+    {
+      items: [item("r1:asking", "decision")],
+      proactive: true,
+      holds: (text) => text.startsWith(DESKTOP_SAID),
+    },
+    answered,
+    ({ conversation, seen }) =>
+      Effect.gen(function* () {
+        const now = conversation.desktopTurns.pipe(Stream.take(1), Stream.runCollect);
+        expect(yield* now).toEqual(["ended"]);
+        yield* TestClock.adjust("3 seconds");
+        yield* eventually(() => seen.prompts.length === 1);
+        expect(yield* now).toEqual(["started"]);
+      }),
   ));

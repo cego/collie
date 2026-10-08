@@ -1,7 +1,6 @@
 // Each Machine's In sync verdict against this Desktop's version and credentials, and the
 // Flock's line.
 
-import { AsyncResult, useAtomValue } from "@effect/atom-vue";
 import type { Credential } from "../../../src/shared/flock";
 import { flockInSync, inSync } from "../../../src/shared/in-sync";
 import { updatesAtom } from "../flock";
@@ -9,10 +8,8 @@ import { updatesAtom } from "../flock";
 export const useInSync = () => {
   const { rows } = useFlock();
   const { credentials } = useCredentials();
-  const updates = useAtomValue(() => updatesAtom);
-  const version = computed(() =>
-    AsyncResult.isSuccess(updates.value) ? updates.value.value.version : null,
-  );
+  const { value: updates } = useHeld(() => updatesAtom);
+  const version = computed(() => updates.value?.version ?? null);
   const held = computed((): ReadonlyArray<Credential> | null => {
     const known = credentials.value;
     if (known === null) return null;

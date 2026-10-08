@@ -243,6 +243,15 @@ program, usually on another computer, and it is not talking to a session either:
 herdr's list and nothing else. Routing them through `herdr.ts` would bring Collie's locks
 into Desktop, which reaches a Machine only through `collie bridge`.
 
+Each Machine's `desktop` channel is its _door_, and Desktop holds one per shown Machine, by
+installation (`DoorMap` in `desktop/src/bun/machine.ts`), for as long as its board stream
+runs. When a door closes under a call, Effect's RPC client ends the call with an interrupt;
+Desktop says it as a failure naming the Machine and the request it was made under, where
+every call through the door has its refusal said. Only the caller's own interrupt stays an
+interrupt. A Run's details are not tied to one door: they ride whichever door the Machine
+has now, and when it closes or breaks they wait for the next, woken by the map's change
+rather than a poll.
+
 Files reach a Machine the same way. The Flock chat's `collie_read`, `collie_glob`,
 `collie_grep`, `collie_write` and `collie_edit` (`desktop/src/bun/file-tools.ts`) are
 answered by the host's `readFile`, `glob`, `grep`, `writeFile` and `editFile` over the

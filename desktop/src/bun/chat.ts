@@ -8,6 +8,7 @@ import {
   Cause,
   Crypto,
   Deferred,
+  Duration,
   Effect,
   Exit,
   FileSystem,
@@ -20,9 +21,11 @@ import {
   Scope,
   Semaphore,
   Stream,
+  SubscriptionRef,
 } from "effect";
 import * as Base64 from "effect/encoding/Base64";
 import { type AguiEvent, ends } from "../shared/agui";
+import { saidOf } from "../shared/said";
 import {
   IMAGE_BYTES,
   INLINE_BUDGET,
@@ -271,6 +274,10 @@ const contentOf = Effect.fnUntraced(function* (
   return { blocks, files };
 });
 
+/** `start` kept once it succeeds, and tried again on the next ask until it does. */
+export const untilStarted = <A, E, R>(start: Effect.Effect<A, E, R>) =>
+  Effect.cachedWithTTL(start, (exit) => (Exit.isSuccess(exit) ? Duration.infinity : Duration.zero));
+
 /**
  * The current conversation's session, started by its first message and warm from then
  * until the scope closes, and never more than one. A session Claude Code has a transcript
@@ -316,7 +323,7 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* <Server>(opts
   };
   const server = opts.claude.server(flock, run);
   const usage = (yield* Path.Path).join(opts.dir, "flock-usage.jsonl");
-  const desktopTurns = yield* PubSub.unbounded<DesktopTurn>();
+  const desktopTurns = yield* SubscriptionRef.make<DesktopTurn>("ended");
   // ponytail: grows by one key per item Desktop spoke about, for as long as Desktop runs.
   /** News a turn of Desktop's has been about, so an item a host failed to settle never wakes it twice. */
   const spoken = new Set<string>();
@@ -380,7 +387,7 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* <Server>(opts
       Stream.runForEach((event) => PubSub.publish(events, event)),
       Effect.matchCauseEffect({
         onSuccess: () => endWith("Claude Code ended the Flock chat's session."),
-        onFailure: (cause) => endWith(Cause.pretty(cause)),
+        onFailure: (cause) => endWith(saidOf(cause)),
       }),
       Effect.forkScoped,
     );
@@ -393,13 +400,15 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* <Server>(opts
   let id = Option.isSome(saved) ? saved.value.session : yield* crypto.randomUUIDv4;
   if (Option.isNone(saved)) yield* remember(id);
   let live: { readonly running: Live; readonly scope: Scope.Closeable } | undefined;
+  /** The session, started again where the last one ended, as one that failed to start has. */
   const warm = Effect.gen(function* () {
-    if (live !== undefined) return live.running;
+    if (live !== undefined && live.running.ended() === null) return live.running;
+    yield* end;
     const scope = yield* Scope.make();
     live = { running: yield* start(id).pipe(Scope.provide(scope)), scope };
     return live.running;
   });
-  const end = Effect.suspend(() => {
+  const end: Effect.Effect<void> = Effect.suspend(() => {
     const ending = live;
     live = undefined;
     return ending === undefined ? Effect.void : Scope.close(ending.scope, Exit.void);
@@ -505,11 +514,11 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* <Server>(opts
     const running = yield* warm;
     if (running.ended() !== null) return;
     const before = running.lastResult();
-    yield* PubSub.publish(desktopTurns, "started");
+    yield* SubscriptionRef.set(desktopTurns, "started");
     yield* turnOn(running, `${DESKTOP_SAID}\n${flockNewsText(fresh)}`, { news: fresh }).pipe(
       Effect.flatMap(Stream.runDrain),
       Effect.scoped,
-      Effect.ensuring(PubSub.publish(desktopTurns, "ended")),
+      Effect.ensuring(SubscriptionRef.set(desktopTurns, "ended")),
     );
     // A turn that failed before the model had its News waits for the next look, not the next nudge.
     resting = fresh.items.every((placed) => !spoken.has(newsKey(placed)));
@@ -595,7 +604,7 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* <Server>(opts
         );
       }).pipe(Effect.orDie),
     nudge,
-    desktopTurns: Stream.fromPubSub(desktopTurns),
+    desktopTurns: SubscriptionRef.changes(desktopTurns),
   };
   return conversation;
 });

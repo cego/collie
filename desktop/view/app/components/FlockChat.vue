@@ -21,6 +21,7 @@ const {
   conversations,
   reopen,
   desktopSpeaking,
+  turnsTrouble,
   proactive,
   setProactive,
 } = useFlockChat();
@@ -299,6 +300,9 @@ const queuedText = ({ content }: QueuedMessage) => {
       >
         <UBadge size="sm" color="neutral" variant="subtle" label="Desktop" />
         <span>is telling the chat what it noticed…</span>
+      </li>
+      <li v-if="turnsTrouble">
+        <RetryNotice title="Desktop is reconnecting to its chat" :trouble="turnsTrouble" />
       </li>
       <li
         v-for="pending in queue"

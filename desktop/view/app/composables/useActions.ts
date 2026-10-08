@@ -11,6 +11,7 @@ import type {
   Skippable,
   TerminalCommand,
 } from "../../../src/shared/flock";
+import { saidOf } from "../../../src/shared/said";
 import { FlockClient } from "../flock";
 
 const actAtom = FlockClient.mutation("act");
@@ -59,10 +60,9 @@ const joined = (parts: ReadonlyArray<Uint8Array>) => {
 
 const failureOf = (cause: Cause.Cause<Failed>) => {
   const found = Cause.findError(cause);
-  if (Result.isFailure(found)) return { reason: Cause.pretty(cause), request: undefined };
-  return found.success._tag === "ActionFailed"
+  return Result.isSuccess(found) && found.success._tag === "ActionFailed"
     ? found.success
-    : { reason: found.success.message, request: undefined };
+    : { reason: saidOf(cause), request: undefined };
 };
 
 export const useActions = () => {

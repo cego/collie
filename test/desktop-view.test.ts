@@ -26,6 +26,7 @@ import {
   machineRows,
   type MachineRow,
   nameAsShown,
+  notLiveOf,
   type MachineMessage,
   machineToAdd,
   unreadBecause,
@@ -37,6 +38,7 @@ import {
   inSync,
   syncable,
 } from "../desktop/src/shared/in-sync";
+import { type Column, columnOf } from "../desktop/src/shared/columns";
 import { epochMs } from "../src/time";
 import { task } from "./support/task";
 
@@ -133,6 +135,7 @@ const served = (main: Channel<ToView, ToMain>) =>
         desktopTurns: () => Stream.die("not asked"),
         settings: () => Effect.die("not asked"),
         setSettings: () => Effect.die("not asked"),
+        drawn: () => Stream.die("not asked"),
       }),
     ),
     Layer.provide(Layer.effect(RpcServer.Protocol, serverProtocol(main))),
@@ -729,4 +732,48 @@ test("Escape closes an open page and keeps the card selected", () => {
 
 test("Escape on the board lets the selected card go", () => {
   expect(afterGesture(picked, { kind: "escape", overlay: false, typing: false })).toEqual(none);
+});
+
+test("a record says its Machine is not live in the board's words, and nothing once it is", () => {
+  const live = snapshot(vm, [working]);
+  expect(notLiveOf(applyItem(EMPTY_FLOCK, live), vm.installation)).toBeNull();
+  const dropped = [live, lostVm("unreachable")].reduce(applyItem, EMPTY_FLOCK);
+  expect(notLiveOf(dropped, vm.installation)).toEqual({
+    icon: "i-lucide-unplug",
+    title: "vm-mk is out of reach",
+    reason: "ssh: connection refused",
+  });
+  const saved = applyItem(EMPTY_FLOCK, {
+    _tag: "Saved",
+    machine: vm,
+    herds: [{ id: "default" }],
+    tasks: [working],
+    at: 7,
+  });
+  expect(notLiveOf(saved, vm.installation)?.title).toBe("vm-mk is reconnecting");
+  expect(notLiveOf(applyItem(dropped, live), vm.installation)).toBeNull();
+  const reopened = applyItem(applyItem(EMPTY_FLOCK, live), {
+    _tag: "Reconnecting",
+    machine: vm,
+    at: 9,
+  });
+  expect(notLiveOf(reopened, vm.installation)?.title).toBe("vm-mk is reconnecting");
+  expect(reopened.machines.get(vm.installation)?.tasks.size).toBe(1);
+  expect(notLiveOf(applyItem(reopened, live), vm.installation)).toBeNull();
+});
+
+test.each<[string, Column]>([
+  ["plan", "reading"],
+  ["review", "reading"],
+  ["facts", "reading"],
+  ["mr", "reading"],
+  ["settings", "reading"],
+  ["machines", "reading"],
+  ["evidence", "wide"],
+  ["log", "wide"],
+  ["diff", "full"],
+  ["terminal", "full"],
+  ["a tab not yet known", "reading"],
+])("%s is laid out %s", (tab, width) => {
+  expect(columnOf(tab)).toBe(width);
 });

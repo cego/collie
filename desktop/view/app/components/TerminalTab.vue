@@ -10,6 +10,7 @@ import { Cause, Effect, Fiber, Result, Stream } from "effect";
 import * as Base64 from "effect/encoding/Base64";
 import type { BoardAgent } from "../../../../src/board-model";
 import type { PlacedTask, TerminalCommand, TerminalEvent } from "../../../src/shared/flock";
+import { saidOf } from "../../../src/shared/said";
 import {
   type AgentTab,
   agentTabs,
@@ -118,11 +119,7 @@ const attach = () => {
       Effect.catchCause((cause) =>
         Effect.sync(() => {
           if (Cause.hasInterruptsOnly(cause)) return;
-          const failed = Cause.findError(cause);
-          ended.value =
-            Result.isSuccess(failed) && failed.success._tag === "ActionFailed"
-              ? failed.success.reason
-              : Cause.pretty(cause);
+          ended.value = saidOf(cause);
         }),
       ),
     ),

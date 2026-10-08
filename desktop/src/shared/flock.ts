@@ -8,6 +8,7 @@ import * as RpcGroup from "effect/rpc/RpcGroup";
 import { AguiEvent } from "./agui";
 import { Staged, StagedOrRefused } from "./attachments";
 import { About, Answers, ChatMessage, Conversations, DesktopTurn } from "./chat-view";
+import { Drawn } from "./scale";
 import { FlockSettings } from "./flock-settings";
 import {
   BoardMessage,
@@ -45,6 +46,17 @@ export type MachineMessage = typeof MachineMessage.Type;
 export const NotLive = Schema.Literals(["unreachable", "sso", "no-collie", "update-desktop"]);
 export type NotLive = typeof NotLive.Type;
 
+/** How the board's alert says a Machine is not live. */
+export const NOT_LIVE: Record<NotLive, { icon: string; title: (name: string) => string }> = {
+  unreachable: { icon: "i-lucide-unplug", title: (name) => `${name} is out of reach` },
+  sso: { icon: "i-lucide-key-round", title: (name) => `Waiting for SSO login on ${name}` },
+  "no-collie": { icon: "i-lucide-package-x", title: (name) => `Collie isn't installed on ${name}` },
+  "update-desktop": {
+    icon: "i-lucide-circle-arrow-up",
+    title: (name) => `Update Desktop to see ${name}`,
+  },
+};
+
 /** A route Desktop could not open, or lost, and since when. */
 export const MachineLost = Schema.TaggedStruct("Lost", {
   machine: KnownMachine,
@@ -68,6 +80,13 @@ export type MachineSaved = typeof MachineSaved.Type;
 /** A route that turned out to reach a Machine already shown through another. */
 export const MachineMerged = Schema.TaggedStruct("Merged", { machine: KnownMachine });
 export type MachineMerged = typeof MachineMerged.Type;
+
+/** A route Desktop reopens on purpose, as Sync now or an upgrade does, and since when. */
+export const MachineReconnecting = Schema.TaggedStruct("Reconnecting", {
+  machine: KnownMachine,
+  at: Schema.Number,
+});
+export type MachineReconnecting = typeof MachineReconnecting.Type;
 
 /** What Desktop did on a Machine that a human should hear of, such as upgrading it. */
 export const MachineNotice = Schema.TaggedStruct("Notice", {
@@ -179,6 +198,7 @@ export const FlockItem = Schema.Union([
   MachineLost,
   MachineSaved,
   MachineMerged,
+  MachineReconnecting,
   MachineNotice,
   MachineRouted,
   MachineRemoved,
@@ -308,6 +328,8 @@ export const DesktopSettings = Schema.Struct({
   gitlabHost: Schema.optionalKey(Schema.String),
   /** Which Machine each kind of work goes to, in the human's words; empty is no rule. */
   machineRule: Schema.optionalKey(Schema.String),
+  /** The human's Zoom, 1 the size of the other apps on each monitor; unset is 1. */
+  zoom: Schema.optionalKey(Schema.Number),
 });
 export type DesktopSettings = typeof DesktopSettings.Type;
 
@@ -316,6 +338,7 @@ export const DesktopSettingsChange = Schema.Struct({
   proactive: Schema.optionalKey(Schema.Boolean),
   gitlabHost: Schema.optionalKey(Schema.String),
   machineRule: Schema.optionalKey(Schema.String),
+  zoom: Schema.optionalKey(Schema.Number),
 });
 export type DesktopSettingsChange = typeof DesktopSettingsChange.Type;
 
@@ -540,6 +563,8 @@ export const DesktopRpcs = RpcGroup.make(
   /** When the Flock chat starts and ends a turn of Desktop's own. */
   Rpc.make("desktopTurns", { success: DesktopTurn, stream: true }),
   Rpc.make("settings", { success: DesktopSettings }),
+  /** How the board's window is drawn, again whenever its zoom is decided again. */
+  Rpc.make("drawn", { success: Drawn, stream: true }),
   Rpc.make("setSettings", { payload: DesktopSettingsChange }),
 );
 
@@ -602,8 +627,8 @@ export const EMPTY_FLOCK: Flock = {
 };
 
 /**
- * A snapshot replaces its Machine and makes it live; a change touches one Task; a lost
- * route dims the Machine it was showing; a merged one is no longer lost; a saved board
+ * A snapshot replaces its Machine and makes it live; a change touches one Task; a lost or
+ * reopened route dims the Machine it was showing; a merged one is no longer lost; a saved board
  * stands in until its Machine is live; anything newer is skipped.
  */
 export const applyItem = (flock: Flock, item: FlockItem): Flock => {
@@ -671,8 +696,9 @@ export const applyItem = (flock: Flock, item: FlockItem): Flock => {
     return { ...flock, lost };
   }
   if ("_tag" in item) {
-    const { machine, state, reason, at } = item;
-    lost.set(machine.profile, { name: machine.name, state, reason });
+    const { machine, at } = item;
+    if (item._tag === "Lost")
+      lost.set(machine.profile, { name: machine.name, state: item.state, reason: item.reason });
     const machines = new Map(flock.machines);
     for (const [installation, known] of machines)
       if (known.machine.profile === machine.profile && known.asOf === null)
@@ -917,6 +943,20 @@ const standing = (onboarding?: OnboardRun, doctor?: OnboardRun): OnboardRun | nu
   );
   const steps = [...doctor.steps.filter(({ step }) => !skipped.has(step)), ...left];
   return { ...doctor, steps, ready: steps.length === 0 };
+};
+
+/** Why an installation's records show what it last said, in the board's words; null while live. */
+export const notLiveOf = (flock: Flock, installation: string) => {
+  const shown = flock.machines.get(installation);
+  if (shown === undefined || shown.asOf === null) return null;
+  const lost = flock.lost.get(shown.machine.profile);
+  return lost === undefined
+    ? { icon: "i-lucide-refresh-cw", title: `${shown.machine.name} is reconnecting`, reason: "" }
+    : {
+        icon: NOT_LIVE[lost.state].icon,
+        title: NOT_LIVE[lost.state].title(lost.name),
+        reason: lost.reason,
+      };
 };
 
 /** Every route, in the order Desktop opened them. */

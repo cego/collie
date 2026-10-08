@@ -4,6 +4,7 @@
 // not its own.
 
 import {
+  Cause,
   Clock,
   Deferred,
   Effect,
@@ -31,6 +32,7 @@ import {
   type PaneAt,
   type ProposalRefused,
   type RequestConflict,
+  type RunDetail,
 } from "../../../src/board-model";
 import type * as RpcClientError from "effect/rpc/RpcClientError";
 import {
@@ -45,6 +47,7 @@ import {
   type NotLive,
 } from "../shared/flock";
 import { CREDENTIAL_SAID, type Lag } from "../shared/in-sync";
+import { backoff } from "../shared/retrying";
 
 const children = new Set<Bun.Subprocess>();
 export const endChildren = () => {
@@ -476,9 +479,6 @@ const upgradeTo = (route: Route<BoardSource>, version: string) =>
     ),
   );
 
-/** How long a route waits before it tries again, after so many tries in a row failed. */
-const backoff = (failures: number) => Math.min(1000 * 2 ** failures, 60_000);
-
 /**
  * A route added, one removed, one woken to try again now rather than after its backoff, or
  * one reopened, which asks a Machine's upgrade again.
@@ -695,6 +695,14 @@ export const flockStream = <D extends BoardSource>(
                       return Stream.unwrap(
                         // A reopen wakes a route in backoff; one that was live needs no wake.
                         Effect.as(Queue.clear(wakes[at]!), afterFailures(0)),
+                      ).pipe(
+                        Stream.prepend<FlockItem>([
+                          {
+                            _tag: "Reconnecting",
+                            machine: route.machine,
+                            at: yield* Clock.currentTimeMillis,
+                          },
+                        ]),
                       );
                     const lost = Stream.fromEffect(lostItem(route, failure.state, failure.reason));
                     if (failure.state === "update-desktop") {
@@ -808,26 +816,49 @@ export const flockStream = <D extends BoardSource>(
     }),
   );
 
+type Refused =
+  | HostRefused
+  | ProposalRefused
+  | RequestConflict
+  | RpcClientError.RpcClientError
+  | Unsteered;
+
 /** Why a host said no, in its own words, under the request it was asked as. */
-const refusal =
-  (request?: string) =>
-  (
-    error:
-      | HostRefused
-      | ProposalRefused
-      | RequestConflict
-      | RpcClientError.RpcClientError
-      | Unsteered,
-  ) =>
-    new ActionFailed({
-      request,
-      reason:
-        error._tag === "HostRefused" || error._tag === "RequestConflict"
-          ? error.reason
-          : error._tag === "ProposalRefused"
-            ? error.detail
-            : error.message,
-    });
+const refusal = (request?: string) => (error: Refused) =>
+  new ActionFailed({
+    request,
+    reason:
+      error._tag === "HostRefused" || error._tag === "RequestConflict"
+        ? error.reason
+        : error._tag === "ProposalRefused"
+          ? error.detail
+          : error.message,
+  });
+
+export type Reached = Pick<Doors, "machine" | "desktop">;
+
+/**
+ * A call over a Machine's door, its refusal said, and its door closing under it a failure
+ * naming the Machine. The caller's own interrupt is not caught.
+ */
+const over = <A, R>(
+  { machine }: Reached,
+  call: Effect.Effect<A, Refused, R>,
+  request?: string,
+): Effect.Effect<A, ActionFailed, R> =>
+  call.pipe(
+    Effect.mapError(refusal(request)),
+    Effect.catchCause((cause) =>
+      Cause.hasInterruptsOnly(cause)
+        ? Effect.fail(
+            new ActionFailed({
+              request,
+              reason: `${machine.name}'s connection was renewed before this finished`,
+            }),
+          )
+        : Effect.failCause(cause),
+    ),
+  );
 
 /** A steer the host carried no further, with what it said about it. */
 interface Unsteered {
@@ -836,7 +867,8 @@ interface Unsteered {
 }
 
 /** One board action carried out on a Machine's host, and what it came to in a line. */
-export const act = (door: Door, request: string, action: DesktopAction) => {
+export const act = (reached: Reached, request: string, action: DesktopAction) => {
+  const door = reached.desktop;
   const said = (() => {
     switch (action._tag) {
       case "Answer":
@@ -895,7 +927,7 @@ export const act = (door: Door, request: string, action: DesktopAction) => {
           .pipe(Effect.map((started) => `Started ${started.runId}`));
     }
   })();
-  return said.pipe(Effect.mapError(refusal(request)));
+  return over(reached, said, request);
 };
 
 /** The door to the Machine an installation id names, while Desktop shows it. */
@@ -910,35 +942,87 @@ export const doorTo = <D>(
 };
 
 /** Focuses `agent` of `runId` where one is chosen, else the Run's newest live agent. */
-export const focusOn = (
-  door: {
-    readonly focus: (payload: {
-      readonly runId: string;
-      readonly agent?: string;
-      readonly request: string;
-    }) => Effect.Effect<PaneAt, HostRefused | RequestConflict | RpcClientError.RpcClientError>;
-  },
-  request: string,
-  runId: string,
-  agent?: string,
-) =>
-  door
-    .focus(agent === undefined ? { runId, request } : { runId, agent, request })
-    .pipe(Effect.mapError(refusal(request)));
+export const focusOn = (door: Reached, request: string, runId: string, agent?: string) =>
+  over(
+    door,
+    door.desktop.focus(agent === undefined ? { runId, request } : { runId, agent, request }),
+    request,
+  );
 
-export const offersOn = (door: Door, runId: string) =>
-  door.offers({ runId }).pipe(Effect.mapError(refusal()));
+export const offersOn = (door: Reached, runId: string) =>
+  over(door, door.desktop.offers({ runId }));
 
-export const workflowsOn = (door: Door, project: string) =>
-  door.workflows({ project }).pipe(Effect.mapError(refusal()));
+export const workflowsOn = (door: Reached, project: string) =>
+  over(door, door.desktop.workflows({ project }));
 
-export const runDetailOn = (door: Door, runId: string) =>
-  door
-    .runDetail({ runId, tail: true, pages: 1, refreshMr: false })
-    .pipe(Stream.mapError(refusal()));
+/** Each shown Machine's door by installation, which wakes whoever waits on it to change. */
+export class DoorMap<D> extends Map<string, D> {
+  #changed = Deferred.makeUnsafe<void>();
+  /** Done at the next change after it was read. */
+  get changed() {
+    return this.#changed;
+  }
+  override set(installation: string, door: D) {
+    if (this.get(installation) === door) return this;
+    super.set(installation, door);
+    return this.#wake();
+  }
+  override delete(installation: string) {
+    if (!super.delete(installation)) return false;
+    this.#wake();
+    return true;
+  }
+  #wake() {
+    Deferred.doneUnsafe(this.#changed, Exit.void);
+    this.#changed = Deferred.makeUnsafe<void>();
+    return this;
+  }
+}
 
-export const runFileOn = (door: Door, runId: string, ref: string, offset?: number) =>
-  door.runFile({ runId, ref, offset }).pipe(Effect.mapError(refusal()));
+/** The Machine's door once it has one other than `last`. */
+const nextDoor = <D>(doors: DoorMap<D>, installation: string, last?: D): Effect.Effect<D> =>
+  Effect.suspend(() => {
+    const changed = doors.changed;
+    const door = doors.get(installation);
+    return door !== undefined && door !== last
+      ? Effect.succeed(door)
+      : Deferred.await(changed).pipe(Effect.andThen(nextDoor(doors, installation, last)));
+  });
+
+/**
+ * A Run's details over whichever door its Machine has now: when that door closes or breaks,
+ * again over the next. It ends only when let go, the host fails it, or its door breaks and
+ * stays.
+ */
+export const runDetailOn = (doors: DoorMap<Reached>, installation: string, runId: string) => {
+  const after = (last?: Reached): Stream.Stream<RunDetail | null, ActionFailed> =>
+    Stream.unwrap(
+      Effect.map(nextDoor(doors, installation, last), (door) =>
+        door.desktop.runDetail({ runId, tail: true, pages: 1, refreshMr: false }).pipe(
+          // A broken connection's door is replaced soon after; one that stays was not.
+          Stream.catchTag("RpcClientError", (error) =>
+            Stream.fromEffectDrain(
+              nextDoor(doors, installation, door).pipe(
+                Effect.timeoutOrElse({
+                  duration: "5 seconds",
+                  orElse: () => Effect.fail(error),
+                }),
+              ),
+            ),
+          ),
+          Stream.mapError(refusal()),
+          Stream.catchCause((cause) =>
+            Cause.hasInterruptsOnly(cause) ? Stream.empty : Stream.failCause(cause),
+          ),
+          Stream.concat(Stream.suspend(() => after(door))),
+        ),
+      ),
+    );
+  return after();
+};
+
+export const runFileOn = (door: Reached, runId: string, ref: string, offset?: number) =>
+  over(door, door.desktop.runFile({ runId, ref, offset }));
 
 /** What connecting would do for a Machine that lags on `behind`, and whether any of it failed. */
 export const syncNow = (
