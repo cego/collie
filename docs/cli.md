@@ -638,7 +638,10 @@ what `--goal` and `--constraint` named — later beating earlier where they name
 constraint. For a plan directory the work source's ask is read from its `SPEC.md`: the
 bullets under a heading matching `Requirements`, `Success criteria`, `Boundaries`,
 `Constraints`, `Out of scope` or `Done when` become `warn` constraints carrying the file,
-heading and line they came from; an out-of-scope bullet reads `Out of scope: <bullet>`. In a
+heading and line each bullet starts on; an out-of-scope bullet reads `Out of scope: <bullet>`.
+A constraint is the whole bullet: it runs until a blank line, a heading or the next bullet at
+its indent or shallower, and its wrapped lines and the bullets nested under it are joined
+into it with single spaces. Intents already written keep what they stored. In a
 Run on a worktree of its own, its `plan/SPEC.md`, written by its planner, is read the same
 way at every work boundary: new bullets are added, dropped ones are removed, and a
 constraint anyone but the plan removed stays removed. **No text ever grants authority** —
