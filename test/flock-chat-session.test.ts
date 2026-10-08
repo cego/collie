@@ -5,9 +5,6 @@
 import { expect, test } from "bun:test";
 import { Effect } from "effect";
 import { sessionOptions } from "../desktop/src/bun/session";
-import type { About } from "../desktop/src/shared/chat-view";
-
-let about: About | undefined;
 let noticed: string | undefined;
 let rule: string | undefined;
 const machines = [
@@ -24,7 +21,6 @@ const options = sessionOptions({
     asked.push(toolUseID);
     return Promise.resolve({ "Which one?": "vm-mk" });
   },
-  about: () => about,
   noticed: () => noticed,
   placement: () => (rule === undefined ? undefined : { rule, machines }),
 });
@@ -105,29 +101,26 @@ test("anything else that asks permission is refused", () =>
 
 const submitted = () => Effect.promise(() => options.hooks.UserPromptSubmit[0]!.hooks[0]!());
 
-test("the card a message goes with is attached to it, as context and not as the human's words", () =>
+test("the hook carries the Machine rule and News, and never the card a message goes with", () =>
   Effect.runPromise(
     Effect.gen(function* () {
-      about = undefined;
+      rule = undefined;
+      noticed = undefined;
       expect(yield* submitted()).toEqual({});
-      about = {
-        machine: "vm-mk",
-        task: "t-1",
-        run: "r-2",
-        name: "Fix board bugs",
-      };
-      const attached = yield* submitted();
-      expect(attached.hookSpecificOutput?.hookEventName).toBe("UserPromptSubmit");
-      expect(attached.hookSpecificOutput?.additionalContext).toContain("vm-mk:t-1");
-      expect(attached.hookSpecificOutput?.additionalContext).toContain("vm-mk:r-2");
-      expect(attached.hookSpecificOutput?.additionalContext).toContain("Fix board bugs");
+      rule = "Everything is on the vm";
+      noticed = "- [routine] vm-mk:r-2: Run r-2 ended.";
+      const context = (yield* submitted()).hookSpecificOutput?.additionalContext ?? "";
+      expect(context).toContain("Everything is on the vm");
+      expect(context).toContain("vm-mk:r-2: Run r-2 ended.");
+      expect(context).not.toContain('"This one"');
+      rule = undefined;
+      noticed = undefined;
     }),
   ));
 
 test("News waiting for the human's next message goes with it, as context and not as their words", () =>
   Effect.runPromise(
     Effect.gen(function* () {
-      about = undefined;
       noticed = "- [routine] vm-mk:r-2: Run r-2 ended.";
       const attached = yield* submitted();
       expect(attached.hookSpecificOutput?.additionalContext).toContain("vm-mk:r-2: Run r-2 ended.");
@@ -144,7 +137,6 @@ test("a question in a turn nobody is watching is refused, so the turn ends rathe
         server: "the in-process server",
         claude: null,
         ask: () => Promise.resolve(null),
-        about: () => undefined,
         noticed: () => undefined,
         placement: () => undefined,
       });
@@ -161,7 +153,6 @@ test("a question in a turn nobody is watching is refused, so the turn ends rathe
 test("the Machine rule goes with every message, in the human's words, beside the Machines reachable now", () =>
   Effect.runPromise(
     Effect.gen(function* () {
-      about = undefined;
       rule = undefined;
       expect(yield* submitted()).toEqual({});
       rule = "Frontend work is on the laptop machine and everything else is on the vm";

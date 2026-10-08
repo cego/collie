@@ -94,3 +94,20 @@ for the full herdr UI.
   that has the pane open.
 - No new listener and no new credential. The renderer does not honour OSC 52 clipboard
   writes, and a link in the pane opens only in the human's browser through `openLink`.
+
+## Amended 2026-10-08: the Terminal tab shows any of the Task's live agents
+
+A Task often has several live agents at once, such as its planner, implementer and
+reviewers, and the tab could reach only the newest of one Run's. The tab now lists every live
+agent the card counts, labelled with its role and its herdr status, and the human picks which
+pane to show. Picking one releases the pane shown and takes the chosen one, as Reattach does.
+
+- The board names each agent's role, from the registry entry it was registered with: the
+  same role its herdr tab is labelled with.
+- `focus` may name one agent of the Run. The host then focuses that agent, or the Run's
+  workspace where herdr no longer has it. Its reply names the agent it focused, so the tab
+  marks the pane it is showing from what the host did, not from what was asked.
+- All three fields are additive, so `PROTOCOL` stays the same. A host older than this
+  ignores the agent asked for and names none, so the tab marks none as shown.
+- Go to pane and Reattach without a choice still find the Run's newest live agent. Reattach
+  after a choice finds the chosen one again.

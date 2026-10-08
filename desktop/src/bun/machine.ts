@@ -29,6 +29,7 @@ import {
   PROTOCOL,
   FrontDoorRpcs,
   type HostRefused,
+  type PaneAt,
   type ProposalRefused,
   type RequestConflict,
   type RunDetail,
@@ -940,8 +941,13 @@ export const doorTo = <D>(
     : Effect.succeed(door);
 };
 
-export const focusOn = (door: Reached, request: string, runId: string) =>
-  over(door, door.desktop.focus({ runId, request }), request);
+/** Focuses `agent` of `runId` where one is chosen, else the Run's newest live agent. */
+export const focusOn = (door: Reached, request: string, runId: string, agent?: string) =>
+  over(
+    door,
+    door.desktop.focus(agent === undefined ? { runId, request } : { runId, agent, request }),
+    request,
+  );
 
 export const offersOn = (door: Reached, runId: string) =>
   over(door, door.desktop.offers({ runId }));

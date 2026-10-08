@@ -3,20 +3,15 @@
 import { Clock, Effect, FileSystem, Result } from "effect";
 import * as Base64 from "effect/encoding/Base64";
 import { ATTACHMENT_BYTES, sha256Hex } from "../../../src/attachments";
-import {
-  type BoardSnapshot,
-  HostRefused,
-  type HostFile,
-  PART_BYTES,
-} from "../../../src/board-model";
-import type { ChatMachine, FlockChat } from "./flock-tools";
+import { HostRefused, type HostFile, PART_BYTES } from "../../../src/board-model";
+import { type FlockChat, reach, type Reached } from "./flock-tools";
 
 const tooLarge = (path: string) =>
   new HostRefused({ reason: `${path} is larger than ${ATTACHMENT_BYTES / 1024 / 1024} MB` });
 
 /** The whole file, part by part, or until `enough` says of the latest part. */
 export const readWhole = Effect.fn("Carried.readWhole")(function* (
-  machine: ChatMachine,
+  machine: Reached,
   path: string,
   enough: (part: Uint8Array) => boolean = () => false,
   most = Number.POSITIVE_INFINITY,
@@ -42,7 +37,7 @@ const REMEMBERED = 24 * 60 * 60 * 1000;
 /** `bytes` on `machine`, uploaded unless this session did today, and their path there. */
 const uploaded = Effect.fn("Carried.upload")(function* (
   flock: FlockChat,
-  machine: ChatMachine,
+  machine: Reached,
   name: string,
   bytes: Uint8Array,
 ) {
@@ -76,17 +71,12 @@ const uploaded = Effect.fn("Carried.upload")(function* (
  */
 export const carriedPaths = Effect.fn("Carried.paths")(function* (
   flock: FlockChat,
-  machine: ChatMachine,
-  board: BoardSnapshot | null,
+  machine: Reached,
   given: ReadonlyArray<string> | undefined,
 ) {
   const named = given ?? flock.attachments()?.map(({ path }) => path);
   if (named === undefined || named.length === 0) return given;
-  if (board === null)
-    return yield* new HostRefused({
-      reason: `${machine.name}'s board could not be read, so Desktop cannot tell whether it takes files. Nothing was done there.`,
-    });
-  if (board.files !== true)
+  if (!machine.board.files)
     return yield* new HostRefused({
       reason: `${machine.name}'s Collie does not take files; upgrade Collie on ${machine.name}. Nothing was done there.`,
     });
@@ -105,7 +95,7 @@ export const carriedPaths = Effect.fn("Carried.paths")(function* (
           flock,
           machine,
           name,
-          (yield* readWhole(on, path, undefined, ATTACHMENT_BYTES)).bytes,
+          (yield* readWhole(yield* reach(on), path, undefined, ATTACHMENT_BYTES)).bytes,
         ),
       );
     else if (path.startsWith("/")) {

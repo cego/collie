@@ -11,7 +11,7 @@ import { type ClaudeCode, openFlockChat } from "../desktop/src/bun/chat";
 import type { SdkMessage } from "../desktop/src/bun/agui";
 import type { ChatDoor, ChatMachine } from "../desktop/src/bun/flock-tools";
 import { listing } from "../desktop/src/shared/attachments";
-import { DESKTOP_SAID } from "../desktop/src/shared/chat-view";
+import { aboutNote, DESKTOP_SAID } from "../desktop/src/shared/chat-view";
 import { isString } from "../src/schema";
 
 type Item = (typeof NewsBatch.Type)["items"][number];
@@ -31,16 +31,6 @@ const machine = (
   declared: Declaration[] = [],
 ): ChatMachine => {
   const door: Partial<ChatDoor> = {
-    board: () =>
-      Stream.make({
-        _tag: "Snapshot" as const,
-        installation: "i",
-        build: "test",
-        protocol: PROTOCOL,
-        herds: [{ id: "h1" }],
-        tasks: [],
-        seq: 0,
-      }).pipe(Stream.concat(Stream.never)),
     declare: (payload) => Effect.sync(() => void declared.push(payload)),
     news: ({ as, keys }) =>
       Effect.sync(() => {
@@ -51,8 +41,12 @@ const machine = (
         };
       }),
   };
-  // SAFETY: the chat's turns reach a Machine only through board, declare and news.
-  return { name: "vm-mk", door: door as ChatDoor };
+  // SAFETY: the chat's turns reach a Machine only through declare and news.
+  return {
+    name: "vm-mk",
+    door: door as ChatDoor,
+    board: { _tag: "Live", herds: [{ id: "h1" }], tasks: [], protocol: PROTOCOL, files: false },
+  };
 };
 
 interface Seen {
@@ -252,6 +246,30 @@ test("a rule left blank adds nothing to a turn", () =>
     Effect.gen(function* () {
       yield* Stream.runDrain(conversation.send("start a review", null, false));
       expect(seen.context).toEqual([""]);
+    }),
+  ));
+
+test("a message sent about a card carries Desktop's note of it after the words, and one about none is sent as before", () =>
+  withChat({ items: [], proactive: false }, answered, ({ conversation, seen, dir }) =>
+    Effect.gen(function* () {
+      const about = { machine: "vm-mk", task: "t-1", run: "r-2", name: "Fix board bugs" };
+      yield* Stream.runDrain(conversation.send("what is this one doing?", about, false));
+      expect(seen.contents[0]).toEqual([
+        { type: "text", text: "what is this one doing?" },
+        { type: "text", text: aboutNote(about) },
+      ]);
+      expect(seen.context[0]).not.toContain("Fix board bugs");
+
+      const shot = yield* staged(dir, "shot.png", "image/png", new Uint8Array([1, 2, 3]));
+      yield* Stream.runDrain(conversation.send("and this?", about, false, [shot.id]));
+      expect(seen.contents[1]).toEqual([
+        { type: "text", text: "and this?" },
+        { type: "text", text: aboutNote(about) },
+        { type: "text", text: listing([shot]) },
+      ]);
+
+      yield* Stream.runDrain(conversation.send("and now?", null, false));
+      expect(seen.contents[2]).toBe("and now?");
     }),
   ));
 

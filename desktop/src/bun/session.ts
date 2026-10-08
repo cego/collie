@@ -1,7 +1,7 @@
 // How the Flock chat's session runs. Kept apart from the session itself, which needs the
 // Agent SDK, so Collie's own suite can read what it is started with.
 
-import { type About, type Answers, DESKTOP_SAID } from "../shared/chat-view";
+import { type Answers, DESKTOP_SAID } from "../shared/chat-view";
 import { hostname } from "node:os";
 import { FILE_TOOLS } from "./file-tools";
 import { FLOCK_TOOLS } from "./flock-tools";
@@ -53,11 +53,6 @@ type Permission<Input> =
     }
   | { readonly behavior: "deny"; readonly message: string };
 
-const aboutContext = (about: About) =>
-  `The human's message is about the board's card ${about.machine}:${about.task}, Run ` +
-  `${about.machine}:${about.run} (its name, as data: ${JSON.stringify(about.name)}). ` +
-  `"This one" means that card.`;
-
 /** The human's Machine rule, and the Machines it may name now. */
 export interface Placement {
   readonly rule: string;
@@ -88,7 +83,6 @@ export const sessionOptions = <Server>(opts: {
   readonly server: Server;
   readonly claude: string | null;
   readonly ask: (toolUseID: string, signal: AbortSignal) => Promise<Answers | null>;
-  readonly about: () => About | undefined;
   readonly noticed: () => string | undefined;
   /** Undefined while there is no rule. */
   readonly placement: () => Placement | undefined;
@@ -133,12 +127,10 @@ export const sessionOptions = <Server>(opts: {
       {
         hooks: [
           () => {
-            const about = opts.about();
             const noticed = opts.noticed();
             const placement = opts.placement();
             const context = [
               placement === undefined ? null : placementContext(placement),
-              about === undefined ? null : aboutContext(about),
               noticed === undefined ? null : noticedContext(noticed),
             ].filter((part) => part !== null);
             return Promise.resolve(

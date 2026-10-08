@@ -958,6 +958,15 @@ the Run's newest live agent again. The tab stays while its Machine is away, and 
 says that Machine is not connected until it is back. The card and the tab say where the pane is, as
 "vm-mk › workspace 3 › tab 2".
 
+Where the Task has more than one live agent — a planner, an implementer and its reviewers,
+across a plan Run and its `.implement` Run — the tab lists every agent the card counts
+beside Open in herdr, each as its role (numbered where two share one, as "reviewer 1") with
+herdr's status, and its herdr name and terminal title on hover. The one marked is the pane
+the Machine says it focused. Picking another gives the shown pane back and opens the chosen
+one, and Reattach then reopens the chosen agent rather than the newest. An agent that ends
+while shown stays listed as **ended** until you pick another. Leaving the tab forgets the
+choice, so coming back, like Go to pane, shows the newest live agent again.
+
 Where there is no pane to show — a Run with no live agent, or a Machine on a Collie whose
 focus does not name one — Go to pane does what it did before, and **Open in herdr** on the
 tab does it on purpose, for the full herdr UI: a new herdr client in this computer's
@@ -1326,7 +1335,21 @@ steered there. What the host records of your words also names the files they car
 Click a card and it becomes a chip above the input ("About: vm-mk › Fix board bugs"): your
 next message goes with it, so "this one" means that card, and sending uses it up. Clear it
 with its ✕, a click on the board's background, or Escape outside a field; a chat popped out
-into its own window clears with it. The chip is attached as context for the turn, never as your words.
+into its own window clears with it. The message keeps its card: it goes to the model as
+Desktop's own bracketed note after your words, never as your words, and stays in the
+conversation's history, so "this one" in an old message still means the card it went with.
+Your bubble shows that card as a pill ("vm-mk › Fix board bugs") from the moment it is sent,
+after a restart and in a reopened conversation alike; a queued message gets its pill once
+it is sent. Click the pill to open that Task's record on the board — from a popped-out chat
+too, in the board's window — or be told the Task is no longer on the board.
+
+A web address in a message — yours, Collie's or Desktop's — is a link that opens in your
+browser, never in Desktop: bare, in `<…>`, as a markdown link, or alone in backticks. One
+whose text is its own address is drawn without `https://` and, past 60 characters, with its
+middle elided ("gitlab.cego.dk/some-group/some-project/-…9abcdef01234567"); hover for the
+whole address. A markdown link keeps its words. Long addresses, paths and ids wrap inside
+the message, so nothing in the chat scrolls sideways at any width; only a code block, a
+table or a diagram scrolls, within itself. The record's markdown wraps the same way.
 
 News reaches it from every Herd on every Machine as one batch: what matters most first —
 decisions, then consequential outcomes, then what is worth trying, then the routine — and
@@ -1340,11 +1363,23 @@ asked in its reply and you answer in your next message. News arriving mid-turn w
 that turn to end; what is worth trying and routine News waits for your next message and
 goes with it as context. An item counts as read once the model has it, so a turn that
 fails first (a usage limit, an outage) leaves it waiting; Desktop tries again at the next
-two-minute look. A Machine that does not answer within ten seconds is said to be unread
-rather than holding up the rest, and one whose Collie is older than Desktop's chat, or
-whose board could not be read, is written to by nothing. The bell turns Desktop's own
-turns off (and on again); it is on by default, and kept in `settings.json` beside the
-session.
+two-minute look. A Machine whose host does not answer a News look within ten seconds is
+said to be unread rather than holding up the rest.
+
+The chat reads each Machine's board from the one the window draws: `collie_herd`, where a
+bare id is, the Herds a News look asks and whether a Machine's Collie can take a write all
+come from the board Desktop already follows, so no tool call has a host build one. Run
+details, News and every write still go to the Machine's host. Every Machine the window
+shows is one the chat knows by name, and one with no live board is named with why: still
+connecting, and how long Desktop has waited for its first board; out of reach, waiting
+for SSO, without Collie or needing a newer Desktop, in its connection's own words; or only
+a board Desktop saved, and when. That reason is what `collie_herd`, `collie_workspaces` and
+`collie_news` say of it, and what a write to it is refused with ("… Nothing was done on
+vm-mk."); a bare id another Machine has is refused while that one cannot be checked. A
+Machine whose Collie is older than Desktop's chat is written to by nothing.
+
+The bell turns Desktop's own turns off (and on again); it is on by default, and kept in
+`settings.json` beside the session.
 
 **Settings** has the **Machine rule** under **Chat**, for **This computer only**: which Machine each kind
 of work goes to, in your own words — "Frontend work is on the laptop, everything else is on

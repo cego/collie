@@ -40,6 +40,7 @@ import { isString } from "../../../src/schema";
 import { describeAttachment, scaledCopy } from "./attachments";
 import {
   type About,
+  aboutNote,
   type Answers,
   type ChatMessage,
   type Conversations,
@@ -182,7 +183,6 @@ interface Voice {
   said?: string;
   /** Desktop's copies of the files the human's message carried. */
   files?: ReadonlyArray<Staged>;
-  about?: About;
   news?: FlockBatch;
 }
 
@@ -212,13 +212,14 @@ const utf8 = (bytes: Uint8Array) => {
 };
 
 /**
- * The human's message as the model is handed it: their words, Desktop's listing of the
- * files apart from them, and what of each fits as an image, document or text. Why not,
- * where a file is gone.
+ * The human's message as the model is handed it: their words, Desktop's notes of the card
+ * it is about and of the files apart from them, and what of each file fits as an image,
+ * document or text. Why not, where a file is gone.
  */
 const contentOf = Effect.fnUntraced(function* (
   dir: string,
   text: string,
+  about: About | null,
   ids: ReadonlyArray<string>,
 ) {
   const fs = yield* FileSystem.FileSystem;
@@ -264,7 +265,8 @@ const contentOf = Effect.fnUntraced(function* (
   }
   const blocks: Array<ContentBlock> = [
     ...(text === "" ? [] : [{ type: "text" as const, text }]),
-    { type: "text", text: listing(files) },
+    ...(about === null ? [] : [{ type: "text" as const, text: aboutNote(about) }]),
+    ...(files.length === 0 ? [] : [{ type: "text" as const, text: listing(files) }]),
     ...images,
     ...documents,
     ...texts,
@@ -304,7 +306,6 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* <Server>(opts
     fs.writeFileString(file, Schema.encodeSync(SessionFile)({ session }));
   let said: string | undefined;
   let carried: ReadonlyArray<Staged> | undefined;
-  let attached: About | undefined;
   let noticed: FlockBatch | undefined;
   const asking = new Map<string, Deferred.Deferred<Answers>>();
   const services = yield* Effect.context<Crypto.Crypto | FileSystem.FileSystem | Path.Path>();
@@ -352,7 +353,6 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* <Server>(opts
         server,
         claude: Bun.which("claude"),
         ask,
-        about: () => attached,
         noticed: () => (noticed === undefined ? undefined : flockNewsText(noticed)),
         placement: () => {
           const rule = opts.machineRule()?.trim() ?? "";
@@ -452,7 +452,6 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* <Server>(opts
       Effect.sync(() => {
         said = undefined;
         carried = undefined;
-        attached = undefined;
         noticed = undefined;
         turning = undefined;
       }).pipe(
@@ -472,7 +471,6 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* <Server>(opts
     );
     said = voice.said;
     carried = voice.files;
-    attached = voice.about;
     // A turn of Desktop's carries its News in its message; the human's carries it as context.
     noticed = voice.said === undefined ? undefined : voice.news;
     turning = running;
@@ -544,7 +542,7 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* <Server>(opts
     send: (text, about, now, attachments = []) =>
       Stream.unwrap(
         Effect.gen(function* () {
-          const content = yield* contentOf(opts.dir, text, attachments).pipe(
+          const content = yield* contentOf(opts.dir, text, about, attachments).pipe(
             Effect.provideContext(services),
           );
           if (isString(content)) return Stream.make(refusal(content));
@@ -558,9 +556,12 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* <Server>(opts
           const news = yield* waiting;
           const voice: Voice = { said: text };
           if (content.files.length > 0) voice.files = content.files;
-          if (about !== null) voice.about = about;
           if (news.items.length > 0) voice.news = news;
-          return yield* turnOn(running, attachments.length > 0 ? content.blocks : text, voice);
+          return yield* turnOn(
+            running,
+            attachments.length > 0 || about !== null ? content.blocks : text,
+            voice,
+          );
         }),
       ),
     answer: (toolCallId, answers) =>

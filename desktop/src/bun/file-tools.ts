@@ -8,12 +8,14 @@ import { decodeStrict, jsonSchemaOf } from "../../../src/toolkit";
 import { IMAGE_BYTES, imageSize, LONG_EDGE, shownAs, TEXTUAL } from "../shared/attachments";
 import { readWhole } from "./carried";
 import {
-  boardOf,
   type ChatMachine,
+  declareVoice,
   type FlockChat,
   newRequest,
+  reach,
+  type Reached,
   reasonOf,
-  speaking,
+  writable,
 } from "./flock-tools";
 
 /** What a file tool hands the model: text, or an image it can see. */
@@ -143,17 +145,16 @@ const placed = (flock: FlockChat, named: string) => {
   return Result.succeed({ machine, path: named.slice(colon + 1) });
 };
 
-/** The Machine's board, refused where its host does not take files. */
-const takingFiles = Effect.fn("FileTools.takingFiles")(function* (machine: ChatMachine) {
-  const board = yield* boardOf(machine);
-  if (board === null)
-    return yield* new HostRefused({ reason: `${machine.name}'s board could not be read` });
-  if (board.files !== true)
-    return yield* new HostRefused({
-      reason: `${machine.name}'s Collie does not take files; upgrade Collie on ${machine.name}`,
-    });
-  return [{ machine, board }];
-});
+/** The Machine reached, refused where its host does not take files. */
+const takingFiles = (reaching: Effect.Effect<Reached, HostRefused>) =>
+  Effect.filterOrFail(
+    reaching,
+    ({ board }) => board.files,
+    ({ name }) =>
+      new HostRefused({
+        reason: `${name}'s Collie does not take files; upgrade Collie on ${name}`,
+      }),
+  );
 
 /** How many lines a read gives when it is not told. */
 const READ_LINES = 2000;
@@ -169,7 +170,7 @@ const numbered = (lines: ReadonlyArray<string>, from: number) =>
     .join("\n");
 
 const read = Effect.fn("FileTools.read")(function* (
-  machine: ChatMachine,
+  machine: Reached,
   path: string,
   input: typeof ReadInput.Type,
 ) {
@@ -238,16 +239,19 @@ const answer = Effect.fn("FileTools.answer")(function* (
       if (Result.isFailure(asked)) return text(`collie_read: ${asked.failure}`);
       const at = where(asked.success.file_path);
       if (Result.isFailure(at)) return text(at.failure);
-      yield* takingFiles(at.success.machine);
-      return yield* read(at.success.machine, at.success.path, asked.success);
+      return yield* read(
+        yield* takingFiles(reach(at.success.machine)),
+        at.success.path,
+        asked.success,
+      );
     }
     case "collie_glob": {
       const asked = decodeStrict(GlobInput)(input);
       if (Result.isFailure(asked)) return text(`collie_glob: ${asked.failure}`);
       const at = where(asked.success.path);
       if (Result.isFailure(at)) return text(at.failure);
-      const { machine, path } = at.success;
-      yield* takingFiles(machine);
+      const { path } = at.success;
+      const machine = yield* takingFiles(reach(at.success.machine));
       const found = yield* machine.door.glob({ pattern: asked.success.pattern, path });
       return answered(machine, found.paths, found.omitted, "No files found.");
     }
@@ -256,8 +260,8 @@ const answer = Effect.fn("FileTools.answer")(function* (
       if (Result.isFailure(asked)) return text(`collie_grep: ${asked.failure}`);
       const at = where(asked.success.path);
       if (Result.isFailure(at)) return text(at.failure);
-      const { machine, path } = at.success;
-      yield* takingFiles(machine);
+      const { path } = at.success;
+      const machine = yield* takingFiles(reach(at.success.machine));
       const one = asked.success;
       const found = yield* machine.door.grep({
         pattern: one.pattern,
@@ -281,8 +285,9 @@ const answer = Effect.fn("FileTools.answer")(function* (
       if (Result.isFailure(asked)) return text(`collie_write: ${asked.failure}`);
       const at = where(asked.success.file_path);
       if (Result.isFailure(at)) return text(at.failure);
-      const { machine, path } = at.success;
-      yield* speaking(flock, machine, yield* takingFiles(machine));
+      const { path } = at.success;
+      const machine = yield* takingFiles(writable(at.success.machine));
+      yield* declareVoice(flock, machine);
       const done = yield* machine.door.writeFile({
         path,
         content: asked.success.content,
@@ -295,8 +300,9 @@ const answer = Effect.fn("FileTools.answer")(function* (
       if (Result.isFailure(asked)) return text(`collie_edit: ${asked.failure}`);
       const at = where(asked.success.file_path);
       if (Result.isFailure(at)) return text(at.failure);
-      const { machine, path } = at.success;
-      yield* speaking(flock, machine, yield* takingFiles(machine));
+      const { path } = at.success;
+      const machine = yield* takingFiles(writable(at.success.machine));
+      yield* declareVoice(flock, machine);
       const done = yield* machine.door.editFile({
         path,
         oldString: asked.success.old_string,

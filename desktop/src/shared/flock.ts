@@ -2,7 +2,7 @@
 // by its Machine, and the board those messages add up to. No Bun-only import: the view
 // bundles this.
 
-import { Effect, Schema, Stream, Struct } from "effect";
+import { DateTime, Effect, Schema, Stream, Struct } from "effect";
 import * as Rpc from "effect/rpc/Rpc";
 import * as RpcGroup from "effect/rpc/RpcGroup";
 import { AguiEvent } from "./agui";
@@ -378,11 +378,12 @@ export const DesktopRpcs = RpcGroup.make(
     success: WentToPane,
     error: ActionFailed,
   }),
-  /** The Run's live agent's pane, held while the stream runs and released when it is interrupted. */
+  /** The pane `focus` finds, held while the stream runs and released when it is interrupted. */
   Rpc.make("terminal", {
     payload: {
       installation: Schema.String,
       runId: Schema.String,
+      agent: Schema.optionalKey(Schema.String),
       cols: Schema.Int,
       rows: Schema.Int,
     },
@@ -580,6 +581,10 @@ export interface FlockMachine {
   readonly build: string | null;
   /** `<version>+<sha>` where the Machine runs a development checkout. */
   readonly development: string | null;
+  /** The board protocol its latest Snapshot spoke; null for a saved board. */
+  readonly protocol: number | null;
+  /** Whether its host takes files, as its latest Snapshot said. */
+  readonly files: boolean;
 }
 
 /** Each Machine keyed by installation id, and each route not live by its herdr profile. */
@@ -680,6 +685,8 @@ export const applyItem = (flock: Flock, item: FlockItem): Flock => {
       asOf: at,
       build: item.build ?? null,
       development: item.development ?? null,
+      protocol: null,
+      files: false,
     };
     return { ...flock, machines: new Map(flock.machines).set(machine.installation, saved) };
   }
@@ -710,6 +717,8 @@ export const applyItem = (flock: Flock, item: FlockItem): Flock => {
   const build = message._tag === "Snapshot" ? message.build : (known?.build ?? null);
   const development =
     message._tag === "Snapshot" ? (message.development ?? null) : (known?.development ?? null);
+  const protocol = message._tag === "Snapshot" ? message.protocol : (known?.protocol ?? null);
+  const files = message._tag === "Snapshot" ? message.files === true : (known?.files ?? false);
   lost.delete(machine.profile);
   return {
     ...flock,
@@ -720,6 +729,8 @@ export const applyItem = (flock: Flock, item: FlockItem): Flock => {
       asOf: null,
       build,
       development,
+      protocol,
+      files,
     }),
     lost,
   };
@@ -737,8 +748,18 @@ export const machineNames = (machines: ReadonlyArray<Machine>) => {
   );
 };
 
-const shownNames = (flock: Flock) =>
-  machineNames([...flock.machines.values()].map(({ machine }) => machine));
+/** `machineNames`, with a saved board told apart from a live Machine reached the same way. */
+const shownNames = (flock: Flock) => {
+  const names = machineNames([...flock.machines.values()].map(({ machine }) => machine));
+  const counts = new Map<string, number>();
+  for (const name of names.values()) counts.set(name, (counts.get(name) ?? 0) + 1);
+  for (const [installation, { asOf }] of flock.machines) {
+    const name = names.get(installation)!;
+    if (asOf !== null && counts.get(name)! > 1)
+      names.set(installation, `${name.replace(/\)$/, "")}, saved)`);
+  }
+  return names;
+};
 
 /** What the board calls a Machine, among every Machine it shows, saved ones included. */
 export const nameAsShown = (flock: Flock) => {
@@ -797,6 +818,91 @@ export const flockCards = (flock: Flock) => {
         projects: [...new Set([...tasks.values()].map((task) => task.project))].sort(),
       })),
   };
+};
+
+/** A Machine's board as the chat reads it: the one the window draws live, or why there is none. */
+export type ChatBoard =
+  | {
+      readonly _tag: "Live";
+      readonly herds: ReadonlyArray<Herd>;
+      readonly tasks: ReadonlyArray<TaskView>;
+      readonly protocol: number;
+      readonly files: boolean;
+    }
+  /** `since` is when Desktop began waiting for its first board, where it knows. */
+  | { readonly _tag: "Connecting"; readonly since: number | null }
+  | { readonly _tag: "Lost"; readonly state: NotLive; readonly reason: string }
+  /** A saved board whose route reaches no host that could make it live. */
+  | { readonly _tag: "Saved"; readonly at: number };
+
+/**
+ * Every Machine the window shows, by the name its cards use, with its board as the chat
+ * reads it. `since` is when Desktop began waiting on each route, by herdr profile.
+ */
+export const chatBoards = (flock: Flock, since: ReadonlyMap<string, number>) => {
+  const names = shownNames(flock);
+  const waiting = (profile: string): ChatBoard => {
+    const lost = flock.lost.get(profile);
+    return lost === undefined
+      ? { _tag: "Connecting", since: since.get(profile) ?? null }
+      : { _tag: "Lost", state: lost.state, reason: lost.reason };
+  };
+  const shown = [...flock.machines].map(([installation, known]) => {
+    const { profile } = known.machine;
+    const liveThere = [...flock.machines.values()].some(
+      (other) => other.machine.profile === profile && other.asOf === null,
+    );
+    const board: ChatBoard =
+      known.asOf === null
+        ? known.protocol === null
+          ? waiting(profile)
+          : {
+              _tag: "Live",
+              herds: known.herds,
+              tasks: [...known.tasks.values()],
+              protocol: known.protocol,
+              files: known.files,
+            }
+        : liveThere || !flock.routes.has(profile)
+          ? { _tag: "Saved", at: known.asOf }
+          : waiting(profile);
+    // SAFETY: `names` holds every Machine of this Flock.
+    return { name: names.get(installation)!, profile, installation, board };
+  });
+  const unshown = [...flock.routes.values()]
+    .filter(({ profile }) => !shown.some((one) => one.profile === profile))
+    .map(({ profile, name }) => ({ name, profile, installation: null, board: waiting(profile) }));
+  return [...shown, ...unshown];
+};
+
+const LOST_SAID: Record<NotLive, (name: string) => string> = {
+  unreachable: (name) => `${name} is out of reach`,
+  sso: (name) => `${name} is waiting for an SSO login`,
+  "no-collie": (name) => `Collie isn't installed on ${name}`,
+  "update-desktop": (name) => `${name} needs a newer Desktop`,
+};
+
+const waited = (ms: number) => {
+  const seconds = Math.round(ms / 1000);
+  return seconds < 60 ? `${seconds} s` : `${Math.floor(seconds / 60)} min ${seconds % 60} s`;
+};
+
+/** Why the chat cannot read `name`'s board, as one clause naming it. */
+export const unreadBecause = (
+  name: string,
+  board: Exclude<ChatBoard, { readonly _tag: "Live" }>,
+  now: number,
+) => {
+  switch (board._tag) {
+    case "Connecting":
+      return board.since === null
+        ? `${name} is still connecting; Desktop has had no board from it yet`
+        : `${name} is still connecting; Desktop has waited ${waited(now - board.since)} for its first board`;
+    case "Lost":
+      return `${LOST_SAID[board.state](name)}: ${board.reason.replace(/\.$/, "")}`;
+    case "Saved":
+      return `${name} is only a board Desktop saved at ${DateTime.formatIso(DateTime.makeUnsafe(board.at))}, with no live host since`;
+  }
 };
 
 /** A route as the Machines list shows it: how it stands now, and how onboarded it is. */
