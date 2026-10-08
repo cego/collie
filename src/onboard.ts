@@ -8,6 +8,7 @@ import { Effect, FileSystem, Option, Schedule, Schema, Stream } from "effect";
 import type { PlatformError } from "effect/PlatformError";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { hostname } from "node:os";
+import { inTerminal } from "./in-terminal";
 import { doctor, glabHosts, onPath, pushCheck } from "./doctor";
 import { gitlabHostOf } from "./config";
 import { tokenPage } from "./gitlab-token";
@@ -535,55 +536,58 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
   );
 
   /** `claude mcp login` under a terminal of its own, streaming its URL as it is printed. */
-  const linearLogin = Effect.gen(function* () {
-    // A URL is told once it is printed, and again when one with a callback port comes.
-    let told: string | null = null;
-    const tell = (url: string) => {
-      const port = /localhost:(\d+)/.exec(decodeURIComponent(url))?.[1];
-      if (url === told || (told !== null && port === undefined)) return Effect.void;
-      told = url;
-      return emit({
-        event: "human",
-        step: "linear",
-        detail: "open this to let Claude Code reach Linear",
-        url,
-        ...(port && { port: Number(port) }),
-      });
-    };
-    // Claude Code may print only a paste-code URL and hand the one with its callback port
-    // to $BROWSER, which this shim writes down instead.
-    const shims = yield* fs.makeTempDirectoryScoped({ prefix: "collie-login-" });
-    const handed = `${shims}/url`;
-    yield* fs.writeFileString(`${shims}/browser`, `#!/bin/sh\necho "$1" > '${handed}'\n`);
-    yield* fs.chmod(`${shims}/browser`, 0o755);
-    const handle = yield* spawner.spawn(
-      ChildProcess.make("script", ["-qefc", LINEAR_LOGIN, "/dev/null"], {
+  const linearLogin = (claude: string) =>
+    Effect.gen(function* () {
+      // A URL is told once it is printed, and again when one with a callback port comes.
+      let told: string | null = null;
+      const tell = (url: string) => {
+        const port = /localhost:(\d+)/.exec(decodeURIComponent(url))?.[1];
+        if (url === told || (told !== null && port === undefined)) return Effect.void;
+        told = url;
+        return emit({
+          event: "human",
+          step: "linear",
+          detail: "open this to let Claude Code reach Linear",
+          url,
+          ...(port && { port: Number(port) }),
+        });
+      };
+      // Claude Code may print only a paste-code URL and hand the one with its callback port
+      // to $BROWSER, which this shim writes down instead.
+      const shims = yield* fs.makeTempDirectoryScoped({ prefix: "collie-login-" });
+      const handed = `${shims}/url`;
+      yield* fs.writeFileString(`${shims}/browser`, `#!/bin/sh\necho "$1" > '${handed}'\n`);
+      yield* fs.chmod(`${shims}/browser`, 0o755);
+      const login = yield* inTerminal([claude, ...LINEAR_LOGIN.split(" ").slice(1)], {
         cwd: env.home,
         env: { ...childEnv, BROWSER: `${shims}/browser` },
-        // It waits on stdin for a pasted redirect, and gives up when stdin ends.
-        stdin: options.terminal ? "inherit" : { stream: Stream.never, endOnDone: false },
-        stdout: "pipe",
-        stderr: "pipe",
-      }),
-    );
-    const said = Stream.merge(handle.stdout, handle.stderr).pipe(
-      Stream.decodeText(),
-      Stream.splitLines,
-      Stream.runForEach((line) => {
-        const url = URL_IN.exec(line)?.[0];
-        return url === undefined ? Effect.void : tell(url);
-      }),
-    );
-    const browsed = fs.readFileString(handed).pipe(
-      Effect.map((text) => URL_IN.exec(text)?.[0]),
-      Effect.flatMap((url) => (url === undefined ? Effect.fail("not yet") : tell(url))),
-      Effect.retry({ schedule: Schedule.spaced("300 millis") }),
-    );
-    yield* Effect.raceFirst(
-      Effect.all([said, handle.exitCode], { concurrency: "unbounded" }),
-      Effect.andThen(browsed, Effect.never),
-    );
-  }).pipe(Effect.scoped, Effect.timeoutOption(LOGIN_LIMIT), Effect.ignore);
+      });
+      // It waits for a pasted redirect, which only a human at a terminal can type.
+      const pasted = options.terminal
+        ? Stream.fromReadableStream({ evaluate: () => Bun.stdin.stream(), onError: String }).pipe(
+            Stream.decodeText(),
+            Stream.runForEach(login.type),
+            Effect.ignore,
+          )
+        : Effect.void;
+      const said = login.output.pipe(
+        Stream.decodeText(),
+        Stream.splitLines,
+        Stream.runForEach((line) => {
+          const url = URL_IN.exec(line)?.[0];
+          return url === undefined ? Effect.void : tell(url);
+        }),
+      );
+      const browsed = fs.readFileString(handed).pipe(
+        Effect.map((text) => URL_IN.exec(text)?.[0]),
+        Effect.flatMap((url) => (url === undefined ? Effect.fail("not yet") : tell(url))),
+        Effect.retry({ schedule: Schedule.spaced("300 millis") }),
+      );
+      yield* Effect.raceFirst(
+        Effect.all([said, login.exitCode], { concurrency: "unbounded" }),
+        Effect.andThen(Effect.all([browsed, pasted], { concurrency: "unbounded" }), Effect.never),
+      );
+    }).pipe(Effect.scoped, Effect.timeoutOption(LOGIN_LIMIT), Effect.ignore);
 
   yield* step(
     "linear",
@@ -591,7 +595,8 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
     Effect.gen(function* () {
       const skip = skipped("linear");
       if (skip) return skip;
-      if ((yield* onPath(search, "claude")) === null) {
+      const claudeDir = yield* onPath(search, "claude");
+      if (claudeDir === null) {
         return failed("Claude Code is not installed, so it has no MCP servers", CLAUDE_INSTALL);
       }
       let changed = false;
@@ -615,10 +620,7 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
           command: LINEAR_LOGIN,
         } satisfies Outcome;
       }
-      if ((yield* onPath(search, "script")) === null) {
-        return failed("no `script` to give the login a terminal", LINEAR_LOGIN);
-      }
-      yield* linearLogin;
+      yield* linearLogin(`${claudeDir}/claude`);
       return (yield* connected)
         ? done("logged in to Linear")
         : failed("the Linear login did not finish", LINEAR_LOGIN);

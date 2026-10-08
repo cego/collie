@@ -2,9 +2,10 @@
 // of the human; Desktop's own version of the runner goes there only once its signature
 // verifies; and `collie onboard` runs with it, each step told as it comes.
 
-import { Cause, Clock, Crypto, Effect, FileSystem, Option, Queue, Schema, Stream } from "effect";
+import { Clock, Crypto, Effect, FileSystem, Option, Schema, Stream } from "effect";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as HttpClient from "effect/http/HttpClient";
+import { inTerminal } from "../../../src/in-terminal";
 import { RELEASE_PUBLIC_KEY, SIGNATURE_SUFFIX, verifyRelease } from "../../../src/signing";
 import { type OnboardRun, type OnboardStep, SETTLED, type Skippable } from "../shared/flock";
 import { quoted, type Route, type ShellRoute, spawned } from "./machine";
@@ -427,21 +428,14 @@ export const addToHerdr = Effect.fn("Desktop.addToHerdr")(function* (
   session: string,
   ask: (text: string, yes: boolean) => Effect.Effect<boolean>,
 ) {
-  const output = yield* Queue.unbounded<Uint8Array, Cause.Done>();
-  // Bun's own terminal: `script` differs between Linux and macOS, and macOS's refuses the
-  // socket Bun gives a child for its stdin.
-  const child = yield* spawned(() =>
-    Bun.spawn([herdr, "machine", "add", "--label", label, "--remote-session", session, target], {
-      env: childEnv(),
-      terminal: {
-        data: (_, bytes) => Queue.offerUnsafe(output, bytes),
-        exit: () => Queue.endUnsafe(output),
-      },
-    }),
+  const herdrAdd = yield* inTerminal(
+    [herdr, "machine", "add", "--label", label, "--remote-session", session, target],
+    { env: childEnv() },
+    spawned,
   );
   let said = "";
   let answered = 0;
-  yield* Stream.fromQueue(output).pipe(
+  yield* herdrAdd.output.pipe(
     Stream.decodeText(),
     Stream.runForEach((chunk) =>
       Effect.gen(function* () {
@@ -451,12 +445,12 @@ export const addToHerdr = Effect.fn("Desktop.addToHerdr")(function* (
         if (asked === null) return;
         answered = said.length;
         const yes = yield* ask(asked.text, asked.yes);
-        child.terminal?.write(yes ? "y\n" : "n\n");
+        yield* herdrAdd.type(yes ? "y\n" : "n\n");
       }),
     ),
     Effect.ignore,
   );
-  const code = yield* Effect.promise(() => child.exited);
+  const code = yield* herdrAdd.exitCode;
   if (code !== 0) {
     const last = said.trim().split("\n").slice(-3).join("\n");
     return yield* Effect.fail(last || `herdr machine add exited ${code}`);
