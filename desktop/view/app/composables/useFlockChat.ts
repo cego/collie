@@ -77,7 +77,7 @@ export const useFlockChat = () => {
   const conversations = useAtomSet(() => conversationsAtom, { mode: "promiseExit" });
   const reopen = useAtomSet(() => reopenAtom, { mode: "promiseExit" });
 
-  const { value: turns } = useHeld(() => desktopTurnsAtom);
+  const { value: turns, trouble: turnsTrouble } = useHeld(() => desktopTurnsAtom);
   /** Whether Desktop is telling the chat about News right now. */
   const desktopSpeaking = computed(() => turns.value === "started");
   const { desktopSettings, setProactive } = useDesktopSettings();
@@ -102,6 +102,7 @@ export const useFlockChat = () => {
   return {
     ...chat,
     desktopSpeaking,
+    turnsTrouble,
     proactive: computed(() => desktopSettings.value.proactive),
     setProactive,
     /**
