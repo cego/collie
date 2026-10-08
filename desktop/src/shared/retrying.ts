@@ -1,6 +1,4 @@
-// A subscription that outlives its failures: it says what went wrong and when it tries
-// again, backs off while it keeps failing, starts afresh after a value, and wakes early
-// when asked. It ends only when the view lets go.
+// A subscription that outlives its failures, ending only when the view lets go.
 // No Bun-only import: the view bundles this.
 
 import { Cause, Clock, Deferred, Effect, Exit, Option, Stream } from "effect";

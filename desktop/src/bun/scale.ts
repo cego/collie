@@ -1,7 +1,4 @@
-// Draws each Desktop window at its monitor's own scale (ADR-0047): Hyprland says which
-// monitor holds it and that monitor's scale, Electrobun the scale it is rendered at, and
-// the page zoom makes up the difference. Decided again as a window moves, resizes or takes
-// focus, and whenever Zoom changes.
+// Draws each Desktop window at its monitor's own scale (ADR-0047).
 
 import { type BrowserWindow, Screen } from "electrobun/bun";
 import { Effect, Queue, Stream } from "effect";
