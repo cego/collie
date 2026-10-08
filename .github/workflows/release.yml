@@ -169,8 +169,10 @@ jobs:
         working-directory: repo
       - run: cp repo/install-desktop.sh .
       # Desktop's installer, its update archive (also as the tar it is applied as, which is
-      # what Desktop verifies) and its update manifest, beside the runners.
-      - run: bun run tools/sign.ts ../collie-* ../*-collie-desktop* ../*-update.json ../install-desktop.sh
+      # what Desktop verifies), its update manifest and any delta patch, beside the runners.
+      - run: |
+          shopt -s nullglob
+          bun run tools/sign.ts ../collie-* ../*-collie-desktop* ../*-update.json ../*.patch ../install-desktop.sh
         working-directory: repo
         env:
           COLLIE_SIGNING_KEY: ${{ secrets.COLLIE_SIGNING_KEY }}
@@ -180,6 +182,6 @@ jobs:
       # A delta patch exists only once there is a release before this one.
       - run: |
           shopt -s nullglob
-          gh release create "$GITHUB_REF_NAME" collie-* *-collie-desktop* *-update.json* *.patch install-desktop.sh* --repo "$GITHUB_REPOSITORY" --title "Collie $GITHUB_REF_NAME" --notes "Collie $GITHUB_REF_NAME"
+          gh release create "$GITHUB_REF_NAME" collie-* *-collie-desktop* *-update.json* *.patch* install-desktop.sh* --repo "$GITHUB_REPOSITORY" --title "Collie $GITHUB_REF_NAME" --notes "Collie $GITHUB_REF_NAME"
         env:
           GH_TOKEN: ${{ github.token }}
