@@ -857,7 +857,7 @@ const main = Effect.gen(function* () {
         const opened = terminal !== null && (yield* launched(terminal));
         return { at, command: shellLine(attach), opened };
       }),
-    terminal: ({ installation, runId, cols, rows }) =>
+    terminal: ({ installation, runId, agent, cols, rows }) =>
       Stream.unwrap(
         Effect.gen(function* () {
           const door = yield* doorTo(doors, installation);
@@ -866,7 +866,7 @@ const main = Effect.gen(function* () {
             return yield* new ActionFailed({ reason: "that Machine is not connected" });
           const request = yield* uuid;
           const opened = yield* openTerminal(
-            focusOn(door.desktop, request, runId),
+            focusOn(door.desktop, request, runId, agent),
             route,
             cols,
             rows,

@@ -958,6 +958,15 @@ the Run's newest live agent again. The tab stays while its Machine is away, and 
 says that Machine is not connected until it is back. The card and the tab say where the pane is, as
 "vm-mk › workspace 3 › tab 2".
 
+Where the Task has more than one live agent — a planner, an implementer and its reviewers,
+across a plan Run and its `.implement` Run — the tab lists every agent the card counts
+beside Open in herdr, each as its role (numbered where two share one, as "reviewer 1") with
+herdr's status, and its herdr name and terminal title on hover. The one marked is the pane
+the Machine says it focused. Picking another gives the shown pane back and opens the chosen
+one, and Reattach then reopens the chosen agent rather than the newest. An agent that ends
+while shown stays listed as **ended** until you pick another. Leaving the tab forgets the
+choice, so coming back, like Go to pane, shows the newest live agent again.
+
 Where there is no pane to show — a Run with no live agent, or a Machine on a Collie whose
 focus does not name one — Go to pane does what it did before, and **Open in herdr** on the
 tab does it on purpose, for the full herdr UI: a new herdr client in this computer's
@@ -1291,7 +1300,21 @@ steered there. What the host records of your words also names the files they car
 Click a card and it becomes a chip above the input ("About: vm-mk › Fix board bugs"): your
 next message goes with it, so "this one" means that card, and sending uses it up. Clear it
 with its ✕, a click on the board's background, or Escape outside a field; a chat popped out
-into its own window clears with it. The chip is attached as context for the turn, never as your words.
+into its own window clears with it. The message keeps its card: it goes to the model as
+Desktop's own bracketed note after your words, never as your words, and stays in the
+conversation's history, so "this one" in an old message still means the card it went with.
+Your bubble shows that card as a pill ("vm-mk › Fix board bugs") from the moment it is sent,
+after a restart and in a reopened conversation alike; a queued message gets its pill once
+it is sent. Click the pill to open that Task's record on the board — from a popped-out chat
+too, in the board's window — or be told the Task is no longer on the board.
+
+A web address in a message — yours, Collie's or Desktop's — is a link that opens in your
+browser, never in Desktop: bare, in `<…>`, as a markdown link, or alone in backticks. One
+whose text is its own address is drawn without `https://` and, past 60 characters, with its
+middle elided ("gitlab.cego.dk/some-group/some-project/-…9abcdef01234567"); hover for the
+whole address. A markdown link keeps its words. Long addresses, paths and ids wrap inside
+the message, so nothing in the chat scrolls sideways at any width; only a code block, a
+table or a diagram scrolls, within itself. The record's markdown wraps the same way.
 
 News reaches it from every Herd on every Machine as one batch: what matters most first —
 decisions, then consequential outcomes, then what is worth trying, then the routine — and

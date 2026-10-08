@@ -1,7 +1,7 @@
 // What the Flock chat's window says of a tool call and of the card a message is about.
 
 import { expect, test } from "bun:test";
-import { aboutLine, toolRow } from "../desktop/src/shared/chat-view";
+import { aboutLine, aboutNote, fromAboutNote, toolRow } from "../desktop/src/shared/chat-view";
 
 test("a tool call is its tool, the Machine it reached and what it was asked", () => {
   expect(
@@ -60,4 +60,15 @@ test("a card a message is about reads as its Machine and its name", () => {
       name: "Fix board bugs",
     }),
   ).toBe("vm-mk › Fix board bugs");
+});
+
+test("Desktop's note of the card a message is about reads back as that card, and nothing else does", () => {
+  const about = { machine: "vm-mk", task: "t-1", run: "r-2", name: 'Fix "board"\nbugs' };
+  const note = aboutNote(about);
+  expect(note.split("\n")[0]).toStartWith("[Desktop:");
+  expect(fromAboutNote(note)).toEqual(about);
+  expect(fromAboutNote("this one, please")).toBeNull();
+  expect(fromAboutNote(`${note}\nand more`)).toBeNull();
+  expect(fromAboutNote(note.replace('"t-1"', "1"))).toBeNull();
+  expect(fromAboutNote(note.split("\n")[1]!)).toBeNull();
 });

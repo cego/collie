@@ -179,14 +179,27 @@ export const useActions = () => {
     /** Where the pane is and how to attach to it, or null where the host said no. */
     goToPane: (installation: string, runId: string) =>
       goToPane({ payload: { installation, runId } }).then(read),
-    /** The Run's live agent's pane, held for as long as the stream runs. */
-    terminal: (installation: string, runId: string, cols: number, rows: number) =>
+    /** The Run's newest live agent's pane, or `agent`'s, held for as long as the stream runs. */
+    terminal: (
+      installation: string,
+      runId: string,
+      agent: string | undefined,
+      cols: number,
+      rows: number,
+    ) =>
       Stream.unwrap(
         AtomRegistry.getResult(registry, FlockClient.runtime).pipe(
           Effect.map((context) =>
             Stream.unwrap(
               FlockClient.use((client) =>
-                Effect.succeed(client("terminal", { installation, runId, cols, rows })),
+                Effect.succeed(
+                  client(
+                    "terminal",
+                    agent === undefined
+                      ? { installation, runId, cols, rows }
+                      : { installation, runId, agent, cols, rows },
+                  ),
+                ),
               ),
             ).pipe(Stream.provideContext(context)),
           ),

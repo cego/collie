@@ -28,6 +28,7 @@ import {
   PROTOCOL,
   FrontDoorRpcs,
   type HostRefused,
+  type PaneAt,
   type ProposalRefused,
   type RequestConflict,
 } from "../../../src/board-model";
@@ -908,8 +909,22 @@ export const doorTo = <D>(
     : Effect.succeed(door);
 };
 
-export const focusOn = (door: Door, request: string, runId: string) =>
-  door.focus({ runId, request }).pipe(Effect.mapError(refusal(request)));
+/** Focuses `agent` of `runId` where one is chosen, else the Run's newest live agent. */
+export const focusOn = (
+  door: {
+    readonly focus: (payload: {
+      readonly runId: string;
+      readonly agent?: string;
+      readonly request: string;
+    }) => Effect.Effect<PaneAt, HostRefused | RequestConflict | RpcClientError.RpcClientError>;
+  },
+  request: string,
+  runId: string,
+  agent?: string,
+) =>
+  door
+    .focus(agent === undefined ? { runId, request } : { runId, agent, request })
+    .pipe(Effect.mapError(refusal(request)));
 
 export const offersOn = (door: Door, runId: string) =>
   door.offers({ runId }).pipe(Effect.mapError(refusal()));

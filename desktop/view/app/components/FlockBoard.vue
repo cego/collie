@@ -72,6 +72,12 @@ const gesture = (done: Gesture, tab: string | null = null) => {
   else showRecord(after.page, tab);
 };
 provide("gesture", gesture);
+const toast = useToast();
+useRecordOpener().opensRecords((about) => {
+  const card = placedAt(about.machine, about.task);
+  if (card !== undefined) gesture({ kind: "name", card: card.key });
+  return card !== undefined;
+});
 // A record closes when its card leaves the Flock.
 watch(
   opened,
@@ -108,7 +114,6 @@ const NOT_LIVE: Record<NotLive, { icon: string; title: (name: string) => string 
   },
 };
 
-const toast = useToast();
 watch(notices, (now, before) => {
   for (const text of now.slice(before.length)) toast.add({ title: text, color: "info" });
 });

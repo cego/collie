@@ -24,6 +24,10 @@ const {
   proactive,
   setProactive,
 } = useFlockChat();
+const { openRecord } = useRecordOpener();
+const toast = useToast();
+const goneFromBoard = () =>
+  toast.add({ title: "That Task is no longer on the board", color: "warning" });
 
 type Message = (typeof messages.value)[number];
 /** What Desktop said of its own about News, after its first line, or null for anyone else's message. */
@@ -33,6 +37,10 @@ const desktopSaid = (message: Message) => {
     ? first.content.slice(DESKTOP_SAID.length).trim()
     : null;
 };
+/** A message's markdown, with no margin above its first block or below its last. */
+const PROSE =
+  "prose prose-sm dark:prose-invert [&_.comark-content>:first-child]:mt-0 [&_.comark-content>:last-child]:mb-0";
+
 // Follows what arrives while the reader is near the bottom; scrolled up, it stays put.
 const NEAR_BOTTOM = 80;
 const list = ref<HTMLOListElement>();
@@ -219,26 +227,36 @@ const queuedText = ({ content }: QueuedMessage) => {
         <li
           v-if="desktopSaid(message) !== null"
           data-testid="chat-desktop"
-          class="flex flex-col gap-1 rounded-md border border-default px-3 py-2 text-sm"
+          class="flex max-w-full min-w-0 flex-col gap-1 rounded-md border border-default px-3 py-2 text-sm"
         >
           <UBadge class="self-start" size="sm" color="neutral" variant="subtle" label="Desktop" />
-          <RichMarkdown
-            :text="desktopSaid(message) ?? ''"
-            class="prose prose-sm dark:prose-invert"
-          />
+          <RichMarkdown :text="desktopSaid(message) ?? ''" :class="PROSE" />
         </li>
         <li
           v-else
           :data-testid="`chat-${message.role}`"
-          class="flex flex-col gap-2"
+          class="flex max-w-full min-w-0 flex-col gap-2"
           :class="message.role === 'user' ? 'self-end rounded-md bg-elevated px-3 py-2' : ''"
         >
+          <UBadge
+            v-if="aboutOf(message) !== null"
+            as="button"
+            type="button"
+            data-testid="chat-about"
+            color="neutral"
+            variant="subtle"
+            class="max-w-full cursor-pointer self-start"
+            :title="aboutLine(aboutOf(message)!)"
+            @click="openRecord(aboutOf(message)!, goneFromBoard)"
+          >
+            <span class="truncate">{{ aboutLine(aboutOf(message)!) }}</span>
+          </UBadge>
           <template v-for="(part, at) in message.parts" :key="at">
             <RichMarkdown
               v-if="part.type === 'text'"
               :text="part.content"
               :streaming="isLoading && message === messages.at(-1)"
-              class="prose prose-sm dark:prose-invert"
+              :class="PROSE"
             />
             <AttachmentChip
               v-else-if="attachedOf(part) !== null"
@@ -247,7 +265,10 @@ const queuedText = ({ content }: QueuedMessage) => {
             />
             <details v-else-if="part.type === 'thinking'" data-testid="chat-thinking">
               <summary class="cursor-pointer text-xs text-muted">Thinking</summary>
-              <p class="mt-1 text-xs whitespace-pre-wrap text-muted">{{ part.content }}</p>
+              <p
+                class="mt-1 text-xs whitespace-pre-wrap text-muted wrap-anywhere"
+                v-text="part.content"
+              />
             </details>
             <template v-else-if="part.type === 'tool-call'">
               <ChatQuestion
@@ -283,9 +304,9 @@ const queuedText = ({ content }: QueuedMessage) => {
         v-for="pending in queue"
         :key="pending.id"
         data-testid="chat-queued"
-        class="flex items-center gap-2 self-end rounded-md border border-dashed border-default px-3 py-2 text-muted"
+        class="flex max-w-full min-w-0 items-center gap-2 self-end rounded-md border border-dashed border-default px-3 py-2 text-muted"
       >
-        <span class="whitespace-pre-wrap">{{ queuedText(pending) }}</span>
+        <span class="min-w-0 whitespace-pre-wrap wrap-anywhere">{{ queuedText(pending) }}</span>
         <UBadge size="sm" color="neutral" variant="subtle" label="Queued" />
         <UButton
           icon="i-lucide-x"
@@ -297,7 +318,7 @@ const queuedText = ({ content }: QueuedMessage) => {
         />
       </li>
     </ol>
-    <p v-if="error" class="px-6 text-sm text-error">{{ error.message }}</p>
+    <p v-if="error" class="px-6 text-sm text-error wrap-anywhere">{{ error.message }}</p>
     <div v-if="chip !== null" class="px-6 pt-2">
       <UBadge data-testid="chat-chip" color="primary" variant="subtle" class="max-w-full gap-1">
         <span class="truncate">About: {{ aboutLine(chip) }}</span>

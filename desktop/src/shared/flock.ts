@@ -355,11 +355,12 @@ export const DesktopRpcs = RpcGroup.make(
     success: WentToPane,
     error: ActionFailed,
   }),
-  /** The Run's live agent's pane, held while the stream runs and released when it is interrupted. */
+  /** The pane `focus` finds, held while the stream runs and released when it is interrupted. */
   Rpc.make("terminal", {
     payload: {
       installation: Schema.String,
       runId: Schema.String,
+      agent: Schema.optionalKey(Schema.String),
       cols: Schema.Int,
       rows: Schema.Int,
     },

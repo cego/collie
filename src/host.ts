@@ -1383,7 +1383,7 @@ const frontDoorHandlers = (
             ),
             plainly,
           ),
-        focus: ({ runId, request }, { client }) =>
+        focus: ({ runId, agent, request }, { client }) =>
           plainly(
             Effect.gen(function* () {
               const view = yield* known(runId);
@@ -1391,13 +1391,20 @@ const frontDoorHandlers = (
               const agents = (yield* everyRegistered(env.stateDir))
                 .filter((entry) => entry.runId === runId)
                 .map((entry) => entry.agent)
+                .filter((name) => agent === undefined || name === agent)
                 .reverse();
               const sessions = (yield* liveHerds(herdr, env)).toSorted(
                 (a, b) => Number(b.herd === task?.herd) - Number(a.herd === task?.herd),
               );
               return yield* once(
                 trail(runId),
-                { operation: "focus", request, ...whoOf(client), asked: {}, result: PaneAt },
+                {
+                  operation: "focus",
+                  request,
+                  ...whoOf(client),
+                  asked: agent === undefined ? {} : { agent },
+                  result: PaneAt,
+                },
                 focusPane(
                   sessions,
                   agents,

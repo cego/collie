@@ -4,7 +4,7 @@
 import { Option, Schema } from "effect";
 import { isString } from "../../../src/schema";
 import { attachmentPart, fromListing } from "../shared/attachments";
-import type { ChatMessage } from "../shared/chat-view";
+import { type About, type ChatMessage, fromAboutNote } from "../shared/chat-view";
 
 const Text = Schema.Struct({ type: Schema.Literal("text"), text: Schema.String });
 const Other = Schema.Struct({ type: Schema.String });
@@ -67,26 +67,38 @@ const textOf = (
     : content.flatMap((part) => (isString(part.text) ? [part.text] : [])).join("\n");
 
 /**
- * The human's words, then the files Desktop listed after them; the images and documents
- * the model was handed with them are not the view's.
+ * The human's words, then the files Desktop listed after them, and the card Desktop noted
+ * the message was about; the images and documents the model was handed are not the view's.
  */
-const humanParts = (content: Parameters<typeof textOf>[0]): Part[] => {
-  if (isString(content)) return content === "" ? [] : [{ type: "text", content }];
+const humanMessage = (content: Parameters<typeof textOf>[0]) => {
+  if (isString(content)) {
+    const parts: Part[] = content === "" ? [] : [{ type: "text", content }];
+    return { parts, about: null };
+  }
   const texts = content.flatMap((part) =>
     part.type === "text" && isString(part.text) ? [part.text] : [],
   );
-  const at = texts.findIndex((text) => fromListing(text) !== null);
-  const words = (at < 0 ? texts : texts.slice(0, at)).join("\n");
-  const files = at < 0 ? [] : (fromListing(texts[at]!) ?? []);
-  return [
+  const noted = texts.findIndex((text) => fromAboutNote(text) !== null);
+  const about = noted < 0 ? null : fromAboutNote(texts[noted]!);
+  const own = texts.filter((_, at) => at !== noted);
+  const at = own.findIndex((text) => fromListing(text) !== null);
+  const words = (at < 0 ? own : own.slice(0, at)).join("\n");
+  const files = at < 0 ? [] : (fromListing(own[at]!) ?? []);
+  const parts: Part[] = [
     ...(words === "" ? [] : [{ type: "text" as const, content: words }]),
     ...files.map(attachmentPart),
   ];
+  return { parts, about };
 };
 
 /** The human's messages and the answers, each answer one message however many model turns it took. */
 export const transcriptOf = (entries: ReadonlyArray<unknown>): ReadonlyArray<ChatMessage> => {
-  const messages: Array<{ id: string; role: ChatMessage["role"]; parts: Part[] }> = [];
+  const messages: Array<{
+    id: string;
+    role: ChatMessage["role"];
+    parts: Part[];
+    metadata?: { about: About };
+  }> = [];
   for (const entry of entries.map((entry) => decodeEntry(entry)).flatMap(Option.toArray)) {
     if (entry.type === "user") {
       const content = entry.message.content;
@@ -101,8 +113,13 @@ export const transcriptOf = (entries: ReadonlyArray<unknown>): ReadonlyArray<Cha
         if (call?.type === "tool-call") answering[at] = { ...call, output: textOf(part.content) };
       }
       if (INTERRUPTED.test(said)) continue;
-      const parts = humanParts(content);
-      if (parts.length > 0) messages.push({ id: entry.uuid, role: "user", parts });
+      const { parts, about } = humanMessage(content);
+      if (parts.length > 0)
+        messages.push(
+          about === null
+            ? { id: entry.uuid, role: "user", parts }
+            : { id: entry.uuid, role: "user", parts, metadata: { about } },
+        );
       continue;
     }
     const parts = entry.message.content.flatMap((block): Part[] =>
