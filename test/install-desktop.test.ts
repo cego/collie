@@ -223,18 +223,28 @@ test("a mismatched or unsigned DMG installs nothing and is never attached", () =
     }).pipe(Effect.scoped),
   ));
 
-test("a copy that fails still detaches the DMG", () =>
+test("a copy that fails keeps the installed app, leaves nothing half-copied and still detaches", () =>
   runEffect(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const dir = yield* fs.makeTempDirectoryScoped();
       const key = pair();
       yield* macRelease(dir, (bytes) => signReleaseP256(bytes, key.privateKey));
-      yield* fs.writeFileString(`${dir}/cp`, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+      const apps = `${dir}/home/Applications`;
+      yield* fs.makeDirectory(`${apps}/collie-desktop.app/Contents`, { recursive: true });
+      yield* fs.writeFileString(`${apps}/collie-desktop.app/Contents/version`, "old\n");
+      // A disk that fills up part way through the copy.
+      yield* fs.writeFileString(
+        `${dir}/cp`,
+        '#!/bin/sh\nfor to; do :; done\nmkdir -p "$to"\nexit 1\n',
+        { mode: 0o755 },
+      );
 
       const done = yield* install(dir, key.publicKey, APPLE_SILICON);
 
       expect(done.code).not.toBe(0);
+      expect(yield* fs.readFileString(`${apps}/collie-desktop.app/Contents/version`)).toBe("old\n");
+      expect(yield* fs.readDirectory(apps)).toEqual(["collie-desktop.app"]);
       expect(yield* hdiutilLog(dir)).toEqual(["attach", "detach"]);
     }).pipe(Effect.scoped),
   ));

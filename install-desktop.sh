@@ -62,9 +62,15 @@ case "$ASSET" in
     trap 'hdiutil detach "$mount" >/dev/null 2>&1; rm -rf "$work"' EXIT
     mkdir -p "$HOME/Applications"
     for app in "$mount"/*.app; do
-      rm -rf "$HOME/Applications/${app##*/}"
-      cp -R "$app" "$HOME/Applications/"
-      echo "installed Collie Desktop from ${BASE}; open it from Spotlight, or: open -a \"$HOME/Applications/${app##*/}\""
+      name=${app##*/}
+      # Copied beside the installed app first, so a copy that fails leaves that one working.
+      staged="$HOME/Applications/.$name.new"
+      trap 'hdiutil detach "$mount" >/dev/null 2>&1; rm -rf "$staged" "$work"' EXIT
+      rm -rf "$staged"
+      cp -R "$app" "$staged"
+      rm -rf "$HOME/Applications/$name"
+      mv "$staged" "$HOME/Applications/$name"
+      echo "installed Collie Desktop from ${BASE}; open it from Spotlight, or: open -a \"$HOME/Applications/$name\""
     done
     ;;
   *)
