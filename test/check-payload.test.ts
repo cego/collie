@@ -72,3 +72,18 @@ test("an installer whose tar carries pax headers is refused", () =>
       expect(done.said).toContain("a pax header");
     }).pipe(Effect.scoped),
   ));
+
+test("a macOS update archive is checked as the tar it is, with no installer around it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped();
+      const long = `collie-desktop.app/Contents/Resources/${"a".repeat(90)}.js`;
+      yield* installerWith(dir, ["collie-desktop.app/Contents/MacOS/launcher", long], "ustar");
+      const archive = `${dir}/stable-macos-arm64-collie-desktop.app.tar.zst`;
+      yield* fs.writeFile(archive, Bun.zstdCompressSync(yield* fs.readFile(`${dir}/payload.tar`)));
+      const done = yield* check(archive);
+      expect(done.code).not.toBe(0);
+      expect(done.said).toContain(long);
+    }).pipe(Effect.scoped),
+  ));
