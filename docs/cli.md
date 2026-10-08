@@ -1363,7 +1363,8 @@ claude  read 3 minutes ago from claude-status-line
 chatgpt Codex is not logged in on this Machine; run `codex login`
 ```
 
-A window whose reset has passed counts as unused, whatever was last read. Under `--json`,
+Each read, from any door, is recorded under who asked in the host's `usage/operations.jsonl`,
+keeping the latest 200. A window whose reset has passed counts as unused, whatever was last read. Under `--json`,
 `data` is `{ "readings": [...] }`, one per Subscription:
 
 ```json

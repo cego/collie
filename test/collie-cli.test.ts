@@ -9,6 +9,7 @@ import { appendMetric } from "../src/metrics";
 import { hosted, settledRun } from "./support/hosted";
 import { evidenceDir } from "../src/engine";
 import { connect } from "../src/host";
+import { readAudit } from "../src/audit";
 import { VerifySpecSchema } from "../src/verify-spec";
 
 const root = new URL("../", import.meta.url).pathname;
@@ -895,8 +896,10 @@ test("usage is each Subscription's reading in the standard envelope, and says wh
         claudeAiOauth: { accessToken: "t", expiresAt: 1, subscriptionType: "max" },
       });
       yield* fs.writeFileString(join(claudeDir, ".credentials.json"), login);
+      const state = yield* fs.makeTempDirectoryScoped({ prefix: "collie-state-" });
+      yield* Effect.addFinalizer(() => Effect.ignore(stopHost(state)));
       // No PATH: this Machine has no Codex, and nothing here may reach a real endpoint.
-      const env = { CLAUDE_CONFIG_DIR: claudeDir };
+      const env = { CLAUDE_CONFIG_DIR: claudeDir, HERDR_PLUGIN_STATE_DIR: state };
 
       const read = yield* cli(["--json", "usage"], env);
       expect(read.exit).toBe(0);
@@ -926,6 +929,12 @@ test("usage is each Subscription's reading in the standard envelope, and says wh
       expect(human.stdout.trim().split("\n")).toEqual([
         "claude  Claude Code's login expired; it refreshes when Claude Code next runs",
         "chatgpt Codex is not installed on this Machine",
+      ]);
+      // Each read is recorded under who asked.
+      const trail = yield* readAudit(join(state, "usage"));
+      expect(trail.map(({ operation, actor }) => [operation, actor.origin])).toEqual([
+        ["usage", "cli"],
+        ["usage", "cli"],
       ]);
     }),
   ));

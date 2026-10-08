@@ -86,6 +86,7 @@ import {
   type SweptBy,
 } from "./cleanup";
 import { once, recordAudit, trimAudit } from "./audit";
+import { usagePhrase } from "./usage-model";
 import { currentEnv } from "./env";
 import { installation as installedRelease } from "./release";
 import { Herdr, type AgentInfo } from "./herdr";
@@ -630,6 +631,8 @@ const CLEANUP_TRAIL = 50;
 
 /** How many of the settings operations a host keeps a record of. */
 const SETTINGS_TRAIL = 50;
+/** How many usage reads the host keeps a record of: Desktop asks every minute. */
+const USAGE_TRAIL = 200;
 /** How many of the chat's writes to files the host keeps a record of. */
 const FILES_TRAIL = 1000;
 /** How many uploads the host keeps a record of. */
@@ -1052,7 +1055,21 @@ const frontDoorHandlers = (
               return taken;
             }),
           ),
-        usage: () => usage.readings,
+        usage: (_, { client }) =>
+          plainly(
+            Effect.gen(function* () {
+              const readings = yield* usage.readings;
+              const trail = (yield* Path.Path).join(env.stateDir, "usage");
+              yield* recordAudit(trail, {
+                operation: "usage",
+                request: yield* (yield* Crypto.Crypto).randomUUIDv4,
+                ...whoOf(client),
+                result: Schema.String,
+                value: usagePhrase(readings, yield* Clock.currentTimeMillis).text,
+              }).pipe(Effect.andThen(trimAudit(trail, USAGE_TRAIL)), Effect.orDie);
+              return readings;
+            }),
+          ),
         cleanup: () => plainly(Effect.flatMap(sweepers, judge)),
         sweep: ({ request }, { client }) =>
           plainly(
