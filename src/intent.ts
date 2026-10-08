@@ -307,11 +307,13 @@ const REQUIREMENT_HEADING = new RegExp(
 );
 const OBJECTIVE_HEADING = new RegExp(String.raw`^#+\s*${NUMBER}Objective\b`, "i");
 const HEADING = /^#+\s/;
-const BULLET = /^\s*[-*]\s+(.*\S)\s*$/;
+const BULLET = /^(\s*)[-*]\s+(.*\S)\s*$/;
+const NUMBERED = /^(\s*)\d+[.)]\s+(.*\S)\s*$/;
 
 /**
  * What a plan asks for, read deterministically: bullets under a heading whose text
- * matches, and the first paragraph under `## Objective` as the goal. Heading match
+ * matches, wrapped and nested lines included, and the first paragraph under `## Objective`
+ * as the goal. Heading match
  * only — no model, no inference — because this is evidence a human can check against
  * the file, and because a plan may not grant authority (SPEC §5). The return type is
  * how that is enforced: there is nowhere here to put a grant.
@@ -322,7 +324,23 @@ export function extractRequirements(text: string, file: string) {
   let goal: string | null = null;
   let heading: string | null = null;
   let objective: string[] | null = null;
+  let bullet: { indent: number; parts: string[]; line: number } | null = null;
+  const flush = () => {
+    if (bullet === null || heading === null) return;
+    const body = bullet.parts.join(" ");
+    const text = /^out of scope$/i.test(heading) ? `Out of scope: ${body}` : body;
+    constraints.push({
+      id: constraintId(text),
+      kind: "semantic",
+      text,
+      severity: "warn",
+      source: "plan",
+      provenance: { file, heading, line: bullet.line },
+    });
+    bullet = null;
+  };
   for (const [index, line] of lines.entries()) {
+    if (HEADING.test(line) || line.trim() === "") flush();
     if (HEADING.test(line)) {
       if (objective !== null && objective.length > 0) goal = objective.join(" ");
       objective = OBJECTIVE_HEADING.test(line) ? [] : null;
@@ -336,20 +354,24 @@ export function extractRequirements(text: string, file: string) {
       } else objective.push(line.trim());
       continue;
     }
-    if (heading === null) continue;
-    const bullet = BULLET.exec(line);
-    if (!bullet) continue;
-    const body = bullet[1]!;
-    const text = /^out of scope$/i.test(heading) ? `Out of scope: ${body}` : body;
-    constraints.push({
-      id: constraintId(text),
-      kind: "semantic",
-      text,
-      severity: "warn",
-      source: "plan",
-      provenance: { file, heading, line: index + 1 },
-    });
+    if (heading === null || line.trim() === "") continue;
+    const item = BULLET.exec(line);
+    const numbered = item === null ? NUMBERED.exec(line) : null;
+    const listed = item ?? numbered;
+    if (listed === null) {
+      bullet?.parts.push(line.trim());
+      continue;
+    }
+    const indent = listed[1]!.length;
+    if (bullet !== null && indent > bullet.indent) {
+      bullet.parts.push(listed[2]!);
+      continue;
+    }
+    flush();
+    // A numbered item ends a bullet but is not one.
+    if (item !== null) bullet = { indent, parts: [item[2]!], line: index + 1 };
   }
+  flush();
   if (goal === null && objective !== null && objective.length > 0) goal = objective.join(" ");
   return { goal, constraints };
 }

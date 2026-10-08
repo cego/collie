@@ -50,8 +50,7 @@ and the one before. Version 1 has none before it.
 ## Consequences
 
 - One board per Machine. Front doors stop disagreeing about a Task.
-- Each subscribed client costs one build per change. That is cheap for the handful of
-  clients a Machine has. A board shared between clients is the upgrade if it ever is not.
+- One build per change, however many clients follow the board (amended 2026-10-07, below).
 - The host reads every running herdr session on the Machine, and a Task records the Herd
   its workspace is in, so a card names its Herd whichever session started the host.
 - A drawer's Run details come from the host too, on a subscription of their own, with
@@ -60,3 +59,23 @@ and the one before. Version 1 has none before it.
   running: Collie learns a merge with no pane open. Each Herd's News comes from the Runs
   whose Task is in it; a Task with no Herd recorded is the host's own Herd's. Event turns stay with each conversation, which reads its Herd's
   News.
+
+## Amended 2026-10-07: one build, shared by every client
+
+Each client used to cost a build of its own per change. On a loaded Machine one build took
+27–29 s, so a client's first snapshot came after any front door had stopped waiting, and
+every client made every other one slower.
+
+The host keeps one board, the latest TaskViews it built. One builder rebuilds it on the
+host's change stream (writes under the state directory, the board tick and herdr events),
+starting with the first subscriber and running as long as the host does. At most one build
+runs at a time, and changes that arrive during one are folded into the next. A build that
+fails, or dies, is logged and skipped, and the last board stands; a client that arrived
+before the first good build waits for one.
+
+A subscriber is told a `Snapshot` of the latest board at once, or once the first build is
+done, with the head (installation, build, development, protocol, Herds) read for it as before. Then it
+is told `Upsert` and `Remove` messages diffed against what it was told, each time the board
+is rebuilt. `FrontDoorRpcs` and `PROTOCOL` are unchanged, and a reconnect is still a fresh
+snapshot. The side jobs' own board, built without herdr for the merge watch and News, is
+not this one.

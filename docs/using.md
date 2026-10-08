@@ -1305,11 +1305,23 @@ asked in its reply and you answer in your next message. News arriving mid-turn w
 that turn to end; what is worth trying and routine News waits for your next message and
 goes with it as context. An item counts as read once the model has it, so a turn that
 fails first (a usage limit, an outage) leaves it waiting; Desktop tries again at the next
-two-minute look. A Machine that does not answer within ten seconds is said to be unread
-rather than holding up the rest, and one whose Collie is older than Desktop's chat, or
-whose board could not be read, is written to by nothing. The bell turns Desktop's own
-turns off (and on again); it is on by default, and kept in `settings.json` beside the
-session.
+two-minute look. A Machine whose host does not answer a News look within ten seconds is
+said to be unread rather than holding up the rest.
+
+The chat reads each Machine's board from the one the window draws: `collie_herd`, where a
+bare id is, the Herds a News look asks and whether a Machine's Collie can take a write all
+come from the board Desktop already follows, so no tool call has a host build one. Run
+details, News and every write still go to the Machine's host. Every Machine the window
+shows is one the chat knows by name, and one with no live board is named with why: still
+connecting, and how long Desktop has waited for its first board; out of reach, waiting
+for SSO, without Collie or needing a newer Desktop, in its connection's own words; or only
+a board Desktop saved, and when. That reason is what `collie_herd`, `collie_workspaces` and
+`collie_news` say of it, and what a write to it is refused with ("… Nothing was done on
+vm-mk."); a bare id another Machine has is refused while that one cannot be checked. A
+Machine whose Collie is older than Desktop's chat is written to by nothing.
+
+The bell turns Desktop's own turns off (and on again); it is on by default, and kept in
+`settings.json` beside the session.
 
 **Settings** has the **Machine rule** under **Chat**, for **This computer only**: which Machine each kind
 of work goes to, in your own words — "Frontend work is on the laptop, everything else is on

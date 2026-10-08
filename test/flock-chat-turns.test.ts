@@ -31,16 +31,6 @@ const machine = (
   declared: Declaration[] = [],
 ): ChatMachine => {
   const door: Partial<ChatDoor> = {
-    board: () =>
-      Stream.make({
-        _tag: "Snapshot" as const,
-        installation: "i",
-        build: "test",
-        protocol: PROTOCOL,
-        herds: [{ id: "h1" }],
-        tasks: [],
-        seq: 0,
-      }).pipe(Stream.concat(Stream.never)),
     declare: (payload) => Effect.sync(() => void declared.push(payload)),
     news: ({ as, keys }) =>
       Effect.sync(() => {
@@ -51,8 +41,12 @@ const machine = (
         };
       }),
   };
-  // SAFETY: the chat's turns reach a Machine only through board, declare and news.
-  return { name: "vm-mk", door: door as ChatDoor };
+  // SAFETY: the chat's turns reach a Machine only through declare and news.
+  return {
+    name: "vm-mk",
+    door: door as ChatDoor,
+    board: { _tag: "Live", herds: [{ id: "h1" }], tasks: [], protocol: PROTOCOL, files: false },
+  };
 };
 
 interface Seen {

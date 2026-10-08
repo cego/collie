@@ -261,7 +261,7 @@ const menu = computed(() =>
       </div>
 
       <div
-        v-else-if="task.decision?.kind === 'gate'"
+        v-else-if="task.decision?.kind === 'gate' && task.decision.verifications.length > 0"
         class="mt-3 flex flex-col gap-2"
         data-testid="gate"
       >

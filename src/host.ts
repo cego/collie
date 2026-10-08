@@ -125,7 +125,7 @@ import {
   sha256Hex,
   type Attached,
 } from "./attachments";
-import { boardMessages } from "./board-stream";
+import { boardMessages, shareBoard } from "./board-stream";
 import { recordDisposition } from "./disposition";
 import {
   NEWS_TRAIL,
@@ -907,6 +907,7 @@ const frontDoorHandlers = (
         ],
         { concurrency: "unbounded" },
       ).pipe(Stream.share({ capacity: 1, strategy: "sliding" }));
+      const boards = yield* shareBoard({ build, changed });
       return FrontDoorRpcs.of({
         declare: ({ frontDoor, session, from, ...voice }, { client }) => {
           const already = declared.get(client.id);
@@ -1567,8 +1568,7 @@ const frontDoorHandlers = (
                       herd === null ? [] : [name === undefined ? { id: herd } : { id: herd, name }],
                     ),
                   },
-                  build,
-                  changed,
+                  boards,
                 }),
               ),
               Effect.provideContext(bun),

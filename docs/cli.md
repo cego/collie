@@ -537,7 +537,7 @@ Task of its own; a Repo run of a fan-out is its parent's `children` rather than 
 | `heldBy`                  | Who set the hold that stands — the front door it came through — and the reason given with it, or `null`.                                                        |
 | `decision`                | The question, proposal or gate waiting on you, or `null`. One of the two ways into Needs you.                                                                   |
 | `agents[]`                | The live agents on it, its Repo runs' included.                                                                                                                 |
-| `children[]`              | A fan-out's repositories in wave order: `repo`, its `run` (`null` until it starts), its `state` (`done`, `active`, `blocked`, `failed` or `todo`) and its `mr`. |
+| `children[]`              | Its plan's repositories, in wave order: `repo`, its `run` (`null` until it starts), its `state` (`done`, `active`, `blocked`, `failed` or `todo`) and its `mr`. |
 | `mr`, `mrState`, `branch` | What it is building, where it can be read, and what the forge last said about the merge request.                                                                |
 | `disposition`, `landed`   | What became of the work, where a person recorded it — never inferred from a merge request — and whether it needs nothing more, which is Finished.               |
 | `ended`                   | When the leading Run ended, or `null` while it has not.                                                                                                         |
@@ -553,6 +553,17 @@ checkout's `.collie/verify.json` (or your config's `verify.json`) offers. Answer
 `collie run answer <run-id> approve --decision evidence-gate`, or `approve:<name>,<name>`
 for part of the list: the host grants those, as `run intent verification` does, and takes
 the Run up again. It is not skipped, since with nothing approved no check could prove it.
+
+A fan-out's own Run never parks, so where neither it nor any of its Runs asks anything, the
+first of its Repo runs in wave order parked at its gate is the Task's `decision`. That gate's
+`run` is the Repo run, which is the one an answer releases, and its `repo` names the
+repository, as the sentence does. A gate whose checkout and config offer no checks says so,
+and names how to grant one: chat's `set_verification`, or
+`collie run intent verification <run-id> --name <name> -- <command>`.
+
+A fan-out finds its plan from its work source even where the kind was never recorded with
+its input, as for an implement Run started from a plan's end menu: a plan directory is the
+plan, so `children` lists every repository it names, those not started as `todo`.
 
 ## Answer a question
 
@@ -627,7 +638,11 @@ what `--goal` and `--constraint` named — later beating earlier where they name
 constraint. For a plan directory the work source's ask is read from its `SPEC.md`: the
 bullets under a heading matching `Requirements`, `Success criteria`, `Boundaries`,
 `Constraints`, `Out of scope` or `Done when` become `warn` constraints carrying the file,
-heading and line they came from; an out-of-scope bullet reads `Out of scope: <bullet>`. In a
+heading and line each bullet starts on; an out-of-scope bullet reads `Out of scope: <bullet>`.
+A constraint is the whole bullet: it runs until a blank line, a heading or the next bullet at
+its indent or shallower, and its wrapped lines and the bullets nested under it are joined
+into it with single spaces. An Intent already seeded keeps what it stored, unless it
+follows its own `plan/SPEC.md` as below. In a
 Run on a worktree of its own, its `plan/SPEC.md`, written by its planner, is read the same
 way at every work boundary: new bullets are added, dropped ones are removed, and a
 constraint anyone but the plan removed stays removed. **No text ever grants authority** —
@@ -1539,10 +1554,13 @@ any front door uses whatever its build or computer, declared with its Schemas in
 development checkout — `protocol`, the `herds` — every running herdr session, by Herd
 `id` and herdr's `name` — and every TaskView), then an `Upsert` or a `Remove` keyed by Task
 id for each change, each with a `seq` higher than the last. A client that reconnects gets a
-fresh snapshot. The host builds again when anything under its state directory is written,
-when herdr pushes an event from any of its sessions (a pane opening or closing, or an
-agent's status changing), and every five seconds. The installation id is written once, by
-the first host to own the directory, and survives restarts and upgrades.
+fresh snapshot. The host builds one board for every client, so a client that subscribes is
+told the latest at once (or once the first build is done), and it builds again when
+anything under its state directory is written, when herdr pushes an event from any of its
+sessions (a pane opening or closing, or an agent's status changing), and every five
+seconds: one build at a time, with what changes meanwhile folded into the next. The
+installation id is written once, by the first host to own the directory, and survives
+restarts and upgrades.
 
 The host also runs what nobody has to have a pane open for: the merge watch, which asks
 GitLab about each waiting merge request every 5 minutes and records a merge; each Herd's

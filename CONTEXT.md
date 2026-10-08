@@ -259,8 +259,10 @@ to no Task is a TaskView of its own.
 
 **Decision** — What a Task is waiting on a human for, and one of the two things that put
 it in **Needs you**: a **question** a Run asked, a **Proposal** Collie made, or an evidence
-**gate** asking which verifications this Run is to be held to. All three are answered on
-the card, from the CLI or from chat, and survive the board closing.
+**gate** asking which verifications this Run is to be held to. Any of a Task's Runs can be
+waiting on one, a fan-out's Repo runs included, and each is answered on the Run that asked.
+All three are answered on the card, from the CLI or from chat, and survive the board
+closing.
 
 **Stalled** — The other way into **Needs you**, and the one with nothing on the card to
 answer: an agent is waiting for a human in its own pane — at its harness's own dialog,

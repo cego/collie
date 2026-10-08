@@ -71,6 +71,8 @@ export const Gate = Schema.Struct({
   id: Schema.String,
   step: Schema.String,
   verifications: Schema.Array(Schema.String),
+  /** The repository of the Repo run holding there, where it is one of a fan-out's. */
+  repo: Schema.optionalKey(Schema.String),
 });
 export type Gate = typeof Gate.Type;
 
