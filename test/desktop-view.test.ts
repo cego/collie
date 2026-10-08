@@ -36,6 +36,7 @@ import {
   inSync,
   syncable,
 } from "../desktop/src/shared/in-sync";
+import { type Column, columnOf } from "../desktop/src/shared/columns";
 import { task } from "./support/task";
 
 const asJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
@@ -682,4 +683,20 @@ test("a record says its Machine is not live in the board's words, and nothing on
   });
   expect(notLiveOf(saved, vm.installation)?.title).toBe("vm-mk is reconnecting");
   expect(notLiveOf(applyItem(dropped, live), vm.installation)).toBeNull();
+});
+
+test.each<[string, Column]>([
+  ["plan", "reading"],
+  ["review", "reading"],
+  ["facts", "reading"],
+  ["mr", "reading"],
+  ["settings", "reading"],
+  ["machines", "reading"],
+  ["evidence", "wide"],
+  ["log", "wide"],
+  ["diff", "full"],
+  ["terminal", "full"],
+  ["a tab not yet known", "reading"],
+])("%s is laid out %s", (tab, width) => {
+  expect(columnOf(tab)).toBe(width);
 });

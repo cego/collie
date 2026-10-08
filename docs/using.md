@@ -1139,8 +1139,13 @@ card go.
 
 The record takes the board's place in its column, under the header bar and beside the Flock
 chat, so you can ask the chat about the Run you are reading while its diff has the column's
-whole width — the window's, with the chat collapsed or popped out. Diff, Evidence and Log
-use that width; Plan, Review and Facts keep a readable line length. The record's back button
+whole width — the window's, with the chat collapsed or popped out. What you read is
+centred in one of three columns: Plan, Review, Facts and Merge request, like Settings and
+Machines, in a reading column of about 80 characters; Evidence and Log in a wider one, with
+room for a 120-column log line; and Diff and Terminal across the full width. The page's
+header, the record's banner and its tabs sit in the reading column on every tab, so they do
+not move as you switch, and a narrower window shrinks each column inside the page's margin
+rather than scrolling sideways. The record's back button
 returns to the board, which was never taken down: it comes back scrolled where you left it,
 its sections open or closed as they were, and the card still selected.
 

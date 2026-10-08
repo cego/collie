@@ -90,95 +90,97 @@ const locationOf = (file: string, line: number | null) =>
       </p>
     </PageHeader>
     <div class="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4">
-      <UAlert v-if="failure !== null" color="error" :title="failure" />
-      <UAlert
-        v-else-if="away !== null"
-        data-testid="record-away"
-        color="warning"
-        variant="subtle"
-        :icon="away.icon"
-        :title="`${away.title}; showing what it last said`"
-        :description="away.reason"
-      />
-      <p v-else-if="AsyncResult.isInitial(result)" class="text-muted text-sm">Loading…</p>
-      <p v-else-if="detail === null" class="text-muted text-sm">
-        This Run's details are not on its Machine.
-      </p>
-      <UTabs v-model="tab" :items="tabs" :content="false" variant="link" />
-      <template v-if="detail !== null">
-        <PlanTab
-          v-if="tab === 'plan' && detail.plan"
-          class="max-w-3xl"
-          :plan="detail.plan"
-          :installation="placed.installation"
-          :run-id="detail.id"
+      <div class="flex flex-col gap-4" :class="readingClass">
+        <UAlert v-if="failure !== null" color="error" :title="failure" />
+        <UAlert
+          v-else-if="away !== null"
+          data-testid="record-away"
+          color="warning"
+          variant="subtle"
+          :icon="away.icon"
+          :title="`${away.title}; showing what it last said`"
+          :description="away.reason"
         />
-        <div
-          v-else-if="tab === 'review'"
-          data-testid="review"
-          class="flex max-w-3xl flex-col gap-4"
-        >
-          <SourceFile
-            v-if="target !== null && !detail.diff"
-            :path="target.file"
-            :line="target.line"
+        <p v-else-if="AsyncResult.isInitial(result)" class="text-muted text-sm">Loading…</p>
+        <p v-else-if="detail === null" class="text-muted text-sm">
+          This Run's details are not on its Machine.
+        </p>
+        <UTabs v-model="tab" :items="tabs" :content="false" variant="link" />
+      </div>
+      <div class="flex flex-col gap-4" :class="columnClass(tab ?? '')">
+        <template v-if="detail !== null">
+          <PlanTab
+            v-if="tab === 'plan' && detail.plan"
+            :plan="detail.plan"
             :installation="placed.installation"
             :run-id="detail.id"
-            @close="target = null"
           />
-          <template v-if="review !== null">
-            <RichMarkdown :text="review.text" />
-            <p v-if="review.cut" class="text-muted text-sm" data-testid="cut">
-              {{ review.cut }}
-            </p>
-          </template>
-          <ul v-if="detail.findings.length > 0" class="flex flex-col gap-2" data-testid="findings">
-            <li
-              v-for="(finding, at) in detail.findings"
-              :key="at"
-              class="rounded border border-default p-2 text-sm"
+          <div v-else-if="tab === 'review'" data-testid="review" class="flex flex-col gap-4">
+            <SourceFile
+              v-if="target !== null && !detail.diff"
+              :path="target.file"
+              :line="target.line"
+              :installation="placed.installation"
+              :run-id="detail.id"
+              @close="target = null"
+            />
+            <template v-if="review !== null">
+              <RichMarkdown :text="review.text" />
+              <p v-if="review.cut" class="text-muted text-sm" data-testid="cut">
+                {{ review.cut }}
+              </p>
+            </template>
+            <ul
+              v-if="detail.findings.length > 0"
+              class="flex flex-col gap-2"
+              data-testid="findings"
             >
-              <div class="flex items-center gap-2">
-                <UBadge variant="subtle" :label="finding.severity" />
-                <strong>{{ finding.title }}</strong>
-              </div>
-              <UButton
-                v-if="finding.file"
-                variant="link"
-                size="xs"
-                class="px-0 font-mono"
-                data-testid="finding-location"
-                :label="locationOf(finding.file, finding.line)"
-                @click="jump(finding.file, finding.line)"
-              />
-              <p v-if="finding.detail" class="mt-1 whitespace-pre-wrap">{{ finding.detail }}</p>
-            </li>
-          </ul>
-        </div>
-        <EvidenceTab
-          v-else-if="tab === 'evidence'"
+              <li
+                v-for="(finding, at) in detail.findings"
+                :key="at"
+                class="rounded border border-default p-2 text-sm"
+              >
+                <div class="flex items-center gap-2">
+                  <UBadge variant="subtle" :label="finding.severity" />
+                  <strong>{{ finding.title }}</strong>
+                </div>
+                <UButton
+                  v-if="finding.file"
+                  variant="link"
+                  size="xs"
+                  class="px-0 font-mono"
+                  data-testid="finding-location"
+                  :label="locationOf(finding.file, finding.line)"
+                  @click="jump(finding.file, finding.line)"
+                />
+                <p v-if="finding.detail" class="mt-1 whitespace-pre-wrap">{{ finding.detail }}</p>
+              </li>
+            </ul>
+          </div>
+          <EvidenceTab
+            v-else-if="tab === 'evidence'"
+            :detail="detail"
+            :installation="placed.installation"
+          />
+          <LogTab v-else-if="tab === 'log'" :tail="detail.tail" />
+          <MrPanel v-else-if="tab === 'mr' && detail.mr" :mr="detail.mr" />
+          <DiffTab
+            v-if="detail.diff && diffSeen"
+            v-show="tab === 'diff'"
+            :diff="detail.diff"
+            :installation="placed.installation"
+            :run-id="detail.id"
+            :target="target"
+          />
+        </template>
+        <FactsTab
+          v-if="tab === 'facts'"
+          :task="placed.task"
           :detail="detail"
           :installation="placed.installation"
         />
-        <LogTab v-else-if="tab === 'log'" :tail="detail.tail" />
-        <MrPanel v-else-if="tab === 'mr' && detail.mr" :mr="detail.mr" />
-        <DiffTab
-          v-if="detail.diff && diffSeen"
-          v-show="tab === 'diff'"
-          :diff="detail.diff"
-          :installation="placed.installation"
-          :run-id="detail.id"
-          :target="target"
-        />
-      </template>
-      <FactsTab
-        v-if="tab === 'facts'"
-        class="max-w-3xl"
-        :task="placed.task"
-        :detail="detail"
-        :installation="placed.installation"
-      />
-      <TerminalTab v-if="tab === 'terminal'" :placed="placed" :went-to-pane="wentToPane" />
+        <TerminalTab v-if="tab === 'terminal'" :placed="placed" :went-to-pane="wentToPane" />
+      </div>
     </div>
   </section>
 </template>

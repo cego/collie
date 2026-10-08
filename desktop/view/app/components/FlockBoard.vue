@@ -143,7 +143,11 @@ watch(update, (now) => {
         <!-- The ring keeps the white tile's edge on a light header. -->
         <img :src="tile" alt="" class="size-6 rounded-md ring-1 ring-default" />
         <strong>Collie</strong>
-        <p data-testid="header" :class="header.urgent ? 'text-warning font-medium' : 'text-muted'">
+        <p
+          data-testid="header"
+          class="min-w-0 truncate"
+          :class="header.urgent ? 'text-warning font-medium' : 'text-muted'"
+        >
           {{ connecting || failure !== null ? "" : header.text }}
         </p>
         <UButton
