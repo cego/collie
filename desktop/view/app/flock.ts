@@ -2,7 +2,7 @@
 // board's own Schemas and folded into each Machine's Tasks.
 
 import { Atom, AtomRpc } from "@effect/atom-vue";
-import { Effect, Layer, Schema, Stream } from "effect";
+import { Effect, Layer, Option, Schema, Stream } from "effect";
 import * as RpcClient from "effect/rpc/RpcClient";
 import { Electroview, type RPCSchema } from "electrobun/view";
 import {
@@ -12,8 +12,14 @@ import {
   type ToMain,
   type ToView,
 } from "../../src/shared/channel";
-import { DesktopRpcs, flockOf } from "../../src/shared/flock";
-import { heldOf, retryWake } from "../../src/shared/retrying";
+import {
+  applyItem,
+  DesktopRpcs,
+  EMPTY_FLOCK,
+  type Flock,
+  type FlockItem,
+} from "../../src/shared/flock";
+import { foldedOf, heldOf, retryWake } from "../../src/shared/retrying";
 
 type Frames = RPCSchema<FrameSchema>;
 
@@ -63,10 +69,14 @@ export const desktopTurnsAtom = FlockClient.runtime
 /** Kept alive, so the board stays subscribed for as long as the view is open. */
 export const flockAtom = FlockClient.runtime
   .atom(
-    held(
-      flockOf(
-        Stream.unwrap(FlockClient.use((client) => Effect.succeed(client("flock", undefined)))),
-      ),
+    foldedOf(
+      Stream.unwrap(FlockClient.use((client) => Effect.succeed(client("flock", undefined)))),
+      retry.waited,
+      (held: Option.Option<Flock>, item: FlockItem) =>
+        applyItem(
+          Option.getOrElse(held, () => EMPTY_FLOCK),
+          item,
+        ),
     ),
   )
   .pipe(Atom.keepAlive);

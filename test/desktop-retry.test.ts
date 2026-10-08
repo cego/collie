@@ -6,11 +6,11 @@ import { Effect, Exit, Fiber, Option, Stream } from "effect";
 import { TestClock } from "effect/testing";
 import { untilStarted } from "../desktop/src/bun/chat";
 import { ActionFailed } from "../desktop/src/shared/flock";
-import { backoff, heldOf, retryWake, retrying } from "../desktop/src/shared/retrying";
+import { backoff, foldedOf, heldOf, retryWake, retrying } from "../desktop/src/shared/retrying";
 
 /**
  * One subscription per entry: `fail` and `interrupt` end it so, `x!` gives x then fails,
- * and anything else gives itself and stays open.
+ * `x.` gives x then ends, and anything else gives itself and stays open.
  */
 const scripted = (subscriptions: ReadonlyArray<string>) => {
   let at = 0;
@@ -18,6 +18,7 @@ const scripted = (subscriptions: ReadonlyArray<string>) => {
     const now = subscriptions[at++] ?? "fail";
     if (now === "fail") return Stream.fail(new ActionFailed({ reason: "the host refused" }));
     if (now === "interrupt") return Stream.fromEffect(Effect.interrupt);
+    if (now.endsWith(".")) return Stream.make(now.slice(0, -1));
     return now.endsWith("!")
       ? Stream.make(now.slice(0, -1)).pipe(
           Stream.concat(Stream.fail(new ActionFailed({ reason: "the host refused" }))),
@@ -89,6 +90,45 @@ test("a subscription cut off by an interrupt is taken again at once, and says no
           Stream.runCollect,
         ),
       ).toEqual([{ _tag: "Value", value: "up" }]);
+    }).pipe(Effect.provide(TestClock.layer())),
+  ));
+
+test("a subscription that ends is taken again, and one cut off says its first real failure as the first", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      expect(
+        yield* retrying(scripted(["up.", "again"]), never.waited).pipe(
+          Stream.take(2),
+          Stream.runCollect,
+        ),
+      ).toEqual([
+        { _tag: "Value", value: "up" },
+        { _tag: "Value", value: "again" },
+      ]);
+      expect(
+        yield* retrying(scripted(["interrupt", "fail"]), never.waited).pipe(
+          Stream.take(1),
+          Stream.runCollect,
+        ),
+      ).toEqual([{ _tag: "Retrying", said: "the host refused", attempt: 1, at: 0 + 1_000 }]);
+    }).pipe(Effect.provide(TestClock.layer())),
+  ));
+
+test("a page's fold carries on from what it held when its subscription is taken again", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const seen = yield* foldedOf(
+        scripted(["a!", "b"]),
+        never.waited,
+        (held: Option.Option<string>, value: string) => Option.getOrElse(held, () => "") + value,
+      ).pipe(Stream.take(4), Stream.runCollect, Effect.forkChild);
+      yield* TestClock.adjust("1 second");
+      expect((yield* Fiber.join(seen)).map(({ value }) => Option.getOrNull(value))).toEqual([
+        null,
+        "a",
+        "a",
+        "ab",
+      ]);
     }).pipe(Effect.provide(TestClock.layer())),
   ));
 

@@ -2,7 +2,7 @@
 import type { UpdateNews } from "../../../src/shared/flock";
 import { updatesAtom } from "../flock";
 
-const { value: updates } = useHeld(() => updatesAtom);
+const { value: updates, trouble } = useHeld(() => updatesAtom);
 const { checkForUpdates, restart } = useActions();
 const now = computed(() => updates.value ?? null);
 
@@ -27,6 +27,11 @@ const said = (news: UpdateNews, version: string) => {
 </script>
 
 <template>
+  <RetryNotice
+    v-if="trouble !== null"
+    title="Desktop could not hear about its updates; showing what it last heard"
+    :trouble="trouble"
+  />
   <section v-if="now" class="flex flex-col gap-2" data-testid="desktop-version">
     <div class="flex items-center gap-2">
       <span class="font-medium">Collie Desktop {{ now.version }}</span>

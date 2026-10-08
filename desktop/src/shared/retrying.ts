@@ -36,20 +36,25 @@ export const retrying = <A, E extends Error, R>(
   source: Stream.Stream<A, E, R>,
   waited: Effect.Effect<void>,
 ): Stream.Stream<Retried<A>, never, R> => {
-  const after = (failures: number): Stream.Stream<Retried<A>, never, R> =>
+  /** `failures` said in a row, and `renewals` taken quietly in a row, since the last value. */
+  const after = (failures: number, renewals: number): Stream.Stream<Retried<A>, never, R> =>
     Stream.suspend(() => {
       let reached = false;
+      const wait = (failed: number) => Effect.raceFirst(Effect.sleep(backoff(failed)), waited);
       return source.pipe(
         Stream.map((value): Retried<A> => ({ _tag: "Value", value })),
         Stream.tap(() => Effect.sync(() => void (reached = true))),
+        // A subscription that ends was cut off, as one interrupted was.
+        Stream.concat(Stream.failCause(Cause.interrupt())),
         Stream.catchCause((cause) => {
-          const failed = reached ? 0 : failures;
-          const wait = Effect.raceFirst(Effect.sleep(backoff(failed)), waited);
+          const [failed, renewed] = reached ? [0, 0] : [failures, renewals];
           // A renewed connection is no trouble: taken again at once, and quietly after that.
           if (Cause.hasInterruptsOnly(cause))
-            return failed === 0
-              ? after(1)
-              : Stream.fromEffectDrain(wait).pipe(Stream.concat(after(failed + 1)));
+            return renewed === 0
+              ? after(failed, 1)
+              : Stream.fromEffectDrain(wait(renewed)).pipe(
+                  Stream.concat(after(failed, renewed + 1)),
+                );
           return Stream.unwrap(
             Effect.map(Clock.currentTimeMillis, (now) => {
               const retried: Retried<A> = {
@@ -59,15 +64,15 @@ export const retrying = <A, E extends Error, R>(
                 at: now + backoff(failed),
               };
               return Stream.make(retried).pipe(
-                Stream.concat(Stream.fromEffectDrain(wait)),
-                Stream.concat(after(failed + 1)),
+                Stream.concat(Stream.fromEffectDrain(wait(failed))),
+                Stream.concat(after(failed + 1, renewed)),
               );
             }),
           );
         }),
       );
     });
-  return after(0);
+  return after(0, 0);
 };
 
 /** What a page holds: its last value, kept through trouble, and the trouble while there is one. */
@@ -76,16 +81,30 @@ export interface Held<A> {
   readonly trouble: Trouble | null;
 }
 
-export const heldOf = <A, E extends Error, R>(
+/**
+ * A subscription's values folded by `step` across its retries, so what a page holds is never
+ * started again from nothing.
+ */
+export const foldedOf = <A, S, E extends Error, R>(
   source: Stream.Stream<A, E, R>,
   waited: Effect.Effect<void>,
-): Stream.Stream<Held<A>, never, R> =>
+  step: (held: Option.Option<S>, value: A) => S,
+): Stream.Stream<Held<S>, never, R> =>
   retrying(source, waited).pipe(
     Stream.scan(
-      (): Held<A> => ({ value: Option.none<A>(), trouble: null }),
-      (held, item): Held<A> =>
+      (): Held<S> => ({ value: Option.none(), trouble: null }),
+      (held, item): Held<S> =>
         item._tag === "Value"
-          ? { value: Option.some(item.value), trouble: null }
+          ? {
+              value: Option.some(step(held.value, item.value)),
+              trouble: null,
+            }
           : { value: held.value, trouble: { said: item.said, attempt: item.attempt, at: item.at } },
     ),
   );
+
+/** A subscription's latest value, kept through its retries. */
+export const heldOf = <A, E extends Error, R>(
+  source: Stream.Stream<A, E, R>,
+  waited: Effect.Effect<void>,
+) => foldedOf(source, waited, (_: Option.Option<A>, value: A) => value);

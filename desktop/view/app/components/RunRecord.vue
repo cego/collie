@@ -7,12 +7,12 @@ import type { DiffTarget } from "./DiffTab.vue";
 const props = defineProps<{ placed: PlacedTask }>();
 const emit = defineEmits<{ close: [] }>();
 
-const { value: held, trouble } = useHeld(() =>
+const { value: read, trouble } = useHeld(() =>
   runDetailAtom(
     runDetailKey({ installation: props.placed.installation, runId: props.placed.task.run }),
   ),
 );
-const detail = computed(() => held.value ?? null);
+const detail = computed(() => read.value ?? null);
 const { notLive } = useFlock();
 const away = computed(() => notLive(props.placed.installation));
 
@@ -100,8 +100,8 @@ const locationOf = (file: string, line: number | null) =>
           :title="`${away.title}; showing what it last said`"
           :description="away.reason"
         />
-        <p v-if="held === undefined && trouble === null" class="text-muted text-sm">Loading…</p>
-        <p v-else-if="held === null" class="text-muted text-sm">
+        <p v-else-if="read === undefined" class="text-muted text-sm">Loading…</p>
+        <p v-else-if="read === null" class="text-muted text-sm">
           This Run's details are not on its Machine.
         </p>
         <UTabs v-model="tab" :items="tabs" :content="false" variant="link" />

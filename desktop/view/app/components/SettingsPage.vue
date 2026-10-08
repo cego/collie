@@ -12,7 +12,7 @@ import { drawnAtom, flockSettingsAtom } from "../flock";
 
 const emit = defineEmits<{ back: [] }>();
 const { openLink, saveGitlabHost, setFlockSetting } = useActions();
-const { credentials } = useCredentials();
+const { credentials, trouble: credentialsTrouble } = useCredentials();
 const { desktopSettings, reread, change } = useDesktopSettings();
 const toast = useToast();
 const { value: held, trouble } = useHeld(() => flockSettingsAtom);
@@ -160,6 +160,11 @@ const drawnLine = computed(() =>
         </section>
         <section class="flex flex-col gap-4" data-testid="credentials">
           <h3 class="text-sm font-semibold">GitLab and credentials</h3>
+          <RetryNotice
+            v-if="credentialsTrouble !== null"
+            title="Desktop could not read its credentials; showing what it last had"
+            :trouble="credentialsTrouble"
+          />
           <template v-if="credentials">
             <div class="flex flex-col gap-1">
               <div class="flex items-baseline gap-2">
