@@ -721,8 +721,18 @@ export const machineNames = (machines: ReadonlyArray<Machine>) => {
   );
 };
 
-const shownNames = (flock: Flock) =>
-  machineNames([...flock.machines.values()].map(({ machine }) => machine));
+/** `machineNames`, with a saved board told apart from a live Machine reached the same way. */
+const shownNames = (flock: Flock) => {
+  const names = machineNames([...flock.machines.values()].map(({ machine }) => machine));
+  const counts = new Map<string, number>();
+  for (const name of names.values()) counts.set(name, (counts.get(name) ?? 0) + 1);
+  for (const [installation, { asOf }] of flock.machines) {
+    const name = names.get(installation)!;
+    if (asOf !== null && counts.get(name)! > 1)
+      names.set(installation, `${name.replace(/\)$/, "")}, saved)`);
+  }
+  return names;
+};
 
 /** What the board calls a Machine, among every Machine it shows, saved ones included. */
 export const nameAsShown = (flock: Flock) => {

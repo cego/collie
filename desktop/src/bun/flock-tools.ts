@@ -161,15 +161,15 @@ export const reach = (machine: ChatMachine) =>
     }),
   );
 
-/** Each Machine, and its live board or why it has none. */
+/** Each Machine, and the live board Desktop follows for it or why it has none. */
 const boards = (flock: FlockChat) =>
   Effect.map(Clock.currentTimeMillis, (now) =>
-    flock.machines().map((machine) =>
-      Result.match(reachedAt(machine, now), {
-        onSuccess: ({ board }) => ({ machine, board, unread: null }),
-        onFailure: (unread) => ({ machine, board: null, unread }),
-      }),
-    ),
+    flock.machines().map((machine) => {
+      const { board } = machine;
+      return board._tag === "Live"
+        ? { machine, board, unread: null }
+        : { machine, board: null, unread: unreadBecause(machine.name, board, now) };
+    }),
   );
 
 type Boards = Effect.Success<ReturnType<typeof boards>>;
@@ -230,7 +230,13 @@ export const place = (
 };
 
 const runsOf = (tasks: ReadonlyArray<TaskView>) =>
-  new Set(tasks.flatMap((task) => [task.run, ...task.runs]));
+  new Set(
+    tasks.flatMap((task) => [
+      task.run,
+      ...task.runs,
+      ...task.children.flatMap(({ run }) => (run === null ? [] : [run])),
+    ]),
+  );
 
 const proposalsOf = (tasks: ReadonlyArray<TaskView>) =>
   new Set(tasks.flatMap(({ decision }) => (decision?.kind === "proposal" ? [decision.id] : [])));
@@ -287,8 +293,16 @@ export const reasonOf = (error: { readonly message: string }) =>
 
 const herd = Effect.fn("FlockTools.herd")(function* (flock: FlockChat) {
   const known = yield* boards(flock);
+  const on = (machine: ChatMachine, run: string) => `${machine.name}:${run}`;
   const prefixed = known.flatMap(({ machine, board }) =>
-    (board?.tasks ?? []).map((task) => ({ ...task, run: `${machine.name}:${task.run}` })),
+    (board?.tasks ?? []).map((task) => ({
+      ...task,
+      run: on(machine, task.run),
+      decision:
+        task.decision?.kind === "gate"
+          ? { ...task.decision, run: on(machine, task.decision.run) }
+          : task.decision,
+    })),
   );
   const lost = known.flatMap(({ unread }) => (unread === null ? [] : [`- (${unread})`]));
   return [herdLines(prefixed, yield* Clock.currentTimeMillis), ...lost].join("\n");

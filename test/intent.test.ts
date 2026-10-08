@@ -298,7 +298,6 @@ test("a plan bullet is one constraint, its wrapped lines and nested bullets incl
       18,
     ],
   ]);
-  // A one-line bullet is what it always was, id included.
   expect(found.constraints[3]?.id).toBe(constraintId("The suite is green."));
 });
 

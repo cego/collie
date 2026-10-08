@@ -320,7 +320,6 @@ test("a build that fails leaves the last board, and the next change builds again
         yield* Queue.offer(hand.changed, undefined);
         yield* Queue.offer(hand.builds, [one, { ...two, sentence: "Moved." }]);
         const messages = yield* Fiber.join(following);
-        // Nothing was removed for the failure: the next message is the next build's change.
         expect(messages[1]).toEqual({
           _tag: "Upsert",
           seq: 3,

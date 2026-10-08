@@ -407,6 +407,23 @@ test("the chat reads each Machine the window shows: a live one's board and proto
   ]);
 });
 
+test("a saved board and the live Machine its route now reaches are named apart, whichever came first", () => {
+  const old = { ...vm, installation: "inst-old" };
+  const savedOld: FlockItem = { _tag: "Saved", machine: old, herds: [], tasks: [working], at: 7 };
+  for (const items of [
+    [savedOld, routed(vm), snapshot(vm, [])],
+    [routed(vm), snapshot(vm, []), savedOld],
+  ]) {
+    const named = chatBoards(items.reduce(applyItem, EMPTY_FLOCK), new Map()).map(
+      ({ name, board }) => [name, board._tag],
+    );
+    expect(named.toSorted()).toEqual([
+      ["vm-mk (mk@vm-mk.cegohost.dk)", "Live"],
+      ["vm-mk (mk@vm-mk.cegohost.dk, saved)", "Saved"],
+    ]);
+  }
+});
+
 test("a Machine with no live board is said with why, in its route's words where it was lost", () => {
   expect(unreadBecause("vm-mk", { _tag: "Connecting", since: 1_000 }, 91_000)).toBe(
     "vm-mk is still connecting; Desktop has waited 1 min 30 s for its first board",
