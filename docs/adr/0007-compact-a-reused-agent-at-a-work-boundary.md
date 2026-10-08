@@ -134,8 +134,8 @@ in the file would otherwise read as nothing having happened and release the wait
 on somebody else's compaction. A completion after a hole is unresolved. A record that names a process names what that process is, too: control
 records outlive the servers they describe, so a launch that signalled a recorded pid on
 trust would eventually SIGTERM whatever the machine had since given that number to. The
-pid is signalled only while `/proc/<pid>/cmdline` still contains the command it was
-started with.
+pid is signalled only while its command line — `/proc/<pid>/cmdline`, or `ps -o command=`
+where there is no `/proc`, as on macOS — still contains the command it was started with.
 
 The helpers a launch installs are generated from Collie's own source, and a harness's
 hook or status line is pointed back at this binary (`collie herdr compaction <dir>`)

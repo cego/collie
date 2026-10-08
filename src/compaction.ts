@@ -5,7 +5,18 @@
 // next step, a fix round, a hand-off from another Run — and a threshold repeated per
 // harness is a threshold that disagrees with itself.
 
-import { Clock, Data, Effect, FileSystem, Path, PlatformError, Result, Schema } from "effect";
+import {
+  Clock,
+  Data,
+  Effect,
+  FileSystem,
+  Path,
+  PlatformError,
+  Result,
+  Schema,
+  Stream,
+} from "effect";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import type { BunServices } from "@effect/platform-bun/BunServices";
 import type { Channel } from "./dispatcher";
 import type { Herdr, Submission } from "./herdr";
@@ -451,8 +462,8 @@ export const putDownControl = Effect.fn("Compaction.putDownControl")(function* <
  * everywhere else. A control record outlives the process it names: a machine reboots, a
  * server is killed, and the pid comes round again, so a launch that signalled a
  * recorded number on trust would eventually SIGTERM something the human was using. The
- * process's own command line is the check, and a `/proc` entry that cannot be read is
- * treated as already gone.
+ * process's own command line is the check — from `/proc`, or `ps` where there is none —
+ * and one that cannot be read is treated as already gone.
  *
  * A record from before this was written carries no command, and so is never signalled:
  * its directory is removed and its endpoint, if it is still up, is left alone.
@@ -460,11 +471,37 @@ export const putDownControl = Effect.fn("Compaction.putDownControl")(function* <
 const endpointPid = Effect.fn("Compaction.endpointPid")(function* (record: ControlRecord | null) {
   if (!record?.pid || !record.command) return null;
   const fs = yield* FileSystem.FileSystem;
-  const cmdline = yield* fs
-    .readFileString(`/proc/${record.pid}/cmdline`)
-    .pipe(Effect.catch(() => Effect.succeed("")));
-  // NUL-separated argv, which is not a string until the separators are.
-  return cmdline.replaceAll("\0", " ").includes(record.command) ? record.pid : null;
+  const cmdline = yield* fs.readFileString(`/proc/${record.pid}/cmdline`).pipe(
+    // NUL-separated argv, which is not a string until the separators are.
+    Effect.map((argv) => argv.replaceAll("\0", " ")),
+    Effect.catch(() => fs.exists("/proc").pipe(Effect.map((there) => (there ? "" : null)))),
+    Effect.catch(() => Effect.succeed("")),
+  );
+  const command = cmdline ?? (yield* psCommand(record.pid));
+  return command.includes(record.command) ? record.pid : null;
+});
+
+/** A pid's command line as `ps` prints it, where there is no /proc (macOS); empty where it is gone. */
+const psCommand = Effect.fn("Compaction.psCommand")(function* (pid: number) {
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  return yield* Effect.gen(function* () {
+    const handle = yield* spawner.spawn(
+      ChildProcess.make("ps", ["-o", "command=", "-p", String(pid)], {
+        stdout: "pipe",
+        stderr: "ignore",
+      }),
+    );
+    return yield* handle.stdout.pipe(
+      Stream.decodeText(),
+      Stream.runFold(
+        (): string => "",
+        (all, chunk) => all + chunk,
+      ),
+    );
+  }).pipe(
+    Effect.scoped,
+    Effect.catch(() => Effect.succeed("")),
+  );
 });
 
 /**
