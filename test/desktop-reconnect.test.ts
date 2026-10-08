@@ -7,6 +7,7 @@ import { act, DoorMap, type Door, offersOn, runDetailOn } from "../desktop/src/b
 import { RpcClientDefect, RpcClientError } from "effect/rpc/RpcClientError";
 import type { RunDetail } from "../src/board-model";
 import { ActionFailed } from "../desktop/src/shared/flock";
+import { fastForward } from "./support/effect";
 
 const machine = { profile: "vm", name: "vm-mk" };
 const reached = (fake: Partial<Door>) => {
@@ -131,6 +132,21 @@ test("a Run's details wait for a Machine with no door yet, and end with nothing 
       doors.set("i-1", b.door);
       yield* Effect.yieldNow;
       expect(open).toEqual(new Set());
+    }),
+  ));
+
+test("a door that breaks and stays fails a Run's details", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const doors = new DoorMap<ReturnType<typeof reached>>();
+      const a = yield* detailDoor("a", new Set());
+      doors.set("i-1", a.door);
+      yield* Queue.fail(a.queue, { _tag: "Broken" });
+      const failed = yield* fastForward(
+        runDetailOn(doors, "i-1", "r-1").pipe(Stream.runDrain, Effect.flip),
+        1_000,
+      );
+      expect(failed.reason).toContain("socket closed");
     }),
   ));
 

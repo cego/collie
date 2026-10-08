@@ -861,11 +861,8 @@ interface Unsteered {
 }
 
 /** One board action carried out on a Machine's host, and what it came to in a line. */
-export const act = (
-  { machine, desktop: door }: Reached,
-  request: string,
-  action: DesktopAction,
-) => {
+export const act = (reached: Reached, request: string, action: DesktopAction) => {
+  const door = reached.desktop;
   const said = (() => {
     switch (action._tag) {
       case "Answer":
@@ -924,7 +921,7 @@ export const act = (
           .pipe(Effect.map((started) => `Started ${started.runId}`));
     }
   })();
-  return over({ machine, desktop: door }, said, request);
+  return over(reached, said, request);
 };
 
 /** The door to the Machine an installation id names, while Desktop shows it. */
@@ -983,15 +980,25 @@ const nextDoor = <D>(doors: DoorMap<D>, installation: string, last?: D): Effect.
 
 /**
  * A Run's details over whichever door its Machine has now: when that door closes or breaks,
- * again over the next. It ends only when let go, or when the host refuses.
+ * again over the next. It ends only when let go, the host fails it, or its door breaks and
+ * stays.
  */
 export const runDetailOn = (doors: DoorMap<Reached>, installation: string, runId: string) => {
   const after = (last?: Reached): Stream.Stream<RunDetail | null, ActionFailed> =>
     Stream.unwrap(
       Effect.map(nextDoor(doors, installation, last), (door) =>
         door.desktop.runDetail({ runId, tail: true, pages: 1, refreshMr: false }).pipe(
-          // Its connection broke: the Machine is reopened, so the next door carries on.
-          Stream.catchTag("RpcClientError", () => Stream.empty),
+          // A broken connection's door is replaced soon after; one that stays was not.
+          Stream.catchTag("RpcClientError", (error) =>
+            Stream.fromEffectDrain(
+              nextDoor(doors, installation, door).pipe(
+                Effect.timeoutOrElse({
+                  duration: "5 seconds",
+                  orElse: () => Effect.fail(error),
+                }),
+              ),
+            ),
+          ),
           Stream.mapError(refusal()),
           Stream.catchCause((cause) =>
             Cause.hasInterruptsOnly(cause) ? Stream.empty : Stream.failCause(cause),

@@ -1,4 +1,5 @@
 // A failure as the window says it: a sentence about the work, never a fiber or a stack.
+// No Bun-only import: the view bundles this.
 
 import { Cause, Predicate, Schema } from "effect";
 import * as RpcClientError from "effect/rpc/RpcClientError";

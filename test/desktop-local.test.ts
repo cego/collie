@@ -46,6 +46,7 @@ test(
             HERDR_BIN_PATH: Bun.env.HERDR_BIN_PATH ?? "",
             FAKE_HERDR_LOG: Bun.env.FAKE_HERDR_LOG ?? "",
           });
+          const reached = { machine: { profile: "local", name: "mk-pc" }, desktop: door };
           const board = yield* machineBoard({ profile: "local", name: "mk-pc" }, door).pipe(
             Stream.toPull,
           );
@@ -73,7 +74,7 @@ test(
           }
 
           expect(
-            yield* act({ machine: { profile: "local", name: "mk-pc" }, desktop: door }, "hold-1", {
+            yield* act(reached, "hold-1", {
               _tag: "Control",
               runId,
               control: "hold",
@@ -81,17 +82,16 @@ test(
             }),
           ).not.toBe("");
           // Tried again under the same request, it is the one hold.
-          yield* act({ machine: { profile: "local", name: "mk-pc" }, desktop: door }, "hold-1", {
+          yield* act(reached, "hold-1", {
             _tag: "Control",
             runId,
             control: "hold",
             set: true,
           });
-          const refused = yield* act(
-            { machine: { profile: "local", name: "mk-pc" }, desktop: door },
-            "resume-x",
-            { _tag: "Resume", runId: "r-nobody" },
-          ).pipe(Effect.flip);
+          const refused = yield* act(reached, "resume-x", {
+            _tag: "Resume",
+            runId: "r-nobody",
+          }).pipe(Effect.flip);
           expect(refused.reason).toBe("no Run r-nobody");
 
           const trail = yield* readAudit(runDir(world.state, runId));
