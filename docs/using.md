@@ -704,7 +704,9 @@ is showing at a time:
   constraint marked `¬`), the files the Run was given, each with its size and its path
   in the Run's directory where its agents read it, the steps with a duration each, the live agents — each saying
   what it is doing right now, from the terminal title its harness publishes, so progress is
-  visible without opening the pane — the branch, and the merge request behind it: state,
+  visible without opening the pane — every agent the Run started under **ran on**, with the
+  harness, model and effort each ran on (`build  claude/opus medium`) — the branch, and the
+  merge request behind it: state,
   pipeline, approvals, unresolved threads, and what has moved since this review finished.
   The newest card is at the bottom.
 - **Review** — the review the run wrote, readable without splitting a pane and running
@@ -1185,7 +1187,8 @@ follows the end of the Run's log as it is written, with a search that keeps only
 that match. **Merge request** shows what the host's merge watch last read — title, state,
 pipeline, approvals and comments — with Open in browser. **Facts** shows the files the Run was
 given, when it was given any (an image as a thumbnail, any other file by its name, type and
-size), its intent, its steering cards and the card's TaskView as the host sent it. Markdown is rendered with
+size), its **Agents** — one row per agent the Run started, in launch order, with the
+harness, model and effort it ran on — its intent, its steering cards and the card's TaskView as the host sent it. Markdown is rendered with
 Comark: tables, Shiki-highlighted code and mermaid diagrams, with anything that could run
 and every inline style removed, because agents write it. The view's own policy lets nothing
 on a page load from the network, and nothing may move Desktop's window off its own page;

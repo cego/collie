@@ -27,6 +27,8 @@ import {
 import type { BunServices } from "@effect/platform-bun/BunServices";
 import * as Activity from "effect/workflow/Activity";
 import { attachmentsDir, listAttachments, type Attachment } from "./attachments";
+import { Launched, LAUNCH_ORDER, LAUNCH_SUFFIX, launchDir, readLaunches } from "./launches";
+export { Launched } from "./launches";
 import * as Workflow from "effect/workflow/Workflow";
 import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
 import {
@@ -112,38 +114,12 @@ export interface AgentAsk {
   readonly permissions: string | null;
 }
 
-/**
- * The agent this work is on. Recorded by the launch Activity, so every later attempt
- * reattaches to this agent rather than starting another.
- */
-export const Launched = Schema.Struct({
-  agent: Schema.String,
-  output: Schema.String,
-  /** True where the agent was already there and this launch reconciled onto it. */
-  reused: Schema.Boolean,
-  /**
-   * What a repair needs to reach this same agent about this same work. Kept here because
-   * this is the durable record: a host that restarts between the collection and the
-   * repair reads the agent and the operation back rather than deriving them again.
-   */
-  runId: Schema.String,
-  operation: Schema.String,
-  role: Schema.String,
-  workflow: Schema.String,
-  harness: Schema.String,
-  model: Schema.optionalKey(Schema.String),
-  effort: Schema.optionalKey(Schema.NullOr(Schema.String)),
-  /** herdr's id for the process given this work: the name alone is reused by the next one. */
-  terminalId: Schema.optionalKey(Schema.String),
-});
-
 /** The agent chosen for one piece of work, recorded before anything starts it. */
 export const AgentChoiceSchema = Schema.Struct({
   harness: Schema.String,
   model: Schema.String,
   effort: Schema.NullOr(Schema.String),
 });
-export type Launched = typeof Launched.Type;
 
 /**
  * Nobody can say whether this agent exists or whether it was given its work, so nothing
@@ -877,11 +853,11 @@ export const agentsLayer = (host: AgentHost): Layer.Layer<Agents, never, AgentSe
 type Under = <A, E>(effect: Effect.Effect<A, E, AgentServices>) => Effect.Effect<A, E>;
 
 const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
-  const dirFor = (runId: string) => `${host.dir}/agents/${runId}`;
+  const dirFor = (runId: string) => launchDir(host.dir, runId);
   const launchPath = (runId: string, operation: string) =>
     `${dirFor(runId)}/${operation}${LAUNCH_SUFFIX}`;
   const outputFor = (runId: string, operation: string) => `${dirFor(runId)}/${operation}.json`;
-  const launchOrder = (runId: string) => `${dirFor(runId)}/launches`;
+  const launchOrder = (runId: string) => `${dirFor(runId)}/${LAUNCH_ORDER}`;
   /** What went out as a step's prompt or its repair, kept so a resend is the same words. */
   const sentPath = (about: Launched, kind: "step" | "repair") =>
     `${dirFor(about.runId)}/${about.operation}.${kind}.md`;
@@ -1445,30 +1421,7 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
       ),
     );
 
-  /** Every agent this run has launched, oldest first, in the order they were launched. */
-  const launchesOf = (runId: string) =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const names = yield* fs.readDirectory(dirFor(runId)).pipe(Effect.orElseSucceed(() => []));
-      const order = (yield* fs
-        .readFileString(launchOrder(runId))
-        .pipe(Effect.orElseSucceed(() => ""))).split("\n");
-      // A launch from before the order was kept sorts first, by name.
-      const rank = (name: string) => order.lastIndexOf(name.slice(0, -LAUNCH_SUFFIX.length));
-      const launches: Launched[] = [];
-      const launched = names
-        .filter((one) => one.endsWith(LAUNCH_SUFFIX))
-        .sort()
-        .sort((one, other) => rank(one) - rank(other));
-      for (const name of launched) {
-        const text = yield* fs
-          .readFileString(`${dirFor(runId)}/${name}`)
-          .pipe(Effect.orElseSucceed(() => ""));
-        const read = decodeLaunched(text);
-        if (read._tag === "Success") launches.push(read.success);
-      }
-      return launches;
-    });
+  const launchesOf = (runId: string) => readLaunches(host.dir, runId);
 
   const revive = (ask: AgentAsk, unless?: string | null) =>
     under(
@@ -1746,12 +1699,9 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
   };
 };
 
-const LAUNCH_SUFFIX = ".launch.json";
 const stepPointer = (file: string) =>
   `Your task for this step is in ${file} — read it and follow it.`;
-const LaunchedJson = Schema.fromJsonString(Launched);
-const encodeLaunched = Schema.encodeSync(LaunchedJson);
-const decodeLaunched = Schema.decodeUnknownResult(LaunchedJson);
+const encodeLaunched = Schema.encodeSync(Schema.fromJsonString(Launched));
 
 /** What a delivery is called in a log: one line of it, so the log stays readable. */
 const firstLine = (text: string) => text.split("\n")[0] ?? "";

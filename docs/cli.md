@@ -503,6 +503,12 @@ whether `type` is present.
 | `parked`                                 | Why it parked its own work and what picks it up again, or `null`.                                                                                                                                    |
 | `diagnostic`                             | Why the engine could not be asked about it — a module that is missing, with the file named — or `null`.                                                                                              |
 
+Beside `run`, `data.agents` lists every agent the Run started, in launch order: `operation`,
+`agent` (its herdr name), and the `harness`, `model` and `effort` it ran on, read from the
+launch records (`model` and `effort` are `null` where a launch recorded none). The human
+lines say the same, one per agent: `  review  claude/opus xhigh`. An operation that reused a
+running agent names the agent it reused.
+
 ## The board
 
 ```sh

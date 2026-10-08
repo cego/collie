@@ -70,7 +70,8 @@ import { PROJECTS_ROOT_OPTION, projectsRoot } from "../projects";
 import { currentReports, readDrift } from "../drift";
 import { newest, readCards } from "../cards";
 import { metricsOf, readMetrics } from "../metrics";
-import type { Metrics } from "../board-model";
+import { ranOn, type Metrics, type RunAgent } from "../board-model";
+import { runAgents } from "../launches";
 import { reportOf } from "../report";
 import { latest, readDispositions, statusLine } from "../disposition";
 import { nowIso, epochMs } from "../time";
@@ -436,6 +437,10 @@ const runList = Command.make("list", {}, () =>
 ).pipe(Command.withDescription("List Runs in the selected workspace, or everywhere without one"));
 
 /** The Run this command is about, and the environment it was resolved in. */
+/** `run show`'s line for each agent: `  review  claude/opus xhigh`. */
+export const agentLines = (agents: ReadonlyArray<RunAgent>) =>
+  agents.map((agent) => `  ${agent.operation}  ${ranOn(agent)}`);
+
 const resolveCommandRun = Effect.fn("collie.resolveCommandRun")(function* (
   global: Global,
   runId: string,
@@ -487,10 +492,12 @@ const runShow = Command.make(
           // work. A Run that failed and whose work shipped anyway says both.
           const disposition = latest(yield* readDispositions(resolved.dir));
           const view = resolved.view;
+          const agents = yield* runAgents(resolved.env.stateDir, view.runId);
           return {
             ok: true,
             data: {
               run: view,
+              agents,
               disposition,
               outcome: view.outcome,
               waiting: view.waiting,
@@ -503,6 +510,7 @@ const runShow = Command.make(
                 ([name, value]) =>
                   `  ${name} = ${textOf(value)} (${view.provenance[name] ?? GIVEN})`,
               ),
+              ...agentLines(agents),
               ...describeWaiting(view),
               ...(yield* childLines(resolved.env, runId)),
             ].join("\n"),

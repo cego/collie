@@ -427,6 +427,21 @@ export const PART_BYTES = 4 * 1024 * 1024;
 
 export type RunFile = typeof RunFile.Type;
 
+/** One agent a Run started, and what it ran on. */
+export const RunAgent = Schema.Struct({
+  operation: Schema.String,
+  agent: Schema.String,
+  harness: Schema.String,
+  /** Null in a launch recorded before the model was. */
+  model: Schema.NullOr(Schema.String),
+  effort: Schema.NullOr(Schema.String),
+});
+export type RunAgent = typeof RunAgent.Type;
+
+/** What an agent ran on, as every door says it: `claude/opus xhigh`. */
+export const ranOn = (agent: RunAgent) =>
+  `${agent.harness}/${agent.model ?? "default"}${agent.effort === null ? "" : ` ${agent.effort}`}`;
+
 /** Everything the detail panel shows for the selected Run. */
 export const RunDetail = Schema.Struct({
   id: Schema.String,
@@ -496,6 +511,8 @@ export const RunDetail = Schema.Struct({
   attachments: Schema.optional(Schema.Array(AttachmentFile)),
   /** Null for a Run with no branch or no checkout left to compare. */
   diff: Schema.NullOr(RunDiff),
+  /** Every agent the Run started, in launch order. Absent from an older host. */
+  agents: Schema.optional(Schema.Array(RunAgent)),
 });
 export type RunDetail = typeof RunDetail.Type;
 

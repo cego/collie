@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import type { RunDetail, TaskView } from "../../../../src/board-model";
 import { attachmentsShown } from "../../../src/shared/attachments";
+import { agentRows } from "../../../src/shared/run-agents";
 
 const props = defineProps<{ task: TaskView; detail: RunDetail | null; installation: string }>();
 const attached = computed(() => attachmentsShown(props.detail?.attachments ?? []));
+const agents = computed(() => agentRows(props.detail?.agents ?? []));
 </script>
 
 <template>
@@ -38,6 +40,15 @@ const attached = computed(() => attachmentsShown(props.detail?.attachments ?? []
       </p>
     </section>
 
+    <section v-if="agents.length > 0" data-testid="agents">
+      <h3 class="font-semibold">Agents</h3>
+      <p v-for="row in agents" :key="row.key" class="flex justify-between gap-2">
+        <span>
+          <strong>{{ row.operation }}</strong> {{ row.ranOn }}
+        </span>
+        <small class="truncate text-muted">{{ row.agent }}</small>
+      </p>
+    </section>
     <section v-if="detail?.intent" data-testid="intent">
       <h3 class="font-semibold">Intent</h3>
       <p v-if="detail.intent.goal">{{ detail.intent.goal }}</p>

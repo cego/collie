@@ -17,7 +17,15 @@ import {
   type TextRenderable,
 } from "@opentui/core";
 import { useRenderer, useTerminalDimensions } from "@opentui/solid";
-import type { MrDetails, MrPanel, Panel, PlanPanel, RunDetail, TaskView } from "../board-model";
+import {
+  ranOn,
+  type MrDetails,
+  type MrPanel,
+  type Panel,
+  type PlanPanel,
+  type RunDetail,
+  type TaskView,
+} from "../board-model";
 import { truncated } from "../views";
 import type { Live } from "../live";
 import { sinceReview } from "../mr";
@@ -125,6 +133,13 @@ export function Drawer(props: DrawerProps) {
           mark: "●",
           markFg: C.blue,
         }));
+
+  const ranOnLines = (): Line[] =>
+    (props.detail?.agents ?? []).map((agent) => ({
+      text: `${agent.operation}  ${ranOn(agent)}`,
+      right: agent.agent,
+      fg: C.muted,
+    }));
 
   const held = (): Line[] =>
     props.view.heldBy === null
@@ -328,6 +343,9 @@ export function Drawer(props: DrawerProps) {
           </Show>
           <Section title="steps" lines={steps()} />
           <Section title="agents" lines={agents()} />
+          <Show when={ranOnLines().length > 0}>
+            <Section title="ran on" lines={ranOnLines()} />
+          </Show>
           <Section title="branch" lines={branch()} />
           <MergeRequest
             url={props.view.mr}

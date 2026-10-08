@@ -1193,6 +1193,37 @@ test("Summary lists what the Run was given with its path, and nothing for a Run 
     }),
   ));
 
+test("Summary says what each of the Run's agents ran on", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const ran = record({
+        agents: [
+          {
+            operation: "build",
+            agent: "r1-build-r1",
+            harness: "claude",
+            model: "opus",
+            effort: "medium",
+          },
+          {
+            operation: "review",
+            agent: "r1-review-r1",
+            harness: "claude",
+            model: "opus",
+            effort: "xhigh",
+          },
+        ],
+      });
+      const app = yield* opened(appState({ tasks: [task()], detail: ran }));
+      expect(app.said()).toContain("RAN ON");
+      expect(app.said()).toContain("build claude/opus medium");
+      expect(app.said()).toContain("review claude/opus xhigh");
+
+      const none = yield* opened(appState({ tasks: [task()], detail: record() }));
+      expect(none.said()).not.toContain("RAN ON");
+    }),
+  ));
+
 test("Review shows the verdict and findings, and says when it was cut short", () =>
   runEffect(
     Effect.gen(function* () {
