@@ -37,3 +37,12 @@ test("a herdr new enough to have machines keeps its own words when it fails", ()
       );
     }),
   ));
+
+test("a herdr below the pin that fails for another reason keeps its own words", () =>
+  runEffect(
+    Effect.gen(function* () {
+      expect(yield* reasonFor("0.9.2", "cannot read machines.toml: permission denied")).toBe(
+        "cannot read machines.toml: permission denied",
+      );
+    }),
+  ));
