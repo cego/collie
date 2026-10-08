@@ -421,6 +421,63 @@ test(
 );
 
 test(
+  "a Repo run's gate is answered on that Repo run, which carries on, and its fan-out is left alone",
+  () =>
+    proves(
+      "collie-writer-repo-gate-",
+      (world) =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const client = yield* connect(world.state);
+          const parent = yield* client.start({
+            project: world.project,
+            id: "plain",
+            request: "p-0",
+            input: { note: "fan" },
+          });
+          const started = yield* client.start({
+            project: world.project,
+            id: "gated",
+            request: "g-0",
+            input: { note: "x" },
+            parent: parent.runId,
+            options: { repo: "api" },
+          });
+          const runId = started.runId;
+          yield* until(
+            () => client.run({ runId }),
+            (view) => view?.parked === nothingApproved(runId),
+          );
+          yield* fs.makeDirectory(`${world.project}/.collie`, { recursive: true });
+          yield* fs.writeFileString(
+            `${world.project}/.collie/verify.json`,
+            '[{"name":"true","executable":"true","argv":[],"cwd":"worktree"}]',
+          );
+          yield* client.answer({
+            runId,
+            decision: EVIDENCE_GATE,
+            value: "approve",
+            request: "g-1",
+          });
+          const done = yield* until(
+            () => client.run({ runId }),
+            (view) => view?.status.status === "complete",
+          );
+          expect(done?.status).toMatchObject({ value: "true" });
+          const operations = (id: string) =>
+            readAudit(runDir(world.state, id)).pipe(
+              Effect.map((lines) => lines.map((line) => line.operation)),
+            );
+          expect(yield* operations(runId)).toContain("answer");
+          expect(yield* operations(parent.runId)).not.toContain("answer");
+          yield* stopHost(world.state);
+        }).pipe(Effect.orDie),
+      ["gated.workflow.ts", "plain.workflow.ts"],
+    ),
+  120_000,
+);
+
+test(
   "a conversation can take every pending item and settle only the ones it delivered",
   () =>
     proves(

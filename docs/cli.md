@@ -537,7 +537,7 @@ Task of its own; a Repo run of a fan-out is its parent's `children` rather than 
 | `heldBy`                  | Who set the hold that stands — the front door it came through — and the reason given with it, or `null`.                                                        |
 | `decision`                | The question, proposal or gate waiting on you, or `null`. One of the two ways into Needs you.                                                                   |
 | `agents[]`                | The live agents on it, its Repo runs' included.                                                                                                                 |
-| `children[]`              | A fan-out's repositories in wave order: `repo`, its `run` (`null` until it starts), its `state` (`done`, `active`, `blocked`, `failed` or `todo`) and its `mr`. |
+| `children[]`              | Its plan's repositories, in wave order: `repo`, its `run` (`null` until it starts), its `state` (`done`, `active`, `blocked`, `failed` or `todo`) and its `mr`. |
 | `mr`, `mrState`, `branch` | What it is building, where it can be read, and what the forge last said about the merge request.                                                                |
 | `disposition`, `landed`   | What became of the work, where a person recorded it — never inferred from a merge request — and whether it needs nothing more, which is Finished.               |
 | `ended`                   | When the leading Run ended, or `null` while it has not.                                                                                                         |
@@ -553,6 +553,17 @@ checkout's `.collie/verify.json` (or your config's `verify.json`) offers. Answer
 `collie run answer <run-id> approve --decision evidence-gate`, or `approve:<name>,<name>`
 for part of the list: the host grants those, as `run intent verification` does, and takes
 the Run up again. It is not skipped, since with nothing approved no check could prove it.
+
+A fan-out's own Run never parks, so where neither it nor any of its Runs asks anything, the
+first of its Repo runs in wave order parked at its gate is the Task's `decision`. That gate's
+`run` is the Repo run, which is the one an answer releases, and its `repo` names the
+repository, as the sentence does. A gate whose checkout and config offer no checks says so,
+and names how to grant one: chat's `set_verification`, or
+`collie run intent verification <run-id> --name <name> -- <command>`.
+
+A fan-out finds its plan from its work source even where the kind was never recorded with
+its input, as for an implement Run started from a plan's end menu: a plan directory is the
+plan, so `children` lists every repository it names, those not started as `todo`.
 
 ## Answer a question
 

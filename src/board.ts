@@ -331,8 +331,15 @@ function decisionSentence(decision: Decision): string {
       return `Waiting on your answer about ${decision.topic}.`;
     case "proposal":
       return "Collie proposes a correction and waits for your yes.";
-    case "gate":
-      return `Holding at the ${decision.step} gate until you approve the list.`;
+    case "gate": {
+      const holding =
+        decision.repo === undefined
+          ? `Holding at the ${decision.step} gate`
+          : `${decision.repo} is holding at the ${decision.step} gate`;
+      return decision.verifications.length > 0
+        ? `${holding} until you approve the list.`
+        : `${holding}, and nothing is offered to approve. Grant a check with chat's set_verification, or collie run intent verification ${decision.run} --name <name> -- <command>.`;
+    }
   }
 }
 
@@ -625,14 +632,29 @@ export const gateOf = Effect.fn("Board.gateOf")(function* (run: RunFacts, userDi
   const offered = yield* approvedFrom({ cwd: run.cwd, userDir }).pipe(
     Effect.orElseSucceed((): ReadonlyArray<VerifySpec> => []),
   );
-  return {
+  const gate: Gate = {
     kind: "gate",
     run: run.id,
     id: EVIDENCE_GATE,
     // Words, not the workflow's id: the sentence reads "Holding at the evidence gate".
     step: "evidence",
     verifications: offered.map((spec) => spec.name),
-  } satisfies Gate;
+  };
+  return run.repo === null ? gate : { ...gate, repo: run.repo };
+});
+
+/** The gate of the first Repo run, in wave order, parked there with nothing approved. */
+const repoGateOf = Effect.fn("Board.repoGateOf")(function* (
+  rows: ReadonlyArray<BoardChild>,
+  children: ReadonlyArray<RunFacts>,
+  userDir: string,
+) {
+  for (const { run } of rows) {
+    const child = children.find((one) => one.id === run);
+    const gate = child === undefined ? null : yield* gateOf(child, userDir);
+    if (gate !== null) return gate;
+  }
+  return null;
 });
 
 /** Who set the hold that stands, and why, as the Run's audit trail recorded it. */
@@ -889,10 +911,14 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
     )
       continue;
     const leader = leaderOf(runs);
+    const fanned = runs.find((run) => repoRunsOf.has(run.id));
+    const fan = fanned === undefined ? null : yield* fanOf(fanned, repoRunsOf.get(fanned.id)!);
     const proposed = pending[0];
     const decision: Decision | null = proposed
       ? asProposal(proposed)
-      : (questionOf(everyRun) ?? (yield* gateOf(leader, opts.env.userDir)));
+      : (questionOf(everyRun) ??
+        (yield* gateOf(leader, opts.env.userDir)) ??
+        (yield* repoGateOf(fan?.children ?? [], children, opts.env.userDir)));
 
     const status = leader.state;
     // A fan-out waiting on its Repo runs writes nothing itself: their work is its work.
@@ -990,8 +1016,6 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
         )
       : null;
     const finishedAt = settledNow ? endedAt(leader) : 0;
-    const fanned = runs.find((run) => repoRunsOf.has(run.id));
-    const fan = fanned === undefined ? null : yield* fanOf(fanned, repoRunsOf.get(fanned.id)!);
     const view: TaskView = {
       id,
       name,
