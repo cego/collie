@@ -34,6 +34,7 @@ import {
   Schedule,
   Schema,
   Scope,
+  Semaphore,
   Stream,
   Struct,
 } from "effect";
@@ -661,6 +662,8 @@ const frontDoorHandlers = (
       const hosted = yield* Effect.context<HostServices>();
       const { env, herdr, bun, build, sweepers } = yield* hostBoard(dir);
       const usage = yield* Usage;
+      // Trimming rewrites the trail through one temporary file, so one read records at a time.
+      const recordingUsage = yield* Semaphore.make(1);
       // A finished Run's plan cannot change, so every drawer on it shares one read.
       // ponytail: kept for the host's life; evict by age if a host lives for months.
       const plans = new Map<string, PlanPanel | null>();
@@ -1060,13 +1063,17 @@ const frontDoorHandlers = (
             Effect.gen(function* () {
               const readings = yield* usage.readings;
               const trail = (yield* Path.Path).join(env.stateDir, "usage");
-              yield* recordAudit(trail, {
-                operation: "usage",
-                request: yield* (yield* Crypto.Crypto).randomUUIDv4,
-                ...whoOf(client),
-                result: Schema.String,
-                value: usagePhrase(readings, yield* Clock.currentTimeMillis).text,
-              }).pipe(Effect.andThen(trimAudit(trail, USAGE_TRAIL)), Effect.orDie);
+              const request = yield* (yield* Crypto.Crypto).randomUUIDv4;
+              const value = usagePhrase(readings, yield* Clock.currentTimeMillis).text;
+              yield* recordingUsage.withPermits(1)(
+                recordAudit(trail, {
+                  operation: "usage",
+                  request,
+                  ...whoOf(client),
+                  result: Schema.String,
+                  value,
+                }).pipe(Effect.andThen(trimAudit(trail, USAGE_TRAIL)), Effect.orDie),
+              );
               return readings;
             }),
           ),

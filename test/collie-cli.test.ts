@@ -8,7 +8,7 @@ import { readIntent, seedIntent, writeIntent } from "../src/intent";
 import { appendMetric } from "../src/metrics";
 import { hosted, settledRun } from "./support/hosted";
 import { evidenceDir } from "../src/engine";
-import { connect } from "../src/host";
+import { connect, frontDoor } from "../src/host";
 import { readAudit } from "../src/audit";
 import { VerifySpecSchema } from "../src/verify-spec";
 
@@ -930,11 +930,17 @@ test("usage is each Subscription's reading in the standard envelope, and says wh
         "claude  Claude Code's login expired; it refreshes when Claude Code next runs",
         "chatgpt Codex is not installed on this Machine",
       ]);
-      // Each read is recorded under who asked.
       const trail = yield* readAudit(join(state, "usage"));
       expect(trail.map(({ operation, actor }) => [operation, actor.origin])).toEqual([
         ["usage", "cli"],
         ["usage", "cli"],
       ]);
+
+      // Past the trail's length, reads at once each record and the trim keeps the newest.
+      const door = yield* frontDoor(state);
+      yield* Effect.forEach(Array.from({ length: 230 }), () => door.usage(), {
+        concurrency: "unbounded",
+      });
+      expect((yield* readAudit(join(state, "usage"))).length).toBe(200);
     }),
   ));
