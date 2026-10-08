@@ -581,6 +581,7 @@ test("Sync now on a Machine behind on its version reopens its route, which asks 
       yield* until(() => connections === 2 && asked === 2);
       // Reopened, not lost: what it showed is dated until it connects again.
       expect(told.filter((one) => one.endsWith("Lost"))).toEqual([]);
+      yield* until(() => told.filter((one) => one === "Snapshot 0.30.2").length === 2);
       const reconnecting = told.indexOf("vm Reconnecting");
       expect(told.slice(reconnecting, reconnecting + 2)).toEqual([
         "vm Reconnecting",
