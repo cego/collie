@@ -102,7 +102,9 @@ herdr actions, and the `collie` CLI.
   `src/usage.ts` (the host's sources, their interval and back-off), `collie usage` in
   `src/commands/usage.ts` and Desktop's `desktop/src/shared/usage.ts` (the header's entries
   and a Machine's Usage block), with `test/usage-model.test.ts`, `test/usage.test.ts` and
-  `test/desktop-usage.test.ts`. Usage
+  `test/desktop-usage.test.ts`. Where work falls back is `resolveWithRoom` in
+  `src/harness.ts`, applied by `choose` in `src/agents.ts` against the `fallbacks` setting,
+  with `test/fallback.test.ts`. Usage
   chooses where work runs, never whether it runs.
 - **Adding a setting, or changing how settings are shared across a Flock** →
   [ADR-0043](docs/adr/0043-a-shared-setting-is-its-latest-edit.md), alongside

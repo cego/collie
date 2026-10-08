@@ -1659,6 +1659,7 @@ checkout there is no branch and no working tree to review, so the target menu is
   "notifications": { "run-done": false },
   "proactive": true,
   "models": { "opencode": ["mycorp/local-model"] },
+  "fallbacks": ["codex", "pi/openai-codex/gpt-5.6-sol"],
   "trust": "auto",
   "permissions": "auto",
   "scope": "local",
@@ -1698,6 +1699,23 @@ stops you answering it.
 model, effort or scope fails validation before a single tab opens. See
 [Authoring](authoring.md#harnesses-models-and-effort) for what each harness accepts, and
 [Permissions](#permissions-auto-by-default) for what `permissions` decides.
+
+`fallbacks` ("Fall back to" under Settings) is where work goes once the agent it would run
+on has used up its **Subscription**
+([ADR-0049](adr/0049-work-goes-to-an-agent-with-usage-left.md)): the first of these with
+usage left, in order. An entry is a harness, which runs that harness's own default model and
+so never goes stale, or `harness/model`, split at the first `/`, so
+`pi/openai-codex/gpt-5.6-sol` is pi on that provider's model. An entry naming a harness
+Collie has no adapter for is refused when you set it; a model is checked only when the entry
+is used, and one that does not resolve is skipped, with a line in the Run's log saying why.
+An entry that draws on the same Exhausted Subscription — pi on `openai-codex` once ChatGPT
+is out — is skipped too. The effort the work asked for comes along where the harness takes
+it. Empty, the default, keeps today's behaviour: the work starts on its preferred agent, and
+the Run's record says when its Subscription resets. It is shared across the Flock like every
+setting, and read at every choice, so an edit reaches the next agent. The Run's record and
+`collie run show` say which agent each step landed on, as in
+`codex/default (fell back from claude/opus: session 100%, resets 15:45)`, and the Run's log
+gets a line when it happens. Usage never refuses, holds or delays work.
 
 `notifications` turns a kind of toast off: `{"run-done": false}`, and a kind left out is on.
 The host raises one when a run finishes (`run-done`), fails (`run-failed`, or

@@ -87,6 +87,8 @@ export interface Defaults {
   compactAtTokens: number;
   /** Extra models to accept per harness, for models the adapter table does not list. */
   models: Readonly<Record<string, ReadonlyArray<string>>>;
+  /** `harness` or `harness/model`, in order: where work goes once its Subscription is Exhausted. */
+  fallbacks: ReadonlyArray<string>;
   /** What to do about a directory the harness has not been trusted with yet. */
   trust: "auto" | "never";
   /**
@@ -125,6 +127,7 @@ export const FALLBACK_DEFAULTS: Defaults = {
   boardQuietMs: 5 * 60 * 1000,
   compactAtTokens: COMPACT_AT_TOKENS,
   models: {},
+  fallbacks: [],
   trust: "auto",
   permissions: "auto",
   scope: "local",
@@ -244,6 +247,12 @@ export const SETTINGS: ReadonlyArray<Setting> = [
       description: `Model names ${HARNESS_TITLES[harness]} is allowed to run beyond the ones Collie knows, separated by commas.`,
     }),
   ),
+  of("fallbacks", "list", "", {
+    group: "Agents",
+    label: "Fall back to",
+    description:
+      "When the agent a step would run on has used up its subscription, the step runs on the first of these with usage left: a harness, or harness/model, in order. Empty keeps it waiting for the reset.",
+  }),
   choice("permissions", PERMISSION_MODES, D.permissions, {
     group: "Agents",
     label: "Tool permissions",
@@ -326,6 +335,15 @@ export const SETTINGS: ReadonlyArray<Setting> = [
   }),
 ];
 
+/** Why a `fallbacks` entry is refused: a harness Collie has, then optionally `/model`. */
+function fallbackProblem(entry: string): string | null {
+  const at = entry.indexOf("/");
+  const harness = at === -1 ? entry : entry.slice(0, at);
+  if (!HARNESS_NAMES.some((name) => name === harness))
+    return `"${entry}" names no harness Collie has (${HARNESS_NAMES.join(", ")})`;
+  return at === entry.length - 1 ? `"${entry}" names no model after its /` : null;
+}
+
 export const settingOf = (key: string) => SETTINGS.find((setting) => setting.key === key);
 
 /**
@@ -360,6 +378,9 @@ export function parseSetting(
         .split(",")
         .map((item) => item.trim())
         .filter((item) => item !== "");
+      const bad =
+        key === "fallbacks" ? items.map(fallbackProblem).find((one) => one !== null) : null;
+      if (bad !== undefined && bad !== null) return { refused: `fallbacks: ${bad}` };
       return { value: items.length === 0 ? null : items };
     }
     case "text":

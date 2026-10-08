@@ -22,7 +22,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { withCodex } from "./codex";
 import { CONTROL_DIR, readControl } from "./compaction";
 import { newestRateLimits } from "./compactors";
-import type { PluginEnv } from "./env";
+import { currentEnv, type PluginEnv } from "./env";
 import { sha256Hex } from "./attachments";
 import { reason } from "./naming";
 import { epochMs } from "./time";
@@ -467,6 +467,8 @@ export const liveSources = (env: PluginEnv) =>
     } satisfies UsageSources;
   });
 
-/** The host's Usage, read from this Machine's own logins and agents. */
-export const usageLayer = (env: PluginEnv) =>
-  Layer.effect(Usage, Effect.flatMap(liveSources(env), makeUsage));
+/** This Machine's one reader of its usage, on the environment this process runs in. */
+export const usageLayer = Layer.effect(
+  Usage,
+  currentEnv.pipe(Effect.orDie, Effect.flatMap(liveSources), Effect.flatMap(makeUsage)),
+);

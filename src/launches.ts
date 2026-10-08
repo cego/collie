@@ -2,7 +2,7 @@
 // layer so the board and the CLI can read it without loading it.
 
 import { Effect, FileSystem, Schema } from "effect";
-import type { RunAgent } from "./board-model";
+import { RanOn, type RunAgent } from "./board-model";
 
 /**
  * The agent this work is on. Recorded by the launch Activity, so every later attempt
@@ -25,6 +25,9 @@ export const Launched = Schema.Struct({
   harness: Schema.String,
   model: Schema.optionalKey(Schema.String),
   effort: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  /** What this work fell back from, and why, where it did. */
+  from: Schema.optionalKey(RanOn),
+  why: Schema.optionalKey(Schema.String),
   /** herdr's id for the process given this work: the name alone is reused by the next one. */
   terminalId: Schema.optionalKey(Schema.String),
 });
@@ -72,6 +75,8 @@ export const runAgents = (stateDir: string, runId: string) =>
         harness: one.harness,
         model: one.model ?? null,
         effort: one.effort ?? null,
+        from: one.from ?? null,
+        why: one.why ?? null,
       })),
     ),
   );

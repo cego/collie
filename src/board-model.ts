@@ -428,6 +428,13 @@ export const PART_BYTES = 4 * 1024 * 1024;
 export type RunFile = typeof RunFile.Type;
 
 /** One agent a Run started, and what it ran on. */
+/** The harness, model and effort an agent ran on. */
+export const RanOn = Schema.Struct({
+  harness: Schema.String,
+  model: Schema.String,
+  effort: Schema.NullOr(Schema.String),
+});
+
 export const RunAgent = Schema.Struct({
   operation: Schema.String,
   agent: Schema.String,
@@ -435,12 +442,28 @@ export const RunAgent = Schema.Struct({
   /** Null in a launch recorded before the model was. */
   model: Schema.NullOr(Schema.String),
   effort: Schema.NullOr(Schema.String),
+  /** The choice it fell back from (ADR-0049 D11). */
+  from: Schema.NullOr(RanOn),
+  /** Why it fell back, or why nothing it could fall back to had room. */
+  why: Schema.NullOr(Schema.String),
 });
 export type RunAgent = typeof RunAgent.Type;
 
-/** What an agent ran on, as every door says it: `claude/opus xhigh`. */
-export const ranOn = (agent: RunAgent) =>
-  `${agent.harness}/${agent.model ?? "default"}${agent.effort === null ? "" : ` ${agent.effort}`}`;
+const choiceSaid = (on: {
+  readonly harness: string;
+  readonly model: string | null;
+  readonly effort: string | null;
+}) => `${on.harness}/${on.model ?? "default"}${on.effort === null ? "" : ` ${on.effort}`}`;
+
+/**
+ * What an agent ran on, as every door says it: `claude/opus xhigh`, or
+ * `codex/default (fell back from claude/opus: session 100%, resets 15:45)`.
+ */
+export const ranOn = (agent: RunAgent) => {
+  const on = choiceSaid(agent);
+  if (agent.from !== null) return `${on} (fell back from ${choiceSaid(agent.from)}: ${agent.why})`;
+  return agent.why === null ? on : `${on} (${agent.why})`;
+};
 
 /** Everything the detail panel shows for the selected Run. */
 export const RunDetail = Schema.Struct({

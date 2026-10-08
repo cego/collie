@@ -38,6 +38,7 @@ import {
   type Outcome,
 } from "./outcome";
 import type { Source } from "./offers";
+import type { UsageReading } from "./usage-model";
 
 export { EXCLUSIVE_STRATEGIES } from "./strategies";
 
@@ -49,6 +50,8 @@ export { SOURCES, SOURCE_NAMES, isSource, type Source } from "./offers";
  * arguments that point a command at its project from anywhere.
  */
 export { repoArgs, targetKind } from "./mr";
+/** How much of a Subscription is used, as the host reads it (ADR-0049). */
+export { subscriptionOf, usedFor, type UsageReading } from "./usage-model";
 export { parseMrTarget, type MrRef } from "./board-model";
 
 export {
@@ -317,6 +320,13 @@ export interface AgentPreferences {
   readonly harness?: string;
   readonly model?: string;
   readonly effort?: string;
+  /** Past this share of its busiest window, 1–100, this agent is not chosen for new work. */
+  readonly upTo?: number;
+  /**
+   * What to try, in order, once this agent is past `upTo` or its Subscription is
+   * Exhausted, before the human's `fallbacks`. Each fills in from this one.
+   */
+  readonly otherwise?: ReadonlyArray<AgentPreferences>;
 }
 
 /**
@@ -487,6 +497,12 @@ export const definitionOf = (written: WrittenDefinition): WorkflowDefinition => 
  */
 export interface HostApi {
   readonly dir: string;
+  /**
+   * This Machine's Usage readings, one per Subscription (ADR-0049). Read it inside an
+   * Activity of the workflow's own where the workflow branches on it, so a replay takes
+   * the same branch.
+   */
+  readonly usage: () => Effect.Effect<ReadonlyArray<UsageReading>>;
   /**
    * This Run as the host admitted it. The checkout is the one it was started for — its
    * own workspace where a caller named one — the directory is this Run's, where a plan, a

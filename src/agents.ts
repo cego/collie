@@ -14,6 +14,7 @@
 // `docs/adr/0020-an-agent-is-launched-once-and-its-output-is-decoded.md` is why.
 
 import {
+  Clock,
   Context,
   Duration,
   Effect,
@@ -45,7 +46,9 @@ import { COMPACTION_PORTS, submittedDelivery } from "./compactors";
 import { kindForRole } from "./cards";
 import { Oversight } from "./oversight";
 import { FALLBACK_DEFAULTS, loadDefaults, readConfig, type Defaults } from "./config";
+import { RanOn } from "./board-model";
 import * as dispatch from "./dispatcher";
+import type * as Types from "effect/Types";
 import { bodySections, layers, personaHoles, skillDirs } from "./definitions";
 import { currentEnv, type PluginEnv } from "./env";
 import {
@@ -54,8 +57,10 @@ import {
   isPermissionMode,
   permissionsAsWritten,
   personaPrefix,
+  ceilingIn,
   preferencesIn,
-  resolveChoice,
+  resolveWithRoom,
+  said,
   startArgs,
   type AgentChoice,
   type HarnessAdapter,
@@ -66,6 +71,7 @@ import { Herdr, herdrFailureReason, type AgentInfo, type HerdrError, type PaneIn
 import { agentName, agentTabLabel, reason, shellQuote, unsafePathComponent } from "./naming";
 import { askRouteTo } from "./handoff";
 import { nowIso } from "./time";
+import { roomFor, type UsageReading } from "./usage-model";
 import { lineageAgent, registerAgent, registryPath, scopeFor, verifyIncarnation } from "./registry";
 import {
   jsonSchemaFor,
@@ -112,14 +118,21 @@ export interface AgentAsk {
   readonly model: string | null;
   readonly effort: string | null;
   readonly permissions: string | null;
+  /** What this work fell back from, and why, where it did. */
+  readonly from?: AgentChoice;
+  readonly why?: string;
 }
 
-/** The agent chosen for one piece of work, recorded before anything starts it. */
+/**
+ * The agent chosen for one piece of work, recorded before anything starts it, with what it
+ * fell back from and why.
+ */
 export const AgentChoiceSchema = Schema.Struct({
-  harness: Schema.String,
-  model: Schema.String,
-  effort: Schema.NullOr(Schema.String),
+  ...RanOn.fields,
+  from: Schema.optionalKey(RanOn),
+  why: Schema.optionalKey(Schema.String),
 });
+export type ChosenAgent = typeof AgentChoiceSchema.Type;
 
 /**
  * Nobody can say whether this agent exists or whether it was given its work, so nothing
@@ -161,12 +174,16 @@ export interface AgentsApi {
   readonly askRoute: (role: string, lineage: ReadonlyArray<string>) => Effect.Effect<string>;
   /** How often anything here looks again, which a workflow's own watch for a stop shares. */
   readonly pollMs: number;
-  /** The agent these preferences come to over the operator's configuration, lowest first. */
+  /**
+   * The agent these preferences come to over the operator's configuration, lowest first,
+   * moved on to one with room where its Subscription is spent.
+   */
   readonly choose: (
     layers: ReadonlyArray<Preferences | undefined>,
-  ) => Effect.Effect<AgentChoice, WorkflowError>;
+    work: { readonly runId: string; readonly operation: string },
+  ) => Effect.Effect<ChosenAgent, WorkflowError>;
   /** What this Run's agent of that name runs on, where it is running; null where it is not. */
-  readonly choiceOf: (runId: string, agent: string) => Effect.Effect<AgentChoice | null>;
+  readonly choiceOf: (runId: string, agent: string) => Effect.Effect<ChosenAgent | null>;
   readonly launch: (ask: AgentAsk) => Effect.Effect<Launched, AgentUncertain | AgentParked>;
   /**
    * Starts this work's agent again with its prompt where it is gone and its Output never
@@ -410,16 +427,19 @@ export const agentWork = <
       error: WorkflowError,
       execute:
         held === null
-          ? agents.choose([
-              preferred,
-              preferencesIn(seated),
-              preferencesIn(place.options),
-              ...scopes,
-              preferencesIn(given),
-            ])
+          ? agents.choose(
+              [
+                preferred,
+                ceilingIn(seated),
+                preferencesIn(place.options),
+                ...scopes,
+                ceilingIn(given),
+              ],
+              work,
+            )
           : Effect.succeed(held),
     });
-    const ask: AgentAsk = {
+    const ask: Types.Mutable<AgentAsk> = {
       runId: work.runId,
       operation: work.operation,
       role,
@@ -437,6 +457,7 @@ export const agentWork = <
       effort: choice.effort,
       permissions: work.permissions ?? null,
     };
+    fellBack(ask, choice.from, choice.why);
 
     // Tickets an agent says it finished are carded while it is still working, so a human
     // sees each one land rather than waiting for the whole piece — and looked for once
@@ -566,6 +587,16 @@ export const agentWork = <
       ),
     ),
   );
+
+/** Notes on a choice, an ask or a launch what it fell back from and why, where there is either. */
+const fellBack = (
+  onto: { from?: AgentChoice; why?: string },
+  from: AgentChoice | null | undefined,
+  why: string | null | undefined,
+) => {
+  if (from !== null && from !== undefined) onto.from = from;
+  if (why !== null && why !== undefined) onto.why = why;
+};
 
 /** Whether what is asked for here is what an agent already running is. */
 const agrees = (held: AgentChoice, requested: Preferences) =>
@@ -792,6 +823,10 @@ export interface AgentHost {
   readonly effort?: string;
   /** Models the operator added per harness, beside the ones each adapter knows. */
   readonly models?: Readonly<Record<string, ReadonlyArray<string>>>;
+  /** This Machine's Usage readings; none where left out. */
+  readonly readings?: Effect.Effect<ReadonlyArray<UsageReading>>;
+  /** The human's Fallback chain; the configured `fallbacks`, read at every choice, where left out. */
+  readonly fallbacks?: Effect.Effect<ReadonlyArray<string>>;
   readonly permissions: PermissionMode;
   /** `auto` where not given. */
   readonly trust?: Defaults["trust"];
@@ -1216,7 +1251,7 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
         const terminalId = alive
           ? (live.terminalId ?? undefined)
           : yield* start(ask, agent, { agents: listing.success, listedAt });
-        const landed: Launched = {
+        const landed: Types.Mutable<Launched> = {
           agent,
           output: ask.output,
           reused: alive,
@@ -1228,6 +1263,7 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
           model: ask.model ?? host.model,
           effort: ask.effort,
         };
+        fellBack(landed, ask.from, ask.why);
         const launched = terminalId === undefined ? landed : { ...landed, terminalId };
         const adapter = adapterFor(launched.harness);
         const prefix = personaPrefix(adapter, yield* personaOf(ask.persona ?? ask.role));
@@ -1644,13 +1680,39 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
         }).pipe(Effect.orElseSucceed(() => askRouteTo(null))),
       ),
     pollMs: host.pollMs ?? DEFAULT_POLL_MS,
-    choose: (layers) => {
-      const configured = { harness: host.harness, model: host.model, effort: host.effort };
-      const resolved = resolveChoice([configured, ...layers], host.models);
-      return resolved.ok
-        ? Effect.succeed(resolved.choice)
-        : Effect.fail(new WorkflowError({ reason: resolved.problem }));
-    },
+    choose: (layers, { runId, operation }) =>
+      under(
+        Effect.gen(function* () {
+          const configured = { harness: host.harness, model: host.model, effort: host.effort };
+          const readings = yield* host.readings ?? Effect.succeed([]);
+          const chain =
+            host.fallbacks ??
+            loadDefaults(host.env.userDir).pipe(
+              Effect.map(({ fallbacks }) => fallbacks),
+              Effect.orElseSucceed(() => []),
+            );
+          const resolved = resolveWithRoom(
+            [configured, ...layers],
+            yield* chain,
+            roomFor(readings, yield* Clock.currentTimeMillis),
+            host.models,
+          );
+          if (!resolved.ok) return yield* new WorkflowError({ reason: resolved.problem });
+          const { choice, from, why, skipped } = resolved.chosen;
+          for (const line of skipped) yield* log(runId, `${operation}: ${line}`);
+          if (from !== null) {
+            yield* log(
+              runId,
+              `${operation}: fell back from ${said(from)} to ${said(choice)}: ${why}`,
+            );
+          } else if (why !== null) {
+            yield* log(runId, `${operation}: stays on ${said(choice)}: ${why}`);
+          }
+          const chosen: Types.Mutable<ChosenAgent> = { ...choice };
+          fellBack(chosen, from, why);
+          return chosen;
+        }),
+      ),
     choiceOf: (runId, agent) =>
       under(
         Effect.gen(function* () {
@@ -1660,7 +1722,13 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
           const listing = yield* host.herdr.agentList().pipe(Effect.option);
           const alive = Option.exists(listing, (agents) => agents.some((one) => one.name === name));
           if (!alive || held.model === undefined) return null;
-          return { harness: held.harness, model: held.model, effort: held.effort ?? null };
+          const running: Types.Mutable<ChosenAgent> = {
+            harness: held.harness,
+            model: held.model,
+            effort: held.effort ?? null,
+          };
+          fellBack(running, held.from, held.why);
+          return running;
         }),
       ),
     launch,
@@ -1804,7 +1872,10 @@ const append = (path: string, line: string) =>
  * operator configured. Read when the host takes its directory: a host serves work for as
  * long as it owns one, and a launch is made under the settings that were in force then.
  */
-export const configuredAgents = Effect.fn("Agents.configured")(function* (dir: string) {
+export const configuredAgents = Effect.fn("Agents.configured")(function* (
+  dir: string,
+  readings: Effect.Effect<ReadonlyArray<UsageReading>>,
+) {
   const env = yield* currentEnv.pipe(Effect.orDie);
   const defaults = yield* loadDefaults(env.userDir).pipe(
     Effect.orElseSucceed(() => FALLBACK_DEFAULTS),
@@ -1820,5 +1891,6 @@ export const configuredAgents = Effect.fn("Agents.configured")(function* (dir: s
     permissions: isPermissionMode(defaults.permissions) ? defaults.permissions : "auto",
     trust: defaults.trust,
     compactAtTokens: defaults.compactAtTokens,
+    readings,
   });
 });

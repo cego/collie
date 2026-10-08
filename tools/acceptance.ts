@@ -384,6 +384,19 @@ const FRONT_DOOR: readonly Check[] = [
 /** Facts about the code beneath the front door. True, useful, and not front-door proof. */
 const BACKEND: readonly Check[] = [
   {
+    id: "backend/exhausted-work-starts-on-the-first-fallback-with-room",
+    statement:
+      "A step whose Subscription is Exhausted starts on the first chain entry with room, and its record says why.",
+    owner: USAGE,
+    needs: "backend",
+    proof: {
+      kind: "test",
+      layer: "backend",
+      file: "test/agents.test.ts",
+      name: "work whose Subscription is Exhausted starts on the first chain entry with room, and its record says why",
+    },
+  },
+  {
     id: "backend/an-agent-start-names-everything-or-is-refused",
     statement:
       "An agent starting a Run through chat's start action is refused unless it names the checkout (or projects-root) and every Input, an optional one as an explicit empty string; the refusal names each field it left out, and nothing is inferred for it.",

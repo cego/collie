@@ -28,6 +28,8 @@ import {
 import { Children, Host, Run, jsonSchemaFor, withAgents } from "../src/sdk";
 import { asRun, enveloped } from "./support/enveloped";
 import { PARKED, controlPath, foundationLayer, loadEntry, pollStatus, runDir } from "../src/engine";
+import { Launched } from "../src/launches";
+import type { UsageReading } from "../src/usage-model";
 import { readCards } from "../src/cards";
 import { readDrift } from "../src/drift";
 import { FixOutputSchema, SynthesisSchema } from "../src/output";
@@ -829,6 +831,91 @@ test(
           ["--model", "opus"],
           ["--model", "opus"],
         ]);
+      }),
+    ),
+  120_000,
+);
+
+const claudeOut = {
+  readings: Effect.succeed([
+    {
+      subscription: "claude",
+      account: "org:acct",
+      accountLabel: null,
+      plan: "max",
+      windows: [
+        {
+          kind: "session",
+          label: "Session",
+          model: null,
+          usedPercent: 100,
+          resetsAt: "2099-01-01T15:45:00Z",
+          reached: false,
+        },
+      ],
+      at: "2026-10-08T08:00:00Z",
+      source: "claude-usage",
+      problem: null,
+    },
+  ] satisfies ReadonlyArray<UsageReading>),
+};
+const launchOf = (runId: string) =>
+  read(`${dir}/agents/${runId}/review.launch.json`).pipe(
+    Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(Launched))),
+    Effect.orDie,
+  );
+const harnessesStarted = (calls: ReadonlyArray<Call>) =>
+  calls
+    .filter((call) => (call.argv ?? [])[1] === "start")
+    .map((call) => (call.argv ?? []).find((arg) => arg === "claude" || arg === "codex"));
+
+test("work whose Subscription is Exhausted starts on the first chain entry with room, and its record says why", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+      yield* session(started("r1"), { ...claudeOut, fallbacks: Effect.succeed(["codex"]) });
+
+      expect(harnessesStarted(yield* rig.calls())).toEqual(["codex"]);
+      const launched = yield* launchOf("r1");
+      expect(launched).toMatchObject({
+        harness: "codex",
+        model: "default",
+        from: { harness: "claude", model: "opus", effort: null },
+      });
+      expect(launched.why).toMatch(/^session 100%, resets .+$/);
+      expect(yield* read(`${dir}/agents/r1/agents.log`)).toContain(
+        "review: fell back from claude/opus to codex/default: session 100%",
+      );
+    }),
+  ));
+
+test("with no fallbacks, Exhausted work starts on Claude as it always has", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+      yield* session(started("r1"), { ...claudeOut, fallbacks: Effect.succeed([]) });
+
+      expect(harnessesStarted(yield* rig.calls())).toEqual(["claude"]);
+      const launched = yield* launchOf("r1");
+      expect(launched.from).toBeUndefined();
+      expect(launched.why).toMatch(/^nothing has room; claude\/opus: session 100%/);
+    }),
+  ));
+
+test(
+  "a replay after a restart starts the agent the work fell back to, whatever the readings say now",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* rig.queueOutputs([null, { verdict: "clean", note: "back" }]);
+        const chain = { fallbacks: Effect.succeed(["codex"]) };
+        yield* interrupted("r1", prompted("Your task for this step"), { ...claudeOut, ...chain });
+        yield* session(halted("r1"), { collectMs: 30_000 });
+
+        // Claude has room again by the time the host comes back.
+        const result = yield* session(started("r1"), chain);
+        expect(result._tag === "Success" && result.success.note).toBe("back");
+        expect(harnessesStarted(yield* rig.calls())).toEqual(["codex", "codex"]);
       }),
     ),
   120_000,

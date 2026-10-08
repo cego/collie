@@ -1204,20 +1204,25 @@ test("Summary says what each of the Run's agents ran on", () =>
             harness: "claude",
             model: "opus",
             effort: "medium",
+            from: null,
+            why: null,
           },
           {
             operation: "review",
             agent: "r1-review-r1",
-            harness: "claude",
-            model: "opus",
-            effort: "xhigh",
+            harness: "codex",
+            model: "default",
+            effort: null,
+            from: { harness: "claude", model: "opus", effort: "xhigh" },
+            why: "session 100%",
           },
         ],
       });
       const app = yield* opened(appState({ tasks: [task()], detail: ran }));
       expect(app.said()).toContain("RAN ON");
       expect(app.said()).toContain("build claude/opus medium");
-      expect(app.said()).toContain("review claude/opus xhigh");
+      expect(app.said()).toContain("review codex/default (fell back from claude/opus");
+      expect(app.said()).toContain("session 100%)");
 
       const none = yield* opened(appState({ tasks: [task()], detail: record() }));
       expect(none.said()).not.toContain("RAN ON");

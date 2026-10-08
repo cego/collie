@@ -72,6 +72,8 @@ test("a Run's agents are its launch records, in launch order, with what each ran
           harness: "codex",
           model: "gpt-5",
           effort: null,
+          from: null,
+          why: null,
         },
         {
           operation: "build",
@@ -79,6 +81,8 @@ test("a Run's agents are its launch records, in launch order, with what each ran
           harness: "claude",
           model: "opus",
           effort: "xhigh",
+          from: null,
+          why: null,
         },
         {
           operation: "re-review",
@@ -86,6 +90,8 @@ test("a Run's agents are its launch records, in launch order, with what each ran
           harness: "claude",
           model: null,
           effort: null,
+          from: null,
+          why: null,
         },
       ]);
       expect(agentLines(agents)).toEqual([
@@ -94,6 +100,30 @@ test("a Run's agents are its launch records, in launch order, with what each ran
         "  re-review  claude/default",
       ]);
       expect(yield* runAgents(state, "never-ran")).toEqual([]);
+    }),
+  ));
+
+test("a Fallback's launch says what it fell back from and why, and an earlier one says neither", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const state = yield* fs.makeTempDirectoryScoped({ prefix: "collie-launches-" });
+      yield* seed(state, "r1", [
+        launched("r1", {
+          operation: "review",
+          agent: "r1-review-r1",
+          harness: "codex",
+          model: "default",
+          effort: null,
+          from: { harness: "claude", model: "opus", effort: null },
+          why: "session 100%, resets 15:45",
+        }),
+        launched("r1", {}),
+      ]);
+      expect(agentLines(yield* runAgents(state, "r1"))).toEqual([
+        "  review  codex/default (fell back from claude/opus: session 100%, resets 15:45)",
+        "  build  claude/default",
+      ]);
     }),
   ));
 

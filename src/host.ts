@@ -1743,6 +1743,8 @@ const own = (dir: string) =>
     const installation = yield* installationOf(dir).pipe(Effect.orDie);
     const installed = yield* installedRelease(env.pluginRoot, BUILD);
     const development: Development = installed.release ? {} : { development: installed.build };
+    // One reader of this Machine's usage, so every door and every choice of agent paces as one.
+    const usage = yield* Usage;
     const panels: MrPanels = new Map();
     const declared: Declared = new Map();
     return yield* Layer.launch(
@@ -1760,7 +1762,7 @@ const own = (dir: string) =>
                   userDir: env.userDir,
                   crashAt,
                 }),
-                usageLayer(env),
+                Layer.succeed(Usage, usage),
               ),
             ),
           ),
@@ -1775,12 +1777,13 @@ const own = (dir: string) =>
             toast: (title, body, sound) =>
               herdr.notify(title, body, sound).pipe(Effect.provideContext(bun), Effect.ignore),
             herd: { socketPath: env.socketPath, pluginRoot: env.pluginRoot },
+            readings: usage.readings,
           }),
         ),
-        Layer.provide(yield* configuredAgents(dir)),
+        Layer.provide(yield* configuredAgents(dir, usage.readings)),
       ),
     );
-  }).pipe(Effect.orDie);
+  }).pipe(Effect.provide(usageLayer), Effect.orDie);
 
 /**
  * A client of the host that owns `dir`, starting one if nothing is there. Every client

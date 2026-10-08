@@ -82,6 +82,7 @@ describe("Each setting explains itself", () => {
       "model",
       "effort",
       ...harnessNames().map((harness) => `models.${harness}`),
+      "fallbacks",
       "permissions",
       "trust",
       "compact_at_tokens",

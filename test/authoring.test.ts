@@ -431,6 +431,17 @@ test(
             { id: "tally", layer: "user", problems: [], toolchain: null },
           ]);
 
+          // A module that reads this Machine's usage and judges it through the SDK compiles too.
+          yield* fs.copyFile(
+            `${fixtures}budgeted.workflow.ts`,
+            `${world.user}/budgeted.workflow.ts`,
+          );
+          const budgeted = yield* collie(world, ["workflow", "check", "budgeted"]);
+          expect(budgeted.exit).toBe(0);
+          expect((yield* reportedIn(budgeted.envelope)).workflows).toEqual([
+            { id: "budgeted", layer: "user", problems: [], toolchain: null },
+          ]);
+
           // An entry beside it that will not load costs that id and no other.
           yield* fs.writeFileString(`${world.user}/half.workflow.ts`, "export const id =\n");
           const both = yield* collie(world, ["workflow", "check"]);

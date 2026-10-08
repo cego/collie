@@ -507,7 +507,14 @@ Beside `run`, `data.agents` lists every agent the Run started, in launch order: 
 `agent` (its herdr name), and the `harness`, `model` and `effort` it ran on, read from the
 launch records (`model` and `effort` are `null` where a launch recorded none). The human
 lines say the same, one per agent: `  review  claude/opus xhigh`. An operation that reused a
-running agent names the agent it reused.
+running agent names the agent it reused. `from` is the choice the work fell back from, where
+its **Subscription** was Exhausted or past the workflow's `upTo`, and `why` says which window
+and when it resets; both are `null` otherwise
+([ADR-0049](adr/0049-work-goes-to-an-agent-with-usage-left.md)). The human line then reads
+`  review  codex/default (fell back from claude/opus: session 100%, resets 15:45)`. Where
+nothing in the `fallbacks` chain had room, the work stays on its preferred agent with only
+`why` set, saying when each Subscription resets:
+`  review  claude/opus (nothing has room; claude/opus: session 100%, resets 15:45)`.
 
 ## The board
 

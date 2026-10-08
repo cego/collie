@@ -76,6 +76,7 @@ import {
 } from "./sdk";
 import { FALLBACK_DEFAULTS, configValue, loadDefaults, readConfig } from "./config";
 import { foldPreferences, preferencesIn, resolveChoice } from "./harness";
+import type { UsageReading } from "./usage-model";
 import { currentEnv } from "./env";
 import { PROJECTS_ROOT_OPTION } from "./projects";
 import {
@@ -307,6 +308,11 @@ export const SDK_DECLARATIONS = `declare module "collie" {
   /** What the host lends a workflow. Hold and stop are read fresh on every replay. */
   export interface HostApi {
     readonly dir: string;
+    /**
+     * This Machine's Usage readings, one per Subscription. Read it inside an Activity of
+     * the workflow's own where it branches on it, so a replay takes the same branch.
+     */
+    readonly usage: () => Effect.Effect<ReadonlyArray<UsageReading>>;
     /** This Run as the host admitted it; its directory is made as this is answered. */
     readonly place: (runId: string) => Effect.Effect<Place>;
     readonly held: (runId: string) => Effect.Effect<boolean>;
@@ -389,7 +395,58 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly harness?: string;
     readonly model?: string;
     readonly effort?: string;
+    /** Past this share of its busiest window, 1–100, this agent is not chosen for new work. */
+    readonly upTo?: number;
+    /** What to try past \`upTo\` or once Exhausted, before the human's \`fallbacks\`. */
+    readonly otherwise?: ReadonlyArray<AgentPreferences>;
   }
+
+  /** One window of a Subscription's usage, as its source reported it. */
+  export interface UsageWindow {
+    readonly kind: "session" | "weekly" | "weekly-model" | "other";
+    readonly label: string;
+    /** The model a \`weekly-model\` window applies to. */
+    readonly model: string | null;
+    /** 0–100. */
+    readonly usedPercent: number;
+    readonly resetsAt: string | null;
+    readonly reached: boolean;
+  }
+
+  /** How much of one Subscription a Machine's login has used, and when that was true. */
+  export interface UsageReading {
+    readonly subscription: "claude" | "chatgpt";
+    /** The account's stable id, never its email. */
+    readonly account: string | null;
+    readonly accountLabel: string | null;
+    readonly plan: string | null;
+    readonly windows: ReadonlyArray<UsageWindow>;
+    readonly at: string;
+    readonly source: "claude-usage" | "claude-status-line" | "codex-app-server";
+    /** Why there is no fresh reading, in a sentence. */
+    readonly problem: string | null;
+  }
+
+  /** The Subscription a choice draws on, or null where Collie reads none for it. */
+  export function subscriptionOf(choice: {
+    readonly harness: string;
+    readonly model: string;
+  }): "claude" | "chatgpt" | null;
+
+  /**
+   * How much of the busiest window that applies to this choice is used at \`now\`, and
+   * whether its Subscription is Exhausted for it; null where nothing is read for it.
+   */
+  export function usedFor(
+    readings: ReadonlyArray<UsageReading>,
+    choice: { readonly harness: string; readonly model: string },
+    now: number,
+  ): {
+    readonly window: UsageWindow;
+    readonly usedPercent: number;
+    readonly resetsAt: string | null;
+    readonly exhausted: boolean;
+  } | null;
 
   /**
    * One place at a panel: the agent that sits there, and what it is and is told where that
@@ -1973,6 +2030,8 @@ export const hostLayer = (options: {
   readonly toast?: Toast;
   /** The Herd this host works for; left out, nothing is judged or charged to one. */
   readonly herd?: Herd;
+  /** This Machine's Usage readings; none where left out. */
+  readonly readings?: Effect.Effect<ReadonlyArray<UsageReading>>;
 }): Layer.Layer<Host | Notifier | Oversight, never, Store | BunServices> =>
   Layer.effectContext(
     Effect.gen(function* () {
@@ -2100,6 +2159,7 @@ export const hostLayer = (options: {
         );
       const host = Host.of({
         dir,
+        usage: () => options.readings ?? Effect.succeed([]),
         place: (runId) =>
           under(
             Effect.zipWith(
@@ -3401,6 +3461,8 @@ export const foundationLayer = (options: {
   readonly toast?: Toast;
   /** The Herd this host works for; left out, nothing is judged or charged to one. */
   readonly herd?: Herd;
+  /** This Machine's Usage readings; none where left out. */
+  readonly readings?: Effect.Effect<ReadonlyArray<UsageReading>>;
 }): Layer.Layer<
   | Host
   | Notifier

@@ -418,3 +418,25 @@ const resetClock = (iso: string, now: number) => {
 export function resetPhrase(resetsAt: string, now: number): string {
   return `resets ${resetClock(resetsAt, now)} (${resetIn(resetsAt, now)})`;
 }
+
+/**
+ * Whether a choice has room: its Subscription is not Exhausted for it, and its busiest
+ * window is below `upTo`. A Subscription with nothing read has room.
+ */
+export function roomFor(readings: ReadonlyArray<UsageReading>, now: number) {
+  return (
+    choice: ChoiceLike,
+    upTo: number | undefined,
+  ): { readonly room: true } | { readonly room: false; readonly why: string } => {
+    const used = usedFor(readings, choice, now);
+    if (used === null) return { room: true };
+    const over = upTo !== undefined && used.usedPercent >= upTo;
+    if (!used.exhausted && !over) return { room: true };
+    const parts = [
+      `${used.window.label.toLowerCase()} ${Math.round(used.usedPercent)}%`,
+      ...(used.exhausted ? [] : [`over its ${upTo}%`]),
+      ...(used.resetsAt === null ? [] : [`resets ${resetClock(used.resetsAt, now)}`]),
+    ];
+    return { room: false, why: parts.join(", ") };
+  };
+}

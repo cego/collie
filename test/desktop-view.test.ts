@@ -674,19 +674,36 @@ test("a record's Agents section is one row per agent, in launch order, saying wh
         harness: "claude",
         model: "opus",
         effort: "medium",
+        from: null,
+        why: null,
       },
-      { operation: "review", agent: "r1-review-r1", harness: "codex", model: null, effort: null },
+      {
+        operation: "review",
+        agent: "r1-review-r1",
+        harness: "codex",
+        model: null,
+        effort: null,
+        from: { harness: "claude", model: "opus", effort: "xhigh" },
+        why: "session 100%, resets 15:45",
+      },
       {
         operation: "build",
         agent: "r1-build-r2",
         harness: "claude",
         model: "opus",
         effort: "medium",
+        from: null,
+        why: null,
       },
     ]),
   ).toEqual([
     { key: "0:r1-build-r1", operation: "build", ranOn: "claude/opus medium", agent: "r1-build-r1" },
-    { key: "1:r1-review-r1", operation: "review", ranOn: "codex/default", agent: "r1-review-r1" },
+    {
+      key: "1:r1-review-r1",
+      operation: "review",
+      ranOn: "codex/default (fell back from claude/opus xhigh: session 100%, resets 15:45)",
+      agent: "r1-review-r1",
+    },
     { key: "2:r1-build-r2", operation: "build", ranOn: "claude/opus medium", agent: "r1-build-r2" },
   ]);
 });
