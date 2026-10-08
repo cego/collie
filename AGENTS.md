@@ -245,6 +245,12 @@ herdr actions, and the `collie` CLI.
   [`docs/internals.md`](docs/internals.md) and [`docs/adr/`](docs/adr).
 - **Changing install, keybindings or the Control Plane** →
   [`docs/using.md`](docs/using.md).
+- **Changing how a release is signed, what an installer checks, or what Collie supports on
+  macOS** → [ADR-0048](docs/adr/0048-collie-is-released-for-macos-on-apple-silicon.md),
+  alongside `tools/sign.ts`, `src/signing.ts`, `install.sh` and `install-desktop.sh`, with
+  `test/signing.test.ts`, `test/prepare.test.ts` and `test/install-desktop.test.ts`. Every
+  asset is signed twice: the shell installers check the P-256 signature, which any
+  `openssl` can, and the runner and Desktop the Ed25519 one.
 
 ## Commands
 

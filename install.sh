@@ -101,35 +101,22 @@ release_token() {
   esac
 }
 
-# An OpenSSL that can check an Ed25519 signature: 3.0 or later. LibreSSL (macOS's
-# /usr/bin/openssl) and OpenSSL 1.1.1 cannot, and Homebrew's and EPEL's sit beside them.
-# COLLIE_OPENSSL names the only one to try.
-verifier() {
-  for candidate in ${COLLIE_OPENSSL:-openssl openssl3 /opt/homebrew/opt/openssl@3/bin/openssl /usr/local/opt/openssl@3/bin/openssl}; do
-    case "$("$candidate" version 2>/dev/null)" in
-      "OpenSSL "[3-9]* | "OpenSSL "[1-9][0-9]*) echo "$candidate"; return 0 ;;
-    esac
-  done
-  return 1
-}
-
-# Whether Collie's release key signed the download, by `release.pub`: the key the runner
-# itself verifies with. Before the download replaces anything, so a refused one never runs.
+# Whether Collie's release key signed the download, by `release-p256.pub`: any openssl or
+# LibreSSL can check a P-256 signature. Before the download replaces anything, so a refused
+# one never runs.
 signed() { # file, curl config
-  if ! printf '%s\n' "$2" | curl -fsSL --config - "${BASE}/${ASSET}.sig" -o "$1.sig" 2>/dev/null; then
-    echo "could not fetch ${BASE}/${ASSET}.sig to check the download" >&2
+  if ! printf '%s\n' "$2" | curl -fsSL --config - "${BASE}/${ASSET}.p256.sig" -o "$1.sig" 2>/dev/null; then
+    echo "could not fetch ${BASE}/${ASSET}.p256.sig to check the download" >&2
     return 1
   fi
-  if ! openssl=$(verifier); then
-    echo "no OpenSSL 3.0 or later to check ${ASSET}'s signature with (LibreSSL and OpenSSL 1.1 cannot)" >&2
+  openssl=${COLLIE_OPENSSL:-openssl}
+  if ! "$openssl" version >/dev/null 2>&1; then
+    echo "no $openssl to check ${ASSET}'s signature with" >&2
     return 1
   fi
   "$openssl" base64 -d -A -in "$1.sig" -out "$1.sig.bin" 2>/dev/null || : >"$1.sig.bin"
-  if ! said=$("$openssl" pkeyutl -verify -pubin -inkey "$ROOT/release.pub" -rawin -in "$1" -sigfile "$1.sig.bin" 2>&1); then
-    case "$said" in
-      *"Signature Verification Failure"*) echo "${BASE}/${ASSET} does not match its signature from Collie's release key" >&2 ;;
-      *) echo "$openssl could not check ${ASSET}'s signature: $said" >&2 ;;
-    esac
+  if ! "$openssl" dgst -sha256 -verify "$ROOT/release-p256.pub" -signature "$1.sig.bin" "$1" >/dev/null 2>&1; then
+    echo "${BASE}/${ASSET} does not match its signature from Collie's release key" >&2
     return 1
   fi
 }

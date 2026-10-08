@@ -4,7 +4,7 @@
 import { expect, test } from "bun:test";
 import { generateKeyPairSync } from "node:crypto";
 import { Effect, FileSystem } from "effect";
-import { signRelease } from "../src/signing";
+import { signReleaseP256 } from "../src/signing";
 import { exec } from "./support/command";
 import { runEffect } from "./support/effect";
 import { root } from "./support/host";
@@ -12,12 +12,12 @@ import { root } from "./support/host";
 const SCRIPT = `${root}install-desktop.sh`;
 const KEY_BLOCK = /-----BEGIN PUBLIC KEY-----\n[^-]*-----END PUBLIC KEY-----/;
 
-test("the install script checks with the key release.pub holds", () =>
+test("the install script checks with the key release-p256.pub holds", () =>
   runEffect(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const script = yield* fs.readFileString(SCRIPT);
-      const key = yield* fs.readFileString(`${root}release.pub`);
+      const key = yield* fs.readFileString(`${root}release-p256.pub`);
       expect(KEY_BLOCK.exec(script)?.[0]).toBe(key.trim());
     }),
   ));
@@ -34,7 +34,7 @@ const release = (dir: string, sign: (bytes: Uint8Array) => string | null) =>
     const asset = `${dir}/release/linux-x64-collie-desktop-Setup.tar.gz`;
     yield* exec(["tar", "-czf", asset, "-C", setup, "./installer"]);
     const signature = sign(yield* fs.readFile(asset));
-    if (signature !== null) yield* fs.writeFileString(`${asset}.sig`, `${signature}\n`);
+    if (signature !== null) yield* fs.writeFileString(`${asset}.p256.sig`, `${signature}\n`);
     return asset;
   });
 
@@ -60,7 +60,7 @@ const install = (dir: string, publicKey: string) =>
   });
 
 const pair = () => {
-  const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+  const { publicKey, privateKey } = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
   return {
     publicKey: publicKey.export({ type: "spki", format: "pem" }).toString(),
     privateKey: privateKey.export({ type: "pkcs8", format: "pem" }).toString(),
@@ -73,7 +73,7 @@ test("a signed installer is downloaded and run for this user", () =>
       const fs = yield* FileSystem.FileSystem;
       const dir = yield* fs.makeTempDirectoryScoped();
       const key = pair();
-      yield* release(dir, (bytes) => signRelease(bytes, key.privateKey));
+      yield* release(dir, (bytes) => signReleaseP256(bytes, key.privateKey));
       const done = yield* install(dir, key.publicKey);
       expect(done.said).toContain("installed Collie Desktop");
       expect(done.code).toBe(0);
@@ -88,7 +88,7 @@ test("a tampered or unsigned installer is refused and never run", () =>
       const key = pair();
 
       const tampered = yield* fs.makeTempDirectoryScoped();
-      yield* release(tampered, (bytes) => signRelease(bytes, pair().privateKey));
+      yield* release(tampered, (bytes) => signReleaseP256(bytes, pair().privateKey));
       const mismatched = yield* install(tampered, key.publicKey);
       expect(mismatched.code).not.toBe(0);
       expect(mismatched.said).toContain("does not match its signature");

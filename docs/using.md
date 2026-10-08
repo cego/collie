@@ -38,9 +38,8 @@ with the fix for each.
 Collie's releases are public, so the install needs no token. A project that is not public — a
 fork, or a mirror — answers an unauthenticated download with a sign-in page rather than a binary — with HTTP 200, which is why the install
 checks that what arrived is a program rather than trusting the status code. A downloaded
-runner is installed only once its signature from Collie's release key checks out, which
-needs OpenSSL 3.0 or later: macOS's own LibreSSL and OpenSSL 1.1 cannot check it, so a Mac
-needs `brew install openssl` and a RHEL 8 Machine EPEL's `openssl3`.
+runner is installed only once its signature from Collie's release key checks out. Any
+`openssl` will do, macOS's own LibreSSL and OpenSSL 1.1 among them.
 
 For one of those, the install finds a token in this order:
 
@@ -855,7 +854,7 @@ curl -fsSL https://github.com/cego/collie/releases/latest/download/install-deskt
 ```
 
 The script downloads the latest release's installer and runs it only once the download
-verifies against Collie's release key. Checking needs OpenSSL 3.0 or later.
+verifies against Collie's release key. Any `openssl` will do.
 
 It shows up as **Collie**, with the Collie mark — the dog on the white tile the TUI board
 shows, which reads on a dark taskbar too — in your app launcher, on its window, in the

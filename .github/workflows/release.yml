@@ -84,6 +84,7 @@ jobs:
         working-directory: repo
         env:
           COLLIE_SIGNING_KEY: ${{ secrets.COLLIE_SIGNING_KEY }}
+          COLLIE_SIGNING_KEY_P256: ${{ secrets.COLLIE_SIGNING_KEY_P256 }}
       # The newest release is the one Desktop's updater and install-desktop.sh read, through
       # `releases/latest/download`.
       # A delta patch exists only once there is a release before this one.

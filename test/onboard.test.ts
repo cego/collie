@@ -269,32 +269,37 @@ test("missing git stops with the exact command to run as root, and changes nothi
     }),
   ));
 
-/** A Machine whose only openssl is LibreSSL, with `manager` as its package manager. */
-const withLibreSsl = Effect.fn("onboardTest.withLibreSsl")(function* (manager: string) {
-  yield* bin.add("openssl", `echo "LibreSSL 3.3.6"`);
-  for (const tool of ["git", "curl", manager]) yield* bin.add(tool, "exit 0");
-  const { events } = yield* onboarded({ PATH: `${home}/stubs`, COLLIE_OPENSSL: "openssl" });
-  expect(results(events).map((event) => event.step)).toEqual(["system"]);
+/** The system step on a Machine with `tools` on PATH and `manager` as its package manager. */
+const systemWith = Effect.fn("onboardTest.systemWith")(function* (
+  tools: Record<string, string>,
+  manager: string,
+) {
+  for (const [tool, body] of Object.entries({ ...tools, [manager]: "exit 0" })) {
+    yield* bin.add(tool, body);
+  }
+  const { events } = yield* onboarded({ PATH: `${home}/stubs` });
   return results(events).find((event) => event.step === "system");
 });
 
-test("an openssl that cannot check a signature stops with what gives OpenSSL 3 here", () =>
+test("any openssl will do, LibreSSL among them", () =>
   runEffect(
     Effect.gen(function* () {
-      expect(yield* withLibreSsl("dnf")).toMatchObject({
-        status: "needs_root",
-        detail: expect.stringContaining("LibreSSL"),
-        command: "sudo dnf install -y epel-release && sudo dnf install -y openssl3",
-      });
+      const system = yield* systemWith(
+        { git: "exit 0", curl: "exit 0", openssl: `echo "LibreSSL 3.3.6"` },
+        "brew",
+      );
+      expect(system).toMatchObject({ status: "in_place" });
     }),
   ));
 
-test("where no package gives OpenSSL 3, the step names none to run", () =>
+test("a missing openssl stops with the package manager's command", () =>
   runEffect(
     Effect.gen(function* () {
-      const system = yield* withLibreSsl("apt-get");
-      expect(system).toMatchObject({ status: "needs_root" });
-      expect(system).not.toHaveProperty("command");
+      const system = yield* systemWith({ git: "exit 0", curl: "exit 0" }, "dnf");
+      expect(system).toMatchObject({
+        status: "needs_root",
+        command: "sudo dnf install -y openssl",
+      });
     }),
   ));
 
