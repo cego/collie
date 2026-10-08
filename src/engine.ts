@@ -42,6 +42,7 @@ import * as Reactivity from "effect/reactivity/Reactivity";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as DurableDeferred from "effect/workflow/DurableDeferred";
 import * as WorkflowModules from "effect/workflow";
+import * as ProcessModules from "effect/process";
 import * as EffectRoot from "effect";
 import * as AgentsSdk from "./agents";
 import { Agents } from "./agents";
@@ -198,6 +199,7 @@ export class ToolchainError extends Data.TaggedError("ToolchainError")<{
 const NAMESPACES = [
   ["effect", EffectRoot],
   ["effect/workflow", WorkflowModules],
+  ["effect/process", ProcessModules],
   // rc.117's path, so a module saved before 4.0.0 moved it still loads. Goes in Collie 0.42.0.
   ["effect/unstable/workflow", WorkflowModules],
 ] as const;
@@ -230,6 +232,7 @@ export const TOOLCHAIN = {
 export const SDK_DECLARATIONS = `declare module "collie" {
   import type { Context, Effect, FileSystem, Layer, Path, Schema } from "effect";
   import type { PlatformError } from "effect/PlatformError";
+  import type { ChildProcessSpawner } from "effect/process";
   import type { Workflow } from "effect/workflow/Workflow";
   import type {
     WorkflowEngine,
@@ -436,7 +439,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     | WorkflowEngine
     | WorkflowInstance
     | FileSystem.FileSystem
-    | Path.Path;
+    | Path.Path
+    | ChildProcessSpawner.ChildProcessSpawner;
 
   /** What a definition declares about itself beside what it does. None of it is a step. */
   export interface Declarations {
@@ -3183,7 +3187,8 @@ export type HostServices =
   | Host
   | Agents
   | FileSystem.FileSystem
-  | Path.Path;
+  | Path.Path
+  | ChildProcessSpawner.ChildProcessSpawner;
 
 /**
  * Which modules a host holds and what it does with them, in front of one state directory.

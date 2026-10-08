@@ -19,6 +19,7 @@ import { Context, Effect, FileSystem, Layer, Path, Predicate, Schema } from "eff
 import type { CheckEvidence } from "./output";
 import type { Verification } from "./verify";
 import type { VerifySpec } from "./verify-spec";
+import type { ChildProcessSpawner } from "effect/process";
 import { WorkflowInstance, type WorkflowEngine } from "effect/workflow/WorkflowEngine";
 import * as DurableDeferred from "effect/workflow/DurableDeferred";
 import * as Workflow from "effect/workflow/Workflow";
@@ -390,7 +391,8 @@ export type Lent =
   | WorkflowEngine
   | WorkflowInstance
   | FileSystem.FileSystem
-  | Path.Path;
+  | Path.Path
+  | ChildProcessSpawner.ChildProcessSpawner;
 
 /** What a definition declares about itself beside what it does. None of it is a step. */
 export interface Declarations {
@@ -767,7 +769,13 @@ export interface Registration {
   readonly layer: Layer.Layer<
     never,
     never,
-    WorkflowEngine | Host | Agents | Children | FileSystem.FileSystem | Path.Path
+    | WorkflowEngine
+    | Host
+    | Agents
+    | Children
+    | FileSystem.FileSystem
+    | Path.Path
+    | ChildProcessSpawner.ChildProcessSpawner
   >;
 }
 

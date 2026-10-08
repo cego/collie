@@ -964,6 +964,17 @@ const OPERATOR_CHECKS: readonly Check[] = [
       how: "On a Mac still on herdr 0.7.1, with something running in a pane, run `~/.collie/setup.sh` and record that it finished, doctor's herdr line with the before-0.9.0 advice, and that the pane is still running. Run `herdr update` on its own and record whether 0.7.1's updater stopped the server by itself; if it did, doctor's wording is corrected. When nothing is running, run `herdr server stop`, then `herdr`, then `collie doctor`, and record that the herdr lines pass. Record the revision.",
     },
   },
+  {
+    id: "workflows/a-bodil-run-brings-its-instance-up-and-down",
+    statement:
+      "A bodil Run brings its instance up, has implement work in bodil's own worktree on bodil's branch and open its merge request from there, and takes the instance down once implement has settled, leaving the worktree.",
+    owner: ON_A_MAC,
+    needs: "operator",
+    proof: {
+      kind: "operator",
+      how: "On a Mac with bodil installed and BODIL_REMOTE_VM set, save the module from docs/sdk.md as `~/.collie/user/workflows/bodil.workflow.ts` and record that `collie workflow show bodil` lists plan, brands and name. Run `collie run start bodil --input plan=<a small plan> --input brands=happytiger --input name=collie-try`; record that `bodil ls` shows collie-try, that the implementer's pane works in `~/work/gitte/worktrees/collie-try/monorepo` on `dabo/collie-try`, and the merge request's source branch. When the Run finishes, record that `bodil ls` no longer lists collie-try and the worktree is still there. Record the revision.",
+    },
+  },
 ];
 
 export const CHECKS: readonly Check[] = [

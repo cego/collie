@@ -1,5 +1,6 @@
 // The taxonomy is the contract: what is sent, how it is titled, and how often.
 
+import type { ChildProcessSpawner } from "effect/process";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, FileSystem, Layer, Path, type Schema } from "effect";
 import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
@@ -63,6 +64,7 @@ const session = <A, E>(
     | Store
     | FileSystem.FileSystem
     | Path.Path
+    | ChildProcessSpawner.ChildProcessSpawner
   >,
 ) =>
   run.pipe(
