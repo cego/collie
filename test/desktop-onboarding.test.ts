@@ -347,7 +347,11 @@ test("a route added while Desktop runs shows its Machine, one removed stops, and
       ).pipe(
         Stream.runForEach((item: FlockItem) =>
           Effect.sync(() =>
-            told.push(`${item.machine.name} ${"_tag" in item ? item._tag : item.message._tag}`),
+            told.push(
+              "machine" in item
+                ? `${item.machine.name} ${"_tag" in item ? item._tag : item.message._tag}`
+                : item._tag,
+            ),
           ),
         ),
         Effect.forkScoped,
@@ -402,7 +406,11 @@ test.each([
         ).pipe(
           Stream.runForEach((item: FlockItem) =>
             Effect.sync(() =>
-              told.push(`${item.machine.name} ${"_tag" in item ? item._tag : item.message._tag}`),
+              told.push(
+                "machine" in item
+                  ? `${item.machine.name} ${"_tag" in item ? item._tag : item.message._tag}`
+                  : item._tag,
+              ),
             ),
           ),
           Effect.forkScoped,

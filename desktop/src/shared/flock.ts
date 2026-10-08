@@ -103,6 +103,12 @@ export type MachineRouted = typeof MachineRouted.Type;
 export const MachineRemoved = Schema.TaggedStruct("Removed", { machine: KnownMachine });
 export type MachineRemoved = typeof MachineRemoved.Type;
 
+/** Every route Desktop has as a subscription starts: a Machine on no other was removed meanwhile. */
+export const MachineRoutes = Schema.TaggedStruct("Routes", {
+  profiles: Schema.Array(Schema.String),
+});
+export type MachineRoutes = typeof MachineRoutes.Type;
+
 /** A step of onboarding as `collie onboard` streams it, or one Desktop takes before it. */
 export const OnboardStep = Schema.Struct({
   step: Schema.String,
@@ -202,6 +208,7 @@ export const FlockItem = Schema.Union([
   MachineNotice,
   MachineRouted,
   MachineRemoved,
+  MachineRoutes,
   MachineOnboarding,
   MachineDoctored,
   MachineSynced,
@@ -631,6 +638,24 @@ export const EMPTY_FLOCK: Flock = {
  * reopened route dims the Machine it was showing; a merged one is no longer lost; a saved board
  * stands in until its Machine is live; anything newer is skipped.
  */
+const removed = (flock: Flock, profile: string): Flock => {
+  const without = <V>(map: ReadonlyMap<string, V>) => {
+    const kept = new Map(map);
+    kept.delete(profile);
+    return kept;
+  };
+  return {
+    ...flock,
+    routes: without(flock.routes),
+    lost: without(flock.lost),
+    onboarded: without(flock.onboarded),
+    doctored: without(flock.doctored),
+    synced: without(flock.synced),
+    given: without(flock.given),
+    machines: new Map([...flock.machines].filter(([, { machine }]) => machine.profile !== profile)),
+  };
+};
+
 export const applyItem = (flock: Flock, item: FlockItem): Flock => {
   if ("_tag" in item && item._tag === "Notice")
     return { ...flock, notices: [...flock.notices, item.text] };
@@ -655,26 +680,16 @@ export const applyItem = (flock: Flock, item: FlockItem): Flock => {
       given: new Map(flock.given).set(profile, { ...had, [credential]: { given, failed } }),
     };
   }
-  if ("_tag" in item && item._tag === "Removed") {
-    const { profile } = item.machine;
-    const without = <V>(map: ReadonlyMap<string, V>) => {
-      const kept = new Map(map);
-      kept.delete(profile);
-      return kept;
-    };
-    return {
-      ...flock,
-      routes: without(flock.routes),
-      lost: without(flock.lost),
-      onboarded: without(flock.onboarded),
-      doctored: without(flock.doctored),
-      synced: without(flock.synced),
-      given: without(flock.given),
-      machines: new Map(
-        [...flock.machines].filter(([, { machine }]) => machine.profile !== profile),
-      ),
-    };
+  if ("_tag" in item && item._tag === "Routes") {
+    const kept = new Set(item.profiles);
+    const shown = [...flock.routes.keys(), ...flock.lost.keys()].concat(
+      [...flock.machines.values()].map(({ machine }) => machine.profile),
+    );
+    return [...new Set(shown)]
+      .filter((profile) => !kept.has(profile))
+      .reduce((left, profile) => removed(left, profile), flock);
   }
+  if ("_tag" in item && item._tag === "Removed") return removed(flock, item.machine.profile);
   if ("_tag" in item && item._tag === "Saved") {
     const { machine, herds, tasks, at } = item;
     if (flock.machines.has(machine.installation)) return flock;
