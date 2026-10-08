@@ -1144,6 +1144,15 @@ use that width; Plan, Review and Facts keep a readable line length. The record's
 returns to the board, which was never taken down: it comes back scrolled where you left it,
 its sections open or closed as they were, and the card still selected.
 
+A record outlives its Machine's connection. When that connection is renewed — it dropped,
+**Sync now** reopened it, or Desktop upgraded the Machine — the record keeps what it showed,
+says above it what the board says of that Machine ("vm-mk is out of reach; showing what it
+last said", with the reason, or "vm-mk is reconnecting"), and carries on by itself once the
+Machine is back. A record opened before its Machine connects fills in once it does. An
+action, the offers, the workflows, a Run's file or Go to pane cut off by a renewed
+connection says "vm-mk's connection was renewed before this finished", and **Try again**
+sends the action under the same request, so it is done once.
+
 The record is one of Desktop's **pages**, with **Settings** and **Machines**: each takes the
 board's column in the same way, one at a time, so opening Settings with a record open replaces
 the record, and back always returns to the board. Opening a page moves focus to its back

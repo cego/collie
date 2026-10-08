@@ -73,13 +73,25 @@ test(
           }
 
           expect(
-            yield* act(door, "hold-1", { _tag: "Control", runId, control: "hold", set: true }),
+            yield* act({ machine: { profile: "local", name: "mk-pc" }, desktop: door }, "hold-1", {
+              _tag: "Control",
+              runId,
+              control: "hold",
+              set: true,
+            }),
           ).not.toBe("");
           // Tried again under the same request, it is the one hold.
-          yield* act(door, "hold-1", { _tag: "Control", runId, control: "hold", set: true });
-          const refused = yield* act(door, "resume-x", { _tag: "Resume", runId: "r-nobody" }).pipe(
-            Effect.flip,
-          );
+          yield* act({ machine: { profile: "local", name: "mk-pc" }, desktop: door }, "hold-1", {
+            _tag: "Control",
+            runId,
+            control: "hold",
+            set: true,
+          });
+          const refused = yield* act(
+            { machine: { profile: "local", name: "mk-pc" }, desktop: door },
+            "resume-x",
+            { _tag: "Resume", runId: "r-nobody" },
+          ).pipe(Effect.flip);
           expect(refused.reason).toBe("no Run r-nobody");
 
           const trail = yield* readAudit(runDir(world.state, runId));

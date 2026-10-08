@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { SECTIONS } from "../../../../src/board-model";
 import { AsyncResult, useAtomValue } from "@effect/atom-vue";
-import type { NotLive } from "../../../src/shared/flock";
+import { NOT_LIVE } from "../../../src/shared/flock";
 import { afterGesture, escapeOn, type Gesture, landedOn } from "../../../src/shared/board-clicks";
 import { updatesAtom } from "../flock";
 import tile from "../../../../assets/brand/logos/collie-tile-256.png";
@@ -96,16 +96,6 @@ const popChatOut = async () => {
   popped.value = true;
   await popOut();
   popped.value = false;
-};
-
-const NOT_LIVE: Record<NotLive, { icon: string; title: (name: string) => string }> = {
-  unreachable: { icon: "i-lucide-unplug", title: (name) => `${name} is out of reach` },
-  sso: { icon: "i-lucide-key-round", title: (name) => `Waiting for SSO login on ${name}` },
-  "no-collie": { icon: "i-lucide-package-x", title: (name) => `Collie isn't installed on ${name}` },
-  "update-desktop": {
-    icon: "i-lucide-circle-arrow-up",
-    title: (name) => `Update Desktop to see ${name}`,
-  },
 };
 
 const toast = useToast();

@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { AsyncResult, useAtomValue } from "@effect/atom-vue";
-import { Cause } from "effect";
 import { offersTerminal, opensHerdrWithoutPane } from "../../../src/shared/record-terminal";
 import type { PlacedTask } from "../../../src/shared/flock";
+import { saidOf } from "../../../src/shared/said";
 import { runDetailAtom, runDetailKey } from "../flock";
 import type { DiffTarget } from "./DiffTab.vue";
 
@@ -16,8 +16,10 @@ const result = useAtomValue(() =>
 );
 const detail = computed(() => AsyncResult.getOrElse(result.value, () => null));
 const failure = computed(() =>
-  AsyncResult.isFailure(result.value) ? Cause.pretty(result.value.cause) : null,
+  AsyncResult.isFailure(result.value) ? saidOf(result.value.cause) : null,
 );
+const { notLive } = useFlock();
+const away = computed(() => notLive(props.placed.installation));
 
 /** The location last followed: opened in the diff, or read-only in Review where there is none. */
 const target = ref<DiffTarget | null>(null);
@@ -89,6 +91,15 @@ const locationOf = (file: string, line: number | null) =>
     </PageHeader>
     <div class="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4">
       <UAlert v-if="failure !== null" color="error" :title="failure" />
+      <UAlert
+        v-else-if="away !== null"
+        data-testid="record-away"
+        color="warning"
+        variant="subtle"
+        :icon="away.icon"
+        :title="`${away.title}; showing what it last said`"
+        :description="away.reason"
+      />
       <p v-else-if="AsyncResult.isInitial(result)" class="text-muted text-sm">Loading…</p>
       <p v-else-if="detail === null" class="text-muted text-sm">
         This Run's details are not on its Machine.

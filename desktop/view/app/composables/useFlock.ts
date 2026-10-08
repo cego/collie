@@ -10,7 +10,13 @@ import {
   sectionsOf,
   type TaskView,
 } from "../../../../src/board-model";
-import { EMPTY_FLOCK, flockCards, machineRows, type PlacedTask } from "../../../src/shared/flock";
+import {
+  EMPTY_FLOCK,
+  flockCards,
+  machineRows,
+  notLiveOf,
+  type PlacedTask,
+} from "../../../src/shared/flock";
 import { flockAtom } from "../flock";
 
 /** Now, again every minute: a week's fold and the header's count of it age with it. */
@@ -39,6 +45,7 @@ export const useFlock = () => {
       AsyncResult.isFailure(flock.value) ? Cause.pretty(flock.value.cause) : null,
     ),
     lost: computed(() => [...told.value.lost]),
+    notLive: (installation: string) => notLiveOf(told.value, installation),
     machines: computed(() => board.value.machines),
     notices: computed(() => told.value.notices),
     /** Now, as of the last minute. */

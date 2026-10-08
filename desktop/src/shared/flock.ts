@@ -45,6 +45,17 @@ export type MachineMessage = typeof MachineMessage.Type;
 export const NotLive = Schema.Literals(["unreachable", "sso", "no-collie", "update-desktop"]);
 export type NotLive = typeof NotLive.Type;
 
+/** How the board's alert says a Machine is not live. */
+export const NOT_LIVE: Record<NotLive, { icon: string; title: (name: string) => string }> = {
+  unreachable: { icon: "i-lucide-unplug", title: (name) => `${name} is out of reach` },
+  sso: { icon: "i-lucide-key-round", title: (name) => `Waiting for SSO login on ${name}` },
+  "no-collie": { icon: "i-lucide-package-x", title: (name) => `Collie isn't installed on ${name}` },
+  "update-desktop": {
+    icon: "i-lucide-circle-arrow-up",
+    title: (name) => `Update Desktop to see ${name}`,
+  },
+};
+
 /** A route Desktop could not open, or lost, and since when. */
 export const MachineLost = Schema.TaggedStruct("Lost", {
   machine: KnownMachine,
@@ -811,6 +822,20 @@ const standing = (onboarding?: OnboardRun, doctor?: OnboardRun): OnboardRun | nu
   );
   const steps = [...doctor.steps.filter(({ step }) => !skipped.has(step)), ...left];
   return { ...doctor, steps, ready: steps.length === 0 };
+};
+
+/** Why an installation's records show what it last said, in the board's words; null while live. */
+export const notLiveOf = (flock: Flock, installation: string) => {
+  const shown = flock.machines.get(installation);
+  if (shown === undefined || shown.asOf === null) return null;
+  const lost = flock.lost.get(shown.machine.profile);
+  return lost === undefined
+    ? { icon: "i-lucide-refresh-cw", title: `${shown.machine.name} is reconnecting`, reason: "" }
+    : {
+        icon: NOT_LIVE[lost.state].icon,
+        title: NOT_LIVE[lost.state].title(lost.name),
+        reason: lost.reason,
+      };
 };
 
 /** Every route, in the order Desktop opened them. */

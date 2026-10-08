@@ -67,6 +67,7 @@ import { SettingValue, settingText } from "../../../src/settings";
 import { isString } from "../../../src/schema";
 import {
   act,
+  DoorMap,
   type Doors,
   doorTo,
   focusOn,
@@ -311,7 +312,7 @@ const main = Effect.gen(function* () {
   );
   const changes = yield* PubSub.unbounded<RouteChange>();
   const news = yield* PubSub.unbounded<FlockItem>();
-  const doors = new Map<string, Doors>();
+  const doors = new DoorMap<Doors>();
   /** Keeps an edit made here, then gives it to every connected Machine. */
   const editFlock = (key: string, typed: string) =>
     Effect.gen(function* () {
@@ -837,12 +838,12 @@ const main = Effect.gen(function* () {
         const door = yield* doorTo(doors, installation).pipe(
           Effect.mapError((failed) => new ActionFailed({ reason: failed.reason, request })),
         );
-        return yield* act(door.desktop, request, action);
+        return yield* act(door, request, action);
       }),
     goToPane: ({ installation, runId }) =>
       Effect.gen(function* () {
         const door = yield* doorTo(doors, installation);
-        const at = yield* focusOn(door.desktop, yield* uuid, runId);
+        const at = yield* focusOn(door, yield* uuid, runId);
         const attach = attachCommand(door.machine.target, at.session);
         const terminal = inTerminal(attach, process.platform, Bun.which);
         const opened = terminal !== null && (yield* launched(terminal));
@@ -856,12 +857,7 @@ const main = Effect.gen(function* () {
           if (route === undefined)
             return yield* new ActionFailed({ reason: "that Machine is not connected" });
           const request = yield* uuid;
-          const opened = yield* openTerminal(
-            focusOn(door.desktop, request, runId),
-            route,
-            cols,
-            rows,
-          );
+          const opened = yield* openTerminal(focusOn(door, request, runId), route, cols, rows);
           // One at a time: a newer terminal ends this one.
           if (shownTerminal !== undefined) Deferred.doneUnsafe(shownTerminal.ended, Effect.void);
           const mine = { send: opened.send, ended: Deferred.makeUnsafe<void>() };
@@ -887,11 +883,9 @@ const main = Effect.gen(function* () {
         Effect.catch(() => openUrl(url)),
       ),
     offers: ({ installation, runId }) =>
-      doorTo(doors, installation).pipe(Effect.flatMap((door) => offersOn(door.desktop, runId))),
+      doorTo(doors, installation).pipe(Effect.flatMap((door) => offersOn(door, runId))),
     workflows: ({ installation, project }) =>
-      doorTo(doors, installation).pipe(
-        Effect.flatMap((door) => workflowsOn(door.desktop, project)),
-      ),
+      doorTo(doors, installation).pipe(Effect.flatMap((door) => workflowsOn(door, project))),
     updates: () => Stream.map(updates.news, (news) => ({ version: manifest.version, news })),
     checkForUpdates: () => updates.check,
     restart: () =>
@@ -899,13 +893,10 @@ const main = Effect.gen(function* () {
         Effect.mapError((reason) => new ActionFailed({ reason })),
         Effect.provide(BunServices.layer),
       ),
-    runDetail: ({ installation, runId }) =>
-      Stream.unwrap(
-        Effect.map(doorTo(doors, installation), (door) => runDetailOn(door.desktop, runId)),
-      ),
+    runDetail: ({ installation, runId }) => runDetailOn(doors, installation, runId),
     runFile: ({ installation, runId, ref, offset }) =>
       doorTo(doors, installation).pipe(
-        Effect.flatMap((door) => runFileOn(door.desktop, runId, ref, offset)),
+        Effect.flatMap((door) => runFileOn(door, runId, ref, offset)),
       ),
     stage: (part) =>
       stageAttachment(own, part).pipe(
