@@ -12,9 +12,11 @@ import { onMachineWith } from "./support/live";
 import { fakeChannel } from "./support/compaction";
 import {
   atLeast,
+  claudeSettings,
   COMPACTION_PORTS,
   externalSubmissions,
   newestRateLimits,
+  ranOutSince,
   recordClaudeEvent,
   submittedDelivery,
   VERIFIED_VERSIONS,
@@ -454,3 +456,49 @@ test("rate_limits Collie cannot read leave the context line alone", () =>
       expect(yield* claude.usage(ctx())).toBe(16_700);
     }),
   ));
+
+const encodeStop = Schema.encodeSync(Schema.fromJsonString(Schema.Json));
+const stopFailure = (error: string) =>
+  encodeStop({
+    session_id: "s-1",
+    hook_event_name: "StopFailure",
+    error,
+    transcript_path: "/home/mk/.claude/projects/p/s-1.jsonl",
+  });
+
+test("a StopFailure on a spent subscription is the agent running out, with its transcript", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* recordClaudeEvent(dir, limited({}));
+      yield* recordClaudeEvent(dir, stopFailure("rate_limit"));
+      expect(yield* ranOutSince(dir, 0)).toEqual({
+        why: "rate_limit",
+        transcript: "/home/mk/.claude/projects/p/s-1.jsonl",
+      });
+    }),
+  ));
+
+test("a transient overload is not running out", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* recordClaudeEvent(dir, limited({}));
+      yield* recordClaudeEvent(dir, stopFailure("overloaded"));
+      expect(yield* ranOutSince(dir, 0)).toBeNull();
+    }),
+  ));
+
+test("a status line with a window at 100% is the agent running out, saying the window and reset", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* recordClaudeEvent(dir, limited(fiveHour(99)));
+      expect(yield* ranOutSince(dir, 0)).toBeNull();
+      yield* recordClaudeEvent(dir, limited(fiveHour(100)));
+      expect((yield* ranOutSince(dir, 0))?.why).toMatch(/^session 100%, resets .+ \(in .+\)$/);
+    }),
+  ));
+
+test("the StopFailure hook is installed only on a Claude known to have it", () => {
+  expect(claudeSettings(dir, true)).toContain(`"StopFailure"`);
+  expect(claudeSettings(dir, true)).toContain(`"rate_limit|billing_error"`);
+  expect(claudeSettings(dir, false)).not.toContain("StopFailure");
+});

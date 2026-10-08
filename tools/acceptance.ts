@@ -384,6 +384,19 @@ const FRONT_DOOR: readonly Check[] = [
 /** Facts about the code beneath the front door. True, useful, and not front-door proof. */
 const BACKEND: readonly Check[] = [
   {
+    id: "backend/an-agent-that-runs-out-is-replaced-mid-work",
+    statement:
+      "An agent that runs out mid-work is closed and replaced by one on the next entry, given the same work and a hand-over.",
+    owner: USAGE,
+    needs: "backend",
+    proof: {
+      kind: "test",
+      layer: "backend",
+      file: "test/agents.test.ts",
+      name: "an agent that runs out mid-work is closed and replaced by one on the next entry, given the same work and a hand-over",
+    },
+  },
+  {
     id: "backend/exhausted-work-starts-on-the-first-fallback-with-room",
     statement:
       "A step whose Subscription is Exhausted starts on the first chain entry with room, and its record says why.",
@@ -990,6 +1003,17 @@ const OPERATOR_CHECKS: readonly Check[] = [
     proof: {
       kind: "operator",
       how: "Rename the task workspace and one of its tabs by hand while a Run is working, let the Run reach its next step, and record that both names are still the ones typed.",
+    },
+  },
+  {
+    id: "usage/a-run-whose-claude-runs-out-finishes-on-codex",
+    statement:
+      "With `fallbacks` set to `codex`, a Run whose Claude runs out finishes on Codex, and its record says so.",
+    owner: USAGE,
+    needs: "operator",
+    proof: {
+      kind: "operator",
+      how: "Set Fall back to `codex`, start an `implement` with Claude near its limit, and when Claude stops mid-slice record that its pane closed, a Codex agent opened in the Task's workspace with the hand-over at the head of its prompt, the Run's log has the Fallback line, `collie run show` lists both agents, and the Run finishes on Codex.",
     },
   },
   {

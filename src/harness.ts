@@ -448,7 +448,7 @@ export function resolveWithRoom(
 }
 
 /** The model a choice runs, so `default` is judged as the model it pins. */
-const pinned = (choice: AgentChoice): AgentChoice =>
+export const pinned = (choice: AgentChoice): AgentChoice =>
   choice.model === DEFAULT_MODEL
     ? { ...choice, model: HARNESSES[choice.harness]?.defaultModel ?? DEFAULT_MODEL }
     : choice;

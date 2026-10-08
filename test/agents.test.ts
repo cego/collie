@@ -28,7 +28,8 @@ import {
 import { Children, Host, Run, jsonSchemaFor, withAgents } from "../src/sdk";
 import { asRun, enveloped } from "./support/enveloped";
 import { PARKED, controlPath, foundationLayer, loadEntry, pollStatus, runDir } from "../src/engine";
-import { Launched } from "../src/launches";
+import { Launched, runAgents } from "../src/launches";
+import { Collected } from "../src/agents";
 import type { UsageReading } from "../src/usage-model";
 import { readCards } from "../src/cards";
 import { readDrift } from "../src/drift";
@@ -920,6 +921,213 @@ test(
     ),
   120_000,
 );
+
+/** Claude Code's own hook, saying the agent stopped on its spent subscription. */
+const rateLimited = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))({
+  session_id: "s-out",
+  hook_event_name: "StopFailure",
+  error: "rate_limit",
+  transcript_path: "/home/mk/.claude/projects/p/s-out.jsonl",
+});
+
+/** Once `agent` has been given its work, its harness says it ran out. */
+const runsOut = (agent: string, times = 1) =>
+  Effect.gen(function* () {
+    const given = rig.calls().pipe(
+      Effect.map((calls) => sent(calls, "Your task for this step") >= times),
+      Effect.orElseSucceed(() => false),
+    );
+    while (!(yield* given)) yield* TestClock.withLive(Effect.sleep("10 millis"));
+    yield* recordClaudeEvent(yield* controlDir(rig.pluginEnv().stateDir, agent), rateLimited);
+  }).pipe(Effect.orDie);
+
+const closedPanes = (calls: ReadonlyArray<Call>) =>
+  calls.filter((call) => (call.argv ?? [])[0] === "pane" && (call.argv ?? [])[1] === "close");
+const chain = { fallbacks: Effect.succeed(["codex"]) };
+
+test("an agent that runs out mid-work is closed and replaced by one on the next entry, given the same work and a hand-over", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([null, { verdict: "clean", note: "finished on codex" }]);
+      yield* Effect.forkScoped(runsOut(agentFor("r1")));
+      const result = yield* session(started("r1"), { ...chain, collectMs: 30_000 });
+
+      expect(result._tag === "Success" && result.success.note).toBe("finished on codex");
+      const calls = yield* rig.calls();
+      expect(closedPanes(calls)).toHaveLength(1);
+      expect(harnessesStarted(calls)).toEqual(["claude", "codex"]);
+      const successor = agentName("r1", "review", null, 2);
+      expect(calls.some((call) => (call.argv ?? []).includes(successor))).toBe(true);
+      const prompt = yield* read(`${dir}/agents/r1/review.r2.prompt.md`);
+      const handed = prompt.indexOf("Another agent (claude/opus) started this work");
+      expect(handed).toBeGreaterThan(-1);
+      expect(handed).toBeLessThan(prompt.indexOf("OUTPUT_PATH:"));
+      expect(prompt).toContain("Its conversation is at /home/mk/.claude/projects/p/s-out.jsonl");
+      expect(yield* read(`${dir}/agents/r1/agents.log`)).toContain(
+        `review: claude/opus ran out (rate_limit) — continuing on codex/default as ${successor}`,
+      );
+      const records = yield* runAgents(dir, "r1");
+      expect(records.map(({ agent, harness }) => [agent, harness])).toEqual([
+        [agentFor("r1"), "claude"],
+        [successor, "codex"],
+      ]);
+      expect(records[1]).toMatchObject({
+        from: { harness: "claude", model: "opus", effort: null },
+        why: "rate_limit",
+      });
+    }).pipe(Effect.scoped),
+  ));
+
+test("a repair after a Fallback goes to the agent that took over, and starts no other", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([null, { verdict: "maybe" }, { verdict: "clean", note: "repaired" }]);
+      yield* Effect.forkScoped(runsOut(agentFor("r1")));
+      const result = yield* session(started("r1"), { ...chain, collectMs: 30_000 });
+
+      expect(result._tag === "Success" && result.success.note).toBe("repaired");
+      const calls = yield* rig.calls();
+      expect(harnessesStarted(calls)).toEqual(["claude", "codex"]);
+      const successor = agentName("r1", "review", null, 2);
+      const promptedTo = (agent: string) =>
+        calls.filter((call) => (call.argv ?? [])[1] === "prompt" && (call.argv ?? [])[2] === agent)
+          .length;
+      // The agent that ran out had its step only; its successor had its step and the repair.
+      expect([promptedTo(agentFor("r1")), promptedTo(successor)]).toEqual([1, 2]);
+    }).pipe(Effect.scoped),
+  ));
+
+test("when nothing has room the agent that ran out is kept, and the Run parks saying when usage resets", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* rig.queueOutputs([null]);
+      // Claude reads Exhausted, and there is nothing to fall back to.
+      yield* interrupted("r1", parked("r1"), {
+        ...claudeOut,
+        fallbacks: Effect.succeed([]),
+        collectMs: 2_000,
+      });
+
+      const calls = yield* rig.calls();
+      expect(closedPanes(calls)).toHaveLength(0);
+      expect(harnessesStarted(calls)).toEqual(["claude"]);
+      expect(yield* read(`${dir}/agents/r1/agents.log`)).toMatch(
+        /review: claude\/opus ran out \(session 100%, resets .+\); nothing has room; claude\/opus: session 100%, resets /,
+      );
+      const why = yield* fs
+        .readFileString(controlPath(dir, PARKED, "r1"))
+        .pipe(Effect.orElseSucceed(() => ""));
+      expect(why).toContain("nothing has room; claude/opus: session 100%, resets");
+    }),
+  ));
+
+test(
+  "a restart after the agent that ran out is closed starts no third agent, and carries on with the new one",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* rig.queueOutputs([null, { verdict: "clean", note: "after the restart" }]);
+        const closed: Reached = rig.calls().pipe(
+          Effect.map((calls) => closedPanes(calls).length > 0),
+          Effect.orElseSucceed(() => false),
+        );
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            yield* Effect.forkScoped(runsOut(agentFor("r1")));
+            yield* interrupted("r1", closed, chain);
+          }),
+        );
+        yield* session(halted("r1"), { collectMs: 30_000 });
+        const result = yield* session(started("r1"), chain);
+        expect(result._tag === "Success" && result.success.note).toBe("after the restart");
+        expect(harnessesStarted(yield* rig.calls()).filter((one) => one === "codex")).toHaveLength(
+          1,
+        );
+      }),
+    ),
+  120_000,
+);
+
+test(
+  "a restart after the new agent is launched collects from it rather than starting another",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* rig.queueOutputs([null, null, { verdict: "clean", note: "from the new agent" }]);
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            yield* Effect.forkScoped(runsOut(agentFor("r1")));
+            yield* interrupted("r1", prompted("Your task for this step", 2), chain);
+          }),
+        );
+        yield* session(halted("r1"), { collectMs: 30_000 });
+        const result = yield* session(started("r1"), chain);
+        expect(result._tag === "Success" && result.success.note).toBe("from the new agent");
+        expect(harnessesStarted(yield* rig.calls()).filter((one) => one === "codex")).toHaveLength(
+          2,
+        );
+        expect((yield* runAgents(dir, "r1")).map(({ agent }) => agent)).toEqual([
+          agentFor("r1"),
+          agentName("r1", "review", null, 2),
+        ]);
+      }),
+    ),
+  120_000,
+);
+
+/** One agent handed two pieces of work in turn, neither naming a model. */
+const handedOn = enveloped({ name: "agent-handed-on", input: {}, success: Schema.String });
+const handedOnBody = handedOn.toLayer(
+  Effect.fnUntraced(function* (payload) {
+    const run = Run.of({ id: payload.runId, workflow: "agent-handed-on" });
+    const build = agentWork({ operation: "build", agent: "implementer", instructions: "Build." });
+    const fix = agentWork({
+      operation: "fix",
+      agent: "implementer",
+      instructions: "Fix.",
+      harness: "claude",
+    });
+    return yield* Effect.all([build, fix]).pipe(
+      Effect.map((both) => both.join("+")),
+      Effect.provideService(Run, run),
+    );
+  }),
+);
+
+test("an agent's later work goes to the one that took over from it, and asking for the first is not refused", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([null, "built", "fixed"]);
+      const implementer = agentName("r1", "implementer", null, 1);
+      const result = yield* Effect.gen(function* () {
+        yield* Effect.forkScoped(runsOut(implementer));
+        return yield* handedOn.execute({ runId: "r1", input: {} }).pipe(Effect.result);
+      }).pipe(
+        Effect.provide(handedOnBody),
+        Effect.provide(agentsLayer({ ...hostOf(), ...chain, collectMs: 30_000 })),
+        Effect.provide(foundationLayer({ dir })),
+        Effect.scoped,
+        Effect.orDie,
+      );
+      expect(result._tag === "Success" && result.success).toBe("built+fixed");
+      const calls = yield* rig.calls();
+      expect(harnessesStarted(calls)).toEqual(["claude", "codex"]);
+      const successor = agentName("r1", "implementer", null, 2);
+      const fixedBy = calls.filter(
+        (call) =>
+          (call.argv ?? [])[1] === "prompt" &&
+          (call.argv ?? [])[2] === successor &&
+          ((call.argv ?? [])[3] ?? "").includes("fix.r2.prompt.md"),
+      );
+      expect(fixedBy).toHaveLength(1);
+    }),
+  ));
+
+test("a collection an earlier build recorded, text or nothing, still decodes as it was", () => {
+  expect(Schema.decodeUnknownSync(Collected)("done")).toBe("done");
+  expect(Schema.decodeUnknownSync(Collected)(null)).toBeNull();
+});
 
 /** One agent handed two pieces of work, the second asking for another model. */
 const shared = enveloped({ name: "agent-shared", input: {}, success: Schema.String });

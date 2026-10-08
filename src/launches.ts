@@ -25,6 +25,10 @@ export const Launched = Schema.Struct({
   harness: Schema.String,
   model: Schema.optionalKey(Schema.String),
   effort: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  /** When it was given this work, on the clock its harness's telemetry is stamped with. */
+  at: Schema.optionalKey(Schema.Number),
+  /** Which agent of this work it is: past 1, one that took over from an agent that ran out. */
+  sequence: Schema.optionalKey(Schema.Number),
   /** What this work fell back from, and why, where it did. */
   from: Schema.optionalKey(RanOn),
   why: Schema.optionalKey(Schema.String),
@@ -36,6 +40,10 @@ export type Launched = typeof Launched.Type;
 export const LAUNCH_SUFFIX = ".launch.json";
 /** One operation a line, in the order its agent was launched. */
 export const LAUNCH_ORDER = "launches";
+
+/** What a launch's files are named by: its operation, and its sequence past the first. */
+export const stemOf = (one: { readonly operation: string; readonly sequence?: number }) =>
+  (one.sequence ?? 1) > 1 ? `${one.operation}.r${one.sequence}` : one.operation;
 
 /** Where a Run's agents keep their launch records, prompts and outputs. */
 export const launchDir = (stateDir: string, runId: string) => `${stateDir}/agents/${runId}`;

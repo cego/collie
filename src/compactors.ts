@@ -27,7 +27,7 @@ import {
   summarize,
   createSession,
 } from "./opencode";
-import { StatusLineLimits, type StatusSample } from "./usage-model";
+import { resetPhrase, StatusLineLimits, statusLineWindows, type StatusSample } from "./usage-model";
 import {
   CONTROL_DIR,
   Unsubmitted,
@@ -111,7 +111,7 @@ const EventSchema = Schema.Struct({
   at: Schema.Number,
   /** The harness's own session identity, so a `/new` in the pane invalidates the rest. */
   session: Schema.NullOr(Schema.String),
-  kind: Schema.Literals(["session", "usage", "start", "done", "failed", "auto", "submit"]),
+  kind: Schema.Literals(["session", "usage", "start", "done", "failed", "auto", "submit", "out"]),
   /** Current-context total. `null` where the harness has not measured this context. */
   tokens: Schema.optionalKey(Schema.NullOr(Schema.Number)),
   /** Collie's own request id, which is what correlates an outcome to an attempt. */
@@ -135,6 +135,8 @@ const EventSchema = Schema.Struct({
   items: Schema.optionalKey(Schema.Array(Schema.String)),
   /** On a Claude `usage`: its Subscription's windows, as the status line had them. */
   limits: Schema.optionalKey(StatusLineLimits),
+  /** On an `out`: where the harness keeps this conversation. */
+  transcript: Schema.optionalKey(Schema.String),
 });
 interface TelemetryEvent extends Schema.Schema.Type<typeof EventSchema> {}
 const EventJson = Schema.fromJsonString(EventSchema);
@@ -387,6 +389,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 const FILE = ${JSON.stringify(file)};
 const KEEP = ${KEEP_LINES};
 const KEEP_LIFECYCLE = ${KEEP_LIFECYCLE};
+const USAGE_LIMIT = /usage limit|usage_limit|exceeded your current quota/i;
 
 export default function (pi) {
   let session = null;
@@ -468,7 +471,14 @@ export default function (pi) {
   };
 
   pi.on("session_start", async (_event, ctx) => sample(ctx));
-  pi.on("turn_end", async (_event, ctx) => sample(ctx));
+  pi.on("turn_end", async (event, ctx) => {
+    sample(ctx);
+    // pi does not retry a spent subscription, so an error stop saying so is the end of it.
+    const message = event?.message;
+    const said = String(message?.errorMessage ?? "");
+    if (message?.stopReason === "error" && USAGE_LIMIT.test(said) && !/overloaded/i.test(said))
+      write({ kind: "out", reason: said, transcript: ctx.sessionManager.getSessionFile() ?? undefined });
+  });
   pi.on("agent_settled", async (_event, ctx) => sample(ctx));
 
   // Recorded with their reason and no request id: a threshold or overflow compaction is
@@ -560,8 +570,11 @@ const beforeSubmitting = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
  */
 const ClaudePayload = Schema.Struct({
   session_id: Schema.optionalKey(Schema.String),
-  /** Absent for the status line; `PreCompact` or `PostCompact` for a hook. */
+  /** Absent for the status line; the hook's name for a hook. */
   hook_event_name: Schema.optionalKey(Schema.String),
+  /** `StopFailure` only: why the turn stopped, `rate_limit` among them. */
+  error: Schema.optionalKey(Schema.String),
+  transcript_path: Schema.optionalKey(Schema.String),
   trigger: Schema.optionalKey(Schema.String),
   /** `UserPromptSubmit` only: what was submitted, which is how Collie's own is told. */
   prompt: Schema.optionalKey(Schema.String),
@@ -675,6 +688,18 @@ export const recordClaudeEvent = Effect.fn("Compactors.recordClaudeEvent")(funct
     );
     return "";
   }
+  const transcript = payload.transcript_path;
+  if (event === "StopFailure") {
+    // Only a spent subscription; an overload or a transient limit is retried by Claude.
+    if (payload.error === "rate_limit" || payload.error === "billing_error")
+      yield* writeEvent(dir, {
+        session,
+        kind: "out",
+        reason: (yield* lastFullWindow(dir)) ?? payload.error,
+        ...(transcript && { transcript }),
+      });
+    return "";
+  }
   if (event === "PreCompact" || event === "PostCompact") {
     // Only `PreCompact` is given the instructions back, so only it can carry the
     // marker. Everything else — Claude's own automatic compaction, a human's
@@ -700,6 +725,19 @@ export const recordClaudeEvent = Effect.fn("Compactors.recordClaudeEvent")(funct
 
   const limits = Option.getOrUndefined(decodeLimits(payload.rate_limits));
   yield* writeEvent(dir, { session, kind: "usage", tokens, ...(limits && { limits }) });
+  // Once a session: a status line is redrawn on every event, and its `out` must not crowd
+  // the compaction records out of the telemetry's cap.
+  const full = limits && statusLineWindows(limits).some((window) => window.usedPercent >= 100);
+  const told = (yield* readEvents(dir).pipe(Effect.orElseSucceed(() => []))).some(
+    (one) => one.kind === "out",
+  );
+  if (full && !told)
+    yield* writeEvent(dir, {
+      session,
+      kind: "out",
+      reason: (yield* lastFullWindow(dir)) ?? "a window at 100%",
+      ...(transcript && { transcript }),
+    });
   const percent = window?.used_percentage;
   return percent === null || percent === undefined
     ? "context: not measured yet"
@@ -715,17 +753,26 @@ export const recordClaudeEvent = Effect.fn("Compactors.recordClaudeEvent")(funct
  * hooks are the official lifecycle. Both are matched on `manual` and `auto`, because
  * an automatic compaction is what invalidates a sample Collie is about to read.
  */
-function claudeSettings(dir: string): string {
+export function claudeSettings(dir: string, stopFailure: boolean): string {
   const helper = [...selfCommand(), "herdr", "compaction", dir].map(shellQuote).join(" ");
   const hook = { matcher: "manual|auto", hooks: [{ type: "command", command: helper }] };
   // `UserPromptSubmit` is the only place a submitted turn is visible to Collie, and it
   // is what attribution rests on: a prompt with no delivery token is somebody typing in
   // the pane. It carries no matcher — every submission counts, which is the point.
   const submitted = { hooks: [{ type: "command", command: helper }] };
+  const spent = {
+    matcher: "rate_limit|billing_error",
+    hooks: [{ type: "command", command: helper }],
+  };
   return `${JSON.stringify(
     {
       statusLine: { type: "command", command: helper },
-      hooks: { PreCompact: [hook], PostCompact: [hook], UserPromptSubmit: [submitted] },
+      hooks: {
+        PreCompact: [hook],
+        PostCompact: [hook],
+        UserPromptSubmit: [submitted],
+        ...(stopFailure && { StopFailure: [spent] }),
+      },
     },
     null,
     2,
@@ -760,6 +807,47 @@ const claudeOutcome = Effect.fn("Compactors.claudeOutcome")(function* (
   return null;
 });
 
+/**
+ * The busiest window this agent's status line last reported, with its reset, as a run-out
+ * is said: `session 100%, resets 15:45 (in 2h 3m)`. Null where it reported none.
+ */
+const lastFullWindow = Effect.fn("Compactors.lastFullWindow")(function* (dir: string) {
+  const sampled = (yield* readEvents(dir).pipe(Effect.orElseSucceed(() => []))).findLast(
+    (one) => one.limits !== undefined,
+  )?.limits;
+  const [busiest] = sampled
+    ? statusLineWindows(sampled).toSorted((a, b) => b.usedPercent - a.usedPercent)
+    : [];
+  if (busiest === undefined) return null;
+  const reset =
+    busiest.resetsAt === null
+      ? ""
+      : `, ${resetPhrase(busiest.resetsAt, yield* Clock.currentTimeMillis)}`;
+  return `${busiest.label.toLowerCase()} ${Math.round(busiest.usedPercent)}%${reset}`;
+});
+
+/**
+ * The earliest Claude Code `StopFailure` was checked in. Older ones are left to their
+ * status line and the Machine's reading rather than given a hook they may refuse.
+ */
+const CLAUDE_STOP_FAILURE = "2.1.291";
+
+/**
+ * When this agent's harness said it ran out of usage at or after `since`, why, and where
+ * its conversation is; null where it has not.
+ */
+export const ranOutSince = Effect.fn("Compactors.ranOutSince")(function* (
+  dir: string,
+  since: number,
+) {
+  const out = (yield* readEvents(dir).pipe(Effect.orElseSucceed(() => []))).findLast(
+    (event) => event.kind === "out" && event.at >= since,
+  );
+  return out === undefined
+    ? null
+    : { why: out.reason ?? "its usage ran out", transcript: out.transcript ?? null };
+});
+
 const claude: CompactionPort = {
   gate: () => gateVersion("claude"),
   install: (ctx) =>
@@ -767,7 +855,9 @@ const claude: CompactionPort = {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const settings = path.join(ctx.dir, "settings.json");
-      yield* fs.writeFileString(settings, claudeSettings(ctx.dir));
+      const installed = yield* installedVersion("claude");
+      const stopFailure = installed !== null && atLeast(installed, CLAUDE_STOP_FAILURE);
+      yield* fs.writeFileString(settings, claudeSettings(ctx.dir, stopFailure));
       return { args: ["--settings", settings] };
     }),
   usage: (ctx) => latestUsage(ctx.dir),

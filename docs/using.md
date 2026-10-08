@@ -2000,6 +2000,22 @@ or not logged in. Machines logged in to one account each read it for themselves;
 names the account by its id, never its email, because one email can hold a personal plan and
 a team seat.
 
+An agent can also run out in the middle of its work
+([ADR-0049](adr/0049-work-goes-to-an-agent-with-usage-left.md) D8): Claude Code says it
+stopped on its limit, or its status line shows a window at 100%; pi stops on a usage-limit
+error; or this Machine's reading says the Subscription is Exhausted for its model. If it has
+not written its Output yet, Collie closes its tab — Claude would otherwise carry on in the
+same checkout at the reset — and opens a new one in the Task's workspace on the next agent
+with room, given the same work with a hand-over at the head of its prompt: what the earlier
+agent changed is in the checkout, and where its conversation is. The Run's log says
+`build: claude/opus ran out (session 100%, resets 15:45) — continuing on codex/default as
+<agent>`, and the Run's record lists both agents, the new one saying what it fell back
+from. The new agent takes the old one's place for later work that names it, such as the
+next slices of a build. A transient rate limit or an overloaded API moves nothing, nor
+does a harness that will not start or is signed out: the Run parks with its reason as
+before. Where nothing has room, the agent is left where it is, and the Run waits for it,
+parking after its collection time with when each Subscription resets.
+
 Usage is data: it never refuses, holds or delays work.
 
 ## Troubleshooting

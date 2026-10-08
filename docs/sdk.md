@@ -435,7 +435,12 @@ agents: { effort: "xhigh", upTo: 80, otherwise: [{ effort: "medium" }] },
 ```
 
 The agent the work landed on is recorded with what it fell back from and why, and the Run's
-record says so. A workflow that wants any other policy reads the Machine's usage from its
+record says so. An agent that runs out in the middle of its work is closed and replaced by
+one on the next choice with room, given the same work and a hand-over; each step is its own
+Activity, so a restart continues with the agent it recorded rather than starting another.
+Where work names an `agent` shared across operations, the agent that took over is that
+agent from then on: later work naming it goes to the new one, and asking for what the
+first one was — `harness: "claude"` for an implementer now on codex — is not refused. A workflow that wants any other policy reads the Machine's usage from its
 `Host` and judges it with `usedFor`, which returns the busiest applicable window's percent,
 its reset and whether the Subscription is Exhausted, or null where nothing is read for it.
 `subscriptionOf` says which Subscription a choice draws on. Read it inside an Activity of
