@@ -134,6 +134,32 @@ const FRONT_DOOR: readonly Check[] = [
     },
   },
   {
+    id: "front-door/desktop-shows-each-subscriptions-windows-per-machine",
+    statement:
+      "Desktop shows each Subscription's windows per Machine, each with its percent and reset, and the reading's age and source or its problem.",
+    owner: USAGE,
+    needs: "ui",
+    proof: {
+      kind: "test",
+      layer: "ui",
+      file: "test/desktop-usage.test.ts",
+      name: "each Subscription's plan and account, each window's meter and reset, and its age and source",
+    },
+  },
+  {
+    id: "front-door/desktop-header-warns-at-90-percent",
+    statement:
+      "Desktop's header names each Subscription's busiest window, amber at 90% and red once it is Exhausted.",
+    owner: USAGE,
+    needs: "ui",
+    proof: {
+      kind: "test",
+      layer: "ui",
+      file: "test/desktop-usage.test.ts",
+      name: "amber at 90%, red and out when Exhausted, and a model's own window does not count",
+    },
+  },
+  {
     id: "front-door/desktop-shows-what-a-run-was-given",
     statement:
       "Desktop's record of a Run shows each PNG, JPEG, GIF or WebP image it was given as a thumbnail and any other file by name.",

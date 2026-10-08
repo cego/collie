@@ -1012,6 +1012,22 @@ gives it what it lacks. A toast says what it did, red where a part of it failed.
 chat reads the same standing and does the same Sync now through `collie_in_sync`. The header's **Machines** button shows how many Machines aren't in sync, those
 still connecting left out.
 
+Beside **Machines**, the header names each **Subscription** and account in use across the
+Flock with its busiest window, as in `Claude 72% · ChatGPT 2%`: amber at 90% or above, red
+and "out" once it is **Exhausted**. Hovering an entry gives its account, when that window
+resets and which Machine read it how long ago, and clicking it opens Machines. Machines
+logged in to one account are one entry, matched by the account's id rather than its email,
+and two accounts are two, each named; the provider counts usage per account, so the entry
+shows the newest of its Machines' readings. On the Machines page each Machine has a
+**Usage** block: per Subscription its plan and account, each window as a meter with its
+percent and when it resets, as a clock time and "in 2h 10m", and how fresh the numbers are
+and where they came from ("as of 3 minutes ago · Claude's usage endpoint"), or the
+reading's problem in its own words. A Machine running a Collie too old to read usage says
+"can't say; upgrade this Machine". Desktop asks every live Machine when it opens, again
+each minute while its window is shown, and whenever Machines opens; each host answers from
+its own reading, which is at most five minutes old unless its source is refusing
+([Usage](#usage)).
+
 Onboarding downloads the runner of Desktop's own version for that Machine from the GitHub
 release, with its `.sig`, and verifies it against Collie's release key before it goes
 anywhere; one that is unsigned or does not match is refused and said, and nothing reaches
@@ -1939,8 +1955,9 @@ Anything a sweep cannot judge is kept, with the reason.
 Each Machine's host reads how much of its Claude and ChatGPT **Subscriptions** is used
 ([ADR-0049](adr/0049-work-goes-to-an-agent-with-usage-left.md)), per window: the 5-hour
 session, the week, and a model's own week where the plan has one. `collie usage` prints it,
-the Control Plane's header names each Subscription's busiest window, and chat runs the
-command when you ask how much is left.
+the Control Plane's header names each Subscription's busiest window, Desktop shows it across
+the Flock and per Machine ([Collie Desktop](#collie-desktop)), and chat runs the command
+when you ask how much is left.
 
 The numbers come from where the harnesses' own `/usage` and `/status` get them:
 

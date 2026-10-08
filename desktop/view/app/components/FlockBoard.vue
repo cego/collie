@@ -3,6 +3,7 @@ import { SECTIONS } from "../../../../src/board-model";
 import { AsyncResult, useAtomValue } from "@effect/atom-vue";
 import type { NotLive } from "../../../src/shared/flock";
 import { afterGesture, escapeOn, type Gesture, landedOn } from "../../../src/shared/board-clicks";
+import type { Level } from "../../../src/shared/usage";
 import { updatesAtom } from "../flock";
 import tile from "../../../../assets/brand/logos/collie-tile-256.png";
 
@@ -20,6 +21,13 @@ const {
   placedAt,
 } = useFlock();
 const { summary } = useInSync();
+const usage = useUsage();
+usage.keepFresh();
+const LEVEL_CLASS = {
+  ok: "text-muted",
+  warn: "text-warning font-medium",
+  out: "text-error font-medium",
+} satisfies Record<Level, string>;
 const starting = ref(false);
 const { onboardOn } = useOnboarding();
 const { renewBy } = useCredentials();
@@ -156,8 +164,26 @@ watch(update, (now) => {
         <p data-testid="header" :class="header.urgent ? 'text-warning font-medium' : 'text-muted'">
           {{ connecting || failure !== null ? "" : header.text }}
         </p>
+        <div class="ml-auto flex items-center">
+          <UButton
+            v-if="usage.entries.value.length > 0"
+            color="neutral"
+            variant="ghost"
+            size="sm"
+            data-testid="usage"
+            @click="open('machines')"
+          >
+            <template v-for="(entry, i) in usage.entries.value" :key="entry.key">
+              <span v-if="i > 0" class="text-muted">·</span>
+              <UTooltip :text="entry.title">
+                <span :class="LEVEL_CLASS[entry.level]" :data-testid="`usage-${entry.key}`">
+                  {{ entry.text }}
+                </span>
+              </UTooltip>
+            </template>
+          </UButton>
+        </div>
         <UButton
-          class="ml-auto"
           color="neutral"
           variant="outline"
           icon="i-lucide-server"

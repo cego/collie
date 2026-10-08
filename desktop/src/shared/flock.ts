@@ -9,6 +9,7 @@ import { AguiEvent } from "./agui";
 import { Staged, StagedOrRefused } from "./attachments";
 import { About, Answers, ChatMessage, Conversations, DesktopTurn } from "./chat-view";
 import { FlockSettings } from "./flock-settings";
+import { MachineUsage } from "./usage";
 import {
   BoardMessage,
   Herd,
@@ -459,6 +460,8 @@ export const DesktopRpcs = RpcGroup.make(
     success: Schema.Struct({ said: Schema.String, failed: Schema.Boolean }),
     error: ActionFailed,
   }),
+  /** What each connected Machine's host read of its Usage. */
+  Rpc.make("usage", { success: Schema.Array(MachineUsage) }),
   /** One Run's details while its record is open, with its log's tail, again as they change. */
   Rpc.make("runDetail", {
     payload: { installation: Schema.String, runId: Schema.String },

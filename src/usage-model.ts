@@ -72,7 +72,7 @@ export function current(window: UsageWindow, now: number): UsageWindow {
   return { ...window, usedPercent: 0, reached: false };
 }
 
-const isFull = (window: UsageWindow) => window.reached || window.usedPercent >= 100;
+export const isFull = (window: UsageWindow) => window.reached || window.usedPercent >= 100;
 
 export interface Used {
   readonly window: UsageWindow;
@@ -125,14 +125,19 @@ export interface UsagePhrase {
   readonly warn: boolean;
 }
 
+/** A reading's busiest window at `now` of those that apply to every model. */
+export function busiestGeneral(reading: UsageReading, now: number): Used | null {
+  // A model's own window says nothing about the Subscription's other models.
+  const general = reading.windows.filter((window) => window.model === null);
+  return busiest(general.map((window) => current(window, now)));
+}
+
 /** Each Subscription's busiest window, in a few characters. */
 export function usagePhrase(readings: ReadonlyArray<UsageReading>, now: number): UsagePhrase {
   const parts: string[] = [];
   let warn = false;
   for (const reading of readings) {
-    // A model's own window says nothing about the Subscription's other models.
-    const general = reading.windows.filter((window) => window.model === null);
-    const used = busiest(general.map((window) => current(window, now)));
+    const used = busiestGeneral(reading, now);
     if (used === null) continue;
     warn ||= used.usedPercent >= WARN_PERCENT;
     parts.push(
@@ -398,4 +403,18 @@ export function resetIn(resetsAt: string, now: number): string {
   if (days > 0) return `in ${days}d ${hours}h`;
   if (hours > 0) return `in ${hours}h ${minutes % 60}m`;
   return `in ${minutes}m`;
+}
+
+const resetClock = (iso: string, now: number) => {
+  const at = DateTime.makeUnsafe(iso);
+  const day = (time: DateTime.DateTime) => DateTime.formatLocal(time, { dateStyle: "short" });
+  const time = DateTime.formatLocal(at, { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+  return day(at) === day(DateTime.makeUnsafe(now))
+    ? time
+    : `${DateTime.formatLocal(at, { weekday: "short", locale: "en-GB" })} ${time}`;
+};
+
+/** A reset as a local clock time and how long until it: `resets 14:00 (in 2h 3m)`. */
+export function resetPhrase(resetsAt: string, now: number): string {
+  return `resets ${resetClock(resetsAt, now)} (${resetIn(resetsAt, now)})`;
 }

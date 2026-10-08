@@ -72,6 +72,7 @@ import {
   focusOn,
   offersOn,
   runDetailOn,
+  usageOn,
   runFileOn,
   workflowsOn,
   endChildren,
@@ -903,6 +904,10 @@ const main = Effect.gen(function* () {
       Stream.unwrap(
         Effect.map(doorTo(doors, installation), (door) => runDetailOn(door.desktop, runId)),
       ),
+    usage: () =>
+      Effect.forEach(doors.values(), (door) => usageOn(door.machine, door.desktop), {
+        concurrency: "unbounded",
+      }),
     runFile: ({ installation, runId, ref, offset }) =>
       doorTo(doors, installation).pipe(
         Effect.flatMap((door) => runFileOn(door.desktop, runId, ref, offset)),

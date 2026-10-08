@@ -99,8 +99,10 @@ herdr actions, and the `collie` CLI.
   Exhausted** → [ADR-0049](docs/adr/0049-work-goes-to-an-agent-with-usage-left.md) and
   [`docs/using.md`](docs/using.md#usage), alongside `src/usage-model.ts` (the reading's
   Schemas and every judgement made from it, pure so Desktop and a module share them),
-  `src/usage.ts` (the host's sources, their interval and back-off) and `collie usage` in
-  `src/commands/usage.ts`, with `test/usage-model.test.ts` and `test/usage.test.ts`. Usage
+  `src/usage.ts` (the host's sources, their interval and back-off), `collie usage` in
+  `src/commands/usage.ts` and Desktop's `desktop/src/shared/usage.ts` (the header's entries
+  and a Machine's Usage block), with `test/usage-model.test.ts`, `test/usage.test.ts` and
+  `test/desktop-usage.test.ts`. Usage
   chooses where work runs, never whether it runs.
 - **Adding a setting, or changing how settings are shared across a Flock** →
   [ADR-0043](docs/adr/0043-a-shared-setting-is-its-latest-edit.md), alongside

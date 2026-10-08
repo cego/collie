@@ -1,21 +1,12 @@
 // `collie usage`: how much of each Subscription this Machine's logins have used, per
 // window, as its host last read it (ADR-0049).
 
-import { Clock, DateTime, Effect } from "effect";
+import { Clock, Effect } from "effect";
 import { Command } from "effect/cli";
 import { usageReadings } from "../lifecycle";
 import { agoMs, epochMs } from "../time";
-import { current, resetIn, type UsageReading } from "../usage-model";
+import { current, resetPhrase, type UsageReading } from "../usage-model";
 import { answering, cliDoor } from "./shared";
-
-const clock = (iso: string, now: number) => {
-  const at = DateTime.makeUnsafe(iso);
-  const day = (time: DateTime.DateTime) => DateTime.formatLocal(time, { dateStyle: "short" });
-  const time = DateTime.formatLocal(at, { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
-  return day(at) === day(DateTime.makeUnsafe(now))
-    ? time
-    : `${DateTime.formatLocal(at, { weekday: "short", locale: "en-GB" })} ${time}`;
-};
 
 /** One line per window, then the reading's age and source, or its problem. */
 export function usageLines(readings: ReadonlyArray<UsageReading>, now: number): string {
@@ -28,7 +19,7 @@ export function usageLines(readings: ReadonlyArray<UsageReading>, now: number): 
         const used = `${window.label} ${Math.round(window.usedPercent)}%${window.reached ? " (reached)" : ""}`;
         return window.resetsAt === null
           ? `${head}${used}`
-          : `${head}${used} · resets ${clock(window.resetsAt, now)} (${resetIn(window.resetsAt, now)})`;
+          : `${head}${used} · ${resetPhrase(window.resetsAt, now)}`;
       });
       const age = `read ${agoMs(epochMs(reading.at), now)} from ${reading.source}`;
       const said =

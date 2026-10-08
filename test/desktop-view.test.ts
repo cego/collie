@@ -117,6 +117,7 @@ const served = (main: Channel<ToView, ToMain>) =>
         terminalSend: () => Effect.die("not asked"),
         runDetail: () => Stream.die("not asked"),
         runFile: () => Effect.die("not asked"),
+        usage: () => Effect.die("not asked"),
         stage: () => Effect.die("not asked"),
         attachmentFile: () => Effect.die("not asked"),
         stagePaths: () => Effect.die("not asked"),

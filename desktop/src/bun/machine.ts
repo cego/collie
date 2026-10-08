@@ -4,6 +4,7 @@
 // not its own.
 
 import {
+  Cause,
   Clock,
   Deferred,
   Effect,
@@ -44,6 +45,7 @@ import {
   type NotLive,
 } from "../shared/flock";
 import { CREDENTIAL_SAID, type Lag } from "../shared/in-sync";
+import { type MachineUsage, UPGRADE_SAID } from "../shared/usage";
 
 const children = new Set<Bun.Subprocess>();
 export const endChildren = () => {
@@ -924,6 +926,32 @@ export const runDetailOn = (door: Door, runId: string) =>
 
 export const runFileOn = (door: Door, runId: string, ref: string, offset?: number) =>
   door.runFile({ runId, ref, offset }).pipe(Effect.mapError(refusal()));
+
+/** What a Machine's host read of its Usage; a host too old to have the call asks for an upgrade. */
+export const usageOn = (
+  { profile, name }: KnownMachine,
+  door: Pick<Door, "usage">,
+): Effect.Effect<MachineUsage> =>
+  door.usage().pipe(
+    Effect.map((readings) => ({ profile, name, readings, problem: null })),
+    Effect.mapError(refusal()),
+    // One Machine that does not answer must not hold back the others'.
+    Effect.timeoutOrElse({
+      duration: "15 seconds",
+      orElse: () => Effect.fail(new ActionFailed({ reason: "its host did not answer in time" })),
+    }),
+    Effect.catchCause((cause) => {
+      if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt;
+      const failed = Cause.findErrorOption(cause);
+      const defect = Cause.findDefect(cause);
+      const problem = Option.isSome(failed)
+        ? failed.value.reason
+        : defect._tag === "Success" && String(defect.success).startsWith("Unknown request tag")
+          ? UPGRADE_SAID
+          : Cause.pretty(cause).split("\n")[0]!;
+      return Effect.succeed({ profile, name, readings: [], problem });
+    }),
+  );
 
 /** What connecting would do for a Machine that lags on `behind`, and whether any of it failed. */
 export const syncNow = (
