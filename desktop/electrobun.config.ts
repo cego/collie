@@ -21,7 +21,20 @@ export default {
     bun: { entrypoint: "src/bun/index.ts" },
     copy: { "view/.output/public": "views/mainview" },
     watchIgnore: ["view/**"],
-    mac: { bundleCEF: false, icons: "mac.iconset", ...macSigning(process.env) },
+    mac: {
+      bundleCEF: false,
+      icons: "mac.iconset",
+      ...macSigning(process.env),
+      // Electrobun signs with the hardened runtime, which Bun's JIT and an ad hoc identity's
+      // libraries need these to run under.
+      entitlements: {
+        "com.apple.security.cs.allow-jit": true,
+        "com.apple.security.cs.allow-unsigned-executable-memory": true,
+        "com.apple.security.cs.disable-executable-page-protection": true,
+        "com.apple.security.cs.allow-dyld-environment-variables": true,
+        "com.apple.security.cs.disable-library-validation": true,
+      },
+    },
     linux: {
       bundleCEF: true,
       // bundleCEF alone still renders with WebKitGTK.

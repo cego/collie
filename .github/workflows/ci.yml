@@ -48,8 +48,7 @@ jobs:
         env:
           COLLIE_OPENSSL: /usr/bin/openssl
 
-  # Desktop built for Apple silicon, unsigned by any Developer ID, and the gate the release runs
-  # on its bundle.
+  # Desktop built for Apple silicon, signed ad hoc, and the gate the release runs on its bundles.
   desktop-macos:
     runs-on: macos-15
     steps:
@@ -62,7 +61,9 @@ jobs:
         working-directory: desktop
       - run: bun run build
         working-directory: desktop
-      - run: sh tools/verify-mac-app.sh desktop/build
+        env:
+          ELECTROBUN_DEVELOPER_ID: "-"
+      - run: sh tools/verify-mac-app.sh desktop
       - run: ls desktop/artifacts
 
   # Desktop's own install and types, which the root check cannot see: the root installs none

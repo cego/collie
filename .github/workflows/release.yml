@@ -103,7 +103,7 @@ jobs:
           if-no-files-found: error
 
   # Desktop for Apple silicon: its DMG, update archive and update manifest. Signed with the
-  # Developer ID and notarized only when every Apple secret is set; ad hoc otherwise.
+  # Developer ID, and notarized, only when the Apple secrets are set; ad hoc otherwise.
   desktop-macos:
     runs-on: macos-15
     steps:
@@ -136,14 +136,15 @@ jobs:
       - run: bun run build
         working-directory: desktop
         env:
-          ELECTROBUN_DEVELOPER_ID: ${{ secrets.ELECTROBUN_DEVELOPER_ID }}
+          # `-` signs ad hoc where there is no Developer ID.
+          ELECTROBUN_DEVELOPER_ID: ${{ secrets.ELECTROBUN_DEVELOPER_ID || '-' }}
           ELECTROBUN_APPLEID: ${{ secrets.ELECTROBUN_APPLEID }}
           ELECTROBUN_APPLEIDPASS: ${{ secrets.ELECTROBUN_APPLEIDPASS }}
           ELECTROBUN_TEAMID: ${{ secrets.ELECTROBUN_TEAMID }}
           ELECTROBUN_APPLEAPIKEY: ${{ secrets.ELECTROBUN_APPLEAPIKEY }}
           ELECTROBUN_APPLEAPIISSUER: ${{ secrets.ELECTROBUN_APPLEAPIISSUER }}
       # A bundle macOS would refuse to start is never published.
-      - run: sh tools/verify-mac-app.sh desktop/build
+      - run: sh tools/verify-mac-app.sh desktop
       - uses: actions/upload-artifact@v7
         with:
           name: collie-desktop-macos

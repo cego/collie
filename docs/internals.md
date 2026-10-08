@@ -724,13 +724,15 @@ Collie Desktop is built by the same release, from the same tag, by the workflow'
 directory that hold Desktop's credentials and chat. The name people see is written into
 the launcher entry by `desktop/scripts/name-desktop-entry.ts`, Electrobun's postBuild and
 postWrap hook, before the bundle is packed; it fails a Linux build if there is none to name.
-A macOS build has none. There the hook signs the bundle ad hoc where Electrobun left it
-unsigned, unless the release signs it with a Developer ID: `desktop/scripts/mac-signing.ts`
-turns Electrobun's `codesign` and `notarize` on only with `ELECTROBUN_DEVELOPER_ID` and a
-complete Apple ID or API key set for notarization. The `desktop-macos` job builds the DMG,
-the `.app.tar.zst` update archive and the update manifest, and `tools/verify-mac-app.sh`
-fails it on a bundle `codesign --verify --deep --strict` rejects; CI runs the same build
-and gate on every push. Electrobun keeps its prepared-update record at
+A macOS build has none. Electrobun signs the app itself, after it writes the release
+metadata into the bundle and before it archives it, with the identity in
+`ELECTROBUN_DEVELOPER_ID`: the release's Developer ID where that secret is set, and `-`,
+ad hoc, where it is not. `desktop/scripts/mac-signing.ts` turns `codesign` on with an
+identity, and `notarize` only with a real one and a complete Apple ID or API key set. The
+`desktop-macos` job builds the DMG, the `.app.tar.zst` update archive and the update
+manifest, and `tools/verify-mac-app.sh` fails it unless `codesign --verify --deep --strict`
+passes on both the DMG's app and the app the update archive unpacks to; CI runs the same
+build and gate on every push. Electrobun keeps its prepared-update record at
 `<appDataFolder>/self-extraction/.electrobun-prepared-update.json` on every platform, and
 Desktop asks Electrobun for that folder, so the record is found on macOS as on Linux. Electrobun's self-extractor cannot read a GNU long-name tar entry,
 so `tools/check-payload.ts` fails the job when any path in the installer's payload is over
