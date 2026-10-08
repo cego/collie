@@ -132,6 +132,7 @@ const windowOn = (url: string, title: string, frame: BrowserWindow["frame"]) => 
       },
     },
   });
+  // macOS bundles no CEF, so its windows render with the system's WebKit.
   const window = new BrowserWindow({ title, url, renderer: "cef", frame, rpc });
   // The view holds the Bun bridge, so nothing may navigate the window off it. Set on the
   // webview: as a window option, Linux CEF ignores it.
@@ -160,18 +161,21 @@ const Collie = Config.schema(
   ),
 );
 
+/** What hands a URL to the app this computer opens it with. */
+const OPENER = process.platform === "darwin" ? "open" : "xdg-open";
+
 /** Opens a web page in the human's own browser. */
 const openUrl = (url: string) =>
   Effect.sync(() => {
-    if (Bun.which("xdg-open") === null) return void Utils.openExternal(url);
-    Bun.spawn(["xdg-open", url], { stdin: "ignore", stdout: "ignore", stderr: "ignore" });
+    if (Bun.which(OPENER) === null) return void Utils.openExternal(url);
+    Bun.spawn([OPENER, url], { stdin: "ignore", stdout: "ignore", stderr: "ignore" });
   });
 
 /** Slack's own app where it opens, else its web client. */
 const openSlack = Effect.gen(function* () {
-  if (Bun.which("xdg-open") === null) return yield* openUrl(SLACK_WEB);
+  if (Bun.which(OPENER) === null) return yield* openUrl(SLACK_WEB);
   // Never killed: still running is the app taking it.
-  const child = Bun.spawn(["xdg-open", SLACK_APP], { stdio: ["ignore", "ignore", "ignore"] });
+  const child = Bun.spawn([OPENER, SLACK_APP], { stdio: ["ignore", "ignore", "ignore"] });
   const code = yield* Effect.promise(() => child.exited).pipe(Effect.timeoutOption("5 seconds"));
   if (Option.isSome(code) && code.value !== 0) yield* openUrl(SLACK_WEB);
 });

@@ -19,7 +19,11 @@ export default {
     bun: { entrypoint: "src/bun/index.ts" },
     copy: { "view/.output/public": "views/mainview" },
     watchIgnore: ["view/**"],
-    mac: { bundleCEF: false },
+    mac: {
+      bundleCEF: false,
+      // The app's icon: the launcher tile at the sizes iconutil reads.
+      icons: "icon.iconset",
+    },
     linux: {
       bundleCEF: true,
       // bundleCEF alone still renders with WebKitGTK.
