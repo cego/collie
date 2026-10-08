@@ -1302,6 +1302,14 @@ next message goes with it, so "this one" means that card, and sending uses it up
 with its ✕, a click on the board's background, or Escape outside a field; a chat popped out
 into its own window clears with it. The chip is attached as context for the turn, never as your words.
 
+A web address in a message — yours, Collie's or Desktop's — is a link that opens in your
+browser, never in Desktop: bare, in `<…>`, as a markdown link, or alone in backticks. One
+whose text is its own address is drawn without `https://` and, past 60 characters, with its
+middle elided ("gitlab.cego.dk/some-group/some-project/-…9abcdef01234567"); hover for the
+whole address. A markdown link keeps its words. Long addresses, paths and ids wrap inside
+the message, so nothing in the chat scrolls sideways at any width; only a code block, a
+table or a diagram scrolls, within itself. The record's markdown wraps the same way.
+
 News reaches it from every Herd on every Machine as one batch: what matters most first —
 decisions, then consequential outcomes, then what is worth trying, then the routine — and
 by time within each, a screen's worth, saying per Machine what it left out ("and 7 older
