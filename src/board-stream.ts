@@ -2,19 +2,19 @@
 // then told to each client as every Task once and each Task that changed, numbered so a
 // client can tell it missed nothing.
 
-import { Effect, Option, Scope, Stream, SubscriptionRef } from "effect";
+import { Cause, Effect, Option, type Scope, Stream, SubscriptionRef } from "effect";
 import type { BoardMessage, BoardSnapshot, TaskView } from "./board-model";
 
 /**
  * One board for every client: built when the first one subscribes and again whenever
  * `changed` says something may have moved, one build at a time, with the changes that arrive
  * during a build folded into the next. It keeps building for as long as `Scope` lasts.
- * `boards` is the latest board, then each one built after it.
+ * Its stream is the latest board, then each one built after it.
  */
 export const shareBoard = <E, R, R2>(options: {
   readonly build: Effect.Effect<ReadonlyArray<TaskView>, E, R>;
   readonly changed: Stream.Stream<unknown, never, R2>;
-}) =>
+}): Effect.Effect<Stream.Stream<ReadonlyArray<TaskView>>, never, Scope.Scope | R | R2> =>
   Effect.gen(function* () {
     const scope = yield* Effect.scope;
     const context = yield* Effect.context<R | R2>();
@@ -22,27 +22,39 @@ export const shareBoard = <E, R, R2>(options: {
     const builder = Stream.concat(Stream.make(undefined), options.changed).pipe(
       Stream.buffer({ capacity: 1, strategy: "sliding" }),
       // A build that fails is skipped: the last board stands until a change builds again.
-      Stream.mapEffect(() => Effect.option(options.build)),
+      Stream.mapEffect(() =>
+        options.build.pipe(
+          Effect.map(Option.some),
+          Effect.catchCause((cause) =>
+            Cause.hasInterruptsOnly(cause)
+              ? Effect.interrupt
+              : Effect.logWarning("the board could not be built", cause).pipe(
+                  Effect.as(Option.none()),
+                ),
+          ),
+        ),
+      ),
       Stream.runForEach((built) =>
         Option.isSome(built) ? SubscriptionRef.set(latest, built) : Effect.void,
       ),
       Effect.provideContext(context),
     );
     let started = false;
-    const boards = Stream.unwrap(
+    return Stream.unwrap(
       Effect.gen(function* () {
         if (!started) {
           started = true;
           yield* Effect.forkIn(builder, scope);
         }
         return SubscriptionRef.changes(latest).pipe(
+          // A client that reads slowly skips to the latest board; it is told by diff.
+          Stream.buffer({ capacity: 1, strategy: "sliding" }),
           Stream.filter(Option.isSome),
           Stream.map((built) => built.value),
         );
       }),
     );
-    return { boards };
-  }) satisfies Effect.Effect<unknown, never, Scope.Scope | R | R2>;
+  });
 
 /**
  * What one client is told: a snapshot of the first board, then each later board as the

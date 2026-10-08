@@ -70,10 +70,11 @@ The host keeps one board, the latest TaskViews it built. One builder rebuilds it
 host's change stream (writes under the state directory, the board tick and herdr events),
 starting with the first subscriber and running as long as the host does. At most one build
 runs at a time, and changes that arrive during one are folded into the next. A build that
-fails is skipped and the last board stands.
+fails, or dies, is logged and skipped, and the last board stands; a client that arrived
+before the first good build waits for one.
 
 A subscriber is told a `Snapshot` of the latest board at once, or once the first build is
-done, with the head (installation, build, protocol, Herds) read for it as before. Then it
+done, with the head (installation, build, development, protocol, Herds) read for it as before. Then it
 is told `Upsert` and `Remove` messages diffed against what it was told, each time the board
 is rebuilt. `FrontDoorRpcs` and `PROTOCOL` are unchanged, and a reconnect is still a fresh
 snapshot. The side jobs' own board, built without herdr for the merge watch and News, is

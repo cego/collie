@@ -907,7 +907,7 @@ const frontDoorHandlers = (
         ],
         { concurrency: "unbounded" },
       ).pipe(Stream.share({ capacity: 1, strategy: "sliding" }));
-      const shared = yield* shareBoard({ build, changed });
+      const boards = yield* shareBoard({ build, changed });
       return FrontDoorRpcs.of({
         declare: ({ frontDoor, session, from, ...voice }, { client }) => {
           const already = declared.get(client.id);
@@ -1568,7 +1568,7 @@ const frontDoorHandlers = (
                       herd === null ? [] : [name === undefined ? { id: herd } : { id: herd, name }],
                     ),
                   },
-                  boards: shared.boards,
+                  boards,
                 }),
               ),
               Effect.provideContext(bun),

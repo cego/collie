@@ -215,9 +215,9 @@ const handBuilt = Effect.gen(function* () {
   }).pipe(
     Effect.flatMap((next) => (next === "fails" ? Effect.fail("unreadable") : Effect.succeed(next))),
   );
-  const shared = yield* shareBoard({ build, changed: Stream.fromQueue(changed) });
+  const boards = yield* shareBoard({ build, changed: Stream.fromQueue(changed) });
   const follow = (count: number) =>
-    boardMessages({ head: HEAD, boards: shared.boards }).pipe(
+    boardMessages({ head: HEAD, boards }).pipe(
       Stream.take(count),
       Stream.runCollect,
       Effect.forkScoped,
@@ -286,6 +286,24 @@ test("a client arriving before the first build is told its snapshot once that bu
         expect(yield* Fiber.join(early)).toEqual([
           { _tag: "Snapshot", ...HEAD, tasks: [two], seq: 1 },
         ]);
+      }),
+    ),
+  ));
+
+test("changes that arrive during a build are folded into one more build", () =>
+  runEffect(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const hand = yield* handBuilt;
+        const following = yield* hand.follow(1);
+        // The first build is under way, so the changes arrive during it.
+        while (hand.calls() === 0) yield* Effect.yieldNow;
+        yield* Queue.offerAll(hand.changed, [undefined, undefined, undefined]);
+        yield* hand.built([one]);
+        yield* hand.built([one, two]);
+        yield* Fiber.join(following);
+        yield* Effect.yieldNow;
+        expect(hand.calls()).toBe(2);
       }),
     ),
   ));

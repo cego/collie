@@ -1554,8 +1554,9 @@ fresh snapshot. The host builds one board for every client, so a client that sub
 told the latest at once (or once the first build is done), and it builds again when
 anything under its state directory is written, when herdr pushes an event from any of its
 sessions (a pane opening or closing, or an agent's status changing), and every five
-seconds: one build at a time, with what changes meanwhile folded into the next. The installation id is written once, by
-the first host to own the directory, and survives restarts and upgrades.
+seconds: one build at a time, with what changes meanwhile folded into the next. The
+installation id is written once, by the first host to own the directory, and survives
+restarts and upgrades.
 
 The host also runs what nobody has to have a pane open for: the merge watch, which asks
 GitLab about each waiting merge request every 5 minutes and records a merge; each Herd's
