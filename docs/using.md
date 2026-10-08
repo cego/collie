@@ -870,6 +870,11 @@ shows, which reads on a dark taskbar too — in your app launcher, on its window
 taskbar and at the top left of the board. On macOS the menu bar and the Dock say Collie;
 the app in `~/Applications` is `collie-desktop.app`, the name its updates are made for.
 
+On macOS an app opened from Finder or the Dock starts with launchd's minimal environment, so Desktop
+takes your login shell's environment as it starts: the `PATH` and variables from `~/.zshrc`
+reach `collie`, herdr and the agents it runs. If the shell does not answer within five
+seconds, Desktop keeps the environment it has.
+
 Desktop then keeps itself up to date. It checks the latest release when it starts and every
 hour after, and downloads an update in the background. **Settings**, under **About**, shows
 Desktop's own version with **Check for updates**, which checks now and says what it found: "Collie 0.34.0

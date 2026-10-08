@@ -58,6 +58,7 @@ import { clipboardPaths } from "../shared/attachments";
 import { readAttachment, stageAttachment, stagePath } from "./attachments";
 import { type FlockConversation, openFlockChat, refusal } from "./chat";
 import { claudeCode } from "./claude";
+import { takeLoginEnv } from "./login-env";
 import { chatDoor } from "./flock-tools";
 import { readSettings, writeSettings } from "./settings";
 import { flockSync, readFlockSettings, writeFlockSettings } from "./flock-settings";
@@ -189,6 +190,8 @@ const StateDir = Config.String("XDG_STATE_HOME").pipe(
 );
 
 const main = Effect.gen(function* () {
+  // Before anything is spawned, so every child starts with the shell's PATH and variables.
+  yield* takeLoginEnv;
   const updater = yield* electrobunUpdater;
   yield* applyAtLaunch(updater).pipe(
     Effect.catch((reason) => Effect.logWarning(`Desktop update not installed: ${reason}`)),
