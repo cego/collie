@@ -2,7 +2,7 @@
 // of the human; Desktop's own version of the runner goes there only once its signature
 // verifies; and `collie onboard` runs with it, each step told as it comes.
 
-import { Clock, Crypto, Effect, FileSystem, Option, Schema, Stream } from "effect";
+import { Cause, Clock, Crypto, Effect, FileSystem, Option, Queue, Schema, Stream } from "effect";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as HttpClient from "effect/http/HttpClient";
 import { RELEASE_PUBLIC_KEY, SIGNATURE_SUFFIX, verifyRelease } from "../../../src/signing";
@@ -420,19 +420,20 @@ export const addToHerdr = Effect.fn("Desktop.addToHerdr")(function* (
   session: string,
   ask: (text: string, yes: boolean) => Effect.Effect<boolean>,
 ) {
-  const command = [herdr, "machine", "add", "--label", label, "--remote-session", session, target]
-    .map(quoted)
-    .join(" ");
+  const output = yield* Queue.unbounded<Uint8Array, Cause.Done>();
+  // Bun's own terminal: `script` differs between Linux and macOS, and macOS's refuses the
+  // socket Bun gives a child for its stdin.
   const child = yield* spawned(() =>
-    Bun.spawn(["script", "-qefc", command, "/dev/null"], {
-      stdin: "pipe",
-      stdout: "pipe",
-      stderr: "pipe",
+    Bun.spawn([herdr, "machine", "add", "--label", label, "--remote-session", session, target], {
+      terminal: {
+        data: (_, bytes) => Queue.offerUnsafe(output, bytes),
+        exit: () => Queue.endUnsafe(output),
+      },
     }),
   );
   let said = "";
   let answered = 0;
-  yield* Stream.fromReadableStream({ evaluate: () => child.stdout, onError: String }).pipe(
+  yield* Stream.fromQueue(output).pipe(
     Stream.decodeText(),
     Stream.runForEach((chunk) =>
       Effect.gen(function* () {
@@ -442,8 +443,7 @@ export const addToHerdr = Effect.fn("Desktop.addToHerdr")(function* (
         if (asked === null) return;
         answered = said.length;
         const yes = yield* ask(asked.text, asked.yes);
-        void child.stdin.write(yes ? "y\n" : "n\n");
-        void child.stdin.flush();
+        child.terminal?.write(yes ? "y\n" : "n\n");
       }),
     ),
     Effect.ignore,
