@@ -1,7 +1,4 @@
-// A Run can work in a checkout another tool made, as bodil makes one: a parent runs the
-// tool's "up", a child works in the worktree it cut, and the tool's "down" runs once the
-// child has settled. Collie reuses that checkout and never prunes it, since it did not make
-// it. Real host, real git.
+// A Run in a checkout another tool made, as bodil makes one, on a real host with real git.
 
 import { expect, test } from "bun:test";
 import { Effect, FileSystem, Schema } from "effect";
