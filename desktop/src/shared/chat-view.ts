@@ -16,7 +16,6 @@ export type About = typeof About.Type;
 
 export const aboutLine = (about: About) => `${about.machine} › ${about.name}`;
 
-/** How Desktop's own block about a message's card begins. */
 const ABOUT =
   '[Desktop: the human sent this message about this card of the board; "this one" means it]';
 const AboutJson = Schema.fromJsonString(About);

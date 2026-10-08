@@ -1,24 +1,29 @@
-// A card's record opened from a chat message, in the board's window even from a chat popped
-// out into its own.
+// Only the board's window opens a record; a popped-out chat asks it over this channel.
 
 import { Option, Schema } from "effect";
 import { About } from "../../../src/shared/chat-view";
 
-const decodeAbout = Schema.decodeUnknownOption(About);
+const Asked = Schema.Union([Schema.Struct({ open: About }), Schema.Struct({ gone: About })]);
+const decodeAsked = Schema.decodeUnknownOption(Asked);
 
-/** The board's window, which opens a card's record; none in a chat popped out alone. */
-let opensRecord: ((about: About) => void) | undefined;
+let opensRecord: ((about: About) => boolean) | undefined;
+let toldGone: ((about: About) => void) | undefined;
 const records = new BroadcastChannel("collie-record");
 records.onmessage = (event) => {
-  const asked = decodeAbout(event.data);
-  if (Option.isSome(asked)) opensRecord?.(asked.value);
+  const asked = Option.getOrNull(decodeAsked(event.data));
+  if (asked === null) return;
+  if ("gone" in asked) toldGone?.(asked.gone);
+  else if (opensRecord !== undefined && !opensRecord(asked.open))
+    records.postMessage({ gone: asked.open });
 };
 
-/** Opens a card's record in the board's window, wherever it is asked from. */
 export const useRecordOpener = () => ({
-  openRecord: (about: About) =>
-    opensRecord === undefined ? records.postMessage(about) : opensRecord(about),
-  opensRecords: (open: (about: About) => void) => {
+  openRecord: (about: About, gone: (about: About) => void) => {
+    toldGone = gone;
+    if (opensRecord === undefined) records.postMessage({ open: about });
+    else if (!opensRecord(about)) gone(about);
+  },
+  opensRecords: (open: (about: About) => boolean) => {
     opensRecord = open;
     onScopeDispose(() => (opensRecord = undefined));
   },

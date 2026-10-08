@@ -25,6 +25,9 @@ const {
   setProactive,
 } = useFlockChat();
 const { openRecord } = useRecordOpener();
+const toast = useToast();
+const goneFromBoard = () =>
+  toast.add({ title: "That Task is no longer on the board", color: "warning" });
 
 type Message = (typeof messages.value)[number];
 /** What Desktop said of its own about News, after its first line, or null for anyone else's message. */
@@ -244,7 +247,7 @@ const queuedText = ({ content }: QueuedMessage) => {
             variant="subtle"
             class="max-w-full cursor-pointer self-start"
             :title="aboutLine(aboutOf(message)!)"
-            @click="openRecord(aboutOf(message)!)"
+            @click="openRecord(aboutOf(message)!, goneFromBoard)"
           >
             <span class="truncate">{{ aboutLine(aboutOf(message)!) }}</span>
           </UBadge>

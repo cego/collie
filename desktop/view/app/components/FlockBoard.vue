@@ -75,9 +75,8 @@ provide("gesture", gesture);
 const toast = useToast();
 useRecordOpener().opensRecords((about) => {
   const card = placedAt(about.machine, about.task);
-  if (card === undefined)
-    toast.add({ title: "That Task is no longer on the board", color: "warning" });
-  else gesture({ kind: "name", card: card.key });
+  if (card !== undefined) gesture({ kind: "name", card: card.key });
+  return card !== undefined;
 });
 // A record closes when its card leaves the Flock.
 watch(
