@@ -603,6 +603,26 @@ esac`,
     }),
   ));
 
+test("Claude Code is asked whether it is logged in with the whole environment, not only what Collie reads", () => {
+  // On macOS its Keychain lookup needs USER, which `currentEnv` does not keep.
+  const user = Bun.env.USER;
+  Bun.env.USER = "someone";
+  return runEffect(
+    Effect.gen(function* () {
+      yield* claudeAt(
+        `[ "$USER" = someone ] && echo '{"loggedIn": true}' || echo '{"loggedIn": false}'`,
+      );
+
+      const { events } = yield* onboarded({}, { attended: false });
+
+      expect(statusOf(events, "claude-login")).toBe("in_place");
+    }),
+  ).finally(() => {
+    if (user === undefined) delete Bun.env.USER;
+    else Bun.env.USER = user;
+  });
+});
+
 test("a terminal shows each step as text", () => {
   expect(eventText({ event: "start", step: "system", title: "Checking for git and curl" })).toBe(
     "→ Checking for git and curl",

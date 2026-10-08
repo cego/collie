@@ -37,3 +37,21 @@ test("a command still running when its scope closes is put down", () =>
       expect(yield* exited).not.toBe(0);
     }),
   ));
+
+test("the environment it is given is laid over this process's own", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const user = Bun.env.USER;
+      const asked = yield* inTerminal(["/bin/sh", "-c", 'echo "$USER/$GIVEN"'], {
+        env: { GIVEN: "given" },
+      });
+      const said = yield* asked.output.pipe(
+        Stream.decodeText(),
+        Stream.runFold(
+          () => "",
+          (all, chunk) => all + chunk,
+        ),
+      );
+      expect(said).toContain(`${user}/given`);
+    }).pipe(Effect.scoped),
+  ));

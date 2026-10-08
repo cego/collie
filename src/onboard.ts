@@ -172,6 +172,9 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
         ChildProcess.make(cmd, [...args], {
           cwd,
           env: { ...childEnv, ...extra },
+          // extendEnv, so a tool still has what `env.raw` leaves out: USER, which Claude
+          // Code's Keychain lookup on macOS needs to say it is logged in.
+          extendEnv: true,
           stdin: input === null ? "ignore" : Stream.make(new TextEncoder().encode(input)),
           stdout: "pipe",
           stderr: "pipe",
@@ -390,6 +393,7 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
             ChildProcess.make("claude", ["auth", "login"], {
               cwd: env.home,
               env: childEnv,
+              extendEnv: true,
               stdin: "inherit",
               stdout: "inherit",
               stderr: "inherit",
