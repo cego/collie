@@ -20,7 +20,6 @@ const DAY_MS = 24 * 60 * 60_000;
 const installed = (dir: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
-    // Where this platform's Desktop keeps it, as `collie cleanup` looks.
     const root = desktopRootOf(dataHomeOf(dir, `${dir}/data`));
     yield* fs.makeDirectory(`${root}/app/Resources`, { recursive: true });
     yield* fs.writeFileString(

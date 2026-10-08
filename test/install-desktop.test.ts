@@ -70,7 +70,7 @@ const fakes = (bin: string, os: Os, machine: string = PLATFORMS[os].uname[1]) =>
   attach) mkdir -p "$6" && tar -xf "$7" -C "$6" ;;
   detach) [ -d "$3" ] && rm -rf "$3" ;;
 esac`,
-      ditto: `cp -R "$1" "$2"`,
+      ditto: `[ -e "$HOME/ditto-fails" ] && { mkdir -p "$2"; exit 1; }; cp -R "$1" "$2"`,
     };
     for (const [name, body] of Object.entries(tools)) {
       yield* fs.writeFileString(`${bin}/${name}`, `#!/bin/sh\n${body}\n`);
@@ -140,6 +140,26 @@ test("on macOS a signed app is put in ~/Applications, over the one there before"
     }).pipe(Effect.scoped),
   ));
 
+test("on macOS a failed copy keeps the app that was there", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped();
+      const key = pair();
+      yield* fs.makeDirectory(`${dir}/home/Applications/collie-desktop.app/Contents/MacOS`, {
+        recursive: true,
+      });
+      yield* fs.writeFileString(`${dir}/home/${APP}`, "old\n");
+      yield* fs.writeFileString(`${dir}/home/ditto-fails`, "");
+      yield* release(dir, (bytes) => signRelease(bytes, key.privateKey), "macos");
+      const done = yield* install(dir, key.publicKey, "macos");
+      expect(done.code).not.toBe(0);
+      expect(done.said).toContain("left as it was");
+      expect(yield* fs.readFileString(`${dir}/home/${APP}`)).toBe("old\n");
+      expect(yield* fs.exists(`${dir}/home/Applications/collie-desktop.app.new`)).toBe(false);
+    }).pipe(Effect.scoped),
+  ));
+
 test("a tampered or unsigned installer is refused and never run, on Linux and macOS alike", () =>
   runEffect(
     Effect.gen(function* () {
@@ -171,5 +191,6 @@ test("an Intel Mac is told Desktop is released for Apple silicon, and nothing is
       const done = yield* install(dir, pair().publicKey, "macos", "x86_64");
       expect(done.code).not.toBe(0);
       expect(done.said).toContain("Apple silicon only");
+      expect(done.said).toContain("TUI plugin");
     }).pipe(Effect.scoped),
   ));

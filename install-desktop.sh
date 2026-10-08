@@ -16,7 +16,7 @@ case "$(uname -s)/$(uname -m)" in
   Linux/x86_64 | Linux/amd64) OS=linux; ASSET="linux-x64-collie-desktop-Setup.tar.gz" ;;
   Linux/*) echo "Collie Desktop is released for x64 only, not $(uname -m)" >&2; exit 1 ;;
   Darwin/arm64) OS=macos; ASSET="macos-arm64-collie-desktop.dmg" ;;
-  Darwin/*) echo "Collie Desktop is released for Apple silicon only, not $(uname -m)" >&2; exit 1 ;;
+  Darwin/*) echo "Collie Desktop is released for Apple silicon only, not $(uname -m); the Collie TUI plugin, installed with setup.sh, works on this Mac" >&2; exit 1 ;;
   *) echo "Collie Desktop is released for Linux and macOS only" >&2; exit 1 ;;
 esac
 
@@ -69,8 +69,16 @@ if [ "$OS" = macos ]; then
   hdiutil attach -quiet -nobrowse -readonly -mountpoint "$work/image" "$work/$ASSET"
   trap 'hdiutil detach -quiet "$work/image" || :; rm -rf "$work"' EXIT
   mkdir -p "$HOME/Applications"
-  rm -rf "$HOME/Applications/collie-desktop.app"
-  ditto "$work/image/collie-desktop.app" "$HOME/Applications/collie-desktop.app"
+  # Copied beside the old app and swapped in once whole: a failed copy keeps what was there.
+  app="$HOME/Applications/collie-desktop.app"
+  rm -rf "$app.new"
+  if ! ditto "$work/image/collie-desktop.app" "$app.new"; then
+    rm -rf "$app.new"
+    echo "could not copy Collie Desktop into ~/Applications, so the app there was left as it was" >&2
+    exit 1
+  fi
+  rm -rf "$app"
+  mv "$app.new" "$app"
   echo "installed Collie Desktop in ~/Applications from ${BASE}"
   exit 0
 fi
