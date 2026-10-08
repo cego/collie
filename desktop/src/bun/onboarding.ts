@@ -8,6 +8,7 @@ import * as HttpClient from "effect/http/HttpClient";
 import { RELEASE_PUBLIC_KEY, SIGNATURE_SUFFIX, verifyRelease } from "../../../src/signing";
 import { type OnboardRun, type OnboardStep, SETTLED, type Skippable } from "../shared/flock";
 import { quoted, type Route, type ShellRoute, spawned } from "./machine";
+import { childEnv } from "./login-env";
 
 export const RELEASES = "https://github.com/cego/collie/releases/download";
 
@@ -92,7 +93,12 @@ export const ranWith = (command: ReadonlyArray<string>, stdin?: Uint8Array) =>
   Effect.scoped(
     Effect.gen(function* () {
       const child = yield* spawned(() =>
-        Bun.spawn([...command], { stdin: stdin ?? "ignore", stdout: "pipe", stderr: "pipe" }),
+        Bun.spawn([...command], {
+          env: childEnv(),
+          stdin: stdin ?? "ignore",
+          stdout: "pipe",
+          stderr: "pipe",
+        }),
       );
       const [out, err, code] = yield* Effect.promise(() =>
         Promise.all([
@@ -270,6 +276,7 @@ export const onboardThrough = Effect.fn("Desktop.onboardThrough")(function* (
     );
     const child = yield* spawned(() =>
       Bun.spawn([...command], {
+        env: childEnv(),
         stdin: secrets === "" ? "ignore" : new TextEncoder().encode(secrets),
         stdout: "pipe",
         stderr: "pipe",
@@ -425,6 +432,7 @@ export const addToHerdr = Effect.fn("Desktop.addToHerdr")(function* (
   // socket Bun gives a child for its stdin.
   const child = yield* spawned(() =>
     Bun.spawn([herdr, "machine", "add", "--label", label, "--remote-session", session, target], {
+      env: childEnv(),
       terminal: {
         data: (_, bytes) => Queue.offerUnsafe(output, bytes),
         exit: () => Queue.endUnsafe(output),

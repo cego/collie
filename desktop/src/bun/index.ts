@@ -58,7 +58,7 @@ import { clipboardPaths } from "../shared/attachments";
 import { readAttachment, stageAttachment, stagePath } from "./attachments";
 import { type FlockConversation, openFlockChat, refusal } from "./chat";
 import { claudeCode } from "./claude";
-import { takeLoginEnv } from "./login-env";
+import { childEnv, takeLoginEnv, which } from "./login-env";
 import { chatDoor } from "./flock-tools";
 import { readSettings, writeSettings } from "./settings";
 import { flockSync, readFlockSettings, writeFlockSettings } from "./flock-settings";
@@ -162,21 +162,28 @@ const Collie = Config.schema(
   ),
 );
 
-/** What hands a URL to the app this computer opens it with. */
 const OPENER = process.platform === "darwin" ? "open" : "xdg-open";
 
 /** Opens a web page in the human's own browser. */
 const openUrl = (url: string) =>
   Effect.sync(() => {
-    if (Bun.which(OPENER) === null) return void Utils.openExternal(url);
-    Bun.spawn([OPENER, url], { stdin: "ignore", stdout: "ignore", stderr: "ignore" });
+    if (which(OPENER) === null) return void Utils.openExternal(url);
+    Bun.spawn([OPENER, url], {
+      env: childEnv(),
+      stdin: "ignore",
+      stdout: "ignore",
+      stderr: "ignore",
+    });
   });
 
 /** Slack's own app where it opens, else its web client. */
 const openSlack = Effect.gen(function* () {
-  if (Bun.which(OPENER) === null) return yield* openUrl(SLACK_WEB);
+  if (which(OPENER) === null) return yield* openUrl(SLACK_WEB);
   // Never killed: still running is the app taking it.
-  const child = Bun.spawn([OPENER, SLACK_APP], { stdio: ["ignore", "ignore", "ignore"] });
+  const child = Bun.spawn([OPENER, SLACK_APP], {
+    env: childEnv(),
+    stdio: ["ignore", "ignore", "ignore"],
+  });
   const code = yield* Effect.promise(() => child.exited).pipe(Effect.timeoutOption("5 seconds"));
   if (Option.isSome(code) && code.value !== 0) yield* openUrl(SLACK_WEB);
 });
@@ -851,7 +858,7 @@ const main = Effect.gen(function* () {
         const door = yield* doorTo(doors, installation);
         const at = yield* focusOn(door.desktop, yield* uuid, runId);
         const attach = attachCommand(door.machine.target, at.session);
-        const terminal = inTerminal(attach, process.platform, Bun.which);
+        const terminal = inTerminal(attach, process.platform, which);
         const opened = terminal !== null && (yield* launched(terminal));
         return { at, command: shellLine(attach), opened };
       }),
@@ -888,7 +895,11 @@ const main = Effect.gen(function* () {
         Effect.flatMap(Effect.fromNullishOr),
         Effect.flatMap((command) =>
           Effect.try(() =>
-            Bun.spawn(command, { stdio: ["ignore", "ignore", "ignore"], detached: true }).unref(),
+            Bun.spawn(command, {
+              env: childEnv(),
+              stdio: ["ignore", "ignore", "ignore"],
+              detached: true,
+            }).unref(),
           ),
         ),
         Effect.catch(() => openUrl(url)),

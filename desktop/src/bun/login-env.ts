@@ -23,31 +23,19 @@ export const parseLoginEnv = (output: string) => {
   return found;
 };
 
-type SpawnOptions = NonNullable<Parameters<typeof Bun.spawn>[1]>;
-
 /**
- * What every child Desktop spawns from here on inherits. Bun finds a bare command (`herdr`)
- * on the PATH it started with, whatever `process.env` says since, so lookups and spawns are
- * pointed at the merged environment too.
+ * The environment every child Desktop starts is given, the login shell's merged in on macOS.
+ * Bun gives a child the environment it started with unless one is passed, whatever
+ * `process.env` says since, so every spawn passes this.
  */
-const mergeEnv = (taken: ReadonlyMap<string, string>) => {
-  // Children inherit the process environment, not an Effect Config.
-  // oxlint-disable effecttsgo/process-env
-  for (const [name, value] of taken) process.env[name] = value;
-  const env = process.env;
-  // oxlint-enable effecttsgo/process-env
-  const which = Bun.which.bind(Bun);
-  // SAFETY: the same call with the PATH it would have had it started now.
-  Bun.which = ((command, options) =>
-    which(command, { PATH: env.PATH, ...options })) as typeof Bun.which;
-  const spawn = Bun.spawn.bind(Bun);
-  Object.assign(Bun, {
-    spawn: (command: Array<string>, options: SpawnOptions = {}) =>
-      spawn(command, { env, ...options }),
-  });
-};
+// Children inherit the process environment, not an Effect Config.
+// oxlint-disable-next-line effecttsgo/process-env
+export const childEnv = () => process.env;
 
-/** On macOS, merges the login shell's environment into `process.env`; any failure keeps the one it has. */
+/** Where a bare command is found on `childEnv`'s PATH; Bun's own lookup uses the PATH it started with. */
+export const which = (command: string) => Bun.which(command, { PATH: childEnv().PATH });
+
+/** On macOS, merges the login shell's environment into `childEnv`; any failure keeps the one it has. */
 export const takeLoginEnv = Effect.gen(function* () {
   if (process.platform !== "darwin") return;
   const shell = yield* Config.String("SHELL").pipe(Config.withDefault("/bin/zsh"));
@@ -64,7 +52,8 @@ export const takeLoginEnv = Effect.gen(function* () {
   if (taken.size === 0) {
     return yield* Effect.logWarning(`Login shell environment not taken from ${shell}`);
   }
-  mergeEnv(taken);
+  const env = childEnv();
+  for (const [name, value] of taken) env[name] = value;
 }).pipe(
   Effect.catchCause((cause) => Effect.logWarning("Login shell environment not taken", cause)),
 );

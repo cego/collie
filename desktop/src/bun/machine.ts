@@ -44,6 +44,7 @@ import {
   type NotLive,
 } from "../shared/flock";
 import { CREDENTIAL_SAID, type Lag } from "../shared/in-sync";
+import { childEnv } from "./login-env";
 
 const children = new Set<Bun.Subprocess>();
 export const endChildren = () => {
@@ -141,7 +142,7 @@ const afterReady = (from: ReadableStream<Uint8Array>, onReady: () => void) => {
  */
 export const openBridge = Effect.fn("Desktop.openBridge")(function* (
   command: ReadonlyArray<string>,
-  env?: Readonly<Record<string, string>>,
+  env: Readonly<Record<string, string | undefined>> = childEnv(),
 ) {
   const child = yield* spawned(() =>
     Bun.spawn([...command], { env, stdin: "pipe", stdout: "pipe", stderr: "pipe" }),
@@ -236,7 +237,13 @@ export const machineBoard = (known: KnownMachine, door: BoardSource) =>
 const ran = (command: ReadonlyArray<string>) =>
   Effect.gen(function* () {
     const child = yield* Effect.try({
-      try: () => Bun.spawn([...command], { stdin: "ignore", stdout: "pipe", stderr: "pipe" }),
+      try: () =>
+        Bun.spawn([...command], {
+          env: childEnv(),
+          stdin: "ignore",
+          stdout: "pipe",
+          stderr: "pipe",
+        }),
       catch: (cause) => String(cause),
     });
     const [out, err, code] = yield* Effect.promise(() =>
@@ -328,6 +335,7 @@ const openMaster = Effect.fn("Desktop.openMaster")(function* (
 ) {
   const master = yield* spawned(() =>
     Bun.spawn([ssh, "-M", "-N", "-S", control, "-o", "ControlPersist=no", target], {
+      env: childEnv(),
       stdin: "ignore",
       stdout: "ignore",
       stderr: "pipe",

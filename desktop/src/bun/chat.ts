@@ -58,6 +58,7 @@ import {
 } from "./flock-tools";
 import { sessionOptions } from "./session";
 import { transcriptOf } from "./transcript";
+import { which } from "./login-env";
 
 /** A session as the chat drives it. */
 export interface ClaudeSession extends AsyncIterable<SdkMessage> {
@@ -343,7 +344,7 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* <Server>(opts
         cwd: opts.dir,
         session: known === undefined ? { sessionId: id } : { resume: id },
         server,
-        claude: Bun.which("claude"),
+        claude: which("claude"),
         ask,
         about: () => attached,
         noticed: () => (noticed === undefined ? undefined : flockNewsText(noticed)),

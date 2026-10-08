@@ -21,7 +21,6 @@ export default {
     watchIgnore: ["view/**"],
     mac: {
       bundleCEF: false,
-      // The app's icon: the launcher tile at the sizes iconutil reads.
       icons: "icon.iconset",
     },
     linux: {
