@@ -1,11 +1,10 @@
 <script setup lang="ts">
-import { AsyncResult, useAtomValue } from "@effect/atom-vue";
 import type { UpdateNews } from "../../../src/shared/flock";
 import { updatesAtom } from "../flock";
 
-const updates = useAtomValue(() => updatesAtom);
+const { value: updates } = useHeld(() => updatesAtom);
 const { checkForUpdates, restart } = useActions();
-const now = computed(() => AsyncResult.getOrElse(updates.value, () => null));
+const now = computed(() => updates.value ?? null);
 
 const said = (news: UpdateNews, version: string) => {
   switch (news._tag) {

@@ -46,6 +46,7 @@ import {
   type NotLive,
 } from "../shared/flock";
 import { CREDENTIAL_SAID, type Lag } from "../shared/in-sync";
+import { backoff } from "../shared/retrying";
 
 const children = new Set<Bun.Subprocess>();
 export const endChildren = () => {
@@ -476,9 +477,6 @@ const upgradeTo = (route: Route<BoardSource>, version: string) =>
           ),
     ),
   );
-
-/** How long a route waits before it tries again, after so many tries in a row failed. */
-const backoff = (failures: number) => Math.min(1000 * 2 ** failures, 60_000);
 
 /**
  * A route added, one removed, one woken to try again now rather than after its backoff, or

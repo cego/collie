@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { SECTIONS } from "../../../../src/board-model";
-import { AsyncResult, useAtomValue } from "@effect/atom-vue";
 import { NOT_LIVE } from "../../../src/shared/flock";
 import { afterGesture, escapeOn, type Gesture, landedOn } from "../../../src/shared/board-clicks";
 import { updatesAtom } from "../flock";
@@ -8,7 +7,7 @@ import tile from "../../../../assets/brand/logos/collie-tile-256.png";
 
 const {
   connecting,
-  failure,
+  trouble,
   lost,
   machines,
   notices,
@@ -103,13 +102,13 @@ watch(notices, (now, before) => {
   for (const text of now.slice(before.length)) toast.add({ title: text, color: "info" });
 });
 
-const update = useAtomValue(() => updatesAtom);
+const { value: update } = useHeld(() => updatesAtom);
 const { restart } = useActions();
 // Each check says its finding again; a toast is for news not yet told.
 const told = new Set<string>();
 watch(update, (now) => {
-  if (!AsyncResult.isSuccess(now)) return;
-  const { news } = now.value;
+  if (now === undefined) return;
+  const { news } = now;
   if (news._tag !== "Ready" && news._tag !== "Refused") return;
   const id = `${news._tag} ${news.version}`;
   if (told.has(id)) return;
@@ -148,7 +147,7 @@ watch(update, (now) => {
           class="min-w-0 truncate"
           :class="header.urgent ? 'text-warning font-medium' : 'text-muted'"
         >
-          {{ connecting || failure !== null ? "" : header.text }}
+          {{ connecting ? "" : header.text }}
         </p>
         <UButton
           class="ml-auto"
@@ -208,14 +207,12 @@ watch(update, (now) => {
           @click="click"
           @dblclick="doubleClick"
         >
-          <p v-if="connecting" class="text-muted">Connecting…</p>
-          <UAlert
-            v-else-if="failure !== null"
-            color="error"
-            icon="i-lucide-triangle-alert"
-            title="Collie is out of reach"
-            :description="failure"
+          <RetryNotice
+            v-if="trouble !== null"
+            title="Desktop is reconnecting to its Flock; showing what it last had"
+            :trouble="trouble"
           />
+          <p v-if="connecting" class="text-muted">Connecting…</p>
           <template v-else>
             <UAlert
               v-if="renewBy !== null"

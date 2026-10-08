@@ -2,7 +2,7 @@
 // counted against a clock that moves even while no board message arrives.
 
 import { AsyncResult, Atom, useAtomValue } from "@effect/atom-vue";
-import { Cause, Clock, Schedule, Stream } from "effect";
+import { Clock, Schedule, Stream } from "effect";
 import {
   foldWaiting,
   headerSentence,
@@ -31,19 +31,18 @@ const clockAtom = Atom.make(
 ).pipe(Atom.keepAlive);
 
 export const useFlock = () => {
-  const flock = useAtomValue(() => flockAtom);
+  const flock = useHeld(() => flockAtom);
   const clock = useAtomValue(() => clockAtom);
   const now = computed(() => AsyncResult.getOrElse(clock.value, () => 0));
-  const told = computed(() => AsyncResult.getOrElse(flock.value, () => EMPTY_FLOCK));
+  const told = computed(() => flock.value.value ?? EMPTY_FLOCK);
   const board = computed(() => flockCards(told.value));
   const tasks = computed(() => board.value.tasks);
   const placed = (some: ReadonlyArray<TaskView>) => some.map(board.value.placedOf);
   const sections = computed(() => sectionsOf(tasks.value, ""));
   return {
-    connecting: computed(() => AsyncResult.isInitial(flock.value)),
-    failure: computed(() =>
-      AsyncResult.isFailure(flock.value) ? Cause.pretty(flock.value.cause) : null,
-    ),
+    connecting: computed(() => flock.value.value === undefined && flock.trouble.value === null),
+    /** Why the board's own stream failed, while it tries again. */
+    trouble: flock.trouble,
     lost: computed(() => [...told.value.lost]),
     notLive: (installation: string) => notLiveOf(told.value, installation),
     machines: computed(() => board.value.machines),

@@ -1,13 +1,12 @@
 // Which credentials Desktop holds for every Machine, and whether the GitLab token is due.
 
-import { AsyncResult, useAtomValue } from "@effect/atom-vue";
 import { renewalDue } from "../../../../src/gitlab-token";
 import { credentialsAtom } from "../flock";
 
 export const useCredentials = () => {
-  const held = useAtomValue(() => credentialsAtom);
+  const { value: held } = useHeld(() => credentialsAtom);
   const { now } = useFlock();
-  const credentials = computed(() => AsyncResult.getOrElse(held.value, () => null));
+  const credentials = computed(() => held.value ?? null);
   return {
     credentials,
     /** When the GitLab token expires, where that is within the renewal window. */

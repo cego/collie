@@ -19,6 +19,11 @@ test.each([
     ),
     "socket closed",
   ],
+  [
+    "a failure said in words",
+    Cause.fail("Claude Code is not logged in"),
+    "Claude Code is not logged in",
+  ],
   ["an interrupt", Cause.interrupt(82), "the connection was renewed before this finished"],
   ["a defect", Cause.die(withStack), "the board could not be read"],
   ["a defect that is not an error", Cause.die("gone"), "gone"],

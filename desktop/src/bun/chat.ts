@@ -8,6 +8,7 @@ import {
   Cause,
   Crypto,
   Deferred,
+  Duration,
   Effect,
   Exit,
   FileSystem,
@@ -23,6 +24,7 @@ import {
 } from "effect";
 import * as Base64 from "effect/encoding/Base64";
 import { type AguiEvent, ends } from "../shared/agui";
+import { saidOf } from "../shared/said";
 import {
   IMAGE_BYTES,
   INLINE_BUDGET,
@@ -269,6 +271,10 @@ const contentOf = Effect.fnUntraced(function* (
   return { blocks, files };
 });
 
+/** `start` kept once it succeeds, and tried again on the next ask until it does. */
+export const untilStarted = <A, E, R>(start: Effect.Effect<A, E, R>) =>
+  Effect.cachedWithTTL(start, (exit) => (Exit.isSuccess(exit) ? Duration.infinity : Duration.zero));
+
 /**
  * The current conversation's session, started by its first message and warm from then
  * until the scope closes, and never more than one. A session Claude Code has a transcript
@@ -380,7 +386,7 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* <Server>(opts
       Stream.runForEach((event) => PubSub.publish(events, event)),
       Effect.matchCauseEffect({
         onSuccess: () => endWith("Claude Code ended the Flock chat's session."),
-        onFailure: (cause) => endWith(Cause.pretty(cause)),
+        onFailure: (cause) => endWith(saidOf(cause)),
       }),
       Effect.forkScoped,
     );

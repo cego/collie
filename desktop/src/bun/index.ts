@@ -56,7 +56,7 @@ import { pruneDesktop, sshControlsPrefix, sweepSshControls } from "../../../src/
 import { appWindowFor } from "./browser";
 import { clipboardPaths } from "../shared/attachments";
 import { readAttachment, stageAttachment, stagePath } from "./attachments";
-import { type FlockConversation, openFlockChat, refusal } from "./chat";
+import { type FlockConversation, openFlockChat, refusal, untilStarted } from "./chat";
 import { claudeCode } from "./claude";
 import { chatDoor } from "./flock-tools";
 import { readSettings, writeSettings } from "./settings";
@@ -641,8 +641,7 @@ const main = Effect.gen(function* () {
         local: held.machine.profile === "local",
       }));
     },
-  }).pipe(Scope.provide(scope), Effect.result, Effect.cached);
-  // ponytail: a chat that could not start stays so until Desktop restarts.
+  }).pipe(Scope.provide(scope), untilStarted, Effect.map(Effect.result));
   const withChat = <A>(use: (opened: FlockConversation) => Effect.Effect<A>, unstarted: A) =>
     chat.pipe(
       Effect.flatMap(Result.match({ onSuccess: use, onFailure: () => Effect.succeed(unstarted) })),

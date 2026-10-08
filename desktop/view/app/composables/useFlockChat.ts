@@ -77,11 +77,9 @@ export const useFlockChat = () => {
   const conversations = useAtomSet(() => conversationsAtom, { mode: "promiseExit" });
   const reopen = useAtomSet(() => reopenAtom, { mode: "promiseExit" });
 
-  const turns = useAtomValue(() => desktopTurnsAtom);
+  const { value: turns } = useHeld(() => desktopTurnsAtom);
   /** Whether Desktop is telling the chat about News right now. */
-  const desktopSpeaking = computed(
-    () => AsyncResult.getOrElse(turns.value, () => "ended" as const) === "started",
-  );
+  const desktopSpeaking = computed(() => turns.value === "started");
   const { desktopSettings, setProactive } = useDesktopSettings();
 
   const reload = () =>

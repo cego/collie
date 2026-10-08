@@ -1171,6 +1171,14 @@ action, the offers, the workflows, a Run's file or Go to pane cut off by a renew
 connection says "vm-mk's connection was renewed before this finished", and **Try again**
 sends the action under the same request, so it is done once.
 
+Nothing in the window needs a restart. The board, a record, Settings, the credentials
+warning, update news and the chat's turn indicator each keep what they last showed when the
+stream behind them fails for any other reason — a host stopped, a refusal, Desktop's own
+main process — and say above it, as a warning, what went wrong and when they try again:
+after 1 s, then twice as long each time it fails again, up to a minute, and at once again
+after anything arrives. **Retry now** tries every one of them at once. A Flock chat that
+could not start, say before you logged in to Claude, starts again on your next message.
+
 The record is one of Desktop's **pages**, with **Settings** and **Machines**: each takes the
 board's column in the same way, one at a time, so opening Settings with a record open replaces
 the record, and back always returns to the board. Opening a page moves focus to its back

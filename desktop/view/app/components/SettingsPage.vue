@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { AsyncResult, injectRegistry, useAtomValue } from "@effect/atom-vue";
+import { injectRegistry } from "@effect/atom-vue";
 import { settingOf, settingStored } from "../../../../src/settings";
 import {
   desktopChange,
@@ -15,7 +15,7 @@ const { openLink, saveGitlabHost, setFlockSetting } = useActions();
 const { credentials } = useCredentials();
 const { desktopSettings, reread, change } = useDesktopSettings();
 const toast = useToast();
-const held = useAtomValue(() => flockSettingsAtom);
+const { value: held, trouble } = useHeld(() => flockSettingsAtom);
 // Asked again on opening, which syncs every connected Machine and so shows their edits.
 const registry = injectRegistry();
 onMounted(() => {
@@ -23,10 +23,7 @@ onMounted(() => {
   void reread();
 });
 const sections = computed(() =>
-  settingSections(
-    AsyncResult.getOrElse(held.value, () => NO_FLOCK_SETTINGS),
-    desktopSettings.value,
-  ),
+  settingSections(held.value ?? NO_FLOCK_SETTINGS, desktopSettings.value),
 );
 
 const host = ref("");
@@ -52,7 +49,7 @@ const set = async (row: SettingRow, typed: string) => {
 };
 const gitlabHostSaid = settingOf("gitlab_host")?.description;
 
-const drawn = useAtomValue(() => drawnAtom);
+const { value: drawn } = useHeld(() => drawnAtom);
 /** The view's own pixel ratio, read again as a zoom resizes its viewport. */
 const ratio = ref(window.devicePixelRatio);
 const readRatio = () => (ratio.value = window.devicePixelRatio);
@@ -60,7 +57,7 @@ onMounted(() => window.addEventListener("resize", readRatio));
 onUnmounted(() => window.removeEventListener("resize", readRatio));
 watch(drawn, readRatio);
 const drawnLine = computed(() =>
-  AsyncResult.isSuccess(drawn.value) ? drawnSaid(drawn.value.value, ratio.value) : null,
+  drawn.value === undefined ? null : drawnSaid(drawn.value, ratio.value),
 );
 </script>
 
@@ -69,6 +66,11 @@ const drawnLine = computed(() =>
     <PageHeader title="Settings" @back="emit('back')" />
     <div class="min-h-0 flex-1 overflow-y-auto p-4 [scrollbar-gutter:stable]">
       <div class="flex flex-col gap-6" :class="columnClass('settings')">
+        <RetryNotice
+          v-if="trouble !== null"
+          title="The Flock's settings could not be read; showing what they last were"
+          :trouble="trouble"
+        />
         <section
           v-for="section in sections"
           :key="section.group"
