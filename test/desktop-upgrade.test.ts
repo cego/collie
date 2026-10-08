@@ -7,7 +7,7 @@ import { expect, test } from "bun:test";
 import { generateKeyPairSync } from "node:crypto";
 import { BunServices } from "@effect/platform-bun";
 import { Effect, FileSystem, Path, Schema, Scope } from "effect";
-import { updateDesktop } from "../src/desktop";
+import { dataHomeOf, updateDesktop } from "../src/desktop";
 import { upgrade } from "../src/operations";
 import { signRelease } from "../src/signing";
 import { FakeBin } from "./support/bin";
@@ -351,4 +351,11 @@ test("collie upgrade shows the Desktop step in its text and steps, and stages no
       yield* bin.restore();
     }).pipe(Effect.scoped),
   );
+});
+
+test("Desktop's data is looked for where Electrobun keeps it: XDG on Linux, Application Support on macOS", () => {
+  expect(dataHomeOf("/home/mk", undefined, "linux")).toBe("/home/mk/.local/share");
+  expect(dataHomeOf("/home/mk", "/data", "linux")).toBe("/data");
+  expect(dataHomeOf("/home/mk", "relative", "linux")).toBe("/home/mk/.local/share");
+  expect(dataHomeOf("/Users/mk", "/data", "darwin")).toBe("/Users/mk/Library/Application Support");
 });
