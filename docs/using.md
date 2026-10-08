@@ -1300,7 +1300,13 @@ steered there. What the host records of your words also names the files they car
 Click a card and it becomes a chip above the input ("About: vm-mk › Fix board bugs"): your
 next message goes with it, so "this one" means that card, and sending uses it up. Clear it
 with its ✕, a click on the board's background, or Escape outside a field; a chat popped out
-into its own window clears with it. The chip is attached as context for the turn, never as your words.
+into its own window clears with it. The message keeps its card: it goes to the model as
+Desktop's own bracketed note after your words, never as your words, and stays in the
+conversation's history, so "this one" in an old message still means the card it went with.
+Your bubble shows that card as a pill ("vm-mk › Fix board bugs") from the moment it is sent,
+after a restart and in a reopened conversation alike; a queued message gets its pill once
+it is sent. Click the pill to open that Task's record on the board — from a popped-out chat
+too, in the board's window — or be told the Task is no longer on the board.
 
 A web address in a message — yours, Collie's or Desktop's — is a link that opens in your
 browser, never in Desktop: bare, in `<…>`, as a markdown link, or alone in backticks. One

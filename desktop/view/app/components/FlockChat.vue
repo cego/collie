@@ -24,6 +24,7 @@ const {
   proactive,
   setProactive,
 } = useFlockChat();
+const { openRecord } = useRecordOpener();
 
 type Message = (typeof messages.value)[number];
 /** What Desktop said of its own about News, after its first line, or null for anyone else's message. */
@@ -234,6 +235,19 @@ const queuedText = ({ content }: QueuedMessage) => {
           class="flex max-w-full min-w-0 flex-col gap-2"
           :class="message.role === 'user' ? 'self-end rounded-md bg-elevated px-3 py-2' : ''"
         >
+          <UBadge
+            v-if="aboutOf(message) !== null"
+            as="button"
+            type="button"
+            data-testid="chat-about"
+            color="neutral"
+            variant="subtle"
+            class="max-w-full cursor-pointer self-start"
+            :title="aboutLine(aboutOf(message)!)"
+            @click="openRecord(aboutOf(message)!)"
+          >
+            <span class="truncate">{{ aboutLine(aboutOf(message)!) }}</span>
+          </UBadge>
           <template v-for="(part, at) in message.parts" :key="at">
             <RichMarkdown
               v-if="part.type === 'text'"
