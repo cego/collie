@@ -85,7 +85,7 @@ export const drawnSaid = (
   const said =
     monitor._tag === "Known"
       ? `Drawn at ${times(expected)} on ${monitor.name} (${monitor.width}×${monitor.height}, Hyprland scale ${Number(monitor.scale.toFixed(2))}). Rendered at ${times(rendered)}, so zoom ${percent(zoom / preference)} × your ${percent(preference)}.`
-      : `This desktop's monitor scale is not known to Desktop; drawn at ${times(rendered)}, zoom ${percent(zoom)}. ${monitor.reason}.`;
+      : `This desktop's monitor scale is not known to Desktop; drawn at ${times(expected)}, zoom ${percent(zoom)}. ${monitor.reason}.`;
   return Math.abs(devicePixelRatio - expected) < 0.01
     ? said
     : `${said} Yet this window draws at ${times(devicePixelRatio)}, so the zoom has not taken.`;
