@@ -61,3 +61,25 @@ export const shownAgent = (
   before: BoardAgent | null,
 ): BoardAgent | null =>
   agents.find((one) => one.name === focused) ?? (before?.name === focused ? before : null);
+
+/**
+ * The Terminal tab's switches between panes, each started once `release` has let the pane
+ * before it go. Only the newest switch still waiting opens; a stop cancels any that wait.
+ */
+export const switches = (release: () => Promise<void>) => {
+  let newest = 0;
+  let released = Promise.resolve();
+  const letGo = () => (released = released.then(release));
+  return {
+    to: (open: () => void) => {
+      const mine = ++newest;
+      return letGo().then(() => {
+        if (mine === newest) open();
+      });
+    },
+    stop: () => {
+      newest++;
+      return letGo();
+    },
+  };
+};

@@ -10,7 +10,12 @@ import { Cause, Effect, Fiber, Result, Stream } from "effect";
 import * as Base64 from "effect/encoding/Base64";
 import type { BoardAgent } from "../../../../src/board-model";
 import type { PlacedTask, TerminalCommand, TerminalEvent } from "../../../src/shared/flock";
-import { type AgentTab, agentTabs, shownAgent } from "../../../src/shared/record-terminal";
+import {
+  type AgentTab,
+  agentTabs,
+  shownAgent,
+  switches,
+} from "../../../src/shared/record-terminal";
 import {
   cellAt,
   isMouseReport,
@@ -99,7 +104,6 @@ const attach = () => {
   if (term === undefined) return;
   ended.value = null;
   noPane.value = false;
-  focused.value = undefined;
   term.reset();
   const agent = chosen.value;
   fiber = Effect.runFork(
@@ -125,16 +129,17 @@ const attach = () => {
   );
 };
 
-/** Ends the terminal, settled once its pane has been given back. */
-const detach = () => {
+const switching = switches(() => {
   const held = fiber;
   fiber = undefined;
   return held === undefined ? Promise.resolve() : Effect.runPromise(Fiber.interrupt(held));
-};
+});
 
-const reattach = () => detach().then(attach);
+const reattach = () => switching.to(attach);
 
 const pick = (agent: AgentTab) => {
+  // The agent shown stays listed, ended or not, until another is picked.
+  if (agent.name !== focused.value) focused.value = undefined;
   chosen.value = agent;
   return reattach();
 };
@@ -208,11 +213,12 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
-  void detach();
+  void switching.stop();
   window.removeEventListener("mouseup", released);
   resized?.disconnect();
   for (const one of listening) one.dispose();
   term?.dispose();
+  term = undefined;
 });
 </script>
 

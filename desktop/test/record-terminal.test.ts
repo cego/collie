@@ -1,11 +1,13 @@
 // What a card's record decides about its Terminal tab.
 
 import { expect, test } from "bun:test";
+import { Effect } from "effect";
 import {
   agentTabs,
   offersTerminal,
   shownAgent,
   opensHerdrWithoutPane,
+  switches,
 } from "../src/shared/record-terminal";
 
 test("the Terminal tab is offered on a reached Machine and kept while shown after it drops", () => {
@@ -83,4 +85,30 @@ test("the agent shown is the board's entry for it, kept once it leaves, and none
   expect(shownAgent([], "review-1", later)).toEqual(later);
   expect(shownAgent([], "review-1", null)).toBeNull();
   expect(shownAgent([review], undefined, review)).toBeNull();
+});
+
+const switching = (log: string[]) =>
+  switches(() => {
+    log.push("let go");
+    return Effect.runPromise(Effect.sleep("1 millis"));
+  });
+
+test("a switch opens only after the pane shown is let go, and only the newest of those waiting", () => {
+  const log: string[] = [];
+  const tab = switching(log);
+  return Effect.runPromise(
+    Effect.promise(() =>
+      Promise.all([tab.to(() => log.push("review-1")), tab.to(() => log.push("impl-1"))]),
+    ).pipe(Effect.map(() => expect(log).toEqual(["let go", "let go", "impl-1"]))),
+  );
+});
+
+test("a switch still waiting when the tab closes never opens", () => {
+  const log: string[] = [];
+  const tab = switching(log);
+  return Effect.runPromise(
+    Effect.promise(() => Promise.all([tab.to(() => log.push("review-1")), tab.stop()])).pipe(
+      Effect.map(() => expect(log).toEqual(["let go", "let go"])),
+    ),
+  );
 });
