@@ -958,6 +958,15 @@ the Run's newest live agent again. The tab stays while its Machine is away, and 
 says that Machine is not connected until it is back. The card and the tab say where the pane is, as
 "vm-mk › workspace 3 › tab 2".
 
+Where the Task has more than one live agent — a planner, an implementer and its reviewers,
+across a plan Run and its `.implement` Run — the tab lists every agent the card counts
+beside Open in herdr, each as its role (numbered where two share one, as "reviewer 1") with
+herdr's status, and its herdr name and terminal title on hover. The one marked is the pane
+the Machine says it focused. Picking another gives the shown pane back and opens the chosen
+one, and Reattach then reopens the chosen agent rather than the newest. An agent that ends
+while shown stays listed as **ended** until you pick another. Leaving the tab forgets the
+choice, so coming back, like Go to pane, shows the newest live agent again.
+
 Where there is no pane to show — a Run with no live agent, or a Machine on a Collie whose
 focus does not name one — Go to pane does what it did before, and **Open in herdr** on the
 tab does it on purpose, for the full herdr UI: a new herdr client in this computer's

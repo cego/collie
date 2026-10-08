@@ -1592,9 +1592,10 @@ carries it out; `act`, which carries out the board's own actions on a Run (`stop
 `release`, `hold`, `answer`, `deliver`, `followup`, `start`) with no proposal, anything else
 being refused as `propose`'s; `reconcile`, which settles a proposal step nobody can account
 for; `settleDelivery`, which does the same for a message to an agent; `focus`, which focuses
-a Run's newest live agent, or its workspace, on the host's own herdr and answers with the
-session, workspace and tab it is in, and the focused agent's pane id where it found one
-(an older host's reply has none, and is read as naming no pane); `setSettings`, which writes the Flock's settings into
+a Run's newest live agent, or only the `agent` it names, else its workspace, on the host's
+own herdr and answers with the session, workspace and tab it is in, and the focused agent's
+pane id and herdr name where it found one (an older host's reply has neither, and is read
+as naming no pane); `setSettings`, which writes the Flock's settings into
 the Machine's `config.json`, each with its own edit's time and only where that is later than
 the Machine's own last edit of the key, records when each was set in `settings-set.json`
 and, when Desktop asks, that a Desktop gave them, and refuses the whole batch over any value the TUI's Settings

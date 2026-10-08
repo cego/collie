@@ -89,7 +89,7 @@ export const focusPane = Effect.fn("Herds.focusPane")(function* (
       workspace: named.label,
       tab,
     };
-    return agent === undefined ? at : { ...at, pane: agent.paneId };
+    return agent === undefined ? at : { ...at, pane: agent.paneId, agent: agent.name };
   }
   return null;
 });

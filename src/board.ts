@@ -610,6 +610,7 @@ function agentsOf(
       if (agent === undefined || found.has(agent.name)) continue;
       found.set(agent.name, {
         name: agent.name,
+        role: entry.role,
         status: agent.status,
         now: agent.title,
         run: run.id,

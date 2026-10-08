@@ -5,7 +5,7 @@ import { expect, test } from "bun:test";
 import { BunServices } from "@effect/platform-bun";
 import { Effect, FileSystem, Option, Schedule, Stream } from "effect";
 import type { PaneAt } from "../src/board-model";
-import { localRoute, remoteRoute } from "../desktop/src/bun/machine";
+import { focusOn, localRoute, remoteRoute } from "../desktop/src/bun/machine";
 import {
   attachCommand,
   commandLine,
@@ -36,6 +36,23 @@ test("a Machine's session is attached over SSH, and Local's directly", () => {
   expect(attachCommand(undefined, "work")).toEqual(["herdr", "--session", "work"]);
   expect(attachCommand(undefined, null)).toEqual(["herdr"]);
 });
+
+test("a chosen agent is focused by its own Run, and no choice asks for the Run's newest", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const asked: Array<unknown> = [];
+      const door = {
+        focus: (payload: { runId: string; agent?: string; request: string }) =>
+          Effect.sync(() => (asked.push(payload), AT)),
+      };
+      yield* focusOn(door, "rq-1", "run-1.implement", "review-1");
+      yield* focusOn(door, "rq-2", "run-1");
+      expect(asked).toEqual([
+        { runId: "run-1.implement", agent: "review-1", request: "rq-1" },
+        { runId: "run-1", request: "rq-2" },
+      ]);
+    }),
+  ));
 
 test("the command to copy reads as typed, quoting only what a shell would split", () => {
   expect(shellLine(["herdr", "--remote", "mk@vm-mk", "--session", "my work"])).toBe(

@@ -81,6 +81,8 @@ export type Decision = typeof Decision.Type;
 export const BoardAgent = Schema.Struct({
   /** herdr's own name for it, which carries the role it was started as. */
   name: Schema.String,
+  /** The persona role it was registered as; absent from an older host. */
+  role: Schema.optionalKey(Schema.String),
   status: Schema.String,
   /** Its pane's terminal title, or null for none: what the harness shows, not the step. */
   now: Schema.NullOr(Schema.String),
@@ -801,14 +803,16 @@ export const NewsBatch = Schema.Struct({
 });
 
 /**
- * Where a host focused a Run's pane. `session` is null for herdr's default; `pane` is the
- * focused agent's pane id in it, absent where only a workspace was found or the host is older.
+ * Where a host focused a Run's pane. `session` is null for herdr's default; `pane` and
+ * `agent` are the focused agent's pane id and herdr name, absent where only a workspace was
+ * found or the host is older.
  */
 export const PaneAt = Schema.Struct({
   session: Schema.NullOr(Schema.String),
   workspace: Schema.String,
   tab: Schema.NullOr(Schema.String),
   pane: Schema.optionalKey(Schema.String),
+  agent: Schema.optionalKey(Schema.String),
 });
 export type PaneAt = typeof PaneAt.Type;
 
@@ -1056,11 +1060,16 @@ export const FrontDoorRpcs = RpcGroup.make(
     error: Schema.Union([HostRefused, RequestConflict]),
   }),
   /**
-   * Focuses a Run's newest live agent, else its workspace, on this Machine's own herdr.
-   * An open herdr window does not follow; a new client attached to `session` lands there.
+   * Focuses a Run's newest live agent, or only `agent` where it is named, else the Run's
+   * workspace, on this Machine's own herdr. An open herdr window does not follow; a new
+   * client attached to `session` lands there.
    */
   Rpc.make("focus", {
-    payload: { runId: Schema.String, request: Schema.String },
+    payload: {
+      runId: Schema.String,
+      agent: Schema.optionalKey(Schema.String),
+      request: Schema.String,
+    },
     success: PaneAt,
     error: Schema.Union([HostRefused, RequestConflict]),
   }),

@@ -684,6 +684,23 @@ test("a working agent leaves the Task working, and its pane title is not the car
     }),
   ));
 
+test("a live agent is shown as the role it was registered as", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const run = yield* madeRun(dir, { task: "task-1" });
+
+      const [view] = yield* board(env, [run], {
+        alive: [agent("review-1", "working")],
+        registered: [{ ...registered("review-1", run.id), role: "reviewer" }],
+      });
+
+      expect(view!.agents).toEqual([
+        { name: "review-1", role: "reviewer", status: "working", now: null, run: run.id },
+      ]);
+    }),
+  ));
+
 test("a check Collie is running outranks what an idle agent last said", () =>
   runEffect(
     Effect.gen(function* () {
