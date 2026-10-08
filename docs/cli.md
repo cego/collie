@@ -1364,7 +1364,8 @@ and one it replaces has its tar removed. A download that does not verify is not
 staged, and the step is `failed` with the reason. A Desktop already at the version is
 `already in place`, so Desktop upgrading this computer to its own version changes nothing.
 There is no `desktop` step where no released Desktop is installed, where Desktop runs from
-a checkout, or on a platform Desktop is not released for (only `linux-x64` is).
+a checkout, or anywhere but Linux x64. On macOS, Desktop updates itself from the release as
+it does on any platform; `upgrade` stages nothing for it.
 
 ```sh
 collie upgrade --to 0.27.0

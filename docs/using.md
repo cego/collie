@@ -840,26 +840,35 @@ a run directory: an unsent answer is yours, not the run's.
 
 ## Collie Desktop
 
-**Desktop** is a desktop app, Linux first, that shows the **Flock** — every Herd on every
+**Desktop** is a desktop app for Linux and macOS that shows the **Flock** — every Herd on every
 Machine it reaches — on one board. It lives in `desktop/` and is one more front door over
 the same board: it reads each host's stream and builds nothing of its own. The sections and
 the header sentence are counted across the Flock. Once there is more than one Machine, each
 card names its Machine, and its Herd too when that Machine runs more than one herdr
 session.
 
-Desktop is released with Collie, under the same tag and version. Install it on Linux (x64)
-for your user, with a desktop entry:
+Desktop is released with Collie, under the same tag and version, for Linux (x64) and macOS
+(Apple silicon). Install it for your user — on Linux with a desktop entry, on macOS in
+`~/Applications` — with:
 
 ```sh
 curl -fsSL https://github.com/cego/collie/releases/latest/download/install-desktop.sh | sh
 ```
 
 The script downloads the latest release's installer and runs it only once the download
-verifies against Collie's release key. Checking needs OpenSSL 3.0 or later.
+verifies against Collie's release key. Checking needs OpenSSL 3.0 or later; macOS has only
+LibreSSL, so there the script uses Homebrew's `openssl@3` (`brew install openssl@3`).
+
+The macOS app is not signed or notarized by Apple; the release key is what it is checked
+against. What `curl` downloads is not quarantined, so Gatekeeper lets it open. If you
+download the disk image in a browser instead and macOS refuses to open the app, clear the
+quarantine flag: `xattr -dr com.apple.quarantine ~/Applications/collie-desktop.app`. The
+first start unpacks the app where it is, so it opens a moment later than the ones after.
 
 It shows up as **Collie**, with the Collie mark — the dog on the white tile the TUI board
 shows, which reads on a dark taskbar too — in your app launcher, on its window, in the
-taskbar and at the top left of the board.
+taskbar and at the top left of the board. On macOS the menu bar and the Dock say Collie;
+the app in `~/Applications` is `collie-desktop.app`, the name its updates are made for.
 
 Desktop then keeps itself up to date. It checks the latest release when it starts and every
 hour after, and downloads an update in the background. **Settings**, under **About**, shows
@@ -870,7 +879,7 @@ tar it would install verifies against the same key, because Electrobun's bundle 
 not authentication. An update that is unsigned or does not match is thrown away and said
 so. One that verifies is announced as "Collie 0.33.0 is ready, restart Desktop", and
 **Restart Desktop** installs it. Desktop never restarts itself: an update that is ready when
-you quit is installed the next time you start Desktop. [`collie upgrade`](cli.md#upgrading)
+you quit is installed the next time you start Desktop. On Linux, [`collie upgrade`](cli.md#upgrading)
 on this computer stages the same update for Desktop, verified the same way, so the CLI and
 Desktop move together; a running Desktop announces it within a minute. A ready update stays
 announced through later checks, even one that fails. A Desktop run from a checkout

@@ -238,7 +238,7 @@ herdr what some other version's schema says.
 Desktop's main process runs three more, all on herdr's list of saved machines:
 `herdr machine list --json`, which machines to reach, and `herdr machine remove`
 (`desktop/src/bun/machine.ts`), and `herdr machine add` (`desktop/src/bun/onboarding.ts`),
-run under `script` so herdr has the terminal its questions need. Desktop is another
+run in a terminal of Bun's own so herdr has the terminal its questions need. Desktop is another
 program, usually on another computer, and it is not talking to a session either: it keeps
 herdr's list and nothing else. Routing them through `herdr.ts` would bring Collie's locks
 into Desktop, which reaches a Machine only through `collie bridge`.
@@ -708,16 +708,23 @@ it installs that release's runner unchecked. Rotating the key means changing bot
 releases signed with the old key stop verifying.
 
 Collie Desktop is built by the same release, from the same tag, by the workflow's
-`desktop` job: `bun run build` in `desktop/` builds the stable channel at
+`desktop` job, once for Linux x64 on `ubuntu-latest` and once for macOS arm64 on
+`macos-14`, since Electrobun builds only for the platform it runs on. Each runs
+`bun run build` in `desktop/`, which builds the stable channel at
 `herdr-plugin.toml`'s version, with the updater's base URL set to the GitHub Releases
 `latest/download` URL. Electrobun names the archives an installed Desktop updates from by
 `app.name`, so that stays `collie-desktop`, as do the keyring service and the state
 directory that hold Desktop's credentials and chat. The name people see is written into
-the launcher entry by `desktop/scripts/name-desktop-entry.ts`, Electrobun's postBuild and
+the Linux launcher entry, and the macOS bundle's `CFBundleName`, by
+`desktop/scripts/name-desktop-entry.ts`, Electrobun's postBuild and
 postWrap hook, before the bundle is packed; it fails the build if there is none to name. Electrobun's self-extractor cannot read a GNU long-name tar entry,
 so `tools/check-payload.ts` fails the job when any path in the installer's payload is over
-100 characters. The release job signs Desktop's installer, its update manifest, its update
-archive and `install-desktop.sh`, each as `<asset>.sig`. It also signs the archive as the
+100 characters; on macOS the payload checked is the update archive, which is what the app
+in the disk image unpacks. The macOS app renders with the system's WebKit rather than a
+bundled CEF, and is neither code-signed nor notarized by Apple: there are no Apple
+credentials, and the release key is the trust check, as on Linux. The release job signs
+each platform's installer (Linux's `-Setup.tar.gz`, macOS's `.dmg`), update manifest and
+update archive, and `install-desktop.sh`, each as `<asset>.sig`. It also signs the archive as the
 tar it is applied as, `<name>.tar.sig` beside `<name>.tar.zst` (`appliedSignatureOf` in
 `src/signing.ts`). Desktop verifies that tar before it installs an update, whether
 Electrobun built it from the archive or from a delta patch
