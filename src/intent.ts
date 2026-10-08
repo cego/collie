@@ -308,12 +308,12 @@ const REQUIREMENT_HEADING = new RegExp(
 const OBJECTIVE_HEADING = new RegExp(String.raw`^#+\s*${NUMBER}Objective\b`, "i");
 const HEADING = /^#+\s/;
 const BULLET = /^(\s*)[-*]\s+(.*\S)\s*$/;
+const NUMBERED = /^(\s*)\d+[.)]\s+(.*\S)\s*$/;
 
 /**
  * What a plan asks for, read deterministically: bullets under a heading whose text
- * matches, and the first paragraph under `## Objective` as the goal. A bullet runs until a
- * blank line, a heading or the next bullet at its indent or shallower; its wrapped lines
- * and the bullets nested under it are joined into its text with single spaces. Heading match
+ * matches, wrapped and nested lines included, and the first paragraph under `## Objective`
+ * as the goal. Heading match
  * only — no model, no inference — because this is evidence a human can check against
  * the file, and because a plan may not grant authority (SPEC §5). The return type is
  * how that is enforced: there is nowhere here to put a grant.
@@ -356,17 +356,20 @@ export function extractRequirements(text: string, file: string) {
     }
     if (heading === null || line.trim() === "") continue;
     const item = BULLET.exec(line);
-    if (item === null) {
+    const numbered = item === null ? NUMBERED.exec(line) : null;
+    const listed = item ?? numbered;
+    if (listed === null) {
       bullet?.parts.push(line.trim());
       continue;
     }
-    const indent = item[1]!.length;
+    const indent = listed[1]!.length;
     if (bullet !== null && indent > bullet.indent) {
-      bullet.parts.push(item[2]!);
+      bullet.parts.push(listed[2]!);
       continue;
     }
     flush();
-    bullet = { indent, parts: [item[2]!], line: index + 1 };
+    // A numbered item ends a bullet but is not one.
+    if (item !== null) bullet = { indent, parts: [item[2]!], line: index + 1 };
   }
   flush();
   if (goal === null && objective !== null && objective.length > 0) goal = objective.join(" ");

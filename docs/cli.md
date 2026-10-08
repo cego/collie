@@ -641,7 +641,8 @@ bullets under a heading matching `Requirements`, `Success criteria`, `Boundaries
 heading and line each bullet starts on; an out-of-scope bullet reads `Out of scope: <bullet>`.
 A constraint is the whole bullet: it runs until a blank line, a heading or the next bullet at
 its indent or shallower, and its wrapped lines and the bullets nested under it are joined
-into it with single spaces. Intents already written keep what they stored. In a
+into it with single spaces. An Intent already seeded keeps what it stored, unless it
+follows its own `plan/SPEC.md` as below. In a
 Run on a worktree of its own, its `plan/SPEC.md`, written by its planner, is read the same
 way at every work boundary: new bullets are added, dropped ones are removed, and a
 constraint anyone but the plan removed stays removed. **No text ever grants authority** —

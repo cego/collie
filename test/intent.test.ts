@@ -264,6 +264,7 @@ test("a plan bullet is one constraint, its wrapped lines and nested bullets incl
     "- Re-run",
     "  the container checks on each consumer after the bump.",
     "- The suite is green.",
+    "1. A numbered step ends it and is no constraint.",
     "",
     "## Out of Scope",
     "",
@@ -294,7 +295,7 @@ test("a plan bullet is one constraint, its wrapped lines and nested bullets incl
     [
       "Out of scope: A canary gate between waves; a wave still waits only for the Repo runs before it.",
       "Out of Scope",
-      17,
+      18,
     ],
   ]);
   // A one-line bullet is what it always was, id included.
