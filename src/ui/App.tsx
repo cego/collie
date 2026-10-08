@@ -20,6 +20,7 @@ import {
   type Row,
   type ViewName,
 } from "./state";
+import { usagePhrase } from "../usage-model";
 import { headerSentence, sectionsOf, type Question, type TaskView } from "../board-model";
 import { truncated } from "../views";
 import { columnsFor, C } from "./sections";
@@ -102,6 +103,7 @@ export function App(props: AppProps) {
   // Over every Task rather than what the search left: a decision a query is hiding is
   // still waiting on the human.
   const header = createMemo(() => headerSentence(tasks(), props.state().now));
+  const usage = createMemo(() => usagePhrase(props.state().usage ?? [], props.state().now));
   const columns = () => columnsFor(dimensions().width, props.state().density);
   const open = () => tasks().find((view) => view.id === openId()) ?? null;
 
@@ -536,6 +538,7 @@ export function App(props: AppProps) {
             sections={sections()}
             columns={columns()}
             header={header()}
+            usage={usage()}
             logo={props.logo ?? null}
             query={query()}
             searching={searching()}

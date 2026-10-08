@@ -1,0 +1,56 @@
+{
+  "id": 2,
+  "result": {
+    "ordinaryUsageAllowed": true,
+    "rateLimits": {
+      "limitId": "<redacted>",
+      "limitName": null,
+      "normalModelSlug": null,
+      "primary": { "usedPercent": 2, "windowDurationMins": 10080, "resetsAt": 1791973608 },
+      "secondary": null,
+      "credits": { "hasCredits": true, "unlimited": false, "balance": null },
+      "individualLimit": {
+        "limit": "5000",
+        "used": "0.0",
+        "remainingPercent": 100,
+        "resetsAt": 1793491200
+      },
+      "spendControlReached": false,
+      "planType": "self_serve_business_prolite",
+      "rateLimitReachedType": null
+    },
+    "rateLimitsByLimitId": {
+      "codex": {
+        "limitId": "<redacted>",
+        "limitName": null,
+        "normalModelSlug": null,
+        "primary": { "usedPercent": 2, "windowDurationMins": 10080, "resetsAt": 1791973608 },
+        "secondary": null,
+        "credits": { "hasCredits": true, "unlimited": false, "balance": null },
+        "individualLimit": {
+          "limit": "5000",
+          "used": "0.0",
+          "remainingPercent": 100,
+          "resetsAt": 1793491200
+        },
+        "spendControlReached": false,
+        "planType": "self_serve_business_prolite",
+        "rateLimitReachedType": null
+      }
+    },
+    "rateLimitResetCredits": {
+      "availableCount": 3,
+      "credits": [
+        {
+          "id": "<redacted>",
+          "resetType": "codexRateLimits",
+          "status": "available",
+          "grantedAt": 1790108580,
+          "expiresAt": 1792700580,
+          "title": "Full reset",
+          "description": "Thanks for using Codex! You've been granted one free rate limit reset."
+        }
+      ]
+    }
+  }
+}

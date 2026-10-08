@@ -63,6 +63,7 @@ import { configuredAgents } from "./agents";
 import { hostLogger } from "./host-log";
 import { Catalogue, discover, searchPath } from "./discovery";
 import { sideJobs } from "./side-jobs";
+import { Usage, usageLayer } from "./usage";
 import { dataHomeOf, desktopRootOf } from "./desktop";
 import type * as MessageStorage from "effect/cluster/MessageStorage";
 import {
@@ -656,6 +657,7 @@ const frontDoorHandlers = (
       const registry = yield* Registry;
       const hosted = yield* Effect.context<HostServices>();
       const { env, herdr, bun, build, sweepers } = yield* hostBoard(dir);
+      const usage = yield* Usage;
       // A finished Run's plan cannot change, so every drawer on it shares one read.
       // ponytail: kept for the host's life; evict by age if a host lives for months.
       const plans = new Map<string, PlanPanel | null>();
@@ -1050,6 +1052,7 @@ const frontDoorHandlers = (
               return taken;
             }),
           ),
+        usage: () => usage.readings,
         cleanup: () => plainly(Effect.flatMap(sweepers, judge)),
         sweep: ({ request }, { client }) =>
           plainly(
@@ -1751,11 +1754,14 @@ const own = (dir: string) =>
             sideJobsLayer(dir, panels),
           ).pipe(
             Layer.provide(
-              registryLayer(dir, {
-                locate: locateIn(env),
-                userDir: env.userDir,
-                crashAt,
-              }),
+              Layer.mergeAll(
+                registryLayer(dir, {
+                  locate: locateIn(env),
+                  userDir: env.userDir,
+                  crashAt,
+                }),
+                usageLayer(env),
+              ),
             ),
           ),
         ),

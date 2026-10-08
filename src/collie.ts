@@ -8,6 +8,7 @@ import { run } from "./commands/run";
 import { task } from "./commands/task";
 import { settings } from "./commands/settings";
 import { cleanup } from "./commands/cleanup";
+import { usage } from "./commands/usage";
 import { root } from "./commands/shared";
 import { doctor } from "./commands/doctor";
 import { upgrade } from "./commands/upgrade";
@@ -44,6 +45,7 @@ export const app = root.pipe(
     onboard,
     doctor,
     cleanup,
+    usage,
     host,
     bridge,
   ]),

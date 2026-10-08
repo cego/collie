@@ -26,6 +26,7 @@ import { scopeFor } from "../../src/registry";
 import { focus } from "../support/focus";
 import { collie, proves } from "../support/world";
 import { epochMs } from "../../src/time";
+import type { UsageReading } from "../../src/usage-model";
 
 const NOW = epochMs("2026-09-16T12:00:00.000Z");
 
@@ -154,6 +155,15 @@ const mount = Effect.fn("board.mount")(function* (
       for (const line of t.captureSpans().lines) {
         for (const span of line.spans) {
           if (span.text.includes(text)) return `${span.bg.r} ${span.bg.g} ${span.bg.b}`;
+        }
+      }
+      throw new Error(`nothing drawn containing ${JSON.stringify(text)}`);
+    },
+    /** What colour a word is drawn in. */
+    fgOf(text: string) {
+      for (const line of t.captureSpans().lines) {
+        for (const span of line.spans) {
+          if (span.text.includes(text)) return `${span.fg.r} ${span.fg.g} ${span.fg.b}`;
         }
       }
       throw new Error(`nothing drawn containing ${JSON.stringify(text)}`);
@@ -390,6 +400,45 @@ test("the search narrows the sections and offers a way back", () =>
 
       yield* app.escape;
       expect(app.said()).toContain("Strapi prod seeder");
+    }),
+  ));
+
+const reading = (subscription: "claude" | "chatgpt", usedPercent: number): UsageReading => ({
+  subscription,
+  account: null,
+  accountLabel: null,
+  plan: null,
+  windows: [
+    { kind: "session", label: "Session", model: null, usedPercent, resetsAt: null, reached: false },
+  ],
+  at: "2026-09-16T12:00:00.000Z",
+  source: subscription === "claude" ? "claude-usage" : "codex-app-server",
+  problem: null,
+});
+
+test("the header names each Subscription's busiest window, and gives way before its sentence", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const calm = yield* mount(
+        appState({ tasks: HERD, usage: [reading("claude", 31), reading("chatgpt", 2)] }),
+        160,
+      );
+      expect(calm.said()).toContain("claude 31% · chatgpt 2%");
+      const muted = calm.fgOf("claude 31%");
+
+      const near = yield* mount(
+        appState({ tasks: HERD, usage: [reading("claude", 100), reading("chatgpt", 92)] }),
+        160,
+      );
+      expect(near.said()).toContain("claude out · chatgpt 92%");
+      expect(near.fgOf("claude out")).not.toBe(muted);
+
+      const narrow = yield* mount(
+        appState({ tasks: HERD, usage: [reading("claude", 31), reading("chatgpt", 2)] }),
+        90,
+      );
+      expect(narrow.said()).toContain("One task is waiting on you.");
+      expect(narrow.said()).not.toContain("chatgpt 2%");
     }),
   ));
 

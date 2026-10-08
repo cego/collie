@@ -529,7 +529,9 @@ the card `nothing has checked it` and says nothing about why.
 The header sentence counts the whole Herd, not what the search left: `One task is
 waiting on you. 1 ready to release, 2 waiting on you. 4 working, 1 gone quiet.` — the
 middle counts being this week's endings, the older ones sitting behind the fold — amber while anything needs
-you and muted otherwise. Beside it, a search field (`/`) matching a task's name, its project, its branch
+you and muted otherwise. After it, each Subscription's busiest window in a few characters —
+`claude 31% · chatgpt 2%` — amber at 90% or more and `out` once one is Exhausted; it is
+the first thing to give way on a narrow pane ([Usage](#usage)). Beside it, a search field (`/`) matching a task's name, its project, its branch
 and what its agents are called and are doing, and **New run**. At the left, the brand
 signature — the mascot and the lettering, drawn as a picture over the Kitty graphics protocol —
 appears when every terminal attached to herdr paints such pictures (Ghostty, kitty,
@@ -1928,6 +1930,39 @@ and what Collie keeps and why. `collie cleanup --apply` sweeps now; chat can do 
 Every removal is judged again at the moment it is made, never forced, and recorded in the
 state directory's `cleanup.jsonl` with when, what, how big, why and who asked, for 30 days.
 Anything a sweep cannot judge is kept, with the reason.
+
+## Usage
+
+Each Machine's host reads how much of its Claude and ChatGPT **Subscriptions** is used
+([ADR-0049](adr/0049-work-goes-to-an-agent-with-usage-left.md)), per window: the 5-hour
+session, the week, and a model's own week where the plan has one. `collie usage` prints it,
+the Control Plane's header names each Subscription's busiest window, and chat runs the
+command when you ask how much is left.
+
+The numbers come from where the harnesses' own `/usage` and `/status` get them:
+
+- **Claude**: the usage endpoint Claude Code's `/usage` reads, called with the login Claude
+  Code keeps on this Machine (`~/.claude/.credentials.json`, or under `CLAUDE_CONFIG_DIR`;
+  the Keychain on macOS). Collie only reads that login, and never refreshes or writes it:
+  once it has expired, the reading says so until Claude Code next runs and refreshes it.
+- **Claude agents Collie started**: their status lines report the session and weekly
+  windows after every response, and the newest of them wins over an older endpoint reading.
+  So while an agent works, the reading is as fresh as its last response.
+- **ChatGPT**: Codex's app server, asked through a running Codex agent's own where there is
+  one, and a `codex app-server` started for the one question otherwise.
+
+Nothing polls. The host asks only when something wants the numbers — `collie usage`, the
+board, Desktop — and calls each endpoint at most once every five minutes; between calls it
+answers with the last reading and its age. An endpoint that refuses is left alone for as
+long as it asks (five minutes where it does not say), and one that does not answer within
+ten seconds becomes a problem; either way the last good windows stand. A window whose reset
+has passed counts as unused, whatever was read before it. Each reading says when it was
+true, where it came from, or why there is none — a login that expired, Codex not installed
+or not logged in. Machines logged in to one account each read it for themselves; a reading
+names the account by its id, never its email, because one email can hold a personal plan and
+a team seat.
+
+Usage is data: it never refuses, holds or delays work.
 
 ## Troubleshooting
 

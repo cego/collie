@@ -95,6 +95,13 @@ herdr actions, and the `collie` CLI.
   (its copies), `bun/carried.ts` (files to a Run's Machine), `bun/file-tools.ts` and
   `shared/attachments.ts`, with `test/attachments.test.ts`, `test/host-files.test.ts` and
   `test/flock-*.test.ts`.
+- **Changing how a Subscription's usage is read, or where work falls back when one is
+  Exhausted** → [ADR-0049](docs/adr/0049-work-goes-to-an-agent-with-usage-left.md) and
+  [`docs/using.md`](docs/using.md#usage), alongside `src/usage-model.ts` (the reading's
+  Schemas and every judgement made from it, pure so Desktop and a module share them),
+  `src/usage.ts` (the host's sources, their interval and back-off) and `collie usage` in
+  `src/commands/usage.ts`, with `test/usage-model.test.ts` and `test/usage.test.ts`. Usage
+  chooses where work runs, never whether it runs.
 - **Adding a setting, or changing how settings are shared across a Flock** →
   [ADR-0043](docs/adr/0043-a-shared-setting-is-its-latest-edit.md), alongside
   `src/settings.ts` (the one list the TUI, Desktop and the host read), `setSetting` and

@@ -61,7 +61,9 @@ import {
   startRun,
   steerAbout,
   steerRun,
+  usageReadings,
 } from "./lifecycle";
+import type { UsageReading } from "./usage-model";
 import { releaseKeyboard, startKeyboard, takeKey } from "./keys";
 import { forkResolvedDefinition, type DefinitionKind } from "./fork";
 import { COLLIE_TAB, reason, runTitle, shellQuote } from "./naming";
@@ -129,6 +131,8 @@ export interface ControlSession extends BoardSession {
   tasksOf?: () => Effect.Effect<BoardRead>;
   /** Where the drawer's details come from: one read of the host's, unless followed; null closes it. */
   detailOf?: (key: DetailKey | null) => Effect.Effect<RunDetail | null>;
+  /** Where the header's Usage readings come from; none where unset. */
+  usageOf?: () => Effect.Effect<ReadonlyArray<UsageReading>>;
   /** Where the defaults live. */
   userDir: string;
 }
@@ -829,6 +833,9 @@ export const workspaceFlow = Effect.fn("Flows.workspaceFlow")(function* (
     }
     return yield* redirectBoard(herdr, env);
   }
+  const platform = yield* Effect.context<
+    FileSystem.FileSystem | ChildProcessSpawner.ChildProcessSpawner
+  >();
   const session: ControlSession = {
     herdr,
     ...scopeFor(env, env.cwd),
@@ -843,6 +850,11 @@ export const workspaceFlow = Effect.fn("Flows.workspaceFlow")(function* (
     compaction: { waitMs: 0 },
     tasksOf: yield* followBoard(env),
     detailOf: yield* followRunDetail(env),
+    usageOf: () =>
+      usageReadings(env, "board").pipe(
+        Effect.map((read) => (read.ok ? read.value : [])),
+        Effect.provideContext(platform),
+      ),
   };
   /**
    * Where the shortcut was pressed, which is what `g` narrows to and what the board
@@ -1105,6 +1117,7 @@ export function appState(
           ? yield* buildSettings(env)
           : null,
       marks: found?.marks ?? reuse?.state.marks ?? {},
+      usage: reuse ? reuse.state.usage : yield* session.usageOf?.() ?? Effect.succeed([]),
       previewing: focus.previewing,
       live: found?.live ?? null,
       // Always re-read: this is the one thing a moved Selection actually changes.

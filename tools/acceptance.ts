@@ -77,6 +77,7 @@ const RELEASE = "ready to release and checks you can see (this MR)";
 const ATTACHMENTS = "files in the Flock chat and its Runs (this MR)";
 const IN_APP_TERMINAL = "go to pane opens the pane in Desktop (this MR)";
 const MACHINE_RULE = "the Machine rule (this MR)";
+const USAGE = "usage readings on every Machine (this MR)";
 
 /** What the front door owes a person, and cannot be settled below the front door. */
 const FRONT_DOOR: readonly Check[] = [
@@ -950,6 +951,17 @@ const OPERATOR_CHECKS: readonly Check[] = [
     proof: {
       kind: "operator",
       how: "Rename the task workspace and one of its tabs by hand while a Run is working, let the Run reach its next step, and record that both names are still the ones typed.",
+    },
+  },
+  {
+    id: "usage/collie-usage-agrees-with-the-harnesses",
+    statement:
+      "`collie usage` agrees with Claude Code's `/usage` and Codex's `/status`: each window's percent within a few points, and the same reset times.",
+    owner: USAGE,
+    needs: "operator",
+    proof: {
+      kind: "operator",
+      how: "On a Machine logged in to both, run `collie usage`, then Claude Code's `/usage` and Codex's `/status`, and record each window's percent and reset from all three. Run `collie usage --json` and record each reading's `at` and `source`. test/usage-model.test.ts proves the parsing of recorded answers; only the live endpoints prove they are read the same way.",
     },
   },
 ];

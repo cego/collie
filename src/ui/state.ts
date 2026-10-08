@@ -9,6 +9,7 @@
 // what matters is that nothing in this file or the components can run an Effect.
 
 import type { PendingChoice } from "../board";
+import type { UsageReading } from "../usage-model";
 import type { PickItem } from "../inputs";
 import { GLYPH } from "../naming";
 import { markFor, marksOf, NO_MARKS, worstOf, type Marks } from "../lines";
@@ -150,6 +151,8 @@ export interface AppState {
    */
   live: Live | null;
   previewing: string | null;
+  /** This Machine's Usage readings, for the header; absent where none were read. */
+  usage?: ReadonlyArray<UsageReading>;
 }
 
 export type RowKind =

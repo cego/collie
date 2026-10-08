@@ -6,6 +6,7 @@ import { Effect, Option, Schema, SchemaGetter } from "effect";
 import * as Rpc from "effect/rpc/Rpc";
 import * as RpcGroup from "effect/rpc/RpcGroup";
 import { IntentSeedSchema } from "./intent-model";
+import { UsageReading } from "./usage-model";
 import { VerifySpecSchema } from "./verify-spec";
 
 const STATE_ORDER = [
@@ -1075,6 +1076,8 @@ export const FrontDoorRpcs = RpcGroup.make(
     success: SharedSettings,
     error: Schema.Union([HostRefused, RequestConflict]),
   }),
+  /** This Machine's Usage readings, one per Subscription (ADR-0049). */
+  Rpc.make("usage", { success: Schema.Array(UsageReading), error: HostRefused }),
   /** What a sweep would remove now, and what Collie keeps and why (ADR-0045). */
   Rpc.make("cleanup", { success: CleanupReport, error: HostRefused }),
   /** Sweeps now: what was removed, and what was kept and why. */

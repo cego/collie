@@ -1331,6 +1331,57 @@ Under `--json`, both answer with the same `data`:
 bytes it freed; `bytes` is their total. A thing a sweep could not judge — herdr not
 answering, say — is in `keep` with that reason, never removed.
 
+## Usage
+
+```sh
+collie usage
+```
+
+How much of each Claude and ChatGPT **Subscription** this Machine's logins have used, as
+its host last read it ([ADR-0049](adr/0049-work-goes-to-an-agent-with-usage-left.md)). One
+line per window — session, weekly, and a model's own weekly — with its percent and its
+reset, then a line saying how old the reading is and where it came from, or why there is
+none:
+
+```text
+claude  team · me@example.com (Cego)  Session 31% · resets 10:49 (in 2h 3m)
+claude  team · me@example.com (Cego)  Weekly 88% · resets Fri 12:59 (in 1d 4h)
+claude  read 3 minutes ago from claude-status-line
+chatgpt Codex is not logged in on this Machine; run `codex login`
+```
+
+A window whose reset has passed counts as unused, whatever was last read. Under `--json`,
+`data` is `{ "readings": [...] }`, one per Subscription:
+
+```json
+{
+  "subscription": "claude",
+  "account": "<organization uuid>:<account uuid>",
+  "accountLabel": "me@example.com (Cego)",
+  "plan": "team",
+  "windows": [
+    {
+      "kind": "session",
+      "label": "Session",
+      "model": null,
+      "usedPercent": 31,
+      "resetsAt": "2026-10-08T10:49:59Z",
+      "reached": false
+    }
+  ],
+  "at": "2026-10-08T08:46:00Z",
+  "source": "claude-status-line",
+  "problem": null
+}
+```
+
+`kind` is `session`, `weekly`, `weekly-model` (with `model`) or `other`. `reached` is the
+source saying the window is used up whatever its percent. `account` is the account's id,
+never its email. `source` is `claude-usage`, `claude-status-line` or `codex-app-server`, and
+`problem` says why there is no fresh reading — an expired login, Codex not installed, an
+endpoint refusing — with the last good windows kept where there were any.
+[Usage](using.md#usage) says where the numbers come from and how fresh they are.
+
 ## Upgrading
 
 ```sh
@@ -1555,7 +1606,8 @@ The operations that change a Run are on `FrontDoorRpcs` too: `start`, `answer`, 
 `offers`, what a Run offers to do next as its module decides now, with each offer's
 arguments as JSON Schema; and `workflows`, what may be started in a project and the Inputs
 each asks for. `start` then takes what a human typed in `text`, and the host settles it
-against the workflow's own schema. `cleanup` reads what a sweep would remove and keep, and
+against the workflow's own schema. `usage` reads this Machine's [Usage readings](#usage).
+`cleanup` reads what a sweep would remove and keep, and
 `sweep` sweeps now, recorded with its Actor in the state directory's `cleanup/operations.jsonl`
 as well as in `cleanup.jsonl`. `grant` and `steer` stay on `HostRpcs`. Each takes a request id, and the same id twice is one operation. A
 channel first sends `declare` with its front door, and the host stamps every operation on

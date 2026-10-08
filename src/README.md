@@ -98,3 +98,5 @@ Runner source (Bun/TypeScript). Compiled to `bin/collie` per platform; see ADR-0
 | `compaction.ts`    | One threshold, one work-boundary policy, and each agent's controls for its lifetime                   |
 | `compactors.ts`    | Each harness's official compaction interface, generated per agent and bundled in Collie               |
 | `codex.ts`         | Codex's App Server as a client: thread identity, its context, and its compactions                     |
+| `usage-model.ts`   | A Subscription's Usage reading: its Schemas, parsing, and Exhausted (pure)                            |
+| `usage.ts`         | This Machine's Usage readings: Claude's endpoint, Codex's app server, status lines                    |

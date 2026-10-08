@@ -885,3 +885,47 @@ test(
     ),
   60_000,
 );
+
+test("usage is each Subscription's reading in the standard envelope, and says why one is missing", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const claudeDir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-claude-" });
+      const login = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))({
+        claudeAiOauth: { accessToken: "t", expiresAt: 1, subscriptionType: "max" },
+      });
+      yield* fs.writeFileString(join(claudeDir, ".credentials.json"), login);
+      // No PATH: this Machine has no Codex, and nothing here may reach a real endpoint.
+      const env = { CLAUDE_CONFIG_DIR: claudeDir };
+
+      const read = yield* cli(["--json", "usage"], env);
+      expect(read.exit).toBe(0);
+      expect(yield* parseEnvelope(read.stdout)).toMatchObject({
+        ok: true,
+        data: {
+          readings: [
+            {
+              subscription: "claude",
+              plan: "max",
+              windows: [],
+              source: "claude-usage",
+              problem: "Claude Code's login expired; it refreshes when Claude Code next runs",
+            },
+            {
+              subscription: "chatgpt",
+              source: "codex-app-server",
+              problem: "Codex is not installed on this Machine",
+            },
+          ],
+        },
+      });
+      expect(yield* fs.readFileString(join(claudeDir, ".credentials.json"))).toBe(login);
+
+      const human = yield* cli(["usage"], env);
+      expect(human.exit).toBe(0);
+      expect(human.stdout.trim().split("\n")).toEqual([
+        "claude  Claude Code's login expired; it refreshes when Claude Code next runs",
+        "chatgpt Codex is not installed on this Machine",
+      ]);
+    }),
+  ));

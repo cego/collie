@@ -7,7 +7,7 @@
 // interface appends to, and a channel that asks it to compact — because the shared
 // policy owns the threshold, the budget and what counts as an outcome.
 
-import { Clock, Data, Effect, FileSystem, Path, Schema } from "effect";
+import { Clock, Data, Effect, FileSystem, Option, Path, Schema } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import {
   boundThread,
@@ -27,7 +27,9 @@ import {
   summarize,
   createSession,
 } from "./opencode";
+import { StatusLineLimits, type StatusSample } from "./usage-model";
 import {
+  CONTROL_DIR,
   Unsubmitted,
   type CompactionPort,
   type CompactionPorts,
@@ -131,6 +133,8 @@ const EventSchema = Schema.Struct({
    * takes a thread and nothing else, and this is what supplies the correlation.
    */
   items: Schema.optionalKey(Schema.Array(Schema.String)),
+  /** On a Claude `usage`: its Subscription's windows, as the status line had them. */
+  limits: Schema.optionalKey(StatusLineLimits),
 });
 interface TelemetryEvent extends Schema.Schema.Type<typeof EventSchema> {}
 const EventJson = Schema.fromJsonString(EventSchema);
@@ -562,6 +566,8 @@ const ClaudePayload = Schema.Struct({
   /** `UserPromptSubmit` only: what was submitted, which is how Collie's own is told. */
   prompt: Schema.optionalKey(Schema.String),
   custom_instructions: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  /** Decoded on its own, so a renamed field loses the limits and keeps the context line. */
+  rate_limits: Schema.optionalKey(Schema.Unknown),
   context_window: Schema.optionalKey(
     Schema.NullOr(
       Schema.Struct({
@@ -582,6 +588,32 @@ const ClaudePayload = Schema.Struct({
   ),
 });
 const decodeClaudePayload = Schema.decodeUnknownOption(Schema.fromJsonString(ClaudePayload));
+const decodeLimits = Schema.decodeUnknownOption(StatusLineLimits);
+
+/**
+ * The newest Subscription windows any Claude agent's status line reported on this
+ * Machine, with when, or null where none has.
+ */
+export const newestRateLimits = Effect.fn("Compactors.newestRateLimits")(function* (
+  stateDir: string,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const root = path.join(stateDir, CONTROL_DIR);
+  const agents = yield* fs.readDirectory(root).pipe(Effect.orElseSucceed(() => []));
+  let newest: StatusSample | null = null;
+  for (const agent of agents) {
+    const text = yield* fs
+      .readFileString(path.join(root, agent, TELEMETRY))
+      .pipe(Effect.orElseSucceed(() => ""));
+    for (const line of text.split("\n")) {
+      const event = Option.getOrNull(decodeEvent(line));
+      if (event?.limits && (newest === null || event.at > newest.at))
+        newest = { at: event.at, limits: event.limits };
+    }
+  }
+  return newest;
+});
 
 /**
  * The token Collie puts in `/compact`'s own instructions and reads back out of the
@@ -666,7 +698,8 @@ export const recordClaudeEvent = Effect.fn("Compactors.recordClaudeEvent")(funct
     return "";
   }
 
-  yield* writeEvent(dir, { session, kind: "usage", tokens });
+  const limits = Option.getOrUndefined(decodeLimits(payload.rate_limits));
+  yield* writeEvent(dir, { session, kind: "usage", tokens, ...(limits && { limits }) });
   const percent = window?.used_percentage;
   return percent === null || percent === undefined
     ? "context: not measured yet"
