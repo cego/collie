@@ -514,7 +514,7 @@ const receiptFacts = Effect.fn("Tools.receipts")(function* (env: PluginEnv, run:
       ? []
       : gate.verifications.length === 0
         ? [
-            "- the evidence gate, with no checks configured to approve: add them to the project's .collie/verify.json",
+            `- the evidence gate, with no checks configured to approve: grant one with set_verification, or collie run intent verification ${run} --name <name> -- <command>`,
           ]
         : [
             `- the evidence gate, offering the checks ${gate.verifications.join(", ")}`,

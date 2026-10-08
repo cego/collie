@@ -13,10 +13,10 @@ import {
   type RunFile,
 } from "./board-model";
 import { attachmentsDir } from "./attachments";
+import { classifyWorkSource } from "./inputs";
 import { pipelineStatus, shell } from "./mr";
 import { REVIEW_FILE } from "./output";
 import { settled, type RunFacts } from "./runs";
-import { classifyWorkSource } from "./inputs";
 import { workSourceOf } from "./strategies";
 import { readVerifications } from "./verify";
 

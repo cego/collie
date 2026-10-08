@@ -1223,6 +1223,40 @@ test("a Repo run parked with nothing approved is its fan-out's Decision, answere
       expect(view!.sentence).toBe(
         "api is holding at the evidence gate, and nothing is offered to approve. Grant a check with chat's set_verification, or collie run intent verification r-api --name <name> -- <command>.",
       );
+      // Chat is told which Run its answer goes to, as the card's buttons know.
+      expect(herdLines([view!], epochMs("2026-09-14T10:05:00Z"))).toContain(
+        "Its gate is answered on run r-api.",
+      );
+    }),
+  ));
+
+test("a Repo run's gate that offers checks names its repository and asks for the list", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const fs = yield* FileSystem.FileSystem;
+      const { parent, root } = yield* startedFromPlan(dir);
+      yield* fs.makeDirectory(`${root}/api/.collie`, { recursive: true });
+      yield* fs.writeFileString(
+        `${root}/api/.collie/verify.json`,
+        '[{"name":"test","executable":"bun","argv":["test"],"cwd":"worktree"}]',
+      );
+      const api = yield* madeRun(dir, {
+        id: "r-api",
+        task: "task-1",
+        parent: "r-fan",
+        repo: "api",
+        state: "waiting",
+        cwd: `${root}/api`,
+        parked: nothingApproved("r-api"),
+      });
+
+      const [view] = yield* board(env, [api, parent]);
+
+      expect(view!.decision).toMatchObject({ run: "r-api", repo: "api", verifications: ["test"] });
+      expect(view!.sentence).toBe(
+        "api is holding at the evidence gate until you approve the list.",
+      );
     }),
   ));
 

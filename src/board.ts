@@ -643,7 +643,7 @@ export const gateOf = Effect.fn("Board.gateOf")(function* (run: RunFacts, userDi
   return run.repo === null ? gate : { ...gate, repo: run.repo };
 });
 
-/** The gate of the first Repo run, in wave order, parked there with nothing approved. */
+/** The first gate among a fan-out's Repo runs, in wave order. */
 const repoGateOf = Effect.fn("Board.repoGateOf")(function* (
   rows: ReadonlyArray<BoardChild>,
   children: ReadonlyArray<RunFacts>,
