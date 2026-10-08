@@ -18,6 +18,7 @@ import {
 } from "../../../src/settings";
 import { epochMs } from "../../../src/time";
 import type { DesktopSettings, DesktopSettingsChange } from "./flock";
+import { percent } from "./scale";
 
 /** Where an edit made in Desktop's own Settings is said to come from. */
 export const DESKTOP = "Desktop";
@@ -107,8 +108,6 @@ interface DesktopSetting extends Setting {
   /** What Settings says of it while it is unset, where its default says nothing. */
   readonly unset?: string;
 }
-
-const percent = (zoom: number) => `${Math.round(zoom * 100)}%`;
 
 const DESKTOP_SETTINGS: ReadonlyArray<DesktopSetting> = [
   {

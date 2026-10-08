@@ -74,7 +74,7 @@ export const zoomFor = (preference: number, monitor: MonitorScale, rendered: num
   );
 
 const times = (scale: number) => `${Number(scale.toFixed(2))}×`;
-const percent = (zoom: number) => `${Math.round(zoom * 100)}%`;
+export const percent = (zoom: number) => `${Math.round(zoom * 100)}%`;
 
 /** How Settings says a window is drawn, with the pixel ratio its view ends up at. */
 export const drawnSaid = (
