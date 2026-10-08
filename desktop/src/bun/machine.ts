@@ -694,6 +694,14 @@ export const flockStream = <D extends BoardSource>(
                       return Stream.unwrap(
                         // A reopen wakes a route in backoff; one that was live needs no wake.
                         Effect.as(Queue.clear(wakes[at]!), afterFailures(0)),
+                      ).pipe(
+                        Stream.prepend<FlockItem>([
+                          {
+                            _tag: "Reconnecting",
+                            machine: route.machine,
+                            at: yield* Clock.currentTimeMillis,
+                          },
+                        ]),
                       );
                     const lost = Stream.fromEffect(lostItem(route, failure.state, failure.reason));
                     if (failure.state === "update-desktop") {
@@ -826,7 +834,6 @@ const refusal = (request?: string) => (error: Refused) =>
           : error.message,
   });
 
-/** A Machine's door, and which Machine it is. */
 export type Reached = Pick<Doors, "machine" | "desktop">;
 
 /**

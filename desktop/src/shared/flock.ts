@@ -81,6 +81,13 @@ export type MachineSaved = typeof MachineSaved.Type;
 export const MachineMerged = Schema.TaggedStruct("Merged", { machine: KnownMachine });
 export type MachineMerged = typeof MachineMerged.Type;
 
+/** A route Desktop reopens on purpose, as Sync now or an upgrade does, and since when. */
+export const MachineReconnecting = Schema.TaggedStruct("Reconnecting", {
+  machine: KnownMachine,
+  at: Schema.Number,
+});
+export type MachineReconnecting = typeof MachineReconnecting.Type;
+
 /** What Desktop did on a Machine that a human should hear of, such as upgrading it. */
 export const MachineNotice = Schema.TaggedStruct("Notice", {
   machine: KnownMachine,
@@ -191,6 +198,7 @@ export const FlockItem = Schema.Union([
   MachineLost,
   MachineSaved,
   MachineMerged,
+  MachineReconnecting,
   MachineNotice,
   MachineRouted,
   MachineRemoved,
@@ -614,8 +622,8 @@ export const EMPTY_FLOCK: Flock = {
 };
 
 /**
- * A snapshot replaces its Machine and makes it live; a change touches one Task; a lost
- * route dims the Machine it was showing; a merged one is no longer lost; a saved board
+ * A snapshot replaces its Machine and makes it live; a change touches one Task; a lost or
+ * reopened route dims the Machine it was showing; a merged one is no longer lost; a saved board
  * stands in until its Machine is live; anything newer is skipped.
  */
 export const applyItem = (flock: Flock, item: FlockItem): Flock => {
@@ -681,8 +689,9 @@ export const applyItem = (flock: Flock, item: FlockItem): Flock => {
     return { ...flock, lost };
   }
   if ("_tag" in item) {
-    const { machine, state, reason, at } = item;
-    lost.set(machine.profile, { name: machine.name, state, reason });
+    const { machine, at } = item;
+    if (item._tag === "Lost")
+      lost.set(machine.profile, { name: machine.name, state: item.state, reason: item.reason });
     const machines = new Map(flock.machines);
     for (const [installation, known] of machines)
       if (known.machine.profile === machine.profile && known.asOf === null)

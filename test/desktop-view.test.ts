@@ -684,6 +684,14 @@ test("a record says its Machine is not live in the board's words, and nothing on
   });
   expect(notLiveOf(saved, vm.installation)?.title).toBe("vm-mk is reconnecting");
   expect(notLiveOf(applyItem(dropped, live), vm.installation)).toBeNull();
+  const reopened = applyItem(applyItem(EMPTY_FLOCK, live), {
+    _tag: "Reconnecting",
+    machine: vm,
+    at: 9,
+  });
+  expect(notLiveOf(reopened, vm.installation)?.title).toBe("vm-mk is reconnecting");
+  expect(reopened.machines.get(vm.installation)?.tasks.size).toBe(1);
+  expect(notLiveOf(applyItem(reopened, live), vm.installation)).toBeNull();
 });
 
 test.each<[string, Column]>([

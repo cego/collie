@@ -336,11 +336,12 @@ test("an older release is upgraded once through its route while its board stays 
       // A change on the board reaches it while the upgrade is still running.
       yield* until(() => told.length === 2);
       yield* Deferred.succeed(upgradeMayFinish, undefined);
-      yield* until(() => told.length >= 4);
-      expect(told.slice(0, 4)).toEqual([
+      yield* until(() => told.length >= 5);
+      expect(told.slice(0, 5)).toEqual([
         "Snapshot 0.30.2",
         "Remove",
         "vm upgraded 0.30.2 → 0.31.0",
+        "vm Reconnecting",
         "Snapshot 0.31.0",
       ]);
       expect(asked).toEqual([["--json", "upgrade", "--to", "0.31.0"]]);
@@ -447,6 +448,7 @@ test("a Machine out of reach when Desktop starts is upgraded once it connects", 
       expect(told.slice(1)).toEqual([
         "Snapshot 0.30.2",
         "vm upgraded 0.30.2 → 0.31.0",
+        "vm Reconnecting",
         "Snapshot 0.31.0",
       ]);
       expect(asked).toEqual([["--json", "upgrade", "--to", "0.31.0"]]);
@@ -577,8 +579,13 @@ test("Sync now on a Machine behind on its version reopens its route, which asks 
         failed: false,
       });
       yield* until(() => connections === 2 && asked === 2);
-      // Reopened, not lost.
+      // Reopened, not lost: what it showed is dated until it connects again.
       expect(told.filter((one) => one.endsWith("Lost"))).toEqual([]);
+      const reconnecting = told.indexOf("vm Reconnecting");
+      expect(told.slice(reconnecting, reconnecting + 2)).toEqual([
+        "vm Reconnecting",
+        "Snapshot 0.30.2",
+      ]);
     }).pipe(Effect.scoped),
   ));
 

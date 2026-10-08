@@ -338,7 +338,6 @@ const main = Effect.gen(function* () {
   const scope = yield* Effect.scope;
   /** How the board's window is drawn, which Settings says. */
   const drawn = yield* SubscriptionRef.make<Drawn | null>(null);
-  /** Each open window's ask to be zoomed again. */
   const zoomAgain = new Set<Effect.Effect<void>>();
   /** Keeps `window` at its monitor's own scale until it closes, telling `told` how. */
   const zoomed = (
