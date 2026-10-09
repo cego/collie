@@ -151,7 +151,6 @@ const scripted = (
       close: () => Deferred.doneUnsafe(closed, Effect.void),
     });
   },
-  // Claude Code has a transcript of each session it has started.
   getSessionInfo: (id) => Promise.resolve(seen.transcripts.has(id) ? { sessionId: id } : undefined),
   getSessionMessages: (id) => Promise.resolve(seen.transcripts.get(id) ?? []),
   listSessions: () =>

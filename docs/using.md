@@ -1161,8 +1161,9 @@ unchanged. **Reset to default**, shown while a setting is set, unsets it. Each s
 **Every Machine** shares it or it is for **This computer only**. Under **Chat**, the Flock
 chat's **Flock chat harness**, **Flock chat model**, **Machine rule** and **Flock chat speaks
 first** are this computer's, like the bell in the chat's header. The harness offers
-`claude`; the model is a one-line field, with **Unset: opus** as its default. It is checked
-as a Run's model is, including **More Claude Code models**, and a refusal saves nothing.
+`claude` and `pi`; the model is a one-line field, with **Unset: opus** for Claude and
+**Unset: pi's own default** for Pi. It is checked as a Run's model is, including
+**More Claude Code models** and Pi's `provider/model` form, and a refusal saves nothing.
 The groups, names, descriptions and
 units live with each key in the one list of settings (`src/settings.ts`) that the TUI's
 Settings reads too, so a new setting shows up in both, except those for this computer only,

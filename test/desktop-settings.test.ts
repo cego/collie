@@ -142,7 +142,6 @@ test("Settings shows every setting with its control, its value and its default",
     defaultSaid: "Unset: no rule",
     multiline: true,
   });
-  // The Flock chat's harness, from those it has a driver for, and its model on one line.
   expect(row("chatHarness", false)).toMatchObject({
     group: "Chat",
     label: "Flock chat harness",
