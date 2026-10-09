@@ -2554,8 +2554,10 @@ scenario(
         expect(status).toBe("complete");
         const builder = yield* persona(runId, "build");
         expect(builder).toContain("Before every GitHub push");
+        expect(builder).toContain("git remote get-url origin");
+        expect(builder).toContain("gh pr list --repo <origin-owner/repository> --head");
         expect(builder).toContain("--json number,autoMergeRequest");
-        expect(builder).toContain("If the read fails or any result has auto-merge enabled");
+        expect(builder).toContain("the read fails or any result has auto-merge enabled");
         const prompt = yield* asked(runId, "mr");
         expect(prompt).toContain("Forge: `github`");
         expect(prompt).toContain("gh pr view");
