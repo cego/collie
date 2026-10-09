@@ -368,13 +368,10 @@ test("the Flock chat's model is checked as a Run's is, with the Flock's extra mo
   expect(changeSettings(before, extra, { chatModel: "proxy-large" })).toMatchObject({
     chatModel: "proxy-large",
   });
-  // Empty unsets it.
   expect(changeSettings(before, NO_FLOCK_SETTINGS, { chatModel: "" })).toEqual({ proactive: true });
-  // Only a harness the chat has a driver for.
   expect(changeSettings(before, NO_FLOCK_SETTINGS, { chatHarness: "opencode" })).toEqual({
     refused: expect.stringContaining('"opencode"'),
   });
-  // A change of something else is not held up by a model saved before.
   expect(
     changeSettings({ proactive: true, chatModel: "gone" }, NO_FLOCK_SETTINGS, { proactive: false }),
   ).toEqual({ proactive: false, chatModel: "gone" });
@@ -390,7 +387,6 @@ test("choosing another harness for the Flock chat clears its model, and the same
   expect(applyChange(before, { chatHarness: "pi", chatModel: "openai-codex/gpt-6.1-sol" })).toEqual(
     { proactive: true, chatHarness: "pi", chatModel: "openai-codex/gpt-6.1-sol" },
   );
-  // Unset is claude.
   expect(applyChange({ proactive: true, chatModel: "sonnet" }, { chatHarness: "claude" })).toEqual({
     proactive: true,
     chatHarness: "claude",

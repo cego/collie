@@ -1,7 +1,4 @@
-// The Flock chat: one warm session of the harness Desktop's Settings name, in Desktop's
-// main process beside the channels its tools call, driven through that harness's driver.
-// Its conversation is resumed on every launch after, until the human starts a fresh one or
-// reopens an earlier one; the harness keeps and compacts the transcripts on this computer.
+// The Flock chat resumes one warm session on the harness named in Desktop's Settings.
 
 import {
   Crypto,
