@@ -16,7 +16,7 @@ import { Effect, Exit, Option, Schema, Stream } from "effect";
 import { isString } from "../../../../src/schema";
 import { type Attached, attachedIn, attachmentPart } from "../../../src/shared/attachments";
 import { About, type Answers } from "../../../src/shared/chat-view";
-import { desktopTurnsAtom, FlockClient } from "../flock";
+import { conversationChangesAtom, desktopTurnsAtom, FlockClient } from "../flock";
 
 const answerAtom = FlockClient.mutation("answer");
 const transcriptAtom = FlockClient.mutation("transcript");
@@ -91,6 +91,10 @@ export const useFlockChat = () => {
 
   // A turn of Desktop's own is read back from the transcript once the human's own is not streaming.
   const stale = ref(false);
+  const { value: current } = useHeld(() => conversationChangesAtom);
+  watch(current, () => {
+    stale.value = true;
+  });
   watch(desktopSpeaking, (speaking) => {
     if (!speaking) stale.value = true;
   });

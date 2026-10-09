@@ -578,6 +578,7 @@ export const DesktopRpcs = RpcGroup.make(
   /** Closes the chat's own window, which puts the chat back beside the board. */
   Rpc.make("popIn"),
   /** When the Flock chat starts and ends a turn of Desktop's own. */
+  Rpc.make("conversationChanges", { success: Schema.String, stream: true }),
   Rpc.make("desktopTurns", { success: DesktopTurn, stream: true }),
   Rpc.make("settings", { success: DesktopSettings }),
   /** How the board's window is drawn, again whenever its zoom is decided again. */

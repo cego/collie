@@ -40,6 +40,7 @@ import {
   CREDENTIALS,
   type Credentials,
   DesktopRpcs,
+  type DesktopSettings,
   type DesktopSettingsChange,
   EMPTY_FLOCK,
   type FlockItem,
@@ -59,6 +60,8 @@ import { readAttachment, stageAttachment, stagePath } from "./attachments";
 import { type FlockConversation, openFlockChat, refusal, untilStarted } from "./chat";
 import { claudeCode } from "./claude";
 import { claudeDriver } from "./claude-driver";
+import { loopbackTools } from "./chat-endpoint";
+import { piDriver } from "./pi-driver";
 import { childEnv, takeLoginEnv, which } from "./login-env";
 import { type ChatMachine, chatDoor } from "./flock-tools";
 import { changeSettings, chatChoice, readSettings, writeSettings } from "./settings";
@@ -574,7 +577,13 @@ const main = Effect.gen(function* () {
 
   /** Desktop's own settings, one change at a time, as Settings and the Flock chat make them. */
   const settingsWrite = Semaphore.makeUnsafe(1);
-  const saveSettings = (changed: DesktopSettingsChange) =>
+  const saveSettings = (
+    changed: DesktopSettingsChange,
+  ): Effect.Effect<
+    DesktopSettings,
+    ActionFailed,
+    Crypto.Crypto | FileSystem.FileSystem | Path.Path
+  > =>
     Effect.gen(function* () {
       const merged = changeSettings(settings, SubscriptionRef.getUnsafe(flockSettings), changed);
       if ("refused" in merged) return yield* new ActionFailed({ reason: merged.refused });
@@ -591,6 +600,8 @@ const main = Effect.gen(function* () {
             : Effect.forEach(zoomAgain, (again) => again, { discard: true }),
         ),
       );
+      if (changed.chatHarness !== undefined)
+        yield* withChat((opened) => opened.refresh, undefined).pipe(Effect.forkIn(scope));
       return settings;
     }).pipe(settingsWrite.withPermits(1));
 
@@ -634,7 +645,13 @@ const main = Effect.gen(function* () {
     });
   // Opened by the view's first ask, in Desktop's own scope; its session starts with the first message.
   const chat = yield* openFlockChat({
-    drivers: (context) => ({ claude: claudeDriver(claudeCode, context) }),
+    drivers: (context) =>
+      loopbackTools(context).pipe(
+        Effect.map((endpoint) => ({
+          claude: claudeDriver(claudeCode, context),
+          pi: piDriver(context, endpoint),
+        })),
+      ),
     dir: own,
     conversation: `flock@${local}`,
     proactive: () => settings.proactive,
@@ -1059,6 +1076,8 @@ const main = Effect.gen(function* () {
         yield* Deferred.await(popped.closed);
       }),
     popIn: () => Effect.sync(() => popped?.window.close()),
+    conversationChanges: () =>
+      Stream.unwrap(withChat((opened) => Effect.succeed(opened.changed), Stream.empty)),
     desktopTurns: () =>
       Stream.unwrap(withChat((opened) => Effect.succeed(opened.desktopTurns), Stream.empty)),
     settings: () => Effect.sync(() => settings),

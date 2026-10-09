@@ -1365,18 +1365,42 @@ Machine whose Collie is too old for files is told to upgrade. There is no shell 
 Machine.
 
 **Settings › Chat** names the Flock chat's harness and model, for this computer only.
-Currently the harness offers `claude`, a session of your own Claude Code on your own
-Claude seat, driven through the Agent SDK in Desktop's main process. Unset, the model is
-`opus`; a set model such as `sonnet` runs at medium effort with summarised thinking.
-None of your settings, hooks, skills or CLAUDE.md loads. A model change waits for the turn
-under way to end, then the next message continues the same conversation on the new model.
-You can ask the chat to read or change these settings through `collie_chat_harness`, with
-the same checks as Settings.
+The harness offers `claude` and `pi`, using your own install and login on this computer.
+Claude runs through the Agent SDK. Unset, its model is `opus`; a set model such as `sonnet`
+runs at medium effort with summarised thinking. None of your Claude settings, hooks, skills
+or CLAUDE.md loads.
+
+On Pi, write the model as `provider/model`, for example `openai-codex/gpt-6.1-sol`.
+Unset, Pi uses its configured default model and thinking level. Desktop starts `pi --mode rpc`
+on its login PATH, with Collie's system prompt appended and its own session directory.
+None of your Pi extensions, skills, prompt templates or context files loads. Its own
+`read`, `bash`, `edit`, `write`, `grep`, `find` and `ls` tools reach this computer without
+asking first. Pi missing from PATH is said in the chat.
+
+Pi reaches Collie's tools, the five Machine file tools and AskUserQuestion through one
+streamable-HTTP MCP endpoint on `127.0.0.1`, started on its first session. A random bearer
+token protects every request. Only the child process's environment carries the token;
+the generated extension reads it there. A private MCP server name keeps your Pi MCP
+configuration from replacing these tools; the chat still shows their Collie names. The
+endpoint remains until Desktop quits. Its
+24-hour tool timeout leaves time for a question click or a slow Machine read. A question
+in a turn Desktop starts is answered at once that the human is not in that turn.
+
+A model change waits for the turn under way to end, then the next message continues the
+same conversation on the new model. A harness change waits too, then starts a fresh
+conversation and clears its model; both chat windows reload it. Earlier conversations
+lists the current harness's history. Switching back to Claude shows its own conversations
+again. You can ask the chat to read or change these settings through `collie_chat_harness`,
+with the same checks as Settings.
 
 Your first message starts the session, and it stays warm between turns. Its session id
 and harness are kept in `$XDG_STATE_HOME/collie-desktop/flock-chat.json` (or
-`~/.local/state/collie-desktop/`), so a restart resumes the same conversation; Claude Code
-keeps and compacts the transcript on this computer.
+`~/.local/state/collie-desktop/`), so a restart resumes the same conversation. Claude Code
+keeps and compacts its transcript; Pi keeps its session files under Desktop's `pi-sessions/`.
+Desktop reads Pi's current branch and earlier conversations from those files.
+The Machine rule, News and card note reach Pi after your words as a bracketed note of
+Desktop's own. Reading the transcript back leaves the context out of your bubble and keeps
+the card as its pill.
 
 Replies stream in as Markdown, rendered as the record renders it: nothing in it runs or
 keeps a style, and a web link opens in your browser. Each tool call is one row — the tool, the Machine it
@@ -1400,8 +1424,8 @@ sent now like any other. A file over 20 MB, or files over 30 MB together, are re
 composer with the reason. Desktop keeps one copy of each file, by its sha256, under its state
 directory's `attachments/`. The model is handed your words, then a block of Desktop's own
 listing each file's name, type, size and the path of that copy, then each image as an image,
-each PDF up to 4 MB as a document, and each UTF-8 text up to 100 KB as text headed with its
-name; anything else, or anything larger, is in the listing alone, so the model can Read it
+each PDF up to 4 MB as a document on Claude, and each UTF-8 text up to 100 KB as text headed with its
+name; Pi receives PDFs by the listing alone. Anything else, or anything larger, is in the listing alone, so the model can read it
 there. An image whose long edge is over 2000 px is scaled to 2000 px first, and never up, and the
 original is what a Run gets. The message shows its chips at once, and again when the
 conversation is read back after a restart; a copy Desktop no longer has shows its name alone. An image

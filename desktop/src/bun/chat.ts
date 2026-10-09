@@ -94,6 +94,8 @@ export interface FlockConversation {
   readonly nudge: Effect.Effect<void>;
   /** When a turn of Desktop's own starts and ends. */
   readonly desktopTurns: Stream.Stream<DesktopTurn>;
+  readonly changed: Stream.Stream<string>;
+  readonly refresh: Effect.Effect<void>;
 }
 
 /** A turn of Desktop's own, recorded as usage on this computer: data, never a limit. */
@@ -214,7 +216,15 @@ export const untilStarted = <A, E, R>(start: Effect.Effect<A, E, R>) =>
  * ends the warm session and resumes the same conversation on the new model.
  */
 export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
-  readonly drivers: (context: DriverContext) => Readonly<Record<string, ChatDriver>>;
+  readonly drivers: (
+    context: DriverContext,
+  ) =>
+    | Readonly<Record<string, ChatDriver>>
+    | Effect.Effect<
+        Readonly<Record<string, ChatDriver>>,
+        never,
+        Scope.Scope | Crypto.Crypto | FileSystem.FileSystem
+      >;
   readonly dir: string;
   readonly conversation: string;
   readonly machines: FlockChat["machines"];
@@ -242,6 +252,8 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
   let carried: ReadonlyArray<Staged> | undefined;
   let noticed: FlockBatch | undefined;
   const asking = new Map<string, Deferred.Deferred<Answers>>();
+  const questions = new Set<string>();
+  const clicked = new Map<string, Answers>();
   const services = yield* Effect.context<Crypto.Crypto | FileSystem.FileSystem | Path.Path>();
   const run = <A>(effect: Effect.Effect<A, never, Crypto.Crypto | FileSystem.FileSystem>) =>
     Effect.runPromise(effect.pipe(Effect.provideContext(services)));
@@ -273,6 +285,11 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
   const ask = (toolUseID: string, signal: AbortSignal) => {
     // A turn of Desktop's own has nobody to click an answer.
     if (said === undefined) return Promise.resolve(null);
+    const early = clicked.get(toolUseID);
+    if (early !== undefined) {
+      clicked.delete(toolUseID);
+      return Promise.resolve(early);
+    }
     const answered = Deferred.makeUnsafe<Answers>();
     asking.set(toolUseID, answered);
     return Effect.runPromise(
@@ -280,7 +297,7 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
       { signal },
     );
   };
-  const drivers = opts.drivers({
+  const provided = opts.drivers({
     dir: opts.dir,
     flock,
     run,
@@ -297,9 +314,11 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
     },
   });
 
+  const drivers = Effect.isEffect(provided) ? yield* provided : provided;
+
   /** One session, live until its scope closes. */
   const start = Effect.fnUntraced(function* (driver: ChatDriver, id: string, choice: AgentChoice) {
-    const session = yield* driver.open(id, pinned(choice).model, choice.effort ?? "medium");
+    const session = yield* driver.open(id, pinned(choice).model, choice.effort ?? "");
     const events = yield* PubSub.unbounded<AguiEvent>();
     /** Why the session ended, once it has: every turn after it is told at once. */
     let ended: string | null = null;
@@ -324,8 +343,11 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
   type Live = Effect.Success<ReturnType<typeof start>>;
   let id = Option.isSome(saved) ? saved.value.session : yield* crypto.randomUUIDv4;
   let heldOn = Option.isSome(saved) ? saved.value.harness : opts.chatHarness().harness;
+  const changed = yield* SubscriptionRef.make(id);
   const remember = Effect.suspend(() =>
-    fs.writeFileString(file, Schema.encodeSync(SessionFile)({ session: id, harness: heldOn })),
+    fs
+      .writeFileString(file, Schema.encodeSync(SessionFile)({ session: id, harness: heldOn }))
+      .pipe(Effect.andThen(SubscriptionRef.set(changed, id))),
   );
   if (Option.isNone(saved)) yield* remember;
   /**
@@ -346,6 +368,7 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
       choiceSaid(live.choice) === choiceSaid(choice)
     )
       return live.running;
+    yield* switchHarness;
     yield* end;
     const scope = yield* Scope.make();
     live = { running: yield* start(driver, id, choice).pipe(Scope.provide(scope)), scope, choice };
@@ -359,6 +382,16 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
   yield* Effect.addFinalizer(() => end);
 
   const turns = yield* Semaphore.make(1);
+  const switchHarness = Effect.gen(function* () {
+    const harness = opts.chatHarness().harness;
+    if (harness === heldOn) return;
+    yield* end;
+    id = yield* crypto.randomUUIDv4;
+    heldOn = harness;
+    yield* remember;
+  }).pipe(Effect.orDie);
+  const refresh = turns.withPermits(1)(switchHarness).pipe(Effect.orDie);
+
   /** The session a turn is under way on, if one is. */
   let turning: Live | undefined;
   // A throttle: the first board change in a while has Desktop look for News once things settle.
@@ -397,6 +430,8 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
         carried = undefined;
         noticed = undefined;
         turning = undefined;
+        questions.clear();
+        clicked.clear();
       }).pipe(
         Effect.andThen(
           finished
@@ -423,6 +458,8 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
       Stream.takeUntil(ends),
       Stream.tap((event) =>
         Effect.suspend(() => {
+          if (event.type === "TOOL_CALL_START" && event.toolCallName === "AskUserQuestion")
+            questions.add(event.toolCallId);
           if (ends(event)) finished = true;
           // The model saying anything is what shows it has the message, and its News.
           if (news === undefined || event.type === "RUN_STARTED" || ends(event)) return Effect.void;
@@ -508,7 +545,9 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
     answer: (toolCallId, answers) =>
       Effect.suspend(() => {
         const answered = asking.get(toolCallId);
-        return answered === undefined ? Effect.void : Deferred.succeed(answered, answers);
+        if (answered !== undefined) return Deferred.succeed(answered, answers);
+        if (questions.has(toolCallId)) clicked.set(toolCallId, answers);
+        return Effect.void;
       }),
     transcript: Effect.suspend(() => drivers[heldOn]?.transcript(id) ?? Effect.succeed([])),
     conversations: Effect.suspend(() =>
@@ -534,6 +573,9 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
       }).pipe(Effect.orDie),
     nudge,
     desktopTurns: SubscriptionRef.changes(desktopTurns),
+    changed: SubscriptionRef.changes(changed),
+    refresh,
   };
+  yield* refresh;
   return conversation;
 });

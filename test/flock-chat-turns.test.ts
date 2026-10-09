@@ -3,12 +3,15 @@
 
 import { expect, test } from "bun:test";
 import { BunServices } from "@effect/platform-bun";
-import { Crypto, Deferred, Effect, Fiber, FileSystem, Path, Schema, Stream } from "effect";
+import { Crypto, Deferred, Effect, Fiber, FileSystem, Path, Schema, Stream, Queue } from "effect";
 import { TestClock } from "effect/testing";
 import { type Declaration, NewsBatch, PROTOCOL, type Significance } from "../src/board-model";
 import { stageAttachment } from "../desktop/src/bun/attachments";
 import { openFlockChat } from "../desktop/src/bun/chat";
 import { type ClaudeCode, claudeDriver } from "../desktop/src/bun/claude-driver";
+import type { AguiEvent } from "../desktop/src/shared/agui";
+import type { TurnCost } from "../desktop/src/bun/driver";
+import type { ChatDriver, DriverContext } from "../desktop/src/bun/driver";
 import { chatChoice } from "../desktop/src/bun/settings";
 import { DesktopSettings } from "../desktop/src/shared/flock";
 import { NO_FLOCK_SETTINGS } from "../desktop/src/shared/flock-settings";
@@ -57,6 +60,10 @@ const machine = (
     board: { _tag: "Live", herds: [{ id: "h1" }], tasks: [], protocol: PROTOCOL, files: false },
   };
 };
+
+interface ScriptedDrivers {
+  [harness: string]: ChatDriver;
+}
 
 interface Seen {
   flock?: FlockChat;
@@ -147,7 +154,14 @@ const scripted = (
   // Claude Code has a transcript of each session it has started.
   getSessionInfo: (id) => Promise.resolve(seen.transcripts.has(id) ? { sessionId: id } : undefined),
   getSessionMessages: (id) => Promise.resolve(seen.transcripts.get(id) ?? []),
-  listSessions: () => Promise.resolve([]),
+  listSessions: () =>
+    Promise.resolve(
+      [...seen.transcripts.keys()].map((sessionId) => ({
+        sessionId,
+        summary: "Earlier",
+        lastModified: 1,
+      })),
+    ),
   server: (flock) => {
     seen.flock = flock;
     return "collie";
@@ -209,6 +223,7 @@ const withChat = <A, E>(
     readonly failedStarts?: number;
     /** What Desktop's Settings have, which a test may change between turns. */
     readonly settings?: { current: DesktopSettings };
+    readonly pi?: (context: DriverContext) => ChatDriver;
     readonly gate?: Deferred.Deferred<void>;
     /** The current conversation's file, as an earlier Desktop left it. */
     readonly savedFile?: string;
@@ -242,12 +257,16 @@ const withChat = <A, E>(
         yield* fs.writeFileString(`${dir}/flock-chat.json`, opts.savedFile);
       const settings = opts.settings ?? { current: { proactive: opts.proactive } };
       const conversation = yield* openFlockChat({
-        drivers: (context) => ({
-          claude: claudeDriver(
-            failingFirst(scripted(seen, reply, opts.holds, opts.gate), opts.failedStarts ?? 0),
-            context,
-          ),
-        }),
+        drivers: (context) => {
+          const drivers: ScriptedDrivers = {
+            claude: claudeDriver(
+              failingFirst(scripted(seen, reply, opts.holds, opts.gate), opts.failedStarts ?? 0),
+              context,
+            ),
+          };
+          if (opts.pi !== undefined) drivers.pi = opts.pi(context);
+          return drivers;
+        },
         dir,
         conversation: "flock@mk-pc",
         machines: () => [machine(opts.items, read, opts.declared)],
@@ -712,6 +731,189 @@ test("a conversation file from before harnesses is claude's, resumed as before, 
         ).toEqual({
           session: "5c1e6c8e-0000-4000-8000-000000000000",
           harness: "claude",
+        });
+      }),
+  ));
+
+test("a harness change waits for the current turn, tells both windows, and keeps each harness's history", () => {
+  const settings = { current: { proactive: false, chatHarness: "claude" } };
+  const gate = Deferred.makeUnsafe<void>();
+  const history = {
+    id: "pi-earlier",
+    role: "user" as const,
+    parts: [{ type: "text" as const, content: "Pi before" }],
+  };
+  const pi = (_context: DriverContext): ChatDriver => ({
+    installed: true,
+    open: (id) =>
+      Effect.gen(function* () {
+        const events = yield* Queue.unbounded<AguiEvent>();
+        return {
+          conversation: () => id,
+          offer: () =>
+            Queue.offer(events, { type: "RUN_FINISHED" as const, threadId: id, runId: id }).pipe(
+              Effect.asVoid,
+            ),
+          events: Stream.fromQueue(events),
+          interrupt: Effect.void,
+          close: Effect.void,
+          lastTurn: () => undefined,
+          limited: () => false,
+        };
+      }),
+    transcript: (id) => Effect.succeed(id === "pi-earlier" ? [history] : []),
+    earlier: () => Effect.succeed([{ session: "pi-earlier", title: "Pi before", at: 1 }]),
+    transcriptPath: () => Effect.succeed(null),
+  });
+  return withChat(
+    { items: [], proactive: false, settings, gate, pi },
+    answered,
+    ({ conversation, seen }) =>
+      Effect.gen(function* () {
+        const first = (yield* conversation.conversations).current;
+        const slow = yield* Stream.runCollect(conversation.send("slow", null, false)).pipe(
+          Effect.forkChild,
+        );
+        yield* eventually(() => seen.prompts.length === 1);
+        const docked = yield* conversation.changed.pipe(
+          Stream.drop(1),
+          Stream.take(1),
+          Stream.runCollect,
+          Effect.forkChild,
+        );
+        const popped = yield* conversation.changed.pipe(
+          Stream.drop(1),
+          Stream.take(1),
+          Stream.runCollect,
+          Effect.forkChild,
+        );
+        settings.current = { proactive: false, chatHarness: "pi" };
+        const refreshing = yield* conversation.refresh.pipe(Effect.forkChild);
+        yield* Effect.yieldNow;
+        expect((yield* conversation.conversations).current).toBe(first);
+        expect(seen.interrupts).toEqual([]);
+        yield* Deferred.succeed(gate, undefined);
+        yield* Fiber.join(slow);
+        yield* Fiber.join(refreshing);
+        const second = (yield* conversation.conversations).current;
+        expect(second).not.toBe(first);
+        expect(yield* Fiber.join(docked)).toEqual([second]);
+        expect(yield* Fiber.join(popped)).toEqual([second]);
+        expect(yield* conversation.transcript).toEqual([]);
+        yield* Stream.runDrain(conversation.send("Pi turn", null, false));
+        expect((yield* conversation.conversations).earlier).toEqual([
+          { session: "pi-earlier", title: "Pi before", at: 1 },
+        ]);
+        yield* conversation.reopen("pi-earlier");
+        expect(yield* conversation.transcript).toEqual([history]);
+        settings.current = { proactive: false, chatHarness: "claude" };
+        yield* conversation.refresh;
+        expect((yield* conversation.conversations).earlier.map(({ session }) => session)).toContain(
+          first,
+        );
+      }),
+  );
+});
+
+test("Pi missing from this computer refuses the message without launching a session", () =>
+  withChat(
+    {
+      items: [],
+      proactive: false,
+      settings: { current: { proactive: false, chatHarness: "pi" } },
+      pi: () => ({
+        installed: false,
+        open: () => Effect.die("must not open"),
+        transcript: () => Effect.succeed([]),
+        earlier: () => Effect.succeed([]),
+        transcriptPath: () => Effect.succeed(null),
+      }),
+    },
+    answered,
+    ({ conversation }) =>
+      Effect.gen(function* () {
+        expect(yield* Stream.runCollect(conversation.send("hello", null, false))).toEqual([
+          {
+            type: "RUN_ERROR",
+            runId: "",
+            message: "pi is not installed or not on PATH on this computer",
+          },
+        ]);
+      }),
+  ));
+
+test("Desktop's own turn on Pi records its harness, model and token counts", () =>
+  withChat(
+    {
+      items: [item("r1:asking", "decision")],
+      proactive: true,
+      settings: {
+        current: { proactive: true, chatHarness: "pi", chatModel: "openai-codex/gpt-6.1-sol" },
+      },
+      pi: (context) => ({
+        installed: true,
+        open: (id) =>
+          Effect.gen(function* () {
+            const events = yield* Queue.unbounded<AguiEvent>();
+            let result: TurnCost | undefined;
+            return {
+              conversation: () => id,
+              offer: (content) =>
+                Effect.gen(function* () {
+                  expect(content).toStartWith(DESKTOP_SAID);
+                  expect(context.flock.said()).toBeUndefined();
+                  result = {
+                    duration_ms: 10,
+                    usage: {
+                      input_tokens: 12,
+                      output_tokens: 7,
+                      cache_read_input_tokens: 4,
+                      cache_creation_input_tokens: 0,
+                    },
+                  };
+                  yield* Queue.offerAll(events, [
+                    { type: "TEXT_MESSAGE_START", messageId: "reply", role: "assistant" },
+                    { type: "RUN_FINISHED", threadId: id, runId: id },
+                  ]);
+                }),
+              events: Stream.fromQueue(events),
+              interrupt: Effect.void,
+              close: Effect.void,
+              lastTurn: () => result,
+              limited: () => false,
+            };
+          }),
+        transcript: () => Effect.succeed([]),
+        earlier: () => Effect.succeed([]),
+        transcriptPath: () => Effect.succeed(null),
+      }),
+    },
+    answered,
+    ({ conversation, dir }) =>
+      Effect.gen(function* () {
+        const ended = yield* conversation.desktopTurns.pipe(
+          Stream.drop(1),
+          Stream.filter((state) => state === "ended"),
+          Stream.take(1),
+          Stream.runDrain,
+          Effect.forkChild,
+        );
+        yield* TestClock.adjust("3 seconds");
+        yield* Fiber.join(ended);
+        const fs = yield* FileSystem.FileSystem;
+        for (let tries = 0; tries < 200 && !(yield* fs.exists(`${dir}/flock-usage.jsonl`)); tries++)
+          yield* TestClock.withLive(Effect.sleep("10 millis"));
+        const usage = yield* fs.readFileString(`${dir}/flock-usage.jsonl`);
+        expect(Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Json))(usage)).toMatchObject({
+          turn: "desktop",
+          harness: "pi",
+          model: "openai-codex/gpt-6.1-sol",
+          usage: {
+            input_tokens: 12,
+            output_tokens: 7,
+            cache_read_input_tokens: 4,
+            cache_creation_input_tokens: 0,
+          },
         });
       }),
   ));

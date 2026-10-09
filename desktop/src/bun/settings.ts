@@ -61,7 +61,18 @@ export const chatChoice = (settings: DesktopSettings, flock: FlockSettings) => {
       ok: false as const,
       problem: `the Flock chat has no harness called "${harness}" (${CHAT_HARNESSES.join(", ")})`,
     };
-  return resolveChoice([{ harness, model: settings.chatModel }], extraModels(flock));
+  const resolved = resolveChoice([{ harness, model: settings.chatModel }], extraModels(flock));
+  if (
+    !resolved.ok &&
+    harness === "pi" &&
+    settings.chatModel !== undefined &&
+    !settings.chatModel.includes("/")
+  )
+    return {
+      ok: false as const,
+      problem: `${resolved.problem}. Write provider/model, for example openai-codex/gpt-6.1-sol.`,
+    };
+  return resolved;
 };
 
 /** The settings `change` makes, or why it is refused; a change that leaves the chat alone is not checked. */

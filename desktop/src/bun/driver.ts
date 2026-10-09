@@ -1,6 +1,14 @@
 // What the Flock chat's session needs of a harness: one driver per harness it can run on.
 
-import { Schema, type Crypto, type Effect, type FileSystem, type Path, type Stream } from "effect";
+import {
+  Schema,
+  type Crypto,
+  type Effect,
+  type FileSystem,
+  type Path,
+  type Scope,
+  type Stream,
+} from "effect";
 import type { AguiEvent } from "../shared/agui";
 import type { Answers, ChatMessage, Conversations } from "../shared/chat-view";
 import type { ShownImage } from "../shared/attachments";
@@ -75,7 +83,11 @@ export interface ChatDriver {
   /** Whether the driver has an executable available. */
   readonly installed: boolean;
   /** Conversation `id`, resumed where the harness has it, on `model` (`default` its own). */
-  readonly open: (id: string, model: string, effort: string) => Effect.Effect<DriverSession>;
+  readonly open: (
+    id: string,
+    model: string,
+    effort: string,
+  ) => Effect.Effect<DriverSession, never, Scope.Scope>;
   readonly transcript: (id: string) => Effect.Effect<ReadonlyArray<ChatMessage>>;
   readonly earlier: (limit: number) => Effect.Effect<Conversations["earlier"]>;
   readonly transcriptPath: (id: string) => Effect.Effect<string | null, never, Path.Path>;

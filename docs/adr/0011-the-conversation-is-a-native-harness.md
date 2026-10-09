@@ -262,7 +262,7 @@ tool, a file included, is data and not instructions.
 
 ## Amended 2026-10-09: the Flock chat runs on the harness Settings names
 
-**Status: accepted, to be built.**
+**Status: Claude and Pi built; Codex and fallback accepted, to be built.**
 
 The Flock chat ran on Claude Code alone, so a human whose seat for this conversation is a
 ChatGPT subscription in Pi or Codex could not hold it there. Desktop's Settings now name its
@@ -299,7 +299,9 @@ nothing else changes.
   127.0.0.1, behind a bearer token minted when Desktop starts and handed to the harness's
   process in its environment, never on a command line or in a file. Claude keeps its
   in-process server. Pi is given the server by a generated `-e` extension that registers
-  it with direct exposure; Codex by `mcp_servers.collie` in its config. AskUserQuestion
+  it with direct exposure under a short random name, so user MCP configuration cannot
+  replace it and Pi keeps the tool names within the provider’s limit; the view and history
+  retain Collie’s stable names. Codex uses `mcp_servers.collie` in its config. AskUserQuestion
   keeps Claude's arguments and its choice buttons, waits for the click however long it
   takes, and in a turn of Desktop's own answers at once that nobody is there to click.
 - **On this computer the chat keeps the harness's own file and shell tools**, and none asks
@@ -322,6 +324,27 @@ nothing else changes.
   after the turn it was made in.
 
 ## What has actually been proven
+
+Flock chat, Pi **1.1.0**, `openai-codex/gpt-6.1-sol`, 2026-10-09: a live probe drove
+`openFlockChat` in a disposable Desktop state directory with no Machines. It used the
+installed Pi and login, the shipped driver and the authenticated endpoint. It did not
+change the human's Desktop settings. This proves the main-process path, not the window.
+
+| Flock chat check                                                        | Pi 1.1.0 |
+| ----------------------------------------------------------------------- | -------- |
+| a message is answered through `collie_herd`                             | pass     |
+| AskUserQuestion is answered by the call id and continues the turn       | pass     |
+| an attached image is described correctly                                | pass     |
+| closing and reopening the chat session reads the same transcript and id | pass     |
+| the window draws choice buttons and a click continues the turn          | pending  |
+| a pasted screenshot is described in the window                          | pending  |
+| quitting and reopening Desktop draws the conversation again             | pending  |
+
+The reply identified the attached Collie portrait. The recorded events include
+`mcp__collie__collie_herd`, `AskUserQuestion`, its result and the answer “Apple”.
+`flock-chat/pi-window-turn-and-restart` in the acceptance registry keeps the window checks
+pending until an operator records them on the release revision. Subscription-limit
+recognition and its live proof belong to the fallback piece; this probe reached no limit.
 
 Recorded by `tools/chat-live.ts <harness>` against herdr 0.9.0, Claude Code 2.1.272 and
 Pi 0.85.1, in a disposable Herd of its own — its own state and config directories, its own

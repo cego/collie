@@ -147,7 +147,7 @@ test("Settings shows every setting with its control, its value and its default",
     group: "Chat",
     label: "Flock chat harness",
     kind: "choice",
-    choices: ["claude"],
+    choices: ["claude", "pi"],
     value: "claude",
     set: false,
   });
@@ -414,3 +414,17 @@ test("the Flock chat's harness and model are kept on this computer, and a file f
       expect(yield* readSettings(dir)).toEqual({ proactive: true, machineRule: "vm" });
     }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
   ));
+
+test("Pi is offered for the Flock chat and checks a provider-qualified model", () => {
+  expect(
+    changeSettings({ proactive: true }, NO_FLOCK_SETTINGS, {
+      chatHarness: "pi",
+      chatModel: "openai-codex/gpt-6.1-sol",
+    }),
+  ).toEqual({ proactive: true, chatHarness: "pi", chatModel: "openai-codex/gpt-6.1-sol" });
+  expect(
+    changeSettings({ proactive: true, chatHarness: "pi" }, NO_FLOCK_SETTINGS, {
+      chatModel: "gpt-6.1-sol",
+    }),
+  ).toEqual({ refused: expect.stringContaining("provider/model") });
+});

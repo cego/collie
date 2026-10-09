@@ -865,6 +865,17 @@ const WORKFLOWS: readonly Check[] = [
 /** What only a person at a terminal can settle. */
 const OPERATOR_CHECKS: readonly Check[] = [
   {
+    id: "flock-chat/pi-window-turn-and-restart",
+    statement:
+      "On Pi, the Flock chat answers through collie_herd, continues after a question click, describes a pasted screenshot and survives Desktop restarting.",
+    owner: "Flock chat on Pi (this MR)",
+    needs: "operator",
+    proof: {
+      kind: "operator",
+      how: "On a disposable Desktop profile, choose pi and openai-codex/gpt-6.1-sol. Ask for collie_herd and a choice, click its button, paste a screenshot and ask about it, quit and reopen Desktop, and record the restored conversation in both windows with the Pi version and revision. Main-process probes do not settle this row.",
+    },
+  },
+  {
     id: "flock-chat/a-machine-on-an-older-collie-is-told-to-upgrade",
     statement:
       "A Machine whose Collie predates files is told to upgrade when the Flock chat reads a file there or starts work carrying one, and nothing starts there.",
