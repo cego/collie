@@ -54,6 +54,7 @@ import {
 import { RELEASE_PUBLIC_KEY } from "../../../src/signing";
 import { pruneDesktop, sshControlsPrefix, sweepSshControls } from "../../../src/desktop";
 import { appWindowFor } from "./browser";
+import { applicationMenu } from "./menu";
 import { clipboardPaths } from "../shared/attachments";
 import { readAttachment, stageAttachment, stagePath } from "./attachments";
 import { type FlockConversation, openFlockChat, refusal, untilStarted } from "./chat";
@@ -1049,6 +1050,10 @@ const main = Effect.gen(function* () {
     );
   return yield* Layer.launch(servedOn(board.channel));
 }).pipe(Effect.scoped, Effect.provide(BunServices.layer));
+
+// A Mac sends Cmd+C, Cmd+V, Cmd+Q and the rest through its menu bar, which is empty until set.
+if (process.platform === "darwin")
+  Electrobun.ApplicationMenu.setApplicationMenu(applicationMenu(process.platform));
 
 // Quitting may end the process before any scope closes, and an SSH master would outlive it.
 Electrobun.events.on("before-quit", endChildren);
