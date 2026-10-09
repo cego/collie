@@ -1717,6 +1717,13 @@ survives the picker closing, the Control Plane closing, and the terminal being d
 
 ### Why a run stopped
 
+`implement` sends a `blocker` or `major` reported by its builder to reviewers before
+starting the next ticket. They review the tickets built so far; later tickets are outside
+that review's scope. The same implementer fixes their findings, followed by another
+review. Each rally is bounded to four rounds and stops on no progress or an unanswered
+blocking dispute. Later tickets start only after the rally settles. When the last review
+already covers the finished plan, it is reused; further work gets another review.
+
 The detail panel of a run that stopped opens with **Stopped**: one line saying why — the
 review loop out of iterations or making no progress, a blocking finding the implementer
 disputed, a last fix whose own account did not hold up, a stop someone asked for, or work

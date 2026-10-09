@@ -103,6 +103,8 @@ their own review of this change:
 Read all of them, then read the target yourself, and write the one review this change
 gets — the review a careful colleague would leave on it.
 
+{{obstacle}}
+
 {{previous.review}}
 
 Where a review of this target appears above, every finding it raised is accounted for:

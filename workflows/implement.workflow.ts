@@ -142,10 +142,7 @@ const Opened = Schema.Struct({
   pushed: Schema.Boolean,
 });
 
-/**
- * A ceiling, not a target: at most four reviews and four fixes after the build. The Run
- * leaves the loop at the first review with nothing blocking.
- */
+/** At most four rounds per rally; leave when no blocking finding remains. */
 const ROUNDS = 4;
 
 /** The checks whose latest run by Collie, on the tree in front of it, failed. */
@@ -291,6 +288,7 @@ export default defineWorkflow({
       const handed: Handed[] = [];
       const assumed: string[] = [];
       let build: typeof Built.Type | null = null;
+      let rallied: Rallied | null = null;
       for (;;) {
         // Identities before work: two tickets nobody can tell apart would share one
         // result, and finding that out after an agent has been paid for is too late.
@@ -301,6 +299,7 @@ export default defineWorkflow({
         if (ticket === undefined) break;
         const before = (yield* host.evidence(runId, cwd)).verifications.length;
         if (ticket !== null) yield* checkpoint(place.dir, ticket, "started", []);
+        rallied = null;
         build = yield* agentWork({
           operation: ticket?.file ?? "build",
           agent: BUILDER,
@@ -329,26 +328,36 @@ export default defineWorkflow({
         built.add(done.item);
         if (ticket === null) for (const one of tickets) built.add(one.file);
         if (ticket !== null) yield* checkpoint(place.dir, ticket, "done", claimsOf(build, ticket));
-        // A ticket that did not land stops the plan here: the next one is written against
-        // work that is not there, and building it would be building on nothing. A finding
-        // nobody is blocked by is carried, exactly as a review's is.
         const blocking = (build.findings ?? []).filter(isBlocking);
         if (blocking.length > 0) {
-          return yield* unbuilt(
-            `${done.item}: stopped with ${blocking.length} blocking finding(s)`,
-          );
+          rallied = yield* rally({
+            cwd,
+            plan: source.kind === "plan-dir" ? source.value : "",
+            proves: kind,
+            risks: place.options.risks ?? "",
+            input,
+            build: {
+              item: done.item,
+              completed: handed.map((one) => one.item),
+              findings: blocking,
+            },
+          });
+          const unresolved = rallied.halted ?? rallied.unsettled.join("; ");
+          if (unresolved !== "") return yield* unbuilt(`${done.item}: ${unresolved}`);
         }
         tickets = yield* ticketsNow;
       }
       if (build === null) return yield* new WorkflowError({ reason: "nothing was built" });
 
-      const rallied = yield* rally({
-        cwd,
-        plan: source.kind === "plan-dir" ? source.value : "",
-        proves: kind,
-        risks: place.options.risks ?? "",
-        input,
-      });
+      if (rallied === null || rallied.unreviewed !== "") {
+        rallied = yield* rally({
+          cwd,
+          plan: source.kind === "plan-dir" ? source.value : "",
+          proves: kind,
+          risks: place.options.risks ?? "",
+          input,
+        });
+      }
       if (rallied.halted !== null) {
         yield* host.record(runId, rallied.halted);
         return yield* unbuilt(rallied.halted);
@@ -648,6 +657,12 @@ const disputesOf = (findings: ReadonlyArray<Finding>): string[] =>
         `disputed blocking finding: [${one.severity}] ${one.title}${one.file ? ` (${one.file})` : ""}${one.reason ? `: ${one.reason}` : ""}`,
     );
 
+interface PartialBuild {
+  readonly item: string;
+  readonly completed: ReadonlyArray<string>;
+  readonly findings: ReadonlyArray<Finding>;
+}
+
 /** Where a rally stood when it stopped: what halted it, and what the last fix left. */
 interface Rallied {
   /** Why the loop stopped short, or null where it converged. */
@@ -671,6 +686,7 @@ const rally = (ask: {
   readonly proves: string;
   readonly risks: string;
   readonly input: typeof Implementing.Type;
+  readonly build?: PartialBuild;
 }): Effect.Effect<
   Rallied,
   WorkflowError,
@@ -680,6 +696,7 @@ const rally = (ask: {
     const host = yield* Host;
     const agents = yield* Agents;
     const runId = (yield* Run).id;
+    const prefix = ask.build === undefined ? "" : `${ask.build.item}.`;
     let disputed: Finding[] = [];
     let seen: { readonly at: number; readonly keys: ReadonlyArray<string> } | null = null;
 
@@ -692,7 +709,12 @@ const rally = (ask: {
         proves: ask.proves,
         previous: "",
         // The last round's fix, which a follow-up review checks each of its findings against.
-        answered: at === 1 ? "" : agents.outputFor(runId, `fix-${at - 1}`),
+        answered: at === 1 ? "" : agents.outputFor(runId, `${prefix}fix-${at - 1}`),
+        prefix,
+        obstacle:
+          ask.build === undefined
+            ? ""
+            : `Review the built part of this plan: ${ask.build.completed.join(", ")}. Later tickets have not started and are outside this review, including its scope judgement. Check these findings reported by the implementer:\n${formatFindings(ask.build.findings)}`,
         risks: ask.risks,
         at,
         of: ROUNDS,
@@ -730,7 +752,7 @@ const rally = (ask: {
       seen = { at, keys: round.keys };
 
       const fixed = yield* agentWork({
-        operation: `fix-${at}`,
+        operation: `${prefix}fix-${at}`,
         agent: BUILDER,
         role: "implementer",
         instructions: prompts.fix,
