@@ -206,9 +206,8 @@ effectTest("a view nobody has opened is not read at all", function* () {
 
 effectTest("a glab that writes a notice to stderr is still read as a merge request", function* () {
   // glab writes non-fatal notices — a new version, a host warning — to stderr and still
-  // exits 0. Folding those into the output made a merge request that had just been read
-  // successfully report as "not a merge request", and the bad answer was then cached for
-  // the whole TTL. Every other glab call in this repo that parses JSON ignores stderr.
+  // exits 0. Read as part of the answer, they made a merge request that had just been
+  // read successfully report as "not a merge request", cached for the whole TTL.
   const bin = yield* FakeBin.make(`${rig.root}/bin`);
   yield* bin.add(
     "glab",
@@ -221,20 +220,11 @@ effectTest("a glab that writes a notice to stderr is still read as a merge reque
   );
 
   const ref = { project: "gitlab.example.com/g/p", iid: "1" };
-  const quiet = yield* mrDetails(ref, rig.projectDir, (cmd, args, cwd) => shell(cmd, args, cwd));
-  const noisy = yield* mrDetails(ref, rig.projectDir, (cmd, args, cwd) =>
-    shell(cmd, args, cwd, "say"),
-  );
+  const details = yield* mrDetails(ref, rig.projectDir, shell);
 
   yield* bin.restore();
 
-  expect(quiet._tag).toBe("Details");
-  // And this is the failure the default was changed away from, pinned so the reason
-  // cannot be forgotten: with stderr folded in, the same read is unreadable.
-  expect(noisy).toEqual({
-    _tag: "Unavailable",
-    reason: "what glab said about gitlab.example.com/g/p!1 is not a merge request",
-  });
+  expect(details._tag).toBe("Details");
 });
 
 effectTest("a card outside the legacy lists still fills its own record", function* () {

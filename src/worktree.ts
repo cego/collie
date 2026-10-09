@@ -30,6 +30,7 @@ import {
   projectHere,
   repoArgs,
   shell,
+  whatItSaid,
   type Runner,
 } from "./mr";
 import { parseMrTarget } from "./board-model";
@@ -627,7 +628,7 @@ const gitCheckout = Effect.fn("worktree.gitCheckout")(function* (opts: {
     : ["worktree", "add", at, "-b", branch, ...(opts.base ? [opts.base] : [])];
   const added = yield* run("git", args, listing.repo);
   if (added.code !== 0) {
-    return { refused: added.stdout.trim() || `git would not add a worktree at ${at}` };
+    return { refused: whatItSaid(added) || `git would not add a worktree at ${at}` };
   }
   return { path: at, created: true };
 });
@@ -788,7 +789,7 @@ const claimRoaming = Effect.fn("worktree.claimRoaming")(function* (opts: {
   const base = tracked ? `origin/${head}` : head;
   const added = yield* run("git", ["worktree", "add", "--detach", at, base], opts.repo);
   if (added.code !== 0) {
-    return { refused: added.stdout.trim() || `git would not add a worktree at ${at}` };
+    return { refused: whatItSaid(added) || `git would not add a worktree at ${at}` };
   }
   return { path: at, base };
 });
@@ -862,7 +863,6 @@ export const checkoutFor = Effect.fn("worktree.checkoutFor")(function* (
           "glab",
           ["config", "get", "token", "--host", host],
           opts.stateDir,
-          "say",
         )).stdout.trim();
         if (token === "") {
           return { ...here, refused: `could not authenticate to ${host}` };
@@ -881,12 +881,11 @@ export const checkoutFor = Effect.fn("worktree.checkoutFor")(function* (
             from,
           ],
           opts.stateDir,
-          "say",
         );
         if (cloned.code !== 0) {
           return {
             ...here,
-            refused: `could not clone ${repository}: ${cloned.stdout.trim() || "git clone failed"}`,
+            refused: `could not clone ${repository}: ${whatItSaid(cloned) || "git clone failed"}`,
           };
         }
       }
@@ -896,7 +895,7 @@ export const checkoutFor = Effect.fn("worktree.checkoutFor")(function* (
       worktrees: yield* herdr.worktreesDirectory(),
       stateDir: opts.stateDir,
       recordedBy: opts.recordedBy,
-      run: (cmd, args, cwd) => shell(cmd, args, cwd, "say"),
+      run: shell,
     });
     if (made.refused !== undefined) {
       return { ...here, refused: `no worktree for ${from}: ${made.refused}` };
@@ -961,8 +960,7 @@ export const checkoutFor = Effect.fn("worktree.checkoutFor")(function* (
     branch: plan.branch,
     base: plan.base,
     worktrees: yield* herdr.worktreesDirectory(),
-    // `say`, so git's own reason for refusing a worktree is what the Run is told.
-    run: (cmd, args, cwd) => shell(cmd, args, cwd, "say"),
+    run: shell,
   });
   if (made.refused !== undefined) return refuse(made.refused);
   const worktree = {
@@ -1269,10 +1267,7 @@ const prune = Effect.fn("worktree.prune")(function* (
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  // `say`: git writes why it will not drop a checkout, or delete a branch, to stderr,
-  // and the whole point of the board's line is to pass that on. Every check here reads
-  // the exit code first, so folding stderr into the output changes no decision.
-  const run = opts.run ?? ((cmd, args, cwd) => shell(cmd, args, cwd, "say"));
+  const run = opts.run ?? shell;
   const now = opts.now ?? (yield* Clock.currentTimeMillis);
   const statePath = path.join(opts.stateDir, PRUNE_FILE);
   // What a board line calls a checkout: the branch it is for. Not the last part of its
@@ -1458,7 +1453,7 @@ const removeWorktree = Effect.fn("worktree.removeWorktree")(function* (
     if (refused !== null) return kept(refused);
   } else {
     const dropped = yield* opts.run("git", ["worktree", "remove", worktree.path], opts.repo);
-    if (dropped.code !== 0) return kept(dropped.stdout.trim() || "git would not remove it");
+    if (dropped.code !== 0) return kept(whatItSaid(dropped) || "git would not remove it");
   }
 
   // The Run's leftover shells, now that the directory they sit in has gone — whichever
@@ -1483,7 +1478,7 @@ const removeWorktree = Effect.fn("worktree.removeWorktree")(function* (
   const why =
     deleted.code === 0
       ? opts.why
-      : `branch ${worktree.branch} kept: ${deleted.stdout.trim() || "git would not delete it"}`;
+      : `branch ${worktree.branch} kept: ${whatItSaid(deleted) || "git would not delete it"}`;
   // Said on the same line, for the same reason the kept branch is: this checkout will
   // not be a candidate again, so anything that did not go with it is reported here or
   // it is never reported.

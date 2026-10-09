@@ -13,6 +13,7 @@ import { gitlabHostOf } from "./config";
 import { tokenPage } from "./gitlab-token";
 import type { PluginEnv } from "./env";
 import { err, moveToRelease, prepareSteps, type OpResult } from "./operations";
+import { whatItSaid } from "./mr";
 import { HELLE_TOKEN_STEPS, helleUrlOf } from "./helle-url";
 import { helleEnvPath, LINEAR_MCP_ADD, LINEAR_MCP_FIX, probeLinearMcp } from "./optional";
 import { installation, manifestField, RELEASE_TAG } from "./release";
@@ -158,7 +159,7 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
       : `${env.home}/.collie`);
 
   const childEnv = { ...env.raw, PATH: search };
-  /** Runs a command with this Machine's PATH, answering with its exit and all it said. */
+  /** Runs a command with this Machine's PATH, answering with its exit and each stream. */
   const piped = (
     cmd: string,
     args: ReadonlyArray<string>,
@@ -188,14 +189,18 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
         [text(handle.stdout), text(handle.stderr), handle.exitCode],
         { concurrency: "unbounded" },
       );
-      return { code: Number(code), stdout: stdout + stderr };
+      return { code: Number(code), stdout, stderr };
     }).pipe(
       Effect.scoped,
       Effect.timeoutOption(COMMAND_LIMIT),
       Effect.map(
-        Option.getOrElse(() => ({ code: 124, stdout: `timed out after ${COMMAND_LIMIT}` })),
+        Option.getOrElse(() => ({
+          code: 124,
+          stdout: "",
+          stderr: `timed out after ${COMMAND_LIMIT}`,
+        })),
       ),
-      Effect.catch(() => Effect.succeed({ code: 127, stdout: "" })),
+      Effect.catch(() => Effect.succeed({ code: 127, stdout: "", stderr: "" })),
     );
   const exec = (cmd: string, args: ReadonlyArray<string>, cwd: string) => piped(cmd, args, cwd);
   const lastWords = (output: string) => output.trim().split("\n").slice(-3).join(" ");
@@ -273,13 +278,13 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
         const repo = env.raw["COLLIE_REPO"] ?? COLLIE_REPO;
         const cloned = yield* exec("git", ["clone", "--quiet", repo, root], env.home);
         if (cloned.code !== 0) {
-          return failed(`could not clone ${repo}: ${lastWords(cloned.stdout)}`);
+          return failed(`could not clone ${repo}: ${lastWords(whatItSaid(cloned))}`);
         }
         // On its branch rather than detached, so a plain `collie upgrade` can still pull.
         const atTag = yield* exec("git", ["reset", "--quiet", "--hard", `refs/tags/${to}`], root);
         return atTag.code === 0
           ? done(`cloned ${repo} at ${to}`)
-          : failed(`${repo} has no release ${to}: ${lastWords(atTag.stdout)}`);
+          : failed(`${repo} has no release ${to}: ${lastWords(whatItSaid(atTag))}`);
       }
       if (!(yield* fs.exists(`${root}/.git`))) {
         return failed(`${root} is there and is not a checkout of Collie`);
@@ -312,7 +317,10 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
           const now = yield* onPath(search, name);
           return ran.code === 0 && now !== null
             ? done(`installed ${now}/${name}`)
-            : failed(`the installer did not leave a ${name}: ${lastWords(ran.stdout)}`, command);
+            : failed(
+                `the installer did not leave a ${name}: ${lastWords(whatItSaid(ran))}`,
+                command,
+              );
         }),
       );
     yield* installer("herdr", "herdr", HERDR_INSTALL, "sh");
@@ -344,7 +352,7 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
           .join("; ");
         if (prepared.code !== 0) {
           return failed(
-            `prepare.sh failed: ${said || lastWords(prepared.stdout)}`,
+            `prepare.sh failed: ${said || lastWords(whatItSaid(prepared))}`,
             `sh ${root}/prepare.sh`,
           );
         }
@@ -435,7 +443,7 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
       );
       return login.code === 0
         ? done(`glab is logged in to ${host}`)
-        : failed(`glab would not log in to ${host}: ${lastWords(login.stdout)}`);
+        : failed(`glab would not log in to ${host}: ${lastWords(whatItSaid(login))}`);
     }),
   );
 
@@ -445,7 +453,7 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
     Effect.gen(function* () {
       const ssh = (yield* onPath(search, "ssh")) !== null;
       const status = yield* exec("glab", ["auth", "status", "--hostname", host], root);
-      const known = glabHosts(status.stdout).find((one) => one.host === host) ?? {
+      const known = glabHosts(whatItSaid(status)).find((one) => one.host === host) ?? {
         host,
         https: false,
       };
@@ -480,7 +488,7 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
           ["-q", "-t", "ed25519", "-N", "", "-C", `collie@${name}`, "-f", key],
           env.home,
         );
-        if (made.code !== 0) return failed(`could not make ${key}: ${lastWords(made.stdout)}`);
+        if (made.code !== 0) return failed(`could not make ${key}: ${lastWords(whatItSaid(made))}`);
       }
       const added = yield* piped(
         "glab",
@@ -489,9 +497,9 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
         null,
         { GITLAB_HOST: host },
       );
-      const registered = /already been taken|already exists/i.test(added.stdout);
+      const registered = /already been taken|already exists/i.test(whatItSaid(added));
       if (added.code !== 0 && !registered) {
-        return failed(`glab would not register ${key}.pub: ${lastWords(added.stdout)}`);
+        return failed(`glab would not register ${key}.pub: ${lastWords(whatItSaid(added))}`);
       }
       const after = yield* pushCheck(known, here, ssh, exec);
       return after.ok
@@ -598,7 +606,10 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
       if ((yield* probeLinearMcp(here)).state !== "ok") {
         const added = yield* exec("claude", LINEAR_MCP_ADD, env.home);
         if (added.code !== 0) {
-          return failed(`could not add the Linear MCP: ${lastWords(added.stdout)}`, LINEAR_MCP_FIX);
+          return failed(
+            `could not add the Linear MCP: ${lastWords(whatItSaid(added))}`,
+            LINEAR_MCP_FIX,
+          );
         }
         changed = true;
       }

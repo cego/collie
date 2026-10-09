@@ -22,7 +22,19 @@ export type Runner<R = never> = (
   cmd: string,
   args: string[],
   cwd: string,
-) => Effect.Effect<{ code: number; stdout: string }, never, R>;
+) => Effect.Effect<Ran, never, R>;
+
+/** What a command said. `stderr` is optional so fakes may omit it; real runners always fill it. */
+export interface Ran {
+  readonly code: number;
+  readonly stdout: string;
+  readonly stderr?: string;
+}
+
+/** What a command told a human — its stdout, then its stderr. An answer is read from `stdout` alone. */
+export function whatItSaid(result: Ran): string {
+  return [result.stdout.trim(), result.stderr?.trim() ?? ""].filter(Boolean).join("\n");
+}
 
 const UserJson = Schema.fromJsonString(Schema.Struct({ username: Schema.String }));
 
@@ -172,19 +184,13 @@ export function shell(
   cmd: string,
   args: string[],
   cwd: string,
-  /**
-   * `"say"` folds stderr into the output. Inference wants it ignored — a probe that
-   * fails is an answer, and its noise is not — but a command a human asked for owes
-   * them the reason it failed.
-   */
-  errors: "ignore" | "say" = "ignore",
-): Effect.Effect<{ code: number; stdout: string }, never, ChildProcessSpawner.ChildProcessSpawner> {
+): Effect.Effect<Ran, never, ChildProcessSpawner.ChildProcessSpawner> {
   return Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const command = ChildProcess.make(cmd, args, {
       cwd,
       stdout: "pipe",
-      stderr: errors === "say" ? "pipe" : "ignore",
+      stderr: "pipe",
       // extendEnv, so git and glab inherit this process's environment and find their
       // config and credentials — the Effect-native spelling of `{ ...process.env }`.
       extendEnv: true,
@@ -199,17 +205,13 @@ export function shell(
         ),
       );
     const [stdout, stderr, code] = yield* Effect.all(
-      [
-        text(handle.stdout),
-        errors === "say" ? text(handle.stderr) : Effect.succeed(""),
-        handle.exitCode,
-      ],
+      [text(handle.stdout), text(handle.stderr), handle.exitCode],
       { concurrency: "unbounded" },
     );
-    return { code: Number(code), stdout: stdout + stderr };
+    return { code: Number(code), stdout, stderr };
   }).pipe(
     Effect.scoped,
-    Effect.catch(() => Effect.succeed({ code: 127, stdout: "" })),
+    Effect.catch(() => Effect.succeed({ code: 127, stdout: "", stderr: "" })),
   );
 }
 

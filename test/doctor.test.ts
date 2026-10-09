@@ -63,7 +63,7 @@ const gitlab = (opts: { expires: string | null }) =>
   bin.add(
     "glab",
     `case "$*" in
-      "auth status"*) echo "gitlab.example"; echo "  ✓ Logged in to gitlab.example as t (config.yml)" ;;
+      "auth status"*) { echo "gitlab.example"; echo "  ✓ Logged in to gitlab.example as t (config.yml)"; } >&2 ;;
       *personal_access_tokens/self*) echo '{"name":"collie","expires_at":${opts.expires === null ? "null" : `"${opts.expires}"`}}' ;;
       *) exit 0 ;;
     esac`,
@@ -257,8 +257,8 @@ test("a glab that did not answer reads differently from one that said no", () =>
         env({ FAKE_HERDR_PLUGINS: `cego.collie 0.1.0 [local:${rig.baselineDir}]` }),
         (cmd, args, cwd) =>
           cmd === "glab"
-            ? Effect.succeed({ code: 124, stdout: "timed out" })
-            : shell(cmd, args, cwd, "say"),
+            ? Effect.succeed({ code: 124, stdout: "", stderr: "timed out" })
+            : shell(cmd, args, cwd),
       );
 
       expect(check(result, "glab").detail).toContain("did not answer");
@@ -328,8 +328,7 @@ test("a git that warns while answering is still answering", () =>
   runEffect(
     Effect.gen(function* () {
       yield* healthy();
-      // doctor folds stderr into what it reads, so it can tell a human why a command
-      // failed. A git that warns and then answers correctly is not a failure.
+      // A git that warns and then answers correctly is not a failure.
       yield* bin.add(
         "git",
         `case "$*" in
@@ -584,6 +583,22 @@ test("a Machine that cannot push to its GitLab fails, with the key to make and r
     }),
   ));
 
+test("a host key ssh does not know is named as that, with the key to trust as its fix", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* healthy();
+      yield* bin.add("ssh", `echo "Host key verification failed." >&2; exit 255`);
+
+      const push = check(yield* report(), "git push");
+
+      expect(push).toMatchObject({
+        ok: false,
+        detail: "gitlab.example's host key is not known here",
+      });
+      expect(push.fix).toContain("ssh-keyscan gitlab.example");
+    }),
+  ));
+
 test("a push that works only through a forwarded agent is not a Machine that can push", () =>
   runEffect(
     Effect.gen(function* () {
@@ -634,7 +649,7 @@ test("a host git reaches over HTTPS pushes with glab's token, and no key is aske
       yield* bin.add(
         "glab",
         `case "$*" in
-          "auth status"*) echo "gitlab.example"; echo "  ✓ Git operations for gitlab.example configured to use https protocol." ;;
+          "auth status"*) { echo "gitlab.example"; echo "  ✓ Git operations for gitlab.example configured to use https protocol."; } >&2 ;;
           *personal_access_tokens/self*) echo '{"expires_at":null}' ;;
           *) exit 0 ;;
         esac`,
@@ -650,9 +665,9 @@ const twoHosts = () =>
   bin.add(
     "glab",
     `case "$*" in
-      "auth status") echo "gitlab.com"; echo "  x gitlab.com: api call failed"; echo "gitlab.cego.dk"; echo "  ✓ Logged in to gitlab.cego.dk as t"; exit 1 ;;
-      "auth status --hostname gitlab.cego.dk") echo "gitlab.cego.dk"; echo "  ✓ Logged in to gitlab.cego.dk as t" ;;
-      "auth status --hostname gitlab.com") echo "gitlab.com"; echo "  x gitlab.com: api call failed"; exit 1 ;;
+      "auth status") { echo "gitlab.com"; echo "  x gitlab.com: api call failed"; echo "gitlab.cego.dk"; echo "  ✓ Logged in to gitlab.cego.dk as t"; } >&2; exit 1 ;;
+      "auth status --hostname gitlab.cego.dk") { echo "gitlab.cego.dk"; echo "  ✓ Logged in to gitlab.cego.dk as t"; } >&2 ;;
+      "auth status --hostname gitlab.com") { echo "gitlab.com"; echo "  x gitlab.com: api call failed"; } >&2; exit 1 ;;
       *"--hostname gitlab.cego.dk personal_access_tokens/self"*) echo '{"expires_at":null}' ;;
       *) exit 1 ;;
     esac`,

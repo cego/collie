@@ -85,12 +85,12 @@ const claudeAt = (script: string) =>
 
 const GITLAB = "gitlab.cego.dk";
 
-/** A glab whose `auth status` runs `status`, and that records everything else it is asked. */
+/** A glab whose `auth status` runs `status` (on stderr, as glab's does), and that records everything else it is asked. */
 const glab = (status: string, rest = "") =>
   bin.add(
     "glab",
     `case "$*" in
-      "auth status"*) ${status} ;;
+      "auth status"*) { ${status}; } >&2 ;;
       *) echo "GITLAB_HOST=$GITLAB_HOST $*" >> "${home}/glab-calls"; ${rest || ":"} ;;
     esac`,
   );
@@ -148,7 +148,7 @@ beforeEach(() =>
         esac`,
       );
       // No test reaches a real GitLab over SSH.
-      yield* bin.add("ssh", `echo "Permission denied (publickey)."; exit 255`);
+      yield* bin.add("ssh", `echo "Permission denied (publickey)." >&2; exit 255`);
       // Logged in to GitLab, and pushing over HTTPS with that login.
       yield* glab(
         `echo "${GITLAB}"; echo "  ✓ Git operations for ${GITLAB} configured to use https protocol."`,
@@ -298,6 +298,24 @@ test("where no package gives OpenSSL 3, the step names none to run", () =>
     }),
   ));
 
+test("a released checkout whose git warns on stderr is a release at its tag", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* git(home, "clone", "--quiet", "--branch", "0.2.0", origin, root);
+      yield* git(root, "checkout", "--quiet", "master");
+      const realGit = Bun.which("git", { PATH: "/usr/bin:/bin" });
+      yield* bin.add("git", `echo "warning: something git wants said" >&2; exec ${realGit} "$@"`);
+
+      const { result, events } = yield* onboarded();
+
+      expect(result).toMatchObject({ ok: true, data: { development: false } });
+      expect(results(events).find((event) => event.step === "collie")).toMatchObject({
+        status: "in_place",
+        detail: "at 0.2.0",
+      });
+    }),
+  ));
+
 test("a development checkout gets the checks, and nothing installed or moved", () =>
   runEffect(
     Effect.gen(function* () {
@@ -444,7 +462,7 @@ test("a Machine that cannot push gets a key of its own, registered with glab", (
       yield* glab(`echo "${GITLAB}"`, `touch "${home}/registered"`);
       yield* bin.add(
         "ssh",
-        `[ -f "${home}/registered" ] && exit 0; echo "Permission denied (publickey)."; exit 255`,
+        `[ -f "${home}/registered" ] && exit 0; echo "Permission denied (publickey)." >&2; exit 255`,
       );
 
       const { events } = yield* onboarded();
@@ -634,9 +652,9 @@ test("a fresh Machine with an unknown host key and no registered key gets one in
       yield* bin.add(
         "ssh",
         `case "$*" in *StrictHostKeyChecking=accept-new*) touch "${home}/known"; exit 255 ;; esac
-        [ -f "${home}/known" ] || { echo "Host key verification failed."; exit 255; }
+        [ -f "${home}/known" ] || { echo "Host key verification failed." >&2; exit 255; }
         [ -f "${home}/registered" ] && exit 0
-        echo "Permission denied (publickey)."; exit 255`,
+        echo "Permission denied (publickey)." >&2; exit 255`,
       );
 
       const { events } = yield* onboarded();
@@ -650,11 +668,11 @@ test("a key GitLab already has is not a failed registration", () =>
     Effect.gen(function* () {
       yield* glab(
         `echo "${GITLAB}"`,
-        `touch "${home}/registered"; echo "fingerprint has already been taken"; exit 1`,
+        `touch "${home}/registered"; echo "fingerprint has already been taken" >&2; exit 1`,
       );
       yield* bin.add(
         "ssh",
-        `[ -f "${home}/registered" ] && exit 0; echo "Permission denied (publickey)."; exit 255`,
+        `[ -f "${home}/registered" ] && exit 0; echo "Permission denied (publickey)." >&2; exit 255`,
       );
 
       const { events } = yield* onboarded();

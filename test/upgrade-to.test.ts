@@ -6,6 +6,7 @@ import { Effect } from "effect";
 import { exec } from "./support/command";
 import { runEffect } from "./support/effect";
 import { Rig } from "./support/recorder";
+import { shell } from "../src/mr";
 import { upgrade } from "../src/operations";
 import { installation } from "../src/release";
 
@@ -159,6 +160,70 @@ test("a development build is named by its version and commit", () =>
       expect(yield* installation(clone, "0.1.0")).toMatchObject({
         release: false,
         build: `0.1.0+${sha}`,
+      });
+    }),
+  ));
+
+// What Collie Desktop's launcher made every child of it write to stderr.
+const LD_SO_NOISE = ["./libcef.so", "./libvk_swiftshader.so"].map(
+  (lib) =>
+    `ERROR: ld.so: object '${lib}' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.`,
+);
+
+const noisy = (cmd: string, args: string[], cwd: string) =>
+  shell(
+    "sh",
+    ["-c", `printf '%s\\n' "$0" "$1" >&2; shift; exec "$@"`, ...LD_SO_NOISE, cmd, ...args],
+    cwd,
+  );
+
+test("a clean released checkout is a release however noisy its tools' stderr", () =>
+  runEffect(
+    Effect.gen(function* () {
+      expect(yield* installation(clone, "0.1.0", noisy)).toEqual({ release: true });
+
+      const moved = yield* upgrade(env(), { to: "0.2.0" }, noisy);
+
+      expect(moved).toMatchObject({ ok: true, data: { updated: true, version: "0.2.0" } });
+      expect(moved.ok && moved.human).toMatch(/runner\s+done/);
+    }),
+  ));
+
+test("a noisy development build is named by its version and commit alone", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* git(clone, "checkout", "--quiet", "-b", "feature");
+      const sha = yield* git(clone, "rev-parse", "--short", "HEAD");
+
+      expect(yield* installation(clone, "0.1.0", noisy)).toEqual({
+        release: false,
+        build: `0.1.0+${sha}`,
+        reason: "it is on branch feature, not master",
+      });
+    }),
+  ));
+
+test("a noisy checkout with a real change is still refused for it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* Effect.promise(() => Bun.write(`${clone}/version`, "work in progress"));
+
+      const refused = yield* upgrade(env(), { to: "0.2.0" }, noisy);
+
+      expect(!refused.ok && refused.error.message).toMatch(/uncommitted changes/);
+    }),
+  ));
+
+test("a failed fetch still says git's own reason", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* exec(["rm", "-rf", origin]);
+
+      const refused = yield* upgrade(env(), { to: "0.2.0" }, noisy);
+
+      expect(refused).toMatchObject({
+        ok: false,
+        error: { code: "operation_failed", details: { output: expect.stringContaining("fatal:") } },
       });
     }),
   ));

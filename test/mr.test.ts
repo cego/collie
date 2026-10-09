@@ -15,8 +15,10 @@ import {
   projectFromRemote,
   repoArgs,
   resolveAssignee,
+  shell,
   sinceReview,
   templateFile,
+  whatItSaid,
 } from "../src/mr";
 import { parseMrUrl, parseMrTarget } from "../src/board-model";
 import { Rig } from "./support/recorder";
@@ -558,5 +560,15 @@ test("a pipeline on a host glab is not logged in to is never asked about", () =>
         yield* pipelineStatus("https://elsewhere.example/x/y/-/pipelines/1", "/w", glab.run),
       ).toBeNull();
       expect(glab.calls.filter(([, verb]) => verb === "api")).toEqual([]);
+    }),
+  ));
+
+test("a command's answer is its stdout, and a human is told both streams", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const ran = yield* shell("sh", ["-c", "echo answer; echo warning >&2; exit 3"], rig.root);
+
+      expect(ran).toEqual({ code: 3, stdout: "answer\n", stderr: "warning\n" });
+      expect(whatItSaid(ran)).toBe("answer\nwarning");
     }),
   ));

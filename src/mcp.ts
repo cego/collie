@@ -130,8 +130,8 @@ const Answered = Schema.fromJsonString(
 const encodeInput = Schema.encodeSync(Schema.fromJsonString(Schema.JsonObject));
 
 /** One tool call made by the binary now on disk, through the `tools call` a human can run. */
-const rebuiltAnswer = (binary: string, cwd: string, name: string, input: JsonObject) =>
-  shell(binary, ["--json", "tools", "call", name, "--input", encodeInput(input)], cwd, "say").pipe(
+export const rebuiltAnswer = (binary: string, cwd: string, name: string, input: JsonObject) =>
+  shell(binary, ["--json", "tools", "call", name, "--input", encodeInput(input)], cwd).pipe(
     Effect.flatMap((ran) => Schema.decodeUnknownEffect(Answered)(ran.stdout)),
     Effect.map((answered) =>
       answered.ok ? answered.data.text : `Collie could not answer: ${answered.error.message}`,

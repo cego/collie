@@ -26,7 +26,7 @@ import {
 } from "./herdr";
 import { carriedBefore, carryOutProposal } from "./run-actions";
 export { carryOutProposal, registerRunExecutors } from "./run-actions";
-import { shell, type Runner } from "./mr";
+import { shell, whatItSaid, type Runner } from "./mr";
 import { checkoutsUnder, projectsRoot } from "./projects";
 import { installation, manifestField, RELEASE_TAG } from "./release";
 import manifest from "../herdr-plugin.toml";
@@ -302,7 +302,7 @@ export const moveToRelease = Effect.fn("operations.moveToRelease")(function* (
   if (fetched.code !== 0) {
     return err("operation_failed", `Could not fetch releases into ${root}.`, {
       root,
-      output: fetched.stdout.trim(),
+      output: whatItSaid(fetched),
     });
   }
   // After the fetch, so "ahead of its remote" is judged against the remote as it is now.
@@ -325,7 +325,7 @@ export const moveToRelease = Effect.fn("operations.moveToRelease")(function* (
   if (moved.code !== 0) {
     return err("operation_failed", `Could not move ${root} to ${to}.`, {
       root,
-      output: moved.stdout.trim(),
+      output: whatItSaid(moved),
     });
   }
   return null;
@@ -339,8 +339,7 @@ export const moveToRelease = Effect.fn("operations.moveToRelease")(function* (
 export const upgrade = Effect.fn("operations.upgrade")(function* (
   env: PluginEnv,
   options: { readonly to?: string } = {},
-  run: Runner<ChildProcessSpawner.ChildProcessSpawner> = (cmd, args, cwd) =>
-    shell(cmd, args, cwd, "say"),
+  run: Runner<ChildProcessSpawner.ChildProcessSpawner> = shell,
 ) {
   const root = env.pluginRoot;
   const head = () => run("git", ["rev-parse", "--short", "HEAD"], root).pipe(Effect.map(short));
@@ -370,7 +369,7 @@ export const upgrade = Effect.fn("operations.upgrade")(function* (
     if (pulled.code !== 0) {
       return err("operation_failed", `Could not update ${root}.`, {
         root,
-        output: pulled.stdout.trim(),
+        output: whatItSaid(pulled),
       });
     }
     after = yield* head();
@@ -380,7 +379,7 @@ export const upgrade = Effect.fn("operations.upgrade")(function* (
   if (installed.code !== 0) {
     return err("operation_failed", `Could not prepare ${root}.`, {
       root,
-      output: installed.stdout.trim(),
+      output: whatItSaid(installed),
     });
   }
 
