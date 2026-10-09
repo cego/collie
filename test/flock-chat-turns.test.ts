@@ -632,7 +632,6 @@ test("unset, the chat runs opus; a model changed mid-turn waits for it, then the
         );
         yield* eventually(() => seen.prompts.length === 1);
         settings.current = { proactive: false, chatModel: "sonnet" };
-        // The turn under way is not touched.
         yield* TestClock.withLive(Effect.sleep("50 millis"));
         expect(seen.interrupts).toEqual([]);
         expect(seen.sessions).toEqual([{ model: "opus", sessionId: current }]);
@@ -650,7 +649,6 @@ test("unset, the chat runs opus; a model changed mid-turn waits for it, then the
           [{ type: "text", content: "slow" }],
           [{ type: "text", content: "next" }],
         ]);
-        // Unchanged, it stays warm.
         yield* Stream.runDrain(conversation.send("again", null, false));
         expect(seen.sessions).toHaveLength(2);
       }),
