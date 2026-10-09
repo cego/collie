@@ -309,7 +309,8 @@ nothing else changes.
   approvals `never` and the `danger-full-access` sandbox. That is the reach Claude Code's
   built-ins already have here, and the system prompt names the tools neutrally.
 - **As little of the user's own setup as the harness lets Collie leave out.** Pi starts
-  with none of the user's extensions, skills, prompt templates or context files. Codex
+  with none of the user's extensions, skills, prompt templates or context files. Explicit
+  system and append sources exclude personal `SYSTEM.md` and `APPEND_SYSTEM.md` files. Codex
   cannot leave out `config.toml` without leaving out its login, so the user's
   configuration loads, and Collie overrides the instructions, approvals, sandbox and its
   own server.

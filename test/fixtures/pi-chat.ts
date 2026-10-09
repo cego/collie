@@ -1,4 +1,6 @@
 import { Schema } from "effect";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { Client } from "../../desktop/node_modules/@modelcontextprotocol/sdk/dist/esm/client/index.js";
 import { StreamableHTTPClientTransport } from "../../desktop/node_modules/@modelcontextprotocol/sdk/dist/esm/client/streamableHttp.js";
 import { childEnv } from "../../desktop/src/bun/login-env";
@@ -77,11 +79,26 @@ for await (const chunk of Bun.stdin.stream()) {
       continue;
     }
     if (command.message?.startsWith("inspect")) {
+      const promptFile = (name: string) => {
+        const local = join(process.cwd(), ".pi", name);
+        const global = join(childEnv().PI_CODING_AGENT_DIR!, name);
+        return existsSync(local)
+          ? readFileSync(local, "utf8")
+          : existsSync(global)
+            ? readFileSync(global, "utf8")
+            : "";
+      };
+      const argument = (flag: string) =>
+        Bun.argv.includes(flag) ? Bun.argv[Bun.argv.indexOf(flag) + 1] : undefined;
       const details = {
         args: Bun.argv.slice(2),
         cwd: process.cwd(),
         hasToken: Boolean(childEnv().COLLIE_CHAT_MCP_TOKEN),
         extension,
+        systemPrompt: [
+          argument("--system-prompt") ?? promptFile("SYSTEM.md"),
+          argument("--append-system-prompt") ?? promptFile("APPEND_SYSTEM.md"),
+        ].join("\n"),
         prompt: command,
       };
       emit({ type: "agent_start" });

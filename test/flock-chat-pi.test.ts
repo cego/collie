@@ -10,6 +10,7 @@ import { FLOCK_TOOLS } from "../desktop/src/bun/flock-tools";
 import { FILE_TOOLS } from "../desktop/src/bun/file-tools";
 import { piPrompt } from "../desktop/src/bun/pi-transcript";
 import { ends } from "../desktop/src/shared/agui";
+import { childEnv } from "../desktop/src/bun/login-env";
 
 const withPi = <A, E>(
   body: (
@@ -21,6 +22,16 @@ const withPi = <A, E>(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const dir = yield* fs.makeTempDirectoryScoped({ prefix: "flock-pi-" });
+      const env = childEnv();
+      const previous = env.PI_CODING_AGENT_DIR;
+      env.PI_CODING_AGENT_DIR = `${dir}/agent`;
+      yield* fs.makeDirectory(env.PI_CODING_AGENT_DIR);
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          if (previous === undefined) delete env.PI_CODING_AGENT_DIR;
+          else env.PI_CODING_AGENT_DIR = previous;
+        }),
+      );
       const services = yield* Effect.context<Crypto.Crypto | FileSystem.FileSystem>();
       const context: DriverContext = {
         dir,
@@ -81,6 +92,12 @@ test("Pi streams text including Unicode separators, thinking and one row per too
 test("Pi's start isolates resources, keeps the token in its environment and sends images and Desktop's note", () =>
   withPi((driver, context) =>
     Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* fs.makeDirectory(`${context.dir}/.pi`);
+      for (const dir of [childEnv().PI_CODING_AGENT_DIR!, `${context.dir}/.pi`]) {
+        yield* fs.writeFileString(`${dir}/SYSTEM.md`, "Personal system instructions");
+        yield* fs.writeFileString(`${dir}/APPEND_SYSTEM.md`, "Personal appended instructions");
+      }
       const session = yield* driver.open("pi-start", "openai-codex/gpt-6.1-sol", "medium");
       yield* Effect.addFinalizer(() => session.close);
       yield* session.offer([
@@ -103,6 +120,7 @@ test("Pi's start isolates resources, keeps the token in its environment and send
             cwd: Schema.String,
             hasToken: Schema.Boolean,
             extension: Schema.String,
+            systemPrompt: Schema.String,
             prompt: Schema.Struct({ message: Schema.String, images: Schema.Array(Schema.Json) }),
           }),
         ),
@@ -115,8 +133,10 @@ test("Pi's start isolates resources, keeps the token in its environment and send
         `${context.dir}/pi-sessions`,
         "--session-id",
         "pi-start",
-        "--append-system-prompt",
+        "--system-prompt",
         expect.stringContaining("You are Collie"),
+        "--append-system-prompt",
+        "",
         "--no-extensions",
         "-e",
         "builtin:mcp",
@@ -133,6 +153,8 @@ test("Pi's start isolates resources, keeps the token in its environment and send
         "medium",
       ]);
       expect(details.hasToken).toBe(true);
+      expect(details.systemPrompt).toContain("You are Collie");
+      expect(details.systemPrompt).not.toContain("Personal");
       expect(details.extension).toContain("process.env.COLLIE_CHAT_MCP_TOKEN");
       expect(details.extension).toContain("timeout: 86400");
       const prefix = details.args[details.args.indexOf("--tools") + 1]!.split(",")
