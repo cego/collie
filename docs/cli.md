@@ -1087,7 +1087,8 @@ three runs of the same suite read as what each was for.
 
 Each check's output is written to a log in the Run's evidence directory as it arrives —
 both streams, in the order they came — and kept after it ends, up to 8 MiB; past that the
-log says it was cut. `running.log`, `running.lastLines` (its last 40) and each `done[].log`
+log says it was cut. `running.log`, `running.lastLines` (its last 40, including a short
+log's first lines) and each `done[].log`
 say where it is.
 
 ```sh

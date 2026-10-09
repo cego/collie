@@ -41,7 +41,10 @@ const TAIL_READ = 16 * 1024;
 export const lastLinesOf = (log: string | null, count = LAST_LINES) =>
   log === null
     ? Effect.succeed<ReadonlyArray<string>>([])
-    : Effect.tryPromise(() => Bun.file(log).slice(-TAIL_READ).text()).pipe(
+    : Effect.tryPromise(() => {
+        const file = Bun.file(log);
+        return file.slice(Math.max(0, file.size - TAIL_READ)).text();
+      }).pipe(
         Effect.map((text) =>
           text
             .split("\n")
