@@ -285,7 +285,7 @@ const main = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   // Short, because a control socket's path is capped at about 100 bytes.
   // A Desktop that was killed left its own, and the masters in them, behind.
-  yield* sweepSshControls(tmpdir()).pipe(Effect.ignore);
+  yield* sweepSshControls(tmpdir(), childEnv()).pipe(Effect.ignore);
   const controls = yield* fs.makeTempDirectoryScoped({ prefix: sshControlsPrefix(process.pid) });
   // herdr's list is the only list of Machines there is.
   const listed = yield* herdrMachines("herdr", manifest.min_herdr_version).pipe(Effect.result);

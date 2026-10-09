@@ -17,12 +17,25 @@ import {
   parseMrUrl,
 } from "./board-model";
 import { epochMs } from "./time";
+import type { MrReady } from "./sdk";
 
 export type Runner<R = never> = (
   cmd: string,
   args: string[],
   cwd: string,
-) => Effect.Effect<{ code: number; stdout: string }, never, R>;
+) => Effect.Effect<Ran, never, R>;
+
+/** What a command said. `stderr` is optional so fakes may omit it; real runners always fill it. */
+export interface Ran {
+  readonly code: number;
+  readonly stdout: string;
+  readonly stderr?: string;
+}
+
+/** What a command told a human — its stdout, then its stderr. An answer is read from `stdout` alone. */
+export function whatItSaid(result: Ran): string {
+  return [result.stdout.trim(), result.stderr?.trim() ?? ""].filter(Boolean).join("\n");
+}
 
 const UserJson = Schema.fromJsonString(Schema.Struct({ username: Schema.String }));
 
@@ -172,19 +185,13 @@ export function shell(
   cmd: string,
   args: string[],
   cwd: string,
-  /**
-   * `"say"` folds stderr into the output. Inference wants it ignored — a probe that
-   * fails is an answer, and its noise is not — but a command a human asked for owes
-   * them the reason it failed.
-   */
-  errors: "ignore" | "say" = "ignore",
-): Effect.Effect<{ code: number; stdout: string }, never, ChildProcessSpawner.ChildProcessSpawner> {
+): Effect.Effect<Ran, never, ChildProcessSpawner.ChildProcessSpawner> {
   return Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const command = ChildProcess.make(cmd, args, {
       cwd,
       stdout: "pipe",
-      stderr: errors === "say" ? "pipe" : "ignore",
+      stderr: "pipe",
       // extendEnv, so git and glab inherit this process's environment and find their
       // config and credentials — the Effect-native spelling of `{ ...process.env }`.
       extendEnv: true,
@@ -199,17 +206,13 @@ export function shell(
         ),
       );
     const [stdout, stderr, code] = yield* Effect.all(
-      [
-        text(handle.stdout),
-        errors === "say" ? text(handle.stderr) : Effect.succeed(""),
-        handle.exitCode,
-      ],
+      [text(handle.stdout), text(handle.stderr), handle.exitCode],
       { concurrency: "unbounded" },
     );
-    return { code: Number(code), stdout: stdout + stderr };
+    return { code: Number(code), stdout, stderr };
   }).pipe(
     Effect.scoped,
-    Effect.catch(() => Effect.succeed({ code: 127, stdout: "" })),
+    Effect.catch(() => Effect.succeed({ code: 127, stdout: "", stderr: "" })),
   );
 }
 
@@ -504,6 +507,103 @@ export function mrFacts<R>(
       assignee: yield* resolveAssignee(opts.cwd, opts.configuredAssignee, run),
       template: yield* templateFile(opts.cwd),
       issues: yield* linearIssues(opts, run),
+    };
+  });
+}
+
+/** The forge this branch pushes to, and the facts its delivery prompt needs. */
+export function prepareMergeRequest<R>(
+  opts: {
+    readonly cwd: string;
+    readonly target?: string;
+    readonly source?: { readonly value: string; readonly kind: string };
+    readonly configuredAssignee?: YamlValue;
+  },
+  run: Runner<R>,
+): Effect.Effect<MrReady, PlatformError, FileSystem.FileSystem | Path.Path | R> {
+  return Effect.gen(function* () {
+    const unavailable = (reason: string): MrReady => ({
+      ok: false,
+      reason,
+      assignee: "",
+      template: "",
+      issues: [],
+    });
+    const work = {
+      cwd: opts.cwd,
+      inputs: { source: opts.source?.value ?? "", source_kind: opts.source?.kind ?? "" },
+      strategies: { source: "work-source" },
+    };
+    const origin =
+      opts.target === undefined
+        ? yield* run("git", ["remote", "get-url", "origin"], opts.cwd)
+        : null;
+    const repository =
+      origin?.code === 0
+        ? /^(?:https:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([\w.-]+\/[\w.-]+?)(?:\.git)?\/?$/.exec(
+            origin.stdout.trim(),
+          )?.[1]
+        : undefined;
+    if (repository !== undefined) {
+      if ((yield* run("gh", ["--version"], opts.cwd)).code !== 0)
+        return unavailable("gh is not installed");
+      if ((yield* run("gh", ["auth", "status", "--hostname", "github.com"], opts.cwd)).code !== 0)
+        return unavailable("gh is not logged in to github.com");
+      const repo = yield* run(
+        "gh",
+        ["repo", "view", repository, "--json", "nameWithOwner"],
+        opts.cwd,
+      );
+      const decoded = Schema.decodeUnknownOption(
+        Schema.fromJsonString(Schema.Struct({ nameWithOwner: Schema.String })),
+      )(repo.stdout);
+      if (
+        repo.code !== 0 ||
+        Option.isNone(decoded) ||
+        decoded.value.nameWithOwner.toLowerCase() !== repository.toLowerCase()
+      )
+        return unavailable(`gh cannot read ${repository}`);
+      const me = yield* run("gh", ["api", "user", "--hostname", "github.com"], opts.cwd);
+      const user = Schema.decodeUnknownOption(
+        Schema.fromJsonString(Schema.Struct({ login: Schema.String })),
+      )(me.stdout);
+      if (me.code !== 0 || Option.isNone(user) || user.value.login.trim() === "")
+        return unavailable("gh did not report a GitHub login");
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      let template = "";
+      for (const candidate of [
+        ".github/pull_request_template.md",
+        ".github/PULL_REQUEST_TEMPLATE.md",
+        "pull_request_template.md",
+        "docs/pull_request_template.md",
+      ])
+        if (yield* fs.exists(path.join(opts.cwd, candidate))) {
+          template = candidate;
+          break;
+        }
+      return {
+        ok: true,
+        reason: "",
+        provider: "github",
+        repository,
+        assignee: user.value.login,
+        template,
+        issues: yield* linearIssues(work, run),
+      };
+    }
+    const ready = yield* opts.target === undefined
+      ? gitlabReadiness(opts.cwd, run)
+      : gitlabForProject(parseMrTarget(opts.target)?.project ?? null, opts.cwd, run);
+    if (!ready.ok) return unavailable(ready.reason);
+    const facts = yield* mrFacts({ ...work, configuredAssignee: opts.configuredAssignee }, run);
+    return {
+      ok: true,
+      reason: "",
+      provider: "gitlab",
+      assignee: facts.assignee ?? "",
+      template: facts.template ?? "",
+      issues: facts.issues,
     };
   });
 }

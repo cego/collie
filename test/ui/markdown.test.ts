@@ -9,6 +9,26 @@ import { C } from "../../src/ui/sections";
 
 const RED = RGBA.fromHex(C.red);
 
+test("markdown keeps headings and emphasis when CLI colour is disabled", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const previous = Bun.env.NO_COLOR;
+      Bun.env.NO_COLOR = "1";
+      try {
+        const styled = yield* Effect.promise(() => styledMarkdown("# Heading\n\n**emphasis**", 40));
+        const chunks = styled?.chunks ?? [];
+        for (const text of ["Heading", "emphasis"])
+          expect(
+            (chunks.find((chunk) => chunk.text.includes(text))?.attributes ?? 0) &
+              TextAttributes.BOLD,
+          ).toBe(TextAttributes.BOLD);
+      } finally {
+        if (previous === undefined) delete Bun.env.NO_COLOR;
+        else Bun.env.NO_COLOR = previous;
+      }
+    }),
+  ));
+
 test("SGR codes become attributes and the board's colours, and a reset clears both", () => {
   const chunks = ansiText(
     "\x1b[1;31mbad\x1b[22mstill red\x1b[0mplain\x1b[38;2;1;3;4mrgb\x1b[39m",

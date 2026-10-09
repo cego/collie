@@ -618,6 +618,9 @@ the modules as they are now — so a run whose module was missing and has been p
 carried on without restarting the host. On a run the engine is already working it changes
 nothing.
 
+A finished execution keeps its recorded result; `resume` does not reopen its steps. Use
+the Run's follow-up action to continue unfinished work on the same Task and branch.
+
 A workflow edited in a way that changes its shape has no promise of a seamless resume, and
 not every such edit can be detected: begin new work where one will not carry on. A run an
 older Collie recorded is read-only and is refused with what recorded it; `run start` begins
@@ -1008,13 +1011,20 @@ What kind of result a run has to prove, and so what evidence closes it:
 The gate runs before the merge request, which is where the claim is made. Collie runs the
 run's own approved set itself at the tree as it stands, then says what is missing. A check
 that failed runs once more; gaps a check could still close go to the implementer for up to
-four fixes, a reviewer's judgement or an Output's claim goes straight to the merge request
-since no fix moves it, and whatever is still unproved is named in the merge request, which opens anyway: the
-human verifies before it lands. Only the latest of Collie's results on that tree counts, so a
+four fixes. Checks still missing after those fixes suspend the Run with the gaps named.
+Repair the checks and resume the Run: the pending proof reruns them even when the repair
+only changes the environment. A changed tree or approved set also gets fresh proof while
+completed build Activities are retained. Missing reviewer evidence gets a fresh review;
+if it still cannot prove the outcome, the Run fails with the gaps named and a follow-up
+can repair the work; implement offers one after success or failure on a branch. The merge request
+is reached only once the outcome is proved. Only the latest
+of Collie's results on that tree counts, so a
 pass a later fail contradicts is not one. In `implement`, a check that fails at the gate is run once more,
 before any fix, where the branch leaves the default branch, in the run's own checkout. One that
-fails there too is named in the merge request as failing before the run's changes, with that
-revision, and is not handed to the implementer. A run with nothing approved is told so rather than passed —
+fails there too remains required on the Run's tree: the base's exit code cannot show
+whether the branch added different failures. If merge request handling is unavailable,
+the Run suspends with the reason instead of completing without delivery. A run with
+nothing approved is told so rather than passed —
 an empty set would make the gate say yes to anything — and a run whose outcome needs the
 approved set is refused at `run start` when it has none (see [What Collie may run
 itself](#what-collie-may-run-itself)). A grant withdrawn while the run works parks it at its
@@ -1034,6 +1044,17 @@ wrote tickets (`issues_dir` in its Output), `review` that it wrote a summary a h
 read — and neither opens a merge request, so there is no gate to stop them. Their row is
 read once when the run finishes, and what is missing is recorded on the run and shown on
 the board and in `run show`.
+
+For an `implement` Run's final delivery, a GitHub origin uses `gh`; a GitLab checkout
+uses `glab`. Both front doors ask the same host service for readiness, assignee,
+repository template and Linear tickets. GitHub readiness requires `gh` installed,
+logged in to github.com and able to read the origin repository. An existing pull
+request on the branch is updated. Before every GitHub push, including build and fix
+steps, the implementer reads the origin repository's open pull requests for the branch
+and refuses a push if auto-merge is enabled or that reading fails.
+An unavailable forge parks the Run with the repair it needs.
+A delivery agent that did not push, supplied no merge request URL or reported findings
+fails the Run with the reason and a follow-up repair; it cannot report successful delivery.
 
 ## Metrics
 
@@ -1077,7 +1098,8 @@ three runs of the same suite read as what each was for.
 
 Each check's output is written to a log in the Run's evidence directory as it arrives —
 both streams, in the order they came — and kept after it ends, up to 8 MiB; past that the
-log says it was cut. `running.log`, `running.lastLines` (its last 40) and each `done[].log`
+log says it was cut. `running.log`, `running.lastLines` (its last 40, including a short
+log's first lines) and each `done[].log`
 say where it is.
 
 ```sh

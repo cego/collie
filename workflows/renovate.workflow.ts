@@ -300,9 +300,10 @@ export const renovation = (landing: Landing = shippedLanding) =>
         // merge or tag. Asked before an agent is started rather than discovered by one, and
         // the same answer names whoever the batch merge request is assigned to.
         const gitlab = yield* host.mr({ cwd });
-        if (!gitlab.ok) {
-          yield* host.record(runId, `nothing to renovate here: ${gitlab.reason}`);
-          return `nothing to renovate here: ${gitlab.reason}`;
+        if (!gitlab.ok || gitlab.provider === "github") {
+          const reason = gitlab.provider === "github" ? "renovate requires GitLab" : gitlab.reason;
+          yield* host.record(runId, `nothing to renovate here: ${reason}`);
+          return `nothing to renovate here: ${reason}`;
         }
         const input = {
           inputs,

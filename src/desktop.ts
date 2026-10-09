@@ -371,6 +371,7 @@ export const sshControlsPrefix = (pid: number) => `collie-ssh-${pid}-`;
  */
 export const sweepSshControls = Effect.fn("desktop.sweepSshControls")(function* (
   tmp: string,
+  env: Readonly<Record<string, string | undefined>>,
   alive: (pid: number) => Effect.Effect<boolean> = (pid) =>
     Effect.sync(() => {
       try {
@@ -391,6 +392,7 @@ export const sweepSshControls = Effect.fn("desktop.sweepSshControls")(function* 
       yield* Effect.promise(
         () =>
           Bun.spawn(["ssh", "-S", `${dir}/${socket}`, "-O", "exit", "collie-desktop"], {
+            env,
             stdout: "ignore",
             stderr: "ignore",
           }).exited,

@@ -1,5 +1,24 @@
 # A rally is a loop, and a claim is not proof
 
+## Amended 2026-10-09: failed evidence keeps implement suspended
+
+A failed approved check remains a gap even when it failed on the base. A suite's exit
+code cannot establish that the branch has only the base's failures. The baseline is
+diagnostic context, never a substitute for a pass on the Run's current tree.
+
+After its bounded fix loop, implement suspends with any remaining check gaps. It
+also suspends when the host cannot prepare its merge request. Neither path returns a
+successful result. The unfinished proof Activity suspends its own WorkflowInstance,
+so resume reruns its checks even after a repair that leaves the source tree unchanged.
+A changed tree or approved set gets new proof while completed work is retained.
+Missing reviewer evidence gets a fresh review; if that still leaves gaps, the Run fails
+explicitly and names the follow-up repair. Finished executions keep their historical result; their
+remaining work continues through a follow-up Run.
+
+The proof is the outcome table and the shipped-workflow scenarios, including the same
+scenarios under unrelated workflow ids, in `test/outcome.test.ts` and
+`test/support/baseline.ts`.
+
 **Status: accepted, and proven against real agents through the real dispatcher, over a real
 repository.** The seams are `src/output.ts` (`settleRound` beside `splitDisputed` and
 `settleFinalFix`), `src/sdk.ts` (what a module may reach for), `src/native.ts` (the host's

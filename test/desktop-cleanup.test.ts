@@ -122,7 +122,7 @@ test("a dead Desktop's ssh control directory is removed, and a live one's kept",
       const live = `${tmp}/${sshControlsPrefix(process.pid)}def`;
       for (const one of [dead, live]) yield* fs.makeDirectory(one);
 
-      expect(yield* sweepSshControls(tmp)).toEqual([dead]);
+      expect(yield* sweepSshControls(tmp, Bun.env)).toEqual([dead]);
       expect(yield* fs.exists(live)).toBe(true);
     }),
   ));

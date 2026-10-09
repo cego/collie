@@ -98,7 +98,8 @@ credentials and the Linear MCP — the last two unless `--skip` names them. Secr
 stdin (`collie onboard --secrets-stdin < secrets.env`), never as arguments. It ends in
 `collie doctor`, and onboarded means doctor is ready. Re-running it
 repairs only what is missing, and a development checkout gets the checks and the logins
-alone. It adds no keybindings; the steps and their `--json` stream are in
+alone. Login commands keep your session's environment so Claude Code can read its macOS
+Keychain login. It adds no keybindings; the steps and their `--json` stream are in
 [the CLI reference](cli.md#onboarding-a-machine).
 
 ### The skills
@@ -756,7 +757,8 @@ is showing at a time:
 
 The review and the plan's spec are capped and paged: `… truncated` says so, and `m` reads
 another cap of it. They are markdown, drawn through [Comark](https://comark.dev)'s
-terminal renderer: headings, emphasis, lists, tables and fenced code are styled, and
+terminal renderer: headings, emphasis, lists, tables and fenced code are styled, even
+when `NO_COLOR` disables CLI colour. OpenTUI draws those styles in the board's palette, and
 Comark's security plugin drops scripts and embedded content first, because what an agent
 writes is untrusted. Tables and rules are drawn to the drawer's width. The log is shown as plain text.
 
@@ -914,7 +916,8 @@ On macOS, Desktop opened from Finder or the Dock starts with launchd's short PAT
 start it takes your login shell's environment (`$SHELL -ilc`), including its PATH, finding
 `herdr`, `collie`, `claude`, `git` and `ssh` as your terminal does. If the shell does not
 answer within five seconds, Desktop keeps the environment it was given and logs why. On Linux it
-keeps the environment its session gave it.
+gives its children the environment its session gave it, leaving out what Electrobun's
+launcher sets for Desktop itself.
 
 It shows up as **Collie**, with the Collie mark — the dog on the white tile the TUI board
 shows, which reads on a dark taskbar too — in your app launcher, on its window, in the

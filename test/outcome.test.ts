@@ -155,14 +155,14 @@ test("the latest of Collie's results on this tree is the one that counts", () =>
   ).toEqual([]);
 });
 
-test("a check that already failed before the Run is not a gap the Run can close", () => {
+test("a failure on the base does not prove this Run's approved check", () => {
   const failing = [record({ name: "tests", result: "fail" })];
   expect(
     evidenceGaps(
       "unspecified",
       collected({ verifications: failing, preexisting: new Set(["tests"]) }),
     ),
-  ).toEqual([]);
+  ).toEqual(["tests failed"]);
   expect(evidenceGaps("unspecified", collected({ verifications: failing }))).toEqual([
     "tests failed",
   ]);
@@ -172,7 +172,6 @@ test("a check that already failed before the Run is not a gap the Run can close"
       collected({ verifications: [record({ name: "tests" })], preexisting: new Set(["tests"]) }),
     ),
   ).toEqual([]);
-  // Only a check that still fails is excused: one the tree moved under is the Run's to settle.
   const moved = [...failing, record({ name: "tests", result: "unstable" })];
   expect(
     evidenceGaps(
@@ -180,7 +179,6 @@ test("a check that already failed before the Run is not a gap the Run can close"
       collected({ verifications: moved, preexisting: new Set(["tests"]) }),
     ),
   ).toHaveLength(1);
-  // A ticket's promise of the same check is the same statement, and is reported, not fixed.
   const promised = {
     verifications: failing,
     tickets: [{ file: "01-picker.md", checks: ["tests"] }],
@@ -188,7 +186,10 @@ test("a check that already failed before the Run is not a gap the Run can close"
   const built = { tickets_done: ["01"], scope_met: true };
   expect(
     evidenceGaps("feature", withOutput(built, { ...promised, preexisting: new Set(["tests"]) })),
-  ).toEqual([]);
+  ).toEqual([
+    "tests failed",
+    '01-picker.md promised check "tests", which has no passing verification on this tree',
+  ]);
   expect(evidenceGaps("feature", withOutput(built, promised))).toEqual([
     "tests failed",
     '01-picker.md promised check "tests", which has no passing verification on this tree',

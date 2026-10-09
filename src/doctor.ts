@@ -19,7 +19,7 @@ import { layers, loadDefinitions, skillDirs, skillInstalled } from "./definition
 import type { PluginEnv } from "./env";
 import { HARNESSES } from "./harness";
 import { Herdr } from "./herdr";
-import { shell, type Runner } from "./mr";
+import { shell, whatItSaid, type Ran, type Runner } from "./mr";
 import { manifestField } from "./release";
 import { err } from "./operations";
 import { probeHelle, probeLinearMcp, type Probe } from "./optional";
@@ -169,15 +169,9 @@ const fetchRemote = (root: string, run: Runner<ChildProcessSpawner.ChildProcessS
  * `doctor`, so nothing it asks over a network may wait on an unreachable host for as
  * long as it likes.
  */
-const answered = (
-  command: Effect.Effect<
-    { code: number; stdout: string },
-    never,
-    ChildProcessSpawner.ChildProcessSpawner
-  >,
-) =>
+const answered = (command: Effect.Effect<Ran, never, ChildProcessSpawner.ChildProcessSpawner>) =>
   Effect.timeoutOption(command, FETCH_LIMIT).pipe(
-    Effect.map(Option.getOrElse(() => ({ code: 124, stdout: "timed out" }))),
+    Effect.map(Option.getOrElse((): Ran => ({ code: 124, stdout: "", stderr: "timed out" }))),
   );
 
 /**
@@ -218,8 +212,7 @@ const knownOf = (root: string): Known =>
 
 export const behindRemote = Effect.fn("Doctor.behindRemote")(function* (
   root: string,
-  run: Runner<ChildProcessSpawner.ChildProcessSpawner> = (cmd, args, cwd) =>
-    shell(cmd, args, cwd, "ignore"),
+  run: Runner<ChildProcessSpawner.ChildProcessSpawner> = shell,
   /** The board builds against one clock reading; both windows below are measured on it. */
   at?: number,
 ) {
@@ -250,11 +243,8 @@ const count = Effect.fn("Doctor.count")(function* (
   now: number,
 ) {
   const answer = yield* run("git", ["rev-list", "--count", "HEAD..@{upstream}"], root);
-  // The line that is a number, not the whole output: `doctor` runs its commands with
-  // stderr folded in so a human can be told why one failed, and a git that warns
-  // about something while answering correctly would otherwise parse as nothing.
-  const number = answer.stdout.split("\n").find((line) => /^\d+$/.test(line.trim()));
-  const behind = answer.code === 0 && number !== undefined ? Number(number) : null;
+  const number = answer.stdout.trim();
+  const behind = answer.code === 0 && /^\d+$/.test(number) ? Number(number) : null;
   known.set(root, { ...knownOf(root), countedAt: now, behind });
   return behind;
 });
@@ -323,7 +313,7 @@ export const glabHosts = (status: string) =>
       https: status.includes(`Git operations for ${host} configured to use https protocol`),
     }));
 
-/** The JSON object in a command's output, from the line it starts on: `say` folds stderr in. */
+/** The JSON object in a command's output, from the line it starts on, so a preamble is skipped. */
 const jsonIn = (text: string) => {
   const lines = text.split("\n");
   const from = lines.findIndex((line) => line.trimStart().startsWith("{"));
@@ -371,7 +361,7 @@ export const pushCheck = Effect.fn("Doctor.pushCheck")(function* (
   if (answer.code === 0) return passed(`pushes to ${host.host} with this Machine's own key`);
   if (answer.code === 124)
     return failed(`${host.host} did not answer within ${FETCH_LIMIT}`, `ssh -T git@${host.host}`);
-  if (answer.stdout.includes("Host key verification failed")) {
+  if (whatItSaid(answer).includes("Host key verification failed")) {
     return failed(
       `${host.host}'s host key is not known here`,
       `ssh-keyscan ${host.host} >> ~/.ssh/known_hosts`,
@@ -390,8 +380,7 @@ export const pushCheck = Effect.fn("Doctor.pushCheck")(function* (
  */
 export const doctor = Effect.fn("Doctor.doctor")(function* (
   env: PluginEnv,
-  run: Runner<ChildProcessSpawner.ChildProcessSpawner> = (cmd, args, cwd) =>
-    shell(cmd, args, cwd, "say"),
+  run: Runner<ChildProcessSpawner.ChildProcessSpawner> = shell,
   herdr: Herdr = new Herdr(env),
 ) {
   const path = yield* Path.Path;
@@ -596,7 +585,7 @@ export const doctor = Effect.fn("Doctor.doctor")(function* (
   });
 
   // A host glab has never heard of is the `glab` check's failure, not two more.
-  const known = auth ? glabHosts(auth.stdout).find((one) => one.host === host) : undefined;
+  const known = auth ? glabHosts(whatItSaid(auth)).find((one) => one.host === host) : undefined;
   if (known !== undefined || auth?.code === 0) {
     const ssh = (yield* onPath(search, "ssh")) !== null;
     checks.push({ name: "gitlab token", ...(yield* tokenExpiry(host, root, run)) });
@@ -605,7 +594,9 @@ export const doctor = Effect.fn("Doctor.doctor")(function* (
       ...(yield* pushCheck(known ?? { host, https: false }, env, ssh, run)),
     });
   }
-  const others = everyHost ? glabHosts(everyHost.stdout).filter((one) => one.host !== host) : [];
+  const others = everyHost
+    ? glabHosts(whatItSaid(everyHost)).filter((one) => one.host !== host)
+    : [];
   if (others.length > 0) {
     checks.push({
       name: "other gitlabs",

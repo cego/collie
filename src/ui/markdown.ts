@@ -65,4 +65,4 @@ export function ansiText(ansi: string): StyledText {
 
 /** Markdown drawn `width` columns wide; `null` when Comark could not render it. */
 export const styledMarkdown = (markdown: string, width: number): Promise<StyledText | null> =>
-  renderAnsi(markdown, { plugins: SANITISED, width }).then(ansiText, () => null);
+  renderAnsi(markdown, { plugins: SANITISED, width, colors: true }).then(ansiText, () => null);

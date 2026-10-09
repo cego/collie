@@ -85,12 +85,12 @@ const claudeAt = (script: string) =>
 
 const GITLAB = "gitlab.cego.dk";
 
-/** A glab whose `auth status` runs `status`, and that records everything else it is asked. */
+/** Real glab writes auth status to stderr. */
 const glab = (status: string, rest = "") =>
   bin.add(
     "glab",
     `case "$*" in
-      "auth status"*) ${status} ;;
+      "auth status"*) { ${status}; } >&2 ;;
       *) echo "GITLAB_HOST=$GITLAB_HOST $*" >> "${home}/glab-calls"; ${rest || ":"} ;;
     esac`,
   );
@@ -148,7 +148,7 @@ beforeEach(() =>
         esac`,
       );
       // No test reaches a real GitLab over SSH.
-      yield* bin.add("ssh", `echo "Permission denied (publickey)."; exit 255`);
+      yield* bin.add("ssh", `echo "Permission denied (publickey)." >&2; exit 255`);
       // Logged in to GitLab, and pushing over HTTPS with that login.
       yield* glab(
         `echo "${GITLAB}"; echo "  ✓ Git operations for ${GITLAB} configured to use https protocol."`,
@@ -320,6 +320,24 @@ test("a missing openssl stops with the package manager's command", () =>
     }),
   ));
 
+test("a released checkout whose git warns on stderr is a release at its tag", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* git(home, "clone", "--quiet", "--branch", "0.2.0", origin, root);
+      yield* git(root, "checkout", "--quiet", "master");
+      const realGit = Bun.which("git", { PATH: "/usr/bin:/bin" });
+      yield* bin.add("git", `echo "warning: something git wants said" >&2; exec ${realGit} "$@"`);
+
+      const { result, events } = yield* onboarded();
+
+      expect(result).toMatchObject({ ok: true, data: { development: false } });
+      expect(results(events).find((event) => event.step === "collie")).toMatchObject({
+        status: "in_place",
+        detail: "at 0.2.0",
+      });
+    }),
+  ));
+
 test("a development checkout gets the checks, and nothing installed or moved", () =>
   runEffect(
     Effect.gen(function* () {
@@ -466,7 +484,7 @@ test("a Machine that cannot push gets a key of its own, registered with glab", (
       yield* glab(`echo "${GITLAB}"`, `touch "${home}/registered"`);
       yield* bin.add(
         "ssh",
-        `[ -f "${home}/registered" ] && exit 0; echo "Permission denied (publickey)."; exit 255`,
+        `[ -f "${home}/registered" ] && exit 0; echo "Permission denied (publickey)." >&2; exit 255`,
       );
 
       const { events } = yield* onboarded();
@@ -645,6 +663,42 @@ test("Claude Code is asked whether it is logged in with the whole environment, n
   });
 });
 
+test("attended Linear login keeps the ambient environment and onboarding's overrides", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const ambient = { USER: "onboard-user", COLLIE_LINEAR_INHERITED: "kept" };
+      yield* Effect.acquireRelease(
+        Effect.sync(() => {
+          const was = Object.fromEntries(Object.keys(ambient).map((name) => [name, Bun.env[name]]));
+          Object.assign(Bun.env, ambient);
+          return was;
+        }),
+        (was) =>
+          Effect.sync(() => {
+            for (const [name, value] of Object.entries(was)) {
+              if (value === undefined) delete Bun.env[name];
+              else Bun.env[name] = value;
+            }
+          }),
+      );
+      yield* claudeAt(
+        `case "$*" in
+  "auth status --json") ${LOGGED_IN} ;;
+  "mcp add"*) echo '{"mcpServers":{"linear-server":{"url":"https://mcp.linear.app/mcp"}}}' > "$HOME/.claude.json" ;;
+  "mcp get linear-server") if [ -f "${home}/authorized" ]; then echo "Connected"; else echo "Needs authentication"; fi ;;
+  "mcp login linear-server")
+    [ "$USER" = onboard-user ] && [ "$COLLIE_LINEAR_INHERITED" = kept ] && [ "$HOME" = "${home}" ] && [ -x "$BROWSER" ] || exit 1
+    touch "${home}/authorized" ;;
+esac`,
+      );
+
+      const { result, events } = yield* onboarded({}, { skip: ["helle"], attended: true });
+
+      expect(statusOf(events, "linear")).toBe("done");
+      expect(result).toMatchObject({ ok: true, data: { ready: true } });
+    }),
+  ));
+
 test("a terminal shows each step as text", () => {
   expect(eventText({ event: "start", step: "system", title: "Checking for git and curl" })).toBe(
     "→ Checking for git and curl",
@@ -670,9 +724,9 @@ test("a fresh Machine with an unknown host key and no registered key gets one in
       yield* bin.add(
         "ssh",
         `case "$*" in *StrictHostKeyChecking=accept-new*) touch "${home}/known"; exit 255 ;; esac
-        [ -f "${home}/known" ] || { echo "Host key verification failed."; exit 255; }
+        [ -f "${home}/known" ] || { echo "Host key verification failed." >&2; exit 255; }
         [ -f "${home}/registered" ] && exit 0
-        echo "Permission denied (publickey)."; exit 255`,
+        echo "Permission denied (publickey)." >&2; exit 255`,
       );
 
       const { events } = yield* onboarded();
@@ -686,11 +740,11 @@ test("a key GitLab already has is not a failed registration", () =>
     Effect.gen(function* () {
       yield* glab(
         `echo "${GITLAB}"`,
-        `touch "${home}/registered"; echo "fingerprint has already been taken"; exit 1`,
+        `touch "${home}/registered"; echo "fingerprint has already been taken" >&2; exit 1`,
       );
       yield* bin.add(
         "ssh",
-        `[ -f "${home}/registered" ] && exit 0; echo "Permission denied (publickey)."; exit 255`,
+        `[ -f "${home}/registered" ] && exit 0; echo "Permission denied (publickey)." >&2; exit 255`,
       );
 
       const { events } = yield* onboarded();

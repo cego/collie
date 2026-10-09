@@ -1341,7 +1341,6 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
         "glab",
         ["mr", "view", ref.iid, ...repoArgs(ref.project), "--web"],
         run?.cwd ?? env.cwd,
-        "say",
       );
       return opened.code === 0
         ? `opened ${command.target} in a browser`

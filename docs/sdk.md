@@ -586,10 +586,16 @@ prose, so the same workflow is usable by somebody else.
 
 `host.mr({ cwd, target?, source? })` is whether a merge request can be opened from here and
 what it would carry: the configured assignee, the repository's own template, the issues the
-branch answers. One question rather than two, because a step that cannot reach GitLab has
+branch answers. Its optional `provider` is `github` or `gitlab` (absent on a GitLab-only
+host), and `repository` names GitHub's owner/repository for explicit `gh --repo` commands.
+A GitHub origin uses `gh`, checks its github.com login and repository access, and reads
+the authenticated assignee and the checkout's pull request template. GitLab retains
+the configured assignee and merge request template. One question rather than two,
+because a step that cannot reach its forge has
 nothing to fill in — check it before you start an agent, and say the reason where it is no.
 Once one is open, `host.mergeRequest(runId, url)` records it as a fact of the Run: its card
 links it, waits on it, and follows what the forge says of it.
+The shipped `renovate` workflow still requires GitLab for its merge and release commands.
 
 `host.claim({ runId, cwd, adopting, say })` blocks until this Run holds the shared claim on
 the repository it works in, and answers `null` where that repository has none. Waiting here
@@ -974,9 +980,9 @@ sentence each, and empty where the evidence is there. It reads the journal, the 
 list, the Outputs you hold and the tickets you built — and it will not take a reviewer's
 judgement from an implementer's Output, because the agent that wrote the change cannot
 vouch for its own scope. Only the latest result for a check on the tree in front of it
-counts, so a pass a later fail on the same tree contradicts is not one. Pass `preexisting` with the approved checks that also failed where
-the branch leaves the default branch, and one that still fails is left out of the gaps for your Run
-to report instead.
+counts, so a pass a later fail on the same tree contradicts is not one. Baseline failures
+are diagnostic context: `preexisting` does not remove gaps. Each approved check and each
+ticket's promised check still needs a passing verification on the current tree.
 
 ```ts
 const gaps = evidenceGapsOf({

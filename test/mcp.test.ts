@@ -3,6 +3,7 @@ import { Cause, Config, Effect, Fiber, FileSystem, Option, Queue, Schema, Stream
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import manifest from "../herdr-plugin.toml";
 import type { JsonObject } from "../src/schema";
+import { rebuiltAnswer } from "../src/mcp";
 import { TOOLS } from "../src/tools";
 import { runEffect, suiteEnv } from "./support/effect";
 
@@ -154,5 +155,21 @@ test("external interruption is not mistaken for clean MCP EOF", () =>
       const server = yield* openServer();
       yield* server.child.kill({ killSignal: "SIGINT" });
       expect(Number(yield* server.child.exitCode.pipe(Effect.timeout("5 seconds")))).toBe(130);
+    }).pipe(Effect.scoped),
+  ));
+
+test("a rebuilt binary that warns on stderr still answers", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-rebuilt-" });
+      const binary = `${dir}/collie`;
+      yield* fs.writeFileString(
+        binary,
+        `#!/bin/sh\necho "warning: something the binary wants said" >&2\necho '{"ok":true,"data":{"text":"the answer"}}'\n`,
+        { mode: 0o755 },
+      );
+
+      expect(yield* rebuiltAnswer(binary, dir, "collie_herd", {})).toBe("the answer");
     }).pipe(Effect.scoped),
   ));

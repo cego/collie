@@ -444,7 +444,7 @@ What each is for, what it needs, and how they chain: `docs/workflows.md`.
 
 **Evidence** — A Verification collected at a revision. An Output field saying the tests pass is a claim, and is shown as one. The gate before a merge request reads evidence, never claims.
 
-**Baseline** — A check that failed at the gate, run once by Collie where the Run's branch leaves the default branch, in the Run's own checkout. One that fails there too, and still fails, is reported as failing before the Run's changes: never a pass, and never handed to the implementer to fix.
+**Baseline** — A check that failed at the gate, run once by Collie where the Run's branch leaves the default branch, in the Run's own checkout. A failure there is diagnostic context: its exit code cannot establish that the Run added no failures. The check remains required on the Run's current tree and may be handed to the implementer to fix.
 
 **Check pass** — One run of an approved check by Collie, with why it runs: `gate` on the
 Run's branch, `baseline` where the branch left the default branch, `recheck` on the same

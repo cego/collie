@@ -85,6 +85,8 @@ const fakeGitAnswering = (
   refusals: Record<string, string> = {},
   /** Patterns that need to do something rather than say something, as raw shell. */
   scripts: Record<string, string> = {},
+  /** Written to stderr before every answer, as a git with something to warn about does. */
+  warning = "",
 ) => {
   const branches = [
     // A refusal wins over an answer for the same question: `case` takes the first
@@ -104,7 +106,7 @@ const fakeGitAnswering = (
   // somewhere that outlives the checkout being removed.
   return bin.add(
     "git",
-    `printf '%s\\t%s\\n' "$PWD" "$*" >> "${gitLog()}"\ncase "$*" in\n${branches}\nesac`,
+    `printf '%s\\t%s\\n' "$PWD" "$*" >> "${gitLog()}"\n${warning && `echo "${warning}" >&2\n`}case "$*" in\n${branches}\nesac`,
   );
 };
 
@@ -660,6 +662,7 @@ const collieWorktree = (
 const settledGit = (
   overrides: Record<string, string> = {},
   refusals: Record<string, string> = {},
+  warning = "",
 ) =>
   fakeGitAnswering(
     {
@@ -673,6 +676,8 @@ const settledGit = (
       ...overrides,
     },
     refusals,
+    {},
+    warning,
   );
 
 /** The merge watch read the branch's merge request as merged. */
@@ -708,6 +713,17 @@ test("a settled worktree is removed, and the board says why", () =>
       // Through herdr, so the workspace goes with the checkout, and never forced.
       const calls = (yield* rig.calls()).filter((c) => c.cmd === "worktree remove");
       expect(calls.at(0)?.argv).toEqual(["worktree", "remove", "--workspace", "w7"]);
+    }),
+  ));
+
+test("a settled worktree whose git warns on stderr is still removed", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* collieWorktree("wt");
+      yield* settledGit({}, {}, "warning: something git wants said");
+      yield* mergedMr();
+
+      expect(yield* prune()).toEqual(["♻ removed wt · merged in !14"]);
     }),
   ));
 

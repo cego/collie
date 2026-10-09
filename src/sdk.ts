@@ -568,7 +568,7 @@ export interface HostApi {
   /**
    * Whether a merge request can be opened from this checkout, and what it would carry —
    * the configured assignee, the repository's own template, the issues this branch
-   * answers. One question rather than two: a step that cannot reach GitLab has nothing to
+   * answers. One question rather than two: a step that cannot reach its forge has nothing to
    * fill in, and asking separately is how the two stop agreeing.
    */
   readonly mr: (options: {
@@ -637,9 +637,13 @@ export interface Place {
 /** What opening a merge request from here needs, and what it would be filled in with. */
 export interface MrReady {
   readonly ok: boolean;
+  /** The checkout's forge; absent on a host that only supports GitLab. */
+  readonly provider?: "gitlab" | "github";
+  /** The GitHub owner/repository, so gh addresses the checkout's origin explicitly. */
+  readonly repository?: string;
   /** Why it cannot be done here. Empty where it can. */
   readonly reason: string;
-  /** The configured assignee, else whoever glab is logged in as; empty for neither. */
+  /** The GitLab configured assignee or authenticated user; the authenticated user on GitHub. */
   readonly assignee: string;
   /** The repository's merge request template, relative to the checkout; empty for none. */
   readonly template: string;
