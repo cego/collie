@@ -551,19 +551,16 @@ test("Helle without credentials is not onboarded unless it is skipped", () =>
 test("the Linear MCP is added at user scope, and its login streams its URL", () =>
   runEffect(
     Effect.gen(function* () {
+      const url =
+        "https://mcp.linear.app/authorize?redirect_uri=http%3A%2F%2Flocalhost%3A62074%2Fcallback&state=s";
       yield* claudeAt(
         `echo "$*" >> "${home}/claude-calls"
 case "$*" in
   "auth status --json") ${LOGGED_IN} ;;
   "mcp add"*) echo '{"mcpServers":{"linear-server":{"url":"https://mcp.linear.app/mcp"}}}' > "$HOME/.claude.json" ;;
   "mcp get linear-server") if [ -f "${home}/authorized" ]; then echo "  Status: ✔ Connected"; else echo "  Status: ! Needs authentication"; fi ;;
+  "mcp login linear-server") [ -t 0 ] && [ -t 1 ] && echo tty >> "${home}/claude-calls"; echo "If the browser didn't open, visit:"; echo "  ${url}"; sleep 0.2; touch "${home}/authorized" ;;
 esac`,
-      );
-      const url =
-        "https://mcp.linear.app/authorize?redirect_uri=http%3A%2F%2Flocalhost%3A62074%2Fcallback&state=s";
-      yield* bin.add(
-        "script",
-        `echo "$*" >> "${home}/script-calls"; echo "If the browser didn't open, visit:"; echo "  ${url}"; sleep 0.2; touch "${home}/authorized"`,
       );
 
       const { events } = yield* onboarded({}, { skip: ["helle"] });
@@ -571,7 +568,8 @@ esac`,
       expect(yield* read(`${home}/claude-calls`)).toContain(
         "mcp add --transport http --scope user linear-server https://mcp.linear.app/mcp",
       );
-      expect(yield* read(`${home}/script-calls`)).toContain("claude mcp login linear-server");
+      // In a terminal of its own: on macOS too, where `script` takes other flags.
+      expect(yield* read(`${home}/claude-calls`)).toContain("mcp login linear-server\ntty\n");
       const human = events.findIndex((event) => event.event === "human" && event.step === "linear");
       const end = events.findIndex((event) => event.event === "result" && event.step === "linear");
       expect(events[human]).toMatchObject({ url, port: 62074 });
@@ -583,18 +581,15 @@ esac`,
 test("a Linear login that hands its callback URL to $BROWSER, printing only a paste-code URL, still streams the URL with its port", () =>
   runEffect(
     Effect.gen(function* () {
+      const handed =
+        "https://mcp.linear.app/authorize?redirect_uri=http%3A%2F%2Flocalhost%3A62074%2Fcallback&state=s";
       yield* claudeAt(
         `case "$*" in
   "auth status --json") ${LOGGED_IN} ;;
   "mcp add"*) echo '{"mcpServers":{"linear-server":{"url":"https://mcp.linear.app/mcp"}}}' > "$HOME/.claude.json" ;;
   "mcp get linear-server") if [ -f "${home}/authorized" ]; then echo "  Status: ✔ Connected"; else echo "  Status: ! Needs authentication"; fi ;;
+  "mcp login linear-server") "$BROWSER" '${handed}'; echo "Paste this code: https://mcp.linear.app/authorize?redirect_uri=https%3A%2F%2Fexample.com"; sleep 1; touch "${home}/authorized" ;;
 esac`,
-      );
-      const handed =
-        "https://mcp.linear.app/authorize?redirect_uri=http%3A%2F%2Flocalhost%3A62074%2Fcallback&state=s";
-      yield* bin.add(
-        "script",
-        `"$BROWSER" '${handed}'; echo "Paste this code: https://mcp.linear.app/authorize?redirect_uri=https%3A%2F%2Fexample.com"; sleep 1; touch "${home}/authorized"`,
       );
 
       const { events } = yield* onboarded({}, { skip: ["helle"] });
@@ -614,7 +609,6 @@ case "$*" in
   "mcp add"*) echo '{"mcpServers":{"linear-server":{"url":"https://mcp.linear.app/mcp"}}}' > "$HOME/.claude.json" ;;
 esac`,
       );
-      yield* bin.add("script", `echo "$*" >> "${home}/script-calls"`);
 
       const { result, events } = yield* onboarded({}, { skip: ["helle"], attended: false });
 
@@ -626,10 +620,30 @@ esac`,
         status: "needs_human",
         command: "claude mcp login linear-server",
       });
-      expect(yield* read(`${home}/script-calls`)).toBe("");
+      expect(yield* read(`${home}/claude-calls`)).not.toContain("mcp login");
       expect(result).toMatchObject({ ok: false });
     }),
   ));
+
+test("Claude Code is asked whether it is logged in with the whole environment, not only what Collie reads", () => {
+  // On macOS its Keychain lookup needs USER, which `currentEnv` does not keep.
+  const user = Bun.env.USER;
+  Bun.env.USER = "someone";
+  return runEffect(
+    Effect.gen(function* () {
+      yield* claudeAt(
+        `[ "$USER" = someone ] && echo '{"loggedIn": true}' || echo '{"loggedIn": false}'`,
+      );
+
+      const { events } = yield* onboarded({}, { attended: false });
+
+      expect(statusOf(events, "claude-login")).toBe("in_place");
+    }),
+  ).finally(() => {
+    if (user === undefined) delete Bun.env.USER;
+    else Bun.env.USER = user;
+  });
+});
 
 test("a terminal shows each step as text", () => {
   expect(eventText({ event: "start", step: "system", title: "Checking for git and curl" })).toBe(

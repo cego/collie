@@ -5,6 +5,7 @@ import { type Answers, DESKTOP_SAID } from "../shared/chat-view";
 import { hostname } from "node:os";
 import { FILE_TOOLS } from "./file-tools";
 import { FLOCK_TOOLS } from "./flock-tools";
+import { childEnv } from "./login-env";
 
 const systemPrompt = (
   computer: string,
@@ -149,5 +150,6 @@ export const sessionOptions = <Server>(opts: {
     ],
   },
   includePartialMessages: true,
+  env: childEnv(),
   pathToClaudeCodeExecutable: opts.claude ?? undefined,
 });

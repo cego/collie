@@ -258,13 +258,15 @@ test("onboarding gives the runner Desktop's secrets on stdin, and forwards and o
 /**
  * `claude auth login` as Claude Code 2.1 does it: the URL with its callback port goes to
  * `$BROWSER`, only the paste-code URL is printed, and the login ends at a callback with a
- * code or at a pasted code. How it ended is written to `<dir>/login`.
+ * code or at a pasted code. How it ended is written to `<dir>/login`, and whether it had a
+ * terminal to `<dir>/tty`.
  */
 const fakeClaude = (dir: string) =>
   executable(
     `${dir}/claude`,
     `#!${process.execPath}
 const done = (how) => { require("fs").writeFileSync("${dir}/login", how); process.exit(0); };
+require("fs").writeFileSync("${dir}/tty", String(require("tty").isatty(0) && require("tty").isatty(1)));
 const server = Bun.serve({ port: 0, fetch: (request) => {
   const code = new URL(request.url).searchParams.get("code");
   if (code === null) return new Response("bad", { status: 400 });
@@ -336,6 +338,8 @@ test("the Claude login takes a pasted code where the browser cannot reach its ca
       );
       expect(ended.ended).toBe(true);
       expect(yield* fs.readFileString(`${dir}/login`)).toBe("code pasted-1");
+      // In a terminal of its own: on macOS too, where `script` takes other flags.
+      expect(yield* fs.readFileString(`${dir}/tty`)).toBe("true");
     }),
   ));
 

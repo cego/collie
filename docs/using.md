@@ -903,10 +903,10 @@ Desktop shows it beside Local. bodil's `--vm` backend is bodil's own business an
 Collie Machine, so a VM bodil uses needs no `herdr machine add` for that.
 
 On macOS, Desktop opened from Finder or the Dock starts with launchd's short PATH. So at
-start it asks your login shell (`$SHELL -ilc`) for its PATH and runs with that, finding
+start it takes your login shell's environment (`$SHELL -ilc`), including its PATH, finding
 `herdr`, `collie`, `claude`, `git` and `ssh` as your terminal does. If the shell does not
-answer within a few seconds, Desktop keeps the PATH it was given and logs why. On Linux it
-keeps the PATH its session gave it.
+answer within five seconds, Desktop keeps the environment it was given and logs why. On Linux it
+keeps the environment its session gave it.
 
 It shows up as **Collie**, with the Collie mark — the dog on the white tile the TUI board
 shows, which reads on a dark taskbar too — in your app launcher, on its window, in the
@@ -979,7 +979,8 @@ Desktop to see _name_**.
 
 A host that is not running needs nothing from you, because the bridge starts it. Desktop
 saves each Machine's last board on this computer, under
-`$XDG_DATA_HOME/dk.cego.collie.desktop/<channel>/machines/`. At launch it shows those boards
+`$XDG_DATA_HOME/dk.cego.collie.desktop/<channel>/machines/` on Linux, or
+`~/Library/Application Support/dk.cego.collie.desktop/<channel>/machines/` on macOS. At launch it shows those boards
 dimmed, marked "as of", until each Machine's connection is live; a board saved through a
 machine herdr no longer lists is not shown.
 

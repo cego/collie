@@ -594,6 +594,9 @@ const hostBoard = (dir: string) =>
         desktopSweeper(
           desktopRootOf(dataHomeOf(env.home, env.raw["XDG_DATA_HOME"])),
           `${env.raw["XDG_STATE_HOME"] || `${env.home}/.local/state`}/collie-desktop`,
+          process.platform === "darwin"
+            ? `${env.home}/Applications/collie-desktop.app/Contents/Resources/version.json`
+            : `${desktopRootOf(dataHomeOf(env.home, env.raw["XDG_DATA_HOME"]))}/app/Resources/version.json`,
         ),
         // Last: a Task is kept while a workspace or a checkout of it is still there.
         retentionSweeper({

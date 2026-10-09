@@ -34,6 +34,9 @@ to date. Helle and a Linear MCP are optional; doctor tells you when a workflow y
 needs one. See [Install](docs/using.md#install) and
 [Optional integrations](docs/using.md#optional-integrations) for the detail.
 
+Collie Desktop, the board for every Machine you reach, installs on Linux (x64) and macOS
+(Apple silicon) with one more command; see [Collie Desktop](docs/using.md#collie-desktop).
+
 ## Four keys
 
 | Key              | What it does                      |

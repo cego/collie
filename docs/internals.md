@@ -238,10 +238,9 @@ herdr what some other version's schema says.
 Desktop's main process runs three more, all on herdr's list of saved machines:
 `herdr machine list --json`, which machines to reach, and `herdr machine remove`
 (`desktop/src/bun/machine.ts`), and `herdr machine add` (`desktop/src/bun/onboarding.ts`),
-run under `script` so herdr has the terminal its questions need. `src/script.ts` builds that
-command, for this and for the Claude and Linear logins: util-linux `script -qefc` on Linux,
-and BSD `script -q /dev/null /bin/sh -c` on macOS, whose `script` has no `-c`. A login run
-on another Machine picks between them there, by `uname`. Where the list fails, it
+run in Bun's terminal so herdr has the terminal its questions need. Local Claude and Linear
+logins use `src/in-terminal.ts` too. A Claude login over SSH uses `src/script.ts` to pick
+util-linux or BSD `script` on that Machine, by `uname`. Where the list fails, it
 also asks `herdr --version`, so a herdr too old to have `herdr machine` is named as one. Desktop is another
 program, usually on another computer, and it is not talking to a session either: it keeps
 herdr's list and nothing else. Routing them through `herdr.ts` would bring Collie's locks
@@ -731,9 +730,9 @@ Collie Desktop is built by the same release, from the same tag, by the workflow'
 `latest/download` URL. Electrobun names the archives an installed Desktop updates from by
 `app.name`, so that stays `collie-desktop`, as do the keyring service and the state
 directory that hold Desktop's credentials and chat. The name people see is written into
-the launcher entry by `desktop/scripts/name-desktop-entry.ts`, Electrobun's postBuild and
-postWrap hook, before the bundle is packed; it fails a Linux build if there is none to name.
-A macOS build has none. Electrobun signs the app itself, after it writes the release
+the Linux launcher entry and the macOS bundle's `CFBundleName` by
+`desktop/scripts/name-desktop-entry.ts`, Electrobun's postBuild and postWrap hook, before
+the bundle is packed; it fails the build if neither is found. Electrobun signs the app itself, after it writes the release
 metadata into the bundle and before it archives it, with the identity in
 `ELECTROBUN_DEVELOPER_ID`: the release's Developer ID where that secret is set, and `-`,
 ad hoc, where it is not. `desktop/scripts/mac-signing.ts` turns `codesign` on with an

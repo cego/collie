@@ -58,6 +58,7 @@ import { clipboardPaths } from "../shared/attachments";
 import { readAttachment, stageAttachment, stagePath } from "./attachments";
 import { type FlockConversation, openFlockChat, refusal, untilStarted } from "./chat";
 import { claudeCode } from "./claude";
+import { childEnv, takeLoginEnv, which } from "./login-env";
 import { type ChatMachine, chatDoor } from "./flock-tools";
 import { readSettings, writeSettings } from "./settings";
 import { followWindow, zoomWindow } from "./scale";
@@ -108,7 +109,6 @@ import {
 import { isHostName, tokenPage } from "../../../src/gitlab-token";
 import { HELLE_URL } from "../../../src/helle-url";
 import { electrobunUpdater } from "./electrobun-updater";
-import { loginPath } from "./login-path";
 import {
   dropBoardsOf,
   dropOnboarding,
@@ -136,6 +136,7 @@ const windowOn = (url: string, title: string, frame: BrowserWindow["frame"]) => 
       },
     },
   });
+  // macOS bundles no CEF, so its windows render with the system's WebKit.
   const window = new BrowserWindow({ title, url, renderer: "cef", frame, rpc });
   // The view holds the Bun bridge, so nothing may navigate the window off it. Set on the
   // webview: as a window option, Linux CEF ignores it.
@@ -164,18 +165,28 @@ const Collie = Config.schema(
   ),
 );
 
+const OPENER = process.platform === "darwin" ? "open" : "xdg-open";
+
 /** Opens a web page in the human's own browser. */
 const openUrl = (url: string) =>
   Effect.sync(() => {
-    if (Bun.which("xdg-open") === null) return void Utils.openExternal(url);
-    Bun.spawn(["xdg-open", url], { stdin: "ignore", stdout: "ignore", stderr: "ignore" });
+    if (which(OPENER) === null) return void Utils.openExternal(url);
+    Bun.spawn([OPENER, url], {
+      env: childEnv(),
+      stdin: "ignore",
+      stdout: "ignore",
+      stderr: "ignore",
+    });
   });
 
 /** Slack's own app where it opens, else its web client. */
 const openSlack = Effect.gen(function* () {
-  if (Bun.which("xdg-open") === null) return yield* openUrl(SLACK_WEB);
+  if (which(OPENER) === null) return yield* openUrl(SLACK_WEB);
   // Never killed: still running is the app taking it.
-  const child = Bun.spawn(["xdg-open", SLACK_APP], { stdio: ["ignore", "ignore", "ignore"] });
+  const child = Bun.spawn([OPENER, SLACK_APP], {
+    env: childEnv(),
+    stdio: ["ignore", "ignore", "ignore"],
+  });
   const code = yield* Effect.promise(() => child.exited).pipe(Effect.timeoutOption("5 seconds"));
   if (Option.isSome(code) && code.value !== 0) yield* openUrl(SLACK_WEB);
 });
@@ -189,9 +200,8 @@ const StateDir = Config.String("XDG_STATE_HOME").pipe(
 );
 
 const main = Effect.gen(function* () {
-  // Before anything is spawned, so herdr, collie, claude, git and ssh resolve as in a terminal.
-  const path = yield* loginPath(process.platform, Bun.env.SHELL ?? "/bin/zsh");
-  if (path !== null) Bun.env.PATH = path;
+  // Before anything is spawned, so every child starts with the shell's PATH and variables.
+  yield* takeLoginEnv;
   const updater = yield* electrobunUpdater;
   yield* applyAtLaunch(updater).pipe(
     Effect.catch((reason) => Effect.logWarning(`Desktop update not installed: ${reason}`)),
@@ -888,7 +898,7 @@ const main = Effect.gen(function* () {
         const door = yield* doorTo(doors, installation);
         const at = yield* focusOn(door, yield* uuid, runId);
         const attach = attachCommand(door.machine.target, at.session);
-        const terminal = inTerminal(attach, process.platform, Bun.which);
+        const terminal = inTerminal(attach, process.platform, which);
         const opened = terminal !== null && (yield* launched(terminal));
         return { at, command: shellLine(attach), opened };
       }),
@@ -925,7 +935,11 @@ const main = Effect.gen(function* () {
         Effect.flatMap(Effect.fromNullishOr),
         Effect.flatMap((command) =>
           Effect.try(() =>
-            Bun.spawn(command, { stdio: ["ignore", "ignore", "ignore"], detached: true }).unref(),
+            Bun.spawn(command, {
+              env: childEnv(),
+              stdio: ["ignore", "ignore", "ignore"],
+              detached: true,
+            }).unref(),
           ),
         ),
         Effect.catch(() => openUrl(url)),

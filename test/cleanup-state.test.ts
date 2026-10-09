@@ -121,6 +121,23 @@ beforeEach(() =>
 );
 afterEach(() => runEffect(rig.close()));
 
+/** A compaction control record for `agent`, naming its endpoint's pid and command. */
+const control = (agent: string, pid: number | null, command: string | null) =>
+  written(
+    `${rig.stateDir}/compaction/${agent}/control.json`,
+    JSON.stringify({
+      agent,
+      harness: "codex",
+      cwd: rig.projectDir,
+      dir: `${rig.stateDir}/compaction/${agent}`,
+      endpoint: null,
+      pid,
+      command,
+      attempt: null,
+    }),
+    0,
+  );
+
 test("a gone agent's compaction controls go and its endpoint is stopped; a listed one's stay", () =>
   runEffect(
     Effect.gen(function* () {
@@ -128,23 +145,8 @@ test("a gone agent's compaction controls go and its endpoint is stopped; a liste
       yield* rig.addAgent("alive", "p1");
       const endpoint = Bun.spawn(["sleep", "987"]);
       yield* Effect.addFinalizer(() => Effect.sync(() => endpoint.kill("SIGKILL")));
-      const control = (agent: string, pid: number | null) =>
-        written(
-          `${rig.stateDir}/compaction/${agent}/control.json`,
-          JSON.stringify({
-            agent,
-            harness: "codex",
-            cwd: rig.projectDir,
-            dir: `${rig.stateDir}/compaction/${agent}`,
-            endpoint: null,
-            pid,
-            command: pid === null ? null : "sleep 987",
-            attempt: null,
-          }),
-          0,
-        );
-      yield* control("gone", endpoint.pid);
-      yield* control("alive", null);
+      yield* control("gone", endpoint.pid, "sleep 987");
+      yield* control("alive", null, null);
 
       const report = yield* sweep(
         [compactionSweeper(rig.stateDir, [new Herdr(rig.pluginEnv())])],
@@ -156,6 +158,27 @@ test("a gone agent's compaction controls go and its endpoint is stopped; a liste
       expect(yield* fs.exists(`${rig.stateDir}/compaction/alive`)).toBe(true);
       yield* Effect.promise(() => endpoint.exited);
       expect(endpoint.signalCode).toBe("SIGTERM");
+    }),
+  ));
+
+test("a gone agent's recorded pid now running something else is not signalled", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const other = Bun.spawn(["sleep", "988"]);
+      yield* Effect.addFinalizer(() => Effect.sync(() => other.kill("SIGKILL")));
+      yield* control("gone", other.pid, "sleep 987");
+
+      yield* sweep(
+        [compactionSweeper(rig.stateDir, [new Herdr(rig.pluginEnv())])],
+        rig.stateDir,
+        "host",
+      );
+      expect(yield* fs.exists(`${rig.stateDir}/compaction/gone`)).toBe(false);
+      // Still up for this test to put down: a SIGTERM from the sweep would have come first.
+      other.kill("SIGKILL");
+      yield* Effect.promise(() => other.exited);
+      expect(other.signalCode).toBe("SIGKILL");
     }),
   ));
 
