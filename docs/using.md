@@ -1837,7 +1837,9 @@ An entry that draws on the same Exhausted Subscription — pi on `openai-codex` 
 is out — is skipped too. The effort the work asked for comes along where the harness takes
 it. Empty, the default, keeps today's behaviour: the work starts on its preferred agent, and
 the Run's record says when its Subscription resets. It is shared across the Flock like every
-setting, and read at every choice, so an edit reaches the next agent. The Run's record and
+setting, and read at every choice, so an edit reaches the next agent. If an agent has run
+out and no fallback has room, Collie checks again each minute while waiting for its Output.
+Adding a usable fallback then moves the unfinished work to it automatically. The Run's record and
 `collie run show` say which agent each step landed on, as in
 `codex/default (fell back from claude/opus: session 100%, resets 15:45)`, and the Run's log
 gets a line when it happens. Usage never refuses, holds or delays work.

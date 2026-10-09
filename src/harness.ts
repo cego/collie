@@ -152,7 +152,7 @@ export const HARNESSES: Harnesses = {
       bypass: ["--dangerously-bypass-approvals-and-sandbox"],
     },
     models: ["gpt-5-codex", "gpt-5", "gpt-5-mini"],
-    modelPattern: /^(?:gpt|o)[0-9][a-z0-9.-]*$/,
+    modelPattern: /^(?:gpt-?|o)[0-9][a-z0-9.-]*$/,
   },
   pi: {
     id: "pi",
