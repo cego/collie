@@ -757,7 +757,8 @@ is showing at a time:
 
 The review and the plan's spec are capped and paged: `… truncated` says so, and `m` reads
 another cap of it. They are markdown, drawn through [Comark](https://comark.dev)'s
-terminal renderer: headings, emphasis, lists, tables and fenced code are styled, and
+terminal renderer: headings, emphasis, lists, tables and fenced code are styled, even
+when `NO_COLOR` disables CLI colour. OpenTUI draws those styles in the board's palette, and
 Comark's security plugin drops scripts and embedded content first, because what an agent
 writes is untrusted. Tables and rules are drawn to the drawer's width. The log is shown as plain text.
 
