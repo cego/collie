@@ -26,6 +26,13 @@ and `interrupt` are gated on a **recorded live result** per harness; where that 
 has none the delivery is refused, with `capability_unproven:<harness>:<mode>` on the
 ledger, so a steer that did not go out as asked has an answer rather than a silence.
 
+One delivery is at most 8 KiB. A steer whose words, with their `Attached:` lines, are over
+that is never split: the host keeps the words as `message-<digest>.md` in the Run's
+`attachments/` and tells the agent the message is in that file, followed by its
+`Attached:` line and any other attachment's. This holds for every door that steers, and
+the audit line records the words as asked
+([ADR-0051](adr/0051-a-review-comment-is-written-on-desktops-own-views.md)).
+
 ## The states, and why they are kept apart
 
 | State          | What it means                                                                                                                                        |

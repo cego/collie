@@ -124,12 +124,14 @@ import {
   attachmentRefusal,
   attachmentsDir,
   copyInto,
+  keepMessage,
   namesIn,
   sha256Hex,
   type Attached,
 } from "./attachments";
 import { boardMessages, shareBoard } from "./board-stream";
 import { recordDisposition } from "./disposition";
+import { MAX_DELIVERY_BYTES } from "./dispatcher";
 import {
   NEWS_TRAIL,
   newsPath,
@@ -410,7 +412,8 @@ const handlers = (
           const into = attachmentsDir(runDir(dir, runId));
           // Files go only into a Run this host has.
           const known =
-            (attachments ?? []).length === 0
+            (attachments ?? []).length === 0 &&
+            Buffer.byteLength(text, "utf8") <= MAX_DELIVERY_BYTES
               ? Effect.void
               : Effect.flatMap(FileSystem.FileSystem, (fs) => fs.exists(runDir(dir, runId))).pipe(
                   Effect.orElseSucceed(() => false),
@@ -441,17 +444,20 @@ const handlers = (
                 },
                 copyInto(into, attachments ?? []).pipe(
                   Effect.mapError((cause) => new HostRefused({ reason: reason(cause) })),
-                  Effect.flatMap((copied) =>
-                    registry.steer({
-                      runId,
-                      text: [text, ...copied.map((one) => attachedLine(`${into}/${one.name}`))]
-                        .filter((line) => line !== "")
-                        .join("\n"),
-                      request,
-                      operation,
-                      agent,
-                      mode,
-                    }),
+                  Effect.flatMap((copied) => {
+                    const lines = copied.map((one) => attachedLine(`${into}/${one.name}`));
+                    const whole = [text, ...lines].filter((line) => line !== "").join("\n");
+                    return Buffer.byteLength(whole, "utf8") <= MAX_DELIVERY_BYTES
+                      ? Effect.succeed(whole)
+                      : keepMessage(into, text).pipe(
+                          Effect.mapError((cause) => new HostRefused({ reason: reason(cause) })),
+                          Effect.map((kept) =>
+                            [TOO_LONG, attachedLine(`${into}/${kept}`), ...lines].join("\n"),
+                          ),
+                        );
+                  }),
+                  Effect.flatMap((told) =>
+                    registry.steer({ runId, text: told, request, operation, agent, mode }),
                   ),
                 ),
               );
@@ -462,6 +468,10 @@ const handlers = (
       });
     }),
   );
+
+/** What an agent is told in place of words over the delivery cap, which are never split (ADR-0051). */
+const TOO_LONG =
+  "This message was too long to send in one piece, so it is in the attached file. Read it whole and act on it.";
 
 /** What a steer's request has to ask again, as `AskedFor` is a start's. */
 type SteerAsked = {

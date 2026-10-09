@@ -158,6 +158,13 @@ next launch: one line and "Open Collie". No board, no chat.
 questions receive explanations without changes, and a dry run previews actions. A target
 is required. Questions about a Herd are Native chat's, and about the whole Flock, Desktop's Flock chat's.
 
+**Review comment** — A human's words about a quoted span of a Run's plan, or a line
+range of one file in its diff, written where Desktop's record shows it. A draft held by
+Desktop until it is sent, never a Collie record. Sent together, a Run's comments are one
+**Delivery**, word for word, to one of that Run's live agents: not a Steer, because no
+model reads them first, and not a merge request note (ADR-0051). Not a finding, which is
+an agent's.
+
 **Proposal** — A durable, hash-bound set of actions. Explicit requests execute through
 this record immediately. Unsolicited background suggestions remain pending.
 

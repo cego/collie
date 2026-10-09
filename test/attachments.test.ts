@@ -258,3 +258,80 @@ test(
     ),
   120_000,
 );
+
+test(
+  "a message over the delivery cap is kept whole in the Run, and the agent is told where",
+  () =>
+    attending("collie-attach-long-", (world, cli) =>
+      Effect.gen(function* () {
+        const started = yield* cli(["run", "start", "attended", "--input", "work=the picker"]);
+        const runId = payloadOf(started.envelope).runId!;
+        yield* viewOf(world, runId, asking);
+        const dir = `${runDir(world.state, runId)}/attachments`;
+        const told = Effect.map(read(Bun.env.FAKE_HERDR_LOG!), (log) =>
+          log
+            .split("\n")
+            .filter((line) => line !== "")
+            .map((line) => Schema.decodeUnknownSync(CallLine)(line))
+            .filter((call) => call.cmd === "agent prompt")
+            .flatMap((call) => call.argv),
+        );
+        const fileFor = (words: string) =>
+          `${dir}/message-${new Bun.CryptoHasher("sha256").update(words).digest("hex").slice(0, 8)}.md`;
+        const steer = (words: string, ...more: ReadonlyArray<string>) =>
+          cli(["run", "steer", runId, words, "--operation", "build", ...more]);
+
+        const long = `Review:\n${"é line of the review\n".repeat(460)}`;
+        expect(Buffer.byteLength(long)).toBeGreaterThan(9 * 1024);
+        const first = yield* steer(long, "--request-id", "req-long");
+        expect(first.envelope.error).toBeUndefined();
+        expect(yield* read(fileFor(long))).toBe(long);
+        const said = (yield* told).find((text) => text.includes(fileFor(long)));
+        expect(said).toBeDefined();
+        expect(said).toContain("too long to send in one piece");
+        expect(said).toContain(`Attached: ${fileFor(long)}`);
+        expect(said).not.toContain("line of the review");
+        const delivered = (yield* readAudit(runDir(world.state, runId)).pipe(Effect.orDie)).find(
+          (one) => one.request === "req-long",
+        );
+        expect(delivered?.asked).toMatchObject({ text: long });
+
+        const again = yield* steer(long, "--request-id", "req-long");
+        expect(again.envelope.error).toBeUndefined();
+        const kept = yield* Effect.flatMap(FileSystem.FileSystem, (fs) =>
+          fs.readDirectory(dir),
+        ).pipe(Effect.orDie);
+        expect(kept.filter((name) => name.startsWith("message-"))).toHaveLength(1);
+
+        const atCap = "x".repeat(8 * 1024);
+        expect((yield* steer(atCap)).envelope.error).toBeUndefined();
+        expect((yield* told).some((text) => text.endsWith(`\n${atCap}`))).toBe(true);
+        expect(yield* Effect.promise(() => Bun.file(fileFor(atCap)).exists())).toBe(false);
+
+        const withFile = `Also:\n${"another line of it\n".repeat(460)}`;
+        expect((yield* steer(withFile, "--attach", "late.png")).envelope.error).toBeUndefined();
+        const listed = (yield* told).find((text) => text.includes(fileFor(withFile)));
+        expect(listed).toContain(`Attached: ${fileFor(withFile)}\nAttached: ${dir}/late.png`);
+
+        const viaAct = `From chat:\n${"a line chat wrote\n".repeat(500)}`;
+        const client = yield* connect(world.state).pipe(Effect.orDie);
+        const acted = yield* client
+          .act({
+            actions: [
+              {
+                kind: "deliver",
+                run: runId,
+                agent: `${runId}-build-r1`,
+                text: viaAct,
+                mode: "boundary",
+              },
+            ],
+            request: "req-act",
+          })
+          .pipe(Effect.orDie);
+        expect(acted).toMatchObject([{ kind: "deliver", state: "applied" }]);
+        expect(yield* read(fileFor(viaAct))).toBe(viaAct);
+      }),
+    ),
+  120_000,
+);

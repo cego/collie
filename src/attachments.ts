@@ -87,6 +87,19 @@ export const copyInto = Effect.fn("attachments.copyInto")(function* (
   return named.map(({ name, from }): Attached => ({ name, from }));
 });
 
+/** Keeps words over the delivery cap as a file in `dir`, named by digest so a retry keeps one. */
+export const keepMessage = Effect.fn("attachments.keepMessage")(function* (
+  dir: string,
+  words: string,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const name = `message-${sha256Hex(words).slice(0, 8)}.md`;
+  yield* fs.makeDirectory(dir, { recursive: true });
+  yield* fs.writeFileString(path.join(dir, name), words);
+  return name;
+});
+
 /** Every file in `dir`, by name; none where there is no such directory. */
 export const listAttachments = Effect.fn("attachments.list")(function* (dir: string) {
   const fs = yield* FileSystem.FileSystem;

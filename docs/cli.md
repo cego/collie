@@ -282,7 +282,9 @@ collie --json run steer <run-id> "check the migration too" --request-id "$(uuidg
 - **`run steer` says something to the Run's agent** through the one sender, with the same
   incarnation and harness-capability checks as every other delivery, and tells you whether
   it was delivered rather than that it was accepted for sending: anything not sent is
-  `operation_failed`, with why. A finished Run's live agent takes one as a running Run's
+  `operation_failed`, with why. A message over 8 KiB is kept whole as a file in the Run's
+  `attachments/`, and the agent is told where to read it
+  ([steering](steering.md#delivery)). A finished Run's live agent takes one as a running Run's
   does, whether or not its module is still loaded. It carries out nothing:
   `collie steer` is still the only thing that proposes an action, and a proposal still
   names its exact payload to be confirmed.
