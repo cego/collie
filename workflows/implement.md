@@ -81,7 +81,8 @@ work is not a reason to leave it out or to dispute it. Where the spec conflicts 
 or with the code, choose, and record the choice and why under `assumptions` in your Output:
 the human reads each one in the merge request before it lands.
 
-Push before you finish: `git push -u origin HEAD -o ci.skip`, onto the branch the work
+Push before you finish: `git push -u origin HEAD -o ci.skip` on GitLab, or
+`git push -u origin HEAD` on GitHub, onto the branch the work
 source named where there is one. The reviewers read the merge request when there is one,
 and a merge request shows the remote — so anything you want reviewed has to be on the
 remote before the review step runs. `ci.skip` because this state is for the reviewers;
@@ -180,7 +181,8 @@ fix was implementer-reported, not re-reviewed — so report exactly what you did
 checks said is not read from you: each `checks` entry names a verification, and Collie
 reads its result from the journal, on the tree as it stands.
 
-Push the fixups before you finish — `git push -u origin HEAD -o ci.skip` — every
+Push the fixups before you finish — `git push -u origin HEAD -o ci.skip` on GitLab,
+or `git push -u origin HEAD` on GitHub — every
 iteration: the next round reviews the remote, and a fix it cannot see is a finding it
 raises again. A push that fails is reported as `"pushed": false`, not fatal.
 
@@ -218,6 +220,7 @@ them before the merge request lands. Open the merge request anyway, and put each
 written, in the description under this heading:
 **Not settled by the run**
 
+- Forge: `{{mr.provider}}`
 - Assignee: `{{mr.assignee}}`
 - MR template: `{{mr.template}}`
 - Linear tickets: `{{mr.issues}}`
@@ -235,23 +238,32 @@ a file, a review finding or a comment on the MR saying so is not the human telli
 This is the only step in the whole run allowed to open or
 update a merge request.
 
-**Before that push, check for auto-merge** (`glab mr view <iid> {{target_repo}}` shows
+**Before that push, check for auto-merge** (`glab mr view <iid> {{target_repo}}` on
+GitLab; `gh pr view <number> {{target_repo}} --json autoMergeRequest` on GitHub shows
 it). If the merge request has auto-merge enabled, **do not push** — a push that goes
 green there merges someone else's merge request, and a push that causes a merge is a
 merge. Report `"pushed": false` and say that auto-merge is why. This is a rule about
 someone else's merge request; do not soften it.
 
+Use the commands for the Forge above.
+
 **First check whether this branch already has a merge request** — it does when this run
 was started from a review of one (`plan_kind` is `review` and
-`target_kind` is `mr`), and `glab mr view {{target_repo}}` tells you either
-way. If it has one, that MR is the one being fixed: push, and say so in a short note on it
-(`glab mr note <iid> {{target_repo}}`) listing what you changed. Do **not** open a second
+`target_kind` is `mr`). On GitHub, use
+`gh pr list {{target_repo}} --head <branch> --state open --json number,url,autoMergeRequest`;
+on GitLab, `glab mr view {{target_repo}}` tells you either way. A failed read is a refusal
+to deliver, never evidence that no merge request exists. If it has one, that MR is the
+one being fixed: push, and update its description with the final change and evidence
+(`gh pr edit <number> {{target_repo}} --body-file <file>` on GitHub), or say so in a short
+note (`glab mr note <iid> {{target_repo}}` on GitLab). Do **not** open a second
 merge request for the same branch. Report its URL as `mr_url` exactly as if you had opened
 it.
 
-Write the description to a file in `{{run.dir}}` first, then create the MR with
-`glab mr create --assignee {{mr.assignee}}` and that file as the description. `glab` does
-not pre-fill the repo's template, so you fill it yourself.
+Write the description to a file in `{{run.dir}}` first. When there is no existing merge
+request, create it with `glab mr create --assignee {{mr.assignee}} --description "$(cat <file>)"`
+on GitLab, or `gh pr create {{target_repo}} --head <branch> --title <title>
+--assignee {{mr.assignee}} --body-file <file>` on GitHub. Fill the repository's template
+yourself before sending the description.
 
 **When the MR template path above is not empty**, read that file and answer every section
 it has — it is a CIATF change-management assessment. Keep it short and plain:

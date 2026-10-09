@@ -87,7 +87,7 @@ const prompts = {
     evidence: text,
     unreviewed: text,
     unsettled: text,
-    mr: Schema.Struct({ assignee: text, template: text, issues: text }),
+    mr: Schema.Struct({ provider: text, assignee: text, template: text, issues: text }),
     target_repo: text,
   }),
 };
@@ -531,9 +531,9 @@ export default defineWorkflow({
         ),
       ];
       if (unsettled.length > 0) yield* host.record(runId, `unsettled: ${unsettled.join("; ")}`);
-      const gitlab = yield* host.mr({ cwd, source: { value: source.value, kind: source.kind } });
-      if (!gitlab.ok) {
-        const reason = `Cannot open the merge request: ${gitlab.reason}. Repair it, then resume ${runId}.`;
+      const ready = yield* host.mr({ cwd, source: { value: source.value, kind: source.kind } });
+      if (!ready.ok) {
+        const reason = `Cannot open the merge request: ${ready.reason}. Repair it, then resume ${runId}.`;
         yield* host.record(runId, reason);
         yield* host.parked(runId, reason);
         return yield* Workflow.suspend(yield* WorkflowInstance);
@@ -553,16 +553,27 @@ export default defineWorkflow({
           unreviewed,
           unsettled: unsettled.map((line) => `- ${line}`).join("\n"),
           mr: {
-            assignee: gitlab.assignee,
-            template: gitlab.template,
-            issues: gitlab.issues.join(", "),
+            provider: ready.provider ?? "gitlab",
+            assignee: ready.assignee,
+            template: ready.template,
+            issues: ready.issues.join(", "),
           },
-          target_repo: "",
+          target_repo: ready.repository ? `--repo ${ready.repository}` : "",
         },
         output: Opened,
       });
-      if (opened.mr_url) yield* host.mergeRequest(runId, opened.mr_url);
-      return opened.mr_url ?? (opened.pushed ? "pushed, no merge request url" : "not pushed");
+      if (opened.verdict !== "clean" || !opened.pushed || !opened.mr_url) {
+        const missing = [
+          ...(!opened.pushed ? ["the branch was not pushed"] : []),
+          ...(!opened.mr_url ? ["no merge request URL was reported"] : []),
+          ...(opened.findings ?? []).map((finding) => finding.title),
+        ];
+        return yield* new WorkflowError({
+          reason: `Merge request delivery did not finish: ${missing.join("; ") || opened.verdict}. Continue with a follow-up Run to finish delivery.`,
+        });
+      }
+      yield* host.mergeRequest(runId, opened.mr_url);
+      return opened.mr_url;
     }),
 });
 

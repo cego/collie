@@ -92,14 +92,7 @@ import { helleUrlOf } from "./helle-url";
 import { currentPid, signalProcess } from "./lock";
 import type { CheckoutKind, InputStrategy } from "./definitions";
 import { noteVerification } from "./metrics";
-import {
-  gitlabForProject,
-  gitlabReadiness,
-  mrFacts,
-  postNote,
-  projectHere,
-  shell as runShell,
-} from "./mr";
+import { prepareMergeRequest, postNote, projectHere, shell as runShell } from "./mr";
 import { parseMrTarget, parseMrUrl } from "./board-model";
 import { Notifier, SOUND, notificationTitle, wanted, type Sound } from "./notify";
 import {
@@ -299,6 +292,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
   /** What opening a merge request from here needs, and what it would be filled in with. */
   export interface MrReady {
     readonly ok: boolean;
+    readonly provider?: "gitlab" | "github";
+    readonly repository?: string;
     /** Why it cannot be done here. Empty where it can. */
     readonly reason: string;
     /** The configured assignee, else whoever glab is logged in as; empty for neither. */
@@ -2268,21 +2263,9 @@ export const hostLayer = (options: {
         mr: (asked) =>
           under(
             Effect.gen(function* () {
-              const project = parseMrTarget(asked.target ?? "")?.project ?? null;
-              const ready = yield* asked.target === undefined
-                ? gitlabReadiness(asked.cwd, runShell)
-                : gitlabForProject(project, asked.cwd, runShell);
-              if (!ready.ok) {
-                return { ok: false, reason: ready.reason, assignee: "", template: "", issues: [] };
-              }
-              const facts = yield* mrFacts(
+              return yield* prepareMergeRequest(
                 {
-                  cwd: asked.cwd,
-                  inputs: {
-                    source: asked.source?.value ?? "",
-                    source_kind: asked.source?.kind ?? "",
-                  },
-                  strategies: { source: "work-source" },
+                  ...asked,
                   configuredAssignee: configValue(
                     yield* readConfig(options.userDir ?? dir),
                     "gitlab.assignee",
@@ -2290,13 +2273,6 @@ export const hostLayer = (options: {
                 },
                 runShell,
               );
-              return {
-                ok: true,
-                reason: "",
-                assignee: facts.assignee ?? "",
-                template: facts.template ?? "",
-                issues: facts.issues,
-              };
             }).pipe(
               Effect.orElseSucceed(() => ({
                 ok: false,

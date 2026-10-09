@@ -2463,6 +2463,7 @@ scenario(
       Effect.gen(function* () {
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
         yield* bin.add("glab", `exit 0`);
+        yield* bin.add("gh", `exit 127`);
         yield* repository();
         yield* exec(["git", "remote", "set-url", "origin", "git@github.com:team/project.git"], {
           cwd: rig.projectDir,
@@ -2473,7 +2474,7 @@ scenario(
         yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, OPENED]);
         const entry = shipped("implement");
         yield* stalled({ entry, runId, input: { plan } });
-        expect(yield* parkedWhy(runId)).toContain("no GitLab remote");
+        expect(yield* parkedWhy(runId)).toContain("gh is not installed");
         const fs = yield* FileSystem.FileSystem;
         yield* fs.writeFileString(
           `${evidenceDir(dir, runId)}/approved.json`,
@@ -2520,12 +2521,85 @@ scenario(
 );
 
 scenario(
+  "implement prepares GitHub delivery for the existing branch's pull request",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* bin.add(
+          "gh",
+          `case "$1" in api) echo '{"login":"tester"}';; repo) echo '{"nameWithOwner":"team/project"}';; esac; exit 0`,
+        );
+        yield* repository();
+        yield* exec(["git", "remote", "set-url", "origin", "git@github.com:team/project.git"], {
+          cwd: rig.projectDir,
+        });
+        const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
+        const runId = "r-impl-github";
+        const url = "https://github.com/team/project/pull/89";
+        yield* approve(runId, ["unit"]);
+        yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, { ...OPENED, mr_url: url }]);
+        const status = yield* running(
+          { entry: shipped("implement"), runId, input: { plan } },
+          (reading) =>
+            until(
+              () => reading,
+              (got) => got !== "pending",
+            ),
+        );
+        expect(status).toBe("complete");
+        const prompt = yield* asked(runId, "mr");
+        expect(prompt).toContain("Forge: `github`");
+        expect(prompt).toContain("gh pr view");
+        expect(prompt).toContain("gh pr edit");
+        expect(prompt).toContain("--repo team/project");
+        expect(prompt).toContain("Do **not** open a second");
+        expect(yield* prompts()).toHaveLength(3);
+        yield* bin.restore();
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "implement fails when the delivery agent has not pushed and supplied a merge request",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* bin.add("glab", `exit 0`);
+        yield* repository();
+        const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
+        const runId = "r-impl-delivery-failed";
+        yield* approve(runId, ["unit"]);
+        yield* rig.queueOutputs([
+          BUILT,
+          CLEAN_SYNTHESIS,
+          {
+            verdict: "findings",
+            pushed: false,
+            mr_url: null,
+            findings: [{ severity: "major", title: "push denied" }],
+          },
+        ]);
+        const result = yield* ran({ entry: shipped("implement"), runId, input: { plan } });
+        yield* bin.restore();
+        expect(reasonOf(result)).toContain("Merge request delivery did not finish");
+        expect(reasonOf(result)).toContain("push denied");
+        expect(yield* prompts()).toHaveLength(3);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
   "unavailable merge request handling suspends and resumes without rebuilding",
   () =>
     runEffect(
       Effect.gen(function* () {
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
         yield* bin.add("glab", `exit 0`);
+        yield* bin.add("gh", `exit 127`);
         yield* repository();
         yield* exec(["git", "remote", "set-url", "origin", "git@github.com:team/project.git"], {
           cwd: rig.projectDir,
@@ -2545,7 +2619,7 @@ scenario(
           ),
         );
         expect(status).toBe("suspended");
-        expect(yield* parkedWhy(options.runId)).toContain("no GitLab remote");
+        expect(yield* parkedWhy(options.runId)).toContain("gh is not installed");
         expect(yield* prompts()).toHaveLength(2);
 
         yield* exec(
@@ -2828,6 +2902,35 @@ const MERGED = {
 };
 const RELEASED = { verdict: "clean", findings: [], version: "1.2.0", tagged: true };
 const RECORDED = { verdict: "clean", findings: [], checked_off: true, status: "renovated" };
+
+scenario(
+  "renovate keeps its GitLab requirement when the origin is on GitHub",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* bin.add(
+          "gh",
+          `case "$1" in api) echo '{"login":"tester"}';; repo) echo '{"nameWithOwner":"team/project"}';; esac; exit 0`,
+        );
+        yield* repository();
+        yield* exec(["git", "remote", "set-url", "origin", "git@github.com:team/project.git"], {
+          cwd: rig.projectDir,
+        });
+        yield* rig.queueOutputs([
+          TRACKED,
+          { verdict: "clean", up_to_date: true, is_package: false },
+          { verdict: "clean", tagged: false, up_to_date: true },
+          RECORDED,
+        ]);
+        const result = yield* ran({ entry: shipped("renovate"), runId: "r-ren-github", input: {} });
+        yield* bin.restore();
+        expect(said(result)).toBe("nothing to renovate here: renovate requires GitLab");
+        expect(yield* prompts()).toHaveLength(0);
+      }),
+    ),
+  120_000,
+);
 
 scenario(
   "a package never reaches batch, stage or approval: no agent, no Output, and a reason on the record",

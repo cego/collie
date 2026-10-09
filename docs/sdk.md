@@ -586,10 +586,16 @@ prose, so the same workflow is usable by somebody else.
 
 `host.mr({ cwd, target?, source? })` is whether a merge request can be opened from here and
 what it would carry: the configured assignee, the repository's own template, the issues the
-branch answers. One question rather than two, because a step that cannot reach GitLab has
+branch answers. Its optional `provider` is `github` or `gitlab` (absent on a GitLab-only
+host), and `repository` names GitHub's owner/repository for explicit `gh --repo` commands.
+A GitHub origin uses `gh`, checks its github.com login and repository access, and reads
+the authenticated assignee and the checkout's pull request template. GitLab retains
+the configured assignee and merge request template. One question rather than two,
+because a step that cannot reach its forge has
 nothing to fill in — check it before you start an agent, and say the reason where it is no.
 Once one is open, `host.mergeRequest(runId, url)` records it as a fact of the Run: its card
 links it, waits on it, and follows what the forge says of it.
+The shipped `renovate` workflow still requires GitLab for its merge and release commands.
 
 `host.claim({ runId, cwd, adopting, say })` blocks until this Run holds the shared claim on
 the repository it works in, and answers `null` where that repository has none. Waiting here
