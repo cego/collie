@@ -16,6 +16,7 @@ import {
 } from "../desktop/src/shared/channel";
 import {
   applyItem,
+  chatBoards,
   DesktopRpcs,
   EMPTY_FLOCK,
   type FlockItem,
@@ -25,8 +26,10 @@ import {
   machineRows,
   type MachineRow,
   nameAsShown,
+  notLiveOf,
   type MachineMessage,
   machineToAdd,
+  unreadBecause,
 } from "../desktop/src/shared/flock";
 import {
   buildOf,
@@ -36,6 +39,8 @@ import {
   syncable,
 } from "../desktop/src/shared/in-sync";
 import { agentRows } from "../desktop/src/shared/run-agents";
+import { type Column, columnOf } from "../desktop/src/shared/columns";
+import { epochMs } from "../src/time";
 import { task } from "./support/task";
 
 const asJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
@@ -132,6 +137,7 @@ const served = (main: Channel<ToView, ToMain>) =>
         desktopTurns: () => Stream.die("not asked"),
         settings: () => Effect.die("not asked"),
         setSettings: () => Effect.die("not asked"),
+        drawn: () => Stream.die("not asked"),
       }),
     ),
     Layer.provide(Layer.effect(RpcServer.Protocol, serverProtocol(main))),
@@ -380,6 +386,71 @@ const routed = (machine: Machine): FlockItem => ({
   machine: { profile: machine.profile, name: machine.name, target: machine.target },
 });
 
+test("the chat reads each Machine the window shows: a live one's board and protocol, or what stands in its way", () => {
+  const old = { ...vm, installation: "inst-old" };
+  const savedOld: FlockItem = { _tag: "Saved", machine: old, herds: [], tasks: [working], at: 7 };
+  const boards = (items: ReadonlyArray<FlockItem>, since = new Map<string, number>()) =>
+    chatBoards(items.reduce(applyItem, EMPTY_FLOCK), since).map(({ name, board }) => [name, board]);
+  expect(boards([routed(pc), snapshot(pc, [asking]), routed(vm), lostVm("unreachable")])).toEqual([
+    [
+      "mk-pc",
+      { _tag: "Live", herds: [{ id: "default" }], tasks: [asking], protocol: 1, files: false },
+    ],
+    ["vm-mk", { _tag: "Lost", state: "unreachable", reason: "ssh: connection refused" }],
+  ]);
+  expect(boards([routed(vm)], new Map([["p-vm", 1_000]]))).toEqual([
+    ["vm-mk", { _tag: "Connecting", since: 1_000 }],
+  ]);
+  // A saved board standing in while its route connects is still connecting.
+  expect(boards([routed(vm), savedOld], new Map([["p-vm", 1_000]]))).toEqual([
+    ["vm-mk", { _tag: "Connecting", since: 1_000 }],
+  ]);
+  // Its route now reaches another installation, so nothing will make that board live again.
+  expect(boards([routed(vm), snapshot(vm, []), savedOld]).map(([, board]) => board)).toEqual([
+    { _tag: "Live", herds: [{ id: "default" }], tasks: [], protocol: 1, files: false },
+    { _tag: "Saved", at: 7 },
+  ]);
+});
+
+test("a saved board and the live Machine its route now reaches are named apart, whichever came first", () => {
+  const old = { ...vm, installation: "inst-old" };
+  const savedOld: FlockItem = { _tag: "Saved", machine: old, herds: [], tasks: [working], at: 7 };
+  for (const items of [
+    [savedOld, routed(vm), snapshot(vm, [])],
+    [routed(vm), snapshot(vm, []), savedOld],
+  ]) {
+    const named = chatBoards(items.reduce(applyItem, EMPTY_FLOCK), new Map()).map(
+      ({ name, board }) => [name, board._tag],
+    );
+    expect(named.toSorted()).toEqual([
+      ["vm-mk (mk@vm-mk.cegohost.dk)", "Live"],
+      ["vm-mk (mk@vm-mk.cegohost.dk, saved)", "Saved"],
+    ]);
+  }
+});
+
+test("a Machine with no live board is said with why, in its route's words where it was lost", () => {
+  expect(unreadBecause("vm-mk", { _tag: "Connecting", since: 1_000 }, 91_000)).toBe(
+    "vm-mk is still connecting; Desktop has waited 1 min 30 s for its first board",
+  );
+  expect(unreadBecause("vm-mk", { _tag: "Connecting", since: null }, 91_000)).toBe(
+    "vm-mk is still connecting; Desktop has had no board from it yet",
+  );
+  expect(
+    unreadBecause(
+      "vm-mk",
+      { _tag: "Lost", state: "unreachable", reason: "ssh: connection refused." },
+      0,
+    ),
+  ).toBe("vm-mk is out of reach: ssh: connection refused");
+  expect(
+    unreadBecause("vm-mk", { _tag: "Lost", state: "update-desktop", reason: "too new" }, 0),
+  ).toBe("vm-mk needs a newer Desktop: too new");
+  expect(unreadBecause("vm-mk", { _tag: "Saved", at: epochMs("2026-10-07T12:00:00Z") }, 0)).toBe(
+    "vm-mk is only a board Desktop saved at 2026-10-07T12:00:00.000Z, with no live host since",
+  );
+});
+
 test("a Machine's build is kept from its Snapshot, and a saved board's stands in until it is live", () => {
   const saved: FlockItem = {
     _tag: "Saved",
@@ -577,6 +648,20 @@ test("a Machine's settings sync and its credentials are kept on its row, and dro
   expect(removed.synced.size + removed.given.size).toBe(0);
 });
 
+test("a Flock held across a new subscription drops each Machine its routes no longer name", () => {
+  const held = [routed(pc), snapshot(pc, [asking]), routed(vm), snapshot(vm, [working])].reduce(
+    applyItem,
+    EMPTY_FLOCK,
+  );
+  const again = [
+    { _tag: "Routes", profiles: [pc.profile] } as const,
+    routed(pc),
+    snapshot(pc, [asking]),
+  ].reduce(applyItem, held);
+  expect([...again.routes.keys()]).toEqual([pc.profile]);
+  expect([...again.machines.keys()]).toEqual([pc.installation]);
+});
+
 test("Add Machine takes a Machine only once its SSH target, label and session are filled", () => {
   expect(machineToAdd({ target: " mk@vm ", label: "vm ", session: " default" })).toEqual({
     target: "mk@vm",
@@ -709,4 +794,48 @@ test("a record's Agents section is one row per agent, in launch order, saying wh
     },
     { key: "2:r1-build-r2", operation: "build", ranOn: "claude/opus medium", agent: "r1-build-r2" },
   ]);
+});
+
+test("a record says its Machine is not live in the board's words, and nothing once it is", () => {
+  const live = snapshot(vm, [working]);
+  expect(notLiveOf(applyItem(EMPTY_FLOCK, live), vm.installation)).toBeNull();
+  const dropped = [live, lostVm("unreachable")].reduce(applyItem, EMPTY_FLOCK);
+  expect(notLiveOf(dropped, vm.installation)).toEqual({
+    icon: "i-lucide-unplug",
+    title: "vm-mk is out of reach",
+    reason: "ssh: connection refused",
+  });
+  const saved = applyItem(EMPTY_FLOCK, {
+    _tag: "Saved",
+    machine: vm,
+    herds: [{ id: "default" }],
+    tasks: [working],
+    at: 7,
+  });
+  expect(notLiveOf(saved, vm.installation)?.title).toBe("vm-mk is reconnecting");
+  expect(notLiveOf(applyItem(dropped, live), vm.installation)).toBeNull();
+  const reopened = applyItem(applyItem(EMPTY_FLOCK, live), {
+    _tag: "Reconnecting",
+    machine: vm,
+    at: 9,
+  });
+  expect(notLiveOf(reopened, vm.installation)?.title).toBe("vm-mk is reconnecting");
+  expect(reopened.machines.get(vm.installation)?.tasks.size).toBe(1);
+  expect(notLiveOf(applyItem(reopened, live), vm.installation)).toBeNull();
+});
+
+test.each<[string, Column]>([
+  ["plan", "reading"],
+  ["review", "reading"],
+  ["facts", "reading"],
+  ["mr", "reading"],
+  ["settings", "reading"],
+  ["machines", "reading"],
+  ["evidence", "wide"],
+  ["log", "wide"],
+  ["diff", "full"],
+  ["terminal", "full"],
+  ["a tab not yet known", "reading"],
+])("%s is laid out %s", (tab, width) => {
+  expect(columnOf(tab)).toBe(width);
 });

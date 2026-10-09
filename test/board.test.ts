@@ -53,6 +53,7 @@ import { madeRun } from "./support/records";
 import { collie, proves } from "./support/world";
 import { stopHost, until } from "./support/host";
 import { epochMs } from "../src/time";
+import { planDirOf } from "../src/run-detail";
 
 function facts(over: Partial<Sentence> = {}): Sentence {
   return {
@@ -684,6 +685,23 @@ test("a working agent leaves the Task working, and its pane title is not the car
     }),
   ));
 
+test("a live agent is shown as the role it was registered as", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const run = yield* madeRun(dir, { task: "task-1" });
+
+      const [view] = yield* board(env, [run], {
+        alive: [agent("review-1", "working")],
+        registered: [{ ...registered("review-1", run.id), role: "reviewer" }],
+      });
+
+      expect(view!.agents).toEqual([
+        { name: "review-1", role: "reviewer", status: "working", now: null, run: run.id },
+      ]);
+    }),
+  ));
+
 test("a check Collie is running outranks what an idle agent last said", () =>
   runEffect(
     Effect.gen(function* () {
@@ -1134,6 +1152,137 @@ test("a fan-out's card lists its Repo runs and every repository still to come, b
         { repo: "cli", run: null, state: "todo", mr: null },
       ]);
       expect(views[0]!.sentence).toBe("Wave 2 of 3. api landed, web is building, cli is next.");
+    }),
+  ));
+
+/**
+ * A fan-out started from a plan's end menu: its `plan` input names the plan Run's own plan,
+ * with no kind recorded, over three repositories in two waves.
+ */
+const startedFromPlan = Effect.fn("board.startedFromPlan")(function* (dir: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const root = `${dir}/root`;
+  const planner = yield* madeRun(dir, { id: "r-plan", state: "succeeded" });
+  const plan = `${planner.dir}/plan`;
+  yield* fs.makeDirectory(`${plan}/issues`, { recursive: true });
+  yield* fs.writeFileString(`${plan}/SPEC.md`, "# Spec\n");
+  const tickets: Array<[string, string, string]> = [
+    ["01-api.md", "api", "None"],
+    ["02-web.md", "web", "None"],
+    ["03-cli.md", "cli", "01"],
+  ];
+  for (const [file, repo, blocked] of tickets) {
+    yield* fs.makeDirectory(`${root}/${repo}/.git`, { recursive: true });
+    yield* fs.writeFileString(
+      `${plan}/issues/${file}`,
+      `# ${file}\n\n**Blocked by:** ${blocked}\n\n**Repo:** ${repo}\n`,
+    );
+  }
+  const parent = yield* madeRun(dir, {
+    id: "r-fan",
+    workflow: "implement",
+    task: "task-1",
+    cwd: root,
+    settled: { inputs: { plan }, strategies: { plan: "work-source" } },
+  });
+  return { root, plan, parent };
+});
+
+test("a fan-out started from a plan's end menu lists every repository its plan names, by wave", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const { parent } = yield* startedFromPlan(dir);
+      const api = yield* madeRun(dir, {
+        id: "r-api",
+        task: "task-1",
+        parent: "r-fan",
+        repo: "api",
+      });
+
+      const [view] = yield* board(env, [api, parent]);
+
+      expect(view!.children).toEqual([
+        { repo: "api", run: "r-api", state: "active", mr: null },
+        { repo: "web", run: null, state: "todo", mr: null },
+        { repo: "cli", run: null, state: "todo", mr: null },
+      ]);
+      expect(view!.sentence).toBe("Wave 1 of 2. api is building, web, cli are next.");
+    }),
+  ));
+
+test("a Repo run parked with nothing approved is its fan-out's Decision, answered on that Repo run", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const { parent } = yield* startedFromPlan(dir);
+      const api = yield* madeRun(dir, {
+        id: "r-api",
+        task: "task-1",
+        parent: "r-fan",
+        repo: "api",
+        state: "waiting",
+        cwd: `${dir}/root/api`,
+        parked: nothingApproved("r-api"),
+      });
+
+      const [view] = yield* board(env, [api, parent]);
+
+      expect(sectionOf(view!)).toBe("needs-you");
+      expect(view!.decision).toEqual({
+        kind: "gate",
+        run: "r-api",
+        id: EVIDENCE_GATE,
+        step: "evidence",
+        verifications: [],
+        repo: "api",
+      });
+      expect(view!.sentence).toBe(
+        "api is holding at the evidence gate, and nothing is offered to approve. Grant a check with chat's set_verification, or collie run intent verification r-api --name <name> -- <command>.",
+      );
+      // Chat is told which Run its answer goes to, as the card's buttons know.
+      expect(herdLines([view!], epochMs("2026-09-14T10:05:00Z"))).toContain(
+        "Its gate is answered on run r-api.",
+      );
+    }),
+  ));
+
+test("a Repo run's gate that offers checks names its repository and asks for the list", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const fs = yield* FileSystem.FileSystem;
+      const { parent, root } = yield* startedFromPlan(dir);
+      yield* fs.makeDirectory(`${root}/api/.collie`, { recursive: true });
+      yield* fs.writeFileString(
+        `${root}/api/.collie/verify.json`,
+        '[{"name":"test","executable":"bun","argv":["test"],"cwd":"worktree"}]',
+      );
+      const api = yield* madeRun(dir, {
+        id: "r-api",
+        task: "task-1",
+        parent: "r-fan",
+        repo: "api",
+        state: "waiting",
+        cwd: `${root}/api`,
+        parked: nothingApproved("r-api"),
+      });
+
+      const [view] = yield* board(env, [api, parent]);
+
+      expect(view!.decision).toMatchObject({ run: "r-api", repo: "api", verifications: ["test"] });
+      expect(view!.sentence).toBe(
+        "api is holding at the evidence gate until you approve the list.",
+      );
+    }),
+  ));
+
+test("the drawer's plan for a Run whose work source is a plan directory, with no kind recorded, is that directory", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir } = yield* scratch();
+      const { parent, plan } = yield* startedFromPlan(dir);
+      expect(yield* planDirOf(parent)).toBe(plan);
     }),
   ));
 

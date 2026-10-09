@@ -11,6 +11,7 @@ import type {
   Skippable,
   TerminalCommand,
 } from "../../../src/shared/flock";
+import { saidOf } from "../../../src/shared/said";
 import { FlockClient } from "../flock";
 
 const actAtom = FlockClient.mutation("act");
@@ -59,10 +60,9 @@ const joined = (parts: ReadonlyArray<Uint8Array>) => {
 
 const failureOf = (cause: Cause.Cause<Failed>) => {
   const found = Cause.findError(cause);
-  if (Result.isFailure(found)) return { reason: Cause.pretty(cause), request: undefined };
-  return found.success._tag === "ActionFailed"
+  return Result.isSuccess(found) && found.success._tag === "ActionFailed"
     ? found.success
-    : { reason: found.success.message, request: undefined };
+    : { reason: saidOf(cause), request: undefined };
 };
 
 export const useActions = () => {
@@ -179,14 +179,27 @@ export const useActions = () => {
     /** Where the pane is and how to attach to it, or null where the host said no. */
     goToPane: (installation: string, runId: string) =>
       goToPane({ payload: { installation, runId } }).then(read),
-    /** The Run's live agent's pane, held for as long as the stream runs. */
-    terminal: (installation: string, runId: string, cols: number, rows: number) =>
+    /** The Run's newest live agent's pane, or `agent`'s, held for as long as the stream runs. */
+    terminal: (
+      installation: string,
+      runId: string,
+      agent: string | undefined,
+      cols: number,
+      rows: number,
+    ) =>
       Stream.unwrap(
         AtomRegistry.getResult(registry, FlockClient.runtime).pipe(
           Effect.map((context) =>
             Stream.unwrap(
               FlockClient.use((client) =>
-                Effect.succeed(client("terminal", { installation, runId, cols, rows })),
+                Effect.succeed(
+                  client(
+                    "terminal",
+                    agent === undefined
+                      ? { installation, runId, cols, rows }
+                      : { installation, runId, agent, cols, rows },
+                  ),
+                ),
               ),
             ).pipe(Stream.provideContext(context)),
           ),

@@ -5,9 +5,11 @@
 import { Clock, Crypto, Effect, FileSystem, Option, Schema, Stream } from "effect";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as HttpClient from "effect/http/HttpClient";
+import { inTerminal } from "../../../src/in-terminal";
 import { RELEASE_PUBLIC_KEY, SIGNATURE_SUFFIX, verifyRelease } from "../../../src/signing";
 import { type OnboardRun, type OnboardStep, SETTLED, type Skippable } from "../shared/flock";
 import { quoted, type Route, type ShellRoute, spawned } from "./machine";
+import { childEnv } from "./login-env";
 
 export const RELEASES = "https://github.com/cego/collie/releases/download";
 
@@ -92,7 +94,12 @@ export const ranWith = (command: ReadonlyArray<string>, stdin?: Uint8Array) =>
   Effect.scoped(
     Effect.gen(function* () {
       const child = yield* spawned(() =>
-        Bun.spawn([...command], { stdin: stdin ?? "ignore", stdout: "pipe", stderr: "pipe" }),
+        Bun.spawn([...command], {
+          env: childEnv(),
+          stdin: stdin ?? "ignore",
+          stdout: "pipe",
+          stderr: "pipe",
+        }),
       );
       const [out, err, code] = yield* Effect.promise(() =>
         Promise.all([
@@ -270,6 +277,7 @@ export const onboardThrough = Effect.fn("Desktop.onboardThrough")(function* (
     );
     const child = yield* spawned(() =>
       Bun.spawn([...command], {
+        env: childEnv(),
         stdin: secrets === "" ? "ignore" : new TextEncoder().encode(secrets),
         stdout: "pipe",
         stderr: "pipe",
@@ -420,19 +428,14 @@ export const addToHerdr = Effect.fn("Desktop.addToHerdr")(function* (
   session: string,
   ask: (text: string, yes: boolean) => Effect.Effect<boolean>,
 ) {
-  const command = [herdr, "machine", "add", "--label", label, "--remote-session", session, target]
-    .map(quoted)
-    .join(" ");
-  const child = yield* spawned(() =>
-    Bun.spawn(["script", "-qefc", command, "/dev/null"], {
-      stdin: "pipe",
-      stdout: "pipe",
-      stderr: "pipe",
-    }),
+  const herdrAdd = yield* inTerminal(
+    [herdr, "machine", "add", "--label", label, "--remote-session", session, target],
+    { env: childEnv() },
+    spawned,
   );
   let said = "";
   let answered = 0;
-  yield* Stream.fromReadableStream({ evaluate: () => child.stdout, onError: String }).pipe(
+  yield* herdrAdd.output.pipe(
     Stream.decodeText(),
     Stream.runForEach((chunk) =>
       Effect.gen(function* () {
@@ -442,13 +445,12 @@ export const addToHerdr = Effect.fn("Desktop.addToHerdr")(function* (
         if (asked === null) return;
         answered = said.length;
         const yes = yield* ask(asked.text, asked.yes);
-        void child.stdin.write(yes ? "y\n" : "n\n");
-        void child.stdin.flush();
+        yield* herdrAdd.type(yes ? "y\n" : "n\n");
       }),
     ),
     Effect.ignore,
   );
-  const code = yield* Effect.promise(() => child.exited);
+  const code = yield* herdrAdd.exitCode;
   if (code !== 0) {
     const last = said.trim().split("\n").slice(-3).join("\n");
     return yield* Effect.fail(last || `herdr machine add exited ${code}`);

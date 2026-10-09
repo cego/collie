@@ -8,6 +8,7 @@ import { Effect, FileSystem, Option, Schedule, Schema, Stream } from "effect";
 import type { PlatformError } from "effect/PlatformError";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { hostname } from "node:os";
+import { inTerminal } from "./in-terminal";
 import { doctor, glabHosts, onPath, pushCheck } from "./doctor";
 import { gitlabHostOf } from "./config";
 import { tokenPage } from "./gitlab-token";
@@ -63,13 +64,6 @@ const CLAUDE_LOGIN = "claude auth login";
 const LOGIN_LIMIT = "10 minutes";
 /** Long enough for an installer or a clone; a network that never answers still ends. */
 const COMMAND_LIMIT = "15 minutes";
-/** Where install.sh looks for an OpenSSL that can check a signature, unless COLLIE_OPENSSL names one. */
-const OPENSSL_CANDIDATES = [
-  "openssl",
-  "openssl3",
-  "/opt/homebrew/opt/openssl@3/bin/openssl",
-  "/usr/local/opt/openssl@3/bin/openssl",
-];
 const SETTLED: ReadonlyArray<StepStatus> = ["done", "in_place", "skipped"];
 /** A URL's own characters (RFC 3986), so the terminal escapes around it are not part of it. */
 const URL_IN = /https:\/\/[\w\-.~:/?#[\]@!$&'()*+,;=%]+/;
@@ -101,12 +95,6 @@ const rootCommand = Effect.fn("Onboard.rootCommand")(function* (
   }
   return `install ${packages.join(" ")} with your package manager`;
 });
-
-/** What gives OpenSSL 3 where the system one is older; apt's releases with 1.1 have no package for it. */
-const OPENSSL3_INSTALL = new Map([
-  ["dnf", "sudo dnf install -y epel-release && sudo dnf install -y openssl3"],
-  ["brew", "brew install openssl"],
-]);
 
 const needsRoot = Effect.fn("Onboard.needsRoot")(function* (
   search: string,
@@ -171,6 +159,9 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
         ChildProcess.make(cmd, [...args], {
           cwd,
           env: { ...childEnv, ...extra },
+          // extendEnv, so a tool still has what `env.raw` leaves out: USER, which Claude
+          // Code's Keychain lookup on macOS needs to say it is logged in.
+          extendEnv: true,
           stdin: input === null ? "ignore" : Stream.make(new TextEncoder().encode(input)),
           stdout: "pipe",
           stderr: "pipe",
@@ -234,32 +225,14 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
     "system",
     "Checking for git, curl and openssl",
     Effect.gen(function* () {
+      const named = env.raw["COLLIE_OPENSSL"];
       const missing: string[] = [];
-      for (const tool of ["git", "curl", "openssl"]) {
+      for (const tool of named ? ["git", "curl"] : ["git", "curl", "openssl"]) {
         if ((yield* onPath(search, tool)) === null) missing.push(tool);
       }
+      if (named && (yield* exec(named, ["version"], env.home)).code !== 0) missing.push("openssl");
       if (missing.length > 0) return yield* needsRoot(search, missing);
-      const openssl = env.raw["COLLIE_OPENSSL"];
-      for (const candidate of openssl ? [openssl] : OPENSSL_CANDIDATES) {
-        if (
-          /^OpenSSL ([3-9]|[1-9]\d)/.test((yield* exec(candidate, ["version"], env.home)).stdout)
-        ) {
-          return inPlace("git, curl and openssl are installed");
-        }
-      }
-      let command: string | undefined;
-      for (const [manager] of PACKAGE_MANAGERS) {
-        if ((yield* onPath(search, manager)) !== null) {
-          command = OPENSSL3_INSTALL.get(manager);
-          break;
-        }
-      }
-      return {
-        status: "needs_root",
-        detail:
-          "openssl is older than 3.0 or is LibreSSL, so it cannot check a runner's Ed25519 signature; install OpenSSL 3 (or bun, to build from source), then onboard again",
-        ...(command && { command }),
-      } satisfies Outcome;
+      return inPlace("git, curl and openssl are installed");
     }),
   );
   if (system.status !== "in_place") return finish(false);
@@ -389,6 +362,7 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
             ChildProcess.make("claude", ["auth", "login"], {
               cwd: env.home,
               env: childEnv,
+              extendEnv: true,
               stdin: "inherit",
               stdout: "inherit",
               stderr: "inherit",
@@ -535,55 +509,58 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
   );
 
   /** `claude mcp login` under a terminal of its own, streaming its URL as it is printed. */
-  const linearLogin = Effect.gen(function* () {
-    // A URL is told once it is printed, and again when one with a callback port comes.
-    let told: string | null = null;
-    const tell = (url: string) => {
-      const port = /localhost:(\d+)/.exec(decodeURIComponent(url))?.[1];
-      if (url === told || (told !== null && port === undefined)) return Effect.void;
-      told = url;
-      return emit({
-        event: "human",
-        step: "linear",
-        detail: "open this to let Claude Code reach Linear",
-        url,
-        ...(port && { port: Number(port) }),
-      });
-    };
-    // Claude Code may print only a paste-code URL and hand the one with its callback port
-    // to $BROWSER, which this shim writes down instead.
-    const shims = yield* fs.makeTempDirectoryScoped({ prefix: "collie-login-" });
-    const handed = `${shims}/url`;
-    yield* fs.writeFileString(`${shims}/browser`, `#!/bin/sh\necho "$1" > '${handed}'\n`);
-    yield* fs.chmod(`${shims}/browser`, 0o755);
-    const handle = yield* spawner.spawn(
-      ChildProcess.make("script", ["-qefc", LINEAR_LOGIN, "/dev/null"], {
+  const linearLogin = (claude: string) =>
+    Effect.gen(function* () {
+      // A URL is told once it is printed, and again when one with a callback port comes.
+      let told: string | null = null;
+      const tell = (url: string) => {
+        const port = /localhost:(\d+)/.exec(decodeURIComponent(url))?.[1];
+        if (url === told || (told !== null && port === undefined)) return Effect.void;
+        told = url;
+        return emit({
+          event: "human",
+          step: "linear",
+          detail: "open this to let Claude Code reach Linear",
+          url,
+          ...(port && { port: Number(port) }),
+        });
+      };
+      // Claude Code may print only a paste-code URL and hand the one with its callback port
+      // to $BROWSER, which this shim writes down instead.
+      const shims = yield* fs.makeTempDirectoryScoped({ prefix: "collie-login-" });
+      const handed = `${shims}/url`;
+      yield* fs.writeFileString(`${shims}/browser`, `#!/bin/sh\necho "$1" > '${handed}'\n`);
+      yield* fs.chmod(`${shims}/browser`, 0o755);
+      const login = yield* inTerminal([claude, ...LINEAR_LOGIN.split(" ").slice(1)], {
         cwd: env.home,
         env: { ...childEnv, BROWSER: `${shims}/browser` },
-        // It waits on stdin for a pasted redirect, and gives up when stdin ends.
-        stdin: options.terminal ? "inherit" : { stream: Stream.never, endOnDone: false },
-        stdout: "pipe",
-        stderr: "pipe",
-      }),
-    );
-    const said = Stream.merge(handle.stdout, handle.stderr).pipe(
-      Stream.decodeText(),
-      Stream.splitLines,
-      Stream.runForEach((line) => {
-        const url = URL_IN.exec(line)?.[0];
-        return url === undefined ? Effect.void : tell(url);
-      }),
-    );
-    const browsed = fs.readFileString(handed).pipe(
-      Effect.map((text) => URL_IN.exec(text)?.[0]),
-      Effect.flatMap((url) => (url === undefined ? Effect.fail("not yet") : tell(url))),
-      Effect.retry({ schedule: Schedule.spaced("300 millis") }),
-    );
-    yield* Effect.raceFirst(
-      Effect.all([said, handle.exitCode], { concurrency: "unbounded" }),
-      Effect.andThen(browsed, Effect.never),
-    );
-  }).pipe(Effect.scoped, Effect.timeoutOption(LOGIN_LIMIT), Effect.ignore);
+      });
+      // It waits for a pasted redirect, which only a human at a terminal can type.
+      const pasted = options.terminal
+        ? Stream.fromReadableStream({ evaluate: () => Bun.stdin.stream(), onError: String }).pipe(
+            Stream.decodeText(),
+            Stream.runForEach(login.type),
+            Effect.ignore,
+          )
+        : Effect.void;
+      const said = login.output.pipe(
+        Stream.decodeText(),
+        Stream.splitLines,
+        Stream.runForEach((line) => {
+          const url = URL_IN.exec(line)?.[0];
+          return url === undefined ? Effect.void : tell(url);
+        }),
+      );
+      const browsed = fs.readFileString(handed).pipe(
+        Effect.map((text) => URL_IN.exec(text)?.[0]),
+        Effect.flatMap((url) => (url === undefined ? Effect.fail("not yet") : tell(url))),
+        Effect.retry({ schedule: Schedule.spaced("300 millis") }),
+      );
+      yield* Effect.raceFirst(
+        Effect.all([said, login.exitCode], { concurrency: "unbounded" }),
+        Effect.andThen(Effect.all([browsed, pasted], { concurrency: "unbounded" }), Effect.never),
+      );
+    }).pipe(Effect.scoped, Effect.timeoutOption(LOGIN_LIMIT), Effect.ignore);
 
   yield* step(
     "linear",
@@ -591,7 +568,8 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
     Effect.gen(function* () {
       const skip = skipped("linear");
       if (skip) return skip;
-      if ((yield* onPath(search, "claude")) === null) {
+      const claudeDir = yield* onPath(search, "claude");
+      if (claudeDir === null) {
         return failed("Claude Code is not installed, so it has no MCP servers", CLAUDE_INSTALL);
       }
       let changed = false;
@@ -615,10 +593,7 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
           command: LINEAR_LOGIN,
         } satisfies Outcome;
       }
-      if ((yield* onPath(search, "script")) === null) {
-        return failed("no `script` to give the login a terminal", LINEAR_LOGIN);
-      }
-      yield* linearLogin;
+      yield* linearLogin(`${claudeDir}/claude`);
       return (yield* connected)
         ? done("logged in to Linear")
         : failed("the Linear login did not finish", LINEAR_LOGIN);

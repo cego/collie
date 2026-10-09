@@ -12,7 +12,7 @@ import { epochMs } from "./time";
 import { appliedSignatureOf, RELEASE_PUBLIC_KEY, verifyRelease } from "./signing";
 
 const IDENTIFIER = "dk.cego.collie.desktop";
-/** The one platform Desktop is released for. */
+/** The one platform `collie upgrade` stages a Desktop update on. */
 const RELEASED_FOR = "linux-x64";
 const PREFIX = `stable-${RELEASED_FOR}`;
 
@@ -59,11 +59,20 @@ export const PreparedRecord = Schema.fromJsonString(
 export const releaseOf = (baseUrl: string, version: string) =>
   baseUrl.replace(/\/+$/, "").replace(/\/latest\/download$/, `/download/${version}`);
 
-/** Where Electrobun installs per user: `$XDG_DATA_HOME` where it is absolute, else `~/.local/share`. */
-export const dataHomeOf = (home: string, xdgDataHome: string | undefined) =>
-  xdgDataHome !== undefined && xdgDataHome.startsWith("/") && xdgDataHome !== "/"
-    ? xdgDataHome
-    : `${home}/.local/share`;
+/**
+ * Where Electrobun keeps an app's data per user: `~/Library/Application Support` on macOS;
+ * elsewhere `$XDG_DATA_HOME` where it is absolute, else `~/.local/share`.
+ */
+export const dataHomeOf = (
+  home: string,
+  xdgDataHome: string | undefined,
+  platform: NodeJS.Platform = process.platform,
+) =>
+  platform === "darwin"
+    ? `${home}/Library/Application Support`
+    : xdgDataHome !== undefined && xdgDataHome.startsWith("/") && xdgDataHome !== "/"
+      ? xdgDataHome
+      : `${home}/.local/share`;
 
 export interface DesktopStep {
   readonly step: "desktop";

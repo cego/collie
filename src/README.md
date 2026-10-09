@@ -68,6 +68,7 @@ Runner source (Bun/TypeScript). Compiled to `bin/collie` per platform; see ADR-0
 | `store.ts`         | Rows beside Effect's: request claims, run identity, generations, questions                            |
 | `release.ts`       | Whether an installation is a release `upgrade --to` may move, or a development checkout               |
 | `onboard.ts`       | A Machine from bare to a working host, one streamed step at a time, never with sudo                   |
+| `in-terminal.ts`   | A login or a question in a terminal Bun gives it, on Linux and macOS alike, never through `script`    |
 | `run-actions.ts`   | What a confirmed action does to a Run, and the one place each kind is carried out                     |
 | `lifecycle.ts`     | A front door's side of every host operation, the board and a drawer's details                         |
 | `signing.ts`       | The release key: signing a runner or Desktop's update in CI, and the check before either is installed |
@@ -82,6 +83,7 @@ Runner source (Bun/TypeScript). Compiled to `bin/collie` per platform; see ADR-0
 | `lines.ts`         | A card, a report, a delivery, a row's marks and an action, as the same words everywhere               |
 | `plan.ts`          | A plan directory as repositories and waves, and the refusals that stop a fan-out                      |
 | `lock.ts`          | The pid-lock discipline every single-owner file takes, the host's own lock among them                 |
+| `script.ts`        | A login under `script`'s pseudo-terminal, in the form Linux or macOS takes                            |
 | `task.ts`          | A Task: the work, its herdr workspace, and which Runs belong to it                                    |
 | `tasknames.ts`     | What a task workspace is called, from the work and the session's own live labels                      |
 | `naming.ts`        | herdr-legal agent names vs readable tab and pane labels                                               |

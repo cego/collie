@@ -78,6 +78,7 @@ const ATTACHMENTS = "files in the Flock chat and its Runs (this MR)";
 const IN_APP_TERMINAL = "go to pane opens the pane in Desktop (this MR)";
 const MACHINE_RULE = "the Machine rule (this MR)";
 const USAGE = "usage readings on every Machine (this MR)";
+const ON_A_MAC = "Collie on macOS (this MR)";
 
 /** What the front door owes a person, and cannot be settled below the front door. */
 const FRONT_DOOR: readonly Check[] = [
@@ -1025,6 +1026,72 @@ const OPERATOR_CHECKS: readonly Check[] = [
     proof: {
       kind: "operator",
       how: "On a Machine logged in to both, run `collie usage`, then Claude Code's `/usage` and Codex's `/status`, and record each window's percent and reset from all three. Run `collie usage --json` and record each reading's `at` and `source`. test/usage-model.test.ts proves the parsing of recorded answers; only the live endpoints prove they are read the same way.",
+    },
+  },
+  {
+    id: "install/tui-installs-on-a-stock-mac",
+    statement:
+      "On an arm64 Mac with no Homebrew OpenSSL, `git clone … ~/.collie && ~/.collie/setup.sh` installs a runner that starts and passes `codesign --verify`, and `collie onboard` reaches the Linear login.",
+    owner: ON_A_MAC,
+    needs: "operator",
+    proof: {
+      kind: "operator",
+      how: "On a Mac without Homebrew's OpenSSL, run `git clone https://github.com/cego/collie.git ~/.collie && ~/.collie/setup.sh` from a release carrying this work. Record that `~/.collie/bin/collie --version` runs and is not killed, that `codesign --verify ~/.collie/bin/collie` passes, and that `collie onboard --skip helle` reaches the Linear login and prints its URL. Record the revision.",
+    },
+  },
+  {
+    id: "install/desktop-on-a-mac-finds-herdr-from-the-dock",
+    statement:
+      "Collie Desktop opened from the Dock finds `herdr`, `collie`, `claude`, `git` and `ssh` as the user's terminal does, so Local and a VM added as a herdr machine are on its board.",
+    owner: ON_A_MAC,
+    needs: "operator",
+    proof: {
+      kind: "operator",
+      how: "On a Mac whose shell adds `~/.local/bin` and Homebrew to PATH in `.zshrc` or `.zprofile`, open Collie Desktop from the Dock, not from a terminal. Record that Local is on the board, and with a VM added by `herdr machine add`, that the VM is too. Record the revision.",
+    },
+  },
+  {
+    id: "install/desktop-installs-and-opens-on-a-mac",
+    statement:
+      "On an arm64 Mac, `curl -fsSL …/install-desktop.sh | sh` puts Collie Desktop in `~/Applications`, and it opens from Spotlight with no Gatekeeper prompt and Local on its board.",
+    owner: ON_A_MAC,
+    needs: "operator",
+    proof: {
+      kind: "operator",
+      how: "On an arm64 Mac, run `curl -fsSL https://github.com/cego/collie/releases/latest/download/install-desktop.sh | sh` from a release carrying this work. Record that `~/Applications/collie-desktop.app` is there, that it opens from Spotlight with no Gatekeeper prompt, that Local is on the board, and with a VM added by `herdr machine add`, that the VM is listed as a second Machine. Record the revision.",
+    },
+  },
+  {
+    id: "install/desktop-on-a-mac-updates-itself",
+    statement:
+      "Collie Desktop on a Mac finds the next release, says it is ready once its tar verifies, and Restart Desktop comes back on the new version.",
+    owner: ON_A_MAC,
+    needs: "operator",
+    proof: {
+      kind: "operator",
+      how: "With Desktop installed on a Mac by `install-desktop.sh`, wait for the next release. Record that Settings → About says the update is ready, that **Restart Desktop** comes back, and that Settings then shows the new version. Record both revisions.",
+    },
+  },
+  {
+    id: "install/old-herdr-is-explained-and-left-running",
+    statement:
+      "With a herdr older than Collie's minimum, `setup.sh` finishes everything it can, `collie doctor` says what upgrading will do to the running panes and when, and the herdr server and its panes are left running.",
+    owner: ON_A_MAC,
+    needs: "operator",
+    proof: {
+      kind: "operator",
+      how: "On a Mac still on herdr 0.7.1, with something running in a pane, run `~/.collie/setup.sh` and record that it finished, doctor's herdr line with the before-0.9.0 advice, and that the pane is still running. Run `herdr update` on its own and record whether 0.7.1's updater stopped the server by itself; if it did, doctor's wording is corrected. When nothing is running, run `herdr server stop`, then `herdr`, then `collie doctor`, and record that the herdr lines pass. Record the revision.",
+    },
+  },
+  {
+    id: "workflows/a-bodil-run-brings-its-instance-up-and-down",
+    statement:
+      "A bodil Run brings its instance up, has implement work in bodil's own worktree on bodil's branch and open its merge request from there, and takes the instance down once implement has settled, leaving the worktree.",
+    owner: ON_A_MAC,
+    needs: "operator",
+    proof: {
+      kind: "operator",
+      how: "On a Mac with bodil installed and BODIL_REMOTE_VM set, save the module from docs/sdk.md as `~/.collie/user/workflows/bodil.workflow.ts` and record that `collie workflow show bodil` lists plan, brands and name. Run `collie run start bodil --input plan=<a small plan> --input brands=happytiger --input name=collie-try`; record that `bodil ls` shows collie-try, that the implementer's pane works in `~/work/gitte/worktrees/collie-try/monorepo` on `dabo/collie-try`, and the merge request's source branch. When the Run finishes, record that `bodil ls` no longer lists collie-try and the worktree is still there. Record the revision.",
     },
   },
 ];

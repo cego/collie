@@ -2,12 +2,13 @@
 // by its Machine, and the board those messages add up to. No Bun-only import: the view
 // bundles this.
 
-import { Effect, Schema, Stream, Struct } from "effect";
+import { DateTime, Effect, Schema, Stream, Struct } from "effect";
 import * as Rpc from "effect/rpc/Rpc";
 import * as RpcGroup from "effect/rpc/RpcGroup";
 import { AguiEvent } from "./agui";
 import { Staged, StagedOrRefused } from "./attachments";
 import { About, Answers, ChatMessage, Conversations, DesktopTurn } from "./chat-view";
+import { Drawn } from "./scale";
 import { FlockSettings } from "./flock-settings";
 import { MachineUsage } from "./usage";
 import {
@@ -46,6 +47,17 @@ export type MachineMessage = typeof MachineMessage.Type;
 export const NotLive = Schema.Literals(["unreachable", "sso", "no-collie", "update-desktop"]);
 export type NotLive = typeof NotLive.Type;
 
+/** How the board's alert says a Machine is not live. */
+export const NOT_LIVE: Record<NotLive, { icon: string; title: (name: string) => string }> = {
+  unreachable: { icon: "i-lucide-unplug", title: (name) => `${name} is out of reach` },
+  sso: { icon: "i-lucide-key-round", title: (name) => `Waiting for SSO login on ${name}` },
+  "no-collie": { icon: "i-lucide-package-x", title: (name) => `Collie isn't installed on ${name}` },
+  "update-desktop": {
+    icon: "i-lucide-circle-arrow-up",
+    title: (name) => `Update Desktop to see ${name}`,
+  },
+};
+
 /** A route Desktop could not open, or lost, and since when. */
 export const MachineLost = Schema.TaggedStruct("Lost", {
   machine: KnownMachine,
@@ -70,6 +82,13 @@ export type MachineSaved = typeof MachineSaved.Type;
 export const MachineMerged = Schema.TaggedStruct("Merged", { machine: KnownMachine });
 export type MachineMerged = typeof MachineMerged.Type;
 
+/** A route Desktop reopens on purpose, as Sync now or an upgrade does, and since when. */
+export const MachineReconnecting = Schema.TaggedStruct("Reconnecting", {
+  machine: KnownMachine,
+  at: Schema.Number,
+});
+export type MachineReconnecting = typeof MachineReconnecting.Type;
+
 /** What Desktop did on a Machine that a human should hear of, such as upgrading it. */
 export const MachineNotice = Schema.TaggedStruct("Notice", {
   machine: KnownMachine,
@@ -84,6 +103,12 @@ export type MachineRouted = typeof MachineRouted.Type;
 /** A route removed from herdr's list, with whatever Desktop showed through it. */
 export const MachineRemoved = Schema.TaggedStruct("Removed", { machine: KnownMachine });
 export type MachineRemoved = typeof MachineRemoved.Type;
+
+/** Every route Desktop has as a subscription starts: a Machine on no other was removed meanwhile. */
+export const MachineRoutes = Schema.TaggedStruct("Routes", {
+  profiles: Schema.Array(Schema.String),
+});
+export type MachineRoutes = typeof MachineRoutes.Type;
 
 /** A step of onboarding as `collie onboard` streams it, or one Desktop takes before it. */
 export const OnboardStep = Schema.Struct({
@@ -180,9 +205,11 @@ export const FlockItem = Schema.Union([
   MachineLost,
   MachineSaved,
   MachineMerged,
+  MachineReconnecting,
   MachineNotice,
   MachineRouted,
   MachineRemoved,
+  MachineRoutes,
   MachineOnboarding,
   MachineDoctored,
   MachineSynced,
@@ -309,6 +336,8 @@ export const DesktopSettings = Schema.Struct({
   gitlabHost: Schema.optionalKey(Schema.String),
   /** Which Machine each kind of work goes to, in the human's words; empty is no rule. */
   machineRule: Schema.optionalKey(Schema.String),
+  /** The human's Zoom, 1 the size of the other apps on each monitor; unset is 1. */
+  zoom: Schema.optionalKey(Schema.Number),
 });
 export type DesktopSettings = typeof DesktopSettings.Type;
 
@@ -317,6 +346,7 @@ export const DesktopSettingsChange = Schema.Struct({
   proactive: Schema.optionalKey(Schema.Boolean),
   gitlabHost: Schema.optionalKey(Schema.String),
   machineRule: Schema.optionalKey(Schema.String),
+  zoom: Schema.optionalKey(Schema.Number),
 });
 export type DesktopSettingsChange = typeof DesktopSettingsChange.Type;
 
@@ -356,11 +386,12 @@ export const DesktopRpcs = RpcGroup.make(
     success: WentToPane,
     error: ActionFailed,
   }),
-  /** The Run's live agent's pane, held while the stream runs and released when it is interrupted. */
+  /** The pane `focus` finds, held while the stream runs and released when it is interrupted. */
   Rpc.make("terminal", {
     payload: {
       installation: Schema.String,
       runId: Schema.String,
+      agent: Schema.optionalKey(Schema.String),
       cols: Schema.Int,
       rows: Schema.Int,
     },
@@ -542,6 +573,8 @@ export const DesktopRpcs = RpcGroup.make(
   /** When the Flock chat starts and ends a turn of Desktop's own. */
   Rpc.make("desktopTurns", { success: DesktopTurn, stream: true }),
   Rpc.make("settings", { success: DesktopSettings }),
+  /** How the board's window is drawn, again whenever its zoom is decided again. */
+  Rpc.make("drawn", { success: Drawn, stream: true }),
   Rpc.make("setSettings", { payload: DesktopSettingsChange }),
 );
 
@@ -558,6 +591,10 @@ export interface FlockMachine {
   readonly build: string | null;
   /** `<version>+<sha>` where the Machine runs a development checkout. */
   readonly development: string | null;
+  /** The board protocol its latest Snapshot spoke; null for a saved board. */
+  readonly protocol: number | null;
+  /** Whether its host takes files, as its latest Snapshot said. */
+  readonly files: boolean;
 }
 
 /** Each Machine keyed by installation id, and each route not live by its herdr profile. */
@@ -600,10 +637,28 @@ export const EMPTY_FLOCK: Flock = {
 };
 
 /**
- * A snapshot replaces its Machine and makes it live; a change touches one Task; a lost
- * route dims the Machine it was showing; a merged one is no longer lost; a saved board
+ * A snapshot replaces its Machine and makes it live; a change touches one Task; a lost or
+ * reopened route dims the Machine it was showing; a merged one is no longer lost; a saved board
  * stands in until its Machine is live; anything newer is skipped.
  */
+const removed = (flock: Flock, profile: string): Flock => {
+  const without = <V>(map: ReadonlyMap<string, V>) => {
+    const kept = new Map(map);
+    kept.delete(profile);
+    return kept;
+  };
+  return {
+    ...flock,
+    routes: without(flock.routes),
+    lost: without(flock.lost),
+    onboarded: without(flock.onboarded),
+    doctored: without(flock.doctored),
+    synced: without(flock.synced),
+    given: without(flock.given),
+    machines: new Map([...flock.machines].filter(([, { machine }]) => machine.profile !== profile)),
+  };
+};
+
 export const applyItem = (flock: Flock, item: FlockItem): Flock => {
   if ("_tag" in item && item._tag === "Notice")
     return { ...flock, notices: [...flock.notices, item.text] };
@@ -628,26 +683,16 @@ export const applyItem = (flock: Flock, item: FlockItem): Flock => {
       given: new Map(flock.given).set(profile, { ...had, [credential]: { given, failed } }),
     };
   }
-  if ("_tag" in item && item._tag === "Removed") {
-    const { profile } = item.machine;
-    const without = <V>(map: ReadonlyMap<string, V>) => {
-      const kept = new Map(map);
-      kept.delete(profile);
-      return kept;
-    };
-    return {
-      ...flock,
-      routes: without(flock.routes),
-      lost: without(flock.lost),
-      onboarded: without(flock.onboarded),
-      doctored: without(flock.doctored),
-      synced: without(flock.synced),
-      given: without(flock.given),
-      machines: new Map(
-        [...flock.machines].filter(([, { machine }]) => machine.profile !== profile),
-      ),
-    };
+  if ("_tag" in item && item._tag === "Routes") {
+    const kept = new Set(item.profiles);
+    const shown = [...flock.routes.keys(), ...flock.lost.keys()].concat(
+      [...flock.machines.values()].map(({ machine }) => machine.profile),
+    );
+    return [...new Set(shown)]
+      .filter((profile) => !kept.has(profile))
+      .reduce((left, profile) => removed(left, profile), flock);
   }
+  if ("_tag" in item && item._tag === "Removed") return removed(flock, item.machine.profile);
   if ("_tag" in item && item._tag === "Saved") {
     const { machine, herds, tasks, at } = item;
     if (flock.machines.has(machine.installation)) return flock;
@@ -658,6 +703,8 @@ export const applyItem = (flock: Flock, item: FlockItem): Flock => {
       asOf: at,
       build: item.build ?? null,
       development: item.development ?? null,
+      protocol: null,
+      files: false,
     };
     return { ...flock, machines: new Map(flock.machines).set(machine.installation, saved) };
   }
@@ -667,8 +714,9 @@ export const applyItem = (flock: Flock, item: FlockItem): Flock => {
     return { ...flock, lost };
   }
   if ("_tag" in item) {
-    const { machine, state, reason, at } = item;
-    lost.set(machine.profile, { name: machine.name, state, reason });
+    const { machine, at } = item;
+    if (item._tag === "Lost")
+      lost.set(machine.profile, { name: machine.name, state: item.state, reason: item.reason });
     const machines = new Map(flock.machines);
     for (const [installation, known] of machines)
       if (known.machine.profile === machine.profile && known.asOf === null)
@@ -687,6 +735,8 @@ export const applyItem = (flock: Flock, item: FlockItem): Flock => {
   const build = message._tag === "Snapshot" ? message.build : (known?.build ?? null);
   const development =
     message._tag === "Snapshot" ? (message.development ?? null) : (known?.development ?? null);
+  const protocol = message._tag === "Snapshot" ? message.protocol : (known?.protocol ?? null);
+  const files = message._tag === "Snapshot" ? message.files === true : (known?.files ?? false);
   lost.delete(machine.profile);
   return {
     ...flock,
@@ -697,6 +747,8 @@ export const applyItem = (flock: Flock, item: FlockItem): Flock => {
       asOf: null,
       build,
       development,
+      protocol,
+      files,
     }),
     lost,
   };
@@ -714,8 +766,18 @@ export const machineNames = (machines: ReadonlyArray<Machine>) => {
   );
 };
 
-const shownNames = (flock: Flock) =>
-  machineNames([...flock.machines.values()].map(({ machine }) => machine));
+/** `machineNames`, with a saved board told apart from a live Machine reached the same way. */
+const shownNames = (flock: Flock) => {
+  const names = machineNames([...flock.machines.values()].map(({ machine }) => machine));
+  const counts = new Map<string, number>();
+  for (const name of names.values()) counts.set(name, (counts.get(name) ?? 0) + 1);
+  for (const [installation, { asOf }] of flock.machines) {
+    const name = names.get(installation)!;
+    if (asOf !== null && counts.get(name)! > 1)
+      names.set(installation, `${name.replace(/\)$/, "")}, saved)`);
+  }
+  return names;
+};
 
 /** What the board calls a Machine, among every Machine it shows, saved ones included. */
 export const nameAsShown = (flock: Flock) => {
@@ -776,6 +838,91 @@ export const flockCards = (flock: Flock) => {
   };
 };
 
+/** A Machine's board as the chat reads it: the one the window draws live, or why there is none. */
+export type ChatBoard =
+  | {
+      readonly _tag: "Live";
+      readonly herds: ReadonlyArray<Herd>;
+      readonly tasks: ReadonlyArray<TaskView>;
+      readonly protocol: number;
+      readonly files: boolean;
+    }
+  /** `since` is when Desktop began waiting for its first board, where it knows. */
+  | { readonly _tag: "Connecting"; readonly since: number | null }
+  | { readonly _tag: "Lost"; readonly state: NotLive; readonly reason: string }
+  /** A saved board whose route reaches no host that could make it live. */
+  | { readonly _tag: "Saved"; readonly at: number };
+
+/**
+ * Every Machine the window shows, by the name its cards use, with its board as the chat
+ * reads it. `since` is when Desktop began waiting on each route, by herdr profile.
+ */
+export const chatBoards = (flock: Flock, since: ReadonlyMap<string, number>) => {
+  const names = shownNames(flock);
+  const waiting = (profile: string): ChatBoard => {
+    const lost = flock.lost.get(profile);
+    return lost === undefined
+      ? { _tag: "Connecting", since: since.get(profile) ?? null }
+      : { _tag: "Lost", state: lost.state, reason: lost.reason };
+  };
+  const shown = [...flock.machines].map(([installation, known]) => {
+    const { profile } = known.machine;
+    const liveThere = [...flock.machines.values()].some(
+      (other) => other.machine.profile === profile && other.asOf === null,
+    );
+    const board: ChatBoard =
+      known.asOf === null
+        ? known.protocol === null
+          ? waiting(profile)
+          : {
+              _tag: "Live",
+              herds: known.herds,
+              tasks: [...known.tasks.values()],
+              protocol: known.protocol,
+              files: known.files,
+            }
+        : liveThere || !flock.routes.has(profile)
+          ? { _tag: "Saved", at: known.asOf }
+          : waiting(profile);
+    // SAFETY: `names` holds every Machine of this Flock.
+    return { name: names.get(installation)!, profile, installation, board };
+  });
+  const unshown = [...flock.routes.values()]
+    .filter(({ profile }) => !shown.some((one) => one.profile === profile))
+    .map(({ profile, name }) => ({ name, profile, installation: null, board: waiting(profile) }));
+  return [...shown, ...unshown];
+};
+
+const LOST_SAID: Record<NotLive, (name: string) => string> = {
+  unreachable: (name) => `${name} is out of reach`,
+  sso: (name) => `${name} is waiting for an SSO login`,
+  "no-collie": (name) => `Collie isn't installed on ${name}`,
+  "update-desktop": (name) => `${name} needs a newer Desktop`,
+};
+
+const waited = (ms: number) => {
+  const seconds = Math.round(ms / 1000);
+  return seconds < 60 ? `${seconds} s` : `${Math.floor(seconds / 60)} min ${seconds % 60} s`;
+};
+
+/** Why the chat cannot read `name`'s board, as one clause naming it. */
+export const unreadBecause = (
+  name: string,
+  board: Exclude<ChatBoard, { readonly _tag: "Live" }>,
+  now: number,
+) => {
+  switch (board._tag) {
+    case "Connecting":
+      return board.since === null
+        ? `${name} is still connecting; Desktop has had no board from it yet`
+        : `${name} is still connecting; Desktop has waited ${waited(now - board.since)} for its first board`;
+    case "Lost":
+      return `${LOST_SAID[board.state](name)}: ${board.reason.replace(/\.$/, "")}`;
+    case "Saved":
+      return `${name} is only a board Desktop saved at ${DateTime.formatIso(DateTime.makeUnsafe(board.at))}, with no live host since`;
+  }
+};
+
 /** A route as the Machines list shows it: how it stands now, and how onboarded it is. */
 export interface MachineRow {
   readonly profile: string;
@@ -814,6 +961,20 @@ const standing = (onboarding?: OnboardRun, doctor?: OnboardRun): OnboardRun | nu
   );
   const steps = [...doctor.steps.filter(({ step }) => !skipped.has(step)), ...left];
   return { ...doctor, steps, ready: steps.length === 0 };
+};
+
+/** Why an installation's records show what it last said, in the board's words; null while live. */
+export const notLiveOf = (flock: Flock, installation: string) => {
+  const shown = flock.machines.get(installation);
+  if (shown === undefined || shown.asOf === null) return null;
+  const lost = flock.lost.get(shown.machine.profile);
+  return lost === undefined
+    ? { icon: "i-lucide-refresh-cw", title: `${shown.machine.name} is reconnecting`, reason: "" }
+    : {
+        icon: NOT_LIVE[lost.state].icon,
+        title: NOT_LIVE[lost.state].title(lost.name),
+        reason: lost.reason,
+      };
 };
 
 /** Every route, in the order Desktop opened them. */

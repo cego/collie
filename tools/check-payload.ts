@@ -1,6 +1,7 @@
 // `bun run tools/check-payload.ts <installer>...`: fails when an Electrobun installer's
 // payload has an entry its self-extractor cannot read: a GNU long-name or pax header, or any
 // path over the 100 characters a tar header holds. Checked before a release publishes one.
+// A macOS app carries its payload as a `.tar.zst` of its own, which is checked as it is.
 
 import { BunRuntime, BunServices } from "@effect/platform-bun";
 import { Data, Effect, FileSystem } from "effect";
@@ -41,10 +42,12 @@ const program = Effect.gen(function* () {
   for (const installer of process.argv.slice(2)) {
     const bytes = yield* fs.readFile(installer);
     const marker = Buffer.from(bytes).lastIndexOf(MARKER);
-    if (marker === -1) {
+    if (marker === -1 && !installer.endsWith(".tar.zst")) {
       return yield* new PayloadRefused({ message: `${installer} has no Electrobun payload` });
     }
-    const tar = Bun.zstdDecompressSync(bytes.subarray(marker + MARKER.length));
+    const tar = Bun.zstdDecompressSync(
+      marker === -1 ? bytes : bytes.subarray(marker + MARKER.length),
+    );
     const found = unreadable(tar);
     if (found.length > 0) {
       return yield* new PayloadRefused({

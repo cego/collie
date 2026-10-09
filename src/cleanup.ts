@@ -1004,12 +1004,12 @@ const DesktopInstalled = Schema.fromJsonString(
  * Desktop's own files on this computer, by the rule Desktop applies at its start; none where
  * Desktop has no data folder here. A tar is kept wherever the running bundle is not known.
  */
-export const desktopSweeper = (root: string, state: string): Sweeper => {
+export const desktopSweeper = (root: string, state: string, installedPath: string): Sweeper => {
   const kind = "desktop";
   const own = Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const installed = yield* fs
-      .readFileString(`${root}/app/Resources/version.json`)
+      .readFileString(installedPath)
       .pipe(Effect.flatMap(Schema.decodeUnknownEffect(DesktopInstalled)), Effect.option);
     return {
       root,

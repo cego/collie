@@ -17,7 +17,8 @@ import {
   settingText,
 } from "../../../src/settings";
 import { epochMs } from "../../../src/time";
-import type { DesktopSettings } from "./flock";
+import type { DesktopSettings, DesktopSettingsChange } from "./flock";
+import { percent } from "./scale";
 
 /** Where an edit made in Desktop's own Settings is said to come from. */
 export const DESKTOP = "Desktop";
@@ -102,6 +103,8 @@ export const editSetting = (
 /** Desktop's own settings, which no Machine has. */
 interface DesktopSetting extends Setting {
   readonly read: (desktop: DesktopSettings) => string;
+  /** What setting it to `typed` changes; `typed` is never empty. */
+  readonly change: (typed: string) => DesktopSettingsChange;
   /** What Settings says of it while it is unset, where its default says nothing. */
   readonly unset?: string;
 }
@@ -117,6 +120,7 @@ const DESKTOP_SETTINGS: ReadonlyArray<DesktopSetting> = [
     description:
       "Whether the Flock chat starts a turn about News that matters, as the bell in its header does.",
     read: (desktop: DesktopSettings) => String(desktop.proactive),
+    change: (typed) => ({ proactive: typed === "true" }),
   },
   {
     key: "machineRule",
@@ -128,9 +132,29 @@ const DESKTOP_SETTINGS: ReadonlyArray<DesktopSetting> = [
     description:
       "Which Machine each kind of work goes to, in your own words. The Flock chat starts work where it says, and asks where it does not say.",
     read: (desktop: DesktopSettings) => desktop.machineRule ?? "",
+    change: (typed) => ({ machineRule: typed.trim() }),
     unset: "Unset: no rule",
   },
+  {
+    key: "zoom",
+    kind: "choice",
+    choices: ["80%", "90%", "100%", "110%", "125%", "150%"],
+    fallback: "100%",
+    group: "Board",
+    label: "Zoom",
+    description:
+      "How large Desktop draws on this computer, against the other apps on the same monitor.",
+    read: (desktop: DesktopSettings) => percent(desktop.zoom ?? 1),
+    change: (typed) => ({ zoom: Number.parseInt(typed, 10) / 100 }),
+    unset: "Default: 100%, the size of your other apps",
+  },
 ];
+
+/** What setting Desktop's own `key` to `typed` changes; empty sets it back to its default. */
+export const desktopChange = (key: string, typed: string): DesktopSettingsChange => {
+  const setting = DESKTOP_SETTINGS.find((one) => one.key === key)!;
+  return setting.change(typed || setting.fallback);
+};
 
 /** One setting as Settings shows it, its value and default in its unit. */
 export interface SettingRow {
@@ -200,7 +224,7 @@ export const settingSections = (
 ): ReadonlyArray<SettingSection> => {
   const rows = [
     ...SETTINGS.filter(({ key }) => key !== GIVEN_ONLY).map((setting) => flockRow(flock, setting)),
-    ...DESKTOP_SETTINGS.map(({ read, unset, ...setting }): SettingRow => {
+    ...DESKTOP_SETTINGS.map(({ read, change: _, unset, ...setting }): SettingRow => {
       const value = read(desktop);
       return {
         ...rowOf(setting),

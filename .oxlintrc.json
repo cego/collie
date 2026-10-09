@@ -34,9 +34,11 @@
     // test inherits, and asks `ps` which hosts outlived their test.
     "test/support/hosts.ts",
     "test/support/sweep.ts",
-    // Desktop's Electrobun build hook: a plain script Electrobun's own runtime runs while
-    // packing Desktop, before any Effect program does.
+    // Desktop's Electrobun build hooks and what they share: plain scripts Electrobun's own
+    // runtime runs while packing Desktop, before any Effect program does.
     "desktop/scripts/name-desktop-entry.ts",
+    "desktop/scripts/mac-icons.ts",
+    "desktop/scripts/mac-signing.ts",
     "tools/oxlint/anti-slop/**"
   ],
   "jsPlugins": [

@@ -1,9 +1,11 @@
 // A Comark plugin for agent-written markdown. No Bun-only import: the view bundles this.
 
 import type { ComarkPlugin, ElementNodeAttributes, Node } from "comark";
+import { shortUrl } from "./links";
 
 const FILE_LINE = /(?<![\w/:.@-])((?:[\w@.-]+\/)*[\w@-][\w@.-]*\.[A-Za-z]\w*):(\d+)(?![\w:])/g;
 const WHOLE_FILE_LINE = new RegExp(`^${FILE_LINE.source}$`);
+const WEB_URL = /^https?:\/\/\S+$/i;
 /** Inside these a `file:line` is something else's text. */
 const LEFT_ALONE = new Set(["pre", "a", "code", "file-ref"]);
 
@@ -36,6 +38,14 @@ const scripted = (attributes: ElementNodeAttributes, name: string) => {
   return /javascript:/i.test(rendered.replace(/\\(?:[bfnrt]|u00[01][\da-f])|\s/gi, ""));
 };
 
+const decoded = (href: string) => {
+  try {
+    return decodeURI(href);
+  } catch {
+    return href;
+  }
+};
+
 const confine =
   (referenced: boolean) =>
   (node: Node): Array<Node> => {
@@ -48,15 +58,21 @@ const confine =
       if (/^:?(style|popover\w*|command\w*|closedby)$/i.test(name) || scripted(attributes, name))
         delete attributes[name];
     const [only] = children;
-    const whole =
-      referenced && tag === "code" && children.length === 1 && !Array.isArray(only)
-        ? WHOLE_FILE_LINE.exec(only ?? "")
-        : null;
+    const text = children.length === 1 && !Array.isArray(only) ? (only ?? "") : null;
+    const whole = referenced && tag === "code" && text !== null ? WHOLE_FILE_LINE.exec(text) : null;
     if (whole !== null) return [["file-ref", { file: whole[1], line: whole[2] }, whole[0]]];
+    const href = String(attributes.href);
+    if (tag === "a" && text !== null && WEB_URL.test(href) && [href, decoded(href)].includes(text))
+      return [["a", { ...attributes, title: href }, shortUrl(text)]];
+    if (referenced && tag === "code" && text !== null && WEB_URL.test(text))
+      return [["a", { href: text, title: text }, ["code", {}, shortUrl(text)]]];
     return [[tag, attributes, ...children.flatMap(confine(referenced && !LEFT_ALONE.has(tag)))]];
   };
 
-/** Strips every style, popover, command and script URL, and turns each `file:line` outside code and links into a `file-ref`. */
+/**
+ * Strips every style, popover, command and script URL; turns each `file:line` outside code
+ * and links into a `file-ref`; shortens a link that is its own URL; links inline-code URLs.
+ */
 export const confined = (): ComarkPlugin => ({
   name: "confined",
   post: ({ tree }) => {

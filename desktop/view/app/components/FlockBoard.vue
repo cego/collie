@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { SECTIONS } from "../../../../src/board-model";
-import { AsyncResult, useAtomValue } from "@effect/atom-vue";
-import type { NotLive } from "../../../src/shared/flock";
+import { NOT_LIVE } from "../../../src/shared/flock";
 import { afterGesture, escapeOn, type Gesture, landedOn } from "../../../src/shared/board-clicks";
 import type { Level } from "../../../src/shared/usage";
 import { updatesAtom } from "../flock";
@@ -9,7 +8,7 @@ import tile from "../../../../assets/brand/logos/collie-tile-256.png";
 
 const {
   connecting,
-  failure,
+  trouble,
   lost,
   machines,
   notices,
@@ -80,6 +79,12 @@ const gesture = (done: Gesture, tab: string | null = null) => {
   else showRecord(after.page, tab);
 };
 provide("gesture", gesture);
+const toast = useToast();
+useRecordOpener().opensRecords((about) => {
+  const card = placedAt(about.machine, about.task);
+  if (card !== undefined) gesture({ kind: "name", card: card.key });
+  return card !== undefined;
+});
 // A record closes when its card leaves the Flock.
 watch(
   opened,
@@ -106,28 +111,17 @@ const popChatOut = async () => {
   popped.value = false;
 };
 
-const NOT_LIVE: Record<NotLive, { icon: string; title: (name: string) => string }> = {
-  unreachable: { icon: "i-lucide-unplug", title: (name) => `${name} is out of reach` },
-  sso: { icon: "i-lucide-key-round", title: (name) => `Waiting for SSO login on ${name}` },
-  "no-collie": { icon: "i-lucide-package-x", title: (name) => `Collie isn't installed on ${name}` },
-  "update-desktop": {
-    icon: "i-lucide-circle-arrow-up",
-    title: (name) => `Update Desktop to see ${name}`,
-  },
-};
-
-const toast = useToast();
 watch(notices, (now, before) => {
   for (const text of now.slice(before.length)) toast.add({ title: text, color: "info" });
 });
 
-const update = useAtomValue(() => updatesAtom);
+const { value: update } = useHeld(() => updatesAtom);
 const { restart } = useActions();
 // Each check says its finding again; a toast is for news not yet told.
 const told = new Set<string>();
 watch(update, (now) => {
-  if (!AsyncResult.isSuccess(now)) return;
-  const { news } = now.value;
+  if (now === undefined) return;
+  const { news } = now;
   if (news._tag !== "Ready" && news._tag !== "Refused") return;
   const id = `${news._tag} ${news.version}`;
   if (told.has(id)) return;
@@ -161,8 +155,12 @@ watch(update, (now) => {
         <!-- The ring keeps the white tile's edge on a light header. -->
         <img :src="tile" alt="" class="size-6 rounded-md ring-1 ring-default" />
         <strong>Collie</strong>
-        <p data-testid="header" :class="header.urgent ? 'text-warning font-medium' : 'text-muted'">
-          {{ connecting || failure !== null ? "" : header.text }}
+        <p
+          data-testid="header"
+          class="min-w-0 truncate"
+          :class="header.urgent ? 'text-warning font-medium' : 'text-muted'"
+        >
+          {{ connecting ? "" : header.text }}
         </p>
         <div class="ml-auto flex items-center">
           <UButton
@@ -240,14 +238,12 @@ watch(update, (now) => {
           @click="click"
           @dblclick="doubleClick"
         >
-          <p v-if="connecting" class="text-muted">Connecting…</p>
-          <UAlert
-            v-else-if="failure !== null"
-            color="error"
-            icon="i-lucide-triangle-alert"
-            title="Collie is out of reach"
-            :description="failure"
+          <RetryNotice
+            v-if="trouble !== null"
+            title="Desktop is reconnecting to its Flock; showing what it last had"
+            :trouble="trouble"
           />
+          <p v-if="connecting" class="text-muted">Connecting…</p>
           <template v-else>
             <UAlert
               v-if="renewBy !== null"

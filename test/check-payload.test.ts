@@ -6,6 +6,16 @@ import { Effect, FileSystem } from "effect";
 import { exec } from "./support/command";
 import { runEffect } from "./support/effect";
 
+/** Owner and group zeroed, in each tar's flags: a large UID does not fit a USTAR header. */
+const flavour = (format: string) =>
+  exec(["tar", "--version"]).pipe(
+    Effect.map((done) =>
+      done.stdout.includes("bsdtar")
+        ? [`--format=${format === "gnu" ? "gnutar" : format}`, "--uid", "0", "--gid", "0"]
+        : [`--format=${format}`, "--owner=0", "--group=0"],
+    ),
+  );
+
 /** An installer as Electrobun lays one out: the extractor, its marker, then the zstd tar. */
 const installerWith = (dir: string, paths: ReadonlyArray<string>, format = "gnu") =>
   Effect.gen(function* () {
@@ -15,7 +25,9 @@ const installerWith = (dir: string, paths: ReadonlyArray<string>, format = "gnu"
       yield* fs.makeDirectory(`${tree}/${path}`.replace(/\/[^/]*$/, ""), { recursive: true });
       yield* fs.writeFileString(`${tree}/${path}`, "x");
     }
-    yield* exec(["tar", `--format=${format}`, "-cf", `${dir}/payload.tar`, "-C", tree, "."]);
+    const flags = yield* flavour(format);
+    const made = yield* exec(["tar", ...flags, "-cf", `${dir}/payload.tar`, "-C", tree, "."]);
+    expect(made.exitCode).toBe(0);
     const tar = yield* fs.readFile(`${dir}/payload.tar`);
     const installer = `${dir}/installer`;
     yield* fs.writeFile(
@@ -70,5 +82,20 @@ test("an installer whose tar carries pax headers is refused", () =>
       const done = yield* check(installer);
       expect(done.code).not.toBe(0);
       expect(done.said).toContain("a pax header");
+    }).pipe(Effect.scoped),
+  ));
+
+test("a macOS update archive is checked as the tar it is, with no installer around it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped();
+      const long = `collie-desktop.app/Contents/Resources/${"a".repeat(90)}.js`;
+      yield* installerWith(dir, ["collie-desktop.app/Contents/MacOS/launcher", long], "ustar");
+      const archive = `${dir}/stable-macos-arm64-collie-desktop.app.tar.zst`;
+      yield* fs.writeFile(archive, Bun.zstdCompressSync(yield* fs.readFile(`${dir}/payload.tar`)));
+      const done = yield* check(archive);
+      expect(done.code).not.toBe(0);
+      expect(done.said).toContain(long);
     }).pipe(Effect.scoped),
   ));

@@ -6,6 +6,7 @@ import { BunServices } from "@effect/platform-bun";
 import { Effect, FileSystem, SubscriptionRef } from "effect";
 import { HostRefused, type SharedSetting, type SharedSettings } from "../src/board-model";
 import {
+  desktopChange,
   editSetting,
   type FlockSettings,
   NO_FLOCK_SETTINGS,
@@ -295,5 +296,34 @@ test("the Machine rule is kept on this computer with Desktop's own settings, and
 
       yield* fs.writeFileString(`${dir}/settings.json`, '{"proactive":true}');
       expect((yield* readSettings(dir)).machineRule).toBeUndefined();
+    }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
+  ));
+
+test("Zoom is this computer's, under Board, 100% until set, and kept as a number", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const zoom = (zoom?: number) =>
+        settingSections(NO_FLOCK_SETTINGS, { proactive: true, ...(zoom && { zoom }) })
+          .find((section) => section.group === "Board")!
+          .rows.find((row) => row.key === "zoom")!;
+      expect(zoom()).toMatchObject({
+        kind: "choice",
+        choices: ["80%", "90%", "100%", "110%", "125%", "150%"],
+        value: "100%",
+        fallback: "100%",
+        set: false,
+        shared: false,
+        defaultSaid: "Default: 100%, the size of your other apps",
+      });
+      expect(zoom(1.25)).toMatchObject({ value: "125%", set: true });
+      expect(desktopChange("zoom", "125%")).toEqual({ zoom: 1.25 });
+      expect(desktopChange("zoom", "")).toEqual({ zoom: 1 });
+      expect(desktopChange("proactive", "false")).toEqual({ proactive: false });
+      expect(desktopChange("machineRule", " vm for all ")).toEqual({ machineRule: "vm for all" });
+
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "desktop-settings-" });
+      yield* writeSettings(dir, { proactive: true, zoom: 0.9 });
+      expect((yield* readSettings(dir)).zoom).toBe(0.9);
     }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
   ));

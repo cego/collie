@@ -97,6 +97,22 @@ const runnable = Effect.fn("Doctor.runnable")(function* (file: string) {
   return Result.isSuccess(info) && (info.success.mode & 0o111) !== 0;
 });
 
+/**
+ * From here on `herdr update` leaves a running server and its panes alone. herdr 0.9.0's
+ * release note: "Servers older than endpoint generation 1 need a one-time upgrade."
+ */
+const PANES_SURVIVE_UPDATE = "0.9.0";
+const BY_PACKAGE_MANAGER = "or upgrade herdr with the package manager that installed it";
+const RESTART_SERVER =
+  "restart the server (`herdr server stop`, then `herdr`) when nothing is running, to give Collie what it needs";
+const RESTART_OLD_SERVER = `${RESTART_SERVER} — ${BY_PACKAGE_MANAGER}`;
+
+/** What upgrading a herdr client at `version` to `min` does to the panes its server runs. */
+const upgradeAdvice = (version: string, min: string): string =>
+  older(version, PANES_SURVIVE_UPDATE)
+    ? `Moving from herdr ${version} to ${min} needs your running herdr server stopped once, which ends every program in its panes. Do it when nothing is running there: \`herdr update\`, then \`herdr server stop\`, then start \`herdr\`. \`herdr update --handoff\` tries to carry the panes across instead; herdr calls it experimental — ${BY_PACKAGE_MANAGER}`
+    : `\`herdr update\` installs ${min} and leaves your running server and its panes alone; ${RESTART_OLD_SERVER}`;
+
 /** `1.10.0` is newer than `1.9.0`; a string comparison would disagree. */
 function older(version: string, than: string): boolean {
   const parts = (v: string) => v.split(".").map((n) => Number(n) || 0);
@@ -403,10 +419,30 @@ export const doctor = Effect.fn("Doctor.doctor")(function* (
       : stale
         ? failed(
             `${version} is older than the ${min} this plugin needs`,
-            "upgrade herdr — https://herdr.dev/docs/install/",
+            upgradeAdvice(version, min),
           )
         : passed(version || "installed")),
   });
+
+  // A stale client's advice already covers its server.
+  const server =
+    herdrBin && !stale
+      ? yield* herdr.serverInfo().pipe(Effect.option, Effect.map(Option.getOrNull))
+      : null;
+  if (server?.running) {
+    const serverVersion = VERSION.exec(server.version)?.[0] ?? "";
+    checks.push({
+      name: "herdr server",
+      ...(serverVersion === ""
+        ? failed("the running server is too old to say its version", RESTART_OLD_SERVER)
+        : min !== "" && older(serverVersion, min)
+          ? failed(
+              `the running server is ${serverVersion}, older than the ${min} this plugin needs`,
+              RESTART_OLD_SERVER,
+            )
+          : passed(serverVersion)),
+    });
+  }
 
   const linked = herdrBin ? yield* text(["plugin", "list"]) : "";
   checks.push({

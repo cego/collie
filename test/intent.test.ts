@@ -8,6 +8,7 @@ import {
   DEFAULT_AUTHORITY,
   IntentUnreadable,
   amend,
+  constraintId,
   extractRequirements,
   followPlan,
   PLAN_AUTHOR,
@@ -245,6 +246,59 @@ test("a plan's out-of-scope and done-when bullets are constraints, and out of sc
     "Out of Scope",
     "Done when",
   ]);
+});
+
+test("a plan bullet is one constraint, its wrapped lines and nested bullets included", () => {
+  // run-6ed7b18b's Done When and Out of Scope, as its plan wrapped and nested them.
+  const spec = [
+    "# Spec: Roll out nuxt module 9.1.1",
+    "",
+    "## Done When",
+    "",
+    "- Six MRs are open, one per consumer in the table above. Each moves its include to 9.1.1, is",
+    "  assigned to mk, is linked to FRO-487 through its title, and has a green pipeline.",
+    "- support-backoffice's MR also records:",
+    "  - the stage deploy under a Helle claim, and",
+    "  - the 9.0.0 baseline it was compared",
+    "    with.",
+    "- Re-run",
+    "  the container checks on each consumer after the bump.",
+    "- The suite is green.",
+    "1. A numbered step ends it and is no constraint.",
+    "",
+    "## Out of Scope",
+    "",
+    "- A canary gate between waves; a wave still waits only for the",
+    "  Repo runs before it.",
+    "",
+    "## Further Notes",
+    "",
+    "- not a requirement,",
+    "  nor this line.",
+  ].join("\n");
+  const found = extractRequirements(spec, "SPEC.md");
+  expect(
+    found.constraints.map(({ text, provenance }) => [text, provenance?.heading, provenance?.line]),
+  ).toEqual([
+    [
+      "Six MRs are open, one per consumer in the table above. Each moves its include to 9.1.1, is assigned to mk, is linked to FRO-487 through its title, and has a green pipeline.",
+      "Done When",
+      5,
+    ],
+    [
+      "support-backoffice's MR also records: the stage deploy under a Helle claim, and the 9.0.0 baseline it was compared with.",
+      "Done When",
+      7,
+    ],
+    ["Re-run the container checks on each consumer after the bump.", "Done When", 11],
+    ["The suite is green.", "Done When", 13],
+    [
+      "Out of scope: A canary gate between waves; a wave still waits only for the Repo runs before it.",
+      "Out of Scope",
+      18,
+    ],
+  ]);
+  expect(found.constraints[3]?.id).toBe(constraintId("The suite is green."));
 });
 
 /** A constraint the Run's own planner wrote into `plan/SPEC.md`. */

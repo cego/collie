@@ -269,8 +269,10 @@ to no Task is a TaskView of its own.
 
 **Decision** — What a Task is waiting on a human for, and one of the two things that put
 it in **Needs you**: a **question** a Run asked, a **Proposal** Collie made, or an evidence
-**gate** asking which verifications this Run is to be held to. All three are answered on
-the card, from the CLI or from chat, and survive the board closing.
+**gate** asking which verifications this Run is to be held to. Any of a Task's Runs can be
+waiting on one, a fan-out's Repo runs included, and each is answered on the Run that asked.
+All three are answered on the card, from the CLI or from chat, and survive the board
+closing.
 
 **Stalled** — The other way into **Needs you**, and the one with nothing on the card to
 answer: an agent is waiting for a human in its own pane — at its harness's own dialog,
@@ -505,7 +507,8 @@ interrupted rather than finished. An action is never applied to it: every action
 board belongs to the card it is on. In **Desktop** it is the card last clicked, whether or
 not its record is open, and it is what the Flock chat's chip is about: opening a card's
 record selects that card, and a click on the board's background, Escape outside a field or a
-message sent clears it.
+message sent clears it. A message sent with a Selection keeps it: the message shows that
+card's name as a pill for as long as the conversation is kept, and the pill opens its record.
 
 **Focus** — What the Collie tab is being looked at as: the showing View, every View shown
 at least once, the Selection, and whether the panel's log tail is open. It is what decides

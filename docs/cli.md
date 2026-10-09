@@ -550,7 +550,7 @@ Task of its own; a Repo run of a fan-out is its parent's `children` rather than 
 | `heldBy`                  | Who set the hold that stands — the front door it came through — and the reason given with it, or `null`.                                                        |
 | `decision`                | The question, proposal or gate waiting on you, or `null`. One of the two ways into Needs you.                                                                   |
 | `agents[]`                | The live agents on it, its Repo runs' included.                                                                                                                 |
-| `children[]`              | A fan-out's repositories in wave order: `repo`, its `run` (`null` until it starts), its `state` (`done`, `active`, `blocked`, `failed` or `todo`) and its `mr`. |
+| `children[]`              | Its plan's repositories, in wave order: `repo`, its `run` (`null` until it starts), its `state` (`done`, `active`, `blocked`, `failed` or `todo`) and its `mr`. |
 | `mr`, `mrState`, `branch` | What it is building, where it can be read, and what the forge last said about the merge request.                                                                |
 | `disposition`, `landed`   | What became of the work, where a person recorded it — never inferred from a merge request — and whether it needs nothing more, which is Finished.               |
 | `ended`                   | When the leading Run ended, or `null` while it has not.                                                                                                         |
@@ -566,6 +566,17 @@ checkout's `.collie/verify.json` (or your config's `verify.json`) offers. Answer
 `collie run answer <run-id> approve --decision evidence-gate`, or `approve:<name>,<name>`
 for part of the list: the host grants those, as `run intent verification` does, and takes
 the Run up again. It is not skipped, since with nothing approved no check could prove it.
+
+A fan-out's own Run never parks, so where neither it nor any of its Runs asks anything, the
+first of its Repo runs in wave order parked at its gate is the Task's `decision`. That gate's
+`run` is the Repo run, which is the one an answer releases, and its `repo` names the
+repository, as the sentence does. A gate whose checkout and config offer no checks says so,
+and names how to grant one: chat's `set_verification`, or
+`collie run intent verification <run-id> --name <name> -- <command>`.
+
+A fan-out finds its plan from its work source even where the kind was never recorded with
+its input, as for an implement Run started from a plan's end menu: a plan directory is the
+plan, so `children` lists every repository it names, those not started as `todo`.
 
 ## Answer a question
 
@@ -640,7 +651,11 @@ what `--goal` and `--constraint` named — later beating earlier where they name
 constraint. For a plan directory the work source's ask is read from its `SPEC.md`: the
 bullets under a heading matching `Requirements`, `Success criteria`, `Boundaries`,
 `Constraints`, `Out of scope` or `Done when` become `warn` constraints carrying the file,
-heading and line they came from; an out-of-scope bullet reads `Out of scope: <bullet>`. In a
+heading and line each bullet starts on; an out-of-scope bullet reads `Out of scope: <bullet>`.
+A constraint is the whole bullet: it runs until a blank line, a heading or the next bullet at
+its indent or shallower, and its wrapped lines and the bullets nested under it are joined
+into it with single spaces. An Intent already seeded keeps what it stored, unless it
+follows its own `plan/SPEC.md` as below. In a
 Run on a worktree of its own, its `plan/SPEC.md`, written by its planner, is read the same
 way at every work boundary: new bullets are added, dropped ones are removed, and a
 constraint anyone but the plan removed stays removed. **No text ever grants authority** —
@@ -1429,7 +1444,8 @@ and one it replaces has its tar removed. A download that does not verify is not
 staged, and the step is `failed` with the reason. A Desktop already at the version is
 `already in place`, so Desktop upgrading this computer to its own version changes nothing.
 There is no `desktop` step where no released Desktop is installed, where Desktop runs from
-a checkout, or on a platform Desktop is not released for (only `linux-x64` is).
+a checkout, or anywhere but Linux x64. On macOS, Desktop updates itself from the release as
+it does on any platform; `upgrade` stages nothing for it.
 
 ```sh
 collie upgrade --to 0.27.0
@@ -1455,20 +1471,20 @@ Its GitLab is one host: `--gitlab-host`, else `GITLAB_HOST`, else the
 [`gitlab_host` setting](using.md#your-defaults), `gitlab.cego.dk` by default. The token
 page, the glab login, the push and the closing doctor all name that host.
 
-| Step           | What it does                                                                                                                                                                                                                                                                                                                                                              |
-| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `system`       | Checks for `git`, `curl` and an OpenSSL 3.0 or later (which checks a downloaded runner's signature; LibreSSL and 1.1 cannot). Any missing stops here with `needs_root` and the exact command; an older OpenSSL gets one only where a package gives OpenSSL 3 (EPEL's `openssl3` with dnf, `brew install openssl`), and otherwise needs OpenSSL 3 or bun installed by hand |
-| `collie`       | Clones `https://github.com/cego/collie.git` (or `COLLIE_REPO`) into `~/.collie` (or `COLLIE_DIR`) and resets `master` to the tag, so a plain `collie upgrade` can still pull; or moves a released checkout to the tag as `upgrade --to` does                                                                                                                              |
-| `herdr`        | `curl -fsSL https://herdr.dev/install.sh \| sh`, if there is no `herdr`                                                                                                                                                                                                                                                                                                   |
-| `claude`       | Anthropic's user-level installer, `curl -fsSL https://claude.ai/install.sh \| bash`, if there is no `claude`                                                                                                                                                                                                                                                              |
-| `path`         | Adds `~/.local/bin` (and `COLLIE_BIN_DIR`) to PATH in the shell's profile (`~/.bashrc`, `~/.zshrc` or `~/.profile`)                                                                                                                                                                                                                                                       |
-| `plugin`       | `prepare.sh`: the plugin link, the runner and shim, the operator skill and the skills. A runner `install.sh` downloads is installed only once the release key's signature (`<asset>.sig`) checks out                                                                                                                                                                      |
-| `claude-login` | `claude auth login` in this terminal, if `claude auth status --json` says Claude Code is not logged in; without a terminal, `needs_human` with that command                                                                                                                                                                                                               |
-| `gitlab`       | `glab auth login --hostname <host> --stdin` with `GITLAB_TOKEN`, if glab is not already logged in there, or is logged in with another token than the one given. Without a token: `needs_human`, with the token page and its `api` and `write_repository` scopes as `url`                                                                                                  |
-| `push`         | Generates `~/.ssh/id_ed25519` if there is none and registers it with `glab ssh-key add`, unless the Machine can already push (over HTTPS with glab's login, or with its own key). GitLab's host key is trusted on first use, and a key GitLab already has counts as registered                                                                                            |
-| `helle`        | Writes `HELLE_API_TOKEN`, and `HELLE_API_URL=https://helle.cego.dk` for other Helle clients, to Helle's credentials file, owner-only; with no token given and no file, `needs_human`, saying how Slack's `/helle token` makes one                                                                                                                                         |
-| `linear`       | `claude mcp add --transport http --scope user linear-server https://mcp.linear.app/mcp`, then `claude mcp login linear-server` in a terminal of its own, whose URL is streamed: the one it prints, or the one with its callback port it hands `$BROWSER`, which a shim writes down                                                                                        |
-| `doctor`       | [`collie doctor`](#checking-an-installation); onboarded means it is ready                                                                                                                                                                                                                                                                                                 |
+| Step           | What it does                                                                                                                                                                                                                                                                       |
+| -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `system`       | Checks for `git`, `curl` and `openssl`, or the one `COLLIE_OPENSSL` names (which checks a downloaded runner's signature; any version, LibreSSL included, will do). Any missing stops here with `needs_root` and the exact command                                                  |
+| `collie`       | Clones `https://github.com/cego/collie.git` (or `COLLIE_REPO`) into `~/.collie` (or `COLLIE_DIR`) and resets `master` to the tag, so a plain `collie upgrade` can still pull; or moves a released checkout to the tag as `upgrade --to` does                                       |
+| `herdr`        | `curl -fsSL https://herdr.dev/install.sh \| sh`, if there is no `herdr`                                                                                                                                                                                                            |
+| `claude`       | Anthropic's user-level installer, `curl -fsSL https://claude.ai/install.sh \| bash`, if there is no `claude`                                                                                                                                                                       |
+| `path`         | Adds `~/.local/bin` (and `COLLIE_BIN_DIR`) to PATH in the shell's profile (`~/.bashrc`, `~/.zshrc` or `~/.profile`)                                                                                                                                                                |
+| `plugin`       | `prepare.sh`: the plugin link, the runner and shim, the operator skill and the skills. A runner `install.sh` downloads is installed only once the release key's signature (`<asset>.p256.sig`) checks out                                                                          |
+| `claude-login` | `claude auth login` in this terminal, if `claude auth status --json` says Claude Code is not logged in; without a terminal, `needs_human` with that command                                                                                                                        |
+| `gitlab`       | `glab auth login --hostname <host> --stdin` with `GITLAB_TOKEN`, if glab is not already logged in there, or is logged in with another token than the one given. Without a token: `needs_human`, with the token page and its `api` and `write_repository` scopes as `url`           |
+| `push`         | Generates `~/.ssh/id_ed25519` if there is none and registers it with `glab ssh-key add`, unless the Machine can already push (over HTTPS with glab's login, or with its own key). GitLab's host key is trusted on first use, and a key GitLab already has counts as registered     |
+| `helle`        | Writes `HELLE_API_TOKEN`, and `HELLE_API_URL=https://helle.cego.dk` for other Helle clients, to Helle's credentials file, owner-only; with no token given and no file, `needs_human`, saying how Slack's `/helle token` makes one                                                  |
+| `linear`       | `claude mcp add --transport http --scope user linear-server https://mcp.linear.app/mcp`, then `claude mcp login linear-server` in a terminal of its own, whose URL is streamed: the one it prints, or the one with its callback port it hands `$BROWSER`, which a shim writes down |
+| `doctor`       | [`collie doctor`](#checking-an-installation); onboarded means it is ready                                                                                                                                                                                                          |
 
 A development checkout — the one this runner belongs to when that is a checkout, or
 `COLLIE_DIR` — is judged as [`upgrade --to`](#upgrading) judges one, and gets the checks
@@ -1519,7 +1535,8 @@ collie doctor --gitlab-host gitlab.example.com
 ```
 
 Every prerequisite in one pass, each with the command that fixes it: herdr present and at
-least the `min_herdr_version` the plugin manifest declares; the plugin linked from this
+least the `min_herdr_version` the plugin manifest declares, and a running herdr server, when
+there is one, at least that too; the plugin linked from this
 installation; the runner built and the `collie` shim on PATH (installed-but-not-on-PATH is
 its own reported state); every skill and every harness
 the loaded workflows and personas name; whether the checkout is behind its remote; the
@@ -1533,6 +1550,14 @@ forwarded into the session does not count, since it goes when the computer it ca
 sleeps. That host is `--gitlab-host`, else `GITLAB_HOST`, else the
 [`gitlab_host` setting](using.md#your-defaults). Any other host glab knows is named in one
 `other gitlabs` note, unchecked, and never fails the run.
+
+**herdr** names what upgrading does to the running panes. From a herdr before 0.9.0, the
+running server must stop once, which ends every program in its panes: `herdr update`, then
+`herdr server stop`, then `herdr`, when nothing is running there, or the experimental
+`herdr update --handoff`. From 0.9.0 on, `herdr update` leaves the running server and its
+panes alone, and a **herdr server** line fails while the server still runs an older herdr,
+until it is restarted when nothing is running. Each fix also offers the package manager
+that installed herdr. Collie never runs `herdr update` or `herdr server stop` itself.
 
 **Disk** covers each filesystem holding the state directory, `~/.cache/collie`, herdr's
 worktrees and the temporary directory, once each. One with less than 10% or 5 GiB free is a
@@ -1604,10 +1629,13 @@ any front door uses whatever its build or computer, declared with its Schemas in
 development checkout — `protocol`, the `herds` — every running herdr session, by Herd
 `id` and herdr's `name` — and every TaskView), then an `Upsert` or a `Remove` keyed by Task
 id for each change, each with a `seq` higher than the last. A client that reconnects gets a
-fresh snapshot. The host builds again when anything under its state directory is written,
-when herdr pushes an event from any of its sessions (a pane opening or closing, or an
-agent's status changing), and every five seconds. The installation id is written once, by
-the first host to own the directory, and survives restarts and upgrades.
+fresh snapshot. The host builds one board for every client, so a client that subscribes is
+told the latest at once (or once the first build is done), and it builds again when
+anything under its state directory is written, when herdr pushes an event from any of its
+sessions (a pane opening or closing, or an agent's status changing), and every five
+seconds: one build at a time, with what changes meanwhile folded into the next. The
+installation id is written once, by the first host to own the directory, and survives
+restarts and upgrades.
 
 The host also runs what nobody has to have a pane open for: the merge watch, which asks
 GitLab about each waiting merge request every 5 minutes and records a merge; each Herd's
@@ -1658,9 +1686,10 @@ carries it out; `act`, which carries out the board's own actions on a Run (`stop
 `release`, `hold`, `answer`, `deliver`, `followup`, `start`) with no proposal, anything else
 being refused as `propose`'s; `reconcile`, which settles a proposal step nobody can account
 for; `settleDelivery`, which does the same for a message to an agent; `focus`, which focuses
-a Run's newest live agent, or its workspace, on the host's own herdr and answers with the
-session, workspace and tab it is in, and the focused agent's pane id where it found one
-(an older host's reply has none, and is read as naming no pane); `setSettings`, which writes the Flock's settings into
+a Run's newest live agent, or only the `agent` it names, else its workspace, on the host's
+own herdr and answers with the session, workspace and tab it is in, and the focused agent's
+pane id and herdr name where it found one (an older host's reply has neither, and is read
+as naming no pane); `setSettings`, which writes the Flock's settings into
 the Machine's `config.json`, each with its own edit's time and only where that is later than
 the Machine's own last edit of the key, records when each was set in `settings-set.json`
 and, when Desktop asks, that a Desktop gave them, and refuses the whole batch over any value the TUI's Settings

@@ -156,7 +156,7 @@ typecheck — and, where nothing typechecked it, the host reports `Service not f
 the file that asked.
 
 What the host lends is `Run`, `Host`, `Agents`, `Children`, the workflow engine, the file
-system and paths. Everything else is yours.
+system, paths and the process spawner. Everything else is yours.
 
 ### Two projects, two implementations
 
@@ -724,6 +724,125 @@ own, and refuses to start it at all where the plan cannot fan out.
 [ADR-0022](adr/0022-a-workflow-is-made-of-workflows.md) is why each of those is the way it
 is, and why nothing here is a dependency resolver.
 
+### A checkout another tool makes
+
+A tool that makes a development environment often cuts the checkout too. bodil's
+`bodil remote up <brands> <name>` cuts `worktrees/<name>/monorepo` on a branch of its own,
+and `bodil remote down <name>` stops the instance. A workflow wraps such a tool around a
+child: its "up" in an Activity, the child given the tool's worktree as its `workspace` and
+the tool's branch as its `branch`, and its "down" in an Activity once the child has settled,
+however the child ended.
+
+The child's `checkout` resolves to the worktree the branch already has, as it does for any
+checkout already on the branch. Collie records it as not made by Collie
+(`created_by_collie: false`), so pruning never removes it, and replaying the parent does not
+run "up" again, since the Activity recorded it. Collie has no option for any such tool: the
+module is the tool's, and moves with the tool's commands. This is the one for bodil, which
+belongs with bodil's own install script and, until then, in
+`~/.collie/user/workflows/bodil.workflow.ts`:
+
+```ts
+// implement, in a bodil instance. `bodil remote up` cuts the worktree and its branch,
+// implement works there, and `bodil remote down` stops the instance once implement has
+// settled, however it ended. bodil reads the VM from BODIL_REMOTE_VM itself.
+
+import { Host, Run, WorkflowError, child, defineWorkflow } from "collie";
+import { Effect, Schema, Stream } from "effect";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
+import * as Activity from "effect/workflow/Activity";
+
+/** What a command printed, or its own words where it fails. */
+const sh = (command: string, args: ReadonlyArray<string>, cwd?: string) =>
+  Effect.gen(function* () {
+    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const ran = yield* spawner.spawn(
+      ChildProcess.make(command, args, { cwd, stdout: "pipe", stderr: "pipe" }),
+    );
+    const [out, err, code] = yield* Effect.all(
+      [
+        Stream.mkString(Stream.decodeText(ran.stdout)),
+        Stream.mkString(Stream.decodeText(ran.stderr)),
+        ran.exitCode,
+      ],
+      { concurrency: "unbounded" },
+    );
+    if (code !== 0) {
+      return yield* new WorkflowError({ reason: err.trim() || `${command} exited ${code}` });
+    }
+    return out.trim();
+  }).pipe(
+    Effect.scoped,
+    Effect.catchTag("PlatformError", (cause) => new WorkflowError({ reason: cause.message })),
+  );
+
+export default defineWorkflow({
+  id: "bodil",
+  title: "Implement a plan in a bodil instance",
+  description:
+    "Brings a bodil instance up, implements the plan in its worktree, and takes it down.",
+  input: Schema.Struct({
+    plan: Schema.String,
+    /** What `bodil remote up` brings up, such as `happytiger`. */
+    brands: Schema.String,
+    /** The instance, and so its worktree and branch; the Run's task name where not given. */
+    name: Schema.optionalKey(Schema.String),
+  }),
+  hints: { plan: "work-source" },
+  output: Schema.String,
+  run: ({ input }) =>
+    Effect.gen(function* () {
+      const place = yield* (yield* Host).place((yield* Run).id);
+      const name = input.name ?? place.options.task;
+      if (name === undefined) {
+        return yield* new WorkflowError({ reason: "name the instance: --input name=<name>" });
+      }
+      yield* Activity.make({
+        name: "up",
+        success: Schema.String,
+        error: WorkflowError,
+        execute: sh("bodil", ["remote", "up", input.brands, name]),
+      });
+      // Everything after "up" is followed by "down", so a failure here leaves no instance up.
+      const built = yield* Effect.exit(
+        Effect.gen(function* () {
+          const checkout = yield* Activity.make({
+            name: "checkout",
+            success: Schema.Struct({ worktree: Schema.String, branch: Schema.String }),
+            error: WorkflowError,
+            execute: Effect.gen(function* () {
+              const worktree = `${yield* sh("bodil", ["root"])}/worktrees/${name}/monorepo`;
+              // Read, never derived, so bodil's rule for naming its branch stays bodil's.
+              const branch = yield* sh("git", ["branch", "--show-current"], worktree);
+              return { worktree, branch };
+            }),
+          });
+          return yield* child({
+            invocation: "implement",
+            workflow: "implement",
+            input: { plan: input.plan },
+            options: { workspace: checkout.worktree, branch: checkout.branch },
+          });
+        }),
+      );
+      // Never `--purge`: the worktree outlives the instance until bodil removes it.
+      yield* Activity.make({
+        name: "down",
+        success: Schema.String,
+        error: WorkflowError,
+        execute: sh("bodil", ["remote", "down", name]),
+      });
+      return String(yield* built);
+    }),
+});
+```
+
+`name` is optional: without one the instance is named after the Run's task. The VM is
+bodil's own `BODIL_REMOTE_VM`, which bodil reads itself. The branch is read from the
+checkout rather than worked out again, so bodil's rule for naming it stays bodil's. `down`
+never passes `--purge`, so the worktree outlives the instance until bodil removes it. A
+`down` that fails fails the Run, even after implement succeeded, so a leftover instance is
+never quiet; a Run stopped part-way leaves the instance up, for `bodil remote down <name>`.
+
 ## A list of work, one item at a time
 
 A list is `Effect.forEach` over whatever you enumerated; what Collie adds is the two things
@@ -1059,6 +1178,8 @@ Collie makes the common cases convenient; it does not stand between you and Effe
 - **A service of your own** is an ordinary `Context` service and Layer, through `layer`.
 - **Concurrency** is `Effect.all` and `Effect.forEach`.
 - **A typed failure** stays typed, through `error`, and is encoded by its schema.
+- **A command of your own** is Effect's `ChildProcess` (`effect/process`) through the lent
+  `ChildProcessSpawner`, inside an Activity so that replay does not run it again.
 - **A direct model call** uses Effect's own `LanguageModel` with a provider Layer of yours
   in `layer`, wrapped in an Activity so replay hands back what it answered. Collie has no
   classifier API of its own, and preferring a harness or model never overrides a provider
