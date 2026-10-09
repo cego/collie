@@ -336,15 +336,27 @@ change the human's Desktop settings. This proves the main-process path, not the 
 | AskUserQuestion is answered by the call id and continues the turn       | pass     |
 | an attached image is described correctly                                | pass     |
 | closing and reopening the chat session reads the same transcript and id | pass     |
-| the window draws choice buttons and a click continues the turn          | pending  |
-| a pasted screenshot is described in the window                          | pending  |
-| quitting and reopening Desktop draws the conversation again             | pending  |
+| the window draws choice buttons and a click continues the turn          | pass     |
+| a pasted screenshot is described in the window                          | pass     |
+| quitting and reopening Desktop draws the conversation again             | pass     |
 
 The reply identified the attached Collie portrait. The recorded events include
 `mcp__collie__collie_herd`, `AskUserQuestion`, its result and the answer “Apple”.
-`flock-chat/pi-window-turn-and-restart` in the acceptance registry keeps the window checks
-pending until an operator records them on the release revision. Subscription-limit
-recognition and its live proof belong to the fallback piece; this probe reached no limit.
+
+The window rows were then observed in the actual Linux Desktop under Xvfb, using a
+disposable profile, Pi 1.1.0 and `openai-codex/gpt-6.1-sol`. Settings selected Pi and its
+model; the human's Desktop settings were unchanged. X11 input submitted the message,
+clicked **Pear** and pasted a PNG screenshot from the clipboard. The turn called
+`collie_herd`, displayed **Apple** and **Pear** buttons, then replied “You prefer Pear.”
+It described the screenshot's card title and both buttons correctly. Closing both native
+windows let Desktop exit; reopening restored the same session id, messages, attachment
+and replies in the docked chat and, when opened, the popped-out chat.
+
+Run `run-8a0118da` keeps the screenshots, window text and revision-bound operator evidence
+under `evidence/pi-desktop/`. `flock-chat/pi-window-turn-and-restart` counts that evidence
+only on its recorded clean revision; a release on another revision must repeat it.
+Subscription-limit recognition and its live proof belong to the fallback piece; neither
+probe reached a limit.
 
 Recorded by `tools/chat-live.ts <harness>` against herdr 0.9.0, Claude Code 2.1.272 and
 Pi 0.85.1, in a disposable Herd of its own — its own state and config directories, its own
