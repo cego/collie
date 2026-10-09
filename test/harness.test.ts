@@ -43,6 +43,10 @@ test("model checks accept the alias list, the harness pattern and user extras", 
   expect(knownModel(HARNESSES.opencode!, "sonnet")).toBe(false);
   expect(knownModel(HARNESSES.opencode!, "anthropic/claude-sonnet-4")).toBe(true);
   expect(knownModel(HARNESSES.opencode!, "sonnet", ["sonnet"])).toBe(true);
+  for (const model of ["gpt-6.1-sol", "gpt-5.6-sol", "gpt5", "o3"])
+    expect(knownModel(HARNESSES.codex!, model)).toBe(true);
+  for (const model of ["gpt-sol", "o-3", "gpt-6.1-sol --flag", "anthropic/opus"])
+    expect(knownModel(HARNESSES.codex!, model)).toBe(false);
 });
 
 test("effort is a flag only where the harness has one", () => {

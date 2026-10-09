@@ -585,6 +585,11 @@ export const agentWork = <
         execute: agents.choose(layers, work, spent),
       });
       if (nothingHasRoom(next)) {
+        const room = Effect.gen(function* () {
+          while (nothingHasRoom(yield* agents.choose(layers, work, spent)))
+            yield* Effect.sleep(READING_EVERY_MS);
+          return out;
+        }).pipe(Effect.mapError((cause) => asUncertain(work.operation, cause)));
         collected = yield* Activity.make({
           name: `${work.operation}.fallback-${n}.collect`,
           success: Collected,
@@ -593,14 +598,18 @@ export const agentWork = <
             .say(runId, `${work.operation}: ${said(on)} ran out (${out.why}); ${next.why}`)
             .pipe(
               Effect.andThen(
-                collecting(
-                  current,
-                  currentAsk,
-                  `${current.agent} ran out (${out.why}) before writing ${output}; ${next.why}. Resume once it has written it.`,
+                Effect.raceFirst(
+                  collecting(
+                    current,
+                    currentAsk,
+                    `${current.agent} ran out (${out.why}) before writing ${output}; ${next.why}. Resume once it has written it.`,
+                  ),
+                  room,
                 ),
               ),
             ),
         });
+        if (isRanOut(collected)) continue;
         break;
       }
       const sequence = (current.sequence ?? 1) + 1;

@@ -946,6 +946,51 @@ const closedPanes = (calls: ReadonlyArray<Call>) =>
   calls.filter((call) => (call.argv ?? [])[0] === "pane" && (call.argv ?? [])[1] === "close");
 const chain = { fallbacks: Effect.succeed(["codex"]) };
 
+test("a waiting agent switches when a fallback is configured after it ran out", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([null, { verdict: "clean", note: "fallback became available" }]);
+      let fallbacks: ReadonlyArray<string> = [];
+      yield* Effect.forkScoped(
+        Effect.gen(function* () {
+          yield* runsOut(agentFor("r1"));
+          while (!(yield* read(`${dir}/agents/r1/agents.log`)).includes("nothing has room"))
+            yield* TestClock.withLive(Effect.sleep("10 millis"));
+          fallbacks = ["codex/gpt-6.1-sol"];
+        }),
+      );
+      const result = yield* session(started("r1"), {
+        fallbacks: Effect.sync(() => fallbacks),
+        collectMs: 300_000,
+      });
+      expect(result._tag === "Success" && result.success.note).toBe("fallback became available");
+      const calls = yield* rig.calls();
+      expect(closedPanes(calls)).toHaveLength(1);
+      expect(harnessesStarted(calls)).toEqual(["claude", "codex"]);
+      expect((yield* runAgents(dir, "r1"))[1]?.model).toBe("gpt-6.1-sol");
+    }).pipe(Effect.scoped),
+  ));
+
+test("a replay rechecks a fallback after the earlier host recorded that nothing had room", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([null, { verdict: "clean", note: "recovered on codex" }]);
+      yield* interrupted("r1", parked("r1"), {
+        ...claudeOut,
+        fallbacks: Effect.succeed([]),
+        collectMs: 2_000,
+      });
+      const result = yield* releasedInto("r1", {
+        ...claudeOut,
+        fallbacks: Effect.succeed(["codex/gpt-6.1-sol"]),
+        collectMs: 30_000,
+      });
+      expect(result._tag === "Success" && result.success.note).toBe("recovered on codex");
+      expect(harnessesStarted(yield* rig.calls())).toEqual(["claude", "codex"]);
+      expect(closedPanes(yield* rig.calls())).toHaveLength(1);
+    }),
+  ));
+
 test("an agent that runs out mid-work is closed and replaced by one on the next entry, given the same work and a hand-over", () =>
   runEffect(
     Effect.gen(function* () {

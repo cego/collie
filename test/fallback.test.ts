@@ -62,6 +62,12 @@ describe("resolveWithRoom", () => {
     expect(chosen.why).toMatch(/^session 100%, resets \S+$/);
   });
 
+  test("a versioned GPT model in the chain is accepted without a configured extra model", () => {
+    const chosen = resolved([opus], ["codex/gpt-6.1-sol"], [claudeOut]);
+    expect(on(chosen)).toBe("codex/gpt-6.1-sol");
+    expect(chosen.skipped).toEqual([]);
+  });
+
   test("a chain entry on the same Exhausted Subscription is skipped", () => {
     const out = resolved(
       [opus],
