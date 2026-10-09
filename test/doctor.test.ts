@@ -63,7 +63,7 @@ const healthy = Effect.fn("doctorTest.healthy")(function* () {
 const freeSpace = (percent: number) =>
   bin.add(
     "df",
-    `printf 'Filesystem 1024-blocks Used Available Capacity Mounted on\\n/dev/sda1 104857600 %d %d %d%%%% /\\n' ${(100 - percent) * 1048576} ${percent * 1048576} ${100 - percent}`,
+    `echo 'warning: disk probe' >&2; printf 'Filesystem 1024-blocks Used Available Capacity Mounted on\\n/dev/sda1 104857600 %d %d %d%%%% /\\n' ${(100 - percent) * 1048576} ${percent * 1048576} ${100 - percent}`,
   );
 
 /** A glab logged in to one GitLab host, whose token expires on `expires` (or never). */
@@ -471,7 +471,6 @@ test("a git that warns while answering is still answering", () =>
   runEffect(
     Effect.gen(function* () {
       yield* healthy();
-      // A git that warns and then answers correctly is not a failure.
       yield* bin.add(
         "git",
         `case "$*" in

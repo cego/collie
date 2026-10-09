@@ -38,13 +38,27 @@ test("a command still running when its scope closes is put down", () =>
     }),
   ));
 
-test("the environment it is given is laid over this process's own", () =>
+test("the environment it is given is the child's whole environment", () =>
   Effect.runPromise(
     Effect.gen(function* () {
-      const user = Bun.env.USER;
-      const asked = yield* inTerminal(["/bin/sh", "-c", 'echo "$USER/$GIVEN"'], {
-        env: { GIVEN: "given" },
-      });
+      yield* Effect.acquireRelease(
+        Effect.sync(() => {
+          const was = Bun.env.COLLIE_TERMINAL_INHERITED;
+          Bun.env.COLLIE_TERMINAL_INHERITED = "inherited";
+          return was;
+        }),
+        (was) =>
+          Effect.sync(() => {
+            if (was === undefined) delete Bun.env.COLLIE_TERMINAL_INHERITED;
+            else Bun.env.COLLIE_TERMINAL_INHERITED = was;
+          }),
+      );
+      const asked = yield* inTerminal(
+        ["/bin/sh", "-c", 'echo "${COLLIE_TERMINAL_INHERITED-none}/$GIVEN/$BROWSER"'],
+        {
+          env: { PATH: Bun.env.PATH, GIVEN: "given", BROWSER: "/login/browser" },
+        },
+      );
       const said = yield* asked.output.pipe(
         Stream.decodeText(),
         Stream.runFold(
@@ -52,7 +66,7 @@ test("the environment it is given is laid over this process's own", () =>
           (all, chunk) => all + chunk,
         ),
       );
-      expect(said).toContain(`${user}/given`);
+      expect(said).toContain("none/given//login/browser");
     }).pipe(Effect.scoped),
   ));
 

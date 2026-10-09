@@ -17,8 +17,8 @@ const killed = <C extends Bun.Subprocess>(start: () => C) =>
   Effect.acquireRelease(Effect.sync(start), (child) => Effect.sync(() => child.kill()));
 
 /**
- * Starts `argv` in a terminal Bun gives it, on Linux and macOS alike. `env` is laid over
- * this process's own rather than replacing it, as `extendEnv` does for Effect's children.
+ * Starts `argv` in a terminal Bun gives it, on Linux and macOS alike. `env`, where given, is
+ * the child's whole environment; without one it gets this process's own.
  */
 export const inTerminal = Effect.fn("inTerminal")(function* (
   argv: ReadonlyArray<string>,
@@ -29,7 +29,7 @@ export const inTerminal = Effect.fn("inTerminal")(function* (
   const child = yield* own(() =>
     Bun.spawn([...argv], {
       ...options,
-      env: { ...Bun.env, ...options.env },
+      env: options.env ?? Bun.env,
       terminal: {
         data: (_, bytes) => Queue.offerUnsafe(output, bytes),
         exit: () => Queue.endUnsafe(output),

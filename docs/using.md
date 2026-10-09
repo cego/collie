@@ -911,7 +911,8 @@ On macOS, Desktop opened from Finder or the Dock starts with launchd's short PAT
 start it takes your login shell's environment (`$SHELL -ilc`), including its PATH, finding
 `herdr`, `collie`, `claude`, `git` and `ssh` as your terminal does. If the shell does not
 answer within five seconds, Desktop keeps the environment it was given and logs why. On Linux it
-keeps the environment its session gave it.
+gives its children the environment its session gave it, leaving out what Electrobun's
+launcher sets for Desktop itself.
 
 It shows up as **Collie**, with the Collie mark — the dog on the white tile the TUI board
 shows, which reads on a dark taskbar too — in your app launcher, on its window, in the

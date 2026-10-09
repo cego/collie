@@ -205,9 +205,6 @@ effectTest("a view nobody has opened is not read at all", function* () {
 });
 
 effectTest("a glab that writes a notice to stderr is still read as a merge request", function* () {
-  // glab writes non-fatal notices — a new version, a host warning — to stderr and still
-  // exits 0. Read as part of the answer, they made a merge request that had just been
-  // read successfully report as "not a merge request", cached for the whole TTL.
   const bin = yield* FakeBin.make(`${rig.root}/bin`);
   yield* bin.add(
     "glab",
