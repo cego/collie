@@ -646,6 +646,20 @@ test("a Machine's settings sync and its credentials are kept on its row, and dro
   expect(removed.synced.size + removed.given.size).toBe(0);
 });
 
+test("a Flock held across a new subscription drops each Machine its routes no longer name", () => {
+  const held = [routed(pc), snapshot(pc, [asking]), routed(vm), snapshot(vm, [working])].reduce(
+    applyItem,
+    EMPTY_FLOCK,
+  );
+  const again = [
+    { _tag: "Routes", profiles: [pc.profile] } as const,
+    routed(pc),
+    snapshot(pc, [asking]),
+  ].reduce(applyItem, held);
+  expect([...again.routes.keys()]).toEqual([pc.profile]);
+  expect([...again.machines.keys()]).toEqual([pc.installation]);
+});
+
 test("Add Machine takes a Machine only once its SSH target, label and session are filled", () => {
   expect(machineToAdd({ target: " mk@vm ", label: "vm ", session: " default" })).toEqual({
     target: "mk@vm",

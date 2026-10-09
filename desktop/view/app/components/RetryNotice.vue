@@ -3,7 +3,6 @@ import { AsyncResult, useAtomValue } from "@effect/atom-vue";
 import type { Trouble } from "../../../src/shared/retrying";
 import { retry } from "../flock";
 
-/** A subscription in trouble: what went wrong, a countdown to its next try, and Retry now. */
 const props = defineProps<{ title: string; trouble: Trouble }>();
 const clock = useAtomValue(() => secondsAtom);
 const retryNow = () => retry.wake();

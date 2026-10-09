@@ -137,6 +137,13 @@ test("Settings says when the monitor's scale is unknown, and why", () => {
   );
 });
 
+test("with the monitor unknown, Settings says the scale the human's Zoom draws at", () => {
+  const unknown = { _tag: "Unknown", reason: "This is not a Hyprland session" } as const;
+  expect(drawnSaid({ monitor: unknown, rendered: 2, zoom: 0.8, preference: 0.8 }, 1.6)).toBe(
+    "This desktop's monitor scale is not known to Desktop; drawn at 1.6×, zoom 80%. This is not a Hyprland session.",
+  );
+});
+
 test("Settings says when the view is not drawn at the scale the zoom should give it", () => {
   expect(drawnSaid(onFourK, 2)).toBe(
     "Drawn at 1.5× on DP-1 (3840×2160, Hyprland scale 1.5). Rendered at 2×, so zoom 75% × your 100%. Yet this window draws at 2×, so the zoom has not taken.",

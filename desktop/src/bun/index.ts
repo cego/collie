@@ -709,6 +709,7 @@ const main = Effect.gen(function* () {
           shown = EMPTY_FLOCK;
           routedAt.clear();
           const before: ReadonlyArray<FlockItem> = [
+            { _tag: "Routes", profiles: [...routes.keys()] },
             ...reachable.map(({ machine }): FlockItem => ({ _tag: "Routed", machine })),
             ...(yield* savedBoards(boards)).filter(listed),
             ...(yield* savedOnboardings(onboardings)).filter(listed),
