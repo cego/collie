@@ -546,6 +546,7 @@ onMachineWith("opencode")(
     runEffect(
       Effect.gen(function* () {
         yield* removesCache("opencode");
+        const temporary = yield* fs.makeTempDirectoryScoped({ prefix: "opencode-probe-" });
         const port = 39_517;
         // One `sh`, not Bun's shell: this needs a background job, `$!` and a poll,
         // none of which Bun's own parser takes.
@@ -562,9 +563,15 @@ onMachineWith("opencode")(
                  i=$((i + 1))
                  sleep 0.5
                done
-               kill $server 2>/dev/null`,
+               kill $server 2>/dev/null
+               wait $server 2>/dev/null`,
             ],
-            { cwd: rig.projectDir, stdout: "pipe", stderr: "ignore" },
+            {
+              cwd: rig.projectDir,
+              env: { ...Bun.env, TMPDIR: temporary },
+              stdout: "pipe",
+              stderr: "ignore",
+            },
           );
           return new Response(probe.stdout).text().finally(() => probe.exited);
         });

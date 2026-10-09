@@ -862,6 +862,9 @@ its time.
 - **A test can go red.** Break `src/` the way its name says and watch it fail before relying
   on it. A test that cannot fail, or whose every failure another test already has, is
   deleted.
+- **An installed harness creates temporary files.** Give a server probe a scoped
+  `TMPDIR`, including its extracted native libraries, and wait for the server to exit
+  before removing it.
 - **A front door loads what it runs.** `src/main.ts` imports each front door with
   `import()` once it knows which one runs, and `src/` imports `@effect/platform-bun` and
   `effect/http` by module rather than through their index. `test/startup.test.ts`
