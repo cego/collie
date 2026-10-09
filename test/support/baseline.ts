@@ -1368,6 +1368,11 @@ scenario("what a finished Run of each shipped module offers is the module's own 
         offersFrom(review, facts({ diffTarget: "branch:main...HEAD" })).map((offer) => offer.id),
       ).toEqual(["run-again"]);
 
+      const implement = yield* declaredIn(shipped("implement"));
+      expect(
+        offersFrom(implement, facts({ succeeded: false, branch: "feature" })).map((o) => o.id),
+      ).toEqual(["follow-up"]);
+
       // A plan offers what it wrote, and only once it has written something.
       const plan = yield* declaredIn(shipped("plan"));
       expect(offersFrom(plan, facts({ outcome: "plan", planIssues: 3 })).map((o) => o.id)).toEqual([

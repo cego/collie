@@ -196,7 +196,7 @@ export default defineWorkflow({
       id: "follow-up",
       title: "Keep going on this",
       workflow: "self",
-      when: "succeeded",
+      when: "always",
       eligible: (facts) => facts.branch !== null,
     },
   ],

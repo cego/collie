@@ -1016,7 +1016,8 @@ Repair the checks and resume the Run: the pending proof reruns them even when th
 only changes the environment. A changed tree or approved set also gets fresh proof while
 completed build Activities are retained. Missing reviewer evidence gets a fresh review;
 if it still cannot prove the outcome, the Run fails with the gaps named and a follow-up
-can repair the work. The merge request is reached only once the outcome is proved. Only the latest
+can repair the work; implement offers one after success or failure on a branch. The merge request
+is reached only once the outcome is proved. Only the latest
 of Collie's results on that tree counts, so a
 pass a later fail contradicts is not one. In `implement`, a check that fails at the gate is run once more,
 before any fix, where the branch leaves the default branch, in the run's own checkout. One that
