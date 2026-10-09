@@ -26,9 +26,9 @@
 
 **Exhausted** — A Subscription with a window that applies to the Model and is used up: fully used, or reported by its source as reached (a spend limit, Codex's `rateLimitReachedType`). Its reset must still be ahead. A Subscription with no reading is never Exhausted. Being Exhausted never refuses or delays work. It only decides which agent does the work.
 
-**Fallback chain** — The human's `fallbacks` setting: an ordered list of `harness` or `harness/model` entries, shared across the Flock. It is tried after whatever the work itself prefers, including a Workflow's own `otherwise`. It is empty by default.
+**Fallback chain** — The human's `fallbacks` setting: an ordered list of `harness` or `harness/model` entries, shared across the Flock. It is tried after whatever the work itself prefers, including a Workflow's own `otherwise`. It is empty by default. The **Flock chat** has a chain of its own, `chatFallbacks` in Desktop's Settings, for this computer only. It is tried after the chat's own harness and model, judged by the same rules.
 
-**Fallback** — Work moved to the next agent with room because its agent's Subscription is Exhausted. If that is known before the agent starts, the recorded choice is simply another agent. Mid-work, Collie closes the agent and starts a new one on the same operation, with the same prompt and a hand-over. The hand-over says the checkout holds what was done and where the earlier transcript is. The new agent also takes the old one's place for later work. A Fallback is recorded with what it fell back from and why.
+**Fallback** — Work moved to the next agent with room because its agent's Subscription is Exhausted. If that is known before the agent starts, the recorded choice is simply another agent. Mid-work, Collie closes the agent and starts a new one on the same operation, with the same prompt and a hand-over. The hand-over says the checkout holds what was done and where the earlier transcript is. The new agent also takes the old one's place for later work. A Fallback is recorded with what it fell back from and why. In the **Flock chat** a Fallback keeps the conversation on another model of the same harness. On another harness it starts a new conversation, and Desktop's hand-over says where it came from and where the earlier transcript is.
 
 **Input** — A value a Workflow needs (plan directory, diff target, goal). Only the **Launch flow** infers one, for a human, from context (branch, cwd, earlier plan Runs, glab), and a Run records which of its Inputs were inferred and which were given. An agent's start — chat's Collie tools or `collie run start` — gives every Input explicitly, an optional one as an explicit empty, and a start missing one is refused with what would fill it.
 
@@ -106,20 +106,23 @@ bound to a session id Collie mints per Herd and harness, never to whichever sess
 last in a directory. Its whole reach is **Collie tools**.
 
 **Flock chat** — Desktop's conversation about the **Flock**: one live per Desktop (earlier
-ones can be reopened, never two at once), a session of
-the user's own Claude Code driven through the Agent SDK in Desktop's main process. It
-reaches Collie through **Collie tools**, this computer through Claude Code's own Read, Glob,
-Grep, Write, Edit and Bash, and each Machine's files through `collie_read`, `collie_glob`,
-`collie_grep`, `collie_write` and `collie_edit`; none of them asks first. Its Collie and file
-tools are answered by each Machine's host over that Machine's `chat` channel, and name
-everything `<machine>:<id>`, a file `<machine>:<path>`. Beside each Home's Native chat, never
-instead of it.
+ones can be reopened, never two at once), a session of the harness Desktop's Settings name
+for it — the user's own Claude Code (the default), Pi or Codex — driven from Desktop's main
+process, on the model Settings name or else the harness's own default. A conversation is
+held on one harness: a new model keeps it, a new harness starts a fresh one. It reaches
+Collie through **Collie tools**, this computer through that harness's own file and shell
+tools, and each Machine's files through `collie_read`, `collie_glob`, `collie_grep`,
+`collie_write` and `collie_edit`; none of them asks first. Its Collie and file tools are
+answered by each Machine's host over that Machine's `chat` channel, and name everything
+`<machine>:<id>`, a file `<machine>:<path>`. Beside each Home's Native chat, never instead
+of it.
 
 **Chat harness** — Which native chat Collie opens with, `claude` (the default, on an
 existing installation as much as a new one) or `pi`, from `chat_harness` in `config.json`.
 It is a launch preference: changing it never stops, replaces or summarises a running
 conversation, and never touches the harnesses Runs use. Each harness keeps its own native
-history; nothing is carried between them.
+history; nothing is carried between them. The **Flock chat**'s harness is Desktop's own
+setting, apart from this one.
 
 **News** — What Collie noticed and the conversation has not been told: the approved
 triggers only — terminal outcomes, halts, pending Choices, evidence gaps, repeated-failure

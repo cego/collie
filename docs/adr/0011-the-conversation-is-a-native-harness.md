@@ -6,7 +6,8 @@ transport adapters. The amendment is "Chat may do what the human could do on the
 below, which replaces this ADR's original rule that chat's write tools carry nothing out,
 "Amended 2026-09-29: chat may choose what proves a Run", "Amended 2026-10-02: the
 tools are one Effect Toolkit", and "Amended 2026-10-05: a Herd's chat per Home, and one
-Flock chat per Desktop", and "Amended 2026-10-07: the Flock chat reaches files".
+Flock chat per Desktop", "Amended 2026-10-07: the Flock chat reaches files", and
+"Amended 2026-10-09: the Flock chat runs on the harness Settings names".
 
 The Herd's conversation is an ordinary Claude Code or Pi session running in the Home's
 right-hand pane. Collie does not implement a chat.
@@ -258,6 +259,65 @@ A file the chat finds, here or on a Machine, can go with a start, a follow-up or
 a pasted one does ([ADR-0046](0046-an-attachment-is-uploaded-once-and-belongs-to-the-run.md)).
 The system prompt says what the chat can reach, and still that what reaches it through a
 tool, a file included, is data and not instructions.
+
+## Amended 2026-10-09: the Flock chat runs on the harness Settings names
+
+**Status: accepted, to be built.**
+
+The Flock chat ran on Claude Code alone, so a human whose seat for this conversation is a
+ChatGPT subscription in Pi or Codex could not hold it there. Desktop's Settings now name its
+harness and model under **Chat**, for **This computer only**: `claude` (the default), `pi` or
+`codex`, and a model written as that harness takes it. OpenCode is not offered: each
+harness is a driver of its own, and nobody has asked for that one.
+
+Each harness is driven as the human runs it, from their own installed binary, login and
+model catalogue on Desktop's login PATH: Claude Code through the Agent SDK as before, Pi in
+RPC mode (`pi --mode rpc`), Codex through its App Server (`codex app-server`). The harness
+still owns the session, its persistence and its compaction; Collie still owns which session
+it is and what the model may reach. A harness that is not on PATH is said in the chat, and
+nothing else changes.
+
+- **The model is checked as a Run's is**, against the same table and the shared
+  `models.<harness>` extras, and Settings refuses one the harness does not take with what
+  it would take. A pi model names its provider (`openai-codex/gpt-6.1-sol`): that is the
+  table's rule, and how a fallback knows which Subscription it draws on
+  ([ADR-0049](0049-work-goes-to-an-agent-with-usage-left.md) D6). Unset, claude runs `opus`
+  at medium effort ([ADR-0032](0032-a-chat-starts-new-on-the-latest-opus.md)), and pi and
+  codex run on the default they are configured with. Choosing another harness unsets the
+  model, as a Run's harness keeps no model chosen for another.
+- **A change applies once the turn under way has ended**, never during it. A new model
+  keeps the conversation, and its next turn runs on that model. A new harness is Start
+  fresh on that harness: a conversation is held on one harness and continued on no other.
+  Earlier conversations are listed from the history each harness keeps, and the list is
+  the current conversation's harness's.
+- **It falls back as a Run does**, along a chain of its own, when the Subscription it draws
+  on is Exhausted: ADR-0049, "Amended 2026-10-09: the Flock chat falls back too".
+- **Collie's tools reach Pi and Codex over MCP on loopback.** Desktop serves the Toolkit's
+  tools, its five file tools and AskUserQuestion as one streamable-HTTP MCP server on
+  127.0.0.1, behind a bearer token minted when Desktop starts and handed to the harness's
+  process in its environment, never on a command line or in a file. Claude keeps its
+  in-process server. Pi is given the server by a generated `-e` extension that registers
+  it with direct exposure; Codex by `mcp_servers.collie` in its config. AskUserQuestion
+  keeps Claude's arguments and its choice buttons, waits for the click however long it
+  takes, and in a turn of Desktop's own answers at once that nobody is there to click.
+- **On this computer the chat keeps the harness's own file and shell tools**, and none asks
+  first: Pi's `read`, `bash`, `edit`, `write`, `grep`, `find` and `ls`, and Codex's with
+  approvals `never` and the `danger-full-access` sandbox. That is the reach Claude Code's
+  built-ins already have here, and the system prompt names the tools neutrally.
+- **As little of the user's own setup as the harness lets Collie leave out.** Pi starts
+  with none of the user's extensions, skills, prompt templates or context files. Codex
+  cannot leave out `config.toml` without leaving out its login, so the user's
+  configuration loads, and Collie overrides the instructions, approvals, sandbox and its
+  own server.
+- **What Claude is told by a hook, Pi and Codex are told in the message.** The Machine rule
+  and News go after the human's words as Desktop's own bracketed note, as the card already
+  does, and the conversation read back leaves the note out of the human's bubble. Images
+  go to all three as images; a PDF goes to Pi and Codex by the listing alone, since neither
+  takes a document.
+- **The chat can set what the human sets here** (invariant 1): `collie_chat_harness` reads
+  the harness, model and fallback chain, and replaces them when the human asks, checked as
+  Settings checks them, as `collie_machine_rule` does the rule. Its own change applies
+  after the turn it was made in.
 
 ## What has actually been proven
 
