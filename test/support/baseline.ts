@@ -1836,7 +1836,7 @@ scenario(
 );
 
 scenario(
-  "a gate the fixes cannot satisfy still opens the merge request, and it says what is unproved",
+  "a gate the fixes cannot satisfy stays suspended and resumes after the check is repaired",
   () =>
     runEffect(
       Effect.gen(function* () {
@@ -1857,7 +1857,7 @@ scenario(
               executable: "sh",
               argv: [
                 "-c",
-                `n=$(($(cat ${count} 2>/dev/null || echo 0) + 1)); echo $n > ${count}; [ $n -eq 2 ]`,
+                `n=$(($(cat ${count} 2>/dev/null || echo 0) + 1)); echo $n > ${count}; [ $n -eq 2 ] || [ -f repaired ]`,
               ],
               cwd: rig.projectDir,
             },
@@ -1872,27 +1872,38 @@ scenario(
         };
         yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, fix, fix, fix, fix, OPENED]);
 
-        // Nobody is asked: the fixes run by themselves, and the human reads what is left
-        // in the merge request before it lands.
-        const result = yield* ran({
-          entry: shipped("implement"),
+        const entry = shipped("implement");
+        const options = {
+          entry,
           runId: "r-impl-gate",
           input: { plan },
           options: { outcome: "feature" },
-        });
-        yield* bin.restore();
+        };
+        const result = yield* running(options, (status) =>
+          until(
+            () => status,
+            (got) => got !== "pending",
+          ),
+        );
 
-        expect(said(result)).toBe(OPENED.mr_url);
+        expect(result).toBe("suspended");
         expect(yield* asked("r-impl-gate", "gate-fix-4")).toContain("unit failed");
-        const opening = yield* asked("r-impl-gate", "mr");
-        expect(opening).toContain("- unproved after 4 gate fixes: unit failed");
+        expect(yield* parkedWhy("r-impl-gate")).toContain("unit failed");
+        expect(yield* fs.exists(`${dir}/agents/r-impl-gate/mr.prompt.md`)).toBe(false);
+
+        yield* fs.writeFileString(`${rig.projectDir}/repaired`, "fixed\n");
+        const completed = yield* resumed(options);
+        expect(said(completed)).toBe(OPENED.mr_url);
+        expect(yield* parkedWhy("r-impl-gate")).toBe("");
+        expect((yield* prompts()).filter((one) => one.includes("build-step-1"))).toHaveLength(1);
+        yield* bin.restore();
       }),
     ),
   120_000,
 );
 
 scenario(
-  "a gap no check can close goes to the merge request without a gate fix chasing it",
+  "missing reviewer evidence suspends the Run without a gate fix chasing it",
   () =>
     runEffect(
       Effect.gen(function* () {
@@ -1902,18 +1913,25 @@ scenario(
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
         yield* approve("r-gate-judged", ["unit"]);
         yield* rig.queueOutputs([BUILT, { ...CLEAN_SYNTHESIS, scope_met: false }, OPENED]);
-        const result = yield* ran({
-          entry: shipped("implement"),
-          runId: "r-gate-judged",
-          input: { plan },
-          options: { outcome: "feature" },
-        });
+        const result = yield* running(
+          {
+            entry: shipped("implement"),
+            runId: "r-gate-judged",
+            input: { plan },
+            options: { outcome: "feature" },
+          },
+          (status) =>
+            until(
+              () => status,
+              (got) => got !== "pending",
+            ),
+        );
         yield* bin.restore();
 
-        expect(said(result)).toBe(OPENED.mr_url);
-        expect(yield* prompts()).toHaveLength(3);
-        expect(yield* asked("r-gate-judged", "mr")).toContain(
-          "- unproved, and no check can prove it: the review did not report scope_met: true for the agreed scope",
+        expect(result).toBe("suspended");
+        expect(yield* prompts()).toHaveLength(2);
+        expect(yield* parkedWhy("r-gate-judged")).toContain(
+          "the review did not report scope_met: true for the agreed scope",
         );
       }),
     ),
@@ -2044,7 +2062,7 @@ scenario(
 );
 
 scenario(
-  "a check red before the Run is reported in the merge request, and no gate fix is asked for it",
+  "a check red on the base still reaches the fix loop before the merge request",
   () =>
     runEffect(
       Effect.gen(function* () {
@@ -2054,11 +2072,27 @@ scenario(
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
         yield* approve("r-impl-red-base", ["unit"]);
         const fs = yield* FileSystem.FileSystem;
+        const count = `${rig.root}/runs`;
         yield* fs.writeFileString(
           `${evidenceDir(dir, "r-impl-red-base")}/approved.json`,
-          asApproved([{ name: "unit", executable: "false", argv: [], cwd: rig.projectDir }]),
+          asApproved([
+            {
+              name: "unit",
+              executable: "sh",
+              argv: [
+                "-c",
+                `n=$(($(cat ${count} 2>/dev/null || echo 0) + 1)); echo $n > ${count}; [ $n -ge 4 ]`,
+              ],
+              cwd: rig.projectDir,
+            },
+          ]),
         );
-        yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, OPENED]);
+        yield* rig.queueOutputs([
+          BUILT,
+          CLEAN_SYNTHESIS,
+          { verdict: "clean", fixed: [], disputed: [], checks: [{ name: "unit" }] },
+          OPENED,
+        ]);
         const result = yield* ran({
           entry: shipped("implement"),
           runId: "r-impl-red-base",
@@ -2069,9 +2103,8 @@ scenario(
 
         expect(said(result)).toBe(OPENED.mr_url);
         const opening = yield* asked("r-impl-red-base", "mr");
-        expect(opening).toContain("unit also fails at ");
-        expect(opening).toContain("before this Run's changes");
-        expect(yield* fs.exists(`${dir}/agents/r-impl-red-base/gate-fix-1.prompt.md`)).toBe(false);
+        expect(opening).toContain("gate fix 1");
+        expect(yield* asked("r-impl-red-base", "gate-fix-1")).toContain("unit failed");
       }),
     ),
   120_000,
@@ -2111,19 +2144,25 @@ scenario(
           checks: [{ name: "unit" }],
         };
         yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, fix, fix, fix, fix, OPENED]);
-        const result = yield* ran({
-          entry: shipped("implement"),
-          runId: "r-impl-own-red",
-          input: { plan },
-          options: { outcome: "feature" },
-        });
+        const result = yield* running(
+          {
+            entry: shipped("implement"),
+            runId: "r-impl-own-red",
+            input: { plan },
+            options: { outcome: "feature" },
+          },
+          (status) =>
+            until(
+              () => status,
+              (got) => got !== "pending",
+            ),
+        );
         yield* bin.restore();
 
-        expect(said(result)).toBe(OPENED.mr_url);
+        expect(result).toBe("suspended");
         expect(yield* asked("r-impl-own-red", "gate-fix-1")).toContain("unit failed");
-        const opening = yield* asked("r-impl-own-red", "mr");
-        expect(opening).toContain("- unproved after 4 gate fixes: unit failed");
-        expect(opening).not.toContain("also fails at");
+        expect(yield* parkedWhy("r-impl-own-red")).toContain("unit failed");
+        expect(yield* fs.exists(`${dir}/agents/r-impl-own-red/mr.prompt.md`)).toBe(false);
         // The comparison ran at the base and put the branch back.
         expect(yield* git("rev-parse", "--abbrev-ref", "HEAD")).toBe("feature");
         const journal = yield* fs.readFileString(
@@ -2372,6 +2411,48 @@ interface ShippedRun {
   readonly options?: Readonly<Record<string, string>>;
   readonly host?: HostOverride;
 }
+
+scenario(
+  "unavailable merge request handling suspends and resumes without rebuilding",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* bin.add("glab", `exit 0`);
+        yield* repository();
+        yield* exec(["git", "remote", "set-url", "origin", "git@github.com:team/project.git"], {
+          cwd: rig.projectDir,
+        });
+        const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
+        yield* approve("r-impl-no-forge", ["unit"]);
+        yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, OPENED]);
+        const options = {
+          entry: shipped("implement"),
+          runId: "r-impl-no-forge",
+          input: { plan },
+        };
+        const status = yield* running(options, (reading) =>
+          until(
+            () => reading,
+            (got) => got !== "pending",
+          ),
+        );
+        expect(status).toBe("suspended");
+        expect(yield* parkedWhy(options.runId)).toContain("no GitLab remote");
+        expect(yield* prompts()).toHaveLength(2);
+
+        yield* exec(
+          ["git", "remote", "set-url", "origin", "git@gitlab.example.com:team/project.git"],
+          { cwd: rig.projectDir },
+        );
+        expect(said(yield* resumed(options))).toBe(OPENED.mr_url);
+        expect(yield* prompts()).toHaveLength(3);
+        expect(yield* parkedWhy(options.runId)).toBe("");
+        yield* bin.restore();
+      }),
+    ),
+  120_000,
+);
 
 /** A Run of a shipped module started, and `waiting` until it has stopped by itself. */
 const running = <A, E>(

@@ -618,6 +618,9 @@ the modules as they are now — so a run whose module was missing and has been p
 carried on without restarting the host. On a run the engine is already working it changes
 nothing.
 
+A finished execution keeps its recorded result; `resume` does not reopen its steps. Use
+the Run's follow-up action to continue unfinished work on the same Task and branch.
+
 A workflow edited in a way that changes its shape has no promise of a seamless resume, and
 not every such edit can be detected: begin new work where one will not carry on. A run an
 older Collie recorded is read-only and is refused with what recorded it; `run start` begins
@@ -1008,13 +1011,17 @@ What kind of result a run has to prove, and so what evidence closes it:
 The gate runs before the merge request, which is where the claim is made. Collie runs the
 run's own approved set itself at the tree as it stands, then says what is missing. A check
 that failed runs once more; gaps a check could still close go to the implementer for up to
-four fixes, a reviewer's judgement or an Output's claim goes straight to the merge request
-since no fix moves it, and whatever is still unproved is named in the merge request, which opens anyway: the
-human verifies before it lands. Only the latest of Collie's results on that tree counts, so a
+four fixes. Evidence still missing after those fixes suspends the Run with the gaps named;
+missing reviewer evidence also suspends it. Repair the missing evidence and resume the
+Run. A changed tree gets fresh checks while completed build and review Activities are
+retained. The merge request is reached only once the outcome is proved. Only the latest
+of Collie's results on that tree counts, so a
 pass a later fail contradicts is not one. In `implement`, a check that fails at the gate is run once more,
 before any fix, where the branch leaves the default branch, in the run's own checkout. One that
-fails there too is named in the merge request as failing before the run's changes, with that
-revision, and is not handed to the implementer. A run with nothing approved is told so rather than passed —
+fails there too remains required on the Run's tree: the base's exit code cannot show
+whether the branch added different failures. If merge request handling is unavailable,
+the Run suspends with the reason instead of completing without delivery. A run with
+nothing approved is told so rather than passed —
 an empty set would make the gate say yes to anything — and a run whose outcome needs the
 approved set is refused at `run start` when it has none (see [What Collie may run
 itself](#what-collie-may-run-itself)). A grant withdrawn while the run works parks it at its

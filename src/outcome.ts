@@ -74,10 +74,7 @@ export interface Collected {
     readonly file: string;
     readonly checks: ReadonlyArray<string>;
   }>;
-  /**
-   * Approved checks that also failed where the branch leaves the default branch. One whose
-   * latest run here failed is not a gap the Run can close; the Run reports it instead.
-   */
+  /** Baseline failures are context; they never satisfy a check on this tree. */
   readonly preexisting?: ReadonlySet<string>;
 }
 
@@ -103,11 +100,6 @@ function lastAtFinal(
         v.end.fingerprint === got.final.fingerprint,
     )
     .at(-1)?.result;
-}
-
-/** Failed where the branch leaves the default branch, and Collie's latest run here failed too. */
-function stillPreexisting(got: Collected, name: string): boolean {
-  return got.preexisting?.has(name) === true && lastAtFinal(got, name, "collie") === "fail";
 }
 
 /** Whether this kind of result is proved by Collie's own run of the approved set. */
@@ -151,7 +143,6 @@ function approvedSetGaps(got: Collected): string[] {
   const gaps: string[] = [];
   for (const spec of got.approved) {
     if (lastPassedAtFinal(got, spec.name, "collie")) continue;
-    if (stillPreexisting(got, spec.name)) continue;
     const any = got.verifications.filter((v) => v.name === spec.name);
     if (any.length === 0) gaps.push(`${spec.name} was never run`);
     else if (any.some((v) => v.result === "fail")) gaps.push(`${spec.name} failed`);
@@ -243,7 +234,7 @@ function gapsOf(kind: Outcome, got: Collected): Array<{ text: string; check: boo
       // collected these itself; what matters is a pass on the tree in front of us.
       for (const ticket of got.tickets) {
         for (const name of ticket.checks) {
-          if (lastPassedAtFinal(got, name) || stillPreexisting(got, name)) continue;
+          if (lastPassedAtFinal(got, name)) continue;
           check(
             `${ticket.file} promised check "${name}", which has no passing verification on this tree`,
           );

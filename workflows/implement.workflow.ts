@@ -52,7 +52,8 @@ import {
   type VerifySpec,
 } from "collie";
 import { DateTime, Effect, FileSystem, Schema } from "effect";
-import type { WorkflowEngine, WorkflowInstance } from "effect/workflow/WorkflowEngine";
+import { WorkflowInstance, type WorkflowEngine } from "effect/workflow/WorkflowEngine";
+import * as Workflow from "effect/workflow/Workflow";
 import * as Activity from "effect/workflow/Activity";
 import markdown from "./implement.md" with { type: "text" };
 import { IMPLEMENTER, REVIEWER, reviewPass } from "./reviewing.ts";
@@ -370,8 +371,9 @@ export default defineWorkflow({
         readonly round?: number;
       }) {
         passes += 1;
+        const { final } = yield* host.evidence(runId, cwd);
         const pass = yield* Activity.make({
-          name: `gate.${passes}`,
+          name: `gate.${passes}.${final.head_sha}.${final.fingerprint}`,
           success: Schema.Struct({
             gaps: Schema.Array(Schema.String),
             // A pass journaled before gaps were told apart handed a fix every gap.
@@ -395,7 +397,6 @@ export default defineWorkflow({
               reviewed: ["synthesize"],
               roots: [place.dir, cwd],
               tickets: tickets.map((ticket) => ({ file: ticket.file, checks: ticket.checks })),
-              preexisting: baseline.map((one) => one.name),
             };
             return { gaps: evidenceGapsOf(asked), fixable: checkGapsOf(asked), passed: now };
           }).pipe(Effect.orDie),
@@ -405,8 +406,7 @@ export default defineWorkflow({
       });
       let gaps = yield* gapsNow({ pass: "gate" });
       if (gaps.fixable.length > 0) {
-        // A check that failed is run once where this branch left the default branch. One
-        // that fails there too was never this Run's to fix, and the merge request says so.
+        // A baseline failure is context, never proof that this tree passes.
         baseline = yield* Activity.make({
           name: "baseline",
           success: Schema.Array(Schema.Struct({ name: Schema.String, at: Schema.String })),
@@ -487,13 +487,21 @@ export default defineWorkflow({
         ),
       ];
       if (unsettled.length > 0) yield* host.record(runId, `unsettled: ${unsettled.join("; ")}`);
+      if (gaps.gaps.length > 0) {
+        yield* host.parked(
+          runId,
+          `Outcome unproved after ${fixes} gate fixes: ${gaps.gaps.join("; ")}. Repair the missing evidence, then resume ${runId}.`,
+        );
+        return yield* Workflow.suspend(yield* WorkflowInstance);
+      }
+      yield* host.parked(runId, null);
 
-      // A step that needs something this machine or repository does not have is not a
-      // failure: it is work that cannot be done here, and the Run says so.
       const gitlab = yield* host.mr({ cwd, source: { value: source.value, kind: source.kind } });
       if (!gitlab.ok) {
-        yield* host.record(runId, `no merge request: ${gitlab.reason}`);
-        return `no merge request: ${gitlab.reason}`;
+        const reason = `Cannot open the merge request: ${gitlab.reason}. Repair it, then resume ${runId}.`;
+        yield* host.record(runId, reason);
+        yield* host.parked(runId, reason);
+        return yield* Workflow.suspend(yield* WorkflowInstance);
       }
 
       const settledEvidence = yield* host.evidence(runId, cwd);

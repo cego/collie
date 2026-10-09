@@ -974,9 +974,9 @@ sentence each, and empty where the evidence is there. It reads the journal, the 
 list, the Outputs you hold and the tickets you built — and it will not take a reviewer's
 judgement from an implementer's Output, because the agent that wrote the change cannot
 vouch for its own scope. Only the latest result for a check on the tree in front of it
-counts, so a pass a later fail on the same tree contradicts is not one. Pass `preexisting` with the approved checks that also failed where
-the branch leaves the default branch, and one that still fails is left out of the gaps for your Run
-to report instead.
+counts, so a pass a later fail on the same tree contradicts is not one. Baseline failures
+are diagnostic context: `preexisting` does not remove gaps. Each approved check and each
+ticket's promised check still needs a passing verification on the current tree.
 
 ```ts
 const gaps = evidenceGapsOf({
