@@ -1,6 +1,6 @@
-// A workflow wrapped around a tool that makes a checkout of its own, as bodil does: the
-// tool's "up" cuts a worktree on a branch, a child works in it, and the tool's "down" runs
-// once the child has settled, whether it succeeded or not.
+// A workflow wrapped around a tool that makes a checkout of its own, as bodil makes its
+// checkout: the tool's "up" cuts a worktree on a branch, a child works in it, and the tool's
+// "down" runs once the child has settled, whether it succeeded or not.
 
 import { WorkflowError, ask, child, defineWorkflow } from "collie";
 import { Effect, Schema, Stream } from "effect";

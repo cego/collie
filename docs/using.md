@@ -162,9 +162,9 @@ is no — a Run that would only find out at its merge step is not started.
 
 ### Working with bodil
 
-Collie has no bodil option. A `bodil` workflow wraps `implement`: it runs `bodil remote up`,
-has implement work in bodil's own worktree on bodil's branch, and runs `bodil remote down`
-once implement has settled. The module is in
+Collie has no bodil option. A `bodil` workflow wraps `implement`: it runs
+`bodil remote up --detach`, has implement work in bodil's own worktree on bodil's branch,
+and leaves the instance up to check the change in. The module is in
 [`docs/sdk.md`](sdk.md#a-checkout-another-tool-makes). Save it as
 `~/.collie/user/workflows/bodil.workflow.ts` until bodil's own install script links it, then:
 
@@ -172,8 +172,8 @@ once implement has settled. The module is in
 collie run start bodil --input plan=… --input brands=happytiger
 ```
 
-`--input name=<name>` names the instance; without it the Run's task name does. A Run
-stopped part-way leaves the instance up, for `bodil remote down <name>`.
+`--input name=<name>` names the instance; without it the Run's task name does. However the
+Run ended, `bodil remote down <name>` takes the instance down once you are done with it.
 
 ### Environment variables
 
