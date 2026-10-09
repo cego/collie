@@ -98,7 +98,8 @@ credentials and the Linear MCP — the last two unless `--skip` names them. Secr
 stdin (`collie onboard --secrets-stdin < secrets.env`), never as arguments. It ends in
 `collie doctor`, and onboarded means doctor is ready. Re-running it
 repairs only what is missing, and a development checkout gets the checks and the logins
-alone. It adds no keybindings; the steps and their `--json` stream are in
+alone. Login commands keep your session's environment so Claude Code can read its macOS
+Keychain login. It adds no keybindings; the steps and their `--json` stream are in
 [the CLI reference](cli.md#onboarding-a-machine).
 
 ### The skills

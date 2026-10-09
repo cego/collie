@@ -663,6 +663,42 @@ test("Claude Code is asked whether it is logged in with the whole environment, n
   });
 });
 
+test("attended Linear login keeps the ambient environment and onboarding's overrides", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const ambient = { USER: "onboard-user", COLLIE_LINEAR_INHERITED: "kept" };
+      yield* Effect.acquireRelease(
+        Effect.sync(() => {
+          const was = Object.fromEntries(Object.keys(ambient).map((name) => [name, Bun.env[name]]));
+          Object.assign(Bun.env, ambient);
+          return was;
+        }),
+        (was) =>
+          Effect.sync(() => {
+            for (const [name, value] of Object.entries(was)) {
+              if (value === undefined) delete Bun.env[name];
+              else Bun.env[name] = value;
+            }
+          }),
+      );
+      yield* claudeAt(
+        `case "$*" in
+  "auth status --json") ${LOGGED_IN} ;;
+  "mcp add"*) echo '{"mcpServers":{"linear-server":{"url":"https://mcp.linear.app/mcp"}}}' > "$HOME/.claude.json" ;;
+  "mcp get linear-server") if [ -f "${home}/authorized" ]; then echo "Connected"; else echo "Needs authentication"; fi ;;
+  "mcp login linear-server")
+    [ "$USER" = onboard-user ] && [ "$COLLIE_LINEAR_INHERITED" = kept ] && [ "$HOME" = "${home}" ] && [ -x "$BROWSER" ] || exit 1
+    touch "${home}/authorized" ;;
+esac`,
+      );
+
+      const { result, events } = yield* onboarded({}, { skip: ["helle"], attended: true });
+
+      expect(statusOf(events, "linear")).toBe("done");
+      expect(result).toMatchObject({ ok: true, data: { ready: true } });
+    }),
+  ));
+
 test("a terminal shows each step as text", () => {
   expect(eventText({ event: "start", step: "system", title: "Checking for git and curl" })).toBe(
     "→ Checking for git and curl",

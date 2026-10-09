@@ -541,7 +541,7 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
       yield* fs.chmod(`${shims}/browser`, 0o755);
       const login = yield* inTerminal([claude, ...LINEAR_LOGIN.split(" ").slice(1)], {
         cwd: env.home,
-        env: { ...childEnv, BROWSER: `${shims}/browser` },
+        env: { ...Bun.env, ...childEnv, BROWSER: `${shims}/browser` },
       });
       // It waits for a pasted redirect, which only a human at a terminal can type.
       const pasted = options.terminal
