@@ -1,5 +1,5 @@
 import { Schema } from "effect";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Client } from "../../desktop/node_modules/@modelcontextprotocol/sdk/dist/esm/client/index.js";
 import { StreamableHTTPClientTransport } from "../../desktop/node_modules/@modelcontextprotocol/sdk/dist/esm/client/streamableHttp.js";
@@ -13,6 +13,31 @@ const path = Bun.argv[Bun.argv.indexOf("builtin:mcp") + 2]!;
 const extension = await Bun.file(path).text();
 const server = /registerMcpServer\("([^"]+)"/.exec(extension)![1]!;
 const namespace = `mcp__${server.replaceAll("-", "_")}__`;
+const argument = (flag: string) =>
+  Bun.argv.includes(flag) ? Bun.argv[Bun.argv.indexOf(flag) + 1] : undefined;
+const savedPath = join(argument("--session-dir")!, `fixture-${argument("--session-id")}.json`);
+const selection = Schema.Struct({ model: Schema.String, thinking: Schema.String });
+const saved = existsSync(savedPath)
+  ? Schema.decodeUnknownSync(Schema.fromJsonString(selection))(readFileSync(savedPath, "utf8"))
+  : undefined;
+const settingsPath = join(childEnv().PI_CODING_AGENT_DIR ?? process.cwd(), "settings.json");
+const settings = existsSync(settingsPath)
+  ? Schema.decodeUnknownSync(
+      Schema.fromJsonString(
+        Schema.Struct({
+          defaultProvider: Schema.optionalKey(Schema.String),
+          defaultModel: Schema.optionalKey(Schema.String),
+          defaultThinkingLevel: Schema.optionalKey(Schema.String),
+        }),
+      ),
+    )(readFileSync(settingsPath, "utf8"))
+  : {};
+const model =
+  argument("--model") ??
+  saved?.model ??
+  `${settings.defaultProvider ?? "auto"}/${settings.defaultModel ?? "default"}`;
+const thinking =
+  argument("--thinking") ?? saved?.thinking ?? settings.defaultThinkingLevel ?? "medium";
 let input = "";
 for await (const chunk of Bun.stdin.stream()) {
   input += new TextDecoder().decode(chunk);
@@ -88,13 +113,14 @@ for await (const chunk of Bun.stdin.stream()) {
             ? readFileSync(global, "utf8")
             : "";
       };
-      const argument = (flag: string) =>
-        Bun.argv.includes(flag) ? Bun.argv[Bun.argv.indexOf(flag) + 1] : undefined;
+      writeFileSync(savedPath, JSON.stringify({ model, thinking }));
       const details = {
         args: Bun.argv.slice(2),
         cwd: process.cwd(),
         hasToken: Boolean(childEnv().COLLIE_CHAT_MCP_TOKEN),
         extension,
+        model,
+        thinking,
         systemPrompt: [
           argument("--system-prompt") ?? promptFile("SYSTEM.md"),
           argument("--append-system-prompt") ?? promptFile("APPEND_SYSTEM.md"),

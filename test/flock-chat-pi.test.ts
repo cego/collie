@@ -175,6 +175,76 @@ test("Pi's start isolates resources, keeps the token in its environment and send
     }),
   ));
 
+test("resetting Pi's model resumes the conversation on its configured default and thinking level", () =>
+  withPi((driver) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const settings = `${childEnv().PI_CODING_AGENT_DIR}/settings.json`;
+      yield* fs.writeFileString(
+        settings,
+        JSON.stringify({
+          defaultProvider: "openai-codex",
+          defaultModel: "gpt-6.1-sol",
+          defaultThinkingLevel: "high",
+        }),
+      );
+      const first = yield* driver.open("pi-reset", "openai-codex/gpt-5.3-codex-spark", "low");
+      yield* Effect.addFinalizer(() => first.close);
+      const inspect = (session: typeof first) =>
+        session.offer("inspect").pipe(
+          Effect.andThen(Stream.runCollect(session.events.pipe(Stream.takeUntil(ends)))),
+          Effect.map((events) => {
+            const text = events.find((event) => event.type === "TEXT_MESSAGE_CONTENT");
+            if (text?.type !== "TEXT_MESSAGE_CONTENT") throw new Error("No reply");
+            return Schema.decodeUnknownSync(
+              Schema.fromJsonString(
+                Schema.Struct({
+                  model: Schema.String,
+                  thinking: Schema.String,
+                }),
+              ),
+            )(text.delta);
+          }),
+        );
+      expect(yield* inspect(first)).toEqual({
+        model: "openai-codex/gpt-5.3-codex-spark",
+        thinking: "low",
+      });
+      yield* first.close;
+      yield* fs.writeFileString(
+        settings,
+        JSON.stringify({
+          defaultProvider: "openai-codex",
+          defaultModel: "gpt-5.6-terra",
+          defaultThinkingLevel: "xhigh",
+        }),
+      );
+      const reset = yield* driver.open("pi-reset", "default", "");
+      yield* Effect.addFinalizer(() => reset.close);
+      expect(reset.conversation()).toBe("pi-reset");
+      expect(yield* inspect(reset)).toEqual({
+        model: "openai-codex/gpt-5.6-terra",
+        thinking: "xhigh",
+      });
+      yield* reset.close;
+      yield* fs.writeFileString(
+        settings,
+        JSON.stringify({
+          defaultProvider: "openai-codex",
+          defaultModel: "gpt-5.6-terra",
+          defaultThinkingLevel: "low",
+          modelThinkingLevels: { "openai-codex/gpt-5.6-terra": "max" },
+        }),
+      );
+      const perModel = yield* driver.open("pi-reset", "default", "");
+      yield* Effect.addFinalizer(() => perModel.close);
+      expect(yield* inspect(perModel)).toEqual({
+        model: "openai-codex/gpt-5.6-terra",
+        thinking: "max",
+      });
+    }),
+  ));
+
 test("Pi reports its own error and abort ends a turn before another message starts", () =>
   withPi((driver) =>
     Effect.gen(function* () {

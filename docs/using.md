@@ -1372,8 +1372,10 @@ runs at medium effort with summarised thinking. None of your Claude settings, ho
 or CLAUDE.md loads.
 
 On Pi, write the model as `provider/model`, for example `openai-codex/gpt-6.1-sol`.
-Unset, Pi uses its configured default model and thinking level. Desktop starts `pi --mode rpc`
-on its login PATH, with Collie's system prompt and its own session directory.
+Unset, Pi uses its configured default model and thinking level.
+Clearing a model override passes Pi's configured provider/model and thinking level explicitly,
+so reopening the same conversation does not restore its previous model override.
+Desktop starts `pi --mode rpc` on its login PATH, with Collie's system prompt and its own session directory.
 Explicit system and append sources exclude your `SYSTEM.md` and `APPEND_SYSTEM.md` files.
 None of your Pi extensions, skills, prompt templates or context files loads. Its own
 `read`, `bash`, `edit`, `write`, `grep`, `find` and `ls` tools reach this computer without

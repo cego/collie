@@ -1,4 +1,5 @@
-import { hostname } from "node:os";
+import { homedir, hostname } from "node:os";
+import { resolve } from "node:path";
 import {
   type Cause,
   Clock,
@@ -22,6 +23,14 @@ import { noticedContext, placementContext, systemPrompt } from "./session";
 
 const TOKEN_ENV = "COLLIE_CHAT_MCP_TOKEN";
 const TOOL_TIMEOUT = 24 * 60 * 60;
+const PiDefaults = Schema.fromJsonString(
+  Schema.Struct({
+    defaultProvider: Schema.optionalKey(Schema.String),
+    defaultModel: Schema.optionalKey(Schema.String),
+    defaultThinkingLevel: Schema.optionalKey(Schema.String),
+    modelThinkingLevels: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
+  }),
+);
 
 export const piDriver = (
   context: DriverContext,
@@ -33,6 +42,28 @@ export const piDriver = (
   return {
     installed: command !== null,
     open: Effect.fnUntraced(function* (id, model, effort) {
+      if (model === "default") {
+        const defaults = yield* Effect.promise(() =>
+          context.run(
+            Effect.gen(function* () {
+              const fs = yield* FileSystem.FileSystem;
+              const agent =
+                childEnv().PI_CODING_AGENT_DIR?.replace(/^~(?=\/|$)/, homedir()) ??
+                `${homedir()}/.pi/agent`;
+              return yield* fs.readFileString(resolve(context.dir, agent, "settings.json")).pipe(
+                Effect.catchReason("PlatformError", "NotFound", () => Effect.succeed("{}")),
+                Effect.flatMap(Schema.decodeUnknownEffect(PiDefaults)),
+              );
+            }).pipe(Effect.orDie),
+          ),
+        );
+        if (defaults.defaultProvider && defaults.defaultModel) {
+          model = `${defaults.defaultProvider}/${defaults.defaultModel}`;
+          if (effort === "")
+            effort =
+              defaults.modelThinkingLevels?.[model] ?? defaults.defaultThinkingLevel ?? "medium";
+        }
+      }
       const { url, token } = yield* endpoint.start;
       // A short private name avoids user overrides and Pi hashing provider tool names.
       const server = `cf-${(yield* Effect.promise(() =>

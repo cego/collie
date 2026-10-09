@@ -285,7 +285,9 @@ nothing else changes.
   table's rule, and how a fallback knows which Subscription it draws on
   ([ADR-0049](0049-work-goes-to-an-agent-with-usage-left.md) D6). Unset, claude runs `opus`
   at medium effort ([ADR-0032](0032-a-chat-starts-new-on-the-latest-opus.md)), and pi and
-  codex run on the default they are configured with. Choosing another harness unsets the
+  codex run on the default they are configured with. Pi's configured provider/model and
+  thinking level are passed explicitly when unset, so a resumed session does not restore
+  its previous override. Choosing another harness unsets the
   model, as a Run's harness keeps no model chosen for another.
 - **A change applies once the turn under way has ended**, never during it. A new model
   keeps the conversation, and its next turn runs on that model. A new harness is Start
