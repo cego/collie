@@ -147,7 +147,6 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
       : `${env.home}/.collie`);
 
   const childEnv = { ...env.raw, PATH: search };
-  /** Runs a command with this Machine's PATH, answering with its exit and each stream. */
   const piped = (
     cmd: string,
     args: ReadonlyArray<string>,

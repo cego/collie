@@ -85,7 +85,7 @@ const claudeAt = (script: string) =>
 
 const GITLAB = "gitlab.cego.dk";
 
-/** A glab whose `auth status` runs `status` (on stderr, as glab's does), and that records everything else it is asked. */
+/** Real glab writes auth status to stderr. */
 const glab = (status: string, rest = "") =>
   bin.add(
     "glab",

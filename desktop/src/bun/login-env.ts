@@ -56,12 +56,7 @@ export const withoutLauncher = (env: Readonly<Record<string, string | undefined>
   return kept;
 };
 
-/**
- * The environment every child Desktop starts is given: Desktop's own, the login shell's
- * merged in on macOS, without what the launcher set for Desktop alone. Bun gives a child the
- * environment it started with unless one is passed, whatever `process.env` says since, so
- * every spawn passes this.
- */
+/** Gives children the cleaned environment; Bun otherwise ignores changes made since it started. */
 export const childEnv = () => withoutLauncher(desktopEnv(), BIN);
 
 // Children inherit the process environment, not an Effect Config.
