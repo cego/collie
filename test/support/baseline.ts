@@ -1782,6 +1782,10 @@ scenario(
         expect(said(result)).toBe(OPENED.mr_url);
         // The fix is told what was found and where the round stands, and the second review
         // is a fresh reviewer rather than the one that wrote the first.
+        expect(yield* persona("r-impl-fix", "build")).toContain("Before every GitHub push");
+        expect(
+          yield* rig.cmds().pipe(Effect.map((cmds) => cmds.filter((cmd) => cmd === "agent start"))),
+        ).toHaveLength(3);
         const fixing = yield* asked("r-impl-fix", "fix-1");
         expect(fixing).toContain("the guard is on the wrong side");
         expect(fixing).toContain("Iteration 1 of at most 4");
@@ -2548,6 +2552,10 @@ scenario(
             ),
         );
         expect(status).toBe("complete");
+        const builder = yield* persona(runId, "build");
+        expect(builder).toContain("Before every GitHub push");
+        expect(builder).toContain("--json number,autoMergeRequest");
+        expect(builder).toContain("If the read fails or any result has auto-merge enabled");
         const prompt = yield* asked(runId, "mr");
         expect(prompt).toContain("Forge: `github`");
         expect(prompt).toContain("gh pr view");
@@ -2586,6 +2594,32 @@ scenario(
         yield* bin.restore();
         expect(reasonOf(result)).toContain("Merge request delivery did not finish");
         expect(reasonOf(result)).toContain("push denied");
+        expect(yield* prompts()).toHaveLength(3);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "implement fails when a clean delivery result still reports findings",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* bin.add("glab", `exit 0`);
+        yield* repository();
+        const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
+        const runId = "r-impl-delivery-findings";
+        yield* approve(runId, ["unit"]);
+        yield* rig.queueOutputs([
+          BUILT,
+          CLEAN_SYNTHESIS,
+          { ...OPENED, findings: [{ severity: "major", title: "delivery blocked" }] },
+        ]);
+        const result = yield* ran({ entry: shipped("implement"), runId, input: { plan } });
+        yield* bin.restore();
+        expect(reasonOf(result)).toContain("Merge request delivery did not finish");
+        expect(reasonOf(result)).toContain("delivery blocked");
         expect(yield* prompts()).toHaveLength(3);
       }),
     ),

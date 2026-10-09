@@ -1049,7 +1049,9 @@ For an `implement` Run's final delivery, a GitHub origin uses `gh`; a GitLab che
 uses `glab`. Both front doors ask the same host service for readiness, assignee,
 repository template and Linear tickets. GitHub readiness requires `gh` installed,
 logged in to github.com and able to read the origin repository. An existing pull
-request on the branch is updated, and its auto-merge state is checked before a push.
+request on the branch is updated. Before every GitHub push, including build and fix
+steps, the implementer reads the branch's open pull requests and refuses a push if
+auto-merge is enabled or that reading fails.
 An unavailable forge parks the Run with the repair it needs.
 A delivery agent that did not push, supplied no merge request URL or reported findings
 fails the Run with the reason and a follow-up repair; it cannot report successful delivery.

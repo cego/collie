@@ -562,7 +562,12 @@ export default defineWorkflow({
         },
         output: Opened,
       });
-      if (opened.verdict !== "clean" || !opened.pushed || !opened.mr_url) {
+      if (
+        opened.verdict !== "clean" ||
+        !opened.pushed ||
+        !opened.mr_url ||
+        (opened.findings ?? []).length > 0
+      ) {
         const missing = [
           ...(!opened.pushed ? ["the branch was not pushed"] : []),
           ...(!opened.mr_url ? ["no merge request URL was reported"] : []),
