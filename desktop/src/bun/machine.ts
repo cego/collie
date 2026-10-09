@@ -29,7 +29,6 @@ import {
   PROTOCOL,
   FrontDoorRpcs,
   type HostRefused,
-  type PaneAt,
   type ProposalRefused,
   type RequestConflict,
   type RunDetail,

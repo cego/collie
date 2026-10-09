@@ -3,13 +3,7 @@
 // human's newest message and the card it carries; the window is filled from the
 // session's transcript when it opens and when another conversation becomes current.
 
-import {
-  AsyncResult,
-  AtomRegistry,
-  injectRegistry,
-  useAtomSet,
-  useAtomValue,
-} from "@effect/atom-vue";
+import { AtomRegistry, injectRegistry, useAtomSet } from "@effect/atom-vue";
 import type { ModelMessage, StreamChunk, UIMessage } from "@tanstack/ai";
 import { useChat } from "@tanstack/ai-vue";
 import { Effect, Exit, Option, Schema, Stream } from "effect";

@@ -1,8 +1,8 @@
 import { expect, test } from "bun:test";
 import { BunServices } from "@effect/platform-bun";
 import { Crypto, Deferred, Effect, Fiber, FileSystem } from "effect";
-import { Client } from "../desktop/node_modules/@modelcontextprotocol/sdk/dist/esm/client/index.js";
-import { StreamableHTTPClientTransport } from "../desktop/node_modules/@modelcontextprotocol/sdk/dist/esm/client/streamableHttp.js";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { loopbackTools } from "../desktop/src/bun/chat-endpoint";
 import { FLOCK_TOOLS, type FlockChat } from "../desktop/src/bun/flock-tools";
 import { FILE_TOOLS } from "../desktop/src/bun/file-tools";

@@ -1,6 +1,6 @@
 import { Effect, Schema } from "effect";
-import { Client } from "../../desktop/node_modules/@modelcontextprotocol/sdk/dist/esm/client/index.js";
-import { StreamableHTTPClientTransport } from "../../desktop/node_modules/@modelcontextprotocol/sdk/dist/esm/client/streamableHttp.js";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { childEnv } from "../../desktop/src/bun/login-env";
 import type { JsonObject } from "../../src/schema";
 const emit = (record: JsonObject) =>
