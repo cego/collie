@@ -897,6 +897,9 @@ into `~/Applications`, replacing an older copy, and detaches it again; open it f
 Spotlight or the Dock. An Intel Mac is refused: Desktop is released for Apple silicon only,
 and the TUI plugin works there.
 
+On a Mac, Desktop sets a menu bar (Collie, Edit, Window) so Cmd+C, Cmd+V, Cmd+Q and the
+other standard shortcuts work.
+
 Until a release is notarized by Apple, a DMG downloaded in a browser is quarantined and
 Gatekeeper refuses to open the app in it. The script avoids that: `curl` sets no quarantine,
 and the app it copies is signed. If you did download the DMG in a browser, install with the
