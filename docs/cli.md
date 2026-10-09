@@ -1011,10 +1011,12 @@ What kind of result a run has to prove, and so what evidence closes it:
 The gate runs before the merge request, which is where the claim is made. Collie runs the
 run's own approved set itself at the tree as it stands, then says what is missing. A check
 that failed runs once more; gaps a check could still close go to the implementer for up to
-four fixes. Evidence still missing after those fixes suspends the Run with the gaps named;
-missing reviewer evidence also suspends it. Repair the missing evidence and resume the
-Run. A changed tree gets fresh checks while completed build and review Activities are
-retained. The merge request is reached only once the outcome is proved. Only the latest
+four fixes. Checks still missing after those fixes suspend the Run with the gaps named.
+Repair the checks and resume the Run: the pending proof reruns them even when the repair
+only changes the environment. A changed tree or approved set also gets fresh proof while
+completed build Activities are retained. Missing reviewer evidence gets a fresh review;
+if it still cannot prove the outcome, the Run fails with the gaps named and a follow-up
+can repair the work. The merge request is reached only once the outcome is proved. Only the latest
 of Collie's results on that tree counts, so a
 pass a later fail contradicts is not one. In `implement`, a check that fails at the gate is run once more,
 before any fix, where the branch leaves the default branch, in the run's own checkout. One that

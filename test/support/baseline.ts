@@ -1836,7 +1836,7 @@ scenario(
 );
 
 scenario(
-  "a gate the fixes cannot satisfy stays suspended and resumes after the check is repaired",
+  "a gate the fixes cannot satisfy resumes after a repair that leaves the tree unchanged",
   () =>
     runEffect(
       Effect.gen(function* () {
@@ -1857,7 +1857,7 @@ scenario(
               executable: "sh",
               argv: [
                 "-c",
-                `n=$(($(cat ${count} 2>/dev/null || echo 0) + 1)); echo $n > ${count}; [ $n -eq 2 ] || [ -f repaired ]`,
+                `n=$(($(cat ${count} 2>/dev/null || echo 0) + 1)); echo $n > ${count}; [ $n -eq 2 ] || [ -f ${rig.root}/repaired ]`,
               ],
               cwd: rig.projectDir,
             },
@@ -1891,11 +1891,16 @@ scenario(
         expect(yield* parkedWhy("r-impl-gate")).toContain("unit failed");
         expect(yield* fs.exists(`${dir}/agents/r-impl-gate/mr.prompt.md`)).toBe(false);
 
-        yield* fs.writeFileString(`${rig.projectDir}/repaired`, "fixed\n");
+        const evidence = session(
+          Effect.flatMap(Host, (host) => host.evidence("r-impl-gate", rig.projectDir)),
+        );
+        const before = (yield* evidence).final;
+        yield* fs.writeFileString(`${rig.root}/repaired`, "fixed\n");
         const completed = yield* resumed(options);
         expect(said(completed)).toBe(OPENED.mr_url);
         expect(yield* parkedWhy("r-impl-gate")).toBe("");
         expect((yield* prompts()).filter((one) => one.includes("build-step-1"))).toHaveLength(1);
+        expect((yield* evidence).final).toEqual(before);
         yield* bin.restore();
       }),
     ),
@@ -1903,7 +1908,7 @@ scenario(
 );
 
 scenario(
-  "missing reviewer evidence suspends the Run without a gate fix chasing it",
+  "missing reviewer evidence gets a fresh judgement without a gate fix chasing it",
   () =>
     runEffect(
       Effect.gen(function* () {
@@ -1912,11 +1917,44 @@ scenario(
         yield* repository();
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
         yield* approve("r-gate-judged", ["unit"]);
-        yield* rig.queueOutputs([BUILT, { ...CLEAN_SYNTHESIS, scope_met: false }, OPENED]);
+        yield* rig.queueOutputs([
+          BUILT,
+          { ...CLEAN_SYNTHESIS, scope_met: false },
+          CLEAN_SYNTHESIS,
+          OPENED,
+        ]);
+        const result = yield* ran({
+          entry: shipped("implement"),
+          runId: "r-gate-judged",
+          input: { plan },
+          options: { outcome: "feature" },
+        });
+        yield* bin.restore();
+
+        expect(said(result)).toBe(OPENED.mr_url);
+        expect(yield* prompts()).toHaveLength(4);
+        expect(yield* asked("r-gate-judged", "review-5-1")).toContain('"scope_met": true');
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "an outcome still missing after a fresh judgement fails instead of completing",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* bin.add("glab", `exit 0`);
+        yield* repository();
+        const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
+        yield* approve("r-gate-unproved", ["unit"]);
+        const unproved = { ...CLEAN_SYNTHESIS, scope_met: false };
+        yield* rig.queueOutputs([BUILT, unproved, unproved]);
         const result = yield* running(
           {
             entry: shipped("implement"),
-            runId: "r-gate-judged",
+            runId: "r-gate-unproved",
             input: { plan },
             options: { outcome: "feature" },
           },
@@ -1926,13 +1964,14 @@ scenario(
               (got) => got !== "pending",
             ),
         );
+        expect(result).toBe("failed");
+        expect(yield* prompts()).toHaveLength(3);
+        expect(
+          yield* (yield* FileSystem.FileSystem).exists(
+            `${dir}/agents/r-gate-unproved/mr.prompt.md`,
+          ),
+        ).toBe(false);
         yield* bin.restore();
-
-        expect(result).toBe("suspended");
-        expect(yield* prompts()).toHaveLength(2);
-        expect(yield* parkedWhy("r-gate-judged")).toContain(
-          "the review did not report scope_met: true for the agreed scope",
-        );
       }),
     ),
   120_000,
@@ -2411,6 +2450,69 @@ interface ShippedRun {
   readonly options?: Readonly<Record<string, string>>;
   readonly host?: HostOverride;
 }
+
+scenario(
+  "replacing an approved command cannot reuse the old command's pass on resume",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* bin.add("glab", `exit 0`);
+        yield* repository();
+        yield* exec(["git", "remote", "set-url", "origin", "git@github.com:team/project.git"], {
+          cwd: rig.projectDir,
+        });
+        const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
+        const runId = "r-impl-replaced-check";
+        yield* approve(runId, ["unit"]);
+        yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, OPENED]);
+        const entry = shipped("implement");
+        yield* stalled({ entry, runId, input: { plan } });
+        expect(yield* parkedWhy(runId)).toContain("no GitLab remote");
+        const fs = yield* FileSystem.FileSystem;
+        yield* fs.writeFileString(
+          `${evidenceDir(dir, runId)}/approved.json`,
+          asApproved([
+            { name: "unit", executable: "sh", argv: ["-c", "exit 1"], cwd: rig.projectDir },
+          ]),
+        );
+        yield* exec(
+          ["git", "remote", "set-url", "origin", "git@gitlab.example.com:team/project.git"],
+          {
+            cwd: rig.projectDir,
+          },
+        );
+        const status = yield* session(
+          Effect.gen(function* () {
+            const made = yield* loaded(entry, runId);
+            const engine = yield* WorkflowEngine.WorkflowEngine;
+            const payload = { runId, input: { plan } };
+            return yield* Effect.gen(function* () {
+              const id = yield* made.workflow.executionId(payload);
+              yield* engine.resume(made.workflow, id);
+              yield* made.workflow.execute(payload, { discard: true });
+              return yield* until(
+                () =>
+                  Effect.all([
+                    engine
+                      .poll(made.workflow, id)
+                      .pipe(Effect.map((got) => pollStatus(got, "").status)),
+                    parkedWhy(runId),
+                  ]),
+                ([got, why]) =>
+                  got === "complete" || (got === "suspended" && why.includes("unit failed")),
+              );
+            }).pipe(Effect.provide(made.layer));
+          }),
+        );
+        expect(status[0]).toBe("suspended");
+        expect(status[1]).toContain("unit failed");
+        expect(yield* prompts()).toHaveLength(2);
+        yield* bin.restore();
+      }),
+    ),
+  120_000,
+);
 
 scenario(
   "unavailable merge request handling suspends and resumes without rebuilding",

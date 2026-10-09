@@ -6,10 +6,13 @@ A failed approved check remains a gap even when it failed on the base. A suite's
 code cannot establish that the branch has only the base's failures. The baseline is
 diagnostic context, never a substitute for a pass on the Run's current tree.
 
-After its bounded fix loop, implement suspends with any remaining evidence gaps. It
+After its bounded fix loop, implement suspends with any remaining check gaps. It
 also suspends when the host cannot prepare its merge request. Neither path returns a
-successful result. On resume, a changed tree gets new verification Activities while
-completed work is retained. Finished executions keep their historical result; their
+successful result. The unfinished proof Activity suspends its own WorkflowInstance,
+so resume reruns its checks even after a repair that leaves the source tree unchanged.
+A changed tree or approved set gets new proof while completed work is retained.
+Missing reviewer evidence gets a fresh review; if that still leaves gaps, the Run fails
+explicitly and names the follow-up repair. Finished executions keep their historical result; their
 remaining work continues through a follow-up Run.
 
 The proof is the outcome table and the shipped-workflow scenarios, including the same

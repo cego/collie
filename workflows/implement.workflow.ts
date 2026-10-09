@@ -365,15 +365,29 @@ export default defineWorkflow({
       let passes = 0;
       let passed: ReadonlyArray<string> = [];
       let baseline: ReadonlyArray<{ readonly name: string; readonly at: string }> = [];
+      const readGaps = Effect.fn("implement.readGaps")(function* (
+        approved: ReadonlyArray<VerifySpec>,
+        reviewed: SynthesisReport,
+      ) {
+        const asked = {
+          kind: isOutcome(kind) ? kind : ("unspecified" as const),
+          evidence: yield* host.evidence(runId, cwd),
+          approved,
+          outputs: { build: { ...build }, synthesize: { ...reviewed } },
+          reviewed: ["synthesize"],
+          roots: [place.dir, cwd],
+          tickets: tickets.map((ticket) => ({ file: ticket.file, checks: ticket.checks })),
+        };
+        return { gaps: evidenceGapsOf(asked), fixable: checkGapsOf(asked) };
+      });
       // Why each pass runs, which every door shows while it does (ADR-0042).
       const gapsNow = Effect.fn("implement.gapsNow")(function* (why: {
         readonly pass: "gate" | "recheck" | "fix";
         readonly round?: number;
       }) {
         passes += 1;
-        const { final } = yield* host.evidence(runId, cwd);
         const pass = yield* Activity.make({
-          name: `gate.${passes}.${final.head_sha}.${final.fingerprint}`,
+          name: `gate.${passes}`,
           success: Schema.Struct({
             gaps: Schema.Array(Schema.String),
             // A pass journaled before gaps were told apart handed a fix every gap.
@@ -387,18 +401,7 @@ export default defineWorkflow({
               const ran = yield* host.verify({ runId, name: spec.name, cwd, ...why });
               if (ran.result === "pass") now.push(spec.name);
             }
-            const asked = {
-              kind: isOutcome(kind) ? kind : ("unspecified" as const),
-              evidence: yield* host.evidence(runId, cwd),
-              approved: granted,
-              outputs: { build: { ...build }, synthesize: { ...rallied.reviewed } },
-              // Only a reviewer may vouch for what a reviewer is asked: read from any Output,
-              // the agent that wrote the change could vouch for its own scope.
-              reviewed: ["synthesize"],
-              roots: [place.dir, cwd],
-              tickets: tickets.map((ticket) => ({ file: ticket.file, checks: ticket.checks })),
-            };
-            return { gaps: evidenceGapsOf(asked), fixable: checkGapsOf(asked), passed: now };
+            return { ...(yield* readGaps(granted, rallied.reviewed)), passed: now };
           }).pipe(Effect.orDie),
         });
         passed = pass.passed;
@@ -467,6 +470,52 @@ export default defineWorkflow({
           .filter((line) => line !== "")
           .join("\n");
       }
+      const { final } = yield* host.evidence(runId, cwd);
+      const proofKey = yield* Activity.idempotencyKey(
+        Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))({
+          final,
+          approved: yield* host.approved(runId),
+        }),
+      );
+      yield* Activity.make({
+        name: `proof.${proofKey}`,
+        success: Schema.Void,
+        error: WorkflowError,
+        execute: Effect.gen(function* () {
+          const approved = yield* requireApproved(kind);
+          let reviewed = rallied.reviewed;
+          const reading = Effect.suspend(() => readGaps(approved, reviewed));
+          for (const spec of approved)
+            yield* host.verify({ runId, name: spec.name, cwd, pass: "recheck" });
+          let missing = yield* reading;
+          if (missing.fixable.length > 0) {
+            yield* host.parked(
+              runId,
+              `Outcome unproved after ${fixes} gate fixes: ${missing.gaps.join("; ")}. Repair the checks, then resume ${runId}.`,
+            );
+            return yield* Workflow.suspend(yield* WorkflowInstance);
+          }
+          if (missing.gaps.length > 0) {
+            reviewed = yield* reviewPass({
+              target: "",
+              plan: source.kind === "plan-dir" ? source.value : "",
+              proves: kind,
+              previous: `${place.dir}/review.md`,
+              answered: fixes === 0 ? "" : agents.outputFor(runId, `gate-fix-${fixes}`),
+              risks: place.options.risks ?? "",
+              at: ROUNDS + 1,
+              of: ROUNDS + 1,
+              disputed: [],
+            });
+            missing = yield* reading;
+          }
+          if (missing.gaps.length > 0)
+            return yield* new WorkflowError({
+              reason: `Outcome still unproved after a fresh review: ${missing.gaps.join("; ")}. Continue with a follow-up Run to repair the work.`,
+            });
+          yield* host.parked(runId, null);
+        }),
+      });
       // Failed before this Run changed anything, and still fails: reported, never passed.
       const failing = failingNow(
         yield* host.evidence(runId, cwd),
@@ -476,26 +525,12 @@ export default defineWorkflow({
       const unsettled = [
         ...assumed,
         ...rallied.unsettled,
-        ...gaps.gaps.map((gap) =>
-          gaps.fixable.includes(gap)
-            ? `unproved after ${fixes} gate fixes: ${gap}`
-            : `unproved, and no check can prove it: ${gap}`,
-        ),
         ...preexisting.map(
           ({ name, at }) =>
             `${name} also fails at ${at.slice(0, 12)}, where this branch leaves the default branch, so it failed before this Run's changes and still fails (by exit code only: a dependency this branch changed can make that comparison wrong)`,
         ),
       ];
       if (unsettled.length > 0) yield* host.record(runId, `unsettled: ${unsettled.join("; ")}`);
-      if (gaps.gaps.length > 0) {
-        yield* host.parked(
-          runId,
-          `Outcome unproved after ${fixes} gate fixes: ${gaps.gaps.join("; ")}. Repair the missing evidence, then resume ${runId}.`,
-        );
-        return yield* Workflow.suspend(yield* WorkflowInstance);
-      }
-      yield* host.parked(runId, null);
-
       const gitlab = yield* host.mr({ cwd, source: { value: source.value, kind: source.kind } });
       if (!gitlab.ok) {
         const reason = `Cannot open the merge request: ${gitlab.reason}. Repair it, then resume ${runId}.`;
