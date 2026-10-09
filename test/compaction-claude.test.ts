@@ -5,14 +5,18 @@
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, FileSystem, Path, Schema } from "effect";
+import { TestClock } from "effect/testing";
 import { Rig } from "./support/recorder";
 import { runEffect } from "./support/effect";
 import { onMachineWith } from "./support/live";
 import { fakeChannel } from "./support/compaction";
 import {
   atLeast,
+  claudeSettings,
   COMPACTION_PORTS,
   externalSubmissions,
+  newestRateLimits,
+  ranOutSince,
   recordClaudeEvent,
   submittedDelivery,
   VERIFIED_VERSIONS,
@@ -400,3 +404,110 @@ onMachineWith("claude")(
     ),
   { timeout: 30_000 },
 );
+
+/** A measured status line that also carries `rate_limits`, as it may be malformed. */
+const encodeLimited = Schema.encodeSync(
+  Schema.fromJsonString(Schema.Struct({ ...StatusLine.fields, rate_limits: Schema.Json })),
+);
+const limited = (rateLimits: typeof Schema.Json.Type) =>
+  encodeLimited({
+    session_id: "s-1",
+    context_window: {
+      total_input_tokens: 15_500,
+      total_output_tokens: 1_200,
+      used_percentage: 8,
+      current_usage: {
+        input_tokens: 8_500,
+        output_tokens: 1_200,
+        cache_creation_input_tokens: 5_000,
+        cache_read_input_tokens: 2_000,
+      },
+    },
+    rate_limits: rateLimits,
+  });
+const fiveHour = (percent: number) => ({
+  five_hour: { used_percentage: percent, resets_at: 1791457799 },
+  seven_day: { used_percentage: 88, resets_at: 1791544799 },
+});
+
+test("a status line's rate_limits are the Machine's newest Claude sample, and its line still prints", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const stateDir = path.join(rig.root, "state");
+      const agentDir = path.join(stateDir, "compaction", "build-r1");
+
+      expect(yield* newestRateLimits(stateDir)).toBeNull();
+      expect(yield* recordClaudeEvent(agentDir, limited(fiveHour(31)))).toBe("context: 8%");
+      yield* TestClock.adjust("1 second");
+      yield* recordClaudeEvent(
+        path.join(stateDir, "compaction", "review-r1"),
+        limited(fiveHour(40)),
+      );
+
+      expect((yield* newestRateLimits(stateDir))?.limits).toEqual(fiveHour(40));
+    }).pipe(Effect.provide(TestClock.layer())),
+  ));
+
+test("rate_limits Collie cannot read leave the context line alone", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const payload = limited({ five_hour: { used_percentage: "lots" } });
+      expect(yield* recordClaudeEvent(dir, payload)).toBe("context: 8%");
+      expect(yield* claude.usage(ctx())).toBe(16_700);
+    }),
+  ));
+
+const encodeStop = Schema.encodeSync(Schema.fromJsonString(Schema.Json));
+const stopFailure = (error: string) =>
+  encodeStop({
+    session_id: "s-1",
+    hook_event_name: "StopFailure",
+    error,
+    transcript_path: "/home/mk/.claude/projects/p/s-1.jsonl",
+  });
+
+test("a StopFailure on a spent subscription is the agent running out, with its transcript", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* recordClaudeEvent(dir, limited({}));
+      yield* recordClaudeEvent(dir, stopFailure("rate_limit"));
+      expect(yield* ranOutSince(dir, 0)).toEqual({
+        why: "rate_limit",
+        transcript: "/home/mk/.claude/projects/p/s-1.jsonl",
+      });
+    }),
+  ));
+
+test("a transient overload is not running out", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* recordClaudeEvent(dir, limited({}));
+      yield* recordClaudeEvent(dir, stopFailure("overloaded"));
+      expect(yield* ranOutSince(dir, 0)).toBeNull();
+    }),
+  ));
+
+test("a status line with a window at 100% is the agent running out, saying the window and reset", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* recordClaudeEvent(dir, limited(fiveHour(99)));
+      expect(yield* ranOutSince(dir, 0)).toBeNull();
+      yield* recordClaudeEvent(dir, limited(fiveHour(100)));
+      expect((yield* ranOutSince(dir, 0))?.why).toMatch(/^session 100%, resets .+ \(in .+\)$/);
+    }).pipe(Effect.provide(TestClock.layer())),
+  ));
+
+test("a status line's full window whose reset has passed is not the agent running out", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* TestClock.setTime(1791457799 * 1000 + 60_000);
+      yield* recordClaudeEvent(dir, limited(fiveHour(100)));
+      expect(yield* ranOutSince(dir, 0)).toBeNull();
+    }).pipe(Effect.provide(TestClock.layer())),
+  ));
+
+test("the StopFailure hook is installed only on a Claude known to have it", () => {
+  expect(claudeSettings(dir, true)).toContain(`"StopFailure"`);
+  expect(claudeSettings(dir, true)).toContain(`"rate_limit|billing_error"`);
+  expect(claudeSettings(dir, false)).not.toContain("StopFailure");
+});

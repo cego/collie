@@ -77,6 +77,7 @@ const RELEASE = "ready to release and checks you can see (this MR)";
 const ATTACHMENTS = "files in the Flock chat and its Runs (this MR)";
 const IN_APP_TERMINAL = "go to pane opens the pane in Desktop (this MR)";
 const MACHINE_RULE = "the Machine rule (this MR)";
+const USAGE = "usage readings on every Machine (this MR)";
 const ON_A_MAC = "Collie on macOS (this MR)";
 
 /** What the front door owes a person, and cannot be settled below the front door. */
@@ -131,6 +132,32 @@ const FRONT_DOOR: readonly Check[] = [
       layer: "ui",
       file: "test/ui/board.test.tsx",
       name: "Summary lists what the Run was given with its path, and nothing for a Run given none",
+    },
+  },
+  {
+    id: "front-door/desktop-shows-each-subscriptions-windows-per-machine",
+    statement:
+      "Desktop shows each Subscription's windows per Machine, each with its percent and reset, and the reading's age and source or its problem.",
+    owner: USAGE,
+    needs: "ui",
+    proof: {
+      kind: "test",
+      layer: "ui",
+      file: "test/desktop-usage.test.ts",
+      name: "each Subscription's plan and account, each window's meter and reset, and its age and source",
+    },
+  },
+  {
+    id: "front-door/desktop-header-warns-at-90-percent",
+    statement:
+      "Desktop's header names each Subscription's busiest window, amber at 90% and red once it is Exhausted.",
+    owner: USAGE,
+    needs: "ui",
+    proof: {
+      kind: "test",
+      layer: "ui",
+      file: "test/desktop-usage.test.ts",
+      name: "amber at 90%, red and out when Exhausted, and a model's own window does not count",
     },
   },
   {
@@ -357,6 +384,32 @@ const FRONT_DOOR: readonly Check[] = [
 
 /** Facts about the code beneath the front door. True, useful, and not front-door proof. */
 const BACKEND: readonly Check[] = [
+  {
+    id: "backend/an-agent-that-runs-out-is-replaced-mid-work",
+    statement:
+      "An agent that runs out mid-work is closed and replaced by one on the next entry, given the same work and a hand-over.",
+    owner: USAGE,
+    needs: "backend",
+    proof: {
+      kind: "test",
+      layer: "backend",
+      file: "test/agents.test.ts",
+      name: "an agent that runs out mid-work is closed and replaced by one on the next entry, given the same work and a hand-over",
+    },
+  },
+  {
+    id: "backend/exhausted-work-starts-on-the-first-fallback-with-room",
+    statement:
+      "A step whose Subscription is Exhausted starts on the first chain entry with room, and its record says why.",
+    owner: USAGE,
+    needs: "backend",
+    proof: {
+      kind: "test",
+      layer: "backend",
+      file: "test/agents.test.ts",
+      name: "work whose Subscription is Exhausted starts on the first chain entry with room, and its record says why",
+    },
+  },
   {
     id: "backend/an-agent-start-names-everything-or-is-refused",
     statement:
@@ -951,6 +1004,28 @@ const OPERATOR_CHECKS: readonly Check[] = [
     proof: {
       kind: "operator",
       how: "Rename the task workspace and one of its tabs by hand while a Run is working, let the Run reach its next step, and record that both names are still the ones typed.",
+    },
+  },
+  {
+    id: "usage/a-run-whose-claude-runs-out-finishes-on-codex",
+    statement:
+      "With `fallbacks` set to `codex`, a Run whose Claude runs out finishes on Codex, and its record says so.",
+    owner: USAGE,
+    needs: "operator",
+    proof: {
+      kind: "operator",
+      how: "Set Fall back to `codex`, start an `implement` with Claude near its limit, and when Claude stops mid-slice record that its pane closed, a Codex agent opened in the Task's workspace with the hand-over at the head of its prompt, the Run's log has the Fallback line, `collie run show` lists both agents, and the Run finishes on Codex.",
+    },
+  },
+  {
+    id: "usage/collie-usage-agrees-with-the-harnesses",
+    statement:
+      "`collie usage` agrees with Claude Code's `/usage` and Codex's `/status`: each window's percent within a few points, and the same reset times.",
+    owner: USAGE,
+    needs: "operator",
+    proof: {
+      kind: "operator",
+      how: "On a Machine logged in to both, run `collie usage`, then Claude Code's `/usage` and Codex's `/status`, and record each window's percent and reset from all three. Run `collie usage --json` and record each reading's `at` and `source`. test/usage-model.test.ts proves the parsing of recorded answers; only the live endpoints prove they are read the same way.",
     },
   },
   {

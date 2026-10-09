@@ -406,6 +406,66 @@ running as, and one that does not is refused rather than ignored. What only defa
 that decides for fresh agents alone. `permissions` is none of this: preferring a model never
 changes what an agent is allowed to do, or which commands Collie may run for the Run.
 
+### When a Subscription is running out
+
+Work runs on its preferred agent until that agent's **Subscription** is **Exhausted**, then
+on the first entry of the human's `fallbacks` setting that has usage left
+([ADR-0049](adr/0049-work-goes-to-an-agent-with-usage-left.md)). That is the default, and
+a workflow sets nothing for it. Two more preferences let a workflow decide sooner:
+
+- `upTo`, a percentage from 1 to 100: past that share of the busiest window that applies
+  to it, this agent is not chosen for new work;
+- `otherwise`, the choices to try past that point, in order, before the human's chain. Each
+  fills in from the preference it follows, so `{ effort: "medium" }` is the same harness and
+  model at less effort, and one that names another harness starts from that harness's
+  defaults.
+
+They layer as harness, model and effort do: the nearest layer that names either one sets
+both, and a layer that switches harness clears both. Neither is handed to a child; the
+chain applies there anyway. An `otherwise` entry its harness does not take is refused like
+any bad choice. Three policies, each one line of a definition:
+
+```ts
+// A cheap model for a light step.
+agents: { roles: { griller: { model: "haiku" } } },
+// The strongest model for planning while budget allows.
+agents: { model: "opus", effort: "xhigh", upTo: 90, otherwise: [{ model: "sonnet" }] },
+// Less effort when a window is nearly spent.
+agents: { effort: "xhigh", upTo: 80, otherwise: [{ effort: "medium" }] },
+```
+
+The agent the work landed on is recorded with what it fell back from and why, and the Run's
+record says so. An agent that runs out in the middle of its work is closed and replaced by
+one on the next choice with room, given the same work and a hand-over; each step is its own
+Activity, so a restart continues with the agent it recorded rather than starting another.
+Where work names an `agent` shared across operations, the agent that took over is that
+agent from then on: later work naming it goes to the new one, and asking for what the
+first one was — `harness: "claude"` for an implementer now on codex — is not refused. A workflow that wants any other policy reads the Machine's usage from its
+`Host` and judges it with `usedFor`, which returns the busiest applicable window's percent,
+its reset and whether the Subscription is Exhausted, or null where nothing is read for it.
+`subscriptionOf` says which Subscription a choice draws on. Read it inside an Activity of
+the workflow's own, so a replay takes the same branch:
+
+```ts
+run: () =>
+  Effect.gen(function* () {
+    const host = yield* Host;
+    const nearlySpent = yield* Activity.make({
+      name: "budget",
+      success: Schema.Boolean,
+      execute: Effect.gen(function* () {
+        const used = usedFor(
+          yield* host.usage(),
+          { harness: "claude", model: "opus" },
+          yield* Clock.currentTimeMillis,
+        );
+        return used !== null && used.usedPercent >= 80;
+      }),
+    });
+    // …
+  }),
+```
+
 ## Panels: several agents for one role
 
 A role in `agents.roles` may be given a list of seats rather than one — a panel. A `Seat` is

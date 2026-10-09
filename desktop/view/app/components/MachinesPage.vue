@@ -1,12 +1,26 @@
 <script setup lang="ts">
 import { type OnboardRun, SETTLED } from "../../../src/shared/flock";
 import { buildOf, type InSync, NOT_LIVE_SAID, syncable } from "../../../src/shared/in-sync";
+import { type Level, machineUsage } from "../../../src/shared/usage";
 
 const emit = defineEmits<{ back: [] }>();
 const { machines, summary } = useInSync();
+const { now } = useFlock();
 const { checkForUpdates, removeMachine, syncNow } = useActions();
 const { onboardOn, loginOn } = useOnboarding();
 const adding = ref(false);
+const usage = useUsage();
+onMounted(() => void usage.refresh());
+const rows = computed(() =>
+  machines.value.map((machine) => {
+    const read = usage.machines.value.find(({ profile }) => profile === machine.row.profile);
+    return { ...machine, usage: read === undefined ? null : machineUsage(read, now.value) };
+  }),
+);
+const METER = { ok: "primary", warn: "warning", out: "error" } as const satisfies Record<
+  Level,
+  string
+>;
 
 const badgeOf = (state: InSync["state"]) =>
   state === "in-sync"
@@ -42,7 +56,7 @@ const missing = (run: OnboardRun) => run.steps.filter(({ status }) => !SETTLED.i
         />
         <AddMachineDialog v-model:open="adding" />
         <section
-          v-for="{ row, verdict } in machines"
+          v-for="{ row, verdict, usage: block } in rows"
           :key="row.profile"
           :data-testid="`machine-${row.name}`"
           class="flex flex-col gap-2 border-t border-default pt-4"
@@ -92,6 +106,30 @@ const missing = (run: OnboardRun) => run.steps.filter(({ status }) => !SETTLED.i
               @skip="(step) => onboardOn(row.profile, [step])"
             />
           </template>
+          <section v-if="block !== null" class="flex flex-col gap-2" data-testid="usage">
+            <h3 class="text-sm font-semibold">Usage</h3>
+            <p v-if="block.said !== null" class="text-sm text-warning">{{ block.said }}</p>
+            <div
+              v-for="subscription in block.subscriptions"
+              :key="subscription.key"
+              class="flex flex-col gap-1"
+            >
+              <span class="text-sm font-medium">{{ subscription.title }}</span>
+              <div
+                v-for="window in subscription.windows"
+                :key="window.key"
+                class="grid grid-cols-[8rem_1fr_3rem] items-center gap-2 text-sm"
+              >
+                <span>{{ window.label }}</span>
+                <UProgress :model-value="window.percent" :color="METER[window.level]" size="sm" />
+                <span class="text-right tabular-nums">{{ window.percent }}%</span>
+                <span v-if="window.reset !== null" class="col-start-2 text-xs text-muted">
+                  {{ window.reset }}
+                </span>
+              </div>
+              <span class="text-xs text-muted">{{ subscription.said }}</span>
+            </div>
+          </section>
           <div class="flex justify-end gap-2">
             <UButton
               v-if="syncable(verdict)"

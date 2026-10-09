@@ -8,7 +8,8 @@ import { readIntent, seedIntent, writeIntent } from "../src/intent";
 import { appendMetric } from "../src/metrics";
 import { hosted, settledRun } from "./support/hosted";
 import { evidenceDir } from "../src/engine";
-import { connect } from "../src/host";
+import { connect, frontDoor } from "../src/host";
+import { readAudit } from "../src/audit";
 import { VerifySpecSchema } from "../src/verify-spec";
 
 const root = new URL("../", import.meta.url).pathname;
@@ -885,3 +886,61 @@ test(
     ),
   60_000,
 );
+
+test("usage is each Subscription's reading in the standard envelope, and says why one is missing", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const claudeDir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-claude-" });
+      const login = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))({
+        claudeAiOauth: { accessToken: "t", expiresAt: 1, subscriptionType: "max" },
+      });
+      yield* fs.writeFileString(join(claudeDir, ".credentials.json"), login);
+      const state = yield* fs.makeTempDirectoryScoped({ prefix: "collie-state-" });
+      yield* Effect.addFinalizer(() => Effect.ignore(stopHost(state)));
+      // No PATH: this Machine has no Codex, and nothing here may reach a real endpoint.
+      const env = { CLAUDE_CONFIG_DIR: claudeDir, HERDR_PLUGIN_STATE_DIR: state };
+
+      const read = yield* cli(["--json", "usage"], env);
+      expect(read.exit).toBe(0);
+      expect(yield* parseEnvelope(read.stdout)).toMatchObject({
+        ok: true,
+        data: {
+          readings: [
+            {
+              subscription: "claude",
+              plan: "max",
+              windows: [],
+              source: "claude-usage",
+              problem: "Claude Code's login expired; it refreshes when Claude Code next runs",
+            },
+            {
+              subscription: "chatgpt",
+              source: "codex-app-server",
+              problem: "Codex is not installed on this Machine",
+            },
+          ],
+        },
+      });
+      expect(yield* fs.readFileString(join(claudeDir, ".credentials.json"))).toBe(login);
+
+      const human = yield* cli(["usage"], env);
+      expect(human.exit).toBe(0);
+      expect(human.stdout.trim().split("\n")).toEqual([
+        "claude  Claude Code's login expired; it refreshes when Claude Code next runs",
+        "chatgpt Codex is not installed on this Machine",
+      ]);
+      const trail = yield* readAudit(join(state, "usage"));
+      expect(trail.map(({ operation, actor }) => [operation, actor.origin])).toEqual([
+        ["usage", "cli"],
+        ["usage", "cli"],
+      ]);
+
+      // Past the trail's length, reads at once each record and the trim keeps the newest.
+      const door = yield* frontDoor(state);
+      yield* Effect.forEach(Array.from({ length: 230 }), () => door.usage(), {
+        concurrency: "unbounded",
+      });
+      expect((yield* readAudit(join(state, "usage"))).length).toBe(200);
+    }),
+  ));

@@ -95,6 +95,17 @@ herdr actions, and the `collie` CLI.
   (its copies), `bun/carried.ts` (files to a Run's Machine), `bun/file-tools.ts` and
   `shared/attachments.ts`, with `test/attachments.test.ts`, `test/host-files.test.ts` and
   `test/flock-*.test.ts`.
+- **Changing how a Subscription's usage is read, or where work falls back when one is
+  Exhausted** → [ADR-0049](docs/adr/0049-work-goes-to-an-agent-with-usage-left.md) and
+  [`docs/using.md`](docs/using.md#usage), alongside `src/usage-model.ts` (the reading's
+  Schemas and every judgement made from it, pure so Desktop and a module share them),
+  `src/usage.ts` (the host's sources, their interval and back-off), `collie usage` in
+  `src/commands/usage.ts` and Desktop's `desktop/src/shared/usage.ts` (the header's entries
+  and a Machine's Usage block), with `test/usage-model.test.ts`, `test/usage.test.ts` and
+  `test/desktop-usage.test.ts`. Where work falls back is `resolveWithRoom` in
+  `src/harness.ts`, applied by `choose` in `src/agents.ts` against the `fallbacks` setting,
+  with `test/fallback.test.ts`. Usage
+  chooses where work runs, never whether it runs.
 - **Changing how large Desktop draws, or its Zoom** →
   [ADR-0047](docs/adr/0047-desktop-draws-at-its-monitors-own-scale.md), alongside
   `desktop/src/shared/scale.ts` (the monitor of a window from `hyprctl -j`, the zoom and the

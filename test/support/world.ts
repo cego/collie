@@ -38,6 +38,13 @@ const Envelope = Schema.fromJsonString(
 );
 const asEnvelope = Schema.decodeUnknownEffect(Envelope);
 
+/** `collie` as the suite runs it: the compiled binary where `COLLIE_TEST_BINARY` names one. */
+export const collieCommand = Config.option(Config.String("COLLIE_TEST_BINARY")).pipe(
+  Effect.map((binary) =>
+    Option.isSome(binary) ? [binary.value] : [process.execPath, `${root}src/main.ts`],
+  ),
+);
+
 /** The command itself, run as an operator runs it: another process, one JSON envelope. */
 export const collie = Effect.fn("World.collie")(function* (
   world: World,
@@ -45,8 +52,7 @@ export const collie = Effect.fn("World.collie")(function* (
   /** More of the operator's environment, over this world's own. */
   extra: Readonly<Record<string, string>> = {},
 ) {
-  const binary = yield* Config.option(Config.String("COLLIE_TEST_BINARY"));
-  const command = Option.isSome(binary) ? [binary.value] : [process.execPath, `${root}src/main.ts`];
+  const command = yield* collieCommand;
   const suite = yield* suiteEnv;
   const child = Bun.spawn([...command, "--json", ...args], {
     cwd: world.project,
@@ -154,10 +160,7 @@ export const proves = <A, E>(
       // A project is a checkout, which is what an agent's start from inside it names.
       yield* exec(["git", "init", "-q"], { cwd: world.project });
       yield* save(world.user, modules);
-      const binary = yield* Config.option(Config.String("COLLIE_TEST_BINARY"));
-      const command = Option.isSome(binary)
-        ? [binary.value]
-        : [process.execPath, `${root}src/main.ts`];
+      const command = yield* collieCommand;
       // A herdr of the world's own, for this process and the host it starts: the real one
       // is not on a CI runner, and on a desk it is the operator's live session.
       const herdr = yield* fakeHerdrIn(dir);

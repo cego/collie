@@ -560,7 +560,10 @@ the card `nothing has checked it` and says nothing about why.
 The header sentence counts the whole Herd, not what the search left: `One task is
 waiting on you. 1 ready to release, 2 waiting on you. 4 working, 1 gone quiet.` — the
 middle counts being this week's endings, the older ones sitting behind the fold — amber while anything needs
-you and muted otherwise. Beside it, a search field (`/`) matching a task's name, its project, its branch
+you and muted otherwise. After it, each Subscription's busiest window in a few characters —
+`claude 31% · chatgpt 2%`, naming the model where a model's own window is the busiest
+(`claude Opus out`) — amber at 90% or more and `out` once one is Exhausted; it is
+the first thing to give way on a narrow pane ([Usage](#usage)). Beside it, a search field (`/`) matching a task's name, its project, its branch
 and what its agents are called and are doing, and **New run**. At the left, the brand
 signature — the mascot and the lettering, drawn as a picture over the Kitty graphics protocol —
 appears when every terminal attached to herdr paints such pictures (Ghostty, kitty,
@@ -733,7 +736,9 @@ is showing at a time:
   constraint marked `¬`), the files the Run was given, each with its size and its path
   in the Run's directory where its agents read it, the steps with a duration each, the live agents — each saying
   what it is doing right now, from the terminal title its harness publishes, so progress is
-  visible without opening the pane — the branch, and the merge request behind it: state,
+  visible without opening the pane — every agent the Run started under **ran on**, with the
+  harness, model and effort each ran on (`build  claude/opus medium`) — the branch, and the
+  merge request behind it: state,
   pipeline, approvals, unresolved threads, and what has moved since this review finished.
   The newest card is at the bottom.
 - **Review** — the review the run wrote, readable without splitting a pane and running
@@ -1070,6 +1075,23 @@ gives it what it lacks. A toast says what it did, red where a part of it failed.
 chat reads the same standing and does the same Sync now through `collie_in_sync`. The header's **Machines** button shows how many Machines aren't in sync, those
 still connecting left out.
 
+Beside **Machines**, the header names each **Subscription** and account in use across the
+Flock with its busiest window, as in `Claude 72% · ChatGPT 2%`, naming the model where it is
+a model's own (`Claude Opus out`): amber at 90% or above, red
+and "out" once it is **Exhausted**. Hovering an entry gives its account, when that window
+resets and which Machine read it how long ago, and clicking it opens Machines. Machines
+logged in to one account are one entry, matched by the account's id rather than its email,
+and two accounts are two, each named; the provider counts usage per account, so the entry
+shows the newest of its Machines' readings. On the Machines page each Machine has a
+**Usage** block: per Subscription its plan and account, each window as a meter with its
+percent and when it resets, as a clock time and "in 2h 10m", and how fresh the numbers are
+and where they came from ("as of 3 minutes ago · Claude's usage endpoint"), or the
+reading's problem in its own words. A Machine running a Collie too old to read usage says
+"can't say; upgrade this Machine". Desktop asks every live Machine when it opens, again
+each minute while its window is shown, and whenever Machines opens; each host answers from
+its own reading, which is at most five minutes old unless its source is refusing
+([Usage](#usage)).
+
 Onboarding downloads the runner of Desktop's own version for that Machine from the GitHub
 release, with its `.sig`, and verifies it against Collie's release key before it goes
 anywhere; one that is unsigned or does not match is refused and said, and nothing reaches
@@ -1280,7 +1302,8 @@ follows the end of the Run's log as it is written, with a search that keeps only
 that match. **Merge request** shows what the host's merge watch last read — title, state,
 pipeline, approvals and comments — with Open in browser. **Facts** shows the files the Run was
 given, when it was given any (an image as a thumbnail, any other file by its name, type and
-size), its intent, its steering cards and the card's TaskView as the host sent it. Markdown is rendered with
+size), its **Agents** — one row per agent the Run started, in launch order, with the
+harness, model and effort it ran on — its intent, its steering cards and the card's TaskView as the host sent it. Markdown is rendered with
 Comark: tables, Shiki-highlighted code and mermaid diagrams, with anything that could run
 and every inline style removed, because agents write it. The view's own policy lets nothing
 on a page load from the network, and nothing may move Desktop's window off its own page;
@@ -1761,6 +1784,7 @@ checkout there is no branch and no working tree to review, so the target menu is
   "notifications": { "run-done": false },
   "proactive": true,
   "models": { "opencode": ["mycorp/local-model"] },
+  "fallbacks": ["codex", "pi/openai-codex/gpt-5.6-sol"],
   "trust": "auto",
   "permissions": "auto",
   "scope": "local",
@@ -1800,6 +1824,23 @@ stops you answering it.
 model, effort or scope fails validation before a single tab opens. See
 [Authoring](authoring.md#harnesses-models-and-effort) for what each harness accepts, and
 [Permissions](#permissions-auto-by-default) for what `permissions` decides.
+
+`fallbacks` ("Fall back to" under Settings) is where work goes once the agent it would run
+on has used up its **Subscription**
+([ADR-0049](adr/0049-work-goes-to-an-agent-with-usage-left.md)): the first of these with
+usage left, in order. An entry is a harness, which runs that harness's own default model and
+so never goes stale, or `harness/model`, split at the first `/`, so
+`pi/openai-codex/gpt-5.6-sol` is pi on that provider's model. An entry naming a harness
+Collie has no adapter for is refused when you set it; a model is checked only when the entry
+is used, and one that does not resolve is skipped, with a line in the Run's log saying why.
+An entry that draws on the same Exhausted Subscription — pi on `openai-codex` once ChatGPT
+is out — is skipped too. The effort the work asked for comes along where the harness takes
+it. Empty, the default, keeps today's behaviour: the work starts on its preferred agent, and
+the Run's record says when its Subscription resets. It is shared across the Flock like every
+setting, and read at every choice, so an edit reaches the next agent. The Run's record and
+`collie run show` say which agent each step landed on, as in
+`codex/default (fell back from claude/opus: session 100%, resets 15:45)`, and the Run's log
+gets a line when it happens. Usage never refuses, holds or delays work.
 
 `notifications` turns a kind of toast off: `{"run-done": false}`, and a kind left out is on.
 The host raises one when a run finishes (`run-done`), fails (`run-failed`, or
@@ -2051,6 +2092,56 @@ and what Collie keeps and why. `collie cleanup --apply` sweeps now; chat can do 
 Every removal is judged again at the moment it is made, never forced, and recorded in the
 state directory's `cleanup.jsonl` with when, what, how big, why and who asked, for 30 days.
 Anything a sweep cannot judge is kept, with the reason.
+
+## Usage
+
+Each Machine's host reads how much of its Claude and ChatGPT **Subscriptions** is used
+([ADR-0049](adr/0049-work-goes-to-an-agent-with-usage-left.md)), per window: the 5-hour
+session, the week, and a model's own week where the plan has one. `collie usage` prints it,
+the Control Plane's header names each Subscription's busiest window, Desktop shows it across
+the Flock and per Machine ([Collie Desktop](#collie-desktop)), and chat runs the command
+when you ask how much is left.
+
+The numbers come from where the harnesses' own `/usage` and `/status` get them:
+
+- **Claude**: the usage endpoint Claude Code's `/usage` reads, called with the login Claude
+  Code keeps on this Machine (`~/.claude/.credentials.json`, or under `CLAUDE_CONFIG_DIR`;
+  the Keychain on macOS). Collie only reads that login, and never refreshes or writes it:
+  once it has expired, the reading says so until Claude Code next runs and refreshes it.
+- **Claude agents Collie started**: their status lines report the session and weekly
+  windows after every response, and the newest of them wins over an older endpoint reading.
+  So while an agent works, the reading is as fresh as its last response.
+- **ChatGPT**: Codex's app server, asked through a running Codex agent's own where there is
+  one, and a `codex app-server` started for the one question otherwise.
+
+Nothing polls. The host asks only when something wants the numbers — `collie usage`, the
+board, Desktop — and calls each endpoint at most once every five minutes; between calls it
+answers with the last reading and its age. An endpoint that refuses is left alone for as
+long as it asks (five minutes where it does not say), and one that does not answer within
+ten seconds becomes a problem; either way the last good windows stand. A window whose reset
+has passed counts as unused, whatever was read before it. Each reading says when it was
+true, where it came from, or why there is none — a login that expired, Codex not installed
+or not logged in. Machines logged in to one account each read it for themselves; a reading
+names the account by its id, never its email, because one email can hold a personal plan and
+a team seat.
+
+An agent can also run out in the middle of its work
+([ADR-0049](adr/0049-work-goes-to-an-agent-with-usage-left.md) D8): Claude Code says it
+stopped on its limit, or its status line shows a window at 100%; pi stops on a usage-limit
+error; or this Machine's reading says the Subscription is Exhausted for its model. If it has
+not written its Output yet, Collie closes its tab — Claude would otherwise carry on in the
+same checkout at the reset — and opens a new one in the Task's workspace on the next agent
+with room, given the same work with a hand-over at the head of its prompt: what the earlier
+agent changed is in the checkout, and where its conversation is. The Run's log says
+`build: claude/opus ran out (session 100%, resets 15:45) — continuing on codex/default as
+<agent>`, and the Run's record lists both agents, the new one saying what it fell back
+from. The new agent takes the old one's place for later work that names it, such as the
+next slices of a build. A transient rate limit or an overloaded API moves nothing, nor
+does a harness that will not start or is signed out: the Run parks with its reason as
+before. Where nothing has room, the agent is left where it is, and the Run waits for it,
+parking after its collection time with when each Subscription resets.
+
+Usage is data: it never refuses, holds or delays work.
 
 ## Troubleshooting
 

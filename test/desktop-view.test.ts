@@ -38,6 +38,7 @@ import {
   inSync,
   syncable,
 } from "../desktop/src/shared/in-sync";
+import { agentRows } from "../desktop/src/shared/run-agents";
 import { type Column, columnOf } from "../desktop/src/shared/columns";
 import { epochMs } from "../src/time";
 import { task } from "./support/task";
@@ -121,6 +122,7 @@ const served = (main: Channel<ToView, ToMain>) =>
         terminalSend: () => Effect.die("not asked"),
         runDetail: () => Stream.die("not asked"),
         runFile: () => Effect.die("not asked"),
+        usage: () => Effect.die("not asked"),
         stage: () => Effect.die("not asked"),
         attachmentFile: () => Effect.die("not asked"),
         stagePaths: () => Effect.die("not asked"),
@@ -746,6 +748,52 @@ test("Escape closes an open page and keeps the card selected", () => {
 
 test("Escape on the board lets the selected card go", () => {
   expect(afterGesture(picked, { kind: "escape", overlay: false, typing: false })).toEqual(none);
+});
+
+test("a record's Agents section is one row per agent, in launch order, saying what it ran on", () => {
+  expect(
+    agentRows([
+      {
+        operation: "build",
+        agent: "r1-build-r1",
+        harness: "claude",
+        model: "opus",
+        effort: "medium",
+        from: null,
+        why: null,
+        at: null,
+      },
+      {
+        operation: "review",
+        agent: "r1-review-r1",
+        harness: "codex",
+        model: null,
+        effort: null,
+        from: { harness: "claude", model: "opus", effort: "xhigh" },
+        why: "session 100%, resets 15:45",
+        at: null,
+      },
+      {
+        operation: "build",
+        agent: "r1-build-r2",
+        harness: "claude",
+        model: "opus",
+        effort: "medium",
+        from: null,
+        why: null,
+        at: null,
+      },
+    ]),
+  ).toEqual([
+    { key: "0:r1-build-r1", operation: "build", ranOn: "claude/opus medium", agent: "r1-build-r1" },
+    {
+      key: "1:r1-review-r1",
+      operation: "review",
+      ranOn: "codex/default (fell back from claude/opus xhigh: session 100%, resets 15:45)",
+      agent: "r1-review-r1",
+    },
+    { key: "2:r1-build-r2", operation: "build", ranOn: "claude/opus medium", agent: "r1-build-r2" },
+  ]);
 });
 
 test("a record says its Machine is not live in the board's words, and nothing once it is", () => {

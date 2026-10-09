@@ -34,6 +34,7 @@ import {
   Schedule,
   Schema,
   Scope,
+  Semaphore,
   Stream,
   Struct,
 } from "effect";
@@ -63,6 +64,7 @@ import { configuredAgents } from "./agents";
 import { hostLogger } from "./host-log";
 import { Catalogue, discover, searchPath } from "./discovery";
 import { sideJobs } from "./side-jobs";
+import { Usage, usageLayer } from "./usage";
 import { dataHomeOf, desktopRootOf } from "./desktop";
 import type * as MessageStorage from "effect/cluster/MessageStorage";
 import {
@@ -85,6 +87,7 @@ import {
   type SweptBy,
 } from "./cleanup";
 import { once, recordAudit, trimAudit } from "./audit";
+import { usagePhrase } from "./usage-model";
 import { currentEnv } from "./env";
 import { installation as installedRelease } from "./release";
 import { Herdr, type AgentInfo } from "./herdr";
@@ -632,6 +635,8 @@ const CLEANUP_TRAIL = 50;
 
 /** How many of the settings operations a host keeps a record of. */
 const SETTINGS_TRAIL = 50;
+/** How many usage reads the host keeps a record of: Desktop asks every minute. */
+const USAGE_TRAIL = 200;
 /** How many of the chat's writes to files the host keeps a record of. */
 const FILES_TRAIL = 1000;
 /** How many uploads the host keeps a record of. */
@@ -659,6 +664,9 @@ const frontDoorHandlers = (
       const registry = yield* Registry;
       const hosted = yield* Effect.context<HostServices>();
       const { env, herdr, bun, build, sweepers } = yield* hostBoard(dir);
+      const usage = yield* Usage;
+      // Trimming rewrites the trail through one temporary file, so one read records at a time.
+      const recordingUsage = yield* Semaphore.make(1);
       // A finished Run's plan cannot change, so every drawer on it shares one read.
       // ponytail: kept for the host's life; evict by age if a host lives for months.
       const plans = new Map<string, PlanPanel | null>();
@@ -1052,6 +1060,25 @@ const frontDoorHandlers = (
               );
               yield* trimAudit(trail, SETTINGS_TRAIL).pipe(Effect.orDie);
               return taken;
+            }),
+          ),
+        usage: (_, { client }) =>
+          plainly(
+            Effect.gen(function* () {
+              const readings = yield* usage.readings;
+              const trail = (yield* Path.Path).join(env.stateDir, "usage");
+              const request = yield* (yield* Crypto.Crypto).randomUUIDv4;
+              const value = usagePhrase(readings, yield* Clock.currentTimeMillis).text;
+              yield* recordingUsage.withPermits(1)(
+                recordAudit(trail, {
+                  operation: "usage",
+                  request,
+                  ...whoOf(client),
+                  result: Schema.String,
+                  value,
+                }).pipe(Effect.andThen(trimAudit(trail, USAGE_TRAIL)), Effect.orDie),
+              );
+              return readings;
             }),
           ),
         cleanup: () => plainly(Effect.flatMap(sweepers, judge)),
@@ -1750,6 +1777,8 @@ const own = (dir: string) =>
     const installation = yield* installationOf(dir).pipe(Effect.orDie);
     const installed = yield* installedRelease(env.pluginRoot, BUILD);
     const development: Development = installed.release ? {} : { development: installed.build };
+    // One reader of this Machine's usage, so every door and every choice of agent paces as one.
+    const usage = yield* Usage;
     const panels: MrPanels = new Map();
     const declared: Declared = new Map();
     return yield* Layer.launch(
@@ -1761,11 +1790,14 @@ const own = (dir: string) =>
             sideJobsLayer(dir, panels),
           ).pipe(
             Layer.provide(
-              registryLayer(dir, {
-                locate: locateIn(env),
-                userDir: env.userDir,
-                crashAt,
-              }),
+              Layer.mergeAll(
+                registryLayer(dir, {
+                  locate: locateIn(env),
+                  userDir: env.userDir,
+                  crashAt,
+                }),
+                Layer.succeed(Usage, usage),
+              ),
             ),
           ),
         ),
@@ -1779,12 +1811,13 @@ const own = (dir: string) =>
             toast: (title, body, sound) =>
               herdr.notify(title, body, sound).pipe(Effect.provideContext(bun), Effect.ignore),
             herd: { socketPath: env.socketPath, pluginRoot: env.pluginRoot },
+            readings: usage.readings,
           }),
         ),
-        Layer.provide(yield* configuredAgents(dir)),
+        Layer.provide(yield* configuredAgents(dir, usage.readings)),
       ),
     );
-  }).pipe(Effect.orDie);
+  }).pipe(Effect.provide(usageLayer), Effect.orDie);
 
 /**
  * A client of the host that owns `dir`, starting one if nothing is there. Every client

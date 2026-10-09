@@ -6,6 +6,7 @@ import { Effect, Option, Schema, SchemaGetter } from "effect";
 import * as Rpc from "effect/rpc/Rpc";
 import * as RpcGroup from "effect/rpc/RpcGroup";
 import { IntentSeedSchema } from "./intent-model";
+import { UsageReading } from "./usage-model";
 import { VerifySpecSchema } from "./verify-spec";
 
 const STATE_ORDER = [
@@ -430,6 +431,45 @@ export const PART_BYTES = 4 * 1024 * 1024;
 
 export type RunFile = typeof RunFile.Type;
 
+/** The harness, model and effort an agent ran on. */
+export const RanOn = Schema.Struct({
+  harness: Schema.String,
+  model: Schema.String,
+  effort: Schema.NullOr(Schema.String),
+});
+
+export const RunAgent = Schema.Struct({
+  operation: Schema.String,
+  agent: Schema.String,
+  harness: Schema.String,
+  /** Null in a launch recorded before the model was. */
+  model: Schema.NullOr(Schema.String),
+  effort: Schema.NullOr(Schema.String),
+  /** The choice it fell back from (ADR-0049 D11). */
+  from: Schema.NullOr(RanOn),
+  /** Why it fell back, or why nothing it could fall back to had room. */
+  why: Schema.NullOr(Schema.String),
+  /** When it was given this work (ISO); null in a launch recorded before that was. */
+  at: Schema.NullOr(Schema.String),
+});
+export type RunAgent = typeof RunAgent.Type;
+
+const choiceSaid = (on: {
+  readonly harness: string;
+  readonly model: string | null;
+  readonly effort: string | null;
+}) => `${on.harness}/${on.model ?? "default"}${on.effort === null ? "" : ` ${on.effort}`}`;
+
+/**
+ * What an agent ran on, as every door says it: `claude/opus xhigh`, or
+ * `codex/default (fell back from claude/opus: session 100%, resets 15:45)`.
+ */
+export const ranOn = (agent: RunAgent) => {
+  const on = choiceSaid(agent);
+  if (agent.from !== null) return `${on} (fell back from ${choiceSaid(agent.from)}: ${agent.why})`;
+  return agent.why === null ? on : `${on} (${agent.why})`;
+};
+
 /** Everything the detail panel shows for the selected Run. */
 export const RunDetail = Schema.Struct({
   id: Schema.String,
@@ -499,6 +539,8 @@ export const RunDetail = Schema.Struct({
   attachments: Schema.optional(Schema.Array(AttachmentFile)),
   /** Null for a Run with no branch or no checkout left to compare. */
   diff: Schema.NullOr(RunDiff),
+  /** Every agent the Run started, in launch order. Absent from an older host. */
+  agents: Schema.optional(Schema.Array(RunAgent)),
 });
 export type RunDetail = typeof RunDetail.Type;
 
@@ -1086,6 +1128,8 @@ export const FrontDoorRpcs = RpcGroup.make(
     success: SharedSettings,
     error: Schema.Union([HostRefused, RequestConflict]),
   }),
+  /** This Machine's Usage readings, one per Subscription (ADR-0049). */
+  Rpc.make("usage", { success: Schema.Array(UsageReading), error: HostRefused }),
   /** What a sweep would remove now, and what Collie keeps and why (ADR-0045). */
   Rpc.make("cleanup", { success: CleanupReport, error: HostRefused }),
   /** Sweeps now: what was removed, and what was kept and why. */

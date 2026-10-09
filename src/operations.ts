@@ -9,7 +9,8 @@ import { ChildProcessSpawner } from "effect/process";
 import { nowIso } from "./time";
 import { attentionFor } from "./attention";
 import type { PluginEnv } from "./env";
-import { Answered, mrLabel, type FrontDoor } from "./board-model";
+import { Answered, mrLabel, ranOn, type FrontDoor } from "./board-model";
+import { runAgents } from "./launches";
 import { readAudit, type AuditLine } from "./audit";
 import { readForge, readMrStates } from "./merges";
 import { findingsIn } from "./output";
@@ -1095,6 +1096,7 @@ export const runFacts = Effect.fn("operations.runFacts")(function* (env: PluginE
   const intent = yield* readIntent(run.dir).pipe(Effect.catch(() => Effect.succeed(null)));
   const attention = yield* attentionFor(run);
   const started = (yield* listRuns(env)).filter((one) => one.parent === run.id);
+  const agents = yield* runAgents(env.stateDir, run.id);
   const lines = [
     `Status: ${run.state}`,
     `Directory: ${run.cwd}`,
@@ -1117,6 +1119,14 @@ export const runFacts = Effect.fn("operations.runFacts")(function* (env: PluginE
           "### Runs it started",
           "",
           ...started.map((one) => `- run ${one.id}: ${one.workflow}, ${one.state}`),
+        ]),
+    ...(agents.length === 0
+      ? []
+      : [
+          "",
+          "### Agents",
+          "",
+          ...agents.map((one) => `- ${one.operation}: ${ranOn(one)} as ${one.agent}`),
         ]),
     "",
     ...(yield* mergeLines(env, run)),

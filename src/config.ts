@@ -243,6 +243,10 @@ export const loadDefaults = Effect.fn("Config.loadDefaults")(function* (userDir:
       ? raw.compact_at_tokens
       : FALLBACK_DEFAULTS.compactAtTokens,
     models: Option.getOrElse(Schema.decodeUnknownOption(Models)(raw.models), () => ({})),
+    fallbacks: Option.getOrElse(
+      Schema.decodeUnknownOption(Schema.Array(Schema.String))(raw.fallbacks),
+      () => [],
+    ),
     trust: raw.trust === "auto" || raw.trust === "never" ? raw.trust : FALLBACK_DEFAULTS.trust,
     // As written rather than coerced: `loadDefaults` is read by the Settings and
     // Workflows views and by Doctor, so a file hand-edited into nonsense still has to

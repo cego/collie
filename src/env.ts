@@ -165,6 +165,8 @@ const environmentKeys = [
   // Which environment file Helle's credentials are read from, for a machine that keeps
   // them somewhere other than the MCP wrapper's default.
   "HELLE_ENV_FILE",
+  // Where Claude Code keeps its login and settings, where it is not `~/.claude`.
+  "CLAUDE_CONFIG_DIR",
   // A fake Helle, for tests only.
   "COLLIE_HELLE_URL",
   "HERDR_BIN_PATH",

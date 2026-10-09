@@ -18,6 +18,7 @@ import {
   SECTIONS,
   type Section as SectionId,
 } from "../board-model";
+import type { UsagePhrase } from "../usage-model";
 import { ALL_KEYS, type Command, type MenuItem, type Older, primaryFor } from "./state";
 import { C, cardEdge, sentenceColour, stateGlyph, stepGlyph } from "./sections";
 
@@ -44,6 +45,7 @@ export interface BoardProps {
   sections: Sections;
   columns: number;
   header: HeaderSentence;
+  usage: UsagePhrase;
   query: string;
   /** Whether the search field has the keyboard, so the board says where typing goes. */
   searching: boolean;
@@ -266,6 +268,7 @@ export function Board(props: BoardProps) {
     <box style={{ flexDirection: "column", flexGrow: 1 }}>
       <Header
         header={props.header}
+        usage={props.usage}
         logo={props.logo}
         width={props.width}
         query={props.query}
@@ -298,6 +301,7 @@ export function Board(props: BoardProps) {
 
 function Header(props: {
   header: HeaderSentence;
+  usage: UsagePhrase;
   logo: string | null;
   width: number;
   query: string;
@@ -338,6 +342,13 @@ function Header(props: {
       <text fg={props.header.urgent ? C.amber : C.muted} wrapMode="none" style={{ flexShrink: 0 }}>
         {`  ${props.header.text}`}
       </text>
+      <Show when={props.usage.text !== ""}>
+        <box style={{ flexShrink: 1, overflow: "hidden" }}>
+          <text fg={props.usage.warn ? C.amber : C.dim} wrapMode="none">
+            {`  ${props.usage.text}`}
+          </text>
+        </box>
+      </Show>
       <box style={{ flexGrow: 1 }} />
       {/* A field, not a word: three rows like the buttons beside it, lit while it has
           the keys. */}

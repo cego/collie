@@ -75,6 +75,7 @@ Runner source (Bun/TypeScript). Compiled to `bin/collie` per platform; see ADR-0
 | `desktop.ts`       | `collie upgrade`'s Desktop step: a verified Desktop update, staged as Electrobun would                |
 | `sdk.ts`           | `collie`: what a module exports, declares, waits on, and starts as a child                            |
 | `agents.ts`        | What a workflow does with an agent: one launch, one collection, one repair                            |
+| `launches.ts`      | What each of a Run's agents was launched on, read back in launch order                                |
 | `proactive.ts`     | What is worth Collie starting a turn about, and what it has already said                              |
 | `news.ts`          | What it noticed, per conversation: deduped, batched, superseded; sent is never read                   |
 | `home.ts`          | Which workspace is this Herd's Home, decided by proof and never by a label                            |
@@ -100,3 +101,5 @@ Runner source (Bun/TypeScript). Compiled to `bin/collie` per platform; see ADR-0
 | `compaction.ts`    | One threshold, one work-boundary policy, and each agent's controls for its lifetime                   |
 | `compactors.ts`    | Each harness's official compaction interface, generated per agent and bundled in Collie               |
 | `codex.ts`         | Codex's App Server as a client: thread identity, its context, and its compactions                     |
+| `usage-model.ts`   | A Subscription's Usage reading: its Schemas, parsing, and Exhausted (pure)                            |
+| `usage.ts`         | This Machine's Usage readings: Claude's endpoint, Codex's app server, status lines                    |

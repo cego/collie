@@ -1045,6 +1045,10 @@ export const setSharedSetting = (
     options.door,
   );
 
+/** This Machine's Usage readings, as its host last read them. */
+export const usageReadings = (env: PluginEnv, door: Door) =>
+  asks(env, (client) => client.usage(), door);
+
 /** What a cleanup sweep would remove now, and what is kept and why. */
 export const cleanupListing = (env: PluginEnv, door: Door) =>
   asks(env, (client) => client.cleanup(), door);
