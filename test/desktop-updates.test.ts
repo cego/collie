@@ -47,6 +47,8 @@ const fakeUpdater = (
     readonly failing?: string;
     /** Held open until it is done, so a second check can arrive while it runs. */
     readonly downloading?: Deferred.Deferred<void>;
+    /** The update archive Electrobun prepared, as its platform names it. */
+    readonly artifact?: string;
   },
 ): Effect.Effect<Fake, never, FileSystem.FileSystem> =>
   Effect.gen(function* () {
@@ -59,7 +61,7 @@ const fakeUpdater = (
       version: "0.33.0",
       hash: "abc",
       tar,
-      artifact: "stable-linux-x64-collie-desktop.tar.zst",
+      artifact: options.artifact ?? "stable-linux-x64-collie-desktop.tar.zst",
     };
     const port: UpdaterPort = {
       channel: Effect.succeed(options.channel ?? "stable"),
@@ -136,6 +138,24 @@ test("a signed update is checked for at launch, said to be downloading, then to 
         "download",
         "signature stable-linux-x64-collie-desktop.tar.sig from 0.33.0",
       ]);
+    }).pipe(Effect.scoped),
+  );
+});
+
+test("on macOS the app's update archive is checked against its own applied tar's signature", () => {
+  const key = pair();
+  return run((dir) =>
+    Effect.gen(function* () {
+      const { port, calls } = yield* fakeUpdater(dir, {
+        signature: signRelease(TAR, key.privateKey),
+        artifact: "stable-macos-arm64-collie-desktop.app.tar.zst",
+      });
+      const updates = yield* updatesOf(port, "0.32.0", key.publicKey);
+      const said = yield* told(updates, updates.check);
+      expect(said.at(-1)).toEqual({ _tag: "Ready", version: "0.33.0" });
+      expect(calls).toContain(
+        "signature stable-macos-arm64-collie-desktop.app.tar.sig from 0.33.0",
+      );
     }).pipe(Effect.scoped),
   );
 });

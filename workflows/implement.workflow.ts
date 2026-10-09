@@ -52,8 +52,8 @@ import {
   type VerifySpec,
 } from "collie";
 import { DateTime, Effect, FileSystem, Schema } from "effect";
-import type { WorkflowEngine, WorkflowInstance } from "effect/unstable/workflow/WorkflowEngine";
-import * as Activity from "effect/unstable/workflow/Activity";
+import type { WorkflowEngine, WorkflowInstance } from "effect/workflow/WorkflowEngine";
+import * as Activity from "effect/workflow/Activity";
 import markdown from "./implement.md" with { type: "text" };
 import { IMPLEMENTER, REVIEWER, reviewPass } from "./reviewing.ts";
 

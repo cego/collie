@@ -12,10 +12,10 @@
 
 import { Context, Effect, Layer, Schema, Stream } from "effect";
 import * as SqliteMigrator from "@effect/sql-sqlite-bun/SqliteMigrator";
-import * as Migrator from "effect/unstable/sql/Migrator";
-import * as Reactivity from "effect/unstable/reactivity/Reactivity";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
-import * as SqlSchema from "effect/unstable/sql/SqlSchema";
+import * as Migrator from "effect/sql/Migrator";
+import * as Reactivity from "effect/reactivity/Reactivity";
+import * as SqlClient from "effect/sql/SqlClient";
+import * as SqlSchema from "effect/sql/SqlSchema";
 import { RequestConflict } from "./board-model";
 import { nowIso } from "./time";
 
@@ -97,7 +97,17 @@ export interface Admission {
   readonly parent: string | null;
   /** What the host places it from, as JSON; absent for work that is placed already. */
   readonly placing?: string;
+  /** Paths on this Machine copied into the Run before it is handed over. */
+  readonly attachments?: ReadonlyArray<string>;
 }
+
+/** What a retry of a claim has to ask again; attachments only where there were some. */
+type AskedFor = {
+  readonly options: Readonly<Record<string, string>>;
+  readonly task: string | null;
+  readonly parent: string | null;
+  attachments?: ReadonlyArray<string>;
+};
 
 export interface StoreApi {
   readonly remember: (generation: GenerationRow) => Effect.Effect<void>;
@@ -141,6 +151,15 @@ export interface StoreApi {
   readonly recordPlacing: (run: string, placing: string) => Effect.Effect<void>;
   /** A claim whose placement was refused, withdrawn so the request can be made again. */
   readonly forget: (run: string) => Effect.Effect<void>;
+  /**
+   * Forgets these Runs' rows in one transaction: `clear` first, for what the engine keeps
+   * of each, then its decisions and its row. A row the engine never accepted is left, for
+   * recovery to hand over (ADR-0017 D4). Answers with the Runs it forgot.
+   */
+  readonly retire: <E>(
+    runs: ReadonlyArray<string>,
+    clear: (row: RunRow) => Effect.Effect<void, E>,
+  ) => Effect.Effect<ReadonlyArray<string>, E>;
   /** The engine has this work: the receipt a crash before it is what recovery looks for. */
   readonly accepted: (run: string) => Effect.Effect<void>;
   readonly pending: Effect.Effect<ReadonlyArray<RunRow>>;
@@ -351,11 +370,13 @@ function makeStore(): Effect.Effect<StoreApi, never, SqlClient.SqlClient | React
 
       admit: Effect.fn("Store.admit")(function* (admission: Admission) {
         const input = canonical(admission.input);
-        const asked = canonical({
+        const askedFor: AskedFor = {
           options: { ...admission.options },
           task: admission.task,
           parent: admission.parent,
-        });
+        };
+        if (admission.attachments?.length) askedFor.attachments = [...admission.attachments];
+        const asked = canonical(askedFor);
         const at = yield* nowIso();
         // The claim is the insert, and what it returns is whether this caller made it:
         // one request id, one row, decided by the database rather than by a read another
@@ -436,6 +457,26 @@ function makeStore(): Effect.Effect<StoreApi, never, SqlClient.SqlClient | React
         reactivity
           .mutation(RUNS, sql`DELETE FROM collie_runs WHERE run = ${run} AND accepted IS NULL`)
           .pipe(Effect.asVoid, Effect.orDie),
+      retire: <E>(runs: ReadonlyArray<string>, clear: (row: RunRow) => Effect.Effect<void, E>) =>
+        reactivity
+          .mutation(
+            RUNS,
+            sql.withTransaction(
+              Effect.gen(function* () {
+                const gone: string[] = [];
+                for (const run of runs) {
+                  const row = (yield* byRun(run).pipe(Effect.orDie))[0];
+                  if (row === undefined || row.accepted === null) continue;
+                  yield* clear(row);
+                  yield* sql`DELETE FROM collie_decisions WHERE run = ${run}`.pipe(Effect.orDie);
+                  yield* sql`DELETE FROM collie_runs WHERE run = ${run}`.pipe(Effect.orDie);
+                  gone.push(run);
+                }
+                return gone;
+              }),
+            ),
+          )
+          .pipe(Effect.catchTag("SqlError", Effect.die)),
       pending: unaccepted().pipe(Effect.orDie),
       runs: all,
       run: (run: string) =>

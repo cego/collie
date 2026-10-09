@@ -6,9 +6,9 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, FileSystem, Path, Schedule, Schema } from "effect";
 import { Rig } from "./support/recorder";
 import { runEffect } from "./support/effect";
-import { onMachineWith } from "./support/live";
+import { onMachineWith, removesCache } from "./support/live";
 import { fakeChannel } from "./support/compaction";
-import { atLeast, COMPACTION_PORTS, VERIFIED_VERSIONS } from "../src/compactors";
+import { atLeast, COMPACTION_PORTS, ranOutSince, VERIFIED_VERSIONS } from "../src/compactors";
 import type { AgentContext } from "../src/compaction";
 
 let rig: Rig;
@@ -220,6 +220,7 @@ test("install writes the extension and passes it with Pi's own launch flag", () 
 /** The parts of Pi's own surface the extension Collie generates registers against. */
 interface PiEvent {
   reason?: string;
+  message?: { stopReason?: string; errorMessage?: string };
 }
 interface PiContext {
   sessionManager: { getSessionFile: () => string | null };
@@ -319,6 +320,7 @@ onMachineWith("pi")(
   () =>
     runEffect(
       Effect.gen(function* () {
+        yield* removesCache("jiti");
         const { args } = yield* pi.install({
           agent: "reuse-run-two-r1",
           harness: "pi",
@@ -355,3 +357,42 @@ onMachineWith("pi")(
     ),
   { timeout: 30_000 },
 );
+
+test("an error stop on a usage limit is the agent running out; an overload is not", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* pi.install({ agent: "build-r1", harness: "pi", cwd: rig.projectDir, dir });
+      const handlers = new Map<string, (event: PiEvent, ctx: PiContext) => void>();
+      const extension: { default: (host: PiHost) => void } = yield* Effect.promise(
+        () => import(path.join(dir, "collie.ts")),
+      );
+      extension.default({
+        on: (event, handler) => handlers.set(event, handler),
+        registerCommand: () => {},
+      });
+      const piCtx: PiContext = {
+        sessionManager: { getSessionFile: () => "/home/mk/.pi/sessions/one.jsonl" },
+        getContextUsage: () => ({ tokens: 1 }),
+        compact: () => {},
+      };
+      handlers.get("session_start")!({}, piCtx);
+      handlers.get("turn_end")!(
+        { message: { stopReason: "error", errorMessage: "529 overloaded" } },
+        piCtx,
+      );
+      expect(yield* ranOutSince(dir, 0)).toBeNull();
+      handlers.get("turn_end")!(
+        {
+          message: {
+            stopReason: "error",
+            errorMessage: "You have hit your ChatGPT usage limit. Try again in 3 hours.",
+          },
+        },
+        piCtx,
+      );
+      expect(yield* ranOutSince(dir, 0)).toEqual({
+        why: "You have hit your ChatGPT usage limit. Try again in 3 hours.",
+        transcript: "/home/mk/.pi/sessions/one.jsonl",
+      });
+    }),
+  ));

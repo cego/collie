@@ -1,6 +1,6 @@
 // The Flock chat as the view holds it: TanStack AI's Vue client, connected to the main
 // process's `say` stream. The session keeps the conversation, so a turn sends only the
-// human's newest message and the card it goes with; the window is filled from the
+// human's newest message and the card it carries; the window is filled from the
 // session's transcript when it opens and when another conversation becomes current.
 
 import {
@@ -14,6 +14,7 @@ import type { ModelMessage, StreamChunk, UIMessage } from "@tanstack/ai";
 import { useChat } from "@tanstack/ai-vue";
 import { Effect, Exit, Option, Schema, Stream } from "effect";
 import { isString } from "../../../../src/schema";
+import { type Attached, attachedIn, attachmentPart } from "../../../src/shared/attachments";
 import { About, type Answers } from "../../../src/shared/chat-view";
 import { desktopTurnsAtom, FlockClient } from "../flock";
 
@@ -22,28 +23,43 @@ const transcriptAtom = FlockClient.mutation("transcript");
 const conversationsAtom = FlockClient.mutation("conversations");
 const reopenAtom = FlockClient.mutation("reopen");
 const popOutAtom = FlockClient.mutation("popOut");
-const settingsAtom = FlockClient.mutation("settings");
-const setSettingsAtom = FlockClient.mutation("setSettings");
 const popInAtom = FlockClient.mutation("popIn");
 
 const decodeAbout = Schema.decodeUnknownOption(About);
 
+/** The card a message was sent about, which rides on it as its metadata. */
+export const aboutOf = (message: UIMessage | ModelMessage) =>
+  "metadata" in message ? Option.getOrNull(decodeAbout(message.metadata?.about)) : null;
+
+/** The human's newest message: its words, its card, and the ids of Desktop's copies it carries. */
 const lastSaid = (messages: ReadonlyArray<UIMessage | ModelMessage>) => {
   const last = messages.findLast((message) => message.role === "user");
-  if (last === undefined) return "";
-  if ("parts" in last)
-    return last.parts.flatMap((part) => (part.type === "text" ? [part.content] : [])).join("\n");
-  return isString(last.content) ? last.content : "";
+  if (last === undefined) return { text: "", about: null, attachments: [] };
+  const parts: ReadonlyArray<{ readonly type: string }> =
+    "parts" in last ? last.parts : isString(last.content) ? [] : (last.content ?? []);
+  const text =
+    "parts" in last
+      ? last.parts.flatMap((part) => (part.type === "text" ? [part.content] : [])).join("\n")
+      : isString(last.content)
+        ? last.content
+        : "";
+  return {
+    text,
+    about: aboutOf(last),
+    attachments: parts.flatMap((part) => Option.toArray(attachedIn(part))).map(({ id }) => id),
+  };
 };
 
 export const useFlockChat = () => {
   const registry = injectRegistry();
-  const turn = (text: string, about: About | null, now: boolean) =>
+  const turn = ({ text, about, attachments }: ReturnType<typeof lastSaid>, now: boolean) =>
     Stream.unwrap(
       AtomRegistry.getResult(registry, FlockClient.runtime).pipe(
         Effect.map((context) =>
           Stream.unwrap(
-            FlockClient.use((client) => Effect.succeed(client("say", { text, about, now }))),
+            FlockClient.use((client) =>
+              Effect.succeed(client("say", { text, about, now, attachments })),
+            ),
           ).pipe(Stream.provideContext(context)),
         ),
       ),
@@ -53,7 +69,7 @@ export const useFlockChat = () => {
       // SAFETY: AG-UI's event types are string enums whose values are these events' `type`s.
       connect: (messages, body) =>
         Stream.toAsyncIterable(
-          turn(lastSaid(messages), Option.getOrNull(decodeAbout(body?.about)), body?.now === true),
+          turn(lastSaid(messages), body?.now === true),
         ) as AsyncIterable<StreamChunk>,
     },
   });
@@ -62,17 +78,10 @@ export const useFlockChat = () => {
   const conversations = useAtomSet(() => conversationsAtom, { mode: "promiseExit" });
   const reopen = useAtomSet(() => reopenAtom, { mode: "promiseExit" });
 
-  const turns = useAtomValue(() => desktopTurnsAtom);
+  const { value: turns, trouble: turnsTrouble } = useHeld(() => desktopTurnsAtom);
   /** Whether Desktop is telling the chat about News right now. */
-  const desktopSpeaking = computed(
-    () => AsyncResult.getOrElse(turns.value, () => "ended" as const) === "started",
-  );
-  const readSettings = useAtomSet(() => settingsAtom, { mode: "promiseExit" });
-  const writeSettings = useAtomSet(() => setSettingsAtom, { mode: "promiseExit" });
-  const proactive = ref(true);
-  void readSettings({ payload: undefined }).then((exit) => {
-    if (Exit.isSuccess(exit)) proactive.value = exit.value.proactive;
-  });
+  const desktopSpeaking = computed(() => turns.value === "started");
+  const { desktopSettings, setProactive } = useDesktopSettings();
 
   const reload = () =>
     transcript({ payload: undefined }).then((exit) => {
@@ -94,18 +103,26 @@ export const useFlockChat = () => {
   return {
     ...chat,
     desktopSpeaking,
-    proactive: readonly(proactive),
-    /** Lets Desktop speak first about News that matters, or not. */
-    setProactive: (on: boolean) =>
-      writeSettings({ payload: { proactive: on } }).then((exit) => {
-        if (Exit.isSuccess(exit)) proactive.value = on;
-      }),
+    turnsTrouble,
+    proactive: computed(() => desktopSettings.value.proactive),
+    setProactive,
     /**
      * Sends a message with the card it is about: queued while a turn is under way, or `now`,
      * interrupting it.
      */
-    say: (text: string, about: About | null, now = false) =>
-      chat.sendMessage(text, { body: { about, now }, whenBusy: now ? "interrupt" : "queue" }),
+    say: (text: string, about: About | null, now = false, files: ReadonlyArray<Attached> = []) => {
+      const content =
+        files.length === 0
+          ? text
+          : [
+              ...(text === "" ? [] : [{ type: "text" as const, content: text }]),
+              ...files.map(attachmentPart),
+            ];
+      return chat.sendMessage(about === null ? { content } : { content, metadata: { about } }, {
+        body: { now },
+        whenBusy: now ? "interrupt" : "queue",
+      });
+    },
     answer: (toolCallId: string, answers: Answers) => answer({ payload: { toolCallId, answers } }),
     reload,
     conversations: () =>

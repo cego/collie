@@ -5,7 +5,7 @@
 
 import type { BunServices } from "@effect/platform-bun/BunServices";
 import { Clock, Context, Effect, FileSystem, Path, Schema } from "effect";
-import type { ChildProcessSpawner } from "effect/unstable/process";
+import type { ChildProcessSpawner } from "effect/process";
 import { appendCard, buildCard, inspectFor, readCards, readCheckpoints, type Card } from "./cards";
 import {
   EXTRA_PASSES,

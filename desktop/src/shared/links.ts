@@ -15,6 +15,12 @@ const PIPELINE = /\/-\/pipelines\/(\d+)(?:[/?#]|$)/;
 
 const where = (url: string) => url.replace(/^https?:\/\//, "").replace(/\/$/, "");
 
+/** A URL without its scheme or trailing slash, elided in the middle past 60. */
+export const shortUrl = (url: string) => {
+  const shown = where(url);
+  return shown.length > 60 ? `${shown.slice(0, 40)}…${shown.slice(-15)}` : shown;
+};
+
 const cardOf = (url: string, given: string | undefined, mr: MrDetails | null): LinkCard => {
   if (url === mr?.url) return { kind: "mr", url, title: mr.title, status: mr.state };
   if (url === `${mr?.url}/pipelines`)

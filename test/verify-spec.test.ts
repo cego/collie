@@ -179,7 +179,7 @@ test("a Run keeps the set it started with, whatever the file says later", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const dir = yield* fs.makeTempDirectory({ prefix: "hw-approved-run-" });
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "hw-approved-run-" });
       yield* write(path.join(cwd, PROJECT_FILE), [TESTS]);
 
       // Read at start, and written into the Run's Intent: from there, the Intent is the set.

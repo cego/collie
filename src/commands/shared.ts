@@ -1,7 +1,7 @@
 import type { BunServices } from "@effect/platform-bun/BunServices";
 import { Effect, FileSystem, Option, Schema, Stdio, Stream } from "effect";
-import type { ChildProcessSpawner } from "effect/unstable/process";
-import { Argument, Command, Flag } from "effect/unstable/cli";
+import type { ChildProcessSpawner } from "effect/process";
+import { Argument, Command, Flag } from "effect/cli";
 import { layers, loadDefinitions, type PersonaDef } from "../definitions";
 import { currentEnv, type PluginEnv } from "../env";
 import { Herdr, type WorkspaceInfo } from "../herdr";

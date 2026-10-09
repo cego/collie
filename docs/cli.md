@@ -101,8 +101,9 @@ the same file, the same schemas and the same diagnostics.
 the SDK declarations, without starting a run, taking an agent or opening a worktree. It
 reports three different things and keeps them apart: `problem(s)` is what stops it running,
 `drawn without:` is a projection limit, and `ok, not typechecked` means no compiler was
-installed in that directory — never silence. It exits non-zero for problems, so it fits a
-pre-commit hook.
+installed in that directory — never silence. Where the `effect` installed there is not the
+host's, as after an upgrade, it provisions the toolchain again before typechecking. It
+exits non-zero for problems, so it fits a pre-commit hook.
 
 ## Write one
 
@@ -142,6 +143,7 @@ collie --json run start <workflow> --inputs-json '{"goal":"ship it"}'
 | `--harness <h>`   | The harness this Run's agents run on, over the workflow's own preference.   |
 | `--model <m>`     | The model this Run's agents run on, over the workflow's own preference.     |
 | `--effort <e>`    | The effort this Run's agents are asked for, over the workflow's own.        |
+| `--attach <file>` | Repeatable. A file to give the Run — see [Attachments](#attachments).       |
 | `--request-id`    | Idempotency key — see [Retrying safely](#retrying-safely).                  |
 
 `--harness`, `--model` and `--effort` reach every agent the Run starts, and its children,
@@ -149,6 +151,38 @@ without the workflow doing anything for them; a piece of work that names its own
 wins. They are resolved together before anything starts, so a model the harness does not
 take is `invalid_input` naming what it would take. [Which agent does the
 work](sdk.md#which-agent-does-the-work) is the whole order.
+
+### Attachments
+
+```sh
+collie --json run start plan --input goal="the picker is cut off" --attach shot.png
+collie --json run steer <run-id> "this is what it does now" --attach after.png
+collie --json run action <run-id> carry-on --input work="still cut off" --attach log.txt
+```
+
+`--attach` names a file to give the work, and is repeatable on `run start`, `run steer`
+and `run action`. A relative path is resolved against where the command runs; the CLI
+sends the absolute path and uploads nothing, so the file has to be on the host's Machine.
+The host copies each into the Run's own `runs/<id>/attachments/` — a copy, never a link —
+before its first step, or for a steer before the message is delivered, and every step's
+prompt lists the Run's attachments with their paths
+([`sdk.md`](sdk.md#what-every-step-prompt-is-given)). A steer's message gains an
+`Attached: <path>` line for each file it brought. A Run started from another — a
+follow-up, a child, an implementation of a plan Run — starts with copies of that Run's
+attachments. Two files of one name and different content are both kept, the later under a
+short sha256 prefix.
+
+A path that does not exist, is not a regular file, cannot be read or is larger than
+100 MB is `invalid_input` naming it, before anything is claimed: no Run, Task, worktree or
+workspace is made. The files are part of the request: at the host, the same request id with other
+attachments is `RequestConflict`, and with the same ones it is the same Run. The CLI
+answers a `--request-id` it already has a receipt for from that receipt, before the host
+is asked, so there it is the first Run whatever is attached. They are not
+an Input, so the Workflow's own input, and with it the execution, is the same either way.
+The operation's line in the Run's `operations.jsonl` names each file under `asked`, by the
+name the Run keeps it under and the path it came from. Chat's `start`, `followup` and
+`deliver` actions take the same paths as `attachments`
+([ADR-0046](adr/0046-an-attachment-is-uploaded-once-and-belongs-to-the-run.md)).
 
 ### A workflow saved as a module
 
@@ -270,7 +304,7 @@ A **Task** is the work itself, and the Runs it takes: a plan, the implementation
 into, the review of that. A fresh start about a branch an open Task's checkout has out —
 the branch it is placed on, or the one its diff target names; never merely the branch the
 caller is standing on — is that Task's, and opens in its workspace wherever it was started from. Any other fresh
-start is a new Task, and gets a herdr workspace of its own, created and focused. The
+start is a new Task, and gets a herdr workspace of its own, created and never focused. The
 default branch names no one piece of work, so a start on it is always new. Chains,
 follow-ups and resumes stay in the Task they came from.
 
@@ -469,6 +503,19 @@ whether `type` is present.
 | `parked`                                 | Why it parked its own work and what picks it up again, or `null`.                                                                                                                                    |
 | `diagnostic`                             | Why the engine could not be asked about it — a module that is missing, with the file named — or `null`.                                                                                              |
 
+Beside `run`, `data.agents` lists every agent the Run started, in launch order: `operation`,
+`agent` (its herdr name), and the `harness`, `model` and `effort` it ran on, read from the
+launch records (`model` and `effort` are `null` where a launch recorded none). The human
+lines say the same, one per agent: `  review  claude/opus xhigh`. An operation that reused a
+running agent names the agent it reused. `from` is the choice the work fell back from, where
+its **Subscription** was Exhausted or past the workflow's `upTo`, and `why` says which window
+and when it resets; both are `null` otherwise
+([ADR-0049](adr/0049-work-goes-to-an-agent-with-usage-left.md)). The human line then reads
+`  review  codex/default (fell back from claude/opus: session 100%, resets 15:45)`. Where
+nothing in the `fallbacks` chain had room, the work stays on its preferred agent with only
+`why` set, saying when each Subscription resets:
+`  review  claude/opus (nothing has room; claude/opus: session 100%, resets 15:45)`.
+
 ## The board
 
 ```sh
@@ -503,7 +550,7 @@ Task of its own; a Repo run of a fan-out is its parent's `children` rather than 
 | `heldBy`                  | Who set the hold that stands — the front door it came through — and the reason given with it, or `null`.                                                        |
 | `decision`                | The question, proposal or gate waiting on you, or `null`. One of the two ways into Needs you.                                                                   |
 | `agents[]`                | The live agents on it, its Repo runs' included.                                                                                                                 |
-| `children[]`              | A fan-out's repositories in wave order: `repo`, its `run` (`null` until it starts), its `state` (`done`, `active`, `blocked`, `failed` or `todo`) and its `mr`. |
+| `children[]`              | Its plan's repositories, in wave order: `repo`, its `run` (`null` until it starts), its `state` (`done`, `active`, `blocked`, `failed` or `todo`) and its `mr`. |
 | `mr`, `mrState`, `branch` | What it is building, where it can be read, and what the forge last said about the merge request.                                                                |
 | `disposition`, `landed`   | What became of the work, where a person recorded it — never inferred from a merge request — and whether it needs nothing more, which is Finished.               |
 | `ended`                   | When the leading Run ended, or `null` while it has not.                                                                                                         |
@@ -519,6 +566,17 @@ checkout's `.collie/verify.json` (or your config's `verify.json`) offers. Answer
 `collie run answer <run-id> approve --decision evidence-gate`, or `approve:<name>,<name>`
 for part of the list: the host grants those, as `run intent verification` does, and takes
 the Run up again. It is not skipped, since with nothing approved no check could prove it.
+
+A fan-out's own Run never parks, so where neither it nor any of its Runs asks anything, the
+first of its Repo runs in wave order parked at its gate is the Task's `decision`. That gate's
+`run` is the Repo run, which is the one an answer releases, and its `repo` names the
+repository, as the sentence does. A gate whose checkout and config offer no checks says so,
+and names how to grant one: chat's `set_verification`, or
+`collie run intent verification <run-id> --name <name> -- <command>`.
+
+A fan-out finds its plan from its work source even where the kind was never recorded with
+its input, as for an implement Run started from a plan's end menu: a plan directory is the
+plan, so `children` lists every repository it names, those not started as `todo`.
 
 ## Answer a question
 
@@ -593,7 +651,11 @@ what `--goal` and `--constraint` named — later beating earlier where they name
 constraint. For a plan directory the work source's ask is read from its `SPEC.md`: the
 bullets under a heading matching `Requirements`, `Success criteria`, `Boundaries`,
 `Constraints`, `Out of scope` or `Done when` become `warn` constraints carrying the file,
-heading and line they came from; an out-of-scope bullet reads `Out of scope: <bullet>`. In a
+heading and line each bullet starts on; an out-of-scope bullet reads `Out of scope: <bullet>`.
+A constraint is the whole bullet: it runs until a blank line, a heading or the next bullet at
+its indent or shallower, and its wrapped lines and the bullets nested under it are joined
+into it with single spaces. An Intent already seeded keeps what it stored, unless it
+follows its own `plan/SPEC.md` as below. In a
 Run on a worktree of its own, its `plan/SPEC.md`, written by its planner, is read the same
 way at every work boundary: new bullets are added, dropped ones are removed, and a
 constraint anyone but the plan removed stays removed. **No text ever grants authority** —
@@ -1259,6 +1321,96 @@ to every Machine: the latest edit of a key wins
 ([ADR-0043](adr/0043-a-shared-setting-is-its-latest-edit.md)). Remembered answers and
 anything else in `config.json` are not settings and are refused.
 
+## Cleaning up
+
+```sh
+collie cleanup
+collie cleanup --apply [--request-id <id>]
+```
+
+`cleanup` lists exactly what the host's sweep would remove now: one line per item with its
+kind, what it is, its size and why it goes, then one line per thing Collie made and keeps,
+with the one condition that keeps it, then the total a sweep would free. `--apply` sweeps
+now, through the host, and prints what it removed and what it freed. There is no
+confirmation: the host sweeps the same way on its own every ten minutes. What each kind
+keeps, and why, is [ADR-0045](adr/0045-collie-removes-what-it-made-once-nothing-needs-it.md);
+[Cleanup](using.md#cleanup) says what a sweep covers.
+
+Under `--json`, both answer with the same `data`:
+
+```json
+{
+  "remove": [
+    {
+      "kind": "generation",
+      "target": "/home/me/.cache/collie/entries/generations/…",
+      "bytes": 81920,
+      "reason": "unused for 8 days"
+    }
+  ],
+  "keep": [
+    { "kind": "worktree", "target": "/home/me/.herdr/worktrees/…", "reason": "uncommitted changes" }
+  ],
+  "bytes": 81920
+}
+```
+
+`remove` is what a sweep would remove, or, with `--apply`, what it removed, each with the
+bytes it freed; `bytes` is their total. A thing a sweep could not judge — herdr not
+answering, say — is in `keep` with that reason, never removed.
+
+## Usage
+
+```sh
+collie usage
+```
+
+How much of each Claude and ChatGPT **Subscription** this Machine's logins have used, as
+its host last read it ([ADR-0049](adr/0049-work-goes-to-an-agent-with-usage-left.md)). One
+line per window — session, weekly, and a model's own weekly — with its percent and its
+reset, then a line saying how old the reading is and where it came from, or why there is
+none:
+
+```text
+claude  team · me@example.com (Cego)  Session 31% · resets 10:49 (in 2h 3m)
+claude  team · me@example.com (Cego)  Weekly 88% · resets Fri 12:59 (in 1d 4h)
+claude  read 3 minutes ago from claude-status-line
+chatgpt Codex is not logged in on this Machine; run `codex login`
+```
+
+Each read, from any door, is recorded under who asked in the host's `usage/operations.jsonl`,
+keeping the latest 200. A window whose reset has passed counts as unused, whatever was last read. Under `--json`,
+`data` is `{ "readings": [...] }`, one per Subscription:
+
+```json
+{
+  "subscription": "claude",
+  "account": "<organization uuid>:<account uuid>",
+  "accountLabel": "me@example.com (Cego)",
+  "plan": "team",
+  "windows": [
+    {
+      "kind": "session",
+      "label": "Session",
+      "model": null,
+      "usedPercent": 31,
+      "resetsAt": "2026-10-08T10:49:59Z",
+      "reached": false
+    }
+  ],
+  "at": "2026-10-08T08:46:00Z",
+  "source": "claude-status-line",
+  "problem": null
+}
+```
+
+`kind` is `session`, `weekly`, `weekly-model` (with `model`) or `other`. `reached` is the
+source saying the window is used up whatever its percent. `account` is the account's id,
+never its email. `source` is `claude-usage`, `claude-status-line` or `codex-app-server`, and
+`problem` says why there is no fresh reading — an expired login, Codex not installed, an
+endpoint refusing — with the last good windows kept where there were any.
+[Usage](using.md#usage) says where the numbers come from and how fresh they are.
+
 ## Upgrading
 
 ```sh
@@ -1292,7 +1444,8 @@ and one it replaces has its tar removed. A download that does not verify is not
 staged, and the step is `failed` with the reason. A Desktop already at the version is
 `already in place`, so Desktop upgrading this computer to its own version changes nothing.
 There is no `desktop` step where no released Desktop is installed, where Desktop runs from
-a checkout, or on a platform Desktop is not released for (only `linux-x64` is).
+a checkout, or anywhere but Linux x64. On macOS, Desktop updates itself from the release as
+it does on any platform; `upgrade` stages nothing for it.
 
 ```sh
 collie upgrade --to 0.27.0
@@ -1318,20 +1471,20 @@ Its GitLab is one host: `--gitlab-host`, else `GITLAB_HOST`, else the
 [`gitlab_host` setting](using.md#your-defaults), `gitlab.cego.dk` by default. The token
 page, the glab login, the push and the closing doctor all name that host.
 
-| Step           | What it does                                                                                                                                                                                                                                                                                                                                                              |
-| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `system`       | Checks for `git`, `curl` and an OpenSSL 3.0 or later (which checks a downloaded runner's signature; LibreSSL and 1.1 cannot). Any missing stops here with `needs_root` and the exact command; an older OpenSSL gets one only where a package gives OpenSSL 3 (EPEL's `openssl3` with dnf, `brew install openssl`), and otherwise needs OpenSSL 3 or bun installed by hand |
-| `collie`       | Clones `https://github.com/cego/collie.git` (or `COLLIE_REPO`) into `~/.collie` (or `COLLIE_DIR`) and resets `master` to the tag, so a plain `collie upgrade` can still pull; or moves a released checkout to the tag as `upgrade --to` does                                                                                                                              |
-| `herdr`        | `curl -fsSL https://herdr.dev/install.sh \| sh`, if there is no `herdr`                                                                                                                                                                                                                                                                                                   |
-| `claude`       | Anthropic's user-level installer, `curl -fsSL https://claude.ai/install.sh \| bash`, if there is no `claude`                                                                                                                                                                                                                                                              |
-| `path`         | Adds `~/.local/bin` (and `COLLIE_BIN_DIR`) to PATH in the shell's profile (`~/.bashrc`, `~/.zshrc` or `~/.profile`)                                                                                                                                                                                                                                                       |
-| `plugin`       | `prepare.sh`: the plugin link, the runner and shim, the operator skill and the skills. A runner `install.sh` downloads is installed only once the release key's signature (`<asset>.sig`) checks out                                                                                                                                                                      |
-| `claude-login` | `claude auth login` in this terminal, if `claude auth status --json` says Claude Code is not logged in; without a terminal, `needs_human` with that command                                                                                                                                                                                                               |
-| `gitlab`       | `glab auth login --hostname <host> --stdin` with `GITLAB_TOKEN`, if glab is not already logged in there, or is logged in with another token than the one given. Without a token: `needs_human`, with the token page and its `api` and `write_repository` scopes as `url`                                                                                                  |
-| `push`         | Generates `~/.ssh/id_ed25519` if there is none and registers it with `glab ssh-key add`, unless the Machine can already push (over HTTPS with glab's login, or with its own key). GitLab's host key is trusted on first use, and a key GitLab already has counts as registered                                                                                            |
-| `helle`        | Writes `HELLE_API_TOKEN`, and `HELLE_API_URL=https://helle.cego.dk` for other Helle clients, to Helle's credentials file, owner-only; with no token given and no file, `needs_human`, saying how Slack's `/helle token` makes one                                                                                                                                         |
-| `linear`       | `claude mcp add --transport http --scope user linear-server https://mcp.linear.app/mcp`, then `claude mcp login linear-server` in a terminal of its own, whose URL is streamed: the one it prints, or the one with its callback port it hands `$BROWSER`, which a shim writes down                                                                                        |
-| `doctor`       | [`collie doctor`](#checking-an-installation); onboarded means it is ready                                                                                                                                                                                                                                                                                                 |
+| Step           | What it does                                                                                                                                                                                                                                                                       |
+| -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `system`       | Checks for `git`, `curl` and `openssl`, or the one `COLLIE_OPENSSL` names (which checks a downloaded runner's signature; any version, LibreSSL included, will do). Any missing stops here with `needs_root` and the exact command                                                  |
+| `collie`       | Clones `https://github.com/cego/collie.git` (or `COLLIE_REPO`) into `~/.collie` (or `COLLIE_DIR`) and resets `master` to the tag, so a plain `collie upgrade` can still pull; or moves a released checkout to the tag as `upgrade --to` does                                       |
+| `herdr`        | `curl -fsSL https://herdr.dev/install.sh \| sh`, if there is no `herdr`                                                                                                                                                                                                            |
+| `claude`       | Anthropic's user-level installer, `curl -fsSL https://claude.ai/install.sh \| bash`, if there is no `claude`                                                                                                                                                                       |
+| `path`         | Adds `~/.local/bin` (and `COLLIE_BIN_DIR`) to PATH in the shell's profile (`~/.bashrc`, `~/.zshrc` or `~/.profile`)                                                                                                                                                                |
+| `plugin`       | `prepare.sh`: the plugin link, the runner and shim, the operator skill and the skills. A runner `install.sh` downloads is installed only once the release key's signature (`<asset>.p256.sig`) checks out                                                                          |
+| `claude-login` | `claude auth login` in this terminal, if `claude auth status --json` says Claude Code is not logged in; without a terminal, `needs_human` with that command                                                                                                                        |
+| `gitlab`       | `glab auth login --hostname <host> --stdin` with `GITLAB_TOKEN`, if glab is not already logged in there, or is logged in with another token than the one given. Without a token: `needs_human`, with the token page and its `api` and `write_repository` scopes as `url`           |
+| `push`         | Generates `~/.ssh/id_ed25519` if there is none and registers it with `glab ssh-key add`, unless the Machine can already push (over HTTPS with glab's login, or with its own key). GitLab's host key is trusted on first use, and a key GitLab already has counts as registered     |
+| `helle`        | Writes `HELLE_API_TOKEN`, and `HELLE_API_URL=https://helle.cego.dk` for other Helle clients, to Helle's credentials file, owner-only; with no token given and no file, `needs_human`, saying how Slack's `/helle token` makes one                                                  |
+| `linear`       | `claude mcp add --transport http --scope user linear-server https://mcp.linear.app/mcp`, then `claude mcp login linear-server` in a terminal of its own, whose URL is streamed: the one it prints, or the one with its callback port it hands `$BROWSER`, which a shim writes down |
+| `doctor`       | [`collie doctor`](#checking-an-installation); onboarded means it is ready                                                                                                                                                                                                          |
 
 A development checkout — the one this runner belongs to when that is a checkout, or
 `COLLIE_DIR` — is judged as [`upgrade --to`](#upgrading) judges one, and gets the checks
@@ -1382,7 +1535,8 @@ collie doctor --gitlab-host gitlab.example.com
 ```
 
 Every prerequisite in one pass, each with the command that fixes it: herdr present and at
-least the `min_herdr_version` the plugin manifest declares; the plugin linked from this
+least the `min_herdr_version` the plugin manifest declares, and a running herdr server, when
+there is one, at least that too; the plugin linked from this
 installation; the runner built and the `collie` shim on PATH (installed-but-not-on-PATH is
 its own reported state); every skill and every harness
 the loaded workflows and personas name; whether the checkout is behind its remote; the
@@ -1396,6 +1550,19 @@ forwarded into the session does not count, since it goes when the computer it ca
 sleeps. That host is `--gitlab-host`, else `GITLAB_HOST`, else the
 [`gitlab_host` setting](using.md#your-defaults). Any other host glab knows is named in one
 `other gitlabs` note, unchecked, and never fails the run.
+
+**herdr** names what upgrading does to the running panes. From a herdr before 0.9.0, the
+running server must stop once, which ends every program in its panes: `herdr update`, then
+`herdr server stop`, then `herdr`, when nothing is running there, or the experimental
+`herdr update --handoff`. From 0.9.0 on, `herdr update` leaves the running server and its
+panes alone, and a **herdr server** line fails while the server still runs an older herdr,
+until it is restarted when nothing is running. Each fix also offers the package manager
+that installed herdr. Collie never runs `herdr update` or `herdr server stop` itself.
+
+**Disk** covers each filesystem holding the state directory, `~/.cache/collie`, herdr's
+worktrees and the temporary directory, once each. One with less than 10% or 5 GiB free is a
+`!` warning naming it, with what [`collie cleanup`](#cleaning-up) would free where a host has
+served this state directory, and `collie cleanup --apply` as the fix. It never fails the run.
 
 Two more are optional, and reported rather than required. **Helle**, where a loaded
 workflow waits on it (`renovate` does): the credentials file the Helle MCP wrapper sources,
@@ -1451,7 +1618,8 @@ host asks the engine about the work it has not finished, on a schedule every cli
 and speaks up when anything a run shows has changed, so watching costs the same whether one
 client is looking or the whole board is. Closing a client cancels nothing it started;
 stopping the host with `kill` leaves suspended work suspended, and the next client starts a
-host that picks it up.
+host that picks it up. A stopped host gives running steps five seconds to finish and then
+exits regardless, letting go of its lock; a step it cut short runs again under the next.
 
 The operations above are `HostRpcs`: internal, and a Collie client of another build stops
 before sending them anything. Beside them on the same socket is `FrontDoorRpcs`, the door
@@ -1461,15 +1629,18 @@ any front door uses whatever its build or computer, declared with its Schemas in
 development checkout — `protocol`, the `herds` — every running herdr session, by Herd
 `id` and herdr's `name` — and every TaskView), then an `Upsert` or a `Remove` keyed by Task
 id for each change, each with a `seq` higher than the last. A client that reconnects gets a
-fresh snapshot. The host builds again when anything under its state directory is written,
-when herdr pushes an event from any of its sessions (a pane opening or closing, or an
-agent's status changing), and every five seconds. The installation id is written once, by
-the first host to own the directory, and survives restarts and upgrades.
+fresh snapshot. The host builds one board for every client, so a client that subscribes is
+told the latest at once (or once the first build is done), and it builds again when
+anything under its state directory is written, when herdr pushes an event from any of its
+sessions (a pane opening or closing, or an agent's status changing), and every five
+seconds: one build at a time, with what changes meanwhile folded into the next. The
+installation id is written once, by the first host to own the directory, and survives
+restarts and upgrades.
 
 The host also runs what nobody has to have a pane open for: the merge watch, which asks
 GitLab about each waiting merge request every 5 minutes and records a merge; each Herd's
-News, which it also supersedes once an item's cause no longer holds; and worktree
-pruning, every 3 minutes.
+News, which it also supersedes once an item's cause no longer holds; and the
+[cleanup](#cleaning-up) sweep, every ten minutes.
 
 The operations that change a Run are on `FrontDoorRpcs` too: `start`, `answer`, `control`
 (a hold or a stop, set or cleared, and every watcher hears about it), `resume` and
@@ -1477,7 +1648,10 @@ The operations that change a Run are on `FrontDoorRpcs` too: `start`, `answer`, 
 `offers`, what a Run offers to do next as its module decides now, with each offer's
 arguments as JSON Schema; and `workflows`, what may be started in a project and the Inputs
 each asks for. `start` then takes what a human typed in `text`, and the host settles it
-against the workflow's own schema. `grant` and `steer` stay on `HostRpcs`. Each takes a request id, and the same id twice is one operation. A
+against the workflow's own schema. `usage` reads this Machine's [Usage readings](#usage).
+`cleanup` reads what a sweep would remove and keep, and
+`sweep` sweeps now, recorded with its Actor in the state directory's `cleanup/operations.jsonl`
+as well as in `cleanup.jsonl`. `grant` and `steer` stay on `HostRpcs`. Each takes a request id, and the same id twice is one operation. A
 channel first sends `declare` with its front door, and the host stamps every operation on
 it with that, as a line in the Run's `operations.jsonl`: the operation, the request, the
 Actor and what came of it ([ADR-0039](adr/0039-every-operation-records-who-asked.md)). A
@@ -1512,9 +1686,10 @@ carries it out; `act`, which carries out the board's own actions on a Run (`stop
 `release`, `hold`, `answer`, `deliver`, `followup`, `start`) with no proposal, anything else
 being refused as `propose`'s; `reconcile`, which settles a proposal step nobody can account
 for; `settleDelivery`, which does the same for a message to an agent; `focus`, which focuses
-a Run's newest live agent, or its workspace, on the host's own herdr and answers with the
-session, workspace and tab it is in, and the focused agent's pane id where it found one
-(an older host's reply has none, and is read as naming no pane); `setSettings`, which writes the Flock's settings into
+a Run's newest live agent, or only the `agent` it names, else its workspace, on the host's
+own herdr and answers with the session, workspace and tab it is in, and the focused agent's
+pane id and herdr name where it found one (an older host's reply has neither, and is read
+as naming no pane); `setSettings`, which writes the Flock's settings into
 the Machine's `config.json`, each with its own edit's time and only where that is later than
 the Machine's own last edit of the key, records when each was set in `settings-set.json`
 and, when Desktop asks, that a Desktop gave them, and refuses the whole batch over any value the TUI's Settings
@@ -1545,12 +1720,41 @@ again. An untracked file reached through a link, or that is not a regular file, 
 without being read. The review's findings come as
 a list. The merge request is what the merge watch last read, asked again after 5 minutes or
 when `refreshMr` is set. Large items are fetched by reference with `runFile`: `log`,
-`review`, `diff:<path>`, `evidence:<name>`, `verification:<id>`, `plan:<file>`, `file:<path>` (read
+`review`, `diff:<path>`, `evidence:<name>`, `verification:<id>`, `plan:<file>`, `attachment:<name>` (one of the Run's attachments), `file:<path>` (read
 only, from the Run's checkout) and `pipeline:<url>` (the status glab reads for that pipeline), text as it is and anything else as base64. Each answer is
 at most 4 MiB from `offset` (or `length` bytes where asked) and says the item's whole
 `size`, so a long log or a video is read in parts. A part of an item is base64 whatever it
 is, so a character split across two parts is whole once they are joined. A reference is refused where it leaves
 the directory it belongs to, links followed, or where it is not a regular file.
+
+Five more answer a front door about the Machine's own files, every path absolute; the Flock
+chat's file tools use them ([ADR-0011](adr/0011-the-conversation-is-a-native-harness.md#amended-2026-10-07-the-flock-chat-reaches-files)).
+`readFile` hands over a part of a file, at most 4 MiB from `offset`, as base64 with its
+media type and whole `size`. `glob` answers the files a pattern matches under a directory,
+newest first, at most 100 and how many it `omitted`. `grep` takes Claude Code Grep's
+arguments that make sense on a host (`glob`, `type`, `outputMode`, `ignoreCase`,
+`lineNumbers`, `before`, `after`, `context`, `headLimit`, `multiline`), runs ripgrep where it
+is on `PATH` and `grep -r` otherwise, and answers at most 100 lines. `writeFile` writes a
+whole file, making its directory, and `editFile` replaces `oldString` with `newString`,
+refusing one that is missing or, without `replaceAll`, not unique. Both take a request id,
+the same id twice being one operation, are recorded with the Actor in
+`files/operations.jsonl` under the state directory (its newest 1000), and are refused where
+the file's real path is inside the state directory. The `Snapshot` carries `files: true`
+from a host that has these; a client sends files to no host without it.
+
+`upload` takes a file sent to this Machine in parts: its `name`, `size`, `sha256`, an
+`offset` and one base64 part of at most 4 MiB. The host appends the parts under
+`uploads/<sha256>/` in its state directory, checks the size and the digest on the last, and
+answers the file's path, which a `start`, an `invoke` or a steer can then name as an
+attachment; before the last part it answers `null`. A digest it already holds whole is
+answered with its path at the first part, so the rest is never sent, under the name it was
+asked for, and a part sent again is the same part, so a retry needs no request id. Parts are
+taken one at a time. A mismatched digest or size removes what arrived and is refused, as is
+a part at an offset other than what arrived (send it again from the start) and a file over
+100 MB. Each upload is recorded with its Actor in `uploads/operations.jsonl`. Being asked
+for a held digest renews its age, and the host's cleanup sweep removes an upload a week after it
+was last asked for; Desktop trusts an upload's path for a day before it asks again. A `chat` channel's `declare` may also carry `attachments`, the names of the files
+the human's message carried, which the host records beside `said`.
 
 `protocol` is an integer, also in `identity`. An optional field, a new operation or a new
 kind of message does not change it, and a client reads a kind it does not know as
@@ -1580,21 +1784,28 @@ died mid-start; sending it with other arguments is `RequestConflict` rather than
 change of mind. A host that died after asking for the run's checkout or workspace, and
 before recording what it got, cannot tell whether one was made: that start is refused
 with what may be left behind, and keeps its claim, so the same request never makes a
-second one. The rows behind that are in the same SQLite file as the engine's own, and
+second one. A start the engine does not take within thirty seconds is refused saying so,
+and stays recorded: the next host start hands it over under the same claim. The rows behind
+that are in the same SQLite file as the engine's own, and
 [ADR-0017](adr/0017-one-request-is-one-run.md) is why each of them is there.
 
 It says which build it is, and which installation it serves. A client newer than the host,
 from the same installation (after `collie upgrade`), stops it and starts itself in its
-place. Any other client of another build is told which build is running and which pid to
+place; a host still there five seconds past its stop grace is killed, and its work is
+recovered by the one that replaces it. A host that does not answer is replaced the same way
+when the build it recorded in `host.build` is older. Any other client of another build is told which build is running and which pid to
 stop, and sends nothing else. That includes a checkout under development, which is pointed
 at a state directory of its own rather than replacing the installed host. Such a
 checkout's host also says `development: "<version>+<sha>"`; a release's does not.
-A host that cannot be started at all is `HostUnavailable`, with whether anything owns the
-directory. [ADR-0015](adr/0015-one-local-host-owns-a-state-directory.md) is why each of
+A host that cannot be started at all, or that takes a connection and does not answer within
+five seconds, is `HostUnavailable`, with whether anything owns the directory. [ADR-0015](adr/0015-one-local-host-owns-a-state-directory.md) is why each of
 those is the way it is.
 
 `COLLIE_HOST` names the command a client starts a host with — one path, or a JSON array of
 the executable and its arguments. Unset, it is this executable.
+
+`COLLIE_HOST_STOP_GRACE` is how long a stopped host waits for running steps before it exits
+anyway, as a duration (`5 seconds` unset).
 
 `COLLIE_HOST_CRASH_AT=admitted|executed` is for the recovery proof alone: the host kills
 itself in one of the two windows a start has — with the run recorded and the engine not yet

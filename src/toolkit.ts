@@ -4,9 +4,9 @@
 // Desktop's Flock chat serve the same definitions.
 
 import { Context, Effect, Option, Result, Schema, Stream } from "effect";
-import * as AiError from "effect/unstable/ai/AiError";
-import * as Tool from "effect/unstable/ai/Tool";
-import * as Toolkit from "effect/unstable/ai/Toolkit";
+import * as AiError from "effect/ai/AiError";
+import * as Tool from "effect/ai/Tool";
+import * as Toolkit from "effect/ai/Toolkit";
 import { ActionSchema } from "./actions";
 import {
   ASKED_KINDS,
@@ -277,7 +277,8 @@ export const CollieTools = Toolkit.make(
     description:
       "Everything that is not about a Run: what Collie needs and whether it is there, " +
       "which workspace this Herd's Home is and what proves it, the panes an older " +
-      "release left that a cleanup would close, the constraints every new Run begins " +
+      "release left that a cleanup would close, what a cleanup sweep would remove and keep, " +
+      "the constraints every new Run begins " +
       "with, and which harness this conversation is running in. Read this before " +
       "proposing an upgrade, an onboarding, a cleanup or a change to the defaults.",
     parameters: Tool.EmptyParams,
@@ -358,7 +359,12 @@ function cardLine(view: TaskView): string {
         : "";
   const agents =
     view.agents.length === 0 ? "" : `, agents ${view.agents.map((agent) => agent.name).join(", ")}`;
-  return `- run ${view.run}: ${view.name}${project}, ${view.state}${where}${agents}. ${view.sentence}`;
+  const decision = view.decision;
+  const answered =
+    decision?.kind === "gate" && decision.run !== view.run
+      ? ` Its gate is answered on run ${decision.run}.`
+      : "";
+  return `- run ${view.run}: ${view.name}${project}, ${view.state}${where}${agents}. ${view.sentence}${answered}`;
 }
 
 /** The board as chat reads it: the header, then each section's cards in the board's order. */
@@ -384,13 +390,13 @@ const LooseActions = Schema.Struct({
 export const decodeLoose = Schema.decodeUnknownOption(LooseActions);
 
 /** The JSON Schema a harness is given, generated from the schema the call is decoded with. */
-export const inputSchemaOf = (tool: Tool.Any): JsonObject => {
-  const document = Schema.toJsonSchemaDocument(tool.parametersSchema, {
-    onExcessProperty: "error",
-  });
+export const jsonSchemaOf = (schema: Schema.Top): JsonObject => {
+  const document = Schema.toJsonSchemaDocument(schema, { onExcessProperty: "error" });
   // SAFETY: a JSON Schema document is JSON, which is what JsonObject says.
   return { ...document.schema, $defs: document.definitions } as JsonObject;
 };
+
+export const inputSchemaOf = (tool: Tool.Any): JsonObject => jsonSchemaOf(tool.parametersSchema);
 
 export const isToolName = (name: string): name is ToolName =>
   Object.hasOwn(CollieTools.tools, name);

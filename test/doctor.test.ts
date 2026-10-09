@@ -56,7 +56,15 @@ const healthy = Effect.fn("doctorTest.healthy")(function* () {
     `case "$*" in "auth status --json") printf '{\\n  "loggedIn": true\\n}\\n' ;; *) exit 0 ;; esac`,
   );
   yield* installFakeSkills(rig.root);
+  yield* freeSpace(50);
 });
+
+/** A `df` that says the one filesystem it is asked about is `percent` free, of 100 GiB. */
+const freeSpace = (percent: number) =>
+  bin.add(
+    "df",
+    `printf 'Filesystem 1024-blocks Used Available Capacity Mounted on\\n/dev/sda1 104857600 %d %d %d%%%% /\\n' ${(100 - percent) * 1048576} ${percent * 1048576} ${100 - percent}`,
+  );
 
 /** A glab logged in to one GitLab host, whose token expires on `expires` (or never). */
 const gitlab = (opts: { expires: string | null }) =>
@@ -134,6 +142,7 @@ test("a healthy machine passes every check and says so", () =>
       // Every prerequisite, in one run.
       expect(checks.map((c) => c.name)).toEqual([
         "herdr",
+        "herdr server",
         "plugin",
         "runner",
         "collie on PATH",
@@ -145,6 +154,7 @@ test("a healthy machine passes every check and says so", () =>
         "workflows",
         "personas",
         "projects root",
+        "disk",
         "glab",
         "gitlab token",
         "git push",
@@ -152,6 +162,30 @@ test("a healthy machine passes every check and says so", () =>
         "linear mcp",
       ]);
       expect(check(result, "workflows").detail).toBe("every workflow here is the one Collie ships");
+    }),
+  ));
+
+test("a filesystem Collie writes to with under a tenth free is a warning, with the fix", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* healthy();
+      yield* freeSpace(8);
+
+      const disk = check(yield* report(), "disk");
+      expect(disk).toMatchObject({ ok: true, warn: true, fix: "collie cleanup --apply" });
+      expect(disk.detail).toBe("/ has 8.0 GiB free (8%)");
+    }),
+  ));
+
+test("a filesystem with room to spare passes the disk check", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* healthy();
+
+      const disk = check(yield* report(), "disk");
+      expect(disk).toMatchObject({ ok: true, fix: "" });
+      expect(disk.warn).toBeUndefined();
+      expect(disk.detail).toBe("/ has 50.0 GiB free (50%)");
     }),
   ));
 
@@ -192,6 +226,115 @@ test("a herdr older than the manifest's minimum is the reported problem", () =>
       expect(herdr.detail).toContain("0.7.4");
       expect(herdr.detail).toContain("0.7.5");
       expect(herdr.fix).not.toBe("");
+    }),
+  ));
+
+test("the shipped manifest calls a herdr older than the pinned 0.9.3 stale, and 0.9.3 current", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* healthy();
+      const fs = yield* FileSystem.FileSystem;
+      const shipped = yield* fs.readFileString(`${import.meta.dir}/../herdr-plugin.toml`);
+      yield* fs.writeFileString(`${rig.baselineDir}/herdr-plugin.toml`, shipped);
+
+      const older = check(yield* report({ FAKE_HERDR_VERSION: "herdr 0.9.2" }), "herdr");
+      expect(older.ok).toBe(false);
+      expect(older.detail).toContain("0.9.3");
+
+      const pinned = check(yield* report({ FAKE_HERDR_VERSION: "herdr 0.9.3" }), "herdr");
+      expect(pinned).toMatchObject({ ok: true, detail: "0.9.3" });
+    }),
+  ));
+
+/** doctor's herdr lines, with the shipped manifest's 0.9.3 as the minimum. */
+const herdrLines = Effect.fn("doctorTest.herdrLines")(function* (
+  overrides: Record<string, string>,
+) {
+  yield* healthy();
+  const fs = yield* FileSystem.FileSystem;
+  yield* fs.writeFileString(
+    `${rig.baselineDir}/herdr-plugin.toml`,
+    'id = "cego.collie"\nmin_herdr_version = "0.9.3"\n',
+  );
+  const checks = reported(yield* report(overrides));
+  return {
+    client: checks.find((c) => c.name === "herdr")!,
+    server: checks.find((c) => c.name === "herdr server"),
+  };
+});
+
+const BY_PACKAGE_MANAGER = "or upgrade herdr with the package manager that installed it";
+
+test("a herdr from before 0.9.0 is told that one server stop ends its panes, and how to avoid it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { client } = yield* herdrLines({ FAKE_HERDR_VERSION: "herdr 0.7.1" });
+
+      expect(client.ok).toBe(false);
+      expect(client.detail).toContain("0.7.1");
+      expect(client.fix).toContain("Moving from herdr 0.7.1 to 0.9.3");
+      expect(client.fix).toContain("stopped once, which ends every program in its panes");
+      expect(client.fix).toContain("`herdr update`, then `herdr server stop`, then start `herdr`");
+      expect(client.fix).toContain("`herdr update --handoff`");
+      expect(client.fix).toContain(BY_PACKAGE_MANAGER);
+    }),
+  ));
+
+test("a 0.9 herdr below the minimum is told that updating leaves its panes alone", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { client } = yield* herdrLines({ FAKE_HERDR_VERSION: "herdr 0.9.2" });
+
+      expect(client.ok).toBe(false);
+      expect(client.fix).toContain(
+        "`herdr update` installs 0.9.3 and leaves your running server and its panes alone",
+      );
+      expect(client.fix).not.toContain("--handoff");
+      expect(client.fix).toContain(BY_PACKAGE_MANAGER);
+    }),
+  ));
+
+test("a current herdr whose running server is older fails a server line of its own", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { client, server } = yield* herdrLines({
+        FAKE_HERDR_VERSION: "herdr 0.9.3",
+        FAKE_HERDR_SERVER_VERSION: "0.9.0",
+      });
+
+      expect(client.ok).toBe(true);
+      expect(server?.ok).toBe(false);
+      expect(server?.detail).toContain("0.9.0");
+      expect(server?.fix).toContain("`herdr server stop`, then `herdr`");
+      expect(server?.fix).toContain(BY_PACKAGE_MANAGER);
+    }),
+  ));
+
+test("a running server too old to say its version fails its line", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { server } = yield* herdrLines({
+        FAKE_HERDR_VERSION: "herdr 0.9.3",
+        FAKE_HERDR_SERVER_VERSION: "none",
+      });
+
+      expect(server?.ok).toBe(false);
+      expect(server?.fix).toContain("`herdr server stop`, then `herdr`");
+      expect(server?.fix).toContain(BY_PACKAGE_MANAGER);
+    }),
+  ));
+
+test("no running herdr server is no server line, and a current one passes", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const stopped = yield* herdrLines({
+        FAKE_HERDR_VERSION: "herdr 0.9.3",
+        FAKE_HERDR_STATUS: "stopped",
+      });
+      expect(stopped.server).toBeUndefined();
+
+      const current = yield* herdrLines({ FAKE_HERDR_VERSION: "herdr 0.9.3" });
+      expect(current.server).toMatchObject({ ok: true, detail: "0.9.3" });
     }),
   ));
 

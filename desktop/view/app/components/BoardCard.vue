@@ -10,6 +10,7 @@ import {
 } from "../../../../src/board-model";
 import { DateTime } from "effect";
 import type { DesktopAction } from "../../../src/shared/flock";
+import type { Gesture } from "../../../src/shared/board-clicks";
 
 const props = defineProps<{
   task: TaskView;
@@ -21,7 +22,8 @@ const props = defineProps<{
 }>();
 const { run, openLink } = useActions();
 const toast = useToast();
-const { open } = useDrawer();
+// SAFETY: FlockBoard provides it to every card it draws.
+const gesture = inject<(done: Gesture, tab?: string) => void>("gesture")!;
 // A dialog opened before its Machine dropped is outside the card's disabled controls.
 const act = (action: DesktopAction) =>
   props.asOf === null ? run(props.installation, action) : Promise.resolve(false);
@@ -35,21 +37,11 @@ const asOfLabel = computed(() => {
   return `as of ${two(hour)}:${two(minute)}`;
 });
 
-const { chip, choose } = useChip();
+const { chip } = useChip();
 const chosen = computed(
   () => chip.value?.machine === props.machine && chip.value.task === props.task.id,
 );
-/** A click on the card itself, not on one of its controls, is what the next chat message is about. */
-const chooseForChat = (event: MouseEvent) => {
-  if (event.target instanceof Element && event.target.closest("button, a, input, label, form"))
-    return;
-  choose({
-    machine: props.machine,
-    task: props.task.id,
-    run: props.task.run,
-    name: props.task.name,
-  });
-};
+const openRecord = () => gesture({ kind: "name", card: props.cardKey });
 
 const STATES: Record<
   TaskView["state"],
@@ -102,11 +94,12 @@ const copy = (text: string) =>
     () => toast.add({ title: "Copied", color: "success" }),
     () => toast.add({ title: "Could not copy the command", color: "error" }),
   );
-const goTo = () => props.asOf === null && open(props.cardKey, "terminal");
+const goTo = () =>
+  props.asOf === null && gesture({ kind: "name", card: props.cardKey }, "terminal");
 
 /**
  * A card action as this board does it, or null where Desktop has no way to yet: a check's
- * output is a tab the TUI board opens on the Machine.
+ * output is a tab the TUI board opens on the Machine, and attaching is the chat's.
  */
 const doing = (action: CardAction, primary: boolean) => {
   const view = props.task;
@@ -115,6 +108,7 @@ const doing = (action: CardAction, primary: boolean) => {
     case "go-to-tab":
       return { label: "Go to pane", press: goTo };
     case "check-output":
+    case "attach":
       return null;
     case "steer":
       return {
@@ -188,9 +182,10 @@ const menu = computed(() =>
   <fieldset :disabled="asOf !== null" class="contents">
     <UCard
       :data-testid="`card-${task.id}`"
+      :data-card="cardKey"
+      :data-as-of="asOf === null ? undefined : ''"
       :variant="task.state === 'blocked' ? 'soft' : 'outline'"
       :class="{ 'opacity-50': asOf !== null, 'ring-2 ring-primary': chosen }"
-      @click="chooseForChat"
     >
       <template #header>
         <div class="flex items-start justify-between gap-2">
@@ -198,7 +193,7 @@ const menu = computed(() =>
             type="button"
             class="cursor-pointer text-left font-semibold hover:underline"
             data-testid="name"
-            @click="open(cardKey)"
+            @click="openRecord"
           >
             {{ task.name }}
           </button>
@@ -266,7 +261,7 @@ const menu = computed(() =>
       </div>
 
       <div
-        v-else-if="task.decision?.kind === 'gate'"
+        v-else-if="task.decision?.kind === 'gate' && task.decision.verifications.length > 0"
         class="mt-3 flex flex-col gap-2"
         data-testid="gate"
       >

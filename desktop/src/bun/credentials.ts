@@ -4,12 +4,15 @@
 import { Effect, FileSystem, Option, Queue, Schedule, Schema, Semaphore, Stream } from "effect";
 import { BunFileSystem } from "@effect/platform-bun";
 import type { PlatformError } from "effect/PlatformError";
-import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
-import * as HttpClient from "effect/unstable/http/HttpClient";
-import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
+import * as FetchHttpClient from "effect/http/FetchHttpClient";
+import * as HttpClient from "effect/http/HttpClient";
+import * as HttpClientRequest from "effect/http/HttpClientRequest";
 import { GITLAB_HOST, SCOPES, TokenSelf } from "../../../src/gitlab-token";
+import { inTerminal } from "../../../src/in-terminal";
+import { scriptLine } from "../../../src/script";
 import type { OnboardRun } from "../shared/flock";
 import { quoted, type ShellRoute, spawned } from "./machine";
+import { childEnv, which } from "./login-env";
 import { ranWith, shOn, tracked } from "./onboarding";
 
 export const GITLAB = `https://${GITLAB_HOST}`;
@@ -37,7 +40,7 @@ const parsed = (text: string) =>
 const fromSecretTool = (tool: string) =>
   Effect.gen(function* () {
     const found = new Map<string, string>();
-    if (Bun.which(tool) === null) return found;
+    if (which(tool) === null) return found;
     for (const key of ENTRIES) {
       // A locked keyring may wait on an unlock prompt; Desktop's launch does not.
       const ran = yield* ranWith([tool, "lookup", "service", "collie-desktop", "key", key]).pipe(
@@ -195,7 +198,7 @@ const onEvery = (routes: ReadonlyArray<ShellRoute>, script: string, stdin: strin
         ),
         Effect.timeoutOrElse({
           duration: GIVE_LIMIT,
-          orElse: () => Effect.fail("not reached; it is given when it is next onboarded"),
+          orElse: () => Effect.fail("not reached; it is given when it next connects"),
         }),
         Effect.catch((failed) => Effect.succeed(failed)),
         Effect.map((failed) => ({ name: route.machine.name, failed })),
@@ -258,13 +261,13 @@ export const claudeLoginThrough = Effect.fn("Desktop.claudeLoginThrough")(functi
     yield* run.step({ ...login, status: "failed", detail: "could not start the login there" });
     return { ended: false, run: run.current() };
   }
+  // In a terminal Desktop gives it. One over SSH is not passed through, so there the
+  // Machine's own `script` gives it one, as util-linux's does.
   const command = yield* route.sh(
-    `BROWSER=${SHIM} exec script -qefc 'claude auth login' /dev/null`,
+    `export BROWSER=${SHIM}; if [ -t 0 ]; then exec claude auth login; else ${scriptLine("claude auth login")}; fi`,
   );
-  const child = yield* spawned(() =>
-    Bun.spawn([...command], { stdin: "pipe", stdout: "pipe", stderr: "pipe" }),
-  );
-  const printed = Stream.fromReadableStream({ evaluate: () => child.stdout, onError: String }).pipe(
+  const child = yield* inTerminal(command, { env: childEnv() }, spawned);
+  const printed = child.output.pipe(
     Stream.decodeText(),
     Stream.splitLines,
     Stream.map((line) => URL_IN.exec(line)?.[0]),
@@ -294,16 +297,11 @@ export const claudeLoginThrough = Effect.fn("Desktop.claudeLoginThrough")(functi
     ),
   );
   const typed = Queue.take(codes).pipe(
-    Effect.flatMap((code) =>
-      Effect.sync(() => {
-        void child.stdin.write(`${code}\n`);
-        void child.stdin.flush();
-      }),
-    ),
+    Effect.flatMap((code) => child.type(`${code}\n`)),
     Effect.forever,
   );
   const code = yield* Effect.raceFirst(
-    Effect.promise(() => child.exited),
+    child.exitCode,
     Effect.all([printed, handed, typed], { concurrency: "unbounded" }).pipe(
       Effect.andThen(Effect.never),
     ),

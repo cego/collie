@@ -1,7 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import { harnessNames } from "../src/harness";
 import { NOTIFICATION_KINDS } from "../src/notify";
-import { parseSetting, SETTINGS } from "../src/settings";
+import {
+  parseSetting,
+  SETTING_GROUPS,
+  SETTINGS,
+  settingOf,
+  settingShown,
+  settingStored,
+} from "../src/settings";
 
 const keys = SETTINGS.map((setting) => setting.key);
 
@@ -65,5 +72,77 @@ describe("Collie's settings", () => {
     expect(parseSetting("linear.team", "CEG")).toEqual({
       refused: "linear.team is not one of Collie's settings",
     });
+  });
+});
+
+describe("Each setting explains itself", () => {
+  const PLACED = {
+    Agents: [
+      "harness",
+      "model",
+      "effort",
+      ...harnessNames().map((harness) => `models.${harness}`),
+      "fallbacks",
+      "permissions",
+      "trust",
+      "compact_at_tokens",
+      "quiet_ms",
+    ],
+    Runs: ["max_iterations", "handoff_timeout_ms"],
+    Board: ["scope", "density", "board_quiet_ms"],
+    Chat: ["proactive"],
+    Notifications: ["questions", ...NOTIFICATION_KINDS.map((kind) => `notifications.${kind}`)],
+    "GitLab and credentials": ["gitlab_host"],
+  };
+
+  test("under a group, with a plain name and a sentence on what it changes", () => {
+    expect<ReadonlyArray<string>>(SETTING_GROUPS).toEqual(Object.keys(PLACED));
+    for (const [group, placed] of Object.entries(PLACED))
+      expect(
+        SETTINGS.filter((setting) => setting.group === group)
+          .map(({ key }) => key)
+          .sort(),
+      ).toEqual([...placed].sort());
+    for (const setting of SETTINGS) {
+      expect(setting.label).not.toBe("");
+      expect(setting.description).not.toBe("");
+    }
+    const descriptions = SETTINGS.map((setting) => setting.description);
+    expect(new Set(descriptions).size).toBe(descriptions.length);
+  });
+
+  test("saying what 0 or unset means, and whose board or chat it changes", () => {
+    const said = (key: string) => settingOf(key)!.description;
+    expect(said("quiet_ms")).toContain("double");
+    expect(said("quiet_ms")).toContain("triple");
+    expect(said("quiet_ms")).toContain("0 waits");
+    expect(said("compact_at_tokens")).toContain("0 turns compaction off");
+    expect(said("effort")).toContain("Unset");
+    for (const key of ["scope", "density", "questions"]) expect(said(key)).toContain("TUI");
+    expect(said("proactive")).toContain("Native chat");
+    expect(said("proactive")).toContain("Flock chat");
+  });
+
+  test("a duration is shown and typed in minutes, and stored in milliseconds", () => {
+    expect(settingOf("quiet_ms")!.unit).toBe("minutes");
+    expect(settingShown("quiet_ms", "600000")).toBe("10");
+    expect(settingShown("quiet_ms", "90000")).toBe("1.5");
+    expect(settingShown("quiet_ms", "")).toBe("");
+    expect(settingStored("quiet_ms", "10")).toEqual({ stored: "600000" });
+    expect(settingStored("handoff_timeout_ms", "1.5")).toEqual({ stored: "90000" });
+    expect(settingStored("quiet_ms", "")).toEqual({ stored: "" });
+    expect(settingStored("quiet_ms", ".5")).toEqual({ stored: "30000" });
+    expect(parseSetting("quiet_ms", "900000")).toEqual({ value: 900000 });
+    for (const typed of ["-1", "ten"])
+      expect(settingStored("board_quiet_ms", typed)).toEqual({
+        refused: `board_quiet_ms has to be a number of minutes, not "${typed}"`,
+      });
+  });
+
+  test("a unit that is only a label changes nothing", () => {
+    expect(settingOf("compact_at_tokens")!.unit).toBe("tokens");
+    expect(settingShown("compact_at_tokens", "372000")).toBe("372000");
+    expect(settingStored("compact_at_tokens", "1000")).toEqual({ stored: "1000" });
+    expect(settingStored("max_iterations", "eight")).toEqual({ stored: "eight" });
   });
 });

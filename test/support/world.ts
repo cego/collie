@@ -7,9 +7,9 @@
 import { Config, ConfigProvider, Effect, FileSystem, Option, Schema, Scope } from "effect";
 import type { BunServices } from "@effect/platform-bun/BunServices";
 import { exec } from "./command";
-import { runEffect, watchedBy } from "./effect";
+import { runEffect, suiteEnv } from "./effect";
 import { fakeHerdrCommand } from "./fake-herdr-core";
-import { fixtures, root } from "./host";
+import { fixtures, root, stopHost } from "./host";
 
 export interface World {
   /** The installation whose user directory an author saves into. */
@@ -38,6 +38,13 @@ const Envelope = Schema.fromJsonString(
 );
 const asEnvelope = Schema.decodeUnknownEffect(Envelope);
 
+/** `collie` as the suite runs it: the compiled binary where `COLLIE_TEST_BINARY` names one. */
+export const collieCommand = Config.option(Config.String("COLLIE_TEST_BINARY")).pipe(
+  Effect.map((binary) =>
+    Option.isSome(binary) ? [binary.value] : [process.execPath, `${root}src/main.ts`],
+  ),
+);
+
 /** The command itself, run as an operator runs it: another process, one JSON envelope. */
 export const collie = Effect.fn("World.collie")(function* (
   world: World,
@@ -45,9 +52,8 @@ export const collie = Effect.fn("World.collie")(function* (
   /** More of the operator's environment, over this world's own. */
   extra: Readonly<Record<string, string>> = {},
 ) {
-  const binary = yield* Config.option(Config.String("COLLIE_TEST_BINARY"));
-  const command = Option.isSome(binary) ? [binary.value] : [process.execPath, `${root}src/main.ts`];
-  const watch = yield* watchedBy;
+  const command = yield* collieCommand;
+  const suite = yield* suiteEnv;
   const child = Bun.spawn([...command, "--json", ...args], {
     cwd: world.project,
     env: {
@@ -59,7 +65,7 @@ export const collie = Effect.fn("World.collie")(function* (
       COLLIE_CWD: world.project,
       // The host a client starts is this same program, as an installation's would be.
       COLLIE_HOST: asCommand(command),
-      COLLIE_HOST_WATCH_PID: watch,
+      ...suite,
       // The world's own herdr, which `proves` set: this env is otherwise built from nothing.
       HERDR_BIN_PATH: Bun.env.HERDR_BIN_PATH,
       FAKE_HERDR_LOG: Bun.env.FAKE_HERDR_LOG,
@@ -139,6 +145,8 @@ export const proves = <A, E>(
         home: `${dir}/home`,
         project: `${dir}/project`,
       };
+      // Before the directory goes, or a host left running can write it back.
+      yield* Effect.addFinalizer(() => Effect.ignore(stopHost(world.state)));
       for (const made of [
         world.user,
         `${world.install}/workflows`,
@@ -152,10 +160,7 @@ export const proves = <A, E>(
       // A project is a checkout, which is what an agent's start from inside it names.
       yield* exec(["git", "init", "-q"], { cwd: world.project });
       yield* save(world.user, modules);
-      const binary = yield* Config.option(Config.String("COLLIE_TEST_BINARY"));
-      const command = Option.isSome(binary)
-        ? [binary.value]
-        : [process.execPath, `${root}src/main.ts`];
+      const command = yield* collieCommand;
       // A herdr of the world's own, for this process and the host it starts: the real one
       // is not on a CI runner, and on a desk it is the operator's live session.
       const herdr = yield* fakeHerdrIn(dir);

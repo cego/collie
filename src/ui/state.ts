@@ -9,6 +9,7 @@
 // what matters is that nothing in this file or the components can run an Effect.
 
 import type { PendingChoice } from "../board";
+import type { UsageReading } from "../usage-model";
 import type { PickItem } from "../inputs";
 import { GLYPH } from "../naming";
 import { markFor, marksOf, NO_MARKS, worstOf, type Marks } from "../lines";
@@ -150,6 +151,8 @@ export interface AppState {
    */
   live: Live | null;
   previewing: string | null;
+  /** This Machine's Usage readings, for the header; absent where none were read. */
+  usage?: ReadonlyArray<UsageReading>;
 }
 
 export type RowKind =
@@ -293,6 +296,8 @@ export type Command =
   /** Say one thing to a Run's Driver, which Collie answers with a proposal. */
   | { _tag: "Steer"; runId: string; text: string }
   | { _tag: "ResumeRun"; runId: string }
+  /** Files for the Run's live agent, asked for as paths. */
+  | { _tag: "AttachFiles"; runId: string }
   /** A Run of its own that builds on a finished one. */
   | { _tag: "FollowUp"; runId: string }
   /**
@@ -1130,6 +1135,8 @@ function itemFor(view: TaskView, action: CardAction, primary: boolean): MenuItem
       return { key: "g", label: primary ? "Go to tab" : "Go to its tab", command: goToTab(view) };
     case "steer":
       return { key: "s", label: "Steer…", command: { _tag: "OpenSteer", id: view.id } };
+    case "attach":
+      return { key: "a", label: "Attach files…", command: { _tag: "AttachFiles", runId } };
     case "open-mr":
       return {
         key: "w",
@@ -1246,6 +1253,7 @@ export const ALL_KEYS: ReadonlyArray<{ key: string; what: string }> = [
   { key: "enter", what: "Open record — on a card's menu" },
   { key: "g", what: "Go to its tab" },
   { key: "s", what: "Steer…" },
+  { key: "a", what: "Attach files…" },
   { key: "w", what: "Open merge request" },
   { key: "u", what: "Resume run" },
   { key: "o", what: "What its workflow offers next" },

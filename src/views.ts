@@ -5,6 +5,7 @@
 // the tab slow the day it became useful.
 
 import { Effect, FileSystem, Path, Stream } from "effect";
+import { attachmentsDir, listAttachments } from "./attachments";
 import { attentionFor } from "./attention";
 import { configValue, readConfig, readSettingsSet } from "./config";
 import { settingOf, SETTINGS } from "./settings";
@@ -22,6 +23,7 @@ import { claudeTrust } from "./trust";
 import { isYamlMap, type YamlMap, type YamlValue } from "./yaml";
 import { NO_OUTCOME, type RunRow } from "./workspace";
 import { latest, readDispositions } from "./disposition";
+import { runAgents } from "./launches";
 import { metricsOf, readMetrics } from "./metrics";
 import type { Disposition, MrPanel, Panel, PlanPanel, PlanTicket, RunDetail } from "./board-model";
 import { newest, readCards } from "./cards";
@@ -394,6 +396,10 @@ export const buildRunDetail = Effect.fn("Views.buildRunDetail")(function* (opts:
       }),
     ),
     evidence: yield* evidenceIn(run.evidence),
+    attachments: (yield* listAttachments(attachmentsDir(run.dir))).map(
+      ({ name, size, mediaType }) => ({ name, size, mediaType }),
+    ),
+    agents: yield* runAgents(opts.env.stateDir, run.id),
     diff: yield* diffOf(run),
   } satisfies RunDetail;
 });

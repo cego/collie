@@ -1,5 +1,5 @@
 // The only channel to herdr: the CLI at HERDR_BIN_PATH, plus the socket at
-// HERDR_SOCKET_PATH for the few methods 0.8.2 does not expose on the CLI — and herdr's
+// HERDR_SOCKET_PATH for the few methods 0.9.3 does not expose on the CLI — and herdr's
 // own `config.toml`, for the few things it settles but answers no question about. Every
 // fact about herdr is behind this one interface, which is what makes the fake herdr in
 // `test/support/` enough to test everything above it.
@@ -18,8 +18,8 @@ import {
   Stream,
 } from "effect";
 import * as BunSocket from "@effect/platform-bun/BunSocket";
-import * as Socket from "effect/unstable/socket/Socket";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import * as Socket from "effect/socket/Socket";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import type { PlatformError } from "effect/PlatformError";
 import type { PluginEnv } from "./env";
 import { isString } from "./schema";
@@ -95,6 +95,8 @@ const WorkspaceReply = Schema.Struct({
    * same thing.
    */
   tokens: Schema.optionalKey(Schema.NullOr(Schema.Record(Schema.String, Schema.String))),
+  /** Whether it is the workspace herdr has in focus, which cleanup never closes. */
+  focused: Schema.optionalKey(Schema.Boolean),
 });
 const WorkspaceCreateReply = Schema.Struct({
   result: Schema.Struct({
@@ -251,6 +253,7 @@ const PluginPaneReply = Schema.Struct({
  */
 export const SOCKET_METHODS = [
   "workspace.focus",
+  "workspace.close",
   "tab.move",
   "agent.view.set",
   "agent.view.clear",
@@ -475,6 +478,7 @@ export interface WorkspaceInfo {
   worktree: string | null;
   /** What a plugin has attached to it. Collie's Home ownership rests on one of these. */
   tokens: Readonly<Record<string, string>>;
+  focused: boolean;
 }
 
 /** One checkout of a repository, as `herdr worktree list` reports it. */
@@ -606,6 +610,7 @@ export const decodeWorkspaceList = (res: BoundaryValue) =>
           cwd: workspace.cwd ?? workspace.working_directory ?? worktree ?? "",
           worktree,
           tokens: workspace.tokens ?? {},
+          focused: workspace.focused ?? false,
         };
       }),
     ),
@@ -790,7 +795,12 @@ export class Herdr {
     return this.rpc("workspace.focus", { workspace_id: workspaceId }).pipe(Effect.asVoid);
   }
 
-  /** Reorders a tab within its workspace; 0 is first. No CLI for it in 0.8.2. */
+  /** Closes a workspace and every pane in it. */
+  workspaceClose(workspaceId: string): HerdrEffect<void> {
+    return this.rpc("workspace.close", { workspace_id: workspaceId }).pipe(Effect.asVoid);
+  }
+
+  /** Reorders a tab within its workspace; 0 is first. No CLI for it in 0.9.3. */
   tabMove(tabId: string, insertIndex: number): HerdrEffect<void> {
     return this.rpc("tab.move", { tab_id: tabId, insert_index: insertIndex }).pipe(Effect.asVoid);
   }
@@ -1322,7 +1332,7 @@ export class Herdr {
     });
   }
 
-  /** Filters the Agents sidebar to this run's panes. CLI has no equivalent in 0.8.2. */
+  /** Filters the Agents sidebar to this run's panes. CLI has no equivalent in 0.9.3. */
   agentViewSet(source: string, label: string, paneIds: string[]): HerdrEffect<void> {
     return this.rpc("agent.view.set", {
       source,
@@ -1346,16 +1356,22 @@ export class Herdr {
   }
 
   /**
-   * A workspace of Collie's own, for the Herd's Home. `focus: false`: creating it is not
-   * the same as going to it, and the shortcut is what does the going.
+   * A workspace of Collie's own, for the Herd's Home or a Task. Never focused: creating it
+   * is not the same as going to it, and the shortcut is what does the going.
    */
   workspaceCreate(opts: {
     cwd: string;
     label: string;
   }): HerdrEffect<{ workspaceId: string; rootTab: StartedTab | null }> {
-    return this.cli(["workspace", "create", "--cwd", opts.cwd, "--label", opts.label]).pipe(
-      Effect.flatMap((value) => decodeWorkspaceCreate(value)),
-    );
+    return this.cli([
+      "workspace",
+      "create",
+      "--cwd",
+      opts.cwd,
+      "--label",
+      opts.label,
+      "--no-focus",
+    ]).pipe(Effect.flatMap((value) => decodeWorkspaceCreate(value)));
   }
 
   /**
@@ -1399,10 +1415,16 @@ export class Herdr {
    * at every ensure, so a version or protocol change is something the log can name
    * rather than something a human works out from a call that started failing.
    */
-  serverInfo(): HerdrEffect<{ socket: string; version: string; protocol: number }> {
+  serverInfo(): HerdrEffect<{
+    running: boolean;
+    socket: string;
+    version: string;
+    protocol: number;
+  }> {
     return this.cli(["status", "server", "--json"]).pipe(
       Effect.flatMap((res) => decodeBoundary("status server failed", HerdrStatusReply, res)),
       Effect.map((status) => ({
+        running: status.running,
         socket: status.socket ?? this.env.socketPath ?? "",
         version: status.version ?? "unknown",
         protocol: status.protocol ?? 0,

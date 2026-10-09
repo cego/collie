@@ -1,7 +1,5 @@
 <script setup lang="ts">
-import { AsyncResult, useAtomValue } from "@effect/atom-vue";
-import { Cause } from "effect";
-import { offersTerminal, opensHerdrWithoutPane } from "../../../src/shared/drawer";
+import { offersTerminal, opensHerdrWithoutPane } from "../../../src/shared/record-terminal";
 import type { PlacedTask } from "../../../src/shared/flock";
 import { runDetailAtom, runDetailKey } from "../flock";
 import type { DiffTarget } from "./DiffTab.vue";
@@ -9,15 +7,14 @@ import type { DiffTarget } from "./DiffTab.vue";
 const props = defineProps<{ placed: PlacedTask }>();
 const emit = defineEmits<{ close: [] }>();
 
-const result = useAtomValue(() =>
+const { value: read, trouble } = useHeld(() =>
   runDetailAtom(
     runDetailKey({ installation: props.placed.installation, runId: props.placed.task.run }),
   ),
 );
-const detail = computed(() => AsyncResult.getOrElse(result.value, () => null));
-const failure = computed(() =>
-  AsyncResult.isFailure(result.value) ? Cause.pretty(result.value.cause) : null,
-);
+const detail = computed(() => read.value ?? null);
+const { notLive } = useFlock();
+const away = computed(() => notLive(props.placed.installation));
 
 /** The location last followed: opened in the diff, or read-only in Review where there is none. */
 const target = ref<DiffTarget | null>(null);
@@ -47,15 +44,15 @@ const tabs = computed(() => {
 });
 /** The tab the human chose while it is there, else the first: Plan, where there is one. */
 const chosen = ref<string>();
-const drawer = useDrawer();
+const { asked: tabAsked, taken } = usePage();
 const wentToPane = ref(false);
 watch(
-  drawer.asked,
+  tabAsked,
   (asked) => {
     if (asked === null) return;
     chosen.value = asked;
     wentToPane.value = opensHerdrWithoutPane(asked);
-    drawer.taken();
+    taken();
   },
   { immediate: true },
 );
@@ -81,24 +78,35 @@ const locationOf = (file: string, line: number | null) =>
 </script>
 
 <template>
-  <USlideover
-    :open="true"
-    @update:open="(still: boolean) => !still && emit('close')"
-    :title="placed.task.name"
-    :description="detail?.title ?? placed.task.run"
-    :ui="{
-      content: tab === 'terminal' ? 'max-w-6xl' : 'max-w-3xl',
-      body: 'flex flex-col gap-4',
-    }"
-  >
-    <template #body>
-      <div data-testid="drawer" class="flex flex-col gap-4">
-        <UAlert v-if="failure !== null" color="error" :title="failure" />
-        <p v-else-if="AsyncResult.isInitial(result)" class="text-muted text-sm">Loading…</p>
-        <p v-else-if="detail === null" class="text-muted text-sm">
+  <section data-testid="record" class="flex flex-col bg-default">
+    <PageHeader :title="placed.task.name" @back="emit('close')">
+      <p class="text-sm text-muted" data-testid="record-description">
+        {{ detail?.title ?? placed.task.run }}
+      </p>
+    </PageHeader>
+    <div class="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4 [scrollbar-gutter:stable]">
+      <div class="flex flex-col gap-4" :class="readingClass">
+        <RetryNotice
+          v-if="trouble !== null"
+          title="This Run's details could not be read; showing what they last said"
+          :trouble="trouble"
+        />
+        <UAlert
+          v-else-if="away !== null"
+          data-testid="record-away"
+          color="warning"
+          variant="subtle"
+          :icon="away.icon"
+          :title="`${away.title}; showing what it last said`"
+          :description="away.reason"
+        />
+        <p v-else-if="read === undefined" class="text-muted text-sm">Loading…</p>
+        <p v-else-if="read === null" class="text-muted text-sm">
           This Run's details are not on its Machine.
         </p>
         <UTabs v-model="tab" :items="tabs" :content="false" variant="link" />
+      </div>
+      <div class="flex flex-col gap-4" :class="columnClass(tab ?? '')">
         <template v-if="detail !== null">
           <PlanTab
             v-if="tab === 'plan' && detail.plan"
@@ -164,9 +172,14 @@ const locationOf = (file: string, line: number | null) =>
             :target="target"
           />
         </template>
-        <FactsTab v-if="tab === 'facts'" :task="placed.task" :detail="detail" />
+        <FactsTab
+          v-if="tab === 'facts'"
+          :task="placed.task"
+          :detail="detail"
+          :installation="placed.installation"
+        />
         <TerminalTab v-if="tab === 'terminal'" :placed="placed" :went-to-pane="wentToPane" />
       </div>
-    </template>
-  </USlideover>
+    </div>
+  </section>
 </template>

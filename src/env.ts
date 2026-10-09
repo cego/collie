@@ -165,6 +165,8 @@ const environmentKeys = [
   // Which environment file Helle's credentials are read from, for a machine that keeps
   // them somewhere other than the MCP wrapper's default.
   "HELLE_ENV_FILE",
+  // Where Claude Code keeps its login and settings, where it is not `~/.claude`.
+  "CLAUDE_CONFIG_DIR",
   // A fake Helle, for tests only.
   "COLLIE_HELLE_URL",
   "HERDR_BIN_PATH",
@@ -188,6 +190,9 @@ const environmentKeys = [
   "GITLAB_USER_LOGIN",
   // gitte's folder, which is the Projects root where `projects.root` names none.
   "GITTE_CWD",
+  // Where Desktop keeps its own on this computer, which cleanup reads.
+  "XDG_DATA_HOME",
+  "XDG_STATE_HOME",
 ] as const;
 
 export const currentEnv = Effect.gen(function* () {

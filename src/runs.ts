@@ -2,7 +2,7 @@
 
 import { Effect, Schema } from "effect";
 import type { FileSystem } from "effect";
-import type { ChildProcessSpawner } from "effect/unstable/process";
+import type { ChildProcessSpawner } from "effect/process";
 import type { PluginEnv } from "./env";
 import { resultText, runViews } from "./lifecycle";
 import { HOLD, STOP, evidenceDir, runDir, type RunView } from "./engine";

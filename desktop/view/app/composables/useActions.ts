@@ -2,14 +2,16 @@
 // said in a toast, in the host's own words when it said no.
 
 import { AtomRegistry, injectRegistry, useAtomSet } from "@effect/atom-vue";
-import { Cause, Effect, Encoding, Exit, Result, type Semaphore, Stream } from "effect";
-import type * as RpcClientError from "effect/unstable/rpc/RpcClientError";
+import { Cause, Effect, Exit, Result, type Semaphore, Stream } from "effect";
+import * as Base64 from "effect/encoding/Base64";
+import type * as RpcClientError from "effect/rpc/RpcClientError";
 import type {
   ActionFailed,
   DesktopAction,
   Skippable,
   TerminalCommand,
 } from "../../../src/shared/flock";
+import { saidOf } from "../../../src/shared/said";
 import { FlockClient } from "../flock";
 
 const actAtom = FlockClient.mutation("act");
@@ -18,14 +20,13 @@ const workflowsAtom = FlockClient.mutation("workflows");
 const openLinkAtom = FlockClient.mutation("openLink");
 const goToPaneAtom = FlockClient.mutation("goToPane");
 const terminalSendAtom = FlockClient.mutation("terminalSend");
-const desktopSettingsAtom = FlockClient.mutation("settings");
-const setDesktopSettingsAtom = FlockClient.mutation("setSettings");
 const restartAtom = FlockClient.mutation("restart");
 const checkForUpdatesAtom = FlockClient.mutation("checkForUpdates");
 const onboardAtom = FlockClient.mutation("onboard");
 const addMachineAtom = FlockClient.mutation("addMachine");
 const answerHerdrAtom = FlockClient.mutation("answerHerdr");
 const removeMachineAtom = FlockClient.mutation("removeMachine");
+const syncNowAtom = FlockClient.mutation("syncNow");
 const saveGitlabAtom = FlockClient.mutation("saveGitlab");
 const saveGitlabHostAtom = FlockClient.mutation("saveGitlabHost");
 const saveHelleAtom = FlockClient.mutation("saveHelle");
@@ -59,10 +60,9 @@ const joined = (parts: ReadonlyArray<Uint8Array>) => {
 
 const failureOf = (cause: Cause.Cause<Failed>) => {
   const found = Cause.findError(cause);
-  if (Result.isFailure(found)) return { reason: Cause.pretty(cause), request: undefined };
-  return found.success._tag === "ActionFailed"
+  return Result.isSuccess(found) && found.success._tag === "ActionFailed"
     ? found.success
-    : { reason: found.success.message, request: undefined };
+    : { reason: saidOf(cause), request: undefined };
 };
 
 export const useActions = () => {
@@ -73,14 +73,13 @@ export const useActions = () => {
   const openLink = useAtomSet(() => openLinkAtom, { mode: "promiseExit" });
   const goToPane = useAtomSet(() => goToPaneAtom, { mode: "promiseExit" });
   const terminalSend = useAtomSet(() => terminalSendAtom, { mode: "promiseExit" });
-  const desktopSettings = useAtomSet(() => desktopSettingsAtom, { mode: "promiseExit" });
-  const setDesktopSettings = useAtomSet(() => setDesktopSettingsAtom, { mode: "promiseExit" });
   const restart = useAtomSet(() => restartAtom, { mode: "promiseExit" });
   const checkForUpdates = useAtomSet(() => checkForUpdatesAtom, { mode: "promiseExit" });
   const onboard = useAtomSet(() => onboardAtom, { mode: "promiseExit" });
   const addMachine = useAtomSet(() => addMachineAtom, { mode: "promiseExit" });
   const answerHerdr = useAtomSet(() => answerHerdrAtom, { mode: "promiseExit" });
   const removeMachine = useAtomSet(() => removeMachineAtom, { mode: "promiseExit" });
+  const syncNow = useAtomSet(() => syncNowAtom, { mode: "promiseExit" });
   const saveGitlab = useAtomSet(() => saveGitlabAtom, { mode: "promiseExit" });
   const saveGitlabHost = useAtomSet(() => saveGitlabHostAtom, { mode: "promiseExit" });
   const saveHelle = useAtomSet(() => saveHelleAtom, { mode: "promiseExit" });
@@ -110,9 +109,7 @@ export const useActions = () => {
         const part = yield* runFile({ installation, runId, ref, offset });
         if (part.encoding === "utf8" && offset === 0)
           return { _tag: "Text", text: part.content } as const;
-        const bytes = yield* Effect.fromResult(Encoding.decodeBase64(part.content)).pipe(
-          Effect.orDie,
-        );
+        const bytes = yield* Effect.fromResult(Base64.decode(part.content)).pipe(Effect.orDie);
         parts.push(bytes);
         offset += bytes.length;
         if (offset >= part.size || bytes.length === 0) return { _tag: "Bytes", parts } as const;
@@ -182,14 +179,27 @@ export const useActions = () => {
     /** Where the pane is and how to attach to it, or null where the host said no. */
     goToPane: (installation: string, runId: string) =>
       goToPane({ payload: { installation, runId } }).then(read),
-    /** The Run's live agent's pane, held for as long as the stream runs. */
-    terminal: (installation: string, runId: string, cols: number, rows: number) =>
+    /** The Run's newest live agent's pane, or `agent`'s, held for as long as the stream runs. */
+    terminal: (
+      installation: string,
+      runId: string,
+      agent: string | undefined,
+      cols: number,
+      rows: number,
+    ) =>
       Stream.unwrap(
         AtomRegistry.getResult(registry, FlockClient.runtime).pipe(
           Effect.map((context) =>
             Stream.unwrap(
               FlockClient.use((client) =>
-                Effect.succeed(client("terminal", { installation, runId, cols, rows })),
+                Effect.succeed(
+                  client(
+                    "terminal",
+                    agent === undefined
+                      ? { installation, runId, cols, rows }
+                      : { installation, runId, agent, cols, rows },
+                  ),
+                ),
               ),
             ).pipe(Stream.provideContext(context)),
           ),
@@ -197,16 +207,6 @@ export const useActions = () => {
       ),
     /** One command to the open terminal; one sent before it opened or after it ended is dropped. */
     terminalSend: (command: TerminalCommand) => terminalSend({ payload: { command } }),
-    /** The Machine rule as Desktop has it saved, which the Flock chat may have changed. */
-    machineRule: () =>
-      desktopSettings({ payload: undefined }).then((exit) => read(exit)?.machineRule ?? ""),
-    /** Whether the rule was kept. */
-    saveMachineRule: (machineRule: string) =>
-      setDesktopSettings({ payload: { machineRule } }).then((exit) => {
-        const kept = read(exit) !== null;
-        if (kept) toast.add({ title: "Machine rule saved", color: "success" });
-        return kept;
-      }),
     offersOf: (installation: string, runId: string) =>
       offers({ payload: { installation, runId } }).then(read),
     workflowsIn: (installation: string, project: string) =>
@@ -238,6 +238,12 @@ export const useActions = () => {
     /** The job logging Claude Code in on that route's Machine. */
     claudeLogin: (profile: string) => claudeLogin({ payload: { profile } }).then(read),
     pasteCode: (job: string, code: string) => pasteCode({ payload: { job, code } }),
+    syncNow: (profile: string) =>
+      syncNow({ payload: { profile } }).then((exit) => {
+        const synced = read(exit);
+        if (synced !== null)
+          toast.add({ title: synced.said, color: synced.failed ? "error" : "success" });
+      }),
     removeMachine: (profile: string) =>
       removeMachine({ payload: { profile } }).then((exit) => {
         const said = read(exit);

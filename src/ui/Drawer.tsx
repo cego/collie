@@ -17,7 +17,15 @@ import {
   type TextRenderable,
 } from "@opentui/core";
 import { useRenderer, useTerminalDimensions } from "@opentui/solid";
-import type { MrDetails, MrPanel, Panel, PlanPanel, RunDetail, TaskView } from "../board-model";
+import {
+  ranOn,
+  type MrDetails,
+  type MrPanel,
+  type Panel,
+  type PlanPanel,
+  type RunDetail,
+  type TaskView,
+} from "../board-model";
 import { truncated } from "../views";
 import type { Live } from "../live";
 import { sinceReview } from "../mr";
@@ -126,6 +134,13 @@ export function Drawer(props: DrawerProps) {
           markFg: C.blue,
         }));
 
+  const ranOnLines = (): Line[] =>
+    (props.detail?.agents ?? []).map((agent) => ({
+      text: `${agent.operation}  ${ranOn(agent)}`,
+      right: agent.agent,
+      fg: C.muted,
+    }));
+
   const held = (): Line[] =>
     props.view.heldBy === null
       ? []
@@ -151,6 +166,14 @@ export function Drawer(props: DrawerProps) {
       { text: `${decision.id} · ${decision.hash}`, fg: C.dim },
     ];
   };
+
+  /** What the Run was given, where its agents read it. */
+  const attached = (): Line[] =>
+    (props.detail?.attachments ?? []).map((file) => ({
+      text: `${props.detail!.dir}/attachments/${file.name}`,
+      mark: "•",
+      right: `${file.size} bytes`,
+    }));
 
   const branch = (): Line[] => [
     { text: props.view.branch ?? "no branch of its own", mark: "⎇", markFg: C.dim },
@@ -315,8 +338,14 @@ export function Drawer(props: DrawerProps) {
             <Section title="proposal" lines={proposed()} />
           </Show>
           <Section title="intent" lines={intent()} />
+          <Show when={attached().length > 0}>
+            <Section title="attachments" lines={attached()} />
+          </Show>
           <Section title="steps" lines={steps()} />
           <Section title="agents" lines={agents()} />
+          <Show when={ranOnLines().length > 0}>
+            <Section title="ran on" lines={ranOnLines()} />
+          </Show>
           <Section title="branch" lines={branch()} />
           <MergeRequest
             url={props.view.mr}

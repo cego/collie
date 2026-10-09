@@ -10,7 +10,7 @@
 // end can be read at all; a Run is started somewhere else entirely.
 
 import { Effect, FileSystem, Path, Schema, type PlatformError } from "effect";
-import type { ChildProcessSpawner } from "effect/unstable/process";
+import type { ChildProcessSpawner } from "effect/process";
 import {
   Declared,
   ENTRY_SUFFIX,
@@ -21,7 +21,7 @@ import {
   type Found,
 } from "./discovery";
 import { reason } from "./naming";
-import { loadEntry, provisionToolchain, typecheckEntry } from "./engine";
+import { loadEntry, provisionToolchain, refreshToolchain, typecheckEntry } from "./engine";
 import {
   RESERVED_INPUTS,
   describeMetadata,
@@ -174,7 +174,10 @@ export const checkModule: (
     };
   }
   const described = describeModule(loaded.success, where);
-  const typed = yield* typecheckEntry({ dir, file: where.path }).pipe(Effect.result);
+  const typed = yield* refreshToolchain(dir).pipe(
+    Effect.andThen(typecheckEntry({ dir, file: where.path })),
+    Effect.result,
+  );
   const unavailable = typed._tag === "Failure" ? typed.failure.message : null;
   return {
     id: described.id,
@@ -299,7 +302,7 @@ const directoryOf = (file: string) => file.slice(0, file.lastIndexOf("/"));
 /** The smallest module that runs: typed input, one recorded step, a typed result. */
 const entryText = (id: string) => `import { Host, Run, defineWorkflow } from "collie";
 import { Effect, Schema } from "effect";
-import * as Activity from "effect/unstable/workflow/Activity";
+import * as Activity from "effect/workflow/Activity";
 
 export default defineWorkflow({
   id: "${id}",

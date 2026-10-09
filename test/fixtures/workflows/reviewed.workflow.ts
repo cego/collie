@@ -6,8 +6,8 @@
 
 import { Host, Run, ask, child, defineWorkflow } from "collie";
 import { Effect, Schema } from "effect";
-import * as Workflow from "effect/unstable/workflow/Workflow";
-import * as WorkflowEngine from "effect/unstable/workflow/WorkflowEngine";
+import * as Workflow from "effect/workflow/Workflow";
+import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
 import { reviewLayer, reviewed } from "./capability.ts";
 import { HOUSE } from "./house.ts";
 

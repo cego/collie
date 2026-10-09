@@ -19,21 +19,21 @@
   },
   "dependencies": {
     "@comark/ansi": "0.7.0",
-    "@effect/platform-bun": "4.0.0-rc.117",
-    "@effect/sql-sqlite-bun": "4.0.0-rc.117",
-    "@opentui/core": "^0.5.10",
-    "@opentui/solid": "^0.5.10",
+    "@effect/platform-bun": "4.0.1",
+    "@effect/sql-sqlite-bun": "4.0.1",
+    "@opentui/core": "^0.5.14",
+    "@opentui/solid": "^0.5.14",
     "comark": "0.7.0",
-    "effect": "4.0.0-rc.117",
-    "solid-js": "^1.9.15"
+    "effect": "4.0.1",
+    "solid-js": "^1.9.16"
   },
   "devDependencies": {
-    "@effect/tsgo": "0.38.0",
-    "@oxlint/plugins": "1.80.0",
-    "@types/bun": "latest",
-    "oxfmt": "0.65.0",
-    "oxlint": "1.80.0",
-    "oxlint-tsgolint": "7.0.2001",
+    "@effect/tsgo": "0.50.0",
+    "@oxlint/plugins": "1.87.0",
+    "@types/bun": "1.4.2",
+    "oxfmt": "0.72.0",
+    "oxlint": "1.87.0",
+    "oxlint-tsgolint": "7.0.2003",
     "typescript": "7.0.2"
   },
   "engines": {

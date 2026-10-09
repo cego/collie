@@ -347,7 +347,11 @@ test("a route added while Desktop runs shows its Machine, one removed stops, and
       ).pipe(
         Stream.runForEach((item: FlockItem) =>
           Effect.sync(() =>
-            told.push(`${item.machine.name} ${"_tag" in item ? item._tag : item.message._tag}`),
+            told.push(
+              "machine" in item
+                ? `${item.machine.name} ${"_tag" in item ? item._tag : item.message._tag}`
+                : item._tag,
+            ),
           ),
         ),
         Effect.forkScoped,
@@ -402,7 +406,11 @@ test.each([
         ).pipe(
           Stream.runForEach((item: FlockItem) =>
             Effect.sync(() =>
-              told.push(`${item.machine.name} ${"_tag" in item ? item._tag : item.message._tag}`),
+              told.push(
+                "machine" in item
+                  ? `${item.machine.name} ${"_tag" in item ? item._tag : item.message._tag}`
+                  : item._tag,
+              ),
             ),
           ),
           Effect.forkScoped,
@@ -436,8 +444,30 @@ test("a removed Machine leaves the board, its routes and what onboarding left of
   ];
   const before = items.reduce(applyItem, EMPTY_FLOCK);
   expect(machineRows(before)).toEqual([
-    { profile: "local", name: "pc", target: null, state: "connecting", onboarded: null },
-    { profile: "p-vm", name: "vm", target: "mk@vm", state: "live", onboarded: run },
+    {
+      profile: "local",
+      name: "pc",
+      target: null,
+      state: "connecting",
+      onboarded: null,
+      build: null,
+      development: null,
+      settings: null,
+      credentials: {},
+      reason: null,
+    },
+    {
+      profile: "p-vm",
+      name: "vm",
+      target: "mk@vm",
+      state: "live",
+      onboarded: run,
+      build: "0.31.0",
+      development: null,
+      settings: null,
+      credentials: {},
+      reason: null,
+    },
   ]);
   const after = applyItem(before, { _tag: "Removed", machine });
   expect(after.machines.size).toBe(0);

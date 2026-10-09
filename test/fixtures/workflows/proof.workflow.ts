@@ -4,9 +4,9 @@
 
 import { Host, Run, ask, defineWorkflow } from "collie";
 import { Effect, Schema } from "effect";
-import * as Activity from "effect/unstable/workflow/Activity";
-import * as Workflow from "effect/unstable/workflow/Workflow";
-import * as WorkflowEngine from "effect/unstable/workflow/WorkflowEngine";
+import * as Activity from "effect/workflow/Activity";
+import * as Workflow from "effect/workflow/Workflow";
+import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
 import { label } from "./helper.ts";
 import notes from "./notes.md" with { type: "text" };
 

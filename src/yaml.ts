@@ -3,7 +3,7 @@
 // when forking a definition.
 
 import { Data, Schema } from "effect";
-import * as Yaml from "effect/unstable/encoding/Yaml";
+import * as Yaml from "effect/encoding/Yaml";
 
 export type YamlScalar = string | number | boolean | null;
 export type YamlValue = YamlScalar | YamlMap | ReadonlyArray<YamlValue>;

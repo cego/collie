@@ -24,9 +24,9 @@ import { Herdr } from "../../src/herdr";
 import { followBoard } from "../../src/lifecycle";
 import { scopeFor } from "../../src/registry";
 import { focus } from "../support/focus";
-import { stopHost } from "../support/host";
 import { collie, proves } from "../support/world";
 import { epochMs } from "../../src/time";
+import type { UsageReading } from "../../src/usage-model";
 
 const NOW = epochMs("2026-09-16T12:00:00.000Z");
 
@@ -155,6 +155,15 @@ const mount = Effect.fn("board.mount")(function* (
       for (const line of t.captureSpans().lines) {
         for (const span of line.spans) {
           if (span.text.includes(text)) return `${span.bg.r} ${span.bg.g} ${span.bg.b}`;
+        }
+      }
+      throw new Error(`nothing drawn containing ${JSON.stringify(text)}`);
+    },
+    /** What colour a word is drawn in. */
+    fgOf(text: string) {
+      for (const line of t.captureSpans().lines) {
+        for (const span of line.spans) {
+          if (span.text.includes(text)) return `${span.fg.r} ${span.fg.g} ${span.fg.b}`;
         }
       }
       throw new Error(`nothing drawn containing ${JSON.stringify(text)}`);
@@ -391,6 +400,45 @@ test("the search narrows the sections and offers a way back", () =>
 
       yield* app.escape;
       expect(app.said()).toContain("Strapi prod seeder");
+    }),
+  ));
+
+const reading = (subscription: "claude" | "chatgpt", usedPercent: number): UsageReading => ({
+  subscription,
+  account: null,
+  accountLabel: null,
+  plan: null,
+  windows: [
+    { kind: "session", label: "Session", model: null, usedPercent, resetsAt: null, reached: false },
+  ],
+  at: "2026-09-16T12:00:00.000Z",
+  source: subscription === "claude" ? "claude-usage" : "codex-app-server",
+  problem: null,
+});
+
+test("the header names each Subscription's busiest window, and gives way before its sentence", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const calm = yield* mount(
+        appState({ tasks: HERD, usage: [reading("claude", 31), reading("chatgpt", 2)] }),
+        160,
+      );
+      expect(calm.said()).toContain("claude 31% · chatgpt 2%");
+      const muted = calm.fgOf("claude 31%");
+
+      const near = yield* mount(
+        appState({ tasks: HERD, usage: [reading("claude", 100), reading("chatgpt", 92)] }),
+        160,
+      );
+      expect(near.said()).toContain("claude out · chatgpt 92%");
+      expect(near.fgOf("claude out")).not.toBe(muted);
+
+      const narrow = yield* mount(
+        appState({ tasks: HERD, usage: [reading("claude", 31), reading("chatgpt", 2)] }),
+        90,
+      );
+      expect(narrow.said()).toContain("One task is waiting on you.");
+      expect(narrow.said()).not.toContain("chatgpt 2%");
     }),
   ));
 
@@ -1129,6 +1177,60 @@ test("the record opens on Summary, with the merge request's own state in it", ()
     }),
   ));
 
+test("Summary lists what the Run was given with its path, and nothing for a Run given none", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const given = record({
+        attachments: [{ name: "shot.png", size: 2048, mediaType: "image/png" }],
+      });
+      const app = yield* opened(appState({ tasks: [task()], detail: given }));
+      expect(app.said()).toContain("ATTACHMENTS");
+      expect(app.said()).toContain("/state/runs/r1/attachments/shot.png");
+      expect(app.said()).toContain("2048 bytes");
+
+      const none = yield* opened(appState({ tasks: [task()], detail: record() }));
+      expect(none.said()).not.toContain("ATTACHMENTS");
+    }),
+  ));
+
+test("Summary says what each of the Run's agents ran on", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const ran = record({
+        agents: [
+          {
+            operation: "build",
+            agent: "r1-build-r1",
+            harness: "claude",
+            model: "opus",
+            effort: "medium",
+            from: null,
+            why: null,
+            at: null,
+          },
+          {
+            operation: "review",
+            agent: "r1-review-r1",
+            harness: "codex",
+            model: "default",
+            effort: null,
+            from: { harness: "claude", model: "opus", effort: "xhigh" },
+            why: "session 100%",
+            at: null,
+          },
+        ],
+      });
+      const app = yield* opened(appState({ tasks: [task()], detail: ran }));
+      expect(app.said()).toContain("RAN ON");
+      expect(app.said()).toContain("build claude/opus medium");
+      expect(app.said()).toContain("review codex/default (fell back from claude/opus");
+      expect(app.said()).toContain("session 100%)");
+
+      const none = yield* opened(appState({ tasks: [task()], detail: record() }));
+      expect(none.said()).not.toContain("RAN ON");
+    }),
+  ));
+
 test("Review shows the verdict and findings, and says when it was cut short", () =>
   runEffect(
     Effect.gen(function* () {
@@ -1719,7 +1821,8 @@ test(
               times: 40,
             }),
           );
-          yield* stopHost(world.state);
+          // The host is left for `proves` to stop once this scope has closed: stopped here,
+          // the board followed above reconnects and starts another that outlives the test.
           const app = yield* mount(state);
           const said = app.said();
           expect(said).toContain("One task is waiting on you.");

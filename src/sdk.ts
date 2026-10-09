@@ -19,9 +19,10 @@ import { Context, Effect, FileSystem, Layer, Path, Predicate, Schema } from "eff
 import type { CheckEvidence } from "./output";
 import type { Verification } from "./verify";
 import type { VerifySpec } from "./verify-spec";
-import { WorkflowInstance, type WorkflowEngine } from "effect/unstable/workflow/WorkflowEngine";
-import * as DurableDeferred from "effect/unstable/workflow/DurableDeferred";
-import * as Workflow from "effect/unstable/workflow/Workflow";
+import type { ChildProcessSpawner } from "effect/process";
+import { WorkflowInstance, type WorkflowEngine } from "effect/workflow/WorkflowEngine";
+import * as DurableDeferred from "effect/workflow/DurableDeferred";
+import * as Workflow from "effect/workflow/Workflow";
 import type { Agents } from "./agents";
 import { bodySections, INPUT_STRATEGIES, type InputStrategy } from "./definitions";
 import { exclusiveClashes, launchInputProblem } from "./strategies";
@@ -38,6 +39,7 @@ import {
   type Outcome,
 } from "./outcome";
 import type { Source } from "./offers";
+import type { UsageReading } from "./usage-model";
 
 export { EXCLUSIVE_STRATEGIES } from "./strategies";
 
@@ -49,6 +51,8 @@ export { SOURCES, SOURCE_NAMES, isSource, type Source } from "./offers";
  * arguments that point a command at its project from anywhere.
  */
 export { repoArgs, targetKind } from "./mr";
+/** How much of a Subscription is used, as the host reads it (ADR-0049). */
+export { subscriptionOf, usedFor, type UsageReading } from "./usage-model";
 export { parseMrTarget, type MrRef } from "./board-model";
 
 export {
@@ -317,6 +321,13 @@ export interface AgentPreferences {
   readonly harness?: string;
   readonly model?: string;
   readonly effort?: string;
+  /** Past this share of its busiest window, 1–100, this agent is not chosen for new work. */
+  readonly upTo?: number;
+  /**
+   * What to try, in order, once this agent is past `upTo` or its Subscription is
+   * Exhausted, before the human's `fallbacks`. Each fills in from this one.
+   */
+  readonly otherwise?: ReadonlyArray<AgentPreferences>;
 }
 
 /**
@@ -390,7 +401,8 @@ export type Lent =
   | WorkflowEngine
   | WorkflowInstance
   | FileSystem.FileSystem
-  | Path.Path;
+  | Path.Path
+  | ChildProcessSpawner.ChildProcessSpawner;
 
 /** What a definition declares about itself beside what it does. None of it is a step. */
 export interface Declarations {
@@ -487,6 +499,12 @@ export const definitionOf = (written: WrittenDefinition): WorkflowDefinition => 
  */
 export interface HostApi {
   readonly dir: string;
+  /**
+   * This Machine's Usage readings, one per Subscription (ADR-0049). Read it inside an
+   * Activity of the workflow's own where the workflow branches on it, so a replay takes
+   * the same branch.
+   */
+  readonly usage: () => Effect.Effect<ReadonlyArray<UsageReading>>;
   /**
    * This Run as the host admitted it. The checkout is the one it was started for — its
    * own workspace where a caller named one — the directory is this Run's, where a plan, a
@@ -767,7 +785,13 @@ export interface Registration {
   readonly layer: Layer.Layer<
     never,
     never,
-    WorkflowEngine | Host | Agents | Children | FileSystem.FileSystem | Path.Path
+    | WorkflowEngine
+    | Host
+    | Agents
+    | Children
+    | FileSystem.FileSystem
+    | Path.Path
+    | ChildProcessSpawner.ChildProcessSpawner
   >;
 }
 

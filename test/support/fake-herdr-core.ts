@@ -14,6 +14,8 @@ import {
   Semaphore,
 } from "effect";
 
+const FAKE_CLIENT_VERSION = "herdr 0.9.0";
+
 /** How a shim runs the fake: what `bun run test` compiled of it, or else its source. */
 export const fakeHerdrCommand = (source: string) =>
   Bun.env.COLLIE_TEST_FAKE_HERDR ?? `${process.execPath} ${source}`;
@@ -52,6 +54,7 @@ interface FakeWorkspace {
   cwd?: string | null;
   /** As on a pane: what `workspace.report_metadata` attached. */
   tokens?: Record<string, string>;
+  focused?: boolean;
 }
 
 interface FakeWorktree {
@@ -122,6 +125,7 @@ const FakeWorkspaceSchema = Schema.Struct({
   cwd: Schema.optionalKey(Schema.NullOr(Schema.String)),
   /** As on a pane: what `workspace.report_metadata` attached, which is what owns a Home. */
   tokens: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
+  focused: Schema.optionalKey(Schema.Boolean),
 });
 const FakeWorktreeSchema = Schema.Struct({
   path: Schema.String,
@@ -444,7 +448,7 @@ function handle(
     // What `doctor` asks of herdr, both plain text rather than an envelope, and both
     // scripted per test: the version this machine has, and what it has linked.
     if (cmd === "--version") {
-      const version = yield* envString("FAKE_HERDR_VERSION", "herdr 0.9.0");
+      const version = yield* envString("FAKE_HERDR_VERSION", FAKE_CLIENT_VERSION);
       return { code: 0, stdout: `${version}\n`, stderr: "" };
     }
     if (cmd === "plugin list") {
@@ -454,7 +458,8 @@ function handle(
     // What the socket boundary falls back to when HERDR_SOCKET_PATH is unset: herdr's
     // own idea of where its running server's socket is. `FAKE_HERDR_STATUS` scripts a
     // stopped server or a malformed reply; `FAKE_HERDR_STATUS_SOCKET` overrides which
-    // socket a running one reports, defaulting to this process's own.
+    // socket a running one reports, defaulting to this process's own, and
+    // `FAKE_HERDR_SERVER_VERSION` its version, defaulting to the client's; `none` leaves it out.
     if (cmd === "status server") {
       const mode = yield* envString("FAKE_HERDR_STATUS", "running");
       if (mode === "malformed") {
@@ -469,12 +474,15 @@ function handle(
       }
       const fallbackSocket = yield* envString("HERDR_SOCKET_PATH", "");
       const socket = yield* envString("FAKE_HERDR_STATUS_SOCKET", fallbackSocket);
+      const client = yield* envString("FAKE_HERDR_VERSION", FAKE_CLIENT_VERSION);
+      const version = yield* envString("FAKE_HERDR_SERVER_VERSION", client.replace(/^herdr /, ""));
       return {
         code: 0,
         stdout: `${encodeJson({
           status: "running",
           running: true,
           socket: socket || null,
+          ...(version !== "none" && { version }),
           session: null,
         })}\n`,
         stderr: "",

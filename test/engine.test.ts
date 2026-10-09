@@ -8,8 +8,8 @@
 import { expect, test } from "bun:test";
 import { Effect, Exit, FileSystem, Layer, Option, Schema } from "effect";
 import { TestClock } from "effect/testing";
-import * as WorkflowEngine from "effect/unstable/workflow/WorkflowEngine";
-import * as Workflow from "effect/unstable/workflow/Workflow";
+import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
+import * as Workflow from "effect/workflow/Workflow";
 import { engineLayer, TOOLCHAIN } from "../src/engine";
 import { runEffect } from "./support/effect";
 import { HostReply, events, fixtures, openHost, root, until, workspace } from "./support/host";
@@ -371,6 +371,27 @@ test(
       }).pipe(Effect.scoped),
     ),
   300_000,
+);
+
+test(
+  "a module on Effect's earlier workflow path runs on the host's own objects, beside the current one",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { wf, state } = yield* workspace("collie-engine-paths-");
+        const host = yield* openHost(state);
+        const loaded = yield* host.ask({ op: "load", entry: `${wf}/paths.workflow.ts` });
+        expect(loaded.ok).toBe(true);
+        yield* host.ask({ op: "start", id: "paths", runId: "r1", input: { note: "n" } });
+        const done = yield* host.until({ op: "poll", id: "paths", runId: "r1" }, complete);
+        // One set of objects, not a copy the host's services would not recognise.
+        expect(done.value).toBe("n:before+after:same");
+        const ran = (yield* events(state, "r1")).filter((line) => !line.startsWith("aligned"));
+        expect(ran).toEqual(["before", "after"]);
+        yield* host.stop;
+      }).pipe(Effect.scoped),
+    ),
+  120_000,
 );
 
 const Manifest = Schema.fromJsonString(

@@ -2,11 +2,13 @@ import { Console, Effect, Layer, Schema } from "effect";
 // The manifest is the version: herdr reads it, `install.sh` builds the release URL
 // from it, and a `--version` that disagreed with either would be worse than none.
 import manifest from "../herdr-plugin.toml";
-import { CliConfig, CliError, Command, GlobalFlag } from "effect/unstable/cli";
+import { CliConfig, CliError, Command, GlobalFlag } from "effect/cli";
 import { persona } from "./commands/persona";
 import { run } from "./commands/run";
 import { task } from "./commands/task";
 import { settings } from "./commands/settings";
+import { cleanup } from "./commands/cleanup";
+import { usage } from "./commands/usage";
 import { root } from "./commands/shared";
 import { doctor } from "./commands/doctor";
 import { upgrade } from "./commands/upgrade";
@@ -42,6 +44,8 @@ export const app = root.pipe(
     upgrade,
     onboard,
     doctor,
+    cleanup,
+    usage,
     host,
     bridge,
   ]),

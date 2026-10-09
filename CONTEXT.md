@@ -16,11 +16,35 @@
 
 **Panel** — The seats a Workflow's definition gives a role (`agents.roles.<role>`): one, or a list. A **Seat** is an agent (harness, model, effort) and optionally the Persona it is started as and the instructions it is told in place of the work's own. `panelOf(role)` reads it and `agentWork({ seat })` sits work at a seat; what a workflow does with the seats is its own. A fork moves or adds seats and keeps everything else the original's.
 
-**Harness** — The agent CLI an operation's agent runs in (claude, codex, opencode, …). Decided with its Model and effort, layer over layer: the user's default, the Workflow's own, the Run's, a scope around the work, the operation's own. Switching it keeps no Model chosen for another; an agent already running cannot switch.
+**Harness** — The agent CLI an operation's agent runs in (claude, codex, opencode, …). Decided with its Model and effort, layer over layer: the user's default, the Workflow's own, the Run's, a scope around the work, the operation's own. Then, if its **Subscription** is **Exhausted**, it moves along the **Fallback chain**. Switching it keeps no Model chosen for another. An agent already running cannot switch; a **Fallback** gives its work to a new agent instead.
 
 **Model** — The model a Harness is asked to use, decided with its Harness. One the Harness does not take is refused before any Tab opens; left open, it is the Harness's own default.
 
+**Subscription** — The paid plan a Harness's login draws its usage from: `claude` (Claude Pro, Max or a team seat, through Claude Code's login) or `chatgpt` (ChatGPT, through Codex's login). It belongs to an account, not to a Machine. Machines logged in to the same account share one Subscription. Each of those Machines reads it for itself. An account is known by its id (Claude's organization and account, ChatGPT's account), never by its email, because one email can hold a personal plan and a team seat. `pi` and `opencode` draw on the one their model's provider names (`anthropic/…`, `openai-codex/…`). Any other provider draws on nothing Collie reads. Not model-call usage, which Collie records as telemetry.
+
+**Usage reading** — A Subscription's windows on one Machine. Each window has its length (a 5-hour session, a week, a week of one model), how much of it is used, and when it resets. A reading also says when it was read and from where: Claude Code's own usage endpoint, Codex's app server, or the status line of a Claude agent Collie started. The host calls each endpoint at most once every five minutes, and backs off when one refuses. Running agents' status lines keep the reading current between calls. Every door asks the host. A window whose reset has passed counts as unused.
+
+**Exhausted** — A Subscription with a window that applies to the Model and is used up: fully used, or reported by its source as reached (a spend limit, Codex's `rateLimitReachedType`). Its reset must still be ahead. A Subscription with no reading is never Exhausted. Being Exhausted never refuses or delays work. It only decides which agent does the work.
+
+**Fallback chain** — The human's `fallbacks` setting: an ordered list of `harness` or `harness/model` entries, shared across the Flock. It is tried after whatever the work itself prefers, including a Workflow's own `otherwise`. It is empty by default.
+
+**Fallback** — Work moved to the next agent with room because its agent's Subscription is Exhausted. If that is known before the agent starts, the recorded choice is simply another agent. Mid-work, Collie closes the agent and starts a new one on the same operation, with the same prompt and a hand-over. The hand-over says the checkout holds what was done and where the earlier transcript is. The new agent also takes the old one's place for later work. A Fallback is recorded with what it fell back from and why.
+
 **Input** — A value a Workflow needs (plan directory, diff target, goal). Only the **Launch flow** infers one, for a human, from context (branch, cwd, earlier plan Runs, glab), and a Run records which of its Inputs were inferred and which were given. An agent's start — chat's Collie tools or `collie run start` — gives every Input explicitly, an optional one as an explicit empty, and a start missing one is refused with what would fill it.
+
+**Attachment** — A file given to a Run beside the words that asked for the work: a
+screenshot pasted into the Flock chat, a file a chat found on this computer or a Machine, a
+file named with `--attach`. Named by its path on the Run's Machine — a file that is not
+there yet is uploaded once, through that Machine's host — and copied by the host into the
+Run's own directory before the work it came with starts or the steer it came with is
+delivered. Every agent prompt of the Run lists each one with its path on that Machine, and
+a Run starts with copies of the attachments of every Run in its **Lineage**. A start,
+follow-up or steer a chat carries out takes the attachments of the human's message that
+asked for it unless it names others. Not an **Input**: no Workflow declares one, so every
+Workflow gets them unchanged. Not **Evidence**: it is what the work was given, not what it
+proved. In the Flock chat it is also what the model is shown — an image, a PDF, a text, or
+a name, size and path — and Desktop keeps a copy, so the conversation still shows it after a
+restart ([ADR-0046](docs/adr/0046-an-attachment-is-uploaded-once-and-belongs-to-the-run.md)).
 
 **Output** — A structured JSON file an agent writes to the Run directory for one operation (e.g. a review verdict + findings). It is decoded against the Workflow's schema before anything believes it, and one that does not decode buys one repair. Workflows read Outputs, never terminal text.
 
@@ -48,6 +72,16 @@ named by its hostname. Otherwise no different from any other Machine.
 reaches through `collie bridge` started as `desktop`. Not "native", which already means
 harness-native (**Native chat**) and Effect-native.
 
+**In sync** — A Machine that has everything **Desktop** gives its Flock: it is live, it runs
+Desktop's Collie version or a newer release, it holds the latest edit of every shared
+setting, it was given the credentials Desktop holds now but those its onboarding skipped, and `collie doctor` finds it onboarded. A Machine on a
+development checkout, which nothing upgrades, is never behind on its version. Each part is
+read from what the Machine's host and doctor last told Desktop, and from what Desktop last
+gave it. A Machine that is not in sync is **behind** on each part it lacks, and each has its
+own fix. Desktop brings a Machine level as it connects — upgrading it, syncing its settings,
+giving it credentials — so one that stays behind is one where that failed. Not "up to date",
+which is Desktop's own check for a newer release of itself.
+
 **Machine rule** — The human's own words, kept in Desktop's settings, about which Machine
 work goes to: "frontend work is on the laptop, everything else is on the vm". The **Flock
 chat** is given it with every message, beside the Machines Desktop reaches at that moment and
@@ -73,10 +107,13 @@ last in a directory. Its whole reach is **Collie tools**.
 
 **Flock chat** — Desktop's conversation about the **Flock**: one live per Desktop (earlier
 ones can be reopened, never two at once), a session of
-the user's own Claude Code driven through the Agent SDK in Desktop's main process, with
-**Collie tools** as its whole reach. Its tools are answered by each Machine's host over that
-Machine's `chat` channel, and name everything `<machine>:<id>`. Beside each Home's Native
-chat, never instead of it.
+the user's own Claude Code driven through the Agent SDK in Desktop's main process. It
+reaches Collie through **Collie tools**, this computer through Claude Code's own Read, Glob,
+Grep, Write, Edit and Bash, and each Machine's files through `collie_read`, `collie_glob`,
+`collie_grep`, `collie_write` and `collie_edit`; none of them asks first. Its Collie and file
+tools are answered by each Machine's host over that Machine's `chat` channel, and name
+everything `<machine>:<id>`, a file `<machine>:<path>`. Beside each Home's Native chat, never
+instead of it.
 
 **Chat harness** — Which native chat Collie opens with, `claude` (the default, on an
 existing installation as much as a new one) or `pi`, from `chat_harness` in `config.json`.
@@ -111,6 +148,8 @@ extension by Pi, and by `collie tools call` from a terminal. Desktop's Flock cha
 the same Toolkit's tools that a host's front door can answer, in-process, each answered by
 the host of the Machine it names (`desktop/src/bun/flock-tools.ts`); `collie_run`,
 `collie_receipts` and `collie_workspaces` with that Machine's Native chat's own reading.
+It also has five file tools of its own that are not the Toolkit's, so Native chat's reach
+is unchanged.
 
 **Redirect notice** — What a per-workspace Collie pane from an older release shows on its
 next launch: one line and "Open Collie". No board, no chat.
@@ -130,7 +169,8 @@ disposition and follow-up. `board`, `desktop` and
 reached through `collie bridge` is the front door it was started as, and `desktop` adds
 where it came from: the computer it named and the SSH client the bridge saw. A chat's
 `collie_do` also names its conversation and carries the human's message from that turn,
-attached by the tool host and never by the model.
+with the names of the **Attachments** it carried, attached by the tool host and never by
+the model.
 
 **Confirmation** — A command naming a Proposal's id **and** its content hash. A yes to a
 summary is not consent to a payload nobody read. Anyone may give one — a human at a
@@ -207,8 +247,11 @@ and then it is that Task's: one workspace per Task. Anything else joins a Task o
 explicit **Continue task**.
 
 **Task workspace** — The herdr workspace a Task's Runs, tabs and agents live in. One per
-Task, made and focused when its first Run is admitted, on the checkout that Run is given,
-and kept when the work is finished until the human closes it. Its label is inferred once, at creation — `<Project or theme> | <what
+Task, made when its first Run is admitted, on the checkout that Run is given. It is never
+focused: a start does not take the human away from what they are doing. Collie closes it
+an hour after its Task is **Finished**, unless herdr has it in focus at that moment or it
+holds a pane Collie did not open, which keeps it open until the human closes it (see
+**Cleanup**). Its label is inferred once, at creation — `<Project or theme> | <what
 this work is>`, from the work and from the names already live in the session — and is
 display only: a label never decides membership, and a label a human changed is theirs,
 never written again. It is where Collie scopes a Run lookup: a workspace that is not a
@@ -226,8 +269,10 @@ to no Task is a TaskView of its own.
 
 **Decision** — What a Task is waiting on a human for, and one of the two things that put
 it in **Needs you**: a **question** a Run asked, a **Proposal** Collie made, or an evidence
-**gate** asking which verifications this Run is to be held to. All three are answered on
-the card, from the CLI or from chat, and survive the board closing.
+**gate** asking which verifications this Run is to be held to. Any of a Task's Runs can be
+waiting on one, a fan-out's Repo runs included, and each is answered on the Run that asked.
+All three are answered on the card, from the CLI or from chat, and survive the board
+closing.
 
 **Stalled** — The other way into **Needs you**, and the one with nothing on the card to
 answer: an agent is waiting for a human in its own pane — at its harness's own dialog,
@@ -267,7 +312,9 @@ agents for as long as one is alive; a gone pane is the Follow-up Run's job (ADR-
 **Disposition** was recorded — merged, abandoned or superseded — the Run succeeded at a
 Workflow that produces nothing to land, such as a review, or it ended with nothing anyone
 could file: no branch, no merge request, no plan, no question. A Task whose work has landed
-is **Finished**, the board's last section.
+is **Finished**, the board's last section, as long as none of its Runs is still going,
+asking or stalled and none of its agents is working. Finished is what **Cleanup** waits
+for before it closes anything of a Task.
 
 **Held** — A Task whose Runs are under a **Hold**, drawn as a `⏸` line under its sentence
 and lifted by a human.
@@ -314,17 +361,43 @@ human later made at the same path on the same branch. Where herdr opened a works
 it, that workspace's shell tab is left where it is, as a Task workspace's is. A checkout a
 human made is never removed.
 
-**Settled** — A Collie-created Worktree that holds nothing which exists only there: the
-tree is clean, it holds no commit that is not on the remote already, nothing is working in
-it or could be resumed in it, and its merge request is merged or closed (or its remote
-branch is gone). "No commit of its own" is the branch's upstream where it has one, and the
-default branch where it does not — a branch merged and deleted loses its upstream ref to
-the next `git fetch --prune`, and requiring one would make the gone-branch case
-unreachable. Only then is it removed, through herdr, and only ever without a force flag:
+**Settled** — A Collie-created Worktree that holds nothing which exists only there:
+
+- The tree is clean.
+- It holds no commit that is not on the remote already.
+- Nothing is working in it, and no Run whose work has not landed could be resumed in it.
+- Its work has landed: the merge watch read its merge request as merged or closed, on
+  GitHub or GitLab; a **Disposition** was recorded; or its remote branch is gone.
+- Its Task's workspace has closed.
+
+A commit is on the remote when a remote-tracking ref contains it, or when it is the head
+its merged merge request was merged at. A squash merge leaves the branch's commits on no
+branch, and "on the default branch" would keep that checkout for ever. A checkout Collie
+made whose branch was switched since is still Collie's, by its path and the moment git
+wrote it, and is judged on what it holds now. The plugin root, a repository's main checkout
+and any checkout a running host serves from are never removed ([ADR-0045](docs/adr/0045-collie-removes-what-it-made-once-nothing-needs-it.md)).
+Only then is it removed, through herdr, and only ever without a force flag:
 git's own refusal to drop a dirty or unmerged checkout is the last guard, so a wrong
 judgement can fail to clean but never delete work. Removal is never forced whichever
 manager does it. The conditions and their order are canonical in `src/worktree.ts` and
 `docs/internals.md`.
+
+**Cleanup** — What Collie removes once nothing needs it, and only what it made and can
+show it made. Its own directories (the state directory, `~/.cache/collie` and Desktop's)
+are its own by where they are, and only kinds it knows are removed from them. A Worktree,
+a Task workspace, a pane and a process are proved by Collie's own record of making them.
+The host sweeps every ten minutes. `collie cleanup` lists what a sweep would remove now,
+how much space that frees, and what Collie keeps and why. `collie cleanup --apply` sweeps
+now. In order:
+
+1. A **Finished** Task's workspace closes after an hour.
+2. Its Worktrees go once **Settled**.
+3. Thirty days after its last Run ended, the Task and every one of its Runs are forgotten
+   together: rows first, then files.
+
+What each kind keeps and why is canonical in
+[ADR-0045](docs/adr/0045-collie-removes-what-it-made-once-nothing-needs-it.md). Every
+removal is recorded with who asked, and none is forced.
 
 **Renovate Run** — One execution of the `renovate` Workflow: one repository, from claiming
 it in Helle to checking it off in Linear. Its Worktree is detached and roams — it holds no
@@ -431,7 +504,11 @@ stable id — a Task id, a Run id — never an index, because the sections re-so
 Changing it is a change in what is read, not in what is true: the record and the one merge
 request behind it are produced for the Selection, and a read superseded by a newer one is
 interrupted rather than finished. An action is never applied to it: every action on the
-board belongs to the card it is on.
+board belongs to the card it is on. In **Desktop** it is the card last clicked, whether or
+not its record is open, and it is what the Flock chat's chip is about: opening a card's
+record selects that card, and a click on the board's background, Escape outside a field or a
+message sent clears it. A message sent with a Selection keeps it: the message shows that
+card's name as a pill for as long as the conversation is kept, and the pill opens its record.
 
 **Focus** — What the Collie tab is being looked at as: the showing View, every View shown
 at least once, the Selection, and whether the panel's log tail is open. It is what decides
@@ -470,7 +547,7 @@ does with each outcome, and what a five-minute unresolved attempt stops:
 
 **Notification** — The only channel from an unattended Run to the person who started it, so what is not worth interrupting for is not sent at all. One title shape — `<repo> · <slug> <what happened>` — one taxonomy in `src/notify.ts`, once per `(run, kind, step)`, and never a reason for a Run to fail.
 
-**Host** — The one background process that runs work for a state directory. CLI, board and chat all reach it over the same local RPC, and closing any of them leaves its work running. It owns the directory under `host.lock`, keeps its Runs in SQLite, and on restart hands every accepted Run back to the engine, so completed work is reused rather than repeated. A client of another build is told to restart it before `HostRpcs` (ADR-0015); `FrontDoorRpcs` serves any build (ADR-0038).
+**Host** — The one background process that runs work for a state directory. CLI, board and chat all reach it over the same local RPC, and closing any of them leaves its work running. It owns the directory under `host.lock`, keeps its Runs in SQLite until **Cleanup** forgets them, and on restart hands every accepted Run back to the engine, so completed work is reused rather than repeated. A client of another build is told to restart it before `HostRpcs` (ADR-0015); `FrontDoorRpcs` serves any build (ADR-0038).
 
 **Ownership** — Who holds something that must have one owner. A claim stands while its process answers and is still the one that wrote it, and one whose process answers but whose identity cannot be read stands too: "I could not tell" is not permission to take over. It decides which process may be the host for a state directory; canonical in `src/lock.ts`.
 

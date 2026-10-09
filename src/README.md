@@ -24,6 +24,7 @@ Runner source (Bun/TypeScript). Compiled to `bin/collie` per platform; see ADR-0
 | `board.ts`         | Builds the board from the files: one TaskView per Task and a card's sentence                          |
 | `board-model.ts`   | The board's Schemas and `FrontDoorRpcs`, and the pure section and header rules                        |
 | `audit.ts`         | A Run's audit trail: each operation, the Actor that asked for it, and what came of it                 |
+| `attachments.ts`   | Files a Run is given: refused or copied into `runs/<id>/attachments/`, and listed for its prompts     |
 | `bridge.ts`        | `collie bridge`: a front door's stdio piped to this Machine's host, declared as it                    |
 | `board-stream.ts`  | The board a host serves one client: a snapshot, then each Task that changed                           |
 | `herds.ts`         | Every running herdr session the host reads, its agents, and the events it pushes                      |
@@ -56,19 +57,25 @@ Runner source (Bun/TypeScript). Compiled to `bin/collie` per platform; see ADR-0
 | `mcp.ts`           | That Toolkit over MCP on stdio, which is how Claude Code reaches it                                   |
 | `engine.ts`        | Effect's workflow engine, the SDK the binary serves a module, and where generations live              |
 | `host.ts`          | The one host per state directory: who owns it, the board it serves, every operation                   |
+| `host-files.ts`    | A Machine's files for a front door: read in parts, glob, grep, write and edit, never into its state   |
+| `uploads.ts`       | Files a front door sends this Machine, kept once by sha256, swept a week after last use               |
+| `host-log.ts`      | The host's own log file beside its state, bounded and rotated                                         |
 | `run-detail.ts`    | One Run's diff against its merge base, items by reference, and a drawer's subscription                |
-| `side-jobs.ts`     | What the host does with no pane open: the merge watch, each Herd's News, pruning and Home tokens      |
+| `side-jobs.ts`     | What the host does with no pane open: the merge watch, each Herd's News, cleanup and Home tokens      |
+| `cleanup.ts`       | What a sweep removes and keeps, one sweeper per kind, and the journal of what went (ADR-0045)         |
 | `discovery.ts`     | Where a workflow module is looked for, which layer wins, and what counts as an edit                   |
 | `authoring.ts`     | What a module says about itself, how it is checked, and the file an author starts from                |
 | `store.ts`         | Rows beside Effect's: request claims, run identity, generations, questions                            |
 | `release.ts`       | Whether an installation is a release `upgrade --to` may move, or a development checkout               |
 | `onboard.ts`       | A Machine from bare to a working host, one streamed step at a time, never with sudo                   |
+| `in-terminal.ts`   | A login or a question in a terminal Bun gives it, on Linux and macOS alike, never through `script`    |
 | `run-actions.ts`   | What a confirmed action does to a Run, and the one place each kind is carried out                     |
 | `lifecycle.ts`     | A front door's side of every host operation, the board and a drawer's details                         |
 | `signing.ts`       | The release key: signing a runner or Desktop's update in CI, and the check before either is installed |
 | `desktop.ts`       | `collie upgrade`'s Desktop step: a verified Desktop update, staged as Electrobun would                |
 | `sdk.ts`           | `collie`: what a module exports, declares, waits on, and starts as a child                            |
 | `agents.ts`        | What a workflow does with an agent: one launch, one collection, one repair                            |
+| `launches.ts`      | What each of a Run's agents was launched on, read back in launch order                                |
 | `proactive.ts`     | What is worth Collie starting a turn about, and what it has already said                              |
 | `news.ts`          | What it noticed, per conversation: deduped, batched, superseded; sent is never read                   |
 | `home.ts`          | Which workspace is this Herd's Home, decided by proof and never by a label                            |
@@ -76,6 +83,7 @@ Runner source (Bun/TypeScript). Compiled to `bin/collie` per platform; see ADR-0
 | `lines.ts`         | A card, a report, a delivery, a row's marks and an action, as the same words everywhere               |
 | `plan.ts`          | A plan directory as repositories and waves, and the refusals that stop a fan-out                      |
 | `lock.ts`          | The pid-lock discipline every single-owner file takes, the host's own lock among them                 |
+| `script.ts`        | A login under `script`'s pseudo-terminal, in the form Linux or macOS takes                            |
 | `task.ts`          | A Task: the work, its herdr workspace, and which Runs belong to it                                    |
 | `tasknames.ts`     | What a task workspace is called, from the work and the session's own live labels                      |
 | `naming.ts`        | herdr-legal agent names vs readable tab and pane labels                                               |
@@ -93,3 +101,5 @@ Runner source (Bun/TypeScript). Compiled to `bin/collie` per platform; see ADR-0
 | `compaction.ts`    | One threshold, one work-boundary policy, and each agent's controls for its lifetime                   |
 | `compactors.ts`    | Each harness's official compaction interface, generated per agent and bundled in Collie               |
 | `codex.ts`         | Codex's App Server as a client: thread identity, its context, and its compactions                     |
+| `usage-model.ts`   | A Subscription's Usage reading: its Schemas, parsing, and Exhausted (pure)                            |
+| `usage.ts`         | This Machine's Usage readings: Claude's endpoint, Codex's app server, status lines                    |

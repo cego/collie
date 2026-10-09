@@ -1,11 +1,11 @@
 import { expect, test } from "bun:test";
 import { Cause, Config, Effect, Fiber, FileSystem, Option, Queue, Schema, Stream } from "effect";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import manifest from "../herdr-plugin.toml";
 import type { JsonObject } from "../src/schema";
 import { rebuiltAnswer } from "../src/mcp";
 import { TOOLS } from "../src/tools";
-import { runEffect } from "./support/effect";
+import { runEffect, suiteEnv } from "./support/effect";
 
 const root = new URL("../", import.meta.url).pathname;
 const encode = Schema.encodeSync(Schema.fromJsonString(Schema.JsonObject));
@@ -39,6 +39,7 @@ const openServer = Effect.fn("McpTest.open")(function* () {
         HERDR_PLUGIN_STATE_DIR: `${dir}/state`,
         HERDR_SOCKET_PATH: `${dir}/no-herdr.sock`,
         COLLIE_CWD: dir,
+        ...(yield* suiteEnv),
       },
       extendEnv: false,
       stdin: Stream.fromQueue(input).pipe(Stream.encodeText),

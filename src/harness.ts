@@ -231,6 +231,10 @@ export interface Preferences {
   readonly harness?: string;
   readonly model?: string;
   readonly effort?: string;
+  /** Past this share of its busiest window, 1–100, this agent is not chosen for new work. */
+  readonly upTo?: number;
+  /** What to try past `upTo` or once Exhausted, in order, before the human's chain. */
+  readonly otherwise?: ReadonlyArray<Preferences>;
 }
 
 /** The harness, model and effort a set of options names, and nothing else of it. */
@@ -247,6 +251,14 @@ export const preferencesIn = (options: {
     }).filter(([, value]) => value !== undefined),
   );
 
+/** A preference as code gives it: `preferencesIn`'s fields, with its ceiling where it has one. */
+export const ceilingIn = (options: Preferences): Preferences => {
+  const ceiling: { -readonly [K in keyof Preferences]: Preferences[K] } = preferencesIn(options);
+  if (options.upTo !== undefined) ceiling.upTo = options.upTo;
+  if (options.otherwise !== undefined) ceiling.otherwise = options.otherwise;
+  return ceiling;
+};
+
 /** The agent a piece of work is given, decided before anything starts it. */
 export interface AgentChoice {
   readonly harness: string;
@@ -259,7 +271,9 @@ export interface AgentChoice {
  * Layers of preferences as one, lowest first. A layer that switches harness keeps nothing
  * chosen below it: a model and an effort are for the harness they were chosen with.
  */
-export function foldPreferences(layers: ReadonlyArray<Preferences | undefined>): Preferences {
+export function foldPreferences(
+  layers: ReadonlyArray<Preferences | undefined>,
+): Pick<Preferences, "harness" | "model" | "effort"> {
   let harness: string | undefined;
   let model: string | undefined;
   let effort: string | undefined;
@@ -315,3 +329,126 @@ export function resolveChoice(
   }
   return { ok: true, choice: { harness, model, effort: effort ?? null } };
 }
+
+/**
+ * The ceiling layers set, lowest first: the nearest layer that names `upTo` or `otherwise`
+ * sets both, and a layer that switches harness clears both.
+ */
+export function foldCeiling(layers: ReadonlyArray<Preferences | undefined>): Preferences {
+  let harness: string | undefined;
+  let ceiling: Preferences = {};
+  for (const layer of layers) {
+    if (layer === undefined) continue;
+    if (layer.harness !== undefined && layer.harness !== harness) {
+      harness = layer.harness;
+      ceiling = {};
+    }
+    if (layer.upTo !== undefined || layer.otherwise !== undefined) {
+      const { upTo, otherwise } = layer;
+      ceiling =
+        upTo === undefined
+          ? { otherwise }
+          : otherwise === undefined
+            ? { upTo }
+            : { upTo, otherwise };
+    }
+  }
+  return ceiling;
+}
+
+/** A `fallbacks` entry: `harness`, or `harness/model` split at the first `/`. */
+export function chainEntry(text: string): Preferences {
+  const at = text.indexOf("/");
+  return at === -1 ? { harness: text } : { harness: text.slice(0, at), model: text.slice(at + 1) };
+}
+
+/** Whether a choice has room under a ceiling, and why not where it has none. */
+export type Room = (
+  choice: AgentChoice,
+  upTo: number | undefined,
+) => { readonly room: true } | { readonly room: false; readonly why: string };
+
+export const said = (choice: AgentChoice) =>
+  `${choice.harness}/${choice.model}${choice.effort === null ? "" : ` ${choice.effort}`}`;
+
+export interface Chosen {
+  readonly choice: AgentChoice;
+  /** The folded choice this fell back from, where it did. */
+  readonly from: AgentChoice | null;
+  readonly why: string | null;
+  /** Chain entries that do not resolve, each with why. */
+  readonly skipped: ReadonlyArray<string>;
+}
+
+/**
+ * The folded choice, else the first of its `otherwise` entries, else the first of the
+ * chain, that has room (ADR-0049 D7). A bad folded or `otherwise` choice is refused; a bad
+ * chain entry is skipped. Where nothing has room, the folded choice, saying why.
+ */
+export function resolveWithRoom(
+  layers: ReadonlyArray<Preferences | undefined>,
+  chain: ReadonlyArray<string>,
+  room: Room,
+  extraModels: Readonly<Record<string, ReadonlyArray<string>>> = {},
+):
+  | { readonly ok: true; readonly chosen: Chosen }
+  | { readonly ok: false; readonly problem: string } {
+  const primary = resolveChoice(layers, extraModels);
+  if (!primary.ok) return primary;
+  const folded = primary.choice;
+  const ceiling = foldCeiling(layers);
+  const outOfRange = [ceiling.upTo, ...(ceiling.otherwise ?? []).map(({ upTo }) => upTo)].find(
+    (upTo) => upTo !== undefined && !(upTo >= 1 && upTo <= 100),
+  );
+  if (outOfRange !== undefined)
+    return { ok: false, problem: `upTo is a percentage from 1 to 100, not ${outOfRange}` };
+  const base = { harness: folded.harness, model: folded.model, effort: folded.effort ?? undefined };
+  const candidates: Array<{ readonly choice: AgentChoice; readonly upTo?: number }> = [
+    { choice: folded, upTo: ceiling.upTo },
+  ];
+  for (const [at, entry] of (ceiling.otherwise ?? []).entries()) {
+    const next = resolveChoice([base, preferencesIn(entry)], extraModels);
+    if (!next.ok) return { ok: false, problem: `otherwise entry ${at + 1}: ${next.problem}` };
+    candidates.push({ choice: next.choice, upTo: entry.upTo });
+  }
+  const skipped: string[] = [];
+  for (const text of chain) {
+    const entry = chainEntry(text);
+    const takes = HARNESSES[entry.harness ?? ""]?.efforts?.includes(folded.effort ?? "") ?? false;
+    const next = resolveChoice(
+      [entry, takes && folded.effort !== null ? { effort: folded.effort } : undefined],
+      extraModels,
+    );
+    if (next.ok) candidates.push({ choice: next.choice });
+    else skipped.push(`fallback ${text} skipped: ${next.problem}`);
+  }
+  const whys: string[] = [];
+  let first: string | null = null;
+  for (const { choice, upTo } of candidates) {
+    const judged = room(pinned(choice), upTo);
+    if (judged.room) {
+      const fell = choice !== folded;
+      return {
+        ok: true,
+        chosen: { choice, from: fell ? folded : null, why: fell ? first : null, skipped },
+      };
+    }
+    first ??= judged.why;
+    whys.push(`${said(choice)}: ${judged.why}`);
+  }
+  return {
+    ok: true,
+    chosen: {
+      choice: folded,
+      from: null,
+      why: `nothing has room; ${[...new Set(whys)].join("; ")}`,
+      skipped,
+    },
+  };
+}
+
+/** The model a choice runs, so `default` is judged as the model it pins. */
+export const pinned = (choice: AgentChoice): AgentChoice =>
+  choice.model === DEFAULT_MODEL
+    ? { ...choice, model: HARNESSES[choice.harness]?.defaultModel ?? DEFAULT_MODEL }
+    : choice;

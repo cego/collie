@@ -3,7 +3,7 @@
 // (ADR-0009).
 
 import { Effect } from "effect";
-import { Command } from "effect/unstable/cli";
+import { Command } from "effect/cli";
 import { sectionOf, type TaskView } from "../board-model";
 import { boardSnapshot } from "../lifecycle";
 import { answering } from "./shared";

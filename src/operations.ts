@@ -5,11 +5,12 @@
 
 import type { BunServices } from "@effect/platform-bun/BunServices";
 import { Crypto, Effect, FileSystem, Path, Schema } from "effect";
-import { ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcessSpawner } from "effect/process";
 import { nowIso } from "./time";
 import { attentionFor } from "./attention";
 import type { PluginEnv } from "./env";
-import { Answered, mrLabel, type FrontDoor } from "./board-model";
+import { Answered, mrLabel, ranOn, type FrontDoor } from "./board-model";
+import { runAgents } from "./launches";
 import { readAudit, type AuditLine } from "./audit";
 import { readForge, readMrStates } from "./merges";
 import { findingsIn } from "./output";
@@ -276,6 +277,7 @@ const workspaceForDirectory = Effect.fn("operations.workspaceForDirectory")(func
       label: path.basename(dir),
       cwd: dir,
       worktree: null,
+      focused: false,
       tokens: {},
     },
   };
@@ -506,23 +508,8 @@ export const taskFor = Effect.fn("operations.taskFor")(function* (
   if (env.workspaceId === null && env.socketPath === null)
     return kept(choice.mode === "continue" ? choice.task : null);
   const herdr = new Herdr(env);
-  if (choice.mode === "continue") {
-    // The Task's workspace has to still be there. Continuing into one herdr has closed
-    // would put the Run's tabs and agents nowhere, which is worse than not starting.
-    const open = yield* Effect.result(herdr.workspaceList());
-    if (open._tag === "Failure")
-      return refuse(
-        `Task "${choice.task.id}" could not be checked: ${herdrFailureReason(open.failure)}`,
-        herdrFailureReason(open.failure),
-      );
-    if (!open.success.some((workspace) => workspace.workspaceId === choice.task.workspace))
-      return refuse(
-        `Task "${choice.task.id}" has no workspace any more; start fresh or continue another.`,
-        "workspace_closed",
-      );
-    yield* Effect.ignore(herdr.workspaceFocus(choice.task.workspace));
-    return kept(choice.task);
-  }
+  // A workspace cleanup closed is reopened on the Run's checkout when its first agent starts.
+  if (choice.mode === "continue") return kept(choice.task);
   const naming = yield* namingDeps(env);
   const label = taskWorkspaceLabel(
     yield* nameTask(
@@ -1108,6 +1095,7 @@ export const runFacts = Effect.fn("operations.runFacts")(function* (env: PluginE
   const intent = yield* readIntent(run.dir).pipe(Effect.catch(() => Effect.succeed(null)));
   const attention = yield* attentionFor(run);
   const started = (yield* listRuns(env)).filter((one) => one.parent === run.id);
+  const agents = yield* runAgents(env.stateDir, run.id);
   const lines = [
     `Status: ${run.state}`,
     `Directory: ${run.cwd}`,
@@ -1130,6 +1118,14 @@ export const runFacts = Effect.fn("operations.runFacts")(function* (env: PluginE
           "### Runs it started",
           "",
           ...started.map((one) => `- run ${one.id}: ${one.workflow}, ${one.state}`),
+        ]),
+    ...(agents.length === 0
+      ? []
+      : [
+          "",
+          "### Agents",
+          "",
+          ...agents.map((one) => `- ${one.operation}: ${ranOn(one)} as ${one.agent}`),
         ]),
     "",
     ...(yield* mergeLines(env, run)),

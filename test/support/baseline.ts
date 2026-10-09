@@ -9,9 +9,10 @@
 // prompts, the skill each step is started with — while the module decides everything that
 // happens: what is asked of whom, in what order, and what the answer starts next.
 
+import type { ChildProcessSpawner } from "effect/process";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, Fiber, FileSystem, Layer, Option, Path, Schedule, Schema } from "effect";
-import * as WorkflowEngine from "effect/unstable/workflow/WorkflowEngine";
+import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
 import { Rig, FakeHerdr } from "./recorder";
 import { exec } from "./command";
 import { fastForward, runEffect } from "./effect";
@@ -126,6 +127,7 @@ const session = <A, E>(
     | Store
     | FileSystem.FileSystem
     | Path.Path
+    | ChildProcessSpawner.ChildProcessSpawner
   >,
   override?: HostOverride,
 ) =>

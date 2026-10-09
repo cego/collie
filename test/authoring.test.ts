@@ -13,12 +13,14 @@ import {
   TOOLCHAIN,
   loadEntry,
   provisionToolchain,
+  refreshToolchain,
   revisionOf,
   stageGeneration,
   clearGenerations,
   typecheckEntry,
 } from "../src/engine";
 import { runEffect } from "./support/effect";
+import { exec } from "./support/command";
 import { stopHost } from "./support/host";
 import { collie, proves as provesWith } from "./support/world";
 
@@ -146,6 +148,55 @@ test(
     ),
   60_000,
 );
+
+test(
+  "checking a module where an older Effect was provisioned moves it to the host's, and reports the old path",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-authoring-stale-" });
+        yield* provisionToolchain(dir);
+        // As a release on Effect 4.0.0-rc.117 left it.
+        const pkg = yield* fs.readFileString(`${dir}/package.json`);
+        yield* fs.writeFileString(
+          `${dir}/package.json`,
+          pkg.replace(`"effect": "${TOOLCHAIN.effect}"`, '"effect": "4.0.0-rc.117"'),
+        );
+        expect((yield* exec([process.execPath, "install"], { cwd: dir })).exitCode).toBe(0);
+        yield* fs.copyFile(`${fixtures}paths.workflow.ts`, `${dir}/paths.workflow.ts`);
+
+        const checked = yield* checkModule({ path: `${dir}/paths.workflow.ts`, layer: "user" });
+
+        const installed = yield* fs.readFileString(`${dir}/node_modules/effect/package.json`);
+        expect(installed).toContain(`"version": "${TOOLCHAIN.effect}"`);
+        expect(checked.toolchain).toBeNull();
+        expect(checked.problems.join("\n")).toContain("effect/unstable/workflow/Activity");
+      }).pipe(Effect.scoped),
+    ),
+  180_000,
+);
+
+test("a toolchain on the host's Effect, or with none installed, is not provisioned again", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const current = yield* fs.makeTempDirectoryScoped({ prefix: "collie-authoring-current-" });
+      yield* fs.makeDirectory(`${current}/node_modules/effect`, { recursive: true });
+      yield* fs.writeFileString(
+        `${current}/node_modules/effect/package.json`,
+        `{"version":"${TOOLCHAIN.effect}"}`,
+      );
+      const bare = yield* fs.makeTempDirectoryScoped({ prefix: "collie-authoring-bare-" });
+
+      for (const dir of [current, bare]) {
+        yield* refreshToolchain(dir);
+        // Provisioning writes these first, so neither being there means it never ran.
+        expect(yield* fs.exists(`${dir}/package.json`)).toBe(false);
+        expect(yield* fs.exists(`${dir}/collie.d.ts`)).toBe(false);
+      }
+    }).pipe(Effect.scoped),
+  ));
 
 test("a typechecker that falls over is no typechecker, not a clean module", () =>
   runEffect(
@@ -378,6 +429,17 @@ test(
           expect(checked.exit).toBe(0);
           expect((yield* reportedIn(checked.envelope)).workflows).toEqual([
             { id: "tally", layer: "user", problems: [], toolchain: null },
+          ]);
+
+          // A module that reads this Machine's usage and judges it through the SDK compiles too.
+          yield* fs.copyFile(
+            `${fixtures}budgeted.workflow.ts`,
+            `${world.user}/budgeted.workflow.ts`,
+          );
+          const budgeted = yield* collie(world, ["workflow", "check", "budgeted"]);
+          expect(budgeted.exit).toBe(0);
+          expect((yield* reportedIn(budgeted.envelope)).workflows).toEqual([
+            { id: "budgeted", layer: "user", problems: [], toolchain: null },
           ]);
 
           // An entry beside it that will not load costs that id and no other.

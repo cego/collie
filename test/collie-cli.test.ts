@@ -1,13 +1,15 @@
 import { expect, test } from "bun:test";
 import { Config, Effect, FileSystem, Option, Schema } from "effect";
 import { exec } from "./support/command";
-import { runEffect, watchedBy } from "./support/effect";
+import { runEffect, suiteEnv } from "./support/effect";
+import { stopHost } from "./support/host";
 import { installFakeSkills } from "./support/defs";
 import { readIntent, seedIntent, writeIntent } from "../src/intent";
 import { appendMetric } from "../src/metrics";
 import { hosted, settledRun } from "./support/hosted";
 import { evidenceDir } from "../src/engine";
-import { connect } from "../src/host";
+import { connect, frontDoor } from "../src/host";
+import { readAudit } from "../src/audit";
 import { VerifySpecSchema } from "../src/verify-spec";
 
 const root = new URL("../", import.meta.url).pathname;
@@ -32,8 +34,10 @@ const cli = Effect.fn("test.cli")(function* (
   extraEnv: Record<string, string> = {},
 ) {
   const fs = yield* FileSystem.FileSystem;
-  const watch = yield* watchedBy;
-  const dir = yield* fs.makeTempDirectory({ prefix: "collie-cli-" });
+  const suite = yield* suiteEnv;
+  const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-cli-" });
+  // Before the directory goes, or a host the command started can write it back.
+  yield* Effect.addFinalizer(() => Effect.ignore(stopHost(join(dir, "state"))));
   yield* fs.makeDirectory(join(dir, "config"), { recursive: true });
   yield* installFakeSkills(dir);
   const binary = yield* Config.option(Config.String("COLLIE_TEST_BINARY"));
@@ -48,7 +52,7 @@ const cli = Effect.fn("test.cli")(function* (
       HERDR_PLUGIN_STATE_DIR: join(dir, "state"),
       HOME: dir,
       PWD: root,
-      COLLIE_HOST_WATCH_PID: watch,
+      ...suite,
       ...extraEnv,
     },
     stdout: "pipe",
@@ -57,7 +61,6 @@ const cli = Effect.fn("test.cli")(function* (
   const [stdout, stderr, exit] = yield* Effect.promise(() =>
     Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]),
   );
-  yield* fs.remove(dir, { recursive: true, force: true });
   return { stdout, stderr, exit };
 });
 
@@ -313,7 +316,7 @@ test(
 /** A Projects root holding two checkouts, and a directory that is none of them. */
 const projectsTree = Effect.fn("test.projectsTree")(function* () {
   const fs = yield* FileSystem.FileSystem;
-  const dir = yield* fs.makeTempDirectory({ prefix: "collie-projects-" });
+  const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-projects-" });
   for (const checkout of ["app/.git", "group/lib/.git"])
     yield* fs.makeDirectory(join(dir, "root", checkout), { recursive: true });
   yield* fs.makeDirectory(join(dir, "elsewhere"), { recursive: true });
@@ -358,7 +361,6 @@ test(
           },
         });
         const fs = yield* FileSystem.FileSystem;
-        yield* fs.remove(tree.dir, { recursive: true });
       }),
     ),
   60_000,
@@ -391,7 +393,7 @@ test(
     runEffect(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
-        const bin = yield* fs.makeTempDirectory({ prefix: "collie-bin-" });
+        const bin = yield* fs.makeTempDirectoryScoped({ prefix: "collie-bin-" });
         yield* fs.writeFileString(
           join(bin, "glab"),
           `#!/bin/sh\necho '{"iid": 42, "state": "opened", "title": "t"}'\n`,
@@ -408,7 +410,6 @@ test(
             details: { inputs: [{ name: "target", facts: [expect.stringContaining("!42")] }] },
           },
         });
-        yield* fs.remove(bin, { recursive: true });
       }),
     ),
   60_000,
@@ -457,7 +458,6 @@ test(
             },
           },
         });
-        yield* fs.remove(tree.dir, { recursive: true });
       }),
     ),
   60_000,
@@ -527,7 +527,6 @@ test(
             error: undefined,
           });
         }
-        yield* fs.remove(tree.dir, { recursive: true });
       }),
     ),
   240_000,
@@ -575,7 +574,7 @@ test(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         // The project layer, so nothing outside this scratch directory is written.
-        const cwd = yield* fs.makeTempDirectory({ prefix: "collie-authoring-" });
+        const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "collie-authoring-" });
         const scratch = { COLLIE_CWD: cwd };
         const saved = join(cwd, ".collie", "workflows");
 
@@ -615,8 +614,6 @@ test(
           error: { code: "target_exists" },
         });
         expect(yield* fs.readFileString(join(saved, "tally.workflow.ts"))).toBe(before);
-
-        yield* fs.remove(cwd, { recursive: true, force: true });
       }),
     ),
   120_000,
@@ -628,7 +625,7 @@ test(
     runEffect(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
-        const cwd = yield* fs.makeTempDirectory({ prefix: "collie-forking-" });
+        const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "collie-forking-" });
         const scratch = { COLLIE_CWD: cwd };
 
         const forked = yield* cli(
@@ -675,8 +672,6 @@ test(
         expect(yield* fs.exists(join(cwd, ".collie", "workflows", "theirs.workflow.ts"))).toBe(
           false,
         );
-
-        yield* fs.remove(cwd, { recursive: true, force: true });
       }),
     ),
   120_000,
@@ -891,3 +886,61 @@ test(
     ),
   60_000,
 );
+
+test("usage is each Subscription's reading in the standard envelope, and says why one is missing", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const claudeDir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-claude-" });
+      const login = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))({
+        claudeAiOauth: { accessToken: "t", expiresAt: 1, subscriptionType: "max" },
+      });
+      yield* fs.writeFileString(join(claudeDir, ".credentials.json"), login);
+      const state = yield* fs.makeTempDirectoryScoped({ prefix: "collie-state-" });
+      yield* Effect.addFinalizer(() => Effect.ignore(stopHost(state)));
+      // No PATH: this Machine has no Codex, and nothing here may reach a real endpoint.
+      const env = { CLAUDE_CONFIG_DIR: claudeDir, HERDR_PLUGIN_STATE_DIR: state };
+
+      const read = yield* cli(["--json", "usage"], env);
+      expect(read.exit).toBe(0);
+      expect(yield* parseEnvelope(read.stdout)).toMatchObject({
+        ok: true,
+        data: {
+          readings: [
+            {
+              subscription: "claude",
+              plan: "max",
+              windows: [],
+              source: "claude-usage",
+              problem: "Claude Code's login expired; it refreshes when Claude Code next runs",
+            },
+            {
+              subscription: "chatgpt",
+              source: "codex-app-server",
+              problem: "Codex is not installed on this Machine",
+            },
+          ],
+        },
+      });
+      expect(yield* fs.readFileString(join(claudeDir, ".credentials.json"))).toBe(login);
+
+      const human = yield* cli(["usage"], env);
+      expect(human.exit).toBe(0);
+      expect(human.stdout.trim().split("\n")).toEqual([
+        "claude  Claude Code's login expired; it refreshes when Claude Code next runs",
+        "chatgpt Codex is not installed on this Machine",
+      ]);
+      const trail = yield* readAudit(join(state, "usage"));
+      expect(trail.map(({ operation, actor }) => [operation, actor.origin])).toEqual([
+        ["usage", "cli"],
+        ["usage", "cli"],
+      ]);
+
+      // Past the trail's length, reads at once each record and the trim keeps the newest.
+      const door = yield* frontDoor(state);
+      yield* Effect.forEach(Array.from({ length: 230 }), () => door.usage(), {
+        concurrency: "unbounded",
+      });
+      expect((yield* readAudit(join(state, "usage"))).length).toBe(200);
+    }),
+  ));

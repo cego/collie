@@ -6,8 +6,8 @@ import { expect, test } from "bun:test";
 import { generateKeyPairSync } from "node:crypto";
 import { BunServices } from "@effect/platform-bun";
 import { Effect, FileSystem, Queue, type Scope } from "effect";
-import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
-import * as HttpClient from "effect/unstable/http/HttpClient";
+import * as FetchHttpClient from "effect/http/FetchHttpClient";
+import * as HttpClient from "effect/http/HttpClient";
 import { signRelease } from "../src/signing";
 import { epochMs } from "../src/time";
 import { localRoute, type ShellRoute } from "../desktop/src/bun/machine";
@@ -19,9 +19,12 @@ import {
   gitlabToken,
   helleOwner,
   credentialsFile,
+  type Keyring,
+  type KeyringEntry,
   secretsFor,
 } from "../desktop/src/bun/credentials";
-import { type OnboardRun } from "../desktop/src/shared/flock";
+import { fingerprint, givenCredentials } from "../desktop/src/bun/given";
+import { type Credential, type MachineGiven, type OnboardRun } from "../desktop/src/shared/flock";
 import { renewalDue } from "../src/gitlab-token";
 import { HELLE_URL } from "../src/helle-url";
 
@@ -255,13 +258,15 @@ test("onboarding gives the runner Desktop's secrets on stdin, and forwards and o
 /**
  * `claude auth login` as Claude Code 2.1 does it: the URL with its callback port goes to
  * `$BROWSER`, only the paste-code URL is printed, and the login ends at a callback with a
- * code or at a pasted code. How it ended is written to `<dir>/login`.
+ * code or at a pasted code. How it ended is written to `<dir>/login`, and whether it had a
+ * terminal to `<dir>/tty`.
  */
 const fakeClaude = (dir: string) =>
   executable(
     `${dir}/claude`,
     `#!${process.execPath}
 const done = (how) => { require("fs").writeFileSync("${dir}/login", how); process.exit(0); };
+require("fs").writeFileSync("${dir}/tty", String(require("tty").isatty(0) && require("tty").isatty(1)));
 const server = Bun.serve({ port: 0, fetch: (request) => {
   const code = new URL(request.url).searchParams.get("code");
   if (code === null) return new Response("bad", { status: 400 });
@@ -333,6 +338,8 @@ test("the Claude login takes a pasted code where the browser cannot reach its ca
       );
       expect(ended.ended).toBe(true);
       expect(yield* fs.readFileString(`${dir}/login`)).toBe("code pasted-1");
+      // In a terminal of its own: on macOS too, where `script` takes other flags.
+      expect(yield* fs.readFileString(`${dir}/tty`)).toBe("true");
     }),
   ));
 
@@ -378,5 +385,169 @@ test("Helle's credentials are written on every Machine, readable by its owner al
         "HELLE_API_URL=https://helle.cego.dk\nHELLE_API_TOKEN=h-1\n",
       );
       expect(((yield* fs.stat(file)).mode & 0o777).toString(8)).toBe("600");
+    }),
+  ));
+
+/** A keyring in memory, holding what `held` says. */
+const keyringOf = (held: Partial<Record<KeyringEntry, string>>): Keyring => ({
+  lookup: (key) => Effect.sync(() => held[key] ?? null),
+  store: (key, _label, value) => Effect.sync(() => void (held[key] = value)),
+  clear: (key) => Effect.sync(() => void delete held[key]),
+});
+const vmRoute: ShellRoute = { ...localRoute([], "vm"), machine: { profile: "p-vm", name: "vm" } };
+
+/** Desktop's record of what it gave, over fake givers that log each give and fail where told. */
+const givenIn = (
+  dir: string,
+  keyring: Keyring,
+  failing: Partial<Record<Credential, string>> = {},
+  skipped: ReadonlyArray<string> = [],
+) =>
+  Effect.gen(function* () {
+    const gave: string[] = [];
+    const told: MachineGiven[] = [];
+    const giver = (credential: Credential) => (route: ShellRoute, text: string) =>
+      Effect.sync(() => {
+        gave.push(`${route.machine.name} ${credential} ${text}`);
+        return failing[credential] ?? null;
+      });
+    const given = yield* givenCredentials({
+      dir,
+      keyring,
+      give: { gitlab: giver("gitlab"), helle: giver("helle") },
+      tell: (item) => Effect.sync(() => void told.push(item)),
+      skipped: () => Effect.succeed(skipped),
+    });
+    return { given, gave, told };
+  });
+
+test("a credential given is recorded by its fingerprint, never the secret, and read back after a restart", () =>
+  run(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* scratch;
+      const keyring = keyringOf({ "gitlab-token": "glpat-secret" });
+      const { given, told } = yield* givenIn(dir, keyring);
+      expect(yield* given.giveEvery([vmRoute], "gitlab", "glpat-secret")).toEqual([
+        { name: "vm", failed: null },
+      ]);
+      expect(told.at(-1)).toEqual({
+        _tag: "Given",
+        machine: vmRoute.machine,
+        credential: "gitlab",
+        given: true,
+        failed: null,
+      });
+      const file = yield* fs.readFileString(`${dir}/given.json`);
+      expect(file).not.toContain("glpat-secret");
+      expect(file).toContain(fingerprint("glpat-secret"));
+
+      const again = yield* givenIn(dir, keyring);
+      expect(yield* again.given.states([vmRoute.machine])).toEqual([
+        {
+          _tag: "Given",
+          machine: vmRoute.machine,
+          credential: "gitlab",
+          given: true,
+          failed: null,
+        },
+      ]);
+    }),
+  ));
+
+test("a Machine that connects is given each credential it lacks or has an older one of, and nothing it has", () =>
+  run(
+    Effect.gen(function* () {
+      const dir = yield* scratch;
+      const held: Partial<Record<KeyringEntry, string>> = {
+        "gitlab-token": "glpat-1",
+        "helle-token": "h-1",
+      };
+      const { given, gave } = yield* givenIn(dir, keyringOf(held));
+      yield* given.giveEvery([vmRoute], "helle", "h-1");
+      gave.length = 0;
+
+      expect(yield* given.giveLacking(vmRoute)).toEqual([{ credential: "gitlab", failed: null }]);
+      expect(gave).toEqual(["vm gitlab glpat-1"]);
+      expect(yield* given.giveLacking(vmRoute)).toEqual([]);
+      // Renewed while it was away.
+      held["gitlab-token"] = "glpat-2";
+      expect(yield* given.giveLacking(vmRoute)).toEqual([{ credential: "gitlab", failed: null }]);
+      expect(gave).toEqual(["vm gitlab glpat-1", "vm gitlab glpat-2"]);
+    }),
+  ));
+
+test("a give that failed keeps why, and the Machine still lacks it", () =>
+  run(
+    Effect.gen(function* () {
+      const dir = yield* scratch;
+      const held: Partial<Record<KeyringEntry, string>> = { "gitlab-token": "glpat-1" };
+      const { given, told } = yield* givenIn(dir, keyringOf(held), {
+        gitlab: "glab: not found",
+      });
+      expect(yield* given.giveLacking(vmRoute)).toEqual([
+        { credential: "gitlab", failed: "glab: not found" },
+      ]);
+      const lacking: MachineGiven = {
+        _tag: "Given",
+        machine: vmRoute.machine,
+        credential: "gitlab",
+        given: false,
+        failed: "glab: not found",
+      };
+      expect(told).toEqual([lacking]);
+      expect(yield* given.states([vmRoute.machine])).toEqual([lacking]);
+      // A renewed token's state is not the older one's failure.
+      held["gitlab-token"] = "glpat-2";
+      expect(yield* given.states([vmRoute.machine])).toEqual([{ ...lacking, failed: null }]);
+    }),
+  ));
+
+test("an onboarding that ended ready counts as given what it was handed, and a removed Machine's record goes", () =>
+  run(
+    Effect.gen(function* () {
+      const dir = yield* scratch;
+      const keyring = keyringOf({ "gitlab-token": "glpat-1", "helle-token": "h-1" });
+      const { given, gave } = yield* givenIn(dir, keyring);
+      yield* given.handed(vmRoute.machine, yield* given.held, [
+        { step: "gitlab", title: "GitLab", status: "in_place" },
+        { step: "helle", title: "Helle", status: "done" },
+      ]);
+      expect(yield* given.giveLacking(vmRoute)).toEqual([]);
+      expect(gave).toEqual([]);
+
+      yield* given.drop(vmRoute.machine.profile);
+      expect((yield* given.states([vmRoute.machine])).map((one) => one.given)).toEqual([
+        false,
+        false,
+      ]);
+      const after = yield* givenIn(dir, keyring);
+      expect((yield* after.given.states([vmRoute.machine])).map((one) => one.given)).toEqual([
+        false,
+        false,
+      ]);
+    }),
+  ));
+
+test("a credential the Machine's onboarding skipped is neither given on connect nor lacked, nor counted as handed", () =>
+  run(
+    Effect.gen(function* () {
+      const dir = yield* scratch;
+      const keyring = keyringOf({ "gitlab-token": "glpat-1", "helle-token": "h-1" });
+      const { given, gave } = yield* givenIn(dir, keyring, {}, ["helle"]);
+      yield* given.handed(vmRoute.machine, yield* given.held, [
+        { step: "gitlab", title: "GitLab", status: "done" },
+        { step: "helle", title: "Helle", status: "skipped" },
+      ]);
+      expect(yield* given.giveLacking(vmRoute)).toEqual([]);
+      expect(gave).toEqual([]);
+      expect((yield* given.states([vmRoute.machine])).map((one) => one.credential)).toEqual([
+        "gitlab",
+      ]);
+
+      const unskipped = yield* givenIn(dir, keyring);
+      expect(yield* unskipped.given.giveLacking(vmRoute)).toEqual([
+        { credential: "helle", failed: null },
+      ]);
     }),
   ));

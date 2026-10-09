@@ -3,6 +3,7 @@
 
 import { Option, Schema } from "effect";
 import { isString } from "../../../src/schema";
+import { AttachmentPart } from "./attachments";
 
 /** The board's card a message goes with, named as the chat's tools name it. */
 export const About = Schema.Struct({
@@ -14,6 +15,22 @@ export const About = Schema.Struct({
 export type About = typeof About.Type;
 
 export const aboutLine = (about: About) => `${about.machine} › ${about.name}`;
+
+const ABOUT =
+  '[Desktop: the human sent this message about this card of the board; "this one" means it]';
+const AboutJson = Schema.fromJsonString(About);
+const decodeAboutJson = Schema.decodeUnknownOption(AboutJson);
+
+/** The block the model is handed after the human's words: the card, as data. */
+export const aboutNote = (about: About) => `${ABOUT}\n${Schema.encodeSync(AboutJson)(about)}`;
+
+/** The card a block of Desktop's names, or null for any other text. */
+export const fromAboutNote = (text: string): About | null => {
+  const [first, json, ...rest] = text.split("\n");
+  return first !== ABOUT || json === undefined || rest.length > 0
+    ? null
+    : Option.getOrNull(decodeAboutJson(json));
+};
 
 /** How a turn Desktop starts about News begins, which is how the window tells it from the human's. */
 export const DESKTOP_SAID = "Desktop noticed, while you were not asked:";
@@ -72,6 +89,7 @@ export const toolRow = (name: string, args: string) => {
 
 const Part = Schema.Union([
   Schema.Struct({ type: Schema.Literals(["text", "thinking"]), content: Schema.String }),
+  AttachmentPart,
   Schema.Struct({
     type: Schema.Literal("tool-call"),
     id: Schema.String,
@@ -87,6 +105,7 @@ export const ChatMessage = Schema.Struct({
   id: Schema.String,
   role: Schema.Literals(["user", "assistant"]),
   parts: Schema.Array(Part),
+  metadata: Schema.optionalKey(Schema.Struct({ about: Schema.optionalKey(About) })),
 });
 export type ChatMessage = typeof ChatMessage.Type;
 

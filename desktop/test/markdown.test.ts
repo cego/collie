@@ -1,4 +1,4 @@
-// What the drawer's markdown keeps of what an agent wrote: no styling, and `file:line` as a jump.
+// What the record's markdown keeps of what an agent wrote: no styling, and `file:line` as a jump.
 
 import { expect, test } from "bun:test";
 import type { Node } from "comark";
@@ -101,4 +101,54 @@ test("a port, a time, code blocks and links are not references", () => {
     ["p", {}, ["a", {}, "src/b.ts:2"]],
   ];
   expect(confine(structuredClone(kept))).toEqual(kept);
+});
+
+const LONG =
+  "https://gitlab.cego.dk/some-group/some-project/-/merge_requests/1234/diffs?commit_id=0123456789abcdef0123456789abcdef01234567";
+
+test("a link that is its own URL is drawn short, with the whole URL on hover", () => {
+  expect(confine([["p", {}, ["a", { href: LONG }, LONG]]])).toEqual([
+    [
+      "p",
+      {},
+      [
+        "a",
+        { href: LONG, title: LONG },
+        "gitlab.cego.dk/some-group/some-project/-…9abcdef01234567",
+      ],
+    ],
+  ]);
+});
+
+test("a markdown link keeps the words it was given", () => {
+  const kept: Array<Node> = [["p", {}, ["a", { href: LONG }, "the MR"]]];
+  expect(confine(structuredClone(kept))).toEqual(kept);
+});
+
+test("inline code that is only a web URL is a link to it, and a script URL is not", () => {
+  expect(
+    confine([
+      ["p", {}, ["code", {}, "https://example.com/a/"], ["code", {}, "javascript:alert(1)"]],
+      ["pre", {}, ["code", {}, "https://example.com/b"]],
+    ]),
+  ).toEqual([
+    [
+      "p",
+      {},
+      [
+        "a",
+        { href: "https://example.com/a/", title: "https://example.com/a/" },
+        ["code", {}, "example.com/a"],
+      ],
+      ["code", {}, "javascript:alert(1)"],
+    ],
+    ["pre", {}, ["code", {}, "https://example.com/b"]],
+  ]);
+});
+
+test("a link is its own URL however the parser encoded its address", () => {
+  const href = "https://example.com/%C3%A6ble?a=b%7Cc%20d";
+  expect(confine([["a", { href }, "https://example.com/æble?a=b|c d"]])).toEqual([
+    ["a", { href, title: href }, "example.com/æble?a=b|c d"],
+  ]);
 });

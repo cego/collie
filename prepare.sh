@@ -25,8 +25,25 @@ export COLLIE_PREPARING=1
 # and the runner is then already built by the time we get here.
 runner_built="${COLLIE_RUNNER_FRESH:-}"
 
+# Whether x.y.z version $1 is at least $2, part by part as numbers.
+at_least() {
+  set -- "$1." "$2."
+  while [ -n "$2" ]; do
+    have=${1%%.*}
+    want=${2%%.*}
+    [ "${have:-0}" -gt "$want" ] && return 0
+    [ "${have:-0}" -lt "$want" ] && return 1
+    set -- "${1#*.}" "${2#*.}"
+  done
+}
+
+herdr_version=$(herdr --version 2>/dev/null | sed -n 's/^[^0-9]*\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\).*/\1/p' | head -1) || true
+min_herdr=$(sed -n 's/^min_herdr_version = "\(.*\)"/\1/p' "$ROOT/herdr-plugin.toml" 2>/dev/null) || true
+
 if ! command -v herdr >/dev/null 2>&1; then
   step plugin-link "skipped — herdr is not installed; see https://herdr.dev/docs/install/"
+elif [ -n "$herdr_version" ] && [ -n "$min_herdr" ] && ! at_least "$herdr_version" "$min_herdr"; then
+  step plugin-link "skipped — herdr $herdr_version is older than the $min_herdr Collie needs; collie doctor says how to upgrade"
 elif herdr plugin list 2>/dev/null | grep -q "$PLUGIN_ID .*\[local:$ROOT\]"; then
   step plugin-link "already in place"
 else
@@ -115,7 +132,7 @@ fi
 # this is an executable that runs unattended with your shell's privileges on every
 # install, upgrade and plugin build. `@latest` would run whatever was published this
 # morning. Bumping this line is a deliberate act, and a small visible diff.
-SKILLS_CLI="skills@1.5.23"
+SKILLS_CLI="skills@1.7.1"
 SKILL_SOURCES="https://github.com/mattpocock/skills/tree/main/skills/engineering
 https://github.com/mattpocock/skills/tree/main/skills/productivity
 https://github.com/addyosmani/agent-skills"

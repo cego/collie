@@ -68,9 +68,15 @@ herdr actions, and the `collie` CLI.
 - **Changing Desktop** → [`docs/using.md`](docs/using.md#collie-desktop), alongside
   `desktop/src/bun/machine.ts` (a Machine reached through `collie bridge`, never the host
   client) and `desktop/src/shared/` (the view's RPC and the Flock it folds), with the main
-  process's behaviour tested in `test/desktop-*.test.ts`. A card's drawer is
-  `desktop/view/app/components/RunDrawer.vue`; what agent markdown may keep is
-  `desktop/src/shared/markdown.ts` with `desktop/test/markdown.test.ts`, and the window's
+  process's behaviour tested in `test/desktop-*.test.ts`. A card's record is
+  `desktop/view/app/components/RunRecord.vue`, one of the pages `usePage` lays over the
+  board's column, with `SettingsPage.vue` and `MachinesPage.vue`; what agent
+  markdown may keep is `desktop/src/shared/markdown.ts` with `desktop/test/markdown.test.ts`; what a click,
+  a double-click, a name, a page's back button and Escape do to the selected card and
+  the open page is `afterGesture` in `desktop/src/shared/board-clicks.ts`, tested in
+  `test/desktop-view.test.ts`, with where a gesture landed read in
+  `desktop/test/board-clicks.test.ts`; whether a Machine is In sync is
+  `desktop/src/shared/in-sync.ts`, tested in `test/desktop-view.test.ts`; and the window's
   navigation rule is in
   `desktop/src/bun/index.ts`. Desktop has its own `package.json`; Effect is the root's, so
   the board's Schemas exist once. The
@@ -82,6 +88,30 @@ herdr actions, and the `collie` CLI.
   `desktop/src/shared/chat-view.ts` what the window says of a tool call and the card a
   message is about, and `src/toolkit.ts` the Toolkit both chats share
   ([ADR-0011](docs/adr/0011-the-conversation-is-a-native-harness.md#amended-2026-10-05-a-herds-chat-per-home-and-one-flock-chat-per-desktop)).
+- **Changing what files a Run, or the Flock chat, is given** →
+  [ADR-0046](docs/adr/0046-an-attachment-is-uploaded-once-and-belongs-to-the-run.md), alongside
+  `src/attachments.ts` (a Run's copies and its prompts' list), `src/uploads.ts` and
+  `src/host-files.ts` (what a host takes and reads), and in Desktop `bun/attachments.ts`
+  (its copies), `bun/carried.ts` (files to a Run's Machine), `bun/file-tools.ts` and
+  `shared/attachments.ts`, with `test/attachments.test.ts`, `test/host-files.test.ts` and
+  `test/flock-*.test.ts`.
+- **Changing how a Subscription's usage is read, or where work falls back when one is
+  Exhausted** → [ADR-0049](docs/adr/0049-work-goes-to-an-agent-with-usage-left.md) and
+  [`docs/using.md`](docs/using.md#usage), alongside `src/usage-model.ts` (the reading's
+  Schemas and every judgement made from it, pure so Desktop and a module share them),
+  `src/usage.ts` (the host's sources, their interval and back-off), `collie usage` in
+  `src/commands/usage.ts` and Desktop's `desktop/src/shared/usage.ts` (the header's entries
+  and a Machine's Usage block), with `test/usage-model.test.ts`, `test/usage.test.ts` and
+  `test/desktop-usage.test.ts`. Where work falls back is `resolveWithRoom` in
+  `src/harness.ts`, applied by `choose` in `src/agents.ts` against the `fallbacks` setting,
+  with `test/fallback.test.ts`. Usage
+  chooses where work runs, never whether it runs.
+- **Changing how large Desktop draws, or its Zoom** →
+  [ADR-0047](docs/adr/0047-desktop-draws-at-its-monitors-own-scale.md), alongside
+  `desktop/src/shared/scale.ts` (the monitor of a window from `hyprctl -j`, the zoom and the
+  "Drawn at" line) and `desktop/src/bun/scale.ts` (reading the scales and setting each
+  window's page zoom as it moves), with `test/desktop-scale.test.ts`. Page zoom, never CSS
+  `zoom`.
 - **Adding a setting, or changing how settings are shared across a Flock** →
   [ADR-0043](docs/adr/0043-a-shared-setting-is-its-latest-edit.md), alongside
   `src/settings.ts` (the one list the TUI, Desktop and the host read), `setSetting` and
@@ -115,7 +145,7 @@ herdr actions, and the `collie` CLI.
   assume about suspension and recovery** →
   [ADR-0014](docs/adr/0014-native-workflows-run-on-effects-own-engine.md), alongside
   `src/engine.ts` and `test/engine.test.ts`. The two non-default cluster settings
-  and the four upstream behaviours the proof measured are recorded there; an Effect
+  and the five upstream behaviours the proof measured are recorded there; an Effect
   upgrade rechecks them rather than assuming them.
 - **Naming something, or writing a test that needs a real host** →
   [ADR-0028](docs/adr/0028-names-are-the-domains-and-the-proof-drives-the-shipped-host.md),
@@ -232,6 +262,17 @@ herdr actions, and the `collie` CLI.
   [`docs/internals.md`](docs/internals.md) and [`docs/adr/`](docs/adr).
 - **Changing install, keybindings or the Control Plane** →
   [`docs/using.md`](docs/using.md).
+- **Changing how a release is signed, what an installer checks, or what Collie supports on
+  macOS** → [ADR-0048](docs/adr/0048-collie-is-released-for-macos-on-apple-silicon.md),
+  alongside `tools/sign.ts`, `src/signing.ts`, `install.sh` and `install-desktop.sh`, with
+  `test/signing.test.ts`, `test/prepare.test.ts` and `test/install-desktop.test.ts`. Every
+  asset is signed twice: the shell installers check the P-256 signature, which any
+  `openssl` can, and the runner and Desktop the Ed25519 one. What runs differently on a Mac is
+  `src/script.ts` (a login's `script`), the `ps` fallback in `src/compaction.ts`'s
+  `endpointPid` and `desktop/src/bun/login-path.ts` (Desktop's PATH from the login shell).
+  Desktop's macOS build is `desktop/scripts/mac-signing.ts` (Developer ID or ad hoc) and
+  `tools/verify-mac-app.sh`, with `test/desktop-mac-signing.test.ts` and
+  `test/desktop-build-hook.test.ts`.
 
 ## Commands
 
@@ -259,8 +300,9 @@ of the view is covered by testing the logic it renders.
    adapters over the same Effect services ([ADR-0003](docs/adr/0003-collie-is-one-effect-program.md)).
 3. All herdr communication goes through `src/herdr.ts`. The exceptions never talk to a
    session for Collie: `tools/herdr-schema.ts`, which runs a downloaded release offline to
-   print its schema; Desktop's `herdr machine list`, `add` and `remove`; and, for the
-   human, herdr's terminal controller whose pane Go to pane shows in Desktop, and the herdr
+   print its schema; Desktop's `herdr machine list`, `add` and `remove`, and the
+   `herdr --version` that says why a list failed; and, for the human, herdr's terminal
+   controller whose pane Go to pane shows in Desktop, and the herdr
    client it opens in a terminal where there is no pane to show — see
    [`docs/internals.md`](docs/internals.md#the-herdr-boundary).
 4. One host owns a state directory and everything it is running

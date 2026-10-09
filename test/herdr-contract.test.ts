@@ -67,6 +67,7 @@ const replies = {
  */
 const calls = {
   "workspace.focus": (herdr: Herdr) => herdr.workspaceFocus("w28"),
+  "workspace.close": (herdr: Herdr) => herdr.workspaceClose("w28"),
   "tab.move": (herdr: Herdr) => herdr.tabMove("1:2", 0),
   "agent.view.set": (herdr: Herdr) =>
     herdr.agentViewSet("cego.collie", "plan/goal", ["1-1", "1-2"]),

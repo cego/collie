@@ -5,7 +5,13 @@ import { expect, test } from "bun:test";
 import { BunServices } from "@effect/platform-bun";
 import { Effect, FileSystem, Option, Schedule, Stream } from "effect";
 import type { PaneAt } from "../src/board-model";
-import { localRoute, remoteRoute } from "../desktop/src/bun/machine";
+import {
+  type Door,
+  focusOn,
+  localRoute,
+  type Reached,
+  remoteRoute,
+} from "../desktop/src/bun/machine";
 import {
   attachCommand,
   commandLine,
@@ -36,6 +42,26 @@ test("a Machine's session is attached over SSH, and Local's directly", () => {
   expect(attachCommand(undefined, "work")).toEqual(["herdr", "--session", "work"]);
   expect(attachCommand(undefined, null)).toEqual(["herdr"]);
 });
+
+test("a chosen agent is focused by its own Run, and no choice asks for the Run's newest", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const asked: Array<unknown> = [];
+      const focus: Partial<Door> = {
+        // SAFETY: focusOn calls focus with a payload alone, and reads only its pane.
+        focus: ((payload: { runId: string; agent?: string; request: string }) =>
+          Effect.sync(() => (asked.push(payload), AT))) as Door["focus"],
+      };
+      // SAFETY: focusOn calls only focus.
+      const door: Reached = { machine: { profile: "vm", name: "vm-mk" }, desktop: focus as Door };
+      yield* focusOn(door, "rq-1", "run-1.implement", "review-1");
+      yield* focusOn(door, "rq-2", "run-1");
+      expect(asked).toEqual([
+        { runId: "run-1.implement", agent: "review-1", request: "rq-1" },
+        { runId: "run-1", request: "rq-2" },
+      ]);
+    }),
+  ));
 
 test("the command to copy reads as typed, quoting only what a shell would split", () => {
   expect(shellLine(["herdr", "--remote", "mk@vm-mk", "--session", "my work"])).toBe(
@@ -73,7 +99,7 @@ test("a terminal that fails as it starts, or is not there, did not open", () =>
   runEffect(
     Effect.gen(function* () {
       expect(yield* launched(["true"])).toBe(true);
-      expect(yield* launched(["sleep", "5"])).toBe(true);
+      expect(yield* launched(["sleep", "1.5"])).toBe(true);
       expect(yield* launched(["false"])).toBe(false);
       expect(yield* launched(["/nonexistent/terminal"])).toBe(false);
     }),
@@ -188,9 +214,8 @@ test("a controller's frames come through, then why it ended: its own reason, her
 test("what is sent reaches the controller, and closing the terminal releases the pane", () =>
   runEffect(
     Effect.gen(function* () {
-      const read = yield* Effect.promise(() => Bun.$`mktemp`.text()).pipe(
-        Effect.map((out) => out.trim()),
-      );
+      const fs = yield* FileSystem.FileSystem;
+      const read = `${yield* fs.makeTempDirectoryScoped({ prefix: "terminal-" })}/read`;
       yield* Effect.scoped(
         Effect.gen(function* () {
           const opened = yield* control(["/bin/sh", "-c", `cat > '${read}'`], "vm-mk");

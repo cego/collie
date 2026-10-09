@@ -269,32 +269,54 @@ test("missing git stops with the exact command to run as root, and changes nothi
     }),
   ));
 
-/** A Machine whose only openssl is LibreSSL, with `manager` as its package manager. */
-const withLibreSsl = Effect.fn("onboardTest.withLibreSsl")(function* (manager: string) {
-  yield* bin.add("openssl", `echo "LibreSSL 3.3.6"`);
-  for (const tool of ["git", "curl", manager]) yield* bin.add(tool, "exit 0");
-  const { events } = yield* onboarded({ PATH: `${home}/stubs`, COLLIE_OPENSSL: "openssl" });
-  expect(results(events).map((event) => event.step)).toEqual(["system"]);
+/** The system step on a Machine with `tools` on PATH and `manager` as its package manager. */
+const systemWith = Effect.fn("onboardTest.systemWith")(function* (
+  tools: Record<string, string>,
+  manager: string,
+  env: Record<string, string> = {},
+) {
+  for (const [tool, body] of Object.entries({ ...tools, [manager]: "exit 0" })) {
+    yield* bin.add(tool, body);
+  }
+  const { events } = yield* onboarded({ PATH: `${home}/stubs`, ...env });
   return results(events).find((event) => event.step === "system");
 });
 
-test("an openssl that cannot check a signature stops with what gives OpenSSL 3 here", () =>
+test("any openssl will do, LibreSSL among them", () =>
   runEffect(
     Effect.gen(function* () {
-      expect(yield* withLibreSsl("dnf")).toMatchObject({
-        status: "needs_root",
-        detail: expect.stringContaining("LibreSSL"),
-        command: "sudo dnf install -y epel-release && sudo dnf install -y openssl3",
+      const system = yield* systemWith(
+        { git: "exit 0", curl: "exit 0", openssl: `echo "LibreSSL 3.3.6"` },
+        "brew",
+      );
+      expect(system).toMatchObject({ status: "in_place" });
+    }),
+  ));
+
+test("COLLIE_OPENSSL names the openssl there is, off PATH", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const named = `${home}/elsewhere/openssl`;
+      yield* fs.makeDirectory(`${home}/elsewhere`);
+      yield* fs.writeFileString(named, `#!/bin/sh\necho "LibreSSL 3.3.6"\n`);
+      yield* fs.chmod(named, 0o755);
+      const tools = { git: "exit 0", curl: "exit 0" };
+
+      expect(yield* systemWith(tools, "brew", { COLLIE_OPENSSL: named })).toMatchObject({
+        status: "in_place",
       });
     }),
   ));
 
-test("where no package gives OpenSSL 3, the step names none to run", () =>
+test("a missing openssl stops with the package manager's command", () =>
   runEffect(
     Effect.gen(function* () {
-      const system = yield* withLibreSsl("apt-get");
-      expect(system).toMatchObject({ status: "needs_root" });
-      expect(system).not.toHaveProperty("command");
+      const system = yield* systemWith({ git: "exit 0", curl: "exit 0" }, "dnf");
+      expect(system).toMatchObject({
+        status: "needs_root",
+        command: "sudo dnf install -y openssl",
+      });
     }),
   ));
 
@@ -547,19 +569,16 @@ test("Helle without credentials is not onboarded unless it is skipped", () =>
 test("the Linear MCP is added at user scope, and its login streams its URL", () =>
   runEffect(
     Effect.gen(function* () {
+      const url =
+        "https://mcp.linear.app/authorize?redirect_uri=http%3A%2F%2Flocalhost%3A62074%2Fcallback&state=s";
       yield* claudeAt(
         `echo "$*" >> "${home}/claude-calls"
 case "$*" in
   "auth status --json") ${LOGGED_IN} ;;
   "mcp add"*) echo '{"mcpServers":{"linear-server":{"url":"https://mcp.linear.app/mcp"}}}' > "$HOME/.claude.json" ;;
   "mcp get linear-server") if [ -f "${home}/authorized" ]; then echo "  Status: ✔ Connected"; else echo "  Status: ! Needs authentication"; fi ;;
+  "mcp login linear-server") [ -t 0 ] && [ -t 1 ] && echo tty >> "${home}/claude-calls"; echo "If the browser didn't open, visit:"; echo "  ${url}"; sleep 0.2; touch "${home}/authorized" ;;
 esac`,
-      );
-      const url =
-        "https://mcp.linear.app/authorize?redirect_uri=http%3A%2F%2Flocalhost%3A62074%2Fcallback&state=s";
-      yield* bin.add(
-        "script",
-        `echo "$*" >> "${home}/script-calls"; echo "If the browser didn't open, visit:"; echo "  ${url}"; sleep 0.2; touch "${home}/authorized"`,
       );
 
       const { events } = yield* onboarded({}, { skip: ["helle"] });
@@ -567,7 +586,8 @@ esac`,
       expect(yield* read(`${home}/claude-calls`)).toContain(
         "mcp add --transport http --scope user linear-server https://mcp.linear.app/mcp",
       );
-      expect(yield* read(`${home}/script-calls`)).toContain("claude mcp login linear-server");
+      // In a terminal of its own: on macOS too, where `script` takes other flags.
+      expect(yield* read(`${home}/claude-calls`)).toContain("mcp login linear-server\ntty\n");
       const human = events.findIndex((event) => event.event === "human" && event.step === "linear");
       const end = events.findIndex((event) => event.event === "result" && event.step === "linear");
       expect(events[human]).toMatchObject({ url, port: 62074 });
@@ -579,18 +599,15 @@ esac`,
 test("a Linear login that hands its callback URL to $BROWSER, printing only a paste-code URL, still streams the URL with its port", () =>
   runEffect(
     Effect.gen(function* () {
+      const handed =
+        "https://mcp.linear.app/authorize?redirect_uri=http%3A%2F%2Flocalhost%3A62074%2Fcallback&state=s";
       yield* claudeAt(
         `case "$*" in
   "auth status --json") ${LOGGED_IN} ;;
   "mcp add"*) echo '{"mcpServers":{"linear-server":{"url":"https://mcp.linear.app/mcp"}}}' > "$HOME/.claude.json" ;;
   "mcp get linear-server") if [ -f "${home}/authorized" ]; then echo "  Status: ✔ Connected"; else echo "  Status: ! Needs authentication"; fi ;;
+  "mcp login linear-server") "$BROWSER" '${handed}'; echo "Paste this code: https://mcp.linear.app/authorize?redirect_uri=https%3A%2F%2Fexample.com"; sleep 1; touch "${home}/authorized" ;;
 esac`,
-      );
-      const handed =
-        "https://mcp.linear.app/authorize?redirect_uri=http%3A%2F%2Flocalhost%3A62074%2Fcallback&state=s";
-      yield* bin.add(
-        "script",
-        `"$BROWSER" '${handed}'; echo "Paste this code: https://mcp.linear.app/authorize?redirect_uri=https%3A%2F%2Fexample.com"; sleep 1; touch "${home}/authorized"`,
       );
 
       const { events } = yield* onboarded({}, { skip: ["helle"] });
@@ -610,7 +627,6 @@ case "$*" in
   "mcp add"*) echo '{"mcpServers":{"linear-server":{"url":"https://mcp.linear.app/mcp"}}}' > "$HOME/.claude.json" ;;
 esac`,
       );
-      yield* bin.add("script", `echo "$*" >> "${home}/script-calls"`);
 
       const { result, events } = yield* onboarded({}, { skip: ["helle"], attended: false });
 
@@ -622,10 +638,30 @@ esac`,
         status: "needs_human",
         command: "claude mcp login linear-server",
       });
-      expect(yield* read(`${home}/script-calls`)).toBe("");
+      expect(yield* read(`${home}/claude-calls`)).not.toContain("mcp login");
       expect(result).toMatchObject({ ok: false });
     }),
   ));
+
+test("Claude Code is asked whether it is logged in with the whole environment, not only what Collie reads", () => {
+  // On macOS its Keychain lookup needs USER, which `currentEnv` does not keep.
+  const user = Bun.env.USER;
+  Bun.env.USER = "someone";
+  return runEffect(
+    Effect.gen(function* () {
+      yield* claudeAt(
+        `[ "$USER" = someone ] && echo '{"loggedIn": true}' || echo '{"loggedIn": false}'`,
+      );
+
+      const { events } = yield* onboarded({}, { attended: false });
+
+      expect(statusOf(events, "claude-login")).toBe("in_place");
+    }),
+  ).finally(() => {
+    if (user === undefined) delete Bun.env.USER;
+    else Bun.env.USER = user;
+  });
+});
 
 test("a terminal shows each step as text", () => {
   expect(eventText({ event: "start", step: "system", title: "Checking for git and curl" })).toBe(

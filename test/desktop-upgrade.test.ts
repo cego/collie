@@ -7,7 +7,7 @@ import { expect, test } from "bun:test";
 import { generateKeyPairSync } from "node:crypto";
 import { BunServices } from "@effect/platform-bun";
 import { Effect, FileSystem, Path, Schema, Scope } from "effect";
-import { updateDesktop } from "../src/desktop";
+import { dataHomeOf, updateDesktop } from "../src/desktop";
 import { upgrade } from "../src/operations";
 import { signRelease } from "../src/signing";
 import { FakeBin } from "./support/bin";
@@ -325,7 +325,7 @@ test("collie upgrade shows the Desktop step in its text and steps, and stages no
   const other = pair();
   return runEffect(
     Effect.gen(function* () {
-      const rig = yield* Rig.make();
+      const rig = yield* Rig.scoped();
       const bin = yield* FakeBin.make(`${rig.root}/bin`);
       yield* bin.add("git", `exit 1`);
       yield* bin.add("sh", `echo "prepare: runner: done"`);
@@ -349,7 +349,13 @@ test("collie upgrade shows the Desktop step in its text and steps, and stages no
       );
       expect(yield* staged(data)).toBeNull();
       yield* bin.restore();
-      yield* rig.close();
     }).pipe(Effect.scoped),
   );
+});
+
+test("Desktop's data is looked for where Electrobun keeps it: XDG on Linux, Application Support on macOS", () => {
+  expect(dataHomeOf("/home/mk", undefined, "linux")).toBe("/home/mk/.local/share");
+  expect(dataHomeOf("/home/mk", "/data", "linux")).toBe("/data");
+  expect(dataHomeOf("/home/mk", "relative", "linux")).toBe("/home/mk/.local/share");
+  expect(dataHomeOf("/Users/mk", "/data", "darwin")).toBe("/Users/mk/Library/Application Support");
 });

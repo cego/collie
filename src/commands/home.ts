@@ -5,7 +5,7 @@
 // When there is none and healing is not safe, `reconcile` is how a person settles it.
 
 import { Effect } from "effect";
-import { Command, Flag } from "effect/unstable/cli";
+import { Command, Flag } from "effect/cli";
 import { Herdr } from "../herdr";
 import { err } from "../operations";
 import {

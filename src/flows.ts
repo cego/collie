@@ -11,6 +11,7 @@ import {
   Effect,
   FileSystem,
   Option,
+  Path,
   Schedule,
   Schema,
 } from "effect";
@@ -59,7 +60,10 @@ import {
   savedModules,
   startRun,
   steerAbout,
+  steerRun,
+  usageReadings,
 } from "./lifecycle";
+import type { UsageReading } from "./usage-model";
 import { releaseKeyboard, startKeyboard, takeKey } from "./keys";
 import { forkResolvedDefinition, type DefinitionKind } from "./fork";
 import { COLLIE_TAB, reason, runTitle, shellQuote } from "./naming";
@@ -73,6 +77,7 @@ import { selectionPath, writeSelection } from "./selection";
 import { everyViewerPaints } from "./outer";
 import { listTasks, taskOfWorkspace, type TaskChoice, type TaskRecord } from "./task";
 import { newRequestId } from "./operations";
+import { typedPaths } from "./attachments";
 import {
   answerFor,
   openingFilter,
@@ -86,7 +91,7 @@ import { buildHistory, buildSettings, buildWorkflows } from "./views";
 import { nowIso } from "./time";
 import { repoArgs, shell } from "./mr";
 import { parseMrTarget } from "./board-model";
-import type { ChildProcessSpawner } from "effect/unstable/process";
+import type { ChildProcessSpawner } from "effect/process";
 import {
   agentForKey,
   askingRun,
@@ -126,6 +131,8 @@ export interface ControlSession extends BoardSession {
   tasksOf?: () => Effect.Effect<BoardRead>;
   /** Where the drawer's details come from: one read of the host's, unless followed; null closes it. */
   detailOf?: (key: DetailKey | null) => Effect.Effect<RunDetail | null>;
+  /** Where the header's Usage readings come from; none where unset. */
+  usageOf?: () => Effect.Effect<ReadonlyArray<UsageReading>>;
   /** Where the defaults live. */
   userDir: string;
 }
@@ -693,6 +700,29 @@ const offerArguments = Effect.fn("Flows.offerArguments")(function* (
 });
 
 /**
+ * Files handed to the Run's newest live agent: the steer `run steer --attach` makes, with
+ * no words of its own. The note for the footer, or null where nothing was typed.
+ */
+export const attachFiles = Effect.fn("Flows.attachFiles")(function* (
+  env: PluginEnv,
+  prompts: FlowPrompts,
+  runId: string,
+) {
+  const typed = yield* prompts.ask(`Which files go to ${runId}? Paths, separated by spaces`);
+  const paths = typedPaths(typed ?? "");
+  if (paths.length === 0) return null;
+  const path = yield* Path.Path;
+  const done = yield* steerRun(env, {
+    door: "board",
+    runId,
+    text: "",
+    attachments: paths.map((one) => path.resolve(env.cwd, one)),
+    request: yield* newRequestId(),
+  });
+  return done.ok ? done.human : done.error.message;
+});
+
+/**
  * One offer of the Run's module, as it stands now, asked for what it takes and then made.
  * The note for the footer, or null where the human cancelled the asking.
  */
@@ -803,6 +833,9 @@ export const workspaceFlow = Effect.fn("Flows.workspaceFlow")(function* (
     }
     return yield* redirectBoard(herdr, env);
   }
+  const platform = yield* Effect.context<
+    FileSystem.FileSystem | ChildProcessSpawner.ChildProcessSpawner
+  >();
   const session: ControlSession = {
     herdr,
     ...scopeFor(env, env.cwd),
@@ -817,6 +850,11 @@ export const workspaceFlow = Effect.fn("Flows.workspaceFlow")(function* (
     compaction: { waitMs: 0 },
     tasksOf: yield* followBoard(env),
     detailOf: yield* followRunDetail(env),
+    usageOf: () =>
+      usageReadings(env, "board").pipe(
+        Effect.map((read) => (read.ok ? read.value : [])),
+        Effect.provideContext(platform),
+      ),
   };
   /**
    * Where the shortcut was pressed, which is what `g` narrows to and what the board
@@ -1079,6 +1117,7 @@ export function appState(
           ? yield* buildSettings(env)
           : null,
       marks: found?.marks ?? reuse?.state.marks ?? {},
+      usage: reuse ? reuse.state.usage : yield* session.usageOf?.() ?? Effect.succeed([]),
       previewing: focus.previewing,
       live: found?.live ?? null,
       // Always re-read: this is the one thing a moved Selection actually changes.
@@ -1344,6 +1383,9 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
       });
       return resumed.ok ? resumed.human : resumed.error.message;
     }
+
+    case "AttachFiles":
+      return yield* attachFiles(env, prompts, command.runId);
 
     /** A finished plan, built: the same launch "Implement now" runs, from the card. */
     /**

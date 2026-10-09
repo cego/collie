@@ -2,7 +2,7 @@
 // loading a definition: executed as its own Run, the way the host executes a definition.
 
 import { Effect, Schema } from "effect";
-import * as Workflow from "effect/unstable/workflow/Workflow";
+import * as Workflow from "effect/workflow/Workflow";
 import { Run, WorkflowError } from "../../src/sdk";
 
 export const enveloped = <Input extends Schema.Struct.Fields, Success extends Schema.Top>(options: {

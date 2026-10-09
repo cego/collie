@@ -74,11 +74,105 @@ const OPERATOR = "operator";
 const MODULES = "workflow modules (this MR)";
 const LAUNCH = "launch flow places human starts (this MR)";
 const RELEASE = "ready to release and checks you can see (this MR)";
+const ATTACHMENTS = "files in the Flock chat and its Runs (this MR)";
 const IN_APP_TERMINAL = "go to pane opens the pane in Desktop (this MR)";
 const MACHINE_RULE = "the Machine rule (this MR)";
+const USAGE = "usage readings on every Machine (this MR)";
+const ON_A_MAC = "Collie on macOS (this MR)";
 
 /** What the front door owes a person, and cannot be settled below the front door. */
 const FRONT_DOOR: readonly Check[] = [
+  {
+    id: "front-door/a-file-too-large-for-a-message-is-refused",
+    statement:
+      "The Flock chat's composer refuses a file over 20 MB, or one that takes a message's files over 30 MB, naming the file or the total and the cap.",
+    owner: ATTACHMENTS,
+    needs: "ui",
+    proof: {
+      kind: "test",
+      layer: "ui",
+      file: "test/desktop-attachments.test.ts",
+      name: "a file over 20 MB, or a message over 30 MB, is refused naming the file or the total and the cap",
+    },
+  },
+  {
+    id: "front-door/a-pasted-image-is-attached-and-pasted-text-stays-text",
+    statement:
+      "Of what is pasted into the Flock chat's composer, an image file becomes an attachment and text stays text.",
+    owner: ATTACHMENTS,
+    needs: "ui",
+    proof: {
+      kind: "test",
+      layer: "ui",
+      file: "test/desktop-attachments.test.ts",
+      name: "a pasted image file becomes an attachment, and pasted text stays text",
+    },
+  },
+  {
+    id: "front-door/a-large-image-is-scaled-for-the-model",
+    statement:
+      "An image attached in the Flock chat is scaled to 2000 px on its long edge for the model, and never up.",
+    owner: ATTACHMENTS,
+    needs: "ui",
+    proof: {
+      kind: "test",
+      layer: "ui",
+      file: "test/desktop-attachments.test.ts",
+      name: "an image is scaled to 2000 px on its long edge, and never up",
+    },
+  },
+  {
+    id: "front-door/the-tui-summary-lists-what-a-run-was-given",
+    statement:
+      "The TUI's Summary of a card lists the files the Run was given, each with its path and size.",
+    owner: ATTACHMENTS,
+    needs: "ui",
+    proof: {
+      kind: "test",
+      layer: "ui",
+      file: "test/ui/board.test.tsx",
+      name: "Summary lists what the Run was given with its path, and nothing for a Run given none",
+    },
+  },
+  {
+    id: "front-door/desktop-shows-each-subscriptions-windows-per-machine",
+    statement:
+      "Desktop shows each Subscription's windows per Machine, each with its percent and reset, and the reading's age and source or its problem.",
+    owner: USAGE,
+    needs: "ui",
+    proof: {
+      kind: "test",
+      layer: "ui",
+      file: "test/desktop-usage.test.ts",
+      name: "each Subscription's plan and account, each window's meter and reset, and its age and source",
+    },
+  },
+  {
+    id: "front-door/desktop-header-warns-at-90-percent",
+    statement:
+      "Desktop's header names each Subscription's busiest window, amber at 90% and red once it is Exhausted.",
+    owner: USAGE,
+    needs: "ui",
+    proof: {
+      kind: "test",
+      layer: "ui",
+      file: "test/desktop-usage.test.ts",
+      name: "amber at 90%, red and out when Exhausted, and a model's own window does not count",
+    },
+  },
+  {
+    id: "front-door/desktop-shows-what-a-run-was-given",
+    statement:
+      "Desktop's record of a Run shows each PNG, JPEG, GIF or WebP image it was given as a thumbnail and any other file by name.",
+    owner: ATTACHMENTS,
+    needs: "ui",
+    proof: {
+      kind: "test",
+      layer: "ui",
+      file: "desktop/test/evidence.test.ts",
+      name: "a Run's attached images the view can show are thumbnails, and every other file is by name",
+    },
+  },
   {
     id: "front-door/a-running-check-says-its-pass-reason-and-timing",
     statement:
@@ -290,6 +384,32 @@ const FRONT_DOOR: readonly Check[] = [
 
 /** Facts about the code beneath the front door. True, useful, and not front-door proof. */
 const BACKEND: readonly Check[] = [
+  {
+    id: "backend/an-agent-that-runs-out-is-replaced-mid-work",
+    statement:
+      "An agent that runs out mid-work is closed and replaced by one on the next entry, given the same work and a hand-over.",
+    owner: USAGE,
+    needs: "backend",
+    proof: {
+      kind: "test",
+      layer: "backend",
+      file: "test/agents.test.ts",
+      name: "an agent that runs out mid-work is closed and replaced by one on the next entry, given the same work and a hand-over",
+    },
+  },
+  {
+    id: "backend/exhausted-work-starts-on-the-first-fallback-with-room",
+    statement:
+      "A step whose Subscription is Exhausted starts on the first chain entry with room, and its record says why.",
+    owner: USAGE,
+    needs: "backend",
+    proof: {
+      kind: "test",
+      layer: "backend",
+      file: "test/agents.test.ts",
+      name: "work whose Subscription is Exhausted starts on the first chain entry with room, and its record says why",
+    },
+  },
   {
     id: "backend/an-agent-start-names-everything-or-is-refused",
     statement:
@@ -525,6 +645,7 @@ const BACKEND: readonly Check[] = [
       name: "the CLI records a disposition and leaves the Run's status as it was",
     },
   },
+
   {
     id: "desktop/go-to-pane-rides-the-machines-master",
     statement:
@@ -536,6 +657,47 @@ const BACKEND: readonly Check[] = [
       layer: "backend",
       file: "test/desktop-terminal.test.ts",
       name: "Go to pane on a Machine runs its controller as one more channel on the master Desktop holds, and gives the pane back",
+    },
+  },
+
+  // ── Attachments: files a Run is given, in its own directory and every prompt ──
+  {
+    id: "backend/an-upload-reaches-a-machine-once",
+    statement:
+      "A file sent to a Machine's host arrives once: its parts are checked against its size and sha256, a digest the host holds is answered at the first part, a bad hash leaves nothing, and a start can name the path it answered.",
+    owner: ATTACHMENTS,
+    needs: "backend",
+    proof: {
+      kind: "test",
+      layer: "backend",
+      file: "test/host-files.test.ts",
+      name: "a file reaches a Machine once through its host's upload, and a start can name the path it answered",
+    },
+  },
+  {
+    id: "backend/a-started-runs-attachments-are-there-before-its-first-prompt",
+    statement:
+      "A Run started with `--attach` has a copy of each file in its own directory before its first agent starts, and that agent's prompt lists each with its absolute path.",
+    owner: ATTACHMENTS,
+    needs: "backend",
+    proof: {
+      kind: "test",
+      layer: "backend",
+      file: "test/attachments.test.ts",
+      name: "a start's attachments are in the Run's directory and its first prompt before it runs, and on its audit line",
+    },
+  },
+  {
+    id: "backend/a-follow-up-inherits-its-runs-attachments",
+    statement:
+      "A follow-up of a Run that was given files starts with copies of them in its own directory, beside any it was given itself, and its first prompt lists them.",
+    owner: ATTACHMENTS,
+    needs: "backend",
+    proof: {
+      kind: "test",
+      layer: "backend",
+      file: "test/attachments.test.ts",
+      name: "an offer invoked from a Run with attachments gives the new Run copies of them beside its own",
     },
   },
 ];
@@ -703,6 +865,49 @@ const WORKFLOWS: readonly Check[] = [
 /** What only a person at a terminal can settle. */
 const OPERATOR_CHECKS: readonly Check[] = [
   {
+    id: "flock-chat/a-machine-on-an-older-collie-is-told-to-upgrade",
+    statement:
+      "A Machine whose Collie predates files is told to upgrade when the Flock chat reads a file there or starts work carrying one, and nothing starts there.",
+    owner: ATTACHMENTS,
+    needs: "operator",
+    proof: {
+      kind: "operator",
+      how: "In Desktop with a Machine on a Collie release before this one, ask the chat to read a file there and to start a plan there with a pasted screenshot; record both answers naming the upgrade, and that no Run started, with the revision.",
+    },
+  },
+  {
+    id: "flock-chat/start-a-plan-for-this-carries-the-screenshot",
+    statement:
+      '"Start a plan for this" with a pasted screenshot starts a Run on vm-mk whose grill prompt names its `attachments/` copy, the agent opens it, and the card\'s drawer shows the thumbnail.',
+    owner: ATTACHMENTS,
+    needs: "operator",
+    proof: {
+      kind: "operator",
+      how: "In Desktop with vm-mk reached, paste a screenshot and send \"start a plan for this\" naming vm-mk; record the Run's id, the line of its grill prompt that names `runs/<id>/attachments/<name>`, that the agent opened it, and the thumbnail in the card's drawer, with the revision.",
+    },
+  },
+  {
+    id: "flock-chat/a-file-copied-in-gnome-files-pastes-as-a-chip",
+    statement: "A file copied in GNOME Files and pasted into the Flock chat becomes a chip.",
+    owner: ATTACHMENTS,
+    needs: "operator",
+    proof: {
+      kind: "operator",
+      how: "In Desktop on GNOME, copy a PDF and a text file in Files, press Ctrl+V in the chat's input, and record the two chips and what the model says of each once sent, with the revision.",
+    },
+  },
+  {
+    id: "flock-chat/a-pasted-screenshot-is-seen-and-kept",
+    statement:
+      "A screenshot pasted with Ctrl+V in the popped-out Flock chat is described correctly by the model, and after a restart the message still shows its thumbnail.",
+    owner: ATTACHMENTS,
+    needs: "operator",
+    proof: {
+      kind: "operator",
+      how: "In Desktop, pop the chat out, paste a screenshot of something distinctive with Ctrl+V, send it with no words, and record the model's description; quit and start Desktop, reopen the conversation, and record that the message shows the thumbnail, with the revision.",
+    },
+  },
+  {
     id: "desktop/a-flock-chat-start-goes-where-the-machine-rule-says",
     statement:
       'A Flock chat start goes where the Machine rule says: with the rule "frontend work is on the laptop, everything else is on the vm", a review of a frontend merge request lands on Local and a plan for Collie on vm-mk; with vm-mk unreachable, the plan is declined in words and nothing starts on the laptop; and Go to pane on each opens in Desktop with no new SSO approval.',
@@ -722,6 +927,17 @@ const OPERATOR_CHECKS: readonly Check[] = [
     proof: {
       kind: "operator",
       how: "Against vm-mk: connect Desktop (one SSO approval), Go to pane on a working Run, type to the agent, press Esc (the agent gets it and the drawer stays open) and paste two lines (they arrive as one paste), close the drawer, Go to pane again. Record that sso.cego.dk asked nothing after the first approval, that an open herdr window showed the pane at its own size again once the drawer closed, and the revision.",
+    },
+  },
+  {
+    id: "flock-chat/reads-greps-and-edits-a-file-on-a-machine",
+    statement:
+      "The Flock chat reads, greps and edits a file on vm-mk with no prompt, and its edit is in vm-mk's host log with the chat's voice.",
+    owner: ATTACHMENTS,
+    needs: "operator",
+    proof: {
+      kind: "operator",
+      how: "In Desktop with vm-mk reached, ask the chat to read a scratch file on vm-mk, grep its directory for a word in it, and change that word; record the three tool rows, the file's new content on vm-mk, and the edit's line in vm-mk's `files/operations.jsonl` with its Actor, with the revision.",
     },
   },
   {
@@ -788,6 +1004,94 @@ const OPERATOR_CHECKS: readonly Check[] = [
     proof: {
       kind: "operator",
       how: "Rename the task workspace and one of its tabs by hand while a Run is working, let the Run reach its next step, and record that both names are still the ones typed.",
+    },
+  },
+  {
+    id: "usage/a-run-whose-claude-runs-out-finishes-on-codex",
+    statement:
+      "With `fallbacks` set to `codex`, a Run whose Claude runs out finishes on Codex, and its record says so.",
+    owner: USAGE,
+    needs: "operator",
+    proof: {
+      kind: "operator",
+      how: "Set Fall back to `codex`, start an `implement` with Claude near its limit, and when Claude stops mid-slice record that its pane closed, a Codex agent opened in the Task's workspace with the hand-over at the head of its prompt, the Run's log has the Fallback line, `collie run show` lists both agents, and the Run finishes on Codex.",
+    },
+  },
+  {
+    id: "usage/collie-usage-agrees-with-the-harnesses",
+    statement:
+      "`collie usage` agrees with Claude Code's `/usage` and Codex's `/status`: each window's percent within a few points, and the same reset times.",
+    owner: USAGE,
+    needs: "operator",
+    proof: {
+      kind: "operator",
+      how: "On a Machine logged in to both, run `collie usage`, then Claude Code's `/usage` and Codex's `/status`, and record each window's percent and reset from all three. Run `collie usage --json` and record each reading's `at` and `source`. test/usage-model.test.ts proves the parsing of recorded answers; only the live endpoints prove they are read the same way.",
+    },
+  },
+  {
+    id: "install/tui-installs-on-a-stock-mac",
+    statement:
+      "On an arm64 Mac with no Homebrew OpenSSL, `git clone … ~/.collie && ~/.collie/setup.sh` installs a runner that starts and passes `codesign --verify`, and `collie onboard` reaches the Linear login.",
+    owner: ON_A_MAC,
+    needs: "operator",
+    proof: {
+      kind: "operator",
+      how: "On a Mac without Homebrew's OpenSSL, run `git clone https://github.com/cego/collie.git ~/.collie && ~/.collie/setup.sh` from a release carrying this work. Record that `~/.collie/bin/collie --version` runs and is not killed, that `codesign --verify ~/.collie/bin/collie` passes, and that `collie onboard --skip helle` reaches the Linear login and prints its URL. Record the revision.",
+    },
+  },
+  {
+    id: "install/desktop-on-a-mac-finds-herdr-from-the-dock",
+    statement:
+      "Collie Desktop opened from the Dock finds `herdr`, `collie`, `claude`, `git` and `ssh` as the user's terminal does, so Local and a VM added as a herdr machine are on its board.",
+    owner: ON_A_MAC,
+    needs: "operator",
+    proof: {
+      kind: "operator",
+      how: "On a Mac whose shell adds `~/.local/bin` and Homebrew to PATH in `.zshrc` or `.zprofile`, open Collie Desktop from the Dock, not from a terminal. Record that Local is on the board, and with a VM added by `herdr machine add`, that the VM is too. Record the revision.",
+    },
+  },
+  {
+    id: "install/desktop-installs-and-opens-on-a-mac",
+    statement:
+      "On an arm64 Mac, `curl -fsSL …/install-desktop.sh | sh` puts Collie Desktop in `~/Applications`, and it opens from Spotlight with no Gatekeeper prompt and Local on its board.",
+    owner: ON_A_MAC,
+    needs: "operator",
+    proof: {
+      kind: "operator",
+      how: "On an arm64 Mac, run `curl -fsSL https://github.com/cego/collie/releases/latest/download/install-desktop.sh | sh` from a release carrying this work. Record that `~/Applications/collie-desktop.app` is there, that it opens from Spotlight with no Gatekeeper prompt, that Local is on the board, and with a VM added by `herdr machine add`, that the VM is listed as a second Machine. Record the revision.",
+    },
+  },
+  {
+    id: "install/desktop-on-a-mac-updates-itself",
+    statement:
+      "Collie Desktop on a Mac finds the next release, says it is ready once its tar verifies, and Restart Desktop comes back on the new version.",
+    owner: ON_A_MAC,
+    needs: "operator",
+    proof: {
+      kind: "operator",
+      how: "With Desktop installed on a Mac by `install-desktop.sh`, wait for the next release. Record that Settings → About says the update is ready, that **Restart Desktop** comes back, and that Settings then shows the new version. Record both revisions.",
+    },
+  },
+  {
+    id: "install/old-herdr-is-explained-and-left-running",
+    statement:
+      "With a herdr older than Collie's minimum, `setup.sh` finishes everything it can, `collie doctor` says what upgrading will do to the running panes and when, and the herdr server and its panes are left running.",
+    owner: ON_A_MAC,
+    needs: "operator",
+    proof: {
+      kind: "operator",
+      how: "On a Mac still on herdr 0.7.1, with something running in a pane, run `~/.collie/setup.sh` and record that it finished, doctor's herdr line with the before-0.9.0 advice, and that the pane is still running. Run `herdr update` on its own and record whether 0.7.1's updater stopped the server by itself; if it did, doctor's wording is corrected. When nothing is running, run `herdr server stop`, then `herdr`, then `collie doctor`, and record that the herdr lines pass. Record the revision.",
+    },
+  },
+  {
+    id: "workflows/a-bodil-run-brings-its-instance-up-and-down",
+    statement:
+      "A bodil Run brings its instance up, has implement work in bodil's own worktree on bodil's branch and open its merge request from there, and takes the instance down once implement has settled, leaving the worktree.",
+    owner: ON_A_MAC,
+    needs: "operator",
+    proof: {
+      kind: "operator",
+      how: "On a Mac with bodil installed and BODIL_REMOTE_VM set, save the module from docs/sdk.md as `~/.collie/user/workflows/bodil.workflow.ts` and record that `collie workflow show bodil` lists plan, brands and name. Run `collie run start bodil --input plan=<a small plan> --input brands=happytiger --input name=collie-try`; record that `bodil ls` shows collie-try, that the implementer's pane works in `~/work/gitte/worktrees/collie-try/monorepo` on `dabo/collie-try`, and the merge request's source branch. When the Run finishes, record that `bodil ls` no longer lists collie-try and the worktree is still there. Record the revision.",
     },
   },
 ];

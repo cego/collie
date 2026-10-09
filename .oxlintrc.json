@@ -33,9 +33,12 @@
     // The test preload: it runs before any Effect program does, sets the environment every
     // test inherits, and asks `ps` which hosts outlived their test.
     "test/support/hosts.ts",
-    // Desktop's Electrobun build hook: a plain script Electrobun's own runtime runs while
-    // packing Desktop, before any Effect program does.
+    "test/support/sweep.ts",
+    // Desktop's Electrobun build hooks and what they share: plain scripts Electrobun's own
+    // runtime runs while packing Desktop, before any Effect program does.
     "desktop/scripts/name-desktop-entry.ts",
+    "desktop/scripts/mac-icons.ts",
+    "desktop/scripts/mac-signing.ts",
     "tools/oxlint/anti-slop/**"
   ],
   "jsPlugins": [
@@ -83,6 +86,10 @@
     "effecttsgo/instance-of-schema": "error",
     "effecttsgo/new-promise": "error",
     "effecttsgo/node-builtin-import": "error",
+    // Collie decodes synchronously at a boundary on purpose.
+    "effecttsgo/schema-sync": "off",
+    // Collie runs on Effect's workflow and cluster modules by decision (ADR-0014).
+    "effecttsgo/unstable-api-usage": "off",
     "effecttsgo/prefer-schema-over-json": "error",
     "effecttsgo/process-env": "error",
     "effecttsgo/process-env-in-effect": "error",
@@ -119,6 +126,20 @@
   },
   "overrides": [
     {
+      // Effect's `Crypto` has digest and random, but no Ed25519 sign, verify or keypair.
+      "files": [
+        "src/signing.ts",
+        "test/desktop-credentials.test.ts",
+        "test/desktop-onboarding.test.ts",
+        "test/desktop-updates.test.ts",
+        "test/desktop-upgrade.test.ts",
+        "test/install-desktop.test.ts",
+        "test/prepare.test.ts",
+        "test/signing.test.ts"
+      ],
+      "rules": { "effecttsgo/node-builtin-import": "off" }
+    },
+    {
       // Every `collie` start, hook and board pays for what loads before its first line runs.
       "files": ["src/**"],
       "rules": {
@@ -131,12 +152,12 @@
                 "message": "Import the module you use (`@effect/platform-bun/BunServices`): the index loads all of them, ~0.1 s of every start."
               },
               {
-                "name": "effect/unstable/http",
-                "message": "Import the module you use (`effect/unstable/http/HttpClient`): the index loads the server too."
+                "name": "effect/http",
+                "message": "Import the module you use (`effect/http/HttpClient`): the index loads the server too."
               },
               {
-                "name": "effect/unstable/ai",
-                "message": "Import the module you use (`effect/unstable/ai/Tool`): the index loads McpServer and LanguageModel into every chat hook."
+                "name": "effect/ai",
+                "message": "Import the module you use (`effect/ai/Tool`): the index loads McpServer and LanguageModel into every chat hook."
               }
             ]
           }

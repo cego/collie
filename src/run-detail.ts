@@ -1,16 +1,19 @@
 // One Run's details as the host serves a drawer: its diff, the large items a front door
 // fetches by reference, and the details themselves followed as they change.
 
-import { Effect, Encoding, FileSystem, Option, Path, Schema, Stream } from "effect";
-import type { ChildProcessSpawner } from "effect/unstable/process";
+import { Effect, FileSystem, Option, Path, Schema, Stream } from "effect";
+import * as Base64 from "effect/encoding/Base64";
+import type { ChildProcessSpawner } from "effect/process";
 import {
   HostRefused,
-  RUN_FILE_BYTES,
+  PART_BYTES,
   RunDiff,
   type DiffFile,
   type RunDetail,
   type RunFile,
 } from "./board-model";
+import { attachmentsDir } from "./attachments";
+import { classifyWorkSource } from "./inputs";
 import { pipelineStatus, shell } from "./mr";
 import { REVIEW_FILE } from "./output";
 import { settled, type RunFacts } from "./runs";
@@ -30,7 +33,16 @@ export const planDirOf = Effect.fn("RunDetail.planDirOf")(function* (run: RunFac
   // Then the directory it was started from, which is how an `implement` run reaches the
   // spec a `plan` run wrote for it.
   const work = workSourceOf(run.settled);
-  if (work?.kind !== "plan-dir") return null;
+  if (work === null) return null;
+  // A start that recorded no kind, as one from a plan's end menu, is classified as the engine does.
+  const kind =
+    work.kind !== ""
+      ? work.kind
+      : yield* classifyWorkSource(work.value).pipe(
+          Effect.map((found) => found.kind),
+          Effect.orElseSucceed(() => "text"),
+        );
+  if (kind !== "plan-dir") return null;
   return (yield* fs.exists(work.value)) ? work.value : null;
 });
 
@@ -239,7 +251,7 @@ export const fetchRef = Effect.fn("RunDetail.fetchRef")(function* (
   ref: string,
   range: { readonly offset: number; readonly length: number } = {
     offset: 0,
-    length: RUN_FILE_BYTES,
+    length: PART_BYTES,
   },
   /** Where glab runs: not the Run's checkout, which is removed once the Run settles. */
   glabCwd: string = run.dir,
@@ -250,14 +262,14 @@ export const fetchRef = Effect.fn("RunDetail.fetchRef")(function* (
 > {
   const part = {
     offset: Math.max(0, range.offset),
-    length: Math.min(Math.max(0, range.length), RUN_FILE_BYTES),
+    length: Math.min(Math.max(0, range.length), PART_BYTES),
   };
   const fs = yield* FileSystem.FileSystem;
   // A part of a text is bytes too: a character across the seam is whole once the parts are joined.
   const asked = (bytes: Uint8Array, size: number, file: string | null): RunFile =>
     bytes.length === size && (file === null || TEXT.test(file))
       ? { ref, encoding: "utf8", content: new TextDecoder().decode(bytes), size }
-      : { ref, encoding: "base64", content: Encoding.encodeBase64(bytes), size };
+      : { ref, encoding: "base64", content: Base64.encode(bytes), size };
   const text = (content: string): RunFile => {
     const bytes = new TextEncoder().encode(content);
     return asked(bytes.subarray(part.offset, part.offset + part.length), bytes.length, null);
@@ -326,6 +338,8 @@ export const fetchRef = Effect.fn("RunDetail.fetchRef")(function* (
       return yield* under(run.dir, REVIEW_FILE, "review");
     case "evidence":
       return yield* under(run.evidence, name, "evidence called");
+    case "attachment":
+      return yield* under(attachmentsDir(run.dir), name, "attachment");
     case "plan": {
       const dir = yield* planDirOf(run).pipe(Effect.orElseSucceed(() => null));
       if (dir === null) return yield* refused(`${run.id} has no plan`);

@@ -1,8 +1,9 @@
-// What the drawer makes of a Run's evidence: terminal colours, and its files sorted into
+// What the record makes of a Run's evidence: terminal colours, and its files sorted into
 // a gallery of before/after pairs, videos, reports and logs.
 
 import { expect, test } from "bun:test";
 import { ansiLines, ansiSpans } from "../src/shared/ansi";
+import { attachmentsShown } from "../src/shared/attachments";
 import { mediaType, sortEvidence } from "../src/shared/evidence";
 
 test("terminal colours become styled spans, and a reset ends them", () => {
@@ -93,4 +94,25 @@ test("a media file's type is known by its extension", () => {
     "video/webm",
     null,
   ]);
+});
+
+test("a Run's attached images the view can show are thumbnails, and every other file is by name", () => {
+  const file = (name: string, mediaType: string) => ({ name, size: 1, mediaType });
+  expect(
+    attachmentsShown([
+      file("trace.zip", "application/zip"),
+      file("shot.PNG", "image/png"),
+      file("notes.txt", "text/plain"),
+      file("clip.mp4", "video/mp4"),
+      file("layers.psd", "image/vnd.adobe.photoshop"),
+    ]),
+  ).toEqual({
+    thumbnails: [file("shot.PNG", "image/png")],
+    named: [
+      file("clip.mp4", "video/mp4"),
+      file("layers.psd", "image/vnd.adobe.photoshop"),
+      file("notes.txt", "text/plain"),
+      file("trace.zip", "application/zip"),
+    ],
+  });
 });

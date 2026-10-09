@@ -5,7 +5,18 @@
 // next step, a fix round, a hand-off from another Run — and a threshold repeated per
 // harness is a threshold that disagrees with itself.
 
-import { Clock, Data, Effect, FileSystem, Path, PlatformError, Result, Schema } from "effect";
+import {
+  Clock,
+  Data,
+  Effect,
+  FileSystem,
+  Path,
+  PlatformError,
+  Result,
+  Schema,
+  Stream,
+} from "effect";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import type { BunServices } from "@effect/platform-bun/BunServices";
 import type { Channel } from "./dispatcher";
 import type { Herdr, Submission } from "./herdr";
@@ -408,22 +419,42 @@ const putDownStaleControls = Effect.fn("Compaction.putDownStaleControls")(functi
   const live = new Set((yield* deps.herdr.agentList()).map((agent) => agent.name));
   for (const name of yield* fs.readDirectory(root)) {
     if (name === launching || live.has(name)) continue;
-    yield* withControlLock(
-      deps.stateDir,
-      name,
-      Effect.gen(function* () {
-        // A launch may have finished while we waited for its lock. The earlier list
-        // cannot prove this agent is still absent.
-        if ((yield* deps.herdr.agentList()).some((agent) => agent.name === name)) return;
-        const pid = yield* endpointPid(yield* readControl(deps.stateDir, name));
-        if (pid !== null) {
-          yield* Effect.ignore(Effect.sync(() => process.kill(pid, "SIGTERM")));
-          yield* deps.log(`${name}: stopped its compaction endpoint (pid ${pid})`);
-        }
-        yield* fs.remove(path.join(root, name), { recursive: true });
-      }),
-    ).pipe(Effect.ignore);
+    const listed = deps.herdr.agentList().pipe(
+      Effect.map((agents) => agents.some((agent) => agent.name === name)),
+      Effect.orElseSucceed(() => true),
+    );
+    yield* putDownControl(deps, name, listed).pipe(Effect.ignore);
   }
+});
+
+/**
+ * Stops the endpoint of one agent herdr does not list and removes its controls, under
+ * its control lock. False where herdr lists it after all, or the lock is taken.
+ */
+export const putDownControl = Effect.fn("Compaction.putDownControl")(function* <R>(
+  deps: Pick<CompactionDeps, "stateDir" | "log">,
+  name: string,
+  /** Whether herdr lists this agent now; true where it cannot tell. */
+  listed: Effect.Effect<boolean, never, R>,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  return yield* withControlLock(
+    deps.stateDir,
+    name,
+    Effect.gen(function* () {
+      // A launch may have finished while we waited for its lock. The earlier list
+      // cannot prove this agent is still absent.
+      if (yield* listed) return false;
+      const pid = yield* endpointPid(yield* readControl(deps.stateDir, name));
+      if (pid !== null) {
+        yield* Effect.ignore(Effect.sync(() => process.kill(pid, "SIGTERM")));
+        yield* deps.log(`${name}: stopped its compaction endpoint (pid ${pid})`);
+      }
+      yield* fs.remove(path.join(deps.stateDir, CONTROL_DIR, name), { recursive: true });
+      return true;
+    }),
+  );
 });
 
 /**
@@ -431,21 +462,41 @@ const putDownStaleControls = Effect.fn("Compaction.putDownStaleControls")(functi
  * everywhere else. A control record outlives the process it names: a machine reboots, a
  * server is killed, and the pid comes round again, so a launch that signalled a
  * recorded number on trust would eventually SIGTERM something the human was using. The
- * process's own command line is the check, and a `/proc` entry that cannot be read is
- * treated as already gone.
+ * process's own command line is the check, read from `/proc` or else `ps`, and one that
+ * cannot be read is treated as already gone.
  *
  * A record from before this was written carries no command, and so is never signalled:
  * its directory is removed and its endpoint, if it is still up, is left alone.
  */
-const endpointPid = Effect.fn("Compaction.endpointPid")(function* (record: ControlRecord | null) {
-  if (!record?.pid || !record.command) return null;
+export const endpointPid = Effect.fn("Compaction.endpointPid")(function* (
+  record: Pick<ControlRecord, "pid" | "command"> | null,
+  proc = "/proc",
+) {
+  const { pid, command } = record ?? {};
+  if (!pid || !command) return null;
   const fs = yield* FileSystem.FileSystem;
-  const cmdline = yield* fs
-    .readFileString(`/proc/${record.pid}/cmdline`)
-    .pipe(Effect.catch(() => Effect.succeed("")));
-  // NUL-separated argv, which is not a string until the separators are.
-  return cmdline.replaceAll("\0", " ").includes(record.command) ? record.pid : null;
+  const cmdline = yield* fs.readFileString(`${proc}/${pid}/cmdline`).pipe(
+    // NUL-separated argv, which is not a string until the separators are.
+    Effect.map((argv) => argv.replaceAll("\0", " ")),
+    Effect.catch(() => psCommand(pid)),
+  );
+  return cmdline.includes(command) ? pid : null;
 });
+
+const psCommand = (pid: number) =>
+  Effect.gen(function* () {
+    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const handle = yield* spawner.spawn(
+      ChildProcess.make("ps", ["-ww", "-o", "command=", "-p", String(pid)], {
+        stdout: "pipe",
+        stderr: "ignore",
+      }),
+    );
+    return yield* Stream.mkString(Stream.decodeText(handle.stdout));
+  }).pipe(
+    Effect.scoped,
+    Effect.catch(() => Effect.succeed("")),
+  );
 
 /**
  * The work boundary: immediately before a reused agent that has finished its previous

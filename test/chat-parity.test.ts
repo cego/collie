@@ -244,6 +244,9 @@ const INVENTORY: ReadonlyArray<readonly [string, Route]> = [
     "home cleanup --confirm",
     { route: "propose", kind: "home_cleanup", action: { kind: "home_cleanup" } },
   ],
+  ["cleanup", { route: "read", tool: "collie_installation" }],
+  ["cleanup --apply", { route: "propose", kind: "cleanup", action: { kind: "cleanup" } }],
+  ["usage", { route: "shell" }],
   ["chat status", { route: "read", tool: "collie_installation" }],
   ["chat harness", { route: "shell" }],
   ["chat news", { route: "read", tool: "collie_news" }],
@@ -305,7 +308,7 @@ test(
     runEffect(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
-        const stateDir = yield* fs.makeTempDirectory({ prefix: "hw-parity-" });
+        const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "hw-parity-" });
         const env = readEnv({ ...process.env, HERDR_PLUGIN_STATE_DIR: stateDir });
         // The registry is filled by the module that owns each operation, so it has to be
         // asked rather than listed: a kind with no executor is refused at confirmation as
@@ -348,7 +351,6 @@ test(
           }
           // shell: the leaf is the command tree's own, which the first test holds.
         }
-        yield* fs.remove(stateDir, { recursive: true, force: true });
 
         // The decisions, named: no action kind is any of these, so a proposal can never
         // carry its own yes. Settling one is a separate act — the human's or chat's.
@@ -412,7 +414,7 @@ test("collie_run and collie_herd say what a running check's card says", () =>
   runEffect(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const stateDir = yield* fs.makeTempDirectory({ prefix: "collie-parity-check-" });
+      const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-parity-check-" });
       const run = yield* madeRun(stateDir, { id: "r-check" });
       yield* fs.writeFileString(
         `${run.dir}/verifying`,
@@ -449,7 +451,7 @@ test("collie_run gives a running check's last forty lines under the card's sente
   runEffect(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const stateDir = yield* fs.makeTempDirectory({ prefix: "collie-parity-lines-" });
+      const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-parity-lines-" });
       const run = yield* madeRun(stateDir, { id: "r-lines" });
       const log = `${run.evidence}/checks/test.log`;
       yield* fs.makeDirectory(`${run.evidence}/checks`, { recursive: true });
