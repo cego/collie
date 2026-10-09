@@ -13,7 +13,7 @@ const { openLink } = useActions();
         <strong data-testid="mr-title">!{{ mr.iid }} {{ mr.title }}</strong>
         <UBadge variant="subtle" data-testid="mr-state" :label="mr.state" />
       </div>
-      <dl class="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1">
+      <dl class="grid grid-cols-[max-content_minmax(0,1fr)] gap-x-4 gap-y-1 wrap-anywhere">
         <dt class="text-muted">Pipeline</dt>
         <dd data-testid="mr-pipeline">{{ mr.pipeline || "none" }}</dd>
         <dt class="text-muted">Approvals</dt>

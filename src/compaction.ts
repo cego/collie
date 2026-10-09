@@ -462,47 +462,41 @@ export const putDownControl = Effect.fn("Compaction.putDownControl")(function* <
  * everywhere else. A control record outlives the process it names: a machine reboots, a
  * server is killed, and the pid comes round again, so a launch that signalled a
  * recorded number on trust would eventually SIGTERM something the human was using. The
- * process's own command line is the check — from `/proc`, or `ps` where there is none —
- * and one that cannot be read is treated as already gone.
+ * process's own command line is the check, read from `/proc` or else `ps`, and one that
+ * cannot be read is treated as already gone.
  *
  * A record from before this was written carries no command, and so is never signalled:
  * its directory is removed and its endpoint, if it is still up, is left alone.
  */
-const endpointPid = Effect.fn("Compaction.endpointPid")(function* (record: ControlRecord | null) {
-  if (!record?.pid || !record.command) return null;
+export const endpointPid = Effect.fn("Compaction.endpointPid")(function* (
+  record: Pick<ControlRecord, "pid" | "command"> | null,
+  proc = "/proc",
+) {
+  const { pid, command } = record ?? {};
+  if (!pid || !command) return null;
   const fs = yield* FileSystem.FileSystem;
-  const cmdline = yield* fs.readFileString(`/proc/${record.pid}/cmdline`).pipe(
+  const cmdline = yield* fs.readFileString(`${proc}/${pid}/cmdline`).pipe(
     // NUL-separated argv, which is not a string until the separators are.
     Effect.map((argv) => argv.replaceAll("\0", " ")),
-    Effect.catch(() => fs.exists("/proc").pipe(Effect.map((there) => (there ? "" : null)))),
-    Effect.catch(() => Effect.succeed("")),
+    Effect.catch(() => psCommand(pid)),
   );
-  const command = cmdline ?? (yield* psCommand(record.pid));
-  return command.includes(record.command) ? record.pid : null;
+  return cmdline.includes(command) ? pid : null;
 });
 
-/** A pid's command line as `ps` prints it, where there is no /proc (macOS); empty where it is gone. */
-const psCommand = Effect.fn("Compaction.psCommand")(function* (pid: number) {
-  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-  return yield* Effect.gen(function* () {
+const psCommand = (pid: number) =>
+  Effect.gen(function* () {
+    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const handle = yield* spawner.spawn(
-      ChildProcess.make("ps", ["-o", "command=", "-p", String(pid)], {
+      ChildProcess.make("ps", ["-ww", "-o", "command=", "-p", String(pid)], {
         stdout: "pipe",
         stderr: "ignore",
       }),
     );
-    return yield* handle.stdout.pipe(
-      Stream.decodeText(),
-      Stream.runFold(
-        (): string => "",
-        (all, chunk) => all + chunk,
-      ),
-    );
+    return yield* Stream.mkString(Stream.decodeText(handle.stdout));
   }).pipe(
     Effect.scoped,
     Effect.catch(() => Effect.succeed("")),
   );
-});
 
 /**
  * The work boundary: immediately before a reused agent that has finished its previous

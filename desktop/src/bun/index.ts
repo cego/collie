@@ -36,6 +36,7 @@ import {
 import {
   ActionFailed,
   applyItem,
+  chatBoards,
   CREDENTIALS,
   type Credentials,
   DesktopRpcs,
@@ -45,7 +46,6 @@ import {
   type KnownMachine,
   machineRows,
   type MachineSynced,
-  nameAsShown,
   type OnboardRun,
   type OnboardStep,
   Skippable,
@@ -56,11 +56,13 @@ import { pruneDesktop, sshControlsPrefix, sweepSshControls } from "../../../src/
 import { appWindowFor } from "./browser";
 import { clipboardPaths } from "../shared/attachments";
 import { readAttachment, stageAttachment, stagePath } from "./attachments";
-import { type FlockConversation, openFlockChat, refusal } from "./chat";
+import { type FlockConversation, openFlockChat, refusal, untilStarted } from "./chat";
 import { claudeCode } from "./claude";
 import { childEnv, takeLoginEnv, which } from "./login-env";
-import { chatDoor } from "./flock-tools";
+import { type ChatMachine, chatDoor } from "./flock-tools";
 import { readSettings, writeSettings } from "./settings";
+import { followWindow, zoomWindow } from "./scale";
+import type { Drawn } from "../shared/scale";
 import { flockSync, readFlockSettings, writeFlockSettings } from "./flock-settings";
 import { editSetting } from "../shared/flock-settings";
 import { nowIso } from "../../../src/time";
@@ -68,6 +70,7 @@ import { SettingValue, settingText } from "../../../src/settings";
 import { isString } from "../../../src/schema";
 import {
   act,
+  DoorMap,
   type Doors,
   doorTo,
   focusOn,
@@ -283,7 +286,7 @@ const main = Effect.gen(function* () {
   yield* sweepSshControls(tmpdir()).pipe(Effect.ignore);
   const controls = yield* fs.makeTempDirectoryScoped({ prefix: sshControlsPrefix(process.pid) });
   // herdr's list is the only list of Machines there is.
-  const listed = yield* herdrMachines("herdr").pipe(Effect.result);
+  const listed = yield* herdrMachines("herdr", manifest.min_herdr_version).pipe(Effect.result);
   const now = yield* Clock.currentTimeMillis;
   const [enabled, unlisted] = Result.match(listed, {
     onSuccess: (machines) => [machines, []] as const,
@@ -325,7 +328,7 @@ const main = Effect.gen(function* () {
   );
   const changes = yield* PubSub.unbounded<RouteChange>();
   const news = yield* PubSub.unbounded<FlockItem>();
-  const doors = new Map<string, Doors>();
+  const doors = new DoorMap<Doors>();
   /** Keeps an edit made here, then gives it to every connected Machine. */
   const editFlock = (key: string, typed: string) =>
     Effect.gen(function* () {
@@ -347,6 +350,30 @@ const main = Effect.gen(function* () {
   const onboardings = `${Utils.paths.userData}/onboarding`;
   const runners = `${Utils.paths.userData}/runners`;
   const scope = yield* Effect.scope;
+  /** How the board's window is drawn, which Settings says. */
+  const drawn = yield* SubscriptionRef.make<Drawn | null>(null);
+  const zoomAgain = new Set<Effect.Effect<void>>();
+  /** Keeps `window` at its monitor's own scale until it closes, telling `told` how. */
+  const zoomed = (
+    window: BrowserWindow,
+    title: string,
+    told: (drawn: Drawn) => Effect.Effect<void> = () => Effect.void,
+  ) =>
+    Effect.gen(function* () {
+      const { again, asked } = yield* followWindow(window);
+      zoomAgain.add(again);
+      const closed = Deferred.makeUnsafe<void>();
+      window.on("close", () => Deferred.doneUnsafe(closed, Effect.void));
+      yield* asked.pipe(
+        Stream.runForEach(() =>
+          Effect.flatMap(zoomWindow(window, title, settings.zoom ?? 1), told),
+        ),
+        Effect.raceFirst(Deferred.await(closed)),
+        Effect.ensuring(Effect.sync(() => zoomAgain.delete(again))),
+        Effect.forkIn(scope),
+      );
+    });
+  yield* zoomed(board.window, "Collie", (now) => SubscriptionRef.set(drawn, now));
   const uuid = (yield* Crypto.Crypto).randomUUIDv4.pipe(Effect.orDie);
   /** Each route's latest settings sync, told again to a view that subscribes. */
   const synced = new Map<string, MachineSynced>();
@@ -493,7 +520,7 @@ const main = Effect.gen(function* () {
         });
       const before = new Set(routes.keys());
       const added = yield* addToHerdr("herdr", target, label, session, ask).pipe(
-        Effect.andThen(herdrMachines("herdr")),
+        Effect.andThen(herdrMachines("herdr", manifest.min_herdr_version)),
         Effect.flatMap((machines) => {
           const found = machines.find(
             (machine) =>
@@ -554,6 +581,11 @@ const main = Effect.gen(function* () {
             settings = merged;
           }),
         ),
+        Effect.andThen(
+          changed.zoom === undefined
+            ? Effect.void
+            : Effect.forEach(zoomAgain, (again) => again, { discard: true }),
+        ),
       );
     }).pipe(settingsWrite.withPermits(1), Effect.orDie);
 
@@ -565,8 +597,10 @@ const main = Effect.gen(function* () {
       ),
     ).pipe(Effect.provide(BunServices.layer));
 
-  // The Flock as the board was last sent it, so the chat names its Machines as the cards do.
+  // The Flock as the board was last sent it: the chat reads its Machines and boards from it.
   let shown = EMPTY_FLOCK;
+  /** When Desktop began waiting on each route, by herdr profile. */
+  const routedAt = new Map<string, number>();
   const holds = Effect.map(given.held, (texts) => ({
     version: manifest.version,
     credentials: CREDENTIALS.filter((one) => texts[one] !== undefined),
@@ -614,16 +648,13 @@ const main = Effect.gen(function* () {
           Effect.catch(({ reason }) => Effect.succeed(reason)),
         );
       }),
-    machines: () => {
-      const named = nameAsShown(shown);
-      return [...doors].map(([installation, held]) => ({
-        name: named({ ...held.machine, installation }),
-        door: chatDoor(held.chat),
-        local: held.machine.profile === "local",
-      }));
-    },
-  }).pipe(Scope.provide(scope), Effect.result, Effect.cached);
-  // ponytail: a chat that could not start stays so until Desktop restarts.
+    machines: () =>
+      chatBoards(shown, routedAt).map(({ name, profile, installation, board }) => {
+        const held = installation === null ? undefined : doors.get(installation);
+        const machine: ChatMachine = { name, board, local: profile === "local" };
+        return held === undefined ? machine : { ...machine, door: chatDoor(held.chat) };
+      }),
+  }).pipe(Scope.provide(scope), untilStarted, Effect.map(Effect.result));
   const withChat = <A>(use: (opened: FlockConversation) => Effect.Effect<A>, unstarted: A) =>
     chat.pipe(
       Effect.flatMap(Result.match({ onSuccess: use, onFailure: () => Effect.succeed(unstarted) })),
@@ -676,6 +707,7 @@ const main = Effect.gen(function* () {
             ).pipe(Effect.forkIn(scope));
           };
           shown = EMPTY_FLOCK;
+          routedAt.clear();
           const before: ReadonlyArray<FlockItem> = [
             ...reachable.map(({ machine }): FlockItem => ({ _tag: "Routed", machine })),
             ...(yield* savedBoards(boards)).filter(listed),
@@ -703,7 +735,15 @@ const main = Effect.gen(function* () {
         }),
       ).pipe(
         saving(boards),
-        Stream.tap((item) => Effect.sync(() => void (shown = applyItem(shown, item)))),
+        Stream.tap((item) =>
+          Effect.map(Clock.currentTimeMillis, (now) => {
+            if ("_tag" in item && item._tag === "Routed" && !routedAt.has(item.machine.profile))
+              routedAt.set(item.machine.profile, now);
+            // A lost route waits for its board again from then.
+            if ("_tag" in item && item._tag === "Lost") routedAt.set(item.machine.profile, item.at);
+            shown = applyItem(shown, item);
+          }),
+        ),
         Stream.provide(BunServices.layer),
         Stream.tap(() => withChat((opened) => opened.nudge, undefined)),
       ),
@@ -851,18 +891,18 @@ const main = Effect.gen(function* () {
         const door = yield* doorTo(doors, installation).pipe(
           Effect.mapError((failed) => new ActionFailed({ reason: failed.reason, request })),
         );
-        return yield* act(door.desktop, request, action);
+        return yield* act(door, request, action);
       }),
     goToPane: ({ installation, runId }) =>
       Effect.gen(function* () {
         const door = yield* doorTo(doors, installation);
-        const at = yield* focusOn(door.desktop, yield* uuid, runId);
+        const at = yield* focusOn(door, yield* uuid, runId);
         const attach = attachCommand(door.machine.target, at.session);
         const terminal = inTerminal(attach, process.platform, which);
         const opened = terminal !== null && (yield* launched(terminal));
         return { at, command: shellLine(attach), opened };
       }),
-    terminal: ({ installation, runId, cols, rows }) =>
+    terminal: ({ installation, runId, agent, cols, rows }) =>
       Stream.unwrap(
         Effect.gen(function* () {
           const door = yield* doorTo(doors, installation);
@@ -871,7 +911,7 @@ const main = Effect.gen(function* () {
             return yield* new ActionFailed({ reason: "that Machine is not connected" });
           const request = yield* uuid;
           const opened = yield* openTerminal(
-            focusOn(door.desktop, request, runId),
+            focusOn(door, request, runId, agent),
             route,
             cols,
             rows,
@@ -905,11 +945,9 @@ const main = Effect.gen(function* () {
         Effect.catch(() => openUrl(url)),
       ),
     offers: ({ installation, runId }) =>
-      doorTo(doors, installation).pipe(Effect.flatMap((door) => offersOn(door.desktop, runId))),
+      doorTo(doors, installation).pipe(Effect.flatMap((door) => offersOn(door, runId))),
     workflows: ({ installation, project }) =>
-      doorTo(doors, installation).pipe(
-        Effect.flatMap((door) => workflowsOn(door.desktop, project)),
-      ),
+      doorTo(doors, installation).pipe(Effect.flatMap((door) => workflowsOn(door, project))),
     updates: () => Stream.map(updates.news, (news) => ({ version: manifest.version, news })),
     checkForUpdates: () => updates.check,
     restart: () =>
@@ -917,13 +955,10 @@ const main = Effect.gen(function* () {
         Effect.mapError((reason) => new ActionFailed({ reason })),
         Effect.provide(BunServices.layer),
       ),
-    runDetail: ({ installation, runId }) =>
-      Stream.unwrap(
-        Effect.map(doorTo(doors, installation), (door) => runDetailOn(door.desktop, runId)),
-      ),
+    runDetail: ({ installation, runId }) => runDetailOn(doors, installation, runId),
     runFile: ({ installation, runId, ref, offset }) =>
       doorTo(doors, installation).pipe(
-        Effect.flatMap((door) => runFileOn(door.desktop, runId, ref, offset)),
+        Effect.flatMap((door) => runFileOn(door, runId, ref, offset)),
       ),
     stage: (part) =>
       stageAttachment(own, part).pipe(
@@ -985,6 +1020,7 @@ const main = Effect.gen(function* () {
           const closed = Deferred.makeUnsafe<void>();
           opened.window.on("close", () => Deferred.doneUnsafe(closed, Effect.void));
           popped = { window: opened.window, closed };
+          yield* zoomed(opened.window, "Flock chat");
           yield* Layer.launch(servedOn(opened.channel)).pipe(
             Effect.raceFirst(Deferred.await(closed)),
             Effect.ensuring(Effect.sync(() => (popped = undefined))),
@@ -997,6 +1033,7 @@ const main = Effect.gen(function* () {
     desktopTurns: () =>
       Stream.unwrap(withChat((opened) => Effect.succeed(opened.desktopTurns), Stream.empty)),
     settings: () => Effect.sync(() => settings),
+    drawn: () => SubscriptionRef.changes(drawn).pipe(Stream.filter((now) => now !== null)),
     setSettings: saveSettings,
   });
   const servedOn = (channel: Channel<ToView, ToMain>) =>

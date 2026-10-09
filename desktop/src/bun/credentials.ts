@@ -9,6 +9,7 @@ import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientRequest from "effect/http/HttpClientRequest";
 import { GITLAB_HOST, SCOPES, TokenSelf } from "../../../src/gitlab-token";
 import { inTerminal } from "../../../src/in-terminal";
+import { scriptLine } from "../../../src/script";
 import type { OnboardRun } from "../shared/flock";
 import { quoted, type ShellRoute, spawned } from "./machine";
 import { childEnv, which } from "./login-env";
@@ -263,7 +264,7 @@ export const claudeLoginThrough = Effect.fn("Desktop.claudeLoginThrough")(functi
   // In a terminal Desktop gives it. One over SSH is not passed through, so there the
   // Machine's own `script` gives it one, as util-linux's does.
   const command = yield* route.sh(
-    `export BROWSER=${SHIM}; if [ -t 0 ]; then exec claude auth login; else exec script -qefc 'claude auth login' /dev/null; fi`,
+    `export BROWSER=${SHIM}; if [ -t 0 ]; then exec claude auth login; else ${scriptLine("claude auth login")}; fi`,
   );
   const child = yield* inTerminal(command, { env: childEnv() }, spawned);
   const printed = child.output.pipe(

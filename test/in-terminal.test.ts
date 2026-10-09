@@ -55,3 +55,24 @@ test("the environment it is given is laid over this process's own", () =>
       expect(said).toContain(`${user}/given`);
     }).pipe(Effect.scoped),
   ));
+
+test("the terminal closes with its scope even when Desktop owns the child", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      let terminal: Bun.Terminal | undefined;
+      yield* inTerminal(["/bin/true"], {}, (start) =>
+        Effect.acquireRelease(
+          Effect.sync(() => {
+            const child = start();
+            terminal = child.terminal;
+            return child;
+          }),
+          (child) => Effect.sync(() => child.kill()),
+        ),
+      ).pipe(
+        Effect.flatMap((child) => child.exitCode),
+        Effect.scoped,
+      );
+      expect(terminal?.closed).toBe(true);
+    }),
+  ));

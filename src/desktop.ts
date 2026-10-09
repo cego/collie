@@ -12,7 +12,7 @@ import { epochMs } from "./time";
 import { appliedSignatureOf, RELEASE_PUBLIC_KEY, verifyRelease } from "./signing";
 
 const IDENTIFIER = "dk.cego.collie.desktop";
-/** The one platform Desktop is released for. */
+/** The one platform `collie upgrade` stages a Desktop update on. */
 const RELEASED_FOR = "linux-x64";
 const PREFIX = `stable-${RELEASED_FOR}`;
 

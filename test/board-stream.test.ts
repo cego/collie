@@ -4,7 +4,7 @@
 import { expect, test } from "bun:test";
 import { Deferred, Effect, Fiber, Queue, Schedule, Schema, Stream } from "effect";
 import { BoardMessage, PaneAt, PROTOCOL, TaskView, type BoardSnapshot } from "../src/board-model";
-import { boardMessages } from "../src/board-stream";
+import { boardMessages, shareBoard } from "../src/board-stream";
 import { recordDisposition } from "../src/disposition";
 import { currentEnv } from "../src/env";
 import { Herdr } from "../src/herdr";
@@ -141,6 +141,28 @@ test(
 );
 
 test(
+  "two clients of one host read the same board",
+  () =>
+    proves(
+      "collie-board-shared-",
+      (world) =>
+        Effect.gen(function* () {
+          const started = yield* collie(world, ["run", "start", "plain", "--input", "note=hi"]);
+          expect(started.envelope.ok).toBe(true);
+          const [first, second] = yield* Effect.all(
+            [firstSnapshot(world.state), firstSnapshot(world.state)],
+            { concurrency: "unbounded" },
+          );
+          yield* stopHost(world.state);
+          expect(first?.tasks.map((one) => one.name)).toEqual(["Plain"]);
+          expect(second?.tasks).toEqual(first!.tasks);
+        }),
+      ["plain.workflow.ts"],
+    ),
+  120_000,
+);
+
+test(
   "the installation id is the state directory's, through a host restart",
   () =>
     proves(
@@ -180,29 +202,132 @@ test("an older host's focus, which names no pane, still decodes", () => {
   expect(decode({ session: "work", workspace: "w", tab: "t", pane: "1-2" }).pane).toBe("1-2");
 });
 
-test("a Task that leaves the board is removed, and a build that fails is skipped", () =>
+const HEAD = { installation: "i", build: "b", protocol: PROTOCOL, herds: [] };
+
+/** A board built from what the test hands it, one build at a time, counting each. */
+const handBuilt = Effect.gen(function* () {
+  const builds = yield* Queue.unbounded<ReadonlyArray<TaskView> | "fails">();
+  const changed = yield* Queue.unbounded<void>();
+  let calls = 0;
+  const build = Effect.suspend(() => {
+    calls++;
+    return Queue.take(builds);
+  }).pipe(
+    Effect.flatMap((next) => (next === "fails" ? Effect.fail("unreadable") : Effect.succeed(next))),
+  );
+  const boards = yield* shareBoard({ build, changed: Stream.fromQueue(changed) });
+  const follow = (count: number) =>
+    boardMessages({ head: HEAD, boards }).pipe(
+      Stream.take(count),
+      Stream.runCollect,
+      Effect.forkScoped,
+    );
+  /** Hands over a board and waits until a build has taken it, so the next change is its own. */
+  const built = (next: ReadonlyArray<TaskView> | "fails") =>
+    Queue.offer(builds, next).pipe(
+      Effect.andThen(
+        Effect.gen(function* () {
+          while ((yield* Queue.size(builds)) > 0) yield* Effect.yieldNow;
+        }),
+      ),
+    );
+  return { builds, changed, follow, built, calls: () => calls };
+});
+
+const one = task({ id: "a" });
+const two = task({ id: "b" });
+const tags = (messages: ReadonlyArray<BoardMessage>) => messages.map((message) => message._tag);
+const seqs = (messages: ReadonlyArray<BoardMessage>) =>
+  messages.map((message) => ("seq" in message ? message.seq : null));
+
+test("two clients of one board cost one build per change, and each is told what changed", () =>
   runEffect(
-    Effect.gen(function* () {
-      const builds = yield* Queue.unbounded<ReadonlyArray<TaskView> | "fails">();
-      const build = Queue.take(builds).pipe(
-        Effect.flatMap((next) =>
-          next === "fails" ? Effect.fail("unreadable") : Effect.succeed(next),
-        ),
-      );
-      const changed = yield* Queue.unbounded<void>();
-      const one = task({ id: "a" });
-      const two = task({ id: "b" });
-      yield* Queue.offerAll(builds, [[one, two], "fails", [{ ...one, sentence: "Moved." }]]);
-      yield* Queue.offerAll(changed, [undefined, undefined]);
-      const messages = yield* boardMessages({
-        head: { installation: "i", build: "b", protocol: PROTOCOL, herds: [] },
-        build,
-        changed: Stream.fromQueue(changed),
-      }).pipe(Stream.take(3), Stream.runCollect);
-      expect(messages.map((message) => message._tag)).toEqual(["Snapshot", "Upsert", "Remove"]);
-      expect(messages.map((message) => ("seq" in message ? message.seq : null))).toEqual([2, 3, 4]);
-      expect(messages[2]).toEqual({ _tag: "Remove", seq: 4, id: "b" });
-    }),
+    Effect.scoped(
+      Effect.gen(function* () {
+        const hand = yield* handBuilt;
+        const first = yield* hand.follow(2);
+        const second = yield* hand.follow(2);
+        yield* hand.built([one, two]);
+        yield* Queue.offer(hand.changed, undefined);
+        yield* Queue.offer(hand.builds, [{ ...one, sentence: "Moved." }, two]);
+        const told = [yield* Fiber.join(first), yield* Fiber.join(second)];
+        for (const messages of told) {
+          expect(tags(messages)).toEqual(["Snapshot", "Upsert"]);
+          expect(seqs(messages)).toEqual([2, 3]);
+        }
+        expect(hand.calls()).toBe(2);
+      }),
+    ),
+  ));
+
+test("a client arriving after a build is told that board, and nothing is built for it", () =>
+  runEffect(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const hand = yield* handBuilt;
+        yield* Queue.offer(hand.builds, [one]);
+        yield* Fiber.join(yield* hand.follow(1));
+        const late = yield* Fiber.join(yield* hand.follow(1));
+        expect(late).toEqual([{ _tag: "Snapshot", ...HEAD, tasks: [one], seq: 1 }]);
+        expect(hand.calls()).toBe(1);
+      }),
+    ),
+  ));
+
+test("a client arriving before the first build is told its snapshot once that build is done", () =>
+  runEffect(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const hand = yield* handBuilt;
+        const early = yield* hand.follow(1);
+        yield* Effect.yieldNow;
+        expect(early.pollUnsafe()).toBeUndefined();
+        yield* Queue.offer(hand.builds, [two]);
+        expect(yield* Fiber.join(early)).toEqual([
+          { _tag: "Snapshot", ...HEAD, tasks: [two], seq: 1 },
+        ]);
+      }),
+    ),
+  ));
+
+test("changes that arrive during a build are folded into one more build", () =>
+  runEffect(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const hand = yield* handBuilt;
+        const following = yield* hand.follow(1);
+        // The first build is under way, so the changes arrive during it.
+        while (hand.calls() === 0) yield* Effect.yieldNow;
+        yield* Queue.offerAll(hand.changed, [undefined, undefined, undefined]);
+        yield* hand.built([one]);
+        yield* hand.built([one, two]);
+        yield* Fiber.join(following);
+        yield* Effect.yieldNow;
+        expect(hand.calls()).toBe(2);
+      }),
+    ),
+  ));
+
+test("a build that fails leaves the last board, and the next change builds again", () =>
+  runEffect(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const hand = yield* handBuilt;
+        const following = yield* hand.follow(2);
+        yield* hand.built([one, two]);
+        yield* Queue.offer(hand.changed, undefined);
+        yield* hand.built("fails");
+        yield* Queue.offer(hand.changed, undefined);
+        yield* Queue.offer(hand.builds, [one, { ...two, sentence: "Moved." }]);
+        const messages = yield* Fiber.join(following);
+        expect(messages[1]).toEqual({
+          _tag: "Upsert",
+          seq: 3,
+          task: { ...two, sentence: "Moved." },
+        });
+        expect(hand.calls()).toBe(3);
+      }),
+    ),
   ));
 
 test(

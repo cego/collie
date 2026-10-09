@@ -13,6 +13,7 @@ import {
   type RunFile,
 } from "./board-model";
 import { attachmentsDir } from "./attachments";
+import { classifyWorkSource } from "./inputs";
 import { pipelineStatus, shell } from "./mr";
 import { REVIEW_FILE } from "./output";
 import { settled, type RunFacts } from "./runs";
@@ -32,7 +33,16 @@ export const planDirOf = Effect.fn("RunDetail.planDirOf")(function* (run: RunFac
   // Then the directory it was started from, which is how an `implement` run reaches the
   // spec a `plan` run wrote for it.
   const work = workSourceOf(run.settled);
-  if (work?.kind !== "plan-dir") return null;
+  if (work === null) return null;
+  // A start that recorded no kind, as one from a plan's end menu, is classified as the engine does.
+  const kind =
+    work.kind !== ""
+      ? work.kind
+      : yield* classifyWorkSource(work.value).pipe(
+          Effect.map((found) => found.kind),
+          Effect.orElseSucceed(() => "text"),
+        );
+  if (kind !== "plan-dir") return null;
   return (yield* fs.exists(work.value)) ? work.value : null;
 });
 

@@ -92,6 +92,7 @@ test(
           workspace: "workspace 3",
           tab: "tab 2",
           pane: paneId,
+          agent: "impl-1",
         });
         expect((yield* rig.cmds()).filter((cmd) => cmd.includes("focus"))).toEqual(["agent focus"]);
 
@@ -103,6 +104,33 @@ test(
           null,
         );
         expect(inDefault?.session).toBeNull();
+      }),
+    ),
+  30_000,
+);
+
+test(
+  "the one agent asked for is focused and named, and one herdr no longer has is its workspace",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const herdr = new Herdr(rig.pluginEnv());
+        yield* rig.addWorkspace("1", "workspace 1", "/p");
+        const { paneId: implPane } = yield* rig.addTab("tab 1", "impl");
+        yield* rig.addAgent("impl-1", implPane);
+        const { paneId: reviewPane } = yield* rig.addTab("tab 2", "review");
+        yield* rig.addAgent("review-1", reviewPane);
+        const sessions = [{ herd: null, name: "default", default: true, herdr }];
+
+        expect(yield* focusPane(sessions, ["review-1"], "1", null)).toEqual({
+          session: null,
+          workspace: "workspace 1",
+          tab: "tab 2",
+          pane: reviewPane,
+          agent: "review-1",
+        });
+        const gone = yield* focusPane(sessions, ["review-2"], "1", null);
+        expect(gone).toEqual({ session: null, workspace: "workspace 1", tab: null });
       }),
     ),
   30_000,

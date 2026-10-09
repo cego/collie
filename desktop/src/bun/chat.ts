@@ -8,6 +8,7 @@ import {
   Cause,
   Crypto,
   Deferred,
+  Duration,
   Effect,
   Exit,
   FileSystem,
@@ -20,9 +21,11 @@ import {
   Scope,
   Semaphore,
   Stream,
+  SubscriptionRef,
 } from "effect";
 import * as Base64 from "effect/encoding/Base64";
 import { type AguiEvent, ends } from "../shared/agui";
+import { saidOf } from "../shared/said";
 import {
   IMAGE_BYTES,
   INLINE_BUDGET,
@@ -37,6 +40,7 @@ import { isString } from "../../../src/schema";
 import { describeAttachment, scaledCopy } from "./attachments";
 import {
   type About,
+  aboutNote,
   type Answers,
   type ChatMessage,
   type Conversations,
@@ -180,7 +184,6 @@ interface Voice {
   said?: string;
   /** Desktop's copies of the files the human's message carried. */
   files?: ReadonlyArray<Staged>;
-  about?: About;
   news?: FlockBatch;
 }
 
@@ -210,13 +213,14 @@ const utf8 = (bytes: Uint8Array) => {
 };
 
 /**
- * The human's message as the model is handed it: their words, Desktop's listing of the
- * files apart from them, and what of each fits as an image, document or text. Why not,
- * where a file is gone.
+ * The human's message as the model is handed it: their words, Desktop's notes of the card
+ * it is about and of the files apart from them, and what of each file fits as an image,
+ * document or text. Why not, where a file is gone.
  */
 const contentOf = Effect.fnUntraced(function* (
   dir: string,
   text: string,
+  about: About | null,
   ids: ReadonlyArray<string>,
 ) {
   const fs = yield* FileSystem.FileSystem;
@@ -262,13 +266,18 @@ const contentOf = Effect.fnUntraced(function* (
   }
   const blocks: Array<ContentBlock> = [
     ...(text === "" ? [] : [{ type: "text" as const, text }]),
-    { type: "text", text: listing(files) },
+    ...(about === null ? [] : [{ type: "text" as const, text: aboutNote(about) }]),
+    ...(files.length === 0 ? [] : [{ type: "text" as const, text: listing(files) }]),
     ...images,
     ...documents,
     ...texts,
   ];
   return { blocks, files };
 });
+
+/** `start` kept once it succeeds, and tried again on the next ask until it does. */
+export const untilStarted = <A, E, R>(start: Effect.Effect<A, E, R>) =>
+  Effect.cachedWithTTL(start, (exit) => (Exit.isSuccess(exit) ? Duration.infinity : Duration.zero));
 
 /**
  * The current conversation's session, started by its first message and warm from then
@@ -298,7 +307,6 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* <Server>(opts
     fs.writeFileString(file, Schema.encodeSync(SessionFile)({ session }));
   let said: string | undefined;
   let carried: ReadonlyArray<Staged> | undefined;
-  let attached: About | undefined;
   let noticed: FlockBatch | undefined;
   const asking = new Map<string, Deferred.Deferred<Answers>>();
   const services = yield* Effect.context<Crypto.Crypto | FileSystem.FileSystem | Path.Path>();
@@ -316,7 +324,7 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* <Server>(opts
   };
   const server = opts.claude.server(flock, run);
   const usage = (yield* Path.Path).join(opts.dir, "flock-usage.jsonl");
-  const desktopTurns = yield* PubSub.unbounded<DesktopTurn>();
+  const desktopTurns = yield* SubscriptionRef.make<DesktopTurn>("ended");
   // ponytail: grows by one key per item Desktop spoke about, for as long as Desktop runs.
   /** News a turn of Desktop's has been about, so an item a host failed to settle never wakes it twice. */
   const spoken = new Set<string>();
@@ -346,7 +354,6 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* <Server>(opts
         server,
         claude: which("claude"),
         ask,
-        about: () => attached,
         noticed: () => (noticed === undefined ? undefined : flockNewsText(noticed)),
         placement: () => {
           const rule = opts.machineRule()?.trim() ?? "";
@@ -381,7 +388,7 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* <Server>(opts
       Stream.runForEach((event) => PubSub.publish(events, event)),
       Effect.matchCauseEffect({
         onSuccess: () => endWith("Claude Code ended the Flock chat's session."),
-        onFailure: (cause) => endWith(Cause.pretty(cause)),
+        onFailure: (cause) => endWith(saidOf(cause)),
       }),
       Effect.forkScoped,
     );
@@ -394,13 +401,15 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* <Server>(opts
   let id = Option.isSome(saved) ? saved.value.session : yield* crypto.randomUUIDv4;
   if (Option.isNone(saved)) yield* remember(id);
   let live: { readonly running: Live; readonly scope: Scope.Closeable } | undefined;
+  /** The session, started again where the last one ended, as one that failed to start has. */
   const warm = Effect.gen(function* () {
-    if (live !== undefined) return live.running;
+    if (live !== undefined && live.running.ended() === null) return live.running;
+    yield* end;
     const scope = yield* Scope.make();
     live = { running: yield* start(id).pipe(Scope.provide(scope)), scope };
     return live.running;
   });
-  const end = Effect.suspend(() => {
+  const end: Effect.Effect<void> = Effect.suspend(() => {
     const ending = live;
     live = undefined;
     return ending === undefined ? Effect.void : Scope.close(ending.scope, Exit.void);
@@ -444,7 +453,6 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* <Server>(opts
       Effect.sync(() => {
         said = undefined;
         carried = undefined;
-        attached = undefined;
         noticed = undefined;
         turning = undefined;
       }).pipe(
@@ -464,7 +472,6 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* <Server>(opts
     );
     said = voice.said;
     carried = voice.files;
-    attached = voice.about;
     // A turn of Desktop's carries its News in its message; the human's carries it as context.
     noticed = voice.said === undefined ? undefined : voice.news;
     turning = running;
@@ -508,11 +515,11 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* <Server>(opts
     const running = yield* warm;
     if (running.ended() !== null) return;
     const before = running.lastResult();
-    yield* PubSub.publish(desktopTurns, "started");
+    yield* SubscriptionRef.set(desktopTurns, "started");
     yield* turnOn(running, `${DESKTOP_SAID}\n${flockNewsText(fresh)}`, { news: fresh }).pipe(
       Effect.flatMap(Stream.runDrain),
       Effect.scoped,
-      Effect.ensuring(PubSub.publish(desktopTurns, "ended")),
+      Effect.ensuring(SubscriptionRef.set(desktopTurns, "ended")),
     );
     // A turn that failed before the model had its News waits for the next look, not the next nudge.
     resting = fresh.items.every((placed) => !spoken.has(newsKey(placed)));
@@ -536,7 +543,7 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* <Server>(opts
     send: (text, about, now, attachments = []) =>
       Stream.unwrap(
         Effect.gen(function* () {
-          const content = yield* contentOf(opts.dir, text, attachments).pipe(
+          const content = yield* contentOf(opts.dir, text, about, attachments).pipe(
             Effect.provideContext(services),
           );
           if (isString(content)) return Stream.make(refusal(content));
@@ -550,9 +557,12 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* <Server>(opts
           const news = yield* waiting;
           const voice: Voice = { said: text };
           if (content.files.length > 0) voice.files = content.files;
-          if (about !== null) voice.about = about;
           if (news.items.length > 0) voice.news = news;
-          return yield* turnOn(running, attachments.length > 0 ? content.blocks : text, voice);
+          return yield* turnOn(
+            running,
+            attachments.length > 0 || about !== null ? content.blocks : text,
+            voice,
+          );
         }),
       ),
     answer: (toolCallId, answers) =>
@@ -595,7 +605,7 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* <Server>(opts
         );
       }).pipe(Effect.orDie),
     nudge,
-    desktopTurns: Stream.fromPubSub(desktopTurns),
+    desktopTurns: SubscriptionRef.changes(desktopTurns),
   };
   return conversation;
 });

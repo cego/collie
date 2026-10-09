@@ -1,5 +1,6 @@
 import type { ElectrobunConfig } from "electrobun";
 import manifest from "../herdr-plugin.toml";
+import { macSigning } from "./scripts/mac-signing";
 
 export default {
   app: {
@@ -11,6 +12,7 @@ export default {
   },
   release: { baseUrl: "https://github.com/cego/collie/releases/latest/download" },
   scripts: {
+    preBuild: "scripts/mac-icons.ts",
     postBuild: "scripts/name-desktop-entry.ts",
     postWrap: "scripts/name-desktop-entry.ts",
   },
@@ -21,7 +23,17 @@ export default {
     watchIgnore: ["view/**"],
     mac: {
       bundleCEF: false,
-      icons: "icon.iconset",
+      icons: "mac.iconset",
+      ...macSigning(process.env),
+      // Electrobun signs with the hardened runtime, which Bun's JIT and an ad hoc identity's
+      // libraries need these to run under.
+      entitlements: {
+        "com.apple.security.cs.allow-jit": true,
+        "com.apple.security.cs.allow-unsigned-executable-memory": true,
+        "com.apple.security.cs.disable-executable-page-protection": true,
+        "com.apple.security.cs.allow-dyld-environment-variables": true,
+        "com.apple.security.cs.disable-library-validation": true,
+      },
     },
     linux: {
       bundleCEF: true,

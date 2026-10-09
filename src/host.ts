@@ -125,7 +125,7 @@ import {
   sha256Hex,
   type Attached,
 } from "./attachments";
-import { boardMessages } from "./board-stream";
+import { boardMessages, shareBoard } from "./board-stream";
 import { recordDisposition } from "./disposition";
 import {
   NEWS_TRAIL,
@@ -594,6 +594,9 @@ const hostBoard = (dir: string) =>
         desktopSweeper(
           desktopRootOf(dataHomeOf(env.home, env.raw["XDG_DATA_HOME"])),
           `${env.raw["XDG_STATE_HOME"] || `${env.home}/.local/state`}/collie-desktop`,
+          process.platform === "darwin"
+            ? `${env.home}/Applications/collie-desktop.app/Contents/Resources/version.json`
+            : `${desktopRootOf(dataHomeOf(env.home, env.raw["XDG_DATA_HOME"]))}/app/Resources/version.json`,
         ),
         // Last: a Task is kept while a workspace or a checkout of it is still there.
         retentionSweeper({
@@ -907,6 +910,7 @@ const frontDoorHandlers = (
         ],
         { concurrency: "unbounded" },
       ).pipe(Stream.share({ capacity: 1, strategy: "sliding" }));
+      const boards = yield* shareBoard({ build, changed });
       return FrontDoorRpcs.of({
         declare: ({ frontDoor, session, from, ...voice }, { client }) => {
           const already = declared.get(client.id);
@@ -1382,7 +1386,7 @@ const frontDoorHandlers = (
             ),
             plainly,
           ),
-        focus: ({ runId, request }, { client }) =>
+        focus: ({ runId, agent, request }, { client }) =>
           plainly(
             Effect.gen(function* () {
               const view = yield* known(runId);
@@ -1390,13 +1394,20 @@ const frontDoorHandlers = (
               const agents = (yield* everyRegistered(env.stateDir))
                 .filter((entry) => entry.runId === runId)
                 .map((entry) => entry.agent)
+                .filter((name) => agent === undefined || name === agent)
                 .reverse();
               const sessions = (yield* liveHerds(herdr, env)).toSorted(
                 (a, b) => Number(b.herd === task?.herd) - Number(a.herd === task?.herd),
               );
               return yield* once(
                 trail(runId),
-                { operation: "focus", request, ...whoOf(client), asked: {}, result: PaneAt },
+                {
+                  operation: "focus",
+                  request,
+                  ...whoOf(client),
+                  asked: agent === undefined ? {} : { agent },
+                  result: PaneAt,
+                },
                 focusPane(
                   sessions,
                   agents,
@@ -1567,8 +1578,7 @@ const frontDoorHandlers = (
                       herd === null ? [] : [name === undefined ? { id: herd } : { id: herd, name }],
                     ),
                   },
-                  build,
-                  changed,
+                  boards,
                 }),
               ),
               Effect.provideContext(bun),

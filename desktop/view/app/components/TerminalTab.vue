@@ -8,7 +8,15 @@ import { type IDisposable, type ILink, Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { Cause, Effect, Fiber, Result, Stream } from "effect";
 import * as Base64 from "effect/encoding/Base64";
+import type { BoardAgent } from "../../../../src/board-model";
 import type { PlacedTask, TerminalCommand, TerminalEvent } from "../../../src/shared/flock";
+import { saidOf } from "../../../src/shared/said";
+import {
+  type AgentTab,
+  agentTabs,
+  shownAgent,
+  switches,
+} from "../../../src/shared/record-terminal";
 import {
   cellAt,
   isMouseReport,
@@ -29,6 +37,17 @@ const host = ref<HTMLElement>();
 const ended = ref<string | null>(null);
 /** Go to pane found no live agent's pane, so herdr's own client was opened instead. */
 const noPane = ref(false);
+/** The agent the human picked, which Reattach opens again; none means the Run's newest. */
+const chosen = ref<AgentTab | null>(null);
+/** The herdr name of the agent whose pane the host says it focused. */
+const focused = ref<string>();
+let lastShown: BoardAgent | null = null;
+const switcher = computed(() =>
+  agentTabs(
+    props.placed.task.agents,
+    (lastShown = shownAgent(props.placed.task.agents, focused.value, lastShown)),
+  ),
+);
 
 let term: Terminal | undefined;
 let fiber: Fiber.Fiber<void> | undefined;
@@ -67,6 +86,7 @@ const shown = (event: TerminalEvent) => {
     case "Opened":
       // A resize sent while the controller was starting was refused.
       if (term !== undefined) send({ type: "terminal.resize", cols: term.cols, rows: term.rows });
+      focused.value = event.at.agent;
       return panes.showing(props.placed, event.at);
     case "Frame":
       return term?.write(Result.getOrElse(Base64.decode(event.bytes), () => new Uint8Array()));
@@ -75,39 +95,60 @@ const shown = (event: TerminalEvent) => {
       return;
     case "NoPane":
       noPane.value = true;
-      return props.wentToPane ? panes.openInHerdr(props.placed) : undefined;
+      return props.wentToPane && chosen.value === null
+        ? panes.openInHerdr(props.placed)
+        : undefined;
   }
 };
 
 const attach = () => {
   if (term === undefined) return;
   ended.value = null;
+  noPane.value = false;
   term.reset();
+  const agent = chosen.value;
   fiber = Effect.runFork(
-    terminal(props.placed.installation, props.placed.task.run, term.cols, term.rows).pipe(
+    terminal(
+      props.placed.installation,
+      agent?.run ?? props.placed.task.run,
+      agent?.name,
+      term.cols,
+      term.rows,
+    ).pipe(
       Stream.runForEach((event) => Effect.sync(() => shown(event))),
       Effect.catchCause((cause) =>
         Effect.sync(() => {
           if (Cause.hasInterruptsOnly(cause)) return;
-          const failed = Cause.findError(cause);
-          ended.value =
-            Result.isSuccess(failed) && failed.success._tag === "ActionFailed"
-              ? failed.success.reason
-              : Cause.pretty(cause);
+          ended.value = saidOf(cause);
         }),
       ),
     ),
   );
 };
 
-/** Ends the terminal, settled once its pane has been given back. */
-const detach = () => {
+const switching = switches(() => {
   const held = fiber;
   fiber = undefined;
   return held === undefined ? Promise.resolve() : Effect.runPromise(Fiber.interrupt(held));
+});
+
+const reattach = () => switching.to(attach);
+
+const pick = (agent: AgentTab) => {
+  // The agent shown stays listed, ended or not, until another is picked.
+  if (agent.name !== focused.value) focused.value = undefined;
+  chosen.value = agent;
+  return reattach();
 };
 
-const reattach = () => detach().then(attach);
+const dotOf = (state: string) =>
+  state === "working"
+    ? "bg-primary"
+    : state === "blocked"
+      ? "bg-warning"
+      : state === "ended"
+        ? "bg-muted"
+        : "bg-inverted/40";
 
 let listening: ReadonlyArray<IDisposable> = [];
 let resized: ResizeObserver | undefined;
@@ -169,20 +210,43 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
-  void detach();
+  void switching.stop();
   window.removeEventListener("mouseup", released);
   resized?.disconnect();
   for (const one of listening) one.dispose();
   term?.dispose();
+  term = undefined;
 });
 </script>
 
 <template>
   <div class="flex flex-col gap-2" data-testid="terminal-tab">
     <div class="flex items-center justify-between gap-2 text-sm">
-      <span class="text-muted" data-testid="terminal-where">{{
+      <span class="text-muted min-w-0 truncate" data-testid="terminal-where">{{
         panes.shownFor(placed.key)?.where ?? ""
       }}</span>
+      <div
+        v-if="switcher.length > 1 || switcher[0]?.state === 'ended' || noPane"
+        class="flex min-w-0 flex-wrap items-center gap-1"
+        data-testid="terminal-agents"
+      >
+        <UButton
+          v-for="agent in switcher"
+          :key="agent.name"
+          size="xs"
+          :variant="agent.shown ? 'soft' : 'ghost'"
+          :color="agent.shown ? 'primary' : 'neutral'"
+          :title="agent.now === null ? agent.name : `${agent.name}: ${agent.now}`"
+          :aria-pressed="agent.shown"
+          :class="{ 'line-through opacity-60': agent.state === 'ended' }"
+          data-testid="terminal-agent"
+          @click="pick(agent)"
+        >
+          <span class="size-2 shrink-0 rounded-full" :class="dotOf(agent.state)" />
+          {{ agent.label }}
+          <span class="text-muted">{{ agent.state }}</span>
+        </UButton>
+      </div>
       <UButton
         size="xs"
         variant="ghost"
@@ -193,7 +257,11 @@ onBeforeUnmount(() => {
       />
     </div>
     <p v-if="noPane" class="text-muted text-sm" data-testid="terminal-no-pane">
-      This Run has no live agent's pane to show here; Open in herdr shows its workspace.
+      {{
+        chosen === null
+          ? "This Run has no live agent's pane to show here; Open in herdr shows its workspace."
+          : `herdr no longer has ${chosen.label}'s pane; pick another agent.`
+      }}
     </p>
     <!-- Esc and Ctrl+C are the pane's while it has focus, not the record's. -->
     <div

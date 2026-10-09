@@ -46,6 +46,7 @@ test(
             HERDR_BIN_PATH: Bun.env.HERDR_BIN_PATH ?? "",
             FAKE_HERDR_LOG: Bun.env.FAKE_HERDR_LOG ?? "",
           });
+          const reached = { machine: { profile: "local", name: "mk-pc" }, desktop: door };
           const board = yield* machineBoard({ profile: "local", name: "mk-pc" }, door).pipe(
             Stream.toPull,
           );
@@ -73,13 +74,24 @@ test(
           }
 
           expect(
-            yield* act(door, "hold-1", { _tag: "Control", runId, control: "hold", set: true }),
+            yield* act(reached, "hold-1", {
+              _tag: "Control",
+              runId,
+              control: "hold",
+              set: true,
+            }),
           ).not.toBe("");
           // Tried again under the same request, it is the one hold.
-          yield* act(door, "hold-1", { _tag: "Control", runId, control: "hold", set: true });
-          const refused = yield* act(door, "resume-x", { _tag: "Resume", runId: "r-nobody" }).pipe(
-            Effect.flip,
-          );
+          yield* act(reached, "hold-1", {
+            _tag: "Control",
+            runId,
+            control: "hold",
+            set: true,
+          });
+          const refused = yield* act(reached, "resume-x", {
+            _tag: "Resume",
+            runId: "r-nobody",
+          }).pipe(Effect.flip);
           expect(refused.reason).toBe("no Run r-nobody");
 
           const trail = yield* readAudit(runDir(world.state, runId));
@@ -324,11 +336,12 @@ test("an older release is upgraded once through its route while its board stays 
       // A change on the board reaches it while the upgrade is still running.
       yield* until(() => told.length === 2);
       yield* Deferred.succeed(upgradeMayFinish, undefined);
-      yield* until(() => told.length >= 4);
-      expect(told.slice(0, 4)).toEqual([
+      yield* until(() => told.length >= 5);
+      expect(told.slice(0, 5)).toEqual([
         "Snapshot 0.30.2",
         "Remove",
         "vm upgraded 0.30.2 → 0.31.0",
+        "vm Reconnecting",
         "Snapshot 0.31.0",
       ]);
       expect(asked).toEqual([["--json", "upgrade", "--to", "0.31.0"]]);
@@ -435,6 +448,7 @@ test("a Machine out of reach when Desktop starts is upgraded once it connects", 
       expect(told.slice(1)).toEqual([
         "Snapshot 0.30.2",
         "vm upgraded 0.30.2 → 0.31.0",
+        "vm Reconnecting",
         "Snapshot 0.31.0",
       ]);
       expect(asked).toEqual([["--json", "upgrade", "--to", "0.31.0"]]);
@@ -565,8 +579,14 @@ test("Sync now on a Machine behind on its version reopens its route, which asks 
         failed: false,
       });
       yield* until(() => connections === 2 && asked === 2);
-      // Reopened, not lost.
+      // Reopened, not lost: what it showed is dated until it connects again.
       expect(told.filter((one) => one.endsWith("Lost"))).toEqual([]);
+      yield* until(() => told.filter((one) => one === "Snapshot 0.30.2").length === 2);
+      const reconnecting = told.indexOf("vm Reconnecting");
+      expect(told.slice(reconnecting, reconnecting + 2)).toEqual([
+        "vm Reconnecting",
+        "Snapshot 0.30.2",
+      ]);
     }).pipe(Effect.scoped),
   ));
 

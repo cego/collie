@@ -1,6 +1,7 @@
 // What a human reads a Run's progress from while nobody is watching its panes: the cards
 // the host writes as the work reaches its moments, and the toast when one is worth it.
 
+import type { ChildProcessSpawner } from "effect/process";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, FileSystem, Layer, Path, Schema } from "effect";
 import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
@@ -67,6 +68,7 @@ const session = <A, E>(
     | Store
     | FileSystem.FileSystem
     | Path.Path
+    | ChildProcessSpawner.ChildProcessSpawner
   >,
   herd?: Herd,
 ) => {

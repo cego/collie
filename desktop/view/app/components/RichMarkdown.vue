@@ -37,8 +37,12 @@ const COMPONENTS = { a: MarkdownLink, mermaid: Mermaid, "file-ref": FileRef };
 </script>
 
 <template>
-  <!-- Contained, so nothing an agent positions can leave it; scrolled, so nothing wide is cut. -->
-  <div class="overflow-x-auto text-sm [contain:paint]" data-testid="markdown">
+  <!-- Contained, so nothing an agent positions can leave it. Long tokens break; code,
+       tables (Nuxt UI's own wrapper) and diagrams scroll within themselves. -->
+  <div
+    class="min-w-0 text-sm wrap-anywhere [contain:paint] [&_.mermaid]:overflow-x-auto [&_pre]:overflow-x-auto [&_pre]:whitespace-pre [&_pre]:wrap-normal [&_table]:wrap-normal"
+    data-testid="markdown"
+  >
     <Suspense>
       <Markdown :value="text" :streaming="streaming" :plugins="PLUGINS" :components="COMPONENTS" />
       <template #fallback><p class="text-muted text-sm">Rendering…</p></template>

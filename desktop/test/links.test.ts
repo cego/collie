@@ -1,7 +1,7 @@
 // The web links a Run produced, as the record's cards show them.
 
 import { expect, test } from "bun:test";
-import { webLinks } from "../src/shared/links";
+import { shortUrl, webLinks } from "../src/shared/links";
 
 const mr = {
   _tag: "Details",
@@ -121,4 +121,12 @@ test("a pipeline's own page is its card, and a page that only starts with digits
       title: "gitlab.cego.dk/g/p/-/pipelines/90x",
     },
   ]);
+});
+
+test("a URL is drawn without its scheme or a trailing slash, and elided in the middle past 60", () => {
+  const sixty = `${"a".repeat(57)}.dk`;
+  expect(shortUrl(`https://${sixty}`)).toBe(sixty);
+  expect(shortUrl(`https://${sixty}/`)).toBe(sixty);
+  expect(shortUrl(`http://${"b".repeat(58)}.dk`)).toBe(`${"b".repeat(40)}…${"b".repeat(12)}.dk`);
+  expect(shortUrl("http://example.com/")).toBe("example.com");
 });

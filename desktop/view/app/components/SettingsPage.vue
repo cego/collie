@@ -1,19 +1,21 @@
 <script setup lang="ts">
-import { AsyncResult, injectRegistry, useAtomValue } from "@effect/atom-vue";
+import { injectRegistry } from "@effect/atom-vue";
 import { settingOf, settingStored } from "../../../../src/settings";
 import {
+  desktopChange,
   NO_FLOCK_SETTINGS,
   type SettingRow,
   settingSections,
 } from "../../../src/shared/flock-settings";
-import { flockSettingsAtom } from "../flock";
+import { drawnSaid } from "../../../src/shared/scale";
+import { drawnAtom, flockSettingsAtom } from "../flock";
 
 const emit = defineEmits<{ back: [] }>();
 const { openLink, saveGitlabHost, setFlockSetting } = useActions();
-const { credentials } = useCredentials();
+const { credentials, trouble: credentialsTrouble } = useCredentials();
 const { desktopSettings, reread, change } = useDesktopSettings();
 const toast = useToast();
-const held = useAtomValue(() => flockSettingsAtom);
+const { value: held, trouble } = useHeld(() => flockSettingsAtom);
 // Asked again on opening, which syncs every connected Machine and so shows their edits.
 const registry = injectRegistry();
 onMounted(() => {
@@ -21,10 +23,7 @@ onMounted(() => {
   void reread();
 });
 const sections = computed(() =>
-  settingSections(
-    AsyncResult.getOrElse(held.value, () => NO_FLOCK_SETTINGS),
-    desktopSettings.value,
-  ),
+  settingSections(held.value ?? NO_FLOCK_SETTINGS, desktopSettings.value),
 );
 
 const host = ref("");
@@ -39,11 +38,7 @@ const shown = (row: SettingRow) => drafts.value[idOf(row)] ?? row.value;
 /** `typed` in the row's unit; empty unsets it. */
 const set = async (row: SettingRow, typed: string) => {
   if (!row.shared) {
-    const kept = await change(
-      row.key === "proactive"
-        ? { proactive: (typed || row.fallback) === "true" }
-        : { machineRule: typed.trim() },
-    );
+    const kept = await change(desktopChange(row.key, typed));
     if (kept) delete drafts.value[idOf(row)];
     else toast.add({ title: "Desktop could not keep that", color: "error" });
     return;
@@ -53,13 +48,29 @@ const set = async (row: SettingRow, typed: string) => {
   if (await setFlockSetting(row.key, stored.stored)) delete drafts.value[idOf(row)];
 };
 const gitlabHostSaid = settingOf("gitlab_host")?.description;
+
+const { value: drawn } = useHeld(() => drawnAtom);
+/** The view's own pixel ratio, read again as a zoom resizes its viewport. */
+const ratio = ref(window.devicePixelRatio);
+const readRatio = () => (ratio.value = window.devicePixelRatio);
+onMounted(() => window.addEventListener("resize", readRatio));
+onUnmounted(() => window.removeEventListener("resize", readRatio));
+watch(drawn, readRatio);
+const drawnLine = computed(() =>
+  drawn.value === undefined ? null : drawnSaid(drawn.value, ratio.value),
+);
 </script>
 
 <template>
   <section data-testid="settings-page" class="flex flex-col bg-default">
     <PageHeader title="Settings" @back="emit('back')" />
-    <div class="min-h-0 flex-1 overflow-y-auto p-4">
-      <div class="flex max-w-3xl flex-col gap-6">
+    <div class="min-h-0 flex-1 overflow-y-auto p-4 [scrollbar-gutter:stable]">
+      <div class="flex flex-col gap-6" :class="columnClass('settings')">
+        <RetryNotice
+          v-if="trouble !== null"
+          title="The Flock's settings could not be read; showing what they last were"
+          :trouble="trouble"
+        />
         <section
           v-for="section in sections"
           :key="section.group"
@@ -149,6 +160,11 @@ const gitlabHostSaid = settingOf("gitlab_host")?.description;
         </section>
         <section class="flex flex-col gap-4" data-testid="credentials">
           <h3 class="text-sm font-semibold">GitLab and credentials</h3>
+          <RetryNotice
+            v-if="credentialsTrouble !== null"
+            title="Desktop could not read its credentials; showing what it last had"
+            :trouble="credentialsTrouble"
+          />
           <template v-if="credentials">
             <div class="flex flex-col gap-1">
               <div class="flex items-baseline gap-2">
@@ -225,6 +241,9 @@ const gitlabHostSaid = settingOf("gitlab_host")?.description;
         <section class="flex flex-col gap-3" data-testid="about">
           <h3 class="text-sm font-semibold">About</h3>
           <DesktopVersion />
+          <p v-if="drawnLine !== null" class="text-sm text-muted" data-testid="drawn">
+            {{ drawnLine }}
+          </p>
         </section>
       </div>
     </div>

@@ -4,6 +4,7 @@
 import { expect, test } from "bun:test";
 import { Clock, DateTime, Effect, FileSystem, Schema } from "effect";
 import { CleanupReport } from "../src/board-model";
+import { desktopSweeper } from "../src/cleanup";
 import {
   dataHomeOf,
   desktopRootOf,
@@ -31,6 +32,28 @@ const installed = (dir: string) =>
       yield* fs.writeFileString(`${root}/self-extraction/${name}`, "x".repeat(4096));
     return root;
   });
+
+test("macOS cleanup reads the installed app and keeps its running runner and tar", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const home = yield* fs.makeTempDirectoryScoped({ prefix: "desktop-macos-" });
+      const root = desktopRootOf(dataHomeOf(home, undefined, "darwin"));
+      const bundle = `${home}/Applications/collie-desktop.app/Contents/Resources/version.json`;
+      yield* fs.makeDirectory(bundle.slice(0, bundle.lastIndexOf("/")), { recursive: true });
+      yield* fs.writeFileString(bundle, '{"version":"0.36.0","hash":"running"}');
+      yield* fs.makeDirectory(`${root}/self-extraction`, { recursive: true });
+      for (const name of ["running.tar", "older.tar"])
+        yield* fs.writeFileString(`${root}/self-extraction/${name}`, "x");
+      for (const version of ["0.34.0", "0.36.0", "0.37.0"])
+        yield* fs.makeDirectory(`${root}/runners/${version}`, { recursive: true });
+      const found = yield* desktopSweeper(root, `${home}/state`, bundle).judge;
+      expect(found.remove.map((item) => item.target).sort()).toEqual([
+        `${root}/runners/0.34.0`,
+        `${root}/self-extraction/older.tar`,
+      ]);
+    }).pipe(Effect.scoped),
+  ));
 
 test("Desktop's start removes every staged tar but its own bundle's", () =>
   runEffect(

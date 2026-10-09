@@ -36,6 +36,7 @@ export const inTerminal = Effect.fn("inTerminal")(function* (
       },
     }),
   );
+  yield* Effect.addFinalizer(() => Effect.sync(() => child.terminal?.close()));
   return {
     output: Stream.fromQueue(output),
     type: (text) => Effect.sync(() => void child.terminal?.write(text)),

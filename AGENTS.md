@@ -95,6 +95,12 @@ herdr actions, and the `collie` CLI.
   (its copies), `bun/carried.ts` (files to a Run's Machine), `bun/file-tools.ts` and
   `shared/attachments.ts`, with `test/attachments.test.ts`, `test/host-files.test.ts` and
   `test/flock-*.test.ts`.
+- **Changing how large Desktop draws, or its Zoom** →
+  [ADR-0047](docs/adr/0047-desktop-draws-at-its-monitors-own-scale.md), alongside
+  `desktop/src/shared/scale.ts` (the monitor of a window from `hyprctl -j`, the zoom and the
+  "Drawn at" line) and `desktop/src/bun/scale.ts` (reading the scales and setting each
+  window's page zoom as it moves), with `test/desktop-scale.test.ts`. Page zoom, never CSS
+  `zoom`.
 - **Adding a setting, or changing how settings are shared across a Flock** →
   [ADR-0043](docs/adr/0043-a-shared-setting-is-its-latest-edit.md), alongside
   `src/settings.ts` (the one list the TUI, Desktop and the host read), `setSetting` and
@@ -245,6 +251,17 @@ herdr actions, and the `collie` CLI.
   [`docs/internals.md`](docs/internals.md) and [`docs/adr/`](docs/adr).
 - **Changing install, keybindings or the Control Plane** →
   [`docs/using.md`](docs/using.md).
+- **Changing how a release is signed, what an installer checks, or what Collie supports on
+  macOS** → [ADR-0048](docs/adr/0048-collie-is-released-for-macos-on-apple-silicon.md),
+  alongside `tools/sign.ts`, `src/signing.ts`, `install.sh` and `install-desktop.sh`, with
+  `test/signing.test.ts`, `test/prepare.test.ts` and `test/install-desktop.test.ts`. Every
+  asset is signed twice: the shell installers check the P-256 signature, which any
+  `openssl` can, and the runner and Desktop the Ed25519 one. What runs differently on a Mac is
+  `src/script.ts` (a login's `script`), the `ps` fallback in `src/compaction.ts`'s
+  `endpointPid` and `desktop/src/bun/login-path.ts` (Desktop's PATH from the login shell).
+  Desktop's macOS build is `desktop/scripts/mac-signing.ts` (Developer ID or ad hoc) and
+  `tools/verify-mac-app.sh`, with `test/desktop-mac-signing.test.ts` and
+  `test/desktop-build-hook.test.ts`.
 
 ## Commands
 
@@ -272,8 +289,9 @@ of the view is covered by testing the logic it renders.
    adapters over the same Effect services ([ADR-0003](docs/adr/0003-collie-is-one-effect-program.md)).
 3. All herdr communication goes through `src/herdr.ts`. The exceptions never talk to a
    session for Collie: `tools/herdr-schema.ts`, which runs a downloaded release offline to
-   print its schema; Desktop's `herdr machine list`, `add` and `remove`; and, for the
-   human, herdr's terminal controller whose pane Go to pane shows in Desktop, and the herdr
+   print its schema; Desktop's `herdr machine list`, `add` and `remove`, and the
+   `herdr --version` that says why a list failed; and, for the human, herdr's terminal
+   controller whose pane Go to pane shows in Desktop, and the herdr
    client it opens in a terminal where there is no pane to show — see
    [`docs/internals.md`](docs/internals.md#the-herdr-boundary).
 4. One host owns a state directory and everything it is running

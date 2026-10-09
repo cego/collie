@@ -19,12 +19,12 @@ everything else. That is the one routine that prepares a
 machine, and `collie upgrade` and herdr's plugin build hook end in it too, so a prerequisite
 is added in one place:
 
-| Step             | What it does                                                                                 |
-| ---------------- | -------------------------------------------------------------------------------------------- |
-| `plugin-link`    | `herdr plugin link` from this checkout, if it is not already linked from it                  |
-| `runner`         | `install.sh`: the runner in `bin/collie`, and a `collie` shim on your PATH                   |
-| `operator-skill` | Links the Collie operator skill into `~/.claude/skills/collie` and `~/.agents/skills/collie` |
-| `skills`         | Installs and updates the skills the workflows require (below)                                |
+| Step             | What it does                                                                                        |
+| ---------------- | --------------------------------------------------------------------------------------------------- |
+| `plugin-link`    | `herdr plugin link` from this checkout, if it is not already linked from it and herdr is new enough |
+| `runner`         | `install.sh`: the runner in `bin/collie`, and a `collie` shim on your PATH                          |
+| `operator-skill` | Links the Collie operator skill into `~/.claude/skills/collie` and `~/.agents/skills/collie`        |
+| `skills`         | Installs and updates the skills the workflows require (below)                                       |
 
 Every step skips what is already in place, so re-running is a reflex rather than a
 decision. `install.sh` writes the shim without changing PATH itself. Keybindings are the
@@ -35,12 +35,28 @@ plugin rebuild may do as a side effect, so `setup.sh` alone adds them.
 its status, so an install's last word is either that everything is ready or what is missing
 with the fix for each.
 
+**An older herdr.** With a herdr older than the plugin manifest's `min_herdr_version`,
+`plugin-link` is skipped and says so, everything else still runs, and doctor says what
+upgrading herdr will do to the programs running in its panes, and when to do it
+([ADR-0048](adr/0048-collie-is-released-for-macos-on-apple-silicon.md), D4). From a herdr
+before 0.9.0 the running server must stop once, which ends every program in its panes, so do
+it when nothing is running there; `herdr update --handoff` is herdr's experimental way to
+carry them across. From 0.9.0 on, `herdr update` leaves the running server and its panes
+alone, and restarting the server when nothing is running picks up the rest. Collie never
+upgrades herdr or stops its server itself: stopping it ends your work, so when is yours to
+choose. Desktop says the same when its herdr has no `herdr machine`, and points at
+`collie doctor`.
+
+**On a Mac.** The same command installs the TUI plugin on macOS. Its `darwin-arm64` runner
+is the file a release ran on a Mac before signing it, signed ad hoc there if macOS would not
+start Bun's build as it was. The logins `collie onboard` and Desktop run use macOS's own BSD
+`script`, and nothing needs Homebrew's OpenSSL or GNU tools.
+
 Collie's releases are public, so the install needs no token. A project that is not public — a
 fork, or a mirror — answers an unauthenticated download with a sign-in page rather than a binary — with HTTP 200, which is why the install
 checks that what arrived is a program rather than trusting the status code. A downloaded
-runner is installed only once its signature from Collie's release key checks out, which
-needs OpenSSL 3.0 or later: macOS's own LibreSSL and OpenSSL 1.1 cannot check it, so a Mac
-needs `brew install openssl` and a RHEL 8 Machine EPEL's `openssl3`.
+runner is installed only once its signature from Collie's release key checks out. Any
+`openssl` will do, macOS's own LibreSSL and OpenSSL 1.1 among them.
 
 For one of those, the install finds a token in this order:
 
@@ -143,6 +159,21 @@ the command above. Set up and not working is a `!`: a credentials file without a
 not valid JSON. Each names the file to look in. `collie run start` asks the same two
 questions for the workflow it is about to run and refuses with that detail when the answer
 is no — a Run that would only find out at its merge step is not started.
+
+### Working with bodil
+
+Collie has no bodil option. A `bodil` workflow wraps `implement`: it runs `bodil remote up`,
+has implement work in bodil's own worktree on bodil's branch, and runs `bodil remote down`
+once implement has settled. The module is in
+[`docs/sdk.md`](sdk.md#a-checkout-another-tool-makes). Save it as
+`~/.collie/user/workflows/bodil.workflow.ts` until bodil's own install script links it, then:
+
+```sh
+collie run start bodil --input plan=… --input brands=happytiger
+```
+
+`--input name=<name>` names the instance; without it the Run's task name does. A Run
+stopped part-way leaves the instance up, for `bodil remote down <name>`.
 
 ### Environment variables
 
@@ -840,40 +871,46 @@ a run directory: an unsent answer is yours, not the run's.
 
 ## Collie Desktop
 
-**Desktop** is a desktop app for Linux and macOS that shows the **Flock** — every Herd on every
+**Desktop** is a desktop app, released for Linux (x64) and for Macs with Apple silicon, that shows the **Flock** — every Herd on every
 Machine it reaches — on one board. It lives in `desktop/` and is one more front door over
 the same board: it reads each host's stream and builds nothing of its own. The sections and
 the header sentence are counted across the Flock. Once there is more than one Machine, each
 card names its Machine, and its Herd too when that Machine runs more than one herdr
 session.
 
-Desktop is released with Collie, under the same tag and version, for Linux (x64) and macOS
-(Apple silicon). Install it for your user — on Linux with a desktop entry, on macOS in
-`~/Applications` — with:
+Desktop is released with Collie, under the same tag and version. Install it for your user,
+on Linux with a desktop entry and on a Mac into `~/Applications`:
 
 ```sh
 curl -fsSL https://github.com/cego/collie/releases/latest/download/install-desktop.sh | sh
 ```
 
-The script downloads the latest release's installer and runs it only once the download
-verifies against Collie's release key. Checking needs OpenSSL 3.0 or later; macOS has only
-LibreSSL, so there the script uses Homebrew's `openssl@3` (`brew install openssl@3`).
+The script downloads the latest release's installer and uses it only once the download
+verifies against Collie's release key. Any `openssl` will do. On Linux it runs the installer.
+On a Mac it attaches the DMG without opening a Finder window, copies **collie-desktop**
+into `~/Applications`, replacing an older copy, and detaches it again; open it from
+Spotlight or the Dock. An Intel Mac is refused: Desktop is released for Apple silicon only,
+and the TUI plugin works there.
 
-The macOS app is not signed or notarized by Apple; the release key is what it is checked
-against. What `curl` downloads is not quarantined, so Gatekeeper lets it open. If you
-download the disk image in a browser instead and macOS refuses to open the app, clear the
-quarantine flag: `xattr -dr com.apple.quarantine ~/Applications/collie-desktop.app`. The
-first start unpacks the app where it is, so it opens a moment later than the ones after.
+Until a release is notarized by Apple, a DMG downloaded in a browser is quarantined and
+Gatekeeper refuses to open the app in it. The script avoids that: `curl` sets no quarantine,
+and the app it copies is signed. If you did download the DMG in a browser, install with the
+script instead.
+
+**On a Mac, the Mac is Local.** Agents run on it as they do on Linux. A VM is a second
+Machine only if you want agents to run there too: add it with `herdr machine add` and
+Desktop shows it beside Local. bodil's `--vm` backend is bodil's own business and not a
+Collie Machine, so a VM bodil uses needs no `herdr machine add` for that.
+
+On macOS, Desktop opened from Finder or the Dock starts with launchd's short PATH. So at
+start it takes your login shell's environment (`$SHELL -ilc`), including its PATH, finding
+`herdr`, `collie`, `claude`, `git` and `ssh` as your terminal does. If the shell does not
+answer within five seconds, Desktop keeps the environment it was given and logs why. On Linux it
+keeps the environment its session gave it.
 
 It shows up as **Collie**, with the Collie mark — the dog on the white tile the TUI board
 shows, which reads on a dark taskbar too — in your app launcher, on its window, in the
-taskbar and at the top left of the board. On macOS the menu bar and the Dock say Collie;
-the app in `~/Applications` is `collie-desktop.app`, the name its updates are made for.
-
-On macOS an app opened from Finder or the Dock starts with launchd's minimal environment, so Desktop
-takes your login shell's environment as it starts: the `PATH` and variables from `~/.zshrc`
-reach `collie`, herdr and the agents it runs. If the shell does not answer within five
-seconds, Desktop keeps the environment it has.
+taskbar and at the top left of the board.
 
 Desktop then keeps itself up to date. It checks the latest release when it starts and every
 hour after, and downloads an update in the background. **Settings**, under **About**, shows
@@ -884,8 +921,9 @@ tar it would install verifies against the same key, because Electrobun's bundle 
 not authentication. An update that is unsigned or does not match is thrown away and said
 so. One that verifies is announced as "Collie 0.33.0 is ready, restart Desktop", and
 **Restart Desktop** installs it. Desktop never restarts itself: an update that is ready when
-you quit is installed the next time you start Desktop. On Linux, [`collie upgrade`](cli.md#upgrading)
-on this computer stages the same update for Desktop, verified the same way, so the CLI and
+you quit is installed the next time you start Desktop. It updates itself the same way on a
+Mac. On Linux, [`collie upgrade`](cli.md#upgrading)
+on this computer also stages the same update for Desktop, verified the same way, so the CLI and
 Desktop move together; a running Desktop announces it within a minute. A ready update stays
 announced through later checks, even one that fails. A Desktop run from a checkout
 (`bun run start`, or any build that is not the stable channel) never updates itself, and
@@ -941,7 +979,8 @@ Desktop to see _name_**.
 
 A host that is not running needs nothing from you, because the bridge starts it. Desktop
 saves each Machine's last board on this computer, under
-`$XDG_DATA_HOME/dk.cego.collie.desktop/<channel>/machines/`. At launch it shows those boards
+`$XDG_DATA_HOME/dk.cego.collie.desktop/<channel>/machines/` on Linux, or
+`~/Library/Application Support/dk.cego.collie.desktop/<channel>/machines/` on macOS. At launch it shows those boards
 dimmed, marked "as of", until each Machine's connection is live; a board saved through a
 machine herdr no longer lists is not shown.
 
@@ -971,6 +1010,15 @@ took it over, the Machine's connection dropped, or herdr refused — and **Reatt
 the Run's newest live agent again. The tab stays while its Machine is away, and Reattach
 says that Machine is not connected until it is back. The card and the tab say where the pane is, as
 "vm-mk › workspace 3 › tab 2".
+
+Where the Task has more than one live agent — a planner, an implementer and its reviewers,
+across a plan Run and its `.implement` Run — the tab lists every agent the card counts
+beside Open in herdr, each as its role (numbered where two share one, as "reviewer 1") with
+herdr's status, and its herdr name and terminal title on hover. The one marked is the pane
+the Machine says it focused. Picking another gives the shown pane back and opens the chosen
+one, and Reattach then reopens the chosen agent rather than the newest. An agent that ends
+while shown stays listed as **ended** until you pick another. Leaving the tab forgets the
+choice, so coming back, like Go to pane, shows the newest live agent again.
 
 Where there is no pane to show — a Run with no live agent, or a Machine on a Collie whose
 focus does not name one — Go to pane does what it did before, and **Open in herdr** on the
@@ -1091,7 +1139,7 @@ unchanged. **Reset to default**, shown while a setting is set, unsets it. Each s
 **Every Machine** shares it or it is for **This computer only**: the Flock chat's switch,
 like the bell in the chat's header, is this computer's. The groups, names, descriptions and
 units live with each key in the one list of settings (`src/settings.ts`) that the TUI's
-Settings reads too, so a new setting shows up in both, except the two for this computer only,
+Settings reads too, so a new setting shows up in both, except the three for this computer only,
 whose are in `DESKTOP_SETTINGS` (`desktop/src/shared/flock-settings.ts`); the TUI does not show the names,
 descriptions or minutes yet. The ones every Machine shares are the Flock's: Desktop keeps them in
 `flock-settings.json` beside its chat, and gives them to every Machine through that
@@ -1106,6 +1154,19 @@ with Settings saying beside it which Machine that came from. A value a Machine h
 its setting refuses, written into its file by hand, is not taken. What stays each Machine's own
 is everything else in its `config.json`: remembered answers such as `linear.team` and
 `gitlab.assignee`, `chat_harness`, and `projects.root`, which is a path on that Machine.
+
+**Zoom**, under **Board** and for **This computer only**, is how large Desktop draws: 80%,
+90%, 100%, 110%, 125% or 150%, where 100% is the size of the other apps on the same monitor.
+A change applies at once to every Desktop window, the popped-out Flock chat included.
+Desktop is drawn through XWayland, which renders it at one whole-number scale on every
+monitor, so on Hyprland Desktop reads the scale of the monitor holding each window from
+`hyprctl -j` and corrects for it with Chromium's own page zoom, again whenever a window
+moves, resizes or takes focus: moving one to another monitor resizes it, and text stays sharp
+([ADR-0047](adr/0047-desktop-draws-at-its-monitors-own-scale.md)). **About** says how the
+board's window is drawn — "Drawn at 1.5× on DP-1 (3840×2160, Hyprland scale 1.5). Rendered
+at 2×, so zoom 75% × your 100%." — and says so where the window's pixel ratio is not what
+that zoom should give. Where Desktop cannot read the monitor's scale, as on another
+compositor or an X11 session, it says the scale is not known and why, and Zoom alone applies.
 
 **Settings** also holds **Collie**: every setting the TUI's Settings offers — each default a
 Run reads, `proactive`, the extra `models.<harness>` and each `notifications.<kind>` — with
@@ -1153,10 +1214,32 @@ card go.
 
 The record takes the board's place in its column, under the header bar and beside the Flock
 chat, so you can ask the chat about the Run you are reading while its diff has the column's
-whole width — the window's, with the chat collapsed or popped out. Diff, Evidence and Log
-use that width; Plan, Review and Facts keep a readable line length. The record's back button
+whole width — the window's, with the chat collapsed or popped out. What you read is
+centred in one of three columns: Plan, Review, Facts and Merge request, like Settings and
+Machines, in a reading column of about 80 characters; Evidence and Log in a wider one, with
+room for a 120-column log line; and Diff and Terminal across the full width. The page's
+header, the record's banner and its tabs sit in the reading column on every tab, so they do
+not move as you switch, and a narrower window shrinks each column inside the page's margin
+rather than scrolling sideways. The record's back button
 returns to the board, which was never taken down: it comes back scrolled where you left it,
 its sections open or closed as they were, and the card still selected.
+
+A record outlives its Machine's connection. When that connection is renewed — it dropped,
+**Sync now** reopened it, or Desktop upgraded the Machine — the record keeps what it showed,
+says above it what the board says of that Machine ("vm-mk is out of reach; showing what it
+last said", with the reason, or "vm-mk is reconnecting"), and carries on by itself once the
+Machine is back. A record opened before its Machine connects fills in once it does. An
+action, the offers, the workflows, a Run's file or Go to pane cut off by a renewed
+connection says "vm-mk's connection was renewed before this finished", and **Try again**
+sends the action under the same request, so it is done once.
+
+Nothing in the window needs a restart. The board, a record, Settings, the credentials
+warning, update news and the chat's turn indicator each keep what they last showed when the
+stream behind them fails for any other reason — a host stopped, a refusal, Desktop's own
+main process — and say above it, as a warning, what went wrong and when they try again:
+after 1 s, then twice as long each time it fails again, up to a minute, and at once again
+after anything arrives. **Retry now** tries every one of them at once. A Flock chat that
+could not start, say before you logged in to Claude, starts again on your next message.
 
 The record is one of Desktop's **pages**, with **Settings** and **Machines**: each takes the
 board's column in the same way, one at a time, so opening Settings with a record open replaces
@@ -1305,7 +1388,21 @@ steered there. What the host records of your words also names the files they car
 Click a card and it becomes a chip above the input ("About: vm-mk › Fix board bugs"): your
 next message goes with it, so "this one" means that card, and sending uses it up. Clear it
 with its ✕, a click on the board's background, or Escape outside a field; a chat popped out
-into its own window clears with it. The chip is attached as context for the turn, never as your words.
+into its own window clears with it. The message keeps its card: it goes to the model as
+Desktop's own bracketed note after your words, never as your words, and stays in the
+conversation's history, so "this one" in an old message still means the card it went with.
+Your bubble shows that card as a pill ("vm-mk › Fix board bugs") from the moment it is sent,
+after a restart and in a reopened conversation alike; a queued message gets its pill once
+it is sent. Click the pill to open that Task's record on the board — from a popped-out chat
+too, in the board's window — or be told the Task is no longer on the board.
+
+A web address in a message — yours, Collie's or Desktop's — is a link that opens in your
+browser, never in Desktop: bare, in `<…>`, as a markdown link, or alone in backticks. One
+whose text is its own address is drawn without `https://` and, past 60 characters, with its
+middle elided ("gitlab.cego.dk/some-group/some-project/-…9abcdef01234567"); hover for the
+whole address. A markdown link keeps its words. Long addresses, paths and ids wrap inside
+the message, so nothing in the chat scrolls sideways at any width; only a code block, a
+table or a diagram scrolls, within itself. The record's markdown wraps the same way.
 
 News reaches it from every Herd on every Machine as one batch: what matters most first —
 decisions, then consequential outcomes, then what is worth trying, then the routine — and
@@ -1319,11 +1416,23 @@ asked in its reply and you answer in your next message. News arriving mid-turn w
 that turn to end; what is worth trying and routine News waits for your next message and
 goes with it as context. An item counts as read once the model has it, so a turn that
 fails first (a usage limit, an outage) leaves it waiting; Desktop tries again at the next
-two-minute look. A Machine that does not answer within ten seconds is said to be unread
-rather than holding up the rest, and one whose Collie is older than Desktop's chat, or
-whose board could not be read, is written to by nothing. The bell turns Desktop's own
-turns off (and on again); it is on by default, and kept in `settings.json` beside the
-session.
+two-minute look. A Machine whose host does not answer a News look within ten seconds is
+said to be unread rather than holding up the rest.
+
+The chat reads each Machine's board from the one the window draws: `collie_herd`, where a
+bare id is, the Herds a News look asks and whether a Machine's Collie can take a write all
+come from the board Desktop already follows, so no tool call has a host build one. Run
+details, News and every write still go to the Machine's host. Every Machine the window
+shows is one the chat knows by name, and one with no live board is named with why: still
+connecting, and how long Desktop has waited for its first board; out of reach, waiting
+for SSO, without Collie or needing a newer Desktop, in its connection's own words; or only
+a board Desktop saved, and when. That reason is what `collie_herd`, `collie_workspaces` and
+`collie_news` say of it, and what a write to it is refused with ("… Nothing was done on
+vm-mk."); a bare id another Machine has is refused while that one cannot be checked. A
+Machine whose Collie is older than Desktop's chat is written to by nothing.
+
+The bell turns Desktop's own turns off (and on again); it is on by default, and kept in
+`settings.json` beside the session.
 
 **Settings** has the **Machine rule** under **Chat**, for **This computer only**: which Machine each kind
 of work goes to, in your own words — "Frontend work is on the laptop, everything else is on

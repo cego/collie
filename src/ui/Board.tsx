@@ -567,11 +567,14 @@ function Deciding(props: { decision: Decision; decide: Decide }) {
 function Gated(props: { gate: Gate; decide: Decide }) {
   return (
     <box style={{ flexDirection: "column" }}>
-      <text fg={C.text}>{props.gate.verifications.join(" · ")}</text>
-      <box style={{ flexDirection: "row", flexWrap: "wrap" }}>
-        <Button label="Approve" primary onPress={() => props.decide.approve(props.gate, null)} />
-        <Button label="Edit the list" onPress={() => props.decide.edit(props.gate)} />
-      </box>
+      {/* With nothing offered, the card's sentence says how to grant a check. */}
+      <Show when={props.gate.verifications.length > 0}>
+        <text fg={C.text}>{props.gate.verifications.join(" · ")}</text>
+        <box style={{ flexDirection: "row", flexWrap: "wrap" }}>
+          <Button label="Approve" primary onPress={() => props.decide.approve(props.gate, null)} />
+          <Button label="Edit the list" onPress={() => props.decide.edit(props.gate)} />
+        </box>
+      </Show>
     </box>
   );
 }

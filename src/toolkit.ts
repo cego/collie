@@ -359,7 +359,12 @@ function cardLine(view: TaskView): string {
         : "";
   const agents =
     view.agents.length === 0 ? "" : `, agents ${view.agents.map((agent) => agent.name).join(", ")}`;
-  return `- run ${view.run}: ${view.name}${project}, ${view.state}${where}${agents}. ${view.sentence}`;
+  const decision = view.decision;
+  const answered =
+    decision?.kind === "gate" && decision.run !== view.run
+      ? ` Its gate is answered on run ${decision.run}.`
+      : "";
+  return `- run ${view.run}: ${view.name}${project}, ${view.state}${where}${agents}. ${view.sentence}${answered}`;
 }
 
 /** The board as chat reads it: the header, then each section's cards in the board's order. */
