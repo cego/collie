@@ -182,7 +182,7 @@ test("resetting Pi's model resumes the conversation on its configured default an
       const settings = `${childEnv().PI_CODING_AGENT_DIR}/settings.json`;
       yield* fs.writeFileString(
         settings,
-        JSON.stringify({
+        Schema.encodeSync(Schema.fromJsonString(Schema.Json))({
           defaultProvider: "openai-codex",
           defaultModel: "gpt-6.1-sol",
           defaultThinkingLevel: "high",
@@ -213,7 +213,7 @@ test("resetting Pi's model resumes the conversation on its configured default an
       yield* first.close;
       yield* fs.writeFileString(
         settings,
-        JSON.stringify({
+        Schema.encodeSync(Schema.fromJsonString(Schema.Json))({
           defaultProvider: "openai-codex",
           defaultModel: "gpt-5.6-terra",
           defaultThinkingLevel: "xhigh",
@@ -229,7 +229,7 @@ test("resetting Pi's model resumes the conversation on its configured default an
       yield* reset.close;
       yield* fs.writeFileString(
         settings,
-        JSON.stringify({
+        Schema.encodeSync(Schema.fromJsonString(Schema.Json))({
           defaultProvider: "openai-codex",
           defaultModel: "gpt-5.6-terra",
           defaultThinkingLevel: "low",

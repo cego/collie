@@ -1,6 +1,4 @@
-import { Schema } from "effect";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { Effect, Schema } from "effect";
 import { Client } from "../../desktop/node_modules/@modelcontextprotocol/sdk/dist/esm/client/index.js";
 import { StreamableHTTPClientTransport } from "../../desktop/node_modules/@modelcontextprotocol/sdk/dist/esm/client/streamableHttp.js";
 import { childEnv } from "../../desktop/src/bun/login-env";
@@ -15,13 +13,13 @@ const server = /registerMcpServer\("([^"]+)"/.exec(extension)![1]!;
 const namespace = `mcp__${server.replaceAll("-", "_")}__`;
 const argument = (flag: string) =>
   Bun.argv.includes(flag) ? Bun.argv[Bun.argv.indexOf(flag) + 1] : undefined;
-const savedPath = join(argument("--session-dir")!, `fixture-${argument("--session-id")}.json`);
+const savedPath = `${argument("--session-dir")}/fixture-${argument("--session-id")}.json`;
 const selection = Schema.Struct({ model: Schema.String, thinking: Schema.String });
-const saved = existsSync(savedPath)
-  ? Schema.decodeUnknownSync(Schema.fromJsonString(selection))(readFileSync(savedPath, "utf8"))
+const saved = (await Bun.file(savedPath).exists())
+  ? Schema.decodeUnknownSync(Schema.fromJsonString(selection))(await Bun.file(savedPath).text())
   : undefined;
-const settingsPath = join(childEnv().PI_CODING_AGENT_DIR ?? process.cwd(), "settings.json");
-const settings = existsSync(settingsPath)
+const settingsPath = `${childEnv().PI_CODING_AGENT_DIR ?? process.cwd()}/settings.json`;
+const settings = (await Bun.file(settingsPath).exists())
   ? Schema.decodeUnknownSync(
       Schema.fromJsonString(
         Schema.Struct({
@@ -30,7 +28,7 @@ const settings = existsSync(settingsPath)
           defaultThinkingLevel: Schema.optionalKey(Schema.String),
         }),
       ),
-    )(readFileSync(settingsPath, "utf8"))
+    )(await Bun.file(settingsPath).text())
   : {};
 const model =
   argument("--model") ??
@@ -104,16 +102,22 @@ for await (const chunk of Bun.stdin.stream()) {
       continue;
     }
     if (command.message?.startsWith("inspect")) {
-      const promptFile = (name: string) => {
-        const local = join(process.cwd(), ".pi", name);
-        const global = join(childEnv().PI_CODING_AGENT_DIR!, name);
-        return existsSync(local)
-          ? readFileSync(local, "utf8")
-          : existsSync(global)
-            ? readFileSync(global, "utf8")
-            : "";
-      };
-      writeFileSync(savedPath, JSON.stringify({ model, thinking }));
+      const promptFile = (name: string) =>
+        Effect.runPromise(
+          Effect.gen(function* () {
+            const local = Bun.file(`${process.cwd()}/.pi/${name}`);
+            const global = Bun.file(`${childEnv().PI_CODING_AGENT_DIR}/${name}`);
+            if (yield* Effect.promise(() => local.exists()))
+              return yield* Effect.promise(() => local.text());
+            if (yield* Effect.promise(() => global.exists()))
+              return yield* Effect.promise(() => global.text());
+            return "";
+          }),
+        );
+      await Bun.write(
+        savedPath,
+        Schema.encodeSync(Schema.fromJsonString(selection))({ model, thinking }),
+      );
       const details = {
         args: Bun.argv.slice(2),
         cwd: process.cwd(),
@@ -122,8 +126,8 @@ for await (const chunk of Bun.stdin.stream()) {
         model,
         thinking,
         systemPrompt: [
-          argument("--system-prompt") ?? promptFile("SYSTEM.md"),
-          argument("--append-system-prompt") ?? promptFile("APPEND_SYSTEM.md"),
+          argument("--system-prompt") ?? (await promptFile("SYSTEM.md")),
+          argument("--append-system-prompt") ?? (await promptFile("APPEND_SYSTEM.md")),
         ].join("\n"),
         prompt: command,
       };

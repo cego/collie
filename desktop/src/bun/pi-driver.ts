@@ -1,5 +1,4 @@
 import { homedir, hostname } from "node:os";
-import { resolve } from "node:path";
 import {
   type Cause,
   Clock,
@@ -7,6 +6,7 @@ import {
   Effect,
   FileSystem,
   Option,
+  Path,
   Queue,
   Schema,
   Stream,
@@ -47,14 +47,17 @@ export const piDriver = (
           context.run(
             Effect.gen(function* () {
               const fs = yield* FileSystem.FileSystem;
+              const path = yield* Path.Path;
               const agent =
                 childEnv().PI_CODING_AGENT_DIR?.replace(/^~(?=\/|$)/, homedir()) ??
                 `${homedir()}/.pi/agent`;
-              return yield* fs.readFileString(resolve(context.dir, agent, "settings.json")).pipe(
-                Effect.catchReason("PlatformError", "NotFound", () => Effect.succeed("{}")),
-                Effect.flatMap(Schema.decodeUnknownEffect(PiDefaults)),
-              );
-            }).pipe(Effect.orDie),
+              return yield* fs
+                .readFileString(path.resolve(context.dir, agent, "settings.json"))
+                .pipe(
+                  Effect.catchReason("PlatformError", "NotFound", () => Effect.succeed("{}")),
+                  Effect.flatMap(Schema.decodeUnknownEffect(PiDefaults)),
+                );
+            }).pipe(Effect.provide(Path.layer), Effect.orDie),
           ),
         );
         if (defaults.defaultProvider && defaults.defaultModel) {
