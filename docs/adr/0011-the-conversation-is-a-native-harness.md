@@ -6,7 +6,8 @@ transport adapters. The amendment is "Chat may do what the human could do on the
 below, which replaces this ADR's original rule that chat's write tools carry nothing out,
 "Amended 2026-09-29: chat may choose what proves a Run", "Amended 2026-10-02: the
 tools are one Effect Toolkit", and "Amended 2026-10-05: a Herd's chat per Home, and one
-Flock chat per Desktop", and "Amended 2026-10-07: the Flock chat reaches files".
+Flock chat per Desktop", "Amended 2026-10-07: the Flock chat reaches files", and
+"Amended 2026-10-09: the Flock chat runs on the harness Settings names".
 
 The Herd's conversation is an ordinary Claude Code or Pi session running in the Home's
 right-hand pane. Collie does not implement a chat.
@@ -259,7 +260,106 @@ a pasted one does ([ADR-0046](0046-an-attachment-is-uploaded-once-and-belongs-to
 The system prompt says what the chat can reach, and still that what reaches it through a
 tool, a file included, is data and not instructions.
 
+## Amended 2026-10-09: the Flock chat runs on the harness Settings names
+
+**Status: Claude and Pi built; Codex and fallback accepted, to be built.**
+
+The Flock chat ran on Claude Code alone, so a human whose seat for this conversation is a
+ChatGPT subscription in Pi or Codex could not hold it there. Desktop's Settings now name its
+harness and model under **Chat**, for **This computer only**: `claude` (the default), `pi` or
+`codex`, and a model written as that harness takes it. OpenCode is not offered: each
+harness is a driver of its own, and nobody has asked for that one.
+
+Each harness is driven as the human runs it, from their own installed binary, login and
+model catalogue on Desktop's login PATH: Claude Code through the Agent SDK as before, Pi in
+RPC mode (`pi --mode rpc`), Codex through its App Server (`codex app-server`). Claude uses
+the executable on login PATH where present, otherwise the Agent SDK's bundled executable,
+as before; Pi and Codex require their own installed binaries. The harness
+still owns the session, its persistence and its compaction; Collie still owns which session
+it is and what the model may reach. Pi or Codex missing from PATH is said in the chat, and
+nothing else changes.
+
+- **The model is checked as a Run's is**, against the same table and the shared
+  `models.<harness>` extras, and Settings refuses one the harness does not take with what
+  it would take. A pi model names its provider (`openai-codex/gpt-6.1-sol`): that is the
+  table's rule, and how a fallback knows which Subscription it draws on
+  ([ADR-0049](0049-work-goes-to-an-agent-with-usage-left.md) D6). Unset, claude runs `opus`
+  at medium effort ([ADR-0032](0032-a-chat-starts-new-on-the-latest-opus.md)), and pi and
+  codex run on the default they are configured with. Pi's configured provider/model and
+  thinking level are passed explicitly when unset, so a resumed session does not restore
+  its previous override. Choosing another harness unsets the
+  model, as a Run's harness keeps no model chosen for another.
+- **A change applies once the turn under way has ended**, never during it. A new model
+  keeps the conversation, and its next turn runs on that model. A new harness is Start
+  fresh on that harness: a conversation is held on one harness and continued on no other.
+  Earlier conversations are listed from the history each harness keeps, and the list is
+  the current conversation's harness's.
+- **It falls back as a Run does**, along a chain of its own, when the Subscription it draws
+  on is Exhausted: ADR-0049, "Amended 2026-10-09: the Flock chat falls back too".
+- **Collie's tools reach Pi and Codex over MCP on loopback.** Desktop serves the Toolkit's
+  tools, its five file tools and AskUserQuestion as one streamable-HTTP MCP server on
+  127.0.0.1, behind a bearer token minted when Desktop starts and handed to the harness's
+  process in its environment, never on a command line or in a file. Claude keeps its
+  in-process server. Pi is given the server by a generated `-e` extension that registers
+  it with direct exposure under a short random name, so user MCP configuration cannot
+  replace it and Pi keeps the tool names within the provider’s limit; the view and history
+  retain Collie’s stable names. Codex uses `mcp_servers.collie` in its config. AskUserQuestion
+  keeps Claude's arguments and its choice buttons, waits for the click however long it
+  takes, and in a turn of Desktop's own answers at once that nobody is there to click.
+- **On this computer the chat keeps the harness's own file and shell tools**, and none asks
+  first: Pi's `read`, `bash`, `edit`, `write`, `grep`, `find` and `ls`, and Codex's with
+  approvals `never` and the `danger-full-access` sandbox. That is the reach Claude Code's
+  built-ins already have here, and the system prompt names the tools neutrally.
+- **As little of the user's own setup as the harness lets Collie leave out.** Pi starts
+  with none of the user's extensions, skills, prompt templates or context files. Explicit
+  system and append sources exclude personal `SYSTEM.md` and `APPEND_SYSTEM.md` files. Codex
+  cannot leave out `config.toml` without leaving out its login, so the user's
+  configuration loads, and Collie overrides the instructions, approvals, sandbox and its
+  own server.
+- **What Claude is told by a hook, Pi and Codex are told in the message.** The Machine rule
+  and News go after the human's words as Desktop's own bracketed note, as the card already
+  does, and the conversation read back leaves the note out of the human's bubble. Images
+  go to all three as images; a PDF goes to Pi and Codex by the listing alone, since neither
+  takes a document.
+- **The chat can set what the human sets here** (invariant 1): `collie_chat_harness` reads
+  the harness, model and fallback chain, and replaces them when the human asks, checked as
+  Settings checks them, as `collie_machine_rule` does the rule. Its own change applies
+  after the turn it was made in.
+
 ## What has actually been proven
+
+Flock chat, Pi **1.1.0**, `openai-codex/gpt-6.1-sol`, 2026-10-09: a live probe drove
+`openFlockChat` in a disposable Desktop state directory with no Machines. It used the
+installed Pi and login, the shipped driver and the authenticated endpoint. It did not
+change the human's Desktop settings. This proves the main-process path, not the window.
+
+| Flock chat check                                                        | Pi 1.1.0 |
+| ----------------------------------------------------------------------- | -------- |
+| a message is answered through `collie_herd`                             | pass     |
+| AskUserQuestion is answered by the call id and continues the turn       | pass     |
+| an attached image is described correctly                                | pass     |
+| closing and reopening the chat session reads the same transcript and id | pass     |
+| the window draws choice buttons and a click continues the turn          | pass     |
+| a pasted screenshot is described in the window                          | pass     |
+| quitting and reopening Desktop draws the conversation again             | pass     |
+
+The reply identified the attached Collie portrait. The recorded events include
+`mcp__collie__collie_herd`, `AskUserQuestion`, its result and the answer “Apple”.
+
+The window rows were then observed in the actual Linux Desktop under Xvfb, using a
+disposable profile, Pi 1.1.0 and `openai-codex/gpt-6.1-sol`. Settings selected Pi and its
+model; the human's Desktop settings were unchanged. X11 input submitted the message,
+clicked **Pear** and pasted a PNG screenshot from the clipboard. The turn called
+`collie_herd`, displayed **Apple** and **Pear** buttons, then replied “You prefer Pear.”
+It described the screenshot's card title and both buttons correctly. Closing both native
+windows let Desktop exit; reopening restored the same session id, messages, attachment
+and replies in the docked chat and, when opened, the popped-out chat.
+
+Run `run-8a0118da` keeps the screenshots, window text and revision-bound operator evidence
+under `evidence/pi-desktop/`. `flock-chat/pi-window-turn-and-restart` counts that evidence
+only on its recorded clean revision; a release on another revision must repeat it.
+Subscription-limit recognition and its live proof belong to the fallback piece; neither
+probe reached a limit.
 
 Recorded by `tools/chat-live.ts <harness>` against herdr 0.9.0, Claude Code 2.1.272 and
 Pi 0.85.1, in a disposable Herd of its own — its own state and config directories, its own

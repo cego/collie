@@ -731,10 +731,23 @@ scenario(
         const blocked = {
           ...BUILT,
           verdict: "findings",
-          findings: [{ severity: "blocker", title: "the schema will not migrate", file: "db" }],
+          findings: [
+            {
+              severity: "blocker",
+              title: "the schema will not migrate",
+              file: "db",
+              detail: "existing rows cannot be decoded",
+            },
+          ],
         };
         yield* approve("r-impl-share", ["unit"]);
-        yield* rig.queueOutputs([blocked]);
+        const reviewed = { ...CLEAN_SYNTHESIS, verdict: "findings", findings: blocked.findings };
+        yield* rig.queueOutputs([
+          blocked,
+          reviewed,
+          { verdict: "clean", fixed: [], disputed: [], checks: [] },
+          reviewed,
+        ]);
 
         const result = yield* ran({
           entry: shipped("implement"),
@@ -744,7 +757,11 @@ scenario(
         });
 
         expect(result._tag).toBe("Failure");
-        expect(reasonOf(result)).toContain("stopped with 1 blocking finding(s)");
+        expect(reasonOf(result)).toContain("no_progress");
+        expect(yield* asked("r-impl-share", "build.review-1")).toContain(
+          "the schema will not migrate",
+        );
+        expect(yield* prompts()).toHaveLength(4);
       }),
     ),
   120_000,
@@ -1743,6 +1760,139 @@ scenario(
         expect(log).toContain(
           "carried 1 non-blocking finding(s) unfixed: the test depends on test order",
         );
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a blocking build finding is reviewed and fixed before the next ticket starts",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* bin.add("glab", `exit 0`);
+        yield* repository();
+        const plan = yield* planOf([
+          { file: "01-first.md", title: "the first one", checks: "unit" },
+          { file: "02-second.md", title: "the second one", checks: "unit" },
+        ]);
+        yield* approve("r-impl-build-findings", ["unit"]);
+        const finding = {
+          severity: "major",
+          title: "the agent reported a missing guard",
+          file: "src/a.ts",
+          detail: "an empty list goes through it",
+        };
+        yield* rig.queueOutputs([
+          { ...BUILT, verdict: "findings", findings: [finding] },
+          { ...CLEAN_SYNTHESIS, verdict: "findings", findings: [finding] },
+          { verdict: "clean", fixed: [{ title: finding.title, file: finding.file }], checks: [] },
+          CLEAN_SYNTHESIS,
+          { ...BUILT, tickets_done: ["the second one"] },
+          CLEAN_SYNTHESIS,
+          OPENED,
+        ]);
+
+        const result = yield* ran({
+          entry: shipped("implement"),
+          runId: "r-impl-build-findings",
+          input: { plan },
+        });
+        yield* bin.restore();
+
+        expect(said(result)).toBe(OPENED.mr_url);
+        const review = yield* asked("r-impl-build-findings", "01-first.md.review-1");
+        expect(review).toContain(finding.title);
+        expect(review).toContain("01-first.md");
+        expect(review).toContain("Later tickets have not started");
+        expect(yield* asked("r-impl-build-findings", "01-first.md.fix-1")).toContain(finding.title);
+        expect(yield* asked("r-impl-build-findings", "01-first.md.review-2-1")).toContain(
+          `${dir}/agents/r-impl-build-findings/01-first.md.fix-1.json`,
+        );
+        expect(yield* asked("r-impl-build-findings", "02-second.md")).toContain("the first one");
+        expect(yield* asked("r-impl-build-findings", "review-1")).toContain("Iteration 1");
+        expect(yield* prompts()).toHaveLength(7);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a completed build whose reported finding is cleared needs no duplicate review",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* bin.add("glab", `exit 0`);
+        yield* repository();
+        const plan = yield* planOf([
+          { file: "01-only.md", title: "the first one", checks: "unit" },
+        ]);
+        yield* approve("r-impl-build-cleared", ["unit"]);
+        yield* rig.queueOutputs([
+          {
+            ...BUILT,
+            verdict: "findings",
+            findings: [{ severity: "major", title: "the guard is missing", file: "a.ts" }],
+          },
+          CLEAN_SYNTHESIS,
+          OPENED,
+        ]);
+
+        const result = yield* ran({
+          entry: shipped("implement"),
+          runId: "r-impl-build-cleared",
+          input: { plan },
+        });
+        yield* bin.restore();
+        expect(said(result)).toBe(OPENED.mr_url);
+        expect(yield* asked("r-impl-build-cleared", "build.review-1")).toContain(
+          "the guard is missing",
+        );
+        expect(yield* prompts()).toHaveLength(3);
+      }),
+    ),
+  120_000,
+);
+
+once(
+  "a partial build review keeps its scope through a reviewer panel",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* bin.add("glab", `exit 0`);
+        yield* repository();
+        const entry = yield* fork(
+          "implement",
+          "build-panel",
+          `{ ...shipped.agents, roles: { ...shipped.agents?.roles, reviewer: [{ harness: "claude", model: "opus" }, { harness: "pi", model: "openai-codex/gpt-6-astra" }] } }`,
+        );
+        const plan = yield* planOf([
+          { file: "01-only.md", title: "the first one", checks: "unit" },
+        ]);
+        yield* approve("r-impl-build-panel", ["unit"]);
+        yield* rig.queueOutputs([
+          {
+            ...BUILT,
+            verdict: "findings",
+            findings: [{ severity: "major", title: "the guard is missing", file: "a.ts" }],
+          },
+          { verdict: "clean", findings: [] },
+          { verdict: "clean", findings: [] },
+          CLEAN_SYNTHESIS,
+          OPENED,
+        ]);
+        const result = yield* ran({ entry, runId: "r-impl-build-panel", input: { plan } });
+        yield* bin.restore();
+
+        expect(said(result)).toBe(OPENED.mr_url);
+        const synthesis = yield* asked("r-impl-build-panel", "build.synthesize");
+        expect(synthesis).toContain("Later tickets have not started");
+        expect(synthesis).toContain("the guard is missing");
+        expect(synthesis).toContain(`${dir}/agents/r-impl-build-panel/build.review-1.json`);
+        expect(synthesis).toContain(`${dir}/agents/r-impl-build-panel/build.review-2.json`);
       }),
     ),
   120_000,

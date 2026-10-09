@@ -88,6 +88,18 @@ herdr actions, and the `collie` CLI.
   `desktop/src/shared/chat-view.ts` what the window says of a tool call and the card a
   message is about, and `src/toolkit.ts` the Toolkit both chats share
   ([ADR-0011](docs/adr/0011-the-conversation-is-a-native-harness.md#amended-2026-10-05-a-herds-chat-per-home-and-one-flock-chat-per-desktop)).
+- **Changing the Flock chat's harness or model** →
+  [ADR-0011's harness amendment](docs/adr/0011-the-conversation-is-a-native-harness.md#amended-2026-10-09-the-flock-chat-runs-on-the-harness-settings-names),
+  alongside `desktop/src/bun/driver.ts` (the session's driver interface),
+  `claude-driver.ts` (Claude through the Agent SDK), `pi-driver.ts` (Pi over RPC),
+  `pi-agui.ts` and `pi-transcript.ts` (Pi events and session files),
+  `chat-endpoint.ts` (authenticated loopback MCP) and `tool-server.ts` (both servers' tools),
+  `chat.ts` (turns and conversation),
+  `settings.ts` and `src/harness-choice.ts` (the same model checks as a Run), and `desktop/src/shared/flock-settings.ts`
+  (the rows), with `test/flock-chat-pi.test.ts`, `test/flock-chat-endpoint.test.ts`,
+  `test/flock-chat-turns.test.ts`, `test/desktop-settings.test.ts` and
+  `test/flock-tools.test.ts`. A model change waits for the current turn and keeps the
+  conversation.
 - **Changing what files a Run, or the Flock chat, is given** →
   [ADR-0046](docs/adr/0046-an-attachment-is-uploaded-once-and-belongs-to-the-run.md), alongside
   `src/attachments.ts` (a Run's copies and its prompts' list), `src/uploads.ts` and

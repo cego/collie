@@ -3,13 +3,25 @@
 
 import { expect, test } from "bun:test";
 import { BunServices } from "@effect/platform-bun";
-import { Deferred, Effect, FileSystem, Path, Stream } from "effect";
+import { Crypto, Deferred, Effect, Fiber, FileSystem, Path, Schema, Stream, Queue } from "effect";
 import { TestClock } from "effect/testing";
 import { type Declaration, NewsBatch, PROTOCOL, type Significance } from "../src/board-model";
 import { stageAttachment } from "../desktop/src/bun/attachments";
-import { type ClaudeCode, openFlockChat } from "../desktop/src/bun/chat";
+import { openFlockChat } from "../desktop/src/bun/chat";
+import { type ClaudeCode, claudeDriver } from "../desktop/src/bun/claude-driver";
+import type { AguiEvent } from "../desktop/src/shared/agui";
+import type { TurnCost } from "../desktop/src/bun/driver";
+import type { ChatDriver, DriverContext } from "../desktop/src/bun/driver";
+import { chatChoice } from "../desktop/src/bun/settings";
+import { DesktopSettings } from "../desktop/src/shared/flock";
+import { NO_FLOCK_SETTINGS } from "../desktop/src/shared/flock-settings";
 import type { SdkMessage } from "../desktop/src/bun/agui";
-import type { ChatDoor, ChatMachine } from "../desktop/src/bun/flock-tools";
+import {
+  callFlockTool,
+  type ChatDoor,
+  type ChatMachine,
+  type FlockChat,
+} from "../desktop/src/bun/flock-tools";
 import { listing } from "../desktop/src/shared/attachments";
 import { aboutNote, DESKTOP_SAID } from "../desktop/src/shared/chat-view";
 import { isString } from "../src/schema";
@@ -49,7 +61,13 @@ const machine = (
   };
 };
 
+interface ScriptedDrivers {
+  [harness: string]: ChatDriver;
+}
+
 interface Seen {
+  flock?: FlockChat;
+  readonly transcripts: Map<string, unknown[]>;
   readonly prompts: string[];
   /** Each message as the SDK was handed it. */
   readonly contents: unknown[];
@@ -58,6 +76,12 @@ interface Seen {
   readonly refusals: string[];
   /** Each time the session was interrupted. */
   readonly interrupts: string[];
+  /** Each session started: its model, and the conversation it resumed or started. */
+  readonly sessions: Array<{
+    readonly model: string;
+    readonly resume?: string;
+    readonly sessionId?: string;
+  }>;
 }
 
 const SAID = { type: "stream_event", parent_tool_use_id: null };
@@ -70,8 +94,14 @@ const scripted = (
   seen: Seen,
   reply: (text: string) => ReadonlyArray<SdkMessage>,
   holds: (text: string) => boolean = () => false,
+  gate?: Deferred.Deferred<void>,
 ): ClaudeCode<string> => ({
   query: ({ prompt, options }) => {
+    const id = "resume" in options ? options.resume : options.sessionId;
+    seen.sessions.push({
+      model: options.model,
+      ...("resume" in options ? { resume: options.resume } : { sessionId: options.sessionId }),
+    });
     const closed = Deferred.makeUnsafe<void>();
     let interrupted = Deferred.makeUnsafe<void>();
     const turns = Stream.fromAsyncIterable(prompt, String).pipe(
@@ -81,6 +111,9 @@ const scripted = (
           const text = isString(message.message.content) ? message.message.content : "";
           seen.prompts.push(text);
           seen.contents.push(message.message.content);
+          const transcript = seen.transcripts.get(id) ?? [];
+          transcript.push({ ...message, uuid: `u-${transcript.length}` });
+          seen.transcripts.set(id, transcript);
           // SAFETY: sessionOptions sets one UserPromptSubmit hook.
           const added = yield* Effect.promise(() => options.hooks.UserPromptSubmit[0]!.hooks[0]!());
           seen.context.push(
@@ -103,6 +136,7 @@ const scripted = (
             yield* Deferred.await(interrupted);
             interrupted = Deferred.makeUnsafe<void>();
           }
+          if (text === "slow" && gate !== undefined) yield* Deferred.await(gate);
           return reply(text);
         }),
       ),
@@ -117,10 +151,20 @@ const scripted = (
       close: () => Deferred.doneUnsafe(closed, Effect.void),
     });
   },
-  getSessionInfo: () => Promise.resolve(undefined),
-  getSessionMessages: () => Promise.resolve([]),
-  listSessions: () => Promise.resolve([]),
-  server: () => "collie",
+  getSessionInfo: (id) => Promise.resolve(seen.transcripts.has(id) ? { sessionId: id } : undefined),
+  getSessionMessages: (id) => Promise.resolve(seen.transcripts.get(id) ?? []),
+  listSessions: () =>
+    Promise.resolve(
+      [...seen.transcripts.keys()].map((sessionId) => ({
+        sessionId,
+        summary: "Earlier",
+        lastModified: 1,
+      })),
+    ),
+  server: (flock) => {
+    seen.flock = flock;
+    return "collie";
+  },
 });
 
 const answered = (text: string) => [
@@ -176,14 +220,21 @@ const withChat = <A, E>(
     readonly rule?: string;
     readonly declared?: Declaration[];
     readonly failedStarts?: number;
+    /** What Desktop's Settings have, which a test may change between turns. */
+    readonly settings?: { current: DesktopSettings };
+    readonly pi?: (context: DriverContext) => ChatDriver;
+    readonly gate?: Deferred.Deferred<void>;
+    /** The current conversation's file, as an earlier Desktop left it. */
+    readonly savedFile?: string;
+    readonly transcripts?: ReadonlyArray<readonly [string, unknown[]]>;
   },
   reply: (text: string) => ReadonlyArray<SdkMessage>,
   body: (chat: {
-    readonly conversation: Effect.Success<ReturnType<typeof openFlockChat<string>>>;
+    readonly conversation: Effect.Success<ReturnType<typeof openFlockChat>>;
     readonly seen: Seen;
     readonly read: string[];
     readonly dir: string;
-  }) => Effect.Effect<A, E, FileSystem.FileSystem | Path.Path>,
+  }) => Effect.Effect<A, E, Crypto.Crypto | FileSystem.FileSystem | Path.Path>,
 ) =>
   Effect.runPromise(
     Effect.gen(function* () {
@@ -191,10 +242,30 @@ const withChat = <A, E>(
       const dir = yield* fs.makeTempDirectoryScoped({
         prefix: "flock-chat-turns-",
       });
-      const seen: Seen = { prompts: [], contents: [], context: [], refusals: [], interrupts: [] };
+      const seen: Seen = {
+        prompts: [],
+        contents: [],
+        context: [],
+        refusals: [],
+        interrupts: [],
+        sessions: [],
+        transcripts: new Map(opts.transcripts),
+      };
       const read: string[] = [];
+      if (opts.savedFile !== undefined)
+        yield* fs.writeFileString(`${dir}/flock-chat.json`, opts.savedFile);
+      const settings = opts.settings ?? { current: { proactive: opts.proactive } };
       const conversation = yield* openFlockChat({
-        claude: failingFirst(scripted(seen, reply, opts.holds), opts.failedStarts ?? 0),
+        drivers: (context) => {
+          const drivers: ScriptedDrivers = {
+            claude: claudeDriver(
+              failingFirst(scripted(seen, reply, opts.holds, opts.gate), opts.failedStarts ?? 0),
+              context,
+            ),
+          };
+          if (opts.pi !== undefined) drivers.pi = opts.pi(context);
+          return drivers;
+        },
         dir,
         conversation: "flock@mk-pc",
         machines: () => [machine(opts.items, read, opts.declared)],
@@ -202,6 +273,12 @@ const withChat = <A, E>(
         machineRule: () => opts.rule ?? "Everything is on the vm",
         setMachineRule: () => Effect.void,
         inSync: () => Effect.succeed(""),
+        choice: () => chatChoice(settings.current, NO_FLOCK_SETTINGS),
+        chatHarness: () => ({
+          harness: settings.current.chatHarness ?? "claude",
+          model: settings.current.chatModel,
+        }),
+        setChatHarness: () => Effect.succeed(null),
       });
       return yield* body({ conversation, seen, read, dir });
     }).pipe(Effect.scoped, Effect.provide([BunServices.layer, TestClock.layer()])),
@@ -232,6 +309,12 @@ test("Desktop speaks first only about what matters, and the rest goes with the h
           yield* TestClock.withLive(Effect.sleep("10 millis"));
         const usage = yield* fs.readFileString(`${dir}/flock-usage.jsonl`);
         expect(usage.trim().split("\n")).toHaveLength(1);
+        expect(Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Json))(usage)).toMatchObject({
+          turn: "desktop",
+          harness: "claude",
+          model: "opus",
+          usage: { input_tokens: 10, output_tokens: 20 },
+        });
 
         yield* Stream.runDrain(conversation.send("what's new?", null, false));
         expect(seen.prompts[1]).toBe("what's new?");
@@ -532,5 +615,302 @@ test("a new subscriber to Desktop's turns is told the one under way", () =>
         yield* TestClock.adjust("3 seconds");
         yield* eventually(() => seen.prompts.length === 1);
         expect(yield* now).toEqual(["started"]);
+      }),
+  ));
+
+test("unset, the chat runs opus; a model changed mid-turn waits for it, then the same conversation goes on on the new model", () => {
+  const settings = { current: Schema.decodeUnknownSync(DesktopSettings)({ proactive: false }) };
+  const gate = Deferred.makeUnsafe<void>();
+  return withChat(
+    { items: [], proactive: false, settings, gate },
+    answered,
+    ({ conversation, seen }) =>
+      Effect.gen(function* () {
+        const current = (yield* conversation.conversations).current;
+        const slow = yield* Stream.runCollect(conversation.send("slow", null, false)).pipe(
+          Effect.forkChild,
+        );
+        yield* eventually(() => seen.prompts.length === 1);
+        settings.current = { proactive: false, chatModel: "sonnet" };
+        yield* TestClock.withLive(Effect.sleep("50 millis"));
+        expect(seen.interrupts).toEqual([]);
+        expect(seen.sessions).toEqual([{ model: "opus", sessionId: current }]);
+        Deferred.doneUnsafe(gate, Effect.void);
+        expect((yield* Fiber.join(slow)).at(-1)).toMatchObject({ type: "RUN_FINISHED" });
+
+        const next = yield* Stream.runCollect(conversation.send("next", null, false));
+        expect(next.at(-1)).toMatchObject({ type: "RUN_FINISHED" });
+        expect(seen.sessions).toEqual([
+          { model: "opus", sessionId: current },
+          { model: "sonnet", resume: current },
+        ]);
+        expect((yield* conversation.conversations).current).toBe(current);
+        expect((yield* conversation.transcript).map(({ parts }) => parts)).toEqual([
+          [{ type: "text", content: "slow" }],
+          [{ type: "text", content: "next" }],
+        ]);
+        yield* Stream.runDrain(conversation.send("again", null, false));
+        expect(seen.sessions).toHaveLength(2);
+      }),
+  );
+});
+
+test("a model the harness does not take is said in the chat, and nothing is started", () =>
+  withChat(
+    {
+      items: [],
+      proactive: false,
+      settings: { current: { proactive: false, chatModel: "gpt-6.1-sol" } },
+    },
+    answered,
+    ({ conversation, seen }) =>
+      Effect.gen(function* () {
+        const said = yield* Stream.runCollect(conversation.send("hello", null, false));
+        expect(said).toEqual([
+          expect.objectContaining({
+            type: "RUN_ERROR",
+            message: expect.stringContaining('"gpt-6.1-sol" is not a model claude takes'),
+          }),
+        ]);
+        expect(seen.sessions).toEqual([]);
+      }),
+  ));
+
+test("the chat reports the model its conversation actually runs on, including the unset default", () =>
+  withChat({ items: [], proactive: false }, answered, ({ conversation, seen }) =>
+    Effect.gen(function* () {
+      yield* Stream.runDrain(conversation.send("hello", null, false));
+      const said = yield* callFlockTool(seen.flock!, "collie_chat_harness", {});
+      expect(said).toContain("This conversation runs on claude/opus now.");
+    }),
+  ));
+
+test("a conversation file from before harnesses is claude's, resumed as before, and kept with its harness", () =>
+  withChat(
+    {
+      items: [],
+      proactive: false,
+      savedFile: '{"session":"5c1e6c8e-0000-4000-8000-000000000000"}',
+      transcripts: [
+        [
+          "5c1e6c8e-0000-4000-8000-000000000000",
+          [
+            {
+              type: "user",
+              uuid: "old",
+              parent_tool_use_id: null,
+              message: { role: "user", content: "before the change" },
+            },
+          ],
+        ],
+      ],
+    },
+    answered,
+    ({ conversation, seen, dir }) =>
+      Effect.gen(function* () {
+        expect((yield* conversation.conversations).current).toBe(
+          "5c1e6c8e-0000-4000-8000-000000000000",
+        );
+        yield* Stream.runDrain(conversation.send("hello", null, false));
+        expect(seen.sessions).toEqual([
+          { model: "opus", resume: "5c1e6c8e-0000-4000-8000-000000000000" },
+        ]);
+        expect((yield* conversation.transcript).map(({ parts }) => parts)).toEqual([
+          [{ type: "text", content: "before the change" }],
+          [{ type: "text", content: "hello" }],
+        ]);
+        yield* conversation.reopen("5c1e6c8e-0000-4000-8000-000000000000");
+        const fs = yield* FileSystem.FileSystem;
+        expect(
+          Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Json))(
+            yield* fs.readFileString(`${dir}/flock-chat.json`),
+          ),
+        ).toEqual({
+          session: "5c1e6c8e-0000-4000-8000-000000000000",
+          harness: "claude",
+        });
+      }),
+  ));
+
+test("a harness change waits for the current turn, tells both windows, and keeps each harness's history", () => {
+  const settings = { current: { proactive: false, chatHarness: "claude" } };
+  const gate = Deferred.makeUnsafe<void>();
+  const history = {
+    id: "pi-earlier",
+    role: "user" as const,
+    parts: [{ type: "text" as const, content: "Pi before" }],
+  };
+  const pi = (_context: DriverContext): ChatDriver => ({
+    installed: true,
+    open: (id) =>
+      Effect.gen(function* () {
+        const events = yield* Queue.unbounded<AguiEvent>();
+        return {
+          conversation: () => id,
+          offer: () =>
+            Queue.offer(events, { type: "RUN_FINISHED" as const, threadId: id, runId: id }).pipe(
+              Effect.asVoid,
+            ),
+          events: Stream.fromQueue(events),
+          interrupt: Effect.void,
+          close: Effect.void,
+          lastTurn: () => undefined,
+          limited: () => false,
+        };
+      }),
+    transcript: (id) => Effect.succeed(id === "pi-earlier" ? [history] : []),
+    earlier: () => Effect.succeed([{ session: "pi-earlier", title: "Pi before", at: 1 }]),
+    transcriptPath: () => Effect.succeed(null),
+  });
+  return withChat(
+    { items: [], proactive: false, settings, gate, pi },
+    answered,
+    ({ conversation, seen }) =>
+      Effect.gen(function* () {
+        const first = (yield* conversation.conversations).current;
+        const slow = yield* Stream.runCollect(conversation.send("slow", null, false)).pipe(
+          Effect.forkChild,
+        );
+        yield* eventually(() => seen.prompts.length === 1);
+        const docked = yield* conversation.changed.pipe(
+          Stream.drop(1),
+          Stream.take(1),
+          Stream.runCollect,
+          Effect.forkChild,
+        );
+        const popped = yield* conversation.changed.pipe(
+          Stream.drop(1),
+          Stream.take(1),
+          Stream.runCollect,
+          Effect.forkChild,
+        );
+        settings.current = { proactive: false, chatHarness: "pi" };
+        const refreshing = yield* conversation.refresh.pipe(Effect.forkChild);
+        yield* Effect.yieldNow;
+        expect((yield* conversation.conversations).current).toBe(first);
+        expect(seen.interrupts).toEqual([]);
+        yield* Deferred.succeed(gate, undefined);
+        yield* Fiber.join(slow);
+        yield* Fiber.join(refreshing);
+        const second = (yield* conversation.conversations).current;
+        expect(second).not.toBe(first);
+        expect(yield* Fiber.join(docked)).toEqual([second]);
+        expect(yield* Fiber.join(popped)).toEqual([second]);
+        expect(yield* conversation.transcript).toEqual([]);
+        yield* Stream.runDrain(conversation.send("Pi turn", null, false));
+        expect((yield* conversation.conversations).earlier).toEqual([
+          { session: "pi-earlier", title: "Pi before", at: 1 },
+        ]);
+        yield* conversation.reopen("pi-earlier");
+        expect(yield* conversation.transcript).toEqual([history]);
+        settings.current = { proactive: false, chatHarness: "claude" };
+        yield* conversation.refresh;
+        expect((yield* conversation.conversations).earlier.map(({ session }) => session)).toContain(
+          first,
+        );
+      }),
+  );
+});
+
+test("Pi missing from this computer refuses the message without launching a session", () =>
+  withChat(
+    {
+      items: [],
+      proactive: false,
+      settings: { current: { proactive: false, chatHarness: "pi" } },
+      pi: () => ({
+        installed: false,
+        open: () => Effect.die("must not open"),
+        transcript: () => Effect.succeed([]),
+        earlier: () => Effect.succeed([]),
+        transcriptPath: () => Effect.succeed(null),
+      }),
+    },
+    answered,
+    ({ conversation }) =>
+      Effect.gen(function* () {
+        expect(yield* Stream.runCollect(conversation.send("hello", null, false))).toEqual([
+          {
+            type: "RUN_ERROR",
+            runId: "",
+            message: "pi is not installed or not on PATH on this computer",
+          },
+        ]);
+      }),
+  ));
+
+test("Desktop's own turn on Pi records its harness, model and token counts", () =>
+  withChat(
+    {
+      items: [item("r1:asking", "decision")],
+      proactive: true,
+      settings: {
+        current: { proactive: true, chatHarness: "pi", chatModel: "openai-codex/gpt-6.1-sol" },
+      },
+      pi: (context) => ({
+        installed: true,
+        open: (id) =>
+          Effect.gen(function* () {
+            const events = yield* Queue.unbounded<AguiEvent>();
+            let result: TurnCost | undefined;
+            return {
+              conversation: () => id,
+              offer: (content) =>
+                Effect.gen(function* () {
+                  expect(content).toStartWith(DESKTOP_SAID);
+                  expect(context.flock.said()).toBeUndefined();
+                  result = {
+                    duration_ms: 10,
+                    usage: {
+                      input_tokens: 12,
+                      output_tokens: 7,
+                      cache_read_input_tokens: 4,
+                      cache_creation_input_tokens: 0,
+                    },
+                  };
+                  yield* Queue.offerAll(events, [
+                    { type: "TEXT_MESSAGE_START", messageId: "reply", role: "assistant" },
+                    { type: "RUN_FINISHED", threadId: id, runId: id },
+                  ]);
+                }),
+              events: Stream.fromQueue(events),
+              interrupt: Effect.void,
+              close: Effect.void,
+              lastTurn: () => result,
+              limited: () => false,
+            };
+          }),
+        transcript: () => Effect.succeed([]),
+        earlier: () => Effect.succeed([]),
+        transcriptPath: () => Effect.succeed(null),
+      }),
+    },
+    answered,
+    ({ conversation, dir }) =>
+      Effect.gen(function* () {
+        const ended = yield* conversation.desktopTurns.pipe(
+          Stream.drop(1),
+          Stream.filter((state) => state === "ended"),
+          Stream.take(1),
+          Stream.runDrain,
+          Effect.forkChild,
+        );
+        yield* TestClock.adjust("3 seconds");
+        yield* Fiber.join(ended);
+        const fs = yield* FileSystem.FileSystem;
+        for (let tries = 0; tries < 200 && !(yield* fs.exists(`${dir}/flock-usage.jsonl`)); tries++)
+          yield* TestClock.withLive(Effect.sleep("10 millis"));
+        const usage = yield* fs.readFileString(`${dir}/flock-usage.jsonl`);
+        expect(Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Json))(usage)).toMatchObject({
+          turn: "desktop",
+          harness: "pi",
+          model: "openai-codex/gpt-6.1-sol",
+          usage: {
+            input_tokens: 12,
+            output_tokens: 7,
+            cache_read_input_tokens: 4,
+            cache_creation_input_tokens: 0,
+          },
+        });
       }),
   ));

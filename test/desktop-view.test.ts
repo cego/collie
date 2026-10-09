@@ -134,6 +134,7 @@ const served = (main: Channel<ToView, ToMain>) =>
         reopen: () => Effect.die("not asked"),
         popOut: () => Effect.die("not asked"),
         popIn: () => Effect.die("not asked"),
+        conversationChanges: () => Stream.make("current"),
         desktopTurns: () => Stream.die("not asked"),
         settings: () => Effect.die("not asked"),
         setSettings: () => Effect.die("not asked"),

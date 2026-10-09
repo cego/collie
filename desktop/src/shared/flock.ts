@@ -338,6 +338,10 @@ export const DesktopSettings = Schema.Struct({
   machineRule: Schema.optionalKey(Schema.String),
   /** The human's Zoom, 1 the size of the other apps on each monitor; unset is 1. */
   zoom: Schema.optionalKey(Schema.Number),
+  /** The harness the Flock chat runs on; unset is claude. */
+  chatHarness: Schema.optionalKey(Schema.String),
+  /** The model the Flock chat runs on; unset is the harness's own default. */
+  chatModel: Schema.optionalKey(Schema.String),
 });
 export type DesktopSettings = typeof DesktopSettings.Type;
 
@@ -347,6 +351,9 @@ export const DesktopSettingsChange = Schema.Struct({
   gitlabHost: Schema.optionalKey(Schema.String),
   machineRule: Schema.optionalKey(Schema.String),
   zoom: Schema.optionalKey(Schema.Number),
+  chatHarness: Schema.optionalKey(Schema.String),
+  /** Empty unsets it. */
+  chatModel: Schema.optionalKey(Schema.String),
 });
 export type DesktopSettingsChange = typeof DesktopSettingsChange.Type;
 
@@ -571,11 +578,17 @@ export const DesktopRpcs = RpcGroup.make(
   /** Closes the chat's own window, which puts the chat back beside the board. */
   Rpc.make("popIn"),
   /** When the Flock chat starts and ends a turn of Desktop's own. */
+  Rpc.make("conversationChanges", { success: Schema.String, stream: true }),
   Rpc.make("desktopTurns", { success: DesktopTurn, stream: true }),
   Rpc.make("settings", { success: DesktopSettings }),
   /** How the board's window is drawn, again whenever its zoom is decided again. */
   Rpc.make("drawn", { success: Drawn, stream: true }),
-  Rpc.make("setSettings", { payload: DesktopSettingsChange }),
+  /** What the settings are now, or why the change was refused and nothing kept. */
+  Rpc.make("setSettings", {
+    payload: DesktopSettingsChange,
+    success: DesktopSettings,
+    error: ActionFailed,
+  }),
 );
 
 /**

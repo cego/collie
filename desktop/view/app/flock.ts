@@ -66,6 +66,16 @@ export const desktopTurnsAtom = FlockClient.runtime
   )
   .pipe(Atom.keepAlive);
 
+export const conversationChangesAtom = FlockClient.runtime
+  .atom(
+    held(
+      Stream.unwrap(
+        FlockClient.use((client) => Effect.succeed(client("conversationChanges", undefined))),
+      ),
+    ),
+  )
+  .pipe(Atom.keepAlive);
+
 /** Kept alive, so the board stays subscribed for as long as the view is open. */
 export const flockAtom = FlockClient.runtime
   .atom(

@@ -142,3 +142,38 @@ happens.
   agents still decide while one runs.
 - Model-call usage stays telemetry (Authority). This reading is about the human's
   subscriptions, and it chooses an agent. It never refuses work.
+
+## Amended 2026-10-09: the Flock chat falls back too
+
+**Status: accepted, to be built.**
+
+The Flock chat runs on the harness and model Desktop's Settings name
+([ADR-0011](0011-the-conversation-is-a-native-harness.md), "Amended 2026-10-09"). A
+conversation on a Subscription that has run out stopped there, though the human pays for
+another. It now moves as work does, on the same judgement.
+
+- **Its chain is its own.** `chatFallbacks` is under **Chat** in Desktop's Settings, for
+  **This computer only**, because the chat runs on this computer's logins: `harness` or
+  `harness/model` entries in order, empty by default. Each entry is checked as a `fallbacks`
+  entry is, and names one of the harnesses the chat runs on. The Runs' `fallbacks` is not
+  read for it.
+- **The candidates and the room are the Runs'.** The chosen harness and model come first,
+  then the chain, resolved and judged by the same functions a Run's agent is (D5–D7). The
+  reading is this computer's Machine's, asked of its host as every door asks (D2, D3).
+  Where this computer is not a Machine, nothing reads its Subscriptions, so it counts as
+  having room, and only the harness's own report of a limit moves the chat.
+- **It is judged before each message, and when a turn stops on its limit.** A conversation
+  whose own choice has room stays where it is. One whose choice has none moves to the
+  first candidate that has room, from the top of the list. A turn the harness ends because
+  the Subscription is used up is given again to the next candidate with room. That is
+  never done for a transient rate limit, an overload or a harness that will not start (D9).
+  A new conversation starts on the first candidate with room.
+- **A move keeps the conversation where the harness is the same.** A move to another model
+  of the same harness continues it on that model. A move to another harness starts a new
+  conversation on it. Its first message carries Desktop's hand-over beside the human's
+  words: where it moved from and why, and the earlier transcript's path where its harness
+  keeps one as a file. The earlier conversation stays in its own harness's history.
+- **The chat says what it moved to.** A turn that runs on a different choice than the turn
+  before opens with a line of Desktop's own: from what, to what and why. Where nothing has
+  room, the turn runs on the conversation's own choice, and the line says so (D4). A move
+  never refuses or holds a message.

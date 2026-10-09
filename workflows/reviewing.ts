@@ -56,6 +56,7 @@ const SYNTHESIZE = content.template("synthesize", {
   ...change,
   previous: Schema.Struct({ review: text }),
   fan_in: text,
+  obstacle: text,
 });
 
 /** An implementer fixing what a review found. */
@@ -97,6 +98,8 @@ export interface ReviewAsk {
   readonly of: number;
   /** What the implementer has already stood on, so a reviewer answers it or drops it. */
   readonly disputed: ReadonlyArray<Finding>;
+  readonly prefix?: string;
+  readonly obstacle?: string;
 }
 
 /** What the reviewers and the synthesis are both told, beside the section they are given. */
@@ -115,7 +118,7 @@ const told = (ask: ReviewAsk, run: { readonly dir: string; readonly id: string }
   disputed: formatFindings(ask.disputed),
   risks: riskLine(ask.risks),
   target_repo: repoArgs(parseMrTarget(ask.target)?.project ?? null).join(" "),
-  obstacle: "",
+  obstacle: ask.obstacle ?? "",
 });
 
 /**
@@ -130,9 +133,10 @@ export const reviewPass = (ask: ReviewAsk) =>
     const input = told(ask, { dir, id });
     // The round comes first, and the first round keeps the plain names: a Run with one
     // review reads as one, and a rally's rounds sort in the order they happened.
+    const prefix = ask.prefix ?? "";
     const reviewOp = (seat: string) =>
-      ask.at === 1 ? `review-${seat}` : `review-${ask.at}-${seat}`;
-    const synthesis = ask.at === 1 ? "synthesize" : `synthesize-${ask.at}`;
+      `${prefix}${ask.at === 1 ? `review-${seat}` : `review-${ask.at}-${seat}`}`;
+    const synthesis = `${prefix}${ask.at === 1 ? "synthesize" : `synthesize-${ask.at}`}`;
 
     const seats = (yield* panelOf("reviewer")).map((seat, at) => ({
       seat,

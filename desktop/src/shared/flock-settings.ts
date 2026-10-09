@@ -106,8 +106,14 @@ interface DesktopSetting extends Setting {
   /** What setting it to `typed` changes; `typed` is never empty. */
   readonly change: (typed: string) => DesktopSettingsChange;
   /** What Settings says of it while it is unset, where its default says nothing. */
-  readonly unset?: string;
+  readonly unset?: (desktop: DesktopSettings) => string;
+  /** Typed as several lines of the human's own words. */
+  readonly multiline?: true;
 }
+
+/** The harnesses the Flock chat has a driver for. */
+export const CHAT_HARNESSES = ["claude", "pi"];
+export const DEFAULT_CHAT_HARNESS = "claude";
 
 const DESKTOP_SETTINGS: ReadonlyArray<DesktopSetting> = [
   {
@@ -133,7 +139,36 @@ const DESKTOP_SETTINGS: ReadonlyArray<DesktopSetting> = [
       "Which Machine each kind of work goes to, in your own words. The Flock chat starts work where it says, and asks where it does not say.",
     read: (desktop: DesktopSettings) => desktop.machineRule ?? "",
     change: (typed) => ({ machineRule: typed.trim() }),
-    unset: "Unset: no rule",
+    unset: () => "Unset: no rule",
+    multiline: true,
+  },
+  {
+    key: "chatHarness",
+    kind: "choice",
+    choices: CHAT_HARNESSES,
+    fallback: DEFAULT_CHAT_HARNESS,
+    group: "Chat",
+    label: "Flock chat harness",
+    description:
+      "The coding agent the Flock chat runs in, from your own install and login on this computer. Another harness starts a fresh conversation and unsets the model.",
+    read: (desktop: DesktopSettings) => desktop.chatHarness ?? DEFAULT_CHAT_HARNESS,
+    change: (typed) => ({ chatHarness: typed }),
+  },
+  {
+    key: "chatModel",
+    kind: "text",
+    choices: [],
+    fallback: "",
+    group: "Chat",
+    label: "Flock chat model",
+    description:
+      "The model the Flock chat runs on, as a Run's model is written for its harness. A new model keeps the conversation.",
+    read: (desktop: DesktopSettings) => desktop.chatModel ?? "",
+    change: (typed) => ({ chatModel: typed.trim() }),
+    unset: (desktop) => {
+      const harness = desktop.chatHarness ?? DEFAULT_CHAT_HARNESS;
+      return harness === "claude" ? "Unset: opus" : `Unset: ${harness}'s own default`;
+    },
   },
   {
     key: "zoom",
@@ -146,7 +181,7 @@ const DESKTOP_SETTINGS: ReadonlyArray<DesktopSetting> = [
       "How large Desktop draws on this computer, against the other apps on the same monitor.",
     read: (desktop: DesktopSettings) => percent(desktop.zoom ?? 1),
     change: (typed) => ({ zoom: Number.parseInt(typed, 10) / 100 }),
-    unset: "Default: 100%, the size of your other apps",
+    unset: () => "Default: 100%, the size of your other apps",
   },
 ];
 
@@ -176,6 +211,7 @@ export interface SettingRow {
   readonly from: string | null;
   /** Every Machine's, or this computer's alone. */
   readonly shared: boolean;
+  readonly multiline: boolean;
 }
 
 export interface SettingSection {
@@ -194,6 +230,7 @@ const flockRow = (flock: FlockSettings, setting: Setting): SettingRow => {
     set: value !== "",
     from: held?.differed === true ? held.from : null,
     shared: true,
+    multiline: false,
   };
 };
 
@@ -224,16 +261,17 @@ export const settingSections = (
 ): ReadonlyArray<SettingSection> => {
   const rows = [
     ...SETTINGS.filter(({ key }) => key !== GIVEN_ONLY).map((setting) => flockRow(flock, setting)),
-    ...DESKTOP_SETTINGS.map(({ read, change: _, unset, ...setting }): SettingRow => {
+    ...DESKTOP_SETTINGS.map(({ read, change: _, unset, multiline, ...setting }): SettingRow => {
       const value = read(desktop);
       return {
         ...rowOf(setting),
         value,
         fallback: setting.fallback,
-        defaultSaid: unset ?? defaultSaid(setting, setting.fallback),
+        defaultSaid: unset?.(desktop) ?? defaultSaid(setting, setting.fallback),
         set: value !== setting.fallback,
         from: null,
         shared: false,
+        multiline: multiline === true,
       };
     }),
   ];

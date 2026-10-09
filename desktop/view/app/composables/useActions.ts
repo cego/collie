@@ -58,7 +58,7 @@ const joined = (parts: ReadonlyArray<Uint8Array>) => {
   return whole;
 };
 
-const failureOf = (cause: Cause.Cause<Failed>) => {
+export const failureOf = (cause: Cause.Cause<Failed>) => {
   const found = Cause.findError(cause);
   return Result.isSuccess(found) && found.success._tag === "ActionFailed"
     ? found.success

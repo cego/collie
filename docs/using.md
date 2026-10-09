@@ -1156,7 +1156,7 @@ Machine's.
 Flock's settings each time it opens. It is grouped under headings, in order: **Agents**, **Runs**, **Board**, **Chat**,
 **Notifications**, **GitLab and credentials** and **About**. It holds every setting the TUI's
 Settings offers — each default a Run reads, `proactive`, the extra `models.<harness>` and each
-`notifications.<kind>` — and the Flock chat's own speak-first switch. Each setting has a plain
+`notifications.<kind>` — and the Flock chat's own settings. Each setting has a plain
 name with its config key in small print, a sentence or two on what it changes (what 0 or
 unset means where that matters, and that `scope`, `density` and `questions` change the TUI's
 board, not Desktop's), a control that fits it (a choice, a number, a switch, or text), its
@@ -1164,10 +1164,15 @@ default, and the same refusals as the TUI. Durations — `quiet_ms`, `handoff_ti
 `board_quiet_ms` — are shown and typed in minutes, decimals where a value is not a whole
 number of them, and still stored in milliseconds, so `config.json` and `collie settings` are
 unchanged. **Reset to default**, shown while a setting is set, unsets it. Each says whether
-**Every Machine** shares it or it is for **This computer only**: the Flock chat's switch,
-like the bell in the chat's header, is this computer's. The groups, names, descriptions and
+**Every Machine** shares it or it is for **This computer only**. Under **Chat**, the Flock
+chat's **Flock chat harness**, **Flock chat model**, **Machine rule** and **Flock chat speaks
+first** are this computer's, like the bell in the chat's header. The harness offers
+`claude` and `pi`; the model is a one-line field, with **Unset: opus** for Claude and
+**Unset: pi's own default** for Pi. It is checked as a Run's model is, including
+**More Claude Code models** and Pi's `provider/model` form, and a refusal saves nothing.
+The groups, names, descriptions and
 units live with each key in the one list of settings (`src/settings.ts`) that the TUI's
-Settings reads too, so a new setting shows up in both, except the three for this computer only,
+Settings reads too, so a new setting shows up in both, except those for this computer only,
 whose are in `DESKTOP_SETTINGS` (`desktop/src/shared/flock-settings.ts`); the TUI does not show the names,
 descriptions or minutes yet. The ones every Machine shares are the Flock's: Desktop keeps them in
 `flock-settings.json` beside its chat, and gives them to every Machine through that
@@ -1366,12 +1371,46 @@ state directory, links followed, because a Run's state changes only through the 
 Machine whose Collie is too old for files is told to upgrade. There is no shell on a
 Machine.
 
-It is a session of your own Claude Code, on your own Claude seat, driven through the Agent
-SDK in Desktop's main process: `opus` at medium effort with summarised thinking, and none
-of your settings, hooks, skills or CLAUDE.md. Your first message starts it, and it stays warm until Desktop quits. Its session
-id is minted once and kept in `$XDG_STATE_HOME/collie-desktop/flock-chat.json` (or
-`~/.local/state/collie-desktop/`), so a restart resumes the same conversation; Claude Code
-keeps and compacts the transcript on this computer.
+**Settings › Chat** names the Flock chat's harness and model, for this computer only.
+The harness offers `claude` and `pi`, using your own install and login on this computer.
+Claude runs through the Agent SDK. Unset, its model is `opus`; a set model such as `sonnet`
+runs at medium effort with summarised thinking. None of your Claude settings, hooks, skills
+or CLAUDE.md loads.
+
+On Pi, write the model as `provider/model`, for example `openai-codex/gpt-6.1-sol`.
+Unset, Pi uses its configured default model and thinking level.
+Clearing a model override passes Pi's configured provider/model and thinking level explicitly,
+so reopening the same conversation does not restore its previous model override.
+Desktop starts `pi --mode rpc` on its login PATH, with Collie's system prompt and its own session directory.
+Explicit system and append sources exclude your `SYSTEM.md` and `APPEND_SYSTEM.md` files.
+None of your Pi extensions, skills, prompt templates or context files loads. Its own
+`read`, `bash`, `edit`, `write`, `grep`, `find` and `ls` tools reach this computer without
+asking first. Pi missing from PATH is said in the chat.
+
+Pi reaches Collie's tools, the five Machine file tools and AskUserQuestion through one
+streamable-HTTP MCP endpoint on `127.0.0.1`, started on its first session. A random bearer
+token protects every request. Only the child process's environment carries the token;
+the generated extension reads it there. A private MCP server name keeps your Pi MCP
+configuration from replacing these tools; the chat still shows their Collie names. The
+endpoint remains until Desktop quits. Its
+24-hour tool timeout leaves time for a question click or a slow Machine read. A question
+in a turn Desktop starts is answered at once that the human is not in that turn.
+
+A model change waits for the turn under way to end, then the next message continues the
+same conversation on the new model. A harness change waits too, then starts a fresh
+conversation and clears its model; both chat windows reload it. Earlier conversations
+lists the current harness's history. Switching back to Claude shows its own conversations
+again. You can ask the chat to read or change these settings through `collie_chat_harness`,
+with the same checks as Settings.
+
+Your first message starts the session, and it stays warm between turns. Its session id
+and harness are kept in `$XDG_STATE_HOME/collie-desktop/flock-chat.json` (or
+`~/.local/state/collie-desktop/`), so a restart resumes the same conversation. Claude Code
+keeps and compacts its transcript; Pi keeps its session files under Desktop's `pi-sessions/`.
+Desktop reads Pi's current branch and earlier conversations from those files.
+The Machine rule, News and card note reach Pi after your words as a bracketed note of
+Desktop's own. Reading the transcript back leaves the context out of your bubble and keeps
+the card as its pill.
 
 Replies stream in as Markdown, rendered as the record renders it: nothing in it runs or
 keeps a style, and a web link opens in your browser. Each tool call is one row — the tool, the Machine it
@@ -1395,8 +1434,8 @@ sent now like any other. A file over 20 MB, or files over 30 MB together, are re
 composer with the reason. Desktop keeps one copy of each file, by its sha256, under its state
 directory's `attachments/`. The model is handed your words, then a block of Desktop's own
 listing each file's name, type, size and the path of that copy, then each image as an image,
-each PDF up to 4 MB as a document, and each UTF-8 text up to 100 KB as text headed with its
-name; anything else, or anything larger, is in the listing alone, so the model can Read it
+each PDF up to 4 MB as a document on Claude, and each UTF-8 text up to 100 KB as text headed with its
+name; Pi receives PDFs by the listing alone. Anything else, or anything larger, is in the listing alone, so the model can read it
 there. An image whose long edge is over 2000 px is scaled to 2000 px first, and never up, and the
 original is what a Run gets. The message shows its chips at once, and again when the
 conversation is read back after a restart; a copy Desktop no longer has shows its name alone. An image
@@ -1687,6 +1726,13 @@ renders what the host reports. A run therefore
 survives the picker closing, the Control Plane closing, and the terminal being detached.
 
 ### Why a run stopped
+
+`implement` sends a `blocker` or `major` reported by its builder to reviewers before
+starting the next ticket. They review the tickets built so far; later tickets are outside
+that review's scope. The same implementer fixes their findings, followed by another
+review. Each rally is bounded to four rounds and stops on no progress or an unanswered
+blocking dispute. Later tickets start only after the rally settles. When the last review
+already covers the finished plan, it is reused; further work gets another review.
 
 The detail panel of a run that stopped opens with **Stopped**: one line saying why — the
 review loop out of iterations or making no progress, a blocking finding the implementer

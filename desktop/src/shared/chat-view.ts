@@ -109,7 +109,7 @@ export const ChatMessage = Schema.Struct({
 });
 export type ChatMessage = typeof ChatMessage.Type;
 
-const Questions = Schema.Struct({
+export const Questions = Schema.Struct({
   questions: Schema.Array(
     Schema.Struct({
       question: Schema.String,
