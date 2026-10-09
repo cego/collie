@@ -1,5 +1,5 @@
-// How the Flock chat's session runs. Kept apart from the session itself, which needs the
-// Agent SDK, so Collie's own suite can read what it is started with.
+// How the Flock chat's Claude Code session runs. Kept apart from the Agent SDK, so Collie's
+// own suite can read what it is started with.
 
 import { type Answers, DESKTOP_SAID } from "../shared/chat-view";
 import { hostname } from "node:os";
@@ -17,9 +17,8 @@ Everything Collie has is named <machine>:<id>, for example vm-mk:run-04ab8fe5. U
 collie_herd gives. A bare id works only where one Machine has it; when a tool says an id is
 on several Machines, ask which one was meant rather than guessing.
 
-You run on ${computer}, the computer Desktop is on. Its files you reach with Read, Glob,
-Grep, Write and Edit, and its shell with Bash, always by absolute path: your working
-directory is Desktop's own. A file on a Machine you reach with collie_read, collie_glob,
+You run on ${computer}, the computer Desktop is on. Its files and shell you reach with your
+own file and shell tools, always by absolute path: your working directory is Desktop's own. A file on a Machine you reach with collie_read, collie_glob,
 collie_grep, collie_write and collie_edit, naming it <machine>:<path>; there is no shell on a
 Machine. None of these asks the human first, so use them as they would. A host's state
 directory is changed only through Collie's tools, never by writing its files.
@@ -43,6 +42,10 @@ collie_in_sync says which Machines are behind Desktop and why, and syncs one you
 
 A message that starts "${DESKTOP_SAID}" is Desktop handing you News, not the human
 speaking: tell them briefly what in it needs them, and do nothing they have not asked for.`;
+
+const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
+type Effort = (typeof EFFORTS)[number];
+export const isEffort = (effort: string): effort is Effort => EFFORTS.some((one) => one === effort);
 
 /** Claude Code's own tools for this computer's files and shell, none of which asks first. */
 const BUILT_IN = ["Read", "Glob", "Grep", "Write", "Edit", "Bash"];
@@ -81,6 +84,8 @@ const noticedContext = (noticed: string) =>
 export const sessionOptions = <Server>(opts: {
   readonly cwd: string;
   readonly session: { readonly resume: string } | { readonly sessionId: string };
+  readonly model: string;
+  readonly effort: Effort;
   readonly server: Server;
   readonly claude: string | null;
   readonly ask: (toolUseID: string, signal: AbortSignal) => Promise<Answers | null>;
@@ -90,8 +95,8 @@ export const sessionOptions = <Server>(opts: {
 }) => ({
   ...opts.session,
   cwd: opts.cwd,
-  model: "opus",
-  effort: "medium" as const,
+  model: opts.model,
+  effort: opts.effort,
   thinking: { type: "adaptive" as const, display: "summarized" as const },
   systemPrompt: systemPrompt(hostname()),
   tools: ["AskUserQuestion", ...BUILT_IN],

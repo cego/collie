@@ -38,9 +38,9 @@ const shown = (row: SettingRow) => drafts.value[idOf(row)] ?? row.value;
 /** `typed` in the row's unit; empty unsets it. */
 const set = async (row: SettingRow, typed: string) => {
   if (!row.shared) {
-    const kept = await change(desktopChange(row.key, typed));
-    if (kept) delete drafts.value[idOf(row)];
-    else toast.add({ title: "Desktop could not keep that", color: "error" });
+    const refused = await change(desktopChange(row.key, typed));
+    if (refused === null) delete drafts.value[idOf(row)];
+    else toast.add({ title: refused, color: "error" });
     return;
   }
   const stored = settingStored(row.key, typed);
@@ -118,7 +118,7 @@ const drawnLine = computed(() =>
                 @submit.prevent="set(row, shown(row))"
               >
                 <UTextarea
-                  v-if="!row.shared && row.kind === 'text'"
+                  v-if="row.multiline"
                   class="flex-1"
                   :rows="3"
                   autoresize

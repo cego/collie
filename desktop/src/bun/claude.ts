@@ -9,7 +9,7 @@ import {
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { isJsonObject } from "../../../src/schema";
-import type { ClaudeCode } from "./chat";
+import type { ClaudeCode } from "./claude-driver";
 import { callFileTool, FILE_TOOLS, isFileTool } from "./file-tools";
 import { callFlockTool, FLOCK_TOOLS } from "./flock-tools";
 

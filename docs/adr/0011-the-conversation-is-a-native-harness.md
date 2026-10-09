@@ -272,9 +272,11 @@ harness is a driver of its own, and nobody has asked for that one.
 
 Each harness is driven as the human runs it, from their own installed binary, login and
 model catalogue on Desktop's login PATH: Claude Code through the Agent SDK as before, Pi in
-RPC mode (`pi --mode rpc`), Codex through its App Server (`codex app-server`). The harness
+RPC mode (`pi --mode rpc`), Codex through its App Server (`codex app-server`). Claude uses
+the executable on login PATH where present, otherwise the Agent SDK's bundled executable,
+as before; Pi and Codex require their own installed binaries. The harness
 still owns the session, its persistence and its compaction; Collie still owns which session
-it is and what the model may reach. A harness that is not on PATH is said in the chat, and
+it is and what the model may reach. Pi or Codex missing from PATH is said in the chat, and
 nothing else changes.
 
 - **The model is checked as a Run's is**, against the same table and the shared

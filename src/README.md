@@ -1,5 +1,8 @@
 Runner source (Bun/TypeScript). Compiled to `bin/collie` per platform; see ADR-0001.
 
+`harness-choice.ts` owns the model catalogue and layered choice resolution shared with
+Desktop. `harness.ts` owns how those choices launch and reexports the shared interface.
+
 | File               | What it owns                                                                                          |
 | ------------------ | ----------------------------------------------------------------------------------------------------- |
 | `main.ts`          | Entry: the `collie` CLI, or the actions and pane entrypoints under `herdr`                            |

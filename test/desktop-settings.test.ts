@@ -15,7 +15,12 @@ import {
 } from "../desktop/src/shared/flock-settings";
 import { flockSync } from "../desktop/src/bun/flock-settings";
 import { settingStored } from "../src/settings";
-import { readSettings, writeSettings } from "../desktop/src/bun/settings";
+import {
+  applyChange,
+  changeSettings,
+  readSettings,
+  writeSettings,
+} from "../desktop/src/bun/settings";
 
 const at = (hour: number) => `2026-10-07T${String(hour).padStart(2, "0")}:00:00.000Z`;
 const set = (key: string, value: SharedSetting["value"], hour: number): SharedSetting => ({
@@ -135,6 +140,25 @@ test("Settings shows every setting with its control, its value and its default",
     value: "",
     set: false,
     defaultSaid: "Unset: no rule",
+    multiline: true,
+  });
+  // The Flock chat's harness, from those it has a driver for, and its model on one line.
+  expect(row("chatHarness", false)).toMatchObject({
+    group: "Chat",
+    label: "Flock chat harness",
+    kind: "choice",
+    choices: ["claude"],
+    value: "claude",
+    set: false,
+  });
+  expect(row("chatModel", false)).toMatchObject({
+    group: "Chat",
+    label: "Flock chat model",
+    kind: "text",
+    value: "",
+    set: false,
+    multiline: false,
+    defaultSaid: "Unset: opus",
   });
   // The GitLab host is shared too, but beside the tokens made for it.
   expect(rows.map((one) => one.key)).not.toContain("gitlab_host");
@@ -325,5 +349,68 @@ test("Zoom is this computer's, under Board, 100% until set, and kept as a number
       const dir = yield* fs.makeTempDirectoryScoped({ prefix: "desktop-settings-" });
       yield* writeSettings(dir, { proactive: true, zoom: 0.9 });
       expect((yield* readSettings(dir)).zoom).toBe(0.9);
+    }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
+  ));
+
+test("the Flock chat's model is checked as a Run's is, with the Flock's extra models, and a refusal keeps nothing", () => {
+  const before = { proactive: true, chatModel: "sonnet" };
+  const refused = changeSettings(before, NO_FLOCK_SETTINGS, { chatModel: "gpt-6.1-sol" });
+  expect(refused).toEqual({
+    refused: expect.stringContaining('"gpt-6.1-sol" is not a model claude takes'),
+  });
+  expect("refused" in refused && refused.refused).toContain("opus, sonnet");
+  expect(changeSettings(before, NO_FLOCK_SETTINGS, { chatModel: "haiku" })).toEqual({
+    proactive: true,
+    chatModel: "haiku",
+  });
+  const extra = takeFrom(NO_FLOCK_SETTINGS, "vm-a", [
+    set("models.claude", ["proxy-large"], 9),
+  ]).flock;
+  expect(changeSettings(before, extra, { chatModel: "proxy-large" })).toMatchObject({
+    chatModel: "proxy-large",
+  });
+  // Empty unsets it.
+  expect(changeSettings(before, NO_FLOCK_SETTINGS, { chatModel: "" })).toEqual({ proactive: true });
+  // Only a harness the chat has a driver for.
+  expect(changeSettings(before, NO_FLOCK_SETTINGS, { chatHarness: "opencode" })).toEqual({
+    refused: expect.stringContaining('"opencode"'),
+  });
+  // A change of something else is not held up by a model saved before.
+  expect(
+    changeSettings({ proactive: true, chatModel: "gone" }, NO_FLOCK_SETTINGS, { proactive: false }),
+  ).toEqual({ proactive: false, chatModel: "gone" });
+});
+
+test("choosing another harness for the Flock chat clears its model, and the same harness keeps it", () => {
+  const before = { proactive: true, chatHarness: "claude", chatModel: "sonnet" };
+  expect(applyChange(before, { chatHarness: "pi" })).toEqual({
+    proactive: true,
+    chatHarness: "pi",
+  });
+  expect(applyChange(before, { chatHarness: "claude" })).toEqual(before);
+  expect(applyChange(before, { chatHarness: "pi", chatModel: "openai-codex/gpt-6.1-sol" })).toEqual(
+    { proactive: true, chatHarness: "pi", chatModel: "openai-codex/gpt-6.1-sol" },
+  );
+  // Unset is claude.
+  expect(applyChange({ proactive: true, chatModel: "sonnet" }, { chatHarness: "claude" })).toEqual({
+    proactive: true,
+    chatHarness: "claude",
+    chatModel: "sonnet",
+  });
+});
+
+test("the Flock chat's harness and model are kept on this computer, and a file from before them still reads", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "desktop-settings-" });
+      yield* writeSettings(dir, { proactive: true, chatHarness: "claude", chatModel: "sonnet" });
+      expect(yield* readSettings(dir)).toEqual({
+        proactive: true,
+        chatHarness: "claude",
+        chatModel: "sonnet",
+      });
+      yield* fs.writeFileString(`${dir}/settings.json`, '{"proactive":true,"machineRule":"vm"}');
+      expect(yield* readSettings(dir)).toEqual({ proactive: true, machineRule: "vm" });
     }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
   ));

@@ -89,6 +89,17 @@ export interface FlockChat {
   readonly setMachineRule: (rule: string) => Effect.Effect<void>;
   /** Each Machine's In sync standing; with a Machine's name, Sync now on it. */
   readonly inSync: (sync: string | undefined) => Effect.Effect<string>;
+  /** The chat's harness and model as set, and `harness/model` of the session warm now. */
+  readonly chatHarness: () => {
+    readonly harness: string;
+    readonly model: string | undefined;
+    readonly runsOn: string | null;
+  };
+  /** Saved with Settings' checks; why not, where it is refused. */
+  readonly setChatHarness: (change: {
+    readonly harness?: string;
+    readonly model?: string;
+  }) => Effect.Effect<string | null>;
 }
 
 /** Desktop's own: a Herd's chat never chooses between Machines. */
@@ -104,6 +115,25 @@ const MachineRuleTool = Tool.make("collie_machine_rule", {
   needsApproval: false,
 })
   .annotate(Tool.Title, "The Machine rule")
+  .annotate(Tool.Readonly, false);
+
+/** Desktop's own: a Herd's chat runs on the Home's harness. */
+const ChatHarnessTool = Tool.make("collie_chat_harness", {
+  description:
+    "The harness and model this conversation runs on, from Desktop's Settings. Without " +
+    "arguments it is read back, with what the conversation runs on now; with `harness` or " +
+    "`model` they are replaced, checked as Settings checks them, and an empty `model` unsets " +
+    "it. Another harness unsets the model. A change applies once this turn has ended. Change " +
+    "them only when the human asks.",
+  parameters: Schema.Struct({
+    harness: Schema.optionalKey(Schema.String),
+    model: Schema.optionalKey(Schema.String),
+  }),
+  success: Schema.String,
+  failureMode: "return",
+  needsApproval: false,
+})
+  .annotate(Tool.Title, "The Flock chat's harness")
   .annotate(Tool.Readonly, false);
 
 /** Desktop's own: what its Machines page says of each Machine, and its Sync now. */
@@ -135,6 +165,7 @@ export const FlockTools = Toolkit.make(
   CollieTools.tools.collie_do,
   CollieTools.tools.collie_propose,
   MachineRuleTool,
+  ChatHarnessTool,
   InSyncTool,
 );
 
@@ -746,6 +777,28 @@ const machineRule = (flock: FlockChat, asked: string | undefined) => {
   );
 };
 
+const chatHarness = (flock: FlockChat, change: { harness?: string; model?: string }) =>
+  Effect.gen(function* () {
+    const setTo = () => {
+      const { harness, model } = flock.chatHarness();
+      return model === undefined
+        ? `${harness}, with no model set: the harness's own default`
+        : `${harness}, model ${model}`;
+    };
+    if (change.harness === undefined && change.model === undefined) {
+      const { runsOn } = flock.chatHarness();
+      return `The Flock chat is set to ${setTo()}. ${
+        runsOn === null
+          ? "No turn has run on it since Desktop started."
+          : `This conversation runs on ${runsOn} now.`
+      }`;
+    }
+    const refused = yield* flock.setChatHarness(change);
+    return refused === null
+      ? `The Flock chat is now set to ${setTo()}. It applies once this turn has ended.`
+      : `${refused}. Nothing was changed.`;
+  });
+
 /** The handlers for one call, which take the input as it was sent once the Toolkit has decoded it. */
 const handlersFor = (flock: FlockChat, sent: JsonObject) =>
   Effect.gen(function* () {
@@ -765,6 +818,7 @@ const handlersFor = (flock: FlockChat, sent: JsonObject) =>
       collie_do: () => answer(carryOut(flock, sent)),
       collie_propose: () => answer(propose(flock, sent)),
       collie_machine_rule: ({ rule }) => answer(machineRule(flock, rule)),
+      collie_chat_harness: (change) => answer(chatHarness(flock, change)),
       collie_in_sync: ({ sync }) => answer(flock.inSync(sync)),
     });
   });

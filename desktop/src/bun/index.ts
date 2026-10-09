@@ -58,13 +58,14 @@ import { clipboardPaths } from "../shared/attachments";
 import { readAttachment, stageAttachment, stagePath } from "./attachments";
 import { type FlockConversation, openFlockChat, refusal, untilStarted } from "./chat";
 import { claudeCode } from "./claude";
+import { claudeDriver } from "./claude-driver";
 import { childEnv, takeLoginEnv, which } from "./login-env";
 import { type ChatMachine, chatDoor } from "./flock-tools";
-import { readSettings, writeSettings } from "./settings";
+import { changeSettings, chatChoice, readSettings, writeSettings } from "./settings";
 import { followWindow, zoomWindow } from "./scale";
 import type { Drawn } from "../shared/scale";
 import { flockSync, readFlockSettings, writeFlockSettings } from "./flock-settings";
-import { editSetting } from "../shared/flock-settings";
+import { DEFAULT_CHAT_HARNESS, editSetting } from "../shared/flock-settings";
 import { nowIso } from "../../../src/time";
 import { SettingValue, settingText } from "../../../src/settings";
 import { isString } from "../../../src/schema";
@@ -574,9 +575,11 @@ const main = Effect.gen(function* () {
   /** Desktop's own settings, one change at a time, as Settings and the Flock chat make them. */
   const settingsWrite = Semaphore.makeUnsafe(1);
   const saveSettings = (changed: DesktopSettingsChange) =>
-    Effect.suspend(() => {
-      const merged = { ...settings, ...changed };
-      return writeSettings(own, merged).pipe(
+    Effect.gen(function* () {
+      const merged = changeSettings(settings, SubscriptionRef.getUnsafe(flockSettings), changed);
+      if ("refused" in merged) return yield* new ActionFailed({ reason: merged.refused });
+      yield* writeSettings(own, merged).pipe(
+        Effect.mapError((error) => new ActionFailed({ reason: error.message })),
         Effect.andThen(
           Effect.sync(() => {
             settings = merged;
@@ -588,7 +591,8 @@ const main = Effect.gen(function* () {
             : Effect.forEach(zoomAgain, (again) => again, { discard: true }),
         ),
       );
-    }).pipe(settingsWrite.withPermits(1), Effect.orDie);
+      return settings;
+    }).pipe(settingsWrite.withPermits(1));
 
   /** Files named by path, each copied in or refused in words. */
   const stagedFrom = (paths: ReadonlyArray<string>) =>
@@ -630,13 +634,32 @@ const main = Effect.gen(function* () {
     });
   // Opened by the view's first ask, in Desktop's own scope; its session starts with the first message.
   const chat = yield* openFlockChat({
-    claude: claudeCode,
+    drivers: (context) => ({ claude: claudeDriver(claudeCode, context) }),
     dir: own,
     conversation: `flock@${local}`,
     proactive: () => settings.proactive,
     machineRule: () => settings.machineRule,
     setMachineRule: (machineRule) =>
-      saveSettings({ machineRule }).pipe(Effect.provide(BunServices.layer)),
+      saveSettings({ machineRule }).pipe(
+        Effect.asVoid,
+        Effect.orDie,
+        Effect.provide(BunServices.layer),
+      ),
+    choice: () => chatChoice(settings, SubscriptionRef.getUnsafe(flockSettings)),
+    chatHarness: () => ({
+      harness: settings.chatHarness ?? DEFAULT_CHAT_HARNESS,
+      model: settings.chatModel,
+    }),
+    setChatHarness: ({ harness, model }) => {
+      const changed: Partial<Record<"chatHarness" | "chatModel", string>> = {};
+      if (harness !== undefined) changed.chatHarness = harness;
+      if (model !== undefined) changed.chatModel = model.trim();
+      return saveSettings(changed).pipe(
+        Effect.as(null),
+        Effect.catch(({ reason }) => Effect.succeed(reason)),
+        Effect.provide(BunServices.layer),
+      );
+    },
     inSync: (sync) =>
       Effect.gen(function* () {
         const rows = machineRows(shown);

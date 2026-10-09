@@ -1,11 +1,9 @@
-// The Flock chat: one warm Agent SDK session on the user's own Claude Code, in Desktop's
-// main process beside the channels its tools call. Its session id is minted once and
-// resumed on every launch after, until the human starts a fresh one or reopens an earlier
-// one; Claude Code keeps and compacts the transcripts on this computer. Collie's tools and
-// AskUserQuestion are its only tools.
+// The Flock chat: one warm session of the harness Desktop's Settings name, in Desktop's
+// main process beside the channels its tools call, driven through that harness's driver.
+// Its conversation is resumed on every launch after, until the human starts a fresh one or
+// reopens an earlier one; the harness keeps and compacts the transcripts on this computer.
 
 import {
-  Cause,
   Crypto,
   Deferred,
   Duration,
@@ -15,7 +13,6 @@ import {
   Option,
   Path,
   PubSub,
-  Queue,
   Schema,
   Schedule,
   Scope,
@@ -31,7 +28,6 @@ import {
   INLINE_BUDGET,
   listing,
   shownAs,
-  type ShownImage,
   type Staged,
   TEXTUAL,
   showable,
@@ -47,9 +43,10 @@ import {
   DESKTOP_SAID,
   type DesktopTurn,
 } from "../shared/chat-view";
+import { type AgentChoice, pinned, said as choiceSaid } from "../../../src/harness-choice";
 import { appendJournal } from "../../../src/journal";
 import { nowIso } from "../../../src/time";
-import { type SdkMessage, startState, step } from "./agui";
+import { type ChatDriver, type ContentBlock, type DriverContext, TurnCost } from "./driver";
 import {
   delivered,
   type FlockBatch,
@@ -60,76 +57,20 @@ import {
   newsKey,
   worthSpeaking,
 } from "./flock-tools";
-import { sessionOptions } from "./session";
-import { transcriptOf } from "./transcript";
-import { which } from "./login-env";
 
-/** A session as the chat drives it. */
-export interface ClaudeSession extends AsyncIterable<SdkMessage> {
-  readonly interrupt: () => Promise<object | void>;
-  readonly close: () => void;
+/** The current conversation and the harness it is held on; a file without one is claude's. */
+const SessionFile = Schema.fromJsonString(
+  Schema.Struct({
+    session: Schema.String,
+    harness: Schema.String.pipe(Schema.withDecodingDefaultKey(Effect.succeed("claude"))),
+  }),
+);
+
+/** The Flock chat's harness and model, as Settings has them. */
+export interface ChatHarnessSet {
+  readonly harness: string;
+  readonly model: string | undefined;
 }
-
-/** A block of a message to the model, as the Messages API takes it. */
-export type ContentBlock =
-  | { readonly type: "text"; readonly text: string }
-  | {
-      readonly type: "document";
-      readonly source: {
-        readonly type: "base64";
-        readonly media_type: "application/pdf";
-        readonly data: string;
-      };
-      readonly title: string;
-    }
-  | {
-      readonly type: "image";
-      readonly source: {
-        readonly type: "base64";
-        readonly media_type: ShownImage;
-        readonly data: string;
-      };
-    };
-
-/** The Agent SDK's user message, as much of it as the chat sends; claude.ts holds it to the SDK's. */
-export interface UserMessage {
-  readonly type: "user";
-  readonly message: {
-    readonly role: "user";
-    readonly content: string | Array<ContentBlock>;
-  };
-  readonly parent_tool_use_id: null;
-}
-
-/** What the chat needs of Claude Code: the Agent SDK in Desktop, a script in a test. */
-export interface ClaudeCode<Server> {
-  readonly query: (params: {
-    readonly prompt: AsyncIterable<UserMessage>;
-    readonly options: ReturnType<typeof sessionOptions<Server>>;
-  }) => ClaudeSession;
-  readonly getSessionInfo: (
-    id: string,
-    options: { dir: string },
-  ) => Promise<{ readonly sessionId: string } | undefined>;
-  readonly getSessionMessages: (
-    id: string,
-    options: { dir: string },
-  ) => Promise<ReadonlyArray<unknown>>;
-  readonly listSessions: (options: { dir: string; limit: number }) => Promise<
-    ReadonlyArray<{
-      readonly sessionId: string;
-      readonly summary: string;
-      readonly lastModified: number;
-    }>
-  >;
-  /** Collie's tools as an MCP server in this process. */
-  readonly server: (
-    flock: FlockChat,
-    run: <A>(effect: Effect.Effect<A, never, Crypto.Crypto | FileSystem.FileSystem>) => Promise<A>,
-  ) => Server;
-}
-
-const SessionFile = Schema.fromJsonString(Schema.Struct({ session: Schema.String }));
 
 export interface FlockConversation {
   /**
@@ -155,27 +96,15 @@ export interface FlockConversation {
   readonly desktopTurns: Stream.Stream<DesktopTurn>;
 }
 
-/** What a turn cost, as Claude Code's result says. */
-const TurnResult = Schema.Struct({
-  type: Schema.Literal("result"),
-  duration_ms: Schema.Number,
-  usage: Schema.Struct({
-    input_tokens: Schema.Number,
-    output_tokens: Schema.Number,
-    cache_read_input_tokens: Schema.Number,
-    cache_creation_input_tokens: Schema.Number,
-  }),
-});
-const decodeTurnResult = Schema.decodeUnknownOption(TurnResult);
-
 /** A turn of Desktop's own, recorded as usage on this computer: data, never a limit. */
 const UsageLine = Schema.fromJsonString(
   Schema.Struct({
     at: Schema.String,
     session: Schema.String,
     turn: Schema.Literal("desktop"),
-    duration_ms: Schema.Number,
-    usage: TurnResult.fields.usage,
+    harness: Schema.String,
+    model: Schema.String,
+    ...TurnCost.fields,
   }),
 );
 
@@ -281,11 +210,11 @@ export const untilStarted = <A, E, R>(start: Effect.Effect<A, E, R>) =>
 
 /**
  * The current conversation's session, started by its first message and warm from then
- * until the scope closes, and never more than one. A session Claude Code has a transcript
- * for is resumed; one it has none of yet starts under its minted id.
+ * until the scope closes, and never more than one. A message after the chat's model changed
+ * ends the warm session and resumes the same conversation on the new model.
  */
-export const openFlockChat = Effect.fn("FlockChat.open")(function* <Server>(opts: {
-  readonly claude: ClaudeCode<Server>;
+export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
+  readonly drivers: (context: DriverContext) => Readonly<Record<string, ChatDriver>>;
   readonly dir: string;
   readonly conversation: string;
   readonly machines: FlockChat["machines"];
@@ -294,6 +223,12 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* <Server>(opts
   readonly machineRule: FlockChat["machineRule"];
   readonly setMachineRule: FlockChat["setMachineRule"];
   readonly inSync: FlockChat["inSync"];
+  /** What the chat runs on, as Settings have it now, or why it cannot run. */
+  readonly choice: () =>
+    | { readonly ok: true; readonly choice: AgentChoice }
+    | { readonly ok: false; readonly problem: string };
+  readonly chatHarness: () => ChatHarnessSet;
+  readonly setChatHarness: FlockChat["setChatHarness"];
 }) {
   const fs = yield* FileSystem.FileSystem;
   const scope = yield* Effect.scope;
@@ -303,8 +238,6 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* <Server>(opts
   const saved = yield* fs
     .readFileString(file)
     .pipe(Effect.flatMap(Schema.decodeUnknownEffect(SessionFile)), Effect.option);
-  const remember = (session: string) =>
-    fs.writeFileString(file, Schema.encodeSync(SessionFile)({ session }));
   let said: string | undefined;
   let carried: ReadonlyArray<Staged> | undefined;
   let noticed: FlockBatch | undefined;
@@ -312,6 +245,10 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* <Server>(opts
   const services = yield* Effect.context<Crypto.Crypto | FileSystem.FileSystem | Path.Path>();
   const run = <A>(effect: Effect.Effect<A, never, Crypto.Crypto | FileSystem.FileSystem>) =>
     Effect.runPromise(effect.pipe(Effect.provideContext(services)));
+  /** The session warm now, if one is. */
+  let live:
+    | { readonly running: Live; readonly scope: Scope.Closeable; readonly choice: AgentChoice }
+    | undefined;
   const flock: FlockChat = {
     machines: opts.machines,
     conversation: opts.conversation,
@@ -321,8 +258,12 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* <Server>(opts
     machineRule: opts.machineRule,
     setMachineRule: opts.setMachineRule,
     inSync: opts.inSync,
+    chatHarness: () => ({
+      ...opts.chatHarness(),
+      runsOn: live === undefined ? null : choiceSaid(pinned(live.choice)),
+    }),
+    setChatHarness: opts.setChatHarness,
   };
-  const server = opts.claude.server(flock, run);
   const usage = (yield* Path.Path).join(opts.dir, "flock-usage.jsonl");
   const desktopTurns = yield* SubscriptionRef.make<DesktopTurn>("ended");
   // ponytail: grows by one key per item Desktop spoke about, for as long as Desktop runs.
@@ -339,37 +280,26 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* <Server>(opts
       { signal },
     );
   };
+  const drivers = opts.drivers({
+    dir: opts.dir,
+    flock,
+    run,
+    ask,
+    noticed: () => (noticed === undefined ? undefined : flockNewsText(noticed)),
+    placement: () => {
+      const rule = opts.machineRule()?.trim() ?? "";
+      return rule === ""
+        ? undefined
+        : {
+            rule,
+            machines: opts.machines().map(({ name, local }) => ({ name, local: local === true })),
+          };
+    },
+  });
 
   /** One session, live until its scope closes. */
-  const start = Effect.fnUntraced(function* (id: string) {
-    const known = yield* Effect.tryPromise(() =>
-      opts.claude.getSessionInfo(id, { dir: opts.dir }),
-    ).pipe(Effect.orElseSucceed(() => undefined));
-    const inbox = yield* Queue.unbounded<UserMessage>();
-    const claude = opts.claude.query({
-      prompt: Stream.toAsyncIterable(Stream.fromQueue(inbox)),
-      options: sessionOptions({
-        cwd: opts.dir,
-        session: known === undefined ? { sessionId: id } : { resume: id },
-        server,
-        claude: which("claude"),
-        ask,
-        noticed: () => (noticed === undefined ? undefined : flockNewsText(noticed)),
-        placement: () => {
-          const rule = opts.machineRule()?.trim() ?? "";
-          return rule === ""
-            ? undefined
-            : {
-                rule,
-                machines: opts.machines().map(({ name, local }) => ({
-                  name,
-                  local: local === true,
-                })),
-              };
-        },
-      }),
-    });
-    let lastResult: typeof TurnResult.Type | undefined;
+  const start = Effect.fnUntraced(function* (driver: ChatDriver, id: string, choice: AgentChoice) {
+    const session = yield* driver.open(id, pinned(choice).model, choice.effort ?? "medium");
     const events = yield* PubSub.unbounded<AguiEvent>();
     /** Why the session ended, once it has: every turn after it is told at once. */
     let ended: string | null = null;
@@ -378,35 +308,47 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* <Server>(opts
         ended = why;
         return PubSub.publish(events, refusal(why));
       });
-    yield* Stream.fromAsyncIterable(claude, String).pipe(
-      Stream.tap((message) =>
-        Effect.sync(() => {
-          lastResult = Option.getOrElse(decodeTurnResult(message), () => lastResult);
-        }),
-      ),
-      Stream.mapAccum(() => startState(id), step),
+    yield* session.events.pipe(
       Stream.runForEach((event) => PubSub.publish(events, event)),
       Effect.matchCauseEffect({
-        onSuccess: () => endWith("Claude Code ended the Flock chat's session."),
+        onSuccess: () => endWith(`${choice.harness} ended the Flock chat's session.`),
         onFailure: (cause) => endWith(saidOf(cause)),
       }),
       Effect.forkScoped,
     );
     // Added after the reader, so it runs first and the reader's pending message ends.
-    yield* Effect.addFinalizer(() => Effect.sync(() => claude.close()));
-    return { claude, inbox, events, ended: () => ended, lastResult: () => lastResult };
+    yield* Effect.addFinalizer(() => session.close);
+    return { session, events, ended: () => ended };
   });
 
   type Live = Effect.Success<ReturnType<typeof start>>;
   let id = Option.isSome(saved) ? saved.value.session : yield* crypto.randomUUIDv4;
-  if (Option.isNone(saved)) yield* remember(id);
-  let live: { readonly running: Live; readonly scope: Scope.Closeable } | undefined;
-  /** The session, started again where the last one ended, as one that failed to start has. */
+  let heldOn = Option.isSome(saved) ? saved.value.harness : opts.chatHarness().harness;
+  const remember = Effect.suspend(() =>
+    fs.writeFileString(file, Schema.encodeSync(SessionFile)({ session: id, harness: heldOn })),
+  );
+  if (Option.isNone(saved)) yield* remember;
+  /**
+   * The session on what Settings name now, started again where the last one ended, as one
+   * that failed to start has; or why there is none.
+   */
   const warm = Effect.gen(function* () {
-    if (live !== undefined && live.running.ended() === null) return live.running;
+    const resolved = opts.choice();
+    if (!resolved.ok) return resolved.problem;
+    const { choice } = resolved;
+    const driver = drivers[choice.harness];
+    if (driver === undefined) return `The Flock chat has no driver for ${choice.harness}.`;
+    if (!driver.installed)
+      return `${choice.harness} is not installed or not on PATH on this computer`;
+    if (
+      live !== undefined &&
+      live.running.ended() === null &&
+      choiceSaid(live.choice) === choiceSaid(choice)
+    )
+      return live.running;
     yield* end;
     const scope = yield* Scope.make();
-    live = { running: yield* start(id).pipe(Scope.provide(scope)), scope };
+    live = { running: yield* start(driver, id, choice).pipe(Scope.provide(scope)), scope, choice };
     return live.running;
   });
   const end: Effect.Effect<void> = Effect.suspend(() => {
@@ -444,7 +386,7 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* <Server>(opts
    */
   const turnOn = Effect.fnUntraced(function* (
     running: Live,
-    content: UserMessage["message"]["content"],
+    content: string | Array<ContentBlock>,
     voice: Voice,
   ) {
     const heard = yield* PubSub.subscribe(running.events);
@@ -459,7 +401,7 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* <Server>(opts
         Effect.andThen(
           finished
             ? Effect.void
-            : Effect.tryPromise(() => running.claude.interrupt()).pipe(
+            : running.session.interrupt.pipe(
                 Effect.andThen(
                   Stream.fromSubscription(heard).pipe(Stream.takeUntil(ends), Stream.runDrain),
                 ),
@@ -475,11 +417,7 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* <Server>(opts
     // A turn of Desktop's carries its News in its message; the human's carries it as context.
     noticed = voice.said === undefined ? undefined : voice.news;
     turning = running;
-    yield* Queue.offer(running.inbox, {
-      type: "user",
-      message: { role: "user", content },
-      parent_tool_use_id: null,
-    });
+    yield* running.session.offer(content);
     let news = voice.news;
     return Stream.fromSubscription(heard).pipe(
       Stream.takeUntil(ends),
@@ -513,8 +451,9 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* <Server>(opts
     const fresh = worthSpeaking(yield* waiting, spoken);
     if (fresh === null) return;
     const running = yield* warm;
-    if (running.ended() !== null) return;
-    const before = running.lastResult();
+    if (isString(running) || running.ended() !== null) return;
+    const before = running.session.lastTurn();
+    const choice = pinned(live!.choice);
     yield* SubscriptionRef.set(desktopTurns, "started");
     yield* turnOn(running, `${DESKTOP_SAID}\n${flockNewsText(fresh)}`, { news: fresh }).pipe(
       Effect.flatMap(Stream.runDrain),
@@ -523,12 +462,14 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* <Server>(opts
     );
     // A turn that failed before the model had its News waits for the next look, not the next nudge.
     resting = fresh.items.every((placed) => !spoken.has(newsKey(placed)));
-    const result = running.lastResult();
+    const result = running.session.lastTurn();
     if (result !== undefined && result !== before)
       yield* appendJournal(usage, UsageLine, {
         at: yield* nowIso(),
         session: id,
         turn: "desktop",
+        harness: choice.harness,
+        model: choice.model,
         duration_ms: result.duration_ms,
         usage: result.usage,
       });
@@ -547,11 +488,10 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* <Server>(opts
             Effect.provideContext(services),
           );
           if (isString(content)) return Stream.make(refusal(content));
-          const claude = turning?.claude;
-          if (now && claude !== undefined)
-            yield* Effect.tryPromise(() => claude.interrupt()).pipe(Effect.ignore);
+          if (now && turning !== undefined) yield* turning.session.interrupt;
           yield* Effect.acquireRelease(turns.take(1), () => turns.release(1));
           const running = yield* warm;
+          if (isString(running)) return Stream.make(refusal(running));
           const ended = running.ended();
           if (ended !== null) return Stream.make(refusal(ended));
           const news = yield* waiting;
@@ -570,37 +510,25 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* <Server>(opts
         const answered = asking.get(toolCallId);
         return answered === undefined ? Effect.void : Deferred.succeed(answered, answers);
       }),
-    transcript: Effect.tryPromise(() => opts.claude.getSessionMessages(id, { dir: opts.dir })).pipe(
-      Effect.map(transcriptOf),
-      Effect.orElseSucceed(() => []),
-    ),
-    conversations: Effect.tryPromise(() =>
-      opts.claude.listSessions({ dir: opts.dir, limit: HISTORY + 1 }),
-    ).pipe(
-      Effect.orElseSucceed(() => []),
-      Effect.map((sessions) => ({
-        current: id,
-        earlier: sessions
-          .filter(({ sessionId }) => sessionId !== id)
-          .slice(0, HISTORY)
-          .map(({ sessionId, summary, lastModified }) => ({
-            session: sessionId,
-            title: summary,
-            at: lastModified,
-          })),
-      })),
+    transcript: Effect.suspend(() => drivers[heldOn]?.transcript(id) ?? Effect.succeed([])),
+    conversations: Effect.suspend(() =>
+      (drivers[heldOn]?.earlier(HISTORY + 1) ?? Effect.succeed([])).pipe(
+        Effect.map((sessions) => ({
+          current: id,
+          earlier: sessions.filter(({ session }) => session !== id).slice(0, HISTORY),
+        })),
+      ),
     ),
     // A turn under way is interrupted, and the session it ran on ends before the next starts.
     reopen: (session) =>
       Effect.gen(function* () {
-        const claude = turning?.claude;
-        if (claude !== undefined)
-          yield* Effect.tryPromise(() => claude.interrupt()).pipe(Effect.ignore);
+        if (turning !== undefined) yield* turning.session.interrupt;
         yield* turns.withPermits(1)(
           Effect.gen(function* () {
             yield* end;
             id = session ?? (yield* crypto.randomUUIDv4);
-            yield* remember(id);
+            heldOn = opts.chatHarness().harness;
+            yield* remember;
           }),
         );
       }).pipe(Effect.orDie),

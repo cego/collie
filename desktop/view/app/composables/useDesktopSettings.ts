@@ -4,6 +4,7 @@ import { useAtomSet } from "@effect/atom-vue";
 import { Exit } from "effect";
 import type { DesktopSettings, DesktopSettingsChange } from "../../../src/shared/flock";
 import { FlockClient } from "../flock";
+import { failureOf } from "./useActions";
 
 const settingsAtom = FlockClient.mutation("settings");
 const setSettingsAtom = FlockClient.mutation("setSettings");
@@ -22,15 +23,16 @@ export const useDesktopSettings = () => {
     read = true;
     void reread();
   }
-  /** Whether the change was kept. */
+  /** Why the change was refused, or null where it was kept. */
   const change = (changed: DesktopSettingsChange) =>
     writeSettings({ payload: changed }).then((exit) => {
-      if (Exit.isSuccess(exit)) settings.value = { ...settings.value, ...changed };
-      return Exit.isSuccess(exit);
+      if (Exit.isFailure(exit)) return failureOf(exit.cause).reason;
+      settings.value = exit.value;
+      return null;
     });
   return {
     desktopSettings: readonly(settings),
-    /** Read again, as the Flock chat may have changed the Machine rule. */
+    /** Read again, as the Flock chat may have changed the Machine rule or its harness. */
     reread,
     change,
     /** Lets the Flock chat speak first about News that matters, or not. */

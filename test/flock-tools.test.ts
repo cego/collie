@@ -16,7 +16,9 @@ import {
   type ChatMachine,
   type Reached,
 } from "../desktop/src/bun/flock-tools";
-import type { ChatBoard } from "../desktop/src/shared/flock";
+import type { ChatBoard, DesktopSettings } from "../desktop/src/shared/flock";
+import { NO_FLOCK_SETTINGS } from "../desktop/src/shared/flock-settings";
+import { changeSettings } from "../desktop/src/bun/settings";
 import { task } from "./support/task";
 
 interface Asked {
@@ -171,6 +173,7 @@ const ON_DISK = new Map([
 ]);
 let saved: string | undefined;
 const savedRule = () => saved;
+let chat: DesktopSettings = { proactive: true };
 
 const flockOf = (asked: Asked[]) => ({
   machines: () => [
@@ -188,6 +191,22 @@ const flockOf = (asked: Asked[]) => ({
   said: () => "stop the board bugs one",
   machineRule: () => saved,
   setMachineRule: (rule: string) => Effect.sync(() => (saved = rule)),
+  chatHarness: () => ({
+    harness: chat.chatHarness ?? "claude",
+    model: chat.chatModel,
+    runsOn: "claude/opus",
+  }),
+  // Saved as Desktop saves it, with Settings' checks.
+  setChatHarness: ({ harness, model }: { harness?: string; model?: string }) =>
+    Effect.sync(() => {
+      const changed: Partial<Record<"chatHarness" | "chatModel", string>> = {};
+      if (harness !== undefined) changed.chatHarness = harness;
+      if (model !== undefined) changed.chatModel = model;
+      const next = changeSettings(chat, NO_FLOCK_SETTINGS, changed);
+      if ("refused" in next) return next.refused;
+      chat = next;
+      return null;
+    }),
   inSync: (sync: string | undefined) =>
     Effect.succeed(sync === undefined ? "every Machine is in sync" : `synced ${sync}`),
   attachments: () => undefined,
@@ -326,6 +345,8 @@ test("a Machine whose host is older than the Flock chat is written to by nothing
         conversation: "flock@mk-pc",
         machineRule: () => undefined,
         setMachineRule: () => Effect.void,
+        chatHarness: () => ({ harness: "claude", model: undefined, runsOn: null }),
+        setChatHarness: () => Effect.succeed(null),
         inSync: () => Effect.succeed(""),
         attachments: () => undefined,
         uploaded: new Map(),
@@ -354,6 +375,8 @@ test("a Machine that stops answering costs a look for News its time, and the oth
         conversation: "flock@mk-pc",
         machineRule: () => undefined,
         setMachineRule: () => Effect.void,
+        chatHarness: () => ({ harness: "claude", model: undefined, runsOn: null }),
+        setChatHarness: () => Effect.succeed(null),
         inSync: () => Effect.succeed(""),
         attachments: () => undefined,
         uploaded: new Map(),
@@ -375,6 +398,8 @@ const withUnread = (asked: Asked[], board: ChatBoard) => ({
   conversation: "flock@mk-pc",
   machineRule: () => undefined,
   setMachineRule: () => Effect.void,
+  chatHarness: () => ({ harness: "claude", model: undefined, runsOn: null }),
+  setChatHarness: () => Effect.succeed(null),
   inSync: () => Effect.succeed(""),
   attachments: () => undefined,
   uploaded: new Map(),
@@ -678,6 +703,8 @@ test("a Machine whose host cannot answer a read is told to upgrade, and the rest
         said: () => undefined,
         machineRule: () => undefined,
         setMachineRule: () => Effect.void,
+        chatHarness: () => ({ harness: "claude", model: undefined, runsOn: null }),
+        setChatHarness: () => Effect.succeed(null),
         inSync: () => Effect.succeed(""),
         attachments: () => undefined,
         uploaded: new Map(),
@@ -716,6 +743,31 @@ test("the Machine rule is read back as saved, and replaced with what the human a
         "The Machine rule is cleared.",
       );
       expect(savedRule()).toBe("");
+    }),
+  ));
+
+test("the chat reads what it runs on, and changes its model with Settings' checks, after this turn", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      chat = { proactive: true };
+      expect(yield* call([], "collie_chat_harness", {})).toBe(
+        "The Flock chat is set to claude, with no model set: the harness's own default. This conversation runs on claude/opus now.",
+      );
+      expect(yield* call([], "collie_chat_harness", { model: "sonnet" })).toBe(
+        "The Flock chat is now set to claude, model sonnet. It applies once this turn has ended.",
+      );
+      expect(chat.chatModel).toBe("sonnet");
+      const refused = yield* call([], "collie_chat_harness", { model: "gpt-6.1-sol" });
+      expect(refused).toContain('"gpt-6.1-sol" is not a model claude takes');
+      expect(refused).toContain("Nothing was changed.");
+      expect(yield* call([], "collie_chat_harness", { harness: "opencode" })).toContain(
+        "Nothing was changed.",
+      );
+      expect(chat).toEqual({ proactive: true, chatModel: "sonnet" });
+      expect(yield* call([], "collie_chat_harness", { model: "" })).toBe(
+        "The Flock chat is now set to claude, with no model set: the harness's own default. It applies once this turn has ended.",
+      );
+      expect(chat).toEqual({ proactive: true });
     }),
   ));
 
@@ -917,6 +969,8 @@ test("a Machine whose Collie has no such operation is told to upgrade, and the r
         said: () => undefined,
         machineRule: () => undefined,
         setMachineRule: () => Effect.void,
+        chatHarness: () => ({ harness: "claude", model: undefined, runsOn: null }),
+        setChatHarness: () => Effect.succeed(null),
         inSync: () => Effect.succeed(""),
         attachments: () => undefined,
         uploaded: new Map(),

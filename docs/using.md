@@ -1150,7 +1150,7 @@ Machine's.
 Flock's settings each time it opens. It is grouped under headings, in order: **Agents**, **Runs**, **Board**, **Chat**,
 **Notifications**, **GitLab and credentials** and **About**. It holds every setting the TUI's
 Settings offers — each default a Run reads, `proactive`, the extra `models.<harness>` and each
-`notifications.<kind>` — and the Flock chat's own speak-first switch. Each setting has a plain
+`notifications.<kind>` — and the Flock chat's own settings. Each setting has a plain
 name with its config key in small print, a sentence or two on what it changes (what 0 or
 unset means where that matters, and that `scope`, `density` and `questions` change the TUI's
 board, not Desktop's), a control that fits it (a choice, a number, a switch, or text), its
@@ -1158,10 +1158,14 @@ default, and the same refusals as the TUI. Durations — `quiet_ms`, `handoff_ti
 `board_quiet_ms` — are shown and typed in minutes, decimals where a value is not a whole
 number of them, and still stored in milliseconds, so `config.json` and `collie settings` are
 unchanged. **Reset to default**, shown while a setting is set, unsets it. Each says whether
-**Every Machine** shares it or it is for **This computer only**: the Flock chat's switch,
-like the bell in the chat's header, is this computer's. The groups, names, descriptions and
+**Every Machine** shares it or it is for **This computer only**. Under **Chat**, the Flock
+chat's **Flock chat harness**, **Flock chat model**, **Machine rule** and **Flock chat speaks
+first** are this computer's, like the bell in the chat's header. The harness offers
+`claude`; the model is a one-line field, with **Unset: opus** as its default. It is checked
+as a Run's model is, including **More Claude Code models**, and a refusal saves nothing.
+The groups, names, descriptions and
 units live with each key in the one list of settings (`src/settings.ts`) that the TUI's
-Settings reads too, so a new setting shows up in both, except the three for this computer only,
+Settings reads too, so a new setting shows up in both, except those for this computer only,
 whose are in `DESKTOP_SETTINGS` (`desktop/src/shared/flock-settings.ts`); the TUI does not show the names,
 descriptions or minutes yet. The ones every Machine shares are the Flock's: Desktop keeps them in
 `flock-settings.json` beside its chat, and gives them to every Machine through that
@@ -1360,10 +1364,17 @@ state directory, links followed, because a Run's state changes only through the 
 Machine whose Collie is too old for files is told to upgrade. There is no shell on a
 Machine.
 
-It is a session of your own Claude Code, on your own Claude seat, driven through the Agent
-SDK in Desktop's main process: `opus` at medium effort with summarised thinking, and none
-of your settings, hooks, skills or CLAUDE.md. Your first message starts it, and it stays warm until Desktop quits. Its session
-id is minted once and kept in `$XDG_STATE_HOME/collie-desktop/flock-chat.json` (or
+**Settings › Chat** names the Flock chat's harness and model, for this computer only.
+Currently the harness offers `claude`, a session of your own Claude Code on your own
+Claude seat, driven through the Agent SDK in Desktop's main process. Unset, the model is
+`opus`; a set model such as `sonnet` runs at medium effort with summarised thinking.
+None of your settings, hooks, skills or CLAUDE.md loads. A model change waits for the turn
+under way to end, then the next message continues the same conversation on the new model.
+You can ask the chat to read or change these settings through `collie_chat_harness`, with
+the same checks as Settings.
+
+Your first message starts the session, and it stays warm between turns. Its session id
+and harness are kept in `$XDG_STATE_HOME/collie-desktop/flock-chat.json` (or
 `~/.local/state/collie-desktop/`), so a restart resumes the same conversation; Claude Code
 keeps and compacts the transcript on this computer.
 

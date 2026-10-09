@@ -15,6 +15,8 @@ const asked: string[] = [];
 const options = sessionOptions({
   cwd: "/state/collie-desktop",
   session: { resume: "5c1e6c8e-0000-4000-8000-000000000000" },
+  model: "opus",
+  effort: "medium",
   server: "the in-process server",
   claude: "/usr/local/bin/claude",
   ask: (toolUseID) => {
@@ -29,10 +31,11 @@ const permission = {
   toolUseID: "toolu_1",
 };
 
-test("the session is opus at medium effort, resumed, on the user's own Claude Code", () => {
+test("the session is on the model it is given at medium effort, resumed, on the user's own Claude Code", () => {
   expect(options).toMatchObject({
     model: "opus",
     effort: "medium",
+    thinking: { type: "adaptive", display: "summarized" },
     resume: "5c1e6c8e-0000-4000-8000-000000000000",
     pathToClaudeCodeExecutable: "/usr/local/bin/claude",
     cwd: "/state/collie-desktop",
@@ -134,6 +137,8 @@ test("a question in a turn nobody is watching is refused, so the turn ends rathe
       const unwatched = sessionOptions({
         cwd: "/state/collie-desktop",
         session: { resume: "5c1e6c8e-0000-4000-8000-000000000000" },
+        model: "sonnet",
+        effort: "medium",
         server: "the in-process server",
         claude: null,
         ask: () => Promise.resolve(null),
@@ -176,4 +181,12 @@ test("the system prompt tells the chat to start where the rule says, and how to 
   expect(prompt).toContain("name its Machine from the rule, unless the human's message names one");
   expect(prompt).toContain("not among those reachable, say so and start nothing elsewhere");
   expect(prompt).toContain("When the rule does not cover the work, ask");
+});
+
+test("the system prompt names this computer's tools as the harness's own, and asks with AskUserQuestion", () => {
+  const prompt = options.systemPrompt.replace(/\s+/g, " ");
+  expect(prompt).toContain("your own file and shell tools");
+  expect(prompt).not.toContain("Read, Glob");
+  expect(prompt).not.toContain("Bash");
+  expect(prompt).toContain("ask with AskUserQuestion");
 });
