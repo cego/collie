@@ -10,11 +10,10 @@
 // this says what is missing.
 
 import type { VerifySpec } from "./verify-spec";
+import { checkProof, owedLocally, owesNothingHere } from "./check-proof";
 import {
-  ranOneTest,
   passed,
-  ranCommand,
-  recordsNamed,
+  ranOneTest,
   type CheckCommand,
   type FailedTest,
   type Snapshot,
@@ -91,28 +90,18 @@ export interface Collected {
 }
 
 /**
- * Whether the latest result for this check, on the tree in front of us, passed: a pass a
- * later fail contradicts is not one.
+ * Whether the latest result for this check, on the tree in front of us, passed — a pass a
+ * later fail contradicts is not one — or it is left to CI.
  */
 function lastPassedAtFinal(got: Collected, name: string): boolean {
-  const last = recordsNamed(got.verifications, name, got.commands)
-    .filter((v) => !earlierTree(v, got.final))
-    .at(-1);
-  return last !== undefined && passed(last);
+  return owesNothingHere(checkProof(got, name));
 }
 
-type Journal = Pick<Collected, "verifications" | "final" | "commands">;
+type Journal = Pick<Collected, "verifications" | "final" | "commands"> &
+  Partial<Pick<Collected, "approved">>;
 
-/** Every run of a check's own command, and the latest of them on the tree in front of us. */
-function runsOf(got: Journal, name: string) {
-  const command = got.commands?.find((one) => one.name === name);
-  const any = got.verifications.filter(
-    (v) =>
-      !ranOneTest(v) &&
-      (command === undefined ? v.by === "collie" && v.name === name : ranCommand(v, command)),
-  );
-  return { any, last: any.findLast((v) => !earlierTree(v, got.final)) };
-}
+/** A check's proof, where only Collie's own runs count for a check whose command is not given. */
+const runsOf = (got: Journal, name: string) => checkProof(got, name, "collie");
 
 /**
  * The tests a check's failed run named, split by whether each has since passed a rerun alone
@@ -254,9 +243,9 @@ export const noCheckNamed =
 function approvedSetGaps(got: Collected): string[] {
   if (got.approved.length === 0) return [noCheckNamed];
   const gaps: string[] = [];
-  for (const spec of got.approved) {
-    const { any, last } = runsOf(got, spec.name);
-    if (last !== undefined && passed(last)) continue;
+  for (const spec of owedLocally(got.approved)) {
+    const { state, runs, last } = runsOf(got, spec.name);
+    if (state === "passed") continue;
     const reran = rerunOf(got, last);
     if (reran !== null) {
       // Not a gap, and not a pass either: every test it failed on passed alone or fails at the base too.
@@ -264,10 +253,10 @@ function approvedSetGaps(got: Collected): string[] {
       gaps.push(
         `${spec.name} failed: ${reran.own.map((test) => `${test.name} (${test.file})`).join(", ")}`,
       );
-    } else if (any.length === 0) gaps.push(`${spec.name} was never run`);
-    else if (any.some((v) => v.result === "fail" || v.expect === "fail"))
+    } else if (state === "never") gaps.push(`${spec.name} was never run`);
+    else if (runs.some((v) => v.result === "fail" || v.expect === "fail"))
       gaps.push(`${spec.name} failed`);
-    else if (any.some((v) => v.result === "unstable"))
+    else if (runs.some((v) => v.result === "unstable"))
       gaps.push(`${spec.name} ran on a tree that moved under it`);
     else gaps.push(`${spec.name} last passed on a different tree`);
   }
@@ -464,17 +453,29 @@ export function renderEvidence(got: Pick<Collected, "verifications" | "final">):
     .join("\n");
 }
 
+/** A check left to CI as a reviewer is told of it, with its job's state where the Run has a merge request. */
+export interface LeftToCiState {
+  readonly name: string;
+  readonly job: string;
+  readonly state: string | null;
+}
+
 /**
  * Every check this Run's journal holds, latest of each, for a reviewer to read rather than run
- * again: who ran it, whether on the tree in front of it, when, and the baseline where there is one.
+ * again: who ran it, whether on the tree in front of it, when, and the baseline where there is
+ * one. Then each check left to CI, which no reviewer runs.
  */
-export function renderRecordedChecks(got: Pick<Collected, "verifications" | "final">): string {
+export function renderRecordedChecks(
+  got: Pick<Collected, "verifications" | "final">,
+  leftToCi: ReadonlyArray<LeftToCiState> = [],
+): string {
   const latest = new Map<string, Verification>();
   const baseline = new Map<string, Verification>();
   for (const v of got.verifications.filter((one) => !ranOneTest(one)))
     if (v.pass === "baseline") baseline.set(v.name, v);
     else latest.set(`${v.name}:${v.by}`, v);
-  if (latest.size + baseline.size === 0) return "(nothing is recorded for this Run)";
+  if (latest.size + baseline.size + leftToCi.length === 0)
+    return "(nothing is recorded for this Run)";
   const onTree = (v: Verification) =>
     v.end.head_sha === got.final.head_sha && v.end.fingerprint === got.final.fingerprint
       ? "on this tree"
@@ -486,6 +487,10 @@ export function renderRecordedChecks(got: Pick<Collected, "verifications" | "fin
     ...[...baseline.values()].map(
       (v) =>
         `- ${v.name} (baseline, where this branch leaves the default branch, ${v.start.head_sha.slice(0, 12)}): ${v.result}, at ${v.at}`,
+    ),
+    ...leftToCi.map(
+      (one) =>
+        `- ${one.name}: left to CI (job ${one.job}), do not run it. left to CI: proved by ${one.job} on the merge request's head${one.state === null ? "" : `; its job is ${one.state} now`}`,
     ),
   ].join("\n");
 }

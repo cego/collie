@@ -49,6 +49,8 @@ Desktop. `harness.ts` owns how those choices launch and reexports the shared int
 | `verify.ts`            | A command's result bound to its tree, so a card can say verified; a running check's marker and log        |
 | `bun-tests.ts`         | Which tests a failed `bun test` names, and the command that runs one again alone                          |
 | `verify-spec.ts`       | Which commands Collie may run itself for a Run, and where that permission came from                       |
+| `check-proof.ts`       | A Check's proof on a tree, and which of a Run's Checks it runs itself                                     |
+| `ci-job.ts`            | A check left to CI: its job read through the forge, a failure settled, waited on, its pass recorded       |
 | `checks.ts`            | The one reading of a Run's running and finished checks that every door uses                               |
 | `outcome.ts`           | What a Run must prove to close, per kind, and what is still missing                                       |
 | `metrics.ts`           | What a Run produced and when: evidence, slices, rework, context — never pane activity                     |
@@ -102,6 +104,7 @@ Desktop. `harness.ts` owns how those choices launch and reexports the shared int
 | `fork.ts`              | Take a persona into a later layer: an `extends:` stub, or a full copy                                     |
 | `trust.ts`             | Whether a harness will work in a directory, or stop and ask first                                         |
 | `agent-start.ts`       | An agent's start names its checkout and every Input, or is refused with what fills each                   |
+| `agent-end.ts`         | The one end of a Run's agent: proved its own, stopped, Quiet, its pane closed, the end logged             |
 | `projects.ts`          | The Projects root, where it came from, and the checkouts under it                                         |
 | `route.ts`             | Where a start from the Home goes: a URL's checkout by remote, else one routing call                       |
 | `worktree.ts`          | The checkout a mutating Run owns, keyed by its branch, and pruning the settled ones                       |
@@ -118,7 +121,8 @@ Desktop. `harness.ts` owns how those choices launch and reexports the shared int
 | `compaction.ts`        | One threshold, one work-boundary policy, each agent's controls for its lifetime, and its one stop         |
 | `compactors.ts`        | Each harness's official compaction interface, generated per agent and bundled in Collie                   |
 | `codex.ts`             | Codex's App Server as a client: thread identity, its context, its compactions and its turns               |
-| `processes.ts`         | A process's command, start time and session, proven before anything signals it                            |
+| `collecting.ts`        | Which agents Collie is collecting an Output from now, by Run and agent                                    |
+| `processes.ts`         | Where a process's command, start time and session are read, and proven before anything signals it         |
 | `usage-model.ts`       | A Subscription's Usage reading: Schemas, parsing, Exhausted; pure, so Desktop and a module share it       |
 | `usage.ts`             | This Machine's Usage readings: Claude's endpoint, Codex's app server, status lines                        |
 | `schedule-model.ts`    | A Schedule as every door reads it, and when an occurrence starts and which comes next (pure)              |

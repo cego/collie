@@ -256,7 +256,8 @@ next refresh asks again instead of standing on a verdict it never reached.
 Removal follows the checkout. A git-managed one is `git worktree remove` from the
 repository's own checkout, and then the tabs of the panes the finished runs' agents were
 registered in, where every pane of the tab sits inside the removed path, are closed — dead shells nothing else would ever close, and
-a tab a human has since split or reused is left alone. A tab herdr will not close is
+a tab a human has since split or reused is left alone. A finished Run's agent still in such a
+tab is ended through `endAgent` first, and its tab is kept where it is not Quiet. A tab herdr will not close is
 counted on the removal line (`· 1 tab(s) left open`), because the checkout has left the
 listing by then and no later sweep has a candidate to retry it with.
 
@@ -772,10 +773,19 @@ Quiet; otherwise it keeps the state reached, what was still running, and every s
 `agents.log` with the full thread and turn ids, the endpoint, the pid and the transcript.
 The stand-in server the tests run in its place is `test/support/codex-server.ts`.
 
+Every end of a Run's agent goes through `endAgent` in `src/agent-end.ts`: a Run's stop
+(`halt`), a Fallback's retirement, closing a Finished Task's workspace, and the worktree
+sweep's close of a dead tab. It proves the agent is this Run's from its launch record,
+stops it where its work runs, requires Quiet, keeps the Task's workspace, closes its pane
+and writes the end, with why, on the Run's `agents.log`, in that order; the workspace sweep
+and the tab close do their own closing once every agent has answered. An agent it cannot
+prove is this Run's is left running, and named.
+
 Every path that replaces an agent or releases what it worked in goes through the same stop
 first. `installControls` stops a record left under the name it installs and fails
 `NotQuiet` rather than delete it; the Agents service turns that into a parked launch. A
-Fallback's retirement stops the agent that ran out whether or not herdr lists it. A launch
+Fallback's retirement stops the agent that ran out whether or not herdr lists it, and parks
+where it cannot prove the agent is its own. A launch
 checks for a stop before it starts an agent and again after, and starts it and writes its
 launch record as one uninterruptible step, so a stop that lands in between finds the agent
 and stops it. The stale-controls put-down at launch and the Cleanup sweep run the stop for
@@ -1129,9 +1139,9 @@ thousand hosts, commands and herdr calls, and a bytecode build starts in a fract
 time the sources take to load. A fixture's own Config provider carries that binary choice,
 the process marker, the watched pid and the test's stop grace into its commands too;
 isolating its installation must not lose the suite's process settings. It uses [Bun's process-parallel
-runner](https://bun.com/docs/test/parallel) with a worker for each available logical CPU
-and a fresh global per file. It does not subtract the load average: the preceding suite's
-work and IO waits remain in that average after the CPU is free. The lock also covers
+runner](https://bun.com/docs/test/parallel) with a fresh global per file, and as many
+workers as the Machine has cores free (see [Keeping the suite and a start
+fast](#keeping-the-suite-and-a-start-fast)). The lock also covers
 builds so a queued suite cannot replace the executables an active suite runs. Tests within
 each file stay sequential: fixtures
 change environment variables and prototypes, so `--concurrent` is not safe here. A test's
@@ -1198,6 +1208,29 @@ docs lint to catch a page that fell behind — a stale page is a defect like any
 Each of these, where it crept in, cost the suite minutes or every start a large share of
 its time.
 
+- **The suite shares the Machine.** After its builds, and once its turn is granted,
+  `bun run test` samples `os.cpus()` one second apart and runs one worker per idle core:
+  `cores × idle / total` over the sample, rounded, at least 2 and at most one per core
+  (`workersFor` in `tools/test-run.ts`). It prints `test: N workers (F of C cores free)`.
+  A targeted run is sized the same way. A `--parallel` or `--parallel=N` before any `--`
+  is passed through as given, and is how a human or agent sets a share themselves. #110
+  stopped subtracting load averages because they lag and count the suite's own previous
+  run and IO waits; a one-second sample of idle CPU just before the tests start counts
+  neither, and the builds and any suite this one waited for are over before it is taken.
+
+- **A test starts a process.** Each start costs the Machine, and an endpoint sensor more
+  again. `bun run test` sets `COLLIE_TEST_STARTS` to a fresh file, and the compiled
+  `collie`, fake herdr and fake forge each append a line naming themselves and what they
+  were asked, such as `herdr agent list` or `collie host` (`src/starts.ts`). The suite
+  ends with `test: <N> processes started` and the ten largest sources. The count leaves
+  out what never reaches those entry points: `collie` running as bun under `BUN_BE_BUN`,
+  real `git`, `ps` and `sleep`, the `sh` shims and stubs, and the fake `ssh` master's
+  `sleep`. It first showed `herdr session list` as the largest source, at 3,970 of
+  11,125: every board build read the sessions again, and a build follows every write
+  under the state directory. A host's board now reads them once a minute, as often as its
+  event watch does (`SESSIONS_EVERY` in `src/herds.ts`), so a session that starts later
+  is on the board within that minute. A sweep still reads them fresh: cleanup must never
+  judge a newer session's agents gone.
 - **A test waits for a state.** It waits with `until` (`test/support/host.ts`) for what it
   needs: a run `suspended`, a file written, a pane gone. Real IO takes the time it takes,
   and a fixed sleep is too long on an idle machine and too short on a busy one. Work that

@@ -1048,7 +1048,6 @@ export const servedEndpoint = Effect.fn("Compactors.servedEndpoint")(function* (
 });
 
 /** Stops a server this agent no longer needs. Best effort: it may already be gone. */
-const stopServer = (pid: number) => Effect.ignore(Effect.sync(() => process.kill(pid, "SIGTERM")));
 
 /**
  * One App Server per agent, on a loopback port it picks itself, with the ordinary
@@ -1437,7 +1436,7 @@ const opencodeLaunch = Effect.fn("Compactors.opencodeLaunch")(function* (ctx: La
     what: "opencode serve",
     env: ctx.env,
   });
-  const session = yield* createSession(base).pipe(Effect.ensuring(stopServer(served.pid)));
+  const session = yield* createSession(base).pipe(Effect.ensuring(terminate(served.pid)));
 
   // Recorded before the agent starts, so the very first boundary reads the session
   // Collie made rather than guessing among the project's.

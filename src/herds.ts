@@ -119,7 +119,7 @@ const changesIn = (session: LiveHerd) =>
   );
 
 /** How often the list of sessions is read again, so a session started later is watched. */
-const SESSIONS_EVERY = "1 minute";
+export const SESSIONS_EVERY = "1 minute";
 
 /** Every change herdr pushes in any of this Machine's sessions. */
 export const herdChanges = (herdr: Herdr, env: PluginEnv) =>

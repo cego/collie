@@ -43,6 +43,22 @@ that is never split: the host keeps the words as `message-<digest>.md` in the Ru
 the audit line records the words as asked
 ([ADR-0051](adr/0051-a-review-comment-is-written-on-desktops-own-views.md)).
 
+### What the host sends on its own
+
+Besides what a human or an agent asks it to send, the host delivers, each through the
+Dispatcher:
+
+- each step's prompt;
+- the answers to an agent's questions, once they are answered on its Run;
+- a finished Run's report, to the agent that requested the Run;
+- a correction of drift ([below](#correcting-drift));
+- the end of a `collie verify` an agent asked for, in mode `boundary`, where herdr reports
+  that agent `idle` or `done` and Collie is still collecting its Output. It names the
+  check, its result and exit status, the commit and the log. A working or blocked agent is
+  sent nothing, nor is one Collie is not waiting on, nor anyone for a verify answered
+  from an earlier pass
+  ([ADR-draft-an-agent-is-told-when-its-verify-ends](adr/draft-an-agent-is-told-when-its-verify-ends.md)).
+
 ## The states, and why they are kept apart
 
 | State          | What it means                                                                                                                                        |

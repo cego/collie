@@ -276,3 +276,71 @@ test("a Finished Task's workspace whose agent's turn has not stopped is kept, wi
       expect(yield* closes).toBe(0);
     }),
   ));
+
+test("a Finished Task's workspace whose root pane another named agent has taken is kept", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* arranged();
+      yield* rig.addAgent("other", "wT-p1", "t-other");
+      const judged = yield* sweep([sweeper(yield* seenAgo(2 * HOUR_MS))], rig.stateDir, "host");
+      expect(judged.keep).toEqual([
+        { kind: "workspace", target: "wT", reason: "other runs in it, and is not this Task's" },
+      ]);
+      expect(yield* closes).toBe(0);
+    }),
+  ));
+
+test("an agent moved to another workspace is logged ended only once its pane there closes", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      for (const fail of [true, false]) {
+        yield* rig.addWorkspace("wT", record.label, "/project");
+        yield* rig.addPane("wT-p1", "wT-t1", "/project", null, "wT");
+        yield* rig.addWorkspace("wX", "Elsewhere", "/project");
+        yield* rig.addPane("wX-p5", "wX-t1", "/project", "claude", "wX");
+        yield* rig.addAgent("impl", "wX-p5", "t-wX-p5");
+        yield* fs.makeDirectory(`${rig.stateDir}/agents/r1`, { recursive: true });
+        yield* fs.writeFileString(
+          `${rig.stateDir}/agents/r1/build.launch.json`,
+          asJson({
+            agent: "impl",
+            output: "out.json",
+            reused: false,
+            runId: "r1",
+            operation: "build",
+            role: "implementer",
+            workflow: "implement",
+            harness: "claude",
+            terminalId: "t-wX-p5",
+          }),
+        );
+        const herdr = new Herdr(
+          rig.pluginEnv(
+            fail
+              ? { FAKE_HERDR_FAIL: `{"pane close":"pane is busy","pane.close":"pane is busy"}` }
+              : {},
+          ),
+        );
+        const judged = yield* sweep(
+          [
+            taskWorkspacesSweeper({
+              stateDir: rig.stateDir,
+              sessions: [{ herd: null, herdr }],
+              tasks: [record],
+              views: [finished],
+              runs: [runFacts({ id: "r1", task: "task-1", state: "succeeded" })],
+              seen: yield* seenAgo(2 * HOUR_MS),
+            }),
+          ],
+          rig.stateDir,
+          "host",
+        );
+        expect(judged.remove.map((item) => item.target)).toEqual(["wT"]);
+        const log = yield* fs
+          .readFileString(`${rig.stateDir}/agents/r1/agents.log`)
+          .pipe(Effect.orElseSucceed(() => ""));
+        expect(log.includes("impl ended: its Task's workspace closed")).toBe(!fail);
+      }
+    }),
+  ));

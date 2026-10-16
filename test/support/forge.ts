@@ -14,6 +14,25 @@ export const Check = Schema.Struct({
 });
 export type Check = typeof Check.Type;
 
+/** A pipeline job on a merge request's head, in the words a check left to CI is read in. */
+const JobStates = Schema.Literals([
+  "passed",
+  "pending",
+  "running",
+  "failed",
+  "skipped",
+  "cancelled",
+]);
+export const FakeJob = Schema.Struct({
+  name: Schema.String,
+  state: JobStates,
+  /** What a retry leaves it in; unchanged where unsaid. */
+  retried: Schema.optionalKey(JobStates),
+  /** Its id once retried, as the forge gives a retry a job of its own. */
+  id: Schema.optionalKey(Schema.Number),
+});
+export type FakeJob = typeof FakeJob.Type;
+
 export const FakeMr = Schema.Struct({
   /** `host/path`, as an `MrRef`'s project. */
   project: Schema.String,
@@ -28,6 +47,14 @@ export const FakeMr = Schema.Struct({
   pipelineAt: Schema.optionalKey(Schema.String),
   mergedSha: Schema.optionalKey(Schema.String),
   checks: Schema.optionalKey(Schema.Array(Check)),
+  /** Its head pipeline's jobs, the nth with id n; on GitLab its pipeline ran at `pipelineAt`. */
+  jobs: Schema.optionalKey(Schema.Array(FakeJob)),
+  /** Where its head leaves its target branch, and that commit's pipeline jobs, if it has a pipeline. */
+  base: Schema.optionalKey(
+    Schema.Struct({ at: Schema.String, jobs: Schema.optionalKey(Schema.Array(FakeJob)) }),
+  ),
+  /** Its target branch's latest pipeline: the commit it ran on, and its jobs. */
+  target: Schema.optionalKey(Schema.Struct({ at: Schema.String, jobs: Schema.Array(FakeJob) })),
   sourceBranch: Schema.optionalKey(Schema.String),
   fork: Schema.optionalKey(Schema.Boolean),
   targetBranch: Schema.optionalKey(Schema.String),
@@ -130,6 +157,7 @@ interface Answer {
   readonly cloned?: string;
   readonly noted?: { readonly key: string; readonly body: string };
   readonly approved?: string;
+  readonly retried?: { readonly mr: FakeMr; readonly at: number };
 }
 
 const Json = Schema.fromJsonString(Schema.Json);
@@ -212,6 +240,40 @@ function pipelineOf(checks: ReadonlyArray<Check> | undefined): string | null {
   return "success";
 }
 
+const GITLAB_JOB = {
+  passed: "success",
+  pending: "pending",
+  running: "running",
+  failed: "failed",
+  skipped: "skipped",
+  cancelled: "canceled",
+} as const;
+
+const GITHUB_RUN = {
+  passed: { status: "completed", conclusion: "success" },
+  pending: { status: "queued", conclusion: null },
+  running: { status: "in_progress", conclusion: null },
+  failed: { status: "completed", conclusion: "failure" },
+  skipped: { status: "completed", conclusion: "skipped" },
+  cancelled: { status: "completed", conclusion: "cancelled" },
+} as const;
+
+/** The id a merge request's head pipeline has; its base's is one more, its target's two. */
+const pipelineIdOf = (mr: FakeMr) => Number(mr.iid) * 100;
+
+/** A job as a forge lists it: the head pipeline's nth has id n, its base's 1000 + n, its target's 2000 + n. */
+const jobsOf = (jobs: ReadonlyArray<FakeJob>, from: number) =>
+  jobs.map((job, at) => ({ ...job, id: job.id ?? from + at + 1 }));
+
+/** The merge request a project's job `id` is on its head pipeline of. */
+const headJobAt = (model: ForgeModel, project: (mr: FakeMr) => boolean, id: number) => {
+  for (const mr of model.mrs.filter(project)) {
+    const at = jobsOf(mr.jobs ?? [], 0).findIndex((job) => job.id === id);
+    if (at !== -1) return { mr, at };
+  }
+  return undefined;
+};
+
 function glab(model: ForgeModel, args: ReadonlyArray<string>): Answer {
   if (!model.installed) return no(127);
   const [verb, sub] = args;
@@ -242,11 +304,18 @@ function glab(model: ForgeModel, args: ReadonlyArray<string>): Answer {
       merge_commit_sha: mr.mergedSha ?? null,
       merged_at: mr.mergedAt ?? null,
       head_pipeline:
-        pipeline === null ? null : { status: pipeline, sha: mr.pipelineAt ?? mr.head ?? null },
+        pipeline === null && mr.jobs === undefined
+          ? null
+          : {
+              id: pipelineIdOf(mr),
+              status: pipeline ?? "running",
+              sha: mr.pipelineAt ?? mr.head ?? null,
+            },
       source_branch: mr.sourceBranch ?? null,
       source_project_id: mr.fork === true ? 7 : 3,
       target_project_id: 3,
       target_branch: mr.targetBranch ?? null,
+      diff_refs: { base_sha: mr.base?.at ?? null },
       merge_when_pipeline_succeeds: mr.autoMerge ?? false,
       approvals_left: mr.approved === true ? 0 : null,
       detailed_merge_status: GITLAB_MERGE_STATUS[mr.mergeable ?? "yes"],
@@ -308,6 +377,55 @@ function glab(model: ForgeModel, args: ReadonlyArray<string>): Answer {
             : [{ sha: env.deployed, environment: { name: env.name } }],
         ),
       );
+    const retry = /^projects\/([^/]+)\/jobs\/(\d+)\/retry$/.exec(route);
+    if (retry && args.includes("POST")) {
+      const path = decodeURIComponent(retry[1]!);
+      const found = headJobAt(model, (one) => one.project.endsWith(`/${path}`), Number(retry[2]));
+      return found === undefined ? no() : { ...json({ id: Number(retry[2]) }), retried: found };
+    }
+    const bySha = /\/pipelines\?sha=([^&]+)/.exec(route);
+    if (bySha) {
+      const sha = bySha[1]!;
+      const mr = model.mrs.find((one) => one.base?.at === sha && one.base?.jobs !== undefined);
+      return json(mr === undefined ? [] : [{ id: pipelineIdOf(mr) + 1, sha }]);
+    }
+    const byRef = /\/pipelines\?ref=([^&]+)/.exec(route);
+    if (byRef) {
+      const mr = model.mrs.find(
+        (one) => one.targetBranch === decodeURIComponent(byRef[1]!) && one.target !== undefined,
+      );
+      return json(mr === undefined ? [] : [{ id: pipelineIdOf(mr) + 2, sha: mr.target!.at }]);
+    }
+    const jobs = /\/pipelines\/(\d+)\/jobs/.exec(route);
+    if (jobs) {
+      const id = Number(jobs[1]);
+      const mr = model.mrs.find((one) => Math.floor(id / 100) === Number(one.iid));
+      const listed =
+        mr === undefined
+          ? undefined
+          : [
+              jobsOf(mr.jobs ?? [], 0),
+              jobsOf(mr.base?.jobs ?? [], 1000),
+              jobsOf(mr.target?.jobs ?? [], 2000),
+            ][id - pipelineIdOf(mr)];
+      const page = Number(/[?&]page=(\d+)/.exec(route)?.[1] ?? "1");
+      const size = Number(/[?&]per_page=(\d+)/.exec(route)?.[1] ?? "20");
+      return mr === undefined || listed === undefined
+        ? no()
+        : json(
+            listed.slice((page - 1) * size, page * size).map((job) => ({
+              id: job.id,
+              name: job.name,
+              status: GITLAB_JOB[job.state],
+              web_url: `https://${mr.project}/-/jobs/${job.id}`,
+            })),
+          );
+    }
+    const commit = /\/repository\/commits\/([^/?]+)$/.exec(route);
+    if (commit) {
+      const parents = model.ancestry?.[commit[1]!];
+      return parents === undefined ? no() : json({ id: commit[1]!, parent_ids: [...parents] });
+    }
     const pipeline = /\/pipelines\/(\d+)$/.exec(route);
     if (pipeline) {
       const said = model.runs?.[pipeline[1]!];
@@ -366,7 +484,52 @@ function ghApi(model: ForgeModel, route: string, args: ReadonlyArray<string>): A
         : (model.ancestry?.[live] ?? []).includes(merged)
           ? "ahead"
           : "behind";
-    return json({ status });
+    const pull = model.mrs.find((one) => one.targetBranch === merged && one.head === live);
+    return json({
+      status,
+      merge_base_commit: pull?.base === undefined ? null : { sha: pull.base.at },
+    });
+  }
+  const checkRuns =
+    /^repos\/(.+)\/commits\/([^/]+)\/check-runs\?(?:check_name=(.+)|per_page=1)$/.exec(route);
+  if (checkRuns) {
+    const [, repo = "", sha = "", name] = checkRuns;
+    const ofRepo = model.mrs.filter((one) => one.project === `github.com/${repo}`);
+    const head = ofRepo.find((one) => one.head === sha);
+    const base = ofRepo.find((one) => one.base?.at === sha);
+    const target = ofRepo.find((one) => one.targetBranch === sha && one.target !== undefined);
+    const [jobs, at] =
+      head !== undefined
+        ? [jobsOf(head.jobs ?? [], 0), sha]
+        : base !== undefined
+          ? [jobsOf(base.base?.jobs ?? [], 1000), sha]
+          : target !== undefined
+            ? [jobsOf(target.target!.jobs, 2000), target.target!.at]
+            : [[], sha];
+    return json({
+      check_runs: jobs.flatMap((job) =>
+        name === undefined || job.name === decodeURIComponent(name)
+          ? [
+              {
+                id: job.id,
+                name: job.name,
+                head_sha: at,
+                ...GITHUB_RUN[job.state],
+                html_url: `https://github.com/${repo}/runs/${job.id}`,
+              },
+            ]
+          : [],
+      ),
+    });
+  }
+  const rerun = /^repos\/(.+)\/actions\/jobs\/(\d+)\/rerun$/.exec(route);
+  if (rerun && args.includes("POST")) {
+    const found = headJobAt(
+      model,
+      (one) => one.project === `github.com/${rerun[1]}`,
+      Number(rerun[2]),
+    );
+    return found === undefined ? no() : { ...ok(), retried: found };
   }
   const runs = /\/actions\/runs\/(\d+)$/.exec(route);
   if (runs) {
@@ -535,6 +698,24 @@ export function answer(
     after = { ...after, cloned: [...(after.cloned ?? []), said.cloned] };
   if (said.approved !== undefined)
     after = { ...after, approved: [...(after.approved ?? []), said.approved] };
+  if (said.retried !== undefined) {
+    const { mr, at } = said.retried;
+    after = {
+      ...after,
+      mrs: after.mrs.map((one) =>
+        one !== mr
+          ? one
+          : {
+              ...one,
+              jobs: (one.jobs ?? []).map((job, n) =>
+                n === at
+                  ? { ...job, state: job.retried ?? job.state, id: (job.id ?? n + 1) + 100 }
+                  : job,
+              ),
+            },
+      ),
+    };
+  }
   return { ran: said.ran, model: after };
 }
 

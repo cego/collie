@@ -25,6 +25,7 @@ import { NOTHING_SETTLING, onBranch, type Settling } from "../src/worktree";
 import { shell } from "../src/mr";
 import { Herdr } from "../src/herdr";
 import { processOf } from "../src/processes";
+import type { CompactionPorts, Stopped } from "../src/compaction";
 
 const asJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
@@ -2959,5 +2960,167 @@ test("a Renovate clone no Run uses and no checkout is left of goes; one a Run us
         { kind: "renovate-clone", target: used, reason: "a Run with a row cut a checkout from it" },
       ]);
       expect(yield* fs.exists(unused)).toBe(false);
+    }),
+  ));
+
+const asRecord = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+
+/** The Run's agent idle in pane 1-5, launched and served where its work runs; `state` is what a stop reaches. */
+const servedLeftover = (worktreePath: string, state: Stopped["state"]) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    yield* rig.addPane("1-5", "1:5", worktreePath, "codex");
+    yield* rig.addAgent("impl-1-5", "1-5", "t-1-5");
+    const agents = `${rig.stateDir}/agents/run-wt`;
+    yield* fs.makeDirectory(agents, { recursive: true });
+    yield* fs.writeFileString(
+      `${agents}/implement.launch.json`,
+      asRecord({
+        agent: "impl-1-5",
+        output: `${agents}/implement.json`,
+        reused: false,
+        runId: "run-wt",
+        operation: "implement",
+        role: "implementer",
+        workflow: "implement",
+        harness: "served",
+        terminalId: "t-1-5",
+      }),
+    );
+    const control = `${rig.stateDir}/compaction/impl-1-5`;
+    yield* fs.makeDirectory(control, { recursive: true });
+    yield* fs.writeFileString(
+      `${control}/control.json`,
+      asRecord({
+        agent: "impl-1-5",
+        harness: "served",
+        cwd: worktreePath,
+        dir: control,
+        endpoint: "ws://127.0.0.1:1",
+        pid: process.pid,
+        command: "bun",
+        started: null,
+        attempt: null,
+      }),
+    );
+    /** Each stop, with whether the agent's tab had closed by then. */
+    const stops: Array<{ agent: string; tabClosed: boolean }> = [];
+    const ports: CompactionPorts = {
+      served: {
+        gate: () => Effect.void,
+        install: () => Effect.succeed({ args: [] }),
+        request: () => Effect.die("unused"),
+        poll: () => Effect.die("unused"),
+        usage: () => Effect.die("unused"),
+        stop: (target) =>
+          Effect.gen(function* () {
+            const cmds = yield* rig
+              .cmds()
+              .pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
+            stops.push({ agent: target.agent, tabClosed: cmds.includes("tab close") });
+            return {
+              state,
+              turns: [{ thread: "th-1", turn: "tu-1", transcript: null }],
+              reason: state === "quiet" ? null : "turn tu-1 still running after 30s",
+              signalled: [],
+              left: [],
+              noted: [],
+            } satisfies Stopped;
+          }),
+      },
+    };
+    return { stops, ports };
+  });
+
+const pruneWith = (ports: CompactionPorts) =>
+  pruneWorktrees({
+    herdr: new Herdr(rig.pluginEnv()),
+    stateDir: rig.stateDir,
+    runs: recorded,
+    registered,
+    cwd: rig.projectDir,
+    settling,
+    ports,
+  });
+
+test("the worktree sweep stops a finished Run's Quiet agent before it closes the agent's tab", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const worktreePath = yield* collieWorktree("wt", { panes: ["1-5"] });
+      const { stops, ports } = yield* servedLeftover(worktreePath, "quiet");
+      yield* settledGit();
+      yield* mergedMr();
+
+      expect(yield* pruneWith(ports)).toEqual(["♻ removed wt · merged in !14"]);
+      expect(stops).toEqual([{ agent: "impl-1-5", tabClosed: false }]);
+      const closed = (yield* rig.calls()).filter((call) => call.cmd === "tab close");
+      expect(closed.map((call) => call.argv?.at(2))).toEqual(["1:5"]);
+      const log = yield* (yield* FileSystem.FileSystem).readFileString(
+        `${rig.stateDir}/agents/run-wt/agents.log`,
+      );
+      expect(log).toContain(`impl-1-5 ended: its checkout ${worktreePath} was removed`);
+    }),
+  ));
+
+test("the worktree sweep keeps the tab of an agent started again under a finished Run's agent's name", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const worktreePath = yield* collieWorktree("wt", { panes: ["1-5"] });
+      const { ports } = yield* servedLeftover(worktreePath, "quiet");
+      yield* rig.reincarnate("impl-1-5");
+      yield* settledGit();
+      yield* mergedMr();
+
+      expect(yield* pruneWith(ports)).toEqual([
+        "♻ removed wt · merged in !14 · 1 tab(s) left open",
+      ]);
+      expect(yield* rig.cmds()).not.toContain("tab close");
+    }),
+  ));
+
+test("the worktree sweep keeps the tab of a finished Run's agent's pane another named agent has taken", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const worktreePath = yield* collieWorktree("wt", { panes: ["1-5"] });
+      yield* rig.addPane("1-5", "1:5", worktreePath, "claude");
+      yield* rig.addAgent("other-1", "1-5", "t-other");
+      const agents = `${rig.stateDir}/agents/run-wt`;
+      yield* fs.makeDirectory(agents, { recursive: true });
+      yield* fs.writeFileString(
+        `${agents}/implement.launch.json`,
+        asRecord({
+          agent: "impl-1-5",
+          output: `${agents}/implement.json`,
+          reused: false,
+          runId: "run-wt",
+          operation: "implement",
+          role: "implementer",
+          workflow: "implement",
+          harness: "claude",
+          terminalId: "t-1-5",
+        }),
+      );
+      yield* settledGit();
+      yield* mergedMr();
+
+      expect(yield* pruneWith({})).toEqual(["♻ removed wt · merged in !14 · 1 tab(s) left open"]);
+      expect(yield* rig.cmds()).not.toContain("tab close");
+    }),
+  ));
+
+test("the worktree sweep keeps the tab of a finished Run's agent that is not Quiet", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const worktreePath = yield* collieWorktree("wt", { panes: ["1-5"] });
+      const { stops, ports } = yield* servedLeftover(worktreePath, "acknowledged");
+      yield* settledGit();
+      yield* mergedMr();
+
+      expect(yield* pruneWith(ports)).toEqual([
+        "♻ removed wt · merged in !14 · 1 tab(s) left open",
+      ]);
+      expect(stops.map((one) => one.agent)).toEqual(["impl-1-5"]);
+      expect(yield* rig.cmds()).not.toContain("tab close");
     }),
   ));

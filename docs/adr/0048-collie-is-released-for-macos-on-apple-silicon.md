@@ -91,6 +91,6 @@ Electrobun's macOS paths and a process check that does not use `/proc`.
 CI gains macOS jobs. The repository is public, so they cost nothing.
 
 What runs differently on a Mac is `src/script.ts` (a login's BSD `script`), the `ps`
-fallback in `src/compaction.ts`'s `endpointPid` where there is no `/proc`, and
+fallback in `src/processes.ts` where there is no `/proc`, and
 `desktop/src/bun/login-path.ts` (D5). Desktop's macOS build is `desktop/scripts/mac-signing.ts`,
 Developer ID or ad hoc, checked by `tools/verify-mac-app.sh`.

@@ -1132,6 +1132,60 @@ tree could close: a check that failed, never ran, or passed on an earlier tree. 
 what a fix may be handed. A reviewer's judgement and an Output's claim are not moved by
 running anything, so a fix handed one spends a session and changes nothing.
 
+Both read each check through `checkProof`, which you can call yourself. It gives a check's
+proof on the tree in `evidence`: `passed`, `failed`, `unstable`, `earlier` (it passed only
+on an earlier tree) or `never`, with its runs and the latest of them on this tree. A record
+counts where it ran exactly that check's command, whoever asked for it. Where
+`evidence.commands` does not name the check, records count by name: anyone's by default, or
+only Collie's own with `"collie"`. A check [left to CI](cli.md#what-collie-may-run-itself)
+(its spec has `ci`, the job's name) is only ever `waiting` on its job or `proved` by it, and
+neither is a gap. `owedLocally` takes the Run's checks and returns those the Run runs itself:
+every one but those left to CI. Loop over it, not over the checks, wherever your workflow
+runs them.
+
+```ts
+const evidence = yield * host.evidence(runId, cwd);
+const red = owedLocally(yield * host.approved(runId)).filter(
+  (spec) => checkProof(evidence, spec.name).state !== "passed",
+);
+```
+
+A check left to CI is proved by its job instead, with
+`host.ciJob({ runId, cwd, name, wait })`. It reads the job through the forge adapter's one
+read for it, the named job on the head commit of the merge request the Run recorded, which
+must be `cwd`'s `HEAD`. On GitLab that is the job in the merge request's head pipeline, and
+a merged-results pipeline counts for the head only where GitLab shows the merge commit was
+built from it; on GitHub it is the check run of that name on the head commit. The adapter
+answers `passed`, `pending`, `running`, `failed`, `skipped`, `cancelled` or `missing`, with
+the job's URL, or why the forge could not say. A pass is recorded once per tree as the
+check's `ci` pass, with `job` (`{ name, url, merge? }`, `merge` being the merged-results
+commit) beside its command, start and end tree. That Verification answers `{ proved }`; anything
+else answers `{ unproved, state, url }`, the sentence naming the check, the job and the
+commit. With `wait: true` a pending or running job is read again every 30 s for up to 2
+hours, the Run's log and `collie run checks` saying which check, job and commit it waits
+on, and a stop ends the wait. `renderRecordedChecks(evidence, leftToCi)` tells a reviewer
+each such check as `left to CI: proved by <job> on the merge request's head`, with the
+job's state where you read one.
+
+An unproved answer also carries `log`: the command line that prints the job's log, written
+by the forge adapter (`glab ci trace <id> --repo <project>` on GitLab, `gh run view --job
+<id> --log --repo <owner/repo>` on GitHub), so a prompt hands an agent the adapter's
+command rather than naming a CLI of its own (ADR-0050). With `settle: true` a failed job is
+settled first: the adapter reads the same job at the merge-base of the merge request's head
+and its target branch, or on the target branch's latest pipeline where that commit has
+none, and one that failed there too answers with `before: { at, url }` and is not retried.
+Otherwise the adapter retries it once — GitLab's job retry, GitHub's rerun of that job —
+and waits on it; a pass then answers `{ proved, retried: true }`, a Flake. Name either on
+the merge request with `host.note({ runId, cwd, body })`, which puts a note on the merge
+request the Run recorded.
+
+```ts
+for (const spec of (yield * host.approved(runId)).filter((one) => one.ci !== undefined)) {
+  const read = yield * host.ciJob({ runId, cwd, name: spec.name, wait: true, settle: true });
+  if ("unproved" in read) yield * host.parked(runId, read.unproved);
+}
+```
+
 [ADR-0023](adr/0023-a-rally-is-a-loop-and-a-claim-is-not-proof.md) is why the rally is a
 loop and why a claim is not proof.
 

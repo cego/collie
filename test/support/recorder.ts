@@ -15,7 +15,7 @@ import {
 } from "effect";
 import { readEnv, type PluginEnv } from "../../src/env";
 import { Herdr } from "../../src/herdr";
-import { fakeHerdr, fakeHerdrCommand } from "./fake-herdr-core";
+import { fakeHerdr, writeFakeHerdrShim } from "./fake-herdr-core";
 
 const JsonString = Schema.fromJsonString(Schema.Json);
 const JsonObjectString = Schema.fromJsonString(Schema.JsonObject);
@@ -233,13 +233,7 @@ export class Rig {
       for (const dir of dirs) {
         yield* fs.makeDirectory(dir, { recursive: true });
       }
-      yield* fs.writeFileString(
-        binPath,
-        `#!/bin/sh\nexec ${fakeHerdrCommand(fakeHerdrPath)} "$@"\n`,
-        {
-          mode: 0o755,
-        },
-      );
+      yield* writeFakeHerdrShim(binPath, fakeHerdrPath);
     });
   }
 
@@ -337,8 +331,13 @@ export class Rig {
   }
 
   /** An agent herdr already has, matching one an earlier run started. */
-  addAgent(name: string, paneId: string) {
-    return this.appendState("agents", { name, pane_id: paneId });
+  addAgent(name: string, paneId: string, terminalId?: string) {
+    return this.appendState(
+      "agents",
+      terminalId === undefined
+        ? { name, pane_id: paneId }
+        : { name, pane_id: paneId, terminal_id: terminalId },
+    );
   }
 
   /** Another process under this agent's name, in the same pane. */

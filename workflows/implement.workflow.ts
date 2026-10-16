@@ -42,6 +42,7 @@ import {
   isOutcome,
   isSingleRepo,
   orderedTicketsOf,
+  owedLocally,
   planReposOf,
   renderApproved,
   renderEvidence,
@@ -98,6 +99,12 @@ const prompts = {
     session: Schema.Struct({ ask: text }),
   }),
   fix: content.template("fix", {
+    ...Implementing.fields,
+    iteration: text,
+    max_iterations: text,
+    findings: text,
+  }),
+  ciFix: content.template("ci-fix", {
     ...Implementing.fields,
     iteration: text,
     max_iterations: text,
@@ -189,6 +196,34 @@ const MERGE_TRIES = 2;
 
 /** One agent for the whole Run, so its model is named once and the fixes know the build. */
 const BUILDER = "build";
+
+const Tree = Schema.Struct({ head: Schema.String, fingerprint: Schema.String });
+
+/** A fix round that changed nothing and disputed every finding: another would read the same tree. */
+const stalledFix = (
+  before: typeof Tree.Type | undefined,
+  after: typeof Tree.Type | undefined,
+  findings: ReadonlyArray<Finding>,
+  fixed: typeof FixOutputSchema.Type,
+) => {
+  const disputed = new Set((fixed.disputed ?? []).map(findingKey));
+  return (
+    before !== undefined &&
+    after?.head === before.head &&
+    after.fingerprint === before.fingerprint &&
+    (fixed.fixed ?? []).length === 0 &&
+    findings.every((one) => disputed.has(findingKey(one)))
+  );
+};
+
+/** A check left to CI whose job failed on the merge request's head, as a CI fix round is told of it. */
+const CiFailed = Schema.Struct({
+  name: Schema.String,
+  job: Schema.String,
+  url: Schema.NullOr(Schema.String),
+  log: Schema.NullOr(Schema.String),
+  unproved: Schema.String,
+});
 
 export default defineWorkflow({
   id: "implement",
@@ -582,7 +617,7 @@ export default defineWorkflow({
               why.pass === "recheck"
                 ? wholeRunsOwed({ ...(yield* host.evidence(runId, cwd)), approved: checks })
                 : null;
-            for (const spec of checks) {
+            for (const spec of owedLocally(checks)) {
               if (now.includes(spec.name)) continue;
               if (whole !== null && !whole.includes(spec.name)) continue;
               const ran = yield* host.verify({ runId, name: spec.name, cwd, ...why });
@@ -684,14 +719,7 @@ export default defineWorkflow({
           output: FixOutputSchema,
         });
         gaps = yield* settleFailed(yield* gapsNow({ pass: "fix", round: at }));
-        const disputed = new Set((fixed.disputed ?? []).map(findingKey));
-        if (
-          before !== undefined &&
-          gaps.tree?.head === before.head &&
-          gaps.tree.fingerprint === before.fingerprint &&
-          (fixed.fixed ?? []).length === 0 &&
-          findings.every((one) => disputed.has(findingKey(one)))
-        )
+        if (stalledFix(before, gaps.tree, findings, fixed))
           stalled = { at, disputed: fixed.disputed ?? [] };
         const settled = settleFinalFix(findings, fixed, yield* host.evidence(runId, cwd));
         unreviewed = [
@@ -729,7 +757,7 @@ export default defineWorkflow({
           // has its named failures run alone too, before any gap is read.
           const rely = Effect.gen(function* () {
             const settled = settledChecks({ ...(yield* host.evidence(runId, cwd)), approved });
-            for (const spec of approved.filter((one) => !settled.includes(one.name))) {
+            for (const spec of owedLocally(approved).filter((one) => !settled.includes(one.name))) {
               const relied = yield* host.verify({ runId, name: spec.name, cwd, pass: "recheck" });
               yield* host.record(runId, `proof: ${spec.name} relies on verification ${relied.id}`);
             }
@@ -815,9 +843,15 @@ export default defineWorkflow({
         ),
       ];
       if (unsettled.length > 0) yield* host.record(runId, `unsettled: ${unsettled.join("; ")}`);
+      const leftToCi = checks.filter((spec) => spec.ci !== undefined);
       const ready = yield* host.mr({ cwd, source: { value: source.value, kind: source.kind } });
       if (!ready.ok) {
-        const reason = `Cannot open the merge request: ${ready.reason}. Repair it, then resume ${runId}.`;
+        const head = (yield* host.evidence(runId, cwd)).final.head_sha.slice(0, 12);
+        const unproved = leftToCi.map(
+          (spec) =>
+            ` ${spec.name} is left to CI and unproved: job ${spec.ci} on ${head} cannot be read without one.`,
+        );
+        const reason = `Cannot open the merge request: ${ready.reason}.${unproved.join("")} Repair it, then resume ${runId}.`;
         yield* host.record(runId, reason);
         yield* host.parked(runId, reason);
         return yield* Workflow.suspend(yield* WorkflowInstance);
@@ -868,6 +902,132 @@ export default defineWorkflow({
         });
       }
       yield* host.mergeRequest(runId, opened.mr_url);
+      // Each check left to CI is proved by its job on the merge request's head. A failed one
+      // is the builder's in a CI fix round, bounded like the gate's; the gate's fix loop stays
+      // apart, since what fails, how it is read again and the replay keys all differ.
+      const treeNow = Effect.map(host.evidence(runId, cwd), ({ final }) => ({
+        head: final.head_sha,
+        fingerprint: final.fingerprint,
+      }));
+      const told = (line: string) =>
+        Effect.andThen(host.record(runId, line), host.note({ runId, cwd, body: line }));
+      let ciFixes = 0;
+      // Why a job still failing parks the Run rather than going to another round.
+      let blocked: { readonly why: string; readonly unmoved: boolean } | null = null;
+      while (leftToCi.length > 0) {
+        const read = yield* Activity.make({
+          name: `ci-proof.${ciFixes}`,
+          success: Schema.Struct({ failed: Schema.Array(CiFailed), tree: Tree }),
+          execute: Effect.gen(function* () {
+            const unproved: string[] = [];
+            const failed: Array<typeof CiFailed.Type> = [];
+            for (const spec of leftToCi) {
+              const job = spec.ci ?? "";
+              const read = yield* host.ciJob({
+                runId,
+                cwd,
+                name: spec.name,
+                wait: true,
+                // The same job on an unmoved head was compared and retried already.
+                settle: blocked?.unmoved !== true,
+              });
+              if ("proved" in read) {
+                if (read.retried === true)
+                  yield* told(
+                    `unsettled: ${spec.name}: job ${job} failed on ${read.proved.end.head_sha.slice(0, 12)}, then passed when retried — a Flake, so this Run has not settled it.`,
+                  );
+              } else if (read.before !== undefined)
+                yield* told(
+                  `unsettled: ${spec.name}: job ${job} also fails at ${read.before.at.slice(0, 12)}, where this branch leaves its target branch, so it failed before this Run's changes.`,
+                );
+              else if (read.state === "failed")
+                failed.push({
+                  name: spec.name,
+                  job,
+                  url: read.url,
+                  log: read.log,
+                  unproved: read.unproved,
+                });
+              else unproved.push(read.unproved);
+            }
+            if (yield* host.stopRequested(runId))
+              return yield* Workflow.suspend(yield* WorkflowInstance);
+            const why =
+              unproved.length > 0
+                ? `Outcome unproved: ${[...unproved, ...failed.map((one) => one.unproved)].join("; ")}`
+                : blocked !== null && failed.length > 0
+                  ? `${blocked.why}: ${failed.map((one) => one.unproved).join("; ")}`
+                  : null;
+            if (why !== null) {
+              const reason = `${why}. Repair it, then resume ${runId}.`;
+              yield* host.record(runId, reason);
+              yield* host.parked(runId, reason);
+              return yield* Workflow.suspend(yield* WorkflowInstance);
+            }
+            yield* host.parked(runId, null);
+            return { failed, tree: yield* treeNow };
+          }),
+        });
+        if (read.failed.length === 0) break;
+        ciFixes += 1;
+        const at = ciFixes;
+        const findings = read.failed.map((one) => ({
+          severity: "blocker",
+          title: `${one.name}: its CI job ${one.job} failed`,
+          detail: `On ${read.tree.head.slice(0, 12)}, the merge request's head: ${one.url ?? "the forge gave no URL"}. Its log: ${one.log ?? "the forge gave no command for it"}`,
+        }));
+        const fixed = yield* agentWork({
+          operation: `ci-fix-${at}`,
+          agent: BUILDER,
+          role: "implementer",
+          pushes: true,
+          instructions: prompts.ciFix,
+          input: {
+            ...input,
+            verify: yield* checksNow,
+            iteration: String(at),
+            max_iterations: String(ROUNDS),
+            findings: formatFindings(findings),
+          },
+          output: FixOutputSchema,
+        });
+        const after = yield* Activity.make({
+          name: `ci-tree.${at}`,
+          success: Tree,
+          execute: treeNow,
+        });
+        if (stalledFix(read.tree, after, findings, fixed)) {
+          const lines = (fixed.disputed ?? []).map(
+            (one) =>
+              `${one.title}: ci fix ${at} disputed it and changed nothing${one.reason ? `: ${one.reason}` : ""}`,
+          );
+          yield* Activity.make({
+            name: `ci-disputed.${at}`,
+            success: Schema.Void,
+            execute: told(`outcome unproved: ${lines.join("; ")}`),
+          });
+          break;
+        }
+        const settled = settleFinalFix(findings, fixed, yield* host.evidence(runId, cwd));
+        yield* Activity.make({
+          name: `ci-unreviewed.${at}`,
+          success: Schema.Void,
+          execute: told(
+            `ci fix ${at} landed after the last review and was not re-reviewed: ${
+              settled.ok ? settled.attestation : settled.reasons.join("; ")
+            }`,
+          ),
+        });
+        blocked =
+          after.head === read.tree.head
+            ? {
+                why: `Outcome unproved: ci fix ${at} pushed no new commit: the head is still ${after.head.slice(0, 12)}`,
+                unmoved: true,
+              }
+            : at >= ROUNDS
+              ? { why: `Outcome unproved after ${ROUNDS} CI fixes`, unmoved: false }
+              : null;
+      }
       return opened.mr_url;
     }),
 });
@@ -987,7 +1147,7 @@ const spawned = (
     );
     return ran === undefined
       ? spec
-      : { name: spec.name, executable: ran.executable, argv: ran.argv, cwd: ran.cwd };
+      : { ...spec, executable: ran.executable, argv: ran.argv, cwd: ran.cwd };
   });
 
 /** A ticket's criteria as its builder is given them. */

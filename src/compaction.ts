@@ -5,25 +5,14 @@
 // next step, a fix round, a hand-off from another Run — and a threshold repeated per
 // harness is a threshold that disagrees with itself.
 
-import {
-  Clock,
-  Data,
-  Effect,
-  FileSystem,
-  Path,
-  PlatformError,
-  Result,
-  Schema,
-  Stream,
-} from "effect";
-import { ChildProcess, ChildProcessSpawner } from "effect/process";
+import { Clock, Data, Effect, FileSystem, Path, PlatformError, Result, Schema } from "effect";
 import type { BunServices } from "@effect/platform-bun/BunServices";
 import type { Channel } from "./dispatcher";
 import type { Herdr, Submission } from "./herdr";
 import { LOCK_CLAIM_SPACING_MS, ensureLockDir, withLock } from "./lock";
 import { reason } from "./naming";
 import { COMPACTION_OFF } from "./settings";
-import { processOf, stillRunning } from "./processes";
+import { commandOf, processOf, stillRunning, terminate } from "./processes";
 
 /**
  * How long Collie waits for a compaction request to resolve before it pauses the Run.
@@ -741,7 +730,7 @@ const putDownServer = Effect.fn("Compaction.putDownServer")(function* (
 ) {
   const pid = yield* endpointPid(record);
   if (record === null || pid === null) return;
-  yield* Effect.ignore(Effect.try(() => process.kill(pid, "SIGTERM")));
+  yield* terminate(pid);
   yield* deps.log(`${record.agent}: stopped its compaction endpoint (pid ${pid})`);
 });
 
@@ -762,29 +751,8 @@ export const endpointPid = Effect.fn("Compaction.endpointPid")(function* (
 ) {
   const { pid, command } = record ?? {};
   if (!pid || !command) return null;
-  const fs = yield* FileSystem.FileSystem;
-  const cmdline = yield* fs.readFileString(`${proc}/${pid}/cmdline`).pipe(
-    // NUL-separated argv, which is not a string until the separators are.
-    Effect.map((argv) => argv.replaceAll("\0", " ")),
-    Effect.catch(() => psCommand(pid)),
-  );
-  return cmdline.includes(command) ? pid : null;
+  return (yield* commandOf(pid, proc)).includes(command) ? pid : null;
 });
-
-const psCommand = (pid: number) =>
-  Effect.gen(function* () {
-    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-    const handle = yield* spawner.spawn(
-      ChildProcess.make("ps", ["-ww", "-o", "command=", "-p", String(pid)], {
-        stdout: "pipe",
-        stderr: "ignore",
-      }),
-    );
-    return yield* Stream.mkString(Stream.decodeText(handle.stdout));
-  }).pipe(
-    Effect.scoped,
-    Effect.catch(() => Effect.succeed("")),
-  );
 
 /**
  * The work boundary: immediately before a reused agent that has finished its previous

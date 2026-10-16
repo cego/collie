@@ -214,6 +214,8 @@ export const RunningCheck = Schema.Struct({
   round: Schema.NullOr(Schema.Number),
   revision: Schema.String,
   base: Schema.NullOr(Schema.String),
+  /** The pipeline job a `ci` pass waits on. */
+  job: Schema.optionalKey(Schema.String),
   /** How long it has run, or null where the marker does not say when it started. */
   elapsedMs: Schema.NullOr(Schema.Number),
   /** The median of its last five completed runs in this repository, or null for none. */

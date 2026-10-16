@@ -71,6 +71,7 @@ import { externalSubmissions } from "./compactors";
 import { controlDir } from "./compaction";
 import { nowIso } from "./time";
 import { fingerprint, ranOneTest, readVerifications } from "./verify";
+import { owedLocally } from "./check-proof";
 
 /** One Run as the host has placed it: where it works, and where its records are. */
 export interface Watched {
@@ -727,7 +728,7 @@ export const grantedToRun = Effect.fn("Oversight.grantedToRun")(function* (at: W
       (one) => one.name,
     ),
   );
-  return intent.authority.run_verification
+  return owedLocally(intent.authority.run_verification)
     .map((spec) => spec.name)
     .filter((name) => wanted.has(name) && !already.has(name));
 });

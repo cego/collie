@@ -16,16 +16,25 @@
 // `--changed` — takes no turn: it needs few cores, builds into a directory of its own that it
 // removes, and reads the shared timings without updating them (`tools/test-run.ts`).
 //
-// One worker per available core. Load averages include this suite's previous run and IO
-// waits, so subtracting them makes a repeat needlessly slower even after the CPU is free.
-// The per-user lock keeps whole suites from competing for those cores.
+// Workers are the cores left idle over a one-second sample taken after the builds and once
+// the turn is granted, at least 2 and at most one per core; a caller's `--parallel` stands
+// (`workersFor`). Load averages, which #110 dropped, lag and count this suite's previous run
+// and IO waits; a fresh idle-CPU sample counts neither, and still leaves room for the other
+// work on the Machine.
 
-import { availableParallelism, tmpdir } from "node:os";
+import { availableParallelism, cpus, tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { BunRuntime, BunServices } from "@effect/platform-bun";
 import solidPlugin from "@opentui/solid/bun-plugin";
 import { Effect } from "effect";
-import { binDirectory, isTargeted, timingFlags, turnFor } from "./test-run";
+import {
+  binDirectory,
+  isTargeted,
+  startsSummary,
+  timingFlags,
+  turnFor,
+  workersFor,
+} from "./test-run";
 import { sweepDeadRoots } from "../test/support/sweep";
 import { LIVE_HARNESSES } from "../test/support/live-switch";
 
@@ -41,6 +50,7 @@ const run = (targeted: boolean, out: string, flags: ReadonlyArray<string>) => as
   const collie = `${out}/collie`;
   const herdr = `${out}/fake-herdr`;
   const forge = `${out}/fake-forge`;
+  const starts = `${out}/starts`;
   const started = performance.now();
   sweepDeadRoots(tmpdir());
   const built = await Promise.all([
@@ -71,19 +81,23 @@ const run = (targeted: boolean, out: string, flags: ReadonlyArray<string>) => as
   // A fresh checkout must start its longest files first too. These are durations, never
   // results: Bun still discovers every test, and replaces the estimates after this run.
   if (!targeted && !(await Bun.file(timings).exists())) await Bun.write(timings, Bun.file(seed));
-  const workers = availableParallelism();
-  const exit = await Bun.spawn(
-    ["bun", "test", `--parallel=${workers}`, "--timeout=30000", ...flags, ...args],
-    {
-      env: {
-        ...suiteEnv(),
-        COLLIE_TEST_BINARY: collie,
-        COLLIE_TEST_FAKE_HERDR: herdr,
-        COLLIE_TEST_FAKE_FORGE: forge,
-      },
-      stdio: ["inherit", "inherit", "inherit"],
+  const before = cpus();
+  await Bun.sleep(1_000);
+  const { workers, line } = workersFor(args, before, cpus(), availableParallelism());
+  console.error(line);
+  const parallel = workers === "caller" ? [] : [`--parallel=${workers}`];
+  await Bun.write(starts, "");
+  const exit = await Bun.spawn(["bun", "test", ...parallel, "--timeout=30000", ...flags, ...args], {
+    env: {
+      ...suiteEnv(),
+      COLLIE_TEST_BINARY: collie,
+      COLLIE_TEST_FAKE_HERDR: herdr,
+      COLLIE_TEST_FAKE_FORGE: forge,
+      COLLIE_TEST_STARTS: starts,
     },
-  ).exited;
+    stdio: ["inherit", "inherit", "inherit"],
+  }).exited;
+  for (const line of startsSummary(await Bun.file(starts).text())) console.error(line);
   console.error(`test: ${((performance.now() - started) / 1_000).toFixed(2)} s including builds`);
   return exit;
 };

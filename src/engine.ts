@@ -97,6 +97,7 @@ import { currentPid, signalProcess } from "./lock";
 import { skillDirs, skillFile, type CheckoutKind, type InputStrategy } from "./definitions";
 import { EXCLUSIVE_STRATEGIES } from "./strategies";
 import { appendMetric, noteVerification, metricsOf, readMetrics } from "./metrics";
+import { ciJob } from "./ci-job";
 import {
   autoMergingHere,
   forgeHere,
@@ -109,7 +110,8 @@ import { redact } from "./redact";
 import { reportOf, type Recorded } from "./report";
 import { outcomeRecordsOf, type OutcomeRecords } from "./outcomes";
 import type { Metrics } from "./board-model";
-import { parseMrTarget, parseMrUrl } from "./board-model";
+import { mrRefOf, parseMrTarget, parseMrUrl } from "./board-model";
+import { forgeOf } from "./forge/forge";
 import { integrateDefault, integratedLine } from "./integrate";
 import { strategyNamed } from "./strategies";
 import { Notifier, SOUND, notificationTitle, openedSubject, wanted, type Sound } from "./notify";
@@ -302,11 +304,13 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     /** What it ran with outside the tree; absent on a record from before environments were. */
     readonly environment?: string;
     /** Why Collie ran it; absent on an agent's. A \`rerun\` is never its check's own run. */
-    readonly pass?: "gate" | "rerun" | "recheck" | "fix" | "baseline" | "finish" | "check";
+    readonly pass?: "gate" | "rerun" | "recheck" | "fix" | "baseline" | "finish" | "ci" | "check";
     /** The tests a failing check's output names, where it could be read whole. */
     readonly failed?: ReadonlyArray<FailedTest>;
     /** The one test a \`rerun\` ran. */
     readonly test?: FailedTest;
+    /** The pipeline job a \`ci\` pass read, and the merge commit it ran on where not the head itself. */
+    readonly job?: { readonly name: string; readonly url: string | null; readonly merge?: string };
   }
 
   /** What the journal holds and the tree in front of you, for checks to be read against. */
@@ -319,6 +323,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
       readonly executable: string | null;
       readonly argv: ReadonlyArray<string>;
       readonly cwd: string;
+      readonly ci?: string;
     }>;
   }
 
@@ -356,12 +361,40 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly message: string;
   }
 
+  /** A pipeline job's state; \`missing\` is a pipeline without it. */
+  export type JobState =
+    | "passed"
+    | "pending"
+    | "running"
+    | "failed"
+    | "skipped"
+    | "cancelled"
+    | "missing";
+  /** What became of a check left to CI: its recorded pass, or why it is unproved. */
+  export type CiJob =
+    | {
+        readonly proved: Verification;
+        /** It failed, and passed when retried: a Flake. */
+        readonly retried?: true;
+      }
+    | {
+        readonly unproved: string;
+        readonly state: JobState | null;
+        readonly url: string | null;
+        /** The command that prints its log, where there is such a job. */
+        readonly log: string | null;
+        /** It failed where the branch leaves its target too: not this Run's to fix. */
+        readonly before?: { readonly at: string; readonly url: string | null };
+      };
+
   /** One of this Run's checks, named by a human, chat or the Run's agent. */
   export interface VerifySpec {
     readonly name: string;
     readonly executable: string;
     readonly argv: ReadonlyArray<string>;
     readonly cwd: string;
+    /** The merge request pipeline job that proves it: nobody runs it locally. */
+    readonly ci?: string;
   }
 
   /** The reviewed branch's checkout, or why there is none. */
@@ -466,6 +499,27 @@ export const SDK_DECLARATIONS = `declare module "collie" {
      * Fails, saying why, where the forge cannot be read: not knowing is not a no.
      */
     readonly autoMerging: (cwd: string) => Effect.Effect<string | null, WorkflowError>;
+    /**
+     * The job proving a check left to CI, on the head of the merge request this Run recorded,
+     * which must be cwd's HEAD. A pass is recorded once per tree as the check's \`ci\`
+     * Verification. With wait, a pending or running job is read again every 30 s for up to 2
+     * hours. Anything else is why it is unproved, naming the check, the job and the commit.
+     * With settle, a failed job is read where the branch leaves its target, and is retried
+     * once and waited on where it did not fail there too.
+     */
+    readonly ciJob: (options: {
+      readonly runId: string;
+      readonly cwd: string;
+      readonly name: string;
+      readonly wait?: boolean;
+      readonly settle?: boolean;
+    }) => Effect.Effect<CiJob>;
+    /** Puts a note on the merge request this Run recorded, sent by Collie. */
+    readonly note: (options: {
+      readonly runId: string;
+      readonly cwd: string;
+      readonly body: string;
+    }) => Effect.Effect<Posted>;
     /**
      * Blocks until this Run holds the shared claim on the repository it works in, and
      * answers null where that repository has none. Waiting here costs wall clock and no
@@ -1416,9 +1470,17 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     got: { readonly verifications: ReadonlyArray<Verification>; readonly final: Snapshot },
   ): string;
 
-  /** Every check this Run's journal holds, latest of each and its baseline, for a reviewer to read. */
+  /**
+   * Every check this Run's journal holds, latest of each and its baseline, for a reviewer to
+   * read; then each check left to CI, with its job's state where the Run has a merge request.
+   */
   export function renderRecordedChecks(
     got: { readonly verifications: ReadonlyArray<Verification>; readonly final: Snapshot },
+    leftToCi?: ReadonlyArray<{
+      readonly name: string;
+      readonly job: string;
+      readonly state: string | null;
+    }>,
   ): string;
 
   /**
@@ -1451,6 +1513,29 @@ export const SDK_DECLARATIONS = `declare module "collie" {
   export function checkGapsOf(
     options: Parameters<typeof evidenceGapsOf>[0],
   ): ReadonlyArray<string>;
+
+  /**
+   * A Check's proof on this tree: passed, failed, unstable, passed only on an earlier tree, or
+   * never run; for a check left to CI, waiting on its job or proved by it.
+   */
+  export interface CheckProof {
+    readonly state: "passed" | "failed" | "unstable" | "earlier" | "never" | "waiting" | "proved";
+    /** Every run of the Check's own command, oldest first. */
+    readonly runs: ReadonlyArray<Verification>;
+    /** The latest of them on this tree. */
+    readonly last: Verification | undefined;
+  }
+  /** Whose records count, by name, for a Check whose command is not given. */
+  export type Unmatched = "anyone" | "collie";
+  export function checkProof(
+    got: CheckEvidence & { readonly approved?: ReadonlyArray<VerifySpec> },
+    name: string,
+    unmatched?: Unmatched,
+  ): CheckProof;
+  /** The Checks a Run runs itself: all but those left to CI. */
+  export function owedLocally<C extends { readonly name: string; readonly ci?: string }>(
+    checks: ReadonlyArray<C>,
+  ): ReadonlyArray<C>;
 
   /** A Run's checks read against its journal, for which tests failed and how each rerun went. */
   type FailedChecks = CheckEvidence & { readonly approved: ReadonlyArray<VerifySpec> };
@@ -2890,6 +2975,55 @@ export const hostLayer = (options: {
               return yield* autoMergingHere(cwd, runShell, gitlabHost);
             }).pipe(Effect.mapError((reason) => new WorkflowError({ reason }))),
           ),
+        ciJob: (asked) =>
+          under(
+            Effect.gen(function* () {
+              const spec = (yield* approvedOf(dir, asked.runId)).find(
+                (one) => one.name === asked.name,
+              );
+              if (spec?.ci === undefined)
+                return {
+                  unproved: `"${asked.name}" is not one of this Run's checks left to CI`,
+                  state: null,
+                  url: null,
+                  log: null,
+                };
+              const own = yield* treeOf(yield* store.run(asked.runId), asked.runId, dir);
+              // A stop ends the wait: the workflow suspends on it, as it does on an agent's.
+              const stopped = set(STOP, asked.runId).pipe(
+                Effect.repeat({ until: (stop) => stop, schedule: Schedule.spaced("1 second") }),
+                Effect.as({
+                  unproved: `${spec.name} is left to CI and unproved: the Run was stopped while job ${spec.ci} was read`,
+                  state: null,
+                  url: null,
+                  log: null,
+                }),
+              );
+              return yield* Effect.raceFirst(
+                ciJob({
+                  runId: asked.runId,
+                  runDir: runDir(dir, asked.runId),
+                  journal: evidenceDir(dir, asked.runId),
+                  cwd: asked.cwd,
+                  spec,
+                  command: yield* commandOf({ ...own, cwd: asked.cwd }, spec),
+                  mr: yield* mergeRequestOf(fs, dir, asked.runId),
+                  wait: asked.wait ?? false,
+                  settle: asked.settle ?? false,
+                  run: runShell,
+                }),
+                stopped,
+              );
+            }),
+          ).pipe(Effect.orDie),
+        note: (asked) =>
+          under(
+            Effect.gen(function* () {
+              const ref = mrRefOf(yield* mergeRequestOf(fs, dir, asked.runId));
+              if (ref === null) return { ok: false, message: "this Run has no merge request" };
+              return yield* forgeOf(ref).post(ref, asked.body, false, asked.cwd, runShell);
+            }),
+          ).pipe(Effect.orDie),
         claim: <E, R>(asked: {
           readonly runId: string;
           readonly cwd: string;
@@ -3967,6 +4101,8 @@ export interface RegistryApi {
     readonly set: boolean;
     /** A stop of this Run without the children it started. */
     readonly alone?: boolean;
+    /** Why a stop ends the Run's agents, for its log. */
+    readonly reason?: string;
   }) => Effect.Effect<typeof Controlled.Type, HostRefused, HostServices>;
   /**
    * Grants this run one command Collie may run itself, or withdraws the grant of that
@@ -5334,12 +5470,16 @@ const makeRegistry: (
   });
 
   /** A stop, and the agents of every Run it reached closed: the Runs, and what did not close. */
-  const stopTree = Effect.fn("Engine.stopTree")(function* (runId: string, alone = false) {
+  const stopTree = Effect.fn("Engine.stopTree")(function* (
+    runId: string,
+    alone = false,
+    reason?: string,
+  ) {
     const { runs } = yield* applyControl(runId, STOP, true, undefined, alone);
     // Closing their panes is what stops the agents; the Run only stops looking.
     const agents = yield* Agents;
     const left: string[] = [];
-    for (const one of runs) left.push(...(yield* agents.halt(one)).left);
+    for (const one of runs) left.push(...(yield* agents.halt(one, reason)).left);
     return { runs, left };
   });
 
@@ -5862,6 +6002,7 @@ const makeRegistry: (
       readonly control: string;
       readonly set: boolean;
       readonly alone?: boolean;
+      readonly reason?: string;
     }) {
       if (options.control === HOLD && (yield* hasEnded(options.runId)))
         return yield* new HostRefused({
@@ -5869,7 +6010,7 @@ const makeRegistry: (
         });
       // A finished Run's status is history: a stop closes its live agents and sets nothing.
       if (options.control === STOP && options.set && (yield* workflowEnded(options.runId))) {
-        const halted = yield* (yield* Agents).halt(options.runId);
+        const halted = yield* (yield* Agents).halt(options.runId, options.reason);
         return {
           runId: options.runId,
           control: options.control,
@@ -5883,7 +6024,7 @@ const makeRegistry: (
       const found = yield* routed(options.runId).pipe(Effect.result);
       const left =
         options.control === STOP && options.set
-          ? (yield* stopTree(options.runId, options.alone)).left
+          ? (yield* stopTree(options.runId, options.alone, options.reason)).left
           : yield* applyControl(options.runId, options.control, options.set).pipe(Effect.as([]));
       const recorded = { runId: options.runId, control: options.control, set: options.set, left };
       if (found._tag === "Failure") {

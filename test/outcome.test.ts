@@ -480,6 +480,20 @@ test("a reviewer is handed the recorded checks: result, who, tree, when, and the
   ]);
 });
 
+test("a reviewer is told a check left to CI is proved by its job, and the job's state where there is a merge request", () => {
+  const nuxi = { name: "nuxi", job: "nuxi-typecheck" };
+  expect(renderRecordedChecks(collected({ verifications: [] }), [{ ...nuxi, state: null }])).toBe(
+    "- nuxi: left to CI (job nuxi-typecheck), do not run it. left to CI: proved by nuxi-typecheck on the merge request's head",
+  );
+  const rendered = renderRecordedChecks(collected({ verifications: [record({ name: "tests" })] }), [
+    { ...nuxi, state: "running" },
+  ]);
+  expect(rendered.split("\n")).toEqual([
+    "- tests: pass (by collie), on this tree, at 2026-09-11T10:00:00.000Z",
+    "- nuxi: left to CI (job nuxi-typecheck), do not run it. left to CI: proved by nuxi-typecheck on the merge request's head; its job is running now",
+  ]);
+});
+
 test("every kind has a rule, so a new one cannot be added without one", () => {
   // The bare shape: nothing verified, nothing claimed. Only the kinds that genuinely
   // require no evidence may come back empty.

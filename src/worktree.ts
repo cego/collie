@@ -14,6 +14,7 @@ import type { ChildProcessSpawner } from "effect/process";
 import {
   herdrFailureReason,
   type Herdr,
+  type AgentInfo,
   type PaneInfo,
   type WorktreeInfo,
   type WorktreeListing,
@@ -39,7 +40,10 @@ import type { WorktreeRecord } from "./run";
 // Type-only: the host imports this module, and `runs.ts` reads through the host.
 import type { RunFacts } from "./runs";
 import { slugify } from "./template";
-import { unlistedServers } from "./compaction";
+import { unlistedServers, type CompactionPorts } from "./compaction";
+import { COMPACTION_PORTS } from "./compactors";
+import { endAgent, endedLine, runLog } from "./agent-end";
+import { readLaunches } from "./launches";
 
 /**
  * Whether a Workflow changes the repository, and so needs a checkout of its own. It
@@ -1219,21 +1223,71 @@ const inside = (at: string, dir: string | null | undefined) =>
  */
 const closeDeadTabs = Effect.fn("worktree.closeDeadTabs")(function* (
   herdr: Herdr,
-  opts: { at: string; tabs: ReadonlySet<string>; panes: ReadonlyArray<PaneInfo> },
+  opts: {
+    at: string;
+    tabs: ReadonlySet<string>;
+    panes: ReadonlyArray<PaneInfo>;
+    stateDir: string;
+    ports: CompactionPorts;
+    /** The finished Runs' agents, by the pane each was left in. */
+    registered: ReadonlyArray<AgentEntry>;
+  },
 ) {
   // Where a pane was started and where it has moved to: a shell the agent `cd`-ed is
   // in the checkout whatever its tab was opened on.
   const isInside = (pane: PaneInfo) =>
     inside(opts.at, pane.cwd) || inside(opts.at, pane.foregroundCwd);
+  const why = `its checkout ${opts.at} was removed`;
+  /** Whether the agent left in this pane, if any, has ended, with its end's log once the tab closes. */
+  const ends = (pane: PaneInfo, agents: ReadonlyArray<AgentInfo>) =>
+    Effect.gen(function* () {
+      const entry = opts.registered.find((one) => one.paneId === pane.paneId);
+      const holder = agents.find((one) => one.paneId === pane.paneId);
+      if (holder !== undefined && holder.name !== entry?.agent) return null;
+      if (pane.agent === null || entry === undefined) return Effect.void;
+      const launched = (yield* readLaunches(opts.stateDir, entry.runId)).findLast(
+        (one) => one.agent === entry.agent,
+      );
+      const ended = yield* endAgent(
+        {
+          herdr,
+          ports: opts.ports,
+          stateDir: opts.stateDir,
+          cwd: opts.at,
+          log: runLog(opts.stateDir, entry.runId),
+        },
+        launched ?? { agent: entry.agent },
+        why,
+        "caller",
+        agents,
+      ).pipe(Effect.orElseSucceed(() => null));
+      if (ended?._tag !== "Closed") return null;
+      return ended.ended
+        ? runLog(opts.stateDir, entry.runId)(endedLine(entry.agent, why)).pipe(Effect.ignore)
+        : Effect.void;
+    });
   let left = 0;
+  let agents: Option.Option<ReadonlyArray<AgentInfo>> | undefined;
   for (const tabId of opts.tabs) {
     const panes = opts.panes.filter((pane) => pane.tabId === tabId);
     // A tab herdr no longer has is nothing to close; one with a pane outside the
     // checkout is a tab somebody has taken over.
     const isDead = panes.length > 0 && panes.every(isInside);
     if (!isDead) continue;
+    agents ??= yield* Effect.option(herdr.agentList());
+    if (Option.isNone(agents)) {
+      left += 1;
+      continue;
+    }
+    const listed = agents.value;
+    const ended = yield* Effect.forEach(panes, (pane) => ends(pane, listed));
+    if (ended.includes(null)) {
+      left += 1;
+      continue;
+    }
     const closed = yield* Effect.result(herdr.tabClose(tabId));
     if (closed._tag === "Failure") left += 1;
+    else for (const logged of ended) if (logged !== null) yield* logged;
   }
   return left;
 });
@@ -1444,6 +1498,7 @@ interface PruneOptions {
   /** Judge without removing; what is kept is still written down for the board. */
   dryRun?: boolean;
   settling?: Settling;
+  ports?: CompactionPorts;
 }
 
 /** One checkout's verdict: kept for `keep`, settled because of `why`, and whether it went. */
@@ -1577,6 +1632,9 @@ const prune = Effect.fn("worktree.prune")(function* (
                 .map((pane) => pane.tabId),
             ),
             panes: use.panes,
+            stateDir: opts.stateDir,
+            ports: opts.ports ?? COMPACTION_PORTS,
+            registered: opts.registered,
           })
         : { line: `kept ${name} · ${verdict.keep}`, removed: false };
     state[worktree.path] = { checked_at: now, repo, ...outcome };
@@ -1651,6 +1709,9 @@ const removeWorktree = Effect.fn("worktree.removeWorktree")(function* (
     /** The tabs its finished Runs' agents were left in, closed with the checkout. */
     tabs: ReadonlySet<string>;
     panes: ReadonlyArray<PaneInfo>;
+    stateDir: string;
+    ports: CompactionPorts;
+    registered: ReadonlyArray<AgentEntry>;
   },
 ) {
   const kept = (why: string): Removal => ({ line: `kept ${opts.name} · ${why}`, removed: false });
@@ -1691,6 +1752,9 @@ const removeWorktree = Effect.fn("worktree.removeWorktree")(function* (
     at: worktree.path,
     tabs: opts.tabs,
     panes: opts.panes,
+    stateDir: opts.stateDir,
+    ports: opts.ports,
+    registered: opts.registered,
   });
 
   // The checkout has gone, so this is a removal whatever happens to the branch — a

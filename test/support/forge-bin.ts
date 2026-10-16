@@ -3,9 +3,13 @@
 
 import * as BunFileSystem from "@effect/platform-bun/BunFileSystem";
 import { Effect, Schema } from "effect";
+import { recordStart } from "../../src/starts";
 import { forgeBin } from "./forge";
 
 const [forge = "", file = "", ...args] = Bun.argv.slice(2);
+await Effect.runPromise(
+  recordStart(`forge ${forge}`, args).pipe(Effect.provide(BunFileSystem.layer)),
+);
 const { code, stdout } = await Effect.runPromise(
   forgeBin(Schema.decodeUnknownSync(Schema.Literals(["gitlab", "github"]))(forge), file, args).pipe(
     Effect.provide(BunFileSystem.layer),

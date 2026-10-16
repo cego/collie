@@ -23,6 +23,7 @@ export type { Issue, IssueRef } from "./forge/issues";
 import type { Report } from "./report";
 export type { Report } from "./report";
 import type { VerifySpec } from "./verify-spec";
+import type { CiJob } from "./ci-job";
 import type { ChildProcessSpawner } from "effect/process";
 import { WorkflowInstance, type WorkflowEngine } from "effect/workflow/WorkflowEngine";
 import * as DurableDeferred from "effect/workflow/DurableDeferred";
@@ -126,6 +127,8 @@ export {
 
 export type { FailedTest, Snapshot, Verification } from "./verify";
 export type { VerifySpec } from "./verify-spec";
+export type { CiJob } from "./ci-job";
+export type { JobState } from "./forge/forge";
 
 /** This Run's checks as a human would type them, for a prompt to name what it faces. */
 export { renderApproved } from "./verify-spec";
@@ -146,6 +149,9 @@ export {
   wholeRunsOwed,
   type Outcome,
 } from "./outcome";
+
+/** A Check's proof on this tree, and which of a Run's Checks it runs itself. */
+export { checkProof, owedLocally, type CheckProof, type Unmatched } from "./check-proof";
 
 /**
  * Which of the five kinds of work a work source is. A workflow that reads a plan
@@ -659,6 +665,31 @@ export interface HostApi {
    * Fails, saying why, where the forge cannot be read: not knowing is not a no.
    */
   readonly autoMerging: (cwd: string) => Effect.Effect<string | null, WorkflowError>;
+  /**
+   * The job proving one of this Run's checks left to CI, read through the forge on the head
+   * of the merge request the Run recorded, which must be `cwd`'s HEAD. A pass is recorded
+   * once per tree as the check's `ci` Verification, with the job's URL. With `wait`, a job
+   * pending or running is read again every 30 s for up to 2 hours, and the Run's log and
+   * checks say which check, job and commit it waits on. Anything else is why it is unproved,
+   * naming all three.
+   */
+  readonly ciJob: (options: {
+    readonly runId: string;
+    readonly cwd: string;
+    readonly name: string;
+    readonly wait?: boolean;
+    /**
+     * A failed job is read where the branch leaves its target, and is retried once and
+     * waited on where it did not fail there too (ADR-0034): `before` and `retried` say which.
+     */
+    readonly settle?: boolean;
+  }) => Effect.Effect<CiJob>;
+  /** Puts a note on the merge request this Run recorded, sent by Collie rather than an agent. */
+  readonly note: (options: {
+    readonly runId: string;
+    readonly cwd: string;
+    readonly body: string;
+  }) => Effect.Effect<Posted>;
   /**
    * Blocks until this Run holds the shared claim on the repository it works in, and
    * answers null where that repository has none. Waiting here costs wall clock and no

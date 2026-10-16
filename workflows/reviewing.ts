@@ -152,7 +152,17 @@ export const reviewPass = (ask: ReviewAsk) =>
     const host = yield* Host;
     const { dir, cwd } = yield* host.place(id);
     const input = told(ask, { dir, id });
-    const checks = renderRecordedChecks(yield* host.evidence(id, cwd));
+    // A check left to CI is read from the forge where the Run has a merge request, never run.
+    const leftToCi = yield* Effect.forEach(
+      (yield* host.approved(id)).filter((spec) => spec.ci !== undefined),
+      (spec) =>
+        Effect.map(host.ciJob({ runId: id, cwd, name: spec.name }), (read) => ({
+          name: spec.name,
+          job: spec.ci ?? "",
+          state: "proved" in read ? "passed" : read.state,
+        })),
+    );
+    const checks = renderRecordedChecks(yield* host.evidence(id, cwd), leftToCi);
     // The round comes first, and the first round keeps the plain names: a Run with one
     // review reads as one, and a rally's rounds sort in the order they happened.
     const prefix = ask.prefix ?? "";

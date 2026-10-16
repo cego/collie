@@ -18,7 +18,7 @@ import { Rig, FakeHerdr } from "./recorder";
 import { exec } from "./command";
 import { fastForward, runEffect } from "./effect";
 import { FakeBin } from "./bin";
-import { CLI, FORGE_HOST, PROJECT, forgeOnPath, type ForgeModel } from "./forge";
+import { CLI, FORGE_HOST, PROJECT, forgeOnPath, type FakeJob, type ForgeModel } from "./forge";
 import { readCheckpoints } from "../../src/cards";
 import { mrTarget, type MrForge } from "../../src/board-model";
 import { installFakeSkills } from "./defs";
@@ -3504,6 +3504,510 @@ scenario(
         ]);
         // Gone once nothing is running.
         expect(yield* fs.exists(marker)).toBe(false);
+      }),
+    ),
+  120_000,
+);
+
+/** A Run's checks: `unit` run here, and each of `jobs` left to CI under its own name, counting any local run. */
+const leftToCi = (runId: string, jobs: ReadonlyArray<string>) =>
+  FileSystem.FileSystem.pipe(
+    Effect.flatMap((fs) =>
+      fs.makeDirectory(evidenceDir(dir, runId), { recursive: true }).pipe(
+        Effect.andThen(
+          fs.writeFileString(
+            `${evidenceDir(dir, runId)}/approved.json`,
+            asApproved([
+              { name: "unit", executable: "true", argv: [], cwd: rig.projectDir },
+              ...jobs.map((job) => ({
+                ...counting(job, `${rig.root}/${job}-runs`),
+                ci: `${job}-job`,
+              })),
+            ]),
+          ),
+        ),
+      ),
+    ),
+    Effect.orDie,
+  );
+
+const CI_MR = `https://${PROJECT.gitlab}/-/merge_requests/31`;
+const OPENED_CI = { ...OPENED, mr_url: CI_MR };
+const ciRecords = (runId: string) =>
+  Effect.map(readVerifications(evidenceDir(dir, runId)), (all) =>
+    all.filter((one) => one.pass === "ci"),
+  );
+const headOf = () =>
+  Effect.map(exec(["git", "rev-parse", "HEAD"], { cwd: rig.projectDir }), (ran) =>
+    ran.stdout.trim(),
+  );
+
+scenario(
+  "a check left to CI is never run at the gate, and its job's pass on the merge request's head is recorded as its proof",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { bin } = yield* deliveringOn("gitlab");
+        const head = yield* headOf();
+        const forge = yield* forgeOnPath(bin, "gitlab", {
+          installed: true,
+          loggedIn: [FORGE_HOST.gitlab],
+          login: "tester",
+          mrs: [
+            {
+              project: PROJECT.gitlab,
+              iid: "31",
+              state: "open",
+              head,
+              jobs: [{ name: "nuxi-job", state: "passed" }],
+            },
+          ],
+        });
+        const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "nuxi" }]);
+        const runId = "r-ci-passed";
+        yield* leftToCi(runId, ["nuxi"]);
+        yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, OPENED_CI]);
+        const result = yield* ran({
+          entry: shipped("implement"),
+          runId,
+          input: { plan },
+          options: { outcome: "feature" },
+        });
+        yield* bin.restore();
+        expect(said(result)).toBe(CI_MR);
+        // Nobody ran it: not the gate, not the proof's rely.
+        expect(yield* runsOf(`${rig.root}/nuxi-runs`)).toBe(0);
+        for (const operation of ["build", "mr"])
+          expect(yield* asked(runId, operation)).toContain(
+            "- nuxi: left to CI (job nuxi-job), do not run it",
+          );
+        const fs = yield* FileSystem.FileSystem;
+        const reviews = (yield* fs.readDirectory(`${dir}/agents/${runId}`)).filter(
+          (file) => file.startsWith("review") && file.endsWith(".prompt.md"),
+        );
+        expect(reviews.length).toBeGreaterThan(0);
+        for (const file of reviews)
+          expect(yield* fs.readFileString(`${dir}/agents/${runId}/${file}`)).toContain(
+            "left to CI: proved by nuxi-job on the merge request's head",
+          );
+        const [proof, ...more] = yield* ciRecords(runId);
+        expect(more).toEqual([]);
+        expect(proof).toMatchObject({
+          name: "nuxi",
+          by: "collie",
+          pass: "ci",
+          result: "pass",
+          argv: ["-c", expect.stringContaining("nuxi-runs")],
+          start: { head_sha: head },
+          end: { head_sha: head },
+          job: { name: "nuxi-job", url: `https://${PROJECT.gitlab}/-/jobs/1` },
+        });
+        expect(proof!.executable).toEndWith("/sh");
+        expect((yield* forge.calls()).some((call) => call.includes("/pipelines/3100/jobs"))).toBe(
+          true,
+        );
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a job missing from the merge request's pipeline parks the Run, naming the check, the job and the commit",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { bin } = yield* deliveringOn("gitlab");
+        const head = yield* headOf();
+        yield* forgeOnPath(bin, "gitlab", {
+          installed: true,
+          loggedIn: [FORGE_HOST.gitlab],
+          login: "tester",
+          mrs: [
+            {
+              project: PROJECT.gitlab,
+              iid: "31",
+              state: "open",
+              head,
+              jobs: [{ name: "lint", state: "passed" }],
+            },
+          ],
+        });
+        const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
+        const runId = "r-ci-missing";
+        yield* leftToCi(runId, ["nuxi"]);
+        yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, OPENED_CI]);
+        const why = yield* parkedOn({
+          entry: shipped("implement"),
+          runId,
+          input: { plan },
+          options: { outcome: "feature" },
+        });
+        yield* bin.restore();
+        expect(why).toContain(
+          `nuxi is left to CI and unproved: job nuxi-job on ${head.slice(0, 12)} is not in its pipeline`,
+        );
+        expect(yield* ciRecords(runId)).toEqual([]);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a check left to CI on a checkout with no forge parks the Run, naming the check, the job and the commit",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* noMergeRequests;
+        yield* repository();
+        yield* exec(["git", "remote", "remove", "upstream"], { cwd: rig.projectDir });
+        const head = yield* headOf();
+        const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
+        const runId = "r-ci-no-forge";
+        yield* leftToCi(runId, ["nuxi"]);
+        yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS]);
+        const why = yield* parkedOn({
+          entry: shipped("implement"),
+          runId,
+          input: { plan },
+          options: { outcome: "feature" },
+        });
+        expect(why).toContain("Cannot open the merge request");
+        expect(why).toContain(
+          `nuxi is left to CI and unproved: job nuxi-job on ${head.slice(0, 12)} cannot be read without one.`,
+        );
+        expect(yield* runsOf(`${rig.root}/nuxi-runs`)).toBe(0);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a resumed Run waits on its jobs again, and records no second proof for a job already recorded",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { bin } = yield* deliveringOn("gitlab");
+        const head = yield* headOf();
+        const mrWith = (e2e: "passed" | "cancelled") => ({
+          installed: true,
+          loggedIn: [FORGE_HOST.gitlab],
+          login: "tester",
+          mrs: [
+            {
+              project: PROJECT.gitlab,
+              iid: "31",
+              state: "open" as const,
+              head,
+              jobs: [
+                { name: "nuxi-job", state: "passed" as const },
+                { name: "e2e-job", state: e2e },
+              ],
+            },
+          ],
+        });
+        const forge = yield* forgeOnPath(bin, "gitlab", mrWith("cancelled"));
+        const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
+        const runId = "r-ci-resumed";
+        yield* leftToCi(runId, ["nuxi", "e2e"]);
+        yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, OPENED_CI]);
+        const options = {
+          entry: shipped("implement"),
+          runId,
+          input: { plan },
+          options: { outcome: "feature" },
+        };
+        expect(yield* parkedOn(options)).toContain(
+          `e2e is left to CI and unproved: job e2e-job on ${head.slice(0, 12)} is cancelled`,
+        );
+        expect((yield* ciRecords(runId)).map((one) => one.name)).toEqual(["nuxi"]);
+
+        yield* forge.set(mrWith("passed"));
+        const result = yield* resumed(options);
+        yield* bin.restore();
+        expect(said(result)).toBe(CI_MR);
+        expect((yield* ciRecords(runId)).map((one) => one.name)).toEqual(["nuxi", "e2e"]);
+      }),
+    ),
+  120_000,
+);
+
+const CI_BASE = "b".repeat(40);
+const CI_LOG = (id: number) => `glab ci trace ${id} --repo ${PROJECT.gitlab}`;
+
+/** The merge request on `head`, its `nuxi-job` as given, and that job at the base as given. */
+const ciOn = (head: string, job: FakeJob, base?: FakeJob["state"]): ForgeModel => ({
+  installed: true,
+  loggedIn: [FORGE_HOST.gitlab],
+  login: "tester",
+  mrs: [
+    {
+      project: PROJECT.gitlab,
+      iid: "31",
+      state: "open",
+      head,
+      targetBranch: "main",
+      jobs: [job],
+      base: { at: CI_BASE, jobs: base === undefined ? [] : [{ name: "nuxi-job", state: base }] },
+    },
+  ],
+});
+const ciFailing: FakeJob = { name: "nuxi-job", state: "failed", retried: "failed" };
+
+/** A commit on top of HEAD with the same tree, and the write that makes it HEAD, as a fix's push would. */
+const ciFixCommit = (parent = "HEAD") =>
+  Effect.gen(function* () {
+    const sha = (yield* exec(
+      ["git", "commit-tree", `${parent}^{tree}`, "-p", parent, "-m", "ci fix"],
+      {
+        cwd: rig.projectDir,
+      },
+    )).stdout.trim();
+    const branch = (yield* exec(["git", "symbolic-ref", "--short", "HEAD"], {
+      cwd: rig.projectDir,
+    })).stdout.trim();
+    return {
+      sha,
+      write: { path: `${rig.projectDir}/.git/refs/heads/${branch}`, text: `${sha}\n` },
+    };
+  });
+
+const ciNotes = <E>(forge: { readonly model: () => Effect.Effect<ForgeModel, E> }) =>
+  Effect.map(forge.model(), (model) => model.notes?.[`${PROJECT.gitlab}!31`] ?? []);
+
+scenario(
+  "a failed job green where the branch leaves its target is retried, then fixed in a CI fix round whose push it passes on",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { bin } = yield* deliveringOn("gitlab");
+        const head = yield* headOf();
+        const forge = yield* forgeOnPath(bin, "gitlab", ciOn(head, ciFailing, "passed"));
+        const fix = yield* ciFixCommit();
+        const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
+        const runId = "r-ci-fixed";
+        yield* leftToCi(runId, ["nuxi"]);
+        yield* rig.queueOutputs([
+          BUILT,
+          CLEAN_SYNTHESIS,
+          OPENED_CI,
+          {
+            writes: [
+              fix.write,
+              forge.holding(ciOn(fix.sha, { name: "nuxi-job", state: "passed" }, "passed")),
+            ],
+            output: GATE_FIX,
+          },
+        ]);
+        const result = yield* ran({
+          entry: shipped("implement"),
+          runId,
+          input: { plan },
+          options: { outcome: "feature" },
+        });
+        yield* bin.restore();
+        expect(said(result)).toBe(CI_MR);
+        const prompt = yield* asked(runId, "ci-fix-1");
+        for (const text of [
+          "nuxi: its CI job nuxi-job failed",
+          `https://${PROJECT.gitlab}/-/jobs/101`,
+          CI_LOG(101),
+          "without `ci.skip`",
+        ])
+          expect(prompt).toContain(text);
+        const [proof, ...more] = yield* ciRecords(runId);
+        expect(more).toEqual([]);
+        expect(proof).toMatchObject({ name: "nuxi", end: { head_sha: fix.sha } });
+        expect((yield* forge.calls()).filter((call) => call.includes("/retry"))).toHaveLength(1);
+        expect((yield* ciNotes(forge)).join("\n")).toContain(
+          "ci fix 1 landed after the last review and was not re-reviewed",
+        );
+        // The merge request is updated by the push, never opened again.
+        const fs = yield* FileSystem.FileSystem;
+        expect(
+          (yield* fs.readDirectory(`${dir}/agents/${runId}`)).filter(
+            (file) => file.startsWith("mr") && file.endsWith(".prompt.md"),
+          ),
+        ).toEqual(["mr.prompt.md"]);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a job red where the branch leaves its target is reported on the merge request and the record, and gets no round",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { bin } = yield* deliveringOn("gitlab");
+        const head = yield* headOf();
+        const forge = yield* forgeOnPath(bin, "gitlab", ciOn(head, ciFailing, "failed"));
+        const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
+        const runId = "r-ci-red-base";
+        yield* leftToCi(runId, ["nuxi"]);
+        yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, OPENED_CI]);
+        const result = yield* ran({
+          entry: shipped("implement"),
+          runId,
+          input: { plan },
+          options: { outcome: "feature" },
+        });
+        yield* bin.restore();
+        expect(said(result)).toBe(CI_MR);
+        const line = `nuxi: job nuxi-job also fails at ${CI_BASE.slice(0, 12)}, where this branch leaves its target branch, so it failed before this Run's changes`;
+        expect((yield* ciNotes(forge)).join("\n")).toContain(line);
+        const fs = yield* FileSystem.FileSystem;
+        expect(yield* fs.readFileString(`${runDir(dir, runId)}/log.txt`)).toContain(line);
+        expect(yield* fs.exists(`${dir}/agents/${runId}/ci-fix-1.prompt.md`)).toBe(false);
+        expect((yield* forge.calls()).some((call) => call.includes("/retry"))).toBe(false);
+        expect(yield* ciRecords(runId)).toEqual([]);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a failed job that passes on its retry is a Flake named on the merge request, and gets no round",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { bin } = yield* deliveringOn("gitlab");
+        const head = yield* headOf();
+        const forge = yield* forgeOnPath(
+          bin,
+          "gitlab",
+          ciOn(head, { name: "nuxi-job", state: "failed", retried: "passed" }, "passed"),
+        );
+        const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
+        const runId = "r-ci-flake";
+        yield* leftToCi(runId, ["nuxi"]);
+        yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, OPENED_CI]);
+        const result = yield* ran({
+          entry: shipped("implement"),
+          runId,
+          input: { plan },
+          options: { outcome: "feature" },
+        });
+        yield* bin.restore();
+        expect(said(result)).toBe(CI_MR);
+        const line = `nuxi: job nuxi-job failed on ${head.slice(0, 12)}, then passed when retried — a Flake, so this Run has not settled it.`;
+        expect((yield* ciNotes(forge)).join("\n")).toContain(line);
+        const fs = yield* FileSystem.FileSystem;
+        expect(yield* fs.readFileString(`${runDir(dir, runId)}/log.txt`)).toContain(line);
+        expect(yield* fs.exists(`${dir}/agents/${runId}/ci-fix-1.prompt.md`)).toBe(false);
+        expect(yield* ciRecords(runId)).toHaveLength(1);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a job that keeps failing parks the Run after the last CI fix round, naming the check, the job and the commit",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { bin } = yield* deliveringOn("gitlab");
+        const head = yield* headOf();
+        const forge = yield* forgeOnPath(bin, "gitlab", ciOn(head, ciFailing, "passed"));
+        const rounds: Array<Schema.Json> = [];
+        let parent = "HEAD";
+        let last = head;
+        for (let round = 0; round < 4; round++) {
+          const fix = yield* ciFixCommit(parent);
+          rounds.push({
+            writes: [fix.write, forge.holding(ciOn(fix.sha, ciFailing, "passed"))],
+            output: GATE_FIX,
+          });
+          parent = last = fix.sha;
+        }
+        const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
+        const runId = "r-ci-limit";
+        yield* leftToCi(runId, ["nuxi"]);
+        yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, OPENED_CI, ...rounds]);
+        const why = yield* parkedOn({
+          entry: shipped("implement"),
+          runId,
+          input: { plan },
+          options: { outcome: "feature" },
+        });
+        yield* bin.restore();
+        expect(why).toContain("Outcome unproved after 4 CI fixes");
+        expect(why).toContain(
+          `nuxi is left to CI and unproved: job nuxi-job on ${last.slice(0, 12)} is failed`,
+        );
+        const fs = yield* FileSystem.FileSystem;
+        expect(yield* fs.exists(`${dir}/agents/${runId}/ci-fix-4.prompt.md`)).toBe(true);
+        expect(yield* fs.exists(`${dir}/agents/${runId}/ci-fix-5.prompt.md`)).toBe(false);
+        expect(yield* ciRecords(runId)).toEqual([]);
+      }),
+    ),
+  180_000,
+);
+
+scenario(
+  "a CI fix round that changes nothing and disputes the failure ends the rounds, and the merge request names the dispute",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { bin } = yield* deliveringOn("gitlab");
+        const head = yield* headOf();
+        const forge = yield* forgeOnPath(bin, "gitlab", ciOn(head, ciFailing, "passed"));
+        const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
+        const runId = "r-ci-disputed";
+        yield* leftToCi(runId, ["nuxi"]);
+        yield* rig.queueOutputs([
+          BUILT,
+          CLEAN_SYNTHESIS,
+          OPENED_CI,
+          disputing(["nuxi: its CI job nuxi-job failed"]),
+        ]);
+        const result = yield* ran({
+          entry: shipped("implement"),
+          runId,
+          input: { plan },
+          options: { outcome: "feature" },
+        });
+        yield* bin.restore();
+        expect(said(result)).toBe(CI_MR);
+        const line =
+          "nuxi: its CI job nuxi-job failed: ci fix 1 disputed it and changed nothing: the check is wrong, not the code";
+        expect((yield* ciNotes(forge)).join("\n")).toContain(line);
+        const fs = yield* FileSystem.FileSystem;
+        expect(yield* fs.readFileString(`${runDir(dir, runId)}/log.txt`)).toContain(line);
+        expect(yield* fs.exists(`${dir}/agents/${runId}/ci-fix-2.prompt.md`)).toBe(false);
+        expect(yield* ciRecords(runId)).toEqual([]);
+        expect(yield* parkedWhy(runId)).toBe("");
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a CI fix round whose push leaves the head where it was parks the Run, saying so",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { bin } = yield* deliveringOn("gitlab");
+        const head = yield* headOf();
+        yield* forgeOnPath(bin, "gitlab", ciOn(head, ciFailing, "passed"));
+        const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
+        const runId = "r-ci-unmoved";
+        yield* leftToCi(runId, ["nuxi"]);
+        yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, OPENED_CI, GATE_FIX]);
+        const why = yield* parkedOn({
+          entry: shipped("implement"),
+          runId,
+          input: { plan },
+          options: { outcome: "feature" },
+        });
+        yield* bin.restore();
+        expect(why).toContain(
+          `ci fix 1 pushed no new commit: the head is still ${head.slice(0, 12)}`,
+        );
+        expect(why).toContain(
+          `nuxi is left to CI and unproved: job nuxi-job on ${head.slice(0, 12)} is failed`,
+        );
+        const fs = yield* FileSystem.FileSystem;
+        expect(yield* fs.exists(`${dir}/agents/${runId}/ci-fix-2.prompt.md`)).toBe(false);
       }),
     ),
   120_000,

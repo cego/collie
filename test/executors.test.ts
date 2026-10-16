@@ -21,7 +21,7 @@ import { registerRunExecutors } from "../src/operations";
 import { scopeKey } from "../src/registry";
 import { listTasks, writeTask } from "../src/task";
 import { runEffect } from "./support/effect";
-import { fakeHerdrCommand } from "./support/fake-herdr-core";
+import { writeFakeHerdrShim } from "./support/fake-herdr-core";
 
 let stateDir: string;
 let env: PluginEnv;
@@ -41,9 +41,7 @@ const fakeHerdrOn = Effect.fn("test.fakeHerdrOn")(function* (
   const path = yield* Path.Path;
   const binPath = path.join(root, "herdr");
   const fake = path.join(process.cwd(), "test", "support", "fake-herdr.ts");
-  yield* fs.writeFileString(binPath, `#!/bin/sh\nexec ${fakeHerdrCommand(fake)} "$@"\n`, {
-    mode: 0o755,
-  });
+  yield* writeFakeHerdrShim(binPath, fake);
   logPath = path.join(root, "fake.log");
   yield* fs.writeFileString(
     `${logPath}.state.json`,

@@ -41,10 +41,8 @@ import {
   awaitReady,
   controlDir,
   installControls,
-  notStopped,
   NotQuiet,
   STOP_WAIT_MS,
-  stopAgent,
   withControlLock,
   type CompactionDeps,
   type CompactionPorts,
@@ -56,6 +54,7 @@ import {
   submittedDelivery,
   type AgentQuestion,
 } from "./compactors";
+import { UNPROVABLE, endAgent, type EndDeps } from "./agent-end";
 import { kindForRole } from "./cards";
 import { Oversight } from "./oversight";
 import {
@@ -92,7 +91,7 @@ import {
   type PermissionMode,
   type Preferences,
 } from "./harness";
-import { Herdr, herdrFailureReason, type AgentInfo, type HerdrError, type PaneInfo } from "./herdr";
+import { Herdr, herdrFailureReason, type AgentInfo, type HerdrError } from "./herdr";
 import { agentName, agentTabLabel, reason, shellQuote, unsafePathComponent } from "./naming";
 import { machineName } from "./peers";
 import { askRouteTo } from "./handoff";
@@ -133,8 +132,9 @@ import {
   type ClaudeOverlay,
 } from "./profile";
 import { isString } from "./schema";
+import { Collecting, collectingLayer, type CollectingApi } from "./collecting";
 import { causalKey, deliveriesOf, SENT_STATES, toldLine } from "./steering";
-import { readTask, taskOfWorkspace, withTaskLock, writeTask } from "./task";
+import { readTask, withTaskLock, writeTask } from "./task";
 import { malformedIn, renderTemplate, skillMention, skillsIn } from "./template";
 
 /** A schema that decodes an agent's Output without services of the author's own. */
@@ -319,7 +319,7 @@ export interface AgentsApi {
    * Stops every agent this run launched where its work runs, then closes its pane; one
    * that is not Quiet is in `left`, its pane open.
    */
-  readonly halt: (runId: string) => Effect.Effect<Halted>;
+  readonly halt: (runId: string, why?: string) => Effect.Effect<Halted>;
   /**
    * What the agent wrote, or null where it has written nothing in the time allowed.
    * `unless` is an Output already known to be unusable: the same text again is the agent
@@ -1230,17 +1230,21 @@ const DEFAULT_COLLECT_MS = 2 * 60 * 60 * 1000;
  * controls and permissions the operator configured. The host's own services are captured
  * here, so a workflow asks for an agent without asking for a filesystem.
  */
-export const agentsLayer = (host: AgentHost): Layer.Layer<Agents, never, AgentServices> =>
+export const agentsLayer = (
+  host: AgentHost,
+): Layer.Layer<Agents | Collecting, never, AgentServices> =>
   Layer.effect(Agents)(
     Effect.gen(function* () {
       const services = yield* Effect.context<AgentServices>();
-      return Agents.of(makeAgents(host, (effect) => Effect.provideContext(effect, services)));
+      return Agents.of(
+        makeAgents(host, (effect) => Effect.provideContext(effect, services), yield* Collecting),
+      );
     }),
-  );
+  ).pipe(Layer.provideMerge(collectingLayer));
 
 type Under = <A, E>(effect: Effect.Effect<A, E, AgentServices>) => Effect.Effect<A, E>;
 
-const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
+const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): AgentsApi => {
   const dirFor = (runId: string) => launchDir(host.dir, runId);
   const launchPath = (runId: string, operation: string) =>
     `${dirFor(runId)}/${operation}${LAUNCH_SUFFIX}`;
@@ -2106,25 +2110,29 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
 
   const collect = (launched: Launched, unless?: string | null, questions?: Questions) =>
     under(
-      Effect.gen(function* () {
-        const asking = questions === undefined ? null : yield* questionsOf(launched, questions);
-        const text = yield* Effect.raceFirst(
-          waitForOutput(launched.output, unless ?? null, {
-            pollMs: host.pollMs ?? DEFAULT_POLL_MS,
-            budgetMs: host.collectMs ?? DEFAULT_COLLECT_MS,
-            counts: Effect.gen(function* () {
-              if (asking !== null && (yield* asking(false))) return false;
-              const status = yield* host.herdr
-                .agentStatus(launched.agent)
-                .pipe(Effect.orElseSucceed(() => null));
-              return status !== "working" && status !== "blocked";
+      collecting.during(
+        launched.runId,
+        launched.agent,
+        Effect.gen(function* () {
+          const asking = questions === undefined ? null : yield* questionsOf(launched, questions);
+          const text = yield* Effect.raceFirst(
+            waitForOutput(launched.output, unless ?? null, {
+              pollMs: host.pollMs ?? DEFAULT_POLL_MS,
+              budgetMs: host.collectMs ?? DEFAULT_COLLECT_MS,
+              counts: Effect.gen(function* () {
+                if (asking !== null && (yield* asking(false))) return false;
+                const status = yield* host.herdr
+                  .agentStatus(launched.agent)
+                  .pipe(Effect.orElseSucceed(() => null));
+                return status !== "working" && status !== "blocked";
+              }),
             }),
-          }),
-          confirmed(launched, unless ?? null).pipe(Effect.andThen(Effect.never)),
-        );
-        if (text !== null && asking !== null) yield* asking(true);
-        return text;
-      }),
+            confirmed(launched, unless ?? null).pipe(Effect.andThen(Effect.never)),
+          );
+          if (text !== null && asking !== null) yield* asking(true);
+          return text;
+        }),
+      ),
     );
 
   const repair = (launched: Launched, problem: string, unusable: string) =>
@@ -2249,35 +2257,6 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
       ),
     );
 
-  /**
-   * herdr drops a workspace with its last pane, and a stop never takes a Task's workspace:
-   * where this pane is the last one in its workspace, a shell is opened there first, and
-   * left as the Task's first pane for its next agent to take over.
-   */
-  const keepWorkspace = (paneId: string, panes: ReadonlyArray<PaneInfo>) =>
-    Effect.gen(function* () {
-      const pane = panes.find((one) => one.paneId === paneId);
-      const workspace = pane?.workspaceId ?? null;
-      if (pane === undefined || workspace === null) return;
-      if (panes.some((one) => one.workspaceId === workspace && one.paneId !== paneId)) return;
-      const shell = yield* host.herdr.tabCreate({
-        label: "shell",
-        cwd: pane.cwd ?? host.env.cwd,
-        workspace,
-      });
-      const stateDir = host.env.stateDir;
-      const task = yield* taskOfWorkspace(stateDir, workspace);
-      if (task === null) return;
-      yield* withTaskLock(
-        stateDir,
-        task.id,
-        Effect.gen(function* () {
-          const current = yield* readTask(stateDir, task.id);
-          if (current !== null) yield* writeTask(stateDir, { ...current, root_pane: shell.paneId });
-        }),
-      );
-    }).pipe(Effect.ignore);
-
   const ranOut = (launched: Launched) =>
     under(
       Effect.gen(function* () {
@@ -2312,6 +2291,13 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
       }).pipe(Effect.orDie),
     );
 
+  const endsOf = (runId: string): EndDeps => ({
+    ...compactionDeps(host, runId),
+    herdr: host.herdr,
+    cwd: host.env.cwd,
+    stopMs: host.stopMs,
+  });
+
   const retire = (launched: Launched, line: string) =>
     under(
       Effect.gen(function* () {
@@ -2320,48 +2306,30 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
             operation: launched.operation,
             reason: `${launched.agent} ran out and must stop before another agent takes its work, but ${why}. Close it and resume.`,
           });
-        const listing = yield* host.herdr
-          .agentList()
-          .pipe(
-            Effect.mapError((cause) =>
-              parked(`herdr cannot say whether it is running (${herdrFailureReason(cause)})`),
-            ),
-          );
-        const one = listing.find((agent) => agent.name === launched.agent);
-        // Another process under the same name is not the agent that ran out.
-        const running =
-          one !== undefined &&
-          (launched.terminalId === undefined ||
-            one.terminalId === null ||
-            one.terminalId === launched.terminalId);
-        if (running || one === undefined) {
-          const reached = yield* stopAgent(
-            compactionDeps(host, launched.runId),
-            launched.agent,
-            host.stopMs ?? STOP_WAIT_MS,
-          ).pipe(Effect.mapError((cause) => parked(`it could not be stopped (${reason(cause)})`)));
-          if (reached !== null && reached.state !== "quiet")
-            return yield* new AgentParked({
-              operation: launched.operation,
-              reason: `${notStopped(launched.agent, reached, reached.target)}. It ran out, and no agent takes its work until it has stopped; resume once it has`,
-            });
-        }
-        if (running) {
-          const panes = yield* host.herdr.paneList().pipe(Effect.orElseSucceed(() => []));
-          yield* keepWorkspace(one.paneId, panes);
-          yield* host.herdr
-            .paneClose(one.paneId)
-            .pipe(
-              Effect.mapError((cause) =>
-                parked(`its pane ${one.paneId} would not close (${herdrFailureReason(cause)})`),
-              ),
-            );
-        }
+        const ended = yield* endAgent(endsOf(launched.runId), launched, "it ran out", "close").pipe(
+          Effect.mapError((failure) =>
+            failure._tag === "AgentsUnlisted"
+              ? parked(
+                  `herdr cannot say whether it is running (${herdrFailureReason(failure.cause)})`,
+                )
+              : parked(
+                  `its pane ${failure.paneId} would not close (${herdrFailureReason(failure.cause)})`,
+                ),
+          ),
+        );
+        if (ended._tag === "Unprovable") return yield* parked(`it ${UNPROVABLE}`);
+        if (ended._tag === "NotQuiet")
+          return yield* ended.locked === undefined
+            ? new AgentParked({
+                operation: launched.operation,
+                reason: `${ended.reason}. It ran out, and no agent takes its work until it has stopped; resume once it has`,
+              })
+            : parked(`it could not be stopped (${ended.locked})`);
         yield* log(launched.runId, line);
       }),
     );
 
-  const halt = (runId: string) =>
+  const halt = (runId: string, why = "its Run was stopped") =>
     under(
       Effect.gen(function* () {
         const launches = yield* launchesOf(runId);
@@ -2375,41 +2343,22 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
         }
         const stopped: string[] = [];
         const left: string[] = [];
-        let panes = yield* host.herdr.paneList().pipe(Effect.orElseSucceed(() => []));
         // Every agent it launched, listed or not: a closed pane is not a stopped server.
         for (const name of new Set(launches.map((launched) => launched.agent))) {
           const ours = launches.findLast((launched) => launched.agent === name)!;
-          const one = listing.success.find((agent) => agent.name === name);
-          if (one !== undefined && (ours.terminalId === undefined || one.terminalId === null)) {
-            left.push(`${one.name} cannot be proven to be this Run's, so it was left running`);
-            continue;
-          }
-          if (one !== undefined && ours.terminalId !== one.terminalId) continue;
-          const reached = yield* stopAgent(
-            compactionDeps(host, runId),
-            name,
-            host.stopMs ?? STOP_WAIT_MS,
-          ).pipe(Effect.result);
-          if (reached._tag === "Failure") {
-            left.push(`${name} could not be stopped (${reason(reached.failure)})`);
-            continue;
-          }
-          if (reached.success !== null && reached.success.state !== "quiet") {
-            left.push(notStopped(name, reached.success, reached.success.target));
-            continue;
-          }
-          if (one === undefined) {
-            if (reached.success !== null) stopped.push(name);
-            continue;
-          }
-          yield* keepWorkspace(one.paneId, panes);
-          const closed = yield* host.herdr.paneClose(one.paneId).pipe(Effect.result);
-          panes = panes.filter((pane) => pane.paneId !== one.paneId);
-          if (closed._tag === "Success") stopped.push(one.name);
-          else
+          const ended = yield* endAgent(endsOf(runId), ours, why, "close", listing.success).pipe(
+            Effect.result,
+          );
+          if (ended._tag === "Failure") {
+            const failure = ended.failure;
             left.push(
-              `${one.name}'s pane ${one.paneId} would not close (${reason(closed.failure)})`,
+              failure._tag === "PaneOpen"
+                ? `${name}'s pane ${failure.paneId} would not close (${reason(failure.cause)})`
+                : `herdr cannot say which agents it has (${reason(failure.cause)})`,
             );
+          } else if (ended.success._tag === "Closed") {
+            if (ended.success.ended) stopped.push(name);
+          } else left.push(ended.success.reason);
         }
         if (stopped.length > 0) yield* log(runId, `stopped ${stopped.join(", ")}`);
         if (left.length > 0) yield* log(runId, `not stopped: ${left.join("; ")}`);

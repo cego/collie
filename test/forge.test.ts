@@ -776,6 +776,109 @@ for (const name of ["gitlab", "github"] as const) {
       }),
     ));
 
+  test(`the ${name} forge reads a check's job on the merge request's head, in every state, and says when it cannot`, () =>
+    runEffect(
+      Effect.gen(function* () {
+        const read = (over: Partial<FakeMr>, rest: Partial<ForgeModel> = {}) =>
+          forge.job(
+            ref(name),
+            "nuxi-typecheck",
+            "/w",
+            fakeForge(name, model(name, { mrs: [mr(name, over)], ...rest })).run,
+          );
+        const url =
+          name === "github"
+            ? "https://github.com/owner/repo/runs/2"
+            : "https://gitlab.example.com/group/app/-/jobs/2";
+        for (const state of [
+          "passed",
+          "pending",
+          "running",
+          "failed",
+          "skipped",
+          "cancelled",
+        ] as const)
+          expect(
+            yield* read({
+              jobs: [
+                { name: "lint", state: "failed" },
+                { name: "nuxi-typecheck", state },
+              ],
+            }),
+          ).toEqual({ ok: true, head: HEAD, state, url, id: "2", merge: null });
+        expect(yield* read({ jobs: [{ name: "lint", state: "passed" }] })).toEqual({
+          ok: true,
+          head: HEAD,
+          state: "missing",
+          url: null,
+          id: null,
+          merge: null,
+        });
+        for (const rest of [{ installed: false }, { loggedIn: [] }])
+          expect((yield* read({ jobs: [] }, rest)).ok).toBe(false);
+      }),
+    ));
+
+  test(`the ${name} forge reads a job where the branch leaves its target, else on the target's latest, and fails safe`, () =>
+    runEffect(
+      Effect.gen(function* () {
+        const BASE = "b".repeat(40);
+        const TIP = "c".repeat(40);
+        const failed = [{ name: "nuxi-typecheck", state: "failed" as const }];
+        const passed = [{ name: "nuxi-typecheck", state: "passed" as const }];
+        const read = (over: Partial<FakeMr>) =>
+          forge.baseJob(
+            ref(name),
+            "nuxi-typecheck",
+            "/w",
+            fakeForge(name, model(name, { mrs: [mr(name, { targetBranch: "main", ...over })] }))
+              .run,
+          );
+        expect(
+          yield* read({ base: { at: BASE, jobs: failed }, target: { at: TIP, jobs: passed } }),
+        ).toMatchObject({ ok: true, at: BASE, state: "failed" });
+        expect(
+          yield* read({ base: { at: BASE }, target: { at: TIP, jobs: failed } }),
+        ).toMatchObject({ ok: true, at: TIP, state: "failed" });
+        expect((yield* read({ base: { at: BASE } })).ok).toBe(false);
+        expect((yield* read({ target: { at: TIP, jobs: failed } })).ok).toBe(false);
+        // CI ran there without it: the target's red job says nothing about it.
+        expect(
+          yield* read({
+            base: { at: BASE, jobs: [{ name: "lint", state: "passed" }] },
+            target: { at: TIP, jobs: failed },
+          }),
+        ).toEqual({ ok: true, at: BASE, state: "missing", url: null });
+      }),
+    ));
+
+  test(`the ${name} forge retries a job once asked, and says how to read its log`, () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fake = fakeForge(
+          name,
+          model(name, {
+            mrs: [
+              mr(name, { jobs: [{ name: "nuxi-typecheck", state: "failed", retried: "passed" }] }),
+            ],
+          }),
+        );
+        const job = () => forge.job(ref(name), "nuxi-typecheck", "/w", fake.run);
+        expect(yield* job()).toMatchObject({ state: "failed", id: "1" });
+        expect(yield* forge.retryJob(ref(name), "1", "/w", fake.run)).toEqual({
+          ok: true,
+          reason: "",
+        });
+        expect(yield* job()).toMatchObject({ state: "passed", id: "101" });
+        expect((yield* forge.retryJob(ref(name), "9", "/w", fake.run)).ok).toBe(false);
+        expect(forge.jobLog(ref(name), "1")).toBe(
+          name === "gitlab"
+            ? "glab ci trace 1 --repo gitlab.example.com/group/app"
+            : "gh run view --job 1 --log --repo owner/repo",
+        );
+      }),
+    ));
+
   test(`the ${name} forge finds the repository's template wherever it keeps one, and none`, () =>
     runEffect(
       Effect.gen(function* () {
@@ -833,5 +936,62 @@ test("a GitLab pipeline of an older head is not this head's CI, and one that was
       });
       expect(pipelineChecks("canceled")).toEqual({ state: "unknown" });
       expect(pipelineChecks("")).toEqual({ state: "none" });
+    }),
+  ));
+
+test("a GitLab job past the first page of its pipeline's jobs is found", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const jobs = [
+        ...Array.from({ length: 100 }, (_, n) => ({
+          name: `shard-${n}`,
+          state: "passed" as const,
+        })),
+        { name: "nuxi-typecheck", state: "passed" as const },
+      ];
+      expect(
+        yield* gitlab.job(
+          ref("gitlab"),
+          "nuxi-typecheck",
+          "/w",
+          fakeForge("gitlab", model("gitlab", { mrs: [mr("gitlab", { jobs })] })).run,
+        ),
+      ).toMatchObject({ ok: true, state: "passed", id: "101" });
+    }),
+  ));
+
+test("a GitLab merged-results pipeline counts for the head it was built from, and one that cannot be shown is not missing", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const MERGE = "9f8e7d6c5b4a39281706f5e4d3c2b1a098765432";
+      const TARGET = "0000000000000000000000000000000000000001";
+      const read = (over: Partial<FakeMr>, ancestry: Record<string, ReadonlyArray<string>>) =>
+        gitlab.job(
+          ref("gitlab"),
+          "nuxi-typecheck",
+          "/w",
+          fakeForge(
+            "gitlab",
+            model("gitlab", {
+              mrs: [mr("gitlab", { jobs: [{ name: "nuxi-typecheck", state: "passed" }], ...over })],
+              ancestry,
+            }),
+          ).run,
+        );
+      expect(yield* read({ pipelineAt: MERGE }, { [MERGE]: [TARGET, HEAD] })).toEqual({
+        ok: true,
+        head: HEAD,
+        state: "passed",
+        url: "https://gitlab.example.com/group/app/-/jobs/1",
+        id: "1",
+        merge: MERGE,
+      });
+      // A pipeline of an older head: this head's has not started.
+      expect(
+        yield* read({ pipelineAt: MERGE }, { [MERGE]: [TARGET, "an-older-head"] }),
+      ).toMatchObject({ ok: true, state: "pending" });
+      const unshown = yield* read({ pipelineAt: MERGE }, {});
+      expect(unshown.ok).toBe(false);
+      if (!unshown.ok) expect(unshown.reason).toContain(MERGE);
     }),
   ));

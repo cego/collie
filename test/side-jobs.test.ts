@@ -4,6 +4,9 @@ import { expect, test } from "bun:test";
 import { Effect, FileSystem, Schedule, Schema, Stream } from "effect";
 import { readAudit } from "../src/audit";
 import { readDispositions } from "../src/disposition";
+import { evidenceDir } from "../src/engine";
+import { factsOfView } from "../src/runs";
+import { readVerifications } from "../src/verify";
 import { currentEnv, readEnv } from "../src/env";
 import { Herdr } from "../src/herdr";
 import { connect, frontDoor, socketOf } from "../src/host";
@@ -12,7 +15,10 @@ import { sideJobs } from "../src/side-jobs";
 import { newsPath, pending, read as readNews } from "../src/news";
 import { herdOf } from "../src/steering";
 import { writeTask } from "../src/task";
+import { FakeBin } from "./support/bin";
+import { exec } from "./support/command";
 import { fastForward, runEffect } from "./support/effect";
+import { forgeOnPath } from "./support/forge";
 import { stopHost } from "./support/host";
 import { collie, proves } from "./support/world";
 
@@ -316,3 +322,89 @@ test("News and the merge watch read the host's latest board, and list no Runs of
       expect(listings).toBe(1);
     }),
   ));
+
+test(
+  "a merge while a Run waits on its check left to CI stops the Run, records the merge, and proves nothing",
+  () =>
+    proves(
+      "collie-side-ci-merged-",
+      (world) =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          yield* fs.writeFileString(`${world.project}/thing.txt`, "one\n").pipe(Effect.orDie);
+          yield* exec(["git", "add", "-A"], { cwd: world.project });
+          yield* exec(
+            ["git", "-c", "user.name=t", "-c", "user.email=t@example.test", "commit", "-qm", "one"],
+            { cwd: world.project },
+          );
+          const head = (yield* exec(["git", "rev-parse", "HEAD"], {
+            cwd: world.project,
+          })).stdout.trim();
+          yield* writeTask(world.state, {
+            id: "task-1",
+            workspace: "w1",
+            label: "project | Waits on CI",
+            cwd: world.project,
+            created_at: "2026-10-01T09:00:00Z",
+          }).pipe(Effect.orDie);
+          const bin = yield* FakeBin.make(`${world.home}/bin`);
+          yield* forgeOnPath(bin, "gitlab", {
+            installed: true,
+            loggedIn: ["gitlab.example.com"],
+            login: "me",
+            mrs: [
+              {
+                project: "gitlab.example.com/mk/project",
+                iid: "7",
+                state: "merged",
+                head,
+                mergedAt: "2099-01-01T00:00:00Z",
+                jobs: [{ name: "nuxi-job", state: "running" }],
+              },
+            ],
+          });
+          const PATH = `${bin.dir}:/usr/bin:/bin`;
+          yield* bin.restore();
+          const started = yield* collie(
+            world,
+            [
+              "run",
+              "start",
+              "waits-on-ci",
+              "--task",
+              "task-1",
+              "--input",
+              "mr=https://gitlab.example.com/mk/project/-/merge_requests/7",
+              "--input",
+              `workspace=${world.project}`,
+              "--verify",
+              `{"name":"nuxi","executable":"true","argv":[],"cwd":".","ci":"nuxi-job"}`,
+            ],
+            { PATH },
+          );
+          expect(started.envelope.ok).toBe(true);
+          const runId = yield* runIdOf(started.envelope);
+          const client = yield* connect(world.state).pipe(Effect.orDie);
+          const ended = yield* until(
+            client.run({ runId }).pipe(Effect.orElseSucceed(() => null)),
+            // Suspended, so the wait itself ended rather than polling on under the stop.
+            (view) => view?.status.status === "suspended",
+          );
+          const log = yield* fs
+            .readFileString(`${world.state}/runs/${runId}/log.txt`)
+            .pipe(Effect.orElseSucceed(() => ""));
+          const recorded = yield* readVerifications(evidenceDir(world.state, runId)).pipe(
+            Effect.orElseSucceed(() => []),
+          );
+          const merged = yield* readDispositions(`${world.state}/runs/${runId}`);
+          yield* stopHost(world.state);
+          expect(factsOfView(world.state, ended!).state).toBe("stopped");
+          expect(ended?.status.status).toBe("suspended");
+          expect(log).toContain(`ci: waiting on job nuxi-job for nuxi on ${head}`);
+          expect(recorded.filter((one) => one.pass === "ci")).toEqual([]);
+          expect(merged.map((line) => [line.kind, line.ref])).toEqual([["merged", "mk/project!7"]]);
+        }),
+      ["waits-on-ci.workflow.ts"],
+    ),
+  120_000,
+);

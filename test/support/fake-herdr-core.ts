@@ -17,8 +17,15 @@ import {
 const FAKE_CLIENT_VERSION = "herdr 0.9.0";
 
 /** How a shim runs the fake: what `bun run test` compiled of it, or else its source. */
-export const fakeHerdrCommand = (source: string) =>
+const fakeHerdrCommand = (source: string) =>
   Bun.env.COLLIE_TEST_FAKE_HERDR ?? `${process.execPath} ${source}`;
+
+export const writeFakeHerdrShim = (bin: string, source: string) =>
+  Effect.flatMap(FileSystem.FileSystem, (fs) =>
+    fs.writeFileString(bin, `#!/bin/sh\nexec ${fakeHerdrCommand(source)} "$@"\n`, {
+      mode: 0o755,
+    }),
+  );
 
 interface FakeTab {
   tab_id: string;
@@ -359,7 +366,11 @@ function handle(
     }
 
     // Unset is a herdr from before `session list`, whose answer is no list at all.
-    const sessions = yield* envString("FAKE_HERDR_SESSIONS");
+    // `<log>.sessions.json`, where a test writes one, is a session opened while a host runs.
+    const opened = `${log}.sessions.json`;
+    const sessions = (yield* fs.exists(opened))
+      ? yield* fs.readFileString(opened)
+      : yield* envString("FAKE_HERDR_SESSIONS");
     if (cmd === "session list" && sessions !== "") {
       const listed = Schema.decodeUnknownSync(SessionsJson)(sessions).map((one) => ({
         name: one.name,
@@ -804,7 +815,15 @@ function handle(
         }
         // A comma-separated list is read one per call, the last value repeating, so a
         // test can script "working for a while, then idle".
-        const scripted = (yield* envString("FAKE_HERDR_AGENT_STATUS", "idle")).split(",");
+        // A file, where named and present, says it instead, so a test can change it under a host.
+        const statusFile = yield* envString("FAKE_HERDR_AGENT_STATUS_FILE");
+        const filed =
+          statusFile !== "" && (yield* fs.exists(statusFile))
+            ? (yield* fs.readFileString(statusFile)).trim()
+            : "";
+        const scripted = (filed || (yield* envString("FAKE_HERDR_AGENT_STATUS", "idle"))).split(
+          ",",
+        );
         let status = scripted[Math.min(state.statusReads, scripted.length - 1)] ?? "idle";
         state.statusReads += 1;
         if (state.blocked > 0 && state.blocked <= blockFor) {

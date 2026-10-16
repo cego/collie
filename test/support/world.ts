@@ -8,7 +8,7 @@ import { Config, ConfigProvider, Effect, FileSystem, Option, Schema, Scope, Stre
 import type { BunServices } from "@effect/platform-bun/BunServices";
 import { exec } from "./command";
 import { runEffect, suiteEnv } from "./effect";
-import { fakeHerdrCommand } from "./fake-herdr-core";
+import { writeFakeHerdrShim } from "./fake-herdr-core";
 import { fixtures, root, stopHost, until } from "./host";
 import { marked } from "./sweep";
 import { testBunfig } from "./packages";
@@ -125,9 +125,7 @@ const fakeHerdrIn = Effect.fn("World.fakeHerdrIn")(function* (dir: string) {
   const fs = yield* FileSystem.FileSystem;
   const fake = `${root}test/support/fake-herdr.ts`;
   const bin = `${dir}/herdr`;
-  yield* fs
-    .writeFileString(bin, `#!/bin/sh\nexec ${fakeHerdrCommand(fake)} "$@"\n`, { mode: 0o755 })
-    .pipe(Effect.orDie);
+  yield* writeFakeHerdrShim(bin, fake).pipe(Effect.orDie);
   // A host asks `claude --help` before an agent starts; the operator's claude, run under a
   // loaded suite, is slow enough to time a test out. Anything else fails, as on CI.
   const harnesses = `${dir}/harnesses`;

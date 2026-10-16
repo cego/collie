@@ -6,7 +6,12 @@
 import * as BunFileSystem from "@effect/platform-bun/BunFileSystem";
 import * as BunPath from "@effect/platform-bun/BunPath";
 import { Effect, Layer, Schedule } from "effect";
+import { recordStart } from "../../src/starts";
 import { fakeHerdr } from "./fake-herdr-core";
+
+await Effect.runPromise(
+  recordStart("herdr", Bun.argv.slice(2)).pipe(Effect.provide(BunFileSystem.layer)),
+);
 
 // A `pane list` waits while this file exists, so a test can hold an action mid-way.
 const hold = Bun.env.FAKE_HERDR_HOLD_PANE_LIST;

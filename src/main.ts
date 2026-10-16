@@ -111,6 +111,19 @@ const herdrProgram = herdr(args[1] ?? "", args[2]).pipe(
   Effect.provide(BunServices.layer),
 );
 
+const started = Config.String("COLLIE_TEST_STARTS").pipe(
+  Config.withDefault(""),
+  Effect.flatMap((file) =>
+    file === ""
+      ? Effect.void
+      : Effect.promise(() => import("./starts")).pipe(
+          Effect.flatMap(({ recordStart }) => recordStart("collie", args)),
+        ),
+  ),
+  Effect.ignore,
+  Effect.provide(BunServices.layer),
+);
+
 // `program`, not `app`: the handler around it is what turns a parse failure into one
 // JSON envelope and exit 2, and running `app` bare bypassed it entirely.
 const cliProgram = Effect.promise(() => import("./collie")).pipe(
@@ -119,6 +132,14 @@ const cliProgram = Effect.promise(() => import("./collie")).pipe(
 );
 
 BunRuntime.runMain(
-  args[0] === "herdr" ? (args[1] === "compaction" ? compactionProgram : herdrProgram) : cliProgram,
+  started.pipe(
+    Effect.andThen(
+      args[0] === "herdr"
+        ? args[1] === "compaction"
+          ? compactionProgram
+          : herdrProgram
+        : cliProgram,
+    ),
+  ),
   { disableErrorReporting: true },
 );

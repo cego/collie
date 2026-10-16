@@ -1927,6 +1927,21 @@ const PASS_SENTENCES: Array<[string, Parameters<typeof checkSentence>[0], string
     },
     "Running test.",
   ],
+  [
+    "a check left to CI",
+    {
+      name: "nuxi",
+      pass: "ci",
+      round: null,
+      base: null,
+      revision: "0123456789abcdef",
+      job: "nuxi-typecheck",
+      elapsedMs: 3 * 60_000,
+      usualMs: null,
+      others: 0,
+    },
+    "Waiting on nuxi's CI job nuxi-typecheck at 0123456789ab, 3 min.",
+  ],
 ];
 
 for (const [form, given, expected] of PASS_SENTENCES) {

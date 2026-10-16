@@ -6,8 +6,11 @@ import { Effect, FileSystem, Path } from "effect";
 import { runEffect } from "./support/effect";
 import {
   approvedFor,
+  approvedFile,
   approvedFrom,
+  approvedIn,
   checkNameOf,
+  encodeApproved,
   rememberedFile,
   renderApproved,
   PROJECT_FILE,
@@ -173,6 +176,41 @@ test("a Run's checks render as the commands a human would recognise", () => {
   const rendered = renderApproved([TESTS, LINT]);
   expect(rendered).toContain("tests: bun test");
   expect(rendered).toContain("lint: bun run lint");
+});
+
+const NUXI: VerifySpec = {
+  name: "nuxi",
+  executable: "bunx",
+  argv: ["nuxi", "typecheck"],
+  cwd: ".",
+  ci: "nuxi-typecheck",
+};
+
+test("a check left to CI keeps its job from every Checks source, and into the Run's frozen Checks", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      yield* write(path.join(userDir, "verify.json"), [NUXI, LINT]);
+      expect(yield* approvedFrom({ cwd, userDir })).toEqual([NUXI, LINT]);
+      yield* write(rememberedOf(userDir), [NUXI]);
+      expect(yield* approvedFrom({ cwd, userDir, project: REPO })).toEqual([NUXI]);
+      yield* write(path.join(cwd, PROJECT_FILE), [TESTS, NUXI]);
+      const project = yield* approvedFrom({ cwd, userDir, project: REPO });
+      expect(project).toEqual([TESTS, NUXI]);
+      expect("ci" in project[0]!).toBe(false);
+
+      const evidence = yield* fs.makeTempDirectoryScoped({ prefix: "hw-approved-frozen-" });
+      yield* fs.writeFileString(approvedFile(evidence), encodeApproved(project));
+      expect(yield* approvedIn(evidence)).toEqual([TESTS, NUXI]);
+    }),
+  ));
+
+test("a check left to CI is listed as its job, which nobody runs", () => {
+  const rendered = renderApproved([TESTS, NUXI]);
+  expect(rendered).toContain("- tests: bun test (in .)");
+  expect(rendered).toContain("- nuxi: left to CI (job nuxi-typecheck), do not run it");
+  expect(rendered).not.toContain("nuxi typecheck");
 });
 
 test("a Run keeps the set it started with, whatever the file says later", () =>

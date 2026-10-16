@@ -187,6 +187,8 @@ const VerifyingSchema = Schema.Struct({
   started: Schema.String,
   /** Where its output is being written. */
   log: Schema.optionalKey(Schema.String),
+  /** The pipeline job a `ci` pass waits on. */
+  job: Schema.optionalKey(Schema.String),
 });
 export type Verifying = typeof VerifyingSchema.Type;
 const VerifyingJson = Schema.fromJsonString(VerifyingSchema);
@@ -492,6 +494,7 @@ export const sameCommand = (one: Command, other: Command) =>
 /** A check's command resolved for its Run; one whose executable is not found matches no record. */
 export type CheckCommand = Pick<Verification, "name" | "argv" | "cwd"> & {
   readonly executable: string | null;
+  readonly ci?: string;
 };
 
 /** Whether this record ran exactly that check's command. */
@@ -500,18 +503,6 @@ export const ranCommand = (record: Command, check: CheckCommand) =>
 
 /** A run of one failed test, again or at the base, is recorded under its check's name, and is never the check's own run. */
 export const ranOneTest = (v: Pick<Verification, "test">) => v.test !== undefined;
-
-/** A named check's records: those of its command where it is one of the Run's, else by name. */
-export const recordsNamed = (
-  records: ReadonlyArray<Verification>,
-  name: string,
-  commands: ReadonlyArray<CheckCommand> = [],
-) => {
-  const command = commands.find((one) => one.name === name);
-  return records.filter(
-    (v) => !ranOneTest(v) && (command === undefined ? v.name === name : ranCommand(v, command)),
-  );
-};
 
 /** A pass that expected one: a reproduced failure is not. */
 export const passed = (v: Verification) => v.result === "pass" && v.expect === "pass";
@@ -542,7 +533,8 @@ export function reliedPass(
 export const commandOf = Effect.fn("Verify.commandOf")(function* (run: CheckRun, spec: VerifySpec) {
   const cwd = yield* checkCwd(run, spec);
   const executable = yield* resolveExecutable(spec.executable, cwd);
-  return { name: spec.name, executable, argv: spec.argv, cwd };
+  const command = { name: spec.name, executable, argv: spec.argv, cwd };
+  return spec.ci === undefined ? command : { ...command, ci: spec.ci };
 });
 
 /** `reliedPass` for one of a Run's checks, read from its journal against its tree now. */

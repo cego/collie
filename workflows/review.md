@@ -88,6 +88,10 @@ is bound to the tree you checked it on: `collie verify --run {{run.id}} --cwd {{
 against the tree it ran on, and only that is a verification — an Output that says the
 tests pass is a claim. Say in your Output which verifications you ran, by name.
 
+A `collie verify` you started in the background is reported to you when it ends,
+so you may end your turn waiting on it. Never end a turn waiting on any other
+background job.
+
 {{criteria}}
 
 ### Your judgement on the outcome
@@ -187,6 +191,10 @@ silently skipped: record it under `disputed` with your reason, and the human see
 the typecheck and the test files you touched, each through
 `collie verify --run {{run.id}} --cwd {{cwd}} -- <command>`, and never the whole suite.
 Say what you ran: what Collie watched is a verification, and anything else is a claim.
+
+A `collie verify` you started in the background is reported to you when it ends,
+so you may end your turn waiting on it. Never end a turn waiting on any other
+background job.
 
 At the end of the round, where `{{branch}}` has an open merge request (a pull request on
 GitHub), push this round's commits to it: a plain push, never forced. A rejected push is

@@ -3,9 +3,19 @@ import { Effect, Schema } from "effect";
 /**
  * Why a check was run (ADR-0042): the gate on the branch, a rerun of one of its failed tests
  * alone, a recheck of the same tree for a flake, a fix after gate fix N, the default branch's
- * base, the finish's own, or a plain check where nobody said.
+ * base, the finish's own, a check left to CI read from the merge request's pipeline, or a
+ * plain check where nobody said.
  */
-export const PASSES = ["gate", "rerun", "recheck", "fix", "baseline", "finish", "check"] as const;
+export const PASSES = [
+  "gate",
+  "rerun",
+  "recheck",
+  "fix",
+  "baseline",
+  "finish",
+  "ci",
+  "check",
+] as const;
 export const Pass = Schema.Literals(PASSES);
 export type Pass = typeof Pass.Type;
 /** One test of a check, as its runner named it: the file, and the name with ` > ` between describes. */
@@ -50,6 +60,14 @@ export const VerificationSchema = Schema.Struct({
   failed: Schema.optionalKey(Schema.Array(FailedTestSchema)),
   /** The one test a `rerun` ran. */
   test: Schema.optionalKey(FailedTestSchema),
+  /** The pipeline job a `ci` pass read, and the merge commit it ran on where not the head itself. */
+  job: Schema.optionalKey(
+    Schema.Struct({
+      name: Schema.String,
+      url: Schema.NullOr(Schema.String),
+      merge: Schema.optionalKey(Schema.String),
+    }),
+  ),
 });
 export type Verification = typeof VerificationSchema.Type;
 export const VerifyEvent = Schema.Union([

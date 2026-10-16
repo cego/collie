@@ -41,6 +41,7 @@ import { shell } from "./mr";
 import type { Disposition, ForgeChecks, Mergeability, OfferView } from "./board-model";
 import { everyDelivery, SENT_STATES, toldIn, type Delivery } from "./steering";
 import { readCards } from "./cards";
+import { owedLocally } from "./check-proof";
 import {
   Answered,
   mrLabel,
@@ -575,8 +576,9 @@ export function checksAt(
   records: ReadonlyArray<Verification>,
   head: string | null,
   /** The Run's checks as they stand, each of which must have passed at that revision. */
-  approved: ReadonlyArray<CheckCommand> = [],
+  granted: ReadonlyArray<CheckCommand> = [],
 ): Checks {
+  const approved = owedLocally(granted);
   const checksOf = (record: Verification) =>
     ranOneTest(record)
       ? []

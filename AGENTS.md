@@ -69,7 +69,9 @@ here are in [`src/README.md`](src/README.md).
   `src/shared-definitions.ts`, `src/peers.ts`, `desktop/src/bun/flock-settings.ts`,
   `test/shared-definitions.test.ts`, `test/peer-definitions.test.ts`, `test/desktop-settings.test.ts`.
 - **Outcomes, proof** → [`docs/cli.md`](docs/cli.md#outcomes), [ADR-0010](docs/adr/0010-a-run-proves-its-outcome.md),
-  `src/outcome.ts`, `src/verify.ts`, `src/verify-spec.ts`, `src/metrics.ts`.
+  `src/outcome.ts`, `src/verify.ts`, `src/verify-spec.ts`, `src/metrics.ts`; a check left to CI:
+  [ADR-draft-a-check-left-to-ci-is-proved-by-its-pipeline-job](docs/adr/draft-a-check-left-to-ci-is-proved-by-its-pipeline-job.md),
+  `src/check-proof.ts`, `src/ci-job.ts`, `test/ci-job.test.ts`.
 - **Checks Collie runs, as seen** → [ADR-0042](docs/adr/0042-a-check-collie-runs-is-seen-while-it-runs.md),
   `src/checks.ts`, `src/verify.ts`, `src/commands/run.ts`.
 - **Home chat** → [`docs/using.md`](docs/using.md#talking-to-collie-about-a-herd),
@@ -107,7 +109,8 @@ here are in [`src/README.md`](src/README.md).
 - **Controls** (decision, hold, stop) → [ADR-0021](docs/adr/0021-one-host-answers-for-a-run.md),
   [`docs/cli.md`](docs/cli.md#answering-holding-and-steering-one), `src/lifecycle.ts`, `test/control.test.ts`;
   stopping an agent: [ADR-0059](docs/adr/0059-a-stopped-agent-is-stopped-where-its-turn-runs.md),
-  `stopAgent` in `src/compaction.ts`, `src/processes.ts`, `test/codex-stop.test.ts`.
+  `stopAgent` in `src/compaction.ts`, `endAgent` in `src/agent-end.ts`, `src/processes.ts`,
+  `test/codex-stop.test.ts`, `test/agent-end.test.ts`.
 - **Child workflows, services** → [ADR-0022](docs/adr/0022-a-workflow-is-made-of-workflows.md),
   [`docs/sdk.md`](docs/sdk.md#a-workflow-made-of-other-workflows), `test/children.test.ts`.
 - **Rallies, checks as proof** → [ADR-0023](docs/adr/0023-a-rally-is-a-loop-and-a-claim-is-not-proof.md),

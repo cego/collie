@@ -1,16 +1,5 @@
-import {
-  Data,
-  Schema,
-  FileSystem,
-  Clock,
-  Effect,
-  Option,
-  Path,
-  Random,
-  Schedule,
-  Stream,
-} from "effect";
-import { ChildProcess, ChildProcessSpawner } from "effect/process";
+import { Data, Schema, FileSystem, Clock, Effect, Option, Path, Random, Schedule } from "effect";
+import { startedOf } from "./processes";
 
 // Cooperative pid-lock files: `wx` creation is the claim; holder liveness, not age, decides
 // staleness. `withLock` is the way in: claiming, breaking and giving back stay in here.
@@ -19,7 +8,6 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process";
 const LOCK_CLAIM_RETRIES = 40;
 export const LOCK_CLAIM_SPACING_MS = 25;
 const LOCK_WRITE_GRACE_MS = 10_000;
-const PROC_STAT_START_TIME_INDEX = 19;
 
 class LockContended extends Data.TaggedError("LockContended") {}
 
@@ -214,39 +202,7 @@ export function withDirLock<A, E, R>(dir: string, effect: Effect.Effect<A, E, R>
 }
 
 /** When this pid's process started, as an opaque token. Null means the identity cannot be read. */
-export const processStartTime = Effect.fn("processStartTime")(function* (id: number) {
-  const fs = yield* FileSystem.FileSystem;
-  const proc = yield* fs.readFileString(`/proc/${id}/stat`).pipe(
-    Effect.map(
-      (stat) =>
-        stat.slice(stat.lastIndexOf(")") + 2).split(" ")[PROC_STAT_START_TIME_INDEX] || null,
-    ),
-    Effect.catchTag("PlatformError", () => Effect.succeed(null)),
-  );
-  if (proc) return proc;
-  // No /proc, so macOS: ask ps. Through the Effect spawner, so the one command this
-  // module runs goes through the same boundary as every other.
-  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-  return yield* Effect.gen(function* () {
-    const handle = yield* spawner.spawn(
-      ChildProcess.make("ps", ["-o", "lstart=", "-p", String(id)], {
-        stdout: "pipe",
-        stderr: "ignore",
-      }),
-    );
-    const out = yield* handle.stdout.pipe(
-      Stream.decodeText(),
-      Stream.runFold(
-        (): string => "",
-        (all, chunk) => all + chunk,
-      ),
-    );
-    return out.trim() || null;
-  }).pipe(
-    Effect.scoped,
-    Effect.catch(() => Effect.succeed(null)),
-  );
-});
+export const processStartTime = startedOf;
 
 function decodeLockHolder(raw: string): LockHolder | null {
   try {

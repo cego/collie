@@ -46,6 +46,41 @@ export type FromBranchList =
   | { readonly ok: true; readonly mrs: ReadonlyArray<FromBranch> }
   | { readonly ok: false; readonly reason: string };
 
+/** A pipeline job's state, as a check left to CI reads it; `missing` is a pipeline without it. */
+export type JobState =
+  | "passed"
+  | "pending"
+  | "running"
+  | "failed"
+  | "skipped"
+  | "cancelled"
+  | "missing";
+
+/** A named job on a merge request's head commit, or why the forge could not say. */
+export type JobRead =
+  | {
+      readonly ok: true;
+      readonly head: string;
+      readonly state: JobState;
+      readonly url: string | null;
+      /** What `retryJob` and `jobLog` take; null where there is no such job. */
+      readonly id: string | null;
+      /** The merge commit a merged-results pipeline of `head` ran on, else null. */
+      readonly merge: string | null;
+    }
+  | { readonly ok: false; readonly reason: string };
+
+/** The same job where the branch leaves its target, or on the target's latest pipeline. */
+export type BaseJobRead =
+  | {
+      readonly ok: true;
+      /** The commit its pipeline ran on. */
+      readonly at: string;
+      readonly state: JobState;
+      readonly url: string | null;
+    }
+  | { readonly ok: false; readonly reason: string };
+
 export interface ReviewCommands {
   readonly diff: string;
   readonly view: string;
@@ -124,6 +159,32 @@ export interface Forge {
     cwd: string,
     run: Runner<R>,
   ) => Effect.Effect<FromBranchList, never, R>;
+  /** The job named `name` in the pipeline on the merge request's head commit. */
+  readonly job: <R>(
+    ref: MrRef,
+    name: string,
+    cwd: string,
+    run: Runner<R>,
+  ) => Effect.Effect<JobRead, never, R>;
+  /**
+   * The job named `name` at the merge-base of the merge request's head and its target
+   * branch, or on the target branch's latest pipeline where that commit has none.
+   */
+  readonly baseJob: <R>(
+    ref: MrRef,
+    name: string,
+    cwd: string,
+    run: Runner<R>,
+  ) => Effect.Effect<BaseJobRead, never, R>;
+  /** Runs the job `id` again: GitLab's retry, GitHub's rerun. */
+  readonly retryJob: <R>(
+    ref: MrRef,
+    id: string,
+    cwd: string,
+    run: Runner<R>,
+  ) => Effect.Effect<Readiness, never, R>;
+  /** The command line that prints job `id`'s log, for an agent to run. */
+  readonly jobLog: (ref: MrRef, id: string) => string;
   /** The repository's merge request template, relative to the checkout, or null. */
   readonly template: (
     cwd: string,

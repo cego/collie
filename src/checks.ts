@@ -133,7 +133,7 @@ export const runningCheck = Effect.fn("Checks.running")(function* (
   const marker = markers.get(run.id);
   if (marker === undefined) return null;
   const started = epochMs(marker.started);
-  const facts = {
+  const read = {
     name: marker.name,
     pass: marker.pass,
     round: marker.round,
@@ -143,6 +143,7 @@ export const runningCheck = Effect.fn("Checks.running")(function* (
     usualMs: yield* usualRemembered(run, runs, marker),
     others: [...markers.keys()].filter((id) => id !== run.id).length,
   };
+  const facts = marker.job === undefined ? read : { ...read, job: marker.job };
   const log = marker.log ?? null;
   return {
     ...facts,
@@ -209,7 +210,10 @@ export const donePasses = Effect.fn("Checks.done")(function* (run: RunFacts) {
 });
 
 /** What the pass is for, in words. */
-function doing(check: Pick<RunningCheck, "name" | "pass" | "round" | "base">): string {
+function doing(
+  check: Pick<RunningCheck, "name" | "pass" | "round" | "base"> &
+    Partial<Pick<RunningCheck, "revision" | "job">>,
+): string {
   const running = `Running ${check.name}`;
   switch (check.pass) {
     case "gate":
@@ -226,6 +230,8 @@ function doing(check: Pick<RunningCheck, "name" | "pass" | "round" | "base">): s
         : `${running} after gate fix ${check.round}`;
     case "finish":
       return `${running} as the Run finishes`;
+    case "ci":
+      return `Waiting on ${check.name}'s CI job ${check.job ?? ""} at ${(check.revision ?? "").slice(0, 12)}`;
     case "check":
       return running;
   }
@@ -252,7 +258,8 @@ export function checkSentence(
   check: Pick<
     RunningCheck,
     "name" | "pass" | "round" | "base" | "elapsedMs" | "usualMs" | "others"
-  >,
+  > &
+    Partial<Pick<RunningCheck, "revision" | "job">>,
 ): string {
   const when = check.elapsedMs === null ? "" : `, ${timing(check.elapsedMs, check.usualMs)}`;
   const others =

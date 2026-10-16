@@ -18,21 +18,32 @@ export interface ProcessInfo {
 const PROC = "/proc";
 
 /** `/proc/<pid>/stat`'s fields after the command, which may itself hold spaces and parens. */
-const statFields = (stat: string) => stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+const statFields = (pid: number) =>
+  FileSystem.FileSystem.pipe(
+    Effect.flatMap((fs) => fs.readFileString(`${PROC}/${pid}/stat`)),
+    Effect.map((stat) => stat.slice(stat.lastIndexOf(")") + 2).split(" ")),
+  );
+const STARTED = 19;
+
+/** NUL-separated argv, which is not a string until the separators are. */
+const procCommand = (pid: number, proc: string) =>
+  FileSystem.FileSystem.pipe(
+    Effect.flatMap((fs) => fs.readFileString(`${proc}/${pid}/cmdline`)),
+    Effect.map((argv) => argv.replaceAll("\0", " ")),
+  );
 
 const fromProc = (pid: number) =>
   Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const fields = statFields(yield* fs.readFileString(`${PROC}/${pid}/stat`));
+    const fields = yield* statFields(pid);
     // A zombie has exited: nothing of it can run or be stopped.
     if (fields[0] === "Z") return null;
-    const command = (yield* fs.readFileString(`${PROC}/${pid}/cmdline`)).replaceAll("\0", " ");
+    const command = yield* procCommand(pid, PROC);
     // Exiting: its memory, and with it its command line, is already gone.
     if (command === "") return null;
     return {
       pid,
       command,
-      started: fields[19] ?? "",
+      started: fields[STARTED] ?? "",
       session: Number(fields[3]),
       parent: Number(fields[1]),
     } satisfies ProcessInfo;
@@ -75,6 +86,19 @@ export const processOf = Effect.fn("Processes.processOf")(function* (pid: number
   if (yield* readsSessions) return yield* fromProc(pid).pipe(Effect.orElseSucceed(() => null));
   const [row] = psRows(yield* ps(["-ww", "-o", "pid=,ppid=,lstart=,command=", "-p", String(pid)]));
   return row ?? null;
+});
+
+/** Its command line, from `proc` or else `ps`; "" where neither can say. */
+export const commandOf = (pid: number, proc = PROC) =>
+  procCommand(pid, proc).pipe(Effect.catch(() => ps(["-ww", "-o", "command=", "-p", String(pid)])));
+
+/** When it started, as a token only compared with itself; null where that cannot be read. */
+export const startedOf = Effect.fn("Processes.startedOf")(function* (pid: number) {
+  const proc = yield* statFields(pid).pipe(
+    Effect.map((fields) => fields[STARTED] || null),
+    Effect.catchTag("PlatformError", () => Effect.succeed(null)),
+  );
+  return proc ?? ((yield* ps(["-o", "lstart=", "-p", String(pid)])).trim() || null);
 });
 
 /**

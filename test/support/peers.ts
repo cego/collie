@@ -10,7 +10,7 @@ import type { BunServices } from "@effect/platform-bun/BunServices";
 import { Effect, FileSystem, Schema, type Scope } from "effect";
 import { exec } from "./command";
 import { suiteEnv } from "./effect";
-import { fakeHerdrCommand } from "./fake-herdr-core";
+import { writeFakeHerdrShim } from "./fake-herdr-core";
 import { fixtures, root, stopHost } from "./host";
 import { collie, collieCommand, type World } from "./world";
 
@@ -119,11 +119,7 @@ export const twoMachines = <A, E>(
         const bin = `${dir}/bin`;
         yield* fs.makeDirectory(bin);
         const herdr = `${bin}/herdr`;
-        yield* fs.writeFileString(
-          herdr,
-          `#!/bin/sh\nexec ${fakeHerdrCommand(`${root}test/support/fake-herdr.ts`)} "$@"\n`,
-          { mode: 0o755 },
-        );
+        yield* writeFakeHerdrShim(herdr, `${root}test/support/fake-herdr.ts`);
         yield* fs.writeFileString(
           `${bin}/collie`,
           `#!/bin/sh\nexec ${command.map((part) => `'${part}'`).join(" ")} "$@"\n`,

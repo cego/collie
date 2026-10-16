@@ -64,6 +64,10 @@ and binds it to the tree the command ran on; that is a verification. Anything yo
 an Output about tests passing is a claim, and is shown as one. Name in your Output which
 verifications you ran.
 
+A `collie verify` you started in the background is reported to you when it ends,
+so you may end your turn waiting on it. Never end a turn waiting on any other
+background job.
+
 ## Output
 
 Each step gives you an `OUTPUT_PATH` and names the keys it wants. Write that JSON there

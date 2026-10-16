@@ -3,14 +3,8 @@
 
 import { Effect, FileSystem, Schema, SchemaGetter } from "effect";
 import { isNumber, isString } from "./schema";
-import {
-  passed,
-  recordsNamed,
-  staleAgainst,
-  type CheckCommand,
-  type Snapshot,
-  type Verification,
-} from "./verify";
+import { checkProof } from "./check-proof";
+import type { CheckCommand, Snapshot, Verification } from "./verify";
 import { isYamlMap, YamlValueJsonSchema, type YamlValue } from "./yaml";
 
 /** Present and not only whitespace: a required judgement nobody wrote is not one. */
@@ -711,15 +705,20 @@ export interface CheckEvidence {
  * counts: what binds it is the collector, not who called it.
  */
 function checkGap(name: string, evidence: CheckEvidence): string | null {
-  const records = recordsNamed(evidence.verifications, name, evidence.commands);
-  if (records.length === 0)
-    return `check "${name}" has no verification record — run it through collie verify`;
-  const latest = records.findLast((v) => !staleAgainst(v, evidence.final));
-  if (latest !== undefined && passed(latest)) return null;
-  const last = latest ?? records[records.length - 1]!;
-  if (last.result === "fail" || last.expect === "fail") return `check failed: ${name}`;
-  if (last.result === "unstable") return `check "${name}" ran on a tree that moved under it`;
-  return `check "${name}" last passed on an earlier tree`;
+  switch (checkProof(evidence, name).state) {
+    case "passed":
+    case "waiting":
+    case "proved":
+      return null;
+    case "never":
+      return `check "${name}" has no verification record — run it through collie verify`;
+    case "failed":
+      return `check failed: ${name}`;
+    case "unstable":
+      return `check "${name}" ran on a tree that moved under it`;
+    case "earlier":
+      return `check "${name}" last passed on an earlier tree`;
+  }
 }
 
 /**

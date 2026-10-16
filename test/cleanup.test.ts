@@ -17,6 +17,10 @@ const DAY_MS = 24 * 60 * 60_000;
 
 const Listed = Schema.decodeUnknownSync(CleanupReport);
 const parsed = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
+const asJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const asRecord = Schema.decodeUnknownSync(
+  Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown)),
+);
 
 /** A staged generation last used `days` ago, holding one file of `bytes`. */
 const generation = (world: World, name: string, days: number, bytes = 8192) =>
@@ -239,6 +243,55 @@ test(
           const disk = checks.checks.find((check) => check.name === "disk");
           expect(disk?.detail).toMatch(
             /^\/ has 8\.0 GiB free \(8%\); `collie cleanup` would free \d/,
+          );
+        }),
+      [],
+    ),
+  60_000,
+);
+
+test(
+  "cleanup keeps the compaction controls of an agent in a session opened while the host runs",
+  () =>
+    proves(
+      "collie-cleanup-session-",
+      (world) =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const log = Bun.env.FAKE_HERDR_LOG;
+          const desk = { name: "desk", socket_path: `${world.home}/desk.sock` };
+          const late = { name: "late", socket_path: `${world.home}/late.sock` };
+          const state = `${log}.state.json`;
+          const seeded = (yield* fs.exists(state)) ? asRecord(yield* fs.readFileString(state)) : {};
+          yield* fs.writeFileString(
+            state,
+            asJson({ ...seeded, agents: [{ name: "impl", pane_id: "p-late" }] }),
+          );
+          const controls = `${world.state}/compaction/impl`;
+          yield* fs.makeDirectory(controls, { recursive: true });
+          yield* fs.writeFileString(
+            `${controls}/control.json`,
+            asJson({
+              agent: "impl",
+              harness: "codex",
+              cwd: world.project,
+              dir: controls,
+              endpoint: null,
+              pid: null,
+              command: null,
+              attempt: null,
+            }),
+          );
+          const herdr = { FAKE_HERDR_AGENTS_IN: late.socket_path };
+          yield* fs.writeFileString(`${log}.sessions.json`, asJson([desk]));
+          const before = Listed((yield* collie(world, ["cleanup"], herdr)).envelope.data);
+          expect(before.remove.map((item) => item.target)).toContain(controls);
+
+          yield* fs.writeFileString(`${log}.sessions.json`, asJson([desk, late]));
+          const listed = yield* collie(world, ["cleanup"], herdr);
+          expect(listed.envelope.ok).toBe(true);
+          expect(Listed(listed.envelope.data).remove.map((item) => item.target)).not.toContain(
+            controls,
           );
         }),
       [],

@@ -21,6 +21,8 @@ export const VerifySpecSchema = Schema.Struct({
   executable: Schema.String,
   argv: Schema.Array(Schema.String),
   cwd: Schema.String,
+  /** The merge request pipeline job that proves it: nobody runs it locally (ADR-draft-a-check-left-to-ci-is-proved-by-its-pipeline-job). */
+  ci: Schema.optionalKey(Schema.String),
 });
 export type VerifySpec = Schema.Schema.Type<typeof VerifySpecSchema>;
 
@@ -143,7 +145,11 @@ export function approvedFor(
 export function renderApproved(approved: ReadonlyArray<VerifySpec>): string {
   if (approved.length === 0) return "(no check is named for this Run yet)";
   return approved
-    .map((spec) => `- ${spec.name}: ${[spec.executable, ...spec.argv].join(" ")} (in ${spec.cwd})`)
+    .map((spec) =>
+      spec.ci === undefined
+        ? `- ${spec.name}: ${[spec.executable, ...spec.argv].join(" ")} (in ${spec.cwd})`
+        : `- ${spec.name}: left to CI (job ${spec.ci}), do not run it`,
+    )
     .join("\n");
 }
 

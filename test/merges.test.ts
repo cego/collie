@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import type { BunServices } from "@effect/platform-bun/BunServices";
 import { Effect, FileSystem, Schema } from "effect";
 import { recordAudit } from "../src/audit";
 import { buildBoard } from "../src/board";
@@ -12,7 +13,10 @@ import {
   watchedMr,
   writeMrStates,
 } from "../src/merges";
-import { runDir } from "../src/engine";
+import { foundationLayer, runDir } from "../src/engine";
+import { Agents, agentsLayer } from "../src/agents";
+import { Launched } from "../src/launches";
+import { FakeHerdr, Rig } from "./support/recorder";
 import type { RunFacts } from "../src/runs";
 import { sinceReview } from "../src/mr";
 import { appendVerification } from "../src/verify";
@@ -25,6 +29,7 @@ import { epochMs } from "../src/time";
 import { fakeForge, type Check, type FakeMr, type ForgeModel } from "./support/forge";
 
 const GITLAB = "gitlab.cego.dk/mk/collie";
+const asLaunch = Schema.encodeSync(Schema.fromJsonString(Launched));
 
 /** The shared fake of a forge, with its calls also kept in `log`. */
 function forge(name: "gitlab" | "github", over: Partial<ForgeModel>, log: string[] = []): Runner {
@@ -433,6 +438,9 @@ const MERGED_AT = "2026-10-15T09:00:00Z";
 const merging = Effect.fn("merges.merging")(function* (
   others: ReadonlyArray<Partial<RunFacts>> = [],
   mergedAt: string | null = MERGED_AT,
+  /** What the host does with a stop, beside recording it. */
+  stopping: (stateDir: string, run: string, reason: string) => Effect.Effect<void> = () =>
+    Effect.void,
 ) {
   const fs = yield* FileSystem.FileSystem;
   const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-settle-" });
@@ -468,7 +476,10 @@ const merging = Effect.fn("merges.merging")(function* (
       views: yield* buildBoard({ env, runs, now, quietMs: Infinity }),
       runs,
       record: () => Effect.void,
-      stop: (run, reason) => Effect.sync(() => void stops.push([run, reason])),
+      stop: (run, reason) =>
+        Effect.sync(() => void stops.push([run, reason])).pipe(
+          Effect.andThen(stopping(stateDir, run, reason)),
+        ),
       now,
       checked,
       states,
@@ -506,6 +517,65 @@ test("a merge stops what in its Task is still going: the parked builder and the 
       stopped();
       yield* round(TEN + MERGE_POLL_MS);
       expect(stops).toHaveLength(2);
+    }),
+  ));
+
+test("a merge's stop ends the Run's agents through the one end, and its log names the merge", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const rig = yield* Rig.make();
+      yield* rig.startSocket();
+      yield* rig.addWorkspace("w1", "Project | Task", "/project");
+      yield* rig.addPane("p0", "t0", "/project", null, "w1");
+      yield* rig.addPane("p1", "t1", "/project", "claude", "w1");
+      yield* rig.addAgent("impl", "p1");
+      const services = yield* Effect.context<BunServices>();
+      const halting = (stateDir: string, run: string, reason: string) =>
+        Agents.pipe(
+          Effect.flatMap((agents) => agents.halt(run, reason)),
+          Effect.provide(
+            agentsLayer({
+              dir: stateDir,
+              env: rig.pluginEnv(),
+              herdr: new FakeHerdr(rig.pluginEnv()),
+              harness: "claude",
+              model: "opus",
+              permissions: "auto",
+              compactAtTokens: 0,
+              help: () => Effect.succeed(""),
+            }),
+          ),
+          Effect.provide(foundationLayer({ dir: stateDir })),
+          Effect.scoped,
+          Effect.orDie,
+          Effect.asVoid,
+          Effect.provideContext(services),
+        );
+      const { stateDir, round } = yield* merging([], MERGED_AT, halting);
+      const fs = yield* FileSystem.FileSystem;
+      const agents = `${stateDir}/agents/r-plan.implement`;
+      yield* fs.makeDirectory(agents, { recursive: true });
+      yield* fs.writeFileString(
+        `${agents}/build.launch.json`,
+        asLaunch({
+          agent: "impl",
+          output: `${agents}/build.json`,
+          reused: false,
+          runId: "r-plan.implement",
+          operation: "build",
+          role: "implementer",
+          workflow: "implement",
+          harness: "claude",
+          terminalId: "term-impl",
+        }),
+      );
+      yield* round(TEN);
+      const closed = (yield* rig.calls()).filter((call) => call.cmd === "pane close");
+      expect(closed.map((call) => call.argv?.at(2))).toEqual(["p1"]);
+      expect(yield* fs.readFileString(`${agents}/agents.log`)).toContain(
+        "impl ended: mk/collie!65 merged",
+      );
+      yield* rig.close();
     }),
   ));
 
