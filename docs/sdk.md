@@ -256,7 +256,8 @@ Everything the fork did not write — what it assesses, what it batches, the cla
 the teammate's approval it waits for — is the shipped orchestration, and a baseline change
 to any of it reaches the fork. `RENOVATE_ON.gitlab` and `RENOVATE_ON.github` hold each
 forge's shipped sections as templates, and `Landed.forge` says which forge a landing step's
-repository is on, so a fork keeps a section's words for either by starting from
+repository is on (`Landed.url` and `Landed.noun` are its web address and its word for a
+merge request, for a Clearance like the shipped one's), so a fork keeps a section's words for either by starting from
 `RENOVATE_ON[at.forge].merge.text` and adds its own sentence. `RENOVATE` is still the GitLab
 sections, so a fork written before there were two reads what it read; `asRenovator`
 is who does the work and the `input` every shipped section reads.
@@ -340,6 +341,24 @@ const verdict =
   auto-merge is off and it is resumed
   ([ADR-0050 D4](adr/0050-a-merge-request-is-its-forges.md)). Give it to any work whose
   agent pushes.
+- **`clears` is the step's Clearance:** what its agent is told, in its own turn, that it
+  may do. Each entry is one sentence naming one action and its target, and Collie types
+  them as one line after the step's pointer: `Cleared for this step: <one>; <two>.` That
+  line is the agent's user turn, where Claude Code's auto mode reads it as the user asking
+  for exactly that action; an instruction in the prompt file is tool output to it. It is
+  typed to every harness, and a resend types it again.
+  - An entry is one line, and the entries joined are at most 400 characters. The whole
+    step message — token, pointer with its real path, command line where `skill` starts
+    one, and the Clearance — must fit 700 characters, the budget Claude Code still shows as
+    typed. Past either, `agentWork` fails naming the operation (and, for the message, its
+    length and prompt path) before anything starts. Work without `clears` is never
+    refused for length.
+  - Compose it from facts Collie holds — the checkout's branch, `host.mr`'s `url`, a merge
+    request the forge adapter found — never from an Output, which an agent wrote.
+  - It is not a permission rule: each call is still judged on its own. A vague Clearance
+    clears nothing, because the review only honours a request that names the exact action
+    and its target
+    ([ADR-draft-what-a-run-authorises-reaches-auto-mode](adr/draft-what-a-run-authorises-reaches-auto-mode.md) D1).
 - **`input` is what the instructions name.** With a template it is exactly what the
   template declares, so the compiler checks it; with text, `{{run.dir}}` reads `input.run.dir`.
   An expression nothing fills fails the work before any agent starts, never renders empty.
@@ -585,6 +604,8 @@ const place = yield * host.place((yield * Run).id);
 // place.workspace — a workspace of its own, where the Run asked for one; null otherwise
 // place.lineage   — this Run, then the Runs it was started from or builds a plan of, and
 //                   so on: whose agents `askRoute` and `handOffWork` may reach
+// place.authority — the branch this Run created, whether it roams, and the human door and
+//                   words that started it: what a Claude agent's auto mode is told
 ```
 
 `place.cwd` is decided before your body runs. A workflow that
@@ -633,7 +654,9 @@ what it would carry, on the checkout's own forge (or the target's, where it name
 the assignee — `<forge>.assignee` from the user's config, else that forge's login — the
 repository's own template, the issues the branch answers. `forge` is `GitLab` or `GitHub`
 and `noun` is `merge request` or `pull request`; `provider` is `gitlab` or `github`, and
-`repository` the repository's path for `--repo`. `existing` is the URL of this branch's
+`repository` the repository's path for `--repo`. `url` is the repository's web address as
+its forge's adapter writes it, and `branch` the checkout's branch, empty on a detached
+one: the facts a Clearance names. `existing` is the URL of this branch's
 open one, or empty, and `autoMerge` whether it merges itself once green — a step that
 pushes to it should not run. `commands.create` and `commands.comment` are the command
 lines an agent runs to open one (with `<title>` and `<file>` left to fill in) or to note on
@@ -696,6 +719,15 @@ costs wall clock and no model tokens, which is the point of claiming before an a
 rather than after. `adopting` is your own durable question, asked only where the claim was
 already the operator's; `host.release(runId)` gives it back, and only a Run that finished
 its work should.
+
+`host.defaultHead(cwd)` is the commit origin's default branch is at now, and fails where
+origin cannot be read; take it inside an Activity, so a replay reads the same commit.
+`host.awaitProduction({ runId, cwd, sha, jobs, slug, url })` blocks, at no token cost, until
+the forge shows production carries `sha`, polling every five minutes. Meanwhile the card
+says what it waits for: `jobs` are the production jobs left for a human to play, which word
+that line and decide nothing, `slug` is the claim held and `url` the repository. It answers
+`true` once production carries the commit, and `false` where the Run was stopped or held
+first. A forge that cannot say keeps it waiting.
 
 ## Markdown as content
 
@@ -1039,7 +1071,8 @@ anyone has named since with `collie run intent verification`
 or chat's `set_verification`, the Run's own agent included. Nobody approves them
 ([ADR-0055](adr/0055-a-run-never-asks-to-run-its-checks.md)). A name not among them is
 refused. Anyone else collects the same way from outside:
-`collie verify --run <your run id> -- <command>`.
+`collie verify -- <command>` in the Run's agent pane, or
+`collie verify --run <your run id> -- <command>` anywhere else.
 With `at: "default-base"` it runs at the merge-base of the checkout and its default branch,
 in that same checkout so what the build installed is there, and then puts the checkout back;
 a checkout with changes of its own, or no default branch to compare with, is refused.

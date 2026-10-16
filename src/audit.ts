@@ -82,6 +82,20 @@ export const trimAudit = Effect.fn("Audit.trim")(function* (runDir: string, keep
 });
 
 /** What one operation did, written down under the request that asked for it. */
+/** Who asked, as an audit line records them under `request`. */
+export const actorOf = (
+  who: Voice & {
+    readonly origin: FrontDoor;
+    readonly from?: Where | undefined;
+    readonly schedule?: ScheduledBy | undefined;
+  },
+  request: string,
+): AuditLine["actor"] => {
+  const voiced = { origin: who.origin, requestId: request, ...voiceOf(who) };
+  const spoken = who.schedule === undefined ? voiced : { ...voiced, schedule: who.schedule };
+  return who.from === undefined ? spoken : { ...spoken, from: who.from };
+};
+
 export const recordAudit = Effect.fn("Audit.record")(function* <A, I extends Schema.Json>(
   runDir: string,
   line: Voice & {
@@ -96,13 +110,11 @@ export const recordAudit = Effect.fn("Audit.record")(function* <A, I extends Sch
     readonly value: A;
   },
 ) {
-  const voiced = { origin: line.origin, requestId: line.request, ...voiceOf(line) };
-  const spoken = line.schedule === undefined ? voiced : { ...voiced, schedule: line.schedule };
   const written: AuditLine = {
     at: yield* nowIso(),
     operation: line.operation,
     request: line.request,
-    actor: line.from === undefined ? spoken : { ...spoken, from: line.from },
+    actor: actorOf(line, line.request),
     result: Schema.encodeSync(line.result)(line.value),
   };
   let full = written;

@@ -237,8 +237,9 @@ test(
           .map((line) => Schema.decodeUnknownSync(CallLine)(line))
           .filter((call) => call.cmd === "agent prompt")
           .map((call) => call.argv.join(" "))
-          .find((text) => text.includes("look at this"));
-        expect(told).toContain(`Attached: ${copy}`);
+          .findLast((text) => text.includes("Their message is in"));
+        const kept = /Their message is in (\S+)\./.exec(told ?? "")?.[1] ?? "";
+        expect(yield* read(kept)).toBe(`look at this\nAttached: ${copy}`);
         const delivered = (yield* readAudit(runDir(world.state, runId)).pipe(Effect.orDie)).find(
           (one) => one.operation === "deliver",
         );
@@ -260,7 +261,7 @@ test(
 );
 
 test(
-  "a message over the delivery cap is kept whole in the Run, and the agent is told where",
+  "a message over the paste budget is kept whole in the Run, and the agent is told where",
   () =>
     attending("collie-attach-long-", (world, cli) =>
       Effect.gen(function* () {
@@ -288,8 +289,7 @@ test(
         expect(yield* read(fileFor(long))).toBe(long);
         const said = (yield* told).find((text) => text.includes(fileFor(long)));
         expect(said).toBeDefined();
-        expect(said).toContain("too long to send in one piece");
-        expect(said).toContain(`Attached: ${fileFor(long)}`);
+        expect(said).toContain(`Their message is in ${fileFor(long)}. Read it whole`);
         expect(said).not.toContain("line of the review");
         const delivered = (yield* readAudit(runDir(world.state, runId)).pipe(Effect.orDie)).find(
           (one) => one.request === "req-long",
@@ -305,13 +305,14 @@ test(
 
         const atCap = "x".repeat(8 * 1024);
         expect((yield* steer(atCap)).envelope.error).toBeUndefined();
-        expect((yield* told).some((text) => text.endsWith(`\n${atCap}`))).toBe(true);
-        expect(yield* Effect.promise(() => Bun.file(fileFor(atCap)).exists())).toBe(false);
+        expect((yield* told).some((text) => text.includes(atCap))).toBe(false);
+        expect(yield* read(fileFor(atCap))).toBe(atCap);
 
         const withFile = `Also:\n${"another line of it\n".repeat(460)}`;
         expect((yield* steer(withFile, "--attach", "late.png")).envelope.error).toBeUndefined();
-        const listed = (yield* told).find((text) => text.includes(fileFor(withFile)));
-        expect(listed).toContain(`Attached: ${fileFor(withFile)}\nAttached: ${dir}/late.png`);
+        const withLines = `${withFile}\nAttached: ${dir}/late.png`;
+        expect(yield* read(fileFor(withLines))).toBe(withLines);
+        expect((yield* told).some((text) => text.includes(fileFor(withLines)))).toBe(true);
 
         const viaAct = `From chat:\n${"a line chat wrote\n".repeat(500)}`;
         const client = yield* connect(world.state).pipe(Effect.orDie);

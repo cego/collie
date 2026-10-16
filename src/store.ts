@@ -16,6 +16,7 @@ import * as Migrator from "effect/sql/Migrator";
 import * as Reactivity from "effect/reactivity/Reactivity";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as SqlSchema from "effect/sql/SqlSchema";
+import { AuditLine } from "./audit";
 import { RequestConflict } from "./board-model";
 import { nowIso } from "./time";
 
@@ -64,6 +65,8 @@ const Decision = Schema.Struct({
   request: Schema.NullOr(Schema.String),
   /** The operation whose agent asked it on its Run; null for the workflow's own question. */
   asker: Schema.NullOr(Schema.String),
+  /** Who answered it, settled with the answer so no reader sees one without the other. */
+  answerer: Schema.NullOr(Schema.fromJsonString(AuditLine.fields.actor)),
 });
 export type DecisionRow = typeof Decision.Type;
 
@@ -136,6 +139,7 @@ export interface StoreApi {
     readonly decision: string;
     readonly value: string;
     readonly request: string;
+    readonly answerer?: AuditLine["actor"] | undefined;
   }) => Effect.Effect<Answered>;
   readonly generations: Effect.Effect<ReadonlyArray<GenerationRow>>;
   /**
@@ -234,6 +238,10 @@ const MIGRATIONS = {
     const sql = yield* SqlClient.SqlClient;
     yield* sql`ALTER TABLE collie_decisions ADD COLUMN asker TEXT`;
   }),
+  "9_answerer": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`ALTER TABLE collie_decisions ADD COLUMN answerer TEXT`;
+  }),
   "4_decisions": Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     yield* sql`
@@ -294,14 +302,14 @@ function makeStore(): Effect.Effect<StoreApi, never, SqlClient.SqlClient | React
       Request: Schema.String,
       Result: Decision,
       execute: (run) =>
-        sql`SELECT run, decision, prompt, options, answer, request, asker FROM collie_decisions WHERE run = ${run} ORDER BY asked, decision`,
+        sql`SELECT run, decision, prompt, options, answer, request, asker, answerer FROM collie_decisions WHERE run = ${run} ORDER BY asked, decision`,
     });
 
     const decisionRow = SqlSchema.findAll({
       Request: Schema.Struct({ run: Schema.String, decision: Schema.String }),
       Result: Decision,
       execute: (key) =>
-        sql`SELECT run, decision, prompt, options, answer, request, asker FROM collie_decisions WHERE run = ${key.run} AND decision = ${key.decision}`,
+        sql`SELECT run, decision, prompt, options, answer, request, asker, answerer FROM collie_decisions WHERE run = ${key.run} AND decision = ${key.decision}`,
     });
 
     const everyGeneration = SqlSchema.findAll({
@@ -350,7 +358,8 @@ function makeStore(): Effect.Effect<StoreApi, never, SqlClient.SqlClient | React
             RUNS,
             sql`
               UPDATE collie_decisions
-              SET answer = ${answer.value}, request = ${answer.request}, answered = ${at}
+              SET answer = ${answer.value}, request = ${answer.request}, answered = ${at},
+                answerer = ${answer.answerer === undefined ? null : answererText(answer.answerer)}
               WHERE run = ${answer.run} AND decision = ${answer.decision} AND answer IS NULL
               RETURNING decision
             `,
@@ -505,6 +514,7 @@ function makeStore(): Effect.Effect<StoreApi, never, SqlClient.SqlClient | React
 
 const isRecord = Schema.is(Schema.Record(Schema.String, Schema.Json));
 const asJsonText = Schema.encodeSync(Schema.fromJsonString(Schema.Json));
+const answererText = Schema.encodeSync(Schema.fromJsonString(AuditLine.fields.actor));
 
 /**
  * The same arguments written the same way, so a retry is compared rather than guessed at:

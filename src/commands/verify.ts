@@ -3,7 +3,7 @@ import { Argument, Command, Flag } from "effect/cli";
 import { err } from "../operations";
 import { verifyRun } from "../lifecycle";
 import { REFUSED_INPUT } from "../engine";
-import { HostRefused } from "../board-model";
+import { FrontDoor, HostRefused } from "../board-model";
 import { type Echo } from "../verify";
 import { checkNameOf } from "../verify-spec";
 import { printResult } from "../envelope";
@@ -37,7 +37,10 @@ export const verify = Command.make(
   "verify",
   {
     runId: Flag.String("run").pipe(
-      Flag.withDescription("The Run this is a verification of; its tree is what is fingerprinted"),
+      Flag.withDescription(
+        "The Run this is a verification of; its tree is what is fingerprinted. By default the Run whose agent this pane is",
+      ),
+      Flag.optional,
     ),
     cwd: Flag.String("cwd").pipe(
       Flag.withDescription("Where to run it; must be inside that Run's own checkout"),
@@ -73,8 +76,14 @@ export const verify = Command.make(
     return answering((env) =>
       Effect.scoped(
         Effect.gen(function* () {
+          const door = yield* cliDoor(env);
+          const run = Option.getOrElse(runId, () =>
+            Schema.is(FrontDoor)(door) ? null : door.from.run,
+          );
+          if (run === null)
+            return err("invalid_input", "verify needs --run outside a Run's agent pane.");
           const request = {
-            runId,
+            runId: run,
             name: Option.getOrElse(name, () => checkNameOf(executable, argv)),
             executable,
             argv,
@@ -84,7 +93,7 @@ export const verify = Command.make(
           const opened = yield* verifyRun(
             env,
             where === undefined ? request : { ...request, cwd: where },
-            yield* cliDoor(env),
+            door,
           );
           if (!opened.ok) return opened;
           const echo = yield* echoed();
@@ -125,16 +134,19 @@ export const verify = Command.make(
   Command.withDescription("Run a command and record its result against this Run's tree"),
   Command.withExamples([
     {
-      command: "collie --json verify --run implement-picker-20260909-101112 -- bun test",
-      description: "Record a test run against that Run's own checkout",
+      command: "collie verify -- bun test",
+      description: "From a Run's agent pane: record a test run against that Run's own checkout",
     },
     {
-      command: "collie verify --run <id> --name typecheck -- bun run typecheck",
+      command: "collie --json verify --run implement-picker-20260909-101112 -- bun test",
+      description: "Anywhere else: name the Run",
+    },
+    {
+      command: "collie verify --name typecheck -- bun run typecheck",
       description: "Name it, so a card can say which verification passed",
     },
     {
-      command:
-        "collie verify --run <id> --name regression --expect fail -- bun test test/bug.test.ts",
+      command: "collie verify --name regression --expect fail -- bun test test/bug.test.ts",
       description: "Prove a bug exists: the record passes because the command failed",
     },
   ]),

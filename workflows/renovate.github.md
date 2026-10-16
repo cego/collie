@@ -29,9 +29,11 @@ repository, so that work in progress is visible from the moment it starts.
 - An issue named above is the issue: read it and skip the search.
 - Otherwise search that team's open issues for the Renovate issue — the one the team
   checks repositories off on, whatever it is called.
-- Exactly one match is the issue. Several is a consultation: list them with their ids,
-  titles and due dates, and ask me which. None means you create one, titled for the
-  current month, whose description is the checklist and nothing else.
+- Exactly one match is the issue. Of several, take, in this order: the one whose title
+  names the current month or cycle; otherwise the one with the earliest due date;
+  otherwise the newest. Say which you took and why in a comment on that issue and as
+  `picked_because` in your Output. None means you create one, titled for the current
+  month, whose description is the checklist and nothing else.
 - Record its id in your Output. Every later step writes to that issue and no other, so a
   long Helle wait, a resume or a cycle rollover cannot split this repository across two.
 
@@ -150,9 +152,10 @@ pass.
 ## approval
 
 The batch pull request must be approved by **another team member**; you never approve it
-yourself, and its author cannot. Ask me, once, in this pane: name the batch pull request,
-say it is on stage and how it was verified, and that it needs an approving review from
-someone else on the team — then wait for my answer. On the answer, read
+yourself, and its author cannot. Ask once, with your harness's question tool, which is
+asked on the Run where a teammate or I answer: name the batch pull request, say it is on
+stage and how it was verified, and that it needs an approving review from someone else on
+the team — then wait for the answer. On the answer, read
 `gh pr view <n> --json reviewDecision,latestReviews,headRefOid`: the batch is approved
 when an `APPROVED` review is on its current head by someone other than this Run's own
 `gh` login, and `reviewDecision` is neither `CHANGES_REQUESTED` nor `REVIEW_REQUIRED`.
@@ -246,12 +249,17 @@ Otherwise:
   --notes-file <file> --verify-tag` — **only where the repository is a package** that
   publishes from a tag or release. An application or a frontend gets the tag alone.
 - Watch the workflow runs the tag started — `gh run list --commit <sha>`, then `gh run
-  watch` — including their publish or deploy jobs, until they succeed. Them succeeding is
-  what makes this a finished renovation. A failing or blocked run is a consultation with
-  the Helle claim still held — never a Run that calls itself done.
+  watch` — until every job has finished, except manual jobs that deploy to production.
+  That is what makes this a finished renovation, and Collie holds the Helle claim until
+  the forge shows production carries it.
+  Production deploy jobs are mine: never play, retry or ask about them. A tag whose
+  only unfinished jobs are manual jobs that deploy to production is released; name each in
+  `prod_jobs`, with its URL. Judge which jobs deploy to production from the repository's
+  own environments. Any other failing or blocked job is a consultation with the Helle claim
+  still held — never a Run that calls itself done.
 
 Then write your Output, naming the tag where you made one. `pipeline` says whether the
-tag's workflow runs succeeded.
+tag's workflow runs succeeded, were not run, or wait for production.
 
 ## record
 

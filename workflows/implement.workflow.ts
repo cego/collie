@@ -829,6 +829,13 @@ export default defineWorkflow({
         agent: BUILDER,
         role: "implementer",
         pushes: true,
+        // Not merging: only a message of its own asks for that.
+        clears: !ready.branch
+          ? []
+          : [
+              `pushing ${ready.branch} to origin${ready.url === undefined ? "" : ` (${ready.url})`}`,
+              `opening or updating its ${ready.noun ?? "merge request"} there`,
+            ],
         instructions: prompts.mr,
         input: {
           ...input,

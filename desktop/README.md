@@ -83,7 +83,7 @@ Done only on the host's reply, and kept in `actions.log`. Tested in
 ## Review comments and the Diff tab
 
 [ADR-0051](../docs/adr/0051-a-review-comment-is-written-on-desktops-own-views.md). Desktop never
-knows the delivery cap.
+knows the delivery cap or the paste budget.
 
 | File                               | What it owns                                                                                                    |
 | ---------------------------------- | --------------------------------------------------------------------------------------------------------------- |

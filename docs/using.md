@@ -1616,7 +1616,8 @@ and **Send**. The line it leaves says whether the agent was
 seen to take it. Every draft goes as one message, word
 for word, each item naming the plan file, or `path:line` with `(as it was)` for removed
 lines, quoting what you selected and giving your words;
-a message over 8 KiB arrives as a file in the Run. Only the drafts that were sent are
+one the agent would see as more than 3 lines or 700 characters arrives as a file in the Run,
+under a line saying it is from the human in Desktop. Only the drafts that were sent are
 cleared; if the host refuses, its words are shown and every draft is kept, as is one you
 edited while it was sending. A successful **Try again** clears the original sent drafts
 and keeps any later edits. With no live agent, Send is disabled and the list says "This
@@ -2105,7 +2106,7 @@ is never the one asked or handed work.
   as a fix round, `disputed` and all, and the fix is reviewed again at once. It works in the
   reviewed branch's checkout — the one that branch already has, or a new one cut from it —
   which becomes the review Run's own: your checkout is never switched under you, and
-  `collie verify --run <id> --cwd <that checkout>` is recorded rather than refused. Where
+  `collie verify -- <command>` from its pane, which runs there, is recorded rather than refused. Where
   that branch has an open merge request, each round's commits are pushed to it, never
   forced, so its pipeline and the next review see them; not where it merges itself once
   green, and nothing is pushed where there is no merge request. A target with no branch to
@@ -2357,6 +2358,68 @@ runbook find tools printing tokens — a second guard against the commands that 
   file Collie passes with `--settings`, Collie's own hooks first. `disableAllHooks`, which
   would switch Collie's hooks off, and any other key are refused with the reason. Codex, Pi
   and OpenCode take `env` only.
+
+### What a Claude agent's auto mode is told
+
+Claude Code's auto mode judges each action an agent takes. So that it knows which session
+it is judging, every Claude agent's `--settings` file carries an `autoMode` block for its
+Run ([ADR-draft-what-a-run-authorises-reaches-auto-mode](adr/draft-what-a-run-authorises-reaches-auto-mode.md),
+D3). Collie writes it at each launch, after merging the `agent_profile` overlay, from facts
+the launching Run holds. Every list starts with `"$defaults"`, so Claude Code's defaults
+and your own lists still apply. Collie never writes `soft_deny` or `hard_deny`, and
+`agent_profile` cannot set `autoMode` or `permissions`. Codex, Pi and OpenCode get no block.
+
+`environment` says:
+
+1. **This session**: the agent, its Run, Workflow and Machine, started by your Collie.
+2. **Checkout**: its directory, `origin`'s URL, and its branch, which is one of:
+   "which this Run created"; "which this Run created, and which the forge reports protected
+   or could not say"; "which this Run was given and did not create"; or "detached at the
+   default branch" for a roaming checkout.
+3. **Collie**: the `collie` CLI, the `collie_*` MCP tools and the state directory are your
+   own installation acting on your own Runs, not a shared resource.
+4. **collie-delivery messages**: what a [Delivery](../CONTEXT.md)'s sender line means, and
+   that a step's own message and its `Cleared for this step:` line are your request.
+5. **Your request**, only where you started the Run on the board, in Desktop, in a
+   terminal, or through chat: `The user started this Run <door> with: "<words>"`. The words
+   are the start's input as given or, through chat, your own message that turn, never
+   chat's input. Credentials are removed, and words over 2,000 characters are cut, saying
+   so. A Run an agent, a Schedule or a script started has no request entry.
+
+`allow` adds:
+
+- **History on the Run's own branch**: `git commit --amend`, a rebase onto the default
+  branch, and `git push --force-with-lease` of that branch to `origin`, and nothing on any
+  other branch. Only where the Run created the branch, and the forge says, when the agent
+  is launched, that it is unprotected.
+- **Your stated intent**: an action your starting words name directly and specifically, on
+  this Run's repository. Only where entry 5 is there.
+
+**"The Run created the branch"** is recorded when its checkout is placed: the branch was
+neither a local branch nor on `origin` before. A checkout that already existed, a branch
+the Run was given, such as another person's merge request under review, a roaming
+checkout, and a Run recorded before this was kept never created one.
+
+**"Unprotected"** is read from the forge at each Claude launch, since a branch the Run
+created can match a rule already (a new `release/*` branch, say). The branch is protected
+where it is the default branch, or matches any protection rule or ruleset, whatever the
+rule allows: on GitLab, the project's protected branches, wildcards included; on GitHub,
+the rules active for the name, which apply before it is pushed, and the classic protection
+rules' patterns. A forge that cannot be read counts as protected. A rule added after an
+agent was launched is not in its block, and the forge itself still refuses the push.
+
+Site policy stays yours, in your own `~/.claude/settings.json`, which your own sessions
+need too: which repositories are public, which environments are stage, which team services
+are shared. To see what an agent is judged by, run this yourself:
+
+```bash
+claude --settings ~/.local/state/herdr/plugins/cego.collie/agents/<run>/<step>.settings.json auto-mode config
+```
+
+Use the file the agent's launch passed, which is its control directory's `settings.json`
+when Collie's compaction controls are on. It should list the Run's entries beside every
+default `soft_deny` and `hard_deny`. An agent that runs it is refused as `[Auto-Mode Bypass]`,
+so this check is yours.
 
 ## Compaction between pieces of work
 

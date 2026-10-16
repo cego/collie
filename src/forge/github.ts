@@ -10,7 +10,7 @@ import {
   type MrPanel,
   type MrRef,
 } from "../board-model";
-import { whatItSaid, type Runner } from "../mr";
+import { keepCredentialHelper, whatItSaid, type Runner } from "../mr";
 import { shellQuote } from "../script";
 import { epochMs } from "../time";
 import type { DeployTier, Forge, ForBranch, FromBranch, FromBranchList, Readiness } from "./forge";
@@ -224,6 +224,62 @@ const OpenPullsJson = Schema.fromJsonString(
     }),
   ),
 );
+
+const DefaultBranchJson = Schema.fromJsonString(Schema.Struct({ default_branch: Schema.String }));
+const RulesJson = Schema.fromJsonString(Schema.Array(Schema.Unknown));
+const ClassicRulesJson = Schema.fromJsonString(
+  Schema.Struct({
+    data: Schema.Struct({
+      repository: Schema.Struct({
+        branchProtectionRules: Schema.Struct({
+          nodes: Schema.Array(Schema.Struct({ pattern: Schema.String })),
+        }),
+      }),
+    }),
+  }),
+);
+const PAGE = 100;
+const CLASSIC_RULES = `query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { branchProtectionRules(first: ${PAGE}) { nodes { pattern } } } }`;
+
+/**
+ * The default branch, the rules active for the name (which GitHub answers for a branch not
+ * pushed yet), and the classic protection rules' patterns; null where any is unread.
+ */
+function protects<R>(
+  project: string,
+  branch: string,
+  cwd: string,
+  run: Runner<R>,
+): Effect.Effect<boolean | null, never, R> {
+  return Effect.gen(function* () {
+    const repo = mrPath({ project, iid: "" });
+    const api = (...args: ReadonlyArray<string>) => run("gh", ["api", ...args], cwd);
+    const about = yield* api(`repos/${repo}`);
+    const named = Schema.decodeUnknownOption(DefaultBranchJson)(about.stdout);
+    if (about.code !== 0 || Option.isNone(named)) return null;
+    if (named.value.default_branch === branch) return true;
+    const active = yield* api(`repos/${repo}/rules/branches/${encodeURIComponent(branch)}`);
+    const rules = Schema.decodeUnknownOption(RulesJson)(active.stdout);
+    if (active.code !== 0 || Option.isNone(rules)) return null;
+    if (rules.value.length > 0) return true;
+    const [owner = "", name = ""] = repo.split("/");
+    const classic = yield* api(
+      "graphql",
+      "-f",
+      `query=${CLASSIC_RULES}`,
+      "-F",
+      `owner=${owner}`,
+      "-F",
+      `name=${name}`,
+    );
+    const patterns = Schema.decodeUnknownOption(ClassicRulesJson)(classic.stdout);
+    if (classic.code !== 0 || Option.isNone(patterns)) return null;
+    const nodes = patterns.value.data.repository.branchProtectionRules.nodes;
+    // ponytail: one page; a full one is a repository with more rules than it reads, so it cannot say.
+    if (nodes.length >= PAGE) return null;
+    return nodes.some((rule) => new Bun.Glob(rule.pattern).match(branch));
+  });
+}
 
 /** The open pull request from `branch`, read with `gh pr list`; a failed read is not "none". */
 function forBranch<R>(
@@ -540,11 +596,15 @@ export const github: Forge = {
       }),
     ),
   clone,
+  credentials: (_project, into, run) =>
+    keepCredentialHelper(into, HOST, "!gh auth git-credential", run),
   display: "GitHub",
   cli: "gh",
   noun: "pull request",
+  webUrl: (project) => `https://${project}`,
   forBranch,
   fromBranch,
+  protects,
   template,
   commands: ({ project, branch, assignee, existing }) => {
     const repo = shellQuote(mrPath({ project, iid: "" }));

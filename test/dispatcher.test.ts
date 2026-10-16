@@ -4,7 +4,7 @@
 // message was addressed to.
 
 import type { BunServices } from "@effect/platform-bun/BunServices";
-import { Effect, FileSystem } from "effect";
+import { DateTime, Effect, FileSystem } from "effect";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { HerdrError, type AgentInfo } from "../src/herdr";
 import {
@@ -16,6 +16,9 @@ import {
   marked,
   carriedDelivery,
   confirmSubmitted,
+  deliveryText,
+  fitDelivery,
+  DELIVERY_TOKEN,
 } from "../src/dispatcher";
 import {
   appendLine,
@@ -62,6 +65,74 @@ test("every delivery mode carries the agent Actor's sender line before its uncha
           `From source-agent of r-source on laptop. Answer with collie_do deliver to r-source (or collie run steer r-source --operation source-agent "…").\n${text}`,
         );
       }
+    }),
+  ));
+
+const MINUTE = String.raw`\d{4}-\d{2}-\d{2} \d{2}:\d{2} [+-]\d{2}:\d{2}`;
+const AT = DateTime.toEpochMillis(DateTime.makeUnsafe("2026-10-16T12:02:30Z"));
+
+test("each door's Delivery names its sender on its first line, and Collie's own carry none", () => {
+  const firstLine = (actor?: Parameters<typeof deliveryText>[1]) =>
+    deliveryText("merge it", actor, AT).split("\n")[0];
+  expect(firstLine({ origin: "board" })).toMatch(
+    new RegExp(`^From the human, on the board, ${MINUTE}\\.$`),
+  );
+  expect(firstLine({ origin: "desktop" })).toMatch(
+    new RegExp(`^From the human, in Desktop, ${MINUTE}\\.$`),
+  );
+  expect(firstLine({ origin: "cli-tty" })).toMatch(
+    new RegExp(`^From the human, in a terminal, ${MINUTE}\\.$`),
+  );
+  for (const door of ["cli", "driver", "evaluator", "schedule"] as const)
+    expect(firstLine({ origin: door })).toMatch(new RegExp(`^From ${door}, ${MINUTE}\\.$`));
+  expect(firstLine({ origin: "chat" })).toMatch(new RegExp(`^From chat, ${MINUTE}\\.$`));
+  const chatting = firstLine({
+    origin: "chat",
+    conversation: "c-1",
+    said: "merge it, token glpat-abcdefghijklmnopqrst",
+  });
+  expect(chatting).toMatch(new RegExp(`^From chat for the human, ${MINUTE}\\. The human said: "`));
+  expect(chatting).toEndWith(`The human said: "merge it, token <gitlab token>"`);
+  expect(deliveryText("merge it", undefined, AT)).toBe("merge it");
+  expect(
+    deliveryText(
+      "merge it",
+      { origin: "agent", from: { run: "r-source", agent: "source-agent" } },
+      AT,
+    ),
+  ).toBe(
+    `From source-agent of r-source on this Machine. Answer with collie_do deliver to r-source (or collie run steer r-source --operation source-agent "…").\nmerge it`,
+  );
+});
+
+test("a fallback that is itself over the paste budget is still typed, and its receipt says so", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const into = `${stateDir}/${"long-state-directory/".repeat(30)}runs/r1/attachments`;
+      const token = `${DELIVERY_TOKEN}r1-req-1-steer-1`;
+      const fitted = yield* fitDelivery(into, token, "first\nsecond", { origin: "board" });
+      const typed = `${token}\n${deliveryText(fitted.words, fitted.actor, AT)}`;
+      expect(typed.split("\n")).toHaveLength(3);
+      expect(typed.length).toBeGreaterThan(700);
+      expect(fitted.words).toStartWith(`Their message is in ${into}/message-`);
+      expect(fitted.kept).toContain("Kept as a file in the Run.");
+      expect(fitted.kept).toContain("over the budget");
+    }),
+  ));
+
+test("an agent's long sender line counts against the budget, and its kept words stay that agent's", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const into = `${stateDir}/runs/r1/attachments`;
+      const token = `${DELIVERY_TOKEN}r1-req-2-steer-1`;
+      const source = { origin: "agent" as const, from: { run: "r-source", agent: "source-agent" } };
+      const words = "w".repeat(560);
+      expect((yield* fitDelivery(into, token, words, { origin: "board" })).kept).toBeNull();
+      const fitted = yield* fitDelivery(into, token, words, source);
+      expect(fitted.words).toEndWith(". Read it whole and act on it as that agent's.");
+      const file = /^Their message is in (\S+)\./.exec(fitted.words)?.[1] ?? "";
+      expect(yield* (yield* FileSystem.FileSystem).readFileString(file)).toBe(words);
+      expect(fitted.kept).not.toContain("over the budget");
     }),
   ));
 

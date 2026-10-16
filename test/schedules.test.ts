@@ -405,7 +405,10 @@ test(
       "collie-schedule-missed-",
       (world) =>
         Effect.gen(function* () {
-          const added = yield* addAsking(world, "missed", "*/2 * * * * *");
+          // Its first occurrence falls after the host is stopped, which under load takes seconds.
+          const second = Math.floor((yield* Clock.currentTimeMillis) / 1000);
+          const seconds = Array.from({ length: 26 }, (_, at) => (second + 8 + 2 * at) % 60);
+          const added = yield* addAsking(world, "missed", `${seconds.join(",")} * * * * *`);
           yield* stopHost(world.state);
           const pending = Schema.decodeUnknownSync(ScheduleChanged)(added.envelope.data).schedule
             ?.next;

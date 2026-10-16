@@ -41,8 +41,18 @@ const askedTwo = encode({
   },
 });
 
+const askedOne = encode({
+  session_id: "s-1",
+  hook_event_name: "PreToolUse",
+  tool_name: "AskUserQuestion",
+  tool_use_id: "toolu_2",
+  tool_input: {
+    questions: [{ question: "Which region?", header: "Region", options: [], multiSelect: false }],
+  },
+});
+
 test(
-  "an agent's questions are answered from the CLI and the card, and the answers reach it together",
+  "an agent's questions are answered from the CLI and the card, and each answer reaches it under its own sender",
   () =>
     proves(
       "collie-agent-question-",
@@ -117,10 +127,35 @@ test(
           const log = Bun.env.FAKE_HERDR_LOG ?? "";
           const prompts = yield* until(
             () => fs.readFileString(log).pipe(Effect.orElseSucceed(() => "")),
-            (all) => all.includes("Your question has been answered on your Run."),
+            (all) => all.includes("Your question Checks is answered:"),
           );
-          expect(prompts).toContain("SQLite; it is only a demo");
-          expect(prompts).toContain("lint and typecheck");
+          expect(prompts).toMatch(
+            /From cli, [^\n]*\.\\nYour question Database is answered: SQLite; it is only a demo/,
+          );
+          expect(prompts).toMatch(
+            /From the human, on the board, [^\n]*\.\\nYour question Checks is answered: lint and typecheck/,
+          );
+
+          yield* recordClaudeEvent(yield* controlDir(world.state, launched.agent), askedOne).pipe(
+            Effect.orDie,
+          );
+          yield* until(
+            () => client.run({ runId }).pipe(Effect.orDie),
+            (view) => (view?.waiting ?? []).some((one) => one.name === "ask-build-3"),
+          );
+          const [chatted] = yield* carryOutAsked(
+            env,
+            [{ kind: "answer", run: runId, choiceId: "ask-build-3", answer: "Postgres" }],
+            { origin: "chat", requestId: "chat-1", conversation: "c-1", said: "use postgres" },
+          );
+          expect(chatted).toMatchObject({ kind: "answer", state: "applied" });
+          const again = yield* until(
+            () => fs.readFileString(log).pipe(Effect.orElseSucceed(() => "")),
+            (all) => all.includes("Your question Region is answered: Postgres"),
+          );
+          expect(again).toMatch(
+            /From chat for the human, [^\n]*\. The human said: \\"use postgres\\"\\nYour question Region is answered: Postgres/,
+          );
 
           yield* fs
             .writeFileString(launched.output, encode({ verdict: "built" }))

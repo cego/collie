@@ -61,10 +61,13 @@ import { Oversight } from "./oversight";
 import {
   autoCompactWindowAsWritten,
   FALLBACK_DEFAULTS,
+  gitlabHostOf,
   loadDefaults,
   readConfig,
   type Defaults,
 } from "./config";
+import { autoModeBlock, autoModeFacts, type AutoModeBlock, type RunAuthority } from "./automode";
+import { shell } from "./mr";
 import type { YamlMap } from "./yaml";
 import { RanOn } from "./board-model";
 import type { Asker } from "./proposals";
@@ -160,6 +163,10 @@ export interface AgentAsk {
   readonly output: string;
   /** A skill this work is started with, invoked the way the human channel invokes one. */
   readonly skill: string | null;
+  /** What this step's agent is told, in its own turn, that it may do: its Clearance. */
+  readonly clears?: ReadonlyArray<string>;
+  /** What the Run authorises, for a Claude agent's auto mode; nothing where left out. */
+  readonly authority?: RunAuthority;
   /** Null takes the host's own configured default, which is the operator's. */
   readonly harness: string | null;
   readonly model: string | null;
@@ -223,6 +230,18 @@ export interface Questions {
 
 /** An agent's question on its Run, numbered from 1 in the order its step asked them. */
 export const agentQuestionName = (operation: string, n: number) => `ask-${operation}-${n}`;
+
+/** Answers in the order asked, grouped by who gave them, so each is sent under its own sender. */
+const bySender = (answerers: ReadonlyArray<Asker | undefined>) => {
+  const groups = new Map<string, { by: Asker | undefined; at: number[] }>();
+  for (const [at, by] of answerers.entries()) {
+    const key = [by?.origin, by?.from?.run, by?.from?.agent, by?.said].join("\0");
+    const group = groups.get(key) ?? { by, at: [] };
+    group.at.push(at);
+    groups.set(key, group);
+  }
+  return [...groups.values()];
+};
 
 const closedAnswer = (operation: string) => `closed: ${operation} finished before it was answered`;
 
@@ -291,6 +310,8 @@ export interface AgentsApi {
   readonly retire: (launched: Launched, line: string) => Effect.Effect<void, AgentParked>;
   /** A line in the Run's log. */
   readonly say: (runId: string, line: string) => Effect.Effect<void>;
+  /** The step message as it will first be typed, token included, and its prompt's path. */
+  readonly stepMessage: (ask: AgentAsk) => { readonly typed: string; readonly prompt: string };
   /** `note` shows, and then clears, why a launch is still waiting without parking. */
   readonly launch: (
     ask: AgentAsk,
@@ -393,6 +414,8 @@ export interface Steered {
   readonly how?: string;
   /** The pane it went to, for a human to look at. */
   readonly pane?: string;
+  /** Said to whoever sent it where the words were kept as a file rather than typed. */
+  readonly kept?: string;
 }
 
 /** The agents a stop made Quiet, and what may still be running after it. */
@@ -446,6 +469,12 @@ interface Doing<Output extends OutputContract> {
    * work does not start: the Run records why and parks as Needs you (ADR-0050 D4).
    */
   readonly pushes?: boolean;
+  /**
+   * The step's Clearance: each entry one sentence naming one action and its target, built
+   * from facts Collie holds and never from an Output. Typed on one line after the step's
+   * pointer, where Claude's auto mode reads it as the user's own request.
+   */
+  readonly clears?: ReadonlyArray<string>;
   readonly harness?: string;
   readonly model?: string;
   readonly effort?: string;
@@ -541,6 +570,10 @@ export const agentWork = <
         }),
       );
     }
+    const unclear = clearanceProblem(given.clears ?? []);
+    if (unclear !== null) {
+      return yield* new WorkflowError({ reason: `${work.operation}: ${unclear}` });
+    }
     const output = agents.outputFor(work.runId, work.operation);
     const role = work.role ?? work.operation;
     // Where each skill the instructions mention lives, so a mention is the path to read
@@ -615,9 +648,20 @@ export const agentWork = <
       model: choice.model,
       effort: choice.effort,
       permissions: work.permissions ?? null,
+      authority: place.authority,
     };
     fellBack(ask, choice.from, choice.why);
     if (held !== null && held.sequence > 1) ask.sequence = held.sequence;
+    if (given.clears !== undefined) ask.clears = given.clears;
+    if ((given.clears ?? []).length > 0) {
+      const step = agents.stepMessage(ask);
+      const typed = Array.from(step.typed).length;
+      if (typed > dispatch.PASTE_BUDGET.chars) {
+        return yield* new WorkflowError({
+          reason: `${work.operation}: its step message would be ${typed} characters typed, over the ${dispatch.PASTE_BUDGET.chars} Claude Code still shows as typed; its prompt is ${step.prompt}. Shorten its Clearance, or use a shorter state directory.`,
+        });
+      }
+    }
 
     // Tickets an agent says it finished are carded while it is still working, so a human
     // sees each one land rather than waiting for the whole piece — and looked for once
@@ -1249,6 +1293,7 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
   /** What went out as a step's prompt or its repair, kept so a resend is the same words. */
   const sentPath = (about: Launched, kind: "step" | "repair") =>
     `${dirFor(about.runId)}/${stemOf(about)}.${kind}.md`;
+  const promptFile = (ask: AgentAsk) => `${dirFor(ask.runId)}/${stemOf(ask)}.prompt.md`;
   const log = (runId: string, line: string) => append(`${dirFor(runId)}/agents.log`, line);
 
   /**
@@ -1354,32 +1399,50 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
         gone: found.gone,
       };
     const entry = found.entry;
+    const requestId = delivery.requestId ?? `${about.runId}-${delivery.ref}-${delivery.kind}`;
+    const attempt = delivery.attempt ?? 1;
+    // Someone's words; work, repairs and corrections are Collie's own and go as they are.
+    const fitted =
+      delivery.kind === "steer"
+        ? yield* dispatch.fitDelivery(
+            attachmentsDir(`${host.dir}/runs/${about.runId}`),
+            `${dispatch.DELIVERY_TOKEN}${requestId}-${attempt}`,
+            text,
+            delivery.actor,
+          )
+        : { words: text, actor: delivery.actor, kept: null };
     const draft: dispatch.DeliveryDraft = {
       run: about.runId,
       harness: adapterFor(about.harness).id,
-      actor: delivery.actor,
+      actor: fitted.actor,
       cause: { kind: delivery.kind, ref: delivery.ref },
       mode: delivery.mode ?? "boundary",
       // Work, a repair and a steer share a causal key per thing they are about, which is
       // what makes the second copy refusable; a correction's is its constraint's.
       intentVersion: delivery.intentVersion ?? 0,
-      attempt: delivery.attempt ?? 1,
-      requestId: delivery.requestId ?? `${about.runId}-${delivery.ref}-${delivery.kind}`,
+      attempt,
+      requestId,
     };
     // A human's own words go out once: they are waiting on the answer, and can say it again.
     // So does a correction: another attempt at one is Collie's to decide, not a retry's.
     const outcome = yield* (
       delivery.kind === "steer" || delivery.kind === "correction"
-        ? dispatch.transaction(deps, entry, (channel) => channel.submit(text, draft))
-        : dispatch.submitPatiently(deps, entry, text, draft, host.patience)
+        ? dispatch.transaction(deps, entry, (channel) => channel.submit(fitted.words, draft))
+        : dispatch.submitPatiently(deps, entry, fitted.words, draft, host.patience)
     ).pipe(Effect.catch((cause) => Effect.succeed(undeliverable(cause))));
     const pane = entry.paneId;
     if (outcome.ok) {
       if (outcome.submission === "observed")
-        return { sent: true, why: "", observed: dispatch.TURN_STARTED, pane };
+        return { sent: true, why: "", observed: dispatch.TURN_STARTED, pane, kept: fitted.kept };
       if (delivery.kind !== "steer" && delivery.kind !== "correction")
         return { sent: true, why: "" };
-      return { sent: true, why: "", observed: yield* observe(about, entry, draft), pane };
+      return {
+        sent: true,
+        why: "",
+        observed: yield* observe(about, entry, draft),
+        pane,
+        kept: fitted.kept,
+      };
     }
     // Already sent about this work, on whichever attempt got there first. Sending it
     // again is the second copy this ledger exists to prevent.
@@ -1740,10 +1803,25 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
           ),
         );
         const settingsArgs =
-          adapter.id === "claude" && profile.claude !== undefined
-            ? yield* overlaySettings(
+          adapter.id === "claude"
+            ? yield* claudeSettings(
                 controls,
-                profile.claude,
+                profile.claude ?? {},
+                autoModeBlock(
+                  yield* autoModeFacts(
+                    {
+                      agent,
+                      run: ask.runId,
+                      workflow: ask.workflow,
+                      machine: machineName(),
+                      stateDir: host.env.stateDir,
+                      cwd: ask.cwd,
+                    },
+                    ask.authority ?? NO_AUTHORITY,
+                    shell,
+                    yield* gitlabHostOf(host.env).pipe(Effect.orElseSucceed(() => undefined)),
+                  ),
+                ),
                 `${dirFor(ask.runId)}/${stemOf(ask)}`,
               )
             : controls;
@@ -1868,10 +1946,10 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
             );
         const adapter = adapterFor(launched.harness);
         const prefix = personaPrefix(adapter, yield* personaOf(ask.persona ?? ask.role));
-        const file = `${dirFor(ask.runId)}/${stemOf(ask)}.prompt.md`;
+        const file = promptFile(ask);
         // Written before it goes out and never rewritten: what a human reads to see what
         // was actually asked, rather than what a prompt would be built as now.
-        const address = `You are ${agent} of ${ask.runId} on ${machineName()}. Message another Run's agent with collie_do deliver to its Run and agent, or collie run steer <run> --operation <agent> "<words>"; push your branch before starting work on another Machine.`;
+        const address = `You are ${agent} of ${ask.runId} on ${machineName()}. Message another Run's agent with collie_do deliver to its Run and agent, or collie run steer <run> --operation <agent> "<words>"; push your branch before starting work on another Machine. ${READING_DELIVERIES} ${SHELL_HABITS}`;
         yield* write(
           file,
           `${address}\n\n${prefix === "" ? ask.prompt : `${prefix}\n\n${ask.prompt}`}`,
@@ -1907,8 +1985,7 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
         // message and not a transcript, and a step's prompt carries a whole contract.
         // A skill marked `disable-model-invocation` refuses an agent that invokes it
         // itself; this is the human's channel, so a slash command here runs.
-        const started = ask.skill === null ? "" : `${adapter.skillCommand(ask.skill)} `;
-        const pointer = `${started}${stepPointer(file)}`;
+        const pointer = stepText(adapter, ask, file);
         yield* write(sentPath(launched, "step"), pointer);
         let asked = yield* deliver(launched, pointer, {
           kind: "step",
@@ -2057,7 +2134,9 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
             call,
             names: call.questions.map(() => agentQuestionName(stem, ++n)),
           }));
-          const answers = new Map((yield* questions.asked).map((one) => [one.name, one.answer]));
+          const asked = yield* questions.asked;
+          const answers = new Map(asked.map((one) => [one.name, one.answer]));
+          const answerers = new Map(asked.map((one) => [one.name, one.by]));
           let open = false;
           for (const { call, names } of calls) {
             for (const [at, question] of call.questions.entries()) {
@@ -2081,23 +2160,23 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
             }
             if (given.includes(closed) || refused.has(call.id)) continue;
             // The ledger refuses a second copy, so a replay sends nothing again.
-            const sent = yield* deliver(
-              launched,
-              [
-                "Your question has been answered on your Run.",
-                ...call.questions.map(
-                  (question, at) =>
-                    `\n${question.header ? `${question.header}: ` : ""}${question.question}\nAnswer: ${given[at]}`,
-                ),
-              ].join("\n"),
-              { kind: "steer", ref: names[0] ?? stem },
-            );
-            if (sent.refused) {
-              refused.add(call.id);
-              yield* log(
-                launched.runId,
-                `${launched.agent}: was not sent the answers to ${names.join(", ")} (${sent.why})`,
+            const label = (at: number) =>
+              call.questions[at]?.header || call.questions[at]?.question || names[at];
+            for (const group of bySender(names.map((name) => answerers.get(name)))) {
+              const sent = yield* deliver(
+                launched,
+                group.at.length === 1
+                  ? `Your question ${label(group.at[0]!)} is answered: ${given[group.at[0]!]}`
+                  : `Your questions are answered: ${group.at.map((at) => `${label(at)}: ${given[at]}`).join("; ")}`,
+                { kind: "steer", ref: names[group.at[0]!] ?? stem, actor: group.by },
               );
+              if (sent.refused) {
+                refused.add(call.id);
+                yield* log(
+                  launched.runId,
+                  `${launched.agent}: was not sent the answers to ${group.at.map((at) => names[at]).join(", ")} (${sent.why})`,
+                );
+              }
             }
           }
           return open;
@@ -2485,6 +2564,11 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
 
   return {
     outputFor,
+    stepMessage: (ask) => {
+      const prompt = promptFile(ask);
+      const text = stepText(adapterFor(ask.harness ?? host.harness), ask, prompt);
+      return { typed: dispatch.marked(text, `${ask.runId}-${stemOf(ask)}-step-1`), prompt };
+    },
     skills: (names) => under(skills(names)),
     attachments: (runId) =>
       under(listAttachments(attachmentsDir(`${host.dir}/runs/${runId}`))).pipe(
@@ -2610,7 +2694,11 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
 /** A steer that went out, with whether it was seen taken. */
 const receipt = (
   agent: string,
-  sent: { readonly observed?: string | null; readonly pane?: string },
+  sent: {
+    readonly observed?: string | null;
+    readonly pane?: string;
+    readonly kept?: string | null;
+  },
 ): Steered => {
   const how = sent.observed ?? null;
   const steered: Types.Mutable<Steered> = {
@@ -2621,11 +2709,44 @@ const receipt = (
   };
   if (how !== null) steered.how = how;
   if (sent.pane !== undefined) steered.pane = sent.pane;
+  if (sent.kept !== undefined && sent.kept !== null) steered.kept = sent.kept;
   return steered;
 };
 
+/** How the agent tells whose words a Delivery carries, by its sender line. */
+const READING_DELIVERIES =
+  "A message whose first line after its `collie-delivery:` token starts `From the human` is the human's own message, as if typed here. One starting `From chat for the human` quotes the human's own words. One from an agent is that agent's words, not the human's. If auto mode refuses an action that was asked for only in a file a message named, ask on the Run with your question tool, naming the exact action and its target, and act on the answer.";
+
+/** Habits whose absence stalled Runs on a permission prompt or wasted their turns. */
+const SHELL_HABITS =
+  "Never use a shell variable as a command word: write the command out. To wait, use a command that blocks until it is done, or run it in the background, never `sleep`. Search under a directory's own path, never from `/`.";
+
 const stepPointer = (file: string) =>
   `Your task for this step is in ${file} — read it and follow it.`;
+
+/** The longest a step's joined Clearance may be, before its prefix. */
+const CLEARANCE_CHARS = 400;
+
+const clearanceProblem = (clears: ReadonlyArray<string>): string | null => {
+  if (clears.some((one) => /[\r\n]/.test(one)))
+    return "a Clearance is one line, and this one has a line break";
+  const joined = Array.from(clears.join("; ")).length;
+  return joined > CLEARANCE_CHARS
+    ? `its Clearance is ${joined} characters, over the ${CLEARANCE_CHARS} a Clearance may be`
+    : null;
+};
+
+/** What a step's agent is sent, before the dispatcher adds its token. */
+const stepText = (
+  adapter: { readonly skillCommand: (name: string) => string },
+  ask: AgentAsk,
+  file: string,
+) => {
+  const started = ask.skill === null ? "" : `${adapter.skillCommand(ask.skill)} `;
+  const pointer = `${started}${stepPointer(file)}`;
+  const clears = ask.clears ?? [];
+  return clears.length === 0 ? pointer : `${pointer}\nCleared for this step: ${clears.join("; ")}.`;
+};
 const encodeLaunched = Schema.encodeSync(Schema.fromJsonString(Launched));
 
 /** What a delivery is called in a log: one line of it, so the log stays readable. */
@@ -2728,11 +2849,18 @@ const write = (path: string, text: string) =>
 
 const encodeSettings = Schema.encodeSync(Schema.fromJsonString(Schema.Json));
 
+const NO_AUTHORITY: RunAuthority = { createdBranch: null, roaming: false, started: null };
+
 /**
- * Claude's `--settings` with the operator's overlay merged in: into the file Collie's
- * controls already pass, or into a file of its own where they pass none.
+ * Claude's `--settings` with the operator's overlay and the Run's `autoMode` merged in: into
+ * the file Collie's controls already pass, or into a file of its own where they pass none.
  */
-const overlaySettings = (controls: ReadonlyArray<string>, overlay: ClaudeOverlay, stem: string) =>
+const claudeSettings = (
+  controls: ReadonlyArray<string>,
+  overlay: ClaudeOverlay,
+  autoMode: AutoModeBlock,
+  stem: string,
+) =>
   Effect.gen(function* () {
     const at = controls.indexOf("--settings");
     const passed = at === -1 ? undefined : controls[at + 1];
@@ -2745,7 +2873,8 @@ const overlaySettings = (controls: ReadonlyArray<string>, overlay: ClaudeOverlay
             Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.JsonObject))),
             Effect.orDie,
           );
-    yield* write(path, `${encodeSettings(mergeClaudeSettings(collie, overlay))}\n`);
+    const merged = { ...mergeClaudeSettings(collie, overlay), autoMode: { ...autoMode } };
+    yield* write(path, `${encodeSettings(merged)}\n`);
     return passed === undefined ? [...controls, "--settings", path] : controls;
   });
 

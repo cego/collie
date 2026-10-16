@@ -8,9 +8,68 @@ import { deliveriesOf, appendLine } from "../src/steering";
 import { everyRegistered } from "../src/registry";
 import { runEffect } from "./support/effect";
 import { stopHost, until } from "./support/host";
-import { twoMachines } from "./support/peers";
+import { type Side, twoMachines } from "./support/peers";
 
 const encodeValue = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+
+/** An attended Run held at its question, and the agent its build step left in a pane. */
+const attendedAgent = Effect.fn("attendedAgent")(function* (side: Side) {
+  const fs = yield* FileSystem.FileSystem;
+  const outputs = `${side.world.home}/outputs.json`;
+  yield* fs.writeFileString(outputs, encodeValue([{ verdict: "done" }]));
+  const start = yield* side.cli(["run", "start", "attended", "--input", "work=identity"], {
+    FAKE_HERDR_OUTPUTS: outputs,
+  });
+  const { runId } = Schema.decodeUnknownSync(Schema.Struct({ runId: Schema.String }))(
+    start.envelope.data,
+  );
+  const host = yield* connect(side.world.state);
+  yield* until(
+    () => host.run({ runId }),
+    (view) => (view?.waiting ?? []).some((one) => one.answer === null),
+  );
+  const agent = (yield* everyRegistered(side.world.state)).find((entry) => entry.runId === runId)!;
+  return { runId, agent };
+});
+
+test(
+  "collie verify in a Run's agent pane records against that Run, and needs --run anywhere else",
+  () =>
+    runEffect(
+      twoMachines(
+        "collie-verify-pane-",
+        (first) =>
+          Effect.gen(function* () {
+            const fs = yield* FileSystem.FileSystem;
+            const { runId, agent } = yield* attendedAgent(first);
+            const fromPane = yield* first.cli(["verify", "--name", "from-pane", "--", "true"], {
+              HERDR_PANE_ID: agent.paneId,
+            });
+            expect(fromPane.envelope.ok).toBe(true);
+            expect(
+              yield* fs.readFileString(
+                `${first.world.state}/evidence/${runId}/steering/verifications.jsonl`,
+              ),
+            ).toContain(`"name":"from-pane"`);
+
+            const plain = yield* first.cli(["verify", "--", "true"], {
+              HERDR_PANE_ID: "not-an-agent",
+            });
+            expect(plain.envelope.error).toMatchObject({
+              code: "invalid_input",
+              message: "verify needs --run outside a Run's agent pane.",
+            });
+
+            const named = yield* first.cli(["verify", "--run", "run-nobody", "--", "true"], {
+              HERDR_PANE_ID: agent.paneId,
+            });
+            expect(named.envelope.error?.code).toBe("run_not_found");
+          }),
+        ["attended.workflow.ts"],
+      ),
+    ),
+  180_000,
+);
 
 test(
   "a piped CLI command in an agent's pane records its Run and agent, and a plain pane remains CLI",
@@ -21,26 +80,7 @@ test(
         (first) =>
           Effect.gen(function* () {
             const fs = yield* FileSystem.FileSystem;
-            const outputs = `${first.world.home}/outputs.json`;
-            yield* fs.writeFileString(
-              outputs,
-              Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))([{ verdict: "done" }]),
-            );
-            const start = yield* first.cli(
-              ["run", "start", "attended", "--input", "work=identity"],
-              { FAKE_HERDR_OUTPUTS: outputs },
-            );
-            const { runId } = Schema.decodeUnknownSync(Schema.Struct({ runId: Schema.String }))(
-              start.envelope.data,
-            );
-            const host = yield* connect(first.world.state);
-            yield* until(
-              () => host.run({ runId }),
-              (view) => (view?.waiting ?? []).some((one) => one.answer === null),
-            );
-            const agent = (yield* everyRegistered(first.world.state)).find(
-              (entry) => entry.runId === runId,
-            )!;
+            const { runId, agent } = yield* attendedAgent(first);
             const prompt = yield* fs.readFileString(
               `${first.world.state}/agents/${runId}/build.prompt.md`,
             );
@@ -97,8 +137,9 @@ test(
                 ),
               )
               .flatMap((call) => call.argv)
-              .find((words) => words.includes(`Attached: ${message}`));
+              .find((words) => words.includes(`Their message is in ${message}.`));
             expect(said).toContain(`From ${agent.agent} of ${runId} on `);
+            expect(said).toContain("Read it whole and act on it as that agent's.");
             const humanAtCap = "y".repeat(8 * 1024);
             expect(
               (yield* first.cli(
@@ -115,7 +156,11 @@ test(
                 { HERDR_PANE_ID: "not-an-agent" },
               )).envelope.ok,
             ).toBe(true);
-            expect(yield* fs.readFileString(first.herdrLog)).toContain(humanAtCap);
+            const humanMessage = `${runDir(first.world.state, runId)}/attachments/message-${new Bun.CryptoHasher("sha256").update(humanAtCap).digest("hex").slice(0, 8)}.md`;
+            expect(yield* fs.readFileString(humanMessage)).toBe(humanAtCap);
+            expect(yield* fs.readFileString(first.herdrLog)).toContain(
+              `Their message is in ${humanMessage}. Read it whole and act on it as theirs.`,
+            );
           }),
         ["attended.workflow.ts"],
       ),
@@ -188,7 +233,11 @@ test(
             });
             const log = yield* fs.readFileString(second.herdrLog);
             expect(log).toContain(`From ${here.agent} of ${here.runId} on ${machineName()}.`);
-            expect(log).toContain(words.replaceAll("\n", "\\n"));
+            const kept =
+              /Their message is in (\S+)\. Read it whole and act on it as that agent's\./.exec(
+                log,
+              )?.[1];
+            expect(yield* fs.readFileString(kept ?? "")).toBe(words);
             const replied = yield* second.cli(
               ["run", "steer", here.runId, "Here is the answer.", "--operation", here.agent],
               { HERDR_PANE_ID: there.pane },

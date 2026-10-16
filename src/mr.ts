@@ -37,6 +37,25 @@ export function whatItSaid(result: Ran): string {
   return [result.stdout.trim(), result.stderr?.trim() ?? ""].filter(Boolean).join("\n");
 }
 
+/**
+ * Makes `helper` the checkout's only credential helper for `host`: the empty entry before
+ * it drops any helper git read from a wider config. Setting it again changes nothing.
+ */
+export const keepCredentialHelper = Effect.fn("mr.keepCredentialHelper")(function* <R>(
+  checkout: string,
+  host: string,
+  helper: string,
+  run: Runner<R>,
+) {
+  const key = `credential.https://${host}.helper`;
+  yield* run("git", ["config", "--local", "--unset-all", key], checkout);
+  for (const value of ["", helper]) {
+    const set = yield* run("git", ["config", "--local", "--add", key, value], checkout);
+    if (set.code !== 0) return { ok: false, reason: whatItSaid(set) || `git could not set ${key}` };
+  }
+  return { ok: true, reason: "" };
+});
+
 /** A Linear id, the shape it takes in a branch name, a URL, or an Output. */
 const LINEAR_ID = /\b([A-Z][A-Z0-9]+-\d+)\b/g;
 
@@ -217,6 +236,21 @@ export function forgeHere<R>(
   });
 }
 
+/** Whether the forge shows production carrying `sha`: false where it cannot say. */
+export function productionCarries<R>(
+  cwd: string,
+  sha: string,
+  run: Runner<R>,
+  gitlabHost?: string,
+): Effect.Effect<boolean, never, R> {
+  return Effect.gen(function* () {
+    const here = yield* forgeHere(cwd, run, gitlabHost);
+    if (!here.ok) return false;
+    const ref = { project: here.project, iid: "" };
+    return (yield* here.forge.liveTier(ref, sha, cwd, run)) === "production";
+  });
+}
+
 /**
  * The URL of the checkout's branch's open merge request where it merges itself once green,
  * else null. A checkout on no forge has none to merge; a forge that cannot be read fails with
@@ -362,6 +396,8 @@ export function prepareMergeRequest<R>(
       issues: yield* linearIssues(work, run),
       forge: forge.display,
       noun: forge.noun,
+      url: forge.webUrl(project),
+      branch: branch === "HEAD" ? "" : branch,
       existing: found.open?.url ?? "",
       autoMerge: found.open?.autoMerge ?? false,
       commands: forge.commands({

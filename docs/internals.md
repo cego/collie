@@ -284,6 +284,9 @@ when it finishes. `worktrees.json` is rewritten only when something moved.
 
 A Renovate clone under `renovate-repositories/` is its own kind of the same sweep: it goes
 once no Run with a row cut a checkout from it and no checkout cut from it is left on disk.
+Each use of such a clone, new or kept, gives it the forge's credential helper (see
+[The forge boundary](#the-forge-boundary)), so a clone made before the helper existed gets
+it on its next Run, and the checkouts cut from it share it.
 
 Two things are deliberately not conditions. A `run start` names the checkout it is about
 to work in, and that one is held whatever its state, because the run resolving its branch
@@ -299,8 +302,9 @@ verification runs in that host's checkout and streams its output. `verify-model.
 keeps the shared Schemas separate from the collector.
 Once the owning host is found, its operation refusal is returned to the caller; it
 does not become a search for the Run on another Machine.
-Message file fallback and Dispatcher use the same rendered sender line when measuring
-the delivery cap, so a full agent message is kept whole rather than refused after attribution.
+The paste budget is measured on the same rendered token and sender line the Dispatcher
+types, so a message is kept whole as a file rather than typed past it
+([steering](steering.md#the-paste-budget)).
 
 Each host keeps its peers in `src/peers.ts`, started in the host's scope
 ([ADR-0057](adr/0057-a-machine-reaches-another-over-a-paired-link.md)):
@@ -658,6 +662,21 @@ forge of the merge request in front of it (`forgeOf(ref)`, from the reference's 
 gets answers rather than CLI calls: whether the CLI is ready for a host, who it is logged
 in as, one merge request as the panel, how far a merged commit is deployed, and a note.
 An operation is added to the interface when its first caller moves onto it.
+
+A checkout Collie clones keeps a credential helper for its forge's host in its own git
+config, and no token: GitLab's asks `glab config get token --host <host>` at each use and
+answers as `oauth2`, and GitHub's is gh's own `gh auth git-credential`. An empty helper
+entry before it drops whatever helper a global config named, so a stale credential there
+never answers first. Setting it again changes nothing.
+
+`protects(project, branch)` says whether a branch, pushed or not, is protected: `true`
+where it is the default branch or matches any protection rule or ruleset, whatever the rule
+allows, and `null` where the forge cannot say. GitLab reads the project's default branch
+and its protected branches, matching their wildcards; GitHub reads the default branch, the
+rules active for the name (`rules/branches/<name>`), and the classic protection rules'
+patterns through GraphQL. A Claude agent's launch reads it for the branch its Run created,
+and only `false` gives the agent the history allowance
+([What a Claude agent's auto mode is told](using.md#what-a-claude-agents-auto-mode-is-told)).
 
 The interface also lists open issues, files issues, and comments on them. The adapters
 decode their own CLI answers into the shared issue shape. GitLab reads consecutive

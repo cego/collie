@@ -285,10 +285,14 @@ export default defineWorkflow({
           settled = reviewed.refused;
           continue;
         }
+        const forge = yield* host.mr({ cwd: reviewed.cwd });
         const fixed = yield* agentWork({
           operation,
           role: "implementer",
           pushes: true,
+          clears: [
+            `pushing new commits to ${reviewed.branch} on origin${forge.url === undefined ? "" : ` (${forge.url})`} with a plain push`,
+          ],
           instructions: FIX_PROMPT,
           input: {
             inputs,

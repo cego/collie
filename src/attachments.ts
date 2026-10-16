@@ -87,7 +87,7 @@ export const copyInto = Effect.fn("attachments.copyInto")(function* (
   return named.map(({ name, from }): Attached => ({ name, from }));
 });
 
-/** Keeps words over the delivery cap as a file in `dir`, named by digest so a retry keeps one. */
+/** Keeps words too long to type as a file in `dir`, named by digest so a retry keeps one. */
 export const keepMessage = Effect.fn("attachments.keepMessage")(function* (
   dir: string,
   words: string,

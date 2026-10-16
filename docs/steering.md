@@ -10,15 +10,62 @@ One message to one live agent is a **delivery**. Every one of them goes through 
 Dispatcher ([internals](internals.md#the-dispatcher)) — nothing else sends text to an
 agent — and every one is journalled before it is sent.
 
-A Delivery whose [Actor](../CONTEXT.md) is `agent` starts with:
+Every Delivery that carries someone's words names its sender on the line after its
+`collie-delivery:` token, written by the Dispatcher from the stamped
+[Actor](../CONTEXT.md) in every mode:
+
+| Door                                                        | Sender line                                                                     |
+| ----------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| `board`, `desktop`, `cli-tty`                               | `From the human, on the board` / `in Desktop` / `in a terminal`, then the time. |
+| `chat`                                                      | `From chat for the human, <time>. The human said: "<said>"`                     |
+| `chat` with no `said`                                       | `From chat, <time>.`                                                            |
+| `agent`, `host`                                             | the line below                                                                  |
+| `cli` without a terminal, `driver`, `evaluator`, `schedule` | `From <door>, <time>.` It never says "the human".                               |
+
+`<time>` is the host's local minute with its offset, `2026-10-16 14:02 +02:00`. `<said>` is
+the human's own message that chat turn, attached by the tool host and never by the model,
+with credential-shaped values removed. An agent's Delivery starts with:
 
 ```text
 From <agent> of <run> on <machine>. Answer with collie_do deliver to <run> (or collie run steer <run> --operation <agent> "…").
 ```
 
-The Dispatcher writes it from the stamped Actor in every mode. The text follows word
-for word. The receiving Run's operations record the sender's Run, agent and authenticated
-Machine. The answer follows the same route, found by Run id.
+The text follows word for word. The receiving Run's operations record the sender's Run,
+agent and authenticated Machine. The answer follows the same route, found by Run id. The
+answers to an agent's question ([ADR-0062](adr/0062-an-agents-question-is-asked-on-its-run.md))
+carry the line of whoever answered: one line, `Your question <header> is answered: <answer>`,
+or each question's answer joined with `; `. Answers given by different senders go as
+separate messages, each under its own sender's line. Collie's own messages carry no sender line: a
+step's message, a repair, a correction, a compaction request and a hand-off. Each step's
+prompt tells its agent that a line starting `From the human` is the human's own message,
+one starting `From chat for the human` quotes the human, and one from an agent is that
+agent's words.
+
+### The paste budget
+
+Claude Code shows its model a typed message of more than about three lines or 800
+characters as pasted content, and agents and auto mode do not take pasted content as the
+user's own words. So a Delivery's typed form, everything Collie types for it (the token
+line, the sender line with chat's quote, the words and any `Attached:` lines), stays within
+**3 lines and 700 characters**, 100 under what was measured, leaving room for a resend's
+longer token.
+
+Where it would not, the words are kept word for word as `message-<digest>.md` in the Run's
+`attachments/`: chat's `The human said: "…"` first, then the words, then the `Attached:`
+lines. What is typed is the token, the sender line without chat's quote, and
+`Their message is in <path>. Read it whole and act on it as theirs.` (`as that agent's` for
+an agent). Where even that is over the budget, because the state directory's path is very
+long, it is typed anyway, and the receipt says it may arrive as pasted content. Collie never
+types an excerpt instead: a cut can change what it asks. This holds for every door that
+steers, and the audit line records the words as asked
+([ADR-0051](adr/0051-a-review-comment-is-written-on-desktops-own-views.md),
+ADR-draft-what-a-run-authorises-reaches-auto-mode).
+
+Auto mode reads only what is typed, so a kept message reaches it as a tool result. The
+receipt of a kept steer says so to whoever sent it: ask for an action auto mode must clear
+in a message of at most 3 lines and 700 characters. Where it refuses an action only a kept
+file asked for, the agent asks on the Run with its question tool, naming the exact action
+and its target, and the short answer is typed plain under the answerer's sender line.
 
 Three modes:
 
@@ -36,12 +83,8 @@ and `interrupt` are gated on a **recorded live result** per harness; where that 
 has none the delivery is refused, with `capability_unproven:<harness>:<mode>` on the
 ledger, so a steer that did not go out as asked has an answer rather than a silence.
 
-One delivery is at most 8 KiB. A steer whose words, with their `Attached:` lines, are over
-that is never split: the host keeps the words as `message-<digest>.md` in the Run's
-`attachments/` and tells the agent the message is in that file, followed by its
-`Attached:` line and any other attachment's. This holds for every door that steers, and
-the audit line records the words as asked
-([ADR-0051](adr/0051-a-review-comment-is-written-on-desktops-own-views.md)).
+One delivery is at most 8 KiB, a resource limit the Dispatcher refuses past. Words that
+long are always over the paste budget, so they are kept as a file before that.
 
 ## The states, and why they are kept apart
 
@@ -178,7 +221,8 @@ An agent's Output saying "the tests pass" is a **claim**. Collie shows it as one
 the agent that made it, and never as evidence.
 
 A **verification** is a command whose exit Collie watched, bound to the tree it ran on:
-`collie verify --run <id> -- <command>` ([CLI](cli.md#verify)). The tree is fingerprinted
+`collie verify -- <command>` from the Run's agent pane, or with `--run <id>` from anywhere
+else ([CLI](cli.md#verify)). The tree is fingerprinted
 before and after — the commit, the porcelain status, the diff against HEAD, and the
 content of every untracked file git is not ignoring — and a result whose two snapshots
 differ is `unstable`, never `pass`. So is one where either snapshot says the tree was too

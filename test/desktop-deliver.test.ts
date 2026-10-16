@@ -1,5 +1,6 @@
 // Desktop sends a Run's review comments as one `deliver`, word for word, at any length:
-// the host, not Desktop, keeps one over the cap as a file in the Run.
+// the host, not Desktop, signs it as the human in Desktop and keeps one over the paste budget
+// as a file in the Run (test/finished-steer.test.ts).
 
 import { expect, test } from "bun:test";
 import { Effect } from "effect";

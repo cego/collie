@@ -5,7 +5,7 @@
 // already in the air about this work".
 
 import type { BunServices } from "@effect/platform-bun/BunServices";
-import { Clock, Data, Duration, Effect, FileSystem, Path, Result } from "effect";
+import { Clock, Data, DateTime, Duration, Effect, FileSystem, Path, Result } from "effect";
 import { ensureLockDir } from "./lock";
 import {
   herdrFailureReason,
@@ -34,6 +34,9 @@ import {
 import { gate, interruptKeys } from "./steering-caps";
 import { nowIso, took, epochMs } from "./time";
 import type { Asker } from "./proposals";
+import type { FrontDoor } from "./board-model";
+import { scrub } from "./redact";
+import { keepMessage } from "./attachments";
 
 /** How long a message may sit `reserved` before a later reader calls it `unknown`. */
 export const SUBMIT_TIMEOUT_MS = 60_000;
@@ -44,13 +47,91 @@ const LISTING_MAX_AGE_MS = 5_000;
 /** A resource limit, not a style rule: one send is one message, not a transcript. */
 export const MAX_DELIVERY_BYTES = 8 * 1024;
 
-/** The exact message whose size is bounded and which reaches the agent. */
-export const deliveryText = (words: string, actor?: Asker): string => {
-  const sender = actor?.origin === "agent" || actor?.origin === "host" ? actor.from : undefined;
-  return sender?.run !== undefined && sender.agent !== undefined
-    ? `From ${sender.agent} of ${sender.run} on ${sender.machine?.name ?? sender.client ?? "this Machine"}. Answer with collie_do deliver to ${sender.run} (or collie run steer ${sender.run} --operation ${sender.agent} "…").\n${words}`
-    : words;
+const HUMAN_DOORS: Partial<Record<FrontDoor, string>> = {
+  board: "on the board",
+  desktop: "in Desktop",
+  "cli-tty": "in a terminal",
 };
+
+/** The host's local time to the minute, with its offset: `2026-10-16 14:02 +02:00`. */
+const localMinute = (at: number): string => {
+  const iso = DateTime.formatIsoOffset(
+    DateTime.makeZonedUnsafe(at, { timeZone: DateTime.zoneMakeLocal() }),
+  );
+  return `${iso.slice(0, 10)} ${iso.slice(11, 16)} ${iso.slice(-6)}`;
+};
+
+/**
+ * Whose words a Delivery carries, or null for Collie's own. A chat's `said` of "" is one
+ * kept in a file, so its line names the human without quoting them.
+ */
+const senderLine = (actor: Asker | undefined, at: number): string | null => {
+  if (actor === undefined) return null;
+  if (actor.origin === "agent" || actor.origin === "host") {
+    const sender = actor.from;
+    return sender?.run !== undefined && sender.agent !== undefined
+      ? `From ${sender.agent} of ${sender.run} on ${sender.machine?.name ?? sender.client ?? "this Machine"}. Answer with collie_do deliver to ${sender.run} (or collie run steer ${sender.run} --operation ${sender.agent} "…").`
+      : null;
+  }
+  const when = localMinute(at);
+  const human = HUMAN_DOORS[actor.origin];
+  if (human !== undefined) return `From the human, ${human}, ${when}.`;
+  if (actor.origin !== "chat") return `From ${actor.origin}, ${when}.`;
+  if (actor.said === undefined) return `From chat, ${when}.`;
+  const quote = actor.said === "" ? "" : ` The human said: "${scrub(actor.said).text}"`;
+  return `From chat for the human, ${when}.${quote}`;
+};
+
+/** The exact message whose size is bounded and which reaches the agent. */
+export const deliveryText = (words: string, actor: Asker | undefined, at: number): string => {
+  const line = senderLine(actor, at);
+  return line === null ? words : `${line}\n${words}`;
+};
+
+/**
+ * What Claude Code still shows its model as typed: past about 3 lines or 800 characters it
+ * becomes pasted content, which agents and auto mode do not take as the user's. 700 leaves
+ * room for a resend's longer token.
+ */
+export const PASTE_BUDGET = { lines: 3, chars: 700 } as const;
+
+const fits = (typed: string) =>
+  typed.split("\n").length <= PASTE_BUDGET.lines && Array.from(typed).length <= PASTE_BUDGET.chars;
+
+export const KEPT =
+  "Kept as a file in the Run. Auto mode reads only what is typed: ask for an action it must clear in a message of at most 3 lines and 700 characters.";
+
+/**
+ * Someone's words as they will be typed after `token`: as given where the whole typed form
+ * fits the paste budget, else kept word for word in `into` and named. Never cut, since an
+ * excerpt can change what it asks.
+ */
+export const fitDelivery = Effect.fn("Dispatcher.fitDelivery")(function* (
+  into: string,
+  token: string,
+  words: string,
+  actor: Asker | undefined,
+) {
+  const at = yield* Clock.currentTimeMillis;
+  if (fits(`${token}\n${deliveryText(words, actor, at)}`)) return { words, actor, kept: null };
+  const said =
+    actor?.origin === "chat" && actor.said !== undefined && actor.said !== ""
+      ? scrub(actor.said).text
+      : undefined;
+  const name = yield* keepMessage(
+    into,
+    said === undefined ? words : `The human said: "${said}"\n\n${words}`,
+  );
+  const told = `Their message is in ${into}/${name}. Read it whole and act on it as ${actor?.origin === "agent" ? "that agent's" : "theirs"}.`;
+  const unquoted = actor === undefined || said === undefined ? actor : { ...actor, said: "" };
+  return {
+    words: told,
+    actor: unquoted,
+    kept: fits(`${token}\n${deliveryText(told, unquoted, at)}`)
+      ? KEPT
+      : `${KEPT} Even this is over the budget, so it may arrive as pasted content.`,
+  };
+});
 
 export interface DeliveryDraft {
   readonly run: string;
@@ -223,7 +304,7 @@ export const transaction = Effect.fn("Dispatcher.transaction")(function* <A, E, 
         agent: entry.agent,
         submit: (words, draft) =>
           Effect.gen(function* () {
-            const text = deliveryText(words, draft.actor);
+            const text = deliveryText(words, draft.actor, yield* Clock.currentTimeMillis);
             if (closed)
               return yield* new DispatcherDefect({
                 why: `${entry.agent}'s channel was used after its transaction closed`,

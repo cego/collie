@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
-import { RENOVATE, RENOVATE_ON } from "../workflows/renovate.workflow";
+import { Schema } from "effect";
+import { RENOVATE, RENOVATE_ON, Released, Tracked } from "../workflows/renovate.workflow";
 import { contentOf } from "../src/sdk";
 import onGitlab from "../workflows/renovate.gitlab.md" with { type: "text" };
 import onGithub from "../workflows/renovate.github.md" with { type: "text" };
@@ -60,4 +61,42 @@ test("the batch leaves out a bump it cannot fix small, with a recommendation, an
     expect(content.sections.get("assess")).toContain("consultation");
     expect(content.sections.get("merge")).toContain("consultation");
   }
+});
+
+test("renovate picks among several issues by rule, asks approval on the Run, and leaves production to the human", () => {
+  for (const content of [gitlab, github]) {
+    const flat = (step: string) => (content.sections.get(step) ?? "").replace(/\s+/g, " ");
+    const track = flat("track");
+    expect(track).toContain("the one whose title names the current month or cycle");
+    expect(track).toContain("otherwise the one with the earliest due date");
+    expect(track).toContain("otherwise the newest");
+    expect(track).toContain("`picked_because`");
+    expect(track).not.toMatch(/ask me which(?! team)/);
+    expect(track).toContain("ask me which team");
+    const approval = flat("approval");
+    expect(approval).not.toContain("in this pane");
+    expect(approval).toContain("question tool");
+    const release = flat("release");
+    expect(release).toContain("`prod_jobs`");
+    expect(release).toContain("never play, retry or ask about them");
+    expect(release).not.toContain("including its publish or deploy jobs");
+  }
+});
+
+test("a landing's own Outputs decode with or without the pick and the production jobs", () => {
+  const tracked = { verdict: "clean", issue: "REN-1" };
+  expect(Schema.decodeUnknownSync(Tracked)(tracked).picked_because).toBeUndefined();
+  expect(
+    Schema.decodeUnknownSync(Tracked)({ ...tracked, picked_because: "names October" })
+      .picked_because,
+  ).toBe("names October");
+  const released = { verdict: "clean", tagged: true, version: "1.2.0" };
+  expect(Schema.decodeUnknownSync(Released)(released).prod_jobs).toBeUndefined();
+  const jobs = [
+    { name: "deploy-prod", url: "https://gitlab.example.com/x/-/jobs/9" },
+    { name: "prod" },
+  ];
+  expect(Schema.decodeUnknownSync(Released)({ ...released, prod_jobs: jobs }).prod_jobs).toEqual(
+    jobs,
+  );
 });

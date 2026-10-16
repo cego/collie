@@ -1023,7 +1023,14 @@ export const steerRun = (
       const { sent, route } = answered.value;
       const data = { run: options.runId, ...sent };
       if (sent.delivered)
-        return { ok: true as const, data, human: withNotice(deliveredLine(sent), sent.redacted) };
+        return {
+          ok: true as const,
+          data,
+          human: withNotice(
+            [deliveredLine(sent), sent.kept].filter((line) => line !== undefined).join(" "),
+            sent.redacted,
+          ),
+        };
       // A receipt that read as delivered when nothing was sent is the failure ADR-0041 ends.
       const why = `Nothing was delivered: ${sent.detail || "no agent to tell"}.`;
       return err(

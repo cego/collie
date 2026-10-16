@@ -28,6 +28,7 @@ import { WorkflowInstance, type WorkflowEngine } from "effect/workflow/WorkflowE
 import * as DurableDeferred from "effect/workflow/DurableDeferred";
 import * as Workflow from "effect/workflow/Workflow";
 import type { Agents } from "./agents";
+import type { RunAuthority } from "./automode";
 import { bodySections, INPUT_STRATEGIES, type InputStrategy } from "./definitions";
 import { exclusiveClashes, launchInputProblem } from "./strategies";
 import { expressionsIn, malformedIn } from "./template";
@@ -41,6 +42,7 @@ import {
   type Outcome,
 } from "./outcome";
 import type { Source } from "./offers";
+import type { Asker } from "./proposals";
 import type { UsageReading } from "./usage-model";
 import type { Integration } from "./integrate";
 
@@ -691,6 +693,28 @@ export interface HostApi {
    */
   readonly integrate: (runId: string, cwd: string) => Effect.Effect<Integration>;
   /**
+   * The commit origin's default branch is at now: everything merged there so far. Take it
+   * inside an Activity, so a replay reads the same commit. Fails where origin cannot be read.
+   */
+  readonly defaultHead: (cwd: string) => Effect.Effect<string, WorkflowError>;
+  /**
+   * Blocks until the forge shows production carries `sha`, costing wall clock and no model
+   * tokens, and says on the card meanwhile what it waits for: `jobs` are the production
+   * jobs left for a human to play, and word the line only. A forge that cannot say is
+   * waited on too. Answers true once production carries it, false where the Run was
+   * stopped or held first.
+   */
+  readonly awaitProduction: (options: {
+    readonly runId: string;
+    readonly cwd: string;
+    readonly sha: string;
+    readonly jobs: ReadonlyArray<{ readonly name: string; readonly url?: string }>;
+    /** The claim held meanwhile. */
+    readonly slug: string;
+    /** The repository's web address, which a job without its own is played at. */
+    readonly url: string;
+  }) => Effect.Effect<boolean>;
+  /**
    * Puts a note on the merge request a Run was pointed at, sent by Collie rather than
    * written out again by an agent — asking for a file to be repeated verbatim is how
    * verbatim stops being true. The refusal is the message: a target that is not a merge
@@ -724,6 +748,8 @@ export interface Place {
   readonly workspace: string | null;
   /** This Run, then the Runs it was started from or builds a plan of, and so on: whose agents it may ask. */
   readonly lineage: ReadonlyArray<string>;
+  /** What a Claude agent's auto mode is told this Run authorises: the branch it made, and who started it. */
+  readonly authority: RunAuthority;
 }
 
 /** The reviewed branch's checkout, or why there is none, in the resolver's own words. */
@@ -750,6 +776,10 @@ export interface MrReady {
   readonly forge?: string;
   /** "merge request" or "pull request", as the forge says it. */
   readonly noun?: string;
+  /** The checkout's branch; empty on a detached checkout. */
+  readonly branch?: string;
+  /** The repository's web address, as its forge's adapter writes it. */
+  readonly url?: string;
   /** The URL of this branch's open merge request, or empty for none. */
   readonly existing?: string;
   /** Whether `existing` merges itself once green, so a push to it is a merge. */
@@ -775,6 +805,8 @@ export class Host extends Context.Service<Host, HostApi>()("collie/Host") {}
 export interface AskedQuestion {
   readonly name: string;
   readonly answer: string | null;
+  /** Who answered it, where the Run's audit says. */
+  readonly by?: Asker;
 }
 
 export interface DecisionSpec {

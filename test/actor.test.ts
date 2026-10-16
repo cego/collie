@@ -8,9 +8,16 @@ import { cliOrigin } from "../src/commands/shared";
 import { currentEnv } from "../src/env";
 import { stopRun } from "../src/flows";
 import { connect, frontDoor, socketOf } from "../src/host";
-import { runDir } from "../src/engine";
+import { foundationLayer, runDir } from "../src/engine";
+import { Host } from "../src/sdk";
 import { stopHost, until } from "./support/host";
 import { collie, proves } from "./support/world";
+
+/** Who the Run's agents are told started it, read once its host has stopped. */
+const startedOf = (state: string, runId: string) =>
+  Effect.gen(function* () {
+    return (yield* (yield* Host).place(runId)).authority.started;
+  }).pipe(Effect.provide(foundationLayer({ dir: state })), Effect.scoped);
 
 /** What the Run's audit trail says was done, by whom, under which request. */
 const audited = (state: string, runId: string) =>
@@ -87,6 +94,7 @@ test(
             expect(yield* fs.exists(runDir(world.state, unknown))).toBe(false);
           }
           yield* stopHost(world.state);
+          expect(yield* startedOf(world.state, runId)).toEqual({ door: "board", words: "who" });
         }).pipe(Effect.orDie),
       ["proof.workflow.ts", "helper.ts", "notes.md"],
     ),
@@ -155,6 +163,7 @@ test(
             (status) => status.status === "complete",
           );
           yield* stopHost(world.state);
+          expect(yield* startedOf(world.state, started.runId)).toBeNull();
         }).pipe(Effect.orDie),
       ["offered.workflow.ts", "graded.workflow.ts"],
     ),
@@ -262,6 +271,11 @@ test(
             ["hold", "hold it"],
           ]);
           yield* stopHost(world.state);
+          // The human's own words that turn, never chat's input.
+          expect(yield* startedOf(world.state, runId)).toEqual({
+            door: "chat",
+            words: "start the proof",
+          });
         }).pipe(Effect.orDie),
       ["proof.workflow.ts", "helper.ts", "notes.md"],
     ),

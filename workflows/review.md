@@ -84,7 +84,7 @@ Read these rather than running them again. Run only targeted checks — the test
 command that confirms or refutes a finding — and never the whole suite.
 
 Where you run something to check a finding, run it through the collector so the result
-is bound to the tree you checked it on: `collie verify --run {{run.id}} --cwd {{cwd}} -- <command>`; Collie records the result
+is bound to the tree you checked it on: `collie verify -- <command>`; Collie records the result
 against the tree it ran on, and only that is a verification — an Output that says the
 tests pass is a claim. Say in your Output which verifications you ran, by name.
 
@@ -185,7 +185,7 @@ Already disputed, and the human's to settle rather than yours to redo:
 Apply the findings you agree with and commit them. A finding you believe is wrong is not
 silently skipped: record it under `disputed` with your reason, and the human sees it. Run
 the typecheck and the test files you touched, each through
-`collie verify --run {{run.id}} --cwd {{cwd}} -- <command>`, and never the whole suite.
+`collie verify -- <command>`, and never the whole suite.
 Say what you ran: what Collie watched is a verification, and anything else is a claim.
 
 At the end of the round, where `{{branch}}` has an open merge request (a pull request on

@@ -177,6 +177,11 @@ for (const name of ["gitlab", "github"] as const) {
           issues: ["FRO-149"],
           existing: "",
           autoMerge: false,
+          branch: "me/FRO-149-modal",
+          url:
+            name === "gitlab"
+              ? "https://gitlab.example.com/group/app"
+              : "https://github.com/owner/repo",
         });
         expect(ready.commands?.create).toContain(`${CLI[name]} `);
         expect(ready.commands?.create).toContain("--assignee 'me'");

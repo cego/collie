@@ -24,7 +24,9 @@ import {
   defineWorkflow,
 } from "collie";
 import { Effect, Schema } from "effect";
-import type { WorkflowEngine, WorkflowInstance } from "effect/workflow/WorkflowEngine";
+import * as Activity from "effect/workflow/Activity";
+import * as Workflow from "effect/workflow/Workflow";
+import { WorkflowInstance, type WorkflowEngine } from "effect/workflow/WorkflowEngine";
 import onGitlab from "./renovate.gitlab.md" with { type: "text" };
 import onGithub from "./renovate.github.md" with { type: "text" };
 
@@ -68,13 +70,16 @@ const verdict = {
 };
 
 /** The one issue every later step writes to, so a long wait cannot split a repository. */
-const Tracked = Schema.Struct({
+export const Tracked = Schema.Struct({
   ...verdict,
   issue: Schema.String.annotate({ description: "the Linear issue id this Run records itself on" }),
   issue_url: Schema.optionalKey(Schema.String),
   team: Schema.optionalKey(Schema.String),
   repository: Schema.optionalKey(Schema.String),
   created_issue: Schema.optionalKey(Schema.Boolean),
+  picked_because: Schema.optionalKey(Schema.String).annotate({
+    description: "which issue among several was taken, and why",
+  }),
 });
 
 /** One Renovate merge request, as the assessment read it. */
@@ -173,8 +178,11 @@ export const Released = Schema.Struct({
   release_url: Schema.optionalKey(Schema.String),
   is_package: Schema.optionalKey(Schema.Boolean),
   pipeline: Schema.optionalKey(Schema.String).annotate({
-    description: "succeeded or not run",
+    description: "succeeded, not run, or waiting for production",
   }),
+  prod_jobs: Schema.optionalKey(
+    Schema.Array(Schema.Struct({ name: Schema.String, url: Schema.optionalKey(Schema.String) })),
+  ).annotate({ description: "the production jobs left for the human to play" }),
   up_to_date: Schema.optionalKey(Schema.Boolean),
 });
 
@@ -195,6 +203,10 @@ export interface Landed {
   readonly dir: string;
   /** The forge the repository is on, whose content its steps are given. */
   readonly forge: keyof typeof RENOVATE_ON;
+  /** The repository's web address on that forge, which a step's Clearance names. */
+  readonly url: string;
+  /** "merge request" or "pull request". */
+  readonly noun: string;
   /** What every step of this Run is told. */
   readonly input: typeof RenovateInput.Type;
   readonly tracked: typeof Tracked.Type;
@@ -231,12 +243,22 @@ export const shippedLanding: Landing = {
   merge: (at) =>
     agentWork({
       ...asRenovator(at, "merge"),
+      clears: [
+        `approving the reviewed head of, and merging, Renovate's own ${at.noun}s on ${at.url}`,
+        `merging this Run's batch ${at.noun} there once a teammate has approved it`,
+        "using the forge's own commands as this step's content names them",
+      ],
       instructions: RENOVATE_ON[at.forge].merge,
       output: Merged,
     }),
   release: (at) =>
     agentWork({
       ...asRenovator(at, "release"),
+      clears: [
+        `pushing an annotated version tag of ${at.url}'s default branch to origin`,
+        "creating its release where the repository is a package",
+        "watching the tag's pipeline, never playing a production deploy job",
+      ],
       instructions: RENOVATE_ON[at.forge].release,
       output: Released,
     }),
@@ -357,6 +379,8 @@ export const renovation = (landing: Landing = shippedLanding) =>
           ...bound,
           dir: place.dir,
           forge: forge.provider,
+          url: forge.url ?? "",
+          noun: forge.noun ?? "merge request",
           tracked,
           assessed,
         };
@@ -399,6 +423,10 @@ export const renovation = (landing: Landing = shippedLanding) =>
           if (batched.mr_url !== undefined) yield* host.mergeRequest(runId, batched.mr_url);
           const staged = yield* agentWork({
             ...asRenovator(here, "stage"),
+            clears: [
+              `playing, retrying and watching the stage deploy, e2e-stage and smoke jobs of ${here.url}'s pipelines`,
+              "rolling stage back to the newest tag whose production deploy succeeded, never a production job",
+            ],
             instructions: steps.stage,
             output: Staged,
           });
@@ -427,11 +455,37 @@ export const renovation = (landing: Landing = shippedLanding) =>
         }
 
         yield* landing.merge(here);
+        // Everything this Run merged, read once so a replay waits for the same commit.
+        const head =
+          claim === null
+            ? null
+            : yield* Activity.make({
+                name: "default-head",
+                success: Schema.String,
+                error: WorkflowError,
+                execute: host.defaultHead(cwd),
+              });
         const released = yield* landing.release(here);
         const recorded = yield* landing.record(here, released);
-        return yield* finished(
-          `${tracked.issue}: ${recorded.status}${released.version ? ` ${released.version}` : ""}`,
-        );
+        const jobs = released.prod_jobs ?? [];
+        const outcome = `${tracked.issue}: ${recorded.status}${released.version ? ` ${released.version}` : ""}`;
+        if (claim === null || head === null) {
+          const left = jobs.map((job) => `\`${job.name}\`${job.url ? ` at ${job.url}` : ""}`);
+          return left.length === 0
+            ? outcome
+            : `${outcome}; production jobs left to play: ${left.join(", ")}`;
+        }
+        // The forge decides when production carries the merge, never the Output.
+        const carried = yield* host.awaitProduction({
+          runId,
+          cwd,
+          sha: head,
+          jobs,
+          slug: claim.slug,
+          url: here.url,
+        });
+        if (!carried) return yield* Workflow.suspend(yield* WorkflowInstance);
+        return yield* finished(`${outcome}; production carries it`);
       }),
   });
 

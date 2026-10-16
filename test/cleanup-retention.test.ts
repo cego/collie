@@ -131,6 +131,7 @@ test("a Task with a checkout of its own still on disk is kept", () =>
             path: rig.projectDir,
             branch: "wt",
             created_by_collie: true,
+            created_branch: false,
             managed_by: "git",
             workspace_id: null,
             made_at: 1,

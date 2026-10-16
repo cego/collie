@@ -11,6 +11,11 @@ export const WorktreeRecordSchema = Schema.Struct({
   branch: Schema.String,
   created_by_collie: Schema.Boolean,
   /**
+   * Whether this Run made the branch: it was neither local nor on origin before. A record
+   * written before this was kept is `false`.
+   */
+  created_branch: Schema.Boolean.pipe(Schema.withDecodingDefaultKey(Effect.succeed(false))),
+  /**
    * Who made this checkout, and so who takes it away again: Collie with git itself,
    * or herdr as a workspace of its own. A record written before this existed is
    * `herdr`, which is what every checkout was then.

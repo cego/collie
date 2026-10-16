@@ -41,6 +41,10 @@ test("the setting refuses what the profile cannot be, with the reason", () => {
   expect(refused(JSON.stringify({ "*": { claude: { model: "opus" } } }))).toContain(
     "claude.model is not one Collie merges",
   );
+  for (const key of ["autoMode", "permissions"])
+    expect(refused(JSON.stringify({ "*": { claude: { [key]: {} } } }))).toContain(
+      `claude.${key} is not one Collie merges`,
+    );
   expect(refused(JSON.stringify({ "*": { env: { "BAD NAME": "x" } } }))).toContain(
     '"BAD NAME" is not an environment variable name',
   );

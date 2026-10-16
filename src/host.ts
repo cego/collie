@@ -127,6 +127,7 @@ import {
   worktreesSweeper,
   type SweptBy,
 } from "./cleanup";
+import { startedOf } from "./automode";
 import { once, readAudit, recordAudit, startedBy, trimAudit } from "./audit";
 import { usagePhrase } from "./usage-model";
 import { currentEnv, leaveLauncher, withoutLauncher } from "./env";
@@ -168,14 +169,12 @@ import {
   attachmentRefusal,
   attachmentsDir,
   copyInto,
-  keepMessage,
   namesIn,
   sha256Hex,
   type Attached,
 } from "./attachments";
 import { boardMessages, shareBoard } from "./board-stream";
 import { recordDisposition } from "./disposition";
-import { deliveryText, MAX_DELIVERY_BYTES } from "./dispatcher";
 import {
   NEWS_TRAIL,
   newsPath,
@@ -498,7 +497,10 @@ const serialization = RpcSerialization.layerNdjson;
 
 /** What each connection declared, which every operation it asks is recorded under. */
 // ponytail: one entry per connection, never removed; prune on disconnect if hosts live for months.
-type Declared = Map<number, { readonly frontDoor: FrontDoor; readonly from?: Where | undefined }>;
+type Declared = Map<
+  number,
+  { readonly frontDoor: FrontDoor; readonly from?: Where | undefined; readonly voice?: Voice }
+>;
 
 /** What an operation on this connection is recorded as: `cli` where it declared nothing. */
 const stampIn = (declared: Declared, client: { readonly id: number }) => {
@@ -694,11 +696,10 @@ const handlers = (
         ) => {
           const { text, removed } = scrub(given);
           const into = attachmentsDir(runDir(dir, runId));
-          const actor = stampIn(declared, client);
+          const actor = { ...stampIn(declared, client), ...declared.get(client.id)?.voice };
           // Files go only into a Run this host has.
           const known =
-            (attachments ?? []).length === 0 &&
-            Buffer.byteLength(deliveryText(text, actor), "utf8") <= MAX_DELIVERY_BYTES
+            (attachments ?? []).length === 0
               ? Effect.void
               : Effect.flatMap(FileSystem.FileSystem, (fs) => fs.exists(runDir(dir, runId))).pipe(
                   Effect.orElseSucceed(() => false),
@@ -731,19 +732,11 @@ const handlers = (
                 },
                 copyInto(into, attachments ?? []).pipe(
                   Effect.mapError((cause) => new HostRefused({ reason: reason(cause) })),
-                  Effect.flatMap((copied) => {
-                    const lines = copied.map((one) => attachedLine(`${into}/${one.name}`));
-                    const whole = [text, ...lines].filter((line) => line !== "").join("\n");
-                    return Buffer.byteLength(deliveryText(whole, actor), "utf8") <=
-                      MAX_DELIVERY_BYTES
-                      ? Effect.succeed(whole)
-                      : keepMessage(into, text).pipe(
-                          Effect.mapError((cause) => new HostRefused({ reason: reason(cause) })),
-                          Effect.map((kept) =>
-                            [TOO_LONG, attachedLine(`${into}/${kept}`), ...lines].join("\n"),
-                          ),
-                        );
-                  }),
+                  Effect.map((copied) =>
+                    [text, ...copied.map((one) => attachedLine(`${into}/${one.name}`))]
+                      .filter((line) => line !== "")
+                      .join("\n"),
+                  ),
                   Effect.flatMap((told) =>
                     registry.steer({
                       runId,
@@ -766,10 +759,6 @@ const handlers = (
       });
     }),
   );
-
-/** What an agent is told in place of words over the delivery cap, which are never split (ADR-0051). */
-const TOO_LONG =
-  "This message was too long to send in one piece, so it is in the attached file. Read it whole and act on it.";
 
 /** What a steer's request has to ask again, as `AskedFor` is a start's. */
 type SteerAsked = {
@@ -1061,7 +1050,7 @@ const frontDoorHandlers = (
       /** Who asks on a channel: its front door, and a chat's voice. */
       const askerOf = (client: { readonly id: number }): Asker => ({
         origin: doorOf(client),
-        ...voices.get(client.id),
+        ...declared.get(client.id)?.voice,
       });
       /** What a channel's operations are recorded as: who asks, and where a bridge said it came from. */
       const whoOf = (client: { readonly id: number }) => ({
@@ -1080,7 +1069,6 @@ const frontDoorHandlers = (
       };
       // ponytail: one entry per connection, never removed, as `declared`.
       const sessions = new Map<number, string>();
-      const voices = new Map<number, Voice>();
       /** The serving env in the herdr session the asking channel declared, where it named one. */
       const askerEnv = (client: { readonly id: number }) => {
         const session = sessions.get(client.id);
@@ -1269,9 +1257,12 @@ const frontDoorHandlers = (
                 machine: { installation, name: machineName() },
               };
             }
-            if (frontDoor === "chat") voices.set(client.id, voiceOf(voice));
-            if (already !== undefined) return;
-            declared.set(client.id, { frontDoor, from: where });
+            const voiced = frontDoor === "chat" ? { voice: voiceOf(voice) } : {};
+            if (already !== undefined) {
+              declared.set(client.id, { ...already, ...voiced });
+              return;
+            }
+            declared.set(client.id, { frontDoor, from: where, ...voiced });
             if (session !== undefined && session !== null) sessions.set(client.id, session);
           }).pipe(
             Effect.mapError((cause) =>
@@ -1317,6 +1308,12 @@ const frontDoorHandlers = (
                         Effect.flatMap((generation) =>
                           registry.start({
                             generation,
+                            started: startedOf(
+                              whoOf(client).origin,
+                              whoOf(client).said,
+                              input,
+                              text,
+                            ),
                             requestedBy:
                               whoOf(client).origin === "agent"
                                 ? Option.getOrUndefined(
@@ -1351,7 +1348,9 @@ const frontDoorHandlers = (
           return fresh(
             () => runId,
             { operation: "answer", request, ...whoOf(client), result: Answered },
-            registry.answer({ runId, decision, value, request }).pipe(Effect.map(saying(removed))),
+            registry
+              .answer({ runId, decision, value, request, by: whoOf(client) })
+              .pipe(Effect.map(saying(removed))),
           );
         },
         control: ({ runId, control, set, request, reason }, { client }) =>

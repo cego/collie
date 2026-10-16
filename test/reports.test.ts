@@ -364,7 +364,7 @@ export default defineWorkflow({id:"investigate",title:"Failed investigation",des
           if (mode === "restart") {
             yield* until(
               () => fs.readFileString(second.herdrLog),
-              (log) => log.includes(result.summary),
+              (log) => log.includes(` of ${runId} on `),
             );
             yield* until(
               () => (before === null ? Effect.succeed(false) : holderLives(before)),
@@ -423,14 +423,17 @@ export default defineWorkflow({id:"investigate",title:"Failed investigation",des
           if (sibling !== undefined)
             expect(panes.some((pane) => pane.paneId === sibling)).toBe(true);
           if (human !== undefined) expect(panes.some((pane) => pane.paneId === human)).toBe(true);
+          // Three lines and a sender line are over the paste budget, so a report is kept as a file.
           const reports = (yield* fs.readFileString(second.herdrLog))
             .split("\n")
-            .filter((line) => line.includes(reportText));
+            .filter((line) => line.includes(`From ${entry?.agent ?? "host"} of ${runId} on `));
           expect(reports).toHaveLength(mode === "gone" || mode === "away" ? 0 : 1);
           if (reports[0] !== undefined) {
-            expect(reports[0]).toContain(`From ${entry?.agent ?? "host"} of ${runId} on `);
-            expect(reports[0]).toContain(`collie run show ${runId}`);
-            expect(reports[0]).toContain(mode === "failed" ? "failed" : "complete");
+            const kept = /Their message is in (\S+)\. Read it whole/.exec(reports[0])?.[1] ?? "";
+            const report = yield* fs.readFileString(kept);
+            expect(report).toContain(reportText);
+            expect(report).toContain(`collie run show ${runId}`);
+            expect(report).toContain(mode === "failed" ? "failed" : "complete");
           }
           const door = yield* frontDoor(socketOf(first.world.state));
           const detail = yield* door

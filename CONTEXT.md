@@ -8,7 +8,7 @@
 
 **Trust** — A Harness's own answer to "may I work in this directory". Collie grants it for an agent's directory before that agent's harness starts, by default, without a duplicate Collie question. `never` leaves the question to the harness.
 
-**Permissions** — Who decides whether an agent's tool call runs: the harness's own automatic review (`auto`, the default, which starts each agent in its harness's auto mode), no one (`bypass`, which an operator opts into, and which is auto mode wherever the harness's managed settings forbid it), or the harness's prompt in the agent's own pane (`harness`). Trust is answered once per directory; this is decided per agent start, and an operation may name its own mode. Trust is about the directory, Permissions about the calls made inside it.
+**Permissions** — Who decides whether an agent's tool call runs: the harness's own automatic review (`auto`, the default, which starts each agent in its harness's auto mode), no one (`bypass`, which an operator opts into, and which is auto mode wherever the harness's managed settings forbid it), or the harness's prompt in the agent's own pane (`harness`). Trust is answered once per directory; this is decided per agent start, and an operation may name its own mode. Trust is about the directory, Permissions about the calls made inside it. Under `auto`, a Claude agent's review is told which Run it serves, the branch that Run created where the forge says it is unprotected, the words a human started it with, and each step's **Clearance**. Collie adds no permission rules of its own (ADR-draft-what-a-run-authorises-reaches-auto-mode).
 
 **Skill** — A named routine the harnesses share. Installed globally by the skills.sh CLI (`npx skills add … -g`) into `~/.agents/skills`, which is the standard location every harness but Claude Code reads directly; Claude Code gets an explicit symlink from the same CLI. An operation names the one it starts, and the prompt is sent as `/<skill> …`: many skills refuse an agent that starts them itself, and only the human's channel may invoke those.
 
@@ -234,7 +234,19 @@ A `deliver` with no mode is `now`. One that names no agent reaches **the agent a
 the agent whose step is active, else the Run's builder (its implementer); `to` names a role
 — `builder`, `reviewer`, `planner` — or an agent instead.
 A Delivery from an agent carries its sender line before the unchanged words: its agent,
-Run and Machine, and the tool and CLI address to answer.
+Run and Machine, and the tool and CLI address to answer. One carrying a human's words says
+so on that line: the human, the door and the time; chat's names the human's own message
+from that turn. Collie's own step messages and repairs carry none. A Delivery whose typed
+form would pass three lines or 700 characters keeps its words as a file in the Run and
+types only a short sender line and where the file is, because Claude Code shows longer typed
+text to its model as pasted content (ADR-draft-what-a-run-authorises-reaches-auto-mode).
+
+**Clearance** — What one step's agent is told, in its own turn, that it may do. Each entry
+is a sentence naming one action and its target (push this branch, merge this merge request,
+play this stage job), composed by the Workflow from facts Collie holds and never from an
+Output. Collie types it after the step's pointer, so a harness reviewing the agent's calls
+reads it as the user's request for exactly that. Not a permission rule, which would skip
+that review. Not **Authority**, which is what Collie may do to a Run.
 
 **Dispatcher** — The only code that sends text to an agent. Holds that agent's ledger lock
 across the compaction decision, the composition and the send.

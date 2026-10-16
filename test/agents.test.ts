@@ -59,6 +59,7 @@ import { seedIntent, writeIntent } from "../src/intent";
 import { appendLine, deliveriesOf, readLedger, reconcile } from "../src/steering";
 import { readLaunches } from "../src/launches";
 import { Store } from "../src/store";
+import type { AuditLine } from "../src/audit";
 import { readTask, writeTask } from "../src/task";
 import { taskFor } from "../src/operations";
 import { lineageAgent, readRegistry, registerAgent, registryPath, scopeFor } from "../src/registry";
@@ -75,9 +76,16 @@ import { COMPACTION_PORTS, recordClaudeEvent } from "../src/compactors";
 import { claudeTrust } from "../src/trust";
 import { FALLBACK_DEFAULTS } from "../src/settings";
 import type { AgentProfile } from "../src/profile";
+import { FakeBin } from "./support/bin";
+import { forgeOnPath } from "./support/forge";
 
 let rig: Rig;
 let dir: string;
+interface Clearing {
+  readonly clears?: ReadonlyArray<string>;
+  readonly skill?: string;
+}
+let clearing: Clearing = {};
 
 beforeEach(() =>
   runEffect(
@@ -85,6 +93,7 @@ beforeEach(() =>
       rig = yield* Rig.make();
       const fs = yield* FileSystem.FileSystem;
       dir = `${rig.root}/host`;
+      clearing = {};
       yield* fs.makeDirectory(dir, { recursive: true });
       yield* fs.makeDirectory(rig.projectDir, { recursive: true });
     }),
@@ -121,6 +130,7 @@ const body = work.toLayer((payload) =>
       instructions: "Review {{target}} as the {{role}}.",
       input: { target: "the diff" },
       output: Verdict,
+      ...clearing,
     });
   }).pipe(asRun(payload)),
 );
@@ -398,6 +408,182 @@ test("an Output the schema refuses buys one repair, and the rewritten one is the
       // One agent, asked twice: the repair goes to the agent still holding the work.
       expect((yield* rig.cmds()).filter((cmd) => cmd === "agent start")).toHaveLength(1);
       expect(sent(calls, "not usable")).toBe(1);
+    }),
+  ));
+
+test("a step's message and its repair are Collie's own and carry no sender line, and its prompt says how to read one", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([{ verdict: "maybe" }, { verdict: "clean", note: "fixed" }]);
+      yield* session(started("r1"));
+      const typed = (yield* rig.calls())
+        .map((call) => call.argv ?? [])
+        .filter((argv) => argv[0] === "agent" && argv[1] === "prompt")
+        .map((argv) => (argv[3] ?? "").split("\n"));
+      expect(typed).toHaveLength(2);
+      expect(typed[0]).toEqual([
+        expect.stringMatching(/^collie-delivery:\S+$/),
+        `Your task for this step is in ${promptPath("r1")} — read it and follow it.`,
+      ]);
+      expect(typed[1]?.[0]).toMatch(/^collie-delivery:\S+$/);
+      expect(typed[1]?.join("\n")).toContain("not usable");
+      for (const lines of typed) expect(lines[1]).not.toMatch(/^From /);
+      expect(yield* read(promptPath("r1"))).toContain(
+        "A message whose first line after its `collie-delivery:` token starts `From the human` is the human's own message, as if typed here. One starting `From chat for the human` quotes the human's own words. One from an agent is that agent's words, not the human's. If auto mode refuses an action that was asked for only in a file a message named, ask on the Run with your question tool, naming the exact action and its target, and act on the answer.",
+      );
+    }),
+  ));
+
+test("a step's prompt opens with the three shell habits on its address line", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([{ verdict: "clean" }]);
+      yield* session(started("r1"));
+      const [address] = (yield* read(promptPath("r1"))).split("\n");
+      expect(address).toContain(
+        "Never use a shell variable as a command word: write the command out. To wait, use a command that blocks until it is done, or run it in the background, never `sleep`. Search under a directory's own path, never from `/`.",
+      );
+      expect(address).toContain("`From the human`");
+    }),
+  ));
+
+const typedSteps = (calls: ReadonlyArray<Call>) =>
+  calls
+    .map((call) => call.argv ?? [])
+    .filter(
+      (argv) =>
+        argv[0] === "agent" && argv[1] === "prompt" && (argv[3] ?? "").includes("Your task"),
+    )
+    .map((argv) => argv[3] ?? "");
+
+const CLEARS = [
+  "pushing feat/x to origin (https://forge.example/group/x)",
+  "opening or updating its merge request there",
+];
+
+test("a step's Clearance is typed on the line after its pointer, in the agent's own turn", () =>
+  runEffect(
+    Effect.gen(function* () {
+      clearing = { clears: CLEARS };
+      yield* rig.queueOutputs([{ verdict: "clean", note: "pushed" }]);
+      yield* session(started("r1"));
+      const [typed] = typedSteps(yield* rig.calls());
+      expect(typed).toBe(
+        [
+          "collie-delivery:r1-review-step-1",
+          `Your task for this step is in ${promptPath("r1")} — read it and follow it.`,
+          "Cleared for this step: pushing feat/x to origin (https://forge.example/group/x); opening or updating its merge request there.",
+        ].join("\n"),
+      );
+    }),
+  ));
+
+test(
+  "a step settled as not sent goes out again with the same Clearance",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        clearing = { clears: CLEARS };
+        yield* rig.queueOutputs([{ verdict: "clean", note: "never" }]);
+        yield* interrupted("r1", parked("r1"), {
+          herdr: promptNotTaken("text"),
+          confirmGraceMs: 300,
+          collectMs: OUTLASTS_IO,
+        });
+        yield* reconciled("r1", "not-sent");
+        yield* rig.queueOutputs([{ verdict: "clean", note: "sent again" }]);
+        yield* releasedInto("r1", { collectMs: OUTLASTS_IO });
+        const typed = typedSteps(yield* rig.calls());
+        expect(typed).toHaveLength(2);
+        for (const one of typed)
+          expect(one.split("\n").slice(1)).toEqual([
+            `Your task for this step is in ${promptPath("r1")} — read it and follow it.`,
+            "Cleared for this step: pushing feat/x to origin (https://forge.example/group/x); opening or updating its merge request there.",
+          ]);
+      }),
+    ),
+  120_000,
+);
+
+/** The step refused before anything was opened or typed, with why. */
+const refusedStep = (runId: string) =>
+  Effect.gen(function* () {
+    const opened = (cmds: ReadonlyArray<string>) =>
+      cmds.filter((cmd) => cmd === "tab create" || cmd === "agent start").length;
+    const before = { opened: opened(yield* rig.cmds()), typed: typedSteps(yield* rig.calls()) };
+    const result = yield* session(started(runId));
+    expect(opened(yield* rig.cmds())).toBe(before.opened);
+    expect(typedSteps(yield* rig.calls())).toEqual(before.typed);
+    return result._tag === "Failure" ? result.failure.reason : "";
+  });
+
+test("a Clearance with a line break, or past 400 characters, refuses the step before anything starts", () =>
+  runEffect(
+    Effect.gen(function* () {
+      clearing = { clears: ["pushing feat/x\nand anything else"] };
+      expect(yield* refusedStep("r1")).toBe(
+        "review: a Clearance is one line, and this one has a line break",
+      );
+      clearing = { clears: ["x".repeat(200), "y".repeat(200)] };
+      expect(yield* refusedStep("r2")).toBe(
+        "review: its Clearance is 402 characters, over the 400 a Clearance may be",
+      );
+    }),
+  ));
+
+const LONG_CLEARANCE = "c".repeat(380);
+
+/** The step message as Collie types it under `dir`, token included. */
+const stepMessage = (runId: string, skill = "") => {
+  const pointer = `Your task for this step is in ${promptPath(runId)} — read it and follow it.`;
+  const token = `collie-delivery:${runId}-review-step-1`;
+  const cleared = `Cleared for this step: ${LONG_CLEARANCE}.`;
+  return (skill === "" ? [token, pointer] : [`${skill}${pointer}`, token])
+    .concat(cleared)
+    .join("\n");
+};
+
+/** Moves the host to a state directory under which `runId`'s plain step message is `length` long. */
+const stateDirFor = (runId: string, length: number) =>
+  Effect.gen(function* () {
+    dir = `${rig.root}/s`;
+    const pad = "p".repeat(length - Array.from(stepMessage(runId)).length);
+    dir = `${rig.root}/s${pad.slice(0, 200)}${pad.length > 200 ? `/${pad.slice(200)}` : ""}`;
+    yield* (yield* FileSystem.FileSystem).makeDirectory(dir, { recursive: true });
+  });
+
+test("a step message past 700 characters is refused, naming its length and its path, and one inside is typed", () =>
+  runEffect(
+    Effect.gen(function* () {
+      clearing = { clears: [LONG_CLEARANCE] };
+      yield* rig.queueOutputs([{ verdict: "clean", note: "typed" }]);
+      yield* session(started("r1"));
+      const [typed] = typedSteps(yield* rig.calls());
+      expect(typed).toBe(stepMessage("r1"));
+      expect(Array.from(typed ?? "").length).toBeLessThan(700);
+
+      yield* stateDirFor("r2", 760);
+      expect(Array.from(stepMessage("r2")).length).toBe(760);
+      expect(yield* refusedStep("r2")).toBe(
+        `review: its step message would be 760 characters typed, over the 700 Claude Code still shows as typed; its prompt is ${promptPath("r2")}. Shorten its Clearance, or use a shorter state directory.`,
+      );
+    }),
+  ));
+
+test("a step started with a skill is measured with its command line", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* stateDirFor("r1", 698);
+      clearing = { clears: [LONG_CLEARANCE], skill: "tdd" };
+      expect(Array.from(stepMessage("r1", "/tdd ")).length).toBe(703);
+      expect(yield* refusedStep("r1")).toContain("would be 703 characters typed");
+
+      clearing = { clears: [LONG_CLEARANCE] };
+      yield* rig.queueOutputs([{ verdict: "clean", note: "typed" }]);
+      yield* session(started("r2"));
+      const [typed] = typedSteps(yield* rig.calls());
+      expect(typed).toBe(stepMessage("r2"));
+      expect(Array.from(typed ?? "").length).toBe(698);
     }),
   ));
 
@@ -761,7 +947,7 @@ const askedTwo = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))({
   },
 });
 
-const ANSWERED = "Your question has been answered on your Run.";
+const ANSWERED = "Your questions are answered:";
 
 /** Once `r1`'s agent has its work, it calls `AskUserQuestion` with two questions. */
 const asksTwo = Effect.gen(function* () {
@@ -782,10 +968,10 @@ const questionsOf = (count: number) =>
     }
   });
 
-const answer = (decision: string, value: string) =>
+const answer = (decision: string, value: string, answerer?: AuditLine["actor"]) =>
   Store.pipe(
     Effect.flatMap((store) =>
-      store.settle({ run: "r1", decision, value, request: `answer-${decision}` }),
+      store.settle({ run: "r1", decision, value, request: `answer-${decision}`, answerer }),
     ),
   );
 
@@ -830,10 +1016,49 @@ test(
             const calls = yield* rig.calls();
             expect(sent(calls, ANSWERED)).toBe(1);
             const delivered = calls.find((call) => (call.argv?.[3] ?? "").includes(ANSWERED));
-            expect(delivered?.argv?.[3]).toContain(
-              "Database: Which database?\nAnswer: SQLite, it is a demo",
+            expect(delivered?.argv?.[3]).toEndWith(
+              "\nYour questions are answered: Database: SQLite, it is a demo; Checks: lint",
             );
-            expect(delivered?.argv?.[3]).toContain("Checks: Which checks?\nAnswer: lint");
+          }),
+          { collectMs: 120_000, pollMs: 1_000 },
+        );
+      }),
+    ),
+  120_000,
+);
+
+test(
+  "answers from different senders each reach the agent under their own sender line",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* rig.queueOutputs([null]);
+        yield* session(
+          Effect.gen(function* () {
+            yield* work.execute({ runId: "r1", input: { skip: false } }, { discard: true });
+            yield* asksTwo;
+            yield* questionsOf(2);
+            yield* answer("ask-review-1", "SQLite", {
+              origin: "agent",
+              requestId: "answer-ask-review-1",
+              from: { run: "r-other", agent: "r-other-build-r1" },
+            });
+            yield* answer("ask-review-2", "lint", {
+              origin: "board",
+              requestId: "answer-ask-review-2",
+            });
+            while (!(yield* prompted("is answered", 2)))
+              yield* TestClock.withLive(Effect.sleep("10 millis"));
+            const typed = (yield* rig.calls())
+              .map((call) => call.argv?.[3] ?? "")
+              .filter((one) => one.includes("is answered"));
+            expect(typed).toHaveLength(2);
+            expect(typed.find((one) => one.includes("Database"))).toMatch(
+              /From r-other-build-r1 of r-other [^\n]*\nYour question Database is answered: SQLite$/,
+            );
+            expect(typed.find((one) => one.includes("Checks"))).toMatch(
+              /From the human, on the board, [^\n]*\nYour question Checks is answered: lint$/,
+            );
           }),
           { collectMs: 120_000, pollMs: 1_000 },
         );
@@ -2131,6 +2356,58 @@ const liveIn = Effect.fn("test.liveIn")(function* (
     incarnation: { terminalId: `term-${agent}`, agentSession: null },
   });
 });
+
+test("a Run's authority is the branch it created and who started it; an older record and a roaming one authorise no branch", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const store = yield* Store;
+      const placedOn = (run: string, branch: string, worktree: { created_branch?: boolean }) =>
+        Effect.gen(function* () {
+          yield* store.admit({
+            request: `req-${run}`,
+            run,
+            workflow: "w",
+            project: dir,
+            input: {},
+            provenance: {},
+            options: {},
+            generation: "g",
+            execution: `exec-${run}`,
+            task: null,
+            parent: null,
+            placing: encodeJson({ from: dir, taskLabel: null }),
+          });
+          yield* store.place(run, {
+            checkout: encodeJson({
+              cwd: dir,
+              branch: branch === "" ? null : branch,
+              workspace: null,
+              worktree: {
+                path: dir,
+                branch,
+                created_by_collie: true,
+                managed_by: "git",
+                workspace_id: null,
+                ...worktree,
+              },
+            }),
+            task: null,
+          });
+        });
+      yield* placedOn("run-new", "me/x", { created_branch: true });
+      yield* placedOn("run-old", "me/x", {});
+      yield* placedOn("run-roams", "", {});
+      const host = yield* Host;
+      const authority = (run: string) => Effect.map(host.place(run), (place) => place.authority);
+      expect(yield* authority("run-new")).toEqual({
+        createdBranch: "me/x",
+        roaming: false,
+        started: null,
+      });
+      expect((yield* authority("run-old")).createdBranch).toBeNull();
+      expect(yield* authority("run-roams")).toMatchObject({ createdBranch: null, roaming: true });
+    }).pipe(Effect.provide(foundationLayer({ dir })), Effect.scoped, Effect.orDie),
+  ));
 
 test("a Run built from another Run's plan has that Run in its lineage, however it was started", () =>
   runEffect(
@@ -3876,6 +4153,20 @@ const claudeSettingsControls = (): CompactionPorts => ({
   claude: { ...COMPACTION_PORTS.claude!, gate: () => Effect.void, ready: undefined },
 });
 
+const AutoModeSettings = Schema.fromJsonString(
+  Schema.Struct({
+    autoMode: Schema.Struct({
+      environment: Schema.Array(Schema.String),
+      allow: Schema.Array(Schema.String),
+    }),
+  }),
+);
+
+const settingsAt = (calls: ReadonlyArray<Call>) => {
+  const args = launchArgs(calls);
+  return read(args[args.indexOf("--settings") + 1] ?? "");
+};
+
 test("with no agent profile a launch types and passes what it always has", () =>
   runEffect(
     Effect.gen(function* () {
@@ -3897,7 +4188,8 @@ test("with no agent profile a launch types and passes what it always has", () =>
       const same = (calls: ReadonlyArray<Call>, runId: string) =>
         [...paneLines(calls), ...launchArgs(calls)].map((said) => said.replaceAll(runId, "<run>"));
       expect(same(after, "r2")).toEqual(same(before, "r1"));
-      expect(launchArgs(after)).not.toContain("--settings");
+      // Its own, for the Run's autoMode block alone.
+      expect(launchArgs(after)).toContain(`${dir}/agents/r2/review.settings.json`);
     }),
   ));
 
@@ -4029,6 +4321,10 @@ test("a Claude overlay is merged into Collie's settings file, and Collie's hooks
       expect(Object.keys(settings.hooks)).toEqual(
         expect.arrayContaining(["PreCompact", "PostCompact", "UserPromptSubmit"]),
       );
+      const { autoMode } = yield* Schema.decodeUnknownEffect(AutoModeSettings)(
+        yield* read(args[args.indexOf("--settings") + 1] ?? ""),
+      );
+      expect(autoMode.environment[0]).toBe("$defaults");
     }),
   ));
 
@@ -4045,5 +4341,113 @@ test("without Collie's controls, a Claude overlay is a settings file of its own"
       const path = args[args.indexOf("--settings") + 1] ?? "";
       expect(path).toBe(`${dir}/agents/r1/review.settings.json`);
       expect(yield* read(path)).toContain("/home/me/.claude/CLAUDE.md");
+    }),
+  ));
+
+test("a Claude launch's settings carry the Run's autoMode block, each list opening with the defaults", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+      yield* session(started("r1"));
+
+      const text = yield* settingsAt(yield* rig.calls());
+      const { autoMode } = yield* Schema.decodeUnknownEffect(AutoModeSettings)(text);
+      expect(autoMode.environment[0]).toBe("$defaults");
+      expect(autoMode.allow).toEqual(["$defaults"]);
+      expect(autoMode.environment[1]).toContain(`of Collie Run r1 (Workflow agent-work)`);
+      expect(autoMode.environment[2]).toContain(`Checkout: ${rig.projectDir}`);
+      expect(autoMode.environment[3]).toContain(rig.pluginEnv().stateDir);
+      expect(autoMode.environment[4]).toContain("collie-delivery:");
+      expect(autoMode.environment).toHaveLength(5);
+      expect(text).not.toContain("soft_deny");
+      expect(text).not.toContain("hard_deny");
+    }),
+  ));
+
+test("a Run that created its branch, which the forge leaves unprotected, may rewrite it, and quotes the human who started it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const branch = "me/new-work";
+      const origin = "git@gitlab.example.com:group/app.git";
+      const git = (...args: ReadonlyArray<string>) =>
+        Effect.promise(() => Bun.$`git ${args}`.cwd(rig.projectDir).quiet());
+      yield* git("init", "--quiet", "-b", branch);
+      yield* git("remote", "add", "origin", origin);
+      const bin = yield* FakeBin.make(`${rig.root}/bin`);
+      yield* forgeOnPath(bin, "gitlab", {
+        installed: true,
+        loggedIn: ["gitlab.example.com"],
+        login: "me",
+        mrs: [],
+        defaultBranch: "main",
+      });
+      yield* Effect.gen(function* () {
+        const store = yield* Store;
+        yield* store.admit({
+          request: "req-r1",
+          run: "r1",
+          workflow: "agent-work",
+          project: rig.projectDir,
+          input: {},
+          provenance: {},
+          options: {},
+          generation: "g",
+          execution: "exec-r1",
+          task: null,
+          parent: null,
+          placing: encodeJson({
+            from: rig.projectDir,
+            taskLabel: null,
+            started: { door: "board", words: "Fix the login form" },
+          }),
+        });
+        yield* store.place("r1", {
+          checkout: encodeJson({
+            cwd: rig.projectDir,
+            branch,
+            workspace: null,
+            worktree: {
+              path: rig.projectDir,
+              branch,
+              created_by_collie: true,
+              created_branch: true,
+              managed_by: "git",
+              workspace_id: null,
+              made_at: null,
+              root_tab_id: null,
+              root_pane_id: null,
+            },
+          }),
+          task: null,
+        });
+      }).pipe(Effect.provide(foundationLayer({ dir })), Effect.scoped, Effect.orDie);
+      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+      yield* session(started("r1")).pipe(Effect.ensuring(bin.restore()));
+
+      const { autoMode } = yield* Schema.decodeUnknownEffect(AutoModeSettings)(
+        yield* settingsAt(yield* rig.calls()),
+      );
+      expect(autoMode.allow[1]).toStartWith(`Rewriting history on branch ${branch} of ${origin}`);
+      expect(autoMode.environment[2]).toContain(`branch ${branch}, which this Run created.`);
+      expect(autoMode.environment[5]).toBe(
+        'The user started this Run from the board with: "Fix the login form"',
+      );
+      expect(autoMode.allow[2]).toContain("starting words");
+      expect(yield* fs.exists(`${rig.root}/bin/gitlab.model.json.log`)).toBe(true);
+    }),
+  ));
+
+test("a Codex launch writes no autoMode", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+      yield* session(started("r1"), { harness: "codex", model: "default" });
+
+      const calls = yield* rig.calls();
+      expect(launchArgs(calls).join(" ")).not.toContain("autoMode");
+      for (const path of yield* fs.readDirectory(`${dir}/agents/r1`))
+        expect(yield* read(`${dir}/agents/r1/${path}`)).not.toContain("autoMode");
     }),
   ));

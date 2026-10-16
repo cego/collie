@@ -269,7 +269,9 @@ branch it merges. Your own checkout is never touched or switched. See
 [A run that roams across branches](using.md#a-run-that-roams-across-branches).
 
 **What happens:** the run binds the team's Renovate issue and appends the repository to its
-checklist unchecked, then assesses the whole batch of Renovate merge requests, read only,
+checklist unchecked. Where several issues match, it takes the one whose title names the
+current month or cycle, else the one with the earliest due date, else the newest, and says
+which and why on that issue and as `picked_because` in its Output. It then assesses the whole batch of Renovate merge requests, read only,
 and decides whether the repository is a package or an application. Once it has said there is
 something to land it blocks — at no token cost — until it holds the repository in
 Helle; a repository that is already up to date takes nobody's turn.
@@ -277,13 +279,29 @@ For an application it then gathers every update into one batch branch and merge 
 deploys the batch to stage and proves it there — rolling stage back to the latest stable
 release, reading the logs `renovate.logs` names, fixing the batch and redeploying, on its
 own, when it does not — and waits for another team member's approval before merging the
-batch. A package never reaches those three steps at all, and its merge requests are merged
+batch. It asks for that approval once with its harness's question tool, so the question is
+on the Run, where a teammate or you answer. A package never reaches those three steps at all, and its merge requests are merged
 one at a time under the same claim, fixing conflicts and routine dependency fallout on each
 merge request's own branch.
 Either way it then chooses a version from the whole diff since the previous tag, tags
 annotated with changelog-style notes (and creates a GitLab release only where the repository
-is a package), waits for the tag pipeline to publish or deploy, and checks the repository
-off. Helle is released when the run finishes, and also when a batch nobody approved ends it
+is a package), waits until every job of the tag pipeline has finished except manual jobs that
+deploy to production, and checks the repository off. Production deploy jobs are yours: the
+run never plays, retries or asks about them, and names each, with its URL, as `prod_jobs`
+in its release Output.
+
+Holding the claim, the run then waits, at no token cost and with no agent turn, until the
+forge shows production carries the default branch's head as it was right after the merge
+step, read through the same deployments a card's `in-prod` comes from. Whatever the Output
+names, an older deployment, a failed one, a forge that cannot be read and a repository with
+no production environment all keep it waiting. The card says what it waits for: "Waiting
+for production: play `<job>` at `<url>`. The claim on `<slug>` is held until the forge shows
+production carries `<sha>`.", or, with no job named, "Waiting for production to carry
+`<sha>` of `<url>`. The claim on `<slug>` is held until it does." A stop or hold ends the
+wait with the claim kept, and a restarted host goes back into it. A run holding no claim
+does not wait, and its result names the production jobs left to play.
+
+Helle is released once production carries the merge, and also when a batch nobody approved ends it
 with nothing merged. A run that fails keeps the claim, since what it guards may be
 half-done, and so does a stage that was not proved: nothing shows stage is back on its
 stable release. The run says `claim retained; recovery required` beside where it failed, and
@@ -308,7 +326,7 @@ Renovate pull request is merged only at the head that was reviewed
 
 **It asks you** at the points where asking is the work: a breaking or substantial
 migration, an update that cannot be merged safely, a bounded retry that made no progress,
-several matching Linear issues, a failing tag pipeline. The Helle claim is held through
+a failing tag pipeline job other than a production deploy. The Helle claim is held through
 every one of them. A run with no open Renovate merge requests reports the repository up to
 date, creates no tag, and still leaves the checklist correct.
 
@@ -368,6 +386,29 @@ is no menu, and the agent takes steering after the run has ended.
 
 Module: [`workflows/general.workflow.ts`](../workflows/general.workflow.ts), with its
 prompt in [`workflows/general.md`](../workflows/general.md).
+
+## What a shipped step is cleared for
+
+A step that pushes, merges, tags or plays a job says so in its agent's own turn, as its
+Clearance ([`docs/sdk.md`](sdk.md#having-an-agent-do-the-work)), in the forge's own noun.
+Each names only what that step's content tells the agent to do:
+
+- **`implement`'s `mr`**: pushing the checkout's branch to origin (its web address) and
+  opening or updating its merge request there. Not merging: it merges only when a message
+  of its own asks it to.
+- **`review`'s fix step**: pushing new commits to the reviewed branch on origin with a
+  plain push.
+- **`renovate`'s `stage`**: playing, retrying and watching the stage deploy, e2e-stage and
+  smoke jobs of the repository's pipelines, and rolling stage back to the newest tag whose
+  production deploy succeeded — never a production job.
+- **`renovate`'s `merge`**: approving the reviewed head of, and merging, Renovate's own merge
+  requests; merging the Run's batch merge request once a teammate has approved it; using
+  the forge's own commands as the content names them.
+- **`renovate`'s `release`**: pushing an annotated version tag of the default branch,
+  creating its release where the repository is a package, and watching the tag's
+  pipeline — never playing a production deploy job.
+
+Every other shipped step clears nothing.
 
 ## How they chain
 

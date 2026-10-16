@@ -177,6 +177,97 @@ test(
 );
 
 test(
+  "a steer is typed plain within 3 lines and 700 characters, or kept as a file the typed line names",
+  () =>
+    steerable("collie-finished-budget-", (world) =>
+      Effect.gen(function* () {
+        const { env, runId, agent } = yield* finishedWithAgent(world);
+        const fs = yield* FileSystem.FileSystem;
+        const typed = Effect.map(
+          fs.readFileString(Bun.env.FAKE_HERDR_LOG!).pipe(Effect.orDie),
+          (log) =>
+            log
+              .split("\n")
+              .filter((line) => line !== "")
+              .map((line) => Schema.decodeUnknownSync(CallLine)(line))
+              .filter((call) => call.cmd === "agent prompt" && call.argv[2] === agent.name)
+              .at(-1)?.argv[3] ?? "",
+        );
+        const steer = (
+          text: string,
+          actor: Parameters<typeof carryOutAsked>[2],
+          attachments?: ReadonlyArray<string>,
+        ) =>
+          Effect.gen(function* () {
+            const action: ReturnType<typeof deliver> & { attachments?: ReadonlyArray<string> } =
+              deliver(runId, agent.name, text);
+            if (attachments !== undefined) action.attachments = attachments;
+            const [done] = yield* carryOutAsked(env, [action], actor);
+            expect(done).toMatchObject({ kind: "deliver", state: "applied" });
+            const lines = (yield* typed).split("\n");
+            expect(lines[0]).toStartWith(`${DELIVERY_TOKEN}${runId}-${actor.requestId}`);
+            expect(lines.length).toBeLessThanOrEqual(3);
+            expect(Array.from(lines.join("\n")).length).toBeLessThanOrEqual(700);
+            const file =
+              /^Their message is in (\S+)\. Read it whole and act on it as theirs\.$/.exec(
+                lines[2] ?? "",
+              )?.[1];
+            const kept =
+              file === undefined ? null : yield* fs.readFileString(file).pipe(Effect.orDie);
+            return { lines, kept, note: done?.note ?? "" };
+          });
+        const board = (n: number) => ({ origin: "board" as const, requestId: `board-${n}` });
+        const AUTO_MODE =
+          "Kept as a file in the Run. Auto mode reads only what is typed: ask for an action it must clear in a message of at most 3 lines and 700 characters.";
+
+        const plain = yield* steer("merge it", board(1));
+        expect(plain.lines).toHaveLength(3);
+        expect(plain.lines[1]).toMatch(/^From the human, on the board, .+\.$/);
+        expect(plain.lines[2]).toBe("merge it");
+        expect(plain.note).not.toContain("Kept as a file");
+
+        const twoLines = yield* steer("merge it\nthen tag it", board(2));
+        expect(twoLines.kept).toBe("merge it\nthen tag it");
+        expect(twoLines.lines[1]).toMatch(/^From the human, on the board, .+\.$/);
+        expect(twoLines.note).toContain(AUTO_MODE);
+
+        const room = 700 - plain.lines[0]!.length - plain.lines[1]!.length - 2;
+        const fills = yield* steer("y".repeat(room), board(3));
+        expect(fills.kept).toBeNull();
+        const over = yield* steer("z".repeat(room + 1), board(4));
+        expect(over.kept).toBe("z".repeat(room + 1));
+
+        const shot = `${world.project}/shot.png`;
+        yield* fs.writeFileString(shot, "png").pipe(Effect.orDie);
+        const attached = yield* steer("look at this", board(5), [shot]);
+        expect(attached.kept).toMatch(/^look at this\nAttached: \S+shot\.png$/);
+
+        const longSaid = "s".repeat(900);
+        for (const [n, said] of [longSaid, "first line\nsecond line"].entries()) {
+          const chatted = yield* steer("merge it", {
+            origin: "chat",
+            requestId: `chat-said-${n}`,
+            conversation: "c-1",
+            said,
+          });
+          expect(chatted.kept).toBe(`The human said: "${said}"\n\nmerge it`);
+          expect(chatted.lines[1]).toMatch(/^From chat for the human, [^"]+\.$/);
+        }
+
+        const desktop = yield* steer("merge it", { origin: "desktop", requestId: "desktop-1" });
+        expect(desktop.lines[1]).toMatch(/^From the human, in Desktop, .+\.$/);
+        const desktopLong = yield* steer(`${"é".repeat(5_000)}\n  kept as typed  `, {
+          origin: "desktop",
+          requestId: "desktop-2",
+        });
+        expect(desktopLong.kept).toBe(`${"é".repeat(5_000)}\n  kept as typed  `);
+        expect(desktopLong.lines[1]).toMatch(/^From the human, in Desktop, .+\.$/);
+      }),
+    ),
+  120_000,
+);
+
+test(
   "a finished Run whose agent is gone fails the delivery and names its follow-up offer",
   () =>
     steerable("collie-finished-gone-", (world) =>
@@ -384,9 +475,11 @@ test(
           .map((line) => Schema.decodeUnknownSync(CallLine)(line))
           .filter((call) => call.cmd === "agent prompt")
           .map((call) => call.argv.join(" "))
-          .find((text) => text.includes("Attached:"));
-        expect(told).toContain(`Attached: ${dir}/my shot.png`);
-        expect(told).toContain(`Attached: ${dir}/log.txt`);
+          .findLast((text) => text.includes("Their message is in"));
+        const kept = /Their message is in (\S+)\./.exec(told ?? "")?.[1] ?? "";
+        expect(yield* fs.readFileString(kept).pipe(Effect.orDie)).toBe(
+          `Attached: ${dir}/my shot.png\nAttached: ${dir}/log.txt`,
+        );
 
         expect(yield* attachFiles(env, typing("/nowhere/at-all.png"), runId)).toContain(
           "attachment /nowhere/at-all.png does not exist",

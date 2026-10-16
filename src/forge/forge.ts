@@ -117,6 +117,16 @@ export interface Forge {
     cwd: string,
     run: Runner<R>,
   ) => Effect.Effect<ForBranch, never, R>;
+  /**
+   * Whether `branch`, pushed or not, is the default branch or matches any protection rule
+   * or ruleset, whatever the rule allows; null where the forge cannot say.
+   */
+  readonly protects: <R>(
+    project: string,
+    branch: string,
+    cwd: string,
+    run: Runner<R>,
+  ) => Effect.Effect<boolean | null, never, R>;
   /** Every merge request whose source branch is `branch`, whatever its state. */
   readonly fromBranch: <R>(
     project: string,
@@ -148,12 +158,23 @@ export interface Forge {
     cwd: string,
     run: Runner<R>,
   ) => Effect.Effect<Readiness, never, R>;
+  /**
+   * Gives the checkout at `into` a credential helper for `project`'s host that asks the
+   * CLI for its token at each use, so no token is stored.
+   */
+  readonly credentials: <R>(
+    project: string,
+    into: string,
+    run: Runner<R>,
+  ) => Effect.Effect<Readiness, never, R>;
   /** "GitLab" or "GitHub". */
   readonly display: string;
   /** The CLI it is reached through, as a human is told to log in with it. */
   readonly cli: string;
   /** "merge request" or "pull request". */
   readonly noun: string;
+  /** The repository's web address, from its `host/path`. */
+  readonly webUrl: (project: string) => string;
   /** One note on the merge request, and its approval where `approve` asks for it. */
   readonly post: <R>(
     ref: MrRef,

@@ -10,6 +10,7 @@
 // pieces below is upstream's rather than Collie's.
 
 import type { Asker } from "./proposals";
+import { actorOf, readAudit, type ScheduledBy } from "./audit";
 import * as BunCrypto from "@effect/platform-bun/BunCrypto";
 import * as SqliteClient from "@effect/sql-sqlite-bun/SqliteClient";
 import {
@@ -102,6 +103,7 @@ import {
   forgeHere,
   prepareMergeRequest,
   postNote,
+  productionCarries,
   projectHere,
   shell as runShell,
 } from "./mr";
@@ -161,7 +163,8 @@ import { TASK_INPUT, checkoutFor, repositoryName, workOf } from "./worktree";
 import { Herdr, herdrFailureReason } from "./herdr";
 
 import type { PluginEnv } from "./env";
-import { WorktreeRecordSchema } from "./run";
+import { StartedSchema, type RunAuthority, type Started } from "./automode";
+import { WorktreeRecordSchema, type WorktreeRecord } from "./run";
 import { listTasks, newTask, taskOfWorkspace, writeTask } from "./task";
 import { nowIso, epochMs } from "./time";
 import { classifyGivenTarget, classifyWorkSource, defaultBase } from "./inputs";
@@ -334,6 +337,12 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly workspace: string | null;
     /** This Run, then the Runs it was started from or builds a plan of, and so on: whose agents it may ask. */
     readonly lineage: ReadonlyArray<string>;
+    /** What a Claude agent's auto mode is told this Run authorises: the branch it made, and who started it. */
+    readonly authority: {
+      readonly createdBranch: string | null;
+      readonly roaming: boolean;
+      readonly started: { readonly door: "board" | "desktop" | "cli-tty" | "chat"; readonly words: string } | null;
+    };
   }
 
   /**
@@ -385,6 +394,10 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly forge?: string;
     /** "merge request" or "pull request". */
     readonly noun?: string;
+    /** The checkout's branch; empty on a detached checkout. */
+    readonly branch?: string;
+    /** The repository's web address, as its forge's adapter writes it. */
+    readonly url?: string;
     /** The URL of this branch's open merge request, or empty for none. */
     readonly existing?: string;
     /** Whether \`existing\` merges itself once green, so a push to it is a merge. */
@@ -488,6 +501,20 @@ export const SDK_DECLARATIONS = `declare module "collie" {
      * \`integrated <branch>@<sha>\`. Take it inside an Activity, so a replay does not merge again.
      */
     readonly integrate: (runId: string, cwd: string) => Effect.Effect<Integration>;
+    /** The commit origin's default branch is at now. Take it inside an Activity. */
+    readonly defaultHead: (cwd: string) => Effect.Effect<string, WorkflowError>;
+    /**
+     * Blocks, with no agent turn, until the forge shows production carries \`sha\`, saying
+     * on the card what it waits for: true then, false where the Run was stopped or held first.
+     */
+    readonly awaitProduction: (options: {
+      readonly runId: string;
+      readonly cwd: string;
+      readonly sha: string;
+      readonly jobs: ReadonlyArray<{ readonly name: string; readonly url?: string }>;
+      readonly slug: string;
+      readonly url: string;
+    }) => Effect.Effect<boolean>;
   }
   export const Host: Context.Service<HostApi, HostApi>;
   export interface IssueRef { readonly number: number; readonly url: string; }
@@ -905,6 +932,11 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly skill?: string;
     /** The agent pushes the branch: while its merge request auto-merges, the Run parks instead. */
     readonly pushes?: boolean;
+    /**
+     * The step's Clearance, typed on one line after its pointer: each entry one sentence
+     * naming one action and its target, from facts Collie holds, never from an Output.
+     */
+    readonly clears?: ReadonlyArray<string>;
     readonly harness?: string;
     readonly model?: string;
     readonly effort?: string;
@@ -2342,6 +2374,8 @@ export const hostLayer = (options: {
   readonly readings?: Effect.Effect<ReadonlyArray<UsageReading>>;
   /** The herdr a reviewed checkout is made through; the host's own by default. */
   readonly placing?: { readonly herdr: Herdr; readonly env: PluginEnv };
+  /** How often a wait for production asks the forge again. */
+  readonly productionPoll?: Duration.Input;
 }): Layer.Layer<Host | Notifier | Oversight | Reliance, never, Store | BunServices> =>
   Layer.effectContext(
     Effect.gen(function* () {
@@ -2732,6 +2766,7 @@ export const hostLayer = (options: {
                           options,
                           task: row.task,
                           placed: placedOf(row, options),
+                          started: Option.getOrUndefined(decodePlacing(row.placing ?? ""))?.started,
                         })),
                       ),
                 ),
@@ -2751,6 +2786,7 @@ export const hostLayer = (options: {
                   options: admitted?.options ?? {},
                   task: admitted?.task ?? null,
                   workspace: admitted?.placed.workspace ?? null,
+                  authority: authorityOf(admitted?.placed.worktree ?? null, admitted?.started),
                 })),
                 Effect.orElseSucceed(() => ({
                   cwd: dir,
@@ -2758,6 +2794,7 @@ export const hostLayer = (options: {
                   options: {},
                   task: null,
                   workspace: null,
+                  authority: authorityOf(null, undefined),
                 })),
               ),
               lineageOf(runId),
@@ -2815,11 +2852,21 @@ export const hostLayer = (options: {
               ),
             ),
         asked: (runId) =>
-          store
-            .asked(runId)
-            .pipe(
-              Effect.map((rows) => rows.map((row) => ({ name: row.decision, answer: row.answer }))),
-            ),
+          Effect.gen(function* () {
+            const rows = yield* store.asked(runId);
+            const audit = yield* under(readAudit(runDir(dir, runId))).pipe(
+              Effect.orElseSucceed(() => []),
+            );
+            return rows.map((row) => {
+              const actor =
+                row.answerer ??
+                audit.find((line) => line.operation === "answer" && line.request === row.request)
+                  ?.actor;
+              if (actor === undefined) return { name: row.decision, answer: row.answer };
+              const { requestId: _, schedule: __, ...by } = actor;
+              return { name: row.decision, answer: row.answer, by };
+            });
+          }),
         close: (runId, decision, value) =>
           store
             .settle({ run: runId, decision, value, request: `${runId}-${decision}-closed` })
@@ -2985,6 +3032,46 @@ export const hostLayer = (options: {
               Effect.orDie,
             ),
           ),
+        defaultHead: (cwd) =>
+          under(runShell("git", ["ls-remote", "origin", "HEAD"], cwd)).pipe(
+            Effect.flatMap((said) => {
+              const sha = said.code === 0 ? (said.stdout.trim().split(/\s/)[0] ?? "") : "";
+              return sha === ""
+                ? Effect.fail(
+                    new WorkflowError({
+                      reason: `origin's default branch could not be read from ${cwd}: ${(said.stderr ?? "").trim()}`,
+                    }),
+                  )
+                : Effect.succeed(sha);
+            }),
+          ),
+        awaitProduction: (asked) =>
+          Effect.gen(function* () {
+            const short = asked.sha.slice(0, 8);
+            const plays = asked.jobs.map((job) => `\`${job.name}\` at ${job.url ?? asked.url}`);
+            yield* host.parked(
+              asked.runId,
+              plays.length === 0
+                ? `Waiting for production to carry \`${short}\` of ${asked.url}. The claim on \`${asked.slug}\` is held until it does.`
+                : `Waiting for production: play ${plays.join(", ")}. The claim on \`${asked.slug}\` is held until the forge shows production carries \`${short}\`.`,
+            );
+            const { gitlabHost } = yield* loadDefaults(options.userDir ?? dir).pipe(
+              Effect.orElseSucceed(() => ({ gitlabHost: undefined })),
+            );
+            const controlled = Effect.gen(function* () {
+              while (!((yield* set(HOLD, asked.runId)) || (yield* set(STOP, asked.runId))))
+                yield* Effect.sleep("1 second");
+              return false;
+            });
+            const carried = Effect.gen(function* () {
+              while (!(yield* productionCarries(asked.cwd, asked.sha, runShell, gitlabHost)))
+                yield* Effect.sleep(options.productionPoll ?? "5 minutes");
+              return true;
+            });
+            const carries = yield* Effect.raceFirst(controlled, carried);
+            yield* host.parked(asked.runId, null);
+            return carries;
+          }).pipe(Effect.provideContext(services)),
         mergeRequest: (runId, url) =>
           fs.makeDirectory(runDir(dir, runId), { recursive: true }).pipe(
             Effect.andThen(fs.writeFileString(mergeRequestPath(dir, runId), `${url}\n`)),
@@ -3553,6 +3640,8 @@ type Cut = typeof Cut.Type;
  */
 const Placing = Schema.Struct({
   requestedBy: Schema.optional(RequestedBy),
+  /** The human door that started it and their words, where one did. */
+  started: Schema.optional(StartedSchema),
   branchBase: Schema.optional(Schema.String),
   closes: Schema.optional(Schema.Literal("reported")),
   from: Schema.String,
@@ -3573,6 +3662,16 @@ export const owesReport = (row: RunRow) =>
     onNone: () => false,
     onSome: (placing) => placing.requestedBy !== undefined || placing.closes === "reported",
   });
+
+/** What a Run's agents are told it authorises; a record from before this was kept authorises nothing. */
+const authorityOf = (
+  worktree: WorktreeRecord | null,
+  started: Started | undefined,
+): RunAuthority => ({
+  createdBranch: worktree?.created_branch === true ? worktree.branch : null,
+  roaming: worktree !== null && worktree.branch === "",
+  started: started ?? null,
+});
 
 /** A row claimed and not placed yet: nothing hands it to the engine until it is. */
 const unplaced = (row: RunRow) => row.checkout === null && row.placing !== null;
@@ -3789,6 +3888,8 @@ export const Steered = Schema.Struct({
   how: Schema.optionalKey(Schema.String),
   /** The pane it went to. */
   pane: Schema.optionalKey(Schema.String),
+  /** Said to whoever sent it where the words were kept as a file rather than typed. */
+  kept: Schema.optionalKey(Schema.String),
   /** The kind of each credential-shaped value taken out before anything was written. */
   redacted: Schema.optionalKey(Schema.Array(Schema.String)),
 });
@@ -3959,6 +4060,7 @@ export interface RegistryApi {
     readonly value: string;
     /** The caller's claim on this answer, so the same one arriving twice is one answer. */
     readonly request: string;
+    readonly by?: Asker & { readonly schedule?: ScheduledBy | undefined };
   }) => Effect.Effect<typeof Answered.Type, HostRefused, HostServices>;
   /** Sets or clears one durable control over one run, and says whether it reached it. */
   readonly control: (options: {
@@ -4044,6 +4146,8 @@ export interface RegistryApi {
 /** What a start is given. */
 export interface StartOptions {
   readonly requestedBy?: RequestedBy;
+  /** The human door that started it and their words, where one did. */
+  readonly started?: Started;
   readonly branchBase?: string | undefined;
   readonly generation: Generation;
   readonly request: string;
@@ -4146,6 +4250,7 @@ export const foundationLayer = (options: {
   readonly messagePoll?: Duration.Input | undefined;
   /** The herdr a reviewed checkout is made through; the host's own by default. */
   readonly placing?: { readonly herdr: Herdr; readonly env: PluginEnv };
+  readonly productionPoll?: Duration.Input;
 }): Layer.Layer<
   | Host
   | Notifier
@@ -5558,6 +5663,7 @@ const makeRegistry: (
       options: launch,
       placing: encodePlacing({
         requestedBy: options.requestedBy,
+        started: options.started,
         branchBase: options.branchBase,
         closes: generation.closes,
         from: request.kind === "existing" ? request.path : options.project,
@@ -5802,12 +5908,9 @@ const makeRegistry: (
       );
     }),
 
-    answer: Effect.fn("Engine.Registry.answer")(function* (options: {
-      readonly runId: string;
-      readonly decision: string | null;
-      readonly value: string;
-      readonly request: string;
-    }) {
+    answer: Effect.fn("Engine.Registry.answer")(function* (
+      options: Parameters<RegistryApi["answer"]>[0],
+    ) {
       const found = yield* routed(options.runId);
       const asks = yield* asked(options.runId);
       const open = asks.filter((one) => one.answer === null);
@@ -5839,6 +5942,7 @@ const makeRegistry: (
         decision: name,
         value,
         request: options.request,
+        answerer: options.by === undefined ? undefined : actorOf(options.by, options.request),
       });
       if (settled._tag === "refused") {
         return yield* new HostRefused({ reason: settled.reason });
