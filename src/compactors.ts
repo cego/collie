@@ -1295,13 +1295,14 @@ const survivors = (
 /** Codex's port, over the App Server `server` starts: `codex app-server`, or a test's stand-in. */
 export const codexPort = (server: string): CompactionPort => ({
   gate: () => gateVersion("codex"),
-  // The TUI binds a thread on the App Server as it starts, before any prompt.
+  // A reachable App Server is enough to type Codex its first prompt. A thread is created
+  // by that first prompt on current Codex versions, so waiting for `boundThread` here
+  // circularly parked a blank pane and prevented Collie from ever injecting its work.
+  // `boundThread` remains the stricter check for context, compaction and usage below.
   ready: (ctx) =>
     ctx.endpoint === null
       ? Effect.succeed(false)
-      : withCodex(ctx.endpoint, (client) => boundThread(client, ctx.cwd)).pipe(
-          Effect.map((thread) => thread !== null),
-        ),
+      : withCodex(ctx.endpoint, () => Effect.succeed(true)),
   install: (ctx) =>
     codexEndpoint(ctx, server).pipe(
       Effect.map(({ endpoint, pid, command }) => ({
