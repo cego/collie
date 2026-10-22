@@ -223,6 +223,7 @@ test("a reachable App Server is ready before the first prompt creates its thread
     Effect.gen(function* () {
       fake.threads = [];
       expect(yield* codex.ready!(ctx())).toBe(true);
+      expect(fake.calls).toEqual([]);
     }),
   ));
 

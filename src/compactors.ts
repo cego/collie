@@ -19,6 +19,7 @@ import {
   startCompaction,
   turnOutcome,
   withCodex,
+  codexReachable,
 } from "./codex";
 import {
   compactionAfter,
@@ -1302,7 +1303,7 @@ export const codexPort = (server: string): CompactionPort => ({
   ready: (ctx) =>
     ctx.endpoint === null
       ? Effect.succeed(false)
-      : withCodex(ctx.endpoint, () => Effect.succeed(true)),
+      : codexReachable(ctx.endpoint).pipe(Effect.as(true)),
   install: (ctx) =>
     codexEndpoint(ctx, server).pipe(
       Effect.map(({ endpoint, pid, command }) => ({

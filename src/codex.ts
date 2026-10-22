@@ -160,6 +160,18 @@ export const withCodex = <A, E, R>(
     (live) => Effect.sync(() => live.close()),
   );
 
+/**
+ * Whether the App Server can accept a WebSocket connection. Startup readiness needs
+ * only this transport fact: initialize can block on optional remote MCP setup, while
+ * Codex's TUI can still receive the first prompt over its already-started server.
+ */
+export const codexReachable = (url: string): Effect.Effect<void, CodexError> =>
+  Effect.acquireUseRelease(
+    open(url),
+    () => Effect.void,
+    (live) => Effect.sync(() => live.close()),
+  );
+
 const LoadedList = Schema.Struct({ data: Schema.Array(Schema.String) });
 const ThreadRead = Schema.Struct({
   thread: Schema.Struct({
