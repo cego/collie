@@ -661,6 +661,12 @@ export interface HostApi {
    */
   readonly place: (runId: string) => Effect.Effect<Place>;
   /**
+   * The branch `checkoutReviewed` would check out, or its refusal in the same words. It
+   * cuts and records nothing, so a workflow can ask before offering a fix. Take it inside
+   * an Activity, so a replay answers the same.
+   */
+  readonly reviewedBranch: (runId: string) => Effect.Effect<ReviewedBranch>;
+  /**
    * The checkout of the branch this Run's diff target names, recorded as the Run's own:
    * `place` answers with it from then on, and every verification is bound to it
    * (ADR-0054). The one git already has, else one cut from the branch; asking again
@@ -1057,6 +1063,9 @@ export interface Place {
 export type ReviewedCheckout =
   | { readonly cwd: string; readonly branch: string }
   | { readonly refused: string };
+
+/** The reviewed branch, or why there is none, in the resolver's own words. */
+export type ReviewedBranch = { readonly branch: string } | { readonly refused: string };
 
 /** What opening a merge request from here needs, and what it would be filled in with. */
 export interface MrReady {

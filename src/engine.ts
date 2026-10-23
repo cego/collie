@@ -184,7 +184,7 @@ import {
   RunReport,
   type Disposition,
 } from "./board-model";
-import { TASK_INPUT, checkoutFor, repositoryName, workOf } from "./worktree";
+import { TASK_INPUT, branchFor, checkoutFor, repositoryName, workOf } from "./worktree";
 import { Herdr, herdrFailureReason } from "./herdr";
 
 import type { PluginEnv } from "./env";
@@ -564,6 +564,9 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     | { readonly cwd: string; readonly branch: string }
     | { readonly refused: string };
 
+  /** The reviewed branch, or why there is none. */
+  export type ReviewedBranch = { readonly branch: string } | { readonly refused: string };
+
   /** What opening a merge request from here needs, and what it would be filled in with. */
   export interface MrReady {
     readonly ok: boolean;
@@ -608,6 +611,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly skill: (name: string) => Effect.Effect<string | null>;
     /** This Run as the host admitted it; its directory is made as this is answered. */
     readonly place: (runId: string) => Effect.Effect<Place>;
+    /** Whether the branch this Run's diff target names can be established; cuts and records nothing. */
+    readonly reviewedBranch: (runId: string) => Effect.Effect<ReviewedBranch>;
     /** The checkout of the branch this Run's diff target names, recorded as the Run's own. */
     readonly checkoutReviewed: (runId: string) => Effect.Effect<ReviewedCheckout>;
     readonly held: (runId: string) => Effect.Effect<boolean>;
@@ -2989,8 +2994,8 @@ export const hostLayer = (options: {
             Effect.map((env) => ({ herdr: new Herdr(env), env })),
             Effect.orDie,
           );
-      /** The reviewed branch's checkout, found or cut as a build of the review's findings is (ADR-0054). */
-      const checkoutReviewed = (runId: string) =>
+      /** What resolving a Run's reviewed branch needs, as a build of the review's findings is placed (ADR-0054). */
+      const reviewing = (runId: string) =>
         Effect.gen(function* () {
           const row = yield* store.run(runId);
           if (row === null) return { refused: `there is no Run ${runId}` };
@@ -2998,21 +3003,19 @@ export const hostLayer = (options: {
             Effect.orElseSucceed((): Record<string, string> => ({})),
           );
           const placed = placedOf(row, launch);
-          if (placed.worktree !== null) {
-            return { cwd: placed.cwd, branch: placed.branch ?? placed.worktree.branch };
-          }
           const input = yield* decodeInput(row.input).pipe(
             Effect.orElseSucceed((): Readonly<Record<string, Schema.Json>> => ({})),
           );
           const field = fieldWith(yield* WorkflowHints, "diff-target");
           const target = field === undefined ? undefined : input[field];
           const { herdr, env } = yield* placing;
-          const made = yield* Effect.result(
-            checkoutFor(herdr, {
+          return {
+            row,
+            placed,
+            herdr,
+            env,
+            ask: {
               cwd: placed.cwd,
-              stateDir: env.stateDir,
-              workflow: row.workflow,
-              checkout: "branch",
               name: runId,
               // As placement feeds a build of a review's findings: this Run is the review.
               inputs: {
@@ -3022,6 +3025,39 @@ export const hostLayer = (options: {
               },
               strategies: { [REVIEWED]: "diff-target", work: "work-source" },
               login: env.gitlabLogin,
+            },
+          };
+        });
+      /** The reviewed branch, or why there is none, by the checkout's own resolution; cuts nothing. */
+      const reviewedBranch = (runId: string) =>
+        Effect.gen(function* () {
+          const asked = yield* reviewing(runId);
+          if (asked.refused !== undefined) return { refused: asked.refused };
+          const { placed } = asked;
+          if (placed.worktree !== null) return { branch: placed.branch ?? placed.worktree.branch };
+          const plan = yield* Effect.result(branchFor(asked.ask));
+          if (plan._tag === "Failure") {
+            return { refused: `no branch could be established: ${String(plan.failure)}` };
+          }
+          return plan.success.refused
+            ? { refused: plan.success.refused }
+            : { branch: plan.success.branch };
+        }).pipe(Effect.provideContext(bun));
+      /** The reviewed branch's checkout, found or cut as a build of the review's findings is (ADR-0054). */
+      const checkoutReviewed = (runId: string) =>
+        Effect.gen(function* () {
+          const asked = yield* reviewing(runId);
+          if (asked.refused !== undefined) return { refused: asked.refused };
+          const { row, placed, herdr, env } = asked;
+          if (placed.worktree !== null) {
+            return { cwd: placed.cwd, branch: placed.branch ?? placed.worktree.branch };
+          }
+          const made = yield* Effect.result(
+            checkoutFor(herdr, {
+              ...asked.ask,
+              stateDir: env.stateDir,
+              workflow: row.workflow,
+              checkout: "branch",
               recordedBy: (at) =>
                 store.runs.pipe(
                   Effect.map((rows) => {
@@ -3375,6 +3411,7 @@ export const hostLayer = (options: {
               (at, lineage) => ({ ...at, lineage }),
             ),
           ),
+        reviewedBranch,
         checkoutReviewed,
         held: (runId) => set(HOLD, runId),
         stopRequested: (runId) => set(STOP, runId),

@@ -1410,11 +1410,19 @@ scenario(
   () =>
     runEffect(
       Effect.gen(function* () {
+        yield* repository();
+        yield* exec(["git", "branch", "feature"], { cwd: rig.projectDir });
+        const worktrees = () =>
+          exec(["git", "worktree", "list"], { cwd: rig.projectDir }).pipe(
+            Effect.map((listed) => listed.stdout),
+          );
+        const before = yield* worktrees();
         yield* rig.queueOutputs([SYNTHESIS]);
+        const target = "branch:main...feature";
         const rows = yield* parked({
           entry: shipped("review"),
           runId: "r-review-branch",
-          input: { target: "branch:main...HEAD" },
+          input: { target },
           decision: "post-1",
         });
 
@@ -1428,11 +1436,13 @@ scenario(
         const result = yield* answered({
           entry: shipped("review"),
           runId: "r-review-branch",
-          input: { target: "branch:main...HEAD" },
+          input: { target },
           decision: "post-1",
           value: "Don't post",
         });
         expect(said(result)).toBe("1 finding(s), not posted");
+        // Asking whether the branch can be fixed cuts no checkout of it.
+        expect(yield* worktrees()).toBe(before);
       }),
     ),
   120_000,
@@ -1726,34 +1736,95 @@ scenario(
 );
 
 scenario(
-  "a review with no branch to fix starts no fixer, says why, and asks again",
+  "a review with no branch to fix offers no fix, says why, and starts no fixer",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* repository();
+        yield* rig.queueOutputs([SYNTHESIS]);
+        const rows = yield* parked({
+          entry: shipped("review"),
+          runId: "r-fix-none",
+          input: { target: "branch:main...HEAD" },
+          decision: "post-1",
+        });
+
+        expect(optionsOf(rows, "post-1")).toEqual(["Don't post"]);
+        expect(rows.find((row) => row.decision === "post-1")?.prompt).toContain(
+          "HEAD is not a branch, so there is nothing to fix on it",
+        );
+        expect((yield* rig.cmds()).filter((cmd) => cmd === "agent start")).toHaveLength(1);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a merge request reviewed from a checkout with no remote is offered no fix, and says why",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        for (const args of [
+          ["init", "-q"],
+          ["config", "user.email", "t@example.com"],
+          ["config", "user.name", "t"],
+          ["commit", "-qm", "first", "--allow-empty"],
+          ["branch", "fix-the-guard"],
+        ]) {
+          yield* exec(["git", ...args], { cwd: rig.projectDir });
+        }
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* bin.add(
+          "glab",
+          `[ "$1 $2" = "mr view" ] && echo '{"source_branch": "fix-the-guard"}'; exit 0`,
+        );
+        yield* rig.queueOutputs([SYNTHESIS]);
+        const rows = yield* parked({
+          entry: shipped("review"),
+          runId: "r-review-no-remote",
+          input: { target: "mr:gitlab.example.com/group/project!42" },
+          decision: "post-1",
+        });
+
+        expect(optionsOf(rows, "post-1")).toEqual(["Post to merge request", "Don't post"]);
+        expect(rows.find((row) => row.decision === "post-1")?.prompt).toContain(
+          `${rig.projectDir} has no remote, so group/project!42 may not be its own`,
+        );
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a fix refused when it starts is not offered again, and its refusal is logged once",
   () =>
     runEffect(
       Effect.gen(function* () {
         yield* repository();
         yield* rig.queueOutputs([SYNTHESIS]);
         const target = "branch:main...HEAD";
-        yield* parked({
-          entry: shipped("review"),
-          runId: "r-fix-none",
-          input: { target },
-          decision: "post-1",
-        });
+        const review = { entry: shipped("review"), runId: "r-fix-refused", input: { target } };
+        // A parent nobody is implementing for: the hand-off finds no one to take it.
+        const first = yield* parked({ ...review, decision: "post-1", parent: "r-gone" });
+        expect(optionsOf(first, "post-1")).toContain("Fix findings");
+        expect(optionsOf(first, "post-1")).not.toContain("Fix findings in a full implement run");
+
         const rows = yield* answeredThen({
-          entry: shipped("review"),
-          runId: "r-fix-none",
-          input: { target },
+          ...review,
           decision: "post-1",
           value: "Fix findings",
           until: "post-2",
         });
-
-        expect((yield* rig.cmds()).filter((cmd) => cmd === "agent start")).toHaveLength(1);
-        const fs = yield* FileSystem.FileSystem;
-        expect(yield* fs.readFileString(`${runDir(dir, "r-fix-none")}/log.txt`)).toContain(
+        expect(optionsOf(rows, "post-2")).toEqual(["Don't post"]);
+        expect(rows.find((row) => row.decision === "post-2")?.prompt).toContain(
           "HEAD is not a branch, so there is nothing to fix on it",
         );
-        expect(optionsOf(rows, "post-2")).toContain("Fix findings");
+        expect((yield* rig.cmds()).filter((cmd) => cmd === "agent start")).toHaveLength(1);
+
+        yield* answered({ ...review, decision: "post-2", value: "Don't post" });
+        const fs = yield* FileSystem.FileSystem;
+        const log = yield* fs.readFileString(`${runDir(dir, "r-fix-refused")}/log.txt`);
+        expect(log.split("fix: nothing fixed, HEAD is not a branch").length - 1).toBe(1);
       }),
     ),
   120_000,
