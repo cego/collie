@@ -717,6 +717,41 @@ for (const { delay, grace } of [
   );
 
 test.skipIf(process.platform !== "linux")(
+  "slow reads of unrelated processes do not leave a check's child alive after its host stops",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const unrelated = Array.from({ length: 40 }, (_, i) => String(2 ** 22 + i));
+        let slow = false;
+        const proc: FileSystem.FileSystem = {
+          ...fs,
+          readDirectory: (path, options) =>
+            fs
+              .readDirectory(path, options)
+              .pipe(Effect.map((names) => (path === "/proc" ? [...unrelated, ...names] : names))),
+          readFileString: (path, encoding) => {
+            const read = fs.readFileString(path, encoding);
+            return slow && unrelated.some((pid) => path === `/proc/${pid}/stat`)
+              ? Effect.sleep("100 millis").pipe(Effect.andThen(read))
+              : read;
+          },
+        };
+        const { notes, checks } = yield* worldWith({}, { fileSystem: proc });
+        yield* runHeld(checks, notes);
+        const ones = yield* startedIn(notes);
+
+        slow = true;
+        yield* endAllWithin(checks, Duration.seconds(2), () => Effect.void).pipe(
+          Effect.ensuring(Effect.sync(() => (slow = false))),
+        );
+        expect(yield* noneRunning(ones)).toBe(true);
+      }),
+    ),
+  30_000,
+);
+
+test.skipIf(process.platform !== "linux")(
   "a child that leaves its check's group after the SIGTERM's look is killed before the stop ends",
   () =>
     runEffect(

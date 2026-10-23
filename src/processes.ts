@@ -24,6 +24,11 @@ const statFields = (pid: number) =>
     Effect.map((stat) => stat.slice(stat.lastIndexOf(")") + 2).split(" ")),
   );
 const STARTED = 19;
+const procStarted = (pid: number) =>
+  statFields(pid).pipe(
+    Effect.map((fields) => fields[STARTED] || null),
+    Effect.orElseSucceed(() => null),
+  );
 
 /** NUL-separated argv, which is not a string until the separators are. */
 const procCommand = (pid: number, proc: string) =>
@@ -94,11 +99,7 @@ export const commandOf = (pid: number, proc = PROC) =>
 
 /** When it started, as a token only compared with itself; null where that cannot be read. */
 export const startedOf = Effect.fn("Processes.startedOf")(function* (pid: number) {
-  if (yield* readsSessions)
-    return yield* statFields(pid).pipe(
-      Effect.map((fields) => fields[STARTED] || null),
-      Effect.orElseSucceed(() => null),
-    );
+  if (yield* readsSessions) return yield* procStarted(pid);
   return (yield* ps(["-o", "lstart=", "-p", String(pid)])).trim() || null;
 });
 
@@ -174,13 +175,14 @@ export const boundProcesses = Effect.fn("Processes.boundProcesses")(function* (
   names: ReadonlyArray<string>,
 ) {
   const fs = yield* FileSystem.FileSystem;
+  if (!(yield* readsSessions)) return [];
   const looked = yield* Effect.forEach(
     yield* fs.readDirectory(PROC).pipe(Effect.orElseSucceed(() => [])),
     (name) =>
       Effect.gen(function* () {
         const pid = Number(name);
         if (!Number.isInteger(pid)) return null;
-        const started = yield* startedOf(pid);
+        const started = yield* procStarted(pid);
         if (started === null) return null;
         const bound = yield* bindingsOf(pid, names);
         return bound !== null && Object.keys(bound).length > 0 ? { pid, started, bound } : null;

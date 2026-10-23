@@ -167,6 +167,10 @@ test(
         Effect.gen(function* () {
           const started = yield* collie(world, ["run", "start", "plain", "--input", "note=hi"]);
           expect(started.envelope.ok).toBe(true);
+          const { runId } = Schema.decodeUnknownSync(Schema.Struct({ runId: Schema.String }))(
+            started.envelope.data,
+          );
+          expect((yield* collie(world, ["run", "wait", runId])).envelope.ok).toBe(true);
           const [first, second] = yield* Effect.all(
             [firstSnapshot(world.state), firstSnapshot(world.state)],
             { concurrency: "unbounded" },
