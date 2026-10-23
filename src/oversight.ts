@@ -5,6 +5,7 @@
 
 import type { BunServices } from "@effect/platform-bun/BunServices";
 import { Clock, Context, Effect, FileSystem, Path, Schema } from "effect";
+import { appendLogLine } from "./run-log";
 import type { ChildProcessSpawner } from "effect/process";
 import { appendCard, buildCard, inspectFor, readCards, readCheckpoints, type Card } from "./cards";
 import {
@@ -240,10 +241,7 @@ export const writeCard = Effect.fn("Oversight.writeCard")(function* (
 
 /** A line of the Run's own log, which its record's log tab shows: what the host saw of its work. */
 export const appendLog = (runDir: string, line: string) =>
-  FileSystem.FileSystem.pipe(
-    Effect.tap((fs) => fs.makeDirectory(runDir, { recursive: true })),
-    Effect.flatMap((fs) => fs.writeFileString(`${runDir}/log.txt`, `${line}\n`, { flag: "a" })),
-  );
+  appendLogLine(runDir, line).pipe(Effect.asVoid);
 
 /** Best effort: oversight's notes never fail the thing they are about. */
 export const said = (at: { readonly runDir: string }, line: string) =>

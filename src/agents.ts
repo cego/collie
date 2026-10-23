@@ -30,6 +30,8 @@ import type { BunServices } from "@effect/platform-bun/BunServices";
 import * as Activity from "effect/workflow/Activity";
 import { attachmentsDir, listAttachments, type Attachment } from "./attachments";
 import { Launched, LAUNCH_ORDER, LAUNCH_SUFFIX, launchDir, readLaunches, stemOf } from "./launches";
+import { CurrentStep, type At } from "./steps";
+import { takeStepNotes } from "./step-steering";
 export { Launched } from "./launches";
 import * as Workflow from "effect/workflow/Workflow";
 import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
@@ -110,7 +112,7 @@ import { machineName } from "./peers";
 import { askRouteTo } from "./handoff";
 import { nowIso } from "./time";
 import { noteContext } from "./metrics";
-import { roomFor, subscriptionOf, type UsageReading } from "./usage-model";
+import { roomFor, subscriptionOf, usedFor, type UsageReading } from "./usage-model";
 import { ownCodexReading } from "./usage";
 import {
   lineageAgent,
@@ -189,6 +191,8 @@ export interface AgentAsk {
   readonly why?: string;
   /** Which agent of this work it is: past 1, one taking over from an agent that ran out. */
   readonly sequence?: number;
+  /** The Step run this work is in, where it is in one. */
+  readonly step?: At;
 }
 
 /**
@@ -207,6 +211,8 @@ export const RanOut = Schema.TaggedStruct("RanOut", {
   why: Schema.String,
   /** Where its harness keeps the conversation, where it said. */
   transcript: Schema.NullOr(Schema.String),
+  /** When its Subscription resets, where a reading says. */
+  resetsAt: Schema.optionalKey(Schema.NullOr(Schema.String)),
 });
 export type RanOut = typeof RanOut.Type;
 const isRanOut = Schema.is(RanOut);
@@ -679,6 +685,8 @@ export const agentWork = <
     };
     fellBack(ask, choice.from, choice.why);
     if (held !== null && held.sequence > 1) ask.sequence = held.sequence;
+    const at = yield* CurrentStep;
+    if (at !== null) ask.step = at;
     if (given.clears !== undefined) ask.clears = given.clears;
     if ((given.clears ?? []).length > 0) {
       const step = agents.stepMessage(ask);
@@ -848,6 +856,12 @@ export const agentWork = <
             .say(runId, `${work.operation}: ${said(on)} ran out (${out.why}); ${next.why}`)
             .pipe(
               Effect.andThen(
+                host.usageWait(runId, {
+                  account: subscriptionOf(on) ?? on.harness,
+                  resetsAt: out.resetsAt ?? null,
+                }),
+              ),
+              Effect.andThen(
                 Effect.raceFirst(
                   collecting(
                     current,
@@ -857,6 +871,7 @@ export const agentWork = <
                   room,
                 ),
               ),
+              Effect.ensuring(host.usageWait(runId, null)),
             ),
         });
         if (isRanOut(collected)) continue;
@@ -1967,6 +1982,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
               effort: ask.effort,
             };
             if ((ask.sequence ?? 1) > 1) landed.sequence = ask.sequence;
+            if (ask.step !== undefined) landed.step = ask.step;
             landed.at = yield* Clock.currentTimeMillis;
             fellBack(landed, ask.from, ask.why);
             if (incarnation !== undefined) {
@@ -2000,12 +2016,16 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         const adapter = adapterFor(launched.harness);
         const prefix = personaPrefix(adapter, yield* personaOf(ask.persona ?? ask.role));
         const file = promptFile(ask);
+        const notes =
+          ask.step === undefined
+            ? ""
+            : yield* takeStepNotes(`${host.dir}/runs/${ask.runId}`, ask.step.step, file);
         // Written before it goes out and never rewritten: what a human reads to see what
         // was actually asked, rather than what a prompt would be built as now.
         const address = `You are ${agent} of ${ask.runId} on ${machineName()}. Message another Run's agent with collie_do deliver to its Run and agent, or collie run steer <run> --operation <agent> "<words>"; push your branch before starting work on another Machine. ${READING_DELIVERIES} ${SHELL_HABITS}`;
         yield* write(
           file,
-          `${address}\n\n${prefix === "" ? ask.prompt : `${prefix}\n\n${ask.prompt}`}`,
+          `${notes === "" ? "" : `${notes}\n\n`}${address}\n\n${prefix === "" ? ask.prompt : `${prefix}\n\n${ask.prompt}`}`,
         );
         if (!alive || !replayed) {
           const late = yield* awaitReady(
@@ -2487,6 +2507,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         const dir = yield* controlDir(host.env.stateDir, launched.agent);
         const on = pinned(choiceOfLaunch(launched));
         let readAt = Number.NEGATIVE_INFINITY;
+        let resetsAt: string | null = null;
         for (;;) {
           const reported = yield* ranOutSince(dir, launched.at ?? 0);
           const now = yield* Clock.currentTimeMillis;
@@ -2503,13 +2524,16 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
                 : [own, ...machine.filter((one) => one.subscription !== own.subscription)];
             const judged = roomFor(readings, now)(on, undefined);
             exhausted = judged.room ? null : judged.why;
+            resetsAt = usedFor(readings, on, now)?.resetsAt ?? null;
           }
           if (reported !== null)
             return RanOut.make({
               why: exhausted ?? reported.why,
               transcript: reported.transcript,
+              resetsAt,
             });
-          if (exhausted !== null) return RanOut.make({ why: exhausted, transcript: null });
+          if (exhausted !== null)
+            return RanOut.make({ why: exhausted, transcript: null, resetsAt });
           yield* Effect.sleep(Duration.millis(host.pollMs ?? DEFAULT_POLL_MS));
         }
       }).pipe(Effect.orDie),

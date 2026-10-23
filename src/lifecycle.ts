@@ -888,6 +888,7 @@ export const controlRun = (
     readonly set: boolean;
     readonly request: string;
     readonly reason?: string | undefined;
+    readonly before?: string | undefined;
   },
 ): Effect.Effect<OpResult, never, Client> =>
   asksRun(
@@ -900,6 +901,7 @@ export const controlRun = (
         set: options.set,
         request: options.request,
         reason: options.reason,
+        before: options.before,
       }),
     options.door,
   ).pipe(Effect.map(controlled));
@@ -1031,6 +1033,24 @@ export const rememberChecks = Effect.fn("lifecycle.rememberChecks")(function* (
   return result;
 });
 
+export const withdrawNoteRun = (
+  env: PluginEnv,
+  options: { runId: string; note: string; request: string; door: Door },
+): Effect.Effect<OpResult, never, Client> =>
+  asksRun(
+    env,
+    options.runId,
+    (client) =>
+      client.withdrawNote({ runId: options.runId, note: options.note, request: options.request }),
+    options.door,
+  ).pipe(
+    Effect.map((done) =>
+      done.ok
+        ? { ok: true as const, data: { removed: true }, human: `Removed note ${options.note}.` }
+        : done,
+    ),
+  );
+
 /** Says something of a human's to the agent a Run has, through the host. */
 export const steerRun = (
   env: PluginEnv,
@@ -1038,6 +1058,7 @@ export const steerRun = (
     readonly runId: string;
     readonly text: string;
     readonly request: string;
+    readonly step?: string;
     readonly to?: string;
     readonly operation?: string;
     readonly agent?: string;
@@ -1052,6 +1073,7 @@ export const steerRun = (
     (client) =>
       Effect.gen(function* () {
         const sent = yield* client.steer({
+          step: options.step,
           runId: options.runId,
           text: options.text,
           request: options.request,
@@ -1080,7 +1102,14 @@ export const steerRun = (
           ok: true as const,
           data,
           human: withNotice(
-            [deliveredLine(sent), sent.kept].filter((line) => line !== undefined).join(" "),
+            [
+              sent.note === undefined
+                ? deliveredLine(sent)
+                : `Note ${sent.note} kept for Step ${options.step}.`,
+              sent.kept,
+            ]
+              .filter((line) => line !== undefined)
+              .join(" "),
             sent.redacted,
           ),
         };

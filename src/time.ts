@@ -92,3 +92,20 @@ export function agoShort(atMs: number, nowMs: number): string {
   }
   return "now";
 }
+
+/** How long, as a Flow's fact line says it: `12 min`, `2 h`, `1 h 5 min`. */
+export function minutes(ms: number): string {
+  const whole = Math.floor(Math.max(0, ms) / 60_000);
+  if (whole < 1) return "under a minute";
+  if (whole < 60) return `${whole} min`;
+  const rest = whole % 60;
+  return rest === 0 ? `${Math.floor(whole / 60)} h` : `${Math.floor(whole / 60)} h ${rest} min`;
+}
+
+/** A time of day on this Machine's clock: `15:45`. */
+export function clockTime(ms: number): string {
+  const iso = DateTime.formatIsoOffset(
+    DateTime.makeZonedUnsafe(ms, { timeZone: DateTime.zoneMakeLocal() }),
+  );
+  return iso.slice(11, 16);
+}

@@ -291,6 +291,24 @@ for (const name of ["gitlab", "github"] as const) {
         }),
       ));
 
+    test("keeps the check address its forge supplied", () =>
+      runEffect(
+        Effect.gen(function* () {
+          const url = `https://${host}/checks/42`;
+          const panel = yield* forge.details(
+            ref(name),
+            "/w",
+            fakeForge(
+              name,
+              model(name, {
+                mrs: [mr(name, { checks: [{ name: "test", state: "failed" }], checksUrl: url })],
+              }),
+            ).run,
+          );
+          expect(panel).toMatchObject({ _tag: "Details", checks: { state: "failed", url } });
+        }),
+      ));
+
     test("says why a merge request it cannot read is unavailable", () =>
       runEffect(
         Effect.gen(function* () {

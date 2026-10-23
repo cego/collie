@@ -1,11 +1,11 @@
 <script setup lang="ts">
-defineProps<{ title: string }>();
+const props = defineProps<{ title: string; initial?: string; sendLabel?: string }>();
 const emit = defineEmits<{ send: [text: string] }>();
 const open = defineModel<boolean>("open", { required: true });
 
 const text = ref("");
 watch(open, () => {
-  text.value = "";
+  text.value = props.initial ?? "";
 });
 const send = () => {
   const said = text.value.trim();
@@ -23,7 +23,7 @@ const send = () => {
         <UButton
           type="submit"
           class="self-end"
-          label="Send"
+          :label="sendLabel ?? 'Send'"
           data-testid="send"
           :disabled="text.trim() === ''"
         />

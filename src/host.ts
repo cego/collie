@@ -15,6 +15,7 @@
 // is the way it is.
 
 import { createConnection, type Socket as NetSocket } from "node:net";
+import { withdrawStepNote } from "./step-steering";
 import * as BunSocket from "@effect/platform-bun/BunSocket";
 import type { BunServices } from "@effect/platform-bun/BunServices";
 import * as BunSocketServer from "@effect/platform-bun/BunSocketServer";
@@ -144,13 +145,13 @@ import {
   type SweptBy,
 } from "./cleanup";
 import { startedOf } from "./automode";
-import { once, readAudit, recordAudit, startedBy, trimAudit } from "./audit";
+import { once, readAudit, recordAudit, startedBy, trimAudit, whoActed, actorOf } from "./audit";
 import { usagePhrase } from "./usage-model";
 import { currentEnv, leaveLauncher, withoutLauncher } from "./env";
 import { installation as installedRelease, RELEASE_TAG } from "./release";
 import { Herdr, isSettled, type AgentInfo } from "./herdr";
 import { serverSocket } from "./home";
-import { buildBoard, mrOf } from "./board";
+import { buildBoard, mrOf, taskFlowOf } from "./board";
 import { readForge, watchedMr, type MrPanels } from "./merges";
 import { shell } from "./mr";
 import { fetchRef, followDetail } from "./run-detail";
@@ -159,6 +160,7 @@ import {
   Answered,
   ASKED_KINDS,
   RunAgent,
+  Flow,
   Controlled,
   Disposition,
   FrontDoorRpcs,
@@ -237,7 +239,16 @@ import { reason } from "./naming";
 import { editString, globFiles, grepFiles, readPart, writeWhole } from "./host-files";
 import { receive, uploadsDir } from "./uploads";
 import { loadDefaults, SettingRefused, sharedSettings, takeShared } from "./config";
-import { decodeAnswer, machineName, relayOf, runShell, startPeers, type Peers } from "./peers";
+import {
+  decodeAnswer,
+  machineName,
+  peersOf,
+  relayOf,
+  runShell,
+  startPeers,
+  type Peers,
+} from "./peers";
+import { RunLinkNotice, readRunLinks, recordRunLink } from "./run-links";
 import type { SshMachine } from "./ssh-connection";
 import { LADDER_BOUND } from "./peer-transport";
 import {
@@ -249,7 +260,7 @@ import {
   type RelayHeader,
 } from "./peers-model";
 import { latest, readDispositions } from "./disposition";
-import { runAgents, stepsOf } from "./launches";
+import { operationsOf, readLaunches, runAgents } from "./launches";
 import { factsOfView, settled, type RunFacts } from "./runs";
 import { Store } from "./store";
 import { SESSIONS_EVERY, agentsIn, focusPane, herdChanges, liveHerds } from "./herds";
@@ -337,6 +348,8 @@ const RunShown = Schema.Struct({
   ),
   /** What of it waits for memory, as the card says it. Absent from an older host. */
   memory: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  /** The same Flow as its details carry. Absent from an older host. */
+  flow: Schema.optionalKey(Schema.NullOr(Flow)),
 });
 
 const Loaded = Schema.Struct({
@@ -365,6 +378,11 @@ const outcomeSaying = (removed: ReadonlyArray<string>, outcome: SteerOutcome): S
  */
 export const HostRpcs = RpcGroup.make(
   Rpc.make("identity", { success: Identity }),
+  Rpc.make("linkNotice", {
+    payload: { notice: RunLinkNotice, request: Schema.String },
+    success: Schema.Boolean,
+    error: Schema.Union([HostRefused, RequestConflict]),
+  }),
   Rpc.make("load", {
     payload: { entry: Schema.String },
     success: Loaded,
@@ -462,6 +480,7 @@ export const HostRpcs = RpcGroup.make(
       runId: Schema.String,
       text: Schema.String,
       request: Schema.String,
+      step: Schema.optional(Schema.String),
       /** A role (`builder`, `reviewer`, `planner`), an agent or an operation. */
       to: Schema.optional(Schema.String),
       operation: Schema.optional(Schema.String),
@@ -559,6 +578,7 @@ const handlers = (
       const registry = yield* Registry;
       const bun = yield* Effect.context<BunServices>();
       const pid = yield* currentPid;
+      const recordingLinks = yield* Semaphore.make(1);
       // The installation this host belongs to, which the client that started it named.
       const env = yield* currentEnv.pipe(Effect.orDie);
       const catalogue = (project: string) =>
@@ -572,6 +592,58 @@ const handlers = (
           Effect.mapError((cause) => new HostRefused({ reason: reason(cause) })),
         );
       return HostRpcs.of({
+        linkNotice: ({ notice, request }, { client }) =>
+          Effect.gen(function* () {
+            const actor = stampIn(declared, client);
+            const sender = actor.from?.machine;
+            const peer =
+              sender === undefined
+                ? undefined
+                : (yield* peersOf(dir)).find((one) => one.installation === sender.installation);
+            if (peer === undefined || sender?.installation !== notice.machine.installation)
+              return yield* new HostRefused({
+                reason: "only a paired Machine can send a Run link notice",
+              });
+            if (notice.requestedBy.machine.installation !== installation)
+              return yield* new HostRefused({
+                reason: "the requesting Run belongs to another Machine",
+              });
+            const runId = notice.requestedBy.run;
+            if ((yield* registry.view(runId)) === null)
+              return yield* new HostRefused({ reason: `No Run "${runId}".` });
+            const launch = (yield* readLaunches(dir, runId)).findLast(
+              (one) => one.agent === notice.requestedBy.agent,
+            );
+            if (launch === undefined)
+              return yield* new HostRefused({
+                reason: "the requesting agent was not launched by that Run",
+              });
+            return yield* recordingLinks.withPermits(1)(
+              once(
+                runDir(dir, runId),
+                {
+                  operation: "run-link",
+                  request,
+                  ...actor,
+                  asked: Schema.encodeSync(RunLinkNotice)(notice),
+                  result: Schema.Boolean,
+                },
+                Effect.gen(function* () {
+                  const prior = (yield* readRunLinks(runDir(dir, runId))).find(
+                    (one) =>
+                      one.run === notice.run &&
+                      one.machine.installation === notice.machine.installation,
+                  );
+                  yield* recordRunLink(runDir(dir, runId), {
+                    ...notice,
+                    machine: { ...notice.machine, name: peer.name },
+                    step: prior?.step ?? launch.step?.step ?? null,
+                  }).pipe(Effect.orDie);
+                  return true;
+                }),
+              ),
+            );
+          }).pipe(Effect.provideContext(bun)),
         identity: () =>
           Effect.succeed({
             build: BUILD,
@@ -674,6 +746,7 @@ const handlers = (
             const view = yield* registry.view(runId);
             if (view === null) return null;
             const all = yield* registry.views(null);
+            const hosted = yield* Effect.context<HostServices>();
             return {
               view,
               agents: yield* runAgents(dir, runId),
@@ -692,6 +765,20 @@ const handlers = (
               memory: yield* Effect.map(memoryWaitOf(runDir(dir, runId)), (wait) =>
                 wait === null ? null : waitLine(wait),
               ),
+              flow: yield* taskFlowOf(
+                {
+                  env,
+                  runs: all.map((one) => factsOfView(env.stateDir, one)),
+                  alive: (yield* liveHerds(new Herdr(env), env).pipe(Effect.flatMap(agentsIn)))
+                    .alive,
+                  offers: (id) =>
+                    registry.offers(id).pipe(
+                      Effect.provideContext(hosted),
+                      Effect.orElseSucceed(() => []),
+                    ),
+                },
+                runId,
+              ).pipe(Effect.orElseSucceed(() => null)),
             };
           }).pipe(Effect.provideContext(bun)),
         invite: (asked) =>
@@ -726,7 +813,7 @@ const handlers = (
             registry.grant({ runId, name, command }),
           ).pipe(Effect.provideContext(bun)),
         steer: (
-          { runId, text: given, request, to, operation, agent, mode, attachments },
+          { runId, text: given, request, to, operation, agent, mode, attachments, step },
           { client },
         ) => {
           const { text, removed } = scrub(given);
@@ -756,6 +843,7 @@ const handlers = (
               if (attached !== undefined) asked.attachments = attached;
               // Only where given, so a request recorded before `to` existed still matches.
               if (to !== undefined) asked.to = to;
+              if (step !== undefined) asked.step = step;
               return once(
                 runDir(dir, runId),
                 {
@@ -782,6 +870,7 @@ const handlers = (
                       agent,
                       mode,
                       actor,
+                      step,
                     }),
                   ),
                   Effect.map(saying(removed)),
@@ -797,6 +886,7 @@ const handlers = (
 
 /** What a steer's request has to ask again, as `AskedFor` is a start's. */
 type SteerAsked = {
+  step?: string;
   readonly text: string;
   to?: string;
   readonly operation: string | null;
@@ -1473,6 +1563,25 @@ const frontDoorHandlers = (
                             attachments,
                           }),
                         ),
+                        Effect.tap((started) =>
+                          Effect.gen(function* () {
+                            const view = yield* registry.view(started.runId);
+                            if (
+                              view?.requestedBy === undefined ||
+                              view.requestedBy.machine.installation === installation
+                            )
+                              return;
+                            const { notifyRunLink } = yield* Effect.promise(
+                              () => import("./run-link-delivery"),
+                            );
+                            yield* notifyRunLink(
+                              { ...env, hostStamp: stamp },
+                              installation,
+                              view,
+                              "admitted",
+                            );
+                          }),
+                        ),
                         Effect.map(saying(scrubbed.removed)),
                       ),
                 ),
@@ -1490,14 +1599,44 @@ const frontDoorHandlers = (
               .pipe(Effect.map(saying(removed))),
           );
         },
-        control: ({ runId, control, set, request, reason }, { client }) =>
+        control: ({ runId, control, set, request, reason, before }, { client }) =>
           auditedControl(
             runId,
-            `${set ? "" : "un"}${control}`,
+            `${set ? "" : "un"}${control}${before === undefined ? "" : `:before:${before}`}`,
             request,
             whoOf(client),
             reason,
-          )(registry.control({ runId, control, set })),
+          )(
+            registry.control({
+              runId,
+              control,
+              set,
+              before,
+              by: whoActed(actorOf(whoOf(client), request)),
+            }),
+          ),
+        withdrawNote: ({ runId, note, request }, { client }) =>
+          once(
+            runDir(dir, runId),
+            {
+              operation: "withdraw_note",
+              request,
+              ...whoOf(client),
+              asked: { note },
+              result: Schema.Boolean,
+            },
+            Effect.andThen(known(runId), withdrawStepNote(runDir(dir, runId), note)).pipe(
+              Effect.flatMap((removed) =>
+                removed
+                  ? Effect.succeed(true)
+                  : Effect.fail(
+                      new HostRefused({
+                        reason: `Note ${note} has already been read or is absent`,
+                      }),
+                    ),
+              ),
+            ),
+          ).pipe(Effect.provideContext(hosted)),
         resume: ({ runId, request }, { client }) =>
           auditedControl(runId, "resume", request, whoOf(client))(takeUp(runId)),
         offers: ({ runId }) => registry.offers(runId),
@@ -1963,6 +2102,12 @@ const frontDoorHandlers = (
                     const echo = (stream: "stdout" | "stderr") => (text: string) =>
                       Queue.offer(queue, { _tag: "Output", stream, text }).pipe(Effect.asVoid);
                     const from = whoOf(client).from;
+                    const step =
+                      from?.run === runId
+                        ? (yield* readLaunches(env.stateDir, runId)).findLast(
+                            (one) => one.agent === from.agent,
+                          )?.step
+                        : undefined;
                     const fs = yield* FileSystem.FileSystem;
                     const memory = yield* waitForMemory({
                       env,
@@ -1991,7 +2136,18 @@ const frontDoorHandlers = (
                     const log = `${evidenceDir(env.stateDir, runId)}/verify/${started}-${name.replace(/[^\w.-]/g, "_")}.log`;
                     const collected = yield* collect(
                       evidenceDir(env.stateDir, runId),
-                      { run: runId, name, executable, argv, cwd: where, by: "agent", expect, log },
+                      {
+                        run: runId,
+                        name,
+                        executable,
+                        argv,
+                        cwd: where,
+                        by: "agent",
+                        expect,
+                        log,
+                        step: step?.step,
+                        place: step?.place,
+                      },
                       { stdout: echo("stdout"), stderr: echo("stderr") },
                     ).pipe(
                       Effect.mapError(
@@ -2452,7 +2608,7 @@ const frontDoorHandlers = (
                 view.status.status === "complete" || view.status.status === "failed",
               ),
               ci: forged?.checks ?? null,
-              steps: yield* stepsOf(env.stateDir, runId),
+              steps: yield* operationsOf(env.stateDir, runId),
             };
           }).pipe(Effect.provideContext(bun)),
         runDetail: ({ runId, tail, pages, refreshMr }) => {
@@ -2476,7 +2632,21 @@ const frontDoorHandlers = (
             fresh = false;
             // Every Run, because another built from the same plan may have finished its tickets.
             const runs = (yield* registry.views(null)).map((one) => factsOfView(env.stateDir, one));
-            return yield* buildRunDetail({ env, runId, runs, mr, tail, pages, plans });
+            const hosted = yield* Effect.context<HostServices>();
+            const flow = yield* taskFlowOf(
+              {
+                env,
+                runs,
+                alive: (yield* liveHerds(herdr, env).pipe(Effect.flatMap(agentsIn))).alive,
+                offers: (id) =>
+                  registry.offers(id).pipe(
+                    Effect.provideContext(hosted),
+                    Effect.orElseSucceed(() => []),
+                  ),
+              },
+              runId,
+            ).pipe(Effect.orElseSucceed(() => null));
+            return yield* buildRunDetail({ env, runId, runs, mr, tail, pages, plans, flow });
           }).pipe(Effect.provideContext(bun));
           return followDetail(detail, changed).pipe(Stream.orDie);
         },

@@ -25,6 +25,7 @@ import {
   defineWorkflow,
   formatFindings,
   planReposOf,
+  step,
 } from "collie";
 import { Effect, Schema } from "effect";
 import * as Activity from "effect/workflow/Activity";
@@ -128,6 +129,76 @@ const OPINIONS = 2;
 /** The planner is one agent for the whole run. */
 const PLANNER = "grill";
 
+const grill = step({
+  id: "grill",
+  title: "Grill",
+  description:
+    "The planner reads the goal and the repository, and asks only what changes the work.",
+  kind: "agent",
+  role: "planner",
+});
+const spec = step({
+  id: "spec",
+  title: "Spec",
+  description: "The planner writes SPEC.md into the Run's plan directory.",
+  kind: "agent",
+  role: "planner",
+  produces: "plan",
+});
+const tickets = step({
+  id: "tickets",
+  title: "Tickets",
+  description: "The planner writes one ticket per slice beside the spec.",
+  kind: "agent",
+  role: "planner",
+  produces: "plan",
+});
+const menu = step({
+  id: "menu",
+  title: "End menu",
+  description: "What becomes of the plan: built, second-guessed, offloaded, refined or finished.",
+  kind: "question",
+});
+const unbuildable = step({
+  id: "unbuildable",
+  title: "Unbuildable",
+  description: "The planner is told once why its tickets cannot be built.",
+  kind: "agent",
+  role: "planner",
+  produces: "plan",
+});
+const opinion = step({
+  id: "second-opinion",
+  title: "Second opinion",
+  description: "A reviewer of its own reads the plan.",
+  kind: "agent",
+  role: "reviewer",
+  produces: "review",
+});
+const revise = step({
+  id: "revise",
+  title: "Revise",
+  description: "The planner answers the second opinion's findings.",
+  kind: "agent",
+  role: "planner",
+  produces: "plan",
+});
+const offload = step({
+  id: "offload",
+  title: "Offload to Linear",
+  description: "The planner files the tickets as Linear issues, in the team it was told.",
+  kind: "agent",
+  role: "planner",
+});
+const refine = step({
+  id: "refine",
+  title: "Refine",
+  description: "Another planner round over the plan.",
+  kind: "agent",
+  role: "planner",
+  produces: "plan",
+});
+
 export default defineWorkflow({
   id: "plan",
   title: "plan — turn a goal into a spec and tickets",
@@ -152,6 +223,7 @@ export default defineWorkflow({
     roles: { reviewer: { harness: "claude", model: "opus", effort: "high" } },
   },
   hints: { goal: "goal" },
+  path: [grill, spec, tickets, menu],
   // A plan proves it wrote tickets; nobody chooses that, so it is fixed rather than asked.
   outcome: { fixed: "plan" },
   // What a finished plan offers: the tickets it wrote, built by the workflow that builds.
@@ -195,39 +267,47 @@ export default defineWorkflow({
         });
       const planner = { agent: PLANNER, role: "planner" };
 
-      const grilled = yield* agentWork({
-        ...planner,
-        operation: "grill",
-        instructions: prompts.grill,
-        input,
-        output: Grilled,
-      });
-      yield* agentWork({
-        ...planner,
-        operation: "spec",
-        skill: "to-spec",
-        instructions: prompts.spec,
-        input,
-        output: Spec,
-      });
-      const written = yield* agentWork({
-        ...planner,
-        operation: "tickets",
-        skill: "to-tickets",
-        instructions: prompts.tickets,
-        input,
-        output: PlanOutputSchema,
-      });
+      const grilled = yield* grill(
+        agentWork({
+          ...planner,
+          operation: "grill",
+          instructions: prompts.grill,
+          input,
+          output: Grilled,
+        }),
+      );
+      yield* spec(
+        agentWork({
+          ...planner,
+          operation: "spec",
+          skill: "to-spec",
+          instructions: prompts.spec,
+          input,
+          output: Spec,
+        }),
+      );
+      const written = yield* tickets(
+        agentWork({
+          ...planner,
+          operation: "tickets",
+          skill: "to-tickets",
+          instructions: prompts.tickets,
+          input,
+          output: PlanOutputSchema,
+        }),
+      );
       // A plan whose tickets nobody can build is not a finished plan: its planner is told once.
       const refusal = yield* refusalOf("tickets");
       if (refusal !== null) {
-        yield* agentWork({
-          ...planner,
-          operation: "unbuildable",
-          instructions: prompts.unbuildable,
-          input: { ...input, refusal },
-          output: PlanOutputSchema,
-        });
+        yield* unbuildable(
+          agentWork({
+            ...planner,
+            operation: "unbuildable",
+            instructions: prompts.unbuildable,
+            input: { ...input, refusal },
+            output: PlanOutputSchema,
+          }),
+        );
         const still = yield* refusalOf("unbuildable");
         if (still !== null) return yield* new WorkflowError({ reason: still });
       }
@@ -237,11 +317,14 @@ export default defineWorkflow({
         // What is left to offer: an opinion already had twice is not offered a third time.
         const chosen = nobodyAsked
           ? IMPLEMENT
-          : yield* ask({
-              name: `next-${round}`,
-              prompt: "What next?",
-              options: opinions < OPINIONS ? CHOICES : CHOICES.filter((one) => one !== OPINION),
-            });
+          : yield* menu(
+              ask({
+                name: `next-${round}`,
+                prompt: "What next?",
+                options: opinions < OPINIONS ? CHOICES : CHOICES.filter((one) => one !== OPINION),
+              }),
+              { round },
+            );
         if (chosen === FINISH) return `${written.issues_dir}: finished planning`;
 
         if (chosen === IMPLEMENT) {
@@ -283,47 +366,59 @@ export default defineWorkflow({
           opinions += 1;
           // A reviewer of its own, on its own agent: the planner that wrote the plan is
           // the last one who can tell you what is wrong with it.
-          const opinion = yield* agentWork({
-            operation: `second-opinion-${opinions}`,
-            role: "reviewer",
-            instructions: prompts.secondOpinion,
-            input,
-            output: ReviewOutputSchema,
-          });
+          const said = yield* opinion(
+            agentWork({
+              operation: `second-opinion-${opinions}`,
+              role: "reviewer",
+              instructions: prompts.secondOpinion,
+              input,
+              output: ReviewOutputSchema,
+            }),
+            { round: opinions, of: OPINIONS },
+          );
           // A second opinion with nothing to say is not a round of revision.
-          if (opinion.findings.length === 0) continue;
-          yield* agentWork({
-            ...planner,
-            operation: `revise-${opinions}`,
-            instructions: prompts.revise,
-            input: { ...input, findings: formatFindings(opinion.findings) },
-            output: Revised,
-          });
+          if (said.findings.length === 0) continue;
+          yield* revise(
+            agentWork({
+              ...planner,
+              operation: `revise-${opinions}`,
+              instructions: prompts.revise,
+              input: { ...input, findings: formatFindings(said.findings) },
+              output: Revised,
+            }),
+            { round: opinions, of: OPINIONS },
+          );
           continue;
         }
 
         if (chosen === OFFLOAD) {
-          const board = yield* ask({
-            name: "linear-team",
-            prompt: "Which Linear team do new issues go to",
-          });
-          yield* agentWork({
-            ...planner,
-            operation: `offload-${round}`,
-            instructions: prompts.offload,
-            input: { ...input, config: { linear: { team: board } } },
-            output: Offloaded,
-          });
+          yield* offload(
+            Effect.gen(function* () {
+              const board = yield* ask({
+                name: "linear-team",
+                prompt: "Which Linear team do new issues go to",
+              });
+              yield* agentWork({
+                ...planner,
+                operation: `offload-${round}`,
+                instructions: prompts.offload,
+                input: { ...input, config: { linear: { team: board } } },
+                output: Offloaded,
+              });
+            }),
+          );
           continue;
         }
 
-        yield* agentWork({
-          ...planner,
-          operation: `refine-${round}`,
-          instructions: prompts.refine,
-          input,
-          output: Revised,
-        });
+        yield* refine(
+          agentWork({
+            ...planner,
+            operation: `refine-${round}`,
+            instructions: prompts.refine,
+            input,
+            output: Revised,
+          }),
+        );
       }
       return `${written.issues_dir}: asked ${ROUNDS} times what to do next`;
     }),

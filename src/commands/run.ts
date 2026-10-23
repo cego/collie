@@ -12,6 +12,7 @@ import {
   answerRun,
   anyRuns,
   controlRun,
+  withdrawNoteRun,
   disposeRun,
   invokeOffer,
   showOffers,
@@ -473,6 +474,7 @@ const runShow = Command.make(
             startedBy,
             handoffs = [],
             memory = null,
+            flow = null,
           } = shown;
           // A Task is this Machine's, so a Run on another is never outside it.
           const task = yield* selectedTask(global);
@@ -496,6 +498,7 @@ const runShow = Command.make(
               handoffs,
               ready,
               memory,
+              flow,
             },
             human: [
               `${view.runId}\t${statusLine(statusOf(view), disposition)}\t${view.workflow}`,
@@ -514,6 +517,14 @@ const runShow = Command.make(
                     `  Report ${view.report.state}: ${view.report.note}`,
                     ...(view.report.closure === undefined ? [] : [`  ${view.report.closure}`]),
                   ]),
+              ...(view.linkNotices ?? [])
+                .filter((one) => one.state === "undelivered")
+                .map((one) => `  ${one.phase} link notice undelivered: ${one.note}`),
+              ...(view.stepNotes ?? [])
+                .filter((one) => one.read === null)
+                .map(
+                  (one) => `  Unread note ${one.id} for ${one.step}, from ${one.by}: ${one.text}`,
+                ),
               ...agentLines(agents),
               ...describeWaiting(view),
               ...children.map((child) => `  ${child.runId}\t${child.workflow}\t${statusOf(child)}`),
@@ -1045,10 +1056,11 @@ const runSteer = Command.make(
       Flag.withDescription("Which of the Run's agents, by its operation or name"),
       Flag.optional,
     ),
+    step: Flag.String("step").pipe(Flag.optional),
     attach: attachFlag,
     requestId: requestIdFlag,
   },
-  ({ runId, text, to, operation, attach, requestId }) =>
+  ({ runId, text, to, operation, attach, requestId, step }) =>
     Effect.gen(function* () {
       const global = yield* root;
       yield* attempt(
@@ -1064,6 +1076,7 @@ const runSteer = Command.make(
               request: id,
               to: Option.getOrUndefined(to),
               operation: Option.getOrNull(operation) ?? undefined,
+              step: Option.getOrUndefined(step),
               attachments,
               door,
             }),
@@ -1082,6 +1095,19 @@ const mutationFlags = {
   runId: runIdArg,
   requestId: requestIdFlag,
 };
+
+const runWithdrawNote = Command.make(
+  "withdraw-note",
+  {
+    runId: runIdArg,
+    note: Argument.String("note"),
+    requestId: requestIdFlag,
+  },
+  ({ runId, note, requestId }) =>
+    runMutationCommand("withdraw-note", runId, requestId, (env, request) =>
+      Effect.flatMap(cliDoor(env), (door) => withdrawNoteRun(env, { runId, note, request, door })),
+    ),
+);
 
 const runStop = Command.make("stop", mutationFlags, ({ runId, requestId }) =>
   runMutationCommand("run-stop", runId, requestId, (env, id) =>
@@ -1139,13 +1165,14 @@ const runHold = Command.make(
   {
     runId: runIdArg.pipe(Argument.optional),
     workspace: holdWorkspaceFlag,
+    before: Flag.String("before").pipe(Flag.optional),
     reason: Flag.String("reason").pipe(
       Flag.withDescription("Why, in your own words, which the board's drawer shows"),
       Flag.optional,
     ),
     requestId: requestIdFlag,
   },
-  ({ runId, workspace, reason, requestId }) =>
+  ({ runId, workspace, reason, before, requestId }) =>
     Effect.gen(function* () {
       const global = yield* root;
       const why = Option.getOrUndefined(reason);
@@ -1156,6 +1183,8 @@ const runHold = Command.make(
           const resolved = yield* context(global, false);
           if (resolved._tag === "ContextFailure") return resolved.result;
           if (where !== null) {
+            if (Option.isSome(before))
+              return err("invalid_input", "--before names one Run's Step; give its Run id");
             return yield* mutation(resolved.env, "run-hold-workspace", requestId, (request) =>
               holdTask(resolved.env, where, request, why),
             );
@@ -1177,6 +1206,7 @@ const runHold = Command.make(
                 control: "hold",
                 set: true,
                 reason: why,
+                before: Option.getOrUndefined(before),
               });
             }),
           );
@@ -1190,11 +1220,18 @@ const runHold = Command.make(
 
 const runRelease = Command.make(
   "release",
-  { runId: runIdArg, requestId: requestIdFlag },
-  ({ runId, requestId }) =>
+  { runId: runIdArg, requestId: requestIdFlag, before: Flag.String("before").pipe(Flag.optional) },
+  ({ runId, requestId, before }) =>
     runMutationCommand("run-release", runId, requestId, (env, id) =>
       Effect.flatMap(cliDoor(env), (door) =>
-        controlRun(env, { door, runId, control: "hold", set: false, request: id }),
+        controlRun(env, {
+          door,
+          runId,
+          control: "hold",
+          set: false,
+          request: id,
+          before: Option.getOrUndefined(before),
+        }),
       ),
     ),
 ).pipe(Command.withDescription("Let a held Run carry on"));
@@ -1866,6 +1903,7 @@ export const run = Command.make("run").pipe(
     runHold,
     runRelease,
     runSteer,
+    runWithdrawNote,
     runClearOverride,
     runDeliveries,
     runDisposition,

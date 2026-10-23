@@ -29,6 +29,7 @@ import {
   moduleFor,
   startRun,
   steerRun,
+  withdrawNoteRun,
   resumeRun,
   runViews,
   sweepNow,
@@ -137,6 +138,7 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
     which: "hold" | "stop",
     set: boolean,
     reason?: string,
+    before?: string,
   ) =>
     carry(
       controlRun(env, {
@@ -146,6 +148,7 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
         set,
         request: by.requestId,
         reason,
+        before,
       }),
     );
   registerExecutor("stop", (action, by, env) => control(env, by, action.run, "stop", true));
@@ -168,9 +171,11 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
     ),
   );
   registerExecutor("hold", (action, by, env) =>
-    control(env, by, action.run, "hold", true, action.reason),
+    control(env, by, action.run, "hold", true, action.reason, action.before),
   );
-  registerExecutor("release", (action, by, env) => control(env, by, action.run, "hold", false));
+  registerExecutor("release", (action, by, env) =>
+    control(env, by, action.run, "hold", false, undefined, action.before),
+  );
   registerExecutor("clear_override", (action, by, env) =>
     carry(
       clearOverride(
@@ -193,9 +198,20 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
           text: action.text,
           request: by.requestId,
           mode: action.mode,
+          step: action.step,
           attachments: action.attachments,
           door: by,
         });
+      }),
+    ),
+  );
+  registerExecutor("withdraw_note", (action, by, env) =>
+    carry(
+      withdrawNoteRun(env, {
+        runId: action.run,
+        note: action.note,
+        request: by.requestId,
+        door: by,
       }),
     ),
   );

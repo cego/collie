@@ -4,7 +4,7 @@
 // human reads on a card — a form nobody has a case for is a form nobody can trust.
 
 import { expect, test } from "bun:test";
-import { Clock, DateTime, Effect, Fiber, FileSystem, Schema } from "effect";
+import { Clock, DateTime, Effect, Fiber, FileSystem, Path, Schema } from "effect";
 import {
   boardLines,
   buildBoard,
@@ -17,7 +17,15 @@ import {
   workingLabel,
   type Sentence,
 } from "../src/board";
-import { mrLabel, type Mergeability } from "../src/board-model";
+import {
+  mrLabel,
+  type Flow,
+  type ForgeChecks,
+  type Mergeability,
+  type MrState,
+} from "../src/board-model";
+import { encodeStepLine, STEPS_FILE, type StepLine, type StepMeta } from "../src/steps";
+import { machineName } from "../src/peers";
 import {
   Answered,
   Controlled,
@@ -2780,3 +2788,513 @@ test("an expected failure of a check's command is not a pass, whether it failed 
     at: "abc",
   });
 });
+
+/** A Step as a module declares it. */
+const declared = (id: string, over: Partial<StepMeta> = {}): StepMeta => ({
+  id,
+  title: id,
+  description: "",
+  kind: "agent",
+  role: null,
+  produces: null,
+  ...over,
+});
+
+/** What a Run recorded of its Steps: the path, then each Step entered 4 min apart, the last 4 min ago. */
+const stepsRecorded = Effect.fn("board.stepsRecorded")(function* (
+  run: RunFacts,
+  path: ReadonlyArray<StepMeta>,
+  entered: ReadonlyArray<{ readonly step: StepMeta; readonly left: boolean }>,
+) {
+  const now = yield* DateTime.now;
+  const ago = (ms: number) => DateTime.formatIso(DateTime.subtract(now, { milliseconds: ms }));
+  const minutes = 60_000;
+  const lines: StepLine[] = [
+    { kind: "forecast", steps: path, at: ago((entered.length + 1) * 4 * minutes) },
+  ];
+  entered.forEach(({ step, left }, at) => {
+    const since = (entered.length - at) * 4 * minutes;
+    lines.push({ kind: "enter", key: step.id, step, place: null, at: ago(since) });
+    if (left) lines.push({ kind: "leave", key: step.id, at: ago(since - minutes) });
+  });
+  yield* (yield* FileSystem.FileSystem).writeFileString(
+    `${run.dir}/${STEPS_FILE}`,
+    lines.map((line) => `${encodeStepLine(line)}\n`).join(""),
+  );
+});
+
+/** The board built over these Runs, and each Task's whole Flow beside it. */
+const boardAndFlows = Effect.fn("board.boardAndFlows")(function* (
+  env: ReturnType<typeof readEnv>,
+  runs: ReadonlyArray<RunFacts>,
+  over: Partial<Parameters<typeof buildBoard>[0]> = {},
+) {
+  const flows = new Map<string, Flow>();
+  const views = yield* board(env, runs, { ...over, flows });
+  return { views, flow: (task: string) => flows.get(task)! };
+});
+
+const BUILD = declared("build");
+const SHIP = declared("ship", { produces: "merge-request" });
+
+/** A Run in its Build Step, held up by whatever `setUp` does to it. */
+const waitingIn = (
+  setUp: (
+    run: RunFacts,
+    dir: string,
+  ) => Effect.Effect<
+    Partial<Parameters<typeof buildBoard>[0]>,
+    never,
+    FileSystem.FileSystem | Path.Path
+  >,
+  over: Partial<RunFacts> = {},
+) =>
+  Effect.gen(function* () {
+    const { dir, env } = yield* scratch();
+    const run = yield* madeRun(dir, { task: "task-1", ...over });
+    yield* stepsRecorded(run, [BUILD, SHIP], [{ step: BUILD, left: false }]);
+    const given = yield* setUp(run, dir);
+    const { flow } = yield* boardAndFlows(env, [run], given);
+    return flow("task-1").lanes[0]!.nodes.map((node) => ({
+      id: node.id,
+      state: node.state,
+      wait: node.wait,
+      said: node.said,
+    }));
+  });
+
+const shipExpected = { id: "ship", state: "expected" as const, wait: null, said: null };
+
+test("a proposal waits on the Step in progress, on you", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const nodes = yield* waitingIn((run) =>
+        Effect.succeed({
+          proposals: [
+            {
+              kind: "proposal",
+              id: "p-1",
+              created_at: "2026-09-14T09:00:00Z",
+              expires_at: "2026-09-14T11:00:00Z",
+              interpretation: "it drifted into the docs",
+              targets: [{ run: run.id }],
+              actions: [{ kind: "stop", run: run.id }],
+              allowed_now: [],
+              intent_versions: {},
+              content_hash: "abc",
+              by: "evaluator:call-1",
+              state: "pending",
+            },
+          ],
+        }),
+      );
+      expect(nodes).toEqual([
+        { id: "build", state: "needs-you", wait: "proposal", said: "Collie proposes a correction" },
+        shipExpected,
+      ]);
+    }),
+  ));
+
+test("an agent herdr reports blocked is a stalled Step, waiting for you in its pane", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const nodes = yield* waitingIn((run) =>
+        Effect.succeed({
+          alive: [agent("impl-1", "blocked")],
+          registered: [registered("impl-1", run.id)],
+        }),
+      );
+      expect(nodes[0]).toEqual({
+        id: "build",
+        state: "needs-you",
+        wait: "stalled",
+        said: "Waiting for you in its pane",
+      });
+    }),
+  ));
+
+test("a Run parked with nothing to answer says why on the Step it parked in", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const nodes = yield* waitingIn(() => Effect.succeed({}), {
+        state: "waiting",
+        parked: "No Output after 2 h idle",
+      });
+      expect(nodes[0]).toEqual({
+        id: "build",
+        state: "needs-you",
+        wait: "parked",
+        said: "No Output after 2 h idle",
+      });
+    }),
+  ));
+
+test("a hold says who held it, as the card's held line does", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const nodes = yield* waitingIn(
+        (run) =>
+          recordAudit(run.dir, {
+            operation: "hold",
+            request: "h-1",
+            origin: "chat",
+            reason: "",
+            result: Controlled,
+            value: {
+              runId: run.id,
+              control: "hold",
+              set: true,
+              applied: true,
+              detail: "",
+              left: [],
+            },
+          }).pipe(Effect.orDie, Effect.as({})),
+        { held: true },
+      );
+      expect(nodes[0]).toEqual({
+        id: "build",
+        state: "waiting",
+        wait: "hold",
+        said: "Held by chat",
+      });
+    }),
+  ));
+
+test("a wait for memory names the Machine short of it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const nodes = yield* waitingIn((run) => waitingForMemory(run.dir).pipe(Effect.as({})));
+      expect(nodes[0]).toEqual({
+        id: "build",
+        state: "waiting",
+        wait: "memory",
+        said: `${machineName()} is short of memory`,
+      });
+    }),
+  ));
+
+test("a wait for usage says whose session resets, and when", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const nodes = yield* waitingIn(() => Effect.succeed({}), {
+        usage: { account: "claude", resetsAt: "2026-09-14T15:45:00.000Z" },
+      });
+      // bun runs its tests on UTC, so the reset's local time is its UTC one.
+      expect(nodes[0]).toEqual({
+        id: "build",
+        state: "waiting",
+        wait: "usage",
+        said: "claude's session resets 15:45",
+      });
+    }),
+  ));
+
+test("a check Collie runs says what it is and how long it has run", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const nodes = yield* waitingIn((run) => marking(run).pipe(Effect.orDie, Effect.as({})));
+      expect(nodes[0]).toEqual({
+        id: "build",
+        state: "waiting",
+        wait: "check",
+        said: "test · 4 min",
+      });
+    }),
+  ));
+
+test("a wait on CI is still running", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const nodes = yield* waitingIn(() => Effect.succeed({}), {
+        awaiting: { on: "CI on cego/collie#30", who: null, since: "2026-09-14T10:02:00Z" },
+      });
+      expect(nodes[0]).toEqual({
+        id: "build",
+        state: "waiting",
+        wait: "ci",
+        said: "Still running",
+      });
+    }),
+  ));
+
+test("a Run held between two Steps holds the next path Step, which is waiting", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const run = yield* madeRun(dir, { task: "task-1", held: true });
+      yield* stepsRecorded(run, [BUILD, SHIP], [{ step: BUILD, left: true }]);
+      const { flow } = yield* boardAndFlows(env, [run]);
+      expect(
+        flow("task-1").lanes[0]!.nodes.map((node) => [node.id, node.state, node.wait]),
+      ).toEqual([
+        ["build", "done", null],
+        ["ship", "waiting", "hold"],
+      ]);
+    }),
+  ));
+
+test("the Release row follows a merge request through CI, the merge and the furthest deploy", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const run = yield* madeRun(dir, { task: "task-1", state: "succeeded", mr: PR });
+      yield* stepsRecorded(
+        run,
+        [BUILD, SHIP],
+        [
+          { step: BUILD, left: true },
+          { step: SHIP, left: true },
+        ],
+      );
+      const release = (state: MrState, checks: ForgeChecks) =>
+        Effect.map(
+          boardAndFlows(env, [run], {
+            mrStates: new Map([["cego/collie#30", state]]),
+            forge: new Map([["cego/collie#30", { checks, head: null }]]),
+          }),
+          ({ flow }) =>
+            (flow("task-1").release ?? []).map((node) => [
+              node.title,
+              node.state,
+              node.wait,
+              node.said,
+            ]),
+        );
+      expect(yield* release("open", { state: "running" })).toEqual([
+        ["CI", "waiting", "ci", "Still running"],
+        ["Merged", "expected", null, null],
+      ]);
+      expect(yield* release("merged", { state: "passed" })).toEqual([
+        ["CI", "done", null, null],
+        ["Merged", "done", null, null],
+      ]);
+      expect(yield* release("in-prod", { state: "passed" })).toEqual([
+        ["CI", "done", null, null],
+        ["Merged", "done", null, null],
+        ["In prod", "done", null, null],
+      ]);
+      expect((yield* release("closed", { state: "passed" }))[1]).toEqual([
+        "Merged",
+        "stopped",
+        null,
+        "Closed without merging",
+      ]);
+    }),
+  ));
+
+test("the Step that made an open merge request says what Ready to release still lacks", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const { repo, head } = yield* checkout("mk/ship");
+      const run = yield* madeRun(dir, {
+        task: "task-1",
+        state: "succeeded",
+        branch: "mk/ship",
+        cwd: repo,
+        mr: PR,
+        finished: "2026-09-14T09:30:00Z",
+      });
+      yield* stepsRecorded(
+        run,
+        [BUILD, SHIP],
+        [
+          { step: BUILD, left: true },
+          { step: SHIP, left: true },
+        ],
+      );
+      yield* appendVerification(run.evidence, checked("test", head));
+      const { views, flow } = yield* boardAndFlows(env, [run], {
+        mrStates: new Map([["cego/collie#30", "open"]]),
+        forge: new Map([
+          [
+            "cego/collie#30",
+            {
+              checks: { state: "passed" },
+              head,
+              mergeable: { state: "blocked", said: "not approved" },
+            },
+          ],
+        ]),
+      });
+      const [missing] = views[0]!.readiness!.missing;
+      expect(missing!.fact).toBe("mergeable");
+      expect(flow("task-1").lanes[0]!.nodes.find((node) => node.id === "ship")!.said).toBe(
+        missing!.said,
+      );
+    }),
+  ));
+
+test("a finished Run's primary offer ends its row until a Run is started from it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const fs = yield* FileSystem.FileSystem;
+      const plan = yield* madeRun(dir, {
+        id: "plan",
+        workflow: "plan",
+        task: "task-1",
+        state: "succeeded",
+        created: "2026-09-14T09:00:00Z",
+      });
+      yield* fs.makeDirectory(`${plan.dir}/plan/issues`, { recursive: true });
+      yield* fs.writeFileString(`${plan.dir}/plan/issues/01-thing.md`, "# 1\n");
+      yield* stepsRecorded(plan, [BUILD], [{ step: BUILD, left: true }]);
+      const offers = () =>
+        Effect.succeed([
+          {
+            id: "implement-now",
+            title: "Implement now",
+            workflow: "implement",
+            arguments: null,
+            kind: "follow-up" as const,
+            primary: true,
+            unavailable: null,
+          },
+        ]);
+      const offered = yield* boardAndFlows(env, [plan], { offers });
+      expect(offered.flow("task-1").lanes[0]!.nodes.at(-1)).toMatchObject({
+        id: "offer:implement-now",
+        kind: "offer",
+        title: "Implement now",
+        state: "expected",
+        said: "Offered",
+      });
+
+      const implement = yield* madeRun(dir, {
+        id: "implement",
+        task: "task-1",
+        parent: "plan",
+        created: "2026-09-14T10:00:00Z",
+      });
+      const taken = yield* boardAndFlows(env, [implement, plan], { offers });
+      const lane = taken.flow("task-1").lanes.find((one) => one.run === "plan")!;
+      expect(lane.nodes.map((node) => node.kind)).toEqual(["agent"]);
+    }),
+  ));
+
+test("a card's strip is its leading Run's Steps, then the Release row, and where the work is", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const plan = yield* madeRun(dir, {
+        id: "plan",
+        workflow: "plan",
+        task: "task-1",
+        state: "succeeded",
+        created: "2026-09-14T09:00:00Z",
+      });
+      yield* stepsRecorded(plan, [declared("spec")], [{ step: declared("spec"), left: true }]);
+      const build = yield* madeRun(dir, {
+        id: "build",
+        task: "task-1",
+        parent: "plan",
+        created: "2026-09-14T10:00:00Z",
+        mr: PR,
+      });
+      yield* stepsRecorded(build, [BUILD, SHIP], [{ step: BUILD, left: false }]);
+      const { views, flow } = yield* boardAndFlows(env, [build, plan], {
+        mrStates: new Map([["cego/collie#30", "open"]]),
+        forge: new Map([["cego/collie#30", { checks: { state: "running" }, head: null }]]),
+      });
+      const whole = flow("task-1");
+      expect(whole.lanes.map((lane) => lane.run)).toEqual(["plan", "build"]);
+      expect(whole.current).toEqual({ run: "build", node: "build" });
+      expect(views[0]!.flow).toEqual({
+        glyphs: [
+          { title: "build", state: "running" },
+          { title: "ship", state: "expected" },
+          { title: "CI", state: "waiting" },
+          { title: "Merged", state: "expected" },
+        ],
+        release: 2,
+        current: { title: "build", said: "4 min" },
+      });
+    }),
+  ));
+
+test.each([false, true])("a fan-out's Repo runs appear once, by Wave (item calls: %s)", (items) =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const fs = yield* FileSystem.FileSystem;
+      const root = `${dir}/root`;
+      const parent = yield* madeRun(dir, { id: "r-fan", task: "task-1", cwd: root });
+      yield* fs.makeDirectory(`${parent.dir}/plan/issues`, { recursive: true });
+      for (const [file, repo, blocked] of [
+        ["01-a.md", "a", "None"],
+        ["02-b.md", "b", "None"],
+        ["03-c.md", "c", "01, 02"],
+      ] as const) {
+        yield* fs.makeDirectory(`${root}/${repo}/.git`, { recursive: true });
+        yield* fs.writeFileString(
+          `${parent.dir}/plan/issues/${file}`,
+          `# ${file}\n\n**Blocked by:** ${blocked}\n\n**Repo:** ${repo}\n`,
+        );
+      }
+      const fan = declared("fan", { kind: "workflow" });
+      const startedIn: StepLine[] = items
+        ? [
+            { kind: "forecast", steps: [fan], at: "2026-09-14T10:00:00.000Z" },
+            {
+              kind: "enter",
+              key: "fan@a",
+              step: fan,
+              place: { item: "a", items: ["a", "b", "c"] },
+              at: "2026-09-14T10:01:00.000Z",
+            },
+            { kind: "child", key: "fan@a", run: "r-a", at: "2026-09-14T10:01:10.000Z" },
+            {
+              kind: "enter",
+              key: "fan@b",
+              step: fan,
+              place: { item: "b", items: ["a", "b", "c"] },
+              at: "2026-09-14T10:01:15.000Z",
+            },
+            { kind: "child", key: "fan@b", run: "r-b", at: "2026-09-14T10:01:20.000Z" },
+          ]
+        : [
+            { kind: "forecast", steps: [fan], at: "2026-09-14T10:00:00.000Z" },
+            { kind: "enter", key: "fan", step: fan, place: null, at: "2026-09-14T10:01:00.000Z" },
+            { kind: "child", key: "fan", run: "r-a", at: "2026-09-14T10:01:10.000Z" },
+            { kind: "child", key: "fan", run: "r-b", at: "2026-09-14T10:01:20.000Z" },
+          ];
+      yield* fs.writeFileString(
+        `${parent.dir}/${STEPS_FILE}`,
+        startedIn.map((line) => `${encodeStepLine(line)}\n`).join(""),
+      );
+      const repoRun = (id: string, repo: string, over: Partial<RunFacts> = {}) =>
+        madeRun(dir, { id, task: "task-1", parent: "r-fan", repo, ...over });
+      const runsOf = (flow: Flow) =>
+        flow.lanes[0]!.nodes[0]!.runs.map((one) => ({
+          title: one.title,
+          wave: one.wave,
+          run: one.link?.run ?? null,
+          state: one.state,
+        }));
+
+      const building = yield* boardAndFlows(env, [
+        yield* repoRun("r-b", "b"),
+        yield* repoRun("r-a", "a"),
+        parent,
+      ]);
+      expect(building.flow("task-1").lanes).toHaveLength(1);
+      expect(runsOf(building.flow("task-1"))).toEqual([
+        { title: "a", wave: 1, run: "r-a", state: "running" },
+        { title: "b", wave: 1, run: "r-b", state: "running" },
+        { title: "c", wave: 2, run: null, state: "expected" },
+      ]);
+
+      const merged = yield* boardAndFlows(
+        env,
+        [
+          yield* repoRun("r-b", "b"),
+          yield* repoRun("r-a", "a", { state: "succeeded", mr: "mr:cego/a!12" }),
+          parent,
+        ],
+        { mrStates: new Map([["cego/a!12", "merged"]]) },
+      );
+      expect(merged.flow("task-1").lanes[0]!.nodes[0]!.runs[0]!.said).toBe("!12 merged");
+    }),
+  ),
+);

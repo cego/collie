@@ -22,6 +22,8 @@ import {
   ask,
   contentOf,
   defineWorkflow,
+  forecast,
+  step,
 } from "collie";
 import { Effect, Schema } from "effect";
 import * as Activity from "effect/workflow/Activity";
@@ -37,6 +39,8 @@ export const RenovateInput = Schema.Struct({
   inputs: Schema.Struct({ repository: text, team: text, issue: text }),
   run: Schema.Struct({ dir: text, id: text }),
   mr: Schema.Struct({ assignee: text }),
+  merge_request: Schema.optionalKey(text),
+  merge_operation: Schema.optionalKey(text),
   config: Schema.Struct({
     linear: Schema.Struct({ team: text }),
     renovate: Schema.Struct({ logs: text }),
@@ -152,6 +156,7 @@ const Approved = Schema.Struct({
 /** Every relevant merge request ends with exactly one of three outcomes. */
 export const Merged = Schema.Struct({
   ...verdict,
+  remaining_requests: Schema.optionalKey(Schema.Array(Bump)),
   outcomes: Schema.optionalKey(
     Schema.Array(
       Schema.Struct({
@@ -219,6 +224,7 @@ export interface Landed {
  * because the only thing that varies is what to do, not who provides it.
  */
 export interface Landing {
+  /** One turn per request, scoped by `input.merge_request`, on the same conversation. */
   readonly merge: (at: Landed) => Effect.Effect<typeof Merged.Type, WorkflowError, Renovating>;
   readonly release: (at: Landed) => Effect.Effect<typeof Released.Type, WorkflowError, Renovating>;
   readonly record: (
@@ -232,10 +238,10 @@ export const TRACKER = "track";
 
 /** What every step of this Run is asked as, and on which agent. */
 export const asRenovator = (at: Pick<Landed, "input">, operation: string) => ({
-  operation,
+  operation: operation === "merge" ? (at.input.merge_operation ?? operation) : operation,
   agent: TRACKER,
   role: "renovate",
-  input: at.input,
+  input: { ...at.input, merge_request: at.input.merge_request ?? "" },
 });
 
 /** The shipped landing: merge what was assessed, tag it, and check the repository off. */
@@ -270,6 +276,75 @@ export const shippedLanding: Landing = {
     }),
 };
 
+const trackStep = step({
+  id: "track",
+  title: "Bind the Renovate issue",
+  kind: "agent",
+  role: "renovate",
+  description: "Bind this renovation to the team's shared issue.",
+});
+const assessStep = step({
+  id: "assess",
+  title: "Assess",
+  kind: "agent",
+  role: "renovate",
+  description: "Assess every Renovate merge request before changing shared work.",
+});
+const claimStep = step({
+  id: "claim",
+  title: "Claim",
+  kind: "question",
+  description: "Hold the deployment claim while shared work is changed.",
+});
+const batchStep = step({
+  id: "batch",
+  title: "Batch",
+  kind: "agent",
+  role: "renovate",
+  description: "Gather an application's dependency updates into its batch branch.",
+});
+const stageStep = step({
+  id: "stage",
+  title: "Stage",
+  kind: "agent",
+  role: "renovate",
+  description: "Prove the application's batch on stage.",
+});
+const approvalStep = step({
+  id: "approval",
+  title: "Approval",
+  kind: "agent",
+  role: "renovate",
+  description: "Wait for another team member to approve the batch's current head.",
+});
+const mergeStep = step({
+  id: "merge",
+  title: "Merge",
+  kind: "agent",
+  role: "renovate",
+  description: "Settle each Renovate merge request under the approval and branch safeguards.",
+});
+const tagStep = step({
+  id: "tag",
+  title: "Tag and watch the release",
+  kind: "agent",
+  role: "renovate",
+  description: "Tag the merged updates and watch the release pipeline.",
+});
+const recordStep = step({
+  id: "record",
+  title: "Record the result",
+  kind: "agent",
+  role: "renovate",
+  description: "Record the repository's result on the shared Renovate issue.",
+});
+const productionStep = step({
+  id: "production",
+  title: "Watch production",
+  kind: "check",
+  description: "Keep the claim until the forge shows production carries the merged updates.",
+});
+
 /**
  * The whole renovation, with its landing supplied: the shipped one where none is. A fork
  * spreads this with three functions of its own and an identity of its own.
@@ -303,6 +378,7 @@ export const renovation = (landing: Landing = shippedLanding) =>
     output: Schema.String,
     // The one agent every step continues, on Claude Code, whose auto mode it is started in.
     agents: { harness: "claude", model: "default", effort: "high" },
+    path: [trackStep, assessStep, claimStep, mergeStep, tagStep, recordStep, productionStep],
     hints: { repository: "repository" },
     // Detached at the default branch, so no branch of the repository is bound to this Run.
     checkout: "roaming",
@@ -349,6 +425,7 @@ export const renovation = (landing: Landing = shippedLanding) =>
         const steps = RENOVATE_ON[forge.provider];
         const input = {
           inputs,
+          merge_request: "",
           run: { dir: place.dir, id: runId },
           mr: { assignee: forge.assignee },
           // What the operator configured, so nothing team-specific or company-specific
@@ -359,22 +436,26 @@ export const renovation = (landing: Landing = shippedLanding) =>
           },
         };
         const started = { input };
-        const tracked = yield* agentWork({
-          ...asRenovator(started, "track"),
-          // Claude Code's configured auto mode; this agent is reused by every later step.
-          permissions: "harness",
-          instructions: steps.track,
-          output: Tracked,
-        });
+        const tracked = yield* trackStep(
+          agentWork({
+            ...asRenovator(started, "track"),
+            // Claude Code's configured auto mode; this agent is reused by every later step.
+            permissions: "harness",
+            instructions: steps.track,
+            output: Tracked,
+          }),
+        );
         // The issue this Run bound itself to, in the preamble every later step shares: a
         // long wait, a resume or a cycle rollover cannot split the repository across two.
         const bound = { input: { ...input, inputs: { ...inputs, issue: tracked.issue } } };
         // Nothing shared is touched yet: no claim is held, so the assessment reads only.
-        const assessed = yield* agentWork({
-          ...asRenovator(bound, "assess"),
-          instructions: steps.assess,
-          output: Assessed,
-        });
+        const assessed = yield* assessStep(
+          agentWork({
+            ...asRenovator(bound, "assess"),
+            instructions: steps.assess,
+            output: Assessed,
+          }),
+        );
         const here: Landed = {
           ...bound,
           dir: place.dir,
@@ -384,29 +465,44 @@ export const renovation = (landing: Landing = shippedLanding) =>
           tracked,
           assessed,
         };
+        if (!assessed.is_package && !assessed.up_to_date)
+          yield* forecast([
+            trackStep,
+            assessStep,
+            claimStep,
+            batchStep,
+            stageStep,
+            approvalStep,
+            mergeStep,
+            tagStep,
+            recordStep,
+            productionStep,
+          ]);
 
         // An empty batch is a finished Run in waiting, decided from the assessment's own
         // judgement: no tab is opened for the work that is skipped, and no Output is
         // written to say it had nothing to do.
         if (assessed.up_to_date) {
           yield* host.record(runId, "nothing to renovate: Renovate has opened nothing here");
-          const released = yield* landing.release(here);
-          const recorded = yield* landing.record(here, released);
+          const released = yield* tagStep(landing.release(here));
+          const recorded = yield* recordStep(landing.record(here, released));
           return `${tracked.issue}: ${recorded.status}`;
         }
 
         // The first thing that touches anything shared, so the claim is taken here and held
         // until the Run is settled. Waiting costs wall clock and no model tokens.
-        const held = yield* host.claim({
-          runId,
-          cwd,
-          adopting: ask({
-            name: "adopt-claim",
-            prompt: "You already hold or are queued for this project's claim. Take it over?",
-            options: ["yes", "no"],
-          }).pipe(Effect.map((answer) => answer === "yes")),
-          say: (line) => host.record(runId, line),
-        });
+        const held = yield* claimStep(
+          host.claim({
+            runId,
+            cwd,
+            adopting: ask({
+              name: "adopt-claim",
+              prompt: "You already hold or are queued for this project's claim. Take it over?",
+              options: ["yes", "no"],
+            }).pipe(Effect.map((answer) => answer === "yes")),
+            say: (line) => host.record(runId, line),
+          }),
+        );
         if ("unresolved" in held)
           yield* host.record(runId, `◦ ${held.unresolved} — carrying on without one`);
         const claim = "slugs" in held && held.slugs.length > 0 ? held.slugs.join(", ") : null;
@@ -418,21 +514,25 @@ export const renovation = (landing: Landing = shippedLanding) =>
         if (!assessed.is_package) {
           // An application's updates land together: one batch branch, one merge request,
           // proved on stage once and reviewed once.
-          const batched = yield* agentWork({
-            ...asRenovator(here, "batch"),
-            instructions: steps.batch,
-            output: Batched,
-          });
+          const batched = yield* batchStep(
+            agentWork({
+              ...asRenovator(here, "batch"),
+              instructions: steps.batch,
+              output: Batched,
+            }),
+          );
           if (batched.mr_url !== undefined) yield* host.mergeRequest(runId, batched.mr_url);
-          const staged = yield* agentWork({
-            ...asRenovator(here, "stage"),
-            clears: [
-              `playing, retrying and watching the stage deploy, e2e-stage and smoke jobs of ${here.url}'s pipelines`,
-              "rolling stage back to the newest tag whose production deploy succeeded, never a production job",
-            ],
-            instructions: steps.stage,
-            output: Staged,
-          });
+          const staged = yield* stageStep(
+            agentWork({
+              ...asRenovator(here, "stage"),
+              clears: [
+                `playing, retrying and watching the stage deploy, e2e-stage and smoke jobs of ${here.url}'s pipelines`,
+                "rolling stage back to the newest tag whose production deploy succeeded, never a production job",
+              ],
+              instructions: steps.stage,
+              output: Staged,
+            }),
+          );
           // Nothing here shows stage is back on its stable release, so the claim stays with
           // this failed Run until someone recovers stage.
           if (!staged.verified) {
@@ -441,11 +541,13 @@ export const renovation = (landing: Landing = shippedLanding) =>
             });
           }
           // The batch is approved by another team member, never by the Run that wrote it.
-          const approval = yield* agentWork({
-            ...asRenovator(here, "approval"),
-            instructions: steps.approval,
-            output: Approved,
-          });
+          const approval = yield* approvalStep(
+            agentWork({
+              ...asRenovator(here, "approval"),
+              instructions: steps.approval,
+              output: Approved,
+            }),
+          );
           if ((approval.approved_by ?? []).length === 0) {
             yield* host.record(runId, "the batch was not approved, so nothing is merged");
             return yield* finished(`${tracked.issue}: the batch was not approved`);
@@ -457,7 +559,25 @@ export const renovation = (landing: Landing = shippedLanding) =>
           );
         }
 
-        yield* landing.merge(here);
+        const pending = [...(assessed.merge_requests ?? [])];
+        if (pending.length === 0) yield* mergeStep(landing.merge(here));
+        for (let index = 0; index < pending.length; index++) {
+          const current = pending[index]!;
+          const merged = yield* mergeStep(
+            landing.merge({
+              ...here,
+              input: {
+                ...here.input,
+                merge_request: String(current.iid),
+                merge_operation: index === 0 ? "merge" : `merge-${index + 1}`,
+              },
+            }),
+            { item: String(current.iid), items: pending.map((one) => String(one.iid)) },
+          );
+          for (const discovered of merged.remaining_requests ?? [])
+            if (!pending.some((one) => String(one.iid) === String(discovered.iid)))
+              pending.push(discovered);
+        }
         // Everything this Run merged, read once so a replay waits for the same commit.
         const head =
           claim === null
@@ -468,8 +588,8 @@ export const renovation = (landing: Landing = shippedLanding) =>
                 error: WorkflowError,
                 execute: host.defaultHead(cwd),
               });
-        const released = yield* landing.release(here);
-        const recorded = yield* landing.record(here, released);
+        const released = yield* tagStep(landing.release(here));
+        const recorded = yield* recordStep(landing.record(here, released));
         const jobs = released.prod_jobs ?? [];
         const outcome = `${tracked.issue}: ${recorded.status}${released.version ? ` ${released.version}` : ""}`;
         if (claim === null || head === null) {
@@ -479,14 +599,16 @@ export const renovation = (landing: Landing = shippedLanding) =>
             : `${outcome}; production jobs left to play: ${left.join(", ")}`;
         }
         // The forge decides when production carries the merge, never the Output.
-        const carried = yield* host.awaitProduction({
-          runId,
-          cwd,
-          sha: head,
-          jobs,
-          slug: claim,
-          url: here.url,
-        });
+        const carried = yield* productionStep(
+          host.awaitProduction({
+            runId,
+            cwd,
+            sha: head,
+            jobs,
+            slug: claim,
+            url: here.url,
+          }),
+        );
         if (!carried) return yield* Workflow.suspend(yield* WorkflowInstance);
         return yield* finished(`${outcome}; production carries it`);
       }),

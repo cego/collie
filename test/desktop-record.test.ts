@@ -35,6 +35,14 @@ const values = (facts: Partial<TabFacts>) =>
   recordTabs({ ...everything, ...facts }).map(({ value }) => value);
 
 describe("the record's tabs", () => {
+  test("Flow comes before Summary when the host supplies it", () => {
+    const tabs = recordTabs({ ...everything, flow: true });
+    expect(tabs.slice(0, 2)).toEqual([
+      { label: "Flow", value: "flow" },
+      { label: "Summary", value: "summary" },
+    ]);
+    expect(tabShown(tabs, undefined)).toBe("flow");
+  });
   test("for a Run with everything start with Summary and end with Facts", () => {
     expect(recordTabs(everything)).toEqual([
       { label: "Summary", value: "summary" },
@@ -134,7 +142,7 @@ describe("what the Summary shows", () => {
     ],
   };
 
-  test("for a full Run are status, attention, outcome, steps and Inputs, in order", () => {
+  test("for a full Run are status, attention, outcome and Inputs, without obsolete steps", () => {
     expect(summaryOf(full)).toEqual([
       { section: "status", status: "waiting" },
       {
@@ -151,13 +159,6 @@ describe("what the Summary shows", () => {
         delivered: "Nothing yet.",
       },
       {
-        section: "steps",
-        steps: [
-          { id: "plan", status: "done", note: "3 tickets", took: "4m", agents: ["planner-r1"] },
-          { id: "build", status: "running", note: "", took: null, agents: [] },
-        ],
-      },
-      {
         section: "inputs",
         inputs: [
           { name: "plan-dir", value: "/runs/r/plan", source: "given" },
@@ -169,7 +170,7 @@ describe("what the Summary shows", () => {
 
   test("leave out attention whose category is none", () => {
     expect(summaryOf({ ...full, attention: bare.attention }).map(({ section }) => section)).toEqual(
-      ["status", "outcome", "steps", "inputs"],
+      ["status", "outcome", "inputs"],
     );
   });
 

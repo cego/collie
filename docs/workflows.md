@@ -66,6 +66,12 @@ by construction, a guard not labelled as one, and one whose only proof is a text
 - **Refine** — another planner round, as often as you like.
 - **Finish planning** — finish without starting implementation or another planning round.
 
+**Its [Flow](../CONTEXT.md)** forecasts **Grill**, **Spec**, **Tickets** and **End menu**,
+the menu a run per round. Unbuildable, Second opinion and its Revise, Offload to Linear and
+Refine are drawn off the path, each after the Step before it. Started with `then=implement`,
+End menu is never asked and ends not run. The implement or architecture Run it starts is a
+row of its own.
+
 Module: [`workflows/plan.workflow.ts`](../workflows/plan.workflow.ts), with its prompts in
 [`workflows/plan.md`](../workflows/plan.md).
 
@@ -219,6 +225,13 @@ the commit. The CI fix loop is kept apart from the gate's: what fails, how it is
 again and the steps a replay depends on all differ, and only the round limit and the
 dispute rule are shared.
 
+**Its [Flow](../CONTEXT.md)** forecasts **Build**, a run per ticket, then **Review**, a run
+per review-and-fix round, **Checks**, the gate with its fix rounds, **Merge request** and
+**What next**. A CI fix round is drawn off the path. A plan that spans repositories forecasts
+again once it is read, to **Repo runs** alone, a run per repository. **What next** has a run
+per question, and each Stage Run and the release Run it starts is a row of its own. Checks still unproved after the gate's fixes park the Run with **Checks** failed,
+and a resume runs them again.
+
 Module: [`workflows/implement.workflow.ts`](../workflows/implement.workflow.ts), with its
 content in [`workflows/implement.md`](../workflows/implement.md).
 
@@ -338,6 +351,10 @@ change breaks is exactly the blocker worth raising. Minor findings are exempt.
   left to fix. Offered only where the target is a merge request, on either forge.
 - **Don't post** — ends the run.
 
+Its Flow forecasts Review and What next, with Synthesis between them when a fork seats
+multiple reviewers. Fix findings is drawn off the path; each review and menu round keeps
+its own run. Implement starts a separate row in the same Task.
+
 Module: [`workflows/review.workflow.ts`](../workflows/review.workflow.ts), with its prompts
 in [`workflows/review.md`](../workflows/review.md).
 
@@ -427,6 +444,15 @@ every one of them. A run with no open Renovate merge requests reports the reposi
 date, creates no tag, and still leaves the checklist correct.
 
 **Ends:** with the repository checked off, or with what stopped it. There is no menu.
+
+Its Flow forecasts Bind the Renovate issue, Assess, Claim, Merge, Tag and watch the
+release, Record the result, and Watch production. An application's path also includes
+Batch, Stage and Approval before Merge. Merge has one run and one agent turn per Renovate
+merge request, on the same conversation. Each turn preserves the approval and held-branch
+rules and returns newly discovered requests for turns of their own. The application batch
+is merged once; later turns settle each original request against that merged batch.
+Recording still precedes the final wait for production, so the shared issue is updated
+while the claim remains held.
 
 Module: [`workflows/renovate.workflow.ts`](../workflows/renovate.workflow.ts), with its
 content in [`workflows/renovate.gitlab.md`](../workflows/renovate.gitlab.md) for a GitLab
@@ -595,6 +621,13 @@ made outside a Release Run — and only tags, asking to adopt the claim the fail
 finishes the tag that already carries the merge, stage included, and asks `production`
 afresh; where production already carries the merge it asks nothing and ends.
 
+**Its [Flow](../CONTEXT.md)** forecasts **Assess**, **Prove the head**, **Review wait**,
+**Merge go**, **Helle claim** and **Merge**, then for an application **Stage**, **Production
+go** and **Production**. Once the assessment finds a package, the path ends at **Tag**
+instead. A comment round and staging the merge request are drawn off the path, and the fix
+rounds belong to the Step that proved the head they fix. Proved checks that still fail park
+the Run with that Step failed, and a resume runs them again.
+
 Module: [`workflows/release.workflow.ts`](../workflows/release.workflow.ts), with its
 content in [`workflows/release.gitlab.md`](../workflows/release.gitlab.md) and
 [`workflows/release.github.md`](../workflows/release.github.md). Why it is shaped this way:
@@ -677,6 +710,10 @@ is back on what production carries`. A rollback the forge cannot show fails the 
 keeps the claims, including where the environments a stage attempt reached could not be
 discovered. A failed Run offers **Stage again** of the same merge request.
 
+**Its [Flow](../CONTEXT.md)** forecasts **Assess**, **Helle claim**, **Stage**, **Test on
+stage** and **Roll stage back**. Stage and Test on stage have a run per staging, a moved head
+adding one to Stage alone. Leave it on stage ends with Roll stage back not run.
+
 Module: [`workflows/stage.workflow.ts`](../workflows/stage.workflow.ts), with its content in
 [`workflows/stage.gitlab.md`](../workflows/stage.gitlab.md) and
 [`workflows/stage.github.md`](../workflows/stage.github.md); the claims and the staging are
@@ -700,6 +737,9 @@ with a reason rather than half-applied.
 is the work you agreed on: `architecture`'s goal is a question rather than a name for the work, so without it
 every architecture run in a repo would be handed the same branch
 ([how the branch is chosen](cli.md#start-a-run)).
+
+Its Flow forecasts Architecture, which produces the plan, and What next. Implement now
+starts a separate row in the same Task.
 
 Module: [`workflows/architecture.workflow.ts`](../workflows/architecture.workflow.ts), with
 its prompts in [`workflows/architecture.md`](../workflows/architecture.md).
@@ -729,6 +769,8 @@ root — and Collie runs the named checks there when the run ends.
 **Ends:** when the agent writes its Output. Its `summary` is the run's result and what the
 card says, as `Finished; it says: “…”` — a claim, shown as one. A `blocked` reason fails the run with that reason. There
 is no menu, and the agent takes steering after the run has ended.
+
+Its Flow forecasts one Step, Task, containing the generalist's work.
 
 Module: [`workflows/general.workflow.ts`](../workflows/general.workflow.ts), with its
 prompt in [`workflows/general.md`](../workflows/general.md).
@@ -825,6 +867,8 @@ proves nothing beyond its decoded Output and offers no next steps. The host repo
 the result to the agent that started it, then closes the investigator and its Task
 workspace unless another Run or a human pane needs it (`closes: "reported"`).
 
+Its Flow forecasts one Step, Investigate, which produces evidence.
+
 Module: [`workflows/investigate.workflow.ts`](../workflows/investigate.workflow.ts),
 with its prompt in [`workflows/investigate.md`](../workflows/investigate.md).
 
@@ -852,6 +896,10 @@ themselves. Nobody is asked anything, and nothing is merged. See
 [Self-improve](using.md#self-improve).
 
 **Ends:** once its Improvements have, with `summary.md` in its Run directory.
+
+Its Flow forecasts Retrospective window, Retro, Triage, Filing and Improvements. The
+window is read from the requested scope without a question. Improvements has one run per
+named improvement, each starting a plan in its own Task.
 
 Module: [`workflows/self-improve.workflow.ts`](../workflows/self-improve.workflow.ts),
 with its prompt in [`workflows/self-improve.md`](../workflows/self-improve.md).

@@ -10,13 +10,17 @@ export type Page =
 
 const page = ref<Page | null>(null);
 const asked = ref<string | null>(null);
+const runAsked = ref<string | null>(null);
 
 export const usePage = () => ({
   page: readonly(page),
   asked: readonly(asked),
-  showRecord: (key: string, tab: string | null = null) => {
+  runAsked: readonly(runAsked),
+  runTaken: () => (runAsked.value = null),
+  showRecord: (key: string, tab: string | null = null, run: string | null = null) => {
     page.value = { kind: "record", key };
     asked.value = tab;
+    runAsked.value = run;
   },
   open: (kind: Exclude<Page["kind"], "record">) => (page.value = { kind }),
   /** Opens it, or goes back if it is the page open. */
