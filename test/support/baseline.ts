@@ -2970,6 +2970,127 @@ scenario(
   120_000,
 );
 
+const COUNTED_ONLY = {
+  ...BUILT,
+  criteria: [
+    { criterion: "**Counted.** Every registry is counted once.", met: "test/count.test.ts" },
+  ],
+};
+/** A hand-back that commits nothing and reports a blocker outside the branch. */
+const BLOCKED = {
+  ...COUNTED_ONLY,
+  verdict: "findings",
+  findings: [{ severity: "blocker", title: "the log service is down", detail: "nothing logs" }],
+  commits: [],
+};
+
+/** The stall question under `name` once it is open, or none if the Run ended first. */
+const stallAsked = (
+  run: {
+    readonly status: Effect.Effect<typeof RunStatus.Type>;
+    readonly asked: Effect.Effect<
+      ReadonlyArray<{ decision: string; prompt: string; options: string; answer: string | null }>
+    >;
+  },
+  name: string,
+) =>
+  until(
+    () => Effect.all([run.asked, run.status]),
+    ([rows, got]) =>
+      rows.some((row) => row.decision === name && row.answer === null) ||
+      got.status === "complete" ||
+      got.status === "failed",
+  ).pipe(Effect.map(([rows]) => rows.filter((row) => row.decision === name)));
+
+scenario(
+  "a criteria hand-back that changed nothing and reported a blocker asks, and Stop fails the Run before any review",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* bin.add("glab", `[ "$1" = "api" ] && echo '{"username":"tester"}'; exit 0`);
+        yield* repository();
+        const plan = yield* planOf([
+          { file: "01-first.md", title: "the first one", checks: "unit", body: CRITERIA },
+          { file: "02-second.md", title: "the second one", checks: "unit" },
+        ]);
+        yield* approve("r-stalled", ["unit"]);
+        yield* rig.queueOutputs([COUNTED_ONLY, BLOCKED, BLOCKED]);
+        const status = yield* driven(
+          { entry: shipped("implement"), runId: "r-stalled", input: { plan, ...FINISH } },
+          (run) =>
+            Effect.gen(function* () {
+              const rows = yield* stallAsked(run, "01-first.md.criteria-stalled-1");
+              expect(rows).toHaveLength(1);
+              const [question] = rows;
+              expect(question!.prompt).toContain("01-first.md");
+              expect(question!.prompt).toContain("the log service is down");
+              expect(question!.prompt).toContain("**Named.** Each one is named in the log.");
+              expect(question!.prompt).not.toContain("not answered: **Counted.**");
+              expect(optionsOf(rows, "01-first.md.criteria-stalled-1")).toEqual([
+                "Hand back",
+                "Stop",
+              ]);
+              expect((yield* prompts()).join("\n")).not.toContain(
+                "01-first.md.criteria-2.prompt.md",
+              );
+              yield* run.answer("01-first.md.criteria-stalled-1", "Stop");
+              return yield* ended(run.status);
+            }),
+        );
+        yield* bin.restore();
+
+        expect(status.status).toBe("failed");
+        const why = outcomeText(status);
+        expect(why).toContain(
+          "01-first.md: a criteria hand-back reported a blocker and changed nothing, so no review starts",
+        );
+        expect(why).toContain("**Named.** Each one is named in the log.");
+        const sent = (yield* prompts()).join("\n");
+        expect(sent).not.toContain("01-first.md.criteria-2.prompt.md");
+        expect(sent).not.toContain("review-1");
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "answering Hand back to a stalled criteria hand-back hands the ticket back again, and a second stall is asked anew",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* bin.add("glab", `[ "$1" = "api" ] && echo '{"username":"tester"}'; exit 0`);
+        yield* repository();
+        const plan = yield* planOf([
+          { file: "01-first.md", title: "the first one", checks: "unit", body: CRITERIA },
+          { file: "02-second.md", title: "the second one", checks: "unit" },
+        ]);
+        yield* approve("r-handed-again", ["unit"]);
+        yield* rig.queueOutputs([COUNTED_ONLY, BLOCKED, BLOCKED]);
+        const status = yield* driven(
+          { entry: shipped("implement"), runId: "r-handed-again", input: { plan, ...FINISH } },
+          (run) =>
+            Effect.gen(function* () {
+              expect(yield* stallAsked(run, "01-first.md.criteria-stalled-1")).toHaveLength(1);
+              yield* run.answer("01-first.md.criteria-stalled-1", "Hand back");
+              expect(yield* stallAsked(run, "01-first.md.criteria-stalled-2")).toHaveLength(1);
+              yield* run.answer("01-first.md.criteria-stalled-2", "Stop");
+              return yield* ended(run.status);
+            }),
+        );
+        yield* bin.restore();
+
+        expect(status.status).toBe("failed");
+        expect(yield* asked("r-handed-again", "01-first.md.criteria-2")).toContain(
+          "acceptance criterion not answered: **Named.** Each one is named in the log.",
+        );
+        expect((yield* prompts()).join("\n")).not.toContain("01-first.md.criteria-3.prompt.md");
+      }),
+    ),
+  120_000,
+);
+
 scenario(
   "the criteria in a work source given as words are answered as a ticket's are",
   () =>
