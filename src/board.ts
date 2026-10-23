@@ -34,7 +34,8 @@ import { approvedFor, approvedIn } from "./verify-spec";
 import { readIntent } from "./intent";
 import { findingsIn, isBlocking } from "./output";
 import { markersOf, runningCheck } from "./checks";
-import { memoryWaitOf, waitLine } from "./memory-wait";
+import { waitLine } from "./memory-wait";
+import { runWaits } from "./run-waits";
 import { awaitingLine } from "./awaiting";
 import { readForge, readMrStates } from "./merges";
 import { filed, standingOf } from "./standing";
@@ -61,7 +62,6 @@ import {
   type Decision,
   type MrState,
   type Proposal,
-  type Question,
   type ReadyToRelease,
   type Reopened,
   type Section,
@@ -538,21 +538,6 @@ function stateOf(
   return silent ? "quiet" : "active";
 }
 
-/** Every question these Runs are waiting on, in the order a card asks them. */
-function questionsOf(runs: ReadonlyArray<RunFacts>): ReadonlyArray<Question> {
-  return runs.flatMap((run) =>
-    run.asking.map((asked): Question => ({
-      kind: "question",
-      run: run.id,
-      id: asked.name,
-      step: run.workflow,
-      topic: asked.name,
-      text: asked.prompt,
-      options: asked.options.map((option) => ({ id: option, title: option, subtitle: null })),
-    })),
-  );
-}
-
 /**
  * The verification that stopped a Run, and how many times in a row it failed. The trailing
  * run of failures of the newest failing check: a check that failed, was fixed and failed
@@ -969,8 +954,15 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
         )
           return null;
         const leader = leaderOf(runs);
-        const proposed = pending[0];
-        const questions = questionsOf(everyRun);
+        const agents = agentsOf(everyRun, registered, live);
+        const waits = new Map(
+          yield* Effect.forEach(everyRun, (run) =>
+            Effect.map(runWaits(run, proposals, agents, now), (read) => [run.id, read] as const),
+          ),
+        );
+        const waitsOf = (run: RunFacts) => waits.get(run.id)!;
+        const proposed = everyRun.flatMap((run) => waitsOf(run).proposals)[0];
+        const questions = everyRun.flatMap((run) => waitsOf(run).questions);
         const decision: Decision | null = proposed ? asProposal(proposed) : (questions[0] ?? null);
 
         const status = leader.state;
@@ -979,13 +971,14 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
         const ownsAgent = (agent: { readonly run: string }) =>
           working.some((run) => run.id === agent.run);
         const at = Math.max(...working.map((run) => touched.get(run.id) ?? 0));
-        const agents = agentsOf(everyRun, registered, live);
         const check = yield* runningCheck(leader, all, markers, now);
         const memory =
-          (yield* Effect.forEach(everyRun, (run) => memoryWaitOf(run.dir)))
+          everyRun
+            .map((run) => waitsOf(run).memory)
             .filter((wait) => wait !== null)
             .sort((a, b) => a.since - b.since)[0] ?? null;
-        const awaiting = working.find((run) => run.awaiting !== null)?.awaiting ?? null;
+        const awaiting =
+          working.map((run) => waitsOf(run).awaiting).find((one) => one !== null) ?? null;
         // An agent mid-turn, a check Collie is running or a wait for memory or anything else
         // that ends by itself is work, however little it writes.
         const busy =
@@ -1003,10 +996,10 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
         // Stopped for a human with no Decision to answer: herdr reports `blocked` for an agent
         // sitting at its harness's own dialog, and a Run parks where its pane will not take a
         // prompt. herdr's name for the pane first: it is the one a human has to go to.
-        const blocked = agents.find((agent) => agent.status === "blocked");
+        const blocked = everyRun.map((run) => waitsOf(run).blocked).find((one) => one !== null);
         const stalled =
           (blocked ? `${blocked.name}'s pane` : null) ??
-          (leader.state === "waiting" && leader.asking.length === 0 ? "its pane" : null);
+          (waitsOf(leader).parked !== null ? "its pane" : null);
         // Nothing drives it and nobody works on it: the host could not take it up again. A
         // Decision outranks it, because answering is still what moves the work.
         const abandoned = decision === null && going && leader.undriven && !agents.some(ownsAgent);
@@ -1022,8 +1015,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
               ? "blocked"
               : stateOf(status, silent !== null, decision, stalled !== null);
 
-        // A hold left on a Run that ended holds nothing, and a finished Run refuses its release.
-        const held = runs.find((run) => run.held && !ended(run));
+        const held = runs.find((run) => waitsOf(run).held);
         const settledNow =
           state === "done" || state === "failed" || state === "stopped" || state === "abandoned";
         const failure =

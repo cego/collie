@@ -75,6 +75,7 @@ Desktop. `harness.ts` owns how those choices launch and reexports the shared int
 | `uploads.ts`           | Files a front door sends this Machine, kept once by sha256, swept a week after last use                   |
 | `host-log.ts`          | The host's own log file beside its state, bounded and rotated                                             |
 | `run-detail.ts`        | One Run's diff against its merge base, items by reference, and a drawer's subscription                    |
+| `run-waits.ts`         | One Run's Waits: its questions, pending proposals, blocked agent, park, hold, memory wait and awaiting    |
 | `side-jobs.ts`         | What the host does with no pane open: the merge watch, each Herd's News, cleanup and Home tokens          |
 | `cleanup.ts`           | What a sweep removes and keeps, one sweeper per kind, and the journal of what went (ADR-0045)             |
 | `bytes.ts`             | A size as `collie cleanup` and Desktop say it (pure)                                                      |

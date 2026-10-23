@@ -388,6 +388,11 @@ that Collie could not put on the Run, which herdr reports as a `blocked` agent �
 not take a prompt. Either way the work has stopped, so the card says which pane to go to
 rather than what the step was doing.
 
+**Wait** — What holds a Run up at a moment: a **Decision** on it, **Stalled**, a **Hold**,
+**Short of memory**, or something it awaits that ends by itself. A Check Collie runs for it
+is shown the same way. A Run can have several at once, and each front door says the one it
+ranks first.
+
 **Working** — A Task something is actually doing: a Run the host holds that has not
 settled, or a **Reopened** Run whose agent herdr reports working. The board's third
 section, under Waiting on you.

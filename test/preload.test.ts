@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { Effect, FileSystem, Schema } from "effect";
+import { Effect, FileSystem, Schedule, Schema } from "effect";
 import { signalProcess } from "../src/lock";
 import { exec } from "./support/command";
 import { runEffect } from "./support/effect";
@@ -187,13 +187,12 @@ describe("the start-of-suite sweep", () => {
         // Read-only inside, as a Go module cache is: it still goes.
         yield* fs.makeDirectory(`${dead}/cache/pkg`, { recursive: true });
         yield* fs.chmod(`${dead}/cache`, 0o555);
-        const orphan = Bun.spawn(["sh", "-c", "echo up; exec sleep 63"], {
-          env: { ...process.env, [MARKER]: dead },
-          stdout: "pipe",
-        });
+        const orphan = Bun.spawn(["sleep", "63"], { env: { ...process.env, [MARKER]: dead } });
         yield* Effect.addFinalizer(() => signalProcess(orphan.pid, "SIGKILL"));
-        // Its environment is in /proc once it has started.
-        yield* Effect.promise(() => orphan.stdout.getReader().read());
+        // /proc shows no environment mid-exec, and the sweep cannot kill what it cannot see.
+        yield* Effect.sync(() => marked(dead).some((one) => one.pid === orphan.pid)).pipe(
+          Effect.repeat({ until: (seen) => seen, schedule: Schedule.spaced("5 millis") }),
+        );
 
         expect(sweepDeadRoots(dir)).toEqual([dead]);
         expect(yield* fs.readDirectory(dir)).toEqual([live]);
