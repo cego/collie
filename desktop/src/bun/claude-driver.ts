@@ -92,7 +92,7 @@ export const claudeDriver = <Server>(
           cwd: opts.dir,
           session: known === undefined ? { sessionId: id } : { resume: id },
           model,
-          effort: isEffort(effort) ? effort : "medium",
+          effort: isEffort(effort) ? effort : undefined,
           server,
           claude: which("claude"),
           userServers,

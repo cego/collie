@@ -152,11 +152,16 @@ compaction; Collie owns which harness, which session, and what the model may rea
 bound to a session id Collie mints per Herd and harness, never to whichever session ran
 last in a directory. Its whole reach is **Collie tools**.
 
-**Flock chat** — Desktop's conversation about the **Flock**: one live per Desktop (earlier
-ones can be reopened, never two at once), a session of the harness Desktop's Settings name
-for it — the user's own Claude Code (the default), Pi or Codex — driven from Desktop's main
-process, on the model Settings name or else the harness's own default. A conversation is
-held on one harness: a new model keeps it, a new harness starts a fresh one. It reaches
+**Flock chat** — Desktop's conversation about the **Flock**. There is one live per Desktop.
+Earlier ones, on any harness, can be reopened, but never two at once. It is a session of
+the harness chosen for it — the user's own Claude Code (the default), Pi or Codex — driven
+from Desktop's main process. The harness, model and effort are chosen beside its message
+box, as one setting for this computer, from what that harness itself lists. What is left
+unchosen runs on Collie's default for that harness: Opus at medium effort on Claude Code,
+and what Pi is configured with on Pi
+(ADR-draft-the-flock-chat-is-switched-where-it-is-typed). A conversation is held on one
+harness: a new model or effort keeps it, and a new harness starts a fresh one with the next
+message. It reaches
 Collie through **Collie tools**, this computer through that harness's own file and shell
 tools, and each Machine's files through `collie_read`, `collie_glob`, `collie_grep`,
 `collie_write` and `collie_edit`; none of them asks first. Its Collie and file tools are

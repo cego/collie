@@ -21,7 +21,6 @@ import {
   Schedule,
   Schema,
   Scope,
-  Semaphore,
   Stream,
   SubscriptionRef,
 } from "effect";
@@ -63,13 +62,16 @@ import { clipboardPaths } from "../shared/attachments";
 import { readAttachment, stageAttachment, stagePath } from "./attachments";
 import { actionsLog } from "./sent";
 import { type FlockConversation, openFlockChat, refusal, untilStarted } from "./chat";
-import { claudeCode } from "./claude";
+import { claudeCode, claudeModels } from "./claude";
 import { claudeDriver } from "./claude-driver";
 import { loopbackTools } from "./chat-endpoint";
 import { piDriver } from "./pi-driver";
+import { piModels } from "./pi-models";
 import { CHILD_CWD, childEnv, localShell, takeLoginEnv, which } from "./login-env";
 import { type ChatMachine, chatDoor } from "./flock-tools";
-import { changeSettings, chatChoice, readSettings, writeSettings } from "./settings";
+import { heldSettings } from "./settings";
+import { chatChoicesOf, chatChoicesStream, chatResolved, readPiConfig } from "./chat-choices";
+import { harnessLists } from "./harness-lists";
 import { followWindow, zoomWindow } from "./scale";
 import type { Drawn } from "../shared/scale";
 import {
@@ -80,7 +82,7 @@ import {
   writeFlockDefinitions,
   writeFlockSettings,
 } from "./flock-settings";
-import { DEFAULT_CHAT_HARNESS, editSetting } from "../shared/flock-settings";
+import { DEFAULT_CHAT_HARNESS, editSetting, type FlockSettings } from "../shared/flock-settings";
 import { nowIso } from "../../../src/time";
 import { changedLine } from "../../../src/schedule-model";
 import { SettingValue, settingText } from "../../../src/settings";
@@ -251,13 +253,22 @@ const main = Effect.gen(function* () {
     version: manifest.version,
   }).pipe(Effect.ignore);
   const logged = yield* actionsLog(own);
-  let settings = yield* readSettings(own);
+  const piConfig = readPiConfig(own).pipe(Effect.provide(BunServices.layer));
+  const lists = yield* harnessLists({ claude: claudeModels, pi: piModels });
+  const desktop = yield* heldSettings(
+    own,
+    (): FlockSettings => SubscriptionRef.getUnsafe(flockSettings),
+    piConfig,
+    lists.now,
+  );
+  const settings = desktop.current;
   const saved = yield* readFlockSettings(own);
   // The GitLab host an earlier Desktop kept as its own becomes the Flock's.
+  const ownGitlab = settings().gitlabHost;
   const seeded =
-    settings.gitlabHost === undefined || saved.settings.gitlab_host !== undefined
+    ownGitlab === undefined || saved.settings.gitlab_host !== undefined
       ? saved
-      : editSetting(saved, "gitlab_host", settings.gitlabHost, yield* nowIso());
+      : editSetting(saved, "gitlab_host", ownGitlab, yield* nowIso());
   const flockSettings = yield* SubscriptionRef.make("refused" in seeded ? saved : seeded);
   const flockDefinitions = yield* SubscriptionRef.make(yield* readFlockDefinitions(own));
   const defaultGitlab = yield* Config.String("COLLIE_DESKTOP_GITLAB").pipe(
@@ -420,7 +431,7 @@ const main = Effect.gen(function* () {
       window.on("close", () => Deferred.doneUnsafe(closed, Effect.void));
       yield* asked.pipe(
         Stream.runForEach(() =>
-          Effect.flatMap(zoomWindow(window, title, settings.zoom ?? 1), told),
+          Effect.flatMap(zoomWindow(window, title, settings().zoom ?? 1), told),
         ),
         Effect.raceFirst(Deferred.await(closed)),
         Effect.ensuring(Effect.sync(() => zoomAgain.delete(again))),
@@ -634,8 +645,7 @@ const main = Effect.gen(function* () {
       yield* Fiber.join(yield* onboardAs(job, route, run));
     });
 
-  /** Desktop's own settings, one change at a time, as Settings and the Flock chat make them. */
-  const settingsWrite = Semaphore.makeUnsafe(1);
+  /** Desktop's own settings, as Settings and the Flock chat change them. */
   const saveSettings = (
     changed: DesktopSettingsChange,
   ): Effect.Effect<
@@ -643,26 +653,15 @@ const main = Effect.gen(function* () {
     ActionFailed,
     Crypto.Crypto | FileSystem.FileSystem | Path.Path
   > =>
-    Effect.gen(function* () {
-      const merged = changeSettings(settings, SubscriptionRef.getUnsafe(flockSettings), changed);
-      if ("refused" in merged) return yield* new ActionFailed({ reason: merged.refused });
-      yield* writeSettings(own, merged).pipe(
-        Effect.mapError((error) => new ActionFailed({ reason: error.message })),
-        Effect.andThen(
-          Effect.sync(() => {
-            settings = merged;
-          }),
-        ),
-        Effect.andThen(
+    desktop
+      .save(changed)
+      .pipe(
+        Effect.tap(() =>
           changed.zoom === undefined
             ? Effect.void
             : Effect.forEach(zoomAgain, (again) => again, { discard: true }),
         ),
       );
-      if (changed.chatHarness !== undefined)
-        yield* withChat((opened) => opened.refresh, undefined).pipe(Effect.forkIn(scope));
-      return settings;
-    }).pipe(settingsWrite.withPermits(1));
 
   /** Files named by path, each copied in or refused in words. */
   const stagedFrom = (paths: ReadonlyArray<string>) =>
@@ -717,29 +716,39 @@ const main = Effect.gen(function* () {
       ),
     dir: own,
     conversation: `flock@${local}`,
-    proactive: () => settings.proactive,
-    machineRule: () => settings.machineRule,
+    proactive: () => settings().proactive,
+    machineRule: () => settings().machineRule,
     setMachineRule: (machineRule) =>
       saveSettings({ machineRule }).pipe(
         Effect.asVoid,
         Effect.orDie,
         Effect.provide(BunServices.layer),
       ),
-    choice: () => chatChoice(settings, SubscriptionRef.getUnsafe(flockSettings)),
+    resolve: () =>
+      chatResolved(settings(), SubscriptionRef.getUnsafe(flockSettings), piConfig, lists),
+    // The chat's tool reads every installed harness's list.
+    choicesOf: (held, installed) =>
+      Effect.gen(function* () {
+        const harnesses = Object.keys(installed).filter((harness) => installed[harness]);
+        yield* Effect.forEach(harnesses, lists.settled, {
+          concurrency: "unbounded",
+          discard: true,
+        });
+        return chatChoicesOf(
+          held,
+          installed,
+          settings(),
+          SubscriptionRef.getUnsafe(flockSettings),
+          yield* piConfig,
+          lists.now(),
+        );
+      }),
     chatHarness: () => ({
-      harness: settings.chatHarness ?? DEFAULT_CHAT_HARNESS,
-      model: settings.chatModel,
+      harness: settings().chatHarness ?? DEFAULT_CHAT_HARNESS,
+      model: settings().chatModel,
+      effort: settings().chatEffort,
     }),
-    setChatHarness: ({ harness, model }) => {
-      const changed: Partial<Record<"chatHarness" | "chatModel", string>> = {};
-      if (harness !== undefined) changed.chatHarness = harness;
-      if (model !== undefined) changed.chatModel = model.trim();
-      return saveSettings(changed).pipe(
-        Effect.as(null),
-        Effect.catch(({ reason }) => Effect.succeed(reason)),
-        Effect.provide(BunServices.layer),
-      );
-    },
+    setChatHarness: desktop.setChatHarness,
     helle: keyring
       .lookup("helle-token")
       .pipe(Effect.map((token) => (token === null ? null : { url: helle, token }))),
@@ -1165,7 +1174,12 @@ const main = Effect.gen(function* () {
       withChat((opened) => opened.answer(toolCallId, answers), undefined),
     transcript: () => withChat((opened) => opened.transcript, []),
     conversations: () => withChat((opened) => opened.conversations, { current: "", earlier: [] }),
-    reopen: ({ session }) => withChat((opened) => opened.reopen(session), undefined),
+    reopen: ({ earlier }) =>
+      withChat((opened) => opened.reopen(earlier), null).pipe(
+        Effect.flatMap((refused) =>
+          refused === null ? Effect.void : Effect.fail(new ActionFailed({ reason: refused })),
+        ),
+      ),
     // Annotated because it serves its own window through `servedOn`, which needs these handlers.
     popOut: (): Effect.Effect<void, never, Crypto.Crypto | FileSystem.FileSystem | Path.Path> =>
       Effect.gen(function* () {
@@ -1193,7 +1207,24 @@ const main = Effect.gen(function* () {
       Stream.unwrap(withChat((opened) => Effect.succeed(opened.changed), Stream.empty)),
     desktopTurns: () =>
       Stream.unwrap(withChat((opened) => Effect.succeed(opened.desktopTurns), Stream.empty)),
-    settings: () => Effect.sync(() => settings),
+    settings: () => desktop.changes,
+    chatChoices: () =>
+      Stream.unwrap(
+        withChat(
+          (opened) =>
+            Effect.succeed(
+              chatChoicesStream({
+                held: opened.held,
+                settings: desktop.changes,
+                flock: SubscriptionRef.changes(flockSettings),
+                installed: opened.installed,
+                pi: piConfig,
+                lists,
+              }),
+            ),
+          Stream.empty,
+        ),
+      ),
     drawn: () => SubscriptionRef.changes(drawn).pipe(Stream.filter((now) => now !== null)),
     setSettings: saveSettings,
   });

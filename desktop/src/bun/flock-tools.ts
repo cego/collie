@@ -41,6 +41,8 @@ import {
   TAKES,
 } from "../../../src/toolkit";
 import type { Staged } from "../shared/attachments";
+import { type ChatChoices, type ChatSet, type Resolved, runsAs } from "../shared/chat-choices";
+import { DEFAULT_MODEL } from "../../../src/harness-choice";
 import { type ChatBoard, unreadBecause } from "../shared/flock";
 import { moveSchedule, type ScheduleDoor } from "../../../src/schedule-move";
 import { carriedPaths } from "./carried";
@@ -109,16 +111,15 @@ export interface FlockChat {
   readonly inSync: (sync: string | undefined) => Effect.Effect<string>;
   /** Helle with the token Desktop holds, or null without one; none where absent. */
   readonly helle?: Effect.Effect<HelleCredentials | null, string>;
-  /** The chat's harness and model as set, and `harness/model` of the session warm now. */
-  readonly chatHarness: () => {
-    readonly harness: string;
-    readonly model: string | undefined;
-    readonly runsOn: string | null;
-  };
+  /** The chat's harness, model and effort as set. */
+  readonly chatHarness: () => ChatSet;
+  /** What the chat holds, runs on and could run on. */
+  readonly chatChoices: Effect.Effect<ChatChoices>;
   /** Saved with Settings' checks; why not, where it is refused. */
   readonly setChatHarness: (change: {
     readonly harness?: string;
     readonly model?: string;
+    readonly effort?: string;
   }) => Effect.Effect<string | null>;
 }
 
@@ -170,14 +171,15 @@ const SchedulesTool = Tool.make("collie_schedules", {
 /** Desktop's own: a Herd's chat runs on the Home's harness. */
 const ChatHarnessTool = Tool.make("collie_chat_harness", {
   description:
-    "The harness and model this conversation runs on, from Desktop's Settings. Without " +
-    "arguments it is read back, with what the conversation runs on now; with `harness` or " +
-    "`model` they are replaced, checked as Settings checks them, and an empty `model` unsets " +
-    "it. Another harness unsets the model. A change applies once this turn has ended. Change " +
-    "them only when the human asks.",
+    "The harness, model and effort this conversation runs on, from Desktop's settings. " +
+    "Without arguments they are read back, with what the conversation runs on now; with " +
+    "`harness`, `model` or `effort` they are replaced, checked as Settings checks them, and " +
+    "an empty `model` or `effort` unsets it. Another harness unsets the model and the " +
+    "effort. A change applies with the next message. Change them only when the human asks.",
   parameters: Schema.Struct({
     harness: Schema.optionalKey(Schema.String),
     model: Schema.optionalKey(Schema.String),
+    effort: Schema.optionalKey(Schema.String),
   }),
   success: Schema.String,
   failureMode: "return",
@@ -1056,25 +1058,68 @@ const machineRule = (flock: FlockChat, asked: string | undefined) => {
   );
 };
 
-const chatHarness = (flock: FlockChat, change: { harness?: string; model?: string }) =>
+const resolvedSaid = ({ harness, model, effort }: Resolved) =>
+  `${harness}/${model}${effort === null ? "" : ` at ${effort}`}`;
+
+const chatHarness = (
+  flock: FlockChat,
+  change: { harness?: string; model?: string; effort?: string },
+) =>
   Effect.gen(function* () {
-    const setTo = () => {
-      const { harness, model } = flock.chatHarness();
-      return model === undefined
-        ? `${harness}, with no model set: the harness's own default`
-        : `${harness}, model ${model}`;
-    };
-    if (change.harness === undefined && change.model === undefined) {
-      const { runsOn } = flock.chatHarness();
-      return `The Flock chat is set to ${setTo()}. ${
-        runsOn === null
-          ? "No turn has run on it since Desktop started."
-          : `This conversation runs on ${runsOn} now.`
+    const setTo = (choices: ChatChoices) => {
+      const set = flock.chatHarness();
+      const runs = runsAs(set, choices);
+      const model = runs.model === DEFAULT_MODEL ? `${set.harness}'s own default` : runs.model;
+      return `${set.harness}, ${
+        set.model === undefined ? `with no model set: it runs ${model}` : `model ${set.model}`
+      }, ${
+        set.effort !== undefined
+          ? `at effort ${set.effort}`
+          : runs.effort === null
+            ? `with no effort: ${model} takes none`
+            : `with no effort set: it runs at ${runs.effort}`
       }`;
+    };
+    if (change.harness === undefined && change.model === undefined && change.effort === undefined) {
+      const choices = yield* flock.chatChoices;
+      const offers = choices.harnesses
+        .filter(({ installed }) => installed)
+        .map(({ harness, label, offered }) => {
+          if (offered.from === "reading")
+            return `- ${harness}: ${label}'s list is still being read; any model id it takes can be set meanwhile`;
+          const from =
+            offered.from === "harness"
+              ? `, as ${label} lists them`
+              : offered.why === undefined
+                ? ""
+                : `, from Collie's table, as ${label}'s list could not be read (${offered.why})`;
+          return `- ${harness}${from}: ${
+            offered.models.length === 0
+              ? "none listed"
+              : offered.models
+                  .map(({ id, label: name, efforts }) => {
+                    const named = name === id ? id : `${id}, ${name}`;
+                    return efforts.length === 0
+                      ? `${named} (no effort)`
+                      : `${named} (${efforts.join(", ")})`;
+                  })
+                  .join("; ")
+          }`;
+        });
+      return [
+        `The Flock chat is set to ${setTo(choices)}.`,
+        `This conversation is held on ${choices.heldOn}; ${
+          choices.runsOn === null
+            ? "no session is warm now."
+            : `its session runs on ${resolvedSaid(choices.runsOn)} now.`
+        }`,
+        "Each installed harness offers, as model (efforts):",
+        ...offers,
+      ].join("\n");
     }
     const refused = yield* flock.setChatHarness(change);
     return refused === null
-      ? `The Flock chat is now set to ${setTo()}. It applies once this turn has ended.`
+      ? `The Flock chat is now set to ${setTo(yield* flock.chatChoices)}. It applies with the next message.`
       : `${refused}. Nothing was changed.`;
   });
 

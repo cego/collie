@@ -2,7 +2,7 @@
 // carries JSON values, as Electrobun's does, and decodes it with the board's own Schemas.
 
 import { expect, test } from "bun:test";
-import { Effect, Layer, Schema, Stream } from "effect";
+import { Deferred, Effect, Layer, Schema, Stream } from "effect";
 import * as RpcClient from "effect/rpc/RpcClient";
 import * as RpcServer from "effect/rpc/RpcServer";
 import { headerSentence, sectionsOf } from "../src/board-model";
@@ -40,6 +40,8 @@ import {
   syncable,
 } from "../desktop/src/shared/in-sync";
 import { agentRows } from "../desktop/src/shared/run-agents";
+import type { AguiEvent } from "../desktop/src/shared/agui";
+import { untilAborted } from "../desktop/src/shared/chat-view";
 import { type Column, columnOf } from "../desktop/src/shared/columns";
 import { PeerView } from "../src/peers-model";
 import { epochMs } from "../src/time";
@@ -90,7 +92,10 @@ const told: ReadonlyArray<MachineMessage> = [
   { machine, message: { _tag: "Remove", seq: 5, id: "t-ask" } },
 ];
 
-const served = (main: Channel<ToView, ToMain>) =>
+const served = (
+  main: Channel<ToView, ToMain>,
+  say: () => Stream.Stream<AguiEvent> = () => Stream.die("not asked"),
+) =>
   RpcServer.layer(DesktopRpcs).pipe(
     Layer.provide(
       DesktopRpcs.toLayer({
@@ -98,7 +103,7 @@ const served = (main: Channel<ToView, ToMain>) =>
         act: () => Effect.die("not asked"),
         offers: () => Effect.die("not asked"),
         definitions: () => Effect.die("not asked"),
-        say: () => Stream.die("not asked"),
+        say,
         goToPane: () => Effect.die("not asked"),
         openLink: () => Effect.die("not asked"),
         updates: () => Stream.die("not asked"),
@@ -144,6 +149,7 @@ const served = (main: Channel<ToView, ToMain>) =>
         conversationChanges: () => Stream.make("current"),
         desktopTurns: () => Stream.die("not asked"),
         settings: () => Effect.die("not asked"),
+        chatChoices: () => Stream.die("not asked"),
         setSettings: () => Effect.die("not asked"),
         drawn: () => Stream.die("not asked"),
       }),
@@ -176,6 +182,35 @@ test("the view decodes every board message its main process relays, a reload inc
       }
     }).pipe(Effect.scoped),
   ));
+
+test("Stop in the view interrupts the reply the main process is streaming", () => {
+  const stop = new AbortController();
+  return Effect.runPromise(
+    Effect.gen(function* () {
+      const { view, main } = channels();
+      const interrupted = yield* Deferred.make<void>();
+      const started: AguiEvent = { type: "RUN_STARTED", threadId: "t", runId: "r" };
+      yield* Layer.build(
+        served(main, () =>
+          Stream.make(started).pipe(
+            Stream.concat(Stream.never),
+            Stream.ensuring(Deferred.succeed(interrupted, undefined)),
+          ),
+        ),
+      );
+      const protocol = yield* Layer.build(Layer.effect(RpcClient.Protocol, clientProtocol(view)));
+      const client = yield* RpcClient.make(DesktopRpcs).pipe(Effect.provide(protocol));
+      // As TanStack AI's client reads the reply, with the signal its stop() aborts.
+      const reply = Stream.toAsyncIterable(
+        untilAborted(client.say({ text: "hello", about: null }), stop.signal),
+      )[Symbol.asyncIterator]();
+      expect((yield* Effect.promise(() => reply.next())).value).toEqual(started);
+      stop.abort();
+      expect((yield* Effect.promise(() => reply.next())).done).toBe(true);
+      yield* Deferred.await(interrupted).pipe(Effect.timeout("2 seconds"));
+    }).pipe(Effect.scoped),
+  );
+});
 
 test("a Flock that has heard nothing draws no board, not an empty one", () =>
   Effect.runPromise(

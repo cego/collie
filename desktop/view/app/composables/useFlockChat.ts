@@ -9,8 +9,9 @@ import { useChat } from "@tanstack/ai-vue";
 import { Effect, Exit, Option, Schema, Stream } from "effect";
 import { isString } from "../../../../src/schema";
 import { type Attached, attachedIn, attachmentPart } from "../../../src/shared/attachments";
-import { About, type Answers } from "../../../src/shared/chat-view";
+import { About, type Answers, untilAborted } from "../../../src/shared/chat-view";
 import { conversationChangesAtom, desktopTurnsAtom, FlockClient } from "../flock";
+import { failureOf } from "./useActions";
 
 const answerAtom = FlockClient.mutation("answer");
 const transcriptAtom = FlockClient.mutation("transcript");
@@ -61,9 +62,9 @@ export const useFlockChat = () => {
   const chat = useChat({
     connection: {
       // SAFETY: AG-UI's event types are string enums whose values are these events' `type`s.
-      connect: (messages, body) =>
+      connect: (messages, body, stopped) =>
         Stream.toAsyncIterable(
-          turn(lastSaid(messages), body?.now === true),
+          untilAborted(turn(lastSaid(messages), body?.now === true), stopped),
         ) as AsyncIterable<StreamChunk>,
     },
   });
@@ -127,11 +128,12 @@ export const useFlockChat = () => {
       conversations({ payload: undefined }).then((exit) =>
         Exit.isSuccess(exit) ? exit.value : null,
       ),
-    /** Makes that conversation current, or a fresh one, and shows it. */
-    reopen: (session: string | null) =>
-      reopen({ payload: { session } }).then(() => {
+    /** Makes that conversation current, or a fresh one, and shows it; why not, where refused. */
+    reopen: (earlier: { session: string; harness: string } | null) =>
+      reopen({ payload: { earlier } }).then((exit) => {
+        if (Exit.isFailure(exit)) return failureOf(exit.cause).reason;
         chat.clear();
-        return reload();
+        return reload().then(() => null);
       }),
   };
 };

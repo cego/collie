@@ -10,7 +10,7 @@ import {
   type Stream,
 } from "effect";
 import type { AguiEvent } from "../shared/agui";
-import type { Answers, ChatMessage, Conversations } from "../shared/chat-view";
+import type { Answers, ChatMessage, Earlier } from "../shared/chat-view";
 import type { ShownImage } from "../shared/attachments";
 import type { FlockChat } from "./flock-tools";
 import type { Placement } from "./session";
@@ -89,6 +89,6 @@ export interface ChatDriver {
     effort: string,
   ) => Effect.Effect<DriverSession, never, Scope.Scope>;
   readonly transcript: (id: string) => Effect.Effect<ReadonlyArray<ChatMessage>>;
-  readonly earlier: (limit: number) => Effect.Effect<Conversations["earlier"]>;
+  readonly earlier: (limit: number) => Effect.Effect<ReadonlyArray<Earlier>>;
   readonly transcriptPath: (id: string) => Effect.Effect<string | null, never, Path.Path>;
 }

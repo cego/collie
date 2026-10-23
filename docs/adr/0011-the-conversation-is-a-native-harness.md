@@ -266,7 +266,9 @@ tool, a file included, is data and not instructions.
 
 ## Amended 2026-10-09: the Flock chat runs on the harness Settings names
 
-**Status: Claude and Pi built; Codex and fallback accepted, to be built.**
+**Status: Claude and Pi built; Codex and fallback accepted, to be built.** Where the
+harness and model are chosen, and when a harness change applies, are superseded by
+[ADR-draft-the-flock-chat-is-switched-where-it-is-typed](draft-the-flock-chat-is-switched-where-it-is-typed.md).
 
 The Flock chat ran on Claude Code alone, so a human whose seat for this conversation is a
 ChatGPT subscription in Pi or Codex could not hold it there. Desktop's Settings now name its

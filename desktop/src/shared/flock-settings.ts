@@ -64,6 +64,12 @@ interface DesktopSetting extends Setting {
 /** The harnesses the Flock chat has a driver for. */
 export const CHAT_HARNESSES = ["claude", "pi"];
 export const DEFAULT_CHAT_HARNESS = "claude";
+const HARNESS_LABELS = new Map([
+  ["claude", "Claude Code"],
+  ["pi", "Pi"],
+]);
+/** A harness as the human reads it. */
+export const harnessLabel = (harness: string) => HARNESS_LABELS.get(harness) ?? harness;
 
 const DESKTOP_SETTINGS: ReadonlyArray<DesktopSetting> = [
   {
@@ -91,34 +97,6 @@ const DESKTOP_SETTINGS: ReadonlyArray<DesktopSetting> = [
     change: (typed) => ({ machineRule: typed.trim() }),
     unset: () => "Unset: no rule",
     multiline: true,
-  },
-  {
-    key: "chatHarness",
-    kind: "choice",
-    choices: CHAT_HARNESSES,
-    fallback: DEFAULT_CHAT_HARNESS,
-    group: "Chat",
-    label: "Flock chat harness",
-    description:
-      "The coding agent the Flock chat runs in, from your own install and login on this computer. Another harness starts a fresh conversation and unsets the model.",
-    read: (desktop: DesktopSettings) => desktop.chatHarness ?? DEFAULT_CHAT_HARNESS,
-    change: (typed) => ({ chatHarness: typed }),
-  },
-  {
-    key: "chatModel",
-    kind: "text",
-    choices: [],
-    fallback: "",
-    group: "Chat",
-    label: "Flock chat model",
-    description:
-      "The model the Flock chat runs on, as a Run's model is written for its harness. A new model keeps the conversation.",
-    read: (desktop: DesktopSettings) => desktop.chatModel ?? "",
-    change: (typed) => ({ chatModel: typed.trim() }),
-    unset: (desktop) => {
-      const harness = desktop.chatHarness ?? DEFAULT_CHAT_HARNESS;
-      return harness === "claude" ? "Unset: opus" : `Unset: ${harness}'s own default`;
-    },
   },
   {
     key: "zoom",

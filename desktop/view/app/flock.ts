@@ -111,6 +111,20 @@ export const credentialsAtom = FlockClient.runtime
     ),
   )
   .pipe(Atom.keepAlive);
+/** Desktop's own settings, told again after every saved change, whichever window made it. */
+export const desktopSettingsAtom = FlockClient.runtime
+  .atom(
+    held(Stream.unwrap(FlockClient.use((client) => Effect.succeed(client("settings", undefined))))),
+  )
+  .pipe(Atom.keepAlive);
+/** What the Flock chat holds, runs on and could run on; each window subscribes on its own. */
+export const chatChoicesAtom = FlockClient.runtime
+  .atom(
+    held(
+      Stream.unwrap(FlockClient.use((client) => Effect.succeed(client("chatChoices", undefined)))),
+    ),
+  )
+  .pipe(Atom.keepAlive);
 /** The Flock's settings; asking syncs every connected Machine first. */
 export const flockSettingsAtom = FlockClient.runtime.atom(
   held(

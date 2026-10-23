@@ -7,9 +7,11 @@ import {
   query,
 } from "@anthropic-ai/claude-agent-sdk";
 import { homedir } from "node:os";
+import { Effect } from "effect";
 import type { ClaudeCode } from "./claude-driver";
+import { readClaudeModels } from "./claude-models";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { childEnv } from "./login-env";
+import { childEnv, which } from "./login-env";
 import { userMcpServers } from "./session";
 import { toolServer } from "./tool-server";
 
@@ -24,3 +26,6 @@ export const claudeCode: ClaudeCode<McpServer> = {
       .text()
       .then(userMcpServers),
 };
+
+/** Claude Code's own list of models, on the executable the driver runs. */
+export const claudeModels = Effect.suspend(() => readClaudeModels(query, which("claude")));

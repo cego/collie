@@ -36,27 +36,39 @@ decides nothing from it.
 
 [ADR-0011](../docs/adr/0011-the-conversation-is-a-native-harness.md#amended-2026-10-05-a-herds-chat-per-home-and-one-flock-chat-per-desktop)
 and its [harness amendment](../docs/adr/0011-the-conversation-is-a-native-harness.md#amended-2026-10-09-the-flock-chat-runs-on-the-harness-settings-names).
-A model change waits for the current turn and keeps the conversation. Tested in
+The message box, `view/app/components/FlockChat.vue`, is Nuxt UI's `UChatPrompt`: the card
+chip and attachments in its header, the harness, model and effort selects and Send or Stop in
+its footer, and the notices above it. It only renders what the shared modules below work
+out. A model change
+waits for the current turn and keeps the conversation; a harness change waits for the next
+message, which starts a new conversation on it. Tested in
 `test/flock-chat-pi.test.ts`, `test/flock-chat-endpoint.test.ts`, `test/flock-chat-turns.test.ts`,
-`test/desktop-settings.test.ts` and `test/flock-tools.test.ts`.
+`test/flock-chat-window.test.ts`, `test/desktop-chat-choices.test.ts`,
+`test/desktop-claude-models.test.ts`, `test/desktop-pi-models.test.ts`,
+`test/desktop-harness-lists.test.ts`, `test/desktop-settings.test.ts` and `test/flock-tools.test.ts`.
 
-| File                       | What it owns                                                                                                                                 |
-| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| `src/bun/chat.ts`          | The session, its turns and the conversation                                                                                                  |
-| `src/bun/driver.ts`        | The session's driver interface                                                                                                               |
-| `src/bun/claude-driver.ts` | Claude through the Agent SDK                                                                                                                 |
-| `src/bun/claude.ts`        | The Agent SDK it runs on, and Collie's tools served to it                                                                                    |
-| `src/bun/pi-driver.ts`     | Pi over RPC                                                                                                                                  |
-| `src/bun/pi-agui.ts`       | Pi events as AG-UI                                                                                                                           |
-| `src/bun/pi-transcript.ts` | Pi session files read back                                                                                                                   |
-| `src/bun/agui.ts`          | SDK messages as AG-UI                                                                                                                        |
-| `src/bun/transcript.ts`    | A conversation read back                                                                                                                     |
-| `src/bun/session.ts`       | What the session runs with                                                                                                                   |
-| `src/bun/chat-endpoint.ts` | The authenticated loopback MCP endpoint                                                                                                      |
-| `src/bun/tool-server.ts`   | Both servers' tools                                                                                                                          |
-| `src/bun/flock-tools.ts`   | The Toolkit over each Machine's `chat` channel                                                                                               |
-| `src/bun/settings.ts`      | Desktop's own switches, the proactive one and the Machine rule among them; model checks through `src/harness-choice.ts`, the same as a Run's |
-| `src/shared/chat-view.ts`  | What the window says of a tool call, and the card a message is about                                                                         |
+| File                         | What it owns                                                                                                                                                                                                                                                              |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/bun/chat.ts`            | The session, its turns and the conversation                                                                                                                                                                                                                               |
+| `src/bun/driver.ts`          | The session's driver interface                                                                                                                                                                                                                                            |
+| `src/bun/claude-driver.ts`   | Claude through the Agent SDK                                                                                                                                                                                                                                              |
+| `src/bun/claude.ts`          | The Agent SDK it runs on, and Collie's tools served to it                                                                                                                                                                                                                 |
+| `src/bun/pi-driver.ts`       | Pi over RPC                                                                                                                                                                                                                                                               |
+| `src/bun/pi-agui.ts`         | Pi events as AG-UI                                                                                                                                                                                                                                                        |
+| `src/bun/pi-transcript.ts`   | Pi session files read back                                                                                                                                                                                                                                                |
+| `src/bun/agui.ts`            | SDK messages as AG-UI                                                                                                                                                                                                                                                     |
+| `src/bun/transcript.ts`      | A conversation read back                                                                                                                                                                                                                                                  |
+| `src/bun/session.ts`         | What the session runs with                                                                                                                                                                                                                                                |
+| `src/bun/chat-endpoint.ts`   | The authenticated loopback MCP endpoint                                                                                                                                                                                                                                   |
+| `src/bun/tool-server.ts`     | Both servers' tools                                                                                                                                                                                                                                                       |
+| `src/bun/flock-tools.ts`     | The Toolkit over each Machine's `chat` channel                                                                                                                                                                                                                            |
+| `src/bun/settings.ts`        | Desktop's own switches, the proactive one, the Machine rule and the Flock chat's harness, model and effort among them; model and effort checks through `src/harness-choice.ts`, the same as a Run's; held in one place and published to every window on each saved change |
+| `src/bun/chat-choices.ts`    | What the chat runs on next, and the `ChatChoices` stream every chat window subscribes to: what it is held on, runs on and could run on                                                                                                                                    |
+| `src/bun/harness-lists.ts`   | Each harness's own list of models: read when first needed, kept in memory until Desktop quits, read again after a failure                                                                                                                                                 |
+| `src/bun/claude-models.ts`   | Claude Code's own list, read through a short-lived Agent SDK session that starts no turn                                                                                                                                                                                  |
+| `src/bun/pi-models.ts`       | Pi's own list and each model's thinking levels, read from a Pi RPC process that loads none of the human's setup, keeps no session and runs offline                                                                                                                        |
+| `src/shared/chat-choices.ts` | The resolver of what an unset model and effort run as, which the session is opened on; what each harness offers from its own list or Collie's table; the harness, model and effort selects; the notices above the message box and what Stay puts back                     |
+| `src/shared/chat-view.ts`    | What the window says of a tool call, the card a message is about, and the Earlier conversations menu; what Stop puts back into the message box, the submit button's state and what the status region announces                                                            |
 
 The Toolkit both chats share is the root's `src/toolkit.ts`.
 
