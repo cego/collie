@@ -81,7 +81,8 @@ import {
 } from "./sdk";
 import { FALLBACK_DEFAULTS, configValue, gitlabHostOf, loadDefaults, readConfig } from "./config";
 import { unlistedServers } from "./compaction";
-import { foldPreferences, preferencesIn, resolveChoice } from "./harness";
+import { foldPreferences, preferencesFromOptions, resolveChoice } from "./harness";
+import { encodeSubagents, readSubagents } from "./subagents";
 import type { UsageReading } from "./usage-model";
 import { currentEnv } from "./env";
 import { waitForMemory } from "./memory-wait";
@@ -866,11 +867,21 @@ export const SDK_DECLARATIONS = `declare module "collie" {
   export const Run: Context.Service<RunApi, RunApi>;
   export type Run = RunApi;
 
+  export interface ClaudeSubagents {
+    readonly enabled?: boolean;
+    readonly model?: string;
+    readonly forceModel?: boolean;
+    readonly cacheTtl?: "5m" | "1h";
+    readonly maxDepth?: number;
+    readonly maxConcurrent?: number;
+  }
+
   /** Which agent does the work: each is inherited from the configuration where it is left out. */
   export interface AgentPreferences {
     readonly harness?: string;
     readonly model?: string;
     readonly effort?: string;
+    readonly claudeSubagents?: ClaudeSubagents;
     /** Past this share of its busiest window, 1–100, this agent is not chosen for new work. */
     readonly upTo?: number;
     /** What to try past \`upTo\` or once Exhausted, before the human's \`fallbacks\`. */
@@ -1092,6 +1103,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly harness: string | null;
     readonly model: string | null;
     readonly effort: string | null;
+    readonly claudeSubagents?: ClaudeSubagents;
     readonly permissions: string | null;
   }
 
@@ -1225,6 +1237,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly model?: string;
     readonly effort?: string;
     readonly permissions?: "auto" | "bypass" | "harness";
+    readonly claudeSubagents?: ClaudeSubagents;
     /**
      * The panel seat this work sits at: its agent over the role's, and its persona and
      * instructions where it names them. Work for a role given none takes the agent of the
@@ -4326,7 +4339,10 @@ const refuseOptions = (
   generation: Generation,
   options: Readonly<Record<string, string>>,
 ): Effect.Effect<void, HostRefused> => {
-  const strange = Object.keys(options).filter((name) => !(name in RESERVED_INPUTS));
+  // Scoped policy travels separately from inputs without reserving another input name.
+  const strange = Object.keys(options).filter(
+    (name) => name !== "claudeSubagents" && !(name in RESERVED_INPUTS),
+  );
   if (strange.length > 0) {
     return refusedInput(
       `no host option is called ${strange.map((name) => `"${name}"`).join(", ")}: ` +
@@ -5305,15 +5321,27 @@ const makeRegistry: (
     generation: Generation,
     options: Readonly<Record<string, string>>,
   ) {
-    const asked = preferencesIn(options);
+    const asked = yield* preferencesFromOptions(options).pipe(
+      Effect.catch((cause) => refusedInput(`claudeSubagents: ${String(cause)}`)),
+    );
     if (Object.keys(asked).length === 0) return;
     const defaults = yield* loadDefaults(userDir).pipe(
       Effect.orElseSucceed(() => FALLBACK_DEFAULTS),
     );
+    const raw = (yield* readConfig(userDir).pipe(
+      Effect.catch((cause) => refusedInput(String(cause))),
+    )).claude_subagents;
+    const policy =
+      raw === undefined
+        ? undefined
+        : yield* readSubagents(raw).pipe(
+            Effect.catch((cause) => refusedInput(`claude_subagents: ${String(cause)}`)),
+          );
     const configured = {
       harness: defaults.harness,
       model: defaults.model,
       effort: defaults.effort,
+      claudeSubagents: policy,
     };
     const resolved = resolveChoice([configured, generation.agents, asked], defaults.models);
     if (!resolved.ok) return yield* refusedInput(resolved.problem);
@@ -5686,7 +5714,15 @@ const makeRegistry: (
     );
     // What the parent prefers where it starts the child, as options the child is given:
     // serializable, so no Context, service or Layer of the parent's crosses over.
-    const inherited = foldPreferences([preferencesIn(parentOptions), ...(yield* AgentScopes)]);
+    const parentPreferences = yield* preferencesFromOptions(parentOptions).pipe(
+      Effect.mapError((cause) => refused(`claudeSubagents: ${String(cause)}`)),
+    );
+    const { claudeSubagents, ...preferences } = foldPreferences([
+      parentPreferences,
+      ...(yield* AgentScopes),
+    ]);
+    const inherited: Record<string, string> = preferences;
+    if (claudeSubagents !== undefined) inherited.claudeSubagents = encodeSubagents(claudeSubagents);
     // The host's own options, held to the same rule a front door's are: a name that is
     // not the host's would be a field the child's author never declared.
     const asked = { ...inherited, ...ask.options };
