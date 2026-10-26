@@ -2,7 +2,6 @@
 
 import {
   AnswerSchema,
-  ClaimedSchema,
   FindingSchema,
   FixOutputSchema,
   Host,
@@ -12,7 +11,6 @@ import {
   RollbackReadSchema,
   Run,
   SettledAnswersSchema,
-  StageReadSchema,
   TagReadSchema,
   TakeoverSchema,
   WorkflowError,
@@ -36,6 +34,17 @@ import * as Activity from "effect/workflow/Activity";
 import * as Workflow from "effect/workflow/Workflow";
 import { WorkflowInstance } from "effect/workflow/WorkflowEngine";
 import { IMPLEMENTER } from "./reviewing.ts";
+import {
+  Assessed,
+  RolledBack,
+  StagedMergeRequest,
+  claiming,
+  nth,
+  plays,
+  quoted,
+  short,
+  staging,
+} from "./staging.ts";
 import onGitlab from "./release.gitlab.md" with { type: "text" };
 import onGithub from "./release.github.md" with { type: "text" };
 
@@ -95,10 +104,6 @@ const pushing = (url: string) =>
 const rollingBack = (url: string) =>
   `rolling ${url}'s stage back to the newest release production carries`;
 
-/** Production jobs as a human plays them: by name, at the forge's address. */
-const plays = (jobs: ReadonlyArray<JobLink>) =>
-  jobs.map((job) => `\`${job.name}\` at ${job.url}`).join(", ");
-
 export const RELEASE_CLEARS = {
   answer: (url: string) => [
     pushing(url),
@@ -141,28 +146,6 @@ const verdict = {
   findings: Schema.optionalKey(Schema.Array(FindingSchema)),
 };
 
-export const Assessed = Schema.Struct({
-  ...verdict,
-  is_package: Schema.Boolean.annotate({
-    description: "true where this repository publishes from its tag pipeline and deploys nowhere",
-  }),
-  kind_evidence: Schema.optionalKey(Schema.String).annotate({
-    description: "what said it is a package or an application",
-  }),
-  stage_jobs: Schema.optionalKey(
-    Schema.Struct({
-      merge_request: Schema.Array(Schema.String),
-      tag: Schema.Array(Schema.String),
-    }),
-  ).annotate({
-    description: "an application's stage deploy jobs, of a merge request's pipeline and a tag's",
-  }),
-  applications: Schema.optionalKey(Schema.Array(Schema.String)).annotate({
-    description:
-      "every application this release deploys, by the name its deploy jobs give it (spilnu for stage:spilnu); empty for a package",
-  }),
-});
-
 export const Answered = Schema.Struct({
   ...verdict,
   answers: Schema.Array(AnswerSchema).annotate({
@@ -193,19 +176,6 @@ export const Staged = Schema.Struct({
   }),
 });
 
-export const StagedMergeRequest = Schema.Struct({
-  ...verdict,
-  stage_jobs: Schema.optionalKey(Schema.Array(Schema.String)).annotate({
-    description:
-      "the stage deploy and stage check jobs of the merge request's pipeline you played or checked",
-  }),
-});
-
-export const RolledBack = Schema.Struct({
-  ...verdict,
-  stage: Schema.optionalKey(Schema.String).annotate({ description: "the release stage runs now" }),
-});
-
 export const Played = Schema.Struct({
   ...verdict,
   played: Schema.Array(Schema.String).annotate({
@@ -226,9 +196,6 @@ const PRODUCTION = { send: "Send to production", leave: "Leave production to me"
 const UNCLAIMED = { again: "Try again", without: "Release without a Helle claim" } as const;
 type ProductionGo = (typeof PRODUCTION)[keyof typeof PRODUCTION];
 
-/** Why a claim waits on the adopt question, which is asked outside the claim's Activity. */
-const ADOPTING = "the claim is already the operator's own";
-
 /** Fix rounds in a row before a failing head parks the Run, as implement's gate fixes. */
 const ROUNDS = 4;
 
@@ -244,13 +211,6 @@ const commentLines = (comments: ReadonlyArray<OpenComment>) =>
       return `- \`${one.id}\` by ${one.author}, ${one.url}${where}:\n${quoted}`;
     })
     .join("\n");
-
-const short = (sha: string) => sha.slice(0, 8);
-
-/** A step or question a Run may take more than once: the first by its name, then numbered. */
-const nth = (name: string, n: number) => (n === 1 ? name : `${name}-${n}`);
-
-const quoted = (jobs: ReadonlyArray<string>) => jobs.map((job) => `\`${job}\``).join(", ");
 
 /** What a Release Run goes on from once its merge request is merged. */
 interface Landed {
@@ -420,77 +380,26 @@ export default defineWorkflow({
         applications: assessed.applications ?? [],
         jobs: [...testJobs, ...stageJobs],
       };
-      // A claim given back mid-Run must not be taken again when the Run replays, so it is
-      // journaled, and the adopt question is asked outside the Activity.
-      const attempt = (at: string, n: number) =>
-        Effect.gen(function* () {
-          const take = (step: string, adopting: Effect.Effect<boolean, WorkflowError>) =>
-            Activity.make({
-              name: step,
-              success: ClaimedSchema,
-              error: WorkflowError,
-              execute: host.claim({
-                runId,
-                cwd,
-                adopting,
-                deploys,
-                say: (line) => host.record(runId, line),
-              }),
-            });
-          const first = yield* take(at, Effect.fail(new WorkflowError({ reason: ADOPTING }))).pipe(
-            Effect.result,
-          );
-          if (first._tag === "Success") return first.success;
-          if (first.failure.reason !== ADOPTING) return { unresolved: first.failure.reason };
-          const adopt = yield* ask({
-            name: nth("adopt-claim", n),
-            prompt: "You already hold or are queued for a claim this release needs. Take it over?",
-            options: ["yes", "no"],
-          });
-          return yield* take(`${at}.adopt`, Effect.succeed(adopt === "yes")).pipe(
-            Effect.catch((failed) => Effect.succeed({ unresolved: failed.reason })),
-          );
-        });
-      /**
-       * Every Helle claim this release needs, held before anything is merged or tagged; none
-       * only on the human's say, and null where they finished instead.
-       */
-      const claimed = (name: string) =>
-        Effect.gen(function* () {
-          for (let n = 1; ; n++) {
-            const at = nth(name, n);
-            const held = yield* attempt(at, n);
-            if ("slugs" in held) return held.slugs;
-            const answer = yield* ask({
-              name: `${at}.unclaimed`,
-              prompt: `${mr} cannot hold the Helle claims its release needs: ${held.unresolved}. Nothing is merged or tagged without them. ${UNCLAIMED.again} claims them again; ${UNCLAIMED.without} goes on holding none; ${GO.finish} stops here.`,
-              options: [UNCLAIMED.again, UNCLAIMED.without, GO.finish],
-            });
-            if (answer === UNCLAIMED.again) continue;
-            // Whatever it did take is given back, so going on without claims holds none.
-            yield* Activity.make({
-              name: `${at}.give-back`,
-              execute: Effect.flatMap(host.release(runId), (kept) =>
-                kept.length === 0
-                  ? Effect.void
-                  : park(
-                      `Helle would not take back ${kept.join(", ")}, which this Run still holds, so it neither finishes nor goes on without its claims`,
-                    ),
-              ),
-            });
-            if (answer === GO.finish) return null;
-            yield* host.record(
-              runId,
-              `released without a Helle claim on the human's say: ${held.unresolved}`,
-            );
-            return [];
-          }
-        });
+      const claimed = claiming({
+        runId,
+        cwd,
+        deploys,
+        park,
+        words: {
+          adopt: "You already hold or are queued for a claim this release needs. Take it over?",
+          unclaimed: (why) =>
+            `${mr} cannot hold the Helle claims its release needs: ${why}. Nothing is merged or tagged without them. ${UNCLAIMED.again} claims them again; ${UNCLAIMED.without} goes on holding none; ${GO.finish} stops here.`,
+          again: UNCLAIMED.again,
+          without: UNCLAIMED.without,
+          finish: GO.finish,
+          went: (why) => `released without a Helle claim on the human's say: ${why}`,
+        },
+      });
 
       let landed: Landed;
       if (recovering !== null) {
         // That go was given and spent: no wait, no go and no merge, only what is left.
-        const slugs = yield* claimed("claim");
+        const slugs = (yield* claimed("claim"))?.slugs ?? null;
         if (slugs === null)
           return yield* fail(
             `${mr} was merged at ${recovering.sha}, and its release was stopped without the Helle claims it needs, so nothing was tagged`,
@@ -717,7 +626,7 @@ export default defineWorkflow({
             yield* host.record(runId, `go ${gos}: finished with ${mr} left open`);
             return `${mr} was left open`;
           }
-          const slugs = yield* claimed(`go-${gos}.claim`);
+          const slugs = (yield* claimed(`go-${gos}.claim`))?.slugs ?? null;
           if (slugs === null) {
             yield* host.record(
               runId,
@@ -751,39 +660,35 @@ export default defineWorkflow({
           if (answer === GO.test) {
             stagings += 1;
             const n = stagings;
-            /** Takes stage off `head` and gives the claim back, or fails keeping it where the forge cannot show that. */
-            const unstage = (failure: string, failing: string) =>
-              Effect.gen(function* () {
-                yield* agentWork({
-                  ...as(nth("unstage", n)),
-                  input: { ...input, head, failure },
+            const stage = staging({
+              runId,
+              cwd,
+              jobs: testJobs,
+              stage: (name, at) =>
+                agentWork({
+                  ...as(name),
+                  input: { ...input, head: at, stage_jobs: quoted(testJobs) },
+                  clears: RELEASE_CLEARS.stageMergeRequest(url),
+                  instructions: steps.stageMergeRequest,
+                  output: StagedMergeRequest,
+                }),
+              unstage: (name, at, failure) =>
+                agentWork({
+                  ...as(name),
+                  input: { ...input, head: at, failure },
                   clears: RELEASE_CLEARS.rollback(url),
                   instructions: steps.unstage,
                   output: RolledBack,
-                });
-                const back = yield* Activity.make({
-                  name: `${nth("unstage", n)}.read`,
-                  success: RollbackReadSchema,
-                  execute: host.readRollback({ runId, cwd, off: head }),
-                });
-                if (back._tag === "Unshown")
-                  return yield* fail(`${failing}. Its rollback is not shown: ${back.why}`);
+                }),
+            });
+            /** Takes stage off `head` and gives the claim back, or fails keeping it where the forge cannot show that. */
+            const unstage = (failure: string, failing: string) =>
+              Effect.gen(function* () {
+                yield* stage.off(nth("unstage", n), failure, failing);
                 yield* giveBack;
               });
-            const staged = yield* agentWork({
-              ...as(nth("stage", n)),
-              input: { ...input, head, stage_jobs: quoted(testJobs) },
-              clears: RELEASE_CLEARS.stageMergeRequest(url),
-              instructions: steps.stageMergeRequest,
-              output: StagedMergeRequest,
-            });
-            const jobs = [...new Set([...testJobs, ...(staged.stage_jobs ?? [])])];
+            const { read: onStage, jobs } = yield* stage.put(nth("stage", n), head);
             const readStage = host.readStage({ runId, cwd, head, jobs });
-            const onStage = yield* Activity.make({
-              name: `${nth("stage", n)}.read`,
-              success: StageReadSchema,
-              execute: readStage,
-            });
             if (onStage._tag === "Moved") {
               const moved = `its head moved to ${short(onStage.head)}`;
               yield* unstage(moved, `stage of ${mr} at ${short(head)} no longer holds: ${moved}`);
@@ -944,7 +849,7 @@ export default defineWorkflow({
         const back = yield* Activity.make({
           name: "read-rollback",
           success: RollbackReadSchema,
-          execute: host.readRollback({ runId, cwd, off: landed.sha }),
+          execute: host.readRollback({ runId, cwd, off: [landed.sha] }),
         });
         // Only a stage the forge shows back on production's release is safe to give back.
         if (back._tag === "Unshown")

@@ -144,6 +144,7 @@ const served = (main: Channel<ToView, ToMain>) =>
         conversationChanges: () => Stream.make("current"),
         desktopTurns: () => Stream.die("not asked"),
         settings: () => Effect.die("not asked"),
+        chatChoices: () => Stream.die("not asked"),
         setSettings: () => Effect.die("not asked"),
         drawn: () => Stream.die("not asked"),
       }),

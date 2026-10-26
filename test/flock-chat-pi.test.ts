@@ -9,14 +9,23 @@ import { aboutNote } from "../desktop/src/shared/chat-view";
 import { FLOCK_TOOLS } from "../desktop/src/bun/flock-tools";
 import { FILE_TOOLS } from "../desktop/src/bun/file-tools";
 import { piPrompt } from "../desktop/src/bun/pi-transcript";
-import { ends } from "../desktop/src/shared/agui";
+import { type AguiEvent, ends } from "../desktop/src/shared/agui";
 import { childEnv } from "../desktop/src/bun/login-env";
+import { offerOf, opensOn, readPiConfig } from "../desktop/src/bun/chat-choices";
+import { PiConfig } from "../desktop/src/shared/chat-choices";
+import type { DesktopSettings } from "../desktop/src/shared/flock";
+import { NO_FLOCK_SETTINGS } from "../desktop/src/shared/flock-settings";
+import { harnessLists } from "../desktop/src/bun/harness-lists";
+import { readPiModels } from "../desktop/src/bun/pi-models";
+import { changeSettings } from "../desktop/src/bun/settings";
+import { chatSelects, choiceNotices } from "../desktop/src/shared/chat-choices";
+import { callFlockTool } from "../desktop/src/bun/flock-tools";
 
 const withPi = <A, E>(
   body: (
     driver: ReturnType<typeof piDriver>,
     context: DriverContext,
-  ) => Effect.Effect<A, E, Scope.Scope | FileSystem.FileSystem | Path.Path>,
+  ) => Effect.Effect<A, E, Scope.Scope | Crypto.Crypto | FileSystem.FileSystem | Path.Path>,
 ) =>
   Effect.runPromise(
     Effect.gen(function* () {
@@ -46,7 +55,8 @@ const withPi = <A, E>(
           machineRule: () => "",
           setMachineRule: () => Effect.void,
           inSync: () => Effect.succeed(""),
-          chatHarness: () => ({ harness: "pi", model: undefined, runsOn: null }),
+          chatHarness: () => ({ harness: "pi", model: undefined, effort: undefined }),
+          chatChoices: Effect.die("not asked"),
           setChatHarness: () => Effect.succeed(null),
         },
         ask: () => Promise.resolve(null),
@@ -176,73 +186,309 @@ test("Pi's start isolates resources, keeps the token in its environment and send
     }),
   ));
 
-test("resetting Pi's model resumes the conversation on its configured default and thinking level", () =>
-  withPi((driver) =>
+const inspected = (events: ReadonlyArray<AguiEvent>) => {
+  const text = events.find((event) => event.type === "TEXT_MESSAGE_CONTENT");
+  if (text?.type !== "TEXT_MESSAGE_CONTENT") throw new Error("No reply");
+  return Schema.decodeUnknownSync(
+    Schema.fromJsonString(
+      Schema.Struct({
+        args: Schema.Array(Schema.String),
+        model: Schema.String,
+        thinking: Schema.String,
+      }),
+    ),
+  )(text.delta);
+};
+
+const writePiConfig = (config: PiConfig) =>
+  Effect.flatMap(FileSystem.FileSystem, (fs) =>
+    fs.writeFileString(
+      `${childEnv().PI_CODING_AGENT_DIR}/settings.json`,
+      Schema.encodeSync(Schema.fromJsonString(PiConfig))(config),
+    ),
+  );
+
+const startedWith = (
+  driver: ReturnType<typeof piDriver>,
+  context: DriverContext,
+  settings: DesktopSettings,
+) =>
+  Effect.gen(function* () {
+    const opened = yield* opensOn(settings, NO_FLOCK_SETTINGS, readPiConfig(context.dir));
+    if (!opened.ok) return yield* Effect.die(opened.problem);
+    const session = yield* driver.open("pi-effort", opened.choice.model, opened.choice.effort);
+    yield* session.offer("inspect");
+    const events = yield* Stream.runCollect(session.events.pipe(Stream.takeUntil(ends)));
+    yield* session.close;
+    const { args } = inspected(events);
+    return args.slice(args.indexOf("--no-context-files") + 3);
+  });
+
+test("Pi starts at the chat's set effort, and with nothing configured on its own model at medium", () =>
+  withPi((driver, context) =>
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const settings = `${childEnv().PI_CODING_AGENT_DIR}/settings.json`;
-      yield* fs.writeFileString(
-        settings,
-        Schema.encodeSync(Schema.fromJsonString(Schema.Json))({
+      const model = "openai-codex/gpt-6.1-sol";
+      expect(
+        yield* startedWith(driver, context, {
+          proactive: true,
+          chatHarness: "pi",
+          chatModel: model,
+          chatEffort: "high",
+        }),
+      ).toEqual(["--model", model, "--thinking", "high"]);
+      expect(yield* startedWith(driver, context, { proactive: true, chatHarness: "pi" })).toEqual([
+        "--thinking",
+        "medium",
+      ]);
+    }),
+  ));
+
+test("Pi starts a set model at the level its configuration names for it while the effort is unset", () =>
+  withPi((driver, context) =>
+    Effect.gen(function* () {
+      const model = "openai-codex/gpt-5.5";
+      yield* writePiConfig({
+        defaultProvider: "openai-codex",
+        defaultModel: "gpt-6.1-sol",
+        defaultThinkingLevel: "low",
+        modelThinkingLevels: { [model]: "xhigh" },
+      });
+      expect(
+        yield* startedWith(driver, context, {
+          proactive: true,
+          chatHarness: "pi",
+          chatModel: model,
+        }),
+      ).toEqual(["--model", model, "--thinking", "xhigh"]);
+      expect(yield* startedWith(driver, context, { proactive: true, chatHarness: "pi" })).toEqual([
+        "--model",
+        "openai-codex/gpt-6.1-sol",
+        "--thinking",
+        "low",
+      ]);
+    }),
+  ));
+
+test("Pi's own per-model levels constrain settings, selects, the tool and the session's configured default", () =>
+  withPi((driver, context) =>
+    Effect.gen(function* () {
+      const lists = yield* harnessLists({
+        pi: readPiModels(NO_FLOCK_SETTINGS, context.dir, [
+          "bun",
+          `${import.meta.dir}/fixtures/pi-models.ts`,
+          "list",
+        ]),
+      });
+      yield* lists.ready("pi");
+      for (const { model, configured, expected, label } of [
+        {
+          model: "openai-codex/gpt-5.5",
+          configured: "max",
+          expected: "xhigh",
+          label: "Default · Extra high",
+        },
+        {
+          model: "openai-codex/gpt-6.1-sol",
+          configured: "off",
+          expected: "minimal",
+          label: "Default · Minimal",
+        },
+        {
+          model: "openai-codex/gpt-5.5",
+          configured: "high",
+          expected: "high",
+          label: "Default · High",
+        },
+      ]) {
+        yield* writePiConfig({
           defaultProvider: "openai-codex",
           defaultModel: "gpt-6.1-sol",
-          defaultThinkingLevel: "high",
-        }),
-      );
-      const first = yield* driver.open("pi-reset", "openai-codex/gpt-5.3-codex-spark", "low");
-      yield* Effect.addFinalizer(() => first.close);
-      const inspect = (session: typeof first) =>
-        session.offer("inspect").pipe(
-          Effect.andThen(Stream.runCollect(session.events.pipe(Stream.takeUntil(ends)))),
-          Effect.map((events) => {
-            const text = events.find((event) => event.type === "TEXT_MESSAGE_CONTENT");
-            if (text?.type !== "TEXT_MESSAGE_CONTENT") throw new Error("No reply");
-            return Schema.decodeUnknownSync(
-              Schema.fromJsonString(
-                Schema.Struct({
-                  model: Schema.String,
-                  thinking: Schema.String,
-                }),
-              ),
-            )(text.delta);
-          }),
+          defaultThinkingLevel: "max",
+          modelThinkingLevels: { [model]: configured },
+        });
+        const settings: DesktopSettings = { proactive: true, chatHarness: "pi", chatModel: model };
+        const choice = yield* opensOn(
+          settings,
+          NO_FLOCK_SETTINGS,
+          readPiConfig(context.dir),
+          lists,
         );
-      expect(yield* inspect(first)).toEqual({
-        model: "openai-codex/gpt-5.3-codex-spark",
-        thinking: "low",
+        expect(choice).toEqual({ ok: true, choice: { harness: "pi", model, effort: expected } });
+        if (!choice.ok) return yield* Effect.die(choice.problem);
+        const session = yield* driver.open("clamped", choice.choice.model, choice.choice.effort);
+        yield* session.offer("inspect");
+        const inspectedSession = inspected(
+          yield* Stream.runCollect(session.events.pipe(Stream.takeUntil(ends))),
+        );
+        yield* session.close;
+        expect(inspectedSession).toMatchObject({ model, thinking: expected });
+        const offered = yield* offerOf(
+          "pi",
+          settings,
+          NO_FLOCK_SETTINGS,
+          readPiConfig(context.dir),
+          lists,
+        );
+        if (offered.from === "reading") return yield* Effect.die("List did not finish");
+        const account = {
+          heldOn: "pi",
+          runsOn: choice.choice,
+          turning: false,
+          harnesses: [{ harness: "pi", label: "Pi", installed: true, offered }],
+        };
+        const selects = chatSelects(settings, account);
+        expect(selects.effort.options[0]?.label).toBe(label);
+        expect(selects.model.note).toBe("Listed by Pi on this computer");
+        expect(selects.model.options.map(({ label }) => label)).toContain("GPT-5.5");
+        const said = yield* callFlockTool(
+          {
+            ...context.flock,
+            chatHarness: () => ({ harness: "pi", model, effort: undefined }),
+            chatChoices: Effect.succeed(account),
+          },
+          "collie_chat_harness",
+          {},
+        );
+        expect(said).toContain(
+          "pi offers openai-codex/gpt-5.5 (off, minimal, low, medium, high, xhigh), openai-codex/gpt-6.1-sol (minimal, low, medium, high, xhigh, max), local/only-off (no effort), local/plain (no effort).",
+        );
+        const offers = { pi: offered };
+        expect(
+          changeSettings(
+            settings,
+            NO_FLOCK_SETTINGS,
+            { chatModel: "openai-codex/gpt-5.5", chatEffort: "max" },
+            offers,
+          ),
+        ).toEqual({
+          refused: '"max" is not an effort GPT-5.5 takes (off, minimal, low, medium, high, xhigh)',
+        });
+        expect(
+          changeSettings(
+            { ...settings, chatModel: "openai-codex/gpt-6.1-sol", chatEffort: "max" },
+            NO_FLOCK_SETTINGS,
+            { chatModel: "openai-codex/gpt-5.5" },
+            offers,
+          ),
+        ).toEqual({ proactive: true, chatHarness: "pi", chatModel: "openai-codex/gpt-5.5" });
+      }
+    }),
+  ));
+
+test("an unlisted Pi model's configured default agrees in the session, selects, notice and tool", () =>
+  withPi((driver, context) =>
+    Effect.gen(function* () {
+      const model = "openai-codex/gpt-6-astra";
+      yield* writePiConfig({
+        defaultProvider: "openai-codex",
+        defaultModel: "gpt-6.1-sol",
+        defaultThinkingLevel: "low",
+        modelThinkingLevels: { [model]: "high" },
       });
-      yield* first.close;
-      yield* fs.writeFileString(
-        settings,
-        Schema.encodeSync(Schema.fromJsonString(Schema.Json))({
-          defaultProvider: "openai-codex",
-          defaultModel: "gpt-5.6-terra",
-          defaultThinkingLevel: "xhigh",
-        }),
+      const lists = yield* harnessLists({
+        pi: readPiModels(NO_FLOCK_SETTINGS, context.dir, [
+          "bun",
+          `${import.meta.dir}/fixtures/pi-models.ts`,
+          "list",
+        ]),
+      });
+      const settings: DesktopSettings = { proactive: true, chatHarness: "pi", chatModel: model };
+      const opened = yield* opensOn(settings, NO_FLOCK_SETTINGS, readPiConfig(context.dir), lists);
+      expect(opened).toEqual({ ok: true, choice: { harness: "pi", model, effort: "high" } });
+      if (!opened.ok) return yield* Effect.die(opened.problem);
+      const session = yield* driver.open(
+        "typed-default",
+        opened.choice.model,
+        opened.choice.effort,
       );
-      const reset = yield* driver.open("pi-reset", "default", "");
-      yield* Effect.addFinalizer(() => reset.close);
-      expect(reset.conversation()).toBe("pi-reset");
-      expect(yield* inspect(reset)).toEqual({
-        model: "openai-codex/gpt-5.6-terra",
-        thinking: "xhigh",
+      yield* Effect.addFinalizer(() => session.close);
+      yield* session.offer("inspect");
+      expect(
+        inspected(yield* Stream.runCollect(session.events.pipe(Stream.takeUntil(ends)))),
+      ).toMatchObject({
+        model,
+        thinking: "high",
       });
-      yield* reset.close;
-      yield* fs.writeFileString(
+      const offered = yield* offerOf(
+        "pi",
         settings,
-        Schema.encodeSync(Schema.fromJsonString(Schema.Json))({
-          defaultProvider: "openai-codex",
-          defaultModel: "gpt-5.6-terra",
-          defaultThinkingLevel: "low",
-          modelThinkingLevels: { "openai-codex/gpt-5.6-terra": "max" },
-        }),
+        NO_FLOCK_SETTINGS,
+        readPiConfig(context.dir),
+        lists,
       );
-      const perModel = yield* driver.open("pi-reset", "default", "");
-      yield* Effect.addFinalizer(() => perModel.close);
-      expect(yield* inspect(perModel)).toEqual({
-        model: "openai-codex/gpt-5.6-terra",
-        thinking: "max",
+      const account = {
+        heldOn: "pi",
+        runsOn: { harness: "pi", model: "openai-codex/gpt-6.1-sol", effort: "low" },
+        turning: true,
+        harnesses: [{ harness: "pi", label: "Pi", installed: true, offered }],
+      };
+      expect(chatSelects(settings, account).effort.label).toBe("Default · High");
+      expect(choiceNotices(settings, account).reply?.next).toBe("openai-codex/gpt-6-astra · High");
+      expect(choiceNotices(settings, { ...account, runsOn: opened.choice }).reply).toBeNull();
+      expect(
+        yield* callFlockTool(
+          {
+            ...context.flock,
+            chatHarness: () => ({ harness: "pi", model, effort: undefined }),
+            chatChoices: Effect.succeed(account),
+          },
+          "collie_chat_harness",
+          {},
+        ),
+      ).toContain("model openai-codex/gpt-6-astra, with no effort set, so it runs at high");
+    }),
+  ));
+
+test("Pi's configuration is read as a session opens, so a level changed since Desktop started is used", () =>
+  withPi((_, context) =>
+    Effect.gen(function* () {
+      const settings: DesktopSettings = { proactive: false, chatHarness: "pi" };
+      yield* writePiConfig({
+        defaultProvider: "openai-codex",
+        defaultModel: "gpt-6.1-sol",
+        defaultThinkingLevel: "high",
       });
+      const conversation = yield* openFlockChat({
+        dir: context.dir,
+        conversation: "flock@test",
+        machines: () => [],
+        proactive: () => false,
+        machineRule: () => "",
+        setMachineRule: () => Effect.void,
+        inSync: () => Effect.succeed(""),
+        choice: () => opensOn(settings, NO_FLOCK_SETTINGS, readPiConfig(context.dir)),
+        offered: (harness) =>
+          offerOf(harness, settings, NO_FLOCK_SETTINGS, readPiConfig(context.dir)),
+        retold: Stream.empty,
+        chatHarness: () => ({ harness: "pi", model: undefined, effort: undefined }),
+        setChatHarness: () => Effect.succeed(null),
+        drivers: (opened) =>
+          loopbackTools(opened).pipe(
+            Effect.map((endpoint) => ({
+              pi: piDriver(opened, endpoint, ["bun", `${import.meta.dir}/fixtures/pi-chat.ts`]),
+            })),
+          ),
+      });
+      const first = inspected(yield* Stream.runCollect(conversation.send("inspect", null, false)));
+      expect(first).toMatchObject({ model: "openai-codex/gpt-6.1-sol", thinking: "high" });
+      yield* writePiConfig({
+        defaultProvider: "openai-codex",
+        defaultModel: "gpt-6.1-sol",
+        defaultThinkingLevel: "xhigh",
+      });
+      const second = inspected(yield* Stream.runCollect(conversation.send("inspect", null, false)));
+      expect(second).toMatchObject({ model: "openai-codex/gpt-6.1-sol", thinking: "xhigh" });
+      expect(
+        second.args.slice(
+          second.args.indexOf("--session-id"),
+          second.args.indexOf("--session-id") + 2,
+        ),
+      ).toEqual(
+        first.args.slice(
+          first.args.indexOf("--session-id"),
+          first.args.indexOf("--session-id") + 2,
+        ),
+      );
     }),
   ));
 
@@ -377,8 +623,12 @@ test("a question's buttons can be clicked before Pi's HTTP call reaches Desktop"
         machineRule: () => "",
         setMachineRule: () => Effect.void,
         inSync: () => Effect.succeed(""),
-        choice: () => ({ ok: true, choice: { harness: "pi", model: "default", effort: null } }),
-        chatHarness: () => ({ harness: "pi", model: undefined }),
+        choice: () =>
+          Effect.succeed({ ok: true, choice: { harness: "pi", model: "default", effort: null } }),
+        offered: (harness) =>
+          offerOf(harness, { proactive: false }, NO_FLOCK_SETTINGS, Effect.succeed({})),
+        retold: Stream.empty,
+        chatHarness: () => ({ harness: "pi", model: undefined, effort: undefined }),
         setChatHarness: () => Effect.succeed(null),
         drivers: (context) =>
           loopbackTools(context).pipe(

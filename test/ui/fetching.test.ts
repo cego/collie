@@ -4,11 +4,12 @@
 
 import type { BunServices } from "@effect/platform-bun/BunServices";
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { Effect, PlatformError } from "effect";
+import { Effect, Layer, PlatformError } from "effect";
 import { Rig, type RigError } from "../support/recorder";
 import { installBaseline } from "../support/engine";
 import { runEffect } from "../support/effect";
 import { FakeBin } from "../support/bin";
+import { forgeHttpOnPath, forgeHttpOver } from "../support/forge";
 import { appState, type ControlSession } from "../../src/flows";
 import { shell } from "../../src/mr";
 import { mrDetails } from "../../src/forge/gitlab";
@@ -51,7 +52,7 @@ const MR_JSON = JSON.stringify({
   updated_at: "2026-09-02T11:00:00.000Z",
 });
 
-/** A glab that answers about any merge request, and counts what it was asked. */
+/** A glab that answers about any merge request, and counts the reads of one it was asked. */
 function glab() {
   const calls: string[][] = [];
   const run = (cmd: string, args: string[]) => {
@@ -61,7 +62,10 @@ function glab() {
     if (args[0] === "auth") return Effect.succeed({ code: 0, stdout: "ok" });
     return Effect.succeed({ code: 0, stdout: MR_JSON });
   };
-  return { run, views: () => calls.filter((c) => c[0] === "glab" && c[1] === "mr") };
+  return {
+    run,
+    views: () => calls.filter((c) => c[1] === "api" && /\/merge_requests\/\d+$/.test(c.at(-1)!)),
+  };
 }
 
 function session(): ControlSession {
@@ -98,7 +102,7 @@ const watched = (
         run: asked.run,
         now: over.now ?? 0,
         fresh: over.fresh ?? false,
-      });
+      }).pipe(Effect.provide(forgeHttpOver(asked.run)));
 };
 
 /** A Run of this workspace, remembered as the newest the host would list. */
@@ -218,7 +222,9 @@ effectTest("a glab that writes a notice to stderr is still read as a merge reque
   );
 
   const ref = { project: "gitlab.example.com/g/p", iid: "1" };
-  const details = yield* mrDetails(ref, rig.projectDir, shell);
+  const details = yield* mrDetails(ref, rig.projectDir, shell).pipe(
+    Effect.provide(Layer.fresh(forgeHttpOnPath)),
+  );
 
   yield* bin.restore();
 

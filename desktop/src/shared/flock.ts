@@ -7,7 +7,15 @@ import * as Rpc from "effect/rpc/Rpc";
 import * as RpcGroup from "effect/rpc/RpcGroup";
 import { AguiEvent } from "./agui";
 import { Staged, StagedOrRefused } from "./attachments";
-import { About, Answers, ChatMessage, Conversations, DesktopTurn } from "./chat-view";
+import { ChatChoices } from "./chat-choices";
+import {
+  About,
+  Answers,
+  ChatMessage,
+  Conversations,
+  DesktopTurn,
+  HeldConversation,
+} from "./chat-view";
 import { Drawn } from "./scale";
 import { FlockSettings } from "./flock-settings";
 import { CleanupListing } from "./machine-cleanup";
@@ -361,6 +369,8 @@ export const DesktopSettings = Schema.Struct({
   chatHarness: Schema.optionalKey(Schema.String),
   /** The model the Flock chat runs on; unset is the harness's own default. */
   chatModel: Schema.optionalKey(Schema.String),
+  /** The effort the Flock chat runs at; unset is the harness's own default. */
+  chatEffort: Schema.optionalKey(Schema.String),
 });
 export type DesktopSettings = typeof DesktopSettings.Type;
 
@@ -373,6 +383,8 @@ export const DesktopSettingsChange = Schema.Struct({
   chatHarness: Schema.optionalKey(Schema.String),
   /** Empty unsets it. */
   chatModel: Schema.optionalKey(Schema.String),
+  /** Empty unsets it. */
+  chatEffort: Schema.optionalKey(Schema.String),
 });
 export type DesktopSettingsChange = typeof DesktopSettingsChange.Type;
 
@@ -632,8 +644,14 @@ export const DesktopRpcs = RpcGroup.make(
   /** The current conversation, as far as it has gone. */
   Rpc.make("transcript", { success: Schema.Array(ChatMessage) }),
   Rpc.make("conversations", { success: Conversations }),
-  /** Makes that conversation the current one, or a fresh one; the one before it ends. */
-  Rpc.make("reopen", { payload: { session: Schema.NullOr(Schema.String) } }),
+  /**
+   * Makes that conversation the current one, moving the chat to its harness, or a fresh one
+   * on the set harness; the one before it ends.
+   */
+  Rpc.make("reopen", {
+    payload: { conversation: Schema.NullOr(HeldConversation) },
+    error: ActionFailed,
+  }),
   /** Opens the chat in its own window, and succeeds when that window is closed. */
   Rpc.make("popOut"),
   /** Closes the chat's own window, which puts the chat back beside the board. */
@@ -641,7 +659,10 @@ export const DesktopRpcs = RpcGroup.make(
   /** When the Flock chat starts and ends a turn of Desktop's own. */
   Rpc.make("conversationChanges", { success: Schema.String, stream: true }),
   Rpc.make("desktopTurns", { success: DesktopTurn, stream: true }),
-  Rpc.make("settings", { success: DesktopSettings }),
+  /** Desktop's own settings, now and after every saved change. */
+  Rpc.make("settings", { success: DesktopSettings, stream: true }),
+  /** What the Flock chat holds, runs on and is offered, now and after each change. */
+  Rpc.make("chatChoices", { success: ChatChoices, stream: true }),
   /** How the board's window is drawn, again whenever its zoom is decided again. */
   Rpc.make("drawn", { success: Drawn, stream: true }),
   /** What the settings are now, or why the change was refused and nothing kept. */

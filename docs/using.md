@@ -1496,11 +1496,12 @@ default, and the same refusals as the TUI. Durations — `quiet_ms`, `idle_close
 number of them, and still stored in milliseconds, so `config.json` and `collie settings` are
 unchanged. **Reset to default**, shown while a setting is set, unsets it. Each says whether
 **Every Machine** shares it or it is for **This computer only**. Under **Chat**, the Flock
-chat's **Flock chat harness**, **Flock chat model**, **Machine rule** and **Flock chat speaks
-first** are this computer's, like the bell in the chat's header. The harness offers
-`claude` and `pi`; the model is a one-line field, with **Unset: opus** for Claude and
-**Unset: pi's own default** for Pi. It is checked as a Run's model is, including
-**More Claude Code models** and Pi's `provider/model` form, and a refusal saves nothing.
+chat's **Machine rule** and **Flock chat speaks first** are this computer's, like the bell in
+the chat's header. The chat's harness, model and effort have no rows here: they are chosen
+beside its message box ([The Flock chat](#the-flock-chat)).
+A change to this computer's settings reaches every Desktop window at once, wherever it was
+made: Settings, the bell and both chat windows show it as soon as it is saved, a choice made
+beside the message box or through `collie_chat_harness` included.
 The groups, names, descriptions and
 units live with each key in the one list of settings (`src/settings.ts`) that the TUI's
 Settings reads too, so a new setting shows up in both, except those for this computer only,
@@ -1814,10 +1815,40 @@ state directory, links followed, because a Run's state changes only through the 
 Machine whose Collie is too old for files is told to upgrade. There is no shell on a
 Machine.
 
-**Settings › Chat** names the Flock chat's harness and model, for this computer only.
-The harness offers `claude` and `pi`, using your own install and login on this computer.
+Three selects in the message box's footer, in both chat windows, choose the chat's
+harness, model and effort for this computer only. When the pane is narrow, they take the
+first line, with Attach and Send on the right of the next.
+A choice is saved at once, through the same checks as `collie_chat_harness`, and focus goes
+back to the message box. Settings › Chat has no rows for them.
+
+- **Harness** offers **Claude Code** (`claude`) and **Pi** (`pi`), using your own install and
+  login on this computer. One not installed is shown disabled, marked **Not installed on this
+  computer**.
+- **Model** starts with **Default · …**, named by the model an unset choice runs as and
+  described "What the chat runs with no model set"; choosing it unsets the model. Then come
+  Claude Code's own models with their names and descriptions, or Pi's with its own names. It can be searched,
+  and an id that is not listed is offered as **Use <id>**, ignoring surrounding whitespace
+  when you paste or type it. A typed model is checked as a
+  Run's model is.
+- **Effort** starts with **Default · …**, named by the level an unset effort runs at and
+  described "What the chat runs with no effort set", then the levels the model takes. For a
+  model that takes none it is disabled, dashed, reading "<model> takes no effort".
+
+A refused choice is shown in red above the message box, ending "Nothing was saved.", with
+**Dismiss**; nothing is saved.
+
+Claude Code's model list comes from your own install and login on this computer. Desktop
+reads it once per start, when the chat is first shown, with no turn started and no tokens
+spent, and keeps the successful list until it quits. Each model lists its own effort
+levels; Haiku 4.5 takes none. The menu says when the list is still being read and still lets
+you type an id. The first message waits at most 20 seconds for it. If the read fails or
+takes longer, the menu warns why and offers Collie's table, the Flock's **More Claude models**
+and the set model, named by id with the table's effort levels. A failed read is tried again
+when the list is next needed; a slow read can still replace the table once it arrives.
+
 Claude runs through the Agent SDK. Unset, its model is `opus`; a set model such as `sonnet`
-runs at medium effort with summarised thinking. None of your Claude settings, hooks, skills
+runs at medium effort, or the one set, with summarised thinking, unless the model lists no
+effort levels, in which case no effort is passed. None of your Claude settings, hooks, skills
 or CLAUDE.md loads, but your MCP servers do: those added at user scope (`claude mcp add
 --scope user`, read from `~/.claude.json` when each conversation starts) and your claude.ai
 connectors, such as Linear and Slack, signed in as Claude Code already is. Their tools ask
@@ -1829,14 +1860,41 @@ when you ask. Without a Helle token in Desktop it says how to make one. This wor
 harness.
 
 On Pi, write the model as `provider/model`, for example `openai-codex/gpt-6.1-sol`.
-Unset, Pi uses its configured default model and thinking level.
-Clearing a model override passes Pi's configured provider/model and thinking level explicitly,
-so reopening the same conversation does not restore its previous model override.
+Desktop reads the models and each model's thinking levels from your own Pi install and
+login, once per Desktop start. The reader runs offline, keeps no session, loads none of
+your extensions, skills, prompt templates or context files, and skips Pi's package check.
+Only the levels a model takes are offered; a non-reasoning model or one whose only level
+is `off` takes no effort. Reading, retries, the first message's 20-second wait and fallback
+work as for Claude Code; a failed read offers the Flock's **More Pi models** and the set
+model, named by id with the table's levels, and says why.
+Unset, the model is Pi's configured `defaultProvider/defaultModel`, or Pi's own default where
+none is configured. An unset effort is the level Pi configures for the model
+(`modelThinkingLevels`), else its `defaultThinkingLevel`, else `medium`, set model or not.
+A typed model absent from Pi's list still uses its own configured level; the selects,
+reply notice and chat's settings read show that same default.
+Where that level is unavailable, Desktop uses Pi's clamp: the next available level above
+it, or the highest available level if none is above. Below the lowest gives the lowest;
+above the highest gives the highest. A model that takes no effort is passed none.
+Desktop reads Pi's `settings.json` (under `PI_CODING_AGENT_DIR`, else `~/.pi/agent`) as each
+session opens, and passes the model and level explicitly, so reopening the same conversation
+does not restore an older override.
 Desktop starts `pi --mode rpc` on its login PATH, with Collie's system prompt and its own session directory.
 Explicit system and append sources exclude your `SYSTEM.md` and `APPEND_SYSTEM.md` files.
 None of your Pi extensions, skills, prompt templates or context files loads. Its own
 `read`, `bash`, `edit`, `write`, `grep`, `find` and `ls` tools reach this computer without
 asking first. Pi missing from PATH is said in the chat.
+
+The effort is chosen in its select, or by asking the chat, for example "answer at high
+effort from now on", which `collie_chat_harness` saves. Claude's levels range from `low` to
+`max`; Pi's from `off` to `max`, passed as `--thinking`. Each model offers its own subset.
+An effort the model does not list is refused with the ones it takes,
+and any effort on a model that lists none; nothing is saved. Another model keeps the effort
+only where it lists it, unsetting the model included. Unset, Claude runs at `medium` and Pi
+at its configured level clamped to the model's available levels. A new effort applies with the next message, in the same
+conversation; another harness unsets the model and the effort.
+Before a session opens, Desktop checks a saved explicit effort against the model list
+it obtained. If a choice saved before that read is unsupported, the message is refused
+with the available levels; the saved choice stays set for you to change or clear.
 
 Pi reaches Collie's tools, the five Machine file tools and AskUserQuestion through one
 streamable-HTTP MCP endpoint on `127.0.0.1`, started on its first session. A random bearer
@@ -1847,12 +1905,27 @@ endpoint remains until Desktop quits. Its
 24-hour tool timeout leaves time for a question click or a slow Machine read. A question
 in a turn Desktop starts is answered at once that the human is not in that turn.
 
-A model change waits for the turn under way to end, then the next message continues the
-same conversation on the new model. A harness change waits too, then starts a fresh
-conversation and clears its model; both chat windows reload it. Earlier conversations
-lists the current harness's history. Switching back to Claude shows its own conversations
-again. You can ask the chat to read or change these settings through `collie_chat_harness`,
-with the same checks as Settings.
+A change applies with the next message, yours or one of Desktop's own about News, and never
+to the turn under way. A new model continues the same conversation on it. A new harness
+unsets the model and the effort, and the conversation stays on screen, with its transcript,
+until the next message, which starts a new conversation on that harness.
+Above the message box, "Your next message starts a new conversation on <harness>." offers
+**Stay on <held harness>**. Stay restores the harness, model and effort this window last
+saw set on the conversation's harness; a window opened after the switch restores just the
+harness. Stay goes through the same checks as choosing. During a reply, a changed choice
+is named in "This reply finishes on <model · effort>. Your next message runs on
+<model · effort>." Default choices that resolve to what is already answering show no
+change notice.
+
+Earlier conversations lists every installed harness's history, ten at most, newest first, each
+marked **Claude Code** or **Pi** beside its date. Reopening one from another harness moves
+the chat to that harness, unsetting the model and the effort, and shows that conversation,
+never a new one; the menu's last line says so whenever it lists one. **Start fresh** stays on
+the set harness. You can ask the chat to read or change these settings through
+`collie_chat_harness`, with the same checks as the selects. Its read says what an unset
+model and effort run as, the harness the conversation is held on, what its session runs on
+now or that none is warm, and each installed harness's models with their efforts. It also
+says when a list is being read or comes from the table, and why a read failed.
 
 Your first message starts the session, and it stays warm between turns. Its session id
 and harness are kept in `$XDG_STATE_HOME/collie-desktop/flock-chat.json` (or
@@ -1871,6 +1944,13 @@ buttons, and goes on when you click; any other permission it asks for is refused
 while it is working and Enter queues your message as **Queued** until the turn ends, or
 drop it with its ✕. Ctrl+Enter sends it now instead: the turn under way, yours or one of
 Desktop's own, is interrupted and your message starts the next.
+The keys are unchanged: Enter sends or queues, Shift+Enter adds a line, and Ctrl+Enter
+sends now. While your own reply is submitted or streaming, Send becomes **Stop the reply**.
+Stop returns queued words to the message box, in queue order separated by blank lines,
+before anything already typed. Their files return to the attachments; an empty About chip
+gets the earliest queued message's card. Then the reply is interrupted. Desktop's own turn
+has no Stop. The message list is a busy log while a reply is under way; a polite status
+announces "Replying…", "Reply stopped" and new choice notices, and refusals are alerts.
 
 Paste a screenshot with Ctrl+V, in the docked or the popped-out chat, and it goes with your
 next message: a chip above the input with its thumbnail, name and size, which its ✕ removes.
@@ -1978,7 +2058,7 @@ and a Run the rule placed on another Machine still opens with Go to pane over th
 Machine's own connection.
 
 **Start fresh** (the pen) mints a new session and makes it current; the history (the clock)
-lists the earlier ones on this computer, newest first, and reopens one. Either way the
+lists the earlier ones on this computer, every harness's, newest first, and reopens one. Either way the
 session before it ends: there is only ever one live conversation. **Pop out** moves the
 chat into its own window, which follows the same conversation (between turns: a window
 the chat leaves would take its turn with it) and opens no board of its own, so no Machine is
@@ -2339,9 +2419,16 @@ to the branch is proved again before anything is asked.
 An `implement` Run starts one for you. Once its merge request is open, it asks **What
 next?**: answer **Release** from the card's answer menu, Desktop, chat or `collie run answer
 <run> Release --decision next`, and the release runs as its child, in its checkout and held
-to its Checks, or **Finish** to end there. To release it later, a succeeded implement Run
-whose merge request is still open offers **Release** in the card's Actions, through
-`collie run action`, and in chat: "release it" takes that offer.
+to its Checks. **Stage** starts a Stage Run of the unmerged merge request as its child, in
+the same checkout, and waits for testing to end. The Stage child's result or failure reason
+is recorded, then **What next?** is asked again with **Release**, **Stage** and **Finish**,
+as `next-2`, `next-3`, and so on. A failed Stage child still returns to that question.
+**Finish** ends with the merge request URL. `then=finish` and `then=release` ask nothing;
+`then` has no `stage` value, so an unattended Run never holds stage for testing.
+
+A succeeded implement Run whose merge request is still open offers **Release** and
+**Stage** in the card's Actions, through `collie run action`, and in chat, so it can be
+released or staged later: "release it" or "stage it" takes that offer.
 
 A reviewer's comment is taken up as it comes: the Run's agent fixes what holds and
 pushes, or disputes it, and Collie replies on the forge with the commit or the reason. An
@@ -2382,6 +2469,35 @@ Either way the Run holds the claim until the forge shows production carries the 
 application whose pipelines deploy nothing to stage is refused at the start. If a Run fails after
 it merged, **Release again** tags what it merged rather than merging anything again, and
 asks the second go afresh ([`release`](workflows.md#release)).
+
+## Staging a merge request for testing
+
+`collie run start stage --input mr=<target>` — or **stage** from the board's start menu, or
+"put !355 on stage" in chat — puts one open merge request's head on stage for you to test,
+unmerged, and nothing more. It does not wait for an approval, answered or resolved
+comments, a green pipeline or mergeability, asks for no go and runs none of the Run's
+checks: the stage checks of a merge request's pipeline run after its stage deploy anyway.
+It never merges, tags, pushes, posts or plays a production job. The target is the same as a
+review's, and the Run joins that merge request's Task.
+
+A merged merge request is refused, because its stage is its release's, and so is a closed
+one, a package, or an application whose merge request pipeline deploys nothing to stage.
+Otherwise it claims in Helle every project the stage deploys under, as a release does,
+plays the merge request pipeline's stage jobs at the head, and reads from the forge that
+every stage environment the pipeline deployed to carries it. Where a teammate holds some of
+those projects, it first asks **`claims-1`**: **Wait for all** queues for them, **Stage
+what is free** stages only the applications whose projects nobody else has, leaving the
+teammate's stage environments as they are, and **Finish** stages nothing. Then it asks
+**`staged-1`**, naming the head, the stage jobs at their addresses, any application left
+off and the claims it holds, while stage is yours to test:
+
+- **Done** rolls stage back, proves it off and gives the claims back.
+- **Stage again** stages the merge request's head as it is now, keeping the claims.
+- **Leave it on stage** gives the claims back and leaves stage as it is.
+
+A stage that fails is rolled back and its claims are given back; the Run fails saying what
+failed and offers **Stage again**. A rollback the forge cannot show fails the Run and keeps
+the claims ([`stage`](workflows.md#stage)).
 
 ## Your defaults
 

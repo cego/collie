@@ -174,20 +174,21 @@ export const boundProcesses = Effect.fn("Processes.boundProcesses")(function* (
   names: ReadonlyArray<string>,
 ) {
   const fs = yield* FileSystem.FileSystem;
-  const found: Array<{
-    readonly pid: number;
-    readonly started: string;
-    readonly bound: Record<string, string>;
-  }> = [];
-  for (const name of yield* fs.readDirectory(PROC).pipe(Effect.orElseSucceed(() => []))) {
-    const pid = Number(name);
-    if (!Number.isInteger(pid)) continue;
-    const started = yield* startedOf(pid);
-    if (started === null) continue;
-    const bound = yield* bindingsOf(pid, names);
-    if (bound !== null && Object.keys(bound).length > 0) found.push({ pid, started, bound });
-  }
-  return found;
+  const looked = yield* Effect.forEach(
+    yield* fs.readDirectory(PROC).pipe(Effect.orElseSucceed(() => [])),
+    (name) =>
+      Effect.gen(function* () {
+        const pid = Number(name);
+        if (!Number.isInteger(pid)) return null;
+        const started = yield* startedOf(pid);
+        if (started === null) return null;
+        const bound = yield* bindingsOf(pid, names);
+        return bound !== null && Object.keys(bound).length > 0 ? { pid, started, bound } : null;
+      }),
+    // One at a time, a busy machine's thousands of processes take seconds to read.
+    { concurrency: 32 },
+  );
+  return looked.filter((one) => one !== null);
 });
 
 /** Whether this process is still the one that was looked at. */

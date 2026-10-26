@@ -39,8 +39,10 @@ import {
   type Conversations,
   DESKTOP_SAID,
   type DesktopTurn,
+  harnessName,
+  type HeldConversation,
 } from "../shared/chat-view";
-import { type AgentChoice, pinned, said as choiceSaid } from "../../../src/harness-choice";
+import type { ChatChoices, Offer, Resolved } from "../shared/chat-choices";
 import { appendJournal } from "../../../src/journal";
 import { nowIso } from "../../../src/time";
 import { type ChatDriver, type ContentBlock, type DriverContext, TurnCost } from "./driver";
@@ -68,6 +70,7 @@ const SessionFile = Schema.fromJsonString(
 export interface ChatHarnessSet {
   readonly harness: string;
   readonly model: string | undefined;
+  readonly effort: string | undefined;
 }
 
 export interface FlockConversation {
@@ -86,15 +89,21 @@ export interface FlockConversation {
   readonly answer: (toolCallId: string, answers: Answers) => Effect.Effect<void>;
   readonly transcript: Effect.Effect<ReadonlyArray<ChatMessage>>;
   readonly conversations: Effect.Effect<Conversations>;
-  /** Ends the current session and makes that one current, or a fresh one. */
-  readonly reopen: (session: string | null) => Effect.Effect<void>;
+  /**
+   * Ends the current session and makes that conversation current, moving the chat to its
+   * harness; or a fresh one on the set harness. Why not, where that harness is refused.
+   */
+  readonly reopen: (conversation: HeldConversation | null) => Effect.Effect<string | null>;
   /** Something changed on a board: News may be waiting, worth a turn of Desktop's own. */
   readonly nudge: Effect.Effect<void>;
   /** When a turn of Desktop's own starts and ends. */
   readonly desktopTurns: Stream.Stream<DesktopTurn>;
   readonly changed: Stream.Stream<string>;
-  readonly refresh: Effect.Effect<void>;
+  /** The account of what the chat holds, runs on and is offered: now, and after each change. */
+  readonly choices: Stream.Stream<ChatChoices>;
 }
+
+type Held = Pick<ChatChoices, "heldOn" | "runsOn" | "turning">;
 
 /** A turn of Desktop's own, recorded as usage on this computer: data, never a limit. */
 const UsageLine = Schema.fromJsonString(
@@ -232,10 +241,25 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
   readonly setMachineRule: FlockChat["setMachineRule"];
   readonly inSync: FlockChat["inSync"];
   readonly helle?: FlockChat["helle"];
-  /** What the chat runs on, as Settings have it now, or why it cannot run. */
-  readonly choice: () =>
-    | { readonly ok: true; readonly choice: AgentChoice }
-    | { readonly ok: false; readonly problem: string };
+  /** What the chat's session opens on, as Settings have it now, or why it cannot run. */
+  readonly choice: () => Effect.Effect<
+    | { readonly ok: true; readonly choice: Resolved }
+    | { readonly ok: false; readonly problem: string },
+    never,
+    FileSystem.FileSystem | Path.Path
+  >;
+  /** What a harness offers now. */
+  readonly offered: (
+    harness: string,
+  ) => Effect.Effect<
+    Offer | { readonly from: "reading" },
+    never,
+    FileSystem.FileSystem | Path.Path
+  >;
+  /** Saved settings or Flock model changes that require a fresh account. */
+  readonly retold: Stream.Stream<unknown>;
+  readonly readModels?: (harness: string) => Effect.Effect<void>;
+  readonly modelsChanged?: Stream.Stream<unknown>;
   readonly chatHarness: () => ChatHarnessSet;
   readonly setChatHarness: FlockChat["setChatHarness"];
 }) {
@@ -258,8 +282,10 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
     Effect.runPromise(effect.pipe(Effect.provideContext(services)));
   /** The session warm now, if one is. */
   let live:
-    | { readonly running: Live; readonly scope: Scope.Closeable; readonly choice: AgentChoice }
+    | { readonly running: Live; readonly scope: Scope.Closeable; readonly choice: Resolved }
     | undefined;
+  /** The session a turn is under way on, if one is. */
+  let turning: Live | undefined;
   const flock: FlockChat = {
     machines: opts.machines,
     conversation: opts.conversation,
@@ -271,10 +297,13 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
     setMachineRule: opts.setMachineRule,
     inSync: opts.inSync,
     helle: opts.helle,
-    chatHarness: () => ({
-      ...opts.chatHarness(),
-      runsOn: live === undefined ? null : choiceSaid(pinned(live.choice)),
-    }),
+    chatHarness: opts.chatHarness,
+    chatChoices: Effect.suspend(() =>
+      Effect.forEach(
+        Object.entries(drivers).filter(([, driver]) => driver.installed),
+        ([harness]) => readModels(harness),
+      ).pipe(Effect.andThen(Effect.suspend(() => accountOf(SubscriptionRef.getUnsafe(held))))),
+    ),
     setChatHarness: opts.setChatHarness,
   };
   const usage = (yield* Path.Path).join(opts.dir, "flock-usage.jsonl");
@@ -316,17 +345,18 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
   });
 
   const drivers = Effect.isEffect(provided) ? yield* provided : provided;
+  const readModels = (harness: string) => opts.readModels?.(harness) ?? Effect.void;
 
   /** One session, live until its scope closes. */
-  const start = Effect.fnUntraced(function* (driver: ChatDriver, id: string, choice: AgentChoice) {
-    const session = yield* driver.open(id, pinned(choice).model, choice.effort ?? "");
+  const start = Effect.fnUntraced(function* (driver: ChatDriver, id: string, choice: Resolved) {
+    const session = yield* driver.open(id, choice.model, choice.effort);
     const events = yield* PubSub.unbounded<AguiEvent>();
     /** Why the session ended, once it has: every turn after it is told at once. */
     let ended: string | null = null;
     const endWith = (why: string) =>
       Effect.suspend(() => {
         ended = why;
-        return PubSub.publish(events, refusal(why));
+        return tell.pipe(Effect.andThen(PubSub.publish(events, refusal(why))));
       });
     yield* session.events.pipe(
       Stream.runForEach((event) => PubSub.publish(events, event)),
@@ -345,10 +375,18 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
   let id = Option.isSome(saved) ? saved.value.session : yield* crypto.randomUUIDv4;
   let heldOn = Option.isSome(saved) ? saved.value.harness : opts.chatHarness().harness;
   const changed = yield* SubscriptionRef.make(id);
+  const held = yield* SubscriptionRef.make<Held>({ heldOn, runsOn: null, turning: false });
+  const tell: Effect.Effect<void> = Effect.suspend(() =>
+    SubscriptionRef.set(held, {
+      heldOn,
+      runsOn: live?.running.ended() === null ? live.choice : null,
+      turning: turning !== undefined,
+    }),
+  );
   const remember = Effect.suspend(() =>
     fs
       .writeFileString(file, Schema.encodeSync(SessionFile)({ session: id, harness: heldOn }))
-      .pipe(Effect.andThen(SubscriptionRef.set(changed, id))),
+      .pipe(Effect.andThen(SubscriptionRef.set(changed, id)), Effect.andThen(tell)),
   );
   if (Option.isNone(saved)) yield* remember;
   /**
@@ -356,7 +394,7 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
    * that failed to start has; or why there is none.
    */
   const warm = Effect.gen(function* () {
-    const resolved = opts.choice();
+    const resolved = yield* opts.choice().pipe(Effect.provideContext(services));
     if (!resolved.ok) return resolved.problem;
     const { choice } = resolved;
     const driver = drivers[choice.harness];
@@ -366,35 +404,37 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
     if (
       live !== undefined &&
       live.running.ended() === null &&
-      choiceSaid(live.choice) === choiceSaid(choice)
+      live.choice.harness === choice.harness &&
+      live.choice.model === choice.model &&
+      live.choice.effort === choice.effort
     )
       return live.running;
-    yield* switchHarness;
+    yield* switchHarness(choice.harness);
     yield* end;
     const scope = yield* Scope.make();
     live = { running: yield* start(driver, id, choice).pipe(Scope.provide(scope)), scope, choice };
+    yield* tell;
     return live.running;
   });
   const end: Effect.Effect<void> = Effect.suspend(() => {
     const ending = live;
     live = undefined;
-    return ending === undefined ? Effect.void : Scope.close(ending.scope, Exit.void);
+    return ending === undefined
+      ? Effect.void
+      : Scope.close(ending.scope, Exit.void).pipe(Effect.andThen(tell));
   });
   yield* Effect.addFinalizer(() => end);
 
   const turns = yield* Semaphore.make(1);
-  const switchHarness = Effect.gen(function* () {
-    const harness = opts.chatHarness().harness;
-    if (harness === heldOn) return;
-    yield* end;
-    id = yield* crypto.randomUUIDv4;
-    heldOn = harness;
-    yield* remember;
-  }).pipe(Effect.orDie);
-  const refresh = turns.withPermits(1)(switchHarness).pipe(Effect.orDie);
+  const switchHarness = (harness: string) =>
+    Effect.gen(function* () {
+      if (harness === heldOn) return;
+      yield* end;
+      id = yield* crypto.randomUUIDv4;
+      heldOn = harness;
+      yield* remember;
+    }).pipe(Effect.orDie);
 
-  /** The session a turn is under way on, if one is. */
-  let turning: Live | undefined;
   // A throttle: the first board change in a while has Desktop look for News once things settle.
   let nudged = false;
   const nudge: Effect.Effect<void> = Effect.suspend(() => {
@@ -434,6 +474,7 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
         questions.clear();
         clicked.clear();
       }).pipe(
+        Effect.andThen(tell),
         Effect.andThen(
           finished
             ? Effect.void
@@ -453,6 +494,7 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
     // A turn of Desktop's carries its News in its message; the human's carries it as context.
     noticed = voice.said === undefined ? undefined : voice.news;
     turning = running;
+    yield* tell;
     yield* running.session.offer(content);
     let news = voice.news;
     return Stream.fromSubscription(heard).pipe(
@@ -491,7 +533,7 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
     const running = yield* warm;
     if (isString(running) || running.ended() !== null) return;
     const before = running.session.lastTurn();
-    const choice = pinned(live!.choice);
+    const choice = live!.choice;
     yield* SubscriptionRef.set(desktopTurns, "started");
     yield* turnOn(running, `${DESKTOP_SAID}\n${flockNewsText(fresh)}`, { news: fresh }).pipe(
       Effect.flatMap(Stream.runDrain),
@@ -517,6 +559,29 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
   yield* Effect.sync(() => {
     resting = false;
   }).pipe(Effect.andThen(nudge), Effect.repeat(Schedule.spaced(LOOK_AGAIN)), Effect.forkIn(scope));
+
+  const accountOf = (now: Held) =>
+    Effect.forEach(Object.entries(drivers), ([harness, driver]) =>
+      opts.offered(harness).pipe(
+        Effect.map((offered) => ({
+          harness,
+          label: harnessName(harness),
+          installed: driver.installed,
+          offered,
+        })),
+      ),
+    ).pipe(
+      Effect.map((harnesses): ChatChoices => ({ ...now, harnesses })),
+      Effect.provideContext(services),
+    );
+
+  yield* Stream.merge(
+    opts.retold.pipe(Stream.tap(() => readModels(opts.chatHarness().harness))),
+    opts.modelsChanged ?? Stream.empty,
+  ).pipe(
+    Stream.runForEach(() => tell),
+    Effect.forkScoped,
+  );
 
   const conversation: FlockConversation = {
     send: (text, about, now, attachments = []) =>
@@ -552,31 +617,53 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
       }),
     transcript: Effect.suspend(() => drivers[heldOn]?.transcript(id) ?? Effect.succeed([])),
     conversations: Effect.suspend(() =>
-      (drivers[heldOn]?.earlier(HISTORY + 1) ?? Effect.succeed([])).pipe(
-        Effect.map((sessions) => ({
+      Effect.forEach(
+        Object.entries(drivers).filter(([, driver]) => driver.installed),
+        ([harness, driver]) =>
+          driver
+            .earlier(HISTORY + 1)
+            .pipe(Effect.map((sessions) => sessions.map((one) => ({ ...one, harness })))),
+        { concurrency: "unbounded" },
+      ).pipe(
+        Effect.map((listed) => ({
           current: id,
-          earlier: sessions.filter(({ session }) => session !== id).slice(0, HISTORY),
+          earlier: listed
+            .flat()
+            .filter(({ session }) => session !== id)
+            .sort((a, b) => b.at - a.at)
+            .slice(0, HISTORY),
         })),
       ),
     ),
     // A turn under way is interrupted, and the session it ran on ends before the next starts.
-    reopen: (session) =>
+    reopen: (conversation) =>
       Effect.gen(function* () {
         if (turning !== undefined) yield* turning.session.interrupt;
-        yield* turns.withPermits(1)(
+        return yield* turns.withPermits(1)(
           Effect.gen(function* () {
+            const set = opts.chatHarness().harness;
+            if (conversation !== null && conversation.harness !== set) {
+              const refused = yield* opts.setChatHarness({ harness: conversation.harness });
+              if (refused !== null) return refused;
+            }
             yield* end;
-            id = session ?? (yield* crypto.randomUUIDv4);
-            heldOn = opts.chatHarness().harness;
+            id = conversation?.session ?? (yield* crypto.randomUUIDv4);
+            heldOn = conversation?.harness ?? set;
             yield* remember;
+            return null;
           }),
         );
       }).pipe(Effect.orDie),
     nudge,
     desktopTurns: SubscriptionRef.changes(desktopTurns),
     changed: SubscriptionRef.changes(changed),
-    refresh,
+    choices: Stream.unwrap(
+      Effect.suspend(() =>
+        readModels(opts.chatHarness().harness).pipe(
+          Effect.as(SubscriptionRef.changes(held).pipe(Stream.mapEffect(accountOf))),
+        ),
+      ),
+    ),
   };
-  yield* refresh;
   return conversation;
 });

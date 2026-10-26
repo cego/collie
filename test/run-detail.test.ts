@@ -2,12 +2,22 @@
 // change, with large items fetched by reference.
 
 import { expect, test } from "bun:test";
-import { Effect, Fiber, FileSystem, Option, Schedule, Schema, Stream } from "effect";
+import {
+  ConfigProvider,
+  Effect,
+  Fiber,
+  FileSystem,
+  Option,
+  Schedule,
+  Schema,
+  Stream,
+} from "effect";
 import { startedBy, type AuditLine } from "../src/audit";
 import type { RunDetail } from "../src/board-model";
 import { runDir } from "../src/engine";
 import { currentEnv } from "../src/env";
 import { appState } from "../src/flows";
+import { forgeHttpLayer } from "../src/forge/http";
 import { Herdr } from "../src/herdr";
 import { frontDoor, socketOf } from "../src/host";
 import { followRunDetail } from "../src/lifecycle";
@@ -19,7 +29,7 @@ import { runRowId } from "../src/ui/state";
 import { exec } from "./support/command";
 import { runEffect } from "./support/effect";
 import { FakeBin } from "./support/bin";
-import { forgeOnPath } from "./support/forge";
+import { forgeOnPath, serveForges } from "./support/forge";
 import { focus } from "./support/focus";
 import { stopHost } from "./support/host";
 import { collie, proves } from "./support/world";
@@ -148,17 +158,20 @@ test(
       "collie-detail-mr-",
       (world) =>
         Effect.gen(function* () {
-          const fs = yield* FileSystem.FileSystem;
-          const bin = `${world.home}/bin`;
-          yield* fs.makeDirectory(bin, { recursive: true });
-          const view = `{"iid":7,"state":"opened","title":"Cards","web_url":"https://gitlab.example.com/mk/project/-/merge_requests/7"}`;
-          yield* fs.writeFileString(
-            `${bin}/glab`,
-            `#!/bin/sh\n[ "$1" = mr ] && [ "$2" = view ] && echo '${view}'\nexit 0\n`,
-            { mode: 0o755 },
-          );
+          const bin = yield* FakeBin.make(`${world.home}/bin`);
+          const gitlab = yield* forgeOnPath(bin, "gitlab", {
+            installed: true,
+            loggedIn: ["gitlab.example.com"],
+            login: "me",
+            mrs: [
+              { project: "gitlab.example.com/mk/project", iid: "7", state: "open", title: "Cards" },
+            ],
+          });
+          const COLLIE_FORGE_API = yield* serveForges(gitlab);
+          yield* bin.restore();
           const runId = yield* started(world, ["targeted", "--input", `target=${MR}`], {
-            PATH: `${bin}:/usr/bin:/bin`,
+            PATH: `${bin.dir}:/usr/bin:/bin`,
+            COLLIE_FORGE_API,
           });
           const door = yield* frontDoor(socketOf(world.state));
           const detail = yield* door
@@ -303,7 +316,7 @@ test("an ended Run keeps its diff once its checkout has gone, file by file", () 
         const joined = Buffer.concat([head, tail].map((one) => Buffer.from(one.content, "base64")));
         expect(joined.toString()).toBe(kept.content);
       }),
-    ),
+    ).pipe(Effect.provide(forgeHttpLayer)),
   ));
 
 test("a kept diff is taken again once its branch has moved on", () =>
@@ -409,7 +422,7 @@ test("a reference never follows a link out of the directory it belongs to", () =
         const joined = parts.flatMap((part) => [...Buffer.from(part.content, "base64")]);
         expect(new TextDecoder().decode(new Uint8Array(joined))).toBe("a—b");
       }),
-    ),
+    ).pipe(Effect.provide(forgeHttpLayer)),
   ));
 
 test("an attachment is fetched by name, and never from outside the Run's attachments", () =>
@@ -433,7 +446,7 @@ test("an attachment is fetched by name, and never from outside the Run's attachm
         for (const ref of ["attachment:linked.png", "attachment:../log.txt"])
           expect((yield* fetchRef(run, ref).pipe(Effect.flip))._tag).toBe("HostRefused");
       }),
-    ),
+    ).pipe(Effect.provide(forgeHttpLayer)),
   ));
 
 test("a pipeline: reference says how a GitLab pipeline or a GitHub Actions run went", () =>
@@ -444,14 +457,14 @@ test("a pipeline: reference says how a GitLab pipeline or a GitHub Actions run w
         const state = yield* fs.makeTempDirectoryScoped({ prefix: "collie-pipeline-" });
         const bin = yield* FakeBin.make(`${state}/bin`);
         const runs = { "7": { status: "completed", conclusion: "failure" } };
-        yield* forgeOnPath(bin, "github", {
+        const github = yield* forgeOnPath(bin, "github", {
           installed: true,
           loggedIn: ["github.com"],
           login: "me",
           mrs: [],
           runs,
         });
-        yield* forgeOnPath(bin, "gitlab", {
+        const gitlab = yield* forgeOnPath(bin, "gitlab", {
           installed: true,
           loggedIn: ["gitlab.example.com"],
           login: "me",
@@ -459,10 +472,15 @@ test("a pipeline: reference says how a GitLab pipeline or a GitHub Actions run w
           runs: { "7": { status: "success" } },
         });
         const run = yield* madeRun(state, { state: "succeeded" });
+        const api = yield* serveForges(github, gitlab);
         const said = (ref: string) =>
           fetchRef(run, ref).pipe(
             Effect.map((file) => file.content),
             Effect.catch((refused) => Effect.succeed(`refused: ${refused.reason}`)),
+            Effect.provide(forgeHttpLayer),
+            Effect.provide(
+              ConfigProvider.layerAdd(ConfigProvider.fromUnknown({ COLLIE_FORGE_API: api })),
+            ),
           );
         expect(yield* said("pipeline:https://github.com/cego/collie/actions/runs/7")).toBe(
           "failure",

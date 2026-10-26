@@ -3,6 +3,7 @@
 
 import { Effect, Schema } from "effect";
 import { FORGES, forgeOfHost } from "./forge/forge";
+import type { ForgeHttp } from "./forge/http";
 import { projectFromRemote, type Runner } from "./mr";
 import { redact, scrub } from "./redact";
 
@@ -85,7 +86,7 @@ export const autoModeFacts = <R>(
   own: RunAuthority,
   run: Runner<R>,
   gitlabHost?: string,
-): Effect.Effect<AutoModeFacts, never, R> =>
+): Effect.Effect<AutoModeFacts, never, R | ForgeHttp> =>
   Effect.gen(function* () {
     const remote = yield* run("git", ["remote", "get-url", "origin"], session.cwd);
     const url = remote.code === 0 ? remote.stdout.trim() || null : null;

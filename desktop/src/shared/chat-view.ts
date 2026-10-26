@@ -43,14 +43,42 @@ export type DesktopTurn = typeof DesktopTurn.Type;
 export const Answers = Schema.Record(Schema.String, Schema.String);
 export type Answers = typeof Answers.Type;
 
+/** A conversation as its harness lists it. */
+export const Earlier = Schema.Struct({
+  session: Schema.String,
+  title: Schema.String,
+  at: Schema.Number,
+});
+export type Earlier = typeof Earlier.Type;
+
+/** A conversation and the harness it is held on. */
+export const HeldConversation = Schema.Struct({ session: Schema.String, harness: Schema.String });
+export type HeldConversation = typeof HeldConversation.Type;
+
+/** Each harness the chat runs on, by the name its maker gives it. */
+const HARNESS_NAMES = new Map([
+  ["claude", "Claude Code"],
+  ["pi", "Pi"],
+]);
+export const harnessName = (harness: string) => HARNESS_NAMES.get(harness) ?? harness;
+
 /** The current conversation and the earlier ones that can be reopened, newest first. */
 export const Conversations = Schema.Struct({
   current: Schema.String,
-  earlier: Schema.Array(
-    Schema.Struct({ session: Schema.String, title: Schema.String, at: Schema.Number }),
-  ),
+  earlier: Schema.Array(Schema.Struct({ ...Earlier.fields, harness: Schema.String })),
 });
 export type Conversations = typeof Conversations.Type;
+
+/** What opening a conversation held on another harness than `set` does, where one is listed. */
+export const earlierNote = (earlier: Conversations["earlier"], set: string) => {
+  const others = [
+    ...new Set(earlier.flatMap(({ harness }) => (harness === set ? [] : [harnessName(harness)]))),
+  ];
+  if (others.length === 0) return null;
+  return others.length === 1
+    ? `Opening a ${others[0]} conversation moves the chat to ${others[0]}.`
+    : `Opening a ${others.join(" or ")} conversation moves the chat to its harness.`;
+};
 
 const Named = Schema.Struct({
   run: Schema.optionalKey(Schema.String),

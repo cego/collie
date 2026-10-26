@@ -6,7 +6,7 @@ import { useAtomSet } from "@effect/atom-vue";
 import { DateTime, Effect, Exit, Option, Random, Schema, Semaphore } from "effect";
 import * as Base64 from "effect/encoding/Base64";
 import {
-  type Attached,
+  Attached,
   capRefusal,
   pastedName,
   scaledSize,
@@ -21,14 +21,14 @@ const pickAtom = FlockClient.mutation("pickFiles");
 const clipboardAtom = FlockClient.mutation("clipboardFiles");
 const fileAtom = FlockClient.mutation("attachmentFile");
 
-const decodePending = Schema.decodeUnknownOption(Schema.Array(Staged));
-const pending = ref<ReadonlyArray<Staged>>([]);
+const decodePending = Schema.decodeUnknownOption(Schema.Array(Attached));
+const pending = ref<ReadonlyArray<Attached>>([]);
 const windows = new BroadcastChannel("collie-attachments");
 windows.onmessage = (event) => {
   const told = decodePending(event.data);
   if (Option.isSome(told)) pending.value = told.value;
 };
-const share = (next: ReadonlyArray<Staged>) => {
+const share = (next: ReadonlyArray<Attached>) => {
   pending.value = next;
   windows.postMessage(next);
 };
@@ -172,6 +172,7 @@ export const useAttachments = () => {
         ),
       ),
     remove: (id: string) => share(pending.value.filter((one) => one.id !== id)),
+    restore: share,
     clear: () => {
       refused.value = null;
       share([]);

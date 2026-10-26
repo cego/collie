@@ -465,10 +465,11 @@ test("a judgement with no evaluator is skipped, and skipped is not passed", () =
   runEffect(
     Effect.gen(function* () {
       const dir = yield* checkout("hw-judge-");
+      const base = yield* committed(dir, { "a.ts": "export const a = 1;\n" });
       const out = yield* judge(judgementDeps(dir, "--print"), semanticIntent(), {
         runDir: dir,
         worktree: dir,
-        base: "HEAD",
+        base,
         at: "t0",
       });
       expect(out.judged.semantic).toBe(false);
@@ -486,6 +487,7 @@ test("a judgement whose evaluator cannot run is skipped saying why, not as missi
   runEffect(
     Effect.gen(function* () {
       const dir = yield* checkout("hw-judge-");
+      const base = yield* committed(dir, { "a.ts": "export const a = 1;\n" });
       const deps = judgementDeps(dir);
       const reason = "claude --help exited 1: The current working directory was deleted";
       yield* judge(
@@ -494,7 +496,7 @@ test("a judgement whose evaluator cannot run is skipped saying why, not as missi
           evaluator: { ...deps.evaluator, help: Effect.fail(new EvaluatorUnavailable({ reason })) },
         },
         semanticIntent(),
-        { runDir: dir, worktree: dir, base: "HEAD", at: "t0" },
+        { runDir: dir, worktree: dir, base, at: "t0" },
       );
       const lines = yield* readDrift(dir);
       expect(lines.map((line) => (line.kind === "skipped" ? line.reason : ""))).toEqual([
@@ -517,6 +519,61 @@ test("a judgement whose diff git cannot read is skipped in git's words, never ju
       const lines = yield* readDrift(dir);
       expect(lines.map((line) => (line.kind === "skipped" ? line.reason : ""))).toEqual([
         expect.stringContaining("the diff could not be read: git diff HEAD..HEAD"),
+      ]);
+    }),
+  ));
+
+const judgedWithNoCall = Effect.fn("DriftTest.judgedWithNoCall")(function* (
+  dir: string,
+  intent: Intent,
+  base: string,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const evaluator = yield* fakeEvaluator(dir);
+  yield* evaluator.reply(envelope({ result: { reports: [] } }));
+  const deps = judgementDeps(dir);
+  const out = yield* judge(deps, intent, { runDir: dir, worktree: dir, base, at: "t0" });
+  evaluator.restore();
+  expect(yield* fs.exists(`${dir}/pack.txt`)).toBe(false);
+  expect((yield* readBudget(deps.budgetFile)).filter((line) => line.kind === "reserve")).toEqual(
+    [],
+  );
+  return out;
+});
+
+test("a judgement with no change to cite is skipped without a call, and reads unverified", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const dir = yield* checkout("hw-judge-");
+      const out = yield* judgedWithNoCall(dir, semanticIntent(), "HEAD");
+      expect(out).toEqual({ judged: { semantic: false, truncated: false }, reports: [] });
+      const lines = yield* readDrift(dir);
+      expect(lines.map((line) => (line.kind === "skipped" ? line.reason : line.kind))).toEqual([
+        "no change to judge",
+      ]);
+      expect(alignment(semanticIntent(), lines, out.judged)).toEqual({
+        aligned: "unverified",
+        why: "a judgement was skipped: no change to judge",
+      });
+    }),
+  ));
+
+test("a judgement of named paths the change did not touch is skipped without a call", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const dir = yield* checkout("hw-judge-");
+      const base = yield* committed(dir, { "a.ts": "export const a = 1;\n" });
+      const docsOnly = semanticIntent({
+        constraints: semanticIntent().constraints.map((constraint) => ({
+          ...constraint,
+          paths: ["docs"],
+        })),
+      });
+      const out = yield* judgedWithNoCall(dir, docsOnly, base);
+      expect(out.judged.semantic).toBe(false);
+      const lines = yield* readDrift(dir);
+      expect(lines.map((line) => (line.kind === "skipped" ? line.reason : line.kind))).toEqual([
+        "no change to judge",
       ]);
     }),
   ));
@@ -595,12 +652,13 @@ test("a Run's own judgement is told its plan's constraints narrow the goal, whic
   runEffect(
     Effect.gen(function* () {
       const dir = yield* checkout("hw-judge-");
+      const base = yield* committed(dir, { "a.ts": "export const a = 1;\n" });
       const evaluator = yield* fakeEvaluator(dir);
       yield* evaluator.reply(envelope({ result: { reports: [] } }));
       yield* judge(judgementDeps(dir), semanticIntent(), {
         runDir: dir,
         worktree: dir,
-        base: "HEAD",
+        base,
         at: "t0",
       });
       evaluator.restore();
@@ -657,6 +715,7 @@ test("every judgement is made and recorded; none is refused over how many came b
   runEffect(
     Effect.gen(function* () {
       const dir = yield* checkout("hw-judge-");
+      const base = yield* committed(dir, { "a.ts": "export const a = 1;\n" });
       const evaluator = yield* fakeEvaluator(dir);
       yield* evaluator.reply(envelope({ result: { reports: [] }, total_cost_usd: 0.02 }));
 
@@ -666,14 +725,14 @@ test("every judgement is made and recorded; none is refused over how many came b
       const first = yield* judge(deps, semanticIntent(), {
         runDir: dir,
         worktree: dir,
-        base: "HEAD",
+        base,
         at: "t1",
       });
       expect(first.judged.semantic).toBe(true);
       const again = yield* judge({ ...deps, newId: Effect.succeed("call-2") }, semanticIntent(), {
         runDir: dir,
         worktree: dir,
-        base: "HEAD",
+        base,
         at: "t2",
       });
       evaluator.restore();

@@ -111,6 +111,10 @@ the release deploys. A monorepo deploys several, and Helle keeps a project for e
 repository's own group (`spilnu/frontend/monorepo` deploys `spilnu/frontend`'s `spilnu`), so
 the projects are the repository's own, plus each project of its group that an application
 or a deploy job's name names, unless the repository's `.collie/helle.json` names them.
+Each of those names a project by its slug or one of its Helle shorthands (`spilnu`'s `sn`),
+ignoring case. A name two projects answer to is unresolved, naming both, and nothing is
+guessed from part of a name. A resolved project is claimed, recorded and given back by its
+slug, because Helle's routes take the slug. The human asked for shorthands on 2026-10-22.
 Claims fail closed: where the projects cannot be settled, or a claim cannot be taken,
 nothing is merged or tagged and the human is asked; only their recorded say goes on without
 one. A release that went on "without one" merged and tagged a monorepo holding no claim.

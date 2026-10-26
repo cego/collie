@@ -153,6 +153,7 @@ import { serverSocket } from "./home";
 import { buildBoard, mrOf } from "./board";
 import { readForge, watchedMr, type MrPanels } from "./merges";
 import { shell } from "./mr";
+import { ForgeHttp, forgeHttpLayer } from "./forge/http";
 import { fetchRef, followDetail } from "./run-detail";
 import { buildRunDetail, type PlanCache } from "./views";
 import {
@@ -1143,6 +1144,7 @@ const frontDoorHandlers = (
       const reliance = yield* Reliance;
       const { env, herdr, bun, sweepers, listed, changed, ...shared } = yield* SharedBoard;
       const collecting = yield* Collecting;
+      const forgeHttp = yield* ForgeHttp;
       const boards = shared.boards.pipe(Stream.map((built) => built.views));
       const usage = yield* Usage;
       const schedules = yield* Schedules;
@@ -2493,6 +2495,7 @@ const frontDoorHandlers = (
                   ),
             ),
             Effect.provideContext(bun),
+            Effect.provideService(ForgeHttp, forgeHttp),
           ),
         board: () =>
           Stream.unwrap(
@@ -2826,6 +2829,7 @@ const own = (dir: string, checks: CheckProcessesApi) =>
           }).pipe(Layer.provideMerge(Layer.succeed(CheckProcesses, checks))),
         ),
         Layer.provide(yield* configuredAgents(dir, usage.readings)),
+        Layer.provide(forgeHttpLayer),
       ),
     );
   }).pipe(Effect.provide(usageLayer), Effect.orDie);

@@ -1,6 +1,6 @@
 # Workflows
 
-Collie ships nine workflows. This page is the "which one do I want" level: what each is
+Collie ships ten workflows. This page is the "which one do I want" level: what each is
 for, what it needs from you, and how they chain. The files under
 [`workflows/`](../workflows) are canonical for step-by-step behavior: each is a TypeScript
 module with its Markdown beside it as content ([the SDK](sdk.md)). Any of them is a fork
@@ -11,7 +11,7 @@ For what a Workflow, an operation, a Choice or a Run _is_, see [`CONTEXT.md`](..
 ## Choosing one
 
 A task that is not planning, building a change to a merge request, reviewing, releasing
-one, renovating or an architecture survey is `general`'s, never `implement` or `plan` stretched to fit.
+or staging one, renovating or an architecture survey is `general`'s, never `implement` or `plan` stretched to fit.
 
 ## How inputs reach a run
 
@@ -105,7 +105,12 @@ at most four review and fix rounds. Every commit is pushed, so the reviewers rea
 rather than the state before it. Before any reviewer sees a ticket, each of its acceptance
 criteria needs an answer, and one left unanswered or not met goes back to the builder. The
 criteria are read from the ticket again before each hand-back, so a ticket the planner
-amended is judged as it reads now. A ticket's `## After merge` outcomes are not criteria:
+amended is judged as it reads now. A ticket goes back twice at most, unless a hand-back leaves
+the tree as it found it and reports a blocking finding: another could not move that
+blocker, so the Run asks instead. The question names the ticket, the blockers and the
+criteria still unmet. **Hand back** reads the ticket again, goes on with no builder turn if
+nothing is unmet any more, and otherwise hands it back with two tries fresh. **Stop** fails
+the Run with that reason, before any review. A ticket's `## After merge` outcomes are not criteria:
 the merge request names them under **Not settled by the run**. A criterion only CI, a merge
 or a deploy can show may be answered `after merge: <reason>`: it does not end the Run, the
 reviewer blocks one the Run could have shown, and the merge request names the ticket, the
@@ -135,20 +140,26 @@ lists each with its command ([ADR-0055](adr/0055-a-run-never-asks-to-run-its-che
 
 **Ends:** with the merge request, then a question where `then` is empty. Once the merge
 request is open and its checks left to CI are settled, the Run asks **What next?**, named
-`next`, naming the merge request, with two answers:
+`next`, naming the merge request, with three answers:
 
 - **Release** starts a [`release`](#release) Run of the merge request as this Run's child,
   in this Run's own checkout and held to its Checks, and waits for it. The Run ends with
   `<merge request URL>; <the release's result>`, and a release that fails fails this Run
   with its reason. While the release waits on the review and the go, which can take days,
   this Run and its implementer stay live and idle.
+- **Stage** starts a [`stage`](#stage) Run of the merge request as this Run's child, in
+  this Run's checkout, and waits for it. Its result or failure reason is recorded, then
+  **What next?** is asked again as `next-2`, `next-3`, and so on, with the same three
+  answers. Each Stage child is named `stage-<n>`. A failed Stage child leaves the implement
+  Run asking what next; **Release** and **Finish** still end it as above and below.
 - **Finish** ends the Run with the merge request URL.
 
 `then=finish` ends at the merge request and `then=release` starts the release, without
 asking. A merge request set to merge itself once green is not asked about: the Run ends at
-it. A succeeded Run with a merge request also offers **Release** on its card, through
-`collie run action` and in chat, so it can be released later; once its merge request has
-merged, or anybody recorded what became of the work, it is not offered.
+it. `then` has no `stage` value: an unattended Run never starts a Stage child.
+A succeeded Run with a merge request also offers **Release** and **Stage** on its card,
+through `collie run action` and in chat, so it can be released or staged later; once its
+merge request has merged, or anybody recorded what became of the work, neither is offered.
 
 It fails with the reason there is no merge request — a ticket stopped
 on a blocking finding, acceptance criteria still unmet or unreadable, a review that halted — and says to
@@ -491,8 +502,10 @@ the later ones it holds or is queued for, and takes them again in order — aski
 take over any that were already the operator's — so two releases never each hold what the
 other waits for: the repository's own, and each
 project of the repository's group that an application the assessment named, or a deploy
-job's name (`stage:spilnu`), names — a monorepo needs several. A repository's
-`.collie/helle.json`, `{"projects": [...]}`, names them instead, and `[]` declares none.
+job's name (`stage:spilnu`), names, by the project's slug or one of its Helle shorthands,
+ignoring case — a monorepo needs several. A name two projects answer to is not guessed
+between: it is unsettled, naming both. A repository's `.collie/helle.json`,
+`{"projects": [...]}`, names them instead, by slug or shorthand, and `[]` declares none.
 Where they cannot be settled — an application with no project, nothing found, Helle
 refusing — nothing is merged or tagged: it asks **`go-<n>.claim.unclaimed`**, saying why,
 with **Try again**, **Release without a Helle claim**, recorded on its log as the human's
@@ -515,7 +528,9 @@ watches the tag pipeline's stage deploy and the repository's own stage checks
 (`e2e-stage`, smoke or the like), until the only jobs left are production jobs waiting
 for somebody to start them: a manual job on GitLab, which blocks the pipeline, or a job
 waiting on its environment's approval on GitHub. Collie then reads from the forge that
-the tag carries the merged commit, that stage's newest successful deployment carries it,
+the tag carries the merged commit, that stage's newest successful deployment carries it
+(this tag path still reads stage's newest deployment across the project, not each
+environment),
 that each named stage job passed, that every other job passed and none is still running or
 waiting to run, and that at least
 one production job waits to be started by hand. The pipeline's own state is not read: it
@@ -529,10 +544,16 @@ and keeps the claim.
 **Staging the merge request** tests it before anything is merged. The Run claims the
 repository and its `stage` step deploys the merge request's own pipeline at the go's head
 to stage, then runs the repository's stage checks there. Collie reads each stage job back
-on the merge request's head pipeline: every one passed, the head is still the go's, and
-stage's newest successful deployment carries that head. Where any of that does not hold,
-the `unstage` step rolls stage back to the newest release production carries; once the
-forge shows it there, the claim is given back, the failure is the finding of a fix round,
+on the merge request's head pipeline: every one passed and the head is still the go's. It
+then reads stage one environment at a time, as a monorepo deploys one stage environment per
+application: at least one staging environment has a deployment of the commit that pipeline
+ran on (its merge commit, for a merged-results pipeline), and the newest successful
+deployment of every such environment carries the head. A stage environment the pipeline
+never deployed to is not read. Where any of that does not hold, the failure names each
+environment that does not carry the head, and the `unstage` step rolls stage back to the
+newest release production carries; the rollback is read in exactly the environments the
+head reached, each of which must no longer carry the head and must carry production's
+newest. Once the forge shows that, the claim is given back, the failure is the finding of a fix round,
 and the Run goes back to the wait, so go 1 is asked again on the fixed head. A head that
 moved instead goes back to the wait with no fix round.
 
@@ -548,6 +569,9 @@ agent tags (where the tag's pipeline deploys stage too, it plays and checks thos
 production** then plays production with no further question, and **Leave production to
 me** plays nothing; either waits until the forge shows production carries the merge.
 **Finish** merges nothing, rolls stage back and ends with the merge request left open.
+Every rollback after staging the merge request is read in the stage environments the head
+reached; one that leaves any of them on the head, or off production's newest, fails
+the Run naming that environment and keeps the claim, so **Release again** takes it over.
 
 Choose **Stage the merge request** where you want to test the change on stage before it is
 on the default branch; choose **Merge, tag and stage** where reviewing it was enough and
@@ -580,6 +604,89 @@ Module: [`workflows/release.workflow.ts`](../workflows/release.workflow.ts), wit
 content in [`workflows/release.gitlab.md`](../workflows/release.gitlab.md) and
 [`workflows/release.github.md`](../workflows/release.github.md). Why it is shaped this way:
 [ADR-draft-a-merge-request-is-released-on-a-humans-go](adr/draft-a-merge-request-is-released-on-a-humans-go.md).
+
+## `stage`
+
+**For:** one open merge request's head put on stage for you to test, unmerged, and nothing
+more. It asks for no approval, answered or resolved comments, passed pipeline,
+mergeability or go, and runs none of the Run's checks: it changes nothing, and what it
+deploys is what the forge's own pipeline built. It never merges, tags, pushes, posts or
+plays a production job. A merge request you want released after testing is `release`'s
+**Stage the merge request**; one you only want to test is this.
+
+**Inputs:** `mr`, the merge request or pull request, as `release` takes it. A Stage Run on a
+merge request joins that merge request's Task.
+
+**Checkout:** the merge request's source branch, as `release`'s, only ever fast-forwarded. A
+refusal parks the Run with why.
+
+**What happens:** it reads the merge request once: a merged one fails, saying its stage is
+its release's, and a closed one fails. One agent assesses, read only and by release's own
+rule, whether the repository is a package or an application, and names the stage deploy
+jobs of its merge request pipelines: a package fails, and so does an application with
+none. Collie fast-forwards the checkout to the head, and reads in Helle who holds each
+project the stage deploys under, found as a Release Run finds them, by slug or Helle
+shorthand, joining no queue. Each application needs its own project and the repository's;
+with a `.collie/helle.json`, every application needs every project it declares. Where every
+project is free or already the operator's, it claims them all, as a Release Run does: in
+Helle's order, asking first to take over any already the operator's. Where someone else holds
+or queues for some of them, it asks **`claims-1`**, naming each such project and who has it:
+
+- **Wait for all** queues for every project in Helle's order, at no token cost, and stages
+  everything once all are handed over.
+- **Stage what is free** takes only the free projects, waiting for none, and stages only the
+  applications whose projects it holds: only their stage jobs are played, read back and
+  rolled back. An application it left is never played, retried or rolled back, so a
+  teammate's stage of it stays as it was. A project someone takes between the read and the
+  take is given back and left off too. It is offered only where it would stage something: a
+  stage job that names no application belongs to every one, and a declared set is all or
+  nothing.
+- **Finish** ends the Run, claiming and staging nothing.
+
+Where the claims cannot be settled it asks **`claim.unclaimed`** with **Try again**, **Stage
+without a Helle claim**, recorded on its log as the human's say, and **Finish**, which
+stages nothing.
+
+Holding them, it reads the head again and fast-forwards to it, as the claims may have
+waited, and the agent's `stage` step plays, retries and watches those jobs of the merge
+request's pipeline, and the stage checks after them. Collie reads stage back from the
+forge, one environment at a time, as `release` does: each stage job passed on the head's
+pipeline, and every stage environment those jobs deployed to carries the head. Other jobs'
+deployments of the same commit are left untouched. Where the head moved first, that head
+is staged in its turn, keeping the earlier head's environments in the rollback proof.
+On GitLab, a deployment at a different commit counts for an earlier head only when its
+job's pipeline ran at that deployment's commit on this merge request's merged-results
+ref and the head is a parent of that commit. An ordinary descendant does not count.
+Then it asks **`staged-<n>`**, in Needs you, naming
+the merge request, the head, each stage job at its address, each application left off with
+who holds its projects, and the claims it holds:
+
+- **Done** rolls stage back, proves it off in each environment the head reached, and gives
+  the claims back.
+- **Stage again** stages the merge request's head as it is then, keeping the claims, and
+  asks again. Under **Stage what is free** it also takes, free-only, any left-off project
+  that is free by then, and stages that application too.
+- **Leave it on stage** gives the claims back and leaves stage as it is.
+
+If refreshing claims for **Stage again** fails, the existing claims stay held. **Finish**
+rolls stage back before giving them back; continuing without the refresh stages only the
+applications the Run already holds.
+
+If Helle refuses a give-back, the Run parks with the names of the claims still held.
+Resuming retries the give-back before the Run can end.
+
+**Ends:** with `<mr> was staged at <head> for testing; stage is rolled back`, or `stage
+carries <mr> at <head>, unmerged`. A stage that fails is rolled back and proved off, its
+claims are given back, and the Run fails with `stage of <mr> at <head> failed: <why>; stage
+is back on what production carries`. A rollback the forge cannot show fails the Run and
+keeps the claims, including where the environments a stage attempt reached could not be
+discovered. A failed Run offers **Stage again** of the same merge request.
+
+Module: [`workflows/stage.workflow.ts`](../workflows/stage.workflow.ts), with its content in
+[`workflows/stage.gitlab.md`](../workflows/stage.gitlab.md) and
+[`workflows/stage.github.md`](../workflows/stage.github.md); the claims and the staging are
+[`workflows/staging.ts`](../workflows/staging.ts), shared with `release`. Why:
+[ADR-draft-an-open-merge-request-is-staged-by-a-run-of-its-own](adr/draft-an-open-merge-request-is-staged-by-a-run-of-its-own.md).
 
 ## `architecture`
 
@@ -672,6 +779,12 @@ Each names only what that step's content tells the agent to do:
   production carries, never a production job.
 - **`release`'s `production`**: playing exactly the production jobs the go named, at their
   addresses, and no other job.
+- **`stage`'s `stage`**: playing, retrying and watching the stage deploy jobs the assessment
+  named, by name, and the stage check jobs that follow them in the merge request's pipeline,
+  and rolling back only the stage environments those jobs deploy to — never a production
+  job.
+- **`stage`'s `unstage`**: rolling back only the stage environments those jobs deployed to,
+  to the newest release production carries, never a production job.
 
 Every other shipped step clears nothing.
 
@@ -691,13 +804,17 @@ Every other shipped step clears nothing.
 - `general` chains into nothing.
 - `release` chains into nothing; a failed one offers **Release again** of the same merge
   request.
+- `stage` chains into nothing; a failed one offers **Stage again** of the same merge request.
 - `self-improve` → `plan` with `then=implement`, once per Improvement, each its own card.
 - `implement` → `release`, on its merge request, from **Release** at its end, `then=release`,
   or the **Release** offer on a succeeded Run's card.
+- `implement` → `stage`, on its merge request, from **Stage** at its end or the **Stage**
+  offer on a succeeded Run's card. A Stage child returns to **What next?** however it ended.
 
 A chained run is a child of the one that started it, its input decoded against the child's
-own schema before it is admitted. It has a card of its own, the parent waits for it and
-ends with its result, and stopping the parent reaches it.
+own schema before it is admitted. It has a card of its own, the parent waits for it, and
+stopping the parent reaches it. The parent's Workflow decides whether to end with the
+child's result or ask what next again.
 
 ## `investigate`
 

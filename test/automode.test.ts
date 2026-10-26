@@ -46,7 +46,9 @@ const blockFor = (
         ? Effect.succeed({ code: 0, stdout: `${toplevels[cwd] ?? cwd}\n`, stderr: "" })
         : fake.run(cmd, args, cwd);
     const base: RunAuthority = { ...made(forge, "me/new-work"), roaming: false, started: null };
-    const facts = yield* autoModeFacts(SESSION, { ...base, ...own }, run);
+    const facts = yield* autoModeFacts(SESSION, { ...base, ...own }, run).pipe(
+      Effect.provide(fake.layer),
+    );
     return { block: autoModeBlock(facts), calls: fake.calls };
   });
 

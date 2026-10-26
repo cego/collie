@@ -101,11 +101,24 @@ export const ProductionReadSchema = Schema.Union([
 ]);
 export type ProductionRead = typeof ProductionReadSchema.Type;
 
-/** A merge request's head proved on stage, with its stage jobs; its head moved; or why not. */
+/**
+ * A merge request's head proved on stage, with its stage jobs and the stage environments it
+ * proved; its head moved; or why not, with the stage environments its pipeline reached where
+ * they could be read.
+ */
 export const StageReadSchema = Schema.Union([
-  Schema.TaggedStruct("Staged", { jobs: Schema.Array(JobLinkSchema) }),
-  Schema.TaggedStruct("Moved", { head: Schema.String }),
-  Schema.TaggedStruct("Failed", { why: Schema.String }),
+  Schema.TaggedStruct("Staged", {
+    jobs: Schema.Array(JobLinkSchema),
+    environments: Schema.Array(Schema.String),
+  }),
+  Schema.TaggedStruct("Moved", {
+    head: Schema.String,
+    environments: Schema.optionalKey(Schema.Array(Schema.String)),
+  }),
+  Schema.TaggedStruct("Failed", {
+    why: Schema.String,
+    environments: Schema.optionalKey(Schema.Array(Schema.String)),
+  }),
 ]);
 export type StageRead = typeof StageReadSchema.Type;
 
@@ -362,9 +375,12 @@ export const readProduction = Effect.fn("Releasing.readProduction")(function* <R
   return { _tag: "Play", jobs } satisfies ProductionRead;
 });
 
+const named = (names: ReadonlyArray<string>) => names.map((one) => `\`${one}\``).join(", ");
+
 /**
  * A merge request's head on stage: each of `jobs`, one at least, passed on the pipeline of its
- * head, that head is `head`, and stage's newest successful deployment carries it.
+ * head, and that head is `head`; at least one stage environment was deployed by those jobs
+ * at that pipeline's commit; and every such environment's newest successful deployment carries `head`.
  */
 export const readStage = Effect.fn("Releasing.readStage")(function* <R>(opts: {
   readonly cwd: string;
@@ -373,51 +389,116 @@ export const readStage = Effect.fn("Releasing.readStage")(function* <R>(opts: {
   readonly jobs: ReadonlyArray<string>;
   readonly run: Runner<R>;
 }) {
-  const failed = (why: string): StageRead => ({ _tag: "Failed", why });
+  const failed = (why: string, environments?: ReadonlyArray<string>): StageRead =>
+    environments === undefined ? { _tag: "Failed", why } : { _tag: "Failed", why, environments };
   if (opts.jobs.length === 0)
     return failed("no stage job of the merge request's pipeline was named");
   const on = `on the merge request's pipeline at ${short(opts.head)}`;
   const jobs: JobLink[] = [];
+  let unpassed: string | null = null;
+  let moved: string | null = null;
+  let commit = opts.head;
   for (const name of opts.jobs) {
     const job = yield* forgeOf(opts.ref).job(opts.ref, name, opts.cwd, opts.run);
-    if (!job.ok) return failed(`\`${name}\` could not be read: ${job.reason}`);
-    if (job.head !== opts.head) return { _tag: "Moved", head: job.head } satisfies StageRead;
-    if (job.state !== "passed")
-      return failed(`\`${name}\` has not passed ${on}: it is ${job.state}`);
+    if (!job.ok) {
+      unpassed ??= `\`${name}\` could not be read: ${job.reason}`;
+      continue;
+    }
+    if (job.head !== opts.head) {
+      moved = job.head;
+      continue;
+    }
+    if (job.merge !== null) commit = job.merge;
+    if (job.state !== "passed") unpassed ??= `\`${name}\` has not passed ${on}: it is ${job.state}`;
     jobs.push({ name, url: job.url ?? "" });
   }
-  const staging = yield* deployedOn(opts.ref, "staging", opts.cwd, opts.run);
-  if (!staging.ok) return failed(`stage could not be read: ${staging.reason}`);
-  const staged = staging.sha === null ? false : yield* carries(gitOf(opts), staging.sha, opts.head);
-  if (staged === null)
+  const staging = yield* forgeOf(opts.ref).stagingEnvironments(
+    opts.ref,
+    commit,
+    opts.cwd,
+    opts.run,
+    opts.jobs,
+  );
+  if (!staging.ok) return failed(unpassed ?? `stage could not be read: ${staging.reason}`);
+  const reached = staging.environments.filter((env) => env.hasCommit);
+  const environments = reached.map((env) => env.name);
+  if (moved !== null) return { _tag: "Moved", head: moved, environments } satisfies StageRead;
+  if (unpassed !== null) return failed(unpassed, environments);
+  if (reached.length === 0)
     return failed(
-      `stage's ${short(staging.sha ?? "")} could not be compared with ${short(opts.head)}`,
+      `stage does not carry ${short(opts.head)}: no stage environment has a deployment of ${short(commit)} by ${named(opts.jobs)}`,
+      environments,
     );
-  if (!staged) return failed(`stage does not carry ${short(opts.head)}`);
-  return { _tag: "Staged", jobs } satisfies StageRead;
+  const uncarried: string[] = [];
+  for (const env of reached) {
+    if (env.live === opts.head || env.live === commit) continue;
+    const staged = env.live === null ? false : yield* carries(gitOf(opts), env.live, opts.head);
+    if (staged === null)
+      return failed(
+        `\`${env.name}\`'s ${short(env.live ?? "")} could not be compared with ${short(opts.head)}`,
+        environments,
+      );
+    if (!staged) uncarried.push(env.name);
+  }
+  if (uncarried.length > 0)
+    return failed(`stage does not carry ${short(opts.head)} in ${named(uncarried)}`, environments);
+  return { _tag: "Staged", jobs, environments } satisfies StageRead;
 });
 
-/** Whether stage is shown back on what production carries, and off `off`. */
+/**
+ * Whether stage is shown back on what production carries, and off each of `off`: in each of
+ * `environments` by its newest successful deployment, or, where none are named, by stage's
+ * newest successful deployment.
+ */
 export const readRollback = Effect.fn("Releasing.readRollback")(function* <R>(opts: {
   readonly cwd: string;
   readonly ref: MrRef;
-  readonly off: string;
+  readonly off: ReadonlyArray<string>;
+  readonly environments?: ReadonlyArray<string>;
   readonly run: Runner<R>;
 }) {
   const unshown = (why: string): RollbackRead => ({ _tag: "Unshown", why });
   const git = gitOf(opts);
-  const staging = yield* deployedOn(opts.ref, "staging", opts.cwd, opts.run);
-  if (!staging.ok) return unshown(`stage could not be read: ${staging.reason}`);
+  const lives: Array<{ readonly where: string; readonly live: string | null }> = [];
+  if (opts.environments === undefined) {
+    const staging = yield* deployedOn(opts.ref, "staging", opts.cwd, opts.run);
+    if (!staging.ok) return unshown(`stage could not be read: ${staging.reason}`);
+    lives.push({ where: "", live: staging.sha });
+  } else if (opts.environments.length > 0) {
+    const staging = yield* forgeOf(opts.ref).stagingEnvironments(
+      opts.ref,
+      null,
+      opts.cwd,
+      opts.run,
+    );
+    if (!staging.ok) return unshown(`stage could not be read: ${staging.reason}`);
+    for (const name of opts.environments)
+      lives.push({
+        where: ` in \`${name}\``,
+        live: staging.environments.find((env) => env.name === name)?.live ?? null,
+      });
+  }
+  if (lives.length === 0) return { _tag: "Shown" } satisfies RollbackRead;
   const production = yield* deployedOn(opts.ref, "production", opts.cwd, opts.run);
   if (!production.ok) return unshown(`production could not be read: ${production.reason}`);
-  if (staging.sha === null) return unshown("stage has no successful deployment");
   if (production.sha === null) return unshown("production has no successful deployment");
-  const still = yield* carries(git, staging.sha, opts.off);
-  if (still === null) return unshown(`stage's ${short(staging.sha)} could not be compared`);
-  if (still) return unshown(`stage still carries ${short(opts.off)}`);
-  if ((yield* carries(git, staging.sha, production.sha)) !== true)
-    return unshown(
-      `stage's ${short(staging.sha)} does not carry production's ${short(production.sha)}`,
-    );
-  return { _tag: "Shown" } satisfies RollbackRead;
+  const why: string[] = [];
+  for (const { where, live } of lives) {
+    if (live === null) {
+      why.push(`stage has no successful deployment${where}`);
+      continue;
+    }
+    const still: string[] = [];
+    for (const head of opts.off) {
+      const carried = yield* carries(git, live, head);
+      if (carried === null) return unshown(`stage's ${short(live)}${where} could not be compared`);
+      if (carried) still.push(short(head));
+    }
+    if (still.length > 0) why.push(`stage still carries ${still.join(", ")}${where}`);
+    else if ((yield* carries(git, live, production.sha)) !== true)
+      why.push(
+        `stage's ${short(live)}${where} does not carry production's ${short(production.sha)}`,
+      );
+  }
+  return why.length === 0 ? ({ _tag: "Shown" } satisfies RollbackRead) : unshown(why.join("; "));
 });

@@ -329,7 +329,9 @@ always.
 The rule that keeps this honest: **nothing passes on an absence**. A verification nobody
 ran is a breach, not a pass. A judgement Collie could not make — no evaluator, a call that
 timed out or answered outside its schema — is recorded as `skipped` with the reason, so a
-card can say why it says nothing rather than reading as clean. A card names each reason
+card can say why it says nothing rather than reading as clean. So is a judgement with no
+change to judge: where the diff it would read holds no file, a report could cite nothing,
+so no call is made and the reason is `no change to judge`. A card names each reason
 once, however many boundaries it was skipped at, and a judgement that is made later answers
 the judgements skipped before it; one that fails afterwards takes nothing back. A skipped rule check is not answered by a judgement. A `claude --help` that
 fails or prints nothing is such a reason, said with its exit code and stderr, never read as

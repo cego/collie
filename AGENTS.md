@@ -102,7 +102,8 @@ here are in [`src/README.md`](src/README.md).
   `src/flows.ts`, `test/lifecycle.test.ts`.
 - **Inputs, strategies** → [ADR-0019](docs/adr/0019-a-strategy-not-a-field-name.md), `src/strategies.ts`,
   `src/inputs.ts`, `test/strategies.test.ts`.
-- **Forge** (`glab`, `gh`) → [ADR-0050](docs/adr/0050-a-merge-request-is-its-forges.md),
+- **Forge** (`glab`, `gh`, `forges`) → [ADR-0050](docs/adr/0050-a-merge-request-is-its-forges.md),
+  [ADR-draft-a-forge-is-asked-over-http-with-its-clis-login](docs/adr/draft-a-forge-is-asked-over-http-with-its-clis-login.md),
   [`docs/internals.md`](docs/internals.md#the-forge-boundary), `src/forge/`, `test/support/forge.ts`,
   `test/forge.test.ts`, `test/forge-boundary.test.ts`.
 - **Agent launch, prompt, Output** → [ADR-0020](docs/adr/0020-an-agent-is-launched-once-and-its-output-is-decoded.md),
@@ -118,7 +119,11 @@ here are in [`src/README.md`](src/README.md).
   [`docs/workflows.md`](docs/workflows.md#release), `workflows/release.workflow.ts`,
   `workflows/release.gitlab.md`, `workflows/release.github.md`, `src/review-wait.ts`,
   `src/releasing.ts`, `src/landing.ts`, `test/release-content.test.ts`, `test/review-wait.test.ts`,
-  `test/landing.test.ts`, `test/support/baseline.ts`.
+  `test/landing.test.ts`, `test/support/baseline.ts`. A **Stage Run** →
+  [ADR-draft-an-open-merge-request-is-staged-by-a-run-of-its-own](docs/adr/draft-an-open-merge-request-is-staged-by-a-run-of-its-own.md),
+  [`docs/workflows.md`](docs/workflows.md#stage), `workflows/stage.workflow.ts`,
+  `workflows/stage.gitlab.md`, `workflows/stage.github.md`, and the claims and staging both
+  share, `workflows/staging.ts`; `test/stage-content.test.ts`.
 - **Rallies, checks as proof** → [ADR-0023](docs/adr/0023-a-rally-is-a-loop-and-a-claim-is-not-proof.md),
   [ADR-0055](docs/adr/0055-a-run-never-asks-to-run-its-checks.md),
   [`docs/sdk.md`](docs/sdk.md#reviewing-and-fixing-until-it-converges), `settleRound`, `test/rally.test.ts`.

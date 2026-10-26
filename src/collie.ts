@@ -24,6 +24,7 @@ import { host } from "./commands/host";
 import { bridge } from "./commands/bridge";
 import { machine } from "./commands/machine";
 import { printResult } from "./envelope";
+import { forgeHttpLayer } from "./forge/http";
 import { err } from "./operations";
 
 export const app = root.pipe(
@@ -108,6 +109,7 @@ export const program = app.pipe(
     CliConfig.layer({ builtIns: [GlobalFlag.Help, GlobalFlag.Version, GlobalFlag.LogLevel] }),
   ),
   Effect.provide(jsonAsked ? Layer.succeed(Console.Console, consoleToStderr) : Layer.empty),
+  Effect.provide(forgeHttpLayer),
 );
 
 /** What was wrong with the command line, or that it stopped short of a command. */

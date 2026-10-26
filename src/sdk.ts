@@ -59,6 +59,7 @@ import type { Integration } from "./integrate";
 import type { MergeOutcome, Takeover } from "./landing";
 import type { ReviewHead, ReviewStanding } from "./review-wait";
 import type { FastForward, ProductionRead, RollbackRead, StageRead, TagRead } from "./releasing";
+import type { Holders } from "./helle";
 
 export { EXCLUSIVE_STRATEGIES } from "./strategies";
 
@@ -109,6 +110,8 @@ export {
   type StageRead,
   type TagRead,
 } from "./releasing";
+/** Who holds the shared claims a Run needs (`HostApi.holders`). */
+export { HoldersSchema, type Holders } from "./helle";
 
 export {
   CheckSchema,
@@ -201,6 +204,9 @@ export {
 
 /** A Check's proof on this tree, and which of a Run's Checks it runs itself. */
 export { checkProof, owedLocally, type CheckProof, type Unmatched } from "./check-proof";
+
+/** The fingerprint of a tree too large to measure: two of them are not the same tree. */
+export { TOO_LARGE } from "./verify";
 
 /**
  * Which of the five kinds of work a work source is. A workflow that reads a plan
@@ -592,10 +598,21 @@ export const definitionOf = (written: WrittenDefinition): WorkflowDefinition => 
  * from the attempt that first ran.
  */
 /** What `claim` holds, or why the claims a Run needs could not be settled. */
-export type Claimed = { readonly slugs: ReadonlyArray<string> } | { readonly unresolved: string };
+export type Claimed =
+  | {
+      readonly slugs: ReadonlyArray<string>;
+      /** What a free-only claim left to whoever holds it. */
+      readonly left?: ReadonlyArray<{ readonly slug: string; readonly holder: string }>;
+    }
+  | { readonly unresolved: string };
 
 const Holding = Schema.Union([
-  Schema.Struct({ slugs: Schema.Array(Schema.String) }),
+  Schema.Struct({
+    slugs: Schema.Array(Schema.String),
+    left: Schema.optionalKey(
+      Schema.Array(Schema.Struct({ slug: Schema.String, holder: Schema.String })),
+    ),
+  }),
   Schema.Struct({ unresolved: Schema.String }),
 ]);
 
@@ -788,7 +805,25 @@ export interface HostApi {
       readonly applications: ReadonlyArray<string>;
       readonly jobs: ReadonlyArray<string>;
     };
+    /**
+     * Takes only the projects nobody else holds or queues for and waits for none; `left`
+     * names each it did not take, and who has it.
+     */
+    readonly free?: boolean;
   }) => Effect.Effect<Claimed, WorkflowError | E, R>;
+  /**
+   * Who holds each shared claim `claim` would take for the same `deploys`, read without
+   * joining any queue, with the projects each application needs and the applications each
+   * deploy job names.
+   */
+  readonly holders: (options: {
+    readonly runId: string;
+    readonly cwd: string;
+    readonly deploys?: {
+      readonly applications: ReadonlyArray<string>;
+      readonly jobs: ReadonlyArray<string>;
+    };
+  }) => Effect.Effect<Holders, WorkflowError>;
   /**
    * Gives every claim back, and answers those Helle would not take, which stay recorded.
    * Only a Run that has finished its work releases: holding it across a consultation is
@@ -930,9 +965,12 @@ export interface HostApi {
   }) => Effect.Effect<ProductionRead>;
   /**
    * Reads the recorded merge request's head on stage from the forge, rather than from an
-   * Output: `Staged` where each of `jobs`, one at least, passed on its head's pipeline and
-   * stage's newest successful deployment carries `head`, with each job's address; `Moved`
-   * where its head is no longer `head`; else `Failed` with why. Take it inside an Activity.
+   * Output, one stage environment at a time: `Staged` where each of `jobs`, one at least,
+   * passed on its head's pipeline, and the newest successful deployment of every stage
+   * environment that pipeline deployed to, one at least, carries `head`, with each job's
+   * address and those environments; `Moved` where its head is no longer `head`; else `Failed`
+   * with why, and the environments the pipeline reached where they could be read. Take it
+   * inside an Activity.
    */
   readonly readStage: (options: {
     readonly runId: string;
@@ -941,13 +979,16 @@ export interface HostApi {
     readonly jobs: ReadonlyArray<string>;
   }) => Effect.Effect<StageRead>;
   /**
-   * Whether the forge shows stage rolled back: its newest successful deployment no longer
-   * carries `off` and carries what production's has. Take it inside an Activity.
+   * Whether the forge shows stage rolled back: the newest successful deployment of each of
+   * `environments` carries none of `off` and carries what production's has. Where
+   * `environments` is not given, stage's newest successful deployment is read instead. Take
+   * it inside an Activity.
    */
   readonly readRollback: (options: {
     readonly runId: string;
     readonly cwd: string;
-    readonly off: string;
+    readonly off: ReadonlyArray<string>;
+    readonly environments?: ReadonlyArray<string>;
   }) => Effect.Effect<RollbackRead>;
   /**
    * For a merged merge request this Run recorded: takes over the landing of the newest Run

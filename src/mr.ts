@@ -17,6 +17,7 @@ import {
   parseMrTarget,
 } from "./board-model";
 import { FORGES, forgeOf, forgeOfHost, type Forge } from "./forge/forge";
+import type { ForgeHttp } from "./forge/http";
 import type { MrReady, Posted } from "./sdk";
 
 export type Runner<R = never> = (
@@ -87,7 +88,7 @@ export function assignedTo<R>(
   who: string,
   cwd: string,
   run: Runner<R>,
-): Effect.Effect<boolean, never, R> {
+): Effect.Effect<boolean, never, R | ForgeHttp> {
   return Effect.gen(function* () {
     const panel = yield* forgeOf(mr).details(mr, cwd, run);
     return panel._tag === "Details" && panel.assignees.includes(who);
@@ -113,7 +114,7 @@ export function postNote<R>(
     readonly gitlabHost?: string;
   },
   run: Runner<R>,
-): Effect.Effect<Posted, never, R> {
+): Effect.Effect<Posted, never, R | ForgeHttp> {
   return Effect.gen(function* () {
     const mr = parseMrTarget(options.target);
     if (!mr)
@@ -242,7 +243,7 @@ export function productionCarries<R>(
   sha: string,
   run: Runner<R>,
   gitlabHost?: string,
-): Effect.Effect<boolean, never, R> {
+): Effect.Effect<boolean, never, R | ForgeHttp> {
   return Effect.gen(function* () {
     const here = yield* forgeHere(cwd, run, gitlabHost);
     if (!here.ok) return false;
@@ -260,7 +261,7 @@ export function autoMergingHere<R>(
   cwd: string,
   run: Runner<R>,
   gitlabHost?: string,
-): Effect.Effect<string | null, string, R> {
+): Effect.Effect<string | null, string, R | ForgeHttp> {
   return Effect.gen(function* () {
     const here = yield* forgeHere(cwd, run, gitlabHost);
     if (!here.ok) return null;
@@ -293,7 +294,7 @@ export function resolveAssignee<R>(
   forge: Forge,
   run: Runner<R>,
   project: string | null = null,
-): Effect.Effect<string | null, never, R> {
+): Effect.Effect<string | null, never, R | ForgeHttp> {
   return Effect.gen(function* () {
     if (configured !== undefined && isString(configured) && configured.trim() !== "")
       return configured.trim();
@@ -341,7 +342,7 @@ export function prepareMergeRequest<R>(
     readonly gitlabHost?: string;
   },
   run: Runner<R>,
-): Effect.Effect<MrReady, PlatformError, FileSystem.FileSystem | Path.Path | R> {
+): Effect.Effect<MrReady, PlatformError, FileSystem.FileSystem | Path.Path | R | ForgeHttp> {
   return Effect.gen(function* () {
     const unavailable = (reason: string): MrReady => ({
       ok: false,

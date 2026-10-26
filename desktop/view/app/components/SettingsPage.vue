@@ -13,15 +13,12 @@ import { drawnAtom, flockSettingsAtom } from "../flock";
 const emit = defineEmits<{ back: [] }>();
 const { openLink, saveGitlabHost, setFlockSetting } = useActions();
 const { credentials, trouble: credentialsTrouble } = useCredentials();
-const { desktopSettings, reread, change } = useDesktopSettings();
+const { desktopSettings, change } = useDesktopSettings();
 const toast = useToast();
 const { value: held, trouble } = useHeld(() => flockSettingsAtom);
 // Asked again on opening, which syncs every connected Machine and so shows their edits.
 const registry = injectRegistry();
-onMounted(() => {
-  registry.refresh(flockSettingsAtom);
-  void reread();
-});
+onMounted(() => registry.refresh(flockSettingsAtom));
 const sections = computed(() =>
   settingSections(held.value ?? NO_FLOCK_SETTINGS, desktopSettings.value),
 );

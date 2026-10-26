@@ -21,6 +21,8 @@ jobs:
           key: test-timings-${{ github.run_id }}
           restore-keys: test-timings-
       - run: bun install --frozen-lockfile
+      - run: bun install --frozen-lockfile
+        working-directory: desktop
       # The same script contributors run, so the local gate and CI cannot drift.
       - run: bun run check
       # `bun test` runs the sources; this runs the compiled entrypoint and JSON envelope.
@@ -66,8 +68,6 @@ jobs:
       - run: sh tools/verify-mac-app.sh desktop
       - run: ls desktop/artifacts
 
-  # Desktop's own install and types, which the root check cannot see: the root installs none
-  # of Desktop's dependencies.
   desktop:
     runs-on: ubuntu-latest
     steps:

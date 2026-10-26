@@ -564,6 +564,19 @@ implement Run's `Release` offer — on the card, from the CLI or from chat — o
 merge request it is (ADR-draft-a-merge-request-is-released-on-a-humans-go,
 ADR-draft-a-tasks-work-is-what-its-runs-worked-on).
 
+**Stage Run** — One execution of the `stage` Workflow: one open merge request's head put
+on stage for testing, unmerged. It is not a release. It asks for no approval, answered or
+resolved comments, passed pipeline, mergeability or **Go**. It never merges, tags, pushes,
+posts or plays a production job, and runs none of the Run's **Checks**, because it
+changes nothing. It holds the Helle claims, and never waits for one while it holds
+another. Where someone else holds some, it asks whether to wait for all or stage only what
+is free. Collie proves stage per environment from the forge. It holds stage until the
+human says `Done`, which rolls stage back, or `Leave it on stage`, and `Stage again` takes
+the head as it is then. A failed stage is rolled back. It starts from implement's "What
+next?", from a succeeded implement Run's `Stage` offer, or on its own, and it is the
+**Task**'s whose merge request it is
+(ADR-draft-an-open-merge-request-is-staged-by-a-run-of-its-own).
+
 **External review comment** — A comment on a merge request by anyone but the forge login
 Collie acts as, and not a bot's or the forge's own note. A reply in a thread is one of its
 own. A **Release Run** answers each one once: fixed, naming the commit, or disputed, saying
@@ -574,7 +587,8 @@ stage, merge, tag), and send one to production. It is asked on the Run once the 
 ready, never at its start. The first holds for one head: a head that moves takes it back.
 The second holds for what it sends. Before a merge, that is the head on stage, so the same
 rule applies. After one, it is one tag and the production jobs that tag names. Who answered
-is recorded, never a reason to refuse.
+is recorded, never a reason to refuse. Staging an open merge request without merging it is
+not one: a **Stage Run** asks for no Go, because its rollback takes it back.
 
 **Layer** — Where a definition is looked up, later wins by name. A Workflow is one `*.workflow.ts` entry, found project `.collie/workflows/` first, then the user's `~/.collie/user/workflows/`, then the installation's `workflows/`; a broken override is reported, never fallen through. A Persona is Markdown, found the same way: the project's `.collie/personas/`, then the user's `~/.collie/user/personas/`, then the installation's `personas/`. Forking takes a baseline definition into a later Layer. The user Layer's files are **shared definitions**: every Machine in a Flock holds the latest edit of each, its removal included, so the user Layer is the Flock's rather than one Machine's ([ADR-0061](docs/adr/0061-a-users-definitions-are-the-flocks.md)).
 
@@ -591,8 +605,9 @@ is recorded, never a reason to refuse.
 What each is for, what it needs, and how they chain: `docs/workflows.md`.
 
 - `plan` — interviews the human, then writes `SPEC.md` and one ticket per slice into its Run's plan directory (ADR-0002).
-- `implement` — builds from a work source, reviews what it built with the same pass `review` runs, loops on the findings, and opens or updates the merge request last, only where the evidence is there. Then it asks what next, unless started with `then=finish` or `then=release`: `Release` takes its merge request the rest of the way as a child **Release Run**. No architecture or simplification pass: those are work the change asks for, not work every Run does.
+- `implement` — builds from a work source, reviews what it built with the same pass `review` runs, loops on the findings, and opens or updates the merge request last, only where the evidence is there. Then it asks what next, unless started with `then=finish` or `then=release`: `Release` takes its merge request the rest of the way as a child **Release Run**, and `Stage` puts it on stage as a child **Stage Run**, after which it asks again. No architecture or simplification pass: those are work the change asks for, not work every Run does.
 - `release` — answers a merge request's External review comments until it is approved, then, on a Go, merges and tags it. An application is staged either from its merge request, for testing before the merge, or from its tag after it, and goes to production on a second Go.
+- `stage` — puts an open merge request's head on stage for testing, unmerged, with no approval or Go, under the Helle claims, until the human is done with it.
 - `review` — standalone; you pick the target; one complete review, and a synthesis that reconciles the reviewers where more than one axis is asked for.
 - `architecture` — runs the architect over the project and reports into its Run's plan directory.
 - `renovate` — claims the repository in Helle, merges or accounts for every Renovate Bot merge request, tags and watches the release, and records the result on the team's Renovate issue.

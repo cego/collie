@@ -17,6 +17,7 @@ const SHIPPED = [
   "renovate",
   "review",
   "self-improve",
+  "stage",
 ];
 
 /** Overrides the shipped general, so the user Layer's claim is the one read. */

@@ -171,7 +171,7 @@ export const sessionOptions = <Server>(opts: {
   readonly cwd: string;
   readonly session: { readonly resume: string } | { readonly sessionId: string };
   readonly model: string;
-  readonly effort: Effort;
+  readonly effort: Effort | undefined;
   readonly server: Server;
   readonly claude: string | null;
   readonly userServers: UserMcpServers;
@@ -188,7 +188,7 @@ export const sessionOptions = <Server>(opts: {
     ...opts.session,
     cwd: opts.cwd,
     model: opts.model,
-    effort: opts.effort,
+    ...(opts.effort !== undefined && { effort: opts.effort }),
     thinking: { type: "adaptive" as const, display: "summarized" as const },
     systemPrompt: systemPrompt(hostname()),
     tools: ["AskUserQuestion", ...BUILT_IN],

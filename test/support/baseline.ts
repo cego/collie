@@ -13,6 +13,7 @@ import type { ChildProcessSpawner } from "effect/process";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { hostname } from "node:os";
 import {
+  ConfigProvider,
   DateTime,
   Deferred,
   Duration,
@@ -35,7 +36,8 @@ import {
   CLI,
   FORGE_HOST,
   PROJECT,
-  forgeOnPath,
+  forgeOnPath as modelOnPath,
+  serveForges,
   type FakeJob,
   type FakeComment,
   type FakeMr,
@@ -44,6 +46,7 @@ import {
 import * as BunServices from "@effect/platform-bun/BunServices";
 import { readLanding, takeOver, writeLanding } from "../../src/landing";
 import { shell } from "../../src/mr";
+import type { ForgeHttp } from "../../src/forge/http";
 import { readCheckpoints } from "../../src/cards";
 import { mrLabel, mrTarget, type MrForge } from "../../src/board-model";
 import { AwaitingJson } from "../../src/awaiting";
@@ -85,7 +88,7 @@ import {
 } from "../../src/engine";
 import { VerifySpecSchema } from "../../src/verify-spec";
 import { findingsIn } from "../../src/output";
-import { collect, fingerprint, readVerifications } from "../../src/verify";
+import { FINGERPRINT_MAX_BYTES, collect, fingerprint, readVerifications } from "../../src/verify";
 import { inputsFor, offersFrom } from "../../src/offers";
 import { Store } from "../../src/store";
 import { everyRegistered, registerAgent, registryPath, scopeFor } from "../../src/registry";
@@ -104,14 +107,34 @@ const UNRELATED = {
   investigate: "find-the-cause",
   general: "odd-job",
   "self-improve": "look-back",
+  stage: "try-it-out",
 } as const;
 type Shipped = keyof typeof UNRELATED;
 
 let rig: Rig;
 let dir: string;
+let forgeApi = "";
+const forgeFaces = new Map<
+  MrForge,
+  {
+    readonly face: (input: string, init?: RequestInit) => Promise<Response>;
+  }
+>();
+const forgeOnPath = (bin: FakeBin, name: MrForge, model: ForgeModel) =>
+  modelOnPath(bin, name, model).pipe(
+    Effect.tap((forge) => Effect.sync(() => forgeFaces.set(name, forge))),
+  );
+const noGitlabMrs = (bin: FakeBin) =>
+  forgeOnPath(bin, "gitlab", {
+    installed: true,
+    loggedIn: [FORGE_HOST.gitlab],
+    login: "tester",
+    mrs: [],
+  });
 let started: ChildAsk[] = [];
 /** The invocations whose child ends in failure. */
 let failing = new Set<string>();
+let childWaits = new Map<string, Deferred.Deferred<void>>();
 let renamed = false;
 
 /** The public id a shipped workflow is run under in this pass. */
@@ -134,7 +157,7 @@ const scenario = (name: string, body: () => Promise<void>, timeout?: number) => 
 /** A test about the shipped modules themselves, which has one pass. */
 const shippedOnly: Array<() => void> = [];
 const once = (name: string, body: () => Promise<void>, timeout?: number) => {
-  shippedOnly.push(() => test(name, body, timeout));
+  shippedOnly.push(() => test(name, () => withForges(body), timeout));
 };
 
 /** The installation is this checkout, so the shipped personas are the ones found. */
@@ -165,14 +188,18 @@ const children = Layer.succeed(Children)(
         };
       }),
     result: (child) =>
-      failing.has(child.invocation)
-        ? Effect.fail(new WorkflowError({ reason: `${child.invocation} failed` }))
-        : Effect.succeed("done"),
+      Effect.gen(function* () {
+        const wait = childWaits.get(child.invocation);
+        if (wait !== undefined) yield* Deferred.await(wait);
+        if (failing.has(child.invocation))
+          return yield* Effect.fail(new WorkflowError({ reason: `${child.invocation} failed` }));
+        return "done";
+      }),
   }),
 );
 
 /** A host layer a test may wrap, for the one capability it has no service to answer with. */
-type HostOverride = Layer.Layer<Host, never, Host | BunServices.BunServices>;
+type HostOverride = Layer.Layer<Host, never, Host | BunServices.BunServices | ForgeHttp>;
 
 /** The host's own layers, placing checkouts through the rig's herdr. */
 const foundation = () => ({
@@ -210,7 +237,11 @@ const session = <A, E>(
         ? foundationLayer(foundation())
         : override.pipe(Layer.provideMerge(foundationLayer(foundation()))),
     ),
+    Effect.provide(
+      ConfigProvider.layerAdd(ConfigProvider.fromUnknown({ COLLIE_FORGE_API: forgeApi })),
+    ),
     Effect.scoped,
+    Effect.timeout("30 seconds"),
     Effect.orDie,
   );
 
@@ -383,6 +414,13 @@ const checkoutBranch = (runId: string, operation = "mr") =>
 const asked = (runId: string, operation: string) =>
   FileSystem.FileSystem.pipe(
     Effect.flatMap((fs) => fs.readFileString(`${dir}/agents/${runId}/${operation}.prompt.md`)),
+    Effect.orDie,
+  );
+
+/** Whether an operation was asked anything at all. */
+const wasAsked = (runId: string, operation: string) =>
+  FileSystem.FileSystem.pipe(
+    Effect.flatMap((fs) => fs.exists(`${dir}/agents/${runId}/${operation}.prompt.md`)),
     Effect.orDie,
   );
 
@@ -1448,10 +1486,19 @@ scenario(
         yield* repository();
         yield* exec(["git", "branch", "fix-the-guard"], { cwd: rig.projectDir });
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add(
-          "glab",
-          `[ "$1 $2" = "mr view" ] && echo '{"source_branch": "fix-the-guard"}'; exit 0`,
-        );
+        yield* forgeOnPath(bin, "gitlab", {
+          installed: true,
+          loggedIn: [FORGE_HOST.gitlab],
+          login: "tester",
+          mrs: [
+            {
+              project: "gitlab.example.com/group/project",
+              iid: "42",
+              state: "open",
+              sourceBranch: "fix-the-guard",
+            },
+          ],
+        });
         const target = "mr:gitlab.example.com/group/project!42";
         const rows = yield* parked({
           entry: shipped("review"),
@@ -1886,6 +1933,40 @@ scenario(
   120_000,
 );
 
+scenario("implement offers Stage as a follow-up on a succeeded Run with its merge request", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const declared = yield* loadEntry(shipped("implement")).pipe(
+        Effect.map((described) => declaredByModule(described.metadata)),
+        Effect.orDie,
+      );
+      const facts: ActionFacts = {
+        outcome: "feature",
+        succeeded: true,
+        branch: "feature",
+        mrUrl: OPENED.mr_url,
+        planIssues: 0,
+        disposed: false,
+        openFindings: 0,
+        diffTarget: null,
+        claim: null,
+      };
+      const offered = offersFrom(declared, facts, { self: idOf("implement") });
+      expect(offered.map((offer) => [offer.id, offer.title, offer.workflow])).toContainEqual([
+        "stage",
+        "Stage",
+        "stage",
+      ]);
+      const stage = offered.find((offer) => offer.id === "stage")!;
+      expect(inputsFor(stage, { runDir: "/r", facts, input: {} })).toEqual({ mr: OPENED.mr_url });
+      for (const over of [{ succeeded: false }, { mrUrl: null }, { disposed: true }])
+        expect(offersFrom(declared, { ...facts, ...over }).map((offer) => offer.id)).not.toContain(
+          "stage",
+        );
+    }),
+  ),
+);
+
 scenario("what a finished Run of each shipped module offers is the module's own declaration", () =>
   runEffect(
     Effect.gen(function* () {
@@ -1934,12 +2015,12 @@ scenario("what a finished Run of each shipped module offers is the module's own 
       expect(
         offersFrom(implement, facts({ succeeded: false, branch: "feature" })).map((o) => o.id),
       ).toEqual(["follow-up"]);
-      // A merge request still open is released later; a merged one, or none, is not.
       const mrUrl = "https://gitlab.example.com/group/project/-/merge_requests/7";
       const delivered = facts({ outcome: "feature", branch: "feature", mrUrl });
       const offered = offersFrom(implement, delivered, { self: idOf("implement") });
       expect(offered.map((o) => [o.id, o.title, o.workflow])).toEqual([
         ["release", "Release", "release"],
+        ["stage", "Stage", "stage"],
         ["follow-up", "Keep going on this", idOf("implement")],
       ]);
       expect(inputsFor(offered[0]!, { runDir: "/r", facts: delivered, input: {} })).toEqual({
@@ -2114,7 +2195,7 @@ const approve = (runId: string, names: ReadonlyArray<string>) =>
 const noMergeRequests = Effect.acquireRelease(
   Effect.gen(function* () {
     const bin = yield* FakeBin.make(`${rig.root}/bin`);
-    yield* bin.add("glab", "exit 0");
+    yield* noGitlabMrs(bin);
     return bin;
   }),
   (bin) => bin.restore(),
@@ -2211,7 +2292,7 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `[ "$1" = "api" ] && echo '{"username":"tester"}'; exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         const plan = yield* planOf([
           { file: "01-first.md", title: "the first one", checks: "unit" },
@@ -2278,7 +2359,7 @@ scenario(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `[ "$1" = "api" ] && echo '{"username":"tester"}'; exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         const plan = yield* planOf([
           { file: "01-first.md", title: "the first one", checks: "unit" },
@@ -2320,7 +2401,7 @@ scenario(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `[ "$1" = "api" ] && echo '{"username":"tester"}'; exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         const plan = yield* planOf([
           { file: "01-first.md", title: "the first one", checks: "unit" },
@@ -2363,7 +2444,7 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `[ "$1" = "api" ] && echo '{"username":"tester"}'; exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         const plan = yield* planOf([
           { file: "01-first.md", title: "the first one", checks: "unit", body: CRITERIA },
@@ -2436,7 +2517,7 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `[ "$1" = "api" ] && echo '{"username":"tester"}'; exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         const plan = yield* planOf([
           { file: "01-first.md", title: "the first one", checks: "unit", body: CRITERIA },
@@ -2475,7 +2556,7 @@ scenario(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `[ "$1" = "api" ] && echo '{"username":"tester"}'; exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         const plan = yield* planOf([
           { file: "01-first.md", title: "the first one", checks: "unit", body: CRITERIA },
@@ -2539,7 +2620,7 @@ scenario(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `[ "$1" = "api" ] && echo '{"username":"tester"}'; exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         const plan = yield* planOf([
           { file: "01-first.md", title: "the first one", checks: "unit", body: CRITERIA },
@@ -2599,7 +2680,7 @@ scenario(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `[ "$1" = "api" ] && echo '{"username":"tester"}'; exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         const plan = yield* planOf([
           { file: "01-first.md", title: "the first one", checks: "unit", body: CRITERIA },
@@ -2657,7 +2738,7 @@ scenario(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `[ "$1" = "api" ] && echo '{"username":"tester"}'; exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         const shared = [
           "## Acceptance criteria",
@@ -2716,7 +2797,7 @@ scenario(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `[ "$1" = "api" ] && echo '{"username":"tester"}'; exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         const plan = yield* planOf([
           { file: "01-first.md", title: "the first one", checks: "unit", body: CRITERIA },
@@ -2783,7 +2864,7 @@ scenario(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `[ "$1" = "api" ] && echo '{"username":"tester"}'; exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         const plan = yield* planOf([
           {
@@ -2829,7 +2910,7 @@ scenario(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `[ "$1" = "api" ] && echo '{"username":"tester"}'; exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         const plan = yield* planOf([
           { file: "01-first.md", title: "the first one", checks: "unit", body: CRITERIA },
@@ -2881,7 +2962,7 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `[ "$1" = "api" ] && echo '{"username":"tester"}'; exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         const plan = yield* planOf([
           { file: "01-first.md", title: "the first one", checks: "unit", body: CRITERIA },
@@ -2923,13 +3004,169 @@ scenario(
   120_000,
 );
 
+const COUNTED_ONLY = {
+  ...BUILT,
+  criteria: [
+    { criterion: "**Counted.** Every registry is counted once.", met: "test/count.test.ts" },
+  ],
+};
+const BLOCKED = {
+  ...COUNTED_ONLY,
+  verdict: "findings",
+  findings: [{ severity: "blocker", title: "the log service is down", detail: "nothing logs" }],
+  commits: [],
+};
+
+/** The stall question under `name` once it is open, or none if the Run ended first. */
+const stallAsked = (
+  run: {
+    readonly status: Effect.Effect<typeof RunStatus.Type>;
+    readonly asked: Effect.Effect<
+      ReadonlyArray<{ decision: string; prompt: string; options: string; answer: string | null }>
+    >;
+  },
+  name: string,
+) =>
+  until(
+    () => Effect.all([run.asked, run.status]),
+    ([rows, got]) =>
+      rows.some((row) => row.decision === name && row.answer === null) ||
+      got.status === "complete" ||
+      got.status === "failed",
+  ).pipe(Effect.map(([rows]) => rows.filter((row) => row.decision === name)));
+
+scenario(
+  "a criteria hand-back that changed nothing and reported a blocker asks, and Stop fails the Run before any review",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* noGitlabMrs(bin);
+        yield* repository();
+        const plan = yield* planOf([
+          { file: "01-first.md", title: "the first one", checks: "unit", body: CRITERIA },
+          { file: "02-second.md", title: "the second one", checks: "unit" },
+        ]);
+        yield* approve("r-stalled", ["unit"]);
+        yield* rig.queueOutputs([COUNTED_ONLY, BLOCKED, BLOCKED]);
+        const status = yield* driven(
+          { entry: shipped("implement"), runId: "r-stalled", input: { plan, ...FINISH } },
+          (run) =>
+            Effect.gen(function* () {
+              const rows = yield* stallAsked(run, "01-first.md.criteria-stalled-1");
+              expect(rows).toHaveLength(1);
+              const [question] = rows;
+              expect(question!.prompt).toContain("01-first.md");
+              expect(question!.prompt).toContain("the log service is down");
+              expect(question!.prompt).toContain("**Named.** Each one is named in the log.");
+              expect(question!.prompt).not.toContain("not answered: **Counted.**");
+              expect(optionsOf(rows, "01-first.md.criteria-stalled-1")).toEqual([
+                "Hand back",
+                "Stop",
+              ]);
+              expect((yield* prompts()).join("\n")).not.toContain(
+                "01-first.md.criteria-2.prompt.md",
+              );
+              yield* run.answer("01-first.md.criteria-stalled-1", "Stop");
+              return yield* ended(run.status);
+            }),
+        );
+        yield* bin.restore();
+
+        expect(status.status).toBe("failed");
+        const why = outcomeText(status);
+        expect(why).toContain(
+          "01-first.md: a criteria hand-back reported a blocker and changed nothing, so no review starts",
+        );
+        expect(why).toContain("**Named.** Each one is named in the log.");
+        const sent = (yield* prompts()).join("\n");
+        expect(sent).not.toContain("01-first.md.criteria-2.prompt.md");
+        expect(sent).not.toContain("review-1");
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "answering Hand back to a stalled criteria hand-back hands the ticket back again, and a second stall is asked anew",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* noGitlabMrs(bin);
+        yield* repository();
+        const plan = yield* planOf([
+          { file: "01-first.md", title: "the first one", checks: "unit", body: CRITERIA },
+          { file: "02-second.md", title: "the second one", checks: "unit" },
+        ]);
+        yield* approve("r-handed-again", ["unit"]);
+        yield* rig.queueOutputs([COUNTED_ONLY, BLOCKED, BLOCKED]);
+        const status = yield* driven(
+          { entry: shipped("implement"), runId: "r-handed-again", input: { plan, ...FINISH } },
+          (run) =>
+            Effect.gen(function* () {
+              expect(yield* stallAsked(run, "01-first.md.criteria-stalled-1")).toHaveLength(1);
+              yield* run.answer("01-first.md.criteria-stalled-1", "Hand back");
+              expect(yield* stallAsked(run, "01-first.md.criteria-stalled-2")).toHaveLength(1);
+              yield* run.answer("01-first.md.criteria-stalled-2", "Stop");
+              return yield* ended(run.status);
+            }),
+        );
+        yield* bin.restore();
+
+        expect(status.status).toBe("failed");
+        expect(yield* asked("r-handed-again", "01-first.md.criteria-2")).toContain(
+          "acceptance criterion not answered: **Named.** Each one is named in the log.",
+        );
+        expect((yield* prompts()).join("\n")).not.toContain("01-first.md.criteria-3.prompt.md");
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a blocked criteria hand-back on a tree too large to fingerprint is handed back again, not asked about",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* noGitlabMrs(bin);
+        yield* repository();
+        const big = `${rig.projectDir}/big.bin`;
+        yield* fs.writeFileString(big, "");
+        yield* fs.truncate(big, FINGERPRINT_MAX_BYTES + 1);
+        const plan = yield* planOf([
+          { file: "01-first.md", title: "the first one", checks: "unit", body: CRITERIA },
+          { file: "02-second.md", title: "the second one", checks: "unit" },
+        ]);
+        yield* approve("r-unmeasured", ["unit"]);
+        yield* rig.queueOutputs([COUNTED_ONLY, BLOCKED, BLOCKED]);
+        const status = yield* driven(
+          { entry: shipped("implement"), runId: "r-unmeasured", input: { plan, ...FINISH } },
+          (run) =>
+            Effect.gen(function* () {
+              expect(yield* stallAsked(run, "01-first.md.criteria-stalled-1")).toHaveLength(0);
+              return yield* ended(run.status);
+            }),
+        );
+        yield* bin.restore();
+
+        expect(status.status).toBe("failed");
+        expect(outcomeText(status)).toContain("after 2 hand-backs");
+        expect((yield* prompts()).join("\n")).toContain("01-first.md.criteria-2.prompt.md");
+      }),
+    ),
+  120_000,
+);
+
 scenario(
   "the criteria in a work source given as words are answered as a ticket's are",
   () =>
     runEffect(
       Effect.gen(function* () {
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `[ "$1" = "api" ] && echo '{"username":"tester"}'; exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         yield* approve("r-words", ["unit"]);
         yield* rig.queueOutputs([
@@ -3038,7 +3275,7 @@ scenario(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `[ "$1" = "api" ] && echo '{"username":"tester"}'; exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         // The plan is a planner Run's own, so that Run is in this one's lineage.
         const plan = yield* planOf(
@@ -3428,7 +3665,7 @@ scenario(
           asJson({ gitlab: { assignee: "someone-else" } }),
         );
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
         yield* approve("r-impl-mr", ["unit"]);
@@ -3458,7 +3695,7 @@ scenario(
 const delivering = (runId: string) =>
   Effect.gen(function* () {
     const bin = yield* FakeBin.make(`${rig.root}/bin`);
-    yield* bin.add("glab", `exit 0`);
+    yield* noGitlabMrs(bin);
     yield* repository();
     const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
     yield* approve(runId, ["unit"]);
@@ -3492,7 +3729,7 @@ scenario(
       Effect.gen(function* () {
         const runId = "r-impl-next";
         const { bin, plan, rows } = yield* deliveredAsking(runId);
-        expect(optionsOf(rows, "next")).toEqual(["Release", "Finish"]);
+        expect(optionsOf(rows, "next")).toEqual(["Release", "Stage", "Finish"]);
         expect(rows.find((row) => row.decision === "next")?.prompt).toContain(OPENED.mr_url);
 
         const result = yield* answered({
@@ -3506,6 +3743,104 @@ scenario(
 
         expect(said(result)).toBe(OPENED.mr_url);
         expect(started).toEqual([]);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "implement offers Stage beside Release, waits for each Stage child in its checkout, then asks again until Finish",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-impl-stage";
+        const { bin, plan } = yield* delivering(runId);
+        const staged = yield* Deferred.make<void>();
+        childWaits.set("stage-1", staged);
+        const status = yield* driven(
+          { entry: shipped("implement"), runId, input: { plan } },
+          (run) =>
+            Effect.gen(function* () {
+              const next = yield* goAsked(run.asked, "next");
+              expect(optionsOf([next], "next")).toEqual(["Release", "Stage", "Finish"]);
+              yield* run.answer("next", "Stage");
+              yield* until(
+                () => Effect.sync(() => started),
+                (now) => now.some((child) => child.invocation === "stage-1"),
+              );
+              expect((yield* run.asked).map((row) => row.decision)).not.toContain("next-2");
+              yield* Deferred.succeed(staged, undefined);
+              const again = yield* goAsked(run.asked, "next-2");
+              expect(optionsOf([again], "next-2")).toEqual(["Release", "Stage", "Finish"]);
+              yield* run.answer("next-2", "Stage");
+              const third = yield* goAsked(run.asked, "next-3");
+              expect(optionsOf([third], "next-3")).toEqual(["Release", "Stage", "Finish"]);
+              yield* run.answer("next-3", "Finish");
+              return yield* ended(run.status);
+            }),
+        );
+        yield* bin.restore();
+
+        expect(status.status).toBe("complete");
+        expect(outcomeText(status)).toBe(OPENED.mr_url);
+        expect(new Set(started.map((child) => child.invocation))).toEqual(
+          new Set(["stage-1", "stage-2"]),
+        );
+        expect(started).toContainEqual({
+          invocation: "stage-1",
+          workflow: "stage",
+          input: { mr: OPENED.mr_url },
+        });
+        expect(started).toContainEqual({
+          invocation: "stage-2",
+          workflow: "stage",
+          input: { mr: OPENED.mr_url },
+        });
+        const log = yield* runLog(runId);
+        expect(log).toContain("stage-1: done");
+        expect(log).toContain("stage-2: done");
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "implement offers Stage again after a Stage child fails, records its reason and can Release from the next question",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-impl-stage-fails";
+        const { bin, plan } = yield* delivering(runId);
+        failing = new Set(["stage-1"]);
+        const status = yield* driven(
+          { entry: shipped("implement"), runId, input: { plan } },
+          (run) =>
+            Effect.gen(function* () {
+              yield* goAsked(run.asked, "next");
+              yield* run.answer("next", "Stage");
+              const resumed = yield* until(
+                () => Effect.all({ status: run.status, rows: run.asked }),
+                (now) =>
+                  now.status.status === "failed" ||
+                  now.rows.some((row) => row.decision === "next-2" && row.answer === null),
+              );
+              expect(resumed.status.status).not.toBe("failed");
+              expect(optionsOf(resumed.rows, "next-2")).toEqual(["Release", "Stage", "Finish"]);
+              yield* run.answer("next-2", "Release");
+              return yield* ended(run.status);
+            }),
+        );
+        yield* bin.restore();
+
+        expect(status.status).toBe("complete");
+        expect(outcomeText(status)).toBe(`${OPENED.mr_url}; done`);
+        expect(started).toContainEqual({
+          invocation: "stage-1",
+          workflow: "stage",
+          input: { mr: OPENED.mr_url },
+        });
+        expect(yield* runLog(runId)).toContain("stage-1: stage-1 failed");
+        expect(started).toContainEqual(RELEASE_STARTED);
       }),
     ),
   120_000,
@@ -3614,7 +3949,7 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
         yield* approve("r-impl-minor", ["unit"]);
@@ -3651,7 +3986,7 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         const plan = yield* planOf([
           { file: "01-first.md", title: "the first one", checks: "unit" },
@@ -3713,7 +4048,7 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         const plan = yield* planOf([
           { file: "01-only.md", title: "the first one", checks: "unit" },
@@ -3751,7 +4086,7 @@ once(
     runEffect(
       Effect.gen(function* () {
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         const entry = yield* fork(
           "implement",
@@ -3847,7 +4182,7 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
         yield* approve("r-impl-fix", ["unit"]);
@@ -3935,7 +4270,7 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         // What a review module leaves behind: the prose a human reads and the findings a
         // card counts. There is no engine run record beside it, and there never will be.
@@ -3968,7 +4303,7 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `exit 0`);
+        yield* noGitlabMrs(bin);
         yield* ahead();
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
         // Approved, and it fails until repaired: an Output that says the tests pass is a claim,
@@ -4040,7 +4375,7 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
         yield* approve("r-gate-judged", ["unit"]);
@@ -4072,7 +4407,7 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
         yield* approve("r-gate-unproved", ["unit"]);
@@ -4110,7 +4445,7 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `exit 0`);
+        yield* noGitlabMrs(bin);
         yield* ahead();
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
         // Fails at the gate and on its recheck, then passes once the fix has run.
@@ -4159,7 +4494,7 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `exit 0`);
+        yield* noGitlabMrs(bin);
         yield* ahead();
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
         const count = `${rig.root}/runs`;
@@ -4316,7 +4651,7 @@ scenario(
           job: { name: "nuxi-job", url: `https://${PROJECT.gitlab}/-/jobs/1` },
         });
         expect(proof!.executable).toEndWith("/sh");
-        expect((yield* forge.calls()).some((call) => call.includes("/pipelines/3100/jobs"))).toBe(
+        expect(forge.requests().some((call) => call.url.includes("/pipelines/3100/jobs"))).toBe(
           true,
         );
       }),
@@ -4530,7 +4865,9 @@ scenario(
         const [proof, ...more] = yield* ciRecords(runId);
         expect(more).toEqual([]);
         expect(proof).toMatchObject({ name: "nuxi", end: { head_sha: fix.sha } });
-        expect((yield* forge.calls()).filter((call) => call.includes("/retry"))).toHaveLength(1);
+        expect(
+          forge.requests().filter((call) => call.method === "POST" && call.url.endsWith("/retry")),
+        ).toHaveLength(1);
         expect((yield* ciNotes(forge)).join("\n")).toContain(
           "ci fix 1 landed after the last review and was not re-reviewed",
         );
@@ -4571,7 +4908,9 @@ scenario(
         const fs = yield* FileSystem.FileSystem;
         expect(yield* fs.readFileString(`${runDir(dir, runId)}/log.txt`)).toContain(line);
         expect(yield* fs.exists(`${dir}/agents/${runId}/ci-fix-1.prompt.md`)).toBe(false);
-        expect((yield* forge.calls()).some((call) => call.includes("/retry"))).toBe(false);
+        expect(
+          forge.requests().some((call) => call.method === "POST" && call.url.endsWith("/retry")),
+        ).toBe(false);
         expect(yield* ciRecords(runId)).toEqual([]);
       }),
     ),
@@ -4767,7 +5106,7 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
         const runId = "r-gate-once";
@@ -4812,7 +5151,7 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `exit 0`);
+        yield* noGitlabMrs(bin);
         yield* ahead();
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
         const runId = "r-gate-fix-reruns";
@@ -4898,7 +5237,7 @@ const failingThen = (
 ) =>
   Effect.gen(function* () {
     const bin = yield* FakeBin.make(`${rig.root}/bin`);
-    yield* bin.add("glab", `exit 0`);
+    yield* noGitlabMrs(bin);
     yield* bin.add(
       "bun",
       `if [ "$(git log -1 --format=%s)" = first ]; then echo >> ${rig.root}/base-runs; ${options.atBase ?? ONE_PASSES}; else ${options.rerun}; fi`,
@@ -5308,7 +5647,7 @@ scenario(
 const stuck = (runId: string, names: ReadonlyArray<string>) =>
   Effect.gen(function* () {
     const bin = yield* FakeBin.make(`${rig.root}/bin`);
-    yield* bin.add("glab", `exit 0`);
+    yield* noGitlabMrs(bin);
     yield* approve(runId, [...names]);
     const fs = yield* FileSystem.FileSystem;
     yield* fs.writeFileString(
@@ -5483,7 +5822,7 @@ scenario(
 const heldUnproved = (runId: string) =>
   Effect.gen(function* () {
     const bin = yield* FakeBin.make(`${rig.root}/bin`);
-    yield* bin.add("glab", `exit 0`);
+    yield* noGitlabMrs(bin);
     yield* ahead();
     const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
     yield* approve(runId, ["unit", "lint"]);
@@ -5571,15 +5910,17 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
         const runId = "r-gate-new-tool";
         yield* approve(runId, ["unit", "lint"]);
         const fs = yield* FileSystem.FileSystem;
         const tool = `${rig.root}/tools/unit`;
+        const unitRuns = `${rig.root}/v2/unit-runs`;
         yield* fs.makeDirectory(`${rig.root}/tools`, { recursive: true });
-        yield* fs.writeFileString(tool, `#!/bin/sh\necho >> ${rig.root}/unit-runs\n`);
+        yield* fs.makeDirectory(`${rig.root}/v2`);
+        yield* fs.writeFileString(tool, `#!/bin/sh\necho >> ${unitRuns}\n`);
         yield* fs.chmod(tool, 0o755);
         yield* fs.writeFileString(
           `${evidenceDir(dir, runId)}/approved.json`,
@@ -5589,7 +5930,7 @@ scenario(
             counting(
               "lint",
               `${rig.root}/lint-runs`,
-              `grep -q v2 ${tool} || echo '# v2' >> ${tool}`,
+              `grep -Fqx '# v2' ${tool} || echo '# v2' >> ${tool}`,
             ),
           ]),
         );
@@ -5603,7 +5944,7 @@ scenario(
         yield* bin.restore();
 
         expect(said(result)).toBe(OPENED.mr_url);
-        expect(yield* runsOf(`${rig.root}/unit-runs`)).toBe(2);
+        expect(yield* runsOf(unitRuns)).toBe(2);
         expect(yield* runsOf(`${rig.root}/lint-runs`)).toBe(1);
       }),
     ),
@@ -5616,7 +5957,7 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
         const runId = "r-gate-new-tree";
@@ -5664,7 +6005,7 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
         yield* approve("r-impl-red-base", ["unit"]);
@@ -5711,7 +6052,7 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         const git = (...args: string[]) =>
           exec(["git", ...args], { cwd: rig.projectDir }).pipe(
@@ -5775,7 +6116,7 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
         yield* approve("r-impl-dispute", ["unit"]);
@@ -5827,7 +6168,7 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
         yield* approve("r-impl-weakened", ["unit"]);
@@ -5879,7 +6220,7 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
         yield* approve("r-final-dispute", ["unit"]);
@@ -5954,7 +6295,7 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
         yield* approve("r-final-stands", ["unit"]);
@@ -6027,7 +6368,7 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
         yield* approve("r-late-grant", ["unit"]);
@@ -6074,7 +6415,7 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
         yield* approve("r-early-dispute", ["unit"]);
@@ -6149,9 +6490,12 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `exit 0`);
-        // It answers for the branch's pull requests, and is otherwise not there.
-        yield* bin.add("gh", `[ "$1" = "pr" ] && { echo '[]'; exit 0; }; exit 127`);
+        yield* noGitlabMrs(bin);
+        // The HTTP login works, but the CLI needed to deliver is missing.
+        yield* bin.add(
+          "gh",
+          `[ "$*" = "auth token --hostname github.com" ] && { echo gho-fake; exit 0; }; exit 127`,
+        );
         yield* repository();
         yield* exec(["git", "remote", "set-url", "upstream", "git@github.com:team/project.git"], {
           cwd: rig.projectDir,
@@ -6500,7 +6844,7 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
         const runId = "r-impl-delivery-failed";
@@ -6535,7 +6879,7 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
         const runId = "r-impl-delivery-findings";
@@ -6565,9 +6909,12 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `exit 0`);
-        // It answers for the branch's pull requests, and is otherwise not there.
-        yield* bin.add("gh", `[ "$1" = "pr" ] && { echo '[]'; exit 0; }; exit 127`);
+        yield* noGitlabMrs(bin);
+        // The HTTP login works, but the CLI needed to deliver is missing.
+        yield* bin.add(
+          "gh",
+          `[ "$*" = "auth token --hostname github.com" ] && { echo gho-fake; exit 0; }; exit 127`,
+        );
         yield* repository();
         yield* exec(["git", "remote", "set-url", "upstream", "git@github.com:team/project.git"], {
           cwd: rig.projectDir,
@@ -6727,7 +7074,7 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "" }]);
         yield* approve("r-impl-none", []);
@@ -6780,7 +7127,7 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
         yield* approve("r-impl-named", []);
@@ -6817,7 +7164,7 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "" }]);
         yield* approve("r-impl-emptied", ["unit"]);
@@ -6931,7 +7278,7 @@ const renovatable = () =>
       }),
     );
     const bin = yield* FakeBin.make(`${rig.root}/bin`);
-    yield* bin.add("glab", `exit 0`);
+    yield* noGitlabMrs(bin);
     yield* repository();
     return bin;
   });
@@ -7388,10 +7735,10 @@ for (const name of ["gitlab", "github"] as const) {
           const waiting = `production to carry \`${head.slice(0, 8)}\` of ${url}, holding the claim on \`project\``;
           const polled = (more: number) =>
             Effect.gen(function* () {
-              const before = (yield* forge.calls()).length;
+              const before = forge.requests().length;
               yield* until(
-                () => forge.calls(),
-                (calls) => calls.length >= before + more,
+                () => Effect.sync(forge.requests),
+                (requests) => requests.length >= before + more,
               );
             });
 
@@ -7517,8 +7864,8 @@ scenario(
                 (on) => on !== "",
               );
               yield* until(
-                () => forge.calls(),
-                (calls) => calls.some((call) => call.includes("deployments")),
+                () => Effect.sync(forge.requests),
+                (requests) => requests.some((request) => request.url.includes("deployments")),
               );
               const fs = yield* FileSystem.FileSystem;
               yield* fs.writeFileString(controlPath(dir, HOLD, runId), "").pipe(Effect.orDie);
@@ -7833,7 +8180,7 @@ const releaseHost = (
   Layer.effect(Host)(
     Effect.gen(function* () {
       const host = yield* Host;
-      const services = yield* Effect.context<BunServices.BunServices>();
+      const services = yield* Effect.context<BunServices.BunServices | ForgeHttp>();
       let replies = 0;
       return Host.of({
         ...host,
@@ -7842,6 +8189,7 @@ const releaseHost = (
           host
             .reply(asked)
             .pipe(Effect.tap(() => (++replies >= stallAfterReplies ? Effect.never : Effect.void))),
+        holders: () => Effect.succeed({ _tag: "Read", projects: [], applications: [], jobs: [] }),
         // As the host's own claim, one a replay takes again is the one the Run already holds.
         claim: (options) =>
           helle !== undefined
@@ -7905,6 +8253,7 @@ const driven = <A, E>(
       ReadonlyArray<{ decision: string; prompt: string; options: string; answer: string | null }>
     >;
     readonly answer: (decision: string, value: string) => Effect.Effect<void>;
+    readonly resume: Effect.Effect<void>;
   }) => Effect.Effect<A, E, FileSystem.FileSystem>,
 ) =>
   session(
@@ -7921,6 +8270,7 @@ const driven = <A, E>(
         return yield* drive({
           status: engine.poll(made.workflow, id).pipe(Effect.map((got) => pollStatus(got, ""))),
           asked: store.asked(options.runId),
+          resume: engine.resume(made.workflow, id),
           answer: (decision, value) =>
             answerDecision(made, { name: decision, executionId: id, value }).pipe(
               Effect.orDie,
@@ -8999,9 +9349,10 @@ for (const name of ["gitlab", "github"] as const) {
 }
 
 /** Whether a failed Release Run on `target` offers Release again. */
-const releaseAgainOffered = (target: string) =>
+/** Whether a failed Run of `name` on `target` is offered its followUp `id`. */
+const followUpOffered = (name: Shipped, id: string, target: string) =>
   Effect.gen(function* () {
-    const declared = yield* loadEntry(shipped("release")).pipe(
+    const declared = yield* loadEntry(shipped(name)).pipe(
       Effect.map((described) => declaredByModule(described.metadata)),
       Effect.orDie,
     );
@@ -9016,10 +9367,10 @@ const releaseAgainOffered = (target: string) =>
       diffTarget: target,
       claim: "project",
     };
-    return offersFrom(declared, facts, { self: idOf("release") }).some(
-      (offer) => offer.id === "release-again",
-    );
+    return offersFrom(declared, facts, { self: idOf(name) }).some((offer) => offer.id === id);
   });
+
+const releaseAgainOffered = (target: string) => followUpOffered("release", "release-again", target);
 
 /** The jobs of an application's tag pipeline, in the order each forge's job read numbers them. */
 const TAG_JOBS = ["build", "deploy-stage", "e2e-stage", "deploy-production"] as const;
@@ -9043,7 +9394,7 @@ const stagedTag = (name: MrForge) => ({
 
 /** Where stage and production are, by the commit each one's newest successful deployment has. */
 const deploys = (stage: string, production: string) => [
-  { name: "stage", tier: "staging", deployed: stage },
+  { name: "stage", tier: "staging", deployed: stage, job: "deploy-stage" },
   { name: "production", tier: "production", deployed: production },
 ];
 
@@ -9349,6 +9700,7 @@ for (const name of ["gitlab", "github"] as const) {
               expect(production.prompt).toContain(`stage carries \`${merged.slice(0, 8)}\``);
               expect(production.prompt).toContain(waiting(name));
               expect(claimed).toEqual([`claim ${runId}`]);
+              expect(yield* wasAsked(runId, "production")).toBe(false);
               const played = yield* now({ environments: deploys(merged, merged) });
               yield* rig.queueOutputs([
                 APP_ASSESSED,
@@ -10059,11 +10411,244 @@ for (const name of ["gitlab", "github"] as const) {
           const model = yield* forge.model();
           yield* bin.restore();
           expect(outcomeText(status)).toBe(
-            `stage of ${mr} at ${head.slice(0, 8)} failed: \`e2e-stage\` has not passed on the merge request's pipeline at ${head.slice(0, 8)}: it is failed. Its rollback is not shown: stage still carries ${head.slice(0, 8)}`,
+            `stage of ${mr} at ${head.slice(0, 8)} failed: \`e2e-stage\` has not passed on the merge request's pipeline at ${head.slice(0, 8)}: it is failed. Its rollback is not shown: stage still carries ${head.slice(0, 8)} in \`stage\``,
           );
           expect(model.merges ?? []).toEqual([]);
           expect(claimed).toEqual([`claim ${runId}`]);
           expect(yield* releaseAgainOffered(target)).toBe(true);
+        }),
+      ),
+    120_000,
+  );
+
+  const MONOREPO_JOBS = ["build", "deploy-stage-spilnu", "deploy-stage-happytiger"] as const;
+  const monorepoJob = (job: (typeof MONOREPO_JOBS)[number]) => {
+    const id = MONOREPO_JOBS.indexOf(job) + 1;
+    return name === "gitlab"
+      ? `https://${PROJECT.gitlab}/-/jobs/${id}`
+      : `https://github.com/owner/repo/runs/${id}`;
+  };
+  const MONOREPO_STAGED = {
+    ...MONOREPO_ASSESSED,
+    stage_jobs: { merge_request: ["deploy-stage-spilnu", "deploy-stage-happytiger"], tag: [] },
+  };
+  const live = (sha: string) => ({ sha, status: "success" as const });
+
+  /**
+   * A monorepo's merge request, ready, whose pipeline deploys `stage-spilnu` and
+   * `stage-happytiger`, both on the commit production carries. `stage-web`, which its pipeline
+   * never deploys to, is on a commit of its own and is listed first, as the newest deployment.
+   * `onStage` is the forge once the stage step deployed the head to both and `happytiger`'s
+   * deployments followed.
+   */
+  const perEnvironment = Effect.gen(function* () {
+    const made = yield* stageable(name);
+    type Deployments = ReadonlyArray<{
+      readonly sha: string;
+      readonly status: "success" | "failed";
+    }>;
+    const environments = (spilnu: Deployments, happytiger: Deployments) => [
+      { name: "stage-web", tier: "staging", deployments: [live("web-only")] },
+      { name: "stage-spilnu", tier: "staging", job: "deploy-stage-spilnu", deployments: spilnu },
+      {
+        name: "stage-happytiger",
+        tier: "staging",
+        job: "deploy-stage-happytiger",
+        deployments: happytiger,
+      },
+      { name: "production", tier: "production", deployments: [live(made.base)] },
+    ];
+    const model: ForgeModel = {
+      ...made.model,
+      environments: environments([live(made.base)], [live(made.base)]),
+      mrs: made.model.mrs.map((one) => ({
+        ...one,
+        jobs: MONOREPO_JOBS.map((job) => ({ name: job, state: "passed" as const })),
+      })),
+    };
+    yield* made.forge.set(model);
+    const staged = [live(made.head), live(made.base)];
+    const onStage = (happytiger: Deployments): ForgeModel => ({
+      ...model,
+      environments: environments(staged, happytiger),
+    });
+    const rolledBack = (happytiger: Deployments): ForgeModel => ({
+      ...model,
+      environments: environments([live(made.base), ...staged], happytiger),
+    });
+    return { ...made, model, staged, onStage, rolledBack };
+  });
+  const MONOREPO_STAGE = { verdict: "clean", stage_jobs: [] };
+  const monorepoJobs = `\`deploy-stage-spilnu\` at ${monorepoJob("deploy-stage-spilnu")}, \`deploy-stage-happytiger\` at ${monorepoJob("deploy-stage-happytiger")}`;
+
+  scenario(
+    `release on ${name}: per environment, a merge request staged on only one of its two stage environments merges nothing, and the fix round names the other`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, forge, head, base, onStage, rolledBack } = yield* perEnvironment;
+          claimed.length = 0;
+          const runId = `r-env-one-${name}`;
+          const happytiger = [{ sha: head, status: "failed" as const }, live(base)];
+          yield* rig.queueOutputs([
+            MONOREPO_STAGED,
+            { writes: [forge.holding(onStage(happytiger))], output: MONOREPO_STAGE },
+            { writes: [forge.holding(rolledBack(happytiger))], output: UNSTAGED },
+            DISPUTED_FIX,
+          ]);
+          const status = yield* driven(options(runId), (run) =>
+            Effect.gen(function* () {
+              yield* goAsked(run.asked, "go-1");
+              yield* run.answer("go-1", "Stage the merge request");
+              yield* goAsked(run.asked, "go-2");
+              expect((yield* run.asked).map((row) => row.decision)).not.toContain("production");
+              yield* run.answer("go-2", "Finish");
+              return yield* ended(run.status);
+            }),
+          );
+          const model = yield* forge.model();
+          yield* bin.restore();
+          expect(outcomeText(status)).toBe(`${mr} was left open`);
+          expect(model.merges ?? []).toEqual([]);
+          expect(claimed).toEqual([`claim ${runId}`, `release ${runId}`]);
+          const finding = yield* asked(runId, "fix-1");
+          expect(finding).toContain(
+            `stage does not carry ${head.slice(0, 8)} in \`stage-happytiger\``,
+          );
+          expect(finding).not.toContain("`stage-spilnu`");
+        }),
+      ),
+    120_000,
+  );
+
+  scenario(
+    `release on ${name}: per environment, a merge request on both its stage environments asks the production go naming both stage jobs, whatever another environment carries`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, forge, head, base, staged, onStage, rolledBack } = yield* perEnvironment;
+          claimed.length = 0;
+          const runId = `r-env-both-${name}`;
+          yield* rig.queueOutputs([
+            MONOREPO_STAGED,
+            { writes: [forge.holding(onStage(staged))], output: MONOREPO_STAGE },
+            { writes: [forge.holding(rolledBack([live(base), ...staged]))], output: UNSTAGED },
+          ]);
+          const prompt = yield* driven(options(runId), (run) =>
+            Effect.gen(function* () {
+              const production = yield* tested(run);
+              yield* run.answer("production", "Finish");
+              yield* ended(run.status);
+              return production.prompt;
+            }),
+          );
+          yield* bin.restore();
+          expect(prompt).toContain(head.slice(0, 8));
+          expect(prompt).toContain(monorepoJobs);
+        }),
+      ),
+    120_000,
+  );
+
+  scenario(
+    `release on ${name}: per environment, Finish rolls back only the stage environments the head reached, whatever another environment carries`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, forge, staged, onStage, rolledBack, base } = yield* perEnvironment;
+          claimed.length = 0;
+          const runId = `r-env-finish-${name}`;
+          yield* rig.queueOutputs([
+            MONOREPO_STAGED,
+            { writes: [forge.holding(onStage(staged))], output: MONOREPO_STAGE },
+            { writes: [forge.holding(rolledBack([live(base), ...staged]))], output: UNSTAGED },
+          ]);
+          const status = yield* driven(options(runId), (run) =>
+            Effect.gen(function* () {
+              yield* tested(run);
+              yield* run.answer("production", "Finish");
+              return yield* ended(run.status);
+            }),
+          );
+          yield* bin.restore();
+          expect(outcomeText(status)).toBe(`${mr} was left open, and stage rolled back`);
+          expect(claimed).toEqual([`claim ${runId}`, `release ${runId}`]);
+        }),
+      ),
+    120_000,
+  );
+
+  scenario(
+    `release on ${name}: per environment, a rollback that leaves one stage environment on the head fails the Run naming it, keeps the claim and offers Release again`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, forge, head, staged, onStage, rolledBack } = yield* perEnvironment;
+          claimed.length = 0;
+          const runId = `r-env-partial-${name}`;
+          yield* rig.queueOutputs([
+            MONOREPO_STAGED,
+            { writes: [forge.holding(onStage(staged))], output: MONOREPO_STAGE },
+            { writes: [forge.holding(rolledBack(staged))], output: UNSTAGED },
+          ]);
+          const status = yield* driven(options(runId), (run) =>
+            Effect.gen(function* () {
+              yield* tested(run);
+              yield* run.answer("production", "Finish");
+              return yield* ended(run.status);
+            }),
+          );
+          const model = yield* forge.model();
+          yield* bin.restore();
+          expect(outcomeText(status)).toBe(
+            `${mr} was left open, but stage was not rolled back. Its rollback is not shown: stage still carries ${head.slice(0, 8)} in \`stage-happytiger\``,
+          );
+          expect(model.merges ?? []).toEqual([]);
+          expect(claimed).toEqual([`claim ${runId}`]);
+          expect(yield* releaseAgainOffered(target)).toBe(true);
+        }),
+      ),
+    120_000,
+  );
+
+  scenario(
+    `release on ${name}: attribution proves every old-head environment off before returning a claim after a move during staging`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, forge, head, staged, onStage, rolledBack } = yield* perEnvironment;
+          claimed.length = 0;
+          const runId = `r-release-moved-env-${name}`;
+          const later = yield* pushedBySomebody(head);
+          const changed = (model: ForgeModel): ForgeModel => ({
+            ...model,
+            mrs: model.mrs.map((mr) => ({ ...mr, head: later })),
+            checksAt: { [head]: model.mrs[0]?.jobs ?? [] },
+            environments: model.environments?.filter((env) => env.name !== "stage-web"),
+          });
+          yield* rig.queueOutputs([
+            MONOREPO_STAGED,
+            { writes: [forge.holding(changed(onStage(staged)))], output: MONOREPO_STAGE },
+            { writes: [forge.holding(changed(rolledBack(staged)))], output: UNSTAGED },
+          ]);
+          const status = yield* driven(options(runId), (run) =>
+            Effect.gen(function* () {
+              yield* goAsked(run.asked, "go-1");
+              yield* run.answer("go-1", "Stage the merge request");
+              const status = yield* until(
+                () => Effect.all([run.status, run.asked]),
+                ([status, asked]) =>
+                  status.status === "failed" || asked.some((q) => q.decision === "go-2"),
+              );
+              expect(status[0].status).toBe("failed");
+              return status[0];
+            }),
+          );
+          yield* bin.restore();
+          expect(outcomeText(status)).toContain(
+            `stage still carries ${head.slice(0, 8)} in \`stage-happytiger\``,
+          );
+          expect(claimed).toEqual([`claim ${runId}`]);
         }),
       ),
     120_000,
@@ -10106,6 +10691,1006 @@ for (const name of ["gitlab", "github"] as const) {
           expect(reasonOf(neither)).toBe(
             `${mr} is an application with no stage deploy that Collie can prove, on its merge request's pipeline or its tags', so nothing was released: a stage and a production environment`,
           );
+          expect(claimed).toEqual([]);
+        }),
+      ),
+    120_000,
+  );
+}
+
+/** The tags on origin, which a Stage Run never pushes. */
+const originTags = () =>
+  exec(["git", "ls-remote", "--tags", "origin"], { cwd: rig.projectDir }).pipe(
+    Effect.map((ran) => ran.stdout.trim()),
+  );
+
+for (const name of ["gitlab", "github"] as const) {
+  const { mr, url, target } = RELEASING[name];
+  const options = (runId: string, host = releaseHost()) => ({
+    entry: shipped("stage"),
+    runId,
+    input: { mr: target },
+    host,
+  });
+  const stageJobs = `\`deploy-stage\` at ${mrJob(name, "deploy-stage")}, \`e2e-stage\` at ${mrJob(name, "e2e-stage")}`;
+  const unresolved = {
+    id: 90,
+    author: "bob",
+    at: "2026-10-20T11:00:00Z",
+    body: "why this?",
+    thread: name === "gitlab" ? "t-90" : "90",
+    file: "src/app.ts",
+    line: 3,
+  };
+
+  /**
+   * An application's open merge request, approved by nobody, with an unresolved thread and
+   * its stage check at `e2e`, its head untagged, and stage and production on the commit the
+   * merge request starts from. `staging` is the stage step's stand-in, which leaves stage on
+   * `head` with every stage job passed; `unstaging` puts stage back.
+   */
+  const stageOn = (e2e: "running" | "failed" = "running", over: Partial<FakeMr> = {}) =>
+    Effect.gen(function* () {
+      const made = yield* releasable(
+        name,
+        { ...UNAPPROVED[name], comments: [unresolved], ...over },
+        false,
+      );
+      const withJobs = (on: ForgeModel, head: string, e2eNow: "running" | "failed" | "passed") =>
+        ({
+          ...on,
+          mrs: on.mrs.map((one) => ({
+            ...one,
+            head,
+            jobs: MR_JOBS.map((job) => ({
+              name: job,
+              state: job === "e2e-stage" ? e2eNow : ("passed" as const),
+            })),
+          })),
+        }) satisfies ForgeModel;
+      const model: ForgeModel = {
+        ...withJobs(yield* made.forge.model(), made.head, e2e),
+        environments: deploys(made.base, made.base),
+      };
+      yield* made.forge.set(model);
+      /** The forge once the stage step put `head` on stage, its stage check at `e2eNow`. */
+      const onStage = (head = made.head, e2eNow: "failed" | "passed" = "passed") => ({
+        ...withJobs(model, head, e2eNow),
+        environments: deploys(head, made.base),
+      });
+      const staging = (head = made.head, e2eNow: "failed" | "passed" = "passed") => ({
+        writes: [made.forge.holding(onStage(head, e2eNow))],
+        output: STAGED_MR,
+      });
+      /** The stage step put `head` on stage while the merge request's head moved to `later`. */
+      const moving = (head: string, later: string) => ({
+        writes: [made.forge.holding({ ...onStage(head), mrs: onStage(later).mrs })],
+        output: STAGED_MR,
+      });
+      /** Stage back on what production carries, the merge request at `head`. */
+      const unstaging = (head = made.head) => ({
+        writes: [
+          made.forge.holding({ ...onStage(head), environments: deploys(made.base, made.base) }),
+        ],
+        output: UNSTAGED,
+      });
+      return { ...made, model, onStage, staging, moving, unstaging };
+    });
+
+  /** Nothing a Stage Run must never do happened on the forge or origin. */
+  const touchedNothing = (model: ForgeModel) =>
+    Effect.gen(function* () {
+      expect(model.merges ?? []).toEqual([]);
+      expect(model.notes ?? {}).toEqual({});
+      expect(repliesOf(model)).toEqual([]);
+      expect(model.approved ?? []).toEqual([]);
+      expect(yield* originTags()).toBe("");
+    });
+
+  scenario(
+    `stage on ${name}: an open merge request with no approval, an unresolved thread and its stage check running is staged, asked about and rolled back on Done, under the claim`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, forge, head, staging, unstaging } = yield* stageOn();
+          claimed.length = 0;
+          const runId = `r-stage-${name}`;
+          yield* rig.queueOutputs([MR_STAGED, staging(), unstaging()]);
+          const status = yield* driven(options(runId), (run) =>
+            Effect.gen(function* () {
+              const question = yield* goAsked(run.asked, "staged-1");
+              expect(optionsOf([question], "staged-1")).toEqual([
+                "Done",
+                "Stage again",
+                "Leave it on stage",
+              ]);
+              expect(question.prompt).toContain(mr);
+              expect(question.prompt).toContain(head.slice(0, 8));
+              expect(question.prompt).toContain(stageJobs);
+              expect(question.prompt).toContain("project");
+              expect(question.prompt).toContain("for testing, unmerged");
+              const card = `${yield* awaitingOn(runId)} ${yield* parkedWhy(runId)}`;
+              expect(card).not.toMatch(/approv|thread/i);
+              expect(claimed).toEqual([`claim ${runId}`]);
+              yield* run.answer("staged-1", "Done");
+              return yield* ended(run.status);
+            }),
+          );
+          const model = yield* forge.model();
+          yield* touchedNothing(model);
+          yield* bin.restore();
+          expect(outcomeText(status)).toBe(
+            `${mr} was staged at ${head.slice(0, 8)} for testing; stage is rolled back`,
+          );
+          expect(claimed).toEqual([`claim ${runId}`, `release ${runId}`]);
+          expect(yield* clearance(runId, "stage")).toContain("never a production job");
+          expect(yield* clearance(runId, "stage")).toContain(
+            `\`deploy-stage\` of ${url}'s merge request pipeline`,
+          );
+          expect(yield* wasAsked(runId, "production")).toBe(false);
+          const log = yield* runLog(runId);
+          expect(log).not.toMatch(/\b(release[sd]?|approv\w*|go \d)\b/i);
+        }),
+      ),
+    120_000,
+  );
+
+  scenario(
+    `stage on ${name}: a merged, closed, package or stage-less merge request fails before any claim or stage step`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, forge, model } = yield* stageOn();
+          claimed.length = 0;
+          const refused = (runId: string, state: FakeMr["state"]) =>
+            Effect.gen(function* () {
+              yield* forge.set({
+                ...model,
+                mrs: model.mrs.map((one) => ({ ...one, state })),
+              });
+              const result = yield* ran(options(runId));
+              expect(yield* wasAsked(runId, "stage")).toBe(false);
+              return reasonOf(result);
+            });
+          expect(yield* refused(`r-stage-merged-${name}`, "merged")).toBe(
+            `${mr} is merged, so its stage is its release's: nothing was staged`,
+          );
+          expect(yield* refused(`r-stage-closed-${name}`, "closed")).toBe(
+            `${mr} is closed, so nothing was staged`,
+          );
+          yield* rig.queueOutputs([PACKAGED, APP_ASSESSED]);
+          expect(yield* refused(`r-stage-package-${name}`, "open")).toBe(
+            `${mr} is a package, so there is nothing to stage: a publish job on tags, and no deploy`,
+          );
+          expect(yield* refused(`r-stage-stageless-${name}`, "open")).toBe(
+            `${mr} is an application with no stage deploy job on its merge request's pipeline, so nothing was staged: a stage and a production environment`,
+          );
+          yield* bin.restore();
+          expect(claimed).toEqual([]);
+        }),
+      ),
+    120_000,
+  );
+
+  scenario(
+    `stage on ${name}: a head that moves before stage is proved is staged in its turn, and the question names it`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, head, staging, moving, unstaging } = yield* stageOn();
+          claimed.length = 0;
+          const runId = `r-stage-moved-${name}`;
+          const later = yield* pushedBySomebody(head);
+          yield* rig.queueOutputs([
+            MR_STAGED,
+            moving(head, later),
+            staging(later),
+            unstaging(later),
+          ]);
+          const status = yield* driven(options(runId), (run) =>
+            Effect.gen(function* () {
+              const question = yield* goAsked(run.asked, "staged-1");
+              expect(question.prompt).toContain(later.slice(0, 8));
+              expect(question.prompt).not.toContain(head.slice(0, 8));
+              yield* run.answer("staged-1", "Done");
+              return yield* ended(run.status);
+            }),
+          );
+          yield* bin.restore();
+          expect(outcomeText(status)).toBe(
+            `${mr} was staged at ${later.slice(0, 8)} for testing; stage is rolled back`,
+          );
+          expect(yield* asked(runId, "stage-2")).toContain(later);
+          expect(claimed).toEqual([`claim ${runId}`, `release ${runId}`]);
+        }),
+      ),
+    120_000,
+  );
+
+  scenario(
+    `stage on ${name}: attribution retains the earlier head's environment after a move and refuses Done while it still carries that head`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, forge, head, base, onStage } = yield* stageOn();
+          claimed.length = 0;
+          const runId = `r-stage-moved-env-${name}`;
+          const later = yield* pushedBySomebody(head);
+          const model = onStage(later);
+          const at = (newLive: string): ForgeModel => ({
+            ...model,
+            checksAt: { [head]: model.mrs[0]?.jobs ?? [] },
+            environments: [
+              {
+                name: "stage-new",
+                tier: "staging",
+                job: "deploy-stage",
+                deployments: [
+                  { sha: newLive, status: "success" },
+                  { sha: later, status: "success" },
+                ],
+              },
+              { name: "stage-old", tier: "staging", job: "deploy-stage", deployed: head },
+              { name: "production", tier: "production", deployed: base },
+            ],
+          });
+          yield* rig.queueOutputs([
+            MR_STAGED,
+            {
+              writes: [
+                forge.holding({
+                  ...at(base),
+                  environments: at(base).environments?.filter((env) => env.name !== "stage-new"),
+                }),
+              ],
+              output: STAGED_MR,
+            },
+            { writes: [forge.holding(at(later))], output: STAGED_MR },
+            { writes: [forge.holding(at(base))], output: UNSTAGED },
+          ]);
+          const status = yield* driven(options(runId), (run) =>
+            Effect.gen(function* () {
+              yield* goAsked(run.asked, "staged-1");
+              yield* run.answer("staged-1", "Done");
+              return yield* ended(run.status);
+            }),
+          );
+          yield* bin.restore();
+          expect(outcomeText(status)).toContain(
+            `stage still carries ${head.slice(0, 8)} in \`stage-old\``,
+          );
+          expect(status.status).toBe("failed");
+          expect(claimed).toEqual([`claim ${runId}`]);
+        }),
+      ),
+    120_000,
+  );
+
+  scenario(
+    `stage on ${name}: a failed stage check is rolled back, its claim given back, and the Run fails naming the job and offers Stage again`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, head, staging, unstaging } = yield* stageOn("failed");
+          claimed.length = 0;
+          const runId = `r-stage-failed-${name}`;
+          yield* rig.queueOutputs([MR_STAGED, staging(head, "failed"), unstaging()]);
+          const status = yield* driven(options(runId), (run) => ended(run.status));
+          yield* bin.restore();
+          expect(outcomeText(status)).toBe(
+            `stage of ${mr} at ${head.slice(0, 8)} failed: \`e2e-stage\` has not passed on the merge request's pipeline at ${head.slice(0, 8)}: it is failed; stage is back on what production carries`,
+          );
+          expect(claimed).toEqual([`claim ${runId}`, `release ${runId}`]);
+          expect(yield* asked(runId, "unstage")).toContain("`e2e-stage`");
+          expect(yield* followUpOffered("stage", "stage-again", target)).toBe(true);
+        }),
+      ),
+    120_000,
+  );
+
+  scenario(
+    `stage on ${name}: a rollback the forge cannot show fails the Run and keeps the claim`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, head, staging } = yield* stageOn("failed");
+          claimed.length = 0;
+          const runId = `r-stage-unshown-${name}`;
+          yield* rig.queueOutputs([MR_STAGED, staging(head, "failed"), UNSTAGED]);
+          const status = yield* driven(options(runId), (run) => ended(run.status));
+          yield* bin.restore();
+          expect(outcomeText(status)).toBe(
+            `stage of ${mr} at ${head.slice(0, 8)} failed: \`e2e-stage\` has not passed on the merge request's pipeline at ${head.slice(0, 8)}: it is failed. Its rollback is not shown: stage still carries ${head.slice(0, 8)} in \`stage\``,
+          );
+          expect(claimed).toEqual([`claim ${runId}`]);
+        }),
+      ),
+    120_000,
+  );
+
+  scenario(
+    `stage on ${name}: Leave it on stage gives the claim back without unstaging, though the Run's Check fails`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, forge, head, onStage, staging } = yield* stageOn();
+          claimed.length = 0;
+          const runId = `r-stage-leave-${name}`;
+          yield* checkedBy(runId, "test", "false");
+          yield* rig.queueOutputs([MR_STAGED, staging()]);
+          const status = yield* driven(options(runId), (run) =>
+            Effect.gen(function* () {
+              yield* goAsked(run.asked, "staged-1");
+              yield* run.answer("staged-1", "Leave it on stage");
+              return yield* ended(run.status);
+            }),
+          );
+          const model = yield* forge.model();
+          yield* bin.restore();
+          expect(outcomeText(status)).toBe(`stage carries ${mr} at ${head.slice(0, 8)}, unmerged`);
+          expect(model.environments).toEqual(onStage().environments);
+          expect(yield* wasAsked(runId, "unstage")).toBe(false);
+          expect(claimed).toEqual([`claim ${runId}`, `release ${runId}`]);
+        }),
+      ),
+    120_000,
+  );
+
+  scenario(
+    `stage on ${name}: Stage again stages the head as it is now, keeping the claim, and asks again naming it`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, forge, head, staging, onStage, unstaging } = yield* stageOn();
+          claimed.length = 0;
+          const runId = `r-stage-again-${name}`;
+          const later = yield* pushedBySomebody(head);
+          yield* rig.queueOutputs([MR_STAGED, staging(), staging(later), unstaging(later)]);
+          const status = yield* driven(options(runId), (run) =>
+            Effect.gen(function* () {
+              yield* goAsked(run.asked, "staged-1");
+              yield* forge.set({ ...(yield* forge.model()), mrs: onStage(later).mrs });
+              yield* run.answer("staged-1", "Stage again");
+              const again = yield* goAsked(run.asked, "staged-2");
+              expect(again.prompt).toContain(later.slice(0, 8));
+              expect(claimed).toEqual([`claim ${runId}`]);
+              yield* run.answer("staged-2", "Done");
+              return yield* ended(run.status);
+            }),
+          );
+          yield* bin.restore();
+          expect(outcomeText(status)).toBe(
+            `${mr} was staged at ${later.slice(0, 8)} for testing; stage is rolled back`,
+          );
+          expect(yield* asked(runId, "stage-2")).toContain(later);
+          expect(claimed).toEqual([`claim ${runId}`, `release ${runId}`]);
+        }),
+      ),
+    120_000,
+  );
+
+  scenario(
+    `stage on ${name}: a head the checkout does not fast-forward to parks the Run before any claim`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, forge, base, onStage } = yield* stageOn();
+          claimed.length = 0;
+          const runId = `r-stage-forced-${name}`;
+          const forced = yield* pushedBySomebody(base, true);
+          yield* forge.set({ ...(yield* forge.model()), mrs: onStage(forced).mrs });
+          yield* rig.queueOutputs([MR_STAGED]);
+          const why = yield* driven(options(runId), () =>
+            until(
+              () => parkedWhy(runId),
+              (said) => said !== "",
+            ),
+          );
+          yield* bin.restore();
+          expect(why).toContain("does not fast-forward");
+          expect(claimed).toEqual([]);
+          expect(yield* wasAsked(runId, "stage")).toBe(false);
+        }),
+      ),
+    120_000,
+  );
+
+  scenario(
+    `stage on ${name}: Helle projects that cannot be resolved are asked about in staging words, and Finish stages nothing`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin } = yield* stageOn();
+          claimed.length = 0;
+          const runId = `r-stage-unclaimed-${name}`;
+          yield* rig.queueOutputs([MR_STAGED]);
+          const why = "no Helle project in group's group for the application newapp";
+          const status = yield* driven(
+            options(
+              runId,
+              releaseHost({}, Effect.void, Infinity, () => ({ held: { unresolved: why } })),
+            ),
+            (run) =>
+              Effect.gen(function* () {
+                const unclaimed = yield* goAsked(run.asked, "claim.unclaimed");
+                expect(unclaimed.prompt).toContain(why);
+                expect(unclaimed.prompt).not.toMatch(/\b(release[sd]?|merged?)\b/i);
+                expect(optionsOf([unclaimed], "claim.unclaimed")).toEqual([
+                  "Try again",
+                  "Stage without a Helle claim",
+                  "Finish",
+                ]);
+                yield* run.answer("claim.unclaimed", "Finish");
+                return yield* ended(run.status);
+              }),
+          );
+          yield* bin.restore();
+          expect(outcomeText(status)).toBe(`${mr} was not staged`);
+          expect(yield* wasAsked(runId, "stage")).toBe(false);
+          expect(claimed).toEqual([`release ${runId}`]);
+        }),
+      ),
+    120_000,
+  );
+
+  scenario(
+    `stage on ${name}: attribution with no environment belonging to a selected job leaves stage unproved and names the jobs`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, forge, onStage, unstaging } = yield* stageOn();
+          const runId = `r-stage-unowned-${name}`;
+          const model = onStage();
+          yield* rig.queueOutputs([
+            MR_STAGED,
+            {
+              writes: [
+                forge.holding({
+                  ...model,
+                  environments: model.environments.map((env) => ({ ...env, job: "teammate-job" })),
+                }),
+              ],
+              output: STAGED_MR,
+            },
+            unstaging(),
+          ]);
+          const result = yield* ran(options(runId));
+          yield* bin.restore();
+          expect(reasonOf(result)).toContain("no stage environment");
+          expect(reasonOf(result)).toContain("by `deploy-stage`, `e2e-stage`");
+          expect(yield* wasAsked(runId, "staged-1")).toBe(false);
+        }),
+      ),
+    120_000,
+  );
+
+  scenario(
+    `stage on ${name}: attribution cannot give back claims when a refused environment read left the deployed environments unknown`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, forge, onStage, unstaging } = yield* stageOn();
+          const runId = `r-stage-unknown-env-${name}`;
+          claimed.length = 0;
+          yield* rig.queueOutputs([
+            MR_STAGED,
+            { writes: [forge.holding({ ...onStage(), deploysDown: true })], output: STAGED_MR },
+            unstaging(),
+          ]);
+          const status = yield* driven(options(runId), (run) => ended(run.status));
+          yield* bin.restore();
+          expect(outcomeText(status)).toContain("stage environments could not be discovered");
+          expect(status.status).toBe("failed");
+          expect(claimed).toEqual([`claim ${runId}`]);
+        }),
+      ),
+    120_000,
+  );
+
+  for (const ending of ["Done", "Leave it on stage", "failed stage"])
+    scenario(
+      `stage on ${name}: a refused claim give-back parks on ${ending} and retries it on resume`,
+      () =>
+        runEffect(
+          Effect.gen(function* () {
+            const { bin, staging, unstaging } = yield* stageOn();
+            claimed.length = 0;
+            refusedBack.length = 0;
+            refusedBack.push(["project"]);
+            const failed = ending === "failed stage";
+            const runId = `r-stage-retained-${name}-${failed ? "failed" : ending === "Done" ? "done" : "leave"}`;
+            yield* rig.queueOutputs([
+              MR_STAGED,
+              staging(undefined, failed ? "failed" : "passed"),
+              ...(ending === "Leave it on stage" ? [] : [unstaging()]),
+            ]);
+            const status = yield* driven(options(runId), (run) =>
+              Effect.gen(function* () {
+                if (!failed) {
+                  yield* goAsked(run.asked, "staged-1");
+                  yield* run.answer("staged-1", ending);
+                }
+                const [status, why] = yield* until(
+                  () => Effect.all([run.status, parkedWhy(runId)]),
+                  ([status, why]) =>
+                    status.status === "complete" ||
+                    status.status === "failed" ||
+                    (status.status === "suspended" && why !== ""),
+                );
+                expect(why).toContain("project");
+                expect(status.status).toBe("suspended");
+                expect(claimed).toEqual([`claim ${runId}`, `release ${runId}`]);
+                yield* run.resume;
+                return yield* ended(run.status);
+              }),
+            );
+            yield* bin.restore();
+            expect(status.status).toBe(failed ? "failed" : "complete");
+            expect(claimed).toEqual([`claim ${runId}`, `release ${runId}`, `release ${runId}`]);
+          }),
+        ),
+      120_000,
+    );
+
+  const APPS = ["bingo", "casino", "happytiger", "lobby", "playground", "poker", "spilnu"] as const;
+  const appJob = (app: string) => `stage:${app}`;
+  const BUSY_ASSESSED = {
+    ...APP_ASSESSED,
+    applications: [...APPS],
+    stage_jobs: { merge_request: APPS.map(appJob), tag: [] },
+  };
+  // An unknown commit makes a teammate's deployment incomparable with this checkout.
+  const TEAMMATE = "7ea3a7e0".repeat(5);
+
+  interface BusyHelle {
+    readonly holders: Record<string, string | null>;
+    readonly racing?: Record<string, string>;
+    readonly handedOver?: Deferred.Deferred<void>;
+    readonly declared?: ReadonlyArray<string>;
+    readonly events?: string[];
+    unresolved?: string;
+  }
+  const busyHost = (helle: BusyHelle): HostOverride =>
+    Layer.effect(Host)(
+      Effect.gen(function* () {
+        const host = yield* Host;
+        const held = new Set<string>();
+        const needsOf = (app: string) => [...(helle.declared ?? [app])];
+        const neededFor = (deploys?: { readonly applications: ReadonlyArray<string> }) =>
+          [...new Set((deploys?.applications ?? []).flatMap(needsOf))].sort();
+        const holderOf = (slug: string) => (held.has(slug) ? null : (helle.holders[slug] ?? null));
+        return Host.of({
+          ...host,
+          readRollback: (options) =>
+            Effect.gen(function* () {
+              helle.events?.push("rollback-started");
+              const back = yield* host.readRollback(options);
+              if (back._tag === "Shown") helle.events?.push("rollback-proved");
+              return back;
+            }),
+          holders: (asked) =>
+            Effect.succeed({
+              _tag: "Read" as const,
+              projects: neededFor(asked.deploys).map((slug) => ({ slug, holder: holderOf(slug) })),
+              applications: (asked.deploys?.applications ?? []).map((app) => ({
+                name: app,
+                needs: needsOf(app),
+              })),
+              jobs: (asked.deploys?.jobs ?? []).map((job) => ({
+                name: job,
+                applications: APPS.filter((app) => job === appJob(app)),
+              })),
+            }),
+          claim: (options) =>
+            Effect.gen(function* () {
+              const needed = neededFor(options.deploys);
+              const take = (slug: string) => {
+                if (!held.has(slug)) claimed.push(`claim ${options.runId} ${slug}`);
+                held.add(slug);
+              };
+              if (options.free !== true) {
+                claimed.push(`wait ${options.runId}`);
+                if (helle.handedOver !== undefined) yield* Deferred.await(helle.handedOver);
+                needed.forEach(take);
+                return { slugs: needed };
+              }
+              if (helle.unresolved !== undefined) return { unresolved: helle.unresolved };
+              const left: Array<{ slug: string; holder: string }> = [];
+              for (const slug of needed) {
+                const holder = holderOf(slug) ?? helle.racing?.[slug] ?? null;
+                if (holder === null) take(slug);
+                else left.push({ slug, holder });
+              }
+              return { slugs: [...held].sort(), left };
+            }),
+          release: (runId) =>
+            Effect.sync(() => {
+              helle.events?.push("claims-released");
+              for (const slug of [...held].sort()) claimed.push(`release ${runId} ${slug}`);
+              held.clear();
+              return [];
+            }),
+        });
+      }),
+    );
+
+  const busyStage = (busy: ReadonlyArray<string>, sameHead = false) =>
+    Effect.gen(function* () {
+      const made = yield* releasable(name, UNAPPROVED[name], false);
+      const success = (sha: string) => ({ sha, status: "success" as const });
+      const start = (app: string) =>
+        busy.includes(app) ? [sameHead ? made.head : TEAMMATE] : [made.base];
+      const before = yield* made.forge.model();
+      const at = (deployed: Partial<Record<string, ReadonlyArray<string>>>): ForgeModel => ({
+        ...before,
+        mrs: before.mrs.map((one) => ({
+          ...one,
+          head: made.head,
+          jobs: APPS.map((app) => ({ name: appJob(app), state: "passed" as const })),
+        })),
+        environments: [
+          ...APPS.map((app) => ({
+            name: `stage-${app}`,
+            tier: "staging",
+            job: appJob(app),
+            deployments: (deployed[app] ?? start(app)).map(success),
+          })),
+          { name: "production", tier: "production", deployments: [success(made.base)] },
+        ],
+      });
+      const model = at({});
+      yield* made.forge.set(model);
+      const onEach = (apps: ReadonlyArray<string>, shas: (app: string) => ReadonlyArray<string>) =>
+        Object.fromEntries(apps.map((app) => [app, shas(app)]));
+      const staged = (apps: ReadonlyArray<string>) => ({
+        writes: [made.forge.holding(at(onEach(apps, (app) => [made.head, ...start(app)])))],
+        output: { verdict: "clean", stage_jobs: apps.map(appJob) },
+      });
+      const unstaged = (apps: ReadonlyArray<string>) => ({
+        writes: [
+          made.forge.holding(at(onEach(apps, (app) => [made.base, made.head, ...start(app)]))),
+        ],
+        output: UNSTAGED,
+      });
+      return { ...made, model, staged, unstaged };
+    });
+
+  const leftOff = (prompt: string) => /Left off stage[^:]*: ([^.]*)\./.exec(prompt)?.[1] ?? "";
+
+  scenario(
+    `stage on ${name}: busy claims: where every project is free, no claims question is asked and every application is staged`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, staged, unstaged } = yield* busyStage([]);
+          claimed.length = 0;
+          const runId = `r-busy-free-${name}`;
+          const helle = { holders: {} };
+          yield* rig.queueOutputs([BUSY_ASSESSED, staged(APPS), unstaged(APPS)]);
+          const status = yield* driven(options(runId, busyHost(helle)), (run) =>
+            Effect.gen(function* () {
+              const question = yield* goAsked(run.asked, "staged-1");
+              expect((yield* run.asked).map((row) => row.decision)).not.toContain("claims-1");
+              expect(leftOff(question.prompt)).toBe("");
+              yield* run.answer("staged-1", "Done");
+              return yield* ended(run.status);
+            }),
+          );
+          yield* bin.restore();
+          expect(outcomeText(status)).toContain("stage is rolled back");
+          for (const app of APPS)
+            expect(yield* asked(runId, "stage")).toContain(`\`${appJob(app)}\``);
+          expect(claimed).toEqual([
+            `wait ${runId}`,
+            ...APPS.map((app) => `claim ${runId} ${app}`),
+            ...APPS.map((app) => `release ${runId} ${app}`),
+          ]);
+        }),
+      ),
+    120_000,
+  );
+
+  const DANNS = APPS.filter((app) => app !== "playground");
+  const dann = (): BusyHelle & { holders: Record<string, string | null> } => ({
+    holders: Object.fromEntries(DANNS.map((app): [string, string | null] => [app, "Dann"])),
+  });
+
+  scenario(
+    `stage on ${name}: busy claims: attribution leaves Dann's six deployments of the same head untouched, stages only the free application, names the six left off, rolls back only its environment and gives back only its project`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, forge, model, staged, unstaged } = yield* busyStage(DANNS, true);
+          claimed.length = 0;
+          const runId = `r-busy-355-${name}`;
+          yield* rig.queueOutputs([
+            BUSY_ASSESSED,
+            staged(["playground"]),
+            unstaged(["playground"]),
+          ]);
+          const status = yield* driven(options(runId, busyHost(dann())), (run) =>
+            Effect.gen(function* () {
+              const claims = yield* goAsked(run.asked, "claims-1");
+              expect(optionsOf([claims], "claims-1")).toEqual([
+                "Wait for all",
+                "Stage what is free",
+                "Finish",
+              ]);
+              for (const app of DANNS) expect(claims.prompt).toContain(`${app} (Dann)`);
+              expect(claims.prompt).not.toContain("playground (");
+              expect(yield* wasAsked(runId, "stage")).toBe(false);
+              yield* run.answer("claims-1", "Stage what is free");
+              const question = yield* goAsked(run.asked, "staged-1");
+              expect(leftOff(question.prompt).split(", ").sort()).toEqual([...DANNS]);
+              yield* run.answer("staged-1", "Done");
+              return yield* ended(run.status);
+            }),
+          );
+          const after = yield* forge.model();
+          yield* bin.restore();
+          expect(outcomeText(status)).toContain("stage is rolled back");
+          const stage = yield* clearance(runId, "stage");
+          const unstage = yield* clearance(runId, "unstage");
+          expect(stage).toContain("`stage:playground`");
+          expect(unstage).toContain("`stage:playground`");
+          for (const app of DANNS) {
+            expect(stage).not.toContain(appJob(app));
+            expect(unstage).not.toContain(appJob(app));
+          }
+          const others = (environments: ForgeModel["environments"]) =>
+            (environments ?? []).filter((env) => DANNS.some((app) => env.name === `stage-${app}`));
+          expect(others(after.environments)).toEqual(others(model.environments));
+          expect(claimed).toEqual([`claim ${runId} playground`, `release ${runId} playground`]);
+        }),
+      ),
+    120_000,
+  );
+
+  scenario(
+    `stage on ${name}: busy claims: Wait for all stages nothing until every project is handed over, then stages every application`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, staged, unstaged } = yield* busyStage(DANNS);
+          claimed.length = 0;
+          const runId = `r-busy-wait-${name}`;
+          const helle = { ...dann(), handedOver: yield* Deferred.make<void>() };
+          yield* rig.queueOutputs([BUSY_ASSESSED, staged(APPS), unstaged(APPS)]);
+          const status = yield* driven(options(runId, busyHost(helle)), (run) =>
+            Effect.gen(function* () {
+              yield* goAsked(run.asked, "claims-1");
+              yield* run.answer("claims-1", "Wait for all");
+              yield* until(
+                () => Effect.sync(() => claimed),
+                (now) => now.includes(`wait ${runId}`),
+              );
+              expect(yield* wasAsked(runId, "stage")).toBe(false);
+              yield* Deferred.succeed(helle.handedOver, undefined);
+              const question = yield* goAsked(run.asked, "staged-1");
+              expect(leftOff(question.prompt)).toBe("");
+              yield* run.answer("staged-1", "Done");
+              return yield* ended(run.status);
+            }),
+          );
+          yield* bin.restore();
+          expect(outcomeText(status)).toContain("stage is rolled back");
+          for (const app of APPS)
+            expect(yield* asked(runId, "stage")).toContain(`\`${appJob(app)}\``);
+          expect(claimed).toContain(`claim ${runId} spilnu`);
+        }),
+      ),
+    120_000,
+  );
+
+  scenario(
+    `stage on ${name}: busy claims: Finish at the claims question claims nothing and stages nothing`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin } = yield* busyStage(DANNS);
+          claimed.length = 0;
+          const runId = `r-busy-finish-${name}`;
+          yield* rig.queueOutputs([BUSY_ASSESSED]);
+          const status = yield* driven(options(runId, busyHost(dann())), (run) =>
+            Effect.gen(function* () {
+              yield* goAsked(run.asked, "claims-1");
+              yield* run.answer("claims-1", "Finish");
+              return yield* ended(run.status);
+            }),
+          );
+          yield* bin.restore();
+          expect(outcomeText(status)).toBe(`${mr} was not staged`);
+          expect(yield* wasAsked(runId, "stage")).toBe(false);
+          expect(claimed).toEqual([]);
+        }),
+      ),
+    120_000,
+  );
+
+  scenario(
+    `stage on ${name}: busy claims: a project someone takes between the read and the take is left off and named`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const busy = DANNS.filter((app) => app !== "poker");
+          const { bin, staged, unstaged } = yield* busyStage(busy);
+          claimed.length = 0;
+          const runId = `r-busy-race-${name}`;
+          const helle = {
+            holders: Object.fromEntries(busy.map((app) => [app, "Dann"])),
+            racing: { poker: "Mona" },
+          };
+          yield* rig.queueOutputs([
+            BUSY_ASSESSED,
+            staged(["playground"]),
+            unstaged(["playground"]),
+          ]);
+          yield* driven(options(runId, busyHost(helle)), (run) =>
+            Effect.gen(function* () {
+              const claims = yield* goAsked(run.asked, "claims-1");
+              expect(claims.prompt).not.toContain("poker (");
+              yield* run.answer("claims-1", "Stage what is free");
+              const question = yield* goAsked(run.asked, "staged-1");
+              expect(leftOff(question.prompt).split(", ").sort()).toEqual(
+                [...busy, "poker"].sort(),
+              );
+              expect(question.prompt).toContain("poker (Mona)");
+              yield* run.answer("staged-1", "Done");
+              return yield* ended(run.status);
+            }),
+          );
+          yield* bin.restore();
+          expect(yield* clearance(runId, "stage")).not.toContain("stage:poker");
+          expect(claimed).toEqual([`claim ${runId} playground`, `release ${runId} playground`]);
+        }),
+      ),
+    120_000,
+  );
+
+  scenario(
+    `stage on ${name}: busy claims: Stage again takes a left-off project that became free, stages that application too, and no longer names it left off`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, staged, unstaged } = yield* busyStage(DANNS);
+          claimed.length = 0;
+          const runId = `r-busy-again-${name}`;
+          const helle = dann();
+          const both = ["playground", "spilnu"];
+          yield* rig.queueOutputs([
+            BUSY_ASSESSED,
+            staged(["playground"]),
+            staged(both),
+            unstaged(both),
+          ]);
+          yield* driven(options(runId, busyHost(helle)), (run) =>
+            Effect.gen(function* () {
+              yield* goAsked(run.asked, "claims-1");
+              yield* run.answer("claims-1", "Stage what is free");
+              yield* goAsked(run.asked, "staged-1");
+              helle.holders.spilnu = null;
+              yield* run.answer("staged-1", "Stage again");
+              const again = yield* goAsked(run.asked, "staged-2");
+              expect(leftOff(again.prompt).split(", ").sort()).toEqual(
+                DANNS.filter((app) => app !== "spilnu"),
+              );
+              expect(claimed).toEqual([`claim ${runId} playground`, `claim ${runId} spilnu`]);
+              yield* run.answer("staged-2", "Done");
+              return yield* ended(run.status);
+            }),
+          );
+          yield* bin.restore();
+          const again = yield* clearance(runId, "stage-2");
+          expect(again).toContain("`stage:playground`");
+          expect(again).toContain("`stage:spilnu`");
+          expect(again).not.toContain("stage:poker");
+          expect(yield* clearance(runId, "unstage-2")).toContain("`stage:spilnu`");
+          expect(claimed.slice(2)).toEqual([
+            `release ${runId} playground`,
+            `release ${runId} spilnu`,
+          ]);
+        }),
+      ),
+    120_000,
+  );
+
+  scenario(
+    `stage on ${name}: busy claims: Finish where Stage again cannot settle the left-off claims rolls stage back and gives back what it holds`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, staged, unstaged } = yield* busyStage(DANNS);
+          claimed.length = 0;
+          const runId = `r-busy-again-finish-${name}`;
+          const events: string[] = [];
+          const helle: BusyHelle = { ...dann(), events };
+          yield* rig.queueOutputs([
+            BUSY_ASSESSED,
+            staged(["playground"]),
+            unstaged(["playground"]),
+          ]);
+          const status = yield* driven(options(runId, busyHost(helle)), (run) =>
+            Effect.gen(function* () {
+              yield* goAsked(run.asked, "claims-1");
+              yield* run.answer("claims-1", "Stage what is free");
+              yield* goAsked(run.asked, "staged-1");
+              helle.unresolved = "Helle is down";
+              yield* run.answer("staged-1", "Stage again");
+              yield* goAsked(run.asked, "staged-1.claim.unclaimed");
+              yield* run.answer("staged-1.claim.unclaimed", "Finish");
+              return yield* ended(run.status);
+            }),
+          );
+          yield* bin.restore();
+          expect(outcomeText(status)).toContain("stage is rolled back");
+          expect(yield* clearance(runId, "unstage")).toContain("`stage:playground`");
+          expect(claimed).toEqual([`claim ${runId} playground`, `release ${runId} playground`]);
+          expect(events).toEqual(["rollback-started", "rollback-proved", "claims-released"]);
+        }),
+      ),
+    120_000,
+  );
+
+  scenario(
+    `stage on ${name}: busy claims: a failed refresh waived by the human retains the live application's claim through restaging and rollback`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, staged, unstaged } = yield* busyStage(DANNS);
+          claimed.length = 0;
+          const runId = `r-busy-refresh-without-${name}`;
+          const events: string[] = [];
+          const helle: BusyHelle = { ...dann(), events };
+          yield* rig.queueOutputs([
+            BUSY_ASSESSED,
+            staged(["playground"]),
+            staged(["playground"]),
+            unstaged(["playground"]),
+          ]);
+          const status = yield* driven(options(runId, busyHost(helle)), (run) =>
+            Effect.gen(function* () {
+              yield* goAsked(run.asked, "claims-1");
+              yield* run.answer("claims-1", "Stage what is free");
+              yield* goAsked(run.asked, "staged-1");
+              helle.unresolved = "Helle is down";
+              yield* run.answer("staged-1", "Stage again");
+              yield* goAsked(run.asked, "staged-1.claim.unclaimed");
+              yield* run.answer("staged-1.claim.unclaimed", "Stage without a Helle claim");
+              const again = yield* goAsked(run.asked, "staged-2");
+              expect(again.prompt).toContain("holds the Helle claims of playground");
+              expect(events).toEqual([]);
+              yield* run.answer("staged-2", "Done");
+              return yield* ended(run.status);
+            }),
+          );
+          yield* bin.restore();
+          expect(outcomeText(status)).toContain("stage is rolled back");
+          expect(events).toEqual(["rollback-started", "rollback-proved", "claims-released"]);
+          expect(claimed).toEqual([`claim ${runId} playground`, `release ${runId} playground`]);
+        }),
+      ),
+    120_000,
+  );
+
+  scenario(
+    `stage on ${name}: busy claims: a repository whose .collie/helle.json declares its projects, one of them busy, is not offered Stage what is free`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin } = yield* busyStage(["spilnu"]);
+          claimed.length = 0;
+          const runId = `r-busy-declared-${name}`;
+          const helle = { holders: { spilnu: "Dann" }, declared: ["playground", "spilnu"] };
+          yield* rig.queueOutputs([BUSY_ASSESSED]);
+          yield* driven(options(runId, busyHost(helle)), (run) =>
+            Effect.gen(function* () {
+              const claims = yield* goAsked(run.asked, "claims-1");
+              expect(optionsOf([claims], "claims-1")).toEqual(["Wait for all", "Finish"]);
+              yield* run.answer("claims-1", "Finish");
+              return yield* ended(run.status);
+            }),
+          );
+          yield* bin.restore();
           expect(claimed).toEqual([]);
         }),
       ),
@@ -10636,6 +12221,29 @@ const noCommandSubstitution = () =>
     }
   }).pipe(Effect.orDie);
 
+const withForges = (body: () => Promise<void>) =>
+  runEffect(
+    Effect.gen(function* () {
+      forgeFaces.clear();
+      const bin = yield* FakeBin.make(`${rig.root}/default-forges`);
+      yield* Effect.addFinalizer(() => bin.restore());
+      for (const name of ["gitlab", "github"] as const)
+        yield* forgeOnPath(bin, name, {
+          installed: true,
+          loggedIn: [FORGE_HOST[name]],
+          login: "tester",
+          mrs: [],
+        });
+      forgeApi = yield* serveForges(
+        ...(["gitlab", "github"] as const).map((name) => ({
+          forge: name,
+          face: (input: string, init?: RequestInit) => forgeFaces.get(name)!.face(input, init),
+        })),
+      );
+      yield* Effect.promise(body);
+    }),
+  );
+
 export const register = (pass: "shipped" | "unrelated") => {
   beforeEach(() =>
     runEffect(
@@ -10643,8 +12251,10 @@ export const register = (pass: "shipped" | "unrelated") => {
         rig = yield* Rig.make();
         const fs = yield* FileSystem.FileSystem;
         dir = `${rig.root}/host`;
+        forgeApi = "";
         started = [];
         failing = new Set();
+        childWaits = new Map();
         yield* fs.makeDirectory(dir, { recursive: true });
         yield* fs.makeDirectory(rig.projectDir, { recursive: true });
         // The skills the shipped personas and steps name, installed where this machine
@@ -10677,7 +12287,7 @@ export const register = (pass: "shipped" | "unrelated") => {
       pass === "unrelated" ? `${one.name} (under an unrelated id)` : one.name,
       () => {
         renamed = pass === "unrelated";
-        return one.body().then(() => runEffect(noCommandSubstitution()));
+        return withForges(() => one.body().then(() => runEffect(noCommandSubstitution())));
       },
       one.timeout,
     );

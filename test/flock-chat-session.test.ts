@@ -1,6 +1,11 @@
 import { expect, test } from "bun:test";
-import { Effect } from "effect";
+import { Effect, type Scope, Stream } from "effect";
+import { type ClaudeCode, claudeDriver } from "../desktop/src/bun/claude-driver";
+import type { DriverContext } from "../desktop/src/bun/driver";
 import { sessionOptions, userMcpServers } from "../desktop/src/bun/session";
+import { opensOn } from "../desktop/src/bun/chat-choices";
+import type { DesktopSettings } from "../desktop/src/shared/flock";
+import { NO_FLOCK_SETTINGS } from "../desktop/src/shared/flock-settings";
 let noticed: string | undefined;
 let rule: string | undefined;
 const machines = [
@@ -38,6 +43,61 @@ test("the session is on the model it is given at medium effort, resumed, on the 
     cwd: "/state/collie-desktop",
   });
 });
+
+const openedOn = (
+  open: (driver: ReturnType<typeof claudeDriver>) => Effect.Effect<unknown, never, Scope.Scope>,
+) =>
+  Effect.gen(function* () {
+    const opened: Array<{ readonly model: string; readonly effort?: string }> = [];
+    const claude: ClaudeCode<string> = {
+      query: ({ options }) => {
+        opened.push({
+          model: options.model,
+          ...(options.effort !== undefined && { effort: options.effort }),
+        });
+        return Object.assign(Stream.toAsyncIterable(Stream.never), {
+          interrupt: () => Promise.resolve(),
+          close: () => {},
+        });
+      },
+      getSessionInfo: () => Promise.resolve(undefined),
+      getSessionMessages: () => Promise.resolve([]),
+      listSessions: () => Promise.resolve([]),
+      server: () => "collie",
+      userServers: () => Promise.resolve({}),
+    };
+    // SAFETY: opening a session reaches none of the context but its directory.
+    yield* open(claudeDriver(claude, { dir: "/state/collie-desktop" } as DriverContext));
+    return opened;
+  }).pipe(Effect.scoped);
+
+const openedAt = (settings: DesktopSettings) =>
+  openedOn((driver) =>
+    Effect.gen(function* () {
+      const resolved = yield* opensOn(settings, NO_FLOCK_SETTINGS, Effect.succeed({}));
+      if (!resolved.ok) return yield* Effect.die(resolved.problem);
+      yield* driver.open("conversation", resolved.choice.model, resolved.choice.effort);
+    }),
+  );
+
+test("the session is opened on what the chat's choice resolves to: opus at medium while unset, and the set effort", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      expect(yield* openedAt({ proactive: true, chatEffort: "high" })).toEqual([
+        { model: "opus", effort: "high" },
+      ]);
+      expect(yield* openedAt({ proactive: true })).toEqual([{ model: "opus", effort: "medium" }]);
+    }),
+  ));
+
+test("a model that takes no effort is opened with none, not at medium", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      expect(
+        yield* openedOn((driver) => driver.open("conversation", "claude-haiku-4-5-20251001", null)),
+      ).toEqual([{ model: "claude-haiku-4-5-20251001" }]);
+    }),
+  ));
 
 const BUILT_IN = ["Read", "Glob", "Grep", "Write", "Edit", "Bash"];
 

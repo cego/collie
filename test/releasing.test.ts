@@ -76,17 +76,17 @@ test("a checkout with uncommitted changes is refused even where it is already at
   ));
 
 /** GitLab answering `runs`, and git for real. */
-const onGitlab = (runs: ForgeModel["runs"], over: Partial<ForgeModel> = {}) =>
-  runner(
-    fakeForge("gitlab", {
-      installed: true,
-      loggedIn: [FORGE_HOST.gitlab],
-      login: "me",
-      mrs: [],
-      runs,
-      ...over,
-    }).run,
-  );
+const onGitlab = (runs: ForgeModel["runs"], over: Partial<ForgeModel> = {}) => {
+  const fake = fakeForge("gitlab", {
+    installed: true,
+    loggedIn: [FORGE_HOST.gitlab],
+    login: "me",
+    mrs: [],
+    runs,
+    ...over,
+  });
+  return { run: runner(fake.run), layer: fake.layer };
+};
 
 const tagRun = (sha: string, over: Partial<NonNullable<ForgeModel["runs"]>[string]> = {}) => ({
   status: "success",
@@ -101,8 +101,9 @@ test("a package's tag is proved only by a pipeline of its own project, tag and c
     Effect.gen(function* () {
       const { cwd, first, tag } = yield* repository;
       const at = yield* tag("v1.2.0");
-      const read = (pipeline: string | null, runs: ForgeModel["runs"]) =>
-        readTag({
+      const read = (pipeline: string | null, runs: ForgeModel["runs"]) => {
+        const fake = onGitlab(runs);
+        return readTag({
           cwd,
           tag: "v1.2.0",
           merged: first,
@@ -111,8 +112,9 @@ test("a package's tag is proved only by a pipeline of its own project, tag and c
           ref: REF,
           stage: [],
           production: [],
-          run: onGitlab(runs),
-        });
+          run: fake.run,
+        }).pipe(Effect.provide(fake.layer));
+      };
       expect((yield* read(PIPELINE, { "7": tagRun(at) }))._tag).toBe("Proved");
       const elsewhere = PIPELINE.replace("group/app", "other/project");
       expect((yield* read(elsewhere, { "7": tagRun(at) }))._tag).toBe("Unproved");
@@ -126,8 +128,9 @@ test("a package's tag named with no pipeline is proved by the forge showing none
     Effect.gen(function* () {
       const { cwd, first, tag } = yield* repository;
       const at = yield* tag("v1.2.0");
-      const read = (runs: ForgeModel["runs"]) =>
-        readTag({
+      const read = (runs: ForgeModel["runs"]) => {
+        const fake = onGitlab(runs);
+        return readTag({
           cwd,
           tag: "v1.2.0",
           merged: first,
@@ -136,8 +139,9 @@ test("a package's tag named with no pipeline is proved by the forge showing none
           ref: REF,
           stage: [],
           production: [],
-          run: onGitlab(runs),
-        });
+          run: fake.run,
+        }).pipe(Effect.provide(fake.layer));
+      };
       expect((yield* read({}))._tag).toBe("Proved");
       expect((yield* read({ "7": tagRun(at) }))._tag).toBe("Proved");
       expect((yield* read({ "7": tagRun(at, { status: "failed" }) }))._tag).toBe("Unproved");
@@ -150,6 +154,7 @@ test("an application's tag is not ready for production on a pipeline of another 
       const { cwd, first, tag } = yield* repository;
       const at = yield* tag("v1.2.0");
       const runs = { "7": tagRun(at, { jobs: [{ name: "deploy-production", state: "manual" }] }) };
+      const fake = onGitlab(runs);
       const read = (pipeline: string) =>
         readTag({
           cwd,
@@ -160,8 +165,8 @@ test("an application's tag is not ready for production on a pipeline of another 
           ref: REF,
           stage: [],
           production: ["deploy-production"],
-          run: onGitlab(runs),
-        });
+          run: fake.run,
+        }).pipe(Effect.provide(fake.layer));
       expect((yield* read(PIPELINE))._tag).toBe("Proved");
       expect((yield* read(PIPELINE.replace("group/app", "other/project")))._tag).toBe("Unproved");
     }).pipe(Effect.scoped),
@@ -174,7 +179,7 @@ test("a job still running, pending or waiting by hand keeps an application's tag
       const at = yield* tag("v1.2.0");
       const object = yield* git(cwd, "rev-parse", "refs/tags/v1.2.0");
       for (const state of ["running", "pending", "manual"] as const) {
-        const run = onGitlab({
+        const fake = onGitlab({
           "7": tagRun(at, {
             jobs: [
               { name: "test", state },
@@ -191,8 +196,8 @@ test("a job still running, pending or waiting by hand keeps an application's tag
           ref: REF,
           stage: [],
           production: ["deploy-production"],
-          run,
-        });
+          run: fake.run,
+        }).pipe(Effect.provide(fake.layer));
         expect(proved._tag).toBe("Unproved");
         const played = yield* readProduction({
           cwd,
@@ -202,8 +207,8 @@ test("a job still running, pending or waiting by hand keeps an application's tag
           merged: first,
           pipeline: PIPELINE,
           jobs: ["deploy-production"],
-          run,
-        });
+          run: fake.run,
+        }).pipe(Effect.provide(fake.layer));
         expect(played._tag).toBe("Unproved");
       }
     }).pipe(Effect.scoped),
@@ -215,6 +220,7 @@ test("a tag moved after its proof plays nothing in production, even onto a desce
       const { cwd, first, commit, tag } = yield* repository;
       const at = yield* tag("v1.2.0");
       const jobs = [{ name: "deploy-production", state: "manual" as const }];
+      const fake = onGitlab({ "7": tagRun(at, { jobs }) });
       const proved = yield* readTag({
         cwd,
         tag: "v1.2.0",
@@ -224,11 +230,12 @@ test("a tag moved after its proof plays nothing in production, even onto a desce
         ref: REF,
         stage: [],
         production: ["deploy-production"],
-        run: onGitlab({ "7": tagRun(at, { jobs }) }),
-      });
+        run: fake.run,
+      }).pipe(Effect.provide(fake.layer));
       if (proved._tag !== "Proved") throw new Error(`not proved: ${proved._tag}`);
-      const read = (sha: string) =>
-        readProduction({
+      const read = (sha: string) => {
+        const fake = onGitlab({ "7": tagRun(sha, { jobs }) });
+        return readProduction({
           cwd,
           ref: REF,
           tag: "v1.2.0",
@@ -236,8 +243,9 @@ test("a tag moved after its proof plays nothing in production, even onto a desce
           merged: first,
           pipeline: PIPELINE,
           jobs: ["deploy-production"],
-          run: onGitlab({ "7": tagRun(sha, { jobs }) }),
-        });
+          run: fake.run,
+        }).pipe(Effect.provide(fake.layer));
+      };
       expect((yield* read(at))._tag).toBe("Play");
       const later = yield* commit("two.ts");
       yield* tag("v1.2.0", true);
