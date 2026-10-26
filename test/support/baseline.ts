@@ -13,6 +13,7 @@ import type { ChildProcessSpawner } from "effect/process";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { hostname } from "node:os";
 import {
+  Config,
   ConfigProvider,
   DateTime,
   Deferred,
@@ -2602,7 +2603,10 @@ let prepared: { readonly home: string; readonly made: string } | undefined;
 
 const preparedRepository = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
-  const home = process.env.HOME!;
+  // The default provider holds the environment the file started with, and its home.
+  const home = yield* Config.String("HOME").pipe(
+    Effect.provideService(ConfigProvider.ConfigProvider, ConfigProvider.fromEnv()),
+  );
   if (prepared?.home === home) return prepared.made;
   // Under the suite's home: what a test makes beside it is reported as left behind.
   const made = yield* fs.makeTempDirectory({ directory: home, prefix: "baseline-repository-" });
