@@ -1527,15 +1527,29 @@ docs lint to catch a page that fell behind — a stale page is a defect like any
 Each of these, where it crept in, cost the suite minutes or every start a large share of
 its time.
 
-- **The suite shares the Machine.** After its builds, and once its turn is granted,
-  `bun run test` samples `os.cpus()` one second apart and runs one worker per idle core:
-  `cores × idle / total` over the sample, rounded, at least 2 and at most one per core
-  (`workersFor` in `tools/test-run.ts`). It prints `test: N workers (F of C cores free)`.
-  A targeted run is sized the same way. A `--parallel` or `--parallel=N` before any `--`
-  is passed through as given, and is how a human or agent sets a share themselves. #110
-  stopped subtracting load averages because they lag and count the suite's own previous
-  run and IO waits; a one-second sample of idle CPU just before the tests start counts
-  neither, and the builds and any suite this one waited for are over before it is taken.
+- **The suite shares the Machine.** Every `bun run test` takes its workers from one budget
+  of test processes per user per Machine
+  ([ADR-draft-test-processes-share-one-budget-per-machine](adr/draft-test-processes-share-one-budget-per-machine.md);
+  `tools/budget.ts`). The budget is two thirds of the cores, at least 2, and
+  `COLLIE_TEST_BUDGET` sets it. A quarter of it, at least 2, is kept for targeted runs. A
+  whole suite asks for all the rest, so whole suites run one at a time. A targeted run asks
+  for 2, and a `--parallel=N` before any `--` asks for N. A run gets no more than its kind's
+  share, and says so when it gets fewer than it asked for. On vm-mk that is 12 workers for a
+  whole suite out of 16. Where the rest would be under 2, as on two or three cores, every
+  run takes from the whole budget in turn. Waiters are admitted in the order they arrived.
+  A wait names who it is behind once, then says every 30 s how long it has waited. The store
+  is `collie-test-budget-<uid>` under the temporary directory, changed under
+  `src/lock.ts`'s lock. A hold names its runner and the `bun test` it started, and it is
+  reclaimed only once both are gone, each known by pid and start time. An interrupted run
+  gives back what it held. A whole suite admitted by the budget also takes the old
+  `collie-test-suite-<uid>.lock`, so a checkout from before the budget still takes turns
+  with it. The `bun test` a run starts is told its hold in `COLLIE_TEST_HOLD`. A run ends
+  with a report: seconds queued, built and run; workers and budget; for a whole suite, the
+  longest file, its share of the run, and the per-file time summed from the updated timings;
+  the processes started; and `/proc/pressure/cpu`'s `some avg60` and the 1-minute load at
+  admission and at the end. Where there is no `/proc/pressure`, as on macOS, the pressure is
+  not available. This replaces #135's one-second idle sample, which picked one worker per
+  idle core and so oversubscribed the Machine whenever the moment after the builds was idle.
 
 - **A test starts a process.** Each start costs the Machine, and an endpoint sensor more
   again. `bun run test` sets `COLLIE_TEST_STARTS` to a fresh file, and the compiled

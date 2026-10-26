@@ -10,35 +10,36 @@
 // A suite that was killed left its files' roots, and maybe processes carrying their marker:
 // those whose pid is dead are removed before this one starts.
 //
-// One whole suite runs at a time on a machine; the next waits for its turn. Several Runs each
-// running the whole suite at once loaded vm-mk past 50 on 16 cores, and every one of them
-// took longer than it would have in a queue. A targeted run — one naming an existing path, or
-// `--changed` — takes no turn: it needs few cores, builds into a directory of its own that it
-// removes, and reads the shared timings without updating them (`tools/test-run.ts`).
-//
-// Workers are the cores left idle over a one-second sample taken after the builds and once
-// the turn is granted, at least 2 and at most one per core; a caller's `--parallel` stands
-// (`workersFor`). Load averages, which #110 dropped, lag and count this suite's previous run
-// and IO waits; a fresh idle-CPU sample counts neither, and still leaves room for the other
-// work on the Machine.
+// Every run takes its workers from one budget of test processes per user per Machine
+// (`tools/budget.ts`): two thirds of the cores, a quarter of it kept for targeted runs, and
+// waiters admitted in the order they arrived. A whole suite asks for all the rest, so whole
+// suites run one at a time and a targeted run never waits behind one. A whole suite also
+// takes the old suite lock, so a checkout from before the budget still takes turns with it.
+// A caller's `--parallel=N` asks for N, and gets no more than its kind's share.
+// `COLLIE_TEST_BUDGET` sets the budget's size. The run ends with a report of where its time
+// went (`report` in `tools/test-run.ts`).
 
-import { availableParallelism, cpus, tmpdir } from "node:os";
+import { availableParallelism, tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { BunRuntime, BunServices } from "@effect/platform-bun";
 import solidPlugin from "@opentui/solid/bun-plugin";
-import { Effect } from "effect";
+import { Effect, FileSystem } from "effect";
+import { budgetOf, startOnHold, STORE as store } from "./budget";
 import {
   binDirectory,
   isTargeted,
-  startsSummary,
+  pressureAt,
+  report,
+  requestOf,
   timingFlags,
   turnFor,
-  workersFor,
 } from "./test-run";
 import { SOCKET_BASE, sweepDeadRoots } from "../test/support/sweep";
 import { LIVE_HARNESSES } from "../test/support/live-switch";
 
 const args = Bun.argv.slice(2);
+const budget = budgetOf(availableParallelism(), process.env.COLLIE_TEST_BUDGET);
+const say = (line: string) => Effect.sync(() => console.error(line));
 
 /** This environment, less the switch for live-harness tests, which only `test:live` sets. */
 const suiteEnv = () => {
@@ -46,80 +47,120 @@ const suiteEnv = () => {
   return rest;
 };
 
-const run = (targeted: boolean, out: string, flags: ReadonlyArray<string>) => async () => {
-  const collie = `${out}/collie`;
-  const herdr = `${out}/fake-herdr`;
-  const forge = `${out}/fake-forge`;
-  const starts = `${out}/starts`;
-  const started = performance.now();
-  sweepDeadRoots(tmpdir());
-  if (tmpdir() !== SOCKET_BASE) sweepDeadRoots(SOCKET_BASE);
-  const built = await Promise.all([
-    Bun.spawn(["bun", "run", "tools/build.ts", `${process.platform}-${process.arch}`, collie], {
-      stdout: "ignore",
-      stderr: "inherit",
-    }).exited,
+const build = (out: string) =>
+  Promise.all([
+    Bun.spawn(
+      ["bun", "run", "tools/build.ts", `${process.platform}-${process.arch}`, `${out}/collie`],
+      {
+        stdout: "ignore",
+        stderr: "inherit",
+      },
+    ).exited,
     Bun.build({
       entrypoints: ["test/support/fake-herdr.ts"],
       target: "bun",
       plugins: [solidPlugin],
       bytecode: true,
       format: "esm",
-      compile: { outfile: herdr },
+      compile: { outfile: `${out}/fake-herdr` },
     }).then((result) => (result.success ? 0 : 1)),
     Bun.build({
       entrypoints: ["test/support/forge-bin.ts"],
       target: "bun",
       bytecode: true,
       format: "esm",
-      compile: { outfile: forge },
+      compile: { outfile: `${out}/fake-forge` },
     }).then((result) => (result.success ? 0 : 1)),
   ]);
-  if (built.some((code) => code !== 0)) {
-    console.error("test: could not build the executables the suite runs");
-    return 1;
-  }
-  // A fresh checkout must start its longest files first too. These are durations, never
-  // results: Bun still discovers every test, and replaces the estimates after this run.
-  if (!targeted && !(await Bun.file(timings).exists())) await Bun.write(timings, Bun.file(seed));
-  const before = cpus();
-  await Bun.sleep(1_000);
-  const { workers, line } = workersFor(args, before, cpus(), availableParallelism());
-  console.error(line);
-  const parallel = workers === "caller" ? [] : [`--parallel=${workers}`];
-  await Bun.write(starts, "");
-  const exit = await Bun.spawn(["bun", "test", ...parallel, "--timeout=30000", ...flags, ...args], {
-    env: {
-      ...suiteEnv(),
-      COLLIE_TEST_BINARY: collie,
-      COLLIE_TEST_FAKE_HERDR: herdr,
-      COLLIE_TEST_FAKE_FORGE: forge,
-      COLLIE_TEST_STARTS: starts,
-    },
-    stdio: ["inherit", "inherit", "inherit"],
-  }).exited;
-  for (const line of startsSummary(await Bun.file(starts).text())) console.error(line);
-  console.error(`test: ${((performance.now() - started) / 1_000).toFixed(2)} s including builds`);
-  return exit;
-};
 
 const timings = ".scratch/test-timings.json";
 const seed = resolve(import.meta.dir, "test-timings.json");
 
-const suite = (targeted: boolean) =>
-  Effect.gen(function* () {
-    const out = yield* binDirectory(targeted);
-    const flags = yield* timingFlags(targeted, timings, seed);
-    return yield* Effect.promise(run(targeted, out, flags));
-  }).pipe(Effect.scoped);
+const suite = (targeted: boolean, since: number) => {
+  const request = requestOf(args, budget, targeted);
+  return turnFor(
+    request,
+    store,
+    budget,
+    lock,
+    (hold) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const queued = performance.now() - since;
+        const admittedAt = yield* pressureAt();
+        console.error(`test: ${hold.workers} workers of a budget of ${budget.total}`);
+        if (hold.fewer !== null) console.error(`test: ${hold.fewer}`);
+        const out = yield* binDirectory(targeted);
+        const flags = yield* timingFlags(targeted, timings, seed);
+        const starts = `${out}/starts`;
+        sweepDeadRoots(tmpdir());
+        if (tmpdir() !== SOCKET_BASE) sweepDeadRoots(SOCKET_BASE);
+        const building = performance.now();
+        if ((yield* Effect.promise(() => build(out))).some((code) => code !== 0)) {
+          console.error("test: could not build the executables the suite runs");
+          return 1;
+        }
+        // A fresh checkout must start its longest files first too. These are durations, never
+        // results: Bun still discovers every test, and replaces the estimates after this run.
+        if (!targeted && !(yield* fs.exists(timings)))
+          yield* Effect.promise(() => Bun.write(timings, Bun.file(seed)));
+        yield* fs.writeFileString(starts, "");
+        const running = performance.now();
+        const child = yield* startOnHold(
+          store,
+          hold.id,
+          [
+            "bun",
+            "test",
+            `--parallel=${hold.workers}`,
+            "--timeout=30000",
+            ...flags,
+            ...request.args,
+          ],
+          {
+            env: {
+              ...suiteEnv(),
+              COLLIE_TEST_BINARY: `${out}/collie`,
+              COLLIE_TEST_FAKE_HERDR: `${out}/fake-herdr`,
+              COLLIE_TEST_FAKE_FORGE: `${out}/fake-forge`,
+              COLLIE_TEST_STARTS: starts,
+            },
+            inherit: true,
+          },
+        );
+        const exit = yield* Effect.promise(() => child.exited);
+        const ended = performance.now();
+        const files = targeted
+          ? null
+          : yield* fs.readFileString(timings).pipe(
+              Effect.map((text) => (JSON.parse(text) as { files: Record<string, number> }).files),
+              Effect.orElseSucceed(() => null),
+            );
+        const lines = report({
+          queued: queued / 1_000,
+          built: (running - building) / 1_000,
+          ran: (ended - running) / 1_000,
+          workers: hold.workers,
+          budget,
+          timings: files,
+          starts: yield* fs.readFileString(starts).pipe(Effect.orElseSucceed(() => "")),
+          admitted: admittedAt,
+          ended: yield* pressureAt(),
+        });
+        for (const line of lines) console.error(line);
+        return exit;
+      }).pipe(Effect.scoped),
+    say,
+  );
+};
 
 // Per user, so one user's suite never waits on a lock it cannot break.
 const lock = `${tmpdir()}/collie-test-suite-${process.getuid?.() ?? "user"}.lock`;
 
 BunRuntime.runMain(
-  isTargeted(args).pipe(
-    Effect.flatMap((targeted) =>
-      turnFor(targeted, lock, suite(targeted), (line) => Effect.sync(() => console.error(line))),
+  Effect.sync(() => performance.now()).pipe(
+    Effect.flatMap((since) =>
+      isTargeted(args).pipe(Effect.flatMap((targeted) => suite(targeted, since))),
     ),
     Effect.flatMap((code) => Effect.sync(() => process.exit(code))),
     Effect.provide(BunServices.layer),
