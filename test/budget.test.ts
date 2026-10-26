@@ -208,7 +208,9 @@ test(
         void one.stdin.end();
         const child = yield* until(
           () =>
-            Effect.sync(() => Bun.spawnSync(["pgrep", "-P", String(one.pid)]).stdout.toString()),
+            Effect.promise(() =>
+              new Response(Bun.spawn(["pgrep", "-P", String(one.pid)]).stdout).text(),
+            ),
           (out) => out.trim() !== "",
         ).pipe(Effect.map(Number));
         yield* Effect.addFinalizer(() => signalProcess(child, "SIGKILL"));
