@@ -1,5 +1,8 @@
 // Harness, model and effort choices shared by the host and Desktop, without host IO.
 
+import { Effect } from "effect";
+import { decodeSubagents, readSubagents, type ClaudeSubagents } from "./subagents";
+
 /**
  * The harness adapter's pinned default model. Adapters without one still omit the flag.
  */
@@ -69,6 +72,7 @@ export interface Preferences {
   readonly harness?: string;
   readonly model?: string;
   readonly effort?: string;
+  readonly claudeSubagents?: ClaudeSubagents;
   /** Past this share of its busiest window, 1–100, this agent is not chosen for new work. */
   readonly upTo?: number;
   /** What to try past `upTo` or once Exhausted, in order, before the human's chain. */
@@ -80,14 +84,27 @@ export const preferencesIn = (options: {
   readonly harness?: string | undefined;
   readonly model?: string | undefined;
   readonly effort?: string | undefined;
+  readonly claudeSubagents?: ClaudeSubagents | undefined;
 }): Preferences =>
   Object.fromEntries(
     Object.entries({
       harness: options.harness,
       model: options.model,
       effort: options.effort,
+      claudeSubagents: options.claudeSubagents,
     }).filter(([, value]) => value !== undefined),
   );
+
+/** Agent preferences carried across a child Run's serialized options. */
+export const preferencesFromOptions = Effect.fn("Harness.preferencesFromOptions")(function* (
+  options: Readonly<Record<string, string>>,
+) {
+  const claudeSubagents =
+    options.claudeSubagents === undefined
+      ? undefined
+      : yield* readSubagents(options.claudeSubagents);
+  return preferencesIn({ ...options, claudeSubagents });
+});
 
 /** A preference as code gives it: `preferencesIn`'s fields, with its ceiling where it has one. */
 export const ceilingIn = (options: Preferences): Preferences => {
@@ -103,6 +120,7 @@ export interface AgentChoice {
   /** `default` is the harness's own pinned or native default. */
   readonly model: string;
   readonly effort: string | null;
+  readonly claudeSubagents?: ClaudeSubagents;
 }
 
 /**
@@ -111,22 +129,33 @@ export interface AgentChoice {
  */
 export function foldPreferences(
   layers: ReadonlyArray<Preferences | undefined>,
-): Pick<Preferences, "harness" | "model" | "effort"> {
+): Pick<Preferences, "harness" | "model" | "effort" | "claudeSubagents"> {
   let harness: string | undefined;
   let model: string | undefined;
   let effort: string | undefined;
+  let claudeSubagents: ClaudeSubagents | undefined;
   for (const layer of layers) {
     if (layer === undefined) continue;
     if (layer.harness !== undefined && layer.harness !== harness) {
       harness = layer.harness;
       model = undefined;
       effort = undefined;
+      claudeSubagents = undefined;
     }
     model = layer.model ?? model;
     effort = layer.effort ?? effort;
+    if (layer.claudeSubagents !== undefined)
+      claudeSubagents = {
+        ...claudeSubagents,
+        ...Object.fromEntries(
+          Object.entries(layer.claudeSubagents).filter(([, value]) => value !== undefined),
+        ),
+      };
   }
   return Object.fromEntries(
-    Object.entries({ harness, model, effort }).filter(([, value]) => value !== undefined),
+    Object.entries({ harness, model, effort, claudeSubagents }).filter(
+      ([, value]) => value !== undefined,
+    ),
   );
 }
 
@@ -141,7 +170,7 @@ export function resolveChoice(
 ):
   | { readonly ok: true; readonly choice: AgentChoice }
   | { readonly ok: false; readonly problem: string } {
-  const { harness = "", model = DEFAULT_MODEL, effort } = foldPreferences(layers);
+  const { harness = "", model = DEFAULT_MODEL, effort, claudeSubagents } = foldPreferences(layers);
   const adapter = HARNESS_MODELS[harness];
   if (adapter === undefined) {
     return { ok: false, problem: `no harness called "${harness}" (${harnessNames().join(", ")})` };
@@ -163,6 +192,29 @@ export function resolveChoice(
     return {
       ok: false,
       problem: `"${effort}" is not an effort ${harness} takes (${adapter.efforts?.join(", ")})`,
+    };
+  }
+  if (harness === "claude" && claudeSubagents !== undefined) {
+    for (const layer of layers) {
+      if (layer?.claudeSubagents === undefined) continue;
+      const checked = decodeSubagents(layer.claudeSubagents);
+      if (checked._tag === "Failure")
+        return { ok: false, problem: `claudeSubagents: ${String(checked.failure)}` };
+    }
+    if (claudeSubagents.forceModel === true && claudeSubagents.model === undefined)
+      return { ok: false, problem: "claudeSubagents.forceModel requires a model" };
+    if (claudeSubagents.model !== undefined && !knownModel(adapter, claudeSubagents.model, extra))
+      return {
+        ok: false,
+        problem: `claudeSubagents.model: ${claudeSubagents.model} is not a Claude model`,
+      };
+    const policy =
+      claudeSubagents.model === DEFAULT_MODEL
+        ? { ...claudeSubagents, model: adapter.defaultModel ?? DEFAULT_MODEL }
+        : claudeSubagents;
+    return {
+      ok: true,
+      choice: { harness, model, effort: effort ?? null, claudeSubagents: policy },
     };
   }
   return { ok: true, choice: { harness, model, effort: effort ?? null } };
@@ -240,7 +292,7 @@ export function resolveWithRoom(
   );
   if (outOfRange !== undefined)
     return { ok: false, problem: `upTo is a percentage from 1 to 100, not ${outOfRange}` };
-  const base = { harness: folded.harness, model: folded.model, effort: folded.effort ?? undefined };
+  const base = { ...folded, effort: folded.effort ?? undefined };
   const candidates: Array<{ readonly choice: AgentChoice; readonly upTo?: number }> = [
     { choice: folded, upTo: ceiling.upTo },
   ];
@@ -255,7 +307,13 @@ export function resolveWithRoom(
     const takes =
       HARNESS_MODELS[entry.harness ?? ""]?.efforts?.includes(folded.effort ?? "") ?? false;
     const next = resolveChoice(
-      [entry, takes && folded.effort !== null ? { effort: folded.effort } : undefined],
+      [
+        entry,
+        entry.harness === "claude" && folded.harness === "claude"
+          ? { claudeSubagents: folded.claudeSubagents }
+          : undefined,
+        takes && folded.effort !== null ? { effort: folded.effort } : undefined,
+      ],
       extraModels,
     );
     if (next.ok) candidates.push({ choice: next.choice });

@@ -2621,6 +2621,9 @@ Claude Code's alone; Codex, OpenCode and Pi are passed nothing. See
 `agent_profile` is what the agents Collie launches get beyond Collie's own setup, per role.
 See [What Collie's agents get](#what-collies-agents-get).
 
+`claude_subagents` controls native Claude delegation for managed Run agents.
+See [Claude subagents](#claude-subagents).
+
 `gitlab_host` is the one GitLab this Machine works against, `gitlab.cego.dk` unless you
 change it under Settings, which refuses anything that is not a host name. `collie doctor`
 checks glab's login, the token and `git push` for that host alone, and `collie onboard` logs
@@ -2700,6 +2703,60 @@ chat is given it after its own prompt. It says that work which cannot be wrong, 
 **Tautology**, proves nothing: a builder makes none, and a reviewer or judge raises each one
 it finds. It also holds the code comment rules. Fork it like any persona to change what
 every agent is told; [authoring](authoring.md#every-agent) says how.
+
+### Claude subagents
+
+The shared **Claude subagents** setting accepts JSON for Claude agents launched by a Run.
+An empty setting preserves native behavior. It does not change other Harnesses, Home chat,
+Desktop chat, or your ordinary Claude sessions. Set it through either Settings view or the CLI:
+
+```sh
+collie settings set claude_subagents '{"model":"sonnet","maxDepth":1,"maxConcurrent":2,"cacheTtl":"1h"}'
+```
+
+This example sets a Sonnet fallback, prevents nested delegation, and limits ordinary Agent
+spawns to two concurrent workers. One-hour retention is an explicit choice for workers
+that resume after pauses. No values in this example are shipped defaults.
+
+| Field           | Values                        | Behavior                                                                                                        |
+| --------------- | ----------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `enabled`       | Boolean                       | `false` denies Claude's `Agent` tool. `true` adds no Collie denial and preserves native restrictions.           |
+| `model`         | Claude alias or full model ID | Sets the default subagent model. `default` uses Collie's pinned Claude default.                                 |
+| `forceModel`    | Boolean                       | `true` requires a model and requests Claude's force override. `false` explicitly disables that override.        |
+| `cacheTtl`      | `5m` or `1h`                  | Sets retention for Claude's subagent/background-request bucket. Leaves the main conversation's retention alone. |
+| `maxDepth`      | Positive whole number         | Maximum subagent layers below the managed agent. `1` prevents nested delegation.                                |
+| `maxConcurrent` | Positive whole number         | Limits ordinary concurrent Agent spawns within each managed agent.                                              |
+
+Every omitted field keeps its inherited or native value. Workflow, role, scope, and call
+preferences can override individual fields; see the [SDK guide](sdk.md#claude-subagent-policy).
+The choice is recorded before launch and survives recovery. Changed defaults affect new
+work; they do not reconfigure a live conversation.
+
+Without `forceModel`, invocation and agent-definition model choices take precedence over
+the fallback, including the built-in Explore and Plan agents. Forcing a model overrides
+specialist choices, but Claude's forks and skills using inherited models have exceptions.
+Check the running worker's model with `/tasks`. See
+[Claude's model precedence](https://code.claude.com/docs/en/sub-agents#choose-a-model).
+
+An ordinary subagent warms its own cache. Longer retention cannot transfer the parent's
+cache or increase context-window capacity. One-hour cache writes cost more than five-minute
+writes, so short workers can become more expensive. Native environment overrides and
+provider restrictions still apply; see
+[Claude's cache controls](https://code.claude.com/docs/en/prompt-caching#cache-lifetime).
+
+Concurrency is a native scheduling limit, not a spending quota. Resumes and `/subtask` can
+exceed it; ultracode, native workflow agents, and teammates have separate behavior. See
+[Claude's concurrent subagent limit](https://code.claude.com/docs/en/sub-agents#concurrent-subagent-limit).
+
+Keep delegation available for substantial research and verbose output. Audit skills that
+require background agents before disabling it. Denying Claude's Agent tool leaves
+Collie's own agents, panels, reviews, and child Runs available.
+
+Collie merges policy into the managed agent's additional settings, preserving hooks,
+profile overlays, and native settings sources. It also applies with compaction disabled.
+A configured unsupported control parks the launch before opening a pane and names the
+required Claude version: 2.1.63 for delegation, 2.1.217 for limits, 2.1.242 for retention,
+2.1.251 for fallback model precedence, and 2.1.257 for the force override.
 
 ### What a Claude agent's auto mode is told
 

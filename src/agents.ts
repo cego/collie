@@ -52,6 +52,8 @@ import {
 } from "./compaction";
 import {
   COMPACTION_PORTS,
+  atLeast,
+  installedVersion,
   questionsSince,
   ranOutSince,
   submittedDelivery,
@@ -90,6 +92,7 @@ import {
   DEFAULT_MODEL,
   pinned,
   preferencesIn,
+  preferencesFromOptions,
   resolveWithRoom,
   said,
   startArgs,
@@ -147,6 +150,7 @@ import {
   type ClaudeOverlay,
 } from "./profile";
 import { isString } from "./schema";
+import { ClaudeSubagents, readSubagents, subagentSettings, subagentVersion } from "./subagents";
 import { Collecting, collectingLayer, type CollectingApi } from "./collecting";
 import { holdsBudgetOf, waitForMemory } from "./memory-wait";
 import { causalKey, deliveriesOf, SENT_STATES, toldLine } from "./steering";
@@ -184,6 +188,7 @@ export interface AgentAsk {
   readonly harness: string | null;
   readonly model: string | null;
   readonly effort: string | null;
+  readonly claudeSubagents?: ClaudeSubagents;
   readonly permissions: string | null;
   /** What this work fell back from, and why, where it did. */
   readonly from?: AgentChoice;
@@ -198,6 +203,7 @@ export interface AgentAsk {
  */
 export const AgentChoiceSchema = Schema.Struct({
   ...RanOn.fields,
+  claudeSubagents: Schema.optionalKey(ClaudeSubagents),
   from: Schema.optionalKey(RanOn),
   why: Schema.optionalKey(Schema.String),
 });
@@ -506,6 +512,7 @@ interface Doing<Output extends OutputContract> {
   readonly harness?: string;
   readonly model?: string;
   readonly effort?: string;
+  readonly claudeSubagents?: ClaudeSubagents;
   readonly permissions?: PermissionMode;
   /**
    * The panel seat this work sits at: its agent over the role's, and its persona and
@@ -631,7 +638,7 @@ export const agentWork = <
     const requested = foldPreferences([...scopes, preferencesIn(given)]);
     if (held !== null && !agrees(held, requested)) {
       return yield* new WorkflowError({
-        reason: `${work.operation}: ${work.agent} is already running as ${held.harness}/${held.model}, and this work asks for ${requested.harness ?? held.harness}/${requested.model ?? held.model}. A conversation cannot become another agent: give this work an agent of its own, or ask for the one it is.`,
+        reason: `${work.operation}: ${work.agent} is already running as ${held.harness}/${held.model}, and this work asks for ${requested.harness ?? held.harness}/${requested.model ?? held.model} or a different Claude subagent policy. A conversation cannot become another agent: give this work an agent of its own, or ask for the one it is.`,
       });
     }
     // A boundary: the work so far is judged against the Intent before more is started.
@@ -649,7 +656,11 @@ export const agentWork = <
     const layers = [
       preferred,
       ceilingIn(seated),
-      preferencesIn(place.options),
+      yield* preferencesFromOptions(place.options).pipe(
+        Effect.mapError(
+          (cause) => new WorkflowError({ reason: `claudeSubagents: ${String(cause)}` }),
+        ),
+      ),
       ...scopes,
       ceilingIn(given),
     ];
@@ -678,6 +689,7 @@ export const agentWork = <
       permissions: work.permissions ?? null,
       authority: place.authority,
     };
+    if (choice.claudeSubagents !== undefined) ask.claudeSubagents = choice.claudeSubagents;
     fellBack(ask, choice.from, choice.why);
     if (held !== null && held.sequence > 1) ask.sequence = held.sequence;
     if (given.clears !== undefined) ask.clears = given.clears;
@@ -879,6 +891,8 @@ export const agentWork = <
         from: currentAsk.from ?? on,
         why: out.why,
       };
+      delete nextAsk.claudeSubagents;
+      if (next.claudeSubagents !== undefined) nextAsk.claudeSubagents = next.claudeSubagents;
       yield* Activity.make({
         name: `${work.operation}.fallback-${n}.close`,
         error: AgentUncertain,
@@ -993,6 +1007,20 @@ const fellBack = (
  * took over from an agent that ran out, what that agent was.
  */
 const agrees = (held: ChosenAgent, requested: Preferences): boolean => {
+  const subagents =
+    requested.claudeSubagents?.model === DEFAULT_MODEL
+      ? { ...requested.claudeSubagents, model: HARNESSES.claude?.defaultModel ?? DEFAULT_MODEL }
+      : requested.claudeSubagents;
+  if (
+    held.harness === "claude" &&
+    subagents !== undefined &&
+    !Object.entries(subagents).every(([key, value]) =>
+      Object.entries(held.claudeSubagents ?? {}).some(
+        ([name, actual]) => name === key && actual === value,
+      ),
+    )
+  )
+    return false;
   const is = (on: AgentChoice) =>
     (requested.harness === undefined || requested.harness === on.harness) &&
     (requested.model === undefined || requested.model === on.model) &&
@@ -1252,6 +1280,7 @@ export interface AgentHost {
   readonly pollMs?: number;
   /** Idle time an agent has to write its Output; past it the work is uncertain, not finished. */
   readonly collectMs?: number;
+  readonly version?: typeof installedVersion;
   /** How long a new agent's harness has to show it can take its first prompt. */
   readonly readyMs?: number;
   /** How long a compaction may run before the Run shows it needs you; `COMPACTION_WAIT_MS` where left out. */
@@ -1276,11 +1305,15 @@ const DEFAULT_POLL_MS = 2000;
 const READING_EVERY_MS = 60_000;
 
 /** What a launch ran on, as a choice. */
-const choiceOfLaunch = (launched: Launched): AgentChoice => ({
-  harness: launched.harness,
-  model: launched.model ?? DEFAULT_MODEL,
-  effort: launched.effort ?? null,
-});
+const choiceOfLaunch = (launched: Launched): AgentChoice => {
+  const choice: Types.Mutable<AgentChoice> = {
+    harness: launched.harness,
+    model: launched.model ?? DEFAULT_MODEL,
+    effort: launched.effort ?? null,
+  };
+  if (launched.claudeSubagents !== undefined) choice.claudeSubagents = launched.claudeSubagents;
+  return choice;
+};
 
 /** A choice that stayed on its preferred agent only because nothing else had room. */
 const nothingHasRoom = (chosen: ChosenAgent) =>
@@ -1745,6 +1778,19 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         reason: `${parsed.refused} in ${host.env.userDir}/config.json: fix it, then resume this Run`,
       });
     const profile = roleProfile(parsed.profile, ask.role);
+    if (
+      adapter.id === "claude" &&
+      ask.claudeSubagents !== undefined &&
+      Object.keys(ask.claudeSubagents).length > 0
+    ) {
+      const needed = subagentVersion(ask.claudeSubagents);
+      const installed = yield* (host.version ?? installedVersion)("claude");
+      if (installed === null || !atLeast(installed, needed))
+        return yield* new AgentParked({
+          operation: ask.operation,
+          reason: `claudeSubagents requires Claude Code ${needed} or later; installed: ${installed ?? "unknown"}. Upgrade Claude Code, then resume this Run`,
+        });
+    }
     const unreadable = yield* envFileProblems(profile.env ?? {}, host.env.home);
     if (unreadable.length > 0)
       return yield* new AgentParked({
@@ -1845,6 +1891,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
                   ),
                 ),
                 `${dirFor(ask.runId)}/${stemOf(ask)}`,
+                ask.claudeSubagents,
               )
             : controls;
         const workspace = ask.workspace ?? (yield* taskWorkspace(ask));
@@ -1967,6 +2014,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
               model: ask.model ?? host.model,
               effort: ask.effort,
             };
+            if (ask.claudeSubagents !== undefined) landed.claudeSubagents = ask.claudeSubagents;
             if ((ask.sequence ?? 1) > 1) landed.sequence = ask.sequence;
             landed.at = yield* Clock.currentTimeMillis;
             fellBack(landed, ask.from, ask.why);
@@ -2718,10 +2766,22 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
     choose: (layers, { runId, operation }, spent = []) =>
       under(
         Effect.gen(function* () {
+          const raw = (yield* readConfig(host.env.userDir).pipe(
+            Effect.mapError((cause) => new WorkflowError({ reason: String(cause) })),
+          )).claude_subagents;
+          const policy =
+            raw === undefined
+              ? undefined
+              : yield* readSubagents(raw).pipe(
+                  Effect.mapError(
+                    (cause) => new WorkflowError({ reason: `claude_subagents: ${String(cause)}` }),
+                  ),
+                );
           const configured = {
             harness: host.harness,
             model: host.model,
             effort: host.effort,
+            claudeSubagents: policy,
           };
           const readings = yield* host.readings ?? Effect.succeed([]);
           const chain =
@@ -2777,6 +2837,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
             effort: held.effort ?? null,
             sequence: held.sequence ?? 1,
           };
+          if (held.claudeSubagents !== undefined) running.claudeSubagents = held.claudeSubagents;
           fellBack(running, held.from, held.why);
           return running;
         }),
@@ -3075,6 +3136,7 @@ const claudeSettings = (
   overlay: ClaudeOverlay,
   autoMode: AutoModeBlock,
   stem: string,
+  policy?: ClaudeSubagents,
 ) =>
   Effect.gen(function* () {
     const at = controls.indexOf("--settings");
@@ -3088,7 +3150,11 @@ const claudeSettings = (
             Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.JsonObject))),
             Effect.orDie,
           );
-    const merged = { ...mergeClaudeSettings(collie, overlay), autoMode: { ...autoMode } };
+    const merged = {
+      ...mergeClaudeSettings(collie, overlay),
+      autoMode: { ...autoMode },
+    };
+    if (policy !== undefined) Object.assign(merged, subagentSettings(policy));
     yield* write(path, `${encodeSettings(merged)}\n`);
     return passed === undefined ? [...controls, "--settings", path] : controls;
   });
