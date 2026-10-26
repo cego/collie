@@ -171,6 +171,7 @@ import {
   propagate,
   readIntent,
   seedIntent,
+  withOutcome,
   writeIntent,
   type IntentSeed,
 } from "./intent";
@@ -3532,6 +3533,7 @@ export const hostLayer = (options: {
                     ? Effect.succeed(null)
                     : decodeStrings(row.options ?? "{}").pipe(
                         Effect.orElseSucceed((): Record<string, string> => ({})),
+                        Effect.flatMap((admitted) => optionsNow(dir, runId, admitted)),
                         Effect.map((options) => ({
                           options,
                           task: row.task,
@@ -4807,6 +4809,12 @@ const workingPlace = (row: RunRow): Placed => {
 };
 
 /** Where a Run works: as the host placed it, or for a row from before that, as it started. */
+const optionsNow = (dir: string, runId: string, options: Readonly<Record<string, string>>) =>
+  readIntent(runDir(dir, runId)).pipe(
+    Effect.map((intent) => withOutcome(options, intent)),
+    Effect.orElseSucceed(() => options),
+  );
+
 const placedOf = (row: RunRow, options: Readonly<Record<string, string>>): Placed =>
   Option.getOrElse(decodePlaced(row.checkout ?? ""), () => ({
     cwd: options.workspace?.startsWith("/") ? options.workspace : row.project,
@@ -6413,6 +6421,8 @@ const makeRegistry: (
       ),
       options: yield* decodeStrings(row.options ?? "{}").pipe(
         Effect.orElseSucceed((): Record<string, string> => ({})),
+        Effect.flatMap((options) => optionsNow(dir, row.run, options)),
+        Effect.provideContext(bun),
       ),
     };
     const { cwd, branch, workspace, worktree } = placedOf(row, admitted.options);
@@ -6809,6 +6819,8 @@ const makeRegistry: (
     const generation = yield* resolve({ project: row.project, id: row.workflow });
     const options = yield* decodeStrings(row.options ?? "{}").pipe(
       Effect.orElseSucceed((): Record<string, string> => ({})),
+      Effect.flatMap((admitted) => optionsNow(dir, runId, admitted)),
+      Effect.provideContext(bun),
     );
     const found = yield* routed(runId);
     const state = pollStatus(

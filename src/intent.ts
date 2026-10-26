@@ -42,6 +42,8 @@ export const IntentSchema = Schema.Struct({
   version: Schema.Int,
   run: Schema.String,
   goal: Schema.NullOr(Schema.String),
+  /** The outcome kind the Run is held to, where it was changed after admission; null clears it. */
+  outcome: Schema.optionalKey(Schema.NullOr(Schema.String)),
   constraints: Schema.Array(ConstraintSchema),
   authority: AuthoritySchema,
   parent: Schema.NullOr(
@@ -119,9 +121,15 @@ export function constraintId(text: string): string {
 
 export type Change =
   | { readonly kind: "set-goal"; readonly goal: string | null }
+  | { readonly kind: "set-outcome"; readonly outcome: string | null }
   | { readonly kind: "add-constraint"; readonly constraint: Omit<Constraint, "since"> }
   | { readonly kind: "remove-constraint"; readonly id: string }
   | { readonly kind: "authority"; readonly patch: Partial<Authority> };
+
+/** The outcome change a front door's word asks for: `unspecified` clears the kind. */
+export function outcomeChange(word: string): Change {
+  return { kind: "set-outcome", outcome: word === "unspecified" ? null : word };
+}
 
 /** The authority change granting `name` this command, or withdrawing it where there is none. */
 export function verificationGrant(
@@ -140,6 +148,8 @@ function describe(change: Change): string {
   switch (change.kind) {
     case "set-goal":
       return `goal set to ${change.goal === null ? "nothing" : JSON.stringify(change.goal)}`;
+    case "set-outcome":
+      return change.outcome === null ? "outcome cleared" : `outcome set to ${change.outcome}`;
     case "add-constraint":
       return `constraint ${change.constraint.id} added (${change.constraint.severity})`;
     case "remove-constraint":
@@ -155,6 +165,8 @@ function applied(intent: Intent, change: Change, version: number): Intent | null
   switch (change.kind) {
     case "set-goal":
       return intent.goal === change.goal ? null : { ...intent, goal: change.goal };
+    case "set-outcome":
+      return intent.outcome === change.outcome ? null : { ...intent, outcome: change.outcome };
     case "add-constraint": {
       const constraint = { ...change.constraint, since: version };
       const without = intent.constraints.filter((c) => c.id !== constraint.id);
@@ -189,6 +201,16 @@ export function amend(
     version,
     history: [...intent.history, { version, at, by, ...voice, change: describe(change) }],
   };
+}
+
+/** A Run's launch options, with the outcome kind its Intent was last set to where it was. */
+export function withOutcome(
+  options: Readonly<Record<string, string>>,
+  intent: Intent | null,
+): Readonly<Record<string, string>> {
+  if (intent?.outcome === undefined) return options;
+  const { outcome: _admitted, ...rest } = options;
+  return intent.outcome === null ? rest : { ...rest, outcome: intent.outcome };
 }
 
 /** Who an amendment from the Run's own plan is by; every other author's removal stands. */

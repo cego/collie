@@ -23,7 +23,7 @@ import { Crypto } from "effect";
 import { connect } from "../src/host";
 import { runDir } from "../src/engine";
 import { isSettled } from "../src/lifecycle";
-import { hosted } from "./support/hosted";
+import { MODULES, hosted } from "./support/hosted";
 import { until } from "./support/host";
 
 let dir: string;
@@ -474,6 +474,72 @@ test(
           (view) => view !== null && isSettled(view),
         );
       }),
+    ),
+  60_000,
+);
+
+test(
+  "a Run's outcome kind is changed through its Intent, and an unknown kind is refused",
+  () =>
+    hosted(
+      "hw-intent-outcome-",
+      ({ world }) =>
+        Effect.gen(function* () {
+          const client = yield* connect(world.state).pipe(Effect.orDie);
+          const started = yield* client
+            .start({
+              project: world.project,
+              id: "hello",
+              request: "start",
+              input: { name: "kind" },
+              options: { outcome: "migration" },
+            })
+            .pipe(Effect.orDie);
+          const { runId } = started;
+          const setOutcome = (outcome: string | null, request: string) =>
+            client.changeIntent({
+              runId,
+              change: { kind: "set-outcome", outcome },
+              propagate: false,
+              request,
+            });
+
+          const changed = yield* setOutcome("feature", "feature").pipe(Effect.orDie);
+          expect(changed.version).toBe(2);
+          const intent = yield* readIntent(runDir(world.state, runId));
+          expect(intent?.history.at(-1)?.change).toBe("outcome set to feature");
+          expect((yield* client.run({ runId }).pipe(Effect.orDie))?.outcome).toBe("feature");
+
+          const refused = yield* setOutcome("chore", "chore").pipe(Effect.flip);
+          expect(String(refused.reason)).toStartWith("invalid_input:");
+          expect((yield* readIntent(runDir(world.state, runId)))?.version).toBe(2);
+
+          yield* setOutcome(null, "cleared").pipe(Effect.orDie);
+          expect((yield* client.run({ runId }).pipe(Effect.orDie))?.outcome).toBe("unspecified");
+
+          const review = yield* client
+            .start({
+              project: world.project,
+              id: "offered",
+              request: "review",
+              input: { note: "x" },
+            })
+            .pipe(Effect.orDie);
+          const fixed = yield* client
+            .changeIntent({
+              runId: review.runId,
+              change: { kind: "set-outcome", outcome: "feature" },
+              propagate: false,
+              request: "fixed",
+            })
+            .pipe(Effect.flip);
+          expect(String(fixed.reason)).toContain('"offered" always proves review');
+          yield* until(
+            () => client.run({ runId }).pipe(Effect.orDie),
+            (view) => view !== null && isSettled(view),
+          );
+        }),
+      [...MODULES, "offered.workflow.ts", "graded.workflow.ts"],
     ),
   60_000,
 );

@@ -690,6 +690,8 @@ it.
 `place.options` is the other half of the launch. The names in `RESERVED_INPUTS` are the
 host's, so they are never in your payload — a caller asking for extra review axes or naming
 an earlier Run to compare against is doing it there, and this is where you read it.
+`outcome` is the one that can change while the Run is live, with `run intent set-outcome`:
+read it again, inside an `Activity`, wherever the kind decides something.
 
 `host.post` puts a file on the merge request a Run was pointed at, as one note Collie sends
 rather than an agent writes out again, through the merge request's own forge. With

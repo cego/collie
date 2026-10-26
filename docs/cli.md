@@ -903,6 +903,7 @@ collie --json run start implement --input plan=./plans/steering \
 
 collie --json run intent show <run-id>
 collie --json run intent set-goal <run-id> "<goal>" [--request-id <id>]
+collie --json run intent set-outcome <run-id> feature
 collie --json run intent add-constraint <run-id> "<text>" --severity block
 collie --json run intent remove-constraint <run-id> <constraint-id>
 collie --json run intent authority <run-id> auto_correct=true --propagate
@@ -922,6 +923,11 @@ Run on a worktree of its own, its `plan/SPEC.md`, written by its planner, is rea
 way at every work boundary: new bullets are added, dropped ones are removed, and a
 constraint anyone but the plan removed stays removed. **No text ever grants authority** —
 not a plan, not the repository, not a prompt.
+
+`set-outcome` changes the [outcome](#outcomes) a live Run is held to: `feature`, `bug`,
+`refactor`, `investigation`, `docs` or `migration`, or `unspecified` to clear it. Any other
+word is refused with `invalid_input`, and so is a Run whose workflow always proves one kind.
+Chat makes the same change with `update_intent`.
 
 `--severity` pairs with the `--constraint` in the same position; a constraint given
 without one is `warn`. A `block` constraint stops work; a `warn` one is reported.
@@ -1336,7 +1342,10 @@ merge.
 
 `plan` settles the outcome during its interview and forwards it, so a chained build is not
 asked again. A value that is not one of these is refused at the front door rather than
-discovered at the gate.
+discovered at the gate. A wrong one is corrected with `collie run intent set-outcome`
+while the Run is live: each review round, each gate pass and the merge request read the
+kind as it stands then, and the merge request names the kind the Run was finally held to.
+A dispute never changes the kind by itself.
 
 `plan` and `review` runs have a kind of their own that nobody chooses — `plan` proves it
 wrote tickets (`issues_dir` in its Output), `review` that it wrote a summary a human can

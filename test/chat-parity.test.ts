@@ -179,6 +179,20 @@ const INVENTORY: ReadonlyArray<readonly [string, Route]> = [
     },
   ],
   [
+    "run intent set-outcome",
+    {
+      route: "propose",
+      kind: "update_intent",
+      action: {
+        kind: "update_intent",
+        run: RUN,
+        change: "set-outcome",
+        patch: "feature",
+        base_version: 1,
+      },
+    },
+  ],
+  [
     "run intent add-constraint",
     {
       route: "propose",

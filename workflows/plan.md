@@ -27,8 +27,22 @@ For larger work, break it into manageable pieces yourself.
 Glossary (`CONTEXT.md`) and ADR changes we agree on go into the repository as we agree
 them — they are domain knowledge. Nothing else does.
 
-Choose the result kind from the task: `feature`, `bug`, `refactor`, `investigation`,
-`docs` or `migration`. Leave it empty if none fits; this is metadata, not another question.
+Choose the result kind from the task; this is metadata, not another question. Each one
+decides what the build has to prove before it opens its merge request:
+
+- `feature` — every ticket built, and a reviewer saying the agreed scope was met.
+- `bug` — a `regression` verification that fails before the fix and passes after it.
+- `refactor` — a reviewer saying behaviour was preserved. Not for a change that alters
+  behaviour on purpose.
+- `investigation` — a conclusion with evidence inside the run, and a reviewer saying it
+  holds; there may be no patch.
+- `docs` — every documented command run and passing, and a reviewer saying the
+  instructions are accurate.
+- `migration` — passing `migrate-up` and `migrate-down` (or `rollback`) verifications, and
+  a reviewer saying it is compatible both ways.
+
+Leave it empty if none fits: then only the run's checks have to pass. A wrong kind can be
+changed later with `collie run intent set-outcome`.
 
 Then write your Output, with what we settled under `decided`.
 

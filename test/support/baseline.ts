@@ -68,6 +68,7 @@ import {
 } from "../../src/sdk";
 import { measuresOf } from "../../src/outcomes";
 import { redact } from "../../src/redact";
+import { INTENT_FILE, IntentSchema, amend, seedIntent } from "../../src/intent";
 import selfImprove from "../../workflows/self-improve.workflow";
 import {
   type Finding,
@@ -4836,6 +4837,110 @@ scenario(
 
         expect(reasonOf(result)).toContain('evidence reference "/elsewhere/notes.md" is outside');
         expect(yield* wasAsked("r-gate-outside", "review-5-1")).toBe(false);
+      }),
+    ),
+  120_000,
+);
+
+/** The Intent `run intent set-outcome` leaves, written as an agent answers. */
+const outcomeSet = (runId: string, outcome: string) => ({
+  path: `${runDir(dir, runId)}/${INTENT_FILE}`,
+  text: Schema.encodeSync(Schema.fromJsonString(IntentSchema))(
+    amend(
+      seedIntent(runId, {}),
+      { kind: "set-outcome", outcome },
+      "human:kind",
+      "2026-10-26T00:00:00Z",
+    ),
+  ),
+});
+
+scenario(
+  "a migration changed to a feature before its gate is proved as a feature and opens its merge request",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* noGitlabMrs(bin);
+        yield* repository();
+        const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
+        const runId = "r-kind-gate";
+        yield* approve(runId, ["unit"]);
+        yield* rig.queueOutputs([
+          BUILT,
+          { writes: [outcomeSet(runId, "feature")], output: CLEAN_SYNTHESIS },
+          OPENED,
+        ]);
+        const result = yield* ran({
+          entry: shipped("implement"),
+          runId,
+          input: { plan, ...FINISH },
+          options: { outcome: "migration" },
+        });
+        yield* bin.restore();
+
+        expect(said(result)).toBe(OPENED.mr_url);
+        expect(yield* wasAsked(runId, "gate-fix-1")).toBe(false);
+        expect(yield* asked(runId, "mr")).toContain(
+          "Outcome to prove (not given means unclassified): feature\n",
+        );
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a refactor changed to a feature between review rounds is reviewed and proved as a feature",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* noGitlabMrs(bin);
+        yield* repository();
+        const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
+        const runId = "r-kind-rally";
+        yield* approve(runId, ["unit"]);
+        const finding = {
+          severity: "blocker",
+          title: "the picker now returns every row",
+          file: "src/a.ts",
+          detail: "a refactor keeps behaviour, and this changes it on purpose",
+        };
+        yield* rig.queueOutputs([
+          BUILT,
+          {
+            ...CLEAN_SYNTHESIS,
+            verdict: "findings",
+            findings: [finding],
+            behavior_preserved: false,
+          },
+          {
+            writes: [outcomeSet(runId, "feature")],
+            output: {
+              verdict: "clean",
+              fixed: [{ title: finding.title, file: finding.file }],
+              checks: [],
+            },
+          },
+          CLEAN_SYNTHESIS,
+          OPENED,
+        ]);
+        const result = yield* ran({
+          entry: shipped("implement"),
+          runId,
+          input: { plan, ...FINISH },
+          options: { outcome: "refactor" },
+        });
+        yield* bin.restore();
+
+        const proving = "Outcome the change has to prove (not given means unclassified):";
+        expect(yield* asked(runId, "review-1")).toContain(`${proving} refactor\n`);
+        expect(yield* asked(runId, "review-2-1")).toContain(`${proving} feature\n`);
+        expect(said(result)).toBe(OPENED.mr_url);
+        expect(yield* wasAsked(runId, "review-5-1")).toBe(false);
+        expect(yield* asked(runId, "mr")).toContain(
+          "Outcome to prove (not given means unclassified): feature\n",
+        );
       }),
     ),
   120_000,

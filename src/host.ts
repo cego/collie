@@ -84,6 +84,7 @@ import {
   CheckEvent,
   outputsOf,
 } from "./run-record";
+import { REQUESTABLE } from "./outcome";
 import { OutcomeRecords, outcomeRecordsOf } from "./outcomes";
 import { removedNotice, scrub, scrubJson } from "./redact";
 import { readMetrics } from "./metrics";
@@ -2261,8 +2262,24 @@ const frontDoorHandlers = (
           return plainly(
             Effect.gen(function* () {
               const edit = Effect.gen(function* () {
-                if ((yield* registry.view(runId)) === null)
-                  return yield* new HostRefused({ reason: `No Run "${runId}".` });
+                const view = yield* registry.view(runId);
+                if (view === null) return yield* new HostRefused({ reason: `No Run "${runId}".` });
+                if (change.kind === "set-outcome") {
+                  const asked = change.outcome;
+                  if (asked !== null && !REQUESTABLE.includes(asked))
+                    return yield* new HostRefused({
+                      reason: `${REFUSED_INPUT}: "${asked}" is not an outcome; a Run is held to one of ${REQUESTABLE.join(", ")}`,
+                    });
+                  const fixed = Option.getOrNull(
+                    yield* registry
+                      .resolve({ project: view.project, id: view.workflow })
+                      .pipe(Effect.option),
+                  )?.fixedOutcome;
+                  if (fixed !== null && fixed !== undefined)
+                    return yield* new HostRefused({
+                      reason: `${REFUSED_INPUT}: "${view.workflow}" always proves ${fixed}`,
+                    });
+                }
                 const by = { ...whoOf(client), requestId: request };
                 const approved =
                   change.kind === "verification"

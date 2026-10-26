@@ -332,7 +332,8 @@ What was actually verified, and by whom — `by collie` is a command Collie ran 
 {{evidence}}
 
 Say that in the description, in one line: which verifications passed on the branch as it
-stands. An Output that says the tests pass is a claim; these are not. Then list each
+stands, and the outcome this run was held to — the one at the top of this prompt, or
+unclassified where it is empty. An Output that says the tests pass is a claim; these are not. Then list each
 verification this run is held to with its command, exactly as written at the top of this
 prompt: a model may have chosen them, and the human reading the merge request is who
 checks that they prove the work.

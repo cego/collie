@@ -23,8 +23,11 @@ export const ActionSchema = Schema.Union([
   Schema.Struct({
     kind: Schema.Literal("update_intent"),
     run: Schema.String,
-    /** Which amendment this is. `patch` is the goal, the constraint, or its id. */
-    change: Schema.Literals(["set-goal", "add-constraint", "remove-constraint"]),
+    /**
+     * Which amendment this is. `patch` is the goal, the outcome kind (`unspecified` clears
+     * it), the constraint, or its id.
+     */
+    change: Schema.Literals(["set-goal", "set-outcome", "add-constraint", "remove-constraint"]),
     patch: Schema.String,
     base_version: Schema.Int,
   }),

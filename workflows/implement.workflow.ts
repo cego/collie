@@ -355,7 +355,6 @@ export default defineWorkflow({
       const source = yield* classifyWorkSource(asked.plan).pipe(
         Effect.orElseSucceed(() => ({ kind: "text", value: asked.plan })),
       );
-      const kind = place.options.outcome ?? "";
       const share = place.options.repo ?? "";
       if (source.kind === "plan-dir" && share === "") {
         const plan = yield* Activity.make({
@@ -416,7 +415,7 @@ export default defineWorkflow({
           plan_kind: source.kind,
           // The host's own launch options, under the names the content asks for them by.
           repo: place.options.repo ?? "",
-          outcome: kind,
+          outcome: place.options.outcome ?? "",
         },
         run: { dir: place.dir, id: runId },
         verify: yield* checksNow,
@@ -484,10 +483,21 @@ export default defineWorkflow({
             });
           return { ...merged, base };
         });
+      // The kind as it stands, which `run intent set-outcome` may change while the Run is live.
+      const outcomeOf = Effect.map(host.place(runId), (now) => now.options.outcome ?? "");
+      let kindReadings = 0;
+      const kindNow = Effect.suspend(() => {
+        kindReadings += 1;
+        return Activity.make({
+          name: `outcome.${kindReadings}`,
+          success: text,
+          execute: outcomeOf,
+        });
+      });
       const rallyAsk = {
         rounds: { n: 0 },
         cwd,
-        proves: kind,
+        proves: kindNow,
         risks: place.options.risks ?? "",
         integrate: integrated,
       };
@@ -785,8 +795,9 @@ export default defineWorkflow({
         approved: ReadonlyArray<VerifySpec>,
         reviewed: SynthesisReport,
       ) {
+        const now = yield* outcomeOf;
         const asked = {
-          kind: isOutcome(kind) ? kind : ("unspecified" as const),
+          kind: isOutcome(now) ? now : ("unspecified" as const),
           evidence: yield* host.evidence(runId, cwd),
           approved,
           outputs: { build: { ...build }, synthesize: { ...reviewed } },
@@ -1032,7 +1043,7 @@ export default defineWorkflow({
                 reviewed = yield* reviewPass({
                   target: "",
                   plan: spec,
-                  proves: kind,
+                  proves: yield* outcomeOf,
                   previous: `${place.dir}/review.md`,
                   answered: fixes === 0 ? "" : agents.outputFor(runId, `gate-fix-${fixes}`),
                   risks: place.options.risks ?? "",
@@ -1119,6 +1130,7 @@ export default defineWorkflow({
             instructions: prompts.mr,
             input: {
               ...input,
+              inputs: { ...input.inputs, outcome: yield* kindNow },
               verify: renderApproved(spawned(checks, settledEvidence.verifications)),
               // Read after the gate settled, so the merge request cites the passing runs.
               evidence: renderEvidence(settledEvidence),
@@ -1567,7 +1579,8 @@ const rally = (ask: {
   readonly rounds: { n: number };
   readonly cwd: string;
   readonly plan: string;
-  readonly proves: string;
+  /** The outcome kind each round is held to, read as the round starts. */
+  readonly proves: Effect.Effect<string, never, WorkflowEngine | WorkflowInstance>;
   readonly risks: string;
   readonly input: typeof Implementing.Type;
   readonly build?: PartialBuild;
@@ -1599,12 +1612,13 @@ const rally = (ask: {
       const ended = yield* reviewRound(
         Effect.gen(function* () {
           const merged = yield* ask.integrate(`${prefix}merge-${at}`);
+          const proves = yield* ask.proves;
           const synthesis = yield* reviewPass({
             // The change is the work in this checkout: a Run that built it reviews what it
             // built, rather than a merge request somebody else has to be pointed at.
             target: "",
             plan: ask.plan,
-            proves: ask.proves,
+            proves,
             previous: "",
             // The last round's fix, which a follow-up review checks each of its findings against.
             answered: at === 1 ? "" : agents.outputFor(runId, `${prefix}fix-${at - 1}`),
@@ -1667,6 +1681,7 @@ const rally = (ask: {
             instructions: prompts.fix,
             input: {
               ...ask.input,
+              inputs: { ...ask.input.inputs, outcome: proves },
               verify: renderApproved(yield* host.approved(runId)),
               iteration: String(at),
               max_iterations: String(ROUNDS),
