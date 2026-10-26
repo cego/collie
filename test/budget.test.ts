@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { Deferred, Effect, Fiber, FileSystem } from "effect";
+import { Config, Deferred, Effect, Fiber, FileSystem } from "effect";
 import { processStartTime, signalProcess, withLock } from "../src/lock";
 import {
   admission,
@@ -386,6 +386,9 @@ const held = (dir: string, count: number) =>
 
 const started = (notes: string) =>
   Effect.flatMap(FileSystem.FileSystem, (fs) => fs.exists(`${notes}/started`));
+
+test("a test's configuration reads the environment the preloads leave, not the one before them", () =>
+  expect(Effect.runSync(Config.String("COLLIE_HOST_WATCH_PID"))).toBe(String(process.pid)));
 
 test.skipIf(process.platform !== "linux")(
   "a bare bun test waits while small runs hold the reserve, and starts once one of them ends",

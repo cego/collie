@@ -7,7 +7,7 @@
 import { afterAll } from "bun:test";
 import { availableParallelism } from "node:os";
 import { BunServices } from "@effect/platform-bun";
-import { Config, Console, Effect, Exit, Option, Scope } from "effect";
+import { Config, ConfigProvider, Console, Effect, Exit, Option, Scope } from "effect";
 import { admitted, budgetOf, entriesOf, HOLD_ENV, shareOf, STORE } from "../../tools/budget";
 
 const scope = Scope.makeUnsafe();
@@ -25,7 +25,12 @@ await Effect.runPromise(
     yield* Console.error(
       `test: admitted after ${(hold.waited / 1_000).toFixed(2)} s queued; small runs hold ${holding} of their ${share} workers`,
     );
-  }).pipe(Scope.provide(scope), Effect.provide(BunServices.layer)),
+  }).pipe(
+    Scope.provide(scope),
+    Effect.provide(BunServices.layer),
+    // Effect's default provider keeps the environment it first reads, before hosts.ts sets the test's.
+    Effect.provideService(ConfigProvider.ConfigProvider, ConfigProvider.fromEnv()),
+  ),
 );
 
 afterAll(() => Effect.runPromise(Scope.close(scope, Exit.void)));
