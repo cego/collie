@@ -21,6 +21,7 @@ import {
 } from "./herdr";
 import type { CheckoutKind } from "./definitions";
 import { diffTargetOf, repositoryOf, workSourceOf } from "./strategies";
+import { recordsIn } from "./check-processes";
 import { defaultBase, linearIssueOf } from "./inputs";
 import { disambiguate, GLYPH, tabLabel } from "./naming";
 import {
@@ -1473,6 +1474,8 @@ function fromRuns(
   runs: ReadonlyArray<RunFacts>,
   registered: ReadonlyArray<AgentEntry>,
   settling: Settling,
+  /** Runs a check is still running for, whatever their state. */
+  checking: ReadonlySet<string>,
 ) {
   const mine = new Map<string, WorktreeRecord>();
   /** The project each checkout's Run was started for. */
@@ -1496,13 +1499,14 @@ function fromRuns(
       (run.state === "stopped" || (run.state === "failed" && !roaming.includes(at ?? ""))) &&
       !landed;
     if (going) paths.set(run.cwd, "a run is still working in it");
+    else if (checking.has(run.id)) paths.set(run.cwd, "its check is still running in it");
     else if (resumable) paths.set(run.cwd, `a ${run.state} run can resume in it`);
     if (worktree !== null) {
       mine.set(worktree.path, worktree);
       projects.set(worktree.path, run.project);
     }
     // A Run that may still go keeps its checkout anyway, so its agents are nobody's leftovers.
-    if (at === undefined || going || resumable) continue;
+    if (at === undefined || going || resumable || checking.has(run.id)) continue;
     const left = panes.get(at) ?? new Set<string>();
     for (const entry of registered) if (entry.runId === run.id) left.add(entry.paneId);
     panes.set(at, left);
@@ -1862,7 +1866,13 @@ export const reportedWorktrees = Effect.fn("worktree.reportedWorktrees")(functio
  */
 const sweep = Effect.fn("worktree.sweep")(function* (opts: PruneOptions) {
   const fs = yield* FileSystem.FileSystem;
-  const recorded = fromRuns(opts.runs, opts.registered, opts.settling ?? NOTHING_SETTLING);
+  const checking = new Set((yield* recordsIn(opts.stateDir)).map((record) => record.run));
+  const recorded = fromRuns(
+    opts.runs,
+    opts.registered,
+    opts.settling ?? NOTHING_SETTLING,
+    checking,
+  );
   const lines: string[] = [];
   const judged: Judged[] = [];
   const listed = new Set<string>();

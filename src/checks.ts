@@ -14,6 +14,8 @@ import {
   type Verifying,
 } from "./verify";
 import { epochMs } from "./time";
+import type { CheckRecord } from "./check-processes";
+import { PASSES } from "./verify-model";
 
 /** One pass Collie ran and finished. */
 export interface DonePass {
@@ -54,8 +56,14 @@ export const lastLinesOf = (log: string | null, count = LAST_LINES) =>
         Effect.orElseSucceed((): ReadonlyArray<string> => []),
       );
 
-/** Every Run's marker, read once for a whole board. */
-export const markersOf = Effect.fn("Checks.markersOf")(function* (runs: ReadonlyArray<RunFacts>) {
+/**
+ * Every Run's marker, read once for a whole board. A Run with none whose check still runs,
+ * as an agent's own verify does, is read from that check's record.
+ */
+export const markersOf = Effect.fn("Checks.markersOf")(function* (
+  runs: ReadonlyArray<RunFacts>,
+  records: ReadonlyArray<CheckRecord> = [],
+) {
   const found = new Map<string, Verifying>();
   yield* Effect.forEach(
     runs,
@@ -65,6 +73,18 @@ export const markersOf = Effect.fn("Checks.markersOf")(function* (runs: Readonly
       }),
     { concurrency: 8, discard: true },
   );
+  for (const record of records)
+    if (!found.has(record.run))
+      found.set(record.run, {
+        name: record.name,
+        executable: "",
+        argv: [],
+        pass: PASSES.find((pass) => pass === record.pass) ?? "check",
+        round: record.round ?? null,
+        revision: "",
+        base: null,
+        started: record.started,
+      });
   return found;
 });
 

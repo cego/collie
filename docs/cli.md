@@ -848,8 +848,10 @@ collie --json run stop <run-id> [--request-id <id>]
 collie --json run resume <run-id> [--request-id <id>]
 ```
 
-`stop` parks the run where it is — at its next boundary, or inside the wait it is in — and
-closes its agents' panes, and those of the Runs it started, which is what stops them; the
+`stop` parks the run where it is — at its next boundary, or inside the wait it is in. It
+enters no further Step, files or comments on no issue, and ends a check the host or one of
+its agents is running, with that check's processes; a resume runs the host's check again.
+It closes its agents' panes, and those of the Runs it started, which is what stops them; the
 workspace keeps its own tab. Only the process each launch recorded is closed, never another
 under the same name, and a pane that will not close fails the stop and names the agent
 still running. `resume`

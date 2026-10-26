@@ -1306,7 +1306,8 @@ export const step = (declared: StepDeclaration): Step => {
         name: `step.${key}.enter`,
         execute: host.step(runId, { kind: "enter", key, step: meta, place }),
       });
-      if (yield* host.held(runId)) return yield* Workflow.suspend(yield* WorkflowInstance);
+      if ((yield* host.held(runId)) || (yield* host.stopRequested(runId)))
+        return yield* Workflow.suspend(yield* WorkflowInstance);
       const done = yield* Effect.provideService(work, CurrentStep, {
         step: meta.id,
         place,

@@ -34,6 +34,7 @@ import { approvedFor, approvedIn } from "./verify-spec";
 import { readIntent } from "./intent";
 import { findingsIn, isBlocking } from "./output";
 import { markersOf, runningCheck } from "./checks";
+import { recordsIn } from "./check-processes";
 import { waitLine } from "./memory-wait";
 import { runWaits } from "./run-waits";
 import { awaitingLine } from "./awaiting";
@@ -538,8 +539,11 @@ function stateOf(
   decision: Decision | null,
   /** Something is waiting for the human in a pane, with no Decision to say so. */
   stalled: boolean,
+  /** A check of it is still running, which outlives even its ending. */
+  checking: boolean,
 ): TaskState {
   if (decision !== null) return "blocked";
+  if (checking) return "active";
   if (status === "stopped") return "stopped";
   if (status === "failed") return "failed";
   if (status === "succeeded") return "done";
@@ -918,7 +922,8 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
   const mrStates = opts.mrStates ?? (yield* readMrStates(stateDir));
   const forge = opts.forge ?? (yield* readForge(stateDir));
   const live = new Map((opts.alive ?? []).map((agent) => [agent.name, agent]));
-  const markers = yield* markersOf(all);
+  const records = yield* recordsIn(stateDir);
+  const markers = yield* markersOf(all, records);
   // Every agent's ledger, read only once a card has a finished Run to look for a steer to.
   const deliveries =
     opts.deliveries === undefined
@@ -1043,7 +1048,13 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
             ? "active"
             : decision === null && reopened?.status === "blocked"
               ? "blocked"
-              : stateOf(status, silent !== null, decision, stalled !== null);
+              : stateOf(
+                  status,
+                  silent !== null,
+                  decision,
+                  stalled !== null,
+                  records.some((record) => record.run === leader.id),
+                );
 
         const held = runs.find((run) => waitsOf(run).held);
         const settledNow =

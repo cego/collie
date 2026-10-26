@@ -2964,6 +2964,10 @@ export const hostLayer = (options: {
         Effect.provideContext(effect, services);
       const set = (control: string, runId: string) =>
         fs.exists(controlPath(dir, control, runId)).pipe(Effect.orElseSucceed(() => false));
+      const untilStopped = (runId: string) =>
+        set(STOP, runId).pipe(
+          Effect.repeat({ until: (stop) => stop, schedule: Schedule.spaced("1 second") }),
+        );
       yield* fs.makeDirectory(dir, { recursive: true }).pipe(Effect.orDie);
       yield* ensureStepDurations(dir, yield* store.runs);
       const toast = options.toast;
@@ -3118,11 +3122,20 @@ export const hostLayer = (options: {
                   Effect.mapError((refused) => new WorkflowError({ reason: refused.why })),
                 );
               });
-            return yield* (
-              asked.at === "default-base"
+            // A stop ends the check and its processes; the Run parks, and a resume runs it again.
+            const ran = yield* Effect.raceFirst(
+              (asked.at === "default-base"
                 ? atDefaultBase(asked.cwd, away, verified)
                 : verified(null)
+              ).pipe(Effect.map(Option.some)),
+              untilStopped(asked.runId).pipe(Effect.as(Option.none<Verification>())),
             ).pipe(Effect.ensuring(fs.remove(marker).pipe(Effect.ignore)));
+            if (Option.isSome(ran)) return ran.value;
+            const instance = yield* Effect.serviceOption(WorkflowEngine.WorkflowInstance);
+            if (Option.isSome(instance)) return yield* Workflow.suspend(instance.value);
+            return yield* new WorkflowError({
+              reason: `${spec.name} did not finish: the Run was stopped while it ran`,
+            });
           }),
         );
       const placing = options.placing
@@ -3227,6 +3240,13 @@ export const hostLayer = (options: {
           });
           return { cwd: checkout.cwd, branch: checkout.branch ?? "" };
         }).pipe(Effect.provideContext(bun), under);
+      /** Refuses what a Run would say outside Collie once it is stopped. */
+      const unstopped = (runId: string, what: string) =>
+        Effect.flatMap(set(STOP, runId), (stopped) =>
+          stopped
+            ? Effect.fail(new WorkflowError({ reason: `${runId} is stopped, so it ${what}` }))
+            : Effect.void,
+        );
       const issueCheckout = Effect.fn("Host.issueCheckout")(function* (runId: string) {
         const row = yield* store.run(runId);
         if (row === null) return yield* new WorkflowError({ reason: `there is no Run ${runId}` });
@@ -3462,6 +3482,7 @@ export const hostLayer = (options: {
         fileIssue: (asked) =>
           under(
             Effect.gen(function* () {
+              yield* unstopped(asked.runId, "files no issue");
               const here = yield* issueCheckout(asked.runId);
               yield* checkIssueText(here, `${asked.title}\n${asked.body}`);
               const filed = yield* here.forge.fileIssue(
@@ -3478,6 +3499,7 @@ export const hostLayer = (options: {
         commentIssue: (asked) =>
           under(
             Effect.gen(function* () {
+              yield* unstopped(asked.runId, "comments on no issue");
               const here = yield* issueCheckout(asked.runId);
               yield* checkIssueText(here, asked.body);
               const commented = yield* here.forge.commentIssue(
@@ -3771,8 +3793,7 @@ export const hostLayer = (options: {
                 };
               const own = yield* treeOf(yield* store.run(asked.runId), asked.runId, dir);
               // A stop ends the wait: the workflow suspends on it, as it does on an agent's.
-              const stopped = set(STOP, asked.runId).pipe(
-                Effect.repeat({ until: (stop) => stop, schedule: Schedule.spaced("1 second") }),
+              const stopped = untilStopped(asked.runId).pipe(
                 Effect.as({
                   unproved: `${spec.name} is left to CI and unproved: the Run was stopped while job ${spec.ci} was read`,
                   state: null,

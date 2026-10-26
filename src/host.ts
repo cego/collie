@@ -34,6 +34,7 @@ import {
   Logger,
   Option,
   Queue,
+  Result,
   Path,
   Schedule,
   Schema,
@@ -2111,6 +2112,9 @@ const frontDoorHandlers = (
                           )?.step
                         : undefined;
                     const fs = yield* FileSystem.FileSystem;
+                    const stopped = fs
+                      .exists(controlPath(env.stateDir, STOP, runId))
+                      .pipe(Effect.orElseSucceed(() => false));
                     const memory = yield* waitForMemory({
                       env,
                       stateDir: env.stateDir,
@@ -2120,9 +2124,7 @@ const frontDoorHandlers = (
                         whoOf(client).origin === "agent" && from?.run === runId
                           ? (from.agent ?? null)
                           : null,
-                      stopped: fs
-                        .exists(controlPath(env.stateDir, STOP, runId))
-                        .pipe(Effect.orElseSucceed(() => false)),
+                      stopped,
                       say: (sentence) => echo("stderr")(`${sentence}\n`),
                     });
                     if (memory === "stopped") {
@@ -2136,26 +2138,42 @@ const frontDoorHandlers = (
                     }
                     const started = (yield* nowIso()).replace(/[:.]/g, "-");
                     const log = `${evidenceDir(env.stateDir, runId)}/verify/${started}-${name.replace(/[^\w.-]/g, "_")}.log`;
-                    const collected = yield* collect(
-                      evidenceDir(env.stateDir, runId),
-                      {
-                        run: runId,
-                        name,
-                        executable,
-                        argv,
-                        cwd: where,
-                        by: "agent",
-                        expect,
-                        log,
-                        step: step?.step,
-                        place: step?.place,
-                      },
-                      { stdout: echo("stdout"), stderr: echo("stderr") },
-                    ).pipe(
-                      Effect.mapError(
-                        (cause) => new HostRefused({ reason: `${REFUSED_INPUT}: ${cause.why}` }),
+                    const collected = yield* Effect.raceFirst(
+                      collect(
+                        evidenceDir(env.stateDir, runId),
+                        {
+                          run: runId,
+                          name,
+                          executable,
+                          argv,
+                          cwd: where,
+                          by: "agent",
+                          expect,
+                          log,
+                          step: step?.step,
+                          place: step?.place,
+                        },
+                        { stdout: echo("stdout"), stderr: echo("stderr") },
+                      ).pipe(
+                        Effect.mapError(
+                          (cause) => new HostRefused({ reason: `${REFUSED_INPUT}: ${cause.why}` }),
+                        ),
+                        Effect.result,
                       ),
-                      Effect.result,
+                      // Ending the race ends the command's process group with its scope.
+                      stopped.pipe(
+                        Effect.repeat({
+                          until: (stop) => stop,
+                          schedule: Schedule.spaced("1 second"),
+                        }),
+                        Effect.as(
+                          Result.fail(
+                            new HostRefused({
+                              reason: `invalid_state: run ${runId} was stopped while "${name}" ran, so it was ended and recorded nothing.`,
+                            }),
+                          ),
+                        ),
+                      ),
                     );
                     if (collected._tag === "Failure") {
                       yield* Queue.fail(queue, collected.failure);
