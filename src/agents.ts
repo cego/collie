@@ -1941,6 +1941,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
                 permissions,
                 window.passed ?? undefined,
               ),
+              ...(adapter.dirArgs?.(`${host.dir}/runs/${ask.runId}`) ?? []),
               ...settingsArgs,
               ...mcp.args,
             ],

@@ -1807,6 +1807,27 @@ test("the agent is started on the operator's harness, model and permissions, wit
     }),
   ));
 
+test("a Claude agent is given its Run's directory", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+      yield* session(started("r1"));
+      const args = launchArgs(yield* rig.calls());
+      expect(args).toContain("--add-dir");
+      expect(args[args.indexOf("--add-dir") + 1]).toBe(runDir(dir, "r1"));
+    }),
+  ));
+
+test("a Codex agent is given no directory to add", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+      yield* session(started("r1"), { ...claudeOut, fallbacks: Effect.succeed(["codex"]) });
+      expect(harnessesStarted(yield* rig.calls())).toEqual(["codex"]);
+      expect(launchArgs(yield* rig.calls())).not.toContain("--add-dir");
+    }),
+  ));
+
 const writePersona = (layer: string, name: string, text: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -3118,6 +3139,30 @@ test("a Run built from another Run's plan has that Run in its lineage, however i
       const host = yield* Host;
       expect((yield* host.place("run-c")).lineage).toEqual(["run-c", "run-i", "run-p"]);
       expect((yield* host.place("run-o")).lineage).toEqual(["run-o"]);
+    }).pipe(Effect.provide(foundationLayer({ dir })), Effect.scoped, Effect.orDie),
+  ));
+
+test("a placed Run has a handoffs directory before any agent of it is launched", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const store = yield* Store;
+      yield* store.admit({
+        request: "req-run-h",
+        run: "run-h",
+        workflow: "w",
+        project: dir,
+        input: {},
+        provenance: {},
+        options: {},
+        generation: "g",
+        execution: "exec-run-h",
+        task: null,
+        parent: null,
+      });
+      const place = yield* (yield* Host).place("run-h");
+      const info = yield* (yield* FileSystem.FileSystem).stat(`${place.dir}/handoffs`);
+      expect(info.type).toBe("Directory");
+      expect(yield* rig.calls()).toEqual([]);
     }).pipe(Effect.provide(foundationLayer({ dir })), Effect.scoped, Effect.orDie),
   ));
 

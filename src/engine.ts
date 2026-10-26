@@ -85,6 +85,7 @@ import {
 import { FALLBACK_DEFAULTS, configValue, gitlabHostOf, loadDefaults, readConfig } from "./config";
 import { unlistedServers } from "./compaction";
 import { foldPreferences, preferencesFromOptions, resolveChoice } from "./harness";
+import { handoffsDir } from "./handoffs";
 import { encodeSubagents, readSubagents } from "./subagents";
 import type { UsageReading } from "./usage-model";
 import { currentEnv } from "./env";
@@ -3553,7 +3554,7 @@ export const hostLayer = (options: {
                 Effect.tap((admitted) =>
                   admitted === null
                     ? Effect.void
-                    : fs.makeDirectory(runDir(dir, runId), { recursive: true }),
+                    : fs.makeDirectory(handoffsDir(runDir(dir, runId)), { recursive: true }),
                 ),
                 Effect.map((admitted) => ({
                   cwd: admitted?.placed.cwd ?? dir,
