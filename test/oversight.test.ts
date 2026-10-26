@@ -48,6 +48,7 @@ import {
 } from "../src/intent";
 import type { Store } from "../src/store";
 import { fixtures } from "./support/host";
+import { loggedGit } from "./support/bin";
 
 let rig: Rig;
 let dir: string;
@@ -959,6 +960,65 @@ test("a Run with relatives stands for the cross-run check, and one leaving unans
   ));
 
 // --- The cross-run judgement reads the work ------------------------------------------
+
+test("a card reads its branch, head and dirtiness from the one status its fingerprint hashes", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const repo = `${rig.root}/carded`;
+      yield* fs.makeDirectory(repo, { recursive: true });
+      for (const args of [
+        ["init", "-q", "-b", "feat/picker"],
+        [
+          "-c",
+          "user.email=t@example.com",
+          "-c",
+          "user.name=t",
+          "commit",
+          "-q",
+          "--allow-empty",
+          "-m",
+          "x",
+        ],
+      ])
+        yield* git(args, repo);
+      yield* fs.writeFileString(`${repo}/new.txt`, "new\n");
+      const starts = yield* loggedGit(`${rig.root}/bin`, `${rig.root}/git.log`);
+      const card = yield* writeCard(
+        { ...watchedAt("r1"), cwd: repo },
+        { kind: "slice", step: "build", claims: [] },
+      );
+      expect(card.revision).toMatchObject({ branch: "feat/picker", dirty: true });
+      expect(card.revision.head_sha).toHaveLength(40);
+      expect(
+        (yield* starts).filter((line) => /^(rev-parse|status --porcelain$)/.test(line)),
+      ).toEqual([]);
+      expect((yield* starts).filter((line) => line.startsWith("status"))).toHaveLength(1);
+
+      yield* git(["checkout", "-q", "--detach"], repo);
+      yield* fs.remove(`${repo}/new.txt`);
+      const detached = yield* writeCard(
+        { ...watchedAt("r1"), cwd: repo },
+        { kind: "slice", step: "build", claims: [] },
+      );
+      expect(detached.revision).toMatchObject({ branch: "HEAD", dirty: false });
+    }),
+  ));
+
+test("a card on a branch with no commit yet names no branch and no head", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const repo = `${rig.root}/unborn`;
+      yield* fs.makeDirectory(repo, { recursive: true });
+      yield* git(["init", "-q"], repo);
+      const card = yield* writeCard(
+        { ...watchedAt("r1"), cwd: repo },
+        { kind: "slice", step: "build", claims: [] },
+      );
+      expect(card.revision).toMatchObject({ branch: null, head_sha: "", dirty: false });
+    }),
+  ));
 
 const R1_ONLY: Constraint = { ...SMALL, id: "r1-only", text: "touch only the docs" };
 

@@ -3,7 +3,14 @@ import { Effect, FileSystem, Schema } from "effect";
 import { signalProcess } from "../src/lock";
 import { exec } from "./support/command";
 import { runEffect } from "./support/effect";
-import { MARKER, marked, sweepDeadRoots } from "./support/sweep";
+import {
+  MARKER,
+  MEMORY_FREE_BYTES,
+  marked,
+  rootBase,
+  sweepDeadRoots,
+  sweepEveryBase,
+} from "./support/sweep";
 
 const preload = `${import.meta.dir}/support/hosts.ts`;
 
@@ -17,19 +24,28 @@ const Recorded = Schema.Struct({
 
 const alive = (pid: number | undefined) => signalProcess(pid ?? 0, 0);
 
-/** Runs one fixture file under the preload, in a temporary directory of its own. */
-const suite = (fixture: string, args: ReadonlyArray<string> = []) =>
+/**
+ * Runs one fixture file under the preload, in a temporary directory of its own. Its roots
+ * go on a memory filesystem only when `memory` names one.
+ */
+const suite = (fixture: string, args: ReadonlyArray<string> = [], memory = false) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const dir = yield* fs.makeTempDirectoryScoped({ prefix: "preload-" });
-    const base = `${dir}/tmp`;
+    const base = memory ? `${dir}/memory` : `${dir}/tmp`;
     const out = `${dir}/out.json`;
-    yield* fs.makeDirectory(base);
+    yield* fs.makeDirectory(`${dir}/tmp`);
+    if (memory) yield* fs.makeDirectory(base);
     yield* fs.writeFileString(`${dir}/bunfig.toml`, `[test]\npreload = ["${preload}"]\n`);
     yield* fs.writeFileString(`${dir}/fixture.test.ts`, fixture);
     const ran = yield* exec(["bun", "test", ...args, "./fixture.test.ts"], {
       cwd: dir,
-      env: { ...process.env, TMPDIR: base, FIXTURE_OUT: out },
+      env: {
+        ...process.env,
+        TMPDIR: `${dir}/tmp`,
+        COLLIE_TEST_MEMORY: memory ? base : `${dir}/no-memory`,
+        FIXTURE_OUT: out,
+      },
     });
     const recorded = (yield* fs.exists(out))
       ? yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Recorded))(
@@ -172,7 +188,53 @@ test("leaks on the second run", () => {
   );
 });
 
+describe("where a test file's root is made", () => {
+  test("on the memory filesystem while it has room", () =>
+    runEffect(
+      Effect.gen(function* () {
+        const run = yield* suite(
+          `${header}
+test("sees its root", () => record({ dir: tmpdir() }));
+`,
+          [],
+          true,
+        );
+        expect(run.output).toContain("1 pass");
+        expect(run.recorded.dir?.startsWith(`${run.base}/collie-test-`)).toBe(true);
+      }),
+    ));
+
+  test("under tmpdir() where the memory filesystem is missing or nearly full", () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const memory = yield* fs.makeTempDirectoryScoped({ prefix: "memory-" });
+        const room = () => MEMORY_FREE_BYTES;
+        expect(rootBase(memory, "/fallback", room)).toBe(memory);
+        expect(rootBase(memory, "/fallback", () => MEMORY_FREE_BYTES - 1)).toBe("/fallback");
+        expect(rootBase(`${memory}/missing`, "/fallback", room)).toBe("/fallback");
+        yield* fs.chmod(memory, 0o555);
+        expect(rootBase(memory, "/fallback", room)).toBe("/fallback");
+        yield* fs.chmod(memory, 0o755);
+      }).pipe(Effect.scoped),
+    ));
+});
+
 describe("the start-of-suite sweep", () => {
+  test("removes a dead suite's root on the memory filesystem too", () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const memory = yield* fs.makeTempDirectoryScoped({ prefix: "memory-" });
+        const gone = Bun.spawn(["true"]);
+        yield* Effect.promise(() => gone.exited);
+        const dead = `${memory}/collie-test-${gone.pid}-x`;
+        yield* fs.makeDirectory(dead);
+        expect(sweepEveryBase(memory)).toContain(dead);
+        expect(yield* fs.readDirectory(memory)).toEqual([]);
+      }).pipe(Effect.scoped),
+    ));
+
   test("removes a dead suite's root and its processes, and leaves a live one's", () =>
     runEffect(
       Effect.gen(function* () {

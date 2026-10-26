@@ -1436,6 +1436,15 @@ does not interrupt a timed-out test's own scope. `bun run test` first removes ev
 a killed suite is cleaned up by the next one; a live pid's root is another suite's and is
 left alone.
 
+The root is made on a memory filesystem, `/dev/shm` (`COLLIE_TEST_MEMORY` names another),
+while that is writable and has 2 GB free, and under `tmpdir()` otherwise, as on macOS. A
+test's hosts commit to SQLite and its fixtures write git objects, and on a disk each of
+those waits for an fsync: on vm-mk a baseline shard took 33.6 s on `/dev/shm` against
+40.4 s on `/tmp`. The sweep looks in `tmpdir()`, `/tmp` and the memory filesystem. Every
+git a test starts runs with `gc.auto=0` and `maintenance.auto=false`, set through
+`GIT_CONFIG_*` and the test home's `.gitconfig`: housekeeping in a repository a test is
+about to remove is work nobody reads.
+
 The same preload keeps the suite out of the operator's herd. Before any test file loads it
 drops `COLLIE_USER_DIR`, `COLLIE_CWD` and every `HERDR_*` variable but `HERDR_API_SCHEMA`,
 which the contract check is given on purpose, and sets `HOME` to a directory under that

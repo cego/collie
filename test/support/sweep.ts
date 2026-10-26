@@ -3,12 +3,41 @@
 // Every process a test starts carries `COLLIE_TEST_ROOT` naming its file's root, which is
 // how a leftover is proved to be the suite's. Read from /proc, so Linux only.
 
-import { chmodSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import {
+  accessSync,
+  chmodSync,
+  constants,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statfsSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 export const MARKER = "COLLIE_TEST_ROOT";
 /** Where a fixture whose control socket must bind keeps its directory, whatever `TMPDIR` says. */
 export const SOCKET_BASE = "/tmp";
+
+/** A memory filesystem, where a test's database commits and git writes never wait on a disk. */
+export const MEMORY_BASE = process.env.COLLIE_TEST_MEMORY ?? "/dev/shm";
+/** What a memory filesystem must have free to hold a test file's root. */
+export const MEMORY_FREE_BYTES = 2 * 1024 ** 3;
+
+const freeBytes = (dir: string) => {
+  const stat = statfsSync(dir);
+  return stat.bavail * stat.bsize;
+};
+
+/** Where a test file's root is made: `memory` while it is writable and has room, else `fallback`. */
+export const rootBase = (memory = MEMORY_BASE, fallback = tmpdir(), free = freeBytes) => {
+  try {
+    accessSync(memory, constants.W_OK);
+    return free(memory) >= MEMORY_FREE_BYTES ? memory : fallback;
+  } catch {
+    return fallback;
+  }
+};
 
 export const alive = (pid: number) => {
   try {
@@ -69,6 +98,16 @@ export const sweepDeadRoots = (dir: string): ReadonlyArray<string> =>
     const root = join(dir, name);
     for (const one of marked(root)) kill(one.pid);
     return removed(root) ? [root] : [];
+  });
+
+/** `sweepDeadRoots` in every place a root may have been made. */
+export const sweepEveryBase = (memory = MEMORY_BASE) =>
+  [...new Set([tmpdir(), SOCKET_BASE, memory])].flatMap((dir) => {
+    try {
+      return sweepDeadRoots(dir);
+    } catch {
+      return [];
+    }
   });
 
 /**

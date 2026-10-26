@@ -13,6 +13,7 @@ import type { ChildProcessSpawner } from "effect/process";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { hostname } from "node:os";
 import {
+  Config,
   ConfigProvider,
   DateTime,
   Deferred,
@@ -2278,9 +2279,30 @@ const noMergeRequests = Effect.acquireRelease(
  */
 const repository = () =>
   Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const made = yield* preparedRepository;
     // Fetched from a bare repository beside it, and known to the forge by `upstream`.
     const origin = `${rig.root}/project-origin.git`;
-    yield* exec(["git", "init", "-q", "--bare", origin], { cwd: rig.root });
+    yield* fs.copy(`${made}/origin.git`, origin);
+    yield* fs.copy(`${made}/project`, rig.projectDir);
+    const config = `${rig.projectDir}/.git/config`;
+    const text = yield* fs.readFileString(config);
+    yield* fs.writeFileString(config, text.replace(`${made}/origin.git`, origin));
+  }).pipe(Effect.orDie);
+
+/** The repository `repository` copies, made once in this process. */
+const preparedRepository = Effect.cached(
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    // Under the suite's home: what a test makes beside it is reported as left behind.
+    const made = yield* fs.makeTempDirectory({
+      directory: yield* Config.String("HOME"),
+      prefix: "baseline-repository-",
+    });
+    const origin = `${made}/origin.git`;
+    const project = `${made}/project`;
+    yield* fs.makeDirectory(project);
+    yield* exec(["git", "init", "-q", "--bare", origin], { cwd: made });
     for (const args of [
       ["init", "-q"],
       ["config", "user.email", "t@example.com"],
@@ -2290,9 +2312,11 @@ const repository = () =>
       ["commit", "-qm", "first", "--allow-empty"],
       ["push", "-q", "origin", "HEAD"],
     ]) {
-      yield* exec(["git", ...args], { cwd: rig.projectDir });
+      yield* exec(["git", ...args], { cwd: project });
     }
-  });
+    return made;
+  }).pipe(Effect.orDie),
+).pipe(Effect.runSync);
 
 /** That repository with a commit the default branch does not have, so its base is another tree. */
 const ahead = () =>

@@ -34,7 +34,7 @@ import {
   timingFlags,
   turnFor,
 } from "./test-run";
-import { SOCKET_BASE, sweepDeadRoots } from "../test/support/sweep";
+import { sweepEveryBase } from "../test/support/sweep";
 import { LIVE_HARNESSES } from "../test/support/live-switch";
 
 const args = Bun.argv.slice(2);
@@ -93,8 +93,7 @@ const suite = (targeted: boolean, since: number) => {
         const out = yield* binDirectory(targeted);
         const flags = yield* timingFlags(targeted, timings, seed);
         const starts = `${out}/starts`;
-        sweepDeadRoots(tmpdir());
-        if (tmpdir() !== SOCKET_BASE) sweepDeadRoots(SOCKET_BASE);
+        sweepEveryBase();
         const building = performance.now();
         if ((yield* Effect.promise(() => build(out))).some((code) => code !== 0)) {
           console.error("test: could not build the executables the suite runs");

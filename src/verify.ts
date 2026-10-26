@@ -58,23 +58,48 @@ const git = (args: string[], cwd: string) => shell("git", args, cwd);
  * Untracked content is included deliberately. A test run that passed because of a file
  * nobody committed passed on a tree that is not the one anybody will get.
  */
-export const fingerprint = Effect.fn("Verify.fingerprint")(function* (cwd: string) {
+export const fingerprint = (cwd: string) =>
+  Effect.map(treeOf(cwd), ({ head_sha, fingerprint }) => ({ head_sha, fingerprint }));
+
+/** `git status --porcelain=v2 --branch -z`'s headers, and the entries after them. */
+const statusParts = (stdout: string) => {
+  const headers = new Map<string, string>();
+  let rest = stdout;
+  while (rest.startsWith("# ")) {
+    const end = rest.indexOf("\0");
+    const [key = "", ...value] = rest.slice(2, end).split(" ");
+    headers.set(key, value.join(" "));
+    rest = rest.slice(end + 1);
+  }
+  return { headers, entries: rest };
+};
+
+/**
+ * The fingerprint, with the branch HEAD names (`HEAD` when detached, null before a first
+ * commit) and whether anything is uncommitted, all from one status.
+ */
+export const treeOf = Effect.fn("Verify.treeOf")(function* (cwd: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  // Four reads of one tree, none waiting on another.
-  const [head, status, diff, others] = yield* Effect.all(
+  // Three reads of one tree, none waiting on another.
+  const [status, diff, others] = yield* Effect.all(
     [
-      git(["rev-parse", "HEAD"], cwd),
-      git(["status", "--porcelain=v2", "-z"], cwd),
+      git(["status", "--porcelain=v2", "--branch", "--no-ahead-behind", "-z"], cwd),
       git(["diff", "HEAD", "--binary"], cwd),
       git(["ls-files", "--others", "--exclude-standard", "-z"], cwd),
     ],
     { concurrency: "unbounded" },
   );
-  const head_sha = head.code === 0 ? head.stdout.trim() : "";
+  const { headers, entries } = statusParts(status.code === 0 ? status.stdout : "");
+  const oid = headers.get("branch.oid");
+  const born = oid !== undefined && oid !== "(initial)";
+  const head_sha = born ? oid : "";
+  const named = headers.get("branch.head");
+  const branch = !born || named === undefined ? null : named === "(detached)" ? "HEAD" : named;
+  const dirty = entries !== "";
 
-  const parts = [status.stdout, Bun.hash(diff.stdout).toString(16)];
-  let bytes = status.stdout.length + diff.stdout.length;
+  const parts = [entries, Bun.hash(diff.stdout).toString(16)];
+  let bytes = entries.length + diff.stdout.length;
   for (const relative of others.stdout.split("\0")) {
     if (relative === "") continue;
     const file = path.join(cwd, relative);
@@ -83,11 +108,11 @@ export const fingerprint = Effect.fn("Verify.fingerprint")(function* (cwd: strin
       Effect.catch(() => Effect.succeed(0)),
     );
     bytes += size;
-    if (bytes > FINGERPRINT_MAX_BYTES) return { head_sha, fingerprint: TOO_LARGE };
+    if (bytes > FINGERPRINT_MAX_BYTES) return { head_sha, fingerprint: TOO_LARGE, branch, dirty };
     const content = yield* fs.readFileString(file).pipe(Effect.catch(() => Effect.succeed("")));
     parts.push(`${relative}:${Bun.hash(content).toString(16)}`);
   }
-  return { head_sha, fingerprint: Bun.hash(parts.join("\n")).toString(16) };
+  return { head_sha, fingerprint: Bun.hash(parts.join("\n")).toString(16), branch, dirty };
 });
 
 /**
