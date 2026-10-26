@@ -2,7 +2,13 @@
 import type { Panel } from "../../../../src/board-model";
 import { FOLLOWING_LOG, type LogPlace, logPlaceOf, logScrollTop } from "../../../src/shared/record";
 
-const props = defineProps<{ tail: Panel | null; installation?: string; runId?: string }>();
+const props = defineProps<{
+  tail: Panel | null;
+  installation?: string;
+  runId?: string;
+  /** Fills its box rather than stopping at 60% of the window. */
+  fill?: boolean;
+}>();
 
 const search = defineModel<string>("search", { default: "" });
 const all = computed(() =>
@@ -64,7 +70,8 @@ watch(
       v-else
       ref="shown"
       data-testid="log-lines"
-      class="max-h-[60vh] overflow-auto rounded bg-elevated p-2 text-xs"
+      class="overflow-auto rounded bg-elevated p-2 text-xs"
+      :class="fill ? 'min-h-0 flex-1' : 'max-h-[60vh]'"
       @scroll="scrolled"
     ><template v-for="(line, at) in lines" :key="at">{{ line }}
 </template></pre>

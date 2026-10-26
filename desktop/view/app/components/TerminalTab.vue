@@ -267,8 +267,9 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="flex min-h-0 flex-1 flex-col gap-2" data-testid="terminal-tab">
-    <div class="flex items-center justify-between gap-2 text-sm">
-      <span class="text-muted min-w-0 truncate" data-testid="terminal-where">{{
+    <div class="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
+      <slot name="lead" />
+      <span class="text-muted min-w-0 flex-1 basis-32 truncate" data-testid="terminal-where">{{
         panes.shownFor(placed.key)?.where ?? ""
       }}</span>
       <div
@@ -301,6 +302,7 @@ onBeforeUnmount(() => {
         data-testid="open-in-herdr"
         @click="panes.openInHerdr(placed)"
       />
+      <slot name="tail" />
     </div>
     <p v-if="noPane" class="text-muted text-sm" data-testid="terminal-no-pane">
       {{
@@ -312,7 +314,7 @@ onBeforeUnmount(() => {
     <!-- Esc and Ctrl+C are the pane's while it has focus, not the record's. -->
     <div
       v-show="!noPane"
-      class="min-h-64 flex-1 overflow-hidden rounded bg-black p-1"
+      class="min-h-40 flex-1 overflow-hidden rounded bg-black p-1"
       :class="{ 'opacity-50': ended !== null }"
       data-testid="terminal"
       @keydown.stop

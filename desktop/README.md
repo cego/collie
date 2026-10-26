@@ -21,7 +21,11 @@ the inspector's controls without deriving capabilities themselves.
 
 `src/shared/step-inspector.ts` scopes log lines and Verifications and chooses the
 initial part and available parts. `StepWork` reuses TerminalTab, LogTab and EvidenceTab;
-only the visible terminal holds its pane.
+only the visible terminal holds its pane, keyed by Run and agent so a Step of another
+agent opens that agent's pane. `src/shared/flow-layout.ts` sizes `FlowWorkspace`'s rail
+and context column, stacks them on a narrow record and reads the Focus keys;
+`useFlowLayout` keeps the chosen sizes across records. `src/shared/terminal-size.ts`
+sends a terminal's size once a resize settles.
 
 | File                                    | What it owns                                                                                                                                                                                                                                           |
 | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |

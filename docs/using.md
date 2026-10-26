@@ -1097,17 +1097,22 @@ separate. Press the strip to open the Task's record on **Flow**. Older hosts sho
 The record opens on **Flow**, with one row per Run, oldest first, then Release. A row
 wraps its Steps to the record's width under a line naming the Run, its Machine and who
 started it; a long Step name is shortened, and its hover and spoken name give it whole.
-Select a Step to inspect its description, agent and model, times, attempts, Slices,
-rounds and Repo runs, beside the map in a wide record and below it otherwise, with the
-selected Step kept in view. Repo runs stay grouped under their Wave headings.
-A completed prefix of Slices or rounds folds into a counted entry that can
+Selecting a Step turns the map into a rail: each Run on one line, its Steps
+scrolling along it, with the selected Step kept in view. Below the rail, a context
+column holds the Step's name, state, actions and, under **Details**, its description,
+agent and model, times, attempts, Slices, rounds and Repo runs; the rest of the record
+is the Step's work. Drag the line under the rail or beside the column to resize them,
+or focus the line and use the arrow keys; double-click resets it, and the sizes hold
+for every record. A record narrower than about 670 px puts the column above the work
+and folds its details behind **Details and runs**. Repo runs stay grouped under their
+Wave headings. A completed prefix of Slices or rounds folds into a counted entry that can
 be expanded. **Open in** follows the selected Step's work to Plan, Review, Evidence,
 the merge request, Terminal or Log. Selecting an earlier Run keeps the same Task's
 map in view; the header names that Run and links back to the leading one.
 
 The map is one Tab stop. Left and Right move along a row, Home and End go to its
 ends, and Up and Down move to the nearest position in the adjacent Run's row. Enter
-inspects a Step; Escape closes the inspector and returns focus to it. Current Steps
+inspects a Step; Escape closes it and returns focus to the map. Current Steps
 and Steps that need you are announced once as they change. A link to a Machine out
 of reach is faded and says **as of** its last notice's time. A Run absent from the
 board is named **not on the board** and opens nothing. A host without a Flow keeps
@@ -1139,14 +1144,19 @@ focused node's first action; Shift+F10, the menu key and a right-click open its 
 The line above the map carries the current node's action too. Saved Flows offer no
 actions until their Machine is reached again.
 
-The inspector shows the selected Step's own **Terminal**, **Log** and **Evidence**,
-or the Slice or round picked in its list. Its terminal is the same live herdr pane
-as the Terminal tab: typing reaches that agent. Switching away releases the pane.
+The work shows the selected Step's own **Terminal**, **Log** and **Evidence**,
+or the Slice or round picked in its list, under why it failed or its question where it
+has one. Its terminal is the same live herdr pane as the Terminal tab: typing reaches
+that agent, and selecting a Step of another agent switches to that agent's pane.
+Switching away releases the pane. The pane is resized once a resize of the record
+settles, not at every step of a drag. **Focus**, or Ctrl+Shift+F (Cmd+Shift+F on a Mac)
+even from inside the terminal, gives the work the whole record below its header;
+the same keys or Escape restore it. Neither reconnects the terminal.
 The Log is bounded by Step start markers; where its beginning is older than the
 tail shown, it says so and links to the full Log. Evidence lists only that Step's
 Verifications, narrowed to the picked Slice or round. Each part shows its count.
 A working agent opens on Terminal; a failed Step shows its failing command and the
-last output above Retry; a check opens on Evidence; other recorded work opens on
+last output above Retry, with its Log below; a check opens on Evidence; other recorded work opens on
 Log. **Full Terminal**, **Full Log** and **Full Evidence** open the Run's whole tab.
 
 Desktop is released with Collie, under the same tag and version. Install it for your user,
