@@ -3,7 +3,11 @@ import type { RunDetail, VerificationView } from "../../../../src/board-model";
 import { hasEvidence, sortEvidence } from "../../../src/shared/evidence";
 import { webLinks } from "../../../src/shared/links";
 
-const props = defineProps<{ detail: RunDetail; installation: string }>();
+const props = defineProps<{
+  detail: RunDetail;
+  installation: string;
+  verifications?: ReadonlyArray<VerificationView>;
+}>();
 
 const sorted = computed(() => sortEvidence(props.detail.evidence));
 
@@ -20,12 +24,18 @@ const links = computed(() => {
   });
 });
 
-const empty = computed(() => !hasEvidence({ ...props.detail, links: links.value }));
+const empty = computed(() =>
+  props.verifications === undefined
+    ? !hasEvidence({ ...props.detail, links: links.value })
+    : props.verifications.length === 0,
+);
 
 /** What it was expected to do, and did not: these are listed first. */
 const failedCheck = (check: VerificationView) => check.result !== check.expect;
 const checks = computed(() =>
-  [...props.detail.verifications].sort((a, b) => Number(failedCheck(b)) - Number(failedCheck(a))),
+  [...(props.verifications ?? props.detail.verifications)].sort(
+    (a, b) => Number(failedCheck(b)) - Number(failedCheck(a)),
+  ),
 );
 /** Whether it did what it was expected to, which a check expected to fail can. */
 const verdictOf = (check: VerificationView) =>
@@ -99,111 +109,117 @@ const metrics = computed(() => {
       </EvidenceText>
     </section>
 
-    <section v-if="links.length > 0" class="flex flex-col gap-2" data-testid="links">
-      <h3 class="font-semibold">Links</h3>
-      <LinkCards :links="links" :installation="installation" :run-id="detail.id" />
-    </section>
+    <template v-if="verifications === undefined"
+      ><section v-if="links.length > 0" class="flex flex-col gap-2" data-testid="links">
+        <h3 class="font-semibold">Links</h3>
+        <LinkCards :links="links" :installation="installation" :run-id="detail.id" />
+      </section>
 
-    <section v-if="sorted.gallery.length > 0" class="flex flex-col gap-2" data-testid="gallery">
-      <h3 class="font-semibold">Screenshots</h3>
-      <div class="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-3">
-        <template v-for="shot in shots" :key="`${shot.alone ? 'shot' : 'pair'}:${shot.key}`">
-          <div
-            v-if="shot.before && shot.after"
-            class="col-span-full flex gap-3"
-            :data-testid="`pair-${shot.key}`"
-          >
-            <EvidenceImage :file="shot.before" :installation="installation" :run-id="detail.id" />
-            <EvidenceImage :file="shot.after" :installation="installation" :run-id="detail.id" />
-          </div>
-          <EvidenceImage
-            v-else-if="shot.alone"
-            :file="shot.alone"
-            :installation="installation"
-            :run-id="detail.id"
-          />
-        </template>
-      </div>
-      <UPagination
-        v-if="sorted.gallery.length > PAGE"
-        v-model:page="page"
-        :total="sorted.gallery.length"
-        :items-per-page="PAGE"
-        data-testid="gallery-pages"
-      />
-    </section>
+      <section v-if="sorted.gallery.length > 0" class="flex flex-col gap-2" data-testid="gallery">
+        <h3 class="font-semibold">Screenshots</h3>
+        <div class="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-3">
+          <template v-for="shot in shots" :key="`${shot.alone ? 'shot' : 'pair'}:${shot.key}`">
+            <div
+              v-if="shot.before && shot.after"
+              class="col-span-full flex gap-3"
+              :data-testid="`pair-${shot.key}`"
+            >
+              <EvidenceImage :file="shot.before" :installation="installation" :run-id="detail.id" />
+              <EvidenceImage :file="shot.after" :installation="installation" :run-id="detail.id" />
+            </div>
+            <EvidenceImage
+              v-else-if="shot.alone"
+              :file="shot.alone"
+              :installation="installation"
+              :run-id="detail.id"
+            />
+          </template>
+        </div>
+        <UPagination
+          v-if="sorted.gallery.length > PAGE"
+          v-model:page="page"
+          :total="sorted.gallery.length"
+          :items-per-page="PAGE"
+          data-testid="gallery-pages"
+        />
+      </section>
 
-    <section v-if="sorted.videos.length > 0" class="flex flex-col gap-2" data-testid="videos">
-      <h3 class="font-semibold">Videos</h3>
-      <EvidenceVideo
-        v-for="file in sorted.videos"
-        :key="file.name"
-        :file="file"
-        :installation="installation"
-        :run-id="detail.id"
-      />
-    </section>
+      <section v-if="sorted.videos.length > 0" class="flex flex-col gap-2" data-testid="videos">
+        <h3 class="font-semibold">Videos</h3>
+        <EvidenceVideo
+          v-for="file in sorted.videos"
+          :key="file.name"
+          :file="file"
+          :installation="installation"
+          :run-id="detail.id"
+        />
+      </section>
 
-    <section v-if="sorted.reports.length > 0" class="flex flex-col gap-2" data-testid="reports">
-      <h3 class="font-semibold">Reports</h3>
-      <EvidenceReport
-        v-for="file in sorted.reports"
-        :key="file.name"
-        :file="file"
-        :installation="installation"
-        :run-id="detail.id"
-      />
-    </section>
+      <section v-if="sorted.reports.length > 0" class="flex flex-col gap-2" data-testid="reports">
+        <h3 class="font-semibold">Reports</h3>
+        <EvidenceReport
+          v-for="file in sorted.reports"
+          :key="file.name"
+          :file="file"
+          :installation="installation"
+          :run-id="detail.id"
+        />
+      </section>
 
-    <section
-      v-if="(detail.handoffFiles ?? []).length > 0"
-      class="flex flex-col gap-2"
-      data-testid="handoffs"
-    >
-      <h3 class="font-semibold">Handoff notes</h3>
-      <EvidenceText
-        v-for="file in detail.handoffFiles"
-        :key="file.name"
-        :data-testid="`handoff-${file.name}`"
-        :title="file.name"
-        :item="`handoff:${file.name}`"
-        :installation="installation"
-        :run-id="detail.id"
+      <section
+        v-if="(detail.handoffFiles ?? []).length > 0"
+        class="flex flex-col gap-2"
+        data-testid="handoffs"
       >
-        <template #trailing>
-          <small class="text-muted">{{ file.bytes }} bytes</small>
-        </template>
-      </EvidenceText>
-    </section>
+        <h3 class="font-semibold">Handoff notes</h3>
+        <EvidenceText
+          v-for="file in detail.handoffFiles"
+          :key="file.name"
+          :data-testid="`handoff-${file.name}`"
+          :title="file.name"
+          :item="`handoff:${file.name}`"
+          :installation="installation"
+          :run-id="detail.id"
+        >
+          <template #trailing>
+            <small class="text-muted">{{ file.bytes }} bytes</small>
+          </template>
+        </EvidenceText>
+      </section>
 
-    <section v-if="sorted.files.length > 0" class="flex flex-col gap-2" data-testid="files">
-      <h3 class="font-semibold">Logs and files</h3>
-      <EvidenceText
-        v-for="file in sorted.files"
-        :key="file.name"
-        :data-testid="`file-${file.name}`"
-        :title="file.name"
-        :item="`evidence:${file.name}`"
-        :installation="installation"
-        :run-id="detail.id"
-      >
-        <template #trailing>
-          <small class="text-muted">{{ file.bytes }} bytes</small>
-        </template>
-      </EvidenceText>
-    </section>
+      <section v-if="sorted.files.length > 0" class="flex flex-col gap-2" data-testid="files">
+        <h3 class="font-semibold">Logs and files</h3>
+        <EvidenceText
+          v-for="file in sorted.files"
+          :key="file.name"
+          :data-testid="`file-${file.name}`"
+          :title="file.name"
+          :item="`evidence:${file.name}`"
+          :installation="installation"
+          :run-id="detail.id"
+        >
+          <template #trailing>
+            <small class="text-muted">{{ file.bytes }} bytes</small>
+          </template>
+        </EvidenceText>
+      </section>
 
+      <section data-testid="metrics">
+        <h3 class="mb-2 font-semibold">Metrics</h3>
+        <table class="w-full">
+          <tr v-for="[name, value] in metrics" :key="name" class="border-b border-default">
+            <th class="py-1 pr-4 text-left font-normal text-muted">{{ name }}</th>
+            <td class="py-1" :data-testid="`metric-${name}`">{{ value }}</td>
+          </tr>
+        </table>
+      </section>
+    </template>
     <p v-if="empty" class="text-muted" data-testid="no-evidence">
-      This Run has kept no evidence yet.
+      {{
+        verifications === undefined
+          ? "This Run has kept no evidence yet."
+          : "This Step has kept no verifications yet."
+      }}
     </p>
-    <section data-testid="metrics">
-      <h3 class="mb-2 font-semibold">Metrics</h3>
-      <table class="w-full">
-        <tr v-for="[name, value] in metrics" :key="name" class="border-b border-default">
-          <th class="py-1 pr-4 text-left font-normal text-muted">{{ name }}</th>
-          <td class="py-1" :data-testid="`metric-${name}`">{{ value }}</td>
-        </tr>
-      </table>
-    </section>
   </div>
 </template>

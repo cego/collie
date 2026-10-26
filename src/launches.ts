@@ -3,8 +3,15 @@
 
 import { DateTime, Effect, FileSystem, Schema } from "effect";
 import { RanOn, type RunAgent, type RunStep } from "./board-model";
+import { StepPlace } from "./steps";
 import { ClaudeSubagents } from "./subagents";
 
+/** The Step run an agent's work was given in. */
+export const LaunchedIn = Schema.Struct({
+  step: Schema.String,
+  place: Schema.NullOr(StepPlace),
+  key: Schema.String,
+});
 export const AgentSession = Schema.Struct({ kind: Schema.String, value: Schema.String });
 export type AgentSession = typeof AgentSession.Type;
 
@@ -46,6 +53,7 @@ export const Launched = Schema.Struct({
   terminalId: Schema.optionalKey(Schema.String),
   /** The harness session herdr reported for it, which a pane herdr restores resumes. */
   agentSession: Schema.optionalKey(AgentSession),
+  step: Schema.optionalKey(LaunchedIn),
 });
 export type Launched = typeof Launched.Type;
 
@@ -103,7 +111,10 @@ export const runAgents = (stateDir: string, runId: string) =>
   );
 
 /** Each operation the Run launched, in launch order, with its latest agent and whether its Output is in. */
-export const stepsOf = Effect.fn("Launches.steps")(function* (stateDir: string, runId: string) {
+export const operationsOf = Effect.fn("Launches.operations")(function* (
+  stateDir: string,
+  runId: string,
+) {
   const fs = yield* FileSystem.FileSystem;
   const steps = new Map<string, RunStep>();
   for (const one of yield* readLaunches(stateDir, runId)) {

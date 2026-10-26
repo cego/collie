@@ -84,6 +84,6 @@ export const inField = (target: Target): boolean =>
 /** Escape as the board reads it: whether an overlay is open, and whether focus is in a field. */
 export const escapeOn = (target: Target, page: Page): Gesture => ({
   kind: "escape",
-  overlay: overlayOpen(page),
+  overlay: overlayOpen(page) || (target?.closest("[data-escape-scope]") ?? null) !== null,
   typing: inField(target),
 });

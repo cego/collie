@@ -16,6 +16,7 @@ import {
   forgeOfRef,
   mrUrlOf,
   readMrRef,
+  step,
   type Holders,
 } from "collie";
 import { Effect, Schema } from "effect";
@@ -90,6 +91,8 @@ export const STAGE_CLEARS = {
 export const STAGER = "stage";
 
 const STAGED = { done: "Done", again: "Stage again", leave: "Leave it on stage" } as const;
+/** Finish, answered while refreshing the claims for Stage again. */
+const FINISHED = "finished";
 const CLAIMS = { wait: "Wait for all", free: "Stage what is free", finish: "Finish" } as const;
 
 type Read = Extract<Holders, { readonly _tag: "Read" }>;
@@ -128,6 +131,41 @@ const UNCLAIMED = {
   finish: "Finish",
 } as const;
 
+const assess = step({
+  id: "assess",
+  title: "Assess",
+  description: "Whether the repository is an application, and its merge request's stage jobs.",
+  kind: "agent",
+  role: "implementer",
+});
+const helleClaim = step({
+  id: "claim",
+  title: "Helle claim",
+  description: "The Helle projects stage deploys under, held before anything goes on stage.",
+  kind: "question",
+});
+const putOnStage = step({
+  id: "stage",
+  title: "Stage",
+  description:
+    "The merge request's own pipeline deploys its head to stage, and Collie reads stage back.",
+  kind: "agent",
+  role: "implementer",
+});
+const testing = step({
+  id: "staged",
+  title: "Test on stage",
+  description: "You test the head on stage, then say Done, Stage again or Leave it on stage.",
+  kind: "question",
+});
+const rollBack = step({
+  id: "unstage",
+  title: "Roll stage back",
+  description: "Stage goes back to what production carries, and Collie proves it off.",
+  kind: "agent",
+  role: "implementer",
+});
+
 export default defineWorkflow({
   id: "stage",
   title: "stage — put an open merge request on stage for testing, unmerged",
@@ -139,6 +177,7 @@ export default defineWorkflow({
   output: Schema.String,
   agents: { roles: { implementer: IMPLEMENTER } },
   hints: { mr: "diff-target" },
+  path: [assess, helleClaim, putOnStage, testing, rollBack],
   followUps: [
     {
       id: "stage-again",
@@ -208,11 +247,13 @@ export default defineWorkflow({
         return yield* fail(`${mr} is merged, so its stage is its release's: nothing was staged`);
       if (start._tag === "Closed") return yield* fail(`${mr} is closed, so nothing was staged`);
 
-      const assessed = yield* agentWork({
-        ...as("assess"),
-        instructions: steps.assess,
-        output: Assessed,
-      });
+      const assessed = yield* assess(
+        agentWork({
+          ...as("assess"),
+          instructions: steps.assess,
+          output: Assessed,
+        }),
+      );
       const evidence = assessed.kind_evidence ? `: ${assessed.kind_evidence}` : "";
       if (assessed.is_package)
         return yield* fail(`${mr} is a package, so there is nothing to stage${evidence}`);
@@ -270,20 +311,23 @@ export default defineWorkflow({
       );
       const freeNow = read === null ? null : freeDeploys(read, jobs, others);
       let free = false;
-      if (freeNow !== null && others.size > 0) {
-        const offered = freeNow.jobs.length > 0;
-        const answer = yield* ask({
-          name: "claims-1",
-          prompt: `${mr}'s stage needs Helle projects someone else holds: ${named(others)}. ${CLAIMS.wait} queues for every project and stages everything once all are handed over${offered ? `; ${CLAIMS.free} takes only what is free and stages only ${freeNow.applications.join(", ")}, leaving every other application's stage as it is` : ""}; ${CLAIMS.finish} stops here, claiming nothing.`,
-          options: [CLAIMS.wait, ...(offered ? [CLAIMS.free] : []), CLAIMS.finish],
-        });
-        if (answer === CLAIMS.finish) return `${mr} was not staged`;
-        free = answer === CLAIMS.free;
-      }
-
-      const first = yield* claimed(
-        "claim",
-        free && freeNow !== null ? { deploys: freeNow, free: true } : {},
+      const first = yield* helleClaim(
+        Effect.gen(function* () {
+          if (freeNow !== null && others.size > 0) {
+            const offered = freeNow.jobs.length > 0;
+            const answer = yield* ask({
+              name: "claims-1",
+              prompt: `${mr}'s stage needs Helle projects someone else holds: ${named(others)}. ${CLAIMS.wait} queues for every project and stages everything once all are handed over${offered ? `; ${CLAIMS.free} takes only what is free and stages only ${freeNow.applications.join(", ")}, leaving every other application's stage as it is` : ""}; ${CLAIMS.finish} stops here, claiming nothing.`,
+              options: [CLAIMS.wait, ...(offered ? [CLAIMS.free] : []), CLAIMS.finish],
+            });
+            if (answer === CLAIMS.finish) return null;
+            free = answer === CLAIMS.free;
+          }
+          return yield* claimed(
+            "claim",
+            free && freeNow !== null ? { deploys: freeNow, free: true } : {},
+          );
+        }),
       );
       if (first === null) return `${mr} was not staged`;
       // An explicit waiver permits staging every application.
@@ -338,16 +382,22 @@ export default defineWorkflow({
       });
       let asks = 0;
       for (let n = 1; ; n++) {
-        // Hours may have passed since the head was read, waiting on the claims or the human.
-        const now = yield* Activity.make({
-          name: `head.${n}`,
-          success: ReviewHeadSchema,
-          execute: host
-            .reviewHead({ runId, cwd, commits: [] })
-            .pipe(Effect.catch((failed) => park(failed.reason))),
-        });
-        const head = yield* moveTo(`fast-forward.${n}`, now.head);
-        const { read: onStage } = yield* stage.put(nth("stage", n), head, playing());
+        const { head, read: onStage } = yield* putOnStage(
+          Effect.gen(function* () {
+            // Hours may have passed since the head was read, waiting on the claims or the human.
+            const now = yield* Activity.make({
+              name: `head.${n}`,
+              success: ReviewHeadSchema,
+              execute: host
+                .reviewHead({ runId, cwd, commits: [] })
+                .pipe(Effect.catch((failed) => park(failed.reason))),
+            });
+            const head = yield* moveTo(`fast-forward.${n}`, now.head);
+            const { read } = yield* stage.put(nth("stage", n), head, playing());
+            return { head, read };
+          }),
+          { round: n },
+        );
         if (onStage._tag === "Moved") {
           yield* host.record(
             runId,
@@ -357,7 +407,7 @@ export default defineWorkflow({
         }
         if (onStage._tag === "Failed") {
           const failed = `stage of ${mr} at ${short(head)} failed: ${onStage.why}`;
-          yield* stage.off(nth("unstage", n), onStage.why, failed);
+          yield* rollBack(stage.off(nth("unstage", n), onStage.why, failed));
           yield* giveBack;
           return yield* fail(`${failed}; stage is back on what production carries`);
         }
@@ -371,42 +421,42 @@ export default defineWorkflow({
           held.size === 0
             ? "This Run holds no Helle claim."
             : `This Run holds the Helle claims of ${[...held].join(", ")}.`;
-        const answer = yield* ask({
-          name: `staged-${asks}`,
-          prompt: `Stage carries ${mr} at \`${short(head)}\` for testing, unmerged: ${plays(onStage.jobs)}.${leftOff} ${holds} Test it there, then: ${STAGED.done} rolls stage back and gives the claims back; ${STAGED.again} stages the merge request's head as it is then, keeping the claims${leftApps.length === 0 ? "" : " and taking any left-off project that is free by then"}; ${STAGED.leave} gives the claims back and leaves stage as it is.`,
-          options: [STAGED.done, STAGED.again, STAGED.leave],
-        });
-        if (answer === STAGED.again) {
-          if (leftApps.length > 0 && read !== null) {
-            const more = yield* claimed(`staged-${asks}.claim`, {
-              deploys,
-              free: true,
-              retaining: true,
+        const answer = yield* testing(
+          Effect.gen(function* () {
+            const answer = yield* ask({
+              name: `staged-${asks}`,
+              prompt: `Stage carries ${mr} at \`${short(head)}\` for testing, unmerged: ${plays(onStage.jobs)}.${leftOff} ${holds} Test it there, then: ${STAGED.done} rolls stage back and gives the claims back; ${STAGED.again} stages the merge request's head as it is then, keeping the claims${leftApps.length === 0 ? "" : " and taking any left-off project that is free by then"}; ${STAGED.leave} gives the claims back and leaves stage as it is.`,
+              options: [STAGED.done, STAGED.again, STAGED.leave],
             });
-            if (more === null) {
-              yield* stage.off(
-                nth("unstage", n),
-                `the human finished testing ${mr}`,
-                `${mr} was staged at ${short(head)} for testing`,
-              );
-              yield* giveBack;
-              return `${mr} was staged at ${short(head)} for testing; stage is rolled back`;
+            if (answer === STAGED.again && leftApps.length > 0 && read !== null) {
+              const more = yield* claimed(`staged-${asks}.claim`, {
+                deploys,
+                free: true,
+                retaining: true,
+              });
+              if (more === null) return FINISHED;
+              if (more.left !== undefined) {
+                for (const slug of more.slugs) held.add(slug);
+                take(more);
+              }
             }
-            if (more.left !== undefined) {
-              for (const slug of more.slugs) held.add(slug);
-              take(more);
-            }
-          }
-          continue;
-        }
+            return answer;
+          }),
+          { round: asks },
+        );
+        if (answer === STAGED.again) continue;
         if (answer === STAGED.leave) {
           yield* giveBack;
           return `stage carries ${mr} at ${short(head)}, unmerged`;
         }
-        yield* stage.off(
-          nth("unstage", n),
-          `the human is done testing ${mr}`,
-          `${mr} was staged at ${short(head)} for testing`,
+        yield* rollBack(
+          stage.off(
+            nth("unstage", n),
+            answer === FINISHED
+              ? `the human finished testing ${mr}`
+              : `the human is done testing ${mr}`,
+            `${mr} was staged at ${short(head)} for testing`,
+          ),
         );
         yield* giveBack;
         return `${mr} was staged at ${short(head)} for testing; stage is rolled back`;

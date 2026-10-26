@@ -30,7 +30,7 @@ import {
   scrollOf,
 } from "../../../src/shared/terminal-input";
 
-const props = defineProps<{ placed: PlacedTask; wentToPane: boolean }>();
+const props = defineProps<{ placed: PlacedTask; wentToPane: boolean; agent?: string }>();
 const { terminal, terminalSend, openLink } = useActions();
 const panes = usePanes();
 const toast = useToast();
@@ -125,7 +125,12 @@ const attach = () => {
   ended.value = null;
   noPane.value = false;
   term.reset();
-  const agent = askedFor(props.placed.task.agents, props.placed.task.run, chosen.value);
+  const agent = askedFor(
+    props.placed.task.agents,
+    props.placed.task.run,
+    chosen.value,
+    props.agent,
+  );
   fiber = Effect.runFork(
     terminal(
       props.placed.installation,

@@ -167,6 +167,13 @@ Then write your Output, naming who approved and the head they approved.
 
 ## merge
 
+This turn settles only Renovate pull request `{{merge_request}}`, when named. Other pull
+requests have turns of their own on this same agent. For an application, merge the approved
+batch only once; after it is merged, each turn settles its named Renovate pull request against
+that batch. Preserve every approval, held-branch and outcome rule below. Never merge another
+package update in this turn. In your Output, list newly opened Renovate pull requests under
+`remaining_requests`, with their `iid` and title, so Collie gives each its own turn.
+
 For an application, the merge is the **batch pull request** alone: verify its approving
 review is still on its current head, then merge it with the harness authorising the exact
 operation, and then re-read the Renovate pull request list — each one the batch carried
@@ -203,8 +210,8 @@ it in your Output, do not override the guard, and do not reach it as a detached
 remote-tracking ref instead. If that stops the pull request being merged, consult me and
 record the deferral only if I approve it.
 
-Re-read the pull request list before you leave this step: Renovate opens more while you
-work, and one opened mid-Run is handled under exactly the same policy as the rest.
+Re-read the pull request list before you leave this step. Return newly opened requests in
+`remaining_requests`; their own turns handle them under the same policy.
 
 Every relevant pull request ends with exactly one outcome:
 

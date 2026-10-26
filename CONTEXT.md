@@ -6,6 +6,8 @@
 
 **Operation** — One piece of agent work inside a Run, named by the Workflow that asks for it. The name is its identity: the agent's name, its prompt and Output files and the Activities that make it durable come from it, so it is stable within a Run and differs from every other. It has a role, injected as a Persona, a Harness, a Model, optionally the Skill it starts, and the schema its Output must decode against. An agent it starts gets a Tab of its own in its Task's workspace, labelled with its role; an operation that reuses an agent opens nothing.
 
+**Step** — One declared piece of a Workflow's work: an agent's (an **Operation**), a question to a human, another Workflow, or a check. Like a Prefect task, it is made where its work is written and called from `run` when the work reaches it. Its metadata is what a reader needs before it runs: its id, title, description, kind, role, and what it produces. A definition may list the **path** it expects its Steps to take. The path is a forecast, never a precondition: a Step called off the path still runs, and a path Step the Run never reached ends `not run`. A Step called once per item has a run per **Slice**, and one a loop calls again has a run per round. A Workflow that declares none still runs, and its Steps are its Operations, questions and children as they happen. A Step can be paused before, so the Run holds as its work reaches it, and given a note its agent reads before its next prompt ([ADR-draft-a-step-is-declared-where-its-work-is-written](docs/adr/draft-a-step-is-declared-where-its-work-is-written.md)).
+
 **Trust** — A Harness's own answer to "may I work in this directory". Collie grants it for an agent's directory before that agent's harness starts, by default, without a duplicate Collie question. `never` leaves the question to the harness.
 
 **Permissions** — Who decides whether an agent's tool call runs: the harness's own automatic review (`auto`, the default, which starts each agent in its harness's auto mode), no one (`bypass`, which an operator opts into, and which is auto mode wherever the harness's managed settings forbid it), or the harness's prompt in the agent's own pane (`harness`). Trust is answered once per directory; this is decided per agent start, and an operation may name its own mode. Trust is about the directory, Permissions about the calls made inside it. Under `auto`, a Claude agent's review is told which Run it serves, the branch that Run created where the forge says it is unprotected, the words a human started it with, and each step's **Clearance**. Collie adds no permission rules of its own (ADR-draft-what-a-run-authorises-reaches-auto-mode).
@@ -367,7 +369,7 @@ A stop closes only its Run's agents' panes, and its own shell tab is never hande
 agent, so it outlives them. One herdr has dropped anyway is reopened on the Run's checkout
 at the next launch, and the Task records the new id.
 
-**TaskView** — One Task as the board draws it: name, project, state, the step glyphs, one
+**TaskView** — One Task as the board draws it: name, project, state, a glyph per Run, one
 plain sentence about what is happening, its age, drift, hold, pending **Decision**, agents,
 children, branch, merge request and disposition. Built by one function from the Runs the
 host reports, the live agents and what each Run left in its directory, so the Home's cards, the one-screen text view and
@@ -387,6 +389,11 @@ answer: an agent is waiting for a human in its own pane — at a dialog of its h
 that Collie could not put on the Run, which herdr reports as a `blocked` agent — or a Run parked because its agent's pane would
 not take a prompt. Either way the work has stopped, so the card says which pane to go to
 rather than what the step was doing.
+
+**Wait** — What holds a Run up at a moment: a **Decision** on it, **Stalled**, a **Hold**,
+**Short of memory**, or something it awaits that ends by itself. A Check Collie runs for it
+is shown the same way. A Run can have several at once, and each front door says the one it
+ranks first.
 
 **Working** — A Task something is actually doing: a Run the host holds that has not
 settled, or a **Reopened** Run whose agent herdr reports working. The board's third
@@ -695,6 +702,15 @@ are asked when the Run reaches them, with the work they decide about in front of
 human. One set of components, two placements — a popup pane for the herdr action, and inline in the
 Collie tab for `＋ New run` — because a question a human answers is a component. A
 question a Run answers is a file in its Run directory, and those two never converge.
+
+**Flow** — A Task drawn as the work it took. Each of its Runs is shown on its Machine, as the
+**Steps** it ran and is running, each with its attempts, waits and evidence. Around them are
+the Steps its path still expects, its children and Repo runs by **Wave**, the follow-up it
+offers, and its merge request's way through CI, merge and deploy. The host builds it from
+what each Run recorded and what its module declares, so every front door reads one model. It
+draws what is recorded or declared and guesses nothing else. It is neither the forge's
+pipeline, which is one of its nodes, nor the **Launch flow**
+([ADR-draft-a-step-is-declared-where-its-work-is-written](docs/adr/draft-a-step-is-declared-where-its-work-is-written.md)).
 
 **Selection** — The Task whose record is open on the board, and what chat means by "it"
 ([ADR-0012](docs/adr/0012-the-boards-selection-is-an-explicit-chat-input.md)). Held by a

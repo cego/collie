@@ -44,7 +44,7 @@ test("only steering.ts names the delivery ledger", () =>
   runEffect(
     Effect.gen(function* () {
       const writers = (yield* sources())
-        .filter((file) => file.text.includes("deliveries.jsonl"))
+        .filter((file) => /(?:^|[^\w.-])deliveries\.jsonl(?:$|[^\w.-])/.test(file.text))
         .map((file) => file.name)
         .sort();
       expect(writers).toEqual(["steering.ts"]);

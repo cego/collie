@@ -152,6 +152,16 @@ test("a pick is asked for over the agent at work, which is asked for as its tab,
   expect(askedFor([live("plan-1", "planner")], "run-1", null)).toBeNull();
 });
 
+test("a Step's agent is asked for exactly, even if it ended before the pane opened", () => {
+  const agents = [live("plan-1", "planner"), live("impl-1", "implementer", "working")];
+  expect(askedFor(agents, "run-1", null, "plan-1")?.name).toBe("plan-1");
+  expect(askedFor(agents, "run-1", null, "ended-builder")).toMatchObject({
+    name: "ended-builder",
+    run: "run-1",
+    state: "ended",
+  });
+});
+
 test("a pane not found opens herdr's client only for Go to pane before a pick", () => {
   const picked = agentTabs([live("impl-1", "implementer", "working")], null)[0]!;
   expect(opensHerdrForNoPane(true, null)).toBe(true);

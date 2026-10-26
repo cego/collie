@@ -2,7 +2,7 @@
 import type { Panel } from "../../../../src/board-model";
 import { FOLLOWING_LOG, type LogPlace, logPlaceOf, logScrollTop } from "../../../src/shared/record";
 
-const props = defineProps<{ tail: Panel | null }>();
+const props = defineProps<{ tail: Panel | null; installation?: string; runId?: string }>();
 
 const search = defineModel<string>("search", { default: "" });
 const all = computed(() =>
@@ -39,6 +39,13 @@ watch(
 
 <template>
   <div data-testid="log" class="flex flex-col gap-2">
+    <EvidenceText
+      v-if="installation !== undefined && runId !== undefined"
+      title="Full log"
+      item="log"
+      :installation="installation"
+      :run-id="runId"
+    />
     <UInput
       v-model="search"
       icon="i-lucide-search"

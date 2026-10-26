@@ -17,6 +17,7 @@ import { failedAlone, failedTests, ranAlone, rerunArgv } from "./bun-tests";
 import { appendJournal, readJournal } from "./journal";
 import { shell } from "./mr";
 import { nowIso, epochMs } from "./time";
+import { CurrentStep, type StepPlace } from "./steps";
 import { Pass, VerificationSchema, type FailedTest, type Snapshot } from "./verify-model";
 
 /** Over this many bytes of working-tree content, the tree is not fingerprinted at all. */
@@ -298,6 +299,8 @@ export interface Echo {
 }
 
 export interface Collected {
+  readonly step?: string;
+  readonly place?: StepPlace | null;
   readonly run: string;
   readonly name: string;
   readonly executable: string;
@@ -416,7 +419,11 @@ export const collect = Effect.fn("Verify.collect")(function* (
   const read: Verification = failed === null ? record : { ...record, failed };
   const tested: Verification = what.test === undefined ? read : { ...read, test: what.test };
   const placed: Verification = environment === null ? tested : { ...tested, environment };
-  const kept: Verification = what.log === undefined ? placed : { ...placed, log: what.log };
+  const loggedRecord: Verification = what.log === undefined ? placed : { ...placed, log: what.log };
+  const atStep = yield* CurrentStep;
+  const step = what.step === undefined ? atStep : { step: what.step, place: what.place ?? null };
+  const kept: Verification =
+    step === null ? loggedRecord : { ...loggedRecord, step: step.step, place: step.place };
   yield* appendVerification(runDir, kept).pipe(Effect.orDie);
   return kept;
 });

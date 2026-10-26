@@ -337,6 +337,16 @@ workspace, which is what a merged branch is supposed to do.
 
 ## Reaching another Machine
 
+An agent-requested Run tells its requesting host twice over the paired link: at admission
+and at settlement, beside its outcome report. The `linkNotice` call validates the sending
+Machine and the requesting Run's agent, and records each request once on that Run. The
+Flow hangs the link under the Step whose launch made the start and keeps that placement
+when settlement arrives. Settlement takes precedence over an admission delivered late.
+The started Run records each notice's delivery result in `linkNotices`, shown by
+`collie run show`; an undelivered notice is recorded and not resent. Nothing polls another
+Machine for a linked Run. On one host, the Flow reads the requested Run's current facts
+directly, and its link's `asOf` is null.
+
 Run records are served by their owning host through `run-record.ts`. Intent changes,
 remembered checks and override clearing take the caller's Actor and request id there;
 verification runs in that host's checkout and streams its output. `verify-model.ts`

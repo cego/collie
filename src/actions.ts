@@ -46,6 +46,7 @@ export const ActionSchema = Schema.Union([
   Schema.Struct({
     kind: Schema.Literal("deliver"),
     run: Schema.String,
+    step: Schema.optional(Schema.String),
     /** One of the Run's agents by name. */
     agent: Schema.optionalKey(Schema.String),
     /** A role (`builder`, `reviewer`, `planner`) or an agent; neither is the agent at work. */
@@ -60,12 +61,18 @@ export const ActionSchema = Schema.Union([
   Schema.Struct({
     kind: Schema.Literal("hold"),
     run: Schema.String,
+    before: Schema.optionalKey(Schema.String),
     /** Refused at admission rather than dropped: nothing lifts a hold at a time. */
     until: Schema.optionalKey(Schema.String),
     /** Why, in the human's own words. */
     reason: Schema.optionalKey(Schema.String),
   }),
-  Schema.Struct({ kind: Schema.Literal("release"), run: Schema.String }),
+  Schema.Struct({
+    kind: Schema.Literal("release"),
+    run: Schema.String,
+    before: Schema.optionalKey(Schema.String),
+  }),
+  Schema.Struct({ kind: Schema.Literal("withdraw_note"), run: Schema.String, note: Schema.String }),
   Schema.Struct({ kind: Schema.Literal("stop"), run: Schema.String }),
   Schema.Struct({
     kind: Schema.Literal("answer"),

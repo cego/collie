@@ -75,6 +75,49 @@ test("a checkout with uncommitted changes is refused even where it is already at
     }).pipe(Effect.scoped),
   ));
 
+test("a plain push past the journaled head is not refused; the checkout is taken at its real tip", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { root, cwd, commit, first } = yield* repository;
+      // The Run parked, journaled `first`. While parked a plain push moved the branch two
+      // commits past it, descending from it, and the checkout already sits at the tip.
+      const second = yield* commit("two.ts");
+      const third = yield* commit("three.ts");
+      expect(second).not.toBe(first);
+      expect(third).not.toBe(second);
+      // Replaying the journaled head, the old code refused as after a force push and the Run
+      // parked on the same stale head forever. Now it is answered `At` on what the checkout
+      // actually holds, so a resumed Run re-proves the real head.
+      const moved = yield* fastForward({ runDir: `${root}/run`, cwd, head: first, run: runner() });
+      expect(moved._tag).toBe("At");
+      if (moved._tag === "At") {
+        expect(moved.head).toBe(third);
+        expect(moved.from).toBe(third);
+      }
+    }).pipe(Effect.scoped),
+  ));
+
+test("a true force push (a head the checkout neither is at nor sits behind) is still refused", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { fs, root, cwd, first } = yield* repository;
+      // Rewrite main in place so the checkout no longer carries the journaled `first`: this is
+      // the force push a plain push is told apart from. `first` is kept as a loose object so
+      // the journaled head still resolves, exactly as a rewritten remote branch leaves it.
+      yield* git(cwd, "update-ref", "-d", "refs/heads/main");
+      yield* git(cwd, "checkout", "-q", "--orphan", "main");
+      yield* fs.writeFileString(`${cwd}/rewrite.ts`, "rewrite.ts");
+      yield* git(cwd, "add", "rewrite.ts");
+      yield* git(cwd, "commit", "-q", "-m", "rewrite");
+      const rewritten = yield* git(cwd, "rev-parse", "HEAD");
+      yield* git(cwd, "push", "-q", "--force", "origin", "main");
+      expect(rewritten).not.toBe(first);
+      const moved = yield* fastForward({ runDir: `${root}/run`, cwd, head: first, run: runner() });
+      expect(moved._tag).toBe("Refused");
+      if (moved._tag === "Refused") expect(moved.why).toContain("force push");
+    }).pipe(Effect.scoped),
+  ));
+
 /** GitLab answering `runs`, and git for real. */
 const onGitlab = (runs: ForgeModel["runs"], over: Partial<ForgeModel> = {}) => {
   const fake = fakeForge("gitlab", {

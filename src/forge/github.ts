@@ -96,21 +96,30 @@ export function rollupChecks(rollup: typeof Rollup.Type | null | undefined): For
   if (checks.length === 0) return { state: "none" };
   const verdicts = checks.map((one) => ({
     name: one.name ?? one.context ?? "a check",
+    url: one.detailsUrl ?? one.targetUrl,
     // A check run has a conclusion once it completes; a status context has only a state.
     said:
       one.conclusion ??
       (one.status != null && one.status !== "COMPLETED" ? "PENDING" : (one.state ?? "PENDING")),
   }));
   const red = verdicts.find((one) => RED.has(one.said));
-  if (red !== undefined) return { state: "failed", name: red.name };
-  if (verdicts.some((one) => !GREEN.has(one.said))) return { state: "running" };
-  return { state: "passed" };
+  const waiting = verdicts.find((one) => !GREEN.has(one.said));
+  const result: ForgeChecks =
+    red !== undefined
+      ? { state: "failed", name: red.name }
+      : waiting !== undefined
+        ? { state: "running" }
+        : { state: "passed" };
+  const url = (red ?? waiting ?? verdicts[0])?.url;
+  return url ? { ...result, url } : result;
 }
 
 const Rollup = Schema.Array(
   Schema.Struct({
     name: optionalText,
     context: optionalText,
+    detailsUrl: optionalText,
+    targetUrl: optionalText,
     status: optionalText,
     conclusion: optionalText,
     state: optionalText,
@@ -178,7 +187,7 @@ const PANEL = `query($owner: String!, $name: String!, $number: Int!, $after: Str
       reviewDecision comments { totalCount } updatedAt url autoMergeRequest { enabledAt }
       mergeable mergeStateStatus
       commits(last: 1) { nodes { commit { statusCheckRollup { contexts(first: 100, after: $after) {
-        nodes { __typename ... on CheckRun { name status conclusion } ... on StatusContext { context state } }
+        nodes { __typename ... on CheckRun { name detailsUrl status conclusion } ... on StatusContext { context targetUrl state } }
         pageInfo { hasNextPage endCursor }
       } } } } }
     }

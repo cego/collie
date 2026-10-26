@@ -79,7 +79,9 @@ here are in [`src/README.md`](src/README.md).
   [ADR-0011](docs/adr/0011-the-conversation-is-a-native-harness.md), [ADR-0032](docs/adr/0032-a-chat-starts-new-on-the-latest-opus.md),
   [ADR-0012](docs/adr/0012-the-boards-selection-is-an-explicit-chat-input.md), `src/chat.ts`, `src/toolkit.ts`,
   `src/selection.ts`, `src/statusline.ts`.
-- **Workflow module contract** → [`docs/sdk.md`](docs/sdk.md), `src/sdk.ts`, `src/output.ts`.
+- **Workflow module contract**, Steps and the Flow → [`docs/sdk.md`](docs/sdk.md),
+  [ADR-draft-a-step-is-declared-where-its-work-is-written](docs/adr/draft-a-step-is-declared-where-its-work-is-written.md),
+  `src/sdk.ts`, `src/steps.ts`, `src/flow.ts`, `src/flow-read.ts`, `src/output.ts`, `test/flow.test.ts`.
 - **Engine, loading, recovery** → [ADR-0014](docs/adr/0014-native-workflows-run-on-effects-own-engine.md),
   `src/engine.ts`, `test/engine.test.ts`.
 - **Naming, host tests** → [ADR-0028](docs/adr/0028-names-are-the-domains-and-the-proof-drives-the-shipped-host.md),

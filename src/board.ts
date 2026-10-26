@@ -34,18 +34,30 @@ import { approvedFor, approvedIn } from "./verify-spec";
 import { readIntent } from "./intent";
 import { findingsIn, isBlocking } from "./output";
 import { markersOf, runningCheck } from "./checks";
-import { memoryWaitOf, waitLine } from "./memory-wait";
+import { waitLine } from "./memory-wait";
+import { runWaits } from "./run-waits";
 import { awaitingLine } from "./awaiting";
 import { readForge, readMrStates } from "./merges";
 import { filed, standingOf } from "./standing";
 import { offersOf } from "./lifecycle";
 import { shell } from "./mr";
-import type { Disposition, ForgeChecks, Mergeability, OfferView } from "./board-model";
+import type {
+  Disposition,
+  Flow,
+  ForgeChecks,
+  Mergeability,
+  OfferView,
+  RunningCheck,
+} from "./board-model";
+import { laneWaitOf, stripOf } from "./flow";
+import { taskFlowFor } from "./flow-read";
+import { machineName } from "./peers";
 import { everyDelivery, SENT_STATES, toldIn, type Delivery } from "./steering";
 import { readCards } from "./cards";
 import { owedLocally } from "./check-proof";
 import {
   Answered,
+  flowActions,
   mrLabel,
   mrWords,
   readMrRef,
@@ -61,7 +73,6 @@ import {
   type Decision,
   type MrState,
   type Proposal,
-  type Question,
   type ReadyToRelease,
   type Reopened,
   type Section,
@@ -133,12 +144,12 @@ const toldBy = Effect.fn("Board.toldBy")(function* (
 const reopenedOf = Effect.fn("Board.reopenedOf")(function* (
   stateDir: string,
   run: RunFacts,
-  deliveries: ReadonlyArray<Delivery>,
+  deliveries: Effect.Effect<ReadonlyArray<Delivery>, never, FileSystem.FileSystem | Path.Path>,
   live: ReadonlyMap<string, AgentInfo>,
 ) {
   const ended = yield* finishedAt(run);
   if (ended === null) return null;
-  const steer = deliveries
+  const steer = (yield* deliveries)
     .filter(
       (one) =>
         one.run === run.id &&
@@ -516,7 +527,7 @@ const STEP_STATE: Readonly<Record<RunState, StepState>> = {
 };
 
 /** The Task's pipeline: its Runs in the order they started, each as it now stands. */
-function stepsOf(runs: ReadonlyArray<RunFacts>): BoardStep[] {
+function glyphsOf(runs: ReadonlyArray<RunFacts>): BoardStep[] {
   return [...runs].reverse().map((run) => ({ name: run.workflow, state: STEP_STATE[run.state] }));
 }
 
@@ -536,21 +547,6 @@ function stateOf(
   // someone stopped while its agent sat at a prompt was stopped, and says so.
   if (stalled) return "blocked";
   return silent ? "quiet" : "active";
-}
-
-/** Every question these Runs are waiting on, in the order a card asks them. */
-function questionsOf(runs: ReadonlyArray<RunFacts>): ReadonlyArray<Question> {
-  return runs.flatMap((run) =>
-    run.asking.map((asked): Question => ({
-      kind: "question",
-      run: run.id,
-      id: asked.name,
-      step: run.workflow,
-      topic: asked.name,
-      text: asked.prompt,
-      options: asked.options.map((option) => ({ id: option, title: option, subtitle: null })),
-    })),
-  );
 }
 
 /**
@@ -718,6 +714,14 @@ const fanOf = Effect.fn("Board.fanOf")(function* (
   const planned = plan === null || plan.refusal !== null ? [] : plan.waves;
   const unplanned = [...started.keys()].filter((repo) => !planned.flat().includes(repo));
   const waves = unplanned.length === 0 ? planned : [...planned, unplanned];
+  const placed = waves.flatMap((wave, at) =>
+    wave.map((repo) => ({
+      parent: parent.id,
+      repo,
+      wave: at + 1,
+      run: started.get(repo)?.id ?? null,
+    })),
+  );
   const rows = waves.flat().map((repo): BoardChild => {
     const run = started.get(repo);
     return {
@@ -732,6 +736,7 @@ const fanOf = Effect.fn("Board.fanOf")(function* (
     rows.filter((row) => row.state === state).map((row) => row.repo);
   return {
     children: rows,
+    waves: placed,
     wave: {
       at: reached + 1,
       of: waves.length,
@@ -896,6 +901,10 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
   deliveries?: ReadonlyArray<Delivery>;
   /** What a Run offers now; the host is asked where this is not given. */
   offers?: (runId: string) => Effect.Effect<ReadonlyArray<OfferView>>;
+  /** Only the Task this Run belongs to, however long ago it finished. */
+  only?: string;
+  /** Where each Task's whole Flow is put, by the Task's id. */
+  flows?: Map<string, Flow>;
 }) {
   const { stateDir } = opts.env;
   const now = opts.now ?? (yield* Clock.currentTimeMillis);
@@ -910,7 +919,11 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
   const forge = opts.forge ?? (yield* readForge(stateDir));
   const live = new Map((opts.alive ?? []).map((agent) => [agent.name, agent]));
   const markers = yield* markersOf(all);
-  const deliveries = opts.deliveries ?? (yield* everyDelivery(stateDir));
+  // Every agent's ledger, read only once a card has a finished Run to look for a steer to.
+  const deliveries =
+    opts.deliveries === undefined
+      ? yield* Effect.cached(everyDelivery(stateDir))
+      : Effect.succeed(opts.deliveries);
   const offersOfRun =
     opts.offers ??
     ((runId: string) =>
@@ -939,6 +952,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
         const children = runs.flatMap((run) => repoRunsOf.get(run.id) ?? []);
         // What a card answers for and who works on it includes its Repo runs'.
         const everyRun = [...runs, ...children];
+        if (opts.only !== undefined && !everyRun.some((run) => run.id === opts.only)) return null;
         const pending = everyRun.flatMap((run) => pendingFor(proposals, run.id, now));
         const touched = new Map<string, number>();
         for (const run of everyRun) touched.set(run.id, yield* lastActivityAt(stateDir, run));
@@ -962,6 +976,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
         // Finished work older than a day is History's, behind `older…` — landed work only:
         // an unmerged branch from last week is still waiting on you, however old.
         if (
+          opts.only === undefined &&
           runs.every((run) => over(run, runs)) &&
           last < now - FINISHED_FOR_MS &&
           pending.length === 0 &&
@@ -969,8 +984,15 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
         )
           return null;
         const leader = leaderOf(runs);
-        const proposed = pending[0];
-        const questions = questionsOf(everyRun);
+        const agents = agentsOf(everyRun, registered, live);
+        const waits = new Map(
+          yield* Effect.forEach(everyRun, (run) =>
+            Effect.map(runWaits(run, proposals, agents, now), (read) => [run.id, read] as const),
+          ),
+        );
+        const waitsOf = (run: RunFacts) => waits.get(run.id)!;
+        const proposed = everyRun.flatMap((run) => waitsOf(run).proposals)[0];
+        const questions = everyRun.flatMap((run) => waitsOf(run).questions);
         const decision: Decision | null = proposed ? asProposal(proposed) : (questions[0] ?? null);
 
         const status = leader.state;
@@ -979,13 +1001,14 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
         const ownsAgent = (agent: { readonly run: string }) =>
           working.some((run) => run.id === agent.run);
         const at = Math.max(...working.map((run) => touched.get(run.id) ?? 0));
-        const agents = agentsOf(everyRun, registered, live);
         const check = yield* runningCheck(leader, all, markers, now);
         const memory =
-          (yield* Effect.forEach(everyRun, (run) => memoryWaitOf(run.dir)))
+          everyRun
+            .map((run) => waitsOf(run).memory)
             .filter((wait) => wait !== null)
             .sort((a, b) => a.since - b.since)[0] ?? null;
-        const awaiting = working.find((run) => run.awaiting !== null)?.awaiting ?? null;
+        const awaiting =
+          working.map((run) => waitsOf(run).awaiting).find((one) => one !== null) ?? null;
         // An agent mid-turn, a check Collie is running or a wait for memory or anything else
         // that ends by itself is work, however little it writes.
         const busy =
@@ -1003,10 +1026,10 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
         // Stopped for a human with no Decision to answer: herdr reports `blocked` for an agent
         // sitting at its harness's own dialog, and a Run parks where its pane will not take a
         // prompt. herdr's name for the pane first: it is the one a human has to go to.
-        const blocked = agents.find((agent) => agent.status === "blocked");
+        const blocked = everyRun.map((run) => waitsOf(run).blocked).find((one) => one !== null);
         const stalled =
           (blocked ? `${blocked.name}'s pane` : null) ??
-          (leader.state === "waiting" && leader.asking.length === 0 ? "its pane" : null);
+          (waitsOf(leader).parked !== null ? "its pane" : null);
         // Nothing drives it and nobody works on it: the host could not take it up again. A
         // Decision outranks it, because answering is still what moves the work.
         const abandoned = decision === null && going && leader.undriven && !agents.some(ownsAgent);
@@ -1022,8 +1045,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
               ? "blocked"
               : stateOf(status, silent !== null, decision, stalled !== null);
 
-        // A hold left on a Run that ended holds nothing, and a finished Run refuses its release.
-        const held = runs.find((run) => run.held && !ended(run));
+        const held = runs.find((run) => waitsOf(run).held);
         const settledNow =
           state === "done" || state === "failed" || state === "stopped" || state === "abandoned";
         const failure =
@@ -1109,12 +1131,63 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
           mergeable: forged?.mergeable ?? null,
         });
         const finishedAt = settledNow ? endedAt(leader) : 0;
+        // Only a ready plan's first action is an offer; asking every card would ask every refresh.
+        const offer = planReady ? primaryOf(yield* offersOfRun(leader.id)) : null;
+        const holders = new Map<string, string | null>();
+        for (const run of everyRun)
+          if (waitsOf(run).held) holders.set(run.id, (yield* holderOf(run))?.by ?? null);
+        const checking = new Map<string, RunningCheck | null>();
+        for (const run of runs)
+          checking.set(
+            run.id,
+            run === leader ? check : yield* runningCheck(run, all, markers, now),
+          );
+        const flow = yield* taskFlowFor(opts.env, {
+          rows: runs,
+          all,
+          repoRunsOf,
+          waves: fan?.waves ?? [],
+          leader,
+          settled: settledNow,
+          waitOf: (run) => {
+            const waits = waitsOf(run);
+            const running = checking.get(run.id) ?? null;
+            return laneWaitOf({
+              proposals: waits.proposals.length,
+              blocked: waits.blocked !== null,
+              parked: waits.parked,
+              heldBy: waits.held ? (holders.get(run.id) ?? "someone") : null,
+              memory: waits.memory !== null,
+              usage: waits.usage,
+              check: running,
+              awaiting: waits.awaiting !== null,
+              machine: opts.env.machine ?? machineName(),
+              sleeping:
+                (run.engine?.wakes ?? null) !== null ||
+                all.some((one) => one.parent === run.id && !ended(one)),
+            });
+          },
+          offer,
+          mr,
+          merging: merging.id,
+          mrState,
+          mrStates,
+          ci: forged?.checks ?? null,
+          readiness:
+            mr !== null && (mrState === null || mrState === "open")
+              ? readiness.ready
+                ? "Ready to release"
+                : (readiness.missing[0]?.said ?? null)
+              : null,
+          mrOf,
+          mrLabel: (one) => mrLabel(one),
+        });
         const view: TaskView = {
           id,
           name,
           project,
           state,
-          steps: stepsOf(runs),
+          steps: glyphsOf(runs),
           sentence: sentenceFor({
             mr,
             mrState,
@@ -1185,17 +1258,50 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
           check,
           reopened,
           planReady,
-          // Only a ready plan's first action is an offer; asking every card would ask every refresh.
-          offer: planReady ? primaryOf(yield* offersOfRun(leader.id)) : null,
+          offer,
           run: leader.id,
           runs: runs.map((run) => run.id),
           at: at === 0 ? first : at,
+          flow: stripOf(flow, leader.id),
         };
+        opts.flows?.set(
+          id,
+          flowActions(
+            flow,
+            view,
+            new Map(
+              runs.map((run) => [
+                run.id,
+                {
+                  canResume:
+                    run.engine?.execution !== "failed" &&
+                    run.engine?.execution !== "completed" &&
+                    (run.state === "stopped" || run.parked !== null || run.undriven),
+                  held: waitsOf(run).held,
+                  proposal:
+                    waitsOf(run).proposals[0] === undefined
+                      ? null
+                      : asProposal(waitsOf(run).proposals[0]!),
+                },
+              ]),
+            ),
+          ),
+        );
         return task?.herd ? { ...view, herd: task.herd } : view;
       }),
     { concurrency: READS_AT_ONCE },
   );
   return sortBoard(views.filter((view) => view !== null));
+});
+
+/** The whole Flow of the Task a Run belongs to, built as its card is. */
+export const taskFlowOf = Effect.fn("Board.taskFlow")(function* (
+  opts: Omit<Parameters<typeof buildBoard>[0], "only" | "flows">,
+  runId: string,
+) {
+  const flows = new Map<string, Flow>();
+  const [view] = yield* buildBoard({ ...opts, only: runId, flows });
+  return view === undefined ? null : (flows.get(view.id) ?? null);
 });
 
 /** Each Ready to release card's Run, with the revision its checks passed at and its sentence. */
