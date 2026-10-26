@@ -2904,7 +2904,6 @@ const settled = (runId: string): Reached =>
     return status === "suspended" || status === "failed";
   });
 
-/** Why `r1` parked, with herdr failing as `failing` says. */
 const parkedOn = (failing: string) =>
   Effect.gen(function* () {
     yield* interrupted("r1", settled("r1"), {

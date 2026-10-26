@@ -11,7 +11,6 @@ export default defineWorkflow({
     Effect.gen(function* () {
       const host = yield* Host;
       const run = yield* Run;
-      // Files once the gate its text names exists.
       if (input.operation === "file-when-open") {
         const fs = yield* FileSystem.FileSystem;
         yield* fs.exists(input.text).pipe(

@@ -1,6 +1,3 @@
-// Two Steps: the first notes `<dir>/one` and goes on once `<dir>/open` exists, the second
-// notes `<dir>/two`.
-
 import { defineWorkflow, step } from "collie";
 import { Effect, FileSystem, Schedule, Schema } from "effect";
 

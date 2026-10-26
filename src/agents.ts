@@ -1371,7 +1371,6 @@ const blockedAtStartup = (error: HerdrError) => /blocked during startup/.test(er
 /** herdr still lists an agent whose process has gone, and refuses it with this. */
 const inactive = (refusal: string) => /not an active named agent/.test(refusal);
 
-/** Gone: herdr no longer lists it, or lists it and refuses it as inactive. */
 const isGone = (agent: string, listed: ReadonlyArray<AgentInfo>, refusal: string) =>
   !listed.some((one) => one.name === agent) || inactive(refusal);
 const DEFAULT_COLLECT_MS = 2 * 60 * 60 * 1000;

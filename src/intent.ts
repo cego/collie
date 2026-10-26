@@ -390,7 +390,6 @@ export function extractRequirements(text: string, file: string) {
   return { goal, constraints };
 }
 
-/** The first paragraph under the first heading `heading` matches, as one line. */
 function firstParagraphUnder(lines: ReadonlyArray<string>, heading: RegExp): string | null {
   const start = lines.findIndex((line) => heading.test(line));
   if (start < 0) return null;
