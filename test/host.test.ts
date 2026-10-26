@@ -905,19 +905,34 @@ test.skipIf(process.platform !== "linux")(
           connect(state).pipe(Effect.flatMap((client) => client.identity())),
         ).pipe(Effect.orDie);
 
+        // The sweep follows the host's first answer.
+        yield* until(
+          () => Effect.forEach(ours, stillRunning),
+          (running) => !running.some(Boolean),
+        );
+        yield* until(
+          () => fs.readDirectory(runningChecksDir(state)),
+          (records) => records.length === 0,
+        );
+        yield* until(
+          () =>
+            Effect.all([
+              fs.readFileString(`${state}/runs/run-four/log.txt`),
+              fs.readFileString(`${state}/host.log`),
+            ]).pipe(Effect.orElseSucceed(() => ["", ""])),
+          ([run, host]) =>
+            run.includes(
+              "check held (pass gate) of run-four, left running by host 4242 (started 2): ended",
+            ) &&
+            host.includes(
+              "check held of run-one, left running by host 4241 (started 1): already gone",
+            ),
+        );
         expect(yield* Effect.forEach([reused, theirs, unmarked], stillRunning)).toEqual([
           true,
           true,
           true,
         ]);
-        expect(yield* Effect.forEach(ours, stillRunning)).toEqual([false, false]);
-        expect(yield* fs.readDirectory(runningChecksDir(state))).toEqual([]);
-        expect(yield* fs.readFileString(`${state}/runs/run-four/log.txt`)).toContain(
-          "check held (pass gate) of run-four, left running by host 4242 (started 2): ended",
-        );
-        expect(yield* fs.readFileString(`${state}/host.log`)).toContain(
-          "check held of run-one, left running by host 4241 (started 1): already gone",
-        );
       }),
     ),
   120_000,

@@ -2784,18 +2784,31 @@ export const serve = (named: string): Effect.Effect<void, never, BunServices | S
       lock,
       Effect.void,
       Effect.gen(function* () {
+        // No process can carry an id this host has yet to make.
+        const fresh = !(yield* fs.exists(`${dir}/installation`));
         const installation = yield* installationOf(dir);
         const checks = yield* hostCheckProcesses({
           dir,
           installation,
           onRun: onLeftoversRun(dir),
+          sweep: false,
         });
+        const sweep = fresh
+          ? Effect.void
+          : checks.left.pipe(
+              Effect.flatMap((left) =>
+                Effect.forEach(left, checks.endLeftover, {
+                  concurrency: "unbounded",
+                  discard: true,
+                }),
+              ),
+            );
         const stop = yield* boundedStop(lock, checks);
         yield* Effect.logInfo(`collie ${BUILD} host started, pid ${process.pid}`);
         yield* Effect.forkScoped(
           rotateInPlace(outputOf(dir)).pipe(Effect.repeat(Schedule.spaced("1 minute"))),
         );
-        yield* Effect.race(own(dir, checks), orphaned(dir).pipe(Effect.flatMap(stop)));
+        yield* Effect.race(own(dir, checks, sweep), orphaned(dir).pipe(Effect.flatMap(stop)));
       }).pipe(Effect.provide(Logger.layer([hostLogger(logOf(dir))], { mergeWithExisting: true }))),
       0,
     );
@@ -2925,7 +2938,7 @@ const scheduleSeconds = Config.option(Config.String("COLLIE_HOST_SCHEDULE_SECOND
   Effect.orDie,
 );
 
-const own = (dir: string, checks: CheckProcessesApi) =>
+const own = (dir: string, checks: CheckProcessesApi, onceAnswering: Effect.Effect<void>) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const env = yield* currentEnv.pipe(Effect.orDie);
@@ -3033,6 +3046,7 @@ const own = (dir: string, checks: CheckProcessesApi) =>
         ),
         Layer.provide(yield* configuredAgents(dir, usage.readings)),
         Layer.provide(forgeHttpLayer),
+        Layer.tap(() => Effect.forkScoped(onceAnswering)),
       ),
     );
   }).pipe(Effect.provide(usageLayer), Effect.orDie);
