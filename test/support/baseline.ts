@@ -12937,7 +12937,6 @@ export const split = (names: ReadonlyArray<string>, of: number) => {
 
 export const scenarioNames = () => scenarios.map((one) => one.name);
 
-/** Registers one share of a pass's scenarios; the shipped-only tests go with share 0. */
 export const register = (pass: "shipped" | "unrelated", share: number) => {
   const mine = new Set(split(scenarioNames(), SHARES)[share]);
   beforeEach(() =>
