@@ -144,12 +144,12 @@ const toldBy = Effect.fn("Board.toldBy")(function* (
 const reopenedOf = Effect.fn("Board.reopenedOf")(function* (
   stateDir: string,
   run: RunFacts,
-  deliveries: ReadonlyArray<Delivery>,
+  deliveries: Effect.Effect<ReadonlyArray<Delivery>, never, FileSystem.FileSystem | Path.Path>,
   live: ReadonlyMap<string, AgentInfo>,
 ) {
   const ended = yield* finishedAt(run);
   if (ended === null) return null;
-  const steer = deliveries
+  const steer = (yield* deliveries)
     .filter(
       (one) =>
         one.run === run.id &&
@@ -919,7 +919,11 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
   const forge = opts.forge ?? (yield* readForge(stateDir));
   const live = new Map((opts.alive ?? []).map((agent) => [agent.name, agent]));
   const markers = yield* markersOf(all);
-  const deliveries = opts.deliveries ?? (yield* everyDelivery(stateDir));
+  // Every agent's ledger, read only once a card has a finished Run to look for a steer to.
+  const deliveries =
+    opts.deliveries === undefined
+      ? yield* Effect.cached(everyDelivery(stateDir))
+      : Effect.succeed(opts.deliveries);
   const offersOfRun =
     opts.offers ??
     ((runId: string) =>

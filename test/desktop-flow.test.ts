@@ -227,12 +227,30 @@ test("the inspector preserves retry causes, fallback words and question attribut
       },
     ],
   });
-  const info = inspectorOf(mainFlow([node]), { run: "build-run", node: "retry", item: null }, 0)!;
+  const flow = mainFlow([node]);
+  const selection = { run: "build-run", node: "retry", item: null };
+  const sameDay = epochMs("2026-10-23T15:00:00.000Z");
+  const info = inspectorOf(flow, selection, sameDay, "UTC")!;
   expect(info.lines).toContain(
     "builder · codex/default (fell back from claude/opus: weekly limit)",
   );
-  expect(info.lines).toContain("Attempt 2 · resumed · 2026-10-23T09:04:00.000Z");
-  expect(info.lines).toContain("Answered 2026-10-23T09:03:00.000Z by mk");
+  expect(info.lines).toEqual(
+    expect.arrayContaining([
+      "Started 09:00",
+      "Ended 09:12",
+      "Attempt 2 · resumed · 09:04",
+      "Answered 09:03 by mk",
+    ]),
+  );
+  expect(inspectorOf(flow, selection, epochMs("2026-10-25T08:00:00.000Z"), "UTC")!.lines).toContain(
+    "Started 23 Oct, 09:00",
+  );
+  expect(inspectorOf(flow, selection, epochMs("2027-01-02T08:00:00.000Z"), "UTC")!.lines).toContain(
+    "Started 23 Oct 2026, 09:00",
+  );
+  expect(inspectorOf(flow, selection, sameDay, "Europe/Copenhagen")!.lines).toContain(
+    "Started 11:00",
+  );
 });
 
 test.each([

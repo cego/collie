@@ -1,4 +1,5 @@
 import type { Flow, FlowNode, FlowRun } from "../../../src/board-model";
+import { epochMs } from "../../../src/time";
 import { stepTiming } from "./step-timing";
 export interface FlowSpot {
   readonly run: string;
@@ -122,7 +123,39 @@ export type FlowEntry = {
   readonly folded: boolean;
   readonly wave?: number;
 };
-export const inspectorOf = (flow: Flow, selection: FlowSelection, now: number) => {
+const dateParts = (ms: number, timeZone: string | undefined) =>
+  Object.fromEntries(
+    new Intl.DateTimeFormat("en-GB", {
+      timeZone,
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    })
+      .formatToParts(ms)
+      .map((part) => [part.type, part.value]),
+  );
+
+/** An instant on this Machine's clock: `11:22` today, `24 Oct, 11:22` on another day. */
+export const whenOf = (iso: string, now: number, timeZone?: string): string => {
+  const ms = epochMs(iso);
+  if (Number.isNaN(ms)) return iso;
+  const at = dateParts(ms, timeZone);
+  const today = dateParts(now, timeZone);
+  const time = `${at.hour}:${at.minute}`;
+  if (at.year !== today.year) return `${at.day} ${at.month} ${at.year}, ${time}`;
+  return at.month === today.month && at.day === today.day ? time : `${at.day} ${at.month}, ${time}`;
+};
+
+export const inspectorOf = (
+  flow: Flow,
+  selection: FlowSelection,
+  now: number,
+  timeZone?: string,
+) => {
+  const when = (iso: string) => whenOf(iso, now, timeZone);
   const parent = nodeAt(flow, selection);
   if (parent === null) return null;
   const all = [...parent.runs, ...(parent.links ?? [])];
@@ -131,20 +164,20 @@ export const inspectorOf = (flow: Flow, selection: FlowSelection, now: number) =
   if (node.agent != null) lines.push(`Agent ${node.agent}`);
   if (node.ranOn !== null) lines.push([node.role, node.ranOn].filter(Boolean).join(" · "));
   if (node.started !== null) {
-    lines.push(`Started ${node.started}`);
+    lines.push(`Started ${when(node.started)}`);
   }
   const timing = stepTiming(node, now);
   if (timing !== null) lines.push(timing);
-  if (node.ended !== null) lines.push(`Ended ${node.ended}`);
+  if (node.ended !== null) lines.push(`Ended ${when(node.ended)}`);
   node.attempts
     .slice(1)
     .forEach((attempt, i) =>
-      lines.push(`Attempt ${i + 2} · ${attempt.cause ?? "retried"} · ${attempt.at}`),
+      lines.push(`Attempt ${i + 2} · ${attempt.cause ?? "retried"} · ${when(attempt.at)}`),
     );
   for (const question of node.questions)
     if (question.answered !== null)
       lines.push(
-        `Answered ${question.answered}${question.by === null ? "" : ` by ${question.by}`}`,
+        `Answered ${when(question.answered)}${question.by === null ? "" : ` by ${question.by}`}`,
       );
   const waves = [
     ...new Set(all.flatMap((one) => (one.wave === undefined ? [] : [one.wave]))),

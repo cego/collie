@@ -1,6 +1,8 @@
 // Desktop's view: a Nuxt SPA generated to static files that Electrobun serves from
 // views://mainview/. Nothing may come from the network at runtime.
 
+import { iconScan } from "./icon-scan";
+
 export default defineNuxtConfig({
   // @comark/nuxt turns on Nuxt UI's prose components, which style rendered markdown.
   modules: ["@nuxt/ui", "@comark/nuxt"],
@@ -46,7 +48,7 @@ export default defineNuxtConfig({
     },
   },
   // Icons are compiled into the bundle from @iconify-json/lucide, never fetched.
-  icon: { provider: "none", fallbackToApi: false, clientBundle: { scan: true } },
+  icon: { provider: "none", fallbackToApi: false, clientBundle: { scan: iconScan } },
   alias: {
     "electrobun/view": new URL("../.hutch/devkit/api/browser/index.ts", import.meta.url).pathname,
   },

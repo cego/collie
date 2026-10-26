@@ -48,6 +48,7 @@ const labels = {
     >
       {{ line }}
     </p>
+    <slot />
     <p v-if="info.description" class="text-sm">{{ info.description }}</p>
     <slot name="decision" />
     <UButton
@@ -95,6 +96,5 @@ const labels = {
       :label="`Open in ${labels[info.open.tab] ?? info.open.tab}`"
       @click="emit('open', info.open.run, info.open.tab)"
     />
-    <slot />
   </section>
 </template>

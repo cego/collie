@@ -198,6 +198,11 @@ watch(
     }
   },
 );
+watch(selected, async (spot) => {
+  if (spot === null) return;
+  await nextTick();
+  map.value?.reveal(spot);
+});
 let revealed = false;
 watch(
   () => props.shown,
@@ -215,7 +220,7 @@ watch(
   <div
     data-testid="flow"
     :data-escape-scope="selected !== null ? '' : undefined"
-    class="flex min-h-0 flex-1 flex-col gap-4"
+    class="@container/flow flex min-h-0 flex-1 flex-col gap-4"
     :class="{ 'opacity-50': placed.asOf !== null }"
     @keydown="key"
   >
@@ -235,82 +240,94 @@ watch(
       />
     </div>
     <p class="sr-only" aria-live="polite" aria-atomic="true">{{ announcement }}</p>
-    <FlowMap
-      ref="map"
-      :flow="flow"
-      :focused="focused"
-      :selected="selected"
-      :cards="cards"
-      :away="away"
-      :now="now"
-      :installation="placed.installation"
-      :live="placed.asOf === null"
-      @choose="choose"
-      @focus="focused = $event"
-      @origin="origin"
-      @act="press"
-    />
-    <FlowInspector
-      v-if="info !== null && selected !== null"
-      :info="info"
-      :selected="selected"
-      @close="close"
-      @item="chooseItem"
-      @open="(run, tab) => emit('open', run, tab)"
+    <div
+      class="flex min-h-0 flex-1 flex-col gap-4"
+      :class="{ '@5xl/flow:flex-row': selected !== null }"
     >
-      <template #why
-        ><section v-if="info.state === 'failed'" class="flex flex-col gap-2">
-          <h4 class="text-sm font-semibold">Why it failed</h4>
-          <pre class="max-h-64 overflow-auto whitespace-pre-wrap rounded bg-elevated p-3 text-xs">{{
-            info.node.why ?? info.said
-          }}</pre>
-        </section></template
+      <FlowMap
+        ref="map"
+        class="shrink-0"
+        :class="{
+          'max-h-72 @5xl/flow:max-h-none @5xl/flow:min-w-0 @5xl/flow:flex-1 @5xl/flow:shrink':
+            selected !== null,
+        }"
+        :flow="flow"
+        :focused="focused"
+        :selected="selected"
+        :cards="cards"
+        :away="away"
+        :now="now"
+        :installation="placed.installation"
+        :live="placed.asOf === null"
+        @choose="choose"
+        @focus="focused = $event"
+        @origin="origin"
+        @act="press"
+      />
+      <FlowInspector
+        v-if="info !== null && selected !== null"
+        :info="info"
+        :selected="selected"
+        class="@5xl/flow:flex-none @5xl/flow:border-t-0 @5xl/flow:border-l @5xl/flow:pt-0 @5xl/flow:pl-4 @5xl/flow:w-md @7xl/flow:w-xl"
+        @close="close"
+        @item="chooseItem"
+        @open="(run, tab) => emit('open', run, tab)"
       >
-      <template #actions
-        ><FlowActions
-          v-if="lane !== undefined"
-          :node="info.node"
-          :lane="lane"
-          :installation="placed.installation"
-          :live="placed.asOf === null"
-          @act="press"
-      /></template>
-      <template #decision
-        ><FlowDecision
-          v-if="decision !== null"
-          :effect="decision"
-          :machine="placed.machine"
-          :perform="controls.perform"
-      /></template>
-      <template #work>
-        <FlowNotes
-          :node="lane?.nodes.find((node) => node.id === selected?.node) ?? info.node"
-          :run="selected.run"
-          :installation="placed.installation"
-          :live="placed.asOf === null"
-          @act="press" />
-        <StepWork
-          :flow="flow"
-          :node="info.node"
-          :selected="selected"
-          :detail="detail"
-          :placed="placed"
-          :shown="shown"
-          :asked="requestedPart"
-          @open="(run, tab, agent) => emit('open', run, tab, agent)"
-      /></template>
-      <template #default
-        ><UButton
-          v-if="source !== null"
-          variant="link"
-          class="self-start px-0"
-          :label="`Started by ${source.run} on ${source.machine}`"
-          @click="origin(source.run, source.machine)"
-      /></template>
-    </FlowInspector>
-    <p v-else class="text-sm text-muted">
-      Select a Step to inspect its work. Use the arrow keys to move between Steps and Runs.
-    </p>
+        <template #why
+          ><section v-if="info.state === 'failed'" class="flex flex-col gap-2">
+            <h4 class="text-sm font-semibold">Why it failed</h4>
+            <pre
+              class="max-h-64 overflow-auto whitespace-pre-wrap rounded bg-elevated p-3 text-xs"
+              >{{ info.node.why ?? info.said }}</pre>
+          </section></template
+        >
+        <template #actions
+          ><FlowActions
+            v-if="lane !== undefined"
+            :node="info.node"
+            :lane="lane"
+            :installation="placed.installation"
+            :live="placed.asOf === null"
+            @act="press"
+        /></template>
+        <template #decision
+          ><FlowDecision
+            v-if="decision !== null"
+            :effect="decision"
+            :machine="placed.machine"
+            :perform="controls.perform"
+        /></template>
+        <template #work>
+          <FlowNotes
+            :node="lane?.nodes.find((node) => node.id === selected?.node) ?? info.node"
+            :run="selected.run"
+            :installation="placed.installation"
+            :live="placed.asOf === null"
+            @act="press" />
+          <StepWork
+            :flow="flow"
+            :node="info.node"
+            :selected="selected"
+            :detail="detail"
+            :placed="placed"
+            :shown="shown"
+            :asked="requestedPart"
+            @open="(run, tab, agent) => emit('open', run, tab, agent)"
+        /></template>
+        <template #default
+          ><UButton
+            v-if="source !== null"
+            variant="link"
+            size="xs"
+            class="self-start p-0"
+            :label="`Started by ${source.run} on ${source.machine}`"
+            @click="origin(source.run, source.machine)"
+        /></template>
+      </FlowInspector>
+      <p v-else class="text-sm text-muted">
+        Select a Step to inspect its work. Use the arrow keys to move between Steps and Runs.
+      </p>
+    </div>
     <OffersDialog
       v-if="offering !== null"
       :installation="placed.installation"

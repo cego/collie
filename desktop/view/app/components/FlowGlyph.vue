@@ -65,7 +65,8 @@ const colors: Record<FlowState, string> = {
 <style scoped>
 .flow-turn {
   transform-origin: center;
-  animation: flow-turn 6s linear infinite;
+  /* Stepped: Desktop composites in software, where a smooth turn repaints every frame. */
+  animation: flow-turn 6s steps(12) infinite;
 }
 @keyframes flow-turn {
   to {
