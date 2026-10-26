@@ -1363,8 +1363,14 @@ const paneNotReady = (error: HerdrError) =>
  * herdr keeps the name of an agent blocked during startup — a first-run dialog in its
  * pane — so it is there, and its prompt waits for it as any blocked agent's does.
  */
-const blockedAtStartup = (error: HerdrError) =>
-  error.code === "agent_not_ready" || /blocked during startup/.test(error.detail);
+const blockedAtStartup = (error: HerdrError) => /blocked during startup/.test(error.detail);
+
+/** herdr still lists an agent whose process has gone, and refuses it with this. */
+const inactive = (refusal: string) => /not an active named agent/.test(refusal);
+
+/** Gone: herdr no longer lists it, or lists it and refuses it as inactive. */
+const isGone = (agent: string, listed: ReadonlyArray<AgentInfo>, refusal: string) =>
+  !listed.some((one) => one.name === agent) || inactive(refusal);
 const DEFAULT_COLLECT_MS = 2 * 60 * 60 * 1000;
 
 /**
@@ -1521,6 +1527,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       sent: false,
       why: `${outcome.reason}: ${outcome.detail}`,
       refused: outcome.reason === "exhausted",
+      gone: inactive(outcome.detail),
     };
   });
 
@@ -1974,7 +1981,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
     );
   });
 
-  /** `fresh` starts the agent even where herdr still lists it, as one gone at delivery. */
+  /** `fresh` starts again an agent gone at delivery, closing the pane herdr still lists it in. */
   const launch = (
     ask: AgentAsk,
     fresh = false,
@@ -1997,6 +2004,17 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         }
         const live = listing.success.find((one) => one.name === agent);
         const alive = live !== undefined && !fresh;
+        // herdr keeps a name while it lists it, so a new agent cannot take it until then.
+        if (fresh && live !== undefined)
+          yield* host.herdr.paneClose(live.paneId).pipe(
+            Effect.mapError(
+              (cause) =>
+                new AgentUncertain({
+                  operation: ask.operation,
+                  reason: `${agent} is gone, but its pane ${live.paneId} did not close, so it was not started again: ${herdrFailureReason(cause)}`,
+                }),
+            ),
+          );
         const memory = alive
           ? "free"
           : yield* waitForMemory({
@@ -2116,7 +2134,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         // The sender reads a failed listing as no agent, so only one that answers settles it.
         if (alive && asked.gone === true) {
           const again = yield* host.herdr.agentList().pipe(Effect.result);
-          if (again._tag === "Success" && !again.success.some((one) => one.name === agent)) {
+          if (again._tag === "Success" && isGone(agent, again.success, asked.why)) {
             // Nothing reached it, so a new one is this work's agent rather than a second.
             yield* log(
               ask.runId,
@@ -2478,13 +2496,19 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         if (written.trim() !== "" && written !== unless) return false;
         const agent = agentName(ask.runId, ask.agent ?? ask.operation, null, ask.sequence ?? 1);
         const listing = yield* host.herdr.agentList().pipe(Effect.option);
-        if (listing._tag === "None" || listing.value.some((one) => one.name === agent))
-          return false;
+        if (listing._tag === "None") return false;
+        // Asked only of one herdr lists: it has no delivery to say whether it is inactive.
+        const refusal = listing.value.some((one) => one.name === agent)
+          ? yield* host.herdr
+              .agentStatus(agent)
+              .pipe(Effect.match({ onFailure: herdrFailureReason, onSuccess: () => "" }))
+          : "";
+        if (!isGone(agent, listing.value, refusal)) return false;
         yield* log(
           ask.runId,
           `${agent}: gone before ${ask.operation} was written; starting it again`,
         );
-        yield* launch(ask);
+        yield* launch(ask, true);
         return true;
       }),
     );
@@ -2750,7 +2774,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           agent: launched.agent,
           delivered: false,
           detail: sent.why,
-          gone: !alive.some((one) => one.name === launched.agent),
+          gone: isGone(launched.agent, alive, sent.why),
         };
       }).pipe(
         Effect.catch((cause) =>

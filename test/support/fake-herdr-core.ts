@@ -596,11 +596,15 @@ function handle(
       const times = Number.parseInt(yield* envString("FAKE_HERDR_PROMPT_ERROR_TIMES", "0"), 10);
       const code =
         times > 0 && state.prompts > times ? "" : yield* envString("FAKE_HERDR_PROMPT_ERROR", "");
+      const message = yield* envString(
+        "FAKE_HERDR_PROMPT_ERROR_MESSAGE",
+        `agent prompt answered ${code}`,
+      );
       const answered = {
         code: 1,
         stdout: `${encodeJson({
           id: "cli:agent:prompt",
-          error: { code, message: `agent prompt answered ${code}` },
+          error: { code, message },
         })}\n`,
         stderr: "",
       };
@@ -772,6 +776,19 @@ function handle(
       }
       case "agent start": {
         const pane = flag("--pane") ?? "";
+        // Real herdr keeps a name while it lists it; most tests start one again by design.
+        if (
+          (yield* envString("FAKE_HERDR_NAME_TAKEN")) !== "" &&
+          state.agents.some((agent) => agent.name === argv[2])
+        )
+          return {
+            code: 1,
+            stdout: `${encodeJson({
+              id: "cli:agent:start",
+              error: { code: "agent_name_taken", message: `agent name ${argv[2]} is taken` },
+            })}\n`,
+            stderr: "",
+          };
         // The harness coming up: Claude's first status-line call into the control dir
         // its `--settings` names. `FAKE_HERDR_HARNESS_SILENT` is a harness not up yet.
         const settings = flag("--settings");

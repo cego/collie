@@ -695,6 +695,26 @@ test("a reused agent that is gone before it was given its work is started again"
     }),
   ));
 
+test("a reused agent herdr still lists but no longer runs is started again in place of its pane", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.addAgent(agentFor("r1"), "1-9");
+      yield* rig.queueOutputs([{ verdict: "clean", note: "started again" }]);
+      const herdr = new FakeHerdr(
+        rig.pluginEnv({
+          FAKE_HERDR_PROMPT_ERROR: "agent_not_ready",
+          FAKE_HERDR_PROMPT_ERROR_TIMES: "1",
+          FAKE_HERDR_PROMPT_ERROR_MESSAGE: `agent ${agentFor("r1")} is not an active named agent`,
+          FAKE_HERDR_NAME_TAKEN: "1",
+        }),
+      );
+      const result = yield* session(started("r1"), { herdr });
+      expect(result._tag === "Success" && result.success.note).toBe("started again");
+      expect((yield* rig.cmds()).filter((cmd) => cmd === "agent start")).toHaveLength(1);
+      expect(sent(yield* rig.calls(), "Your task for this step")).toBe(2);
+    }),
+  ));
+
 const cardsOf = (runId: string) =>
   readCards(runDir(dir, runId)).pipe(
     Effect.orDie,
@@ -922,6 +942,66 @@ test(
         expect(result._tag === "Success" && result.success.note).toBe("revived");
         expect(yield* fs.exists(controlPath(dir, PARKED, "r1"))).toBe(false);
         expect(yield* starts).toBe(2);
+      }),
+    ),
+  120_000,
+);
+
+/** herdr still listing an agent whose process has gone, once `dead`, until one is started. */
+class ListsItDead extends FakeHerdr {
+  dead = false;
+  override agentStatus(target: string) {
+    return this.dead
+      ? Effect.fail(
+          new HerdrError({
+            message: "herdr agent get",
+            detail: `agent ${target} is not an active named agent`,
+            code: "agent_not_ready",
+            answered: true,
+          }),
+        )
+      : super.agentStatus(target);
+  }
+  override agentStart(...args: Parameters<FakeHerdr["agentStart"]>) {
+    this.dead = false;
+    return super.agentStart(...args);
+  }
+}
+
+test(
+  "an agent herdr still lists but no longer runs while it is collected is started again with its work",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        yield* rig.queueOutputs([null]);
+        const herdr = new ListsItDead(rig.pluginEnv({ FAKE_HERDR_NAME_TAKEN: "1" }));
+        const starts = rig.cmds().pipe(
+          Effect.orDie,
+          Effect.map((cmds) => cmds.filter((cmd) => cmd === "agent start").length),
+        );
+        const result = yield* session(
+          Effect.gen(function* () {
+            const fiber = yield* Effect.forkChild(started("r1"));
+            yield* pastTheBudget;
+            yield* until(
+              steps("r1").pipe(
+                Effect.provideService(Path.Path, yield* Path.Path),
+                Effect.map(
+                  (found) =>
+                    found.length > 0 && found.every((one) => one.delivery.state === "acknowledged"),
+                ),
+              ),
+            );
+            herdr.dead = true;
+            yield* until(starts.pipe(Effect.map((count) => count === 2)));
+            yield* fs.writeFileString(outputPath("r1"), `{"verdict":"clean","note":"revived"}`);
+            return yield* Fiber.join(fiber);
+          }),
+          { herdr, collectMs: 400 },
+        );
+        expect(result._tag === "Success" && result.success.note).toBe("revived");
+        expect(sent(yield* rig.calls(), "Your task for this step")).toBe(2);
       }),
     ),
   120_000,

@@ -338,8 +338,10 @@ const verdict =
   launch that waits for memory spends none of it either: the budget starts once the agent
   is launched. Past the budget the Run parks saying how many minutes it sat idle, and Collie
   keeps collecting: an Output written later clears the park and the step goes on, with no
-  resume. An agent that has gone by the end of another idle budget is started again. A stop
-  still ends the wait.
+  resume. An agent that has gone by the end of another idle budget is started again. Gone is
+  an agent herdr no longer lists, or one it still lists but refuses as not active, as it
+  does when the agent's process died with its Machine; that one's pane is closed first, so
+  the new agent can take its name. A stop still ends the wait.
 - **`cwd` is where the host placed the Run** unless you name another checkout.
 - **`role`** defaults to the operation's name. The role is injected as a persona, and where
   `personas/<role>.md` exists in the project, on this machine or in the installation, that
