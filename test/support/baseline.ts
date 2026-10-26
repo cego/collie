@@ -13,7 +13,6 @@ import type { ChildProcessSpawner } from "effect/process";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { hostname } from "node:os";
 import {
-  Config,
   ConfigProvider,
   DateTime,
   Deferred,
@@ -2598,32 +2597,33 @@ const repository = () =>
     yield* fs.writeFileString(config, text.replace(`${made}/origin.git`, origin));
   }).pipe(Effect.orDie);
 
-const preparedRepository = Effect.cached(
-  Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    // Under the suite's home: what a test makes beside it is reported as left behind.
-    const made = yield* fs.makeTempDirectory({
-      directory: yield* Config.String("HOME"),
-      prefix: "baseline-repository-",
-    });
-    const origin = `${made}/origin.git`;
-    const project = `${made}/project`;
-    yield* fs.makeDirectory(project);
-    yield* exec(["git", "init", "-q", "--bare", origin], { cwd: made });
-    for (const args of [
-      ["init", "-q"],
-      ["config", "user.email", "t@example.com"],
-      ["config", "user.name", "t"],
-      ["remote", "add", "origin", origin],
-      ["remote", "add", "upstream", "https://gitlab.example.com/group/project.git"],
-      ["commit", "-qm", "first", "--allow-empty"],
-      ["push", "-q", "origin", "HEAD"],
-    ]) {
-      yield* exec(["git", ...args], { cwd: project });
-    }
-    return made;
-  }).pipe(Effect.orDie),
-).pipe(Effect.runSync);
+// Per home: a `--rerun-each` run removes the last run's.
+let prepared: { readonly home: string; readonly made: string } | undefined;
+
+const preparedRepository = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const home = process.env.HOME!;
+  if (prepared?.home === home) return prepared.made;
+  // Under the suite's home: what a test makes beside it is reported as left behind.
+  const made = yield* fs.makeTempDirectory({ directory: home, prefix: "baseline-repository-" });
+  const origin = `${made}/origin.git`;
+  const project = `${made}/project`;
+  yield* fs.makeDirectory(project);
+  yield* exec(["git", "init", "-q", "--bare", origin], { cwd: made });
+  for (const args of [
+    ["init", "-q"],
+    ["config", "user.email", "t@example.com"],
+    ["config", "user.name", "t"],
+    ["remote", "add", "origin", origin],
+    ["remote", "add", "upstream", "https://gitlab.example.com/group/project.git"],
+    ["commit", "-qm", "first", "--allow-empty"],
+    ["push", "-q", "origin", "HEAD"],
+  ]) {
+    yield* exec(["git", ...args], { cwd: project });
+  }
+  prepared = { home, made };
+  return made;
+}).pipe(Effect.orDie);
 
 /** That repository with a commit the default branch does not have, so its base is another tree. */
 const ahead = () =>
