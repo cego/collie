@@ -18,11 +18,13 @@ await Effect.runPromise(
     const override = yield* Config.option(Config.String("COLLIE_TEST_BUDGET"));
     const budget = budgetOf(availableParallelism(), Option.getOrUndefined(override));
     const share = shareOf(budget, "small");
-    yield* admitted(STORE, budget, "small", 1, Console.error);
+    const hold = yield* admitted(STORE, budget, "small", 1, Console.error);
     const holding = (yield* entriesOf(STORE))
       .filter((one) => one.state === "held" && (share === budget.total || one.kind === "small"))
       .reduce((sum, one) => sum + one.workers, 0);
-    yield* Console.error(`test: admitted; small runs hold ${holding} of their ${share} workers`);
+    yield* Console.error(
+      `test: admitted after ${(hold.waited / 1_000).toFixed(2)} s queued; small runs hold ${holding} of their ${share} workers`,
+    );
   }).pipe(Scope.provide(scope), Effect.provide(BunServices.layer)),
 );
 

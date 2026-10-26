@@ -1599,10 +1599,11 @@ its time.
   runs, and gives it back when its files end: once per file in a worker, once for a whole
   plain `bun test`. A worker holds nothing between files, so the reserve goes round in turn.
   A wait says whom it is behind and how long it has waited, as a run of `bun run test`
-  does, and an admission says how many of their workers small runs then hold. One that dies
-  is reclaimed like any other hold. The preload runs before `hosts.ts` points `TMPDIR` at
-  the file's own root, so it finds the same store as `bun run test`. A process with
-  `COLLIE_TEST_HOLD` set already runs on a hold, and takes nothing.
+  does, and an admission says how long it queued and how many of their workers small runs
+  then hold. One that dies is reclaimed like any other hold. The preload runs before
+  `hosts.ts` points `TMPDIR` at the file's own root, so it finds the same store as
+  `bun run test`. A process with `COLLIE_TEST_HOLD` set already runs on a hold, and takes
+  nothing.
 
 - **A test starts a process.** Each start costs the Machine, and an endpoint sensor more
   again. `bun run test` sets `COLLIE_TEST_STARTS` to a fresh file, and the compiled
