@@ -924,6 +924,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
   const live = new Map((opts.alive ?? []).map((agent) => [agent.name, agent]));
   const records = yield* recordsIn(stateDir);
   const markers = yield* markersOf(all, records);
+  const checked = new Set(records.map((record) => record.run));
   // Every agent's ledger, read only once a card has a finished Run to look for a steer to.
   const deliveries =
     opts.deliveries === undefined
@@ -978,10 +979,12 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
         // Read whatever the state: a merge GitLab reported lands the work even while the Run
         // is still going, and the card must say so.
         const disposition = yield* dispositionOf(repoRun === undefined ? runs : [...runs, repoRun]);
+        const checking = everyRun.filter((run) => checked.has(run.id));
         // Finished work older than a day is History's, behind `older…` — landed work only:
         // an unmerged branch from last week is still waiting on you, however old.
         if (
           opts.only === undefined &&
+          checking.length === 0 &&
           runs.every((run) => over(run, runs)) &&
           last < now - FINISHED_FOR_MS &&
           pending.length === 0 &&
@@ -1006,7 +1009,8 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
         const ownsAgent = (agent: { readonly run: string }) =>
           working.some((run) => run.id === agent.run);
         const at = Math.max(...working.map((run) => touched.get(run.id) ?? 0));
-        const check = yield* runningCheck(leader, all, markers, now);
+        const checkOf = markers.has(leader.id) ? leader : (checking[0] ?? leader);
+        const check = yield* runningCheck(checkOf, all, markers, now);
         const memory =
           everyRun
             .map((run) => waitsOf(run).memory)
@@ -1048,13 +1052,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
             ? "active"
             : decision === null && reopened?.status === "blocked"
               ? "blocked"
-              : stateOf(
-                  status,
-                  silent !== null,
-                  decision,
-                  stalled !== null,
-                  records.some((record) => record.run === leader.id),
-                );
+              : stateOf(status, silent !== null, decision, stalled !== null, checking.length > 0);
 
         const held = runs.find((run) => waitsOf(run).held);
         const settledNow =
@@ -1147,11 +1145,11 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
         const holders = new Map<string, string | null>();
         for (const run of everyRun)
           if (waitsOf(run).held) holders.set(run.id, (yield* holderOf(run))?.by ?? null);
-        const checking = new Map<string, RunningCheck | null>();
+        const checksOf = new Map<string, RunningCheck | null>();
         for (const run of runs)
-          checking.set(
+          checksOf.set(
             run.id,
-            run === leader ? check : yield* runningCheck(run, all, markers, now),
+            run === checkOf ? check : yield* runningCheck(run, all, markers, now),
           );
         const flow = yield* taskFlowFor(opts.env, {
           rows: runs,
@@ -1162,7 +1160,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
           settled: settledNow,
           waitOf: (run) => {
             const waits = waitsOf(run);
-            const running = checking.get(run.id) ?? null;
+            const running = checksOf.get(run.id) ?? null;
             return laneWaitOf({
               proposals: waits.proposals.length,
               blocked: waits.blocked !== null,
