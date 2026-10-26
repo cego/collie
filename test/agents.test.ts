@@ -53,7 +53,7 @@ import { readMetrics } from "../src/metrics";
 import { Launched, runAgents } from "../src/launches";
 import { Collected } from "../src/agents";
 import { Collecting } from "../src/collecting";
-import { memoryWaitOf, waitForMemory } from "../src/memory-wait";
+import { holdsBudgetOf, memoryWaitOf, waitForMemory } from "../src/memory-wait";
 import type { UsageReading } from "../src/usage-model";
 import { readCards } from "../src/cards";
 import { readDrift } from "../src/drift";
@@ -5388,6 +5388,7 @@ test(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         yield* rig.queueOutputs([null, null]);
+        const herdr = new BusyUntilWritten("working");
         const result = yield* session(
           Effect.gen(function* () {
             const fiber = yield* Effect.forkChild(started("r1"));
@@ -5404,16 +5405,21 @@ test(
                 asker: agentFor("r1"),
               }),
             );
+            // Setup IO can outlast the idle budget; finish the turns only once verify holds it.
+            yield* until(holdsBudgetOf(dir, "r1", agentFor("r1")));
+            herdr.written = true;
             yield* until(parked("r2"));
             yield* spend(5_000);
             expect(yield* parked("r1")).toBe(false);
 
+            herdr.written = false;
             yield* rig.memory(50);
             expect(yield* Fiber.join(verify)).toBe("waited");
             yield* fs.writeFileString(outputPath("r1"), `{"verdict":"clean","note":"verified"}`);
+            herdr.written = true;
             return yield* Fiber.join(fiber);
           }),
-          { collectMs: 400 },
+          { herdr, collectMs: 400 },
         );
         expect(result._tag === "Success" && result.success.note).toBe("verified");
       }),
