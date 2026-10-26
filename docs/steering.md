@@ -499,14 +499,18 @@ tells the winner its snapshot is behind — it judges again, a bounded number of
 
 The judge is told, as a Run's own judgement is, that plan constraints narrow the goal, and
 is given each Run's work beside its constraints, as data to judge: the diff from where
-the commit of its newest card left the default branch, read in the judging Run's
-checkout, and its Outputs (`<operation>.json` in its agents directory, never the
+the commit of its newest card left the default branch, read in that Run's own checkout
+(its worktree, else the checkout it was placed in), so a Run of another repository shows
+its own work, and its Outputs (`<operation>.json` in its agents directory, never the
 `.launch.json`, `.mcp.json` or `.settings.json` beside them), under the caps and redaction
 above — an Output whose name looks like a credential is named with `<redacted>` — and marked `TRUNCATED` where any of it was cut. Where a Run's work cannot be read
 the pack says why and the judgement goes on with what it can read: `work: none yet (no
-card)`, `diff: could not be read: <git's first line>` for a commit this checkout does not
+card)`, `diff: could not be read: <git's first line>` for a commit its checkout does not
 have, or `diff: no committed change yet`; its Outputs are shown either way, and the log line
-of the judgement names each Run whose diff it could not show.
+of the judgement names each Run whose diff it could not show. Where no Run has a file of
+its diff or an Output to show, the model is not asked: the log says `cross-run judgement
+not asked at <when>: no related Run's work can be shown`, and nothing is written down as
+owed.
 
 A report is kept only when it names a Run in the pack, one of that Run's own constraints,
 and cites that Run's work as the pack showed it: a file of its diff or one of its Outputs.

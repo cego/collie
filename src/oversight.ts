@@ -103,6 +103,8 @@ export interface Watched {
   readonly family: ReadonlyArray<string>;
   /** Where any Run's records are, by its id. */
   readonly dirOf: (runId: string) => string;
+  /** Where any Run's work is, by its id: its worktree, else the checkout it was placed in. */
+  readonly cwdOf: (runId: string) => Effect.Effect<string>;
   /** The Herd this Run is judged and charged in, or null where there is none. */
   readonly herd: string | null;
 }
@@ -579,6 +581,7 @@ type CrossRunDiff =
 interface CrossRunTarget {
   readonly id: string;
   readonly dir: string;
+  readonly cwd: string;
   readonly intentVersion: number;
   readonly goal: string | null;
   readonly constraints: ReadonlyArray<string>;
@@ -593,10 +596,7 @@ interface CrossRunTarget {
   readonly line: string;
 }
 
-/**
- * The change `head` made since it left the default branch, read in the judging Run's
- * checkout: every Run of one repository shares its objects, worktree or none.
- */
+/** The change `head` made since it left the default branch, read in its own Run's checkout. */
 const committedWork = Effect.fn("Oversight.committedWork")(function* (
   cwd: string,
   head: string,
@@ -624,6 +624,7 @@ const versionVector = Effect.fn("Oversight.versionVector")(function* (
   const targets: CrossRunTarget[] = [];
   for (const id of new Set(family)) {
     const dir = at.dirOf(id);
+    const cwd = yield* at.cwdOf(id);
     const intent = yield* readIntent(dir).pipe(Effect.orElseSucceed(() => null));
     const cards = yield* readCards(dir).pipe(Effect.orElseSucceed(() => []));
     const open = openReports(yield* readDrift(dir).pipe(Effect.orElseSucceed(() => [])));
@@ -631,13 +632,14 @@ const versionVector = Effect.fn("Oversight.versionVector")(function* (
     const read =
       card === undefined
         ? ({ kind: "no card" } as const)
-        : yield* committedWork(at.cwd, card.revision.head_sha);
+        : yield* committedWork(cwd, card.revision.head_sha);
     const diff =
       read.kind === "shown" ? { ...read, blocks: read.blocks.slice(0, MAX_FILES) } : read;
     const outputs = yield* outputsIn(`${at.stateDir}/agents/${id}`);
     targets.push({
       id,
       dir,
+      cwd,
       intentVersion: intent?.version ?? 0,
       goal: intent?.goal ?? null,
       constraints: (intent?.constraints ?? []).map(
@@ -731,7 +733,7 @@ const judgeCrossRun = Effect.fn("Oversight.judgeCrossRun")(function* (
     // pack showed it: anything else is a model reaching outside what it was shown.
     const target = byId.get(found.run);
     if (target === undefined || !target.constraintIds.includes(found.constraint)) continue;
-    const cited = citedIn(shownOf(target), at.cwd);
+    const cited = citedIn(shownOf(target), target.cwd);
     if (!found.evidence.some((ref) => cited(ref) !== null)) continue;
     const report = judgedReport(
       found,
@@ -813,6 +815,16 @@ export const standForElection = Effect.fn("Oversight.standForElection")(function
       let snapshotAt = now;
       for (let passes = 0; ; passes += 1) {
         const targets = yield* versionVector(at, [...at.family, ...owed]);
+        if (
+          targets.every((target) => {
+            const shown = shownOf(target);
+            return shown.files.length === 0 && shown.outputs.length === 0;
+          })
+        )
+          return yield* said(
+            at,
+            `cross-run judgement not asked at ${snapshotAt}: no related Run's work can be shown`,
+          );
         const why = yield* judgeCrossRun(at, deps, key, targets, snapshotAt).pipe(
           Effect.catch((cause) => Effect.succeed(`the judgement failed: ${reason(cause)}`)),
         );

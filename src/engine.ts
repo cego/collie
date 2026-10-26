@@ -4189,6 +4189,20 @@ export const hostLayer = (options: {
           Effect.orElseSucceed(() => null),
         );
       });
+      const checkoutOf = (row: RunRow | null) =>
+        Effect.gen(function* () {
+          const placed =
+            row === null
+              ? null
+              : placedOf(
+                  row,
+                  yield* decodeStrings(row.options ?? "{}").pipe(
+                    Effect.orElseSucceed((): Record<string, string> => ({})),
+                  ),
+                );
+          const worktree = placed?.worktree?.path ?? null;
+          return { worktree, cwd: worktree ?? placed?.cwd ?? dir };
+        });
       /** A Run as a card sees it: where it works, and where its records are. */
       const watched = (runId: string): Effect.Effect<Watched> =>
         Effect.gen(function* () {
@@ -4200,29 +4214,25 @@ export const hostLayer = (options: {
                   Effect.provideContext(bun),
                   Effect.orElseSucceed(() => null),
                 );
-          const placed =
-            row === null
-              ? null
-              : placedOf(
-                  row,
-                  yield* decodeStrings(row.options ?? "{}").pipe(
-                    Effect.orElseSucceed((): Record<string, string> => ({})),
-                  ),
-                );
-          const worktree = placed?.worktree?.path ?? null;
+          const { worktree, cwd } = yield* checkoutOf(row);
           return {
             runId,
             stateDir: dir,
             runDir: runDir(dir, runId),
             evidenceDir: evidenceDir(dir, runId),
             agentsDir: `${dir}/agents/${runId}`,
-            cwd: worktree ?? placed?.cwd ?? dir,
+            cwd,
             worktree,
             mr: yield* mergeRequestOf(fs, dir, runId),
             asking: (yield* store.asked(runId)).some((one) => one.answer === null),
             held: yield* set(HOLD, runId),
             family: row === null ? [runId] : familyOf(yield* store.runs, row),
             dirOf: (id: string) => runDir(dir, id),
+            cwdOf: (id: string) =>
+              store.run(id).pipe(
+                Effect.flatMap(checkoutOf),
+                Effect.map((one) => one.cwd),
+              ),
             herd: task?.herd ?? (yield* hostHerd),
           };
         });
