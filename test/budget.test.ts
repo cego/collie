@@ -8,6 +8,7 @@ import {
   type Entry,
   enqueue,
   entriesOf,
+  HOLD_ENV,
   look,
   ownProcess,
   processOf,
@@ -315,3 +316,148 @@ test("an interrupted waiter leaves no ticket, and an interrupted holder leaves n
       expect((yield* entriesOf(dir)).map((one) => one.id)).toEqual([theirs.id]);
     }),
   ));
+
+const SMALL_FILE = new URL("./fixtures/budget/small.ts", import.meta.url).pathname;
+const REPO = new URL("..", import.meta.url).pathname;
+/** What a bare run is told the budget is: 8, with 2 kept for small runs. */
+const EIGHT = budgetOf(1, "8");
+
+/**
+ * A bare `bun test` of one small file, whose temporary directory, and so its budget's store,
+ * is `tmp`. It writes `started` into `notes` and runs until `release` is there.
+ */
+const bare = (tmp: string, notes: string, hold?: string) =>
+  Effect.gen(function* () {
+    const child = yield* Effect.acquireRelease(
+      Effect.sync(() => {
+        const env: typeof process.env = {
+          ...process.env,
+          TMPDIR: tmp,
+          // No memory filesystem, so its root is under `tmp` too and goes with it.
+          COLLIE_TEST_MEMORY: `${tmp}/none`,
+          COLLIE_TEST_BUDGET: "8",
+          COLLIE_BARE_NOTES: notes,
+        };
+        if (hold === undefined) delete env[HOLD_ENV];
+        else env[HOLD_ENV] = hold;
+        return Bun.spawn(["bun", "test", SMALL_FILE], {
+          cwd: REPO,
+          stdout: "ignore",
+          stderr: "pipe",
+          env,
+        });
+      }),
+      (child) =>
+        Effect.sync(() => child.kill("SIGKILL")).pipe(
+          Effect.andThen(Effect.promise(() => child.exited)),
+        ),
+    );
+    let said = "";
+    const decoder = new TextDecoder();
+    void child.stderr.pipeTo(
+      new WritableStream({ write: (chunk) => void (said += decoder.decode(chunk)) }),
+    );
+    return { child, stderr: () => said };
+  });
+
+/** A temporary directory, and the budget store a bare run with it as `TMPDIR` uses. */
+const bareStore = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const tmp = yield* store;
+  const notes = `${tmp}/notes`;
+  yield* fs.makeDirectory(notes);
+  return { tmp, notes, dir: `${tmp}/collie-test-budget-${process.getuid!()}` };
+});
+
+const smallHold = (dir: string) =>
+  Effect.forkScoped(
+    Effect.scoped(
+      admitted(dir, EIGHT, "small", 1, () => Effect.void).pipe(Effect.andThen(Effect.never)),
+    ),
+  );
+
+const held = (dir: string, count: number) =>
+  until(
+    () => entriesOf(dir),
+    (all) => all.filter((one) => one.state === "held").length === count,
+  );
+
+const started = (notes: string) =>
+  Effect.flatMap(FileSystem.FileSystem, (fs) => fs.exists(`${notes}/started`));
+
+test.skipIf(process.platform !== "linux")(
+  "a bare bun test waits while small runs hold the reserve, and starts once one of them ends",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const { tmp, notes, dir } = yield* bareStore;
+        const first = yield* smallHold(dir);
+        yield* smallHold(dir);
+        yield* held(dir, 2);
+
+        const { child, stderr } = yield* bare(tmp, notes);
+        const waiting = `test: waiting for the run in process ${process.pid}`;
+        const running = yield* until(
+          () => started(notes),
+          (running) => running || stderr().includes(waiting),
+        );
+        expect(running).toBe(false);
+
+        yield* Fiber.interrupt(first);
+        yield* until(
+          () => started(notes),
+          (running) => running,
+        );
+        yield* fs.writeFileString(`${notes}/release`, "");
+        expect(yield* Effect.promise(() => child.exited)).toBe(0);
+        expect(stderr().split(waiting).length - 1).toBe(1);
+      }),
+    ),
+  60_000,
+);
+
+test.skipIf(process.platform !== "linux")(
+  "a bun test that bun run test started on its hold does not queue again",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { tmp, notes, dir } = yield* bareStore;
+        yield* smallHold(dir);
+        yield* smallHold(dir);
+        const holds = yield* held(dir, 2);
+
+        yield* bare(tmp, notes, "the-runners-hold");
+        yield* until(
+          () => started(notes),
+          (running) => running,
+        );
+        expect(yield* entriesOf(dir)).toEqual(holds);
+      }),
+    ),
+  60_000,
+);
+
+test.skipIf(process.platform !== "linux")(
+  "a bare bun test killed with kill -9 while it holds leaves the next waiter admitted on its next look",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { tmp, notes, dir } = yield* bareStore;
+        yield* smallHold(dir);
+        yield* held(dir, 1);
+        const { child } = yield* bare(tmp, notes);
+        yield* until(
+          () => started(notes),
+          (running) => running,
+        );
+        const next = yield* Effect.flatMap(ownProcess, (me) => enqueue(dir, "small", 1, [me]));
+        expect(yield* look(dir, EIGHT, next.id)).toMatchObject({ _tag: "wait" });
+
+        child.kill("SIGKILL");
+        yield* Effect.promise(() => child.exited);
+        expect(yield* look(dir, EIGHT, next.id)).toMatchObject({ _tag: "admit", workers: 1 });
+      }),
+    ),
+  60_000,
+);

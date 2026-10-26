@@ -1508,7 +1508,8 @@ seconds, how long it has waited (`tools/suite-lock.ts`). Which forms take the lo
   temporary directory of its own that it removes when it ends, and reads
   `.scratch/test-timings.json` without updating it.
 - `bun test <file>`, `bun test -t <name>` and `bun run test:live` do not: they run the
-  sources directly, beside whatever suite is running.
+  sources directly, and join the budget as a small run (see [Keeping the suite and a start
+  fast](#keeping-the-suite-and-a-start-fast)).
 
 ### Tests against an installed harness
 
@@ -1583,6 +1584,25 @@ its time.
   admission and at the end. Where there is no `/proc/pressure`, as on macOS, the pressure is
   not available. This replaces #135's one-second idle sample, which picked one worker per
   idle core and so oversubscribed the Machine whenever the moment after the builds was idle.
+
+  A bare `bun test`, one `bun run test` did not start, joins the same budget as a small run
+  (`test/support/budget-preload.ts`). Three things Bun 1.4.4 does decide how:
+  - under `--parallel` with more than one file, only the `--test-worker` processes run the
+    preload, never the coordinator; a run of one file stays in one process, which runs it
+    once;
+  - a top-level `await` in the preload delays the first test and counts against no test's
+    timeout;
+  - `--isolate`, which every worker runs with, runs the preload and its `afterAll` again for
+    each file, and resets `process.env` between files.
+
+  So each run of the preload takes one worker from the reserve, in turn with the other small
+  runs, and gives it back when its files end: once per file in a worker, once for a whole
+  plain `bun test`. A worker holds nothing between files, so the reserve goes round in turn.
+  A wait says whom it is behind and how long it has waited, as a run of `bun run test`
+  does, and an admission says how many of their workers small runs then hold. One that dies
+  is reclaimed like any other hold. The preload runs before `hosts.ts` points `TMPDIR` at
+  the file's own root, so it finds the same store as `bun run test`. A process with
+  `COLLIE_TEST_HOLD` set already runs on a hold, and takes nothing.
 
 - **A test starts a process.** Each start costs the Machine, and an endpoint sensor more
   again. `bun run test` sets `COLLIE_TEST_STARTS` to a fresh file, and the compiled
