@@ -33,9 +33,10 @@ fraction of the suite. Every scenario still runs as shipped and under an unrelat
 ([ADR-0029](0029-one-host-acts-for-a-run-and-a-workflows-name-decides-nothing.md)).
 
 **D2. One budget per user per Machine, counted in test processes.** The budget is two
-thirds of the cores, at least 2: 16 on vm-mk. A quarter of it, at least 2, is reserved
-for small runs: a targeted run, a bare `bun test`, or one of Collie's single-test reruns.
-Whole suites share the rest. A whole suite asks for all of that rest, so whole suites run
+thirds of the cores, at least 2: 16 on vm-mk. A worker counts as one core: on vm-mk a
+whole suite's worker, with the hosts and fakes it starts, used 0.92 cores (2026-10-26). A
+quarter of it, at least 2, is reserved for small runs: a targeted run, a bare `bun test`,
+or one of Collie's single-test reruns. Whole suites share the rest. A whole suite asks for all of that rest, so whole suites run
 one at a time, as they did under the lock. A small run never waits behind a whole suite.
 A caller's `--parallel=N` asks for N workers. A run gets no more than its class's share,
 and its log says when it got fewer than it asked for; otherwise a request larger than the
@@ -90,12 +91,27 @@ failed test that passes alone is still reported as a Flake, as ADR-0034 says.
 
 ## Consequences
 
-A whole suite on vm-mk should take about 7 minutes rather than 13 to 18. Its work, about
-4,400 tests at roughly 1.15 s each over 12 workers, sets that time now, rather than its
-longest file. Making each test cheaper is what takes it below 6 minutes. A profile of
-baseline scenarios puts their CPU in the engine's storage polling, git process starts,
-including fixtures' own `git gc --auto` and `git maintenance run`, and the filesystem. A minute is not reachable on vm-mk
-with this suite. A minute is what a targeted run (`--changed`, or one shard) is for.
+Measured on vm-mk on 2026-10-26 with every ticket of this change in place
+([`docs/internals.md`](../internals.md), "Test-suite measurements, 26 October 2026"), a
+whole suite of 4,633 tests takes 474 s including builds, against 753 s on the base and 13
+to 18 minutes on the day this was written. Its work sets that time, not its longest file:
+it ran in 1.03 times its summed test time over its 12 workers, about 1.15 s a test, where
+the base took 1.79 times. That is still over the 6 minutes aimed for. Making each test
+cheaper is what takes it below. A profile of baseline scenarios puts their CPU in the
+engine's storage polling, git process starts, including fixtures' own `git gc --auto` and
+`git maintenance run`, and the filesystem. A minute is not reachable on vm-mk with this
+suite. A minute is what a targeted run (`--changed`, or one shard) is for.
+
+Four whole suites started together all finished within 1,894 s, 4.0 times one alone, and
+targeted runs started among them were admitted within 0.19 s. Sampled once a second, the
+store never held more than 14 workers of 16. A whole suite's worker uses about 0.92 cores:
+one suite at 12 workers used 11.1 cores. So the budget counts a worker as a core, and a
+whole suite's 12 fit its share. Sixteen workers finished 8 % sooner than 12, for 25 % more
+test time and more cores than the share. With four suites queued, a 5 ms command in the
+checkout took 16.3 ms at p95, 2.12 times its idle p95, so other work on the Machine is still
+slowed while whole suites run. Ten suites one after another had two Flakes between them,
+both one self-improve scenario that expects concurrent starts in order, where the check
+logs of 14 to 26 October averaged about two a suite.
 
 A Machine with fewer cores gets fewer workers. The two-thirds figure was measured on
 vm-mk alone, and is to be checked again on a laptop before it is trusted there.

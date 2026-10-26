@@ -1666,6 +1666,79 @@ its time.
   holds the first and keeps the engine and the board out of the compaction helper; lint
   holds the second.
 
+### Test-suite measurements, 26 October 2026
+
+Measured on vm-mk (24 cores, Bun 1.4.4) on ef9b4555, under the Machine budget of 16 with 4
+kept for small runs
+([ADR-draft-test-processes-share-one-budget-per-machine](adr/draft-test-processes-share-one-budget-per-machine.md)).
+Each experiment started only once `/proc/pressure/cpu`'s `some avg60` was under 10 %, and
+none ran beside another. None had to be abandoned for pressure over 50 % for two minutes.
+Each suite ran through `collie verify`; the logs are run-a0ff8856.implement's
+`09-*` verifications, and the driver and its samples are that Run's
+`handoffs/09-measure/`. Every suite had 4,633 tests in 314 files. The base, 5a479a85, took
+753 s at 12 workers, with one file at 739 s.
+
+**Workers.** One whole suite at each worker count, one after another
+(`bun run test --parallel=N`; 16 with `COLLIE_TEST_BUDGET=21`):
+
+| Workers | Including builds |     Ran | Summed test time | Per test | Tests per second | Ran ÷ (summed ÷ workers) |
+| ------: | ---------------: | ------: | ---------------: | -------: | ---------------: | -----------------------: |
+|       4 |          911.5 s | 900.8 s |          3,602 s |   0.78 s |             5.13 |                     1.00 |
+|       8 |          574.4 s | 563.7 s |          4,409 s |   0.95 s |             8.20 |                     1.02 |
+|      12 |          473.6 s | 464.0 s |          5,310 s |   1.15 s |             9.96 |                     1.05 |
+|      16 |          438.1 s | 428.0 s |          6,615 s |   1.43 s |            10.80 |                     1.04 |
+
+Sixteen workers finish 8 % sooner than 12 for 25 % more test time, and use more cores than
+a whole suite's share of 12. The share stays at 12. No file is the critical path any more:
+the longest, `test/placement.test.ts` or `test/agents.test.ts`, took 40 to 45 % of a run at
+12 workers.
+
+**Cores per worker.** One whole suite at 12 workers in a cgroup of its own
+(`handoffs/redesign/cpu-of.sh`) used 5,505 CPU-s in 497 s: 11.1 cores, or 0.92 a worker.
+At `--parallel=8` on 9263ba29, before tickets 06 to 08, it was 5,582 CPU-s and 9.2 cores.
+Sampled every 250 ms, which misses most processes shorter than that, the test processes took
+2,438 CPU-s, 529 test hosts 1,346, 773 CLI starts 459, and 3,583 fake herdr and forge starts
+39, where 11,448 fake herdr starts had taken 12 % before.
+
+**Queueing.** Whole suites from separate worktrees on the same commit, started together,
+with targeted runs of `test/yaml.test.ts` started 120 s in and every 360 s after:
+
+| Case     | Suite |    Queued |  Built |     Ran | Ended after the start |
+| -------- | ----- | --------: | -----: | ------: | --------------------: |
+| 1 suite  | 1     |    0.06 s |  9.9 s | 464.2 s |               474.1 s |
+| 2 suites | 1     |    0.07 s | 10.2 s | 462.8 s |               473.6 s |
+|          | 2     |   473.2 s | 10.4 s | 458.9 s |               943.0 s |
+| 4 suites | 1     |    0.06 s | 10.1 s | 464.4 s |               475.1 s |
+|          | 2     |   474.6 s | 10.3 s | 469.7 s |               955.0 s |
+|          | 3     |   954.6 s | 10.1 s | 445.6 s |             1,410.8 s |
+|          | 4     | 1,410.3 s |  9.6 s | 473.8 s |             1,894.2 s |
+
+Four suites all finished in 4.0 times one alone. The six targeted runs queued 0.06 to
+0.19 s, each while no other small run held the reserve, and took about 15 s to build their
+own executables. Sampled once a second, the budget's store held at most 14 workers of 16
+(12 whole, 2 small), and at most 12 `--test-worker` processes ran.
+
+**Responsiveness.** `git rev-parse HEAD` in the checkout, once a second: on an idle Machine
+for 5 minutes, p50 4.99 ms and p95 7.72 ms; throughout the four-suite case, p50 6.87 ms and
+p95 16.34 ms, 2.12 times the idle p95.
+
+**Flakes.** Ten whole suites one after another took 457 to 498 s each including builds,
+477.6 s at the median. Eight passed. Two failed one test each, and each passed when run
+alone: two Flakes, both the self-improve scenario "a day's findings are filed or commented,
+all-new Improvements start, and the summary says so", once under an unrelated id
+(`test/baseline-unrelated-09.test.ts`) and once under its own (`test/baseline-09.test.ts`).
+The workflow starts its Improvements concurrently, and the scenario expects them started in
+order. The check logs of 14 to 26 October averaged about two Flakes a suite. No timeout was
+raised and no retry added. The tenth suite first waited 432 s for the old suite lock, held
+by a suite from a checkout without the budget.
+
+Against the goals: a whole suite alone takes 474 s including builds, over the 6 minutes
+aimed for, though it now runs at 1.03 times its summed test time over its workers (1.79 on
+the base). Four queued suites finish within 4.4 times one; targeted runs are admitted at
+once; the budget was never exceeded; and the suite fits its 12 cores. The probe's p95 under
+four queued suites is over twice its idle p95. Ten suites had two Flakes, over the one
+aimed for.
+
 ### Test-suite measurements, 12 October 2026
 
 Measured with `/usr/bin/time bun run test`, Bun 1.4.3, Linux and 20 available logical CPUs.
