@@ -221,6 +221,34 @@ test("a numbered plan has a goal and constraints like any other", () => {
   expect(found.constraints[0]?.provenance?.heading).toBe("Requirements");
 });
 
+test("a spec with no Objective takes its goal from its Solution, and an Objective still wins", () => {
+  // The headings to-spec writes, which is how Collie's own planner shapes a spec.
+  const toSpec = [
+    "# Spec: a thing",
+    "",
+    "## Problem Statement",
+    "",
+    "Things break.",
+    "",
+    "## Solution",
+    "",
+    "Make the thing",
+    "work end to end.",
+    "",
+    "Second paragraph is not the goal.",
+    "",
+    "## Requirements",
+    "",
+    "- the envelope stays stable",
+  ].join("\n");
+  const found = extractRequirements(toSpec, "SPEC.md");
+  expect(found.goal).toBe("Make the thing work end to end.");
+  expect(found.constraints.map((c) => c.text)).toEqual(["the envelope stays stable"]);
+
+  const both = [toSpec, "", "## Objective", "", "What the Runs are to achieve."].join("\n");
+  expect(extractRequirements(both, "SPEC.md").goal).toBe("What the Runs are to achieve.");
+});
+
 test("a plan's out-of-scope and done-when bullets are constraints, and out of scope says so", () => {
   const spec = [
     "# Spec: a thing",

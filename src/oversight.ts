@@ -11,7 +11,6 @@ import { appendCard, buildCard, inspectFor, readCards, readCheckpoints, type Car
 import {
   EXTRA_PASSES,
   MAX_FILES,
-  MAX_LINES_PER_FILE,
   NOT_JUDGED,
   PLAN_NARROWS_GOAL,
   alignment,
@@ -45,9 +44,10 @@ import {
   type Judged,
   type JudgementDeps,
   gitOutput,
-  looksSecret,
   merging,
+  outputsIn,
   type RuleFacts,
+  type ShownOutput,
 } from "./drift";
 import {
   extractRequirements,
@@ -339,6 +339,7 @@ const judgeDrift = Effect.fn("Oversight.judgeDrift")(function* (
   at: Watched,
   intent: Intent,
   where: string,
+  judging: "boundary" | "finish",
   deps: JudgementDeps | null,
 ) {
   if (!intent.constraints.some((constraint) => constraint.kind === "semantic")) return;
@@ -352,8 +353,10 @@ const judgeDrift = Effect.fn("Oversight.judgeDrift")(function* (
   const outcome = yield* judge(deps, intent, {
     runDir: at.runDir,
     worktree: at.cwd,
+    agentsDir: at.agentsDir,
     base: yield* baseOf(at.cwd),
     at: judgedAt,
+    ...(judging === "boundary" && { boundary: where }),
   }).pipe(
     Effect.catch((cause) =>
       recordSkipped(at.runDir, at.runId, `the judgement failed: ${reason(cause)}`).pipe(
@@ -558,7 +561,7 @@ export const checkDrift = Effect.fn("Oversight.checkDrift")(function* (
   const deferred = judging === "boundary" && (yield* merging(at.cwd));
   if (deferred)
     yield* said(at, `drift not judged at ${where}: an integration's conflicts are open`);
-  else if (judging !== "none") yield* judgeDrift(at, intent, where, deps);
+  else if (judging !== "none") yield* judgeDrift(at, intent, where, judging, deps);
   const rules = intent.constraints.some((constraint) => constraint.kind === "rule");
   if (rules) yield* checkRuleDrift(at, intent, where);
   // With no rule to check there may still be something to correct, from the judgement.
@@ -572,11 +575,6 @@ type CrossRunDiff =
   | { readonly kind: "no card" }
   | { readonly kind: "unread"; readonly why: string };
 
-interface CrossRunOutput {
-  readonly operation: string;
-  readonly text: string;
-}
-
 /** One Run the cross-run question is about: where it has got to, and what it is for. */
 interface CrossRunTarget {
   readonly id: string;
@@ -586,7 +584,7 @@ interface CrossRunTarget {
   readonly constraints: ReadonlyArray<string>;
   readonly constraintIds: ReadonlyArray<string>;
   readonly diff: CrossRunDiff;
-  readonly outputs: ReadonlyArray<CrossRunOutput>;
+  readonly outputs: ReadonlyArray<ShownOutput>;
   /** Whether any of its diff or Outputs was cut to the cap. */
   readonly truncated: boolean;
   /** Whether it has ended, so a report about it is said on the board rather than filed. */
@@ -612,42 +610,6 @@ const committedWork = Effect.fn("Oversight.committedWork")(function* (
       why: (ran.stderr ?? "").trim().split("\n")[0] || `git diff exited ${ran.code}`,
     };
   return { kind: "shown", blocks: splitDiff(ran.stdout) };
-});
-
-const NOT_OUTPUTS = [".launch.json", ".mcp.json", ".settings.json"];
-
-const decodeJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown));
-const printJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown, { space: 2 }));
-
-/** Each Output in `agentsDir`, printed with a two-space indent, by operation; one named like a credential is not quoted. */
-const outputsIn = Effect.fn("Oversight.outputsIn")(function* (agentsDir: string) {
-  const fs = yield* FileSystem.FileSystem;
-  const names = (yield* fs.readDirectory(agentsDir).pipe(Effect.orElseSucceed(() => [])))
-    .filter((name) => name.endsWith(".json") && !NOT_OUTPUTS.some((not) => name.endsWith(not)))
-    .sort();
-  const outputs: Array<CrossRunOutput & { readonly truncated: boolean }> = [];
-  for (const name of names.slice(0, MAX_FILES)) {
-    const operation = name.slice(0, -".json".length);
-    if (looksSecret(name)) {
-      outputs.push({ operation, text: "<redacted>", truncated: false });
-      continue;
-    }
-    const raw = yield* fs
-      .readFileString(`${agentsDir}/${name}`)
-      .pipe(Effect.orElseSucceed(() => ""));
-    const decoded = decodeJson(raw);
-    const printed = decoded._tag === "None" ? raw : printJson(decoded.value);
-    const lines = printed.split("\n");
-    outputs.push({
-      operation,
-      text: lines.slice(0, MAX_LINES_PER_FILE).join("\n"),
-      truncated: lines.length > MAX_LINES_PER_FILE,
-    });
-  }
-  return {
-    outputs: outputs.map(({ operation, text }) => ({ operation, text })),
-    truncated: names.length > MAX_FILES || outputs.some((one) => one.truncated),
-  };
 });
 
 /**

@@ -663,6 +663,39 @@ test("a Run that finishes with a semantic constraint asks for its one judgement"
     }),
   ));
 
+test("a branch past the cap is judged once, at the finish, and each boundary says so", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* repository();
+      yield* fs.makeDirectory(`${dir}/src`, { recursive: true });
+      const files: string[] = [];
+      for (let n = 0; n <= MAX_FILES; n += 1) {
+        files.push(`src/f${n}.ts`);
+        yield* fs.writeFileString(`${dir}/src/f${n}.ts`, `${n}\n`);
+      }
+      yield* exec(["git", "add", ...files], { cwd: dir });
+      yield* intended("r1", [SMALL]);
+      const calls = `${rig.root}/judgements`;
+      yield* evaluatorAnswering(
+        `echo asked >> ${calls}\ncat > /dev/null\necho '{"result":{"reports":[]}}'`,
+      );
+      yield* session(
+        Effect.gen(function* () {
+          const oversight = yield* Oversight;
+          for (const where of ["build-1", "build-2", "build-3"])
+            yield* oversight.drift("r1", where, "boundary");
+          yield* oversight.drift("r1", "finish", "finish");
+        }),
+        { socketPath: `${rig.root}/herd.sock`, pluginRoot: rig.root },
+      );
+      const asked = yield* fs.readFileString(calls).pipe(Effect.orElseSucceed(() => ""));
+      expect(asked.split("\n").filter((line) => line === "asked")).toHaveLength(1);
+      const log = yield* fs.readFileString(`${runDir(dir, "r1")}/log.txt`);
+      expect(log).toContain("not judged at build-2: evidence past the cap; judged at the finish");
+    }),
+  ));
+
 const SRC_ONLY: Constraint = {
   id: "src-only",
   kind: "rule",

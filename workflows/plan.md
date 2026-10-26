@@ -48,8 +48,9 @@ Then write your Output, with what we settled under `decided`.
 
 ## spec
 
-You were started with {{skill:to-spec}}. Write the spec to `{{run.dir}}/plan/SPEC.md`. It has the problem in one
-paragraph, what is explicitly out of scope, the ordered work with the seams that want
+You were started with {{skill:to-spec}}. Write the spec to `{{run.dir}}/plan/SPEC.md`. It opens with an
+`## Objective`: one paragraph saying what the plan's Runs are to achieve, which each of them
+takes as its goal. It has the problem in one paragraph, what is explicitly out of scope, the ordered work with the seams that want
 tests, and how we will know the whole thing works. The tickets carry each piece's detail
 and acceptance criteria, so the spec does not restate them.
 

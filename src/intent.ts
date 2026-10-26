@@ -328,6 +328,7 @@ const REQUIREMENT_HEADING = new RegExp(
   "i",
 );
 const OBJECTIVE_HEADING = new RegExp(String.raw`^#+\s*${NUMBER}Objective\b`, "i");
+const SOLUTION_HEADING = new RegExp(String.raw`^#+\s*${NUMBER}Solution\b`, "i");
 const HEADING = /^#+\s/;
 const BULLET = /^(\s*)[-*]\s+(.*\S)\s*$/;
 const NUMBERED = /^(\s*)\d+[.)]\s+(.*\S)\s*$/;
@@ -335,7 +336,7 @@ const NUMBERED = /^(\s*)\d+[.)]\s+(.*\S)\s*$/;
 /**
  * What a plan asks for, read deterministically: bullets under a heading whose text
  * matches, wrapped and nested lines included, and the first paragraph under `## Objective`
- * as the goal. Heading match
+ * as the goal, else under `## Solution`, the heading to-spec writes. Heading match
  * only — no model, no inference — because this is evidence a human can check against
  * the file, and because a plan may not grant authority (SPEC §5). The return type is
  * how that is enforced: there is nowhere here to put a grant.
@@ -343,9 +344,7 @@ const NUMBERED = /^(\s*)\d+[.)]\s+(.*\S)\s*$/;
 export function extractRequirements(text: string, file: string) {
   const lines = text.split("\n");
   const constraints: Array<Omit<Constraint, "since">> = [];
-  let goal: string | null = null;
   let heading: string | null = null;
-  let objective: string[] | null = null;
   let bullet: { indent: number; parts: string[]; line: number } | null = null;
   const flush = () => {
     if (bullet === null || heading === null) return;
@@ -364,16 +363,8 @@ export function extractRequirements(text: string, file: string) {
   for (const [index, line] of lines.entries()) {
     if (HEADING.test(line) || line.trim() === "") flush();
     if (HEADING.test(line)) {
-      if (objective !== null && objective.length > 0) goal = objective.join(" ");
-      objective = OBJECTIVE_HEADING.test(line) ? [] : null;
       const match = REQUIREMENT_HEADING.exec(line);
       heading = match ? match[1]! : null;
-      continue;
-    }
-    if (objective !== null && goal === null) {
-      if (line.trim() === "") {
-        if (objective.length > 0) goal = objective.join(" ");
-      } else objective.push(line.trim());
       continue;
     }
     if (heading === null || line.trim() === "") continue;
@@ -394,8 +385,21 @@ export function extractRequirements(text: string, file: string) {
     if (item !== null) bullet = { indent, parts: [item[2]!], line: index + 1 };
   }
   flush();
-  if (goal === null && objective !== null && objective.length > 0) goal = objective.join(" ");
+  const goal =
+    firstParagraphUnder(lines, OBJECTIVE_HEADING) ?? firstParagraphUnder(lines, SOLUTION_HEADING);
   return { goal, constraints };
+}
+
+/** The first paragraph under the first heading `heading` matches, as one line. */
+function firstParagraphUnder(lines: ReadonlyArray<string>, heading: RegExp): string | null {
+  const start = lines.findIndex((line) => heading.test(line));
+  if (start < 0) return null;
+  const paragraph: string[] = [];
+  for (const line of lines.slice(start + 1)) {
+    if (HEADING.test(line) || (line.trim() === "" && paragraph.length > 0)) break;
+    if (line.trim() !== "") paragraph.push(line.trim());
+  }
+  return paragraph.length > 0 ? paragraph.join(" ") : null;
 }
 
 /** Where a workspace keeps what every Run it starts begins with. */
