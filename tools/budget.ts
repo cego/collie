@@ -268,7 +268,17 @@ export const startOnHold = (
             : ["ignore", "ignore", "ignore"],
         }),
       ),
-      (child) => Effect.sync(() => void (child.exitCode === null && child.kill())),
+      (child) =>
+        Effect.gen(function* () {
+          child.kill();
+          const ended = yield* Effect.promise(() => child.exited).pipe(
+            Effect.timeoutOption("2 seconds"),
+          );
+          if (Option.isNone(ended)) {
+            child.kill("SIGKILL");
+            yield* Effect.promise(() => child.exited);
+          }
+        }),
     );
     yield* join(dir, id, yield* processOf(child.pid));
     return child;

@@ -11,6 +11,7 @@ import {
   look,
   ownProcess,
   processOf,
+  startOnHold,
 } from "../tools/budget";
 import { runEffect } from "./support/effect";
 import { until } from "./support/host";
@@ -166,6 +167,28 @@ test(
         yield* Effect.promise(() => held.exited);
         yield* gone(child);
         expect(yield* entriesOf(dir)).toEqual([]);
+      }),
+    ),
+  20_000,
+);
+
+test(
+  "a hold is given back only once the process started on it is gone, even one SIGTERM does not end",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const dir = yield* store;
+        const child = yield* Effect.scoped(
+          Effect.gen(function* () {
+            const hold = yield* admitted(dir, VM_MK, "whole", 12, () => Effect.void);
+            const child = yield* startOnHold(dir, hold.id, ["sleep", "30"], { env: process.env });
+            process.kill(child.pid, "SIGSTOP");
+            return child;
+          }),
+        );
+        const lives = yield* signalProcess(child.pid);
+        if (lives) child.kill("SIGKILL");
+        expect({ lives, store: yield* entriesOf(dir) }).toEqual({ lives: false, store: [] });
       }),
     ),
   20_000,
