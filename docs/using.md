@@ -1322,8 +1322,9 @@ Leaving the tab or closing the record gives the pane back, so a herdr window sho
 returns to its own size. A terminal that ends says why — the pane closed, another client
 took it over, the Machine's connection dropped, or herdr refused — and **Reattach** finds
 the agent at work again, by the same rule. The tab stays while its Machine is away, and Reattach
-says that Machine is not connected until it is back. The card and the tab say where the pane is, as
-"vm-mk › workspace 3 › tab 2".
+says that Machine is not connected until it is back. The tab says where the pane is, as
+"vm-mk › workspace 3 › tab 2"; the card says it on one line, tab first, as
+"tab 2 · workspace 3", and the whole of it on hover.
 
 Where the Task has more than one live agent — a planner, an implementer and its reviewers,
 across a plan Run and its `.implement` Run — the tab lists every agent the card counts

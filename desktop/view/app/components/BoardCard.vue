@@ -188,6 +188,11 @@ const menu = computed(() =>
       :data-as-of="asOf === null ? undefined : ''"
       :variant="task.state === 'blocked' ? 'soft' : 'outline'"
       :class="{ 'opacity-50': asOf !== null, 'ring-2 ring-primary': chosen }"
+      :ui="{
+        header: 'px-4 py-3 sm:px-4',
+        body: 'px-4 py-3 sm:p-4 sm:py-3',
+        footer: 'px-4 py-2 sm:px-4',
+      }"
     >
       <template #header>
         <div class="flex items-start justify-between gap-2">
@@ -215,13 +220,15 @@ const menu = computed(() =>
             </UDropdownMenu>
           </div>
         </div>
-        <small class="text-muted">{{ repoAndBranch }}</small>
+        <small class="mt-0.5 block truncate text-muted" :title="repoAndBranch">{{
+          repoAndBranch
+        }}</small>
       </template>
       <p data-testid="sentence" class="text-sm">{{ task.sentence }}</p>
       <button
         v-if="flow !== null"
         type="button"
-        class="mt-2 flex w-full items-center gap-2 text-left text-xs text-muted hover:text-default focus-visible:outline-2 focus-visible:outline-primary"
+        class="mt-2 flex w-full flex-wrap items-center gap-x-2 gap-y-1 text-left text-xs text-muted hover:text-default focus-visible:outline-2 focus-visible:outline-primary"
         :aria-label="flow.name"
         @click="gesture({ kind: 'name', card: cardKey }, 'flow')"
       >
@@ -239,7 +246,7 @@ const menu = computed(() =>
             <FlowGlyph v-for="(glyph, at) in flow.release" :key="at" :state="glyph.state" />
           </span>
         </span>
-        <span class="min-w-0 truncate">{{ flow.label }}</span>
+        <span class="min-w-0">{{ flow.label }}</span>
       </button>
       <p v-if="task.held" class="text-sm text-muted">{{ task.held }}</p>
       <p v-if="task.drift" class="text-sm text-warning">{{ task.drift }}</p>
@@ -284,8 +291,14 @@ const menu = computed(() =>
         />
       </div>
 
-      <div v-if="pane" class="mt-3 flex flex-col gap-1 text-sm" data-testid="pane">
-        <span data-testid="pane-where">{{ pane.where }}</span>
+      <div v-if="pane" class="mt-2 flex flex-col gap-1 text-xs text-muted" data-testid="pane">
+        <span class="flex min-w-0 items-center gap-1" :title="pane.where"
+          ><UIcon name="i-lucide-terminal" class="shrink-0" aria-hidden="true" /><span
+            class="truncate"
+            data-testid="pane-where"
+            >{{ pane.line }}</span
+          ></span
+        >
         <div v-if="pane.command !== null" class="flex items-center gap-1">
           <code class="truncate text-xs" data-testid="pane-command">{{ pane.command }}</code>
           <UButton

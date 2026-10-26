@@ -114,3 +114,7 @@ export const linksIn = (line: string) =>
 /** Where a pane is, as its card says it: Machine › workspace › tab. */
 export const paneWhere = (machine: string, at: PaneAt) =>
   [machine, at.workspace, at.tab].filter((part) => part !== null).join(" › ");
+
+/** A pane on its card's one line, whose footer names the Machine: tab · workspace. */
+export const paneLine = (at: PaneAt) =>
+  [at.tab, at.workspace].filter((part) => part !== null).join(" · ");
