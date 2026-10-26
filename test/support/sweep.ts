@@ -29,7 +29,6 @@ const freeBytes = (dir: string) => {
   return stat.bavail * stat.bsize;
 };
 
-/** Where a test file's root is made: `memory` while it is writable and has room, else `fallback`. */
 export const rootBase = (memory = MEMORY_BASE, fallback = tmpdir(), free = freeBytes) => {
   try {
     accessSync(memory, constants.W_OK);
@@ -100,7 +99,6 @@ export const sweepDeadRoots = (dir: string): ReadonlyArray<string> =>
     return removed(root) ? [root] : [];
   });
 
-/** `sweepDeadRoots` in every place a root may have been made. */
 export const sweepEveryBase = (memory = MEMORY_BASE) =>
   [...new Set([tmpdir(), SOCKET_BASE, memory])].flatMap((dir) => {
     try {

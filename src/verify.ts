@@ -82,7 +82,6 @@ const statusParts = (stdout: string) => {
 export const treeOf = Effect.fn("Verify.treeOf")(function* (cwd: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  // Three reads of one tree, none waiting on another.
   const [status, diff, others] = yield* Effect.all(
     [
       git(["status", "--porcelain=v2", "--branch", "--no-ahead-behind", "-z"], cwd),

@@ -2598,7 +2598,6 @@ const repository = () =>
     yield* fs.writeFileString(config, text.replace(`${made}/origin.git`, origin));
   }).pipe(Effect.orDie);
 
-/** The repository `repository` copies, made once in this process. */
 const preparedRepository = Effect.cached(
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;

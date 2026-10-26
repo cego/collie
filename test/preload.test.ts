@@ -24,10 +24,7 @@ const Recorded = Schema.Struct({
 
 const alive = (pid: number | undefined) => signalProcess(pid ?? 0, 0);
 
-/**
- * Runs one fixture file under the preload, in a temporary directory of its own. Its roots
- * go on a memory filesystem only when `memory` names one.
- */
+/** Runs one fixture file under the preload, in a temporary directory of its own. */
 const suite = (fixture: string, args: ReadonlyArray<string> = [], memory = false) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
