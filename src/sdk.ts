@@ -426,11 +426,14 @@ export interface RunApi {
 
 export class Run extends Context.Service<Run, RunApi>()("collie/Run") {}
 
+export type { ClaudeSubagents } from "./subagents";
+
 /** Which agent does the work: each is inherited from the configuration where it is left out. */
 export interface AgentPreferences {
   readonly harness?: string;
   readonly model?: string;
   readonly effort?: string;
+  readonly claudeSubagents?: import("./subagents").ClaudeSubagents;
   /** Past this share of its busiest window, 1–100, this agent is not chosen for new work. */
   readonly upTo?: number;
   /**
@@ -1068,9 +1071,8 @@ export interface Place {
   readonly cwd: string;
   readonly dir: string;
   /**
-   * The host's own launch options for this Run — the `RESERVED_INPUTS` names — as a front
-   * door supplied them. They are not in the payload because they are not the author's
-   * fields, and this is where a workflow that wants one reads it.
+   * The host's own launch options, plus agent preferences inherited from a parent Run.
+   * They stay separate from the author's input payload.
    */
   readonly options: Readonly<Record<string, string>>;
   /** The Task this Run belongs to, whose workspace its agents open in; null for none. */

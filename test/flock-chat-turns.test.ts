@@ -11,7 +11,6 @@ import {
   FileSystem,
   Option,
   Path,
-  PubSub,
   Schema,
   type Scope,
   Stream,
@@ -1319,9 +1318,9 @@ test("heldOn changes with the next message after a harness change, not when the 
 
 test("the account is told again when Desktop retells it, with each harness's list as it is then", () => {
   const settings = { current: Schema.decodeUnknownSync(DesktopSettings)({ proactive: false }) };
-  const retold = Effect.runSync(PubSub.unbounded<void>());
+  const retold = Effect.runSync(Queue.unbounded<void>());
   return withChat(
-    { items: [], proactive: false, settings, retold: Stream.fromPubSub(retold) },
+    { items: [], proactive: false, settings, retold: Stream.fromQueue(retold) },
     answered,
     ({ conversation }) =>
       Effect.gen(function* () {
@@ -1332,7 +1331,7 @@ test("the account is told again when Desktop retells it, with each harness's lis
         );
         yield* eventually(() => told.length === 1);
         settings.current = { proactive: false, chatModel: "claude-opus-5" };
-        yield* PubSub.publish(retold, undefined);
+        yield* Queue.offer(retold, undefined);
         yield* eventually(() => told.length === 2);
         const ids = (choices: ChatChoices) => {
           const offered = choices.harnesses[0]!.offered;
@@ -1346,7 +1345,7 @@ test("the account is told again when Desktop retells it, with each harness's lis
 
 test("windows start the set harness's read, choosing another starts its read, and the chat tool retries a failed list", () => {
   const settings = { current: Schema.decodeUnknownSync(DesktopSettings)({ proactive: false }) };
-  const changed = Effect.runSync(PubSub.unbounded<void>());
+  const changed = Effect.runSync(Queue.unbounded<void>());
   const reads = { claude: 0, pi: 0 };
   return withChat(
     {
@@ -1354,7 +1353,7 @@ test("windows start the set harness's read, choosing another starts its read, an
       proactive: false,
       settings,
       drivers: { pi: fakeDriver([]).driver },
-      retold: Stream.fromPubSub(changed),
+      retold: Stream.fromQueue(changed),
       readers: {
         claude: Effect.sync(() => {
           reads.claude++;
@@ -1389,7 +1388,7 @@ test("windows start the set harness's read, choosing another starts its read, an
           ),
           Effect.forkScoped,
         );
-        yield* eventually(() => told.length > 0);
+        yield* eventually(() => told.length > 0 && reads.claude === 1);
         expect(told[0]!.harnesses[0]!.offered).toEqual({ from: "reading" });
         expect(reads).toEqual({ claude: 1, pi: 0 });
         yield* TestClock.adjust("2 seconds");
@@ -1399,7 +1398,7 @@ test("windows start the set harness's read, choosing another starts its read, an
         yield* account(conversation);
         expect(reads.claude).toBe(1);
         settings.current = { proactive: false, chatHarness: "pi" };
-        yield* PubSub.publish(changed, undefined);
+        yield* Queue.offer(changed, undefined);
         yield* eventually(() => reads.pi === 1);
         expect(told.at(-1)!.harnesses[1]!.offered).toEqual({ from: "reading" });
         yield* TestClock.adjust("2 seconds");
@@ -1411,6 +1410,7 @@ test("windows start the set harness's read, choosing another starts its read, an
         expect(yield* callFlockTool(seen.flock!, "collie_chat_harness", {})).toContain(
           "pi's models are still being read",
         );
+        yield* eventually(() => reads.pi === 2);
         expect(reads.pi).toBe(2);
         yield* TestClock.adjust("2 seconds");
         yield* eventually(() => told.at(-1)?.harnesses[1]?.offered.from === "harness");

@@ -5,6 +5,8 @@ import { expect, test } from "bun:test";
 import { Effect } from "effect";
 import { connect } from "../src/host";
 import { savedModules } from "../src/discovery";
+import { readSubagents } from "../src/subagents";
+import { setSetting } from "../src/config";
 import { stopHost, until } from "./support/host";
 import { collie, proves } from "./support/world";
 
@@ -120,6 +122,12 @@ test(
       "collie-definition-agents-",
       (world) =>
         Effect.gen(function* () {
+          yield* setSetting(
+            world.config,
+            "claude_subagents",
+            '{"model":"sonnet"}',
+            "2026-10-23T00:00:00.000Z",
+          );
           const client = yield* connect(world.state).pipe(Effect.orDie);
           const parent = yield* client
             .start({ project: world.project, id: "delegates", request: "req-1", input: {} })
@@ -132,6 +140,11 @@ test(
           const child = runs.find((one) => one.parent === parent.runId);
           expect(child?.workflow).toBe("quiet");
           expect(child?.options.model).toBe("sonnet");
+          expect(yield* readSubagents(child?.options.claudeSubagents ?? "null")).toEqual({
+            forceModel: true,
+            cacheTtl: "1h",
+            maxDepth: 1,
+          });
 
           const refused = yield* client
             .start({

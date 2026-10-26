@@ -1977,6 +1977,20 @@ const glabEnvironment = Effect.gen(function* () {
   return false;
 }).pipe(Effect.orElseSucceed(() => false));
 
+// Readers in the host and CLI must see a complete model while another face replaces it.
+let modelWrites = 0;
+const writeModel = (file: string, model: ForgeModel) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const staged = `${file}.${process.pid}.${++modelWrites}.tmp`;
+    yield* fs
+      .writeFileString(staged, Schema.encodeSync(ModelJson)(model))
+      .pipe(
+        Effect.andThen(fs.rename(staged, file)),
+        Effect.ensuring(fs.remove(staged).pipe(Effect.ignore)),
+      );
+  });
+
 /** The FakeBin face: the compiled fake or `bun forge-bin.ts`, with the same arguments. */
 export const forgeBin = Effect.fn("forge.bin")(function* (
   forge: MrForge,
@@ -1991,8 +2005,7 @@ export const forgeBin = Effect.fn("forge.bin")(function* (
     environment: yield* glabEnvironment,
   });
   // Writing back an unchanged model would undo a test's write that landed since the read.
-  if (said.model !== model)
-    yield* fs.writeFileString(file, Schema.encodeSync(ModelJson)(said.model));
+  if (said.model !== model) yield* writeModel(file, said.model);
   return said.ran;
 });
 
@@ -2008,7 +2021,7 @@ export const forgeOnPath = Effect.fn("forge.onPath")(function* (
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const file = path.join(bin.dir, `${forge}.model.json`);
-  yield* fs.writeFileString(file, Schema.encodeSync(ModelJson)(model));
+  yield* writeModel(file, model);
   const script = yield* path.fromFileUrl(new URL("./forge-bin.ts", import.meta.url));
   const binary = yield* Config.String("COLLIE_TEST_FAKE_FORGE").pipe(Config.withDefault(""));
   const command = binary === "" ? [process.execPath, script] : [binary];
@@ -2018,7 +2031,8 @@ export const forgeOnPath = Effect.fn("forge.onPath")(function* (
     forge,
     {
       read: Effect.orDie(Effect.map(fs.readFileString(file), Schema.decodeSync(ModelJson))),
-      write: (next) => Effect.orDie(fs.writeFileString(file, Schema.encodeSync(ModelJson)(next))),
+      write: (next) =>
+        Effect.orDie(writeModel(file, next).pipe(Effect.provideService(FileSystem.FileSystem, fs))),
     },
     requests,
     [],
@@ -2030,7 +2044,8 @@ export const forgeOnPath = Effect.fn("forge.onPath")(function* (
     requests: () => [...requests],
     /** The model file holding `next`, as an agent's scripted write would leave it. */
     holding: (next: ForgeModel) => ({ path: file, text: Schema.encodeSync(ModelJson)(next) }),
-    set: (next: ForgeModel) => fs.writeFileString(file, Schema.encodeSync(ModelJson)(next)),
+    set: (next: ForgeModel) =>
+      writeModel(file, next).pipe(Effect.provideService(FileSystem.FileSystem, fs)),
     model: () => Effect.map(fs.readFileString(file), Schema.decodeSync(ModelJson)),
     calls: () =>
       Effect.map(

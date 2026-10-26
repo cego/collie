@@ -467,6 +467,44 @@ running as, and one that does not is refused rather than ignored. What only defa
 that decides for fresh agents alone. `permissions` is none of this: preferring a model never
 changes what an agent is allowed to do, or which commands Collie may run for the Run.
 
+### Claude subagent policy
+
+`claudeSubagents` belongs to agent preferences: operator defaults, a Workflow's `agents`,
+its role seats, `withAgents`, and an `agentWork` call. Its individual fields merge in the
+same order as other preferences. Explicit `false` overrides an inherited `true`.
+
+For a Workflow with `implementer` and `researcher` roles, this is an `agents` declaration:
+
+```ts
+agents: {
+  claudeSubagents: { model: "sonnet", maxDepth: 1, maxConcurrent: 2 },
+  roles: {
+    implementer: { claudeSubagents: { enabled: false } },
+    researcher: { claudeSubagents: { cacheTtl: "1h" } },
+  },
+}
+```
+
+The parent agent's Model remains its own preference. The `model` inside `claudeSubagents`
+is a fallback for native workers. Add `forceModel: true` to request enforcement, subject
+to [Claude's exceptions](using.md#claude-subagents). The available fields are `enabled`,
+`model`, `forceModel`, `cacheTtl`, `maxDepth`, and `maxConcurrent`.
+
+A Harness switch clears an inherited Claude policy alongside the old Model and effort.
+Pi, Codex, and OpenCode receive none of its settings. An explicit policy on later Claude
+work supplies a new choice; it does not recover one discarded by a Harness switch.
+
+Scopes carry policy into child Runs as a serialized host option. It is recorded with the
+agent choice before launch. A running agent keeps its policy: changed defaults apply to
+fresh agents, and incompatible policy explicitly requested by a call or scope is refused.
+Do not use a settings edit to reconfigure an existing conversation.
+
+Malformed values and unknown models are refused before an affected agent launches.
+The force override requires a model after inheritance. `cacheTtl` accepts `5m` or `1h`;
+limits require positive whole numbers. No policy is supplied by default.
+See the [operator guide](using.md#claude-subagents) for native precedence, compatibility,
+and the cost of longer retention.
+
 ### When a Subscription is running out
 
 Work runs on its preferred agent until that agent's **Subscription** is **Exhausted**, then

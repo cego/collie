@@ -59,6 +59,12 @@ test("an input may not take a name the host supplies at launch", () => {
   }
 });
 
+test("scoped subagent policy does not reserve an existing workflow input name", () => {
+  expect(
+    checkEntry(entry({ input: { text: Schema.String, claudeSubagents: Schema.String } })),
+  ).toEqual([]);
+});
+
 test("only one input may claim each strategy inference reads", () => {
   for (const strategy of EXCLUSIVE_STRATEGIES) {
     const problems = checkEntry(
