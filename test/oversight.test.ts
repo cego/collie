@@ -3,11 +3,12 @@
 
 import type { ChildProcessSpawner } from "effect/process";
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { Effect, FileSystem, Layer, Path, Schema } from "effect";
+import { Clock, Effect, FileSystem, Layer, Path, Schema } from "effect";
+import { TestClock } from "effect/testing";
 import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
 import { Rig, FakeHerdr } from "./support/recorder";
 import { exec } from "./support/command";
-import { fastForward, runEffect } from "./support/effect";
+import { runEffect } from "./support/effect";
 import { Agents, agentsLayer } from "../src/agents";
 import { Children, Host } from "../src/sdk";
 import { foundationLayer, loadEntry, runDir, type Herd } from "../src/engine";
@@ -896,20 +897,23 @@ test("a host that finds its Herd while a Run finishes offers that Run's blocking
         Schema.encodeSync(Schema.fromJsonString(Schema.Array(VerifySpecSchema)))([started]),
       );
       const socketPath = `${rig.root}/herd.sock`;
+      // A minute passes at each ask that finds no Herd, so the host asks again, and never
+      // while a check runs on the clock that bounds it.
+      const clock = yield* TestClock.make();
+      yield* clock.setTime(yield* Clock.currentTimeMillis);
       const locate = fs.exists(herdr).pipe(
-        Effect.map((up) => (up ? socketPath : null)),
-        Effect.orElseSucceed(() => null),
+        Effect.orElseSucceed(() => false),
+        Effect.flatMap((up) =>
+          up ? Effect.succeed(socketPath) : Effect.as(clock.adjust("1 minute"), null),
+        ),
       );
 
-      yield* fastForward(
-        executed(
-          "hello.workflow.ts",
-          "r1",
-          { name: "you" },
-          { socketPath: null, pluginRoot: rig.root, locate },
-        ),
-        60_000,
-      );
+      yield* executed(
+        "hello.workflow.ts",
+        "r1",
+        { name: "you" },
+        { socketPath: null, pluginRoot: rig.root, locate },
+      ).pipe(Effect.provideService(Clock.Clock, clock));
 
       const key = yield* herdOf(socketPath);
       const proposed = yield* readProposals(yield* proposalsPath(dir, key!));

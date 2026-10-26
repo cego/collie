@@ -27,7 +27,7 @@ import { Store } from "../src/store";
 import { readTask, writeTask } from "../src/task";
 import { TestClock } from "effect/testing";
 import { fastForward, runEffect } from "./support/effect";
-import { stopHost } from "./support/host";
+import { stopHost, until } from "./support/host";
 import { task } from "./support/task";
 import { collie, proves } from "./support/world";
 
@@ -171,13 +171,21 @@ test(
             started.envelope.data,
           );
           expect((yield* collie(world, ["run", "wait", runId])).envelope.ok).toBe(true);
+          // The host sees the finish a moment after the wait returns.
+          yield* until(
+            () => firstSnapshot(world.state),
+            (snapshot) => snapshot?.tasks[0]?.state === "done",
+          );
           const [first, second] = yield* Effect.all(
             [firstSnapshot(world.state), firstSnapshot(world.state)],
             { concurrency: "unbounded" },
           );
           yield* stopHost(world.state);
           expect(first?.tasks.map((one) => one.name)).toEqual(["Plain"]);
-          expect(second?.tasks).toEqual(first!.tasks);
+          // `age` is reckoned when a board is built, and a tick may build one between the two.
+          const ageless = (tasks: ReadonlyArray<TaskView> = []) =>
+            tasks.map((task) => ({ ...task, age: null }));
+          expect(ageless(second?.tasks)).toEqual(ageless(first?.tasks));
         }),
       ["plain.workflow.ts"],
     ),

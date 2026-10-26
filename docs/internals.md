@@ -379,10 +379,14 @@ Each host keeps its peers in `src/peers.ts`, started in the host's scope
   pinning the peer's certificate as the only CA and sending the secret as a bearer, and
   pipes bytes. `as: "host"` is taken only with the relay's own host's stamp.
 - **The listener,** on `0.0.0.0:47217` (`COLLIE_PEER_PORT` for a test), only while a peer
-  that dials in is paired. It finds the installation a bearer was minted for, and declares
-  the channel on a fresh `host.sock` connection as `{frontDoor: as, from: {machine,
-  client}}` with the host's per-process stamp, which is what lets `from.machine` through
-  `declare`: a channel that sets it without the stamp is refused.
+  that dials in is paired. `COLLIE_PEER_PORT=0` binds whatever port is free the first time
+  and that same port every later time, by any host of the state directory (it is kept in
+  `peer-port` there), and an invitation answers it: the test rig's way to
+  a port no other process can take between its choice and the listen. It finds the
+  installation a bearer was minted for, and declares the channel on a fresh `host.sock`
+  connection as `{frontDoor: as, from: {machine, client}}` with the host's per-process
+  stamp, which is what lets `from.machine` through `declare`: a channel that sets it without
+  the stamp is refused.
 
 **Dial-back.** The dialling host keeps `/control` open, with the pinned certificate and
 bearer. The listener keeps one control link per installation; a newer one replaces it.
