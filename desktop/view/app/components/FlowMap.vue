@@ -115,16 +115,25 @@ const rowKey = (event: KeyboardEvent) => {
   event.stopPropagation();
   if (event.currentTarget instanceof HTMLElement) showMenu(event.currentTarget);
 };
+const reveal = (spot: FlowSpot) =>
+  buttons.get(keyOf(spot))?.scrollIntoView({ block: "nearest", inline: "nearest" });
+// A map that changes size, with the window or the inspector, keeps the selected Step in view.
+const box = ref<HTMLElement | null>(null);
+let resized: ResizeObserver | undefined;
+onMounted(() => {
+  resized = new ResizeObserver(() => props.selected !== null && reveal(props.selected));
+  if (box.value !== null) resized.observe(box.value);
+});
+onBeforeUnmount(() => resized?.disconnect());
 defineExpose({
   focus: (spot: FlowSpot) => buttons.get(keyOf(spot))?.focus(),
-  reveal: (spot: FlowSpot) =>
-    buttons.get(keyOf(spot))?.scrollIntoView({ block: "nearest", inline: "nearest" }),
+  reveal,
   menu: (spot: FlowSpot) => showMenu(buttons.get(keyOf(spot))),
 });
 </script>
 
 <template>
-  <div role="group" aria-label="Flow" class="overflow-y-auto">
+  <div ref="box" role="group" aria-label="Flow" class="overflow-y-auto">
     <section
       v-for="row in rows"
       :key="row.run"
