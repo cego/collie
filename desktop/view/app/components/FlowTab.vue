@@ -18,7 +18,7 @@ import {
   type FlowSelection,
   type FlowSpot,
 } from "../../../src/shared/flow";
-import { workspaceKey } from "../../../src/shared/flow-layout";
+import { focusHandOff, workspaceKey } from "../../../src/shared/flow-layout";
 const props = defineProps<{
   flow: Flow;
   placed: PlacedTask;
@@ -129,6 +129,28 @@ const actNode = (kind: FlowAction, spot: FlowSpot) => {
 const focusing = ref(false);
 watch(focusing, (now) => emit("focusing", now));
 watch(selected, (now) => now === null && (focusing.value = false));
+const root = ref<HTMLElement | null>(null);
+const handOff = focusHandOff<HTMLElement>();
+const focusedElement = () => {
+  const active = document.activeElement;
+  return active instanceof HTMLElement && active !== document.body ? active : null;
+};
+const focus = async (now: boolean) => {
+  if (now === focusing.value) return;
+  if (now) {
+    const work = root.value?.querySelector<HTMLElement>('[data-testid="flow-work"]') ?? null;
+    handOff.focus(
+      focusedElement(),
+      (one) => work?.contains(one) ?? false,
+      work?.querySelector<HTMLElement>('[data-testid="flow-focus"]') ?? null,
+    );
+    focusing.value = true;
+    return;
+  }
+  focusing.value = false;
+  await nextTick();
+  handOff.restore(focusedElement());
+};
 const close = () => {
   const spot = selected.value;
   selected.value = null;
@@ -169,7 +191,7 @@ const key = (event: KeyboardEvent) => {
   if (layout !== null && !overlayOpen(document)) {
     event.preventDefault();
     event.stopPropagation();
-    focusing.value = layout === "focus";
+    void focus(layout === "focus");
     return;
   }
   if (
@@ -231,6 +253,7 @@ watch(
 
 <template>
   <div
+    ref="root"
     data-testid="flow"
     :data-escape-scope="selected !== null ? '' : undefined"
     class="flex min-h-0 flex-1 flex-col gap-3"
@@ -335,7 +358,7 @@ watch(
           :focusing="focusing"
           :alone="info.state !== 'failed' && decision === null"
           @open="(run, tab, agent) => emit('open', run, tab, agent)"
-          @focus="focusing = !focusing"
+          @focus="focus(!focusing)"
         />
       </template>
       <template #empty>

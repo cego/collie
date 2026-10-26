@@ -4,6 +4,7 @@ import { expect, test } from "bun:test";
 import {
   contextStepped,
   contextWidth,
+  focusHandOff,
   railCap,
   railHeight,
   railStepped,
@@ -71,6 +72,67 @@ test("Ctrl or Cmd+Shift+F focuses the work and restores it; Escape only restores
   expect(workspaceKey(key("Escape"), true)).toBe("restore");
   expect(workspaceKey(key("Escape"), false)).toBeNull();
   expect(workspaceKey(key("f"), false)).toBeNull();
+});
+
+interface Control {
+  readonly name: string;
+  isConnected: boolean;
+  readonly focus: () => void;
+}
+
+const controls = () => {
+  const focused: string[] = [];
+  const control = (name: string): Control => ({
+    name,
+    isConnected: true,
+    focus: () => focused.push(name),
+  });
+  return {
+    focused,
+    map: control("map"),
+    separator: control("separator"),
+    restore: control("restore"),
+    terminal: control("terminal"),
+    inWork: (one: Control) => one.name === "restore" || one.name === "terminal",
+  };
+};
+
+test("Focus moves keyboard focus out of a region it hides into the work, and Restore takes it back", () => {
+  const { focused, map, restore, inWork } = controls();
+  const hand = focusHandOff<Control>();
+  hand.focus(map, inWork, restore);
+  expect(focused).toEqual(["restore"]);
+  hand.restore(restore);
+  expect(focused).toEqual(["restore", "map"]);
+});
+
+test("Restore takes keyboard focus back when it was lost, and only once", () => {
+  const { focused, separator, restore, inWork } = controls();
+  const hand = focusHandOff<Control>();
+  hand.focus(separator, inWork, restore);
+  hand.restore(null);
+  hand.restore(null);
+  expect(focused).toEqual(["restore", "separator"]);
+});
+
+test("Focus leaves keyboard focus already in the work where it is", () => {
+  const { focused, terminal, restore, inWork } = controls();
+  const hand = focusHandOff<Control>();
+  hand.focus(terminal, inWork, restore);
+  hand.restore(terminal);
+  expect(focused).toEqual([]);
+});
+
+test("Restore leaves keyboard focus that has moved on since Focus, or whose origin is gone", () => {
+  const { focused, map, terminal, restore, inWork } = controls();
+  const hand = focusHandOff<Control>();
+  hand.focus(map, inWork, restore);
+  hand.restore(terminal);
+  expect(focused).toEqual(["restore"]);
+  hand.focus(map, inWork, restore);
+  map.isConnected = false;
+  hand.restore(restore);
+  expect(focused).toEqual(["restore", "restore"]);
 });
 
 test("a Step with nothing to show says whether it has yet to start", () => {

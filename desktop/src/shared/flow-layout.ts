@@ -43,3 +43,28 @@ export const workspaceKey = (key: Key, focusing: boolean): "focus" | "restore" |
   if (isFocusKey(key)) return focusing ? "restore" : "focus";
   return key.key === "Escape" && focusing ? "restore" : null;
 };
+
+export interface Focusable {
+  readonly isConnected: boolean;
+  readonly focus: () => void;
+}
+
+/** Keeps keyboard focus inside the Flow, whose keys restore it, while Focus hides all but the work. */
+export const focusHandOff = <T extends Focusable>() => {
+  let left: { origin: T; into: T } | null = null;
+  return {
+    focus: (active: T | null, inWork: (one: T) => boolean, into: T | null) => {
+      left = null;
+      if (active === null || into === null || inWork(active)) return;
+      left = { origin: active, into };
+      into.focus();
+    },
+    /** `active` is null where focus was lost to the page. */
+    restore: (active: T | null) => {
+      const back = left;
+      left = null;
+      if (back?.origin.isConnected && (active === null || active === back.into))
+        back.origin.focus();
+    },
+  };
+};
