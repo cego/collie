@@ -6,41 +6,51 @@ import { keyAction } from "../desktop/src/shared/terminal-input";
 
 const world = () => {
   const sent: Array<[number, number]> = [];
-  let due: (() => void) | null = null;
-  const timers: Timers<() => void> = {
-    set: (run) => {
-      due = run;
-      return run;
+  let now = 0;
+  let made = 0;
+  const due = new Map<number, { at: number; run: () => void }>();
+  const timers: Timers<number> = {
+    set: (run, ms) => {
+      made += 1;
+      due.set(made, { at: now + ms, run });
+      return made;
     },
     clear: (handle) => {
-      if (handle === due) due = null;
+      due.delete(handle);
     },
   };
   const sizes = settledResizes((cols, rows) => sent.push([cols, rows]), timers);
-  const settle = () => {
-    const run = due;
-    due = null;
-    run?.();
+  const advance = (ms: number) => {
+    now += ms;
+    for (const [handle, timer] of [...due].sort((one, other) => one[1].at - other[1].at))
+      if (timer.at <= now) {
+        due.delete(handle);
+        timer.run();
+      }
   };
-  return { sent, sizes, settle, pending: () => due !== null };
+  return { sent, sizes, advance, pending: () => due.size > 0 };
 };
 
-test("a drag through many sizes resizes the pane once, at the size it settles at", () => {
-  const { sent, sizes, settle } = world();
+test("a drag through many sizes resizes the pane once, 120 ms after it settles", () => {
+  const { sent, sizes, advance } = world();
   sizes.resized(80, 24);
+  advance(40);
   sizes.resized(92, 24);
+  advance(40);
   sizes.resized(131, 38);
+  advance(119);
   expect(sent).toEqual([]);
-  settle();
+  advance(1);
   expect(sent).toEqual([[131, 38]]);
 });
 
 test("settling back at the size the pane already has sends nothing", () => {
-  const { sent, sizes, settle } = world();
+  const { sent, sizes, advance } = world();
   sizes.opened(80, 24);
   sizes.resized(120, 30);
+  advance(60);
   sizes.resized(80, 24);
-  settle();
+  advance(500);
   expect(sent).toEqual([[80, 24]]);
 });
 
