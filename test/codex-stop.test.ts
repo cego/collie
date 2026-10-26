@@ -958,17 +958,13 @@ const neverAdmits = () =>
     }),
   );
 
-test("a start herdr never admits fails naming its agent, and the next launch under that name stops its server first", () =>
+test("a start herdr never admits parks naming its agent, and the next launch under that name stops its server first", () =>
   runEffect(
     Effect.gen(function* () {
       yield* serve(unmaterialized());
-      const first = yield* session(
-        work.execute({ runId: "r1", input: { skip: false } }).pipe(Effect.result),
-        { herdr: neverAdmits() },
-      );
-      const why = first._tag === "Failure" ? first.failure.reason : "";
-      expect(why).toContain(agent);
-      expect(why).toContain("agent start failed");
+      yield* until(suspended, { herdr: neverAdmits() });
+      const why = yield* parkedWhy();
+      expect(why).toContain(`${agent} did not start`);
       expect(why).toContain("timed out waiting for agent startup");
       expect(yield* rig.cmds()).not.toContain("agent prompt");
       const stranded = yield* serverPid();
@@ -1013,11 +1009,7 @@ test("a start herdr never admits fails naming its agent, and the next launch und
 /** r1's start, which herdr never admits, leaving its server up with no launch recorded. */
 const neverAdmitted = Effect.gen(function* () {
   yield* serve(unmaterialized());
-  const first = yield* session(
-    work.execute({ runId: "r1", input: { skip: false } }).pipe(Effect.result),
-    { herdr: neverAdmits() },
-  );
-  expect(first._tag).toBe("Failure");
+  yield* until(suspended, { herdr: neverAdmits() });
   return yield* serverPid();
 });
 
@@ -1153,16 +1145,12 @@ class StoppedWhileStarting extends FakeHerdr {
   }
 }
 
-test("a stop that lands in a start herdr then refuses stops that start's server once it fails", () =>
+test("a stop that lands in a start herdr then refuses stops that start's server once it parks", () =>
   runEffect(
     Effect.gen(function* () {
       yield* serve(unmaterialized());
       const herdr = new StoppedWhileStarting();
-      const first = yield* session(
-        work.execute({ runId: "r1", input: { skip: false } }).pipe(Effect.result),
-        { herdr },
-      );
-      expect(first._tag).toBe("Failure");
+      yield* until(suspended, { herdr });
       expect(herdr.halts).toEqual([
         {
           stopped: [],

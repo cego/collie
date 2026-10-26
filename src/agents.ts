@@ -814,16 +814,18 @@ export const agentWork = <
         const instance = yield* WorkflowEngine.WorkflowInstance;
         if (yield* host.stopRequested(runId)) return yield* Workflow.suspend(instance);
         const launched = yield* parkedWhenStuck(
-          agents.launch(next, (why) => host.parked(work.runId, why)),
+          agents
+            .launch(next, (why) => host.parked(work.runId, why))
+            .pipe(
+              // A stop that landed while a start failed or parked still reaches the server it left.
+              Effect.tapError(() =>
+                Effect.gen(function* () {
+                  if (yield* host.stopRequested(runId)) yield* haltLate;
+                }),
+              ),
+            ),
           host,
           work.runId,
-        ).pipe(
-          // A stop that landed while a start failed still reaches the server it left.
-          Effect.tapError(() =>
-            Effect.gen(function* () {
-              if (yield* host.stopRequested(runId)) yield* haltLate;
-            }),
-          ),
         );
         // A stop that landed while it started: that agent is stopped too, and the work waits.
         if (yield* host.stopRequested(runId)) {
