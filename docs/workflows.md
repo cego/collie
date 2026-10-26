@@ -523,7 +523,8 @@ they follow the reviewers.
 included, and a check Collie leaves to CI is waited on there. A failure goes to a fix
 round, `fix-<n>`, which fixes and pushes as implement's gate fixes do. Four rounds in a
 row that leave a check failing, or one that changes nothing, park the Run with why;
-resuming it runs the checks again.
+resuming it runs the checks again. Collie's own `check` is left to CI's `test` job, so a
+Release of Collie is proved by that job at its head, never by a local `bun run check`.
 
 Once ready, it asks **`go-<n>`**, naming the head and who approved it: **Release** or
 **Finish** for a package. For an application it offers **Stage the merge request** where

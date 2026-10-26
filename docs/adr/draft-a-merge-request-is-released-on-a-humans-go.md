@@ -87,7 +87,8 @@ start the release once all of these hold:
 
 - the merge request is approved;
 - no external comment is unanswered;
-- Collie's Checks and the forge's pipeline passed at its head;
+- Collie's Checks passed at its head, a Check left to CI by its pipeline job there, and so
+  did the forge's pipeline;
 - the forge says it can merge.
 
 The question names the merge request, its head and who approved it, and it raises the

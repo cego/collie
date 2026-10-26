@@ -9033,6 +9033,107 @@ const agentPush = (
 /** The replies Collie posted on the merge request, in order. */
 const repliesOf = (model: ForgeModel) => Object.values(model.replies ?? {}).flat();
 
+/** Collie's own Checks: `check`, left to CI's `test` job, counting any local run. */
+const ownCheck = (runId: string) =>
+  FileSystem.FileSystem.pipe(
+    Effect.flatMap((fs) =>
+      fs
+        .makeDirectory(evidenceDir(dir, runId), { recursive: true })
+        .pipe(
+          Effect.andThen(
+            fs.writeFileString(
+              `${evidenceDir(dir, runId)}/approved.json`,
+              asApproved([{ ...counting("check", `${rig.root}/check-runs`), ci: "test" }]),
+            ),
+          ),
+        ),
+    ),
+    Effect.orDie,
+  );
+
+scenario(
+  "a Release whose check is left to CI's test job is asked its go once the job passed at the head, never running the check",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { bin, head } = yield* releasable("github", {
+          jobs: [{ name: "test", state: "passed" }],
+        });
+        const runId = "r-release-own-check";
+        yield* ownCheck(runId);
+        yield* rig.queueOutputs([PACKAGED]);
+        yield* driven(
+          {
+            entry: shipped("release"),
+            runId,
+            input: { mr: RELEASING.github.target },
+            host: releaseHost(),
+          },
+          (run) =>
+            Effect.gen(function* () {
+              yield* goAsked(run.asked, "go-1");
+              yield* run.answer("go-1", "Finish");
+              return yield* ended(run.status);
+            }),
+        );
+        yield* bin.restore();
+        expect(yield* runsOf(`${rig.root}/check-runs`)).toBe(0);
+        const [proof, ...more] = yield* ciRecords(runId);
+        expect(more).toEqual([]);
+        expect(proof).toMatchObject({
+          name: "check",
+          result: "pass",
+          end: { head_sha: head },
+          job: { name: "test" },
+        });
+      }),
+    ),
+  120_000,
+);
+
+for (const [state, jobs] of [
+  ["failing", [{ name: "test", state: "failed", retried: "failed" }]],
+  ["not reported", []],
+] as const)
+  scenario(
+    `a Release whose check is left to CI's test job is not asked its go while the job is ${state}`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, head } = yield* releasable("github", { jobs });
+          const runId = `r-release-own-check-${jobs.length}`;
+          yield* ownCheck(runId);
+          yield* rig.queueOutputs([PACKAGED, { verdict: "clean", fixed: [] }]);
+          const why = yield* driven(
+            {
+              entry: shipped("release"),
+              runId,
+              input: { mr: RELEASING.github.target },
+              host: releaseHost(),
+            },
+            (run) =>
+              Effect.gen(function* () {
+                const why = yield* until(
+                  () => parkedWhy(runId),
+                  (why) => why !== "",
+                );
+                expect((yield* run.asked).filter((row) => row.decision.startsWith("go-"))).toEqual(
+                  [],
+                );
+                return why;
+              }),
+          );
+          yield* bin.restore();
+          expect(why).toContain(
+            `check is left to CI and unproved: job test on ${head.slice(0, 12)} is ${state === "failing" ? "failed" : "not in its pipeline"}`,
+          );
+          expect(yield* runsOf(`${rig.root}/check-runs`)).toBe(0);
+          expect(yield* ciRecords(runId)).toEqual([]);
+        }),
+      ),
+    120_000,
+  );
+
 for (const name of ["gitlab", "github"] as const) {
   const { mr, url, target } = RELEASING[name];
 

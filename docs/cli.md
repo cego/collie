@@ -1587,6 +1587,10 @@ commit.
 ]
 ```
 
+Collie's own `.collie/verify.json` leaves its one check, `check` (`bun run check`), to CI's
+`test` job, which runs that script: its implement Runs and Releases wait for the job rather
+than run the suite again.
+
 A file that is there and does not decode is an error naming it, never an empty set, and
 the start is refused as `invalid_input`, so a typo is never quietly replaced by an agent's
 choice. So is `--verify` given to a plan that spans repositories: each repository is held to
