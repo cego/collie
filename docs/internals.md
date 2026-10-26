@@ -1592,7 +1592,7 @@ its time.
   out what never reaches those entry points: `collie` running as bun under `BUN_BE_BUN`,
   real `git`, `ps` and `sleep`, the `sh` shims and stubs, and the fake `ssh` and the
   master it keeps. It first showed `herdr session list` as the largest source, at 3,970 of
-  11,125: every board build read the sessions again, and a build follows every write
+  11,125: every board build read the sessions again, and a build then followed every write
   under the state directory. A host's board now reads them once a minute, as often as its
   event watch does (`SESSIONS_EVERY` in `src/herds.ts`), so a session that starts later
   is on the board within that minute. A sweep still reads them fresh: cleanup must never

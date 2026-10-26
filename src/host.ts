@@ -112,6 +112,7 @@ import { memoryWaitOf, waitForMemory, waitLine } from "./memory-wait";
 import { runLog } from "./agent-end";
 import { hostLogger, rotateInPlace } from "./host-log";
 import { handoffsDir, handoffsIn } from "./handoffs";
+import { QUESTIONS } from "./compactors";
 import { Catalogue, discover, searchPath } from "./discovery";
 import { readDefinitions } from "./authoring";
 import { SharedDefinition } from "./definitions-model";
@@ -964,7 +965,7 @@ const hostBoard = (dir: string) =>
     const env = yield* servingEnv(dir);
     const herdr = new Herdr(env);
     // Read as often as `herdChanges` reads them: each read is a herdr process, and a build
-    // runs on every write under the state directory.
+    // runs on every write the board reads under the state directory.
     const herdsNow = yield* Effect.cachedWithTTL(liveHerds(herdr, env), SESSIONS_EVERY);
     const runs = registry
       .views(null)
@@ -1127,22 +1128,56 @@ class SharedBoard extends Context.Service<
   }
 >()("collie/SharedBoard") {}
 
+/** What the host writes for itself, by its path under the state directory, which no build reads. */
+const isBookkeeping = ({ _tag, path }: FileSystem.WatchEvent) => {
+  const [top, , below] = path.split("/");
+  const name = path.slice(path.lastIndexOf("/") + 1);
+  if (name.endsWith(".lock") || name.endsWith(".tmp") || top === "ssh") return true;
+  if (/^host\.(log|out)(\.\d+)?$|^host\.db-(wal|journal)$/.test(path)) return true;
+  if (top === "compaction") return name !== QUESTIONS;
+  // The board reads only these directories' mtime, which a file growing leaves alone.
+  return (
+    _tag === "Update" &&
+    ((top === "runs" && below === "handoffs") || (top === "evidence" && below === "verify"))
+  );
+};
+
+const watched = (dir: string) =>
+  Stream.unwrap(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      return fs.watch(dir, { recursive: true }).pipe(Stream.catch(() => Stream.empty));
+    }),
+  );
+
+/** Each write under the state directory that may move the board, by its path inside it. */
+export const boardWrites = (dir: string) =>
+  watched(dir).pipe(
+    Stream.filter((event) => !isBookkeeping(event)),
+    Stream.map((event) => event.path),
+  );
+
+/** What a Run's open drawer lists and the board ignores: its handoffs' and evidence's sizes. */
+export const drawerWrites = (dir: string, runId: string) =>
+  Stream.merge(
+    watched(runDir(dir, runId)).pipe(Stream.filter((event) => event.path.startsWith("handoffs/"))),
+    watched(evidenceDir(dir, runId)),
+  ).pipe(Stream.debounce("200 millis"));
+
 /**
- * Anything written under the state directory, by this host or anyone else, or a Run
- * recorded from any door, is a reason to build again.
+ * A write under the state directory, by this host or anyone else, to a file the board reads,
+ * or a Run recorded from any door, is a reason to build again.
  */
 const sharedBoardLayer = (dir: string) =>
   Layer.effect(SharedBoard)(
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
       const store = yield* Store;
       const { listing, ...board } = yield* hostBoard(dir);
       // Debounced apart from the tick, so a burst of writes cannot hold the tick back.
       // Shared, so every subscriber rides one recursive watch: setting one up walks the tree.
       const changed = yield* Stream.mergeAll(
         [
-          fs.watch(dir, { recursive: true }).pipe(
-            Stream.catch(() => Stream.empty),
+          boardWrites(dir).pipe(
             Stream.debounce("200 millis"),
             Stream.map(() => undefined),
           ),
@@ -1214,10 +1249,7 @@ const Edited = Schema.Struct({ path: Schema.String, replaced: Schema.Int });
 /** A Herd's key names one directory under the state directory, and nothing above it. */
 const isHerdName = (herd: string) => herd !== "." && herd !== ".." && /^[^/\\]+$/.test(herd);
 
-/**
- * The board, built here for every front door. Anything written under the state
- * directory, by this host or anyone else, is a reason to look again.
- */
+/** The board, built here for every front door. */
 const frontDoorHandlers = (
   dir: string,
   installation: string,
@@ -2650,7 +2682,8 @@ const frontDoorHandlers = (
             ).pipe(Effect.orElseSucceed(() => null));
             return yield* buildRunDetail({ env, runId, runs, mr, tail, pages, plans, flow });
           }).pipe(Effect.provideContext(bun));
-          return followDetail(detail, changed).pipe(Stream.orDie);
+          const own = drawerWrites(env.stateDir, runId).pipe(Stream.provideContext(bun));
+          return followDetail(detail, Stream.merge(changed, own)).pipe(Stream.orDie);
         },
         runFile: ({ runId, ref, offset, length }) =>
           registry.view(runId).pipe(

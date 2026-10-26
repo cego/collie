@@ -11,6 +11,7 @@ import {
   FileSystem,
   Logger,
   Option,
+  Path,
   Queue,
   Schedule,
   Schema,
@@ -21,7 +22,9 @@ import { boardMessages, shareBoard } from "../src/board-stream";
 import { recordDisposition } from "../src/disposition";
 import { currentEnv } from "../src/env";
 import { Herdr } from "../src/herdr";
-import { BUILD, frontDoor, socketOf } from "../src/host";
+import { BUILD, boardWrites, drawerWrites, frontDoor, socketOf } from "../src/host";
+import { handoffsIn } from "../src/handoffs";
+import { followDetail } from "../src/run-detail";
 import { foundationLayer } from "../src/engine";
 import { Store } from "../src/store";
 import { readTask, writeTask } from "../src/task";
@@ -564,4 +567,140 @@ test("a reader that arrives after a change reads a board built after it, not the
         expect(Option.getOrThrow(yield* Stream.runHead(boards))).toBe(1);
       }),
     ).pipe(fastForward),
+  ));
+
+/** A state directory with a Run's files, and the paths its board's watch lets through. */
+const watchedState = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const dir = yield* fs.makeTempDirectoryScoped({
+    prefix: "collie-board-writes-",
+  });
+  const write = (file: string, text = "x\n") =>
+    fs
+      .makeDirectory(path.dirname(`${dir}/${file}`), { recursive: true })
+      .pipe(Effect.andThen(fs.writeFileString(`${dir}/${file}`, text)), Effect.orDie);
+  const append = (file: string) =>
+    fs.writeFileString(`${dir}/${file}`, "more\n", { flag: "a" }).pipe(Effect.orDie);
+  for (const file of [
+    "runs/run-a/handoffs/test.log",
+    "evidence/run-a/verify/v.log",
+    "evidence/run-a/checks/c.log",
+    "compaction/agent-a/questions.jsonl",
+    "compaction/agent-a/events.jsonl",
+    "agents/run-a/step.json",
+    "tasks/task-a.json",
+    "ssh/.made",
+  ])
+    yield* write(file);
+  yield* write("runs/run-a/handoffs/ready", "");
+  const seen = yield* Queue.unbounded<string>();
+  yield* Effect.forkScoped(Stream.runForEach(boardWrites(dir), (path) => Queue.offer(seen, path)));
+  yield* until(() => write("ready").pipe(Effect.andThen(Queue.poll(seen))), Option.isSome);
+  const told = new Set<string>();
+  /** Each path through not told before, readiness left out, once every one of `wanted` is. */
+  const through = (wanted: ReadonlyArray<string>) =>
+    Effect.gen(function* () {
+      const paths = new Set<string>();
+      while (!wanted.every((one) => paths.has(one))) {
+        const written = yield* Queue.take(seen);
+        if (!written.endsWith("ready") && !told.has(written)) paths.add(written);
+      }
+      for (const one of paths) told.add(one);
+      return [...paths].sort();
+    }).pipe(Effect.timeoutOption("2 seconds"));
+  return { dir, write, append, through };
+});
+
+test("no write to the host's own bookkeeping reaches the board", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { write, through } = yield* watchedState;
+      for (const file of [
+        "host.lock",
+        "tasks/task-a.json.lock",
+        "tasks/task-a.json.123.1.tmp",
+        "host.log",
+        "host.log.1",
+        "host.out",
+        "host.out.1",
+        "host.db-wal",
+        "host.db-journal",
+        "ssh/98276eb421de291c",
+        "compaction/agent-a/events.jsonl",
+        "compaction/agent-a/events.lock",
+        "compaction/agent-a/control.json",
+      ])
+        yield* write(file);
+      yield* write("tasks/marker.json");
+      expect(yield* through(["tasks/marker.json"])).toEqual(Option.some(["tasks/marker.json"]));
+    }),
+  ));
+
+test("a log growing in a Run's handoffs or verify logs reaches no board, and a file created there does", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { write, append, through } = yield* watchedState;
+      yield* append("runs/run-a/handoffs/test.log");
+      yield* append("evidence/run-a/verify/v.log");
+      yield* write("tasks/marker.json");
+      expect(yield* through(["tasks/marker.json"])).toEqual(Option.some(["tasks/marker.json"]));
+      const created = ["evidence/run-a/verify/w.log", "runs/run-a/handoffs/new.log"];
+      for (const file of created) yield* write(file);
+      expect(yield* through(created)).toEqual(Option.some(created));
+    }),
+  ));
+
+test("a running check's log, an agent's question and its Output reach the board as they are written", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const { dir, write, append, through } = yield* watchedState;
+      yield* append("evidence/run-a/checks/c.log");
+      yield* append("compaction/agent-a/questions.jsonl");
+      yield* write("agents/run-a/step.json.123.tmp", "{}");
+      yield* fs.rename(`${dir}/agents/run-a/step.json.123.tmp`, `${dir}/agents/run-a/step.json`);
+      const read = [
+        "agents/run-a/step.json",
+        "compaction/agent-a/questions.jsonl",
+        "evidence/run-a/checks/c.log",
+      ];
+      expect(yield* through(read)).toEqual(Option.some(read));
+    }),
+  ));
+
+test("a Run's open drawer lists a handoff's new size while the board's watch lets the write by", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, write, append, through } = yield* watchedState;
+      let listed: ReadonlyArray<{
+        readonly name: string;
+        readonly bytes: number;
+      }> = [];
+      let drawerSaw = false;
+      const changed = boardWrites(dir).pipe(Stream.debounce("200 millis"));
+      const own = drawerWrites(dir, "run-a").pipe(
+        Stream.tap(() => Effect.sync(() => (drawerSaw = true))),
+      );
+      yield* Effect.forkScoped(
+        Stream.runForEach(
+          followDetail(handoffsIn(`${dir}/runs/run-a`), Stream.merge(changed, own)),
+          (files) => Effect.sync(() => (listed = files)),
+        ),
+      );
+      const bytesOf = (name: string) => () =>
+        Effect.sync(() => listed.find((file) => file.name === name)?.bytes ?? 0);
+      // Further apart than the drawer's debounce, which each write would put off again.
+      const followed = append("runs/run-a/handoffs/ready").pipe(
+        Effect.map(() => drawerSaw),
+        Effect.repeat({ until: (saw) => saw, schedule: Schedule.spaced("300 millis") }),
+        Effect.timeoutOption("2 seconds"),
+      );
+      expect(yield* followed).toEqual(Option.some(true));
+      yield* append("runs/run-a/handoffs/test.log");
+      const grown = until(bytesOf("test.log"), (bytes) => bytes === 7);
+      expect(yield* grown.pipe(Effect.timeoutOption("2 seconds"))).toEqual(Option.some(7));
+      yield* write("tasks/marker.json");
+      expect(yield* through(["tasks/marker.json"])).toEqual(Option.some(["tasks/marker.json"]));
+    }),
   ));
