@@ -3,6 +3,9 @@
 // take workers from it, in the order they arrived, so the Machine is never oversubscribed and
 // a small run never waits behind a whole suite.
 
+// FileSystem cannot write to or close a pipe it did not open.
+// oxlint-disable-next-line effecttsgo/node-builtin-import
+import { closeSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { Clock, Duration, Effect, FileSystem, Option, Schema } from "effect";
 import { ensureLockDir, holderLives, processStartTime, withLock } from "../src/lock";
@@ -250,7 +253,8 @@ export const admitted = (
 
 /**
  * Starts `cmd` on the hold, named in it so it counts as long as it runs, and stops it if the
- * scope ends first.
+ * scope ends first. `cmd` runs only once it is named: a runner that dies first closes the
+ * gate it waits on, and it exits instead.
  */
 export const startOnHold = (
   dir: string,
@@ -261,11 +265,11 @@ export const startOnHold = (
   Effect.gen(function* () {
     const child = yield* Effect.acquireRelease(
       Effect.sync(() =>
-        Bun.spawn([...cmd], {
+        Bun.spawn(["sh", "-c", 'read -r go <&3 && exec "$@" 3<&-', "sh", ...cmd], {
           env: { ...options.env, [HOLD_ENV]: id },
           stdio: options.inherit
-            ? ["inherit", "inherit", "inherit"]
-            : ["ignore", "ignore", "ignore"],
+            ? ["inherit", "inherit", "inherit", "pipe"]
+            : ["ignore", "ignore", "ignore", "pipe"],
         }),
       ),
       (child) =>
@@ -280,6 +284,10 @@ export const startOnHold = (
           }
         }),
     );
-    yield* join(dir, id, yield* processOf(child.pid));
+    const gate = child.stdio[3]!;
+    yield* Effect.flatMap(processOf(child.pid), (named) => join(dir, id, named)).pipe(
+      Effect.andThen(Effect.sync(() => writeSync(gate, "go\n"))),
+      Effect.ensuring(Effect.sync(() => closeSync(gate))),
+    );
     return child;
   });

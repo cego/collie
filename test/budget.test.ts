@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
-import { Effect, Fiber, FileSystem } from "effect";
-import { processStartTime, signalProcess } from "../src/lock";
+import { Deferred, Effect, Fiber, FileSystem } from "effect";
+import { processStartTime, signalProcess, withLock } from "../src/lock";
 import {
   admission,
   admitted,
@@ -167,6 +167,60 @@ test(
         yield* Effect.promise(() => held.exited);
         yield* gone(child);
         expect(yield* entriesOf(dir)).toEqual([]);
+      }),
+    ),
+  20_000,
+);
+
+test(
+  "a runner killed while it names its child in the store leaves nothing running on the hold",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const dir = yield* store;
+        const marker = `${dir}/ran`;
+        const one = yield* Effect.acquireRelease(
+          Effect.sync(() =>
+            Bun.spawn(["bun", RUNNER, dir, marker], {
+              stdin: "pipe",
+              stdout: "pipe",
+              stderr: "inherit",
+            }),
+          ),
+          (one) => Effect.sync(() => one.kill("SIGKILL")),
+        );
+        const reader = one.stdout.getReader();
+        yield* Effect.promise(() => reader.read());
+
+        const taken = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const lock = yield* Effect.forkChild(
+          withLock(
+            `${dir}/budget.lock`,
+            Effect.die(new Error("the store's lock could not be taken")),
+            Deferred.succeed(taken, undefined).pipe(Effect.andThen(Deferred.await(release))),
+          ),
+        );
+        yield* Deferred.await(taken);
+        void one.stdin.write("start\n");
+        void one.stdin.end();
+        const child = yield* until(
+          () =>
+            Effect.sync(() => Bun.spawnSync(["pgrep", "-P", String(one.pid)]).stdout.toString()),
+          (out) => out.trim() !== "",
+        ).pipe(Effect.map(Number));
+        yield* Effect.addFinalizer(() => signalProcess(child, "SIGKILL"));
+        one.kill("SIGKILL");
+        yield* Effect.promise(() => one.exited);
+        yield* Deferred.succeed(release, undefined);
+        yield* Fiber.join(lock);
+
+        const [, ran] = yield* until(
+          () => Effect.all([signalProcess(child), fs.exists(marker)]),
+          ([lives, ran]) => !lives || ran,
+        );
+        expect(ran).toBe(false);
       }),
     ),
   20_000,
