@@ -5,6 +5,7 @@
 export type Column = "reading" | "wide" | "full";
 
 const COLUMNS = new Map<string, Column>([
+  ["flow", "full"],
   ["evidence", "wide"],
   ["log", "wide"],
   ["workflows", "full"],

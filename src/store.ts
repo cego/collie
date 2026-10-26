@@ -67,6 +67,8 @@ const Decision = Schema.Struct({
   asker: Schema.NullOr(Schema.String),
   /** Who answered it, settled with the answer so no reader sees one without the other. */
   answerer: Schema.NullOr(Schema.fromJsonString(AuditLine.fields.actor)),
+  asked: Schema.String,
+  answered: Schema.NullOr(Schema.String),
 });
 export type DecisionRow = typeof Decision.Type;
 
@@ -302,14 +304,14 @@ function makeStore(): Effect.Effect<StoreApi, never, SqlClient.SqlClient | React
       Request: Schema.String,
       Result: Decision,
       execute: (run) =>
-        sql`SELECT run, decision, prompt, options, answer, request, asker, answerer FROM collie_decisions WHERE run = ${run} ORDER BY asked, decision`,
+        sql`SELECT run, decision, prompt, options, answer, request, asker, answerer, asked, answered FROM collie_decisions WHERE run = ${run} ORDER BY asked, decision`,
     });
 
     const decisionRow = SqlSchema.findAll({
       Request: Schema.Struct({ run: Schema.String, decision: Schema.String }),
       Result: Decision,
       execute: (key) =>
-        sql`SELECT run, decision, prompt, options, answer, request, asker, answerer FROM collie_decisions WHERE run = ${key.run} AND decision = ${key.decision}`,
+        sql`SELECT run, decision, prompt, options, answer, request, asker, answerer, asked, answered FROM collie_decisions WHERE run = ${key.run} AND decision = ${key.decision}`,
     });
 
     const everyGeneration = SqlSchema.findAll({

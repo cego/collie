@@ -47,6 +47,8 @@ an agent is told, and any input your work really needs stay yours to write.
 `run` is ordinary Effect code. Branches, loops, helpers in other files, parallel work and
 lists you build as you go are TypeScript, and a helper can itself ask an agent, ask a
 human, start a child or branch again: there is no step graph to keep in step with the code.
+A [`path`](#steps-and-the-path-a-run-expects) is a forecast of the Steps a Run expects to
+take, never a precondition, and nothing draws an edge the code did not take.
 
 The host executes `run` as a Run, and the Run is supplied rather than passed:
 `yield* Run` is its `id` and the public id of the workflow it is a Run of, and `agentWork`,
@@ -261,6 +263,13 @@ merge request, for a Clearance like the shipped one's), so a fork keeps a sectio
 `RENOVATE_ON[at.forge].merge.text` and adds its own sentence. `RENOVATE` is still the GitLab
 sections, so a fork written before there were two reads what it read; `asRenovator`
 is who does the work and the `input` every shipped section reads.
+
+`Landing.merge` is called once per Renovate merge request on the same conversation.
+`at.input.merge_request` names that turn's request; `asRenovator` gives later turns
+distinct operations. Keep that scope in a fork's instructions, and return any newly
+opened requests in `Merged.remaining_requests` so each gets its own turn. For an
+application, the approved batch is merged once and each original request is then settled
+against it. The release and record functions are still called once for the repository.
 
 Nothing was added to Collie to make that possible, and nothing needs to be. A workflow
 that wants to be varied takes functions, or takes a service and lets a fork provide a
@@ -1112,6 +1121,59 @@ passes `--detach` because bodil's foreground mode holds until it is stopped, so 
 would never finish. The instance outlives the Run, however it ended, so the human can check
 the change in it; `bodil remote down <name>` takes it down once they are done.
 
+## Steps, and the path a Run expects
+
+A **Step** is a value made where its work is written, the way Prefect declares a task. Its
+metadata is what a reader needs before it runs: an `id`, a `title`, a `description`, its
+`kind` (`agent`, `question`, `workflow` or `check`), its `role`, and what it `produces`
+(`plan`, `review`, `evidence` or `merge-request`). Called around an Effect, it runs that
+Effect unchanged — no retry, timeout or schedule of its own — and records with the host when
+the work enters it and leaves it. An agent's work, a question, a child or a check pass made
+inside it is recorded as the Step's.
+
+```ts
+import { agentWork, ask, defineWorkflow, forecast, step } from "collie";
+
+const build = step({ id: "build", title: "Build it", kind: "agent", role: "implementer" });
+const decide = step({ id: "decide", title: "Ship it?", kind: "question" });
+const slice = step({ id: "slice", title: "Build a slice", kind: "agent" });
+const review = step({ id: "review", title: "Review", kind: "agent", produces: "review" });
+
+export default defineWorkflow({
+  id: "stepped",
+  path: [build, decide, review],
+  run: () =>
+    Effect.gen(function* () {
+      yield* build(agentWork({ operation: "build" /* … */ }));
+      yield* decide(ask({ name: "go", options: ["yes", "no"] }));
+      // Once the Run knows its branch, it may forecast again.
+      yield* forecast([build, slice, review]);
+      yield* Effect.forEach(items, (item) => slice(agentWork({/* … */}), { item, items }));
+      for (const round of [1, 2]) yield* review(agentWork({/* … */}), { round, of: 2 });
+    }),
+});
+```
+
+A call may give its place: `{ item, items }` for one item of a list, which is a
+[Slice](#a-list-of-work-one-item-at-a-time), or `{ round, of }` for a round under its bound.
+Each call is one run of the same Step, so a Step called per item is one node with a run per
+item, and the items it has not reached yet are expected runs.
+
+`path` lists the Steps the Workflow expects to take, in order. A Step is known by its id, so
+two values with one id are one Step, and a path that lists one id twice is refused by the
+definition check. `forecast` replaces the path from there once the Run knows which branch it
+takes; the Steps it drops are no longer drawn. A Step called off the path still runs and is
+drawn after the Step that ran before it, and a path Step the Run never reached ends `not run`.
+The records are Activities, so a replay records nothing twice, and the host is their only
+writer ([ADR-draft-a-step-is-declared-where-its-work-is-written](adr/draft-a-step-is-declared-where-its-work-is-written.md)).
+
+Work that fails in a way a resume can retry parks the Run rather than failing it. Call
+`stepFailed(why)` before parking, and the Step it is in is drawn failed, saying why, until
+the resume enters it again.
+
+A module that declares no Steps still runs. Its Run's Flow is what happened — its Operations,
+questions and children, titled by their names — and forecasts nothing.
+
 ## A list of work, one item at a time
 
 A list is `Effect.forEach` over whatever you enumerated; what Collie adds is the two things
@@ -1400,8 +1462,8 @@ None of it is yours to implement, but it decides where your workflow can be inte
 ## What a definition declares
 
 Beside what it does, a definition says what the workflow _is_, in the same object. None of
-it is consulted by `run`, none of it is a step, and all of it is read without running
-anything — a listing, a card and a launch know it from the definition alone.
+it is consulted by `run`, and all of it is read without running anything — a listing, a
+card, a launch and a Run's Flow know it from the definition alone.
 
 ```ts
 export default defineWorkflow({
@@ -1424,6 +1486,8 @@ export default defineWorkflow({
 });
 ```
 
+- **`path`** is the [Steps it expects to take](#steps-and-the-path-a-run-expects), in
+  order: a forecast the Flow draws, never a precondition.
 - **`agents`** is what the workflow's own work prefers, under anything a Run or a scope
   prefers: [which agent does the work](#which-agent-does-the-work).
 

@@ -75,6 +75,21 @@ Three modes:
 | `now`       | Sent to an agent that is already working.           | A proven `now` for that harness.       |
 | `interrupt` | An interrupt key, then the message.                 | A proven `interrupt` for that harness. |
 
+`run steer <run> --step <step-id> "<words>"` leaves a note for a declared Step,
+including one whose agent has not launched. Its next prompt starts with the note,
+including a prompt made after `run resume`. While that Step's agent is working,
+the host uses a boundary delivery to it. Notes keep their id, author, time, text
+and read time. `run withdraw-note <run> <note-id>` removes an unread note; edit by
+withdrawing it and sending another. A read note is history. A Step that makes no
+prompt leaves its note unread, listed by `run show` even after the Run ends.
+Question Steps take answers rather than notes. A Step already left with no next
+item or round refuses notes and pauses, naming the Step.
+
+`run hold <run> --before <step-id>` arms a pause at that Step's entry, before any
+kind of work. `run release <run> --before <step-id>` disarms it. Once reached,
+plain `run release <run>` continues. Chat's hold/release take `before`, deliver
+takes `step`, and `withdraw_note` takes the note id, with the same rules.
+
 `boundary` is the only one that works everywhere: it goes out as an ordinary prompt, which
 every harness takes, and a busy agent's harness takes it when the turn it is in ends. A
 human's message is about the work under way, so a `deliver` with no mode is `now`. Every

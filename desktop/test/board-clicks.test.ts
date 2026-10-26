@@ -52,6 +52,10 @@ test("Escape finds no overlay and no field on the board", () => {
   expect(escapeOn(null, page(null))).toEqual({ kind: "escape", overlay: false, typing: false });
 });
 
+test("Escape inside an open Flow inspector belongs to the Flow", () => {
+  expect(escapeOn(element(["[data-escape-scope]"]), page(null))).toMatchObject({ overlay: true });
+});
+
 test("Escape finds a dialog, slideover, popover, menu or select open", () => {
   for (const role of [
     '[role="dialog"]',

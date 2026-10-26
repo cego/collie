@@ -57,6 +57,10 @@ export const startedBy = (
   return `Started by ${run.parent} as ${invocation}`;
 };
 
+/** Who did something, in the words a Flow says it: the agent's name, or the front door a human used. */
+export const whoActed = (actor: AuditLine["actor"]): string =>
+  actor.from?.agent ?? STARTED_FROM[actor.origin] ?? actor.origin;
+
 const AuditJson = Schema.fromJsonString(AuditLine);
 const sameJson = Schema.toEquivalence(Schema.Json);
 export const AUDIT_FILE = "operations.jsonl";

@@ -652,12 +652,13 @@ Answer what the wait returned with `run answer <run-id> <option> --decision <nam
 `--follow` streams instead of returning one envelope: one newline-delimited
 `{"type":"status","run":…}` line each time the run's status changes, carrying the same
 `run` object as `run show`, and one line for each other change, with the Run's id as `run`:
-`{"type":"step","operation":…,"agent":…,"state":"started"|"finished"}`,
+`{"type":"operation","operation":…,"agent":…,"state":"started"|"finished"}` for an agent's
+Operation, which a Step may hold several of or none,
 `{"type":"agent","agent":…,"operation":…}` when an agent is launched,
 `{"type":"parked","reason":…}`, `{"type":"awaiting","on":…,"who":…}` when it starts
 waiting for something that comes by itself, `{"type":"mr","mr":…}` when the merge request opens and
 `{"type":"ci","ci":…}` when the forge's pipeline changes state. Without `--json` each is
-one line: `run-1a2b: step 01-a.md finished`, `run-1a2b: parked: …`, `run-1a2b: CI running`. Failures still arrive as a normal envelope — a timeout, or a
+one line: `run-1a2b: operation 01-a.md finished`, `run-1a2b: parked: …`, `run-1a2b: CI running`. Failures still arrive as a normal envelope — a timeout, or a
 run the host could not watch — so a consumer reads each line as JSON and branches on
 whether `type` is present.
 
@@ -665,7 +666,64 @@ whether `type` is present.
 for this Run — `ready`, and `missing[]`, each a `fact` (`succeeded`, `leads`, `mr-open`,
 `not-draft`, `checks`, `ci`, `review` or `mergeable`), what is `said` of it, and whether it
 is `settling`, may still come by itself — or `null` from a host that cannot say. A Run that
-does not lead its Task's card is never ready. Its `run` object carries:
+does not lead its Task's card is never ready. `data.flow` is the **Flow** of the Run's Task,
+the same whichever of its Runs you asked for, and the same value its details carry to
+Desktop: `lanes`, one row per Run of the Task, oldest first, with its `execution`, the
+`startedBy` Run and Step of a child started into the Task, and its `nodes` — each Step's
+`state`, the `wait` holding it up, the one fact line it `said`, its `attempts`, `questions`,
+`ranOn`, the `link` to a child started as a Task of its own and, for a Step called per item
+or round or a fan-out's Repo runs by `wave`, its `runs`; then `current`, the node the
+leading Run's work is at, `null` once the Task has settled; and `release`, the merge
+request's CI, Merged and furthest deploy, `null` until there is one
+([ADR-draft-a-step-is-declared-where-its-work-is-written](adr/draft-a-step-is-declared-where-its-work-is-written.md)).
+A Step's `links` are Runs its agents started, without expanding those Runs' Steps.
+Each node's `usual` is a duration in milliseconds or null until three completed
+calls exist on this Machine for the same Workflow and Step. The median uses the
+last ten calls, counting each item and round separately. `long` is true while a
+running call exceeds twice its usual time. `data.flow.notice` names that current
+Step and its elapsed and usual times; it is null otherwise. These are observations
+and do not change the card's section or sentence.
+
+`pause` records who armed a pause and when, or is null. `notes` holds ids, authors,
+times, text and read times (null until read). Chat and CLI can arm a hold with
+`before`, deliver a note with `step`, or `withdraw_note` before it is read. A
+failed resumable Step also offers `retry-noted`, a note followed by resume.
+Their `link.asOf` is null for live local state, or the last admission or settlement
+notice from a paired Machine. `run.linkNotices` records those deliveries on the started
+Run; human output names undelivered notices. A missed notice is not retried or polled.
+
+Each node's optional `primary` names its first action and `actions` lists the rest,
+without repeating it. A lane's `actions` are its own Run controls. `agent` names the
+latest agent launched in that Step; open `questions` carry their Choice `id`, text
+and options. A supplied forge address is in `url`. These are the same capabilities
+Desktop draws, recomputed on every read. Their state-changing routes are:
+
+| Action                | Route                                                                                      |
+| --------------------- | ------------------------------------------------------------------------------------------ |
+| `retry`, `resume`     | `run resume <run>`; a linked Run's retry names `link.run`                                  |
+| `answer`              | `run answer <run> <value> --decision <questions[].id>`                                     |
+| `proposal`            | `confirm <proposal.id>` or `decline <proposal.id>`                                         |
+| `continue`, `release` | `run release <run>`                                                                        |
+| `hold`, `stop`        | `run hold <run>` or `run stop <run>`                                                       |
+| `tell`                | `run steer <run> --operation <agent> <text>`                                               |
+| `start`               | `run action <run> <offer-id>`                                                              |
+| `follow-up`           | `run actions <run>`, then `run action <run> <follow-up-offer> --input <work-field>=<text>` |
+
+`terminal` addresses `agent` in the inspector's live Terminal, through the bridge's
+existing `focus` route and herdr's pane controller. `open` follows `url`, or opens
+the record named by `link`. A terminal Workflow error has no retry: the engine
+cannot resume it. A resumable failed Step records its failure and parks, keeping
+the completed work before it.
+
+`log` and `evidence` open those inspector parts. A node's `log` is the one-based
+line of its latest run's start marker in `log.txt`; each item or round carries its
+own. `why` holds at most twenty lines of the failing command and output, or the
+failure reason. `evidence` counts the Step's Verifications. Verification records and
+RunDetail's verification list carry optional `step` and `place`, so another Step's
+checks are never presented as this Step's proof. `RunDetail.logStart` is the first
+absolute line in its bounded log tail.
+
+Its `run` object carries:
 
 | Field                                    | What it tells you                                                                                                                                                                                    |
 | ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -747,6 +805,7 @@ Task of its own; a Repo run of a fan-out is its parent's `children` rather than 
 | `check`                   | The check Collie is running for the leading Run, as `collie run checks` gives `running` (with its `log` and `lastLines`), or `null`.                            |
 | `reopened`                | A finished Run whose agent took a steer after it ended: the `delivery`, the `agent`, the first line it was `told` and its `status` now; else `null`.            |
 | `run`, `runs[]`           | The Run a card acts on, and every Run of the Task.                                                                                                              |
+| `flow`                    | The card's **Flow** strip: `glyphs`, the leading Run's then the Release row's, `release`, how many are the Release row's, and `current`, or `null`.             |
 
 A fan-out finds its plan from its work source even where the kind was never recorded with
 its input, as for an implement Run started from a plan's end menu: a plan directory is the
@@ -1539,6 +1598,10 @@ to change the set, or delete it to withdraw it.
 
 ```sh
 collie --json run hold <run-id> [--request-id <id>]
+collie --json run hold <run-id> --before <step-id>
+collie --json run release <run-id> --before <step-id>
+collie --json run steer <run-id> --step <step-id> "check the race first"
+collie --json run withdraw-note <run-id> <note-id>
 collie --json run hold --workspace <workspace-id> [--request-id <id>]
 collie --json run release <run-id> [--request-id <id>]
 ```

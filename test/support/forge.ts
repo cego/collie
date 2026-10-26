@@ -94,6 +94,7 @@ export const FakeMr = Schema.Struct({
   head: Schema.optionalKey(Schema.String),
   /** The revision its pipeline ran on, where that is not its head. */
   pipelineAt: Schema.optionalKey(Schema.String),
+  checksUrl: Schema.optionalKey(Schema.String),
   mergedSha: Schema.optionalKey(Schema.String),
   checks: Schema.optionalKey(Schema.Array(Check)),
   /** Its head pipeline's jobs, the nth with id n; on GitLab its pipeline ran at `pipelineAt`. */
@@ -704,6 +705,7 @@ function glabMrJson(mr: FakeMr) {
             id: pipelineIdOf(mr),
             status: pipeline ?? "running",
             sha: mr.pipelineAt ?? mr.head ?? null,
+            web_url: mr.checksUrl ?? null,
           },
     source_branch: mr.sourceBranch ?? null,
     source_project_id: mr.fork === true ? 7 : 3,
@@ -1132,6 +1134,7 @@ const ghPullNode = (model: ForgeModel, pull: FakeMr) => ({
                     nodes: (pull.checks ?? []).map((check) => ({
                       __typename: "CheckRun",
                       name: check.name,
+                      detailsUrl: pull.checksUrl ?? null,
                       status: check.state === "running" ? "QUEUED" : "COMPLETED",
                       conclusion:
                         check.state === "running"
@@ -1579,6 +1582,7 @@ function gh(model: ForgeModel, args: ReadonlyArray<string>): Answer {
       statusCheckRollup: (pull.checks ?? []).map((check) => ({
         __typename: "CheckRun",
         name: check.name,
+        detailsUrl: pull.checksUrl ?? null,
         status: check.state === "running" ? "QUEUED" : "COMPLETED",
         conclusion:
           check.state === "running" ? null : check.state === "passed" ? "SUCCESS" : "FAILURE",

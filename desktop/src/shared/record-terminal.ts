@@ -148,9 +148,22 @@ export const askedFor = (
   agents: ReadonlyArray<BoardAgent>,
   run: string,
   picked: AgentTab | null,
+  requested?: string,
 ): AgentTab | null => {
+  if (picked !== null) return picked;
+  if (requested !== undefined)
+    return (
+      agentTabs(agents, null).find((one) => one.name === requested) ?? {
+        name: requested,
+        run,
+        label: requested,
+        state: "ended",
+        now: null,
+        shown: false,
+      }
+    );
   const busy = atWork(agents, run);
-  return picked ?? agentTabs(agents, null).find((one) => one.name === busy?.name) ?? null;
+  return agentTabs(agents, null).find((one) => one.name === busy?.name) ?? null;
 };
 
 /**

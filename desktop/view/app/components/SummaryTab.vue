@@ -42,20 +42,6 @@ const sections = computed(() => summaryOf(props.detail));
           <RichMarkdown :text="shown.delivered" />
         </template>
       </section>
-      <section v-else-if="shown.section === 'steps'" data-testid="summary-steps">
-        <h3 class="font-semibold">Steps</h3>
-        <ol class="flex flex-col gap-1">
-          <li v-for="step in shown.steps" :key="step.id" class="flex flex-wrap items-center gap-2">
-            <strong>{{ step.id }}</strong>
-            <UBadge variant="subtle" color="neutral" :label="step.status" />
-            <span v-if="step.note">{{ step.note }}</span>
-            <small v-if="step.took" class="text-muted">{{ step.took }}</small>
-            <small v-if="step.agents.length > 0" class="ml-auto truncate text-muted">
-              {{ step.agents.join(", ") }}
-            </small>
-          </li>
-        </ol>
-      </section>
       <section v-else data-testid="summary-inputs">
         <h3 class="font-semibold">Inputs</h3>
         <p v-for="input in shown.inputs" :key="input.name" class="flex justify-between gap-2">

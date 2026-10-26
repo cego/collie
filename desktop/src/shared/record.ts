@@ -5,6 +5,7 @@ import type { RunDetail } from "../../../src/board-model";
 import type { Target } from "./board-clicks";
 
 export interface TabFacts {
+  readonly flow?: boolean;
   /** Whether the Run's details are loaded; every tab but Log, Terminal and Facts needs them. */
   readonly loaded: boolean;
   readonly plan: boolean;
@@ -26,6 +27,7 @@ export interface Tab {
 export const recordTabs = (facts: TabFacts): Array<Tab> => {
   const loaded = facts.loaded;
   const present: ReadonlyArray<readonly [boolean, Tab]> = [
+    [loaded && facts.flow === true, { label: "Flow", value: "flow" }],
     [loaded, { label: "Summary", value: "summary" }],
     [loaded && facts.plan, { label: "Plan", value: "plan" }],
     [
@@ -171,7 +173,6 @@ export type SummarySection =
       readonly explanation: string;
     }
   | ({ readonly section: "outcome" } & Outcome)
-  | { readonly section: "steps"; readonly steps: RunDetail["steps"] }
   | { readonly section: "inputs"; readonly inputs: RunDetail["inputs"] };
 
 const saysSomething = ({ kind, gaps, obstacle, next, delivered }: Outcome) =>
@@ -187,7 +188,6 @@ export const summaryOf = (detail: SummaryFacts): ReadonlyArray<SummarySection> =
     ...(saysSomething(detail.outcome)
       ? [{ section: "outcome", kind, gaps, obstacle, next, delivered } as const]
       : []),
-    ...(detail.steps.length === 0 ? [] : [{ section: "steps", steps: detail.steps } as const]),
     ...(detail.inputs.length === 0 ? [] : [{ section: "inputs", inputs: detail.inputs } as const]),
   ];
 };

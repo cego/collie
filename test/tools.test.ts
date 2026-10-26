@@ -59,7 +59,13 @@ import { isSettled } from "../src/lifecycle";
 import { appendLog } from "../src/oversight";
 import { readAudit, trimAudit } from "../src/audit";
 import { writeMrStates } from "../src/merges";
-import { FrontDoorRpcs, mrLabel, type Declaration, type FLOCK_READS } from "../src/board-model";
+import {
+  Flow,
+  FrontDoorRpcs,
+  mrLabel,
+  type Declaration,
+  type FLOCK_READS,
+} from "../src/board-model";
 
 const encodeJson = Schema.encodeUnknownSync(Schema.fromJsonString(Schema.Any));
 
@@ -1536,12 +1542,25 @@ test("each answer says who gave it, the newest five are listed, and an unrecorde
       yield* trimAudit(run.dir, 4);
 
       const said = yield* call("collie_run", { run: run.id });
-      expect(said).toContain('- "q6": yes — desktop on mk-laptop at ');
-      expect(said).toContain('- "q5": yes — cli at ');
-      expect(said).toContain('- "q4": yes — board at ');
-      expect(said).toContain('- "q3": yes — chat flock@mk-pc at ');
-      expect(said).toContain('- "q2": yes — who answered is not recorded');
-      expect(said).not.toContain('"q1"');
+      const answered = said.split("### Answered\n\n")[1]!.split("\n\n")[0]!;
+      expect(answered.split("\n")).toHaveLength(5);
+      expect(answered).toContain('- "q6": yes — desktop on mk-laptop at ');
+      expect(answered).toContain('- "q5": yes — cli at ');
+      expect(answered).toContain('- "q4": yes — board at ');
+      expect(answered).toContain('- "q3": yes — chat flock@mk-pc at ');
+      expect(answered).toContain('- "q2": yes — who answered is not recorded');
+      expect(answered).not.toContain('"q1"');
+      const flow = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Flow))(
+        said.split("```json\n")[1]!.split("\n```")[0]!,
+      );
+      expect(flow.lanes[0]!.nodes.map((node) => [node.id, node.state])).toEqual([
+        ["q1", "done"],
+        ["q2", "done"],
+        ["q3", "done"],
+        ["q4", "done"],
+        ["q5", "done"],
+        ["q6", "done"],
+      ]);
     }),
   ));
 

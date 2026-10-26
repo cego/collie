@@ -70,7 +70,7 @@ const optionalText = Schema.optionalKey(Schema.NullOr(Schema.String));
 const optionalFlag = Schema.optionalKey(Schema.NullOr(Schema.Boolean));
 const optionalCount = Schema.optionalKey(Schema.NullOr(Schema.Number));
 const optionalStatus = Schema.optionalKey(
-  Schema.NullOr(Schema.Struct({ status: optionalText, sha: optionalText })),
+  Schema.NullOr(Schema.Struct({ status: optionalText, sha: optionalText, web_url: optionalText })),
 );
 
 const MrFields = Schema.Struct({
@@ -238,12 +238,19 @@ function approvalsLine(
 
 /** A pipeline counts for the head it ran on; its own head pipeline need not say which. */
 function headChecks(
-  pipeline: { readonly status?: string | null; readonly sha?: string | null } | null,
+  pipeline: {
+    readonly status?: string | null;
+    readonly sha?: string | null;
+    readonly web_url?: string | null;
+  } | null,
   head: string,
 ): ForgeChecks {
   if (pipeline === null) return { state: "none" };
-  if (pipeline.sha && head !== "" && pipeline.sha !== head) return { state: "unknown" };
-  return pipelineChecks(pipeline.status ?? "");
+  const checks: ForgeChecks =
+    pipeline.sha && head !== "" && pipeline.sha !== head
+      ? { state: "unknown" }
+      : pipelineChecks(pipeline.status ?? "");
+  return pipeline.web_url ? { ...checks, url: pipeline.web_url } : checks;
 }
 
 /** GitLab's head pipeline status, as the card reads it. */
