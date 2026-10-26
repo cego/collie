@@ -3041,7 +3041,7 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `[ "$1" = "api" ] && echo '{"username":"tester"}'; exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         const plan = yield* planOf([
           { file: "01-first.md", title: "the first one", checks: "unit", body: CRITERIA },
@@ -3093,7 +3093,7 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `[ "$1" = "api" ] && echo '{"username":"tester"}'; exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         const plan = yield* planOf([
           { file: "01-first.md", title: "the first one", checks: "unit", body: CRITERIA },
@@ -3131,7 +3131,7 @@ scenario(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `[ "$1" = "api" ] && echo '{"username":"tester"}'; exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         const big = `${rig.projectDir}/big.bin`;
         yield* fs.writeFileString(big, "");
