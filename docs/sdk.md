@@ -1464,8 +1464,11 @@ into a blocking finding against the ticket; an `after merge` answer is neither.
 shipped `implement` names in its merge request as not settled by the Run. `answerFor(criterion, answers)` is the
 answer a criterion has: one to its whole wording, where a copy that dropped the criterion's
 formatting still counts, so an answer to earlier wording does not answer an amended criterion. Shipped
-`implement` hands what is unmet back to the builder before any reviewer is launched, twice at
-most, and stops the work if any is still unmet, so no reviewer starts on it. A text work
+`implement` hands what is unmet back to the builder before any reviewer is launched, and
+stops the work if any is still unmet after two hand-backs, so no reviewer starts on it. A
+hand-back that leaves the head and fingerprint unchanged and reports a blocking finding is
+asked about instead (`<ticket>.criteria-stalled-<n>`): `Hand back` reads the ticket again and,
+if any criterion is still unmet, hands it back with two tries fresh; `Stop` stops the work. A text work
 source's criteria are its own checkboxes; a Linear issue's are read from `plan/SPEC.md`, the
 copy of its description the builder makes, and a copy that cannot be read stops the work. The reviewer's prompt
 shows every criterion, its answer and the builder's assumptions. A workflow that never reads

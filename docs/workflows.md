@@ -105,7 +105,12 @@ at most four review and fix rounds. Every commit is pushed, so the reviewers rea
 rather than the state before it. Before any reviewer sees a ticket, each of its acceptance
 criteria needs an answer, and one left unanswered or not met goes back to the builder. The
 criteria are read from the ticket again before each hand-back, so a ticket the planner
-amended is judged as it reads now. A ticket's `## After merge` outcomes are not criteria:
+amended is judged as it reads now. A ticket goes back twice at most, unless a hand-back leaves
+the tree as it found it and reports a blocking finding: another could not move that
+blocker, so the Run asks instead. The question names the ticket, the blockers and the
+criteria still unmet. **Hand back** reads the ticket again, goes on with no builder turn if
+nothing is unmet any more, and otherwise hands it back with two tries fresh. **Stop** fails
+the Run with that reason, before any review. A ticket's `## After merge` outcomes are not criteria:
 the merge request names them under **Not settled by the run**. A criterion only CI, a merge
 or a deploy can show may be answered `after merge: <reason>`: it does not end the Run, the
 reviewer blocks one the Run could have shown, and the merge request names the ticket, the

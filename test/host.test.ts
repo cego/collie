@@ -726,6 +726,24 @@ const notedIn = (notes: string, file: string) =>
     Effect.orElseSucceed((): ReadonlyArray<string> => []),
   );
 
+/** The leader pid of each running check the host has recorded, its temp files aside. */
+const recordedLeaders = (state: string) =>
+  FileSystem.FileSystem.pipe(
+    Effect.flatMap((fs) =>
+      fs.readDirectory(runningChecksDir(state)).pipe(
+        Effect.map((names) => names.filter((name) => name.endsWith(".json"))),
+        Effect.flatMap((names) =>
+          Effect.forEach(names, (name) =>
+            fs
+              .readFileString(`${runningChecksDir(state)}/${name}`)
+              .pipe(Effect.map((text): number => JSON.parse(text).leader.pid)),
+          ),
+        ),
+      ),
+    ),
+    Effect.orElseSucceed((): ReadonlyArray<number> => []),
+  );
+
 /** Lets the held check end, waits for its Run to complete, and gives back its verifications. */
 const releasedOnce = (state: string, runId: string, notes: string) =>
   Effect.scoped(
@@ -793,11 +811,16 @@ test.skipIf(process.platform !== "linux")(
         yield* Effect.addFinalizer(() => stopHost(state).pipe(Effect.ignore));
         expect(restarted.running).toEqual([false, false]);
 
-        yield* until(
+        const [, rerun] = yield* until(
           () => notedIn(notes, "starts"),
           (pids) => pids.length === 2,
         );
-        expect(yield* recordedChecks(state, 1)).toHaveLength(1);
+        // The host records a check only once it has spawned it and read its leader.
+        const leaders = yield* until(
+          () => recordedLeaders(state),
+          (pids) => pids.includes(Number(rerun)),
+        );
+        expect(leaders).toEqual([Number(rerun)]);
         expect(yield* notedIn(notes, "overlaps")).toEqual([]);
         expect(yield* releasedOnce(state, runId, notes)).toHaveLength(1);
       }),
