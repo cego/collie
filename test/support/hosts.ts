@@ -37,6 +37,9 @@ const makeRoot = () => {
   process.env.HOME = join(root, "home");
   mkdirSync(process.env.HOME);
   writeFileSync(join(process.env.HOME, ".bunfig.toml"), testBunfig);
+  // Git 2.47+ detaches the maintenance a commit starts, which writes into a test's repository
+  // while the test removes it.
+  writeFileSync(join(process.env.HOME, ".gitconfig"), "[maintenance]\n\tauto = false\n");
 };
 makeRoot();
 process.env.COLLIE_HOST_WATCH_PID = String(process.pid);

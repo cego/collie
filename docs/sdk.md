@@ -625,6 +625,9 @@ as the Run's own, so read `place` again after it rather than keeping `place.cwd`
 `{ cwd, branch }`, or `{ refused }` in the resolver's own words where the target has no
 branch to work on; asking again answers from the record. Take it inside an `Activity`, so a
 replay does not cut a second checkout. Shipped `review` takes it before its own fixer starts.
+`host.reviewedBranch(runId)` answers `{ branch }`, or the `{ refused }` the checkout would
+give, by the same resolution, and cuts and records nothing; shipped `review` asks it before
+its first menu, so a fix that cannot run is not offered.
 
 `place.dir` is where what a Run produces belongs, and where the things that read a Run look:
 a plan's tickets under `plan/issues/`, a review's prose in `review.md` and its findings in

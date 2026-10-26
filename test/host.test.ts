@@ -599,6 +599,21 @@ const heldCheck = `${root}test/fixtures/checks/held.sh`;
  * `watch`, then ends the host with `end`. Gives back the check's two processes, each with
  * its start token, once the host's pid is gone.
  */
+/** The check records in `state` once there are at least `least`. */
+const recordedChecks = (state: string, least: number) =>
+  FileSystem.FileSystem.pipe(
+    Effect.flatMap((fs) =>
+      until(
+        () =>
+          fs.readDirectory(runningChecksDir(state)).pipe(
+            Effect.map((files) => files.filter((file) => file.endsWith(".json"))),
+            Effect.orElseSucceed((): ReadonlyArray<string> => []),
+          ),
+        (files) => files.length >= least,
+      ),
+    ),
+  );
+
 const endsWithAHeldCheck = <R>(
   watch: string,
   end: (host: { readonly state: string; readonly pid: number }) => Effect.Effect<void, never, R>,
@@ -643,6 +658,8 @@ const endsWithAHeldCheck = <R>(
     const check = yield* Effect.forEach([yield* pidIn("starts"), yield* pidIn("children")], (pid) =>
       Effect.map(startedOf(pid), (started) => ({ pid, started: started ?? "" })),
     );
+    // The host records a check only after its child has started.
+    yield* recordedChecks(state, 1);
     // Released for whatever this did not end, so nothing outlives the test.
     yield* Effect.addFinalizer(() =>
       fs.writeFileString(`${notes}/release`, "").pipe(Effect.ignore),
