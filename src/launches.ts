@@ -3,6 +3,7 @@
 
 import { DateTime, Effect, FileSystem, Schema } from "effect";
 import { RanOn, type RunAgent, type RunStep } from "./board-model";
+import { ClaudeSubagents } from "./subagents";
 
 export const AgentSession = Schema.Struct({ kind: Schema.String, value: Schema.String });
 export type AgentSession = typeof AgentSession.Type;
@@ -33,6 +34,7 @@ export const Launched = Schema.Struct({
   harness: Schema.String,
   model: Schema.optionalKey(Schema.String),
   effort: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  claudeSubagents: Schema.optionalKey(ClaudeSubagents),
   /** When it was given this work, on the clock its harness's telemetry is stamped with. */
   at: Schema.optionalKey(Schema.Number),
   /** Which agent of this work it is: past 1, one that took over from an agent that ran out. */

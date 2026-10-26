@@ -15,6 +15,7 @@ export {
   knownModel,
   modelHint,
   preferencesIn,
+  preferencesFromOptions,
   ceilingIn,
   foldPreferences,
   resolveChoice,

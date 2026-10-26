@@ -6,6 +6,7 @@ import { Option, Schema } from "effect";
 import { GITLAB_HOST, isHostName } from "./gitlab-token";
 import { NOTIFICATION_KINDS } from "./notify";
 import { parseProfile } from "./profile";
+import { parseSubagents } from "./subagents";
 import { isString } from "./schema";
 
 /**
@@ -323,6 +324,12 @@ export const SETTINGS: ReadonlyArray<Setting> = [
     description:
       'Per role, or "*" for any role without its own: env for every harness, a value or {"file": "<0600 path>"}, and claude settings merged into Collie\'s own. Empty launches agents as Collie always has.',
   }),
+  of("claude_subagents", "json", "", {
+    group: "Agents",
+    label: "Claude subagents",
+    description:
+      "Claude's nested agents: enabled, model, forceModel, cacheTtl (5m or 1h), maxDepth and maxConcurrent. Empty keeps native behavior.",
+  }),
   of("max_iterations", "number", String(D.maxIterations), {
     group: "Runs",
     label: "Rounds of review",
@@ -449,8 +456,8 @@ export function parseSetting(
       return { value: items.length === 0 ? null : items };
     }
     case "json": {
-      const profile = parseProfile(said);
-      return "refused" in profile ? profile : { value: said };
+      const parsed = key === "claude_subagents" ? parseSubagents(said) : parseProfile(said);
+      return "refused" in parsed ? parsed : { value: said };
     }
     case "text": {
       if (key === "claude_auto_compact_window") {

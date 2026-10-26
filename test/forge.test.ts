@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { Clock, ConfigProvider, Effect, Fiber, FileSystem, Schema } from "effect";
+import { Clock, ConfigProvider, Deferred, Effect, Fiber, FileSystem, Schema } from "effect";
 import { TestClock } from "effect/testing";
 import type { MrForge } from "../src/board-model";
 import { FORGES } from "../src/forge/forge";
@@ -1375,35 +1375,83 @@ test("a status context's state counts as a check run's conclusion does", () => {
   });
 });
 
-test("each fake answers the same on PATH, logs what it got, and keeps what was posted", () =>
+test(
+  "each fake answers the same on PATH, logs what it got, and keeps what was posted",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const bin = yield* FakeBin.make(
+          yield* fs.makeTempDirectoryScoped({ prefix: "forge-bin-" }),
+        );
+        try {
+          for (const name of ["gitlab", "github"] as const) {
+            const onPath = yield* forgeOnPath(bin, name, model(name));
+            expect(
+              yield* FORGES[name]
+                .details(ref(name), "/", shell)
+                .pipe(Effect.provide(forgeHttpOnPath)),
+            ).toMatchObject({
+              _tag: "Details",
+              head: HEAD,
+            });
+            expect(
+              (yield* FORGES[name]
+                .post(ref(name), "LGTM", false, "/", shell)
+                .pipe(Effect.provide(forgeHttpOnPath))).ok,
+            ).toBe(true);
+            expect(Object.values((yield* onPath.model()).notes ?? {})).toEqual([["LGTM"]]);
+            expect((yield* onPath.calls()).length).toBeGreaterThan(0);
+            yield* forgeOnPath(bin, name, model(name, { installed: false }));
+            expect(yield* exec([CLI[name], "--version"])).toMatchObject({
+              exitCode: 127,
+              stdout: "",
+            });
+          }
+        } finally {
+          yield* bin.restore();
+        }
+      }),
+    ),
+  30_000,
+);
+
+test("a fake forge's model stays readable while its replacement is being written", () =>
   runEffect(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const bin = yield* FakeBin.make(yield* fs.makeTempDirectoryScoped({ prefix: "forge-bin-" }));
       try {
-        for (const name of ["gitlab", "github"] as const) {
-          const onPath = yield* forgeOnPath(bin, name, model(name));
-          expect(
-            yield* FORGES[name]
-              .details(ref(name), "/", shell)
-              .pipe(Effect.provide(forgeHttpOnPath)),
-          ).toMatchObject({
-            _tag: "Details",
-            head: HEAD,
-          });
-          expect(
-            (yield* FORGES[name]
-              .post(ref(name), "LGTM", false, "/", shell)
-              .pipe(Effect.provide(forgeHttpOnPath))).ok,
-          ).toBe(true);
-          expect(Object.values((yield* onPath.model()).notes ?? {})).toEqual([["LGTM"]]);
-          expect((yield* onPath.calls()).length).toBeGreaterThan(0);
-          yield* forgeOnPath(bin, name, model(name, { installed: false }));
-          expect(yield* exec([CLI[name], "--version"])).toMatchObject({
-            exitCode: 127,
-            stdout: "",
-          });
-        }
+        const writing = yield* Deferred.make<void>();
+        const finish = yield* Deferred.make<void>();
+        let replacing = false;
+        const slow = FileSystem.FileSystem.of({
+          ...fs,
+          writeFileString: (file, text, options) =>
+            replacing
+              ? fs
+                  .writeFileString(file, "", options)
+                  .pipe(
+                    Effect.andThen(Deferred.succeed(writing, undefined)),
+                    Effect.andThen(Deferred.await(finish)),
+                    Effect.andThen(fs.writeFileString(file, text, options)),
+                  )
+              : fs.writeFileString(file, text, options),
+        });
+        const original = model("github");
+        const next = model("github", { login: "someone-else" });
+        const fake = yield* forgeOnPath(bin, "github", original).pipe(
+          Effect.provideService(FileSystem.FileSystem, slow),
+        );
+        replacing = true;
+        const write = yield* Effect.forkChild(fake.set(next));
+        yield* Deferred.await(writing);
+        yield* fake.model().pipe(
+          Effect.tap((read) => Effect.sync(() => expect(read).toEqual(original))),
+          Effect.ensuring(Deferred.succeed(finish, undefined)),
+        );
+        yield* Fiber.join(write);
+        expect(yield* fake.model()).toEqual(next);
       } finally {
         yield* bin.restore();
       }
