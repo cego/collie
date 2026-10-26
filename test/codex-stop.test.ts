@@ -154,6 +154,8 @@ const Event = Schema.Struct({
   params: Schema.optionalKey(Schema.Unknown),
   pid: Schema.optionalKey(Schema.Number),
   child: Schema.optionalKey(Schema.Number),
+  turn: Schema.optionalKey(Schema.String),
+  thread: Schema.optionalKey(Schema.String),
 });
 const decodeEvent = Schema.decodeUnknownSync(Schema.fromJsonString(Event));
 const events = () =>
@@ -295,21 +297,36 @@ test("a continuation queued behind an interrupted turn never starts", () =>
     }),
   ));
 
-test("a continuation that started before the server took its drain is interrupted too", () =>
-  runEffect(
-    Effect.gen(function* () {
-      yield* working({ continuation: true, lateDrain: true });
-      expect(yield* halted()).toEqual({ stopped: [agent], left: [] });
-      const atStop = yield* sizeOf(written());
-      yield* aWhile;
-      expect(yield* sizeOf(written())).toBe(atStop);
-      const interrupts = (yield* events()).filter((one) => one.method === "turn/interrupt");
-      expect(interrupts.map((one) => one.params)).toEqual([
-        { threadId: THREAD, turnId: TURN },
-        { threadId: THREAD, turnId: `${TURN}-continued` },
-      ]);
-    }),
-  ));
+const Turn = Schema.Struct({ threadId: Schema.String, turnId: Schema.String });
+const decodeTurn = Schema.decodeUnknownSync(Turn);
+const byTurn = (a: typeof Turn.Type, b: typeof Turn.Type) =>
+  `${a.threadId} ${a.turnId}`.localeCompare(`${b.threadId} ${b.turnId}`);
+
+test.each([1, 2])(
+  "a continuation that started before the server took its drain is interrupted too, the drain landing after interrupt %i",
+  (lateDrain) =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* working({ continuation: true, lateDrain });
+        expect(yield* halted()).toEqual({ stopped: [agent], left: [] });
+        const atStop = yield* sizeOf(written());
+        yield* aWhile;
+        expect(yield* sizeOf(written())).toBe(atStop);
+        const all = yield* events();
+        const interrupted = all
+          .filter((one) => one.method === "turn/interrupt")
+          .map((one) => decodeTurn(one.params));
+        const begun = all
+          .filter((one) => one.turn !== undefined)
+          .map((one) => decodeTurn({ threadId: one.thread, turnId: one.turn }));
+        expect(interrupted.slice(0, 2)).toEqual([
+          { threadId: THREAD, turnId: TURN },
+          { threadId: THREAD, turnId: `${TURN}-continued` },
+        ]);
+        expect(interrupted.toSorted(byTurn)).toEqual(begun.toSorted(byTurn));
+      }),
+    ),
+);
 
 test("a process left in the server's session gets one SIGTERM and ends", () =>
   runEffect(
