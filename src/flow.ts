@@ -209,20 +209,26 @@ export function laneOf(facts: LaneFacts): FlowLane {
         one.attempts.push({ at: entry.at, cause: entry.cause });
 
   const declared = forecasts.length > 0 || runs.size > 0;
+  // A launch from before its Run recorded Steps names no Step: it is the Step its Run
+  // replayed under the same key.
+  const stepKeyOf = (launch: Launched) =>
+    launch.step?.key ?? (runs.has(launch.operation) ? launch.operation : undefined);
   const keyOfLaunch = new Map<string, string>();
-  for (const { launch } of facts.launches)
-    if (launch.step !== undefined) keyOfLaunch.set(launch.operation, launch.step.key);
+  for (const { launch } of facts.launches) {
+    const key = stepKeyOf(launch);
+    if (key !== undefined) keyOfLaunch.set(launch.operation, key);
+  }
   const questionKey = (name: string) => {
     const asker = askerOf(name);
     return questionIn.get(name) ?? (asker === null ? undefined : keyOfLaunch.get(asker));
   };
 
   const ranOnFor = (key: string) => {
-    const last = facts.launches.findLast(({ launch }) => launch.step?.key === key);
+    const last = facts.launches.findLast(({ launch }) => stepKeyOf(launch) === key);
     return last === undefined ? null : ranOn(agentOf(last.launch));
   };
   const agentFor = (key: string) =>
-    facts.launches.findLast(({ launch }) => launch.step?.key === key)?.launch.agent ?? null;
+    facts.launches.findLast(({ launch }) => stepKeyOf(launch) === key)?.launch.agent ?? null;
   const questionsFor = (key: string) =>
     facts.questions.filter((one) => questionKey(one.name) === key);
   const placeKey = (place: StepPlace | null | undefined) =>

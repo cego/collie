@@ -59,6 +59,7 @@ import { runEffect } from "./support/effect";
 import { madeRun } from "./support/records";
 import { collie, proves } from "./support/world";
 import { stopHost, until } from "./support/host";
+import { Launched } from "../src/launches";
 import { epochMs } from "../src/time";
 import { seedIntent, writeIntent } from "../src/intent";
 import { approvedFile, encodeApproved } from "../src/verify-spec";
@@ -2836,6 +2837,48 @@ const boardAndFlows = Effect.fn("board.boardAndFlows")(function* (
 
 const BUILD = declared("build");
 const SHIP = declared("ship", { produces: "merge-request" });
+
+const encodeLaunch = Schema.encodeSync(Schema.fromJsonString(Launched));
+
+test("a launch from before a Run's Steps is drawn as the Step it was, once", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const { dir, env } = yield* scratch();
+      const run = yield* madeRun(dir, { task: "task-1" });
+      yield* launched(dir, run.id, ["grill", "spec"]);
+      for (const operation of ["grill", "spec"])
+        yield* fs.writeFileString(
+          `${dir}/agents/${run.id}/${operation}.launch.json`,
+          encodeLaunch({
+            agent: `${run.id}-${operation}-r1`,
+            output: `${dir}/agents/${run.id}/${operation}.json`,
+            reused: false,
+            runId: run.id,
+            operation,
+            role: "planner",
+            workflow: "plan",
+            harness: "claude",
+            model: "opus",
+            at: epochMs("2026-09-14T08:00:00Z"),
+          }),
+        );
+      const grill = declared("grill", { title: "Grill" });
+      yield* stepsRecorded(run, [grill, BUILD], [{ step: grill, left: true }]);
+      const { flow } = yield* boardAndFlows(env, [run]);
+      const nodes = flow("task-1").lanes[0]!.nodes;
+      expect(nodes.map((node) => node.id).toSorted((a, b) => a.localeCompare(b))).toEqual([
+        "build",
+        "grill",
+        "spec",
+      ]);
+      expect(nodes.find((node) => node.id === "grill")).toMatchObject({
+        title: "Grill",
+        agent: `${run.id}-grill-r1`,
+        ranOn: "claude/opus",
+      });
+    }),
+  ));
 
 /** A Run in its Build Step, held up by whatever `setUp` does to it. */
 const waitingIn = (
