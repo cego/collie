@@ -503,6 +503,15 @@ and are retried on the next link-up. Development checkouts never take part.
 the rest. Nothing else in the program shells out to `herdr` or opens that socket. That is
 what makes the fake herdr in `test/support/` enough to test everything above it.
 
+A process a test starts still runs a real executable at `HERDR_BIN_PATH` for every call, so
+the argv, stdout, stderr and exit code still cross a process boundary. That executable is
+only a forwarder (`test/support/forwarder.ts`): it hands its argv and environment over a
+unix socket to the test process, which answers with the same fake core the in-process fake
+uses (`test/support/forwarding.ts`). The fake forge's executable on `PATH` is the same
+forwarder. With no test process listening, as for a host that outlived its test, the
+forwarder prints nothing, names the socket on stderr and exits 70: it never answers on its
+own.
+
 One thing outside the program does run a herdr binary: `tools/herdr-schema.ts` downloads a
 named release and asks it to print its bundled schema. It is the exception the invariant
 can afford, because it is not talking to the session — no `HERDR_BIN_PATH`, no socket, no
@@ -1454,7 +1463,7 @@ that environment. A test that needs herdr sets up the fake under `test/support/`
 `test/isolation.test.ts` fails if the live socket or home gets through.
 
 `bun run test` (`tools/test.ts`) takes the per-user suite lock, then compiles `collie` the
-way a release does, and the fake herdr the same way, into `.scratch/test-bin/`, and runs the suite with
+way a release does, and the fakes' forwarder the same way, into `.scratch/test-bin/`, and runs the suite with
 `COLLIE_TEST_BINARY` and `COLLIE_TEST_FAKE_HERDR` naming them: the suite starts well over a
 thousand hosts, commands and herdr calls, and a bytecode build starts in a fraction of the
 time the sources take to load. A fixture's own Config provider carries that binary choice,
@@ -1562,8 +1571,9 @@ its time.
 
 - **A test starts a process.** Each start costs the Machine, and an endpoint sensor more
   again. `bun run test` sets `COLLIE_TEST_STARTS` to a fresh file, and the compiled
-  `collie`, fake herdr and fake forge each append a line naming themselves and what they
-  were asked, such as `herdr agent list` or `collie host` (`src/starts.ts`). The suite
+  `collie` and each call of the fake herdr and fake forge append a line naming themselves
+  and what they were asked, such as `herdr agent list` or `collie host` (`src/starts.ts`);
+  a fake's line is written by the test process that answers it. The suite
   ends with `test: <N> processes started` and the ten largest sources. The count leaves
   out what never reaches those entry points: `collie` running as bun under `BUN_BE_BUN`,
   real `git`, `ps` and `sleep`, the `sh` shims and stubs, and the fake `ssh` and the
@@ -1595,13 +1605,13 @@ its time.
 - **A fixture runs a command.** `test/support/command.ts` uses asynchronous `Bun.spawn`,
   drains stdout and stderr together, and closes the process group when its scope ends.
   A nonzero exit remains visible; an interrupted fixture cannot leave its child running.
-  The fake herdr CLI provides only its filesystem and path services, while using the
-  same core as the in-process fake.
-  The forge CLI fake is compiled once too, as `COLLIE_TEST_FAKE_FORGE`; it provides only
-  its filesystem service and keeps the same model, call log and exit codes. An isolated
-  world's environment carries that executable through its Config provider. A focused
-  `bun test` still runs its sources with this process's Bun executable, without needing
-  `bun` on the fixture's PATH.
+  The fake herdr's and fake forge's executable is one forwarder, compiled once and named by
+  both `COLLIE_TEST_FAKE_HERDR` and `COLLIE_TEST_FAKE_FORGE`. The test process answers each
+  call with the fake's core, under the caller's environment and with only filesystem, path
+  and that environment as Config, so it keeps the same state, model, call log and exit
+  codes. An isolated world's environment carries that executable through its Config
+  provider. A focused `bun test` still runs the forwarder's source with this process's Bun
+  executable, without needing `bun` on the fixture's PATH.
 - **A test can go red.** Break `src/` the way its name says and watch it fail before relying
   on it. A test that cannot fail, or whose every failure another test already has, is
   deleted.

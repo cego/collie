@@ -3,8 +3,9 @@
 // A test that starts a host, runs a command or answers as herdr starts a process, and the
 // suite starts well over a thousand. From the sources each one spends most of a second
 // loading modules; compiled to bytecode it is a fraction of that. So this builds `collie`
-// the way a release does and both CLI fakes the same way, then runs the suite with
-// `COLLIE_TEST_BINARY`, `COLLIE_TEST_FAKE_HERDR` and `COLLIE_TEST_FAKE_FORGE` naming them.
+// the way a release does and the fakes' forwarder the same way, then runs the suite with
+// `COLLIE_TEST_BINARY`, and `COLLIE_TEST_FAKE_HERDR` and `COLLIE_TEST_FAKE_FORGE` both
+// naming the forwarder.
 // `bun test <file>` on its own still runs the sources, which is the quicker loop for one file.
 //
 // A suite that was killed left its files' roots, and maybe processes carrying their marker:
@@ -22,7 +23,6 @@
 import { availableParallelism, tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { BunRuntime, BunServices } from "@effect/platform-bun";
-import solidPlugin from "@opentui/solid/bun-plugin";
 import { Effect, FileSystem } from "effect";
 import { budgetOf, startOnHold, STORE as store } from "./budget";
 import {
@@ -57,19 +57,11 @@ const build = (out: string) =>
       },
     ).exited,
     Bun.build({
-      entrypoints: ["test/support/fake-herdr.ts"],
-      target: "bun",
-      plugins: [solidPlugin],
-      bytecode: true,
-      format: "esm",
-      compile: { outfile: `${out}/fake-herdr` },
-    }).then((result) => (result.success ? 0 : 1)),
-    Bun.build({
-      entrypoints: ["test/support/forge-bin.ts"],
+      entrypoints: ["test/support/forwarder.ts"],
       target: "bun",
       bytecode: true,
       format: "esm",
-      compile: { outfile: `${out}/fake-forge` },
+      compile: { outfile: `${out}/fake-forward` },
     }).then((result) => (result.success ? 0 : 1)),
   ]);
 
@@ -120,8 +112,8 @@ const suite = (targeted: boolean, since: number) => {
             env: {
               ...suiteEnv(),
               COLLIE_TEST_BINARY: `${out}/collie`,
-              COLLIE_TEST_FAKE_HERDR: `${out}/fake-herdr`,
-              COLLIE_TEST_FAKE_FORGE: `${out}/fake-forge`,
+              COLLIE_TEST_FAKE_HERDR: `${out}/fake-forward`,
+              COLLIE_TEST_FAKE_FORGE: `${out}/fake-forward`,
               COLLIE_TEST_STARTS: starts,
             },
             inherit: true,

@@ -1,31 +1,75 @@
 // Fake herdr. Records every invocation and answers with canned ids so a whole
 // run can be driven without a herdr server.
 
+import * as BunFileSystem from "@effect/platform-bun/BunFileSystem";
+import * as BunPath from "@effect/platform-bun/BunPath";
 import {
   Cause,
   Clock,
   Config,
+  ConfigProvider,
   Effect,
   FileSystem,
+  Layer,
   Option,
   Path,
   Schedule,
   Schema,
   Semaphore,
 } from "effect";
+import { recordStart } from "../../src/starts";
+import { forwarding } from "./forwarding";
 
 const FAKE_CLIENT_VERSION = "herdr 0.9.0";
 
-/** How a shim runs the fake: what `bun run test` compiled of it, or else its source. */
-const fakeHerdrCommand = (source: string) =>
-  Bun.env.COLLIE_TEST_FAKE_HERDR ?? `${process.execPath} ${source}`;
-
-export const writeFakeHerdrShim = (bin: string, source: string) =>
-  Effect.flatMap(FileSystem.FileSystem, (fs) =>
-    fs.writeFileString(bin, `#!/bin/sh\nexec ${fakeHerdrCommand(source)} "$@"\n`, {
-      mode: 0o755,
-    }),
+/** One call of the fake herdr's executable, answered here in the environment it started in. */
+const herdrCall = (args: string[], env: Record<string, string>) =>
+  Effect.gen(function* () {
+    yield* recordStart("herdr", args);
+    const fs = yield* FileSystem.FileSystem;
+    const exists = (file: string) => fs.exists(file).pipe(Effect.orElseSucceed(() => false));
+    const whileExists = (file: string) =>
+      exists(file).pipe(
+        Effect.repeat({ while: (there) => there, schedule: Schedule.spaced("50 millis") }),
+      );
+    const [command, subcommand] = args;
+    const workspaceList = command === "workspace" && subcommand === "list";
+    // A `workspace list` waits while this file exists, once as many calls as it holds have passed.
+    const lists = env.FAKE_HERDR_HOLD_WORKSPACE_LIST;
+    const passing =
+      lists !== undefined && workspaceList && (yield* exists(lists))
+        ? Number(yield* Effect.orDie(fs.readFileString(lists)))
+        : null;
+    if (lists !== undefined && passing !== null && passing > 0)
+      yield* Effect.orDie(fs.writeFileString(lists, String(passing - 1)));
+    // A `workspace list` fails while this file exists, as a herdr that does not answer.
+    const down = env.FAKE_HERDR_DOWN;
+    if (down !== undefined && workspaceList && (yield* exists(down)))
+      return { code: 1, stdout: "", stderr: "herdr is not running\n" };
+    // A `pane list` waits while this file exists, so a test can hold an action mid-way.
+    const hold = env.FAKE_HERDR_HOLD_PANE_LIST;
+    if (hold !== undefined && command === "pane" && subcommand === "list") yield* whileExists(hold);
+    if (lists !== undefined && passing === 0) yield* whileExists(lists);
+    return yield* fakeHerdr(args, env, env);
+  }).pipe(
+    Effect.provide(
+      Layer.mergeAll(
+        BunFileSystem.layer,
+        BunPath.layer,
+        ConfigProvider.layer(ConfigProvider.fromEnv({ env })),
+      ),
+    ),
   );
+
+/** The fake herdr at `bin`, for the processes a test spawns: its calls are answered here. */
+export const writeFakeHerdrShim = (bin: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const line = yield* forwarding(Bun.env.COLLIE_TEST_FAKE_HERDR ?? "", ["herdr"], (argv, env) =>
+      herdrCall(argv.slice(1), env),
+    );
+    yield* fs.writeFileString(bin, `#!/bin/sh\n${line}\n`, { mode: 0o755 });
+  });
 
 interface FakeTab {
   tab_id: string;
@@ -273,6 +317,8 @@ const turn = Semaphore.makeUnsafe(1);
 export function fakeHerdr(
   argv: string[],
   environment: Readonly<Record<string, string | undefined>> = {},
+  /** The environment of the process the fake stands in, read where `environment` has no value. */
+  processEnv: Readonly<Record<string, string | undefined>> = Bun.env,
 ): Effect.Effect<FakeResult, never, FileSystem.FileSystem | Path.Path> {
   return turn.withPermits(1)(
     Effect.gen(function* () {
@@ -281,10 +327,10 @@ export function fakeHerdr(
       const log =
         environment.FAKE_HERDR_LOG ??
         (yield* Config.String("FAKE_HERDR_LOG").pipe(
-          Config.withDefault(Bun.env.FAKE_HERDR_LOG ?? ""),
+          Config.withDefault(processEnv.FAKE_HERDR_LOG ?? ""),
           Effect.orElseSucceed(() => ""),
         ));
-      if (log === "") return yield* handle(argv, environment);
+      if (log === "") return yield* handle(argv, environment, processEnv);
       // The same turn across processes: the host and the test each spawn this, and two
       // edits of the state file at once lose one of them — an agent just started, say.
       // ponytail: a lock left by a killed call is waited out for ~2 s, then taken over.
@@ -297,7 +343,7 @@ export function fakeHerdr(
             Effect.retry({ times: 1_000, schedule: Schedule.spaced("2 millis") }),
             Effect.ignore,
           ),
-        () => handle(argv, environment),
+        () => handle(argv, environment, processEnv),
         () => fs.remove(lock, { recursive: true }).pipe(Effect.ignore),
       );
     }),
@@ -307,6 +353,7 @@ export function fakeHerdr(
 function handle(
   argv: string[],
   environment: Readonly<Record<string, string | undefined>>,
+  processEnv: Readonly<Record<string, string | undefined>>,
 ): Effect.Effect<FakeResult, never, FileSystem.FileSystem | Path.Path> {
   return Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -314,7 +361,7 @@ function handle(
     const envString = (name: string, fallback = "") => {
       const value = environment[name];
       return value === undefined
-        ? Config.String(name).pipe(Config.withDefault(Bun.env[name] ?? fallback))
+        ? Config.String(name).pipe(Config.withDefault(processEnv[name] ?? fallback))
         : Config.succeed(value);
     };
     const log = yield* envString("FAKE_HERDR_LOG");

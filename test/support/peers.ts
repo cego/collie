@@ -93,7 +93,7 @@ export const twoMachines = <A, E>(
         const bin = `${dir}/bin`;
         yield* fs.makeDirectory(bin);
         const herdr = `${bin}/herdr`;
-        yield* writeFakeHerdrShim(herdr, `${root}test/support/fake-herdr.ts`);
+        yield* writeFakeHerdrShim(herdr);
         yield* fs.writeFileString(
           `${bin}/collie`,
           `#!/bin/sh\nexec ${command.map((part) => `'${part}'`).join(" ")} "$@"\n`,
