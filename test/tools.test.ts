@@ -362,6 +362,26 @@ test("chat changes a Run's outcome kind through the host, which refuses one it d
     }),
   ));
 
+test("of two outcome changes made on the same Intent version at once, only one applies", () =>
+  inWorld(
+    Effect.gen(function* () {
+      const run = yield* aRun("add a picker");
+      const outcome = (patch: string) =>
+        call("collie_propose", {
+          interpretation: "change the kind",
+          actions: [
+            { kind: "update_intent", run: run.id, change: "set-outcome", patch, base_version: 1 },
+          ],
+        });
+      const said = yield* Effect.all([outcome("feature"), outcome("bug")], {
+        concurrency: "unbounded",
+      });
+      expect(said.filter((one) => one.includes("applied"))).toHaveLength(1);
+      expect(said.filter((one) => one.includes("not v1"))).toHaveLength(1);
+      expect((yield* readIntent(run.dir))?.version).toBe(2);
+    }),
+  ));
+
 test("retrying a chat request returns its receipt instead of applying it again", () =>
   inWorld(
     Effect.gen(function* () {

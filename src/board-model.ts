@@ -1471,6 +1471,7 @@ export const FrontDoorRpcs = RpcGroup.make(
       change: IntentChangeSchema,
       propagate: Schema.Boolean,
       request: Schema.String,
+      expected: Schema.optionalKey(Schema.Number),
     },
     success: ChangedIntent,
     error: Schema.Union([HostRefused, RequestConflict]),

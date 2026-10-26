@@ -227,14 +227,12 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
     Effect.gen(function* () {
       const dir = runDir(env.stateDir, action.run);
       if (action.change === "set-outcome") {
-        const now = yield* readIntent(dir).pipe(Effect.catch(() => Effect.succeed(null)));
-        if (now !== null && now.version !== action.base_version)
-          return failed(`the Intent is v${now.version}, not v${action.base_version}`);
         const changed = yield* changeIntentRun(env, {
           runId: action.run,
           change: outcomeChange(action.patch),
           request: by.requestId,
           door: by,
+          expected: action.base_version,
         });
         return changed.ok
           ? { state: "applied" as const, note: `intent v${changed.value.version}` }

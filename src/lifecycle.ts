@@ -960,6 +960,8 @@ export const changeIntentRun = (
     readonly change: Change;
     readonly request: string;
     readonly door: Door;
+    /** The Intent version the change was made on; the host refuses it on any other. */
+    readonly expected?: number;
   },
 ) =>
   asksRun(
@@ -971,6 +973,7 @@ export const changeIntentRun = (
         change: options.change,
         propagate: false,
         request: options.request,
+        ...(options.expected !== undefined && { expected: options.expected }),
       }),
     options.door,
   );

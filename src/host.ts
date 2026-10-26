@@ -2253,7 +2253,10 @@ const frontDoorHandlers = (
               ),
             ),
           ),
-        changeIntent: ({ runId, change: given, propagate: spread, request }, { client }) => {
+        changeIntent: (
+          { runId, change: given, propagate: spread, request, expected },
+          { client },
+        ) => {
           const scrubbed =
             given.kind === "set-goal" || given.kind === "add-constraint"
               ? scrubJson(given)
@@ -2300,6 +2303,10 @@ const frontDoorHandlers = (
                   Effect.gen(function* () {
                     const current = yield* readIntent(runDir(env.stateDir, runId));
                     if (current === null) return null;
+                    if (expected !== undefined && current.version !== expected)
+                      return yield* new HostRefused({
+                        reason: `the Intent is v${current.version}, not v${expected}`,
+                      });
                     const recorded =
                       change.kind === "verification"
                         ? (yield* readAudit(trail(runId))).find((one) => one.request === request)
@@ -2328,7 +2335,11 @@ const frontDoorHandlers = (
                 ).pipe(Effect.result);
                 if (updated._tag === "Failure") {
                   if (approved === undefined)
-                    return yield* new HostRefused({ reason: reason(updated.failure) });
+                    return yield* new HostRefused({
+                      reason: Schema.is(HostRefused)(updated.failure)
+                        ? updated.failure.reason
+                        : reason(updated.failure),
+                    });
                   return {
                     version: null,
                     propagated: [],
