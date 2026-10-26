@@ -50,7 +50,7 @@ const shown = (
   effect: FlowEffect,
   color: FlowActionView["color"] = "neutral",
   caption?: string,
-): FlowActionView => ({ label, icon: `i-lucide-${icon}`, effect, color, caption });
+): FlowActionView => ({ label, icon, effect, color, caption });
 
 export const retryCaption = (lane: FlowLane, node: FlowRun): string => {
   const kept = lane.nodes
@@ -82,23 +82,27 @@ export const desktopFlowAction = (
             one.id === (node.pauseTarget ?? stepId) ||
             one.runs.some((run) => run.id === node.pauseTarget),
         ) ?? node;
-      return shown(target.pause == null ? `Pause before ${target.title}` : "Don't pause", "pause", {
-        kind: "write",
-        installation,
-        write: {
-          _tag: "Control",
-          runId,
-          control: "hold",
-          set: target.pause == null,
-          before: target.id,
+      return shown(
+        target.pause == null ? `Pause before ${target.title}` : "Don't pause",
+        "i-lucide-pause",
+        {
+          kind: "write",
+          installation,
+          write: {
+            _tag: "Control",
+            runId,
+            control: "hold",
+            set: target.pause == null,
+            before: target.id,
+          },
         },
-      });
+      );
     }
     case "note":
     case "retry-noted":
       return shown(
         kind === "note" ? `Note for ${node.title}…` : "Retry with a note…",
-        "message-square-plus",
+        "i-lucide-message-square-plus",
         {
           kind: "text",
           installation,
@@ -108,19 +112,23 @@ export const desktopFlowAction = (
         },
       );
     case "log":
-      return shown("Log", "scroll-text", { kind: "part", run: runId, part: "log" });
+      return shown("Log", "i-lucide-scroll-text", { kind: "part", run: runId, part: "log" });
     case "evidence":
-      return shown("Evidence", "file-check", { kind: "part", run: runId, part: "evidence" });
+      return shown("Evidence", "i-lucide-file-check", {
+        kind: "part",
+        run: runId,
+        part: "evidence",
+      });
     case "retry":
       return shown(
         `Retry ${node.title}`,
-        "rotate-ccw",
+        "i-lucide-rotate-ccw",
         { kind: "write", installation, write: { _tag: "Resume", runId: node.link?.run ?? runId } },
         "error",
         retryCaption(lane, node),
       );
     case "continue":
-      return shown("Continue", "play", {
+      return shown("Continue", "i-lucide-play", {
         kind: "write",
         installation,
         write: { _tag: "Control", runId, control: "hold", set: false },
@@ -128,7 +136,7 @@ export const desktopFlowAction = (
     case "tell":
       return node.agent == null
         ? null
-        : shown(`Tell the ${role}…`, "message-square", {
+        : shown(`Tell the ${role}…`, "i-lucide-message-square", {
             kind: "text",
             installation,
             write: { _tag: "Deliver", runId, agent: node.agent, text: "" },
@@ -136,7 +144,7 @@ export const desktopFlowAction = (
     case "terminal":
       return node.agent == null
         ? null
-        : shown(`Watch the ${role}`, "terminal", {
+        : shown(`Watch the ${role}`, "i-lucide-terminal", {
             kind: "terminal",
             run: runId,
             agent: node.agent,
@@ -157,7 +165,7 @@ export const desktopFlowAction = (
       };
       return shown(
         "Answer",
-        "message-circle-question",
+        "i-lucide-message-circle-question",
         {
           kind: "answer",
           installation,
@@ -173,7 +181,7 @@ export const desktopFlowAction = (
         ? null
         : shown(
             "Review",
-            "check",
+            "i-lucide-check",
             {
               kind: "proposal",
               installation,
@@ -186,20 +194,20 @@ export const desktopFlowAction = (
     }
     case "open": {
       if (node.link?.run != null)
-        return shown(`Open ${node.title}`, "arrow-up-right", {
+        return shown(`Open ${node.title}`, "i-lucide-arrow-up-right", {
           kind: "run",
           run: node.link.run,
           machine: node.link.machine,
         });
       return node.url === undefined
         ? null
-        : shown(node.id === "ci" ? "Open pipeline" : "Open MR", "external-link", {
+        : shown(node.id === "ci" ? "Open pipeline" : "Open MR", "i-lucide-external-link", {
             kind: "url",
             url: node.url,
           });
     }
     case "start":
-      return shown(node.title, "play", {
+      return shown(node.title, "i-lucide-play", {
         kind: "offer",
         run: runId,
         offer: node.id.replace(/^offer:/, ""),
@@ -217,31 +225,31 @@ export const desktopLaneAction = (
   const runId = lane.run;
   switch (kind) {
     case "hold":
-      return shown("Hold run", "pause", {
+      return shown("Hold run", "i-lucide-pause", {
         kind: "write",
         installation,
         write: { _tag: "Control", runId, control: "hold", set: true },
       });
     case "release":
-      return shown("Release hold", "play", {
+      return shown("Release hold", "i-lucide-play", {
         kind: "write",
         installation,
         write: { _tag: "Control", runId, control: "hold", set: false },
       });
     case "stop":
-      return shown("Stop run", "square", {
+      return shown("Stop run", "i-lucide-square", {
         kind: "write",
         installation,
         write: { _tag: "Control", runId, control: "stop", set: true },
       });
     case "resume":
-      return shown("Resume", "rotate-ccw", {
+      return shown("Resume", "i-lucide-rotate-ccw", {
         kind: "write",
         installation,
         write: { _tag: "Resume", runId },
       });
     case "follow-up":
-      return shown("Follow-up run", "message-square-plus", {
+      return shown("Follow-up run", "i-lucide-message-square-plus", {
         kind: "text",
         installation,
         write: { _tag: "FollowUp", runId, text: "" },
