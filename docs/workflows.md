@@ -40,8 +40,9 @@ cannot be built then fails with why, rather than asking again.
 
 **What happens:** a planner reads the goal and repository, asks only when a missing
 decision changes the work, then writes `SPEC.md` and one ticket per slice into the run's
-`plan/` directory. There is no mandatory interview, summary approval, or manual skill
-handoff. Plans never enter the repository
+`plan/` directory. A design artifact the work follows is copied into `plan/design/`, and the
+spec and tickets name that copy before its URL, so the build reads the copy. There is no
+mandatory interview, summary approval, or manual skill handoff. Plans never enter the repository
 ([ADR-0002](adr/0002-plan-artefacts-live-in-the-run-directory.md)).
 
 A criterion is one the ticket's absence would make false, never a text search. Before a
@@ -85,7 +86,10 @@ newest finished `plan` runs for this repo and a Linear issue id in the branch na
 candidate is taken as the answer; none or several bring up a menu of them plus **Type it…**,
 which accepts a Linear id or URL, a path to a plan directory, or a plain description of the
 work. What was resolved is recorded with its kind, and the build prompt reads both
-`{{inputs.plan}}` and `{{inputs.plan_kind}}` (`plan-dir`, `linear`, `review` or `text`).
+`{{inputs.plan}}` and `{{inputs.plan_kind}}` (`plan-dir`, `linear`, `review`, `followup` or
+`text`). It carries only that kind's instructions, its `## source.<kind>` section of
+[`implement.md`](../workflows/implement.md), and only the outcome's, its
+`## outcome.<kind>` section; a Run with no outcome kind is told only its checks have to pass.
 `review` is what a run chained from a review carries: the findings are the tickets. For
 `linear` and `text` the implementer writes the spec and a task list into the run's `plan/`
 before it builds, so every run leaves the same audit trail.

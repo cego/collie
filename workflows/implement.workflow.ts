@@ -93,6 +93,12 @@ const Implementing = Schema.Struct({
   verify: text,
 });
 
+/** A section's text is sent as it is, so the names it carries are filled here. */
+const sectionOf = (section: string, input: typeof Implementing.Type) =>
+  (content.sections.get(section) ?? "")
+    .replaceAll("{{inputs.plan}}", input.inputs.plan)
+    .replaceAll("{{run.dir}}", input.run.dir);
+
 const prompts = {
   build: content.template("build", {
     ...Implementing.fields,
@@ -101,6 +107,8 @@ const prompts = {
     session: Schema.Struct({ ask: text }),
     obstacle: text,
     criteria: text,
+    source: text,
+    proof: text,
   }),
   criteria: content.template("criteria", {
     ...Implementing.fields,
@@ -582,6 +590,13 @@ export default defineWorkflow({
                   ticket === null && source.kind === "linear"
                     ? "Every checkbox in the issue's description. Copy the description into the spec word for word, its checkboxes included, and answer each one."
                     : renderCriteria(given),
+                source: sectionOf(`source.${source.kind}`, input),
+                proof: sectionOf(
+                  content.sections.has(`outcome.${input.inputs.outcome}`)
+                    ? `outcome.${input.inputs.outcome}`
+                    : "outcome.unspecified",
+                  input,
+                ),
                 obstacle:
                   merged?.status === "conflicted"
                     ? `${conflictOf(merged)}\n\nFinish that merge before this ticket's work goes on: resolve those files, \`git add\` them and \`git commit --no-edit\`. Never rebase, reset or abort it.`

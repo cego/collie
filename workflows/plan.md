@@ -54,13 +54,19 @@ takes as its goal. It has the problem in one paragraph, what is explicitly out o
 tests, and how we will know the whole thing works. The tickets carry each piece's detail
 and acceptance criteria, so the spec does not restate them.
 
+Where the work follows a design artifact known by a URL — a mock-up, a diagram, a design
+page — save a copy of it under `{{run.dir}}/plan/design/` and name that path in the spec
+before the URL: a link may change or close, and the implement Run reads the copy.
+
 Then write your Output, naming the spec you wrote.
 
 ## tickets
 
 You were started with {{skill:to-tickets}}. Cut the spec into tickets: one file each at
 `{{run.dir}}/plan/issues/NN-<slug>.md`, numbered in the order they can land. Each says
-what to build, what blocks it, and criteria someone else can check.
+what to build, what blocks it, and criteria someone else can check. A ticket that follows a
+design artifact names its copy under `{{run.dir}}/plan/design/` before its URL, saving the
+copy there first where the spec step did not.
 
 A criterion is something the implement Run can show before its merge request: a test, a
 file, or a command's result on the branch. An outcome that only CI, a merge or a deploy can

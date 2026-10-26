@@ -23,45 +23,12 @@ Makefile, the CI config — each in the directory it belongs to. Name each one w
 `collie run intent verification {{run.id}} --name <name> [--cwd <dir>] -- <command>`.
 Collie runs them itself at the gate, and the merge request lists each with its command.
 
-The work source above is one of five kinds. Do the one that matches
-`{{inputs.plan_kind}}` and ignore the others.
+The work source above is a `{{inputs.plan_kind}}`:
 
-- **plan-dir** — a plan is already written. `{{inputs.plan}}/SPEC.md` is the spec and
-  `{{inputs.plan}}/issues/` holds the tickets. Where the repository above is not empty,
-  this plan spans several and you own one of them: only the tickets whose `**Repo:**`
-  line names it are yours, and the rest are another run's. Which ticket you are on is
-  under **This slice** below; Collie hands them to you one at a time, in an order their
-  `Blocked by` lines allow.
-- **review** — a review of work that already exists. `{{inputs.plan}}/review.md` is the
-  spec, and the same findings as JSON are `{{inputs.plan}}/findings.json`. The
-  tickets are those findings, worst severity first. You are fixing an existing
-  change and this checkout is already on its branch, so there is no branch to pick and
-  nothing to check out: the fixes land on the branch that was reviewed, and a merge
-  request on it is updated rather than replaced. Write the findings you are working from
-  to `{{run.dir}}/plan/SPEC.md` and one ticket per finding under
-  `{{run.dir}}/plan/issues/`, so this run records what it set out to fix. A finding you
-  disagree with is `disputed` with a reason, exactly as in a fix round — never silently
-  skipped.
-- **linear** — a Linear issue id. Fetch it with the Linear MCP (`get_issue`) and treat
-  its description as the spec. Before building, write that description word for word,
-  checkboxes included, to `{{run.dir}}/plan/SPEC.md` and a short task list to `{{run.dir}}/plan/issues/NN-*.md`,
-  one file per slice, so the run records what you decided to build. Every ticket you write
-  carries a `**Checks:**` line saying what proves it. Where it names one of this run's
-  checks above, the gate proves it on the final tree: it is not a command for you to run.
-  Where the ticket needs a proof of its own — a regression test, or the test files that
-  hold its behaviour — name that targeted command, and run it through `collie verify`.
-  Clear work states its acceptance checks before it starts; deciding afterwards what would
-  have counted is not a check.
-- **followup** — a finished run's outcome needs more work. `{{inputs.plan}}` names it as
-  `followup:<run id>`; that run's `steering/drift.jsonl` open reports and the text in
-  `{{run.dir}}/plan/SPEC.md` are the spec. Write one ticket per open report under
-  `{{run.dir}}/plan/issues/`. This checkout is already on the branch that run built, and
-  its merge request is updated rather than replaced — the parent run is finished and
-  immutable, so nothing you do belongs in it.
-- **text** — the work in the human's own words. Same as `linear` without the fetch: write
-  `{{run.dir}}/plan/SPEC.md` and the task list from the text, with the same `**Checks:**`
-  line on every ticket, then build. Where the text does not settle something, decide it the
-  way the text most plausibly means, and record the decision under `assumptions`.
+{{source}}
+
+Where a ticket's `**Checks:**` line names one of this run's checks above, it is not a
+command for you to run: the gate proves it on the final tree.
 
 This run has a checkout of its own, on the branch it is building: Collie resolved the
 branch and opened the worktree before you started, so never create a branch or switch
@@ -140,32 +107,11 @@ background job.
 
 ### What this run has to prove
 
-`{{inputs.outcome}}` above decides what closes this run. Do the one that matches and
-ignore the others; an outcome not given means only the checks have to pass.
-
-- **feature** — every ticket you were given is built and named in `tickets_done`, and the
-  review has to be able to say the agreed scope was met.
-- **bug** — reproduce it first. Write the failing test, record it as a verification that is
-  _supposed_ to fail — `collie verify --name regression
-  --expect fail -- <command>` — and only then fix it. When it is fixed, record `regression`
-  again, without `--expect`, so there is a fail and then a pass on two different trees.
-  Name it in your Output as `"reproduced": "regression"`.
-- **refactor** — behaviour is identical. Say what you ran; the review has to be able to say
-  behaviour was preserved.
-- **investigation** — the answer is the deliverable, and there may be no patch at all.
-  Write the report to `{{run.dir}}/plan/INVESTIGATION.md`, and in your Output give
-  `"conclusion"`, `"evidence"` as a list of paths inside this run or its checkout, and
-  `"patch": true | false`. `false` is a real outcome: no merge request is opened, and
-  nothing is invented to have something to merge.
-- **docs** — run the commands you documented, as written, each through
-  `collie verify --name docs-<what> -- <command>`, and list
-  their names in `"documented_commands"`. Instructions nobody ran are not documentation.
-- **migration** — prove it goes both ways: a `migrate-up` verification and a
-  `migrate-down` (or `rollback`) one, both passing on the final tree.
+{{proof}}
 
 {{session.ask}}
 
-Then write your Output, plus whichever of the outcome fields above applies. `clean` means
+Then write your Output, plus the outcome fields above where they name any. `clean` means
 the whole scope is built and the tests pass; anything else is `findings`, one entry per
 thing that is not, each with a `severity` of `blocker`, `major` or `minor` — a failure
 that pre-dates this branch is `minor`.
@@ -431,3 +377,98 @@ message, or anywhere else. Write it as a bare name.
 Then write your Output, naming the merge request and the issues you linked. `clean` means
 the {{mr.noun}} exists or was updated; a push or a command above that failed is
 `findings`, saying what.
+
+## source.plan-dir
+
+A plan is already written. `{{inputs.plan}}/SPEC.md` is the spec and
+`{{inputs.plan}}/issues/` holds the tickets. Where the spec or a ticket names a local copy
+of a design artifact, under `{{inputs.plan}}/design/`, work from that copy and open its URL
+only for what the copy lacks. Where the repository above is not empty, this plan spans
+several and you own one of them: only the tickets whose `**Repo:**` line names it are
+yours, and the rest are another run's. Which ticket you are on is under **This slice**
+below; Collie hands them to you one at a time, in an order their `Blocked by` lines allow.
+
+## source.review
+
+A review of work that already exists. `{{inputs.plan}}/review.md` is the spec, and the same
+findings as JSON are `{{inputs.plan}}/findings.json`. The tickets are those findings, worst
+severity first. You are fixing an existing change and this checkout is already on its
+branch, so there is no branch to pick and nothing to check out: the fixes land on the
+branch that was reviewed, and a merge request on it is updated rather than replaced. Write
+the findings you are working from to `{{run.dir}}/plan/SPEC.md` and one ticket per finding
+under `{{run.dir}}/plan/issues/`, so this run records what it set out to fix. A finding you
+disagree with is `disputed` with a reason, exactly as in a fix round — never silently
+skipped.
+
+## source.linear
+
+A Linear issue id. Fetch it with the Linear MCP (`get_issue`) and treat its description as
+the spec. Before building, write that description word for word, checkboxes included, to
+`{{run.dir}}/plan/SPEC.md` and a short task list to `{{run.dir}}/plan/issues/NN-*.md`, one
+file per slice, so the run records what you decided to build. Every ticket you write
+carries a `**Checks:**` line saying what proves it. Where the ticket needs a proof of its
+own — a regression test, or the test files that hold its behaviour — name that targeted
+command, and run it through `collie verify`. Clear work states its acceptance checks
+before it starts; deciding afterwards what would have counted is not a check.
+
+## source.followup
+
+A finished run's outcome needs more work. `{{inputs.plan}}` names it as
+`followup:<run id>`; that run's `steering/drift.jsonl` open reports and the text in
+`{{run.dir}}/plan/SPEC.md` are the spec. Write one ticket per open report under
+`{{run.dir}}/plan/issues/`. This checkout is already on the branch that run built, and its
+merge request is updated rather than replaced — the parent run is finished and immutable,
+so nothing you do belongs in it.
+
+## source.text
+
+The work in the human's own words. Write `{{run.dir}}/plan/SPEC.md` from the text and a
+short task list to `{{run.dir}}/plan/issues/NN-*.md`, one file per slice, so the run
+records what you decided to build, then build. Every ticket you write carries a
+`**Checks:**` line saying what proves it. Where the ticket needs a proof of its own — a
+regression test, or the test files that hold its behaviour — name that targeted command,
+and run it through `collie verify`. Clear work states its acceptance checks before it
+starts; deciding afterwards what would have counted is not a check. Where the text does
+not settle something, decide it the way the text most plausibly means, and record the
+decision under `assumptions`.
+
+## outcome.unspecified
+
+No outcome kind is given, so only the checks have to pass.
+
+## outcome.feature
+
+A feature: every ticket you were given is built and named in `tickets_done`, and the
+review has to be able to say the agreed scope was met.
+
+## outcome.bug
+
+A bug: reproduce it first. Write the failing test, record it as a verification that is
+_supposed_ to fail — `collie verify --name regression --expect fail -- <command>` — and
+only then fix it. When it is fixed, record `regression` again, without `--expect`, so there
+is a fail and then a pass on two different trees. Name it in your Output as
+`"reproduced": "regression"`.
+
+## outcome.refactor
+
+A refactor: behaviour is identical. Say what you ran; the review has to be able to say
+behaviour was preserved.
+
+## outcome.investigation
+
+An investigation: the answer is the deliverable, and there may be no patch at all. Write
+the report to `{{run.dir}}/plan/INVESTIGATION.md`, and in your Output give `"conclusion"`,
+`"evidence"` as a list of paths inside this run or its checkout, and
+`"patch": true | false`. `false` is a real outcome: no merge request is opened, and nothing
+is invented to have something to merge.
+
+## outcome.docs
+
+Documentation: run the commands you documented, as written, each through
+`collie verify --name docs-<what> -- <command>`, and list their names in
+`"documented_commands"`. Instructions nobody ran are not documentation.
+
+## outcome.migration
+
+A migration: prove it goes both ways, with a `migrate-up` verification and a
+`migrate-down` (or `rollback`) one, both passing on the final tree.

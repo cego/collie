@@ -4701,7 +4701,7 @@ scenario(
 
         const building = yield* asked("r-impl-review", "build");
         expect(building).toContain(`Work source (review): ${reviewed}`);
-        expect(building).toContain("Do the one that matches\n`review`");
+        expect(building).toContain(`\`${reviewed}/review.md\` is the spec`);
       }),
     ),
   120_000,
@@ -7771,6 +7771,76 @@ scenario(
       ),
     ),
   30_000,
+);
+
+/** What a shipped Run's build is asked, read once it is written; the Run goes no further. */
+const buildAsked = (options: ShippedRun) =>
+  running(options, () =>
+    until(
+      () =>
+        FileSystem.FileSystem.pipe(
+          Effect.flatMap((fs) =>
+            fs.readFileString(`${dir}/agents/${options.runId}/build.prompt.md`),
+          ),
+          Effect.orElseSucceed(() => ""),
+        ),
+      (text) => text.includes("OUTPUT_PATH"),
+    ),
+  );
+
+scenario(
+  "an investigation from text is told its own source and outcome, and no other",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* noMergeRequests;
+        yield* repository();
+        yield* approve("r-impl-told", ["unit"]);
+
+        const building = yield* buildAsked({
+          entry: shipped("implement"),
+          runId: "r-impl-told",
+          input: { plan: "why is the board slow?", ...FINISH },
+          options: { outcome: "investigation" },
+        });
+        expect(building).toContain(`${dir}/runs/r-impl-told/plan/INVESTIGATION.md`);
+        expect(building).not.toContain("migrate-up");
+        expect(building).not.toContain("get_issue");
+      }),
+    ),
+  60_000,
+);
+
+scenario(
+  "a plan directory with no outcome kind is told only its checks have to pass",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* noMergeRequests;
+        yield* repository();
+        const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "" }]);
+        yield* approve("r-impl-plain", ["unit"]);
+
+        const building = yield* buildAsked({
+          entry: shipped("implement"),
+          runId: "r-impl-plain",
+          input: { plan, ...FINISH },
+        });
+        expect(building).toContain(`\`${plan}/SPEC.md\` is the spec`);
+        expect(building).not.toContain("get_issue");
+        expect(building).toContain("only the checks have to pass");
+        for (const instruction of [
+          "the agreed scope was met",
+          "reproduce it first",
+          "behaviour is identical",
+          "INVESTIGATION.md",
+          "Instructions nobody ran",
+          "migrate-up",
+        ])
+          expect(building).not.toContain(instruction);
+      }),
+    ),
+  60_000,
 );
 
 /**
