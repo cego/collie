@@ -55,13 +55,11 @@ export const inspectorPart = (node: FlowRun, live: boolean): InspectorPart => {
   if (node.kind === "check" || node.produces === "evidence") return "evidence";
   return node.log == null ? "details" : "log";
 };
-/** What the work pane shows: the part chosen where it has a tab, else the first that does. */
 export const shownPart = (
   chosen: InspectorPart,
   parts: ReadonlyArray<InspectorTab>,
 ): InspectorPart =>
   parts.some((one) => one.value === chosen) ? chosen : (parts[0]?.value ?? chosen);
-/** The work pane's words for a Step with no terminal, log or evidence. */
 export const quietWork = (node: FlowRun) =>
   node.state === "expected"
     ? "This Step has not started yet."
