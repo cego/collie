@@ -17,8 +17,12 @@ export type FastForward = typeof FastForwardSchema.Type;
 
 /**
  * Fetches origin and fast-forwards the checkout at `cwd` to `head`, recording the move in
- * the Run's log. Uncommitted changes, or a head that does not fast-forward, are refused:
- * nothing is reset or discarded.
+ * the Run's log. Uncommitted changes, or a head the checkout neither is at nor sits behind,
+ * are refused: nothing is reset or discarded. The one refusal it does not make is a plain
+ * push that moved the branch past a `head` the Run had journaled while it parked: where the
+ * checkout already carries `head` and sits at origin's branch tip, it answers `At` on what
+ * it actually holds, so a resumed Run re-proves the real head instead of parking on the
+ * stale one.
  */
 export const fastForward = Effect.fn("Releasing.fastForward")(function* <R>(opts: {
   readonly runDir: string;
@@ -40,10 +44,31 @@ export const fastForward = Effect.fn("Releasing.fastForward")(function* <R>(opts
   yield* git(["fetch", "--quiet", "origin"]);
   if ((yield* git(["cat-file", "-e", `${opts.head}^{commit}`])).code !== 0)
     return refused(`origin does not have ${short(opts.head)}`);
-  if ((yield* git(["merge-base", "--is-ancestor", from, opts.head])).code !== 0)
+  if ((yield* git(["merge-base", "--is-ancestor", from, opts.head])).code !== 0) {
+    // The checkout is not behind `head`. Before refusing as a force push, tell
+    // apart a plain push that moved the branch past `head` while the Run parked
+    // from a true rewrite: where `head` is an ancestor of the checkout and the
+    // checkout sits exactly at origin's branch tip, the Run's journal simply
+    // holds a stale head, so answer `At` and let the next read see the real
+    // head instead of parking on the same journaled head forever.
+    const carries = (yield* git(["merge-base", "--is-ancestor", opts.head, from])).code === 0;
+    const branch = (yield* git(["rev-parse", "--abbrev-ref", "HEAD"])).stdout.trim();
+    const atOrigin =
+      branch !== "" &&
+      branch !== "HEAD" &&
+      (yield* git(["rev-parse", "--verify", `refs/remotes/origin/${branch}`])).stdout.trim() ===
+        from;
+    if (carries && atOrigin) {
+      yield* appendLog(
+        opts.runDir,
+        `the checkout already carries ${short(opts.head)} and sits at ${short(from)}, where origin's ${branch} points`,
+      );
+      return { _tag: "At", head: from, from } satisfies FastForward;
+    }
     return refused(
       `${short(opts.head)} does not fast-forward ${short(from)} in ${opts.cwd}, as after a force push`,
     );
+  }
   const moved = yield* git(["merge", "--ff-only", "--quiet", opts.head]);
   if (moved.code !== 0)
     return refused(`git merge --ff-only ${short(opts.head)} failed: ${whatItSaid(moved)}`);
