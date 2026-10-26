@@ -51,6 +51,7 @@ import {
   REQUESTABLE,
   checkGaps,
   evidenceGaps,
+  reviewGaps,
   isOutcome,
   refInside,
   type Outcome,
@@ -375,6 +376,11 @@ export function evidenceGapsOf(options: EvidenceAsk): ReadonlyArray<string> {
  */
 export function checkGapsOf(options: EvidenceAsk): ReadonlyArray<string> {
   return checkGaps(options.kind, collectedOf(options));
+}
+
+/** The gaps among those a fresh review could close: what is worth paying a reviewer for. */
+export function reviewGapsOf(options: EvidenceAsk): ReadonlyArray<string> {
+  return reviewGaps(options.kind, collectedOf(options));
 }
 
 export interface EvidenceAsk {

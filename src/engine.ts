@@ -1910,6 +1910,10 @@ export const SDK_DECLARATIONS = `declare module "collie" {
   export function checkGapsOf(
     options: Parameters<typeof evidenceGapsOf>[0],
   ): ReadonlyArray<string>;
+  /** The gaps among those a fresh review could close: what is worth paying a reviewer for. */
+  export function reviewGapsOf(
+    options: Parameters<typeof evidenceGapsOf>[0],
+  ): ReadonlyArray<string>;
 
   /**
    * A Check's proof on this tree: passed, failed, unstable, passed only on an earlier tree, or

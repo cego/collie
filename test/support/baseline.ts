@@ -3647,6 +3647,36 @@ scenario(
   120_000,
 );
 
+for (const [kind, plan] of [
+  ["typed text", "Count every registry once"],
+  ["Linear issue", "ABC-125"],
+  ["follow-up", "followup:r-spec-parent"],
+] as const)
+  scenario(
+    `the spec a ${kind} build wrote is handed to its reviewers`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          yield* noMergeRequests;
+          yield* repository();
+          const fs = yield* FileSystem.FileSystem;
+          const runId = `r-spec-${kind.replace(/\W/g, "-")}`;
+          yield* approve(runId, ["unit"]);
+          yield* fs.makeDirectory(`${runDir(dir, runId)}/plan`, { recursive: true });
+          yield* fs.writeFileString(`${runDir(dir, runId)}/plan/SPEC.md`, "# The spec\n");
+          yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, OPENED]);
+          const result = yield* ran({
+            entry: shipped("implement"),
+            runId,
+            input: { plan, ...FINISH },
+          });
+          expect(said(result)).toBe(OPENED.mr_url);
+          expect(yield* asked(runId, "review-1")).toContain(`Spec: ${runDir(dir, runId)}/plan\n`);
+        }).pipe(Effect.orDie),
+      ),
+    120_000,
+  );
+
 scenario(
   "the planner route is read again for each ticket, so a planner that has gone is not called live",
   () =>
@@ -4775,6 +4805,37 @@ scenario(
         expect(said(result)).toBe(OPENED.mr_url);
         expect(yield* prompts()).toHaveLength(4);
         expect(yield* asked("r-gate-judged", "review-5-1")).toContain('"scope_met": true');
+        expect(yield* asked("r-gate-judged", "review-5-1")).toContain(`Spec: ${plan}\n`);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "evidence outside every root fails the Run without a fresh review no reviewer could change",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* noMergeRequests;
+        yield* repository();
+        yield* approve("r-gate-outside", []);
+        const answered = {
+          ...BUILT,
+          conclusion: "The board redraws every card on each change.",
+          evidence: ["/elsewhere/notes.md"],
+          patch: true,
+        };
+        const supported = { ...CLEAN_SYNTHESIS, supported: true };
+        yield* rig.queueOutputs([answered, supported, supported, OPENED]);
+        const result = yield* ran({
+          entry: shipped("implement"),
+          runId: "r-gate-outside",
+          input: { plan: "why is the board slow?", ...FINISH },
+          options: { outcome: "investigation" },
+        });
+
+        expect(reasonOf(result)).toContain('evidence reference "/elsewhere/notes.md" is outside');
+        expect(yield* wasAsked("r-gate-outside", "review-5-1")).toBe(false);
       }),
     ),
   120_000,

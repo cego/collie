@@ -1273,6 +1273,11 @@ What kind of result a run has to prove, and so what evidence closes it:
 A reference inside the run is under its own directory or its checkout, or, for a run given
 another Run's own plan directory, under that Run's directory, where its handoffs are.
 
+Only a reviewer can move one kind of gap: the review's own verdict, `scope_met` for a
+feature, `behavior_preserved` for a refactor, `supported` for an investigation, `accurate`
+for docs and `compatible` for a migration. A check that has not passed, or a reference
+outside the run, is not a reviewer's to change.
+
 A text search proves none of the rows above: a pass of `grep`, `egrep`, `fgrep`, `rg`, `ag`,
 `ack` or `git grep`, also as the first word of a `sh -c` or `bash -c` script, shows the text
 is there, not that anything works. A promised check, `regression`, documented command or
@@ -1305,8 +1310,8 @@ Nor is a check that failed on a tree run again on it after a gate fix that left 
 it was: the round is read from the records already there, and the proof's whole `recheck`
 is only for a check whose failures named no tests and that has had none on that tree
 (ADR-0034, amended 2026-10-19). A changed tree or set of checks also gets fresh proof while
-completed build Activities are retained. Missing reviewer evidence gets a fresh review;
-if it still cannot prove the outcome, the Run fails with the gaps named and a follow-up
+completed build Activities are retained. A missing review verdict gets a fresh review, and no other gap does;
+if the outcome is still unproved, the Run fails with the gaps named and a follow-up
 can repair the work; implement offers one after success or failure on a branch. Apart from
 that disputed gate fix, the merge request is reached only once the outcome is proved. Only the latest
 record of a check's exact command on that tree counts, whoever asked for it, so a

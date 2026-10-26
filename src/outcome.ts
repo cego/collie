@@ -412,14 +412,27 @@ export function evidenceGaps(kind: Outcome, got: Collected): string[] {
  */
 export function checkGaps(kind: Outcome, got: Collected): string[] {
   return gapsOf(kind, got)
-    .filter((gap) => gap.check)
+    .filter((gap) => gap.by === "check")
     .map((gap) => gap.text);
 }
 
-function gapsOf(kind: Outcome, got: Collected): Array<{ text: string; check: boolean }> {
-  const gaps: Array<{ text: string; check: boolean }> = [];
-  const check = (text: string) => gaps.push({ text, check: true });
-  const claim = (text: string) => gaps.push({ text, check: false });
+/** The gaps a fresh review could close: a reviewer's judgement the Outputs do not report. */
+export function reviewGaps(kind: Outcome, got: Collected): string[] {
+  return gapsOf(kind, got)
+    .filter((gap) => gap.by === "review")
+    .map((gap) => gap.text);
+}
+
+/** Who can close a gap: a verification, a reviewer, or nobody short of new work. */
+type GapCloser = "check" | "review" | "claim";
+
+function gapsOf(kind: Outcome, got: Collected): Array<{ text: string; by: GapCloser }> {
+  const gaps: Array<{ text: string; by: GapCloser }> = [];
+  const check = (text: string) => gaps.push({ text, by: "check" });
+  const claim = (text: string) => gaps.push({ text, by: "claim" });
+  const judged = (key: string, text: string) => {
+    if (!reviewerSays(got, key)) gaps.push({ text, by: "review" });
+  };
   if (needsChecks(kind)) for (const gap of approvedSetGaps(got)) check(gap);
 
   switch (kind) {
@@ -428,8 +441,7 @@ function gapsOf(kind: Outcome, got: Collected): Array<{ text: string; check: boo
     case "feature": {
       const done = names(anyField(got, "tickets_done"));
       if (done.length === 0) claim("no ticket is reported built (tickets_done is empty)");
-      if (!reviewerSays(got, "scope_met"))
-        claim("the review did not report scope_met: true for the agreed scope");
+      judged("scope_met", "the review did not report scope_met: true for the agreed scope");
       // What each ticket said would prove it, before it was built. An agent may have
       // collected these itself; what matters is a pass on the tree in front of us.
       for (const ticket of got.tickets) {
@@ -477,8 +489,7 @@ function gapsOf(kind: Outcome, got: Collected): Array<{ text: string; check: boo
       break;
     }
     case "refactor":
-      if (!reviewerSays(got, "behavior_preserved"))
-        claim("the review did not report behavior_preserved: true");
+      judged("behavior_preserved", "the review did not report behavior_preserved: true");
       break;
     case "investigation": {
       const conclusion = anyField(got, "conclusion");
@@ -491,8 +502,7 @@ function gapsOf(kind: Outcome, got: Collected): Array<{ text: string; check: boo
       }
       if (!isBoolean(anyField(got, "patch")))
         claim("the investigation does not say whether it produced a patch");
-      if (!reviewerSays(got, "supported"))
-        claim("the review did not report supported: true for the conclusion");
+      judged("supported", "the review did not report supported: true for the conclusion");
       break;
     }
     case "docs": {
@@ -505,8 +515,7 @@ function gapsOf(kind: Outcome, got: Collected): Array<{ text: string; check: boo
         else if (proof === "unproved")
           check(`documented command "${name}" has no passing verification on this tree`);
       }
-      if (!reviewerSays(got, "accurate"))
-        claim("the review did not report accurate: true for the instructions");
+      judged("accurate", "the review did not report accurate: true for the instructions");
       break;
     }
     case "migration": {
@@ -525,7 +534,7 @@ function gapsOf(kind: Outcome, got: Collected): Array<{ text: string; check: boo
             : onlySearched(searched.one),
         );
       }
-      if (!reviewerSays(got, "compatible")) claim("the review did not report compatible: true");
+      judged("compatible", "the review did not report compatible: true");
       break;
     }
     case "plan": {
