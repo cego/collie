@@ -29,8 +29,10 @@ import {
   type Screen,
   scrollOf,
 } from "../../../src/shared/terminal-input";
+import { settledResizes } from "../../../src/shared/terminal-size";
 
 const props = defineProps<{ placed: PlacedTask; wentToPane: boolean; agent?: string }>();
+const emit = defineEmits<{ focus: [] }>();
 const { terminal, terminalSend, openLink } = useActions();
 const panes = usePanes();
 const toast = useToast();
@@ -62,6 +64,10 @@ const TYPE = {
 let term: Terminal | undefined;
 let fiber: Fiber.Fiber<void> | undefined;
 const send = (command: TerminalCommand) => void terminalSend(command);
+const sizes = settledResizes((cols, rows) => send({ type: "terminal.resize", cols, rows }), {
+  set: (run, ms) => window.setTimeout(run, ms),
+  clear: (handle) => window.clearTimeout(handle),
+});
 
 const copy = (text: string) =>
   navigator.clipboard
@@ -95,7 +101,7 @@ const shown = (event: TerminalEvent) => {
   switch (event._tag) {
     case "Opened":
       // A resize sent while the controller was starting was refused.
-      if (term !== undefined) send({ type: "terminal.resize", cols: term.cols, rows: term.rows });
+      if (term !== undefined) sizes.opened(term.cols, term.rows);
       focused.value = event.at.agent;
       return panes.showing(props.placed, event.at);
     case "Frame":
@@ -202,7 +208,7 @@ onMounted(() => {
   fit.fit();
   listening = [
     term.onData((text) => isMouseReport(text) || send({ type: "terminal.input", text })),
-    term.onResize(({ cols, rows }) => send({ type: "terminal.resize", cols, rows })),
+    term.onResize(({ cols, rows }) => sizes.resized(cols, rows)),
     term.registerLinkProvider({ provideLinks: (line, links) => links(linksOn(line)) }),
   ];
   term.attachCustomWheelEventHandler((event) => {
@@ -214,6 +220,7 @@ onMounted(() => {
     if (event.type !== "keydown") return true;
     const action = keyAction(event, term!.hasSelection());
     if (action === "copy" && term!.hasSelection()) void copy(term!.getSelection());
+    if (action === "focus") emit("focus");
     return action === "pane";
   });
   // Only on the grid: a press beside it, in the box, just takes the keys.
@@ -248,6 +255,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   void switching.stop();
+  sizes.stop();
   window.removeEventListener("mouseup", released);
   resized?.disconnect();
   rescaled?.();
