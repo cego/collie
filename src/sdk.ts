@@ -203,6 +203,7 @@ export { renderApproved } from "./verify-spec";
 export {
   baseFailuresOf,
   baselinesOwed,
+  evidenceRoots,
   flakesOf,
   isOutcome,
   recheckOwed,

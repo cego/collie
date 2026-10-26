@@ -36,6 +36,7 @@ import {
   criteriaIn,
   defineWorkflow,
   evidenceGapsOf,
+  evidenceRoots,
   baseFailuresOf,
   baselinesOwed,
   findingKey,
@@ -769,7 +770,7 @@ export default defineWorkflow({
           approved,
           outputs: { build: { ...build }, synthesize: { ...reviewed } },
           reviewed: ["synthesize"],
-          roots: [place.dir, cwd],
+          roots: evidenceRoots(place.dir, cwd, source.value),
           tickets: tickets.map((ticket) => ({ file: ticket.file, checks: ticket.checks })),
         };
         return { gaps: evidenceGapsOf(asked), fixable: checkGapsOf(asked) };

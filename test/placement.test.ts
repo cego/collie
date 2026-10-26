@@ -34,6 +34,8 @@ import type * as MessageStorage from "effect/cluster/MessageStorage";
 import { SqlClient } from "effect/sql";
 import { VerifySpecSchema } from "../src/verify-spec";
 import { readTask, writeTask, type TaskRecord } from "../src/task";
+import { writeMrStates } from "../src/merges";
+import { mrLabel, type MrState } from "../src/board-model";
 import type { Call } from "./support/recorder";
 
 const asJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
@@ -2158,6 +2160,67 @@ test(
 
         expect(release).toMatchObject({ task: "task-1", parent: null });
         expect(yield* rig.cmds()).not.toContain("workspace create");
+      }),
+    ),
+  120_000,
+);
+
+/**
+ * An open Task's planner, its build on `add-a-picker` with MR_URL, then a build started by
+ * hand from the planner's own plan directory, as a human does where "Implement now" cannot
+ * be used.
+ */
+const builtFromItsPlan = (mrState: MrState | null) =>
+  Effect.gen(function* () {
+    const task = yield* aTask;
+    yield* rig.queueOutputs([{ verdict: "clean" }]);
+    return yield* hosted(
+      Effect.gen(function* () {
+        const registry = yield* Registry;
+        const fs = yield* FileSystem.FileSystem;
+        const [chains, , builds] = yield* loaded(registry, [
+          `${fixtures}/chains-and-opens.workflow.ts`,
+          `${fixtures}/opens.workflow.ts`,
+          `${fixtures}/builds.workflow.ts`,
+        ]);
+        const planner = yield* builtByAChild(registry, chains!, task.id, MR_URL);
+        const plan = `${runDir(dir(), planner)}/plan`;
+        yield* fs.makeDirectory(plan, { recursive: true });
+        yield* fs.writeFileString(`${plan}/SPEC.md`, "# Add a picker\n");
+        if (mrState !== null) yield* writeMrStates(dir(), new Map([[mrLabel(MR_URL), mrState]]));
+        const started = yield* start(builds!, {
+          request: "r-by-hand",
+          text: { work: plan },
+          taskLabel: "Project | By hand",
+        });
+        if (started._tag === "Failure") return yield* Effect.die(started.failure);
+        return { runId: started.success.runId, view: yield* finished(started.success.runId) };
+      }),
+    );
+  });
+
+test(
+  "a build started from another Run's plan directory is on that Run's Task branch, in its Task",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { view } = yield* builtFromItsPlan(null);
+
+        expect(view).toMatchObject({ branch: `${LOGIN}/add-a-picker`, task: "task-1" });
+        expect(yield* rig.cmds()).not.toContain("workspace create");
+      }),
+    ),
+  120_000,
+);
+
+test(
+  "a build started from a plan whose branch has merged is on a fresh branch named by the Run",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { runId, view } = yield* builtFromItsPlan("merged");
+
+        expect(view?.branch).toBe(`${LOGIN}/${runId}`);
       }),
     ),
   120_000,

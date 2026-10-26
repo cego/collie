@@ -503,9 +503,14 @@ they came. Everything else is new work, and gets a new branch called
 
 4. `--input task=<slug>`, which is also what `plan` and `architecture` forward when you
    choose **Implement now**, and what a fan-out gives every repository run.
-5. The plan directory's own name, for a run given a plan directory.
-6. A slug of the work itself — the description, or the issue id.
-7. Otherwise a slug of the run's own name.
+5. For a run given another Run's own plan directory (`<state>/runs/<id>/plan`), the branch
+   that Run's Task was placed on, used as it is and cut from its remote tip, so the run
+   joins that Task. Not once its merge request has merged or closed: the run's own name
+   then names a fresh branch.
+6. The plan directory's own name, for a run given a plan directory that is no Run's own.
+7. A slug of the work itself — the description, or the issue id. Never a Run's own plan
+   directory, whose path names nothing.
+8. Otherwise a slug of the run's own name.
 
 The login is the checkout's forge's (ADR-0050 D5). On GitLab it is `GITLAB_USER_LOGIN`
 where the environment sets it, and otherwise whoever `glab` is logged in as for this
@@ -1264,6 +1269,9 @@ What kind of result a run has to prove, and so what evidence closes it:
 | `investigation` | a conclusion, references inside the run, and whether there is a patch at all                                                                                |
 | `docs`          | the documented commands, run as written, each with a passing verification                                                                                   |
 | `migration`     | `migrate-up` and `migrate-down` (or `rollback`) both passing                                                                                                |
+
+A reference inside the run is under its own directory or its checkout, or, for a run given
+another Run's own plan directory, under that Run's directory, where its handoffs are.
 
 A text search proves none of the rows above: a pass of `grep`, `egrep`, `fgrep`, `rg`, `ag`,
 `ack` or `git grep`, also as the first word of a `sh -c` or `bash -c` script, shows the text

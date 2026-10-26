@@ -102,8 +102,9 @@ empty, the default, asks (see **Ends:**). A start nobody attends passes `finish`
 
 **Branch:** named after the work, not the path to it — an explicit `--input branch=`, else
 the reviewed branch, else the `<name>` of a `branch:<base>...<name>` target you gave, else
-a new `<your GitLab login>/<task>` from `--input task=`, the plan directory's own name, or
-the work itself. Nobody is asked for one ([the full order](cli.md#start-a-run)).
+a new `<your GitLab login>/<task>` from `--input task=`, else, given another Run's own
+plan directory, the branch that Run's Task is on until its merge request lands, else a new
+one from the plan directory's own name, or the work itself. Nobody is asked for one ([the full order](cli.md#start-a-run)).
 
 **What happens:** one implementer agent builds, a commit per ticket. It reviews what it
 built with the same pass `review` runs — one complete review — and loops on the findings for

@@ -140,10 +140,11 @@ import { redact } from "./redact";
 import { reportOf, type Recorded } from "./report";
 import { outcomeRecordsOf, type OutcomeRecords } from "./outcomes";
 import type { Metrics } from "./board-model";
-import { mrRefOf, parseMrTarget, parseMrUrl } from "./board-model";
+import { mrLabel, mrRefOf, parseMrTarget, parseMrUrl } from "./board-model";
+import { readMrStates } from "./merges";
 import { forgeOf } from "./forge/forge";
 import { integrateDefault, integratedLine } from "./integrate";
-import { strategyNamed } from "./strategies";
+import { planRunOf, strategyNamed, workSourceOf } from "./strategies";
 import { Notifier, SOUND, notificationTitle, openedSubject, wanted, type Sound } from "./notify";
 import {
   Oversight,
@@ -2633,10 +2634,6 @@ export const evidenceDir = (dir: string, runId: string): string => `${dir}/evide
  * a Run produces is files and the things that read them are ordinary readers of files.
  */
 export const runDir = (dir: string, runId: string): string => `${dir}/runs/${runId}`;
-
-/** The Run whose own plan directory this Input value is, and null where it is none. */
-const planRunOf = (value: string): string | null =>
-  /(?:^|\/)runs\/([^/]+)\/plan\/?$/.exec(value)?.[1] ?? null;
 
 /**
  * A Run, then the Runs it came from: its parent and the Run whose plan it builds. Stops at
@@ -5683,6 +5680,25 @@ const makeRegistry: (
   });
 
   /**
+   * The branch the Runs of this plan Run's lineage were placed on, and null where none was
+   * or its merge request has merged or closed, so its work there is done.
+   */
+  const plannedOn = Effect.fn("Engine.plannedOn")(function* (planRun: string, runId: string) {
+    const states = yield* readMrStates(dir).pipe(Effect.orElseSucceed(() => new Map()));
+    let branch: string | null = null;
+    for (const row of yield* store.runs) {
+      const on = row.run === runId || unplaced(row) ? null : placedOf(row, {}).branch;
+      if (on === null || (branch !== null && on !== branch)) continue;
+      if (!(yield* lineageIn(store)(row.run)).includes(planRun)) continue;
+      branch = on;
+      const mr = yield* mergeRequestOf(fs, dir, row.run);
+      const state = mr === null ? undefined : states.get(mrLabel(mr));
+      if (state !== undefined && state !== "open") return null;
+    }
+    return branch;
+  });
+
+  /**
    * Where a Run will work, settled before it exists. A workflow that declares a checkout is
    * cut one from the checkout it starts from, and one that cannot be is refused here, while
    * there is nothing to clean up. A fresh Task's workspace is opened now, on that checkout,
@@ -5737,6 +5753,10 @@ const makeRegistry: (
           ? yield* reviewedTarget(inputs[source] ?? "")
           : null;
       if (reviewed !== null) inputs[REVIEWED] = reviewed;
+      const planRun = planRunOf(
+        workSourceOf({ inputs, strategies: generation.hints })?.value ?? "",
+      );
+      const taskBranch = planRun === null ? null : yield* plannedOn(planRun, ask.runId);
       if (
         generation.checkout === "branch" &&
         (yield* repositoryName(runShell, from).pipe(Effect.mapError(failed))) === null
@@ -5759,6 +5779,7 @@ const makeRegistry: (
         sources: ask.provenance,
         openLabel: ask.taskLabel ?? null,
         explicit: ask.options.branch ?? null,
+        taskBranch,
         branchBase: ask.branchBase,
         login: placing.env.gitlabLogin,
         githubLogin: placing.env.githubLogin,

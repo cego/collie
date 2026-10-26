@@ -21,6 +21,7 @@ import {
   type Verification,
 } from "./verify";
 import { isString, isBoolean } from "./schema";
+import { planRunOf } from "./strategies";
 import { isYamlMap, type YamlValue } from "./yaml";
 
 /**
@@ -374,6 +375,15 @@ const shown = (v: Verification) => [v.executable.split("/").at(-1), ...v.argv].j
 
 function names(value: YamlValue | undefined): string[] {
   return Array.isArray(value) ? value.filter(isString) : [];
+}
+
+/**
+ * The directories a reference a Run's Outputs give may point inside: its own, its
+ * checkout, and, where it builds another Run's plan, that Run's.
+ */
+export function evidenceRoots(own: string, cwd: string, workSource: string): string[] {
+  const planned = planRunOf(workSource) === null ? [] : [workSource.replace(/\/plan\/?$/, "")];
+  return [own, cwd, ...planned];
 }
 
 /**

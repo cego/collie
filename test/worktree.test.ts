@@ -612,6 +612,21 @@ test("a plan directory Collie itself pointed at names no branch; the run's own n
     }),
   ));
 
+test("a Run's own plan directory typed by hand names no branch either", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      yield* fakeGit();
+
+      expect(
+        yield* plan(
+          { plan_kind: "plan-dir", plan: `${rig.root}/state/runs/run-x/plan` },
+          undefined,
+          { name: "add-a-version-flag", sources: { plan: "typed" } },
+        ),
+      ).toMatchObject({ branch: `${LOGIN}/add-a-version-flag`, source: "from the run name" });
+    }),
+  ));
+
 test("a branch with a worktree is opened, and one without gets a new one", () =>
   runOnPath(
     Effect.gen(function* () {
