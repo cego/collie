@@ -12315,7 +12315,21 @@ const withForges = (body: () => Promise<void>) =>
     }),
   );
 
-export const register = (pass: "shipped" | "unrelated") => {
+/** How many test files each pass is split into, so that no one file holds a whole pass. */
+export const SHARES = 12;
+
+/** Splits names into `of` shares by a hash of each name, so that adding one moves no other. */
+export const split = (names: ReadonlyArray<string>, of: number) => {
+  const shares = Array.from({ length: of }, (): string[] => []);
+  for (const name of names) shares[Bun.hash.crc32(name) % of]!.push(name);
+  return shares;
+};
+
+export const scenarioNames = () => scenarios.map((one) => one.name);
+
+/** Registers one share of a pass's scenarios; the shipped-only tests go with share 0. */
+export const register = (pass: "shipped" | "unrelated", share: number) => {
+  const mine = new Set(split(scenarioNames(), SHARES)[share]);
   beforeEach(() =>
     runEffect(
       Effect.gen(function* () {
@@ -12353,7 +12367,7 @@ export const register = (pass: "shipped" | "unrelated") => {
   );
 
   afterEach(() => runEffect(rig.close()));
-  for (const one of scenarios) {
+  for (const one of scenarios.filter((one) => mine.has(one.name))) {
     test(
       pass === "unrelated" ? `${one.name} (under an unrelated id)` : one.name,
       () => {
@@ -12363,5 +12377,5 @@ export const register = (pass: "shipped" | "unrelated") => {
       one.timeout,
     );
   }
-  if (pass === "shipped") for (const one of shippedOnly) one();
+  if (pass === "shipped" && share === 0) for (const one of shippedOnly) one();
 };
