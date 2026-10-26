@@ -2895,35 +2895,54 @@ test("an agent blocked during startup is waited for, not taken for a failed star
     }),
   ));
 
-test("a start herdr refused says what herdr said", () =>
+/** The run has parked or failed: either way its step has let go of the work. */
+const settled = (runId: string): Reached =>
+  Effect.gen(function* () {
+    const engine = yield* WorkflowEngine.WorkflowEngine;
+    const id = yield* work.executionId({ runId, input: { skip: false } });
+    const { status } = pollStatus(yield* engine.poll(work, id), "agent-work");
+    return status === "suspended" || status === "failed";
+  });
+
+/** Why `r1` parked, with herdr failing as `failing` says. */
+const parkedOn = (failing: string) =>
+  Effect.gen(function* () {
+    yield* interrupted("r1", settled("r1"), {
+      herdr: new FakeHerdr(rig.pluginEnv({ FAKE_HERDR_FAIL: failing })),
+    });
+    expect(yield* statusNow("r1")).toBe("suspended");
+    return yield* read(controlPath(dir, PARKED, "r1"));
+  });
+
+test("a start herdr refused parks, saying what herdr said", () =>
   runEffect(
     Effect.gen(function* () {
-      const result = yield* session(started("r1"), {
-        herdr: new FakeHerdr(
-          rig.pluginEnv({ FAKE_HERDR_FAIL: `{"agent start":"claude exited: no API key"}` }),
-        ),
-      });
-      expect(result._tag).toBe("Failure");
-      expect(result._tag === "Failure" ? result.failure.reason : "").toContain(
-        "claude exited: no API key",
-      );
+      const why = yield* parkedOn(`{"agent start":"claude exited: no API key"}`);
+      expect(why).toContain("claude exited: no API key");
+      expect(why).toContain(promptPath("r1"));
     }),
   ));
 
-test("a herdr that cannot say what it has blocks the work rather than starting an agent", () =>
+test("a herdr that cannot say what it has parks the work rather than starting an agent", () =>
   runEffect(
     Effect.gen(function* () {
-      const result = yield* session(started("r1"), {
-        herdr: new FakeHerdr(
-          rig.pluginEnv({ FAKE_HERDR_FAIL: `{"agent list":"herdr is not answering"}` }),
-        ),
-      });
-      expect(result._tag).toBe("Failure");
-      const reason = result._tag === "Failure" ? result.failure.reason : "";
-      expect(reason).toContain("herdr cannot say which agents it has");
+      const why = yield* parkedOn(`{"agent list":"herdr is not answering"}`);
+      expect(why).toContain("herdr cannot say which agents it has");
+      expect(why).toContain("herdr is not answering");
       // What uncertainty must never be rounded down to.
-      expect(reason).toContain("Nothing here says the agent did no work.");
+      expect(why).toContain("Nothing here says the agent did no work.");
       expect((yield* rig.cmds()).filter((cmd) => cmd === "agent start")).toHaveLength(0);
+    }),
+  ));
+
+test("a step whose work was never sent parks, naming the file its work is in", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const why = yield* parkedOn(`{"agent prompt":"herdr lost the connection"}`);
+      expect(why).toContain("was not given its work");
+      expect(why).toContain("herdr lost the connection");
+      expect(why).toContain(promptPath("r1"));
+      expect((yield* rig.cmds()).filter((cmd) => cmd === "agent start")).toHaveLength(1);
     }),
   ));
 

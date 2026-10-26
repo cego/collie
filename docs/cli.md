@@ -864,7 +864,11 @@ asks the host to pick a suspended run up again. It re-enters the workflow's curr
 and reuses every Activity already done, so completed work and its Outputs are kept and
 never redone, and an agent still live is reattached to rather than started a second
 time; one a stop closed is started again with the prompt it had, once its predecessor is
-Quiet — otherwise the run parks again, saying which server may still be writing. The host
+Quiet — otherwise the run parks again, saying which server may still be writing. A launch
+that cannot say whether its agent started or was given its work — herdr refused or timed out
+the start, could not list its agents, or the step's prompt did not go out — parks the same
+way, naming the prompt file, since a resume lists herdr's agents again and takes up the
+agent or starts it. The host
 registers the modules as they are now, then clears the stop before waking work. A
 restored module is picked up without restarting the host.
 

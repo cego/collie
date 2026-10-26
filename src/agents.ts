@@ -16,9 +16,11 @@
 import {
   Clock,
   Context,
+  Deferred,
   Duration,
   Effect,
   FileSystem,
+  Formatter,
   Layer,
   Option,
   Path,
@@ -228,8 +230,9 @@ const isRanOut = Schema.is(RanOut);
 export const Collected = Schema.Union([Schema.String, Schema.Null, RanOut]);
 
 /**
- * Nobody can say whether this agent exists or whether it was given its work, so nothing
- * was started. Uncertainty is reported; it is never rounded down to "nothing happened".
+ * A failure nothing here could classify, so the Run fails. Uncertainty is reported; it is
+ * never rounded down to "nothing happened". A launch unsure whether it started its agent or
+ * gave it its work parks instead: a resume lists herdr's agents before it starts one.
  */
 export class AgentUncertain extends Schema.TaggedError<AgentUncertain>()("AgentUncertain", {
   operation: Schema.String,
@@ -1402,6 +1405,12 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
   const sentPath = (about: Launched, kind: "step" | "repair") =>
     `${dirFor(about.runId)}/${stemOf(about)}.${kind}.md`;
   const promptFile = (ask: AgentAsk) => `${dirFor(ask.runId)}/${stemOf(ask)}.prompt.md`;
+  /** A launch nobody can say the fate of: a resume lists herdr's agents again before it starts one. */
+  const unsettled = (ask: AgentAsk, what: string) =>
+    new AgentParked({
+      operation: ask.operation,
+      reason: `${what}. Nothing here says the agent did no work. Its work is in ${promptFile(ask)}; \`collie run resume ${ask.runId}\` takes up the agent or starts it, then hands that to it.`,
+    });
   const log = (runId: string, line: string) => append(`${dirFor(runId)}/agents.log`, line);
 
   const skills = (names: ReadonlyArray<string>) => installedSkills(host.env, names);
@@ -1955,12 +1964,11 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
             Effect.catchIf(blockedAtStartup, () =>
               log(ask.runId, `${agent}: blocked during startup in ${tab.paneId}; its prompt waits`),
             ),
-            Effect.mapError(
-              (cause) =>
-                new AgentUncertain({
-                  operation: ask.operation,
-                  reason: `${agent} did not start in ${tab.paneId}: ${herdrFailureReason(cause)}`,
-                }),
+            Effect.mapError((cause) =>
+              unsettled(
+                ask,
+                `${agent} did not start in ${tab.paneId}: ${herdrFailureReason(cause)}`,
+              ),
             ),
           );
         yield* log(
@@ -1982,11 +1990,32 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
     );
   });
 
+  /** The agents whose step is being launched or given: a steer to one waits for it. */
+  const stepsGoingOut = new Map<string, Deferred.Deferred<void>>();
+
   /** `fresh` starts again an agent gone at delivery, closing the pane herdr still lists it in. */
   const launch = (
     ask: AgentAsk,
     fresh = false,
     note: (why: string | null) => Effect.Effect<void> = () => Effect.void,
+  ): Effect.Effect<Launched, AgentUncertain | AgentParked> =>
+    Effect.gen(function* () {
+      const agent = agentName(ask.runId, ask.agent ?? ask.operation, null, ask.sequence ?? 1);
+      const out = yield* Deferred.make<void>();
+      stepsGoingOut.set(agent, out);
+      return yield* launching(ask, fresh, note).pipe(Effect.ensuring(stepGoneOut(agent, out)));
+    });
+  const stepGoneOut = (agent: string, out = stepsGoingOut.get(agent)) =>
+    Effect.suspend(() => {
+      if (out === undefined) return Effect.void;
+      if (stepsGoingOut.get(agent) === out) stepsGoingOut.delete(agent);
+      return Deferred.succeed(out, undefined);
+    });
+
+  const launching = (
+    ask: AgentAsk,
+    fresh: boolean,
+    note: (why: string | null) => Effect.Effect<void>,
   ): Effect.Effect<Launched, AgentUncertain | AgentParked> =>
     under(
       Effect.gen(function* () {
@@ -1998,13 +2027,15 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         if (listing._tag === "Failure") {
           // Nothing is started on a question nobody answered: a second agent on the same
           // work is worse than work that stops and says why it stopped.
-          return yield* new AgentUncertain({
-            operation: ask.operation,
-            reason: `herdr cannot say which agents it has (${reason(listing.failure)})`,
-          });
+          return yield* unsettled(
+            ask,
+            `herdr cannot say which agents it has (${herdrFailureReason(listing.failure)})`,
+          );
         }
         const live = listing.success.find((one) => one.name === agent);
         const alive = live !== undefined && !fresh;
+        // Only a new agent's first work holds a steer; one reused takes it at its boundary.
+        if (alive) yield* stepGoneOut(agent);
         // herdr keeps a name while it lists it, so a new agent cannot take it until then.
         if (fresh && live !== undefined)
           yield* host.herdr.paneClose(live.paneId).pipe(
@@ -2152,12 +2183,8 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         if (asked.refused) {
           return yield* refusedWith(ask, `${agent} was not given its work (${asked.why})`, file);
         }
-        if (!asked.sent) {
-          return yield* new AgentUncertain({
-            operation: ask.operation,
-            reason: `${agent} was not given its work (${asked.why})`,
-          });
-        }
+        if (!asked.sent)
+          return yield* unsettled(ask, `${agent} was not given its work (${asked.why})`);
         yield* log(
           ask.runId,
           `${agent}: ${alive ? "reattached to" : "launched for"} ${ask.operation}`,
@@ -2757,6 +2784,9 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
             gone: true,
           };
         }
+        // After the step it is being given, so its work reaches it first.
+        const out = stepsGoingOut.get(launched.agent);
+        if (out !== undefined) yield* Deferred.await(out);
         const sent = yield* deliver(launched, options.text, {
           kind: "steer",
           ref: options.request,
@@ -3120,7 +3150,8 @@ const undeliverable = (cause: unknown) => ({
   ok: false as const,
   id: null,
   reason: "failed" as const,
-  detail: reason(cause),
+  // A tagged error's fields say what its empty message does not.
+  detail: reason(cause) || Formatter.formatJson(cause),
 });
 
 /**

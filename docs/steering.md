@@ -160,6 +160,12 @@ is alive and its prompt is written, so `run show` says so and `collie run resume
 prompt to that agent. A human's steer is sent once and told the refusal, since they are
 waiting on the answer.
 
+A step's prompt or repair also waits out another sender holding the agent's ledger — a
+transaction already open on it in the host, or its lock held by another process — on the
+same backoff, and parks once that has lasted ten minutes. A steer to an agent whose step
+is still being launched or given waits until that step's prompt has gone out, so the work
+reaches the agent first.
+
 ## Who a steer reaches, and what it says came of it
 
 A steer, a review comment, chat's `deliver` and a correction that name no agent reach the

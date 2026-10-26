@@ -24,6 +24,18 @@ const withLostPrompt = <A, E>(
   body: (world: World) => Effect.Effect<A, E, BunServices | Scope.Scope>,
   extra: Readonly<Record<string, string>> = {},
 ) =>
+  withHerdr(prefix, body, {
+    FAKE_HERDR_PROMPT_LOST: "text",
+    FAKE_HERDR_PROMPT_LOST_TIMES: "1",
+    FAKE_HERDR_AGENT_STATUS: "working,idle",
+    ...extra,
+  });
+
+const withHerdr = <A, E>(
+  prefix: string,
+  body: (world: World) => Effect.Effect<A, E, BunServices | Scope.Scope>,
+  fake: Readonly<Record<string, string>>,
+) =>
   proves(
     prefix,
     (world) =>
@@ -31,10 +43,7 @@ const withLostPrompt = <A, E>(
         const set = {
           HERDR_PLUGIN_STATE_DIR: world.state,
           COLLIE_USER_DIR: world.config,
-          FAKE_HERDR_PROMPT_LOST: "text",
-          FAKE_HERDR_PROMPT_LOST_TIMES: "1",
-          FAKE_HERDR_AGENT_STATUS: "working,idle",
-          ...extra,
+          ...fake,
         };
         yield* Effect.acquireRelease(
           Effect.sync(() => {
@@ -75,6 +84,53 @@ const parkedAgent = Effect.fn("test.parkedAgent")(function* (world: World) {
   expect(view?.parked).toContain(delivery!.delivery.id);
   return { client, runId, delivery: delivery!, old: view!.parked };
 });
+
+test(
+  "a start that timed out parks naming its work, and a resume starts it and completes the step",
+  () =>
+    withHerdr(
+      "collie-resume-start-",
+      (world) =>
+        Effect.gen(function* () {
+          const client = yield* connect(world.state).pipe(Effect.orDie);
+          const { runId } = yield* client
+            .start({
+              project: world.project,
+              id: "told",
+              request: "start",
+              input: { work: "resume" },
+              options: { harness: "claude" },
+            })
+            .pipe(Effect.orDie);
+          const parked = yield* until(
+            () => client.run({ runId }).pipe(Effect.orDie),
+            (one) => one?.status.status !== "pending",
+          );
+          expect(parked?.status.status).toBe("suspended");
+          expect(parked?.parked).toContain("timed out");
+          expect(parked?.parked).toContain(`${world.state}/agents/${runId}/build.prompt.md`);
+          expect(yield* deliveriesOf(world.state, runId)).toEqual([]);
+
+          expect(
+            (yield* client.resume({ runId, request: "resume" }).pipe(Effect.orDie)).applied,
+          ).toBe(true);
+          yield* until(
+            () => deliveriesOf(world.state, runId),
+            (one) => one.length === 1,
+          );
+          yield* (yield* FileSystem.FileSystem)
+            .writeFileString(`${world.state}/agents/${runId}/build.json`, '{"verdict":"built"}')
+            .pipe(Effect.orDie);
+          const done = yield* until(
+            () => client.run({ runId }).pipe(Effect.orDie),
+            (one) => one?.status.status !== "pending",
+          );
+          expect(done?.status.status).toBe("complete");
+        }),
+      { FAKE_HERDR_FAIL: `{"agent start":"timed out"}`, FAKE_HERDR_FAIL_TIMES: "1" },
+    ),
+  120_000,
+);
 
 test(
   "resume clears a collection's old note before Output, journals take-up, and refuses no-ops",
