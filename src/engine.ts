@@ -1868,6 +1868,9 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     got: { readonly verifications: ReadonlyArray<Verification>; readonly final: Snapshot },
   ): string;
 
+  /** Where a reference a Run's Outputs give may point: its own directory, its checkout, and a planning Run's. */
+  export function evidenceRoots(own: string, cwd: string, workSource: string): string[];
+
   /**
    * Every check this Run's journal holds, latest of each and its baseline, for a reviewer to
    * read; then each check left to CI, with its job's state where the Run has a merge request.
