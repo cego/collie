@@ -1,5 +1,3 @@
-// A runner as `tools/test.ts` is one: it holds a whole suite's workers from the store named in
-// its argument, starts a child on the hold, prints the child's pid and waits.
 import { BunRuntime, BunServices } from "@effect/platform-bun";
 import { Console, Effect } from "effect";
 import { admitted, budgetOf, startOnHold } from "../../tools/budget";
