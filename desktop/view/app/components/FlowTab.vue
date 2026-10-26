@@ -318,7 +318,8 @@ watch(
           ><UButton
             v-if="source !== null"
             variant="link"
-            class="self-start px-0"
+            size="xs"
+            class="self-start p-0"
             :label="`Started by ${source.run} on ${source.machine}`"
             @click="origin(source.run, source.machine)"
         /></template>
