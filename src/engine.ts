@@ -1838,6 +1838,9 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     checks: ReadonlyArray<C>,
   ): ReadonlyArray<C>;
 
+  /** The fingerprint of a tree too large to measure: two of them are not the same tree. */
+  export const TOO_LARGE: "unstable:too-large";
+
   /** A Run's checks read against its journal, for which tests failed and how each rerun went. */
   type FailedChecks = CheckEvidence & { readonly approved: ReadonlyArray<VerifySpec> };
   /** Each failed test of a check's latest run on this tree that has not been run again alone yet. */

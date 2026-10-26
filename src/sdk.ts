@@ -205,6 +205,9 @@ export {
 /** A Check's proof on this tree, and which of a Run's Checks it runs itself. */
 export { checkProof, owedLocally, type CheckProof, type Unmatched } from "./check-proof";
 
+/** The fingerprint of a tree too large to measure: two of them are not the same tree. */
+export { TOO_LARGE } from "./verify";
+
 /**
  * Which of the five kinds of work a work source is. A workflow that reads a plan
  * directory differently from a Linear issue asks here rather than guessing from the text.
