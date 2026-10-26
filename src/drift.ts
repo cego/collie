@@ -630,6 +630,11 @@ export const judge = Effect.fn("Drift.judge")(function* (
     return NOTHING;
   }
   const evidence = read.success;
+  // A report must cite a changed file, so with none the call could find nothing.
+  if (evidence.blocks.length === 0) {
+    yield* recordSkipped(what.runDir, intent.run, "no change to judge");
+    return NOTHING;
+  }
 
   const asked = yield* askJudgement(deps, intent.run, judgementPack(intent, evidence));
   if (asked.refused !== null) {

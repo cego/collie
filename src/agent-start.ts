@@ -7,6 +7,7 @@ import { gitlabHostOf } from "./config";
 import type { Found } from "./discovery";
 import type { Given } from "./engine";
 import type { PluginEnv } from "./env";
+import { forgeHttpLayer } from "./forge/http";
 import { inferInput, shell } from "./inputs";
 import { err, type Failure } from "./operations";
 import { checkoutsUnder, PROJECTS_ROOT_OPTION, projectsRoot, repositoryCheckout } from "./projects";
@@ -96,7 +97,10 @@ export const agentStartRefusal = Effect.fn("AgentStart.refusal")(function* (
       const inferred = yield* inferInput(field.name, "diff-target", {
         cwd: checkout.named ?? env.cwd,
         gitlabHost: yield* gitlabHostOf(env).pipe(Effect.orElseSucceed(() => undefined)),
-      }).pipe(Effect.orElseSucceed(() => null));
+      }).pipe(
+        Effect.provide(forgeHttpLayer),
+        Effect.orElseSucceed(() => null),
+      );
       if (inferred !== null && !inferred.needsAsking && inferred.value !== "")
         facts.push(`${inferred.value} (${inferred.source})`);
     }

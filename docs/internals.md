@@ -775,7 +775,8 @@ falls all the way through to the current directory.
 
 Collie reaches GitLab and GitHub through one interface, `Forge` in `src/forge/forge.ts`,
 with an adapter per forge: `src/forge/gitlab.ts` runs `glab`, and `src/forge/github.ts`
-runs `gh` ([ADR-0050](adr/0050-a-merge-request-is-its-forges.md) D1). Each forge's doctor
+runs `gh` ([ADR-0050](adr/0050-a-merge-request-is-its-forges.md) D1), or asks its forge
+over HTTP with that CLI's token (below). Each forge's doctor
 checks sit beside its adapter, in `src/forge/gitlab-checks.ts` and
 `src/forge/github-checks.ts`, and a workflow's content file for one forge
 (`<name>.gitlab.md`, `<name>.github.md`) may name that forge's CLI. A caller asks the
@@ -789,6 +790,90 @@ its state and address, a job waiting to be started by hand as `manual`: GitLab's
 job, or a GitHub job waiting on its environment's approval.
 An operation is added to the interface when its first caller moves onto it.
 
+### The calls that go over HTTP
+
+These calls go to the forge in-process through the [`forges`](https://forges.link) library,
+pinned to one exact version, rather than through `gh` or `glab`
+([ADR-draft-a-forge-is-asked-over-http-with-its-clis-login](adr/draft-a-forge-is-asked-over-http-with-its-clis-login.md)):
+
+- The CI job reads a check left to CI is proved by: `job`, `baseJob`, `retryJob` and
+  `runStatus`. Each sends the REST requests its CLI sent, a merge request's head included.
+- The merge request reads: `details`, the panel, and `forBranch` and `fromBranch`, a
+  branch's merge requests. GitHub's `details` is one GraphQL query for every field `gh pr
+  view --json` asked for, its check contexts paged; GitLab's reads the merge request, its
+  `/approvals` and its `/discussions` together, and says it has unresolved threads when a
+  resolvable note is unresolved. A branch's merge requests are the REST list filtered by
+  source branch (GitHub's `head=<owner>:<branch>`, so a fork's same-named branch is not
+  one), read page by page until a short page.
+- Branch protection, `protects`, and deploy status, `liveTier`. GitHub pages its
+  deployments and reads their latest statuses and commit comparisons; GitLab reads
+  environments, successful deployments and their merge-bases on the same routes as glab.
+- Stage's `stagingEnvironments` pages environments and deployments through the same
+  transport. Selected-job attribution includes earlier attempts, and a refused read
+  leaves the deployed environments unknown so their claims cannot be given back.
+- Issues, review posting, my open merge requests and the login: `issues`, `fileIssue`,
+  `commentIssue`, `post`, `mine` and `login`. These use the library's modelled thread and
+  user operations. A review posts one note, then an approval only where asked. Lists are
+  read to the end; GitHub's issues exclude pull requests.
+- Review reads, replies, merging and release reads: `readReview`, `reply`, `merge`,
+  `deployed`, `tagPipeline` and `pipeline`. They keep their REST routes; GitHub reads the
+  pull request, review threads and default merge method through GraphQL. Comments,
+  reviews, threads, deployments and pipeline jobs are read to the end. A failed merge is
+  read back to distinguish one that landed, a moved head and a refusal; a timeout,
+  network failure or 5xx never resends the merge.
+
+The CLI keeps readiness and the doctor's checks,
+cloning, the credential helper, opening a browser, and commands an agent or reviewer is
+told to run, including job logs: the Machine still needs its CLI logged in. Only
+`src/forge/` imports `forges`, and
+`test/forge-boundary.test.ts` fails on an import anywhere else.
+
+**ForgeHttp** (`src/forge/http.ts`) is the Effect service that sends them. It keeps a
+`forges` provider per forge host, provided live in both front doors: the host's
+`foundationLayer` and the `collie` CLI. Its token is the CLI's login for that host, read
+by **credential reads**, the only commands it runs:
+
+- GitHub: `gh auth token --hostname github.com`. The token is kept until a 401.
+- GitLab: `glab config get oauth2_expiry_date --host <host>`, then `glab config get token
+  --host <host>`. An empty expiry is a personal access token, kept until a 401. An OAuth
+  token is kept until its expiry, checked against Effect's Clock before each request.
+  `glab config get` never refreshes one, so once the expiry has passed, ForgeHttp runs `glab
+  auth status --hostname <host>` first: that builds glab's API client, which refreshes the
+  token and writes it back. A refresh that fails answers as not ready.
+
+One credential read per host is in flight at a time, so concurrent calls on a cold cache
+share one, and two refreshes never race. A host whose CLI gives no token answers as not
+ready, with the reason `ready` gives, and is sent nothing. After a 401 the token is read
+again once and the rejected request sent once more, a write's included, since a forge that
+answers 401 applied nothing. A second 401 answers unavailable, naming the login command.
+No other request is resent by Collie: a write that times out, fails on the network or gets
+a 5xx may have been applied. A failure is an answer, never a defect: its reason names the
+forge, the HTTP status and the forge's message, and a rate limit's reset. Interrupting a
+call aborts its request.
+
+`runStatus` and `pipeline` take their addresses from agent text. GitHub accepts only
+github.com. GitLab's is asked only where glab's own
+config or keyring holds a token for that host, read with `env -u GITLAB_TOKEN -u
+GITLAB_ACCESS_TOKEN -u OAUTH_TOKEN glab config get token`: glab hands an environment token
+to every host, and that token is never sent to a host an agent named.
+
+The fake forge (`test/support/forge.ts`) answers from one model through three faces: the
+Runner face (argv), the FakeBin face (an executable on `PATH`) and the **HTTP face**, a
+`fetch` answering the same routes, accepting only the token the CLI hands out, and logging
+every request. In-process tests give `fakeForge(...).layer`, ForgeHttp over the HTTP face
+and the Runner face, to the operation. A spawned host's credential reads go to FakeBin, and
+`COLLIE_FORGE_API`, read only by ForgeHttp, points every forge host at the HTTP face
+`serveForges` serves on loopback. Baseline workflow scenarios serve both fake forges for
+the whole scenario, and replacing a forge's model on `PATH` switches its HTTP face too.
+Their host sessions are bounded to 30 seconds, so a missing fake response cannot leave
+the suite waiting for the test harness's longer timeout.
+
+A test that runs a merge request read through the CLI's
+`PATH`, rather than a model, gives it `forgeHttpOnPath` (ForgeHttp over whatever `glab` or
+`gh` is on `PATH`, answering each request as `<cli> api <route>`), or runs it with
+`runOnPath`. `tools/forges-benchmark.ts` times `job` or `details` over the CLI and over the
+library against a live pull request and merge request.
+
 A checkout Collie clones keeps a credential helper for its forge's host in its own git
 config, and no token: GitLab's asks `glab config get token --host <host>` at each use and
 answers as `oauth2`, and GitHub's is gh's own `gh auth git-credential`. An empty helper
@@ -797,10 +882,11 @@ never answers first. Setting it again changes nothing.
 
 `protects(project, branch)` says whether a branch, pushed or not, is protected: `true`
 where it is the default branch or matches any protection rule or ruleset, whatever the rule
-allows, and `null` where the forge cannot say. GitLab reads the project's default branch
-and its protected branches, matching their wildcards; GitHub reads the default branch, the
-rules active for the name (`rules/branches/<name>`), and the classic protection rules'
-patterns through GraphQL. A Claude agent's launch reads it for the branch its Run created,
+allows, and `null` where the forge cannot say. Both forges are read over HTTP with their
+CLI's login. GitLab reads the project's default branch and every page of its protected
+branches, matching their wildcards; GitHub reads the default branch, the rules active for
+the name (`rules/branches/<name>`), and the classic protection rules' patterns through
+GraphQL. A Claude agent's launch reads it for the branch its Run created,
 and only `false` gives the agent the history allowance
 ([What a Claude agent's auto mode is told](using.md#what-a-claude-agents-auto-mode-is-told)).
 
@@ -865,11 +951,10 @@ read, the watch stops nothing for that merge request until it can. Collie's logi
 operator's own, so a hand merge by that login, at the very head that was approved, after
 the attempt, cannot be told from Collie's, and is taken as the merge the go asked for.
 
-The interface also lists open issues, files issues, and comments on them. The adapters
-decode their own CLI answers into the shared issue shape. GitLab reads consecutive
-pages; GitHub requests all open issues through its list command. These flags follow the
-[GitLab issue list](https://docs.gitlab.com/cli/issue/list/) and
-[GitHub issue list](https://cli.github.com/manual/gh_issue_list) contracts.
+The interface decodes the library's issues into the shared issue shape. Filing an issue
+uses the returned number and URL. An issue or review write that fails is not sent again,
+apart from the single resend after a 401; its reason asks the caller to inspect the issue
+or merge request before retrying, since a lost answer may have followed a successful write.
 
 The Host service chooses the forge of the Run's recorded checkout. Before publishing,
 it applies Conversation redaction and checks text against other checkouts, including
@@ -890,8 +975,9 @@ Recovered workflows read reports after every saved generation has been registere
 
 An adapter runs its commands through a `Runner` (`src/mr.ts`), the same seam the tests
 fake. `test/support/forge.ts` is a fake of each forge built on one model of a forge, with
-two faces: a Runner answering the argv its adapter uses, and a `FakeBin` executable on
-PATH answering from the same model for host-driven tests. `test/forge.test.ts` runs one
+three faces: a Runner answering the argv its adapter uses, a `FakeBin` executable on
+PATH, and HTTP served on loopback for host-driven tests, all answering from the same model.
+`test/forge.test.ts` runs one
 contract against both. `test/forge-boundary.test.ts` fails on a `glab` or `gh` invocation
 in `src/` or `workflows/` outside its adapter, and on workflow content that names either; its
 allowlist names each file that still does, with the ticket that moves it.
@@ -1212,7 +1298,10 @@ tree and the runner into `<Collie directory>/release.new` with `placed.json`, ea
 sha256, copies every file of the current `release/` that differs from its own record into
 `kept/`, then swaps the two. In a placed release `install.sh` and `prepare.sh` leave
 `bin/collie` as it was placed. `tools/smoke.sh` checks the built runner places its release
-at its own version.
+at its own version. Its forge check asks the compiled runner for a missing review target
+against a temporary checkout: the missing-input response must offer the pull request
+served by the fake forge over HTTP. This exercises the lazily loaded provider without
+starting a Run.
 
 `install.sh` authenticates that download with `COLLIE_TOKEN` where it is set, and otherwise
 borrows the token `glab` or `gh` already holds for the release host — see

@@ -72,6 +72,7 @@ import {
 } from "./config";
 import { autoModeBlock, autoModeFacts, type AutoModeBlock, type RunAuthority } from "./automode";
 import { shell } from "./mr";
+import type { ForgeHttp } from "./forge/http";
 import type { YamlMap } from "./yaml";
 import { RanOn } from "./board-model";
 import type { Asker } from "./proposals";
@@ -1284,7 +1285,7 @@ export interface AgentHost {
   readonly help?: (kind: string) => Effect.Effect<string>;
 }
 
-type AgentServices = FileSystem.FileSystem | Path.Path | BunServices;
+type AgentServices = FileSystem.FileSystem | Path.Path | BunServices | ForgeHttp;
 
 const DEFAULT_POLL_MS = 2000;
 const READING_EVERY_MS = 60_000;

@@ -74,6 +74,11 @@ const fixingStep = step({
   description: "The implementer fixes the findings before the next review.",
 });
 
+const ReviewedBranch = Schema.Union([
+  Schema.Struct({ branch: Schema.String }),
+  Schema.Struct({ refused: Schema.String }),
+]);
+
 export default defineWorkflow({
   id: "review",
   title: "review — an MR, a branch diff, or the working tree",
@@ -205,6 +210,24 @@ export default defineWorkflow({
           );
         });
 
+      // Why no fix can run here, recorded inside its Activity so a replay logs it once.
+      const fixable = yield* Activity.make({
+        name: "fixable",
+        success: ReviewedBranch,
+        execute: host
+          .reviewedBranch(run.id)
+          .pipe(
+            Effect.tap((answer) =>
+              "refused" in answer
+                ? host.record(run.id, `no fix can run here: ${answer.refused}`)
+                : Effect.void,
+            ),
+          ),
+      });
+      let unfixable = "refused" in fixable ? fixable.refused : "";
+      // A hand-off needs no checkout, so a live implementer in the lineage may still take one.
+      let handOff = place.lineage.length > 1;
+
       let handed = false;
       // Reviews are numbered by how many there have been, not by how often the menu came.
       let reviews = 1;
@@ -237,13 +260,24 @@ export default defineWorkflow({
         // Posting is offered for a merge request and nothing else; whether this is one to
         // post to is decided when it is invoked, by whoever can actually see GitLab.
         if (!fixing) {
+          const fixOffered = unfixable === "" || handOff;
           chosen = yield* menu(
             ask({
               name: `post-${(asks += 1)}`,
-              prompt: settled === "" ? "What next?" : `What next? The rally stopped: ${settled}.`,
+              prompt: [
+                "What next?",
+                ...(settled === "" ? [] : [`The rally stopped: ${settled}.`]),
+                ...(unfixable === ""
+                  ? []
+                  : [
+                      fixOffered
+                        ? `Only a live implementer can take a fix: ${unfixable}.`
+                        : `No fix is offered: ${unfixable}.`,
+                    ]),
+              ].join(" "),
               options: [
-                ...(handed ? [AGAIN] : split.live.length > 0 ? [FIX] : []),
-                IMPLEMENT,
+                ...(handed ? [AGAIN] : split.live.length > 0 && fixOffered ? [FIX] : []),
+                ...(unfixable === "" ? [IMPLEMENT] : []),
                 ...(kind === "mr" ? [POST] : []),
                 DONE,
               ],
@@ -315,12 +349,20 @@ export default defineWorkflow({
         const reviewed = yield* Activity.make({
           name: `${operation}-checkout`,
           success: ReviewedCheckout,
-          execute: host.checkoutReviewed(run.id),
+          execute: host
+            .checkoutReviewed(run.id)
+            .pipe(
+              Effect.tap((answer) =>
+                "refused" in answer
+                  ? host.record(run.id, `${operation}: nothing fixed, ${answer.refused}`)
+                  : Effect.void,
+              ),
+            ),
         });
         if ("refused" in reviewed) {
-          yield* host.record(run.id, `${operation}: nothing fixed, ${reviewed.refused}`);
           fixing = false;
-          settled = reviewed.refused;
+          unfixable = reviewed.refused;
+          handOff = false;
           continue;
         }
         const forge = yield* host.mr({ cwd: reviewed.cwd });

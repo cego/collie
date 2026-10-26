@@ -37,6 +37,8 @@ export interface StandIn {
   dropOn?: string;
   /** Start a queued turn on a thread whose turn was interrupted, unless draining. */
   continuation?: boolean;
+  /** Take a SIGTERM only once the next `turn/interrupt` is answered, as a server that read it first does. */
+  lateDrain?: boolean;
   /** A process of this server's session: one that ends on SIGTERM, or one that ignores it. */
   child?: "ends" | "ignores";
   /** Environment variables whose values it records when it starts. */
@@ -60,6 +62,7 @@ record({
 const turns = new Map<string, Turn[]>();
 const running = () => [...turns.values()].flat().filter((turn) => turn.status === "inProgress");
 let draining = false;
+let drainPending = false;
 
 const begin = (threadId: string, id: string, writes?: string) => {
   const turn: Turn = { id, status: "inProgress" };
@@ -88,10 +91,14 @@ setInterval(() => {
   exitWhenIdle();
 }, 50);
 
-process.on("SIGTERM", () => {
-  record({ signal: "SIGTERM" });
+const drain = () => {
   draining = true;
   exitWhenIdle();
+};
+process.on("SIGTERM", () => {
+  record({ signal: "SIGTERM" });
+  if (config.lateDrain) drainPending = true;
+  else drain();
 });
 
 if (config.child !== undefined) {
@@ -182,6 +189,10 @@ function answer(ws: import("bun").ServerWebSocket<undefined>, raw: string | Buff
       turn.status = "interrupted";
       if (config.continuation && !draining)
         begin(params.threadId, `${turn.id}-continued`, thread?.turn?.writes);
+      if (drainPending) {
+        drainPending = false;
+        return drain();
+      }
       return exitWhenIdle();
     }
     case "turn/start":

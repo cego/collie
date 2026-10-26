@@ -10,11 +10,12 @@
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import type { BunServices } from "@effect/platform-bun";
-import { Clock, Effect, FileSystem, Layer, Result, Schema } from "effect";
+import { Clock, ConfigProvider, Effect, FileSystem, Layer, Result, Schema } from "effect";
 import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
 import { Rig, FakeHerdr } from "./support/recorder";
 import { exec } from "./support/command";
 import { FakeBin } from "./support/bin";
+import { forgeOnPath, serveForges } from "./support/forge";
 import { fastForward, runEffect as runLive } from "./support/effect";
 import { installFakeSkills } from "./support/defs";
 import { fixtures, until } from "./support/host";
@@ -1941,16 +1942,27 @@ for (const chain of CHAINS) {
           yield* aTask;
           yield* approvedByOperator;
           // A forge that finds no merge request from the branch, so the build may push.
-          yield* Effect.acquireRelease(
-            FakeBin.make(`${rig.root}/bin`).pipe(Effect.tap((bin) => bin.add("glab", "exit 0"))),
-            (bin) => bin.restore(),
+          const bin = yield* Effect.acquireRelease(FakeBin.make(`${rig.root}/bin`), (made) =>
+            made.restore(),
+          );
+          const api = yield* serveForges(
+            yield* forgeOnPath(bin, "gitlab", {
+              installed: true,
+              loggedIn: ["gitlab.example.com"],
+              login: LOGIN,
+              mrs: [],
+            }),
           );
           yield* rig.queueOutputs(chain.outputs);
           const seen = yield* chainedFrom({
             entry: shipped(chain.name),
             text: chain.text,
             decision: chain.decision,
-          });
+          }).pipe(
+            Effect.provide(
+              ConfigProvider.layerAdd(ConfigProvider.fromUnknown({ COLLIE_FORGE_API: api })),
+            ),
+          );
 
           const worktree = worktreeOf("one-registry");
           expect(seen.parent).toMatchObject({

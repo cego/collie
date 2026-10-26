@@ -82,7 +82,7 @@ import { claudeTrust } from "../src/trust";
 import { FALLBACK_DEFAULTS } from "../src/settings";
 import type { AgentProfile } from "../src/profile";
 import { FakeBin } from "./support/bin";
-import { forgeOnPath } from "./support/forge";
+import { forgeHttpOnPath, forgeOnPath } from "./support/forge";
 
 let rig: Rig;
 let dir: string;
@@ -219,7 +219,7 @@ const session = <A, E>(
 ) =>
   run.pipe(
     Effect.provide(body),
-    Effect.provide(agentsLayer({ ...hostOf(), ...over })),
+    Effect.provide(agentsLayer({ ...hostOf(), ...over }).pipe(Layer.provide(forgeHttpOnPath))),
     Effect.provide(foundationLayer({ dir })),
     Effect.scoped,
     Effect.orDie,

@@ -62,6 +62,7 @@ import {
   splitDisputed,
   step,
   stepFailed,
+  TOO_LARGE,
   unmetCriteria,
   wholeRunsOwed,
   type Criterion,
@@ -214,6 +215,8 @@ const BUILDER = "build";
 const RELEASE = "Release";
 const STAGE = "Stage";
 const FINISH = "Finish";
+const HAND_BACK = "Hand back";
+const STOP = "Stop";
 
 const Tree = Schema.Struct({ head: Schema.String, fingerprint: Schema.String });
 
@@ -620,12 +623,42 @@ export default defineWorkflow({
             const commits = [...(build.commits ?? [])];
             let criteria = spec;
             let unmet: ReadonlyArray<Finding> = [];
-            for (let tries = 1; ; tries++) {
+            // Another hand-back on an unchanged tree cannot move a blocker, so a stall asks instead.
+            let blockers: ReadonlyArray<Finding> = [];
+            let stalls = 0;
+            let stopped: string | null = null;
+            const treeAt = (name: string) =>
+              Activity.make({
+                name,
+                success: Tree,
+                execute: Effect.map(host.evidence(runId, cwd), ({ final }) => ({
+                  head: final.head_sha,
+                  fingerprint: final.fingerprint,
+                })),
+              });
+            for (let tries = 1, turn = 1; ;) {
               criteria = yield* criteriaNow;
               unmet = unmetCriteria(item, criteria, answers);
-              if (unmet.length === 0 || tries > CRITERIA_TRIES) break;
+              if (unmet.length === 0) break;
+              if (blockers.length > 0) {
+                stalls += 1;
+                const chosen = yield* ask({
+                  name: `${item}.criteria-stalled-${stalls}`,
+                  prompt: `${item}: a criteria hand-back reported a blocker and changed nothing.\n\nIts blockers:\n${formatFindings(blockers)}\n\nStill unmet:\n${formatFindings(unmet)}\n\nAmend the ticket or clear the blocker, then hand it back, or stop the Run.`,
+                  options: [HAND_BACK, STOP],
+                });
+                if (chosen !== HAND_BACK) {
+                  stopped = `${item}: a criteria hand-back reported a blocker and changed nothing, so no review starts: ${unmet.map((one) => one.title).join("; ")}`;
+                  break;
+                }
+                blockers = [];
+                tries = 1;
+                continue;
+              }
+              if (tries > CRITERIA_TRIES) break;
+              const before = yield* treeAt(`${item}.criteria-${turn}.before`);
               const answered = yield* agentWork({
-                operation: `${item}.criteria-${tries}`,
+                operation: `${item}.criteria-${turn}`,
                 agent: BUILDER,
                 role: "implementer",
                 pushes: true,
@@ -640,9 +673,18 @@ export default defineWorkflow({
                 },
                 output: Built,
               });
+              const after = yield* treeAt(`${item}.criteria-${turn}.after`);
               answers = [...answers, ...boundTo(criteria, answered.criteria ?? [])];
               assumptions.push(...(answered.assumptions ?? []));
               commits.push(...(answered.commits ?? []));
+              blockers =
+                after.head === before.head &&
+                after.fingerprint === before.fingerprint &&
+                after.fingerprint !== TOO_LARGE
+                  ? (answered.findings ?? []).filter(isBlocking)
+                  : [];
+              tries += 1;
+              turn += 1;
             }
             const done: Handed = {
               item,
@@ -654,7 +696,9 @@ export default defineWorkflow({
             };
             handed.push(done);
             if (unmet.length > 0) {
-              const why = `${item}: acceptance criteria still unanswered or unmet after ${CRITERIA_TRIES} hand-backs, so no review starts: ${unmet.map((one) => one.title).join("; ")}`;
+              const why =
+                stopped ??
+                `${item}: acceptance criteria still unanswered or unmet after ${CRITERIA_TRIES} hand-backs, so no review starts: ${unmet.map((one) => one.title).join("; ")}`;
               yield* host.record(runId, why);
               return yield* unbuilt(why);
             }

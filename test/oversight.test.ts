@@ -281,6 +281,15 @@ const repository = () =>
     );
   });
 
+/** A tracked edit left uncommitted: the base falls back to `HEAD`, so a commit would hide it. */
+const edited = () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    yield* fs.makeDirectory(`${dir}/src`, { recursive: true });
+    yield* fs.writeFileString(`${dir}/src/work.ts`, "export const work = 1;\n");
+    yield* exec(["git", "add", "src/work.ts"], { cwd: dir });
+  });
+
 test("a rule the work breaks is reported where it was collected, and cleared once the work comes back", () =>
   runEffect(
     Effect.gen(function* () {
@@ -460,6 +469,7 @@ test("a host whose environment names no socket finds its Herd in herdr's status,
   runEffect(
     Effect.gen(function* () {
       yield* repository();
+      yield* edited();
       yield* intended("r1", [SMALL]);
       yield* evaluatorOnPath;
       const socketPath = `${rig.root}/herd.sock`;
@@ -508,6 +518,7 @@ test("a judgement made after one was skipped leaves the Run aligned, not unverif
   runEffect(
     Effect.gen(function* () {
       yield* repository();
+      yield* edited();
       yield* intended("r1", [SMALL]);
       yield* session(boundaryThenCard);
       expect((yield* cardsOf("r1")).at(-1)!.aligned).toBe("unverified");
@@ -528,6 +539,7 @@ test("a judgement that fails after one that answered leaves only its own failure
   runEffect(
     Effect.gen(function* () {
       yield* repository();
+      yield* edited();
       yield* intended("r1", [SMALL]);
       yield* session(boundaryThenCard);
       const herd = { socketPath: `${rig.root}/herd.sock`, pluginRoot: rig.root };
@@ -540,6 +552,45 @@ test("a judgement that fails after one that answered leaves only its own failure
       expect(card.aligned).toBe("unverified");
       expect(card.missing).toHaveLength(1);
       expect(card.missing[0]).toStartWith("a judgement was skipped: the judgement did not answer");
+    }),
+  ));
+
+test("a boundary with no change is skipped, and one after an edit leaves the Run aligned", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* repository();
+      yield* intended("r1", [SMALL]);
+      yield* evaluatorOnPath;
+      const herd = { socketPath: `${rig.root}/herd.sock`, pluginRoot: rig.root };
+      yield* session(boundaryThenCard, herd);
+      const before = (yield* cardsOf("r1")).at(-1)!;
+      expect(before.aligned).toBe("unverified");
+      expect(before.missing).toEqual(["a judgement was skipped: no change to judge"]);
+
+      yield* edited();
+      yield* session(boundaryThenCard, herd);
+      const after = (yield* cardsOf("r1")).at(-1)!;
+      expect(after.aligned).toBe("true");
+      expect(after.missing).toEqual([]);
+    }),
+  ));
+
+test("a Run that finishes with nothing changed logs that it is unverified, and why", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* repository();
+      yield* intended("r1", [SMALL]);
+      yield* evaluatorOnPath;
+      yield* executed(
+        "hello.workflow.ts",
+        "r1",
+        { name: "you" },
+        { socketPath: `${rig.root}/herd.sock`, pluginRoot: rig.root },
+      );
+      const log = yield* (yield* FileSystem.FileSystem).readFileString(
+        `${runDir(dir, "r1")}/log.txt`,
+      );
+      expect(log).toContain("aligned: unverified — a judgement was skipped: no change to judge");
     }),
   ));
 
@@ -582,6 +633,7 @@ const judgementsAtFinish = (intent: { constraints: Constraint[]; goal: string })
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     yield* repository();
+    yield* edited();
     const at = runDir(dir, "r1");
     yield* fs.makeDirectory(at, { recursive: true });
     yield* writeIntent(at, seedIntent("r1", intent));

@@ -599,6 +599,21 @@ const heldCheck = `${root}test/fixtures/checks/held.sh`;
  * `watch`, then ends the host with `end`. Gives back the check's two processes, each with
  * its start token, once the host's pid is gone.
  */
+/** The check records in `state` once there are at least `least`. */
+const recordedChecks = (state: string, least: number) =>
+  FileSystem.FileSystem.pipe(
+    Effect.flatMap((fs) =>
+      until(
+        () =>
+          fs.readDirectory(runningChecksDir(state)).pipe(
+            Effect.map((files) => files.filter((file) => file.endsWith(".json"))),
+            Effect.orElseSucceed((): ReadonlyArray<string> => []),
+          ),
+        (files) => files.length >= least,
+      ),
+    ),
+  );
+
 const endsWithAHeldCheck = <R>(
   watch: string,
   end: (host: { readonly state: string; readonly pid: number }) => Effect.Effect<void, never, R>,
@@ -643,6 +658,8 @@ const endsWithAHeldCheck = <R>(
     const check = yield* Effect.forEach([yield* pidIn("starts"), yield* pidIn("children")], (pid) =>
       Effect.map(startedOf(pid), (started) => ({ pid, started: started ?? "" })),
     );
+    // The host records a check only after its child has started.
+    yield* recordedChecks(state, 1);
     // Released for whatever this did not end, so nothing outlives the test.
     yield* Effect.addFinalizer(() =>
       fs.writeFileString(`${notes}/release`, "").pipe(Effect.ignore),
@@ -709,6 +726,24 @@ const notedIn = (notes: string, file: string) =>
     Effect.orElseSucceed((): ReadonlyArray<string> => []),
   );
 
+/** The leader pid of each running check the host has recorded, its temp files aside. */
+const recordedLeaders = (state: string) =>
+  FileSystem.FileSystem.pipe(
+    Effect.flatMap((fs) =>
+      fs.readDirectory(runningChecksDir(state)).pipe(
+        Effect.map((names) => names.filter((name) => name.endsWith(".json"))),
+        Effect.flatMap((names) =>
+          Effect.forEach(names, (name) =>
+            fs
+              .readFileString(`${runningChecksDir(state)}/${name}`)
+              .pipe(Effect.map((text): number => JSON.parse(text).leader.pid)),
+          ),
+        ),
+      ),
+    ),
+    Effect.orElseSucceed((): ReadonlyArray<number> => []),
+  );
+
 /** Lets the held check end, waits for its Run to complete, and gives back its verifications. */
 const releasedOnce = (state: string, runId: string, notes: string) =>
   Effect.scoped(
@@ -769,7 +804,6 @@ test.skipIf(process.platform !== "linux")(
   () =>
     proves(
       Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
         const restarted = yield* endsWithAHeldCheck("", ({ state }) =>
           restartHost(state).pipe(Effect.asVoid, Effect.orDie),
         );
@@ -777,11 +811,16 @@ test.skipIf(process.platform !== "linux")(
         yield* Effect.addFinalizer(() => stopHost(state).pipe(Effect.ignore));
         expect(restarted.running).toEqual([false, false]);
 
-        yield* until(
+        const [, rerun] = yield* until(
           () => notedIn(notes, "starts"),
           (pids) => pids.length === 2,
         );
-        expect(yield* fs.readDirectory(runningChecksDir(state))).toHaveLength(1);
+        // The host records a check only once it has spawned it and read its leader.
+        const leaders = yield* until(
+          () => recordedLeaders(state),
+          (pids) => pids.includes(Number(rerun)),
+        );
+        expect(leaders).toEqual([Number(rerun)]);
         expect(yield* notedIn(notes, "overlaps")).toEqual([]);
         expect(yield* releasedOnce(state, runId, notes)).toHaveLength(1);
       }),

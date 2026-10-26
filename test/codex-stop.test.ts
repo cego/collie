@@ -295,6 +295,22 @@ test("a continuation queued behind an interrupted turn never starts", () =>
     }),
   ));
 
+test("a continuation that started before the server took its drain is interrupted too", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* working({ continuation: true, lateDrain: true });
+      expect(yield* halted()).toEqual({ stopped: [agent], left: [] });
+      const atStop = yield* sizeOf(written());
+      yield* aWhile;
+      expect(yield* sizeOf(written())).toBe(atStop);
+      const interrupts = (yield* events()).filter((one) => one.method === "turn/interrupt");
+      expect(interrupts.map((one) => one.params)).toEqual([
+        { threadId: THREAD, turnId: TURN },
+        { threadId: THREAD, turnId: `${TURN}-continued` },
+      ]);
+    }),
+  ));
+
 test("a process left in the server's session gets one SIGTERM and ends", () =>
   runEffect(
     Effect.gen(function* () {

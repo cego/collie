@@ -17,6 +17,7 @@ import { handoffsDir } from "./handoffs";
 import { classifyWorkSource } from "./inputs";
 import { shell } from "./mr";
 import { forgeOfUrl } from "./forge/forge";
+import type { ForgeHttp } from "./forge/http";
 import { REVIEW_FILE } from "./output";
 import { settled, type RunFacts } from "./runs";
 import { workSourceOf } from "./strategies";
@@ -260,7 +261,7 @@ export const fetchRef = Effect.fn("RunDetail.fetchRef")(function* (
 ): Effect.fn.Return<
   RunFile,
   HostRefused,
-  FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
+  FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner | ForgeHttp
 > {
   const part = {
     offset: Math.max(0, range.offset),

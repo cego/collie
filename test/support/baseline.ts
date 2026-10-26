@@ -13,6 +13,7 @@ import type { ChildProcessSpawner } from "effect/process";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { hostname } from "node:os";
 import {
+  ConfigProvider,
   DateTime,
   Deferred,
   Duration,
@@ -35,7 +36,8 @@ import {
   CLI,
   FORGE_HOST,
   PROJECT,
-  forgeOnPath,
+  forgeOnPath as modelOnPath,
+  serveForges,
   type FakeJob,
   type FakeComment,
   type FakeMr,
@@ -44,6 +46,7 @@ import {
 import * as BunServices from "@effect/platform-bun/BunServices";
 import { readLanding, takeOver, writeLanding } from "../../src/landing";
 import { shell } from "../../src/mr";
+import type { ForgeHttp } from "../../src/forge/http";
 import { readCheckpoints } from "../../src/cards";
 import { mrLabel, mrTarget, type FlowLane, type MrForge } from "../../src/board-model";
 import { laneFor } from "../../src/flow-read";
@@ -89,7 +92,7 @@ import {
 } from "../../src/engine";
 import { VerifySpecSchema } from "../../src/verify-spec";
 import { findingsIn } from "../../src/output";
-import { collect, fingerprint, readVerifications } from "../../src/verify";
+import { FINGERPRINT_MAX_BYTES, collect, fingerprint, readVerifications } from "../../src/verify";
 import { inputsFor, offersFrom } from "../../src/offers";
 import { Store, storeLayer } from "../../src/store";
 import * as SqliteClient from "@effect/sql-sqlite-bun/SqliteClient";
@@ -116,6 +119,24 @@ type Shipped = keyof typeof UNRELATED;
 
 let rig: Rig;
 let dir: string;
+let forgeApi = "";
+const forgeFaces = new Map<
+  MrForge,
+  {
+    readonly face: (input: string, init?: RequestInit) => Promise<Response>;
+  }
+>();
+const forgeOnPath = (bin: FakeBin, name: MrForge, model: ForgeModel) =>
+  modelOnPath(bin, name, model).pipe(
+    Effect.tap((forge) => Effect.sync(() => forgeFaces.set(name, forge))),
+  );
+const noGitlabMrs = (bin: FakeBin) =>
+  forgeOnPath(bin, "gitlab", {
+    installed: true,
+    loggedIn: [FORGE_HOST.gitlab],
+    login: "tester",
+    mrs: [],
+  });
 let started: ChildAsk[] = [];
 /** The invocations whose child ends in failure. */
 let failing = new Set<string>();
@@ -142,7 +163,7 @@ const scenario = (name: string, body: () => Promise<void>, timeout?: number) => 
 /** A test about the shipped modules themselves, which has one pass. */
 const shippedOnly: Array<() => void> = [];
 const once = (name: string, body: () => Promise<void>, timeout?: number) => {
-  shippedOnly.push(() => test(name, body, timeout));
+  shippedOnly.push(() => test(name, () => withForges(body), timeout));
 };
 
 /** The installation is this checkout, so the shipped personas are the ones found. */
@@ -184,7 +205,7 @@ const children = Layer.succeed(Children)(
 );
 
 /** A host layer a test may wrap, for the one capability it has no service to answer with. */
-type HostOverride = Layer.Layer<Host, never, Host | BunServices.BunServices>;
+type HostOverride = Layer.Layer<Host, never, Host | BunServices.BunServices | ForgeHttp>;
 
 /** The host's own layers, placing checkouts through the rig's herdr. */
 const foundation = () => ({
@@ -222,7 +243,11 @@ const session = <A, E>(
         ? foundationLayer(foundation())
         : override.pipe(Layer.provideMerge(foundationLayer(foundation()))),
     ),
+    Effect.provide(
+      ConfigProvider.layerAdd(ConfigProvider.fromUnknown({ COLLIE_FORGE_API: forgeApi })),
+    ),
     Effect.scoped,
+    Effect.timeout("30 seconds"),
     Effect.orDie,
   );
 
@@ -1698,11 +1723,19 @@ scenario(
   () =>
     runEffect(
       Effect.gen(function* () {
+        yield* repository();
+        yield* exec(["git", "branch", "feature"], { cwd: rig.projectDir });
+        const worktrees = () =>
+          exec(["git", "worktree", "list"], { cwd: rig.projectDir }).pipe(
+            Effect.map((listed) => listed.stdout),
+          );
+        const before = yield* worktrees();
         yield* rig.queueOutputs([SYNTHESIS]);
+        const target = "branch:main...feature";
         const rows = yield* parked({
           entry: shipped("review"),
           runId: "r-review-branch",
-          input: { target: "branch:main...HEAD" },
+          input: { target },
           decision: "post-1",
         });
 
@@ -1716,11 +1749,13 @@ scenario(
         const result = yield* answered({
           entry: shipped("review"),
           runId: "r-review-branch",
-          input: { target: "branch:main...HEAD" },
+          input: { target },
           decision: "post-1",
           value: "Don't post",
         });
         expect(said(result)).toBe("1 finding(s), not posted");
+        // Asking whether the branch can be fixed cuts no checkout of it.
+        expect(yield* worktrees()).toBe(before);
       }),
     ),
   120_000,
@@ -1749,10 +1784,19 @@ scenario(
         yield* repository();
         yield* exec(["git", "branch", "fix-the-guard"], { cwd: rig.projectDir });
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add(
-          "glab",
-          `[ "$1 $2" = "mr view" ] && echo '{"source_branch": "fix-the-guard"}'; exit 0`,
-        );
+        yield* forgeOnPath(bin, "gitlab", {
+          installed: true,
+          loggedIn: [FORGE_HOST.gitlab],
+          login: "tester",
+          mrs: [
+            {
+              project: "gitlab.example.com/group/project",
+              iid: "42",
+              state: "open",
+              sourceBranch: "fix-the-guard",
+            },
+          ],
+        });
         const target = "mr:gitlab.example.com/group/project!42";
         const rows = yield* parked({
           entry: shipped("review"),
@@ -2014,34 +2058,95 @@ scenario(
 );
 
 scenario(
-  "a review with no branch to fix starts no fixer, says why, and asks again",
+  "a review with no branch to fix offers no fix, says why, and starts no fixer",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* repository();
+        yield* rig.queueOutputs([SYNTHESIS]);
+        const rows = yield* parked({
+          entry: shipped("review"),
+          runId: "r-fix-none",
+          input: { target: "branch:main...HEAD" },
+          decision: "post-1",
+        });
+
+        expect(optionsOf(rows, "post-1")).toEqual(["Don't post"]);
+        expect(rows.find((row) => row.decision === "post-1")?.prompt).toContain(
+          "HEAD is not a branch, so there is nothing to fix on it",
+        );
+        expect((yield* rig.cmds()).filter((cmd) => cmd === "agent start")).toHaveLength(1);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a merge request reviewed from a checkout with no remote is offered no fix, and says why",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        for (const args of [
+          ["init", "-q"],
+          ["config", "user.email", "t@example.com"],
+          ["config", "user.name", "t"],
+          ["commit", "-qm", "first", "--allow-empty"],
+          ["branch", "fix-the-guard"],
+        ]) {
+          yield* exec(["git", ...args], { cwd: rig.projectDir });
+        }
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* bin.add(
+          "glab",
+          `[ "$1 $2" = "mr view" ] && echo '{"source_branch": "fix-the-guard"}'; exit 0`,
+        );
+        yield* rig.queueOutputs([SYNTHESIS]);
+        const rows = yield* parked({
+          entry: shipped("review"),
+          runId: "r-review-no-remote",
+          input: { target: "mr:gitlab.example.com/group/project!42" },
+          decision: "post-1",
+        });
+
+        expect(optionsOf(rows, "post-1")).toEqual(["Post to merge request", "Don't post"]);
+        expect(rows.find((row) => row.decision === "post-1")?.prompt).toContain(
+          `${rig.projectDir} has no remote, so group/project!42 may not be its own`,
+        );
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a fix refused when it starts is not offered again, and its refusal is logged once",
   () =>
     runEffect(
       Effect.gen(function* () {
         yield* repository();
         yield* rig.queueOutputs([SYNTHESIS]);
         const target = "branch:main...HEAD";
-        yield* parked({
-          entry: shipped("review"),
-          runId: "r-fix-none",
-          input: { target },
-          decision: "post-1",
-        });
+        const review = { entry: shipped("review"), runId: "r-fix-refused", input: { target } };
+        // A parent nobody is implementing for: the hand-off finds no one to take it.
+        const first = yield* parked({ ...review, decision: "post-1", parent: "r-gone" });
+        expect(optionsOf(first, "post-1")).toContain("Fix findings");
+        expect(optionsOf(first, "post-1")).not.toContain("Fix findings in a full implement run");
+
         const rows = yield* answeredThen({
-          entry: shipped("review"),
-          runId: "r-fix-none",
-          input: { target },
+          ...review,
           decision: "post-1",
           value: "Fix findings",
           until: "post-2",
         });
-
-        expect((yield* rig.cmds()).filter((cmd) => cmd === "agent start")).toHaveLength(1);
-        const fs = yield* FileSystem.FileSystem;
-        expect(yield* fs.readFileString(`${runDir(dir, "r-fix-none")}/log.txt`)).toContain(
+        expect(optionsOf(rows, "post-2")).toEqual(["Don't post"]);
+        expect(rows.find((row) => row.decision === "post-2")?.prompt).toContain(
           "HEAD is not a branch, so there is nothing to fix on it",
         );
-        expect(optionsOf(rows, "post-2")).toContain("Fix findings");
+        expect((yield* rig.cmds()).filter((cmd) => cmd === "agent start")).toHaveLength(1);
+
+        yield* answered({ ...review, decision: "post-2", value: "Don't post" });
+        const fs = yield* FileSystem.FileSystem;
+        const log = yield* fs.readFileString(`${runDir(dir, "r-fix-refused")}/log.txt`);
+        expect(log.split("fix: nothing fixed, HEAD is not a branch").length - 1).toBe(1);
       }),
     ),
   120_000,
@@ -2469,7 +2574,7 @@ const approve = (runId: string, names: ReadonlyArray<string>) =>
 const noMergeRequests = Effect.acquireRelease(
   Effect.gen(function* () {
     const bin = yield* FakeBin.make(`${rig.root}/bin`);
-    yield* bin.add("glab", "exit 0");
+    yield* noGitlabMrs(bin);
     return bin;
   }),
   (bin) => bin.restore(),
@@ -2566,7 +2671,7 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `[ "$1" = "api" ] && echo '{"username":"tester"}'; exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         const plan = yield* planOf([
           { file: "01-first.md", title: "the first one", checks: "unit" },
@@ -2633,7 +2738,7 @@ scenario(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `[ "$1" = "api" ] && echo '{"username":"tester"}'; exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         const plan = yield* planOf([
           { file: "01-first.md", title: "the first one", checks: "unit" },
@@ -2675,7 +2780,7 @@ scenario(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `[ "$1" = "api" ] && echo '{"username":"tester"}'; exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         const plan = yield* planOf([
           { file: "01-first.md", title: "the first one", checks: "unit" },
@@ -2718,7 +2823,7 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `[ "$1" = "api" ] && echo '{"username":"tester"}'; exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         const plan = yield* planOf([
           { file: "01-first.md", title: "the first one", checks: "unit", body: CRITERIA },
@@ -2791,7 +2896,7 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `[ "$1" = "api" ] && echo '{"username":"tester"}'; exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         const plan = yield* planOf([
           { file: "01-first.md", title: "the first one", checks: "unit", body: CRITERIA },
@@ -2830,7 +2935,7 @@ scenario(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `[ "$1" = "api" ] && echo '{"username":"tester"}'; exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         const plan = yield* planOf([
           { file: "01-first.md", title: "the first one", checks: "unit", body: CRITERIA },
@@ -2894,7 +2999,7 @@ scenario(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `[ "$1" = "api" ] && echo '{"username":"tester"}'; exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         const plan = yield* planOf([
           { file: "01-first.md", title: "the first one", checks: "unit", body: CRITERIA },
@@ -2954,7 +3059,7 @@ scenario(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `[ "$1" = "api" ] && echo '{"username":"tester"}'; exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         const plan = yield* planOf([
           { file: "01-first.md", title: "the first one", checks: "unit", body: CRITERIA },
@@ -3012,7 +3117,7 @@ scenario(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `[ "$1" = "api" ] && echo '{"username":"tester"}'; exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         const shared = [
           "## Acceptance criteria",
@@ -3071,7 +3176,7 @@ scenario(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `[ "$1" = "api" ] && echo '{"username":"tester"}'; exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         const plan = yield* planOf([
           { file: "01-first.md", title: "the first one", checks: "unit", body: CRITERIA },
@@ -3138,7 +3243,7 @@ scenario(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `[ "$1" = "api" ] && echo '{"username":"tester"}'; exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         const plan = yield* planOf([
           {
@@ -3184,7 +3289,7 @@ scenario(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `[ "$1" = "api" ] && echo '{"username":"tester"}'; exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         const plan = yield* planOf([
           { file: "01-first.md", title: "the first one", checks: "unit", body: CRITERIA },
@@ -3236,7 +3341,7 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `[ "$1" = "api" ] && echo '{"username":"tester"}'; exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         const plan = yield* planOf([
           { file: "01-first.md", title: "the first one", checks: "unit", body: CRITERIA },
@@ -3278,13 +3383,169 @@ scenario(
   120_000,
 );
 
+const COUNTED_ONLY = {
+  ...BUILT,
+  criteria: [
+    { criterion: "**Counted.** Every registry is counted once.", met: "test/count.test.ts" },
+  ],
+};
+const BLOCKED = {
+  ...COUNTED_ONLY,
+  verdict: "findings",
+  findings: [{ severity: "blocker", title: "the log service is down", detail: "nothing logs" }],
+  commits: [],
+};
+
+/** The stall question under `name` once it is open, or none if the Run ended first. */
+const stallAsked = (
+  run: {
+    readonly status: Effect.Effect<typeof RunStatus.Type>;
+    readonly asked: Effect.Effect<
+      ReadonlyArray<{ decision: string; prompt: string; options: string; answer: string | null }>
+    >;
+  },
+  name: string,
+) =>
+  until(
+    () => Effect.all([run.asked, run.status]),
+    ([rows, got]) =>
+      rows.some((row) => row.decision === name && row.answer === null) ||
+      got.status === "complete" ||
+      got.status === "failed",
+  ).pipe(Effect.map(([rows]) => rows.filter((row) => row.decision === name)));
+
+scenario(
+  "a criteria hand-back that changed nothing and reported a blocker asks, and Stop fails the Run before any review",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* noGitlabMrs(bin);
+        yield* repository();
+        const plan = yield* planOf([
+          { file: "01-first.md", title: "the first one", checks: "unit", body: CRITERIA },
+          { file: "02-second.md", title: "the second one", checks: "unit" },
+        ]);
+        yield* approve("r-stalled", ["unit"]);
+        yield* rig.queueOutputs([COUNTED_ONLY, BLOCKED, BLOCKED]);
+        const status = yield* driven(
+          { entry: shipped("implement"), runId: "r-stalled", input: { plan, ...FINISH } },
+          (run) =>
+            Effect.gen(function* () {
+              const rows = yield* stallAsked(run, "01-first.md.criteria-stalled-1");
+              expect(rows).toHaveLength(1);
+              const [question] = rows;
+              expect(question!.prompt).toContain("01-first.md");
+              expect(question!.prompt).toContain("the log service is down");
+              expect(question!.prompt).toContain("**Named.** Each one is named in the log.");
+              expect(question!.prompt).not.toContain("not answered: **Counted.**");
+              expect(optionsOf(rows, "01-first.md.criteria-stalled-1")).toEqual([
+                "Hand back",
+                "Stop",
+              ]);
+              expect((yield* prompts()).join("\n")).not.toContain(
+                "01-first.md.criteria-2.prompt.md",
+              );
+              yield* run.answer("01-first.md.criteria-stalled-1", "Stop");
+              return yield* ended(run.status);
+            }),
+        );
+        yield* bin.restore();
+
+        expect(status.status).toBe("failed");
+        const why = outcomeText(status);
+        expect(why).toContain(
+          "01-first.md: a criteria hand-back reported a blocker and changed nothing, so no review starts",
+        );
+        expect(why).toContain("**Named.** Each one is named in the log.");
+        const sent = (yield* prompts()).join("\n");
+        expect(sent).not.toContain("01-first.md.criteria-2.prompt.md");
+        expect(sent).not.toContain("review-1");
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "answering Hand back to a stalled criteria hand-back hands the ticket back again, and a second stall is asked anew",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* noGitlabMrs(bin);
+        yield* repository();
+        const plan = yield* planOf([
+          { file: "01-first.md", title: "the first one", checks: "unit", body: CRITERIA },
+          { file: "02-second.md", title: "the second one", checks: "unit" },
+        ]);
+        yield* approve("r-handed-again", ["unit"]);
+        yield* rig.queueOutputs([COUNTED_ONLY, BLOCKED, BLOCKED]);
+        const status = yield* driven(
+          { entry: shipped("implement"), runId: "r-handed-again", input: { plan, ...FINISH } },
+          (run) =>
+            Effect.gen(function* () {
+              expect(yield* stallAsked(run, "01-first.md.criteria-stalled-1")).toHaveLength(1);
+              yield* run.answer("01-first.md.criteria-stalled-1", "Hand back");
+              expect(yield* stallAsked(run, "01-first.md.criteria-stalled-2")).toHaveLength(1);
+              yield* run.answer("01-first.md.criteria-stalled-2", "Stop");
+              return yield* ended(run.status);
+            }),
+        );
+        yield* bin.restore();
+
+        expect(status.status).toBe("failed");
+        expect(yield* asked("r-handed-again", "01-first.md.criteria-2")).toContain(
+          "acceptance criterion not answered: **Named.** Each one is named in the log.",
+        );
+        expect((yield* prompts()).join("\n")).not.toContain("01-first.md.criteria-3.prompt.md");
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a blocked criteria hand-back on a tree too large to fingerprint is handed back again, not asked about",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* noGitlabMrs(bin);
+        yield* repository();
+        const big = `${rig.projectDir}/big.bin`;
+        yield* fs.writeFileString(big, "");
+        yield* fs.truncate(big, FINGERPRINT_MAX_BYTES + 1);
+        const plan = yield* planOf([
+          { file: "01-first.md", title: "the first one", checks: "unit", body: CRITERIA },
+          { file: "02-second.md", title: "the second one", checks: "unit" },
+        ]);
+        yield* approve("r-unmeasured", ["unit"]);
+        yield* rig.queueOutputs([COUNTED_ONLY, BLOCKED, BLOCKED]);
+        const status = yield* driven(
+          { entry: shipped("implement"), runId: "r-unmeasured", input: { plan, ...FINISH } },
+          (run) =>
+            Effect.gen(function* () {
+              expect(yield* stallAsked(run, "01-first.md.criteria-stalled-1")).toHaveLength(0);
+              return yield* ended(run.status);
+            }),
+        );
+        yield* bin.restore();
+
+        expect(status.status).toBe("failed");
+        expect(outcomeText(status)).toContain("after 2 hand-backs");
+        expect((yield* prompts()).join("\n")).toContain("01-first.md.criteria-2.prompt.md");
+      }),
+    ),
+  120_000,
+);
+
 scenario(
   "the criteria in a work source given as words are answered as a ticket's are",
   () =>
     runEffect(
       Effect.gen(function* () {
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `[ "$1" = "api" ] && echo '{"username":"tester"}'; exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         yield* approve("r-words", ["unit"]);
         yield* rig.queueOutputs([
@@ -3393,7 +3654,7 @@ scenario(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `[ "$1" = "api" ] && echo '{"username":"tester"}'; exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         // The plan is a planner Run's own, so that Run is in this one's lineage.
         const plan = yield* planOf(
@@ -3783,7 +4044,7 @@ scenario(
           asJson({ gitlab: { assignee: "someone-else" } }),
         );
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
         yield* approve("r-impl-mr", ["unit"]);
@@ -3813,7 +4074,7 @@ scenario(
 const delivering = (runId: string) =>
   Effect.gen(function* () {
     const bin = yield* FakeBin.make(`${rig.root}/bin`);
-    yield* bin.add("glab", `exit 0`);
+    yield* noGitlabMrs(bin);
     yield* repository();
     const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
     yield* approve(runId, ["unit"]);
@@ -4067,7 +4328,7 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
         yield* approve("r-impl-minor", ["unit"]);
@@ -4104,7 +4365,7 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         const plan = yield* planOf([
           { file: "01-first.md", title: "the first one", checks: "unit" },
@@ -4166,7 +4427,7 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         const plan = yield* planOf([
           { file: "01-only.md", title: "the first one", checks: "unit" },
@@ -4204,7 +4465,7 @@ once(
     runEffect(
       Effect.gen(function* () {
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         const entry = yield* fork(
           "implement",
@@ -4300,7 +4561,7 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
         yield* approve("r-impl-fix", ["unit"]);
@@ -4388,7 +4649,7 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         // What a review module leaves behind: the prose a human reads and the findings a
         // card counts. There is no engine run record beside it, and there never will be.
@@ -4421,7 +4682,7 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `exit 0`);
+        yield* noGitlabMrs(bin);
         yield* ahead();
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
         // Approved, and it fails until repaired: an Output that says the tests pass is a claim,
@@ -4493,7 +4754,7 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
         yield* approve("r-gate-judged", ["unit"]);
@@ -4525,7 +4786,7 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
         yield* approve("r-gate-unproved", ["unit"]);
@@ -4563,7 +4824,7 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `exit 0`);
+        yield* noGitlabMrs(bin);
         yield* ahead();
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
         // Fails at the gate and on its recheck, then passes once the fix has run.
@@ -4612,7 +4873,7 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `exit 0`);
+        yield* noGitlabMrs(bin);
         yield* ahead();
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
         const count = `${rig.root}/runs`;
@@ -4769,7 +5030,7 @@ scenario(
           job: { name: "nuxi-job", url: `https://${PROJECT.gitlab}/-/jobs/1` },
         });
         expect(proof!.executable).toEndWith("/sh");
-        expect((yield* forge.calls()).some((call) => call.includes("/pipelines/3100/jobs"))).toBe(
+        expect(forge.requests().some((call) => call.url.includes("/pipelines/3100/jobs"))).toBe(
           true,
         );
       }),
@@ -4983,7 +5244,9 @@ scenario(
         const [proof, ...more] = yield* ciRecords(runId);
         expect(more).toEqual([]);
         expect(proof).toMatchObject({ name: "nuxi", end: { head_sha: fix.sha } });
-        expect((yield* forge.calls()).filter((call) => call.includes("/retry"))).toHaveLength(1);
+        expect(
+          forge.requests().filter((call) => call.method === "POST" && call.url.endsWith("/retry")),
+        ).toHaveLength(1);
         expect((yield* ciNotes(forge)).join("\n")).toContain(
           "ci fix 1 landed after the last review and was not re-reviewed",
         );
@@ -5024,7 +5287,9 @@ scenario(
         const fs = yield* FileSystem.FileSystem;
         expect(yield* fs.readFileString(`${runDir(dir, runId)}/log.txt`)).toContain(line);
         expect(yield* fs.exists(`${dir}/agents/${runId}/ci-fix-1.prompt.md`)).toBe(false);
-        expect((yield* forge.calls()).some((call) => call.includes("/retry"))).toBe(false);
+        expect(
+          forge.requests().some((call) => call.method === "POST" && call.url.endsWith("/retry")),
+        ).toBe(false);
         expect(yield* ciRecords(runId)).toEqual([]);
       }),
     ),
@@ -5220,7 +5485,7 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
         const runId = "r-gate-once";
@@ -5265,7 +5530,7 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `exit 0`);
+        yield* noGitlabMrs(bin);
         yield* ahead();
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
         const runId = "r-gate-fix-reruns";
@@ -5351,7 +5616,7 @@ const failingThen = (
 ) =>
   Effect.gen(function* () {
     const bin = yield* FakeBin.make(`${rig.root}/bin`);
-    yield* bin.add("glab", `exit 0`);
+    yield* noGitlabMrs(bin);
     yield* bin.add(
       "bun",
       `if [ "$(git log -1 --format=%s)" = first ]; then echo >> ${rig.root}/base-runs; ${options.atBase ?? ONE_PASSES}; else ${options.rerun}; fi`,
@@ -5761,7 +6026,7 @@ scenario(
 const stuck = (runId: string, names: ReadonlyArray<string>) =>
   Effect.gen(function* () {
     const bin = yield* FakeBin.make(`${rig.root}/bin`);
-    yield* bin.add("glab", `exit 0`);
+    yield* noGitlabMrs(bin);
     yield* approve(runId, [...names]);
     const fs = yield* FileSystem.FileSystem;
     yield* fs.writeFileString(
@@ -5936,7 +6201,7 @@ scenario(
 const heldUnproved = (runId: string) =>
   Effect.gen(function* () {
     const bin = yield* FakeBin.make(`${rig.root}/bin`);
-    yield* bin.add("glab", `exit 0`);
+    yield* noGitlabMrs(bin);
     yield* ahead();
     const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
     yield* approve(runId, ["unit", "lint"]);
@@ -6024,15 +6289,17 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
         const runId = "r-gate-new-tool";
         yield* approve(runId, ["unit", "lint"]);
         const fs = yield* FileSystem.FileSystem;
         const tool = `${rig.root}/tools/unit`;
+        const unitRuns = `${rig.root}/v2/unit-runs`;
         yield* fs.makeDirectory(`${rig.root}/tools`, { recursive: true });
-        yield* fs.writeFileString(tool, `#!/bin/sh\necho >> ${rig.root}/unit-runs\n`);
+        yield* fs.makeDirectory(`${rig.root}/v2`);
+        yield* fs.writeFileString(tool, `#!/bin/sh\necho >> ${unitRuns}\n`);
         yield* fs.chmod(tool, 0o755);
         yield* fs.writeFileString(
           `${evidenceDir(dir, runId)}/approved.json`,
@@ -6042,7 +6309,7 @@ scenario(
             counting(
               "lint",
               `${rig.root}/lint-runs`,
-              `grep -q v2 ${tool} || echo '# v2' >> ${tool}`,
+              `grep -Fqx '# v2' ${tool} || echo '# v2' >> ${tool}`,
             ),
           ]),
         );
@@ -6056,7 +6323,7 @@ scenario(
         yield* bin.restore();
 
         expect(said(result)).toBe(OPENED.mr_url);
-        expect(yield* runsOf(`${rig.root}/unit-runs`)).toBe(2);
+        expect(yield* runsOf(unitRuns)).toBe(2);
         expect(yield* runsOf(`${rig.root}/lint-runs`)).toBe(1);
       }),
     ),
@@ -6069,7 +6336,7 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
         const runId = "r-gate-new-tree";
@@ -6117,7 +6384,7 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
         yield* approve("r-impl-red-base", ["unit"]);
@@ -6164,7 +6431,7 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         const git = (...args: string[]) =>
           exec(["git", ...args], { cwd: rig.projectDir }).pipe(
@@ -6228,7 +6495,7 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
         yield* approve("r-impl-dispute", ["unit"]);
@@ -6280,7 +6547,7 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
         yield* approve("r-impl-weakened", ["unit"]);
@@ -6332,7 +6599,7 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
         yield* approve("r-final-dispute", ["unit"]);
@@ -6407,7 +6674,7 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
         yield* approve("r-final-stands", ["unit"]);
@@ -6480,7 +6747,7 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
         yield* approve("r-late-grant", ["unit"]);
@@ -6527,7 +6794,7 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
         yield* approve("r-early-dispute", ["unit"]);
@@ -6602,9 +6869,12 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `exit 0`);
-        // It answers for the branch's pull requests, and is otherwise not there.
-        yield* bin.add("gh", `[ "$1" = "pr" ] && { echo '[]'; exit 0; }; exit 127`);
+        yield* noGitlabMrs(bin);
+        // The HTTP login works, but the CLI needed to deliver is missing.
+        yield* bin.add(
+          "gh",
+          `[ "$*" = "auth token --hostname github.com" ] && { echo gho-fake; exit 0; }; exit 127`,
+        );
         yield* repository();
         yield* exec(["git", "remote", "set-url", "upstream", "git@github.com:team/project.git"], {
           cwd: rig.projectDir,
@@ -6953,7 +7223,7 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
         const runId = "r-impl-delivery-failed";
@@ -6988,7 +7258,7 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
         const runId = "r-impl-delivery-findings";
@@ -7018,9 +7288,12 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `exit 0`);
-        // It answers for the branch's pull requests, and is otherwise not there.
-        yield* bin.add("gh", `[ "$1" = "pr" ] && { echo '[]'; exit 0; }; exit 127`);
+        yield* noGitlabMrs(bin);
+        // The HTTP login works, but the CLI needed to deliver is missing.
+        yield* bin.add(
+          "gh",
+          `[ "$*" = "auth token --hostname github.com" ] && { echo gho-fake; exit 0; }; exit 127`,
+        );
         yield* repository();
         yield* exec(["git", "remote", "set-url", "upstream", "git@github.com:team/project.git"], {
           cwd: rig.projectDir,
@@ -7180,7 +7453,7 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "" }]);
         yield* approve("r-impl-none", []);
@@ -7233,7 +7506,7 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
         yield* approve("r-impl-named", []);
@@ -7270,7 +7543,7 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "" }]);
         yield* approve("r-impl-emptied", ["unit"]);
@@ -7384,7 +7657,7 @@ const renovatable = () =>
       }),
     );
     const bin = yield* FakeBin.make(`${rig.root}/bin`);
-    yield* bin.add("glab", `exit 0`);
+    yield* noGitlabMrs(bin);
     yield* repository();
     return bin;
   });
@@ -7887,10 +8160,10 @@ for (const name of ["gitlab", "github"] as const) {
           const waiting = `production to carry \`${head.slice(0, 8)}\` of ${url}, holding the claim on \`project\``;
           const polled = (more: number) =>
             Effect.gen(function* () {
-              const before = (yield* forge.calls()).length;
+              const before = forge.requests().length;
               yield* until(
-                () => forge.calls(),
-                (calls) => calls.length >= before + more,
+                () => Effect.sync(forge.requests),
+                (requests) => requests.length >= before + more,
               );
             });
 
@@ -8016,8 +8289,8 @@ scenario(
                 (on) => on !== "",
               );
               yield* until(
-                () => forge.calls(),
-                (calls) => calls.some((call) => call.includes("deployments")),
+                () => Effect.sync(forge.requests),
+                (requests) => requests.some((request) => request.url.includes("deployments")),
               );
               const fs = yield* FileSystem.FileSystem;
               yield* fs.writeFileString(controlPath(dir, HOLD, runId), "").pipe(Effect.orDie);
@@ -8332,7 +8605,7 @@ const releaseHost = (
   Layer.effect(Host)(
     Effect.gen(function* () {
       const host = yield* Host;
-      const services = yield* Effect.context<BunServices.BunServices>();
+      const services = yield* Effect.context<BunServices.BunServices | ForgeHttp>();
       let replies = 0;
       return Host.of({
         ...host,
@@ -12460,7 +12733,7 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `[ "$1" = "api" ] && echo '{"username":"tester"}'; exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         const plan = yield* planOf([
           { file: "01-first.md", title: "the first one", checks: "unit" },
@@ -12503,7 +12776,7 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add("glab", `exit 0`);
+        yield* noGitlabMrs(bin);
         yield* repository();
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
         yield* approve("r-flow-fix", ["unit"]);
@@ -12606,6 +12879,28 @@ scenario(
     ),
   120_000,
 );
+const withForges = (body: () => Promise<void>) =>
+  runEffect(
+    Effect.gen(function* () {
+      forgeFaces.clear();
+      const bin = yield* FakeBin.make(`${rig.root}/default-forges`);
+      yield* Effect.addFinalizer(() => bin.restore());
+      for (const name of ["gitlab", "github"] as const)
+        yield* forgeOnPath(bin, name, {
+          installed: true,
+          loggedIn: [FORGE_HOST[name]],
+          login: "tester",
+          mrs: [],
+        });
+      forgeApi = yield* serveForges(
+        ...(["gitlab", "github"] as const).map((name) => ({
+          forge: name,
+          face: (input: string, init?: RequestInit) => forgeFaces.get(name)!.face(input, init),
+        })),
+      );
+      yield* Effect.promise(body);
+    }),
+  );
 
 export const register = (pass: "shipped" | "unrelated") => {
   beforeEach(() =>
@@ -12614,6 +12909,7 @@ export const register = (pass: "shipped" | "unrelated") => {
         rig = yield* Rig.make();
         const fs = yield* FileSystem.FileSystem;
         dir = `${rig.root}/host`;
+        forgeApi = "";
         started = [];
         failing = new Set();
         modules = new Map();
@@ -12650,11 +12946,13 @@ export const register = (pass: "shipped" | "unrelated") => {
       pass === "unrelated" ? `${one.name} (under an unrelated id)` : one.name,
       () => {
         renamed = pass === "unrelated";
-        return one
-          .body()
-          .then(() => runEffect(noCommandSubstitution()))
-          .then(() => runEffect(undeclaredWork()))
-          .then((loose) => expect(loose).toEqual([]));
+        return withForges(() =>
+          one
+            .body()
+            .then(() => runEffect(noCommandSubstitution()))
+            .then(() => runEffect(undeclaredWork()))
+            .then((loose) => expect(loose).toEqual([])),
+        );
       },
       one.timeout,
     );

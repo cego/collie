@@ -9,7 +9,7 @@
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect } from "effect";
-import { runEffect } from "./support/effect";
+import { runOnPath } from "./support/forge";
 import { Rig, TEST_LOGIN as LOGIN } from "./support/recorder";
 import { FakeBin } from "./support/bin";
 import { branchFor, checkoutFor, type BranchAsk } from "../src/worktree";
@@ -35,7 +35,7 @@ const SHIPPED = { plan: "work-source", target: "diff-target" } as const;
 const RENAMED = { spec: "work-source", change: "diff-target" } as const;
 
 beforeEach(() =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       rig = yield* Rig.make();
       bin = yield* FakeBin.make(join(rig.root, "bin"));
@@ -44,7 +44,7 @@ beforeEach(() =>
 );
 
 afterEach(() =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* bin.restore();
       yield* rig.close();
@@ -89,7 +89,7 @@ const asks = (
 });
 
 test("a branch is named from the work source whatever the work source is called", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* fakeGit();
       const shipped = yield* branchFor(
@@ -106,7 +106,7 @@ test("a branch is named from the work source whatever the work source is called"
   ));
 
 test("a branch is built from the diff target whatever the diff target is called", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* fakeGit();
       const shipped = yield* branchFor(asks({ target: "branch:master...fix-login" }, SHIPPED));
@@ -118,7 +118,7 @@ test("a branch is built from the diff target whatever the diff target is called"
   ));
 
 test("a review is cut from the reviewed branch whatever the two fields are called", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* fakeGit();
       const shipped = yield* branchFor(
@@ -140,7 +140,7 @@ test("a review is cut from the reviewed branch whatever the two fields are calle
   ));
 
 test("the Linear tickets a branch answers come from the work source's own field", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* fakeGit("feature/ABC-12-picker");
       const shipped = yield* linearIssues(
@@ -166,7 +166,7 @@ test("the Linear tickets a branch answers come from the work source's own field"
   ));
 
 test("a roaming Run is cut from the repository the strategy names, under a neutral name", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* fakeGit();
       // Not `repository`, which is only what the shipped roaming workflow calls it.
@@ -189,7 +189,7 @@ test("a roaming Run is cut from the repository the strategy names, under a neutr
   ));
 
 test("the previous review of a change is found whatever the reviewing Run called it", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       const earlier = runFacts({
         workflow: "review",

@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { Effect, FileSystem, Path } from "effect";
 import { runEffect } from "./support/effect";
+import { forgesImportsIn } from "./support/forges-imports";
 
 // ADR-0050 D1: `glab` is run only by the GitLab adapter and `gh` only by the GitHub one,
 // and no workflow's content names either.
@@ -101,3 +102,41 @@ test("every allowlisted file still runs a forge CLI, so a moved one leaves the l
       expect([...ALLOWED.keys()].filter((file) => !found.has(file))).toEqual([]);
     }),
   ));
+
+test("only the forge directory imports forges", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = path.dirname(yield* path.fromFileUrl(new URL("./", import.meta.url)));
+      const files = new Map<string, string>();
+      for (const dir of ["src", "workflows"])
+        for (const entry of yield* fs.readDirectory(path.join(root, dir), { recursive: true }))
+          if (/\.tsx?$/.test(entry))
+            files.set(`${dir}/${entry}`, yield* fs.readFileString(path.join(root, dir, entry)));
+      expect(forgesImportsIn(files)).toEqual([]);
+    }),
+  ));
+
+test("a forges import outside the forge directory is a stray, however it is written", () => {
+  expect(
+    forgesImportsIn(
+      new Map([
+        ["src/forge/http.ts", 'import type { ForgeProvider } from "forges";'],
+        ["src/ci-job.ts", 'import { github } from "forges/github";'],
+        ["src/mr.ts", "const lib = await import('forges');"],
+        ["src/outside.ts", 'import "forges";'],
+        ["src/another.ts", "import 'forges/github';"],
+        ["src/forge/side-effect.ts", 'import "forges";'],
+        ["workflows/release.workflow.ts", 'import type { FetchLike } from "forges";'],
+        ["src/other.ts", 'import { forgesFromThere } from "./forges-helper";'],
+      ]),
+    ),
+  ).toEqual([
+    "src/ci-job.ts imports forges",
+    "src/mr.ts imports forges",
+    "src/outside.ts imports forges",
+    "src/another.ts imports forges",
+    "workflows/release.workflow.ts imports forges",
+  ]);
+});

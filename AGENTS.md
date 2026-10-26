@@ -104,7 +104,8 @@ here are in [`src/README.md`](src/README.md).
   `src/flows.ts`, `test/lifecycle.test.ts`.
 - **Inputs, strategies** → [ADR-0019](docs/adr/0019-a-strategy-not-a-field-name.md), `src/strategies.ts`,
   `src/inputs.ts`, `test/strategies.test.ts`.
-- **Forge** (`glab`, `gh`) → [ADR-0050](docs/adr/0050-a-merge-request-is-its-forges.md),
+- **Forge** (`glab`, `gh`, `forges`) → [ADR-0050](docs/adr/0050-a-merge-request-is-its-forges.md),
+  [ADR-draft-a-forge-is-asked-over-http-with-its-clis-login](docs/adr/draft-a-forge-is-asked-over-http-with-its-clis-login.md),
   [`docs/internals.md`](docs/internals.md#the-forge-boundary), `src/forge/`, `test/support/forge.ts`,
   `test/forge.test.ts`, `test/forge-boundary.test.ts`.
 - **Agent launch, prompt, Output** → [ADR-0020](docs/adr/0020-an-agent-is-launched-once-and-its-output-is-decoded.md),

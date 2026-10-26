@@ -104,6 +104,7 @@ import { currentPid, signalProcess } from "./lock";
 import { skillDirs, skillFile, type CheckoutKind, type InputStrategy } from "./definitions";
 import { EXCLUSIVE_STRATEGIES } from "./strategies";
 import { appendMetric, noteVerification, metricsOf, readMetrics } from "./metrics";
+import { ForgeHttp, forgeHttpLayer } from "./forge/http";
 import { ciJob } from "./ci-job";
 import { land, LandingSchema, readLanding, takeOver } from "./landing";
 import {
@@ -187,7 +188,7 @@ import {
   RunReport,
   type Disposition,
 } from "./board-model";
-import { TASK_INPUT, checkoutFor, repositoryName, workOf } from "./worktree";
+import { TASK_INPUT, branchFor, checkoutFor, repositoryName, workOf } from "./worktree";
 import { Herdr, herdrFailureReason } from "./herdr";
 
 import type { PluginEnv } from "./env";
@@ -587,6 +588,9 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     | { readonly cwd: string; readonly branch: string }
     | { readonly refused: string };
 
+  /** The reviewed branch, or why there is none. */
+  export type ReviewedBranch = { readonly branch: string } | { readonly refused: string };
+
   /** What opening a merge request from here needs, and what it would be filled in with. */
   export interface MrReady {
     readonly ok: boolean;
@@ -631,6 +635,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly skill: (name: string) => Effect.Effect<string | null>;
     /** This Run as the host admitted it; its directory is made as this is answered. */
     readonly place: (runId: string) => Effect.Effect<Place>;
+    /** Whether the branch this Run's diff target names can be established; cuts and records nothing. */
+    readonly reviewedBranch: (runId: string) => Effect.Effect<ReviewedBranch>;
     /** The checkout of the branch this Run's diff target names, recorded as the Run's own. */
     readonly checkoutReviewed: (runId: string) => Effect.Effect<ReviewedCheckout>;
     readonly held: (runId: string) => Effect.Effect<boolean>;
@@ -1914,6 +1920,9 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     checks: ReadonlyArray<C>,
   ): ReadonlyArray<C>;
 
+  /** The fingerprint of a tree too large to measure: two of them are not the same tree. */
+  export const TOO_LARGE: "unstable:too-large";
+
   /** A Run's checks read against its journal, for which tests failed and how each rerun went. */
   type FailedChecks = CheckEvidence & { readonly approved: ReadonlyArray<VerifySpec> };
   /** Each failed test of a check's latest run on this tree that has not been run again alone yet. */
@@ -2924,14 +2933,18 @@ export const hostLayer = (options: {
   readonly issuePrivacyBudget?: Duration.Input;
   /** How often a wait for review reads the merge request again. */
   readonly reviewPoll?: Duration.Input;
-}): Layer.Layer<Host | Notifier | Oversight | Reliance, never, Store | BunServices> =>
+}): Layer.Layer<Host | Notifier | Oversight | Reliance, never, Store | BunServices | ForgeHttp> =>
   Layer.effectContext(
     Effect.gen(function* () {
       const dir = options.dir;
       const fs = yield* FileSystem.FileSystem;
       const store = yield* Store;
       // Captured, so a workflow asks for a verification without asking for a filesystem.
-      type Collecting = FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner;
+      type Collecting =
+        | FileSystem.FileSystem
+        | Path.Path
+        | ChildProcessSpawner.ChildProcessSpawner
+        | ForgeHttp;
       const services = yield* Effect.context<Collecting>();
       const bun = yield* Effect.context<BunServices>();
       const under = <A, E>(effect: Effect.Effect<A, E, Collecting>) =>
@@ -3105,8 +3118,8 @@ export const hostLayer = (options: {
             Effect.map((env) => ({ herdr: new Herdr(env), env })),
             Effect.orDie,
           );
-      /** The reviewed branch's checkout, found or cut as a build of the review's findings is (ADR-0054). */
-      const checkoutReviewed = (runId: string) =>
+      /** What resolving a Run's reviewed branch needs, as a build of the review's findings is placed (ADR-0054). */
+      const reviewing = (runId: string) =>
         Effect.gen(function* () {
           const row = yield* store.run(runId);
           if (row === null) return { refused: `there is no Run ${runId}` };
@@ -3114,21 +3127,19 @@ export const hostLayer = (options: {
             Effect.orElseSucceed((): Record<string, string> => ({})),
           );
           const placed = placedOf(row, launch);
-          if (placed.worktree !== null) {
-            return { cwd: placed.cwd, branch: placed.branch ?? placed.worktree.branch };
-          }
           const input = yield* decodeInput(row.input).pipe(
             Effect.orElseSucceed((): Readonly<Record<string, Schema.Json>> => ({})),
           );
           const field = fieldWith(yield* WorkflowHints, "diff-target");
           const target = field === undefined ? undefined : input[field];
           const { herdr, env } = yield* placing;
-          const made = yield* Effect.result(
-            checkoutFor(herdr, {
+          return {
+            row,
+            placed,
+            herdr,
+            env,
+            ask: {
               cwd: placed.cwd,
-              stateDir: env.stateDir,
-              workflow: row.workflow,
-              checkout: "branch",
               name: runId,
               // As placement feeds a build of a review's findings: this Run is the review.
               inputs: {
@@ -3138,6 +3149,39 @@ export const hostLayer = (options: {
               },
               strategies: { [REVIEWED]: "diff-target", work: "work-source" },
               login: env.gitlabLogin,
+            },
+          };
+        });
+      /** The reviewed branch, or why there is none, by the checkout's own resolution; cuts nothing. */
+      const reviewedBranch = (runId: string) =>
+        Effect.gen(function* () {
+          const asked = yield* reviewing(runId);
+          if (asked.refused !== undefined) return { refused: asked.refused };
+          const { placed } = asked;
+          if (placed.worktree !== null) return { branch: placed.branch ?? placed.worktree.branch };
+          const plan = yield* Effect.result(branchFor(asked.ask));
+          if (plan._tag === "Failure") {
+            return { refused: `no branch could be established: ${String(plan.failure)}` };
+          }
+          return plan.success.refused
+            ? { refused: plan.success.refused }
+            : { branch: plan.success.branch };
+        }).pipe(Effect.provideContext(bun), under);
+      /** The reviewed branch's checkout, found or cut as a build of the review's findings is (ADR-0054). */
+      const checkoutReviewed = (runId: string) =>
+        Effect.gen(function* () {
+          const asked = yield* reviewing(runId);
+          if (asked.refused !== undefined) return { refused: asked.refused };
+          const { row, placed, herdr, env } = asked;
+          if (placed.worktree !== null) {
+            return { cwd: placed.cwd, branch: placed.branch ?? placed.worktree.branch };
+          }
+          const made = yield* Effect.result(
+            checkoutFor(herdr, {
+              ...asked.ask,
+              stateDir: env.stateDir,
+              workflow: row.workflow,
+              checkout: "branch",
               recordedBy: (at) =>
                 store.runs.pipe(
                   Effect.map((rows) => {
@@ -3169,7 +3213,7 @@ export const hostLayer = (options: {
             task: null,
           });
           return { cwd: checkout.cwd, branch: checkout.branch ?? "" };
-        }).pipe(Effect.provideContext(bun));
+        }).pipe(Effect.provideContext(bun), under);
       const issueCheckout = Effect.fn("Host.issueCheckout")(function* (runId: string) {
         const row = yield* store.run(runId);
         if (row === null) return yield* new WorkflowError({ reason: `there is no Run ${runId}` });
@@ -3491,6 +3535,7 @@ export const hostLayer = (options: {
               (at, lineage) => ({ ...at, lineage }),
             ),
           ),
+        reviewedBranch,
         checkoutReviewed,
         held: (runId) => set(HOLD, runId),
         stopRequested: (runId) => set(STOP, runId),
@@ -3566,7 +3611,10 @@ export const hostLayer = (options: {
               ? fs.remove(path, { force: true }).pipe(Effect.orDie)
               : Effect.gen(function* () {
                   const before = yield* fs.readFileString(path).pipe(Effect.option);
-                  yield* fs.writeFileString(path, why).pipe(Effect.orDie);
+                  // Renamed into place, so a reader never sees it empty.
+                  yield* fs
+                    .writeFileString(`${path}.new`, why)
+                    .pipe(Effect.andThen(fs.rename(`${path}.new`, path)), Effect.orDie);
                   if (Option.getOrNull(before) === why) return;
                   yield* under(
                     Effect.gen(function* () {
@@ -5032,7 +5080,8 @@ export type HostServices =
   | Agents
   | FileSystem.FileSystem
   | Path.Path
-  | ChildProcessSpawner.ChildProcessSpawner;
+  | ChildProcessSpawner.ChildProcessSpawner
+  | ForgeHttp;
 
 /**
  * Which modules a host holds and what it does with them, in front of one state directory.
@@ -5304,12 +5353,14 @@ export const foundationLayer = (options: {
   | WorkflowEngine.WorkflowEngine
   | MessageStorage.MessageStorage
   | SqlClient.SqlClient
-  | Reactivity.Reactivity,
+  | Reactivity.Reactivity
+  | ForgeHttp,
   ConfigError,
   BunServices
 > =>
   hostLayer(options).pipe(
     Layer.provideMerge(storeLayer.pipe(Layer.provideMerge(engineLayer(options)))),
+    Layer.provideMerge(forgeHttpLayer),
   );
 
 const makeRegistry: (
@@ -5384,7 +5435,10 @@ const makeRegistry: (
         Option.isSome(old) &&
         !(yield* fs.exists(controlPath(dir, PARKED, runId)).pipe(Effect.orDie))
       ) {
-        yield* fs.writeFileString(controlPath(dir, PARKED, runId), old.value).pipe(Effect.orDie);
+        const path = controlPath(dir, PARKED, runId);
+        yield* fs
+          .writeFileString(`${path}.new`, old.value)
+          .pipe(Effect.andThen(fs.rename(`${path}.new`, path)), Effect.orDie);
         yield* store.announce;
       }
     });
@@ -5509,6 +5563,7 @@ const makeRegistry: (
       run: runShell,
     }).pipe(
       Effect.catchTag("PlatformError", (cause) => Effect.die(cause)),
+      Effect.provideService(ForgeHttp, Context.get(hostServices, ForgeHttp)),
       Effect.provideContext(bun),
     );
   });

@@ -111,7 +111,12 @@ at most four review and fix rounds. Every commit is pushed, so the reviewers rea
 rather than the state before it. Before any reviewer sees a ticket, each of its acceptance
 criteria needs an answer, and one left unanswered or not met goes back to the builder. The
 criteria are read from the ticket again before each hand-back, so a ticket the planner
-amended is judged as it reads now. A ticket's `## After merge` outcomes are not criteria:
+amended is judged as it reads now. A ticket goes back twice at most, unless a hand-back leaves
+the tree as it found it and reports a blocking finding: another could not move that
+blocker, so the Run asks instead. The question names the ticket, the blockers and the
+criteria still unmet. **Hand back** reads the ticket again, goes on with no builder turn if
+nothing is unmet any more, and otherwise hands it back with two tries fresh. **Stop** fails
+the Run with that reason, before any review. A ticket's `## After merge` outcomes are not criteria:
 the merge request names them under **Not settled by the run**. A criterion only CI, a merge
 or a deploy can show may be answered `after merge: <reason>`: it does not end the Run, the
 reviewer blocks one the Run could have shown, and the merge request names the ticket, the
@@ -333,9 +338,13 @@ change breaks is exactly the blocker worth raising. Minor findings are exempt.
   branch's checkout — the one git already has for it, or one cut from the branch. That
   checkout is recorded as this Run's own, so the fixer, every later reviewer and every
   verification of the Run work there
-  ([ADR-0054](adr/0054-a-reviews-fix-works-in-the-reviewed-branchs-checkout.md)). A target
-  with no branch to fix — another project's merge request, `HEAD`, a sha range — starts no
-  fixer: the Run's log says why and the menu comes back. Where the branch has an open merge
+  ([ADR-0054](adr/0054-a-reviews-fix-works-in-the-reviewed-branchs-checkout.md)). Before
+  the first question the review asks whether that branch can be established. A target with
+  no branch to fix — another project's merge request, one reviewed from a checkout with no
+  remote, `HEAD`, a sha range — is offered neither fix option, and the question says why.
+  **Fix findings** stays only where a Run this one came from may have a live implementer
+  to hand the findings to. Where the checkout is refused when the fix starts, neither fix
+  option is offered again, and the next question says why. Where the branch has an open merge
   request, the fixer pushes each round's commits to it — plainly, never forced, and not where
   the merge request merges itself once green; it never opens or edits one, or comments. A
   fix Collie ran is reviewed again at once, and the rally

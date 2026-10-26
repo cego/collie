@@ -3,7 +3,7 @@
 // at, a directory that is not the Run's, and a command that is not the approved one.
 
 import { Effect, Fiber, FileSystem, Path } from "effect";
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { expect, test } from "bun:test";
 import {
   LOG_BYTES,
   TOO_LARGE,
@@ -28,12 +28,12 @@ let repo: string;
 const git = (args: string[], cwd = repo) =>
   exec(["git", ...args], { cwd }).pipe(Effect.map((done) => done.exitCode));
 
-beforeEach(() =>
+const inRepository: typeof runEffect = (effect) =>
   runEffect(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      repo = yield* fs.makeTempDirectory({ prefix: "hw-verify-" });
+      repo = yield* fs.makeTempDirectoryScoped({ prefix: "hw-verify-" });
       yield* git(["init", "-q"]);
       yield* git(["config", "user.email", "t@example.com"]);
       yield* git(["config", "user.name", "t"]);
@@ -41,21 +41,12 @@ beforeEach(() =>
       yield* fs.writeFileString(path.join(repo, "tracked.txt"), "one\n");
       yield* git(["add", "-A"]);
       yield* git(["commit", "-qm", "first"]);
+      return yield* effect;
     }),
-  ),
-);
-
-afterEach(() =>
-  runEffect(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      yield* fs.remove(repo, { recursive: true, force: true });
-    }),
-  ),
-);
+  );
 
 test("the fingerprint moves for anything that changes what a command would see", () =>
-  runEffect(
+  inRepository(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
@@ -112,7 +103,7 @@ test("two trees nobody measured are not the same tree", () => {
 });
 
 test("a command that leaves the tree alone passes; one that changes it is unstable", () =>
-  runEffect(
+  inRepository(
     Effect.gen(function* () {
       const path = yield* Path.Path;
       const runDir = path.join(repo, ".run");
@@ -162,7 +153,7 @@ test("a command that leaves the tree alone passes; one that changes it is unstab
   ));
 
 test("the argument list is the command; nothing is handed to a shell", () =>
-  runEffect(
+  inRepository(
     Effect.gen(function* () {
       const path = yield* Path.Path;
       const runDir = path.join(repo, ".run");
@@ -183,7 +174,7 @@ test("the argument list is the command; nothing is handed to a shell", () =>
   ));
 
 test("a directory outside the Run is refused, and one inside it is not", () =>
-  runEffect(
+  inRepository(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
@@ -199,7 +190,7 @@ test("a directory outside the Run is refused, and one inside it is not", () =>
   ));
 
 test("Collie runs only the command the human approved, argument for argument", () =>
-  runEffect(
+  inRepository(
     Effect.gen(function* () {
       const path = yield* Path.Path;
       const runDir = path.join(repo, ".run");
@@ -231,7 +222,7 @@ test("Collie runs only the command the human approved, argument for argument", (
   ));
 
 test("a check granted with a cwd relative to a Run at the Projects root runs in that repository", () =>
-  runEffect(
+  inRepository(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
@@ -255,7 +246,7 @@ test("a check granted with a cwd relative to a Run at the Projects root runs in 
   ));
 
 test("an executable nothing on PATH provides is refused before anything runs", () =>
-  runEffect(
+  inRepository(
     Effect.gen(function* () {
       const path = yield* Path.Path;
       expect(yield* resolveExecutable("definitely-not-a-real-binary-xyz", repo)).toBeNull();
@@ -272,7 +263,7 @@ test("an executable nothing on PATH provides is refused before anything runs", (
   ));
 
 test("an expected failure passes when it fails, and fails when it does not", () =>
-  runEffect(
+  inRepository(
     Effect.gen(function* () {
       const path = yield* Path.Path;
       const runDir = path.join(repo, ".run-expect");
@@ -333,7 +324,7 @@ test("expectation is applied only after the stability rules", () => {
 });
 
 test("a verification is stale the moment the tree it ran on moves", () =>
-  runEffect(
+  inRepository(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
@@ -362,7 +353,7 @@ test("a verification is stale the moment the tree it ran on moves", () =>
   ));
 
 test("Collie's own run carries the expectation it was approved with", () =>
-  runEffect(
+  inRepository(
     Effect.gen(function* () {
       const path = yield* Path.Path;
       const runDir = path.join(repo, ".run-approved");
@@ -376,7 +367,7 @@ test("Collie's own run carries the expectation it was approved with", () =>
   ));
 
 test("both streams go to the log as they arrive, readable while the command runs", () =>
-  runEffect(
+  inRepository(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
@@ -407,7 +398,7 @@ test("both streams go to the log as they arrive, readable while the command runs
   ));
 
 test("a log past its bound is cut, and says it was", () =>
-  runEffect(
+  inRepository(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
@@ -454,7 +445,7 @@ const tool = (dir: string, body: string) =>
   });
 
 test("every record carries the environment it ran in, which moves with the tool and the toolchain", () =>
-  runEffect(
+  inRepository(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const runDir = yield* fs.makeTempDirectoryScoped({ prefix: "hw-verify-run-" });
@@ -475,7 +466,7 @@ test("every record carries the environment it ran in, which moves with the tool 
   ));
 
 test("a pass is relied on only while its tree, its command and its environment are unchanged, whoever asked", () =>
-  runEffect(
+  inRepository(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
@@ -516,7 +507,7 @@ test("a pass is relied on only while its tree, its command and its environment a
   ));
 
 test("the latest record of that command on the tree decides, whoever asked", () =>
-  runEffect(
+  inRepository(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const runDir = yield* fs.makeTempDirectoryScoped({ prefix: "hw-verify-run-" });

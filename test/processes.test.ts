@@ -1,7 +1,14 @@
 import { expect, test } from "bun:test";
-import { Effect } from "effect";
+import { Clock, Effect, FileSystem } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
-import { bindingsOf, commandOf, groupOf, processOf, startedOf } from "../src/processes";
+import {
+  bindingsOf,
+  boundProcesses,
+  commandOf,
+  groupOf,
+  processOf,
+  startedOf,
+} from "../src/processes";
 import { runEffect } from "./support/effect";
 
 test("a process's command and start time read alone are what reading it whole says", () =>
@@ -58,5 +65,31 @@ test("a running process's group and bindings are read, and a gone one has neithe
       const gone = 2 ** 22 + 1;
       expect(yield* groupOf(gone)).toBeNull();
       expect(yield* bindingsOf(gone, ["COLLIE_PROBE"])).toBeNull();
+    }),
+  ));
+
+test("a look for bound processes on a busy machine takes about one process's reads, not all of theirs", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const pids = Array.from({ length: 100 }, (_, at) => String(at + 1));
+      const stat = (pid: string) =>
+        [`${pid} (sh)`, "S", ...Array(18).fill("1"), `start-${pid}`].join(" ");
+      const slowProc = FileSystem.makeNoop({
+        exists: () => Effect.succeed(true),
+        readDirectory: () => Effect.succeed(pids),
+        readFileString: (path) => {
+          const [, , pid, file] = path.split("/");
+          const environ = pid === "7" ? "COLLIE_PROBE=carried\0HOME=/x" : "HOME=/x";
+          return Effect.sleep("20 millis").pipe(Effect.as(file === "stat" ? stat(pid!) : environ));
+        },
+      });
+
+      const began = yield* Clock.currentTimeMillis;
+      const found = yield* boundProcesses(["COLLIE_PROBE"]).pipe(
+        Effect.provideService(FileSystem.FileSystem, slowProc),
+      );
+      expect(found).toEqual([{ pid: 7, started: "start-7", bound: { COLLIE_PROBE: "carried" } }]);
+      // Read one after another, 100 processes' two reads take 4 seconds.
+      expect((yield* Clock.currentTimeMillis) - began).toBeLessThan(1_000);
     }),
   ));

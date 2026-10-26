@@ -634,6 +634,9 @@ as the Run's own, so read `place` again after it rather than keeping `place.cwd`
 `{ cwd, branch }`, or `{ refused }` in the resolver's own words where the target has no
 branch to work on; asking again answers from the record. Take it inside an `Activity`, so a
 replay does not cut a second checkout. Shipped `review` takes it before its own fixer starts.
+`host.reviewedBranch(runId)` answers `{ branch }`, or the `{ refused }` the checkout would
+give, by the same resolution, and cuts and records nothing; shipped `review` asks it before
+its first menu, so a fix that cannot run is not offered.
 
 `place.dir` is where what a Run produces belongs, and where the things that read a Run look:
 a plan's tickets under `plan/issues/`, a review's prose in `review.md` and its findings in
@@ -1525,8 +1528,11 @@ into a blocking finding against the ticket; an `after merge` answer is neither.
 shipped `implement` names in its merge request as not settled by the Run. `answerFor(criterion, answers)` is the
 answer a criterion has: one to its whole wording, where a copy that dropped the criterion's
 formatting still counts, so an answer to earlier wording does not answer an amended criterion. Shipped
-`implement` hands what is unmet back to the builder before any reviewer is launched, twice at
-most, and stops the work if any is still unmet, so no reviewer starts on it. A text work
+`implement` hands what is unmet back to the builder before any reviewer is launched, and
+stops the work if any is still unmet after two hand-backs, so no reviewer starts on it. A
+hand-back that leaves the head and fingerprint unchanged and reports a blocking finding is
+asked about instead (`<ticket>.criteria-stalled-<n>`): `Hand back` reads the ticket again and,
+if any criterion is still unmet, hands it back with two tries fresh; `Stop` stops the work. A text work
 source's criteria are its own checkboxes; a Linear issue's are read from `plan/SPEC.md`, the
 copy of its description the builder makes, and a copy that cannot be read stops the work. The reviewer's prompt
 shows every criterion, its answer and the builder's assumptions. A workflow that never reads
