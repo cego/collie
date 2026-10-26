@@ -1094,16 +1094,19 @@ then the release. The glyphs show their states and the label names the current S
 With more than ten Steps, done Steps fold into one counted glyph; release glyphs stay
 separate. Press the strip to open the Task's record on **Flow**. Older hosts show no strip.
 
-The record opens on **Flow**, with one row per Run, oldest first, then Release. Select
-a Step to inspect its description, agent and model, times, attempts, Slices, rounds
-and Repo runs below the map. Repo runs stay grouped under their Wave headings.
+The record opens on **Flow**, with one row per Run, oldest first, then Release. A row
+wraps its Steps to the record's width under a line naming the Run, its Machine and who
+started it; a long Step name is shortened, and its hover and spoken name give it whole.
+Select a Step to inspect its description, agent and model, times, attempts, Slices,
+rounds and Repo runs, beside the map in a wide record and below it otherwise, with the
+selected Step kept in view. Repo runs stay grouped under their Wave headings.
 A completed prefix of Slices or rounds folds into a counted entry that can
 be expanded. **Open in** follows the selected Step's work to Plan, Review, Evidence,
 the merge request, Terminal or Log. Selecting an earlier Run keeps the same Task's
 map in view; the header names that Run and links back to the leading one.
 
 The map is one Tab stop. Left and Right move along a row, Home and End go to its
-ends, and Up and Down move to the nearest position in the adjacent row. Enter
+ends, and Up and Down move to the nearest position in the adjacent Run's row. Enter
 inspects a Step; Escape closes the inspector and returns focus to it. Current Steps
 and Steps that need you are announced once as they change. A link to a Machine out
 of reach is faded and says **as of** its last notice's time. A Run absent from the

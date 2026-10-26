@@ -124,16 +124,16 @@ defineExpose({
 </script>
 
 <template>
-  <div role="group" aria-label="Flow" class="max-h-96 shrink-0 overflow-auto">
+  <div role="group" aria-label="Flow" class="overflow-y-auto">
     <section
       v-for="row in rows"
       :key="row.run"
       role="group"
       :aria-label="row.name"
-      class="flex min-w-max items-center border-t border-default py-3 first:border-0"
+      class="flex flex-col gap-2 border-t border-default py-3 first:border-0 first:pt-0"
     >
-      <div class="sticky left-0 z-10 w-36 shrink-0 bg-default pr-3">
-        <h3 class="text-sm font-semibold">
+      <div class="flex flex-wrap items-baseline gap-x-2 text-xs text-muted">
+        <h3 class="text-sm font-semibold text-highlighted">
           <UContextMenu :items="laneMenu(row.run)" :disabled="laneMenu(row.run).length === 0"
             ><UDropdownMenu :items="laneMenu(row.run)" :disabled="laneMenu(row.run).length === 0"
               ><button
@@ -147,8 +147,7 @@ defineExpose({
             ></UContextMenu
           >
         </h3>
-        <p class="text-xs text-muted">{{ row.machine }}</p>
-        <p class="text-xs text-muted">{{ row.execution }}</p>
+        <span>{{ row.machine }} · {{ row.execution }}</span>
         <button
           v-if="row.requestedBy"
           type="button"
@@ -169,21 +168,24 @@ defineExpose({
           }}<template v-if="row.startedBy.step"> · {{ row.startedBy.step }}</template>
         </button>
       </div>
-      <ol class="flex items-center">
-        <li v-for="(node, at) in row.nodes" :key="node.id" class="flex items-center">
-          <UIcon
-            v-if="stepSteering(node).pause !== null"
-            name="i-lucide-pause"
-            class="mx-1 shrink-0 text-highlighted"
-            aria-hidden="true"
-          />
+      <ol class="grid grid-cols-[repeat(auto-fill,minmax(12rem,1fr))] gap-x-6 gap-y-2 pl-6">
+        <li v-for="(node, at) in row.nodes" :key="node.id" class="relative flex">
           <span
-            v-if="at > 0"
             aria-hidden="true"
-            class="w-5 border-t-2 border-default"
-            :class="{ 'border-dashed': node.state === 'expected' }"
-          />
-          <div class="relative">
+            class="absolute top-1/2 right-full flex w-6 items-center justify-center"
+          >
+            <span
+              v-if="at > 0"
+              class="w-full border-t-2 border-default"
+              :class="{ 'border-dashed': node.state === 'expected' }"
+            />
+            <UIcon
+              v-if="stepSteering(node).pause !== null"
+              name="i-lucide-pause"
+              class="absolute bg-default text-highlighted"
+            />
+          </span>
+          <div class="relative min-w-0 flex-1">
             <UContextMenu :items="menu(row.run, node)" :disabled="menu(row.run, node).length === 0"
               ><UTooltip
                 :text="hover(row.run, node.id)"
@@ -193,7 +195,7 @@ defineExpose({
                 <button
                   :ref="(el) => remember({ run: row.run, node: node.id }, el)"
                   type="button"
-                  class="flex min-h-14 w-44 items-center gap-2 rounded border bg-default px-3 py-2 text-left focus-visible:outline-2 focus-visible:outline-primary"
+                  class="flex min-h-12 w-full items-center gap-2 rounded border bg-default px-2.5 py-1.5 text-left focus-visible:outline-2 focus-visible:outline-primary"
                   :class="[
                     node.state === 'failed'
                       ? 'border-2 border-error'
@@ -219,15 +221,15 @@ defineExpose({
                   @click="emit('choose', { run: row.run, node: node.id })"
                 >
                   <FlowGlyph :state="node.state" />
-                  <span class="min-w-0"
-                    ><span class="block text-sm font-semibold">{{ node.title }}</span
+                  <span class="min-w-0 flex-1"
+                    ><span class="block truncate text-sm font-semibold">{{ node.title }}</span
                     ><span
                       v-if="stepSteering(node).badge !== null"
                       class="mt-1 inline-block rounded-full bg-elevated px-2 text-xs"
                       >{{ stepSteering(node).badge }}</span
                     ><span
                       v-if="node.said && (node.state !== 'expected' || node.pause != null)"
-                      class="block text-xs text-muted"
+                      class="block truncate text-xs text-muted"
                       >{{ node.said }}</span
                     ><span
                       v-if="
@@ -235,7 +237,7 @@ defineExpose({
                         away.has(node.link.machine) &&
                         node.link.asOf != null
                       "
-                      class="block text-xs text-muted"
+                      class="block truncate text-xs text-muted"
                       >as of {{ node.link.asOf }}</span
                     ></span
                   >
