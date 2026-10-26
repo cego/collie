@@ -210,6 +210,22 @@ test("a run asks for its kind's workers, or the --parallel its caller passed, wh
   });
 });
 
+test("a run asks for the last --parallel it was passed and hands on none of them", () => {
+  expect(requestOf(["--parallel=2", "--parallel=24"], budgetOf(24), false)).toEqual({
+    kind: "whole",
+    asked: 24,
+    args: [],
+  });
+});
+
+test("a value an option takes is never read as a --parallel", () => {
+  expect(requestOf(["-t", "--parallel=24", "./fixture.test.ts"], budgetOf(24), true)).toEqual({
+    kind: "small",
+    asked: 2,
+    args: ["-t", "--parallel=24", "./fixture.test.ts"],
+  });
+});
+
 const ENDS = {
   admitted: { psi: 1.25, load: 3.5 },
   ended: { psi: 40, load: 14.25 },

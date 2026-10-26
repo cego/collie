@@ -51,8 +51,11 @@ export const isTargeted = (args: ReadonlyArray<string>) => {
 export const requestOf = (args: ReadonlyArray<string>, budget: Budget, targeted: boolean) => {
   const kind: Kind = targeted ? "small" : "whole";
   const operands = args.indexOf("--");
-  const own = operands === -1 ? args : args.slice(0, operands);
-  const given = own.find((arg) => arg === "--parallel" || arg.startsWith("--parallel="));
+  const isWorkers = (arg: string, at: number) =>
+    (operands === -1 || at < operands) &&
+    !TAKES_VALUE.has(args[at - 1] ?? "") &&
+    (arg === "--parallel" || arg.startsWith("--parallel="));
+  const given = args.findLast(isWorkers);
   const asked =
     given === undefined
       ? targeted
@@ -61,11 +64,7 @@ export const requestOf = (args: ReadonlyArray<string>, budget: Budget, targeted:
       : given === "--parallel"
         ? shareOf(budget, kind)
         : Number(given.slice("--parallel=".length));
-  return {
-    kind,
-    asked,
-    args: args.filter((arg, at) => arg !== given || (operands !== -1 && at > operands)),
-  };
+  return { kind, asked, args: args.filter((arg, at) => !isWorkers(arg, at)) };
 };
 
 /**
