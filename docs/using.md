@@ -2072,9 +2072,11 @@ and → narrows it 16 px at a time, and a double-click puts back the default, 32
 of a narrower window. The chat is never narrower than 320 px, and leaves the board at least
 480 px unless the window is too narrow for both; a window resized, or a Zoom changed,
 clamps it again, and widening the window gives back the width you chose. Below 768 px the
-board's header shows its Workflows, Machines and Settings buttons as icons. The width is
-kept for this computer beside Zoom in Desktop's `settings.json`, so it survives a restart;
-a popped-out chat fills its own window.
+board's header shows its Workflows, Machines and Settings buttons as icons, and the
+Workflows page puts a workflow's Result and Failure side by side only where its own pane is
+768 px or wider. The width is kept for this computer beside Zoom in Desktop's
+`settings.json`, saved once when a drag ends or an arrow key is let go, so it survives a
+restart; a popped-out chat fills its own window.
 
 ```sh
 cd desktop

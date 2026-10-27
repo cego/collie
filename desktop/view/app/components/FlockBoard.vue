@@ -2,13 +2,7 @@
 import { SECTIONS } from "../../../../src/board-model";
 import { NOT_LIVE } from "../../../src/shared/flock";
 import { afterGesture, escapeOn, type Gesture, landedOn } from "../../../src/shared/board-clicks";
-import {
-  CHAT_WIDTH,
-  chatWidth,
-  chatWidthMax,
-  dragged,
-  nudged,
-} from "../../../src/shared/chat-width";
+import { CHAT_WIDTH, chatWidth, chatWidthMax } from "../../../src/shared/chat-width";
 import type { Level } from "../../../src/shared/usage";
 import { updatesAtom } from "../flock";
 import tile from "../../../../assets/brand/logos/collie-tile-256.png";
@@ -133,34 +127,16 @@ watch(root, (box, _, onCleanup) => {
   resized.observe(box);
   onCleanup(() => resized.disconnect());
 });
-const { chosen: chatChosen, save: saveChatWidth } = useChatWidth();
-const chatDrawn = computed(() => chatWidth(chatChosen.value, windowWidth.value));
-const chatDragging = ref<{ x: number; width: number; chosen: number | undefined } | null>(null);
+const chat = useChatWidth();
+const chatDrawn = computed(() => chatWidth(chat.chosen.value, windowWidth.value));
 const startChatDrag = (event: PointerEvent) => {
   if (event.button !== 0 || !(event.currentTarget instanceof HTMLElement)) return;
   event.preventDefault();
   event.currentTarget.setPointerCapture(event.pointerId);
-  chatDragging.value = { x: event.clientX, width: chatDrawn.value, chosen: chatChosen.value };
-};
-const dragChat = (event: PointerEvent) => {
-  const start = chatDragging.value;
-  if (start !== null) chatChosen.value = dragged(start, event.clientX, windowWidth.value);
-};
-const endChatDrag = () => {
-  const start = chatDragging.value;
-  chatDragging.value = null;
-  if (start !== null && chatChosen.value !== start.chosen) void saveChatWidth();
+  chat.startDrag(event.clientX, windowWidth.value);
 };
 const nudgeChat = (event: KeyboardEvent) => {
-  const width = nudged(chatChosen.value, windowWidth.value, event.key);
-  if (width === null) return;
-  event.preventDefault();
-  chatChosen.value = width;
-  void saveChatWidth();
-};
-const resetChatWidth = () => {
-  chatChosen.value = undefined;
-  void saveChatWidth();
+  if (chat.nudge(event.key, windowWidth.value)) event.preventDefault();
 };
 
 watch(notices, (now, before) => {
@@ -204,7 +180,7 @@ watch(update, (now) => {
   <div
     ref="root"
     class="flex h-screen"
-    :class="chatDragging !== null && 'cursor-col-resize select-none'"
+    :class="chat.dragging.value !== null && 'cursor-col-resize select-none'"
   >
     <div class="@container/board flex min-w-0 flex-1 flex-col">
       <header class="flex items-center gap-3 border-b border-default px-4 py-3">
@@ -397,7 +373,7 @@ watch(update, (now) => {
       </div>
     </div>
     <template v-if="!popped">
-      <!-- Over the chat's border, which it lights up, so the board and the chat keep every pixel. -->
+      <!-- Over the chat's border and edge, so it takes no width and the board's scrollbar stays clear. -->
       <div
         v-show="chatShown"
         role="separator"
@@ -408,17 +384,19 @@ watch(update, (now) => {
         :aria-valuemax="Math.round(chatWidthMax(windowWidth))"
         tabindex="0"
         title="Drag to resize, double-click for the default width"
-        class="group relative z-10 -mx-1.5 flex w-3 shrink-0 cursor-col-resize touch-none justify-center outline-none"
+        class="group relative z-10 -mr-2 flex w-2 shrink-0 cursor-col-resize touch-none outline-none"
         data-testid="chat-resize"
         @pointerdown="startChatDrag"
-        @pointermove="dragChat"
-        @lostpointercapture="endChatDrag"
+        @pointermove="chat.drag($event.clientX, windowWidth)"
+        @lostpointercapture="chat.settle"
         @keydown="nudgeChat"
-        @dblclick="resetChatWidth"
+        @keyup="chat.settle"
+        @blur="chat.settle"
+        @dblclick="chat.reset"
       >
         <div
           class="w-px transition-all group-hover:w-0.5 group-hover:bg-primary group-focus-visible:w-0.5 group-focus-visible:bg-primary"
-          :class="chatDragging !== null && 'w-0.5 bg-primary'"
+          :class="chat.dragging.value !== null && 'w-0.5 bg-primary'"
         />
       </div>
       <FlockChat

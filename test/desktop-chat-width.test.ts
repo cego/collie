@@ -2,7 +2,13 @@
 // within what the window leaves both.
 
 import { describe, expect, test } from "bun:test";
-import { CHAT_WIDTH, chatWidth, dragged, nudged } from "../desktop/src/shared/chat-width";
+import {
+  CHAT_WIDTH,
+  chatWidth,
+  chatWidthControl,
+  dragged,
+  nudged,
+} from "../desktop/src/shared/chat-width";
 
 describe("the chat's drawn width", () => {
   test("is the chosen width while the chat and the board both keep their least widths", () => {
@@ -73,5 +79,96 @@ describe("nudging the chat's edge with the keys", () => {
   test("leaves any other key to the page", () => {
     expect(nudged(500, 1400, "ArrowUp")).toBeNull();
     expect(nudged(500, 1400, "a")).toBeNull();
+  });
+});
+
+describe("keeping the chat's width", () => {
+  const control = (saved?: number) => {
+    const view = { chosen: { value: saved }, dragging: { value: null } };
+    const saves: (number | undefined)[] = [];
+    const pending: (() => void)[] = [];
+    const kept = chatWidthControl(view, (width) => {
+      saves.push(width);
+      const { promise, resolve } = Promise.withResolvers<void>();
+      pending.push(resolve);
+      return promise;
+    });
+    const finishSaves = () => {
+      for (const done of pending.splice(0)) done();
+    };
+    return { view, saves, kept, finishSaves };
+  };
+
+  test("saves a drag once, when it ends, however far it moved", () => {
+    const { view, saves, kept } = control(500);
+    kept.startDrag(900, 1400);
+    kept.drag(880, 1400);
+    kept.drag(860, 1400);
+    kept.drag(840, 1400);
+    expect(saves).toEqual([]);
+    void kept.settle();
+    expect(saves).toEqual([560]);
+    expect(view.dragging.value).toBeNull();
+  });
+
+  test("saves nothing for a drag that ends where it began", () => {
+    const { saves, kept } = control(500);
+    kept.startDrag(900, 1400);
+    kept.drag(860, 1400);
+    kept.drag(900, 1400);
+    void kept.settle();
+    expect(saves).toEqual([]);
+  });
+
+  test("saves a held arrow key once, when the nudging stops", () => {
+    const { view, saves, kept } = control(500);
+    for (let repeat = 0; repeat < 5; repeat += 1) kept.nudge("ArrowLeft", 1400);
+    expect(view.chosen.value).toBe(580);
+    expect(saves).toEqual([]);
+    void kept.settle();
+    expect(saves).toEqual([580]);
+  });
+
+  test("does not save or open a nudge for a key that does not size the chat", () => {
+    const { saves, kept } = control(500);
+    expect(kept.nudge("a", 1400)).toBe(false);
+    void kept.settle();
+    expect(saves).toEqual([]);
+  });
+
+  test("saves the default straight away when the width is reset", () => {
+    const { view, saves, kept } = control(700);
+    void kept.reset();
+    expect(view.chosen.value).toBeUndefined();
+    expect(saves).toEqual([undefined]);
+  });
+
+  test("takes a width told back by the settings while it is not saving", () => {
+    const { view, kept } = control(500);
+    kept.told(640);
+    expect(view.chosen.value).toBe(640);
+  });
+
+  test("never lets an older save told back undo a newer choice", () => {
+    const { view, kept, finishSaves } = control(500);
+    kept.nudge("ArrowLeft", 1400);
+    const older = kept.settle();
+    kept.nudge("ArrowLeft", 1400);
+    const newer = kept.settle();
+    kept.told(516);
+    expect(view.chosen.value).toBe(532);
+    finishSaves();
+    return Promise.all([older, newer]).then(() => {
+      kept.told(540);
+      expect(view.chosen.value).toBe(540);
+    });
+  });
+
+  test("keeps the width a drag is choosing when the settings are told back mid-drag", () => {
+    const { view, kept } = control(500);
+    kept.startDrag(900, 1400);
+    kept.drag(840, 1400);
+    kept.told(500);
+    expect(view.chosen.value).toBe(560);
   });
 });
