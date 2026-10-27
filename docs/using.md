@@ -2200,6 +2200,14 @@ medium effort, with the auto-compact window a Run's agents get (see
 **Chat chooses a workflow by its description**, which `collie_workspaces` lists beside each
 one; an ad-hoc request that is none of the others is `general`, in either chat.
 
+**Chat asks before it moves a Run's scope**, in either chat. A review you report ("I got
+review on the MR") is news to chat, not an instruction to change what a Run does. Before
+it starts or changes work that would move a Run to another repository, a shared package or
+something the Run's spec puts out of scope, it asks you. When it reads a merge request's
+review it reads the replies too, and tells you what a Collie Run replied there in your
+name, which it knows by the reply's last line, "Posted by Collie's Run … on …". What you
+ask for yourself is still done at once.
+
 **Chat knows which card you have open.** Every message you send carries one line naming
 the open card, attached as you send it and never when you click — so opening ten cards and
 asking about none costs the conversation nothing, and closing the record ends it. "How is

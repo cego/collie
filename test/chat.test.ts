@@ -356,6 +356,35 @@ test.each([
     ),
 );
 
+test("the system prompt chat writes takes a reported review as a report, asks before moving a Run's scope, and reads what Runs replied", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "hw-chat-scope-" });
+      const files = yield* writeLaunchFiles({
+        dir: `${root}/chat`,
+        pluginRoot: `${import.meta.dir}/..`,
+        userDir: `${root}/user`,
+        home: `${root}/home`,
+        self: ["/bin/collie"],
+        serverEnv: {},
+        news: `${root}/news.jsonl`,
+        tools: [],
+        mcpConfig: "{}",
+      });
+      const prompt = (yield* fs.readFileString(files.systemPrompt)).replace(/\s+/g, " ");
+      expect(prompt).toContain(
+        `A human reporting a review, such as "I got review on the MR", is telling you what happened, not asking you to change what a Run does.`,
+      );
+      expect(prompt).toContain(
+        "Before you start or change work that moves a Run's scope, to another repository, a shared package or something its spec puts out of scope, ask the human.",
+      );
+      expect(prompt).toContain(
+        `When you read a merge request's review, read the replies on it too, and tell the human what a Collie Run replied there in their name: its reply ends "Posted by Collie's Run <run> on <machine>."`,
+      );
+    }).pipe(Effect.scoped),
+  ));
+
 test("the shipped prompt has chat choose by description, with ad-hoc work as general", () =>
   runEffect(
     Effect.gen(function* () {
