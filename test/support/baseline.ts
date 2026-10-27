@@ -68,6 +68,7 @@ import {
   type Claimed,
   type Issue,
 } from "../../src/sdk";
+import { readStepLines } from "../../src/steps";
 import { measuresOf } from "../../src/outcomes";
 import { redact } from "../../src/redact";
 import { INTENT_FILE, IntentSchema, amend, seedIntent } from "../../src/intent";
@@ -4258,7 +4259,8 @@ scenario(
           { entry: shipped("implement"), runId, input: { plan } },
           (run) =>
             Effect.gen(function* () {
-              yield* goAsked(run.asked, "next");
+              const next = yield* goAsked(run.asked, "next");
+              expect(next.prompt).toBe(`${OPENED.mr_url} is open. What next?`);
               yield* run.answer("next", "Stage");
               const resumed = yield* until(
                 () => Effect.all({ status: run.status, rows: run.asked }),
@@ -4268,6 +4270,9 @@ scenario(
               );
               expect(resumed.status.status).not.toBe("failed");
               expect(optionsOf(resumed.rows, "next-2")).toEqual(["Release", "Stage", "Finish"]);
+              expect(resumed.rows.find((row) => row.decision === "next-2")?.prompt).toContain(
+                "stage-1 failed: stage-1 failed",
+              );
               yield* run.answer("next-2", "Release");
               return yield* ended(run.status);
             }),
@@ -9185,6 +9190,64 @@ for (const [state, jobs] of [
     120_000,
   );
 
+/** The Run left its checkout step, and assess was the next it entered. */
+const checkedOutThenAssessed = (runId: string) =>
+  Effect.gen(function* () {
+    const lines = yield* readStepLines(runDir(dir, runId));
+    expect(
+      lines.flatMap((line) => ("key" in line && line.key === "checkout" ? [line.kind] : [])),
+    ).toEqual(["enter", "leave"]);
+    expect(lines.flatMap((line) => (line.kind === "enter" ? [line.key] : [])).slice(0, 2)).toEqual([
+      "checkout",
+      "assess",
+    ]);
+  });
+
+const refusingCheckout = (refused: string): HostOverride =>
+  Layer.effect(Host)(
+    Effect.gen(function* () {
+      const host = yield* Host;
+      return Host.of({ ...host, checkoutReviewed: () => Effect.succeed({ refused }) });
+    }),
+  );
+
+scenario(
+  "a refused checkout fails Stage and Release on their checkout step, before anything is assessed",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { mr, target } = RELEASING.gitlab;
+        const refused = "every slot of mk/run-x is held; free one of them and retry";
+        for (const workflow of ["stage", "release"] as const) {
+          const runId = `r-${workflow}-unchecked`;
+          const result = yield* ran({
+            entry: shipped(workflow),
+            runId,
+            input: { mr: target },
+            host: refusingCheckout(refused),
+          });
+          expect(reasonOf(result)).toBe(`${mr} has no checkout to ${workflow} from: ${refused}`);
+          const lines = yield* readStepLines(runDir(dir, runId));
+          expect(lines.flatMap((line) => (line.kind === "enter" ? [line.key] : []))).toEqual([
+            "checkout",
+          ]);
+          expect(lines.find((line) => line.kind === "fail")).toMatchObject({
+            key: "checkout",
+            why: expect.stringContaining(refused),
+          });
+          const lane = yield* laneNow(runId, "failed");
+          expect(lane.nodes[0]).toMatchObject({
+            id: "checkout",
+            state: "failed",
+            declared: true,
+            offPath: false,
+          });
+        }
+      }),
+    ),
+  120_000,
+);
+
 for (const name of ["gitlab", "github"] as const) {
   const { mr, url, target } = RELEASING[name];
 
@@ -9228,6 +9291,7 @@ for (const name of ["gitlab", "github"] as const) {
           for (const step of ["assess", "tag"])
             expect(yield* asked(runId, step)).not.toMatch(other);
           expect(yield* asked(runId, "tag")).toContain(`merged commit is \`${merged}\``);
+          yield* checkedOutThenAssessed(runId);
         }),
       ),
     120_000,
@@ -12004,12 +12068,14 @@ for (const name of ["gitlab", "github"] as const) {
           expect(log).not.toMatch(/\b(release[sd]?|approv\w*|go \d)\b/i);
           const lane = yield* laneNow(runId, "succeeded");
           expect(lane.nodes.map((node) => [node.title, node.state])).toEqual([
+            ["Checkout", "done"],
             ["Assess", "done"],
             ["Helle claim", "done"],
             ["Stage", "done"],
             ["Test on stage", "done"],
             ["Roll stage back", "done"],
           ]);
+          yield* checkedOutThenAssessed(runId);
         }),
       ),
     120_000,
@@ -13614,6 +13680,7 @@ scenario(
         );
         yield* bin.restore();
         expect(statesOf(yield* laneNow(runId, "waiting"))).toEqual([
+          ["checkout", "done"],
           ["assess", "done"],
           ["prove", "done"],
           ["review-wait", "done"],

@@ -1349,11 +1349,12 @@ const releasing = (delivered: {
           ),
       });
       if (merging !== null) return mr;
+      let stageFailed = "";
       for (let n = 1; ; n++) {
         const chosen = yield* next(
           ask({
             name: n === 1 ? "next" : `next-${n}`,
-            prompt: `${mr} is open. What next?`,
+            prompt: `${mr} is open.${stageFailed} What next?`,
             options: [RELEASE, STAGE, FINISH],
           }),
           { round: n },
@@ -1362,10 +1363,17 @@ const releasing = (delivered: {
           const children = yield* Children;
           const invocation = `stage-${n}`;
           const child = yield* children.start({ invocation, workflow: "stage", input: { mr } });
-          const result = yield* children
-            .result(child)
-            .pipe(Effect.match({ onSuccess: String, onFailure: (failure) => failure.reason }));
-          yield* host.record(runId, `${invocation}: ${result}`);
+          const result = yield* children.result(child).pipe(
+            Effect.match({
+              onSuccess: (value) => ({ said: String(value), failed: "" }),
+              onFailure: (failure) => ({
+                said: failure.reason,
+                failed: ` ${invocation} failed: ${failure.reason}.`,
+              }),
+            }),
+          );
+          stageFailed = result.failed;
+          yield* host.record(runId, `${invocation}: ${result.said}`);
           continue;
         }
         if (chosen !== RELEASE) return mr;

@@ -162,7 +162,9 @@ request is open and its checks left to CI are settled, the Run asks **What next?
   this Run's checkout, and waits for it. Its result or failure reason is recorded, then
   **What next?** is asked again as `next-2`, `next-3`, and so on, with the same three
   answers. Each Stage child is named `stage-<n>`. A failed Stage child leaves the implement
-  Run asking what next; **Release** and **Finish** still end it as above and below.
+  Run asking what next, and that question names it and its reason, as in `<merge request>
+  is open. stage-1 failed: <reason>. What next?`; **Release** and **Finish** still end it as
+  above and below.
 - **Finish** ends the Run with the merge request URL.
 
 `then=finish` ends at the merge request and `then=release` starts the release, without
@@ -650,10 +652,10 @@ made outside a Release Run — and only tags, asking to adopt the claim the fail
 finishes the tag that already carries the merge, stage included, and asks `production`
 afresh; where production already carries the merge it asks nothing and ends.
 
-**Its [Flow](../CONTEXT.md)** forecasts **Assess**, **Prove the head**, **Review wait**,
+**Its [Flow](../CONTEXT.md)** forecasts **Checkout**, **Assess**, **Prove the head**, **Review wait**,
 **Merge go**, **Helle claim** and **Merge**, then for an application **Stage**, **Production
-go** and **Production**. Once the assessment finds a package, the path ends at **Tag**
-instead. A comment round, staging the merge request and, with sharing on, **Share for
+go** and **Production**. A checkout Collie cannot give fails the Run on **Checkout**, with
+why. Once the assessment finds a package, the path ends at **Tag** instead. A comment round, staging the merge request and, with sharing on, **Share for
 approval** and **Share** are drawn off the path, and the fix
 rounds belong to the Step that proved the head they fix. Proved checks that still fail park
 the Run with that Step failed, and a resume runs them again.
@@ -742,8 +744,9 @@ is back on what production carries`. A rollback the forge cannot show fails the 
 keeps the claims, including where the environments a stage attempt reached could not be
 discovered. A failed Run offers **Stage again** of the same merge request.
 
-**Its [Flow](../CONTEXT.md)** forecasts **Assess**, **Helle claim**, **Stage**, **Test on
-stage** and **Roll stage back**. Stage and Test on stage have a run per staging, a moved head
+**Its [Flow](../CONTEXT.md)** forecasts **Checkout**, **Assess**, **Helle claim**, **Stage**,
+**Test on stage** and **Roll stage back**. A checkout Collie cannot give fails the Run on
+**Checkout**, with why. Stage and Test on stage have a run per staging, a moved head
 adding one to Stage alone. Leave it on stage ends with Roll stage back not run.
 
 Module: [`workflows/stage.workflow.ts`](../workflows/stage.workflow.ts), with its content in
