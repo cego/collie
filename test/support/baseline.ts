@@ -13,6 +13,7 @@ import type { ChildProcessSpawner } from "effect/process";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { hostname } from "node:os";
 import {
+  Clock,
   Config,
   ConfigProvider,
   DateTime,
@@ -237,21 +238,25 @@ const session = <A, E>(
   >,
   override?: HostOverride,
 ) =>
-  run.pipe(
-    Effect.provide(agentsLayer(hostOf())),
-    Effect.provide(children),
-    Effect.provide(
-      override === undefined
-        ? foundationLayer(foundation())
-        : override.pipe(Layer.provideMerge(foundationLayer(foundation()))),
+  Clock.clockWith((clock) =>
+    run.pipe(
+      Effect.provide(agentsLayer(hostOf())),
+      Effect.provide(children),
+      Effect.provide(
+        override === undefined
+          ? foundationLayer(foundation())
+          : override.pipe(Layer.provideMerge(foundationLayer(foundation()))),
+      ),
+      Effect.provide(
+        ConfigProvider.layerAdd(ConfigProvider.fromUnknown({ COLLIE_FORGE_API: forgeApi })),
+      ),
+      Effect.scoped,
+      // The Run keeps the scenario's clock; the hang guard is real time.
+      Effect.provideService(Clock.Clock, clock),
+      Effect.timeout("30 seconds"),
+      Effect.provideService(Clock.Clock, Clock.Clock.defaultValue()),
     ),
-    Effect.provide(
-      ConfigProvider.layerAdd(ConfigProvider.fromUnknown({ COLLIE_FORGE_API: forgeApi })),
-    ),
-    Effect.scoped,
-    Effect.timeout("30 seconds"),
-    Effect.orDie,
-  );
+  ).pipe(Effect.orDie);
 
 /** Each Run's module, by the entry it was loaded from. */
 let modules = new Map<string, string>();
