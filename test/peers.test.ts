@@ -271,7 +271,7 @@ test(
 );
 
 /** The TCP ports a process listens on: its sockets among the kernel's listening ones. */
-const listensOn = (pid: number) =>
+const listensOn = (pid: number, tables = ["/proc/net/tcp", "/proc/net/tcp6"]) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const sockets = new Set<string>();
@@ -283,8 +283,16 @@ const listensOn = (pid: number) =>
       if (inode !== undefined) sockets.add(inode);
     }
     const ports: number[] = [];
-    for (const table of ["/proc/net/tcp", "/proc/net/tcp6"]) {
-      const rows = (yield* fs.readFileString(table)).split("\n").slice(1);
+    for (const table of tables) {
+      // A kernel booted without IPv6 has no tcp6 table.
+      const text = yield* fs
+        .readFileString(table)
+        .pipe(
+          Effect.catchTag("PlatformError", (error) =>
+            error.reason._tag === "NotFound" ? Effect.succeed("") : Effect.fail(error),
+          ),
+        );
+      const rows = text.split("\n").slice(1);
       for (const row of rows) {
         // local_address, rem_address, st, …, inode; st 0A is LISTEN.
         const [, local, , state, , , , , , inode] = row.trim().split(/\s+/);
@@ -294,6 +302,20 @@ const listensOn = (pid: number) =>
     }
     return ports;
   }).pipe(Effect.orDie);
+
+test.skipIf(process.platform !== "linux")(
+  "a process's listening ports are found on a kernel without IPv6's table",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { port } = Schema.decodeUnknownSync(Schema.Struct({ port: Schema.Number }))(
+          (yield* occupy("0")).address(),
+        );
+        const ports = yield* listensOn(process.pid, ["/proc/net/tcp", "/proc/net/no-such-table"]);
+        expect(ports).toContain(port);
+      }),
+    ),
+);
 
 /** A WebSocket to a listener: open, or refused. */
 const dialListener = (
