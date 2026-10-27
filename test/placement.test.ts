@@ -555,9 +555,8 @@ test(
         );
 
         expect(seen.run?.cwd).toBe(`${held}-2`);
-        expect(seen.log).toContain(
-          `passing over ${held} is a checkout that does not say which repository it belongs to`,
-        );
+        const passing = `passing over ${held} is a checkout that does not say which repository it belongs to`;
+        expect(seen.log.split(passing)).toHaveLength(2);
         expect(yield* fs.readFileString(`${held}/notes.txt`)).toBe("mine\n");
       }),
     ),

@@ -687,7 +687,7 @@ const cutBranchCheckout = Effect.fn("worktree.cutBranchCheckout")(function* (opt
       break;
     }
     const recorded = opts.recordedBy === undefined ? null : yield* opts.recordedBy(slot);
-    passed.push(describeOccupied(slot, taken.owner, recorded));
+    passed.push(`${slot} is ${occupiedAs(taken.owner, recorded)}`);
   }
   if (at === null) return { refused: `${passed.join("; ")}; free one of them and retry` };
 

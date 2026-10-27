@@ -113,7 +113,12 @@ test(
         const recordedBy: RecordedBy = (at) =>
           Effect.succeed(
             at === first
-              ? { run: "run-b", worktree: null, release: Effect.succeed("not taken") }
+              ? {
+                  run: "run-b",
+                  worktree: null,
+                  live: Effect.succeed("run-b is running"),
+                  release: Effect.succeed("not taken"),
+                }
               : null,
           );
 
