@@ -4989,6 +4989,84 @@ scenario(
   120_000,
 );
 
+const STATED = "Outcome to prove (not given means unclassified):";
+const PROVES_BUG = "A bug: reproduce it first.";
+const PROVES_MIGRATION = "A migration: prove it goes both ways";
+
+scenario(
+  "a migration changed to a bug while its first ticket is built prompts the next ticket as a bug",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* noGitlabMrs(bin);
+        yield* repository();
+        // The second ticket's criteria are left unanswered, so the Run stops after its build.
+        const plan = yield* planOf([
+          { file: "01-first.md", title: "the first one", checks: "unit" },
+          { file: "02-second.md", title: "the second one", checks: "unit", body: CRITERIA },
+        ]);
+        const runId = "r-kind-build";
+        yield* approve(runId, ["unit"]);
+        yield* rig.queueOutputs([
+          { writes: [outcomeSet(runId, "bug")], output: BUILT },
+          BUILT,
+          BUILT,
+          BUILT,
+        ]);
+        yield* ran({
+          entry: shipped("implement"),
+          runId,
+          input: { plan, ...FINISH },
+          options: { outcome: "migration" },
+        });
+        yield* bin.restore();
+
+        const first = yield* asked(runId, "01-first.md");
+        expect(first).toContain(`${STATED} migration\n`);
+        expect(first).toContain(PROVES_MIGRATION);
+        const second = yield* asked(runId, "02-second.md");
+        expect(second).toContain(`${STATED} bug\n`);
+        expect(second).toContain(PROVES_BUG);
+        expect(second).not.toContain(PROVES_MIGRATION);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a kind changed by a build whose criteria are unmet is the kind its criteria hand-back states",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* noGitlabMrs(bin);
+        yield* repository();
+        const plan = yield* planOf([
+          { file: "01-only.md", title: "the only one", checks: "unit", body: CRITERIA },
+        ]);
+        const runId = "r-kind-criteria";
+        yield* approve(runId, ["unit"]);
+        yield* rig.queueOutputs([
+          { writes: [outcomeSet(runId, "bug")], output: BUILT },
+          BUILT,
+          BUILT,
+        ]);
+        yield* ran({
+          entry: shipped("implement"),
+          runId,
+          input: { plan, ...FINISH },
+          options: { outcome: "migration" },
+        });
+        yield* bin.restore();
+
+        expect(yield* asked(runId, "build")).toContain(`${STATED} migration\n`);
+        expect(yield* asked(runId, "build.criteria-1")).toContain(`${STATED} bug\n`);
+      }),
+    ),
+  120_000,
+);
+
 scenario(
   "an outcome still missing after a fresh judgement fails instead of completing",
   () =>

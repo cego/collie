@@ -1347,8 +1347,8 @@ merge.
 `plan` settles the outcome during its interview and forwards it, so a chained build is not
 asked again. A value that is not one of these is refused at the front door rather than
 discovered at the gate. A wrong one is corrected with `collie run intent set-outcome`
-while the Run is live: each review round, each gate pass and the merge request read the
-kind as it stands then, and the merge request names the kind the Run was finally held to.
+while the Run is live: each build and criteria turn, each review round, each gate pass and
+the merge request read the kind as it stands then, and the merge request names the kind the Run was finally held to.
 A dispute never changes the kind by itself.
 
 `plan` and `review` runs have a kind of their own that nobody chooses — `plan` proves it

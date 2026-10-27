@@ -502,6 +502,9 @@ export default defineWorkflow({
           execute: outcomeOf,
         });
       });
+      const restateKind = Effect.map(kindNow, (outcome) => {
+        input = { ...input, inputs: { ...input.inputs, outcome } };
+      });
       const rallyAsk = {
         rounds: { n: 0 },
         cwd,
@@ -574,6 +577,7 @@ export default defineWorkflow({
               (source.kind === "text"
                 ? criteriaIn(source.value)
                 : tickets.flatMap((one) => one.criteria));
+            yield* restateKind;
             build = yield* agentWork({
               operation: ticket?.file ?? "build",
               agent: BUILDER,
@@ -698,6 +702,7 @@ export default defineWorkflow({
               }
               if (tries > CRITERIA_TRIES) break;
               const before = yield* treeAt(`${item}.criteria-${turn}.before`);
+              yield* restateKind;
               const answered = yield* agentWork({
                 operation: `${item}.criteria-${turn}`,
                 agent: BUILDER,
