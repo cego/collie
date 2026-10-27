@@ -83,3 +83,23 @@ forge's CLI for the push.
 
 Handing the findings to a live implementer, and **Fix findings in a full implement run**,
 are unchanged: each works in its own Run's checkout.
+
+## Amended 2026-10-22: a fix that cannot run is not offered
+
+D1 let a review offer **Fix findings** for a target with no branch to fix, refuse the
+answer, and offer it again. Every answer was refused the same way, and replays wrote the
+refusal to the Run's log again each time (cego/collie#185).
+
+- **The review asks the host before its first menu.** The host answers whether the reviewed
+  branch can be established, by the same resolution as the checkout, without cutting or
+  recording one. The answer is taken once per Run, inside an Activity.
+- **What the answer refuses is not offered.** Where it refuses, **Fix findings in a full
+  implement run** is withheld, because its build is placed by the same resolution. **Fix
+  findings** is withheld too, unless a Run in this one's lineage may have a live implementer
+  to hand the findings to, since a hand-off needs no checkout. The menu's question names
+  the refusal.
+- **A refusal at fix time stands for the rest of the Run.** The checkout can still be
+  refused when the fix starts. Then neither fix is offered again, and the next question
+  names why.
+- **A refusal is logged once per answer.** It is recorded inside the Activity that met it,
+  so a replay does not write it again.

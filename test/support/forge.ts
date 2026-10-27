@@ -2,11 +2,30 @@
 // a FakeBin executable answering from the same model for host-driven tests. Both log
 // every call they get.
 
-import { Config, Effect, FileSystem, Path, Schema } from "effect";
+import * as BunFileSystem from "@effect/platform-bun/BunFileSystem";
+import type * as BunServices from "@effect/platform-bun/BunServices";
+import {
+  Clock,
+  Config,
+  ConfigProvider,
+  DateTime,
+  Effect,
+  FileSystem,
+  Layer,
+  Option,
+  Path,
+  Schema,
+  type Scope,
+} from "effect";
+import { ChildProcessSpawner } from "effect/process";
 import type { MrForge } from "../../src/board-model";
-import type { Ran, Runner } from "../../src/mr";
+import { forgeHttpTest, type ForgeHttp } from "../../src/forge/http";
+import { runEffect } from "./effect";
+import { glabExpiry, MONTHS } from "../../src/forge/gitlab";
+import { shell, type Ran, type Runner } from "../../src/mr";
 import type { FakeBin } from "./bin";
-import { shellQuote } from "../../src/script";
+import { recordStart } from "../../src/starts";
+import { forwarding } from "./forwarding";
 
 export const Check = Schema.Struct({
   name: Schema.String,
@@ -78,6 +97,7 @@ export const FakeMr = Schema.Struct({
   head: Schema.optionalKey(Schema.String),
   /** The revision its pipeline ran on, where that is not its head. */
   pipelineAt: Schema.optionalKey(Schema.String),
+  checksUrl: Schema.optionalKey(Schema.String),
   mergedSha: Schema.optionalKey(Schema.String),
   checks: Schema.optionalKey(Schema.Array(Check)),
   /** Its head pipeline's jobs, the nth with id n; on GitLab its pipeline ran at `pipelineAt`. */
@@ -145,7 +165,24 @@ export const ForgeModel = Schema.Struct({
   login: Schema.NullOr(Schema.String),
   /** The token the CLI hands out for its host, where a test changes it. */
   token: Schema.optionalKey(Schema.String),
+  /** glab's OAuth login: its token and its expiry as glab stores it (RFC 822). */
+  oauth: Schema.optionalKey(Schema.Struct({ token: Schema.String, expiry: Schema.String })),
+  /** A token in glab's environment, which a plain `glab config get token` gives for any host. */
+  envToken: Schema.optionalKey(Schema.String),
+  /** The forge refuses every token, though the CLI still hands its own out. */
+  revoked: Schema.optionalKey(Schema.Boolean),
+  /** What the HTTP face answers every request with instead of the model. */
+  httpFault: Schema.optionalKey(
+    Schema.Union([
+      Schema.Struct({
+        status: Schema.Number,
+        headers: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
+      }),
+      Schema.Literals(["network", "hold"]),
+    ]),
+  ),
   mrs: Schema.Array(FakeMr),
+  checksAt: Schema.optionalKey(Schema.Record(Schema.String, Schema.Array(FakeJob))),
   issues: Schema.optionalKey(Schema.Array(FakeIssue)),
   issueNotes: Schema.optionalKey(Schema.Record(Schema.String, Schema.Array(Schema.String))),
   /** The checkout's `origin` and `upstream` remote URLs, and the branch it is on. */
@@ -161,6 +198,22 @@ export const ForgeModel = Schema.Struct({
         deployed: Schema.optionalKey(Schema.String),
         /** A newer deployment there that failed, which is not what is live. */
         failed: Schema.optionalKey(Schema.String),
+        job: Schema.optionalKey(Schema.String),
+        /** Every deployment there, newest first; `deployed` and `failed` are not read where set. */
+        deployments: Schema.optionalKey(
+          Schema.Array(
+            Schema.Struct({
+              sha: Schema.String,
+              status: Schema.Literals(["success", "failed", "running"]),
+              job: Schema.optionalKey(Schema.String),
+              jobId: Schema.optionalKey(Schema.Number),
+              logUrl: Schema.optionalKey(Schema.String),
+              pipeline: Schema.optionalKey(
+                Schema.Struct({ ref: Schema.String, sha: Schema.String }),
+              ),
+            }),
+          ),
+        ),
       }),
     ),
   ),
@@ -268,6 +321,7 @@ interface Answer {
   readonly noted?: { readonly key: string; readonly body: string };
   readonly approved?: string;
   readonly retried?: { readonly mr: FakeMr; readonly at: number };
+  readonly oauth?: { readonly token: string; readonly expiry: string };
   readonly replied?: { readonly mr: FakeMr; readonly thread: string | null; readonly body: string };
   readonly merged?: {
     readonly mr: FakeMr;
@@ -394,7 +448,11 @@ const userOf = (login: string, bot: boolean | undefined) => ({
 
 /** `gh api --paginate --slurp`'s pages of `items`. */
 const pagesOf = (items: ReadonlyArray<Schema.Json>, args: ReadonlyArray<string>): Answer =>
-  json(args.includes("--slurp") ? [[...items]] : [...items]);
+  json(
+    args.includes("--slurp")
+      ? [[...items]]
+      : pageOf(args.find((one) => one.startsWith("repos/")) ?? "", items),
+  );
 
 function issueAnswer(forge: MrForge, model: ForgeModel, args: ReadonlyArray<string>): Answer {
   const project = `${forge === "github" ? "github.com/" : ""}${flag(args, "--repo") ?? ""}`;
@@ -443,6 +501,121 @@ function issueAnswer(forge: MrForge, model: ForgeModel, args: ReadonlyArray<stri
     };
   }
   return no();
+}
+
+function issueApi(
+  forge: MrForge,
+  model: ForgeModel,
+  route: string,
+  args: ReadonlyArray<string>,
+): Answer | null {
+  if (route === "user")
+    return model.login === null
+      ? no()
+      : json(forge === "github" ? { login: model.login } : { id: 1, username: model.login });
+  const match =
+    forge === "github"
+      ? /^repos\/([^/]+\/[^/]+)\/issues(?:\/(\d+)\/comments)?(?:\?.*)?$/.exec(route)
+      : /^projects\/([^/]+)\/issues(?:\/(\d+)\/notes)?(?:\?.*)?$/.exec(route);
+  if (match === null) return null;
+  const path = decodeURIComponent(match[1]!);
+  const project = `${forge === "github" ? "github.com" : flag(args, "--hostname")}/${path}`;
+  if (flag(args, "-X") === "POST" && match[2] !== undefined) {
+    if (model.mrs.some((one) => one.project === project && one.iid === match[2])) return null;
+    const noted = issueAnswer(forge, model, [
+      "issue",
+      "comment",
+      match[2],
+      "--repo",
+      forge === "github" ? path : project,
+      forge === "github" ? "--body" : "--message",
+      field(args, "body") ?? "",
+    ]);
+    return noted.ran.code !== 0
+      ? noted
+      : { ...noted, ...json({ id: 1, body: field(args, "body") ?? "" }) };
+  }
+  if (flag(args, "-X") === "POST" && match[2] === undefined) {
+    const filed = issueAnswer(forge, model, [
+      "issue",
+      "create",
+      "--repo",
+      forge === "github" ? path : project,
+      "--title",
+      field(args, "title") ?? "",
+      forge === "github" ? "--body" : "--description",
+      field(args, forge === "github" ? "body" : "description") ?? "",
+    ]);
+    const one = filed.filedIssue;
+    if (one === undefined) return filed;
+    return {
+      ...filed,
+      ...json(
+        forge === "github"
+          ? {
+              number: one.number,
+              title: one.title,
+              body: one.body,
+              html_url: `https://${project}/issues/${one.number}`,
+            }
+          : {
+              iid: one.number,
+              title: one.title,
+              description: one.body,
+              web_url: `https://${project}/-/issues/${one.number}`,
+            },
+      ),
+    };
+  }
+  if ((flag(args, "-X") ?? "GET") !== "GET") return null;
+  if (match[2] !== undefined) return null;
+  const query = new URLSearchParams(route.split("?")[1]);
+  const issues: Schema.Json[] = (model.issues ?? [])
+    .filter(
+      (one) =>
+        one.project === project &&
+        one.state === "open" &&
+        !query.has("creator") &&
+        !query.has("assignee"),
+    )
+    .map((one): Schema.Json =>
+      forge === "github"
+        ? {
+            number: one.number,
+            title: one.title,
+            body: one.body,
+            state: "open",
+            html_url: `https://${project}/issues/${one.number}`,
+          }
+        : {
+            iid: one.number,
+            title: one.title,
+            description: one.body,
+            state: "opened",
+            web_url: `https://${project}/-/issues/${one.number}`,
+          },
+    );
+  if (forge === "github")
+    issues.push(
+      ...model.mrs
+        .filter(
+          (one) =>
+            one.project === project &&
+            one.state === "open" &&
+            (!query.has("creator") || one.author === query.get("creator")) &&
+            (!query.has("assignee") || (one.assignees ?? []).includes(query.get("assignee")!)),
+        )
+        .map((one) => ({
+          number: Number(one.iid),
+          title: one.title ?? "",
+          body: "",
+          state: "open",
+          pull_request: {},
+          user: { login: one.author ?? "" },
+          assignees: (one.assignees ?? []).map((login) => ({ login })),
+        })),
+    );
+  return json(pageOf(route, issues));
 }
 
 const keyOf = (forge: MrForge, mr: FakeMr) =>
@@ -535,6 +708,7 @@ function glabMrJson(mr: FakeMr) {
             id: pipelineIdOf(mr),
             status: pipeline ?? "running",
             sha: mr.pipelineAt ?? mr.head ?? null,
+            web_url: mr.checksUrl ?? null,
           },
     source_branch: mr.sourceBranch ?? null,
     source_project_id: mr.fork === true ? 7 : 3,
@@ -553,14 +727,52 @@ function glabMrJson(mr: FakeMr) {
   };
 }
 
-function glab(model: ForgeModel, args: ReadonlyArray<string>): Answer {
+/** What a CLI is run under: the clock, and whether it sees a token in its environment. */
+interface Under {
+  readonly now: number;
+  readonly environment: boolean;
+}
+
+/** The token the forge accepts, as its CLI hands it out. */
+export const tokenOf = (forge: MrForge, model: ForgeModel) =>
+  forge === "gitlab"
+    ? (model.oauth?.token ?? model.token ?? "glpat-fake")
+    : (model.token ?? "gho-fake");
+
+/** A time as glab stores an OAuth token's expiry: Go's RFC 822, in UTC. */
+export const rfc822 = (ms: number) => {
+  const at = DateTime.toPartsUtc(DateTime.makeUnsafe(ms));
+  const two = (n: number) => String(n).padStart(2, "0");
+  return `${two(at.day)} ${MONTHS[at.month - 1]} ${two(at.year % 100)} ${two(at.hour)}:${two(at.minute)} UTC`;
+};
+
+function glab(model: ForgeModel, args: ReadonlyArray<string>, under: Under): Answer {
   if (!model.installed) return no(127);
   const [verb, sub] = args;
   if (verb === "issue") return issueAnswer("gitlab", model, args);
   if (verb === "--version") return ok("glab 1.0.0");
   if (verb === "auth" && sub === "status") {
     const host = flag(args, "--hostname");
-    return host === undefined || model.loggedIn.includes(host) ? ok() : no();
+    if (host !== undefined && !model.loggedIn.includes(host)) return no();
+    const login = model.oauth;
+    const expires = login === undefined ? null : glabExpiry(login.expiry);
+    // Building its API client refreshes an expired OAuth token, as glab 1.53.0 does.
+    return login !== undefined && expires !== null && expires <= under.now
+      ? {
+          ...ok(),
+          oauth: { token: `${login.token}-refreshed`, expiry: rfc822(under.now + 7_200_000) },
+        }
+      : ok();
+  }
+  if (verb === "config" && sub === "get") {
+    const host = flag(args, "--host") ?? "";
+    const signedIn = model.loggedIn.includes(host);
+    if (args[2] === "token") {
+      if (under.environment && model.envToken !== undefined) return ok(`${model.envToken}\n`);
+      return ok(signedIn ? `${tokenOf("gitlab", model)}\n` : "");
+    }
+    if (args[2] === "oauth2_expiry_date")
+      return ok(signedIn && model.oauth !== undefined ? `${model.oauth.expiry}\n` : "");
   }
   if (verb === "api" && sub === "user")
     return model.login === null ? no() : json({ username: model.login });
@@ -594,10 +806,6 @@ function glab(model: ForgeModel, args: ReadonlyArray<string>): Answer {
         })),
     );
   }
-  if (verb === "config" && sub === "get" && args[2] === "token") {
-    const host = flag(args, "--host") ?? "";
-    return model.loggedIn.includes(host) ? ok(`${model.token ?? "glpat-fake"}\n`) : ok("");
-  }
   if (verb === "mr" && sub === "list" && args[3] === "@me")
     return json(
       mine(model, args[2]).map((one) => ({ iid: Number(one.iid), title: one.title ?? "" })),
@@ -614,6 +822,8 @@ function glab(model: ForgeModel, args: ReadonlyArray<string>): Answer {
   }
   if (verb === "api" && flag(args, "--hostname") !== undefined) {
     const route = args.at(-1) ?? "";
+    const issue = issueApi("gitlab", model, route, args);
+    if (issue !== null) return issue;
     if (/^projects\/[^/]+$/.test(route))
       return model.protectionDown === true
         ? no()
@@ -622,10 +832,13 @@ function glab(model: ForgeModel, args: ReadonlyArray<string>): Answer {
       return model.protectionDown === true
         ? no()
         : json(
-            (model.protectedBranches ?? []).map((one) => ({
-              name: one.name,
-              allow_force_push: one.allowForcePush ?? false,
-            })),
+            pageOf(
+              route,
+              (model.protectedBranches ?? []).map((one) => ({
+                name: one.name,
+                allow_force_push: one.allowForcePush ?? false,
+              })),
+            ),
           );
     if (model.deploysDown === true) return no();
     const environments = model.environments ?? [];
@@ -640,13 +853,45 @@ function glab(model: ForgeModel, args: ReadonlyArray<string>): Answer {
       return json(
         pageOf(
           route,
-          environments.flatMap((env) =>
-            env.deployed === undefined
-              ? []
-              : [{ sha: env.deployed, environment: { name: env.name } }],
-          ),
+          deploymentsAsked(model, route).map(({ sha, status, environment, job, pipeline }) => ({
+            sha,
+            status,
+            environment: { name: environment },
+            deployable: job === undefined ? null : { name: job, pipeline: pipeline ?? null },
+          })),
         ),
       );
+    const byBranch = /^projects\/([^/]+)\/merge_requests\?(.*)$/.exec(route);
+    if (byBranch) {
+      const path = decodeURIComponent(byBranch[1]!);
+      const query = new URLSearchParams(byBranch[2]);
+      const state = query.get("state");
+      return json(
+        pageOf(
+          route,
+          model.mrs
+            .filter(
+              (one) =>
+                one.project.endsWith(`/${path}`) &&
+                (!query.has("source_branch") || one.sourceBranch === query.get("source_branch")) &&
+                (!query.has("author_username") || one.author === query.get("author_username")) &&
+                (!query.has("assignee_username") ||
+                  (one.assignees ?? []).includes(query.get("assignee_username")!)) &&
+                (state === null || state === "all" || glabMrJson(one).state === state),
+            )
+            .map((one) => ({
+              iid: Number(one.iid),
+              title: one.title ?? "",
+              web_url: `https://${one.project}/-/merge_requests/${one.iid}`,
+              merge_when_pipeline_succeeds: one.autoMerge ?? false,
+              state: one.state === "open" ? "opened" : one.state,
+              created_at: one.createdAt ?? NOW,
+              merged_at: one.mergedAt ?? null,
+              closed_at: one.closedAt ?? null,
+            })),
+        ),
+      );
+    }
     const onMr = /^projects\/([^/]+)\/merge_requests\/(\d+)(?:\/(.+))?$/.exec(route);
     if (onMr) {
       const [, path = "", iid = "", rest] = onMr;
@@ -714,7 +959,9 @@ function glab(model: ForgeModel, args: ReadonlyArray<string>): Answer {
     }
     const commit = /\/repository\/commits\/([^/?]+)$/.exec(route);
     if (commit) {
-      const parents = model.ancestry?.[commit[1]!];
+      const parents =
+        model.ancestry?.[commit[1]!] ??
+        (deploymentsOf(model).some((deployment) => deployment.sha === commit[1]) ? [] : undefined);
       return parents === undefined ? no() : json({ id: commit[1]!, parent_ids: [...parents] });
     }
     const pipeline = /\/pipelines\/(\d+)$/.exec(route);
@@ -742,6 +989,19 @@ function glabOnMr(
   args: ReadonlyArray<string>,
 ): Answer {
   const method = flag(args, "-X") ?? "GET";
+  if (rest === "notes" && method === "POST")
+    return {
+      ...json({ id: 1, body: field(args, "body") ?? "" }),
+      noted: { key: keyOf("gitlab", mr), body: field(args, "body") ?? "" },
+      replied: { mr, thread: null, body: field(args, "body") ?? "" },
+    };
+  if (rest === "approve" && method === "POST")
+    return model.refusesApproval
+      ? refused("403 Forbidden")
+      : {
+          ...json({ approved_by: [{ user: { username: model.login ?? "me", id: 1 } }] }),
+          approved: keyOf("gitlab", mr),
+        };
   if (rest === "" && method === "GET") return json(glabMrJson(mr));
   if (rest === "approval_state")
     return model.free === true
@@ -755,7 +1015,8 @@ function glabOnMr(
         });
   if (rest === "approvals") {
     const rules = rulesOf(mr);
-    const approvers = mr.approvers ?? [...new Set(rules.flatMap((rule) => rule.approvers))];
+    const named = mr.approvers ?? [...new Set(rules.flatMap((rule) => rule.approvers))];
+    const approvers = named.length === 0 && mr.approved === true ? ["a-reviewer"] : named;
     const required = mr.required ?? Math.max(0, ...rules.map((rule) => rule.required));
     return json({
       approvals_required: required,
@@ -844,10 +1105,77 @@ function ghOnPull(pull: FakeMr, kind: string, rest: string, args: ReadonlyArray<
   return no();
 }
 
-/** `gh api graphql`: a pull request's review threads, or a branch's protection for the viewer. */
+/** A pull request as GitHub's GraphQL answers the panel's query. */
+const ghPullNode = (model: ForgeModel, pull: FakeMr) => ({
+  title: pull.title ?? "",
+  state: pull.state.toUpperCase(),
+  isDraft: pull.draft ?? false,
+  author: { login: pull.author ?? "" },
+  assignees: { nodes: (pull.assignees ?? []).map((login) => ({ login })) },
+  headRefName: pull.sourceBranch ?? "",
+  isCrossRepository: pull.fork === true,
+  baseRefName: pull.targetBranch ?? "",
+  reviewDecision: decisionOf(model, pull),
+  comments: { totalCount: 0 },
+  updatedAt: pull.updatedAt ?? null,
+  url: `https://${pull.project}/pull/${pull.iid}`,
+  autoMergeRequest: pull.autoMerge === true ? { enabledAt: "2026-10-01T00:00:00Z" } : null,
+  headRefOid: pull.head ?? null,
+  ...GITHUB_MERGE_STATE[pull.mergeable ?? "yes"],
+  mergeCommit: pull.mergedSha === undefined ? null : { oid: pull.mergedSha },
+  mergedAt: pull.mergedAt ?? null,
+  mergedBy: pull.mergedBy === undefined ? null : { login: pull.mergedBy },
+  commits: {
+    nodes: [
+      {
+        commit: {
+          statusCheckRollup:
+            (pull.checks ?? []).length === 0
+              ? null
+              : {
+                  contexts: {
+                    nodes: (pull.checks ?? []).map((check) => ({
+                      __typename: "CheckRun",
+                      name: check.name,
+                      detailsUrl: pull.checksUrl ?? null,
+                      status: check.state === "running" ? "QUEUED" : "COMPLETED",
+                      conclusion:
+                        check.state === "running"
+                          ? null
+                          : check.state === "passed"
+                            ? "SUCCESS"
+                            : "FAILURE",
+                    })),
+                    pageInfo: { hasNextPage: false, endCursor: null },
+                  },
+                },
+        },
+      },
+    ],
+  },
+});
+
+/** `gh api graphql`: a pull request's panel or review threads, or a branch's protection for the viewer. */
 function ghGraphql(model: ForgeModel, args: ReadonlyArray<string>): Answer | undefined {
   const query = field(args, "query") ?? "";
   const typed = (name: string) => field(args, name, "-F");
+  if (query.includes("viewerDefaultMergeMethod"))
+    return json({
+      data: { repository: { viewerDefaultMergeMethod: model.mergeMethod ?? "MERGE" } },
+    });
+  if (query.includes("statusCheckRollup") || query.includes("mergedBy")) {
+    const pull = model.mrs.find(
+      (one) =>
+        one.project === `github.com/${typed("owner")}/${typed("name")}` &&
+        one.iid === typed("number"),
+    );
+    if (pull === undefined)
+      return json({
+        data: { repository: { pullRequest: null } },
+        errors: [{ type: "NOT_FOUND", message: "Could not resolve to a PullRequest." }],
+      });
+    return json({ data: { repository: { pullRequest: ghPullNode(model, pull) } } });
+  }
   if (query.includes("reviewThreads")) {
     const pull = model.mrs.find(
       (one) =>
@@ -895,19 +1223,48 @@ function ghGraphql(model: ForgeModel, args: ReadonlyArray<string>): Answer | und
   return undefined;
 }
 
-/** Each environment's deployments, newest first: a failed newer one, then what is live. */
+/** Each environment's deployments, newest first: by default a failed newer one, then what is live. */
 const deploymentsOf = (model: ForgeModel) =>
-  (model.environments ?? []).flatMap((env, at) => [
-    ...(env.failed === undefined || env.failed === ""
-      ? []
-      : [{ id: at * 10 + 1, sha: env.failed, environment: env.name, state: "failure" }]),
-    ...(env.deployed === undefined
-      ? []
-      : [{ id: at * 10 + 2, sha: env.deployed, environment: env.name, state: "success" }]),
-  ]);
+  (model.environments ?? []).flatMap((env, at) =>
+    (
+      env.deployments ?? [
+        ...(env.failed === undefined || env.failed === ""
+          ? []
+          : [{ sha: env.failed, status: "failed" as const }]),
+        ...(env.deployed === undefined ? [] : [{ sha: env.deployed, status: "success" as const }]),
+      ]
+    ).map((one, n) => ({
+      id: at * 1000 + n + 1,
+      sha: one.sha,
+      environment: env.name,
+      state:
+        one.status === "failed" ? "failure" : one.status === "running" ? "in_progress" : one.status,
+      status: one.status,
+      job: "job" in one ? one.job : env.job,
+      jobId: "jobId" in one ? one.jobId : undefined,
+      logUrl: "logUrl" in one ? one.logUrl : undefined,
+      pipeline: "pipeline" in one ? one.pipeline : undefined,
+    })),
+  );
+
+/** The deployments a deployment list route asks for, by its `environment`, `sha` and `status`. */
+const deploymentsAsked = (model: ForgeModel, route: string) => {
+  const query = new URLSearchParams(route.split("?")[1] ?? "");
+  const environment = query.get("environment");
+  const sha = query.get("sha");
+  const status = query.get("status");
+  return deploymentsOf(model).filter(
+    (one) =>
+      (environment === null || one.environment === environment) &&
+      (sha === null || one.sha === sha) &&
+      (status === null || one.status === status),
+  );
+};
 
 /** `gh api repos/<o>/<r>/…`, for deployments, compare and Actions runs. */
 function ghApi(model: ForgeModel, route: string, args: ReadonlyArray<string>): Answer {
+  const issue = issueApi("github", model, route, args);
+  if (issue !== null) return issue;
   if (/^repos\/[^/]+\/[^/]+$/.test(route))
     return model.protectionDown === true
       ? no()
@@ -935,12 +1292,70 @@ function ghApi(model: ForgeModel, route: string, args: ReadonlyArray<string>): A
   }
   const asked = route === "graphql" ? ghGraphql(model, args) : undefined;
   if (asked !== undefined) return asked;
+  const pulls = /^repos\/([^/]+\/[^/]+)\/pulls\?(.*)$/.exec(route);
+  if (pulls) {
+    const query = new URLSearchParams(pulls[2]);
+    const [owner = "", branch = ""] = (query.get("head") ?? "").split(/:(.*)/);
+    return json(
+      pageOf(
+        route,
+        model.mrs
+          .filter(
+            (one) =>
+              one.project === `github.com/${pulls[1]}` &&
+              pulls[1]!.startsWith(`${owner}/`) &&
+              (query.get("state") === "all" || one.state === "open") &&
+              one.sourceBranch === branch,
+          )
+          .map((one) => ({
+            number: Number(one.iid),
+            html_url: `https://${one.project}/pull/${one.iid}`,
+            state: one.state === "open" ? "open" : "closed",
+            created_at: one.createdAt ?? "",
+            merged_at: one.mergedAt ?? null,
+            // GitHub stamps a merged pull request closed too.
+            closed_at: one.closedAt ?? one.mergedAt ?? null,
+            auto_merge:
+              one.autoMerge === true
+                ? { merge_method: "merge", enabled_by: { login: "me" } }
+                : null,
+          })),
+      ),
+    );
+  }
+  const pullOnly = /^repos\/([^/]+\/[^/]+)\/pulls\/(\d+)$/.exec(route);
+  if (pullOnly) {
+    const pull = model.mrs.find(
+      (one) => one.project === `github.com/${pullOnly[1]}` && one.iid === pullOnly[2],
+    );
+    return pull === undefined
+      ? no()
+      : json({
+          number: Number(pull.iid),
+          head: { sha: pull.head ?? "", ref: pull.sourceBranch ?? "" },
+          base: { ref: pull.targetBranch ?? "" },
+        });
+  }
   const onPull = /^repos\/([^/]+\/[^/]+)\/(pulls|issues)\/(\d+)\/(.+)$/.exec(route);
   if (onPull) {
     const [, repo = "", kind = "", number = "", rest = ""] = onPull;
     const pull = model.mrs.find(
       (one) => one.project === `github.com/${repo}` && one.iid === number,
     );
+    if (pull !== undefined && kind === "pulls" && rest === "reviews" && flag(args, "-X") === "POST")
+      return model.refusesApproval
+        ? refused("403 Forbidden")
+        : { ...json({ id: 1, state: "APPROVED" }), approved: keyOf("github", pull) };
+    if (
+      pull !== undefined &&
+      kind === "issues" &&
+      rest === "comments" &&
+      flag(args, "-X") === "POST"
+    )
+      return {
+        ...ghOnPull(pull, kind, rest, args),
+        noted: { key: keyOf("github", pull), body: field(args, "body") ?? "" },
+      };
     return pull === undefined ? no() : ghOnPull(pull, kind, rest, args);
   }
   if (route === "graphql")
@@ -958,14 +1373,22 @@ function ghApi(model: ForgeModel, route: string, args: ReadonlyArray<string>): A
   if (model.deploysDown === true) return no();
   const tierOf = (name: string) =>
     (model.environments ?? []).find((env) => env.name === name)?.tier;
+  if (/\/environments\?/.test(route)) {
+    const environments = (model.environments ?? []).map((env) => ({ name: env.name }));
+    const page = {
+      total_count: environments.length,
+      environments: args.includes("--slurp") ? environments : pageOf(route, environments),
+    };
+    return json(args.includes("--slurp") ? [page] : page);
+  }
   if (/\/deployments\?/.test(route)) {
-    const deployments = deploymentsOf(model).map(({ id, sha, environment }) => ({
+    const deployments = deploymentsAsked(model, route).map(({ id, sha, environment }) => ({
       id,
       sha,
       environment,
       production_environment: tierOf(environment) === "production",
     }));
-    if (!args.includes("--paginate")) return json(deployments.slice(0, 100));
+    if (!args.includes("--paginate")) return json(pageOf(route, deployments));
     const pages = [];
     for (let at = 0; at < deployments.length; at += 100)
       pages.push(deployments.slice(at, at + 100));
@@ -974,7 +1397,19 @@ function ghApi(model: ForgeModel, route: string, args: ReadonlyArray<string>): A
   const statuses = /\/deployments\/(\d+)\/statuses/.exec(route);
   if (statuses) {
     const one = deploymentsOf(model).find((deployment) => deployment.id === Number(statuses[1]));
-    return one === undefined ? no() : json([{ state: one.state }]);
+    if (one === undefined) return no();
+    const mr = model.mrs[0];
+    const jobId =
+      one.jobId ??
+      (mr?.jobs ?? []).find((job) => job.name === one.job)?.id ??
+      (mr?.jobs ?? []).findIndex((job) => job.name === one.job) + 1;
+    return json([
+      {
+        state: one.state,
+        log_url:
+          one.logUrl ?? (jobId > 0 ? `https://${mr?.project}/actions/runs/7/job/${jobId}` : ""),
+      },
+    ]);
   }
   const compare = /\/compare\/([^.]+)\.\.\.(.+)$/.exec(route);
   if (compare) {
@@ -992,7 +1427,9 @@ function ghApi(model: ForgeModel, route: string, args: ReadonlyArray<string>): A
     });
   }
   const checkRuns =
-    /^repos\/(.+)\/commits\/([^/]+)\/check-runs\?(?:check_name=(.+)|per_page=1)$/.exec(route);
+    /^repos\/(.+)\/commits\/([^/]+)\/check-runs\?(?:check_name=([^&]+)(?:&.*)?|per_page=1)$/.exec(
+      route,
+    );
   if (checkRuns) {
     const [, repo = "", sha = "", name] = checkRuns;
     const ofRepo = model.mrs.filter((one) => one.project === `github.com/${repo}`);
@@ -1006,22 +1443,30 @@ function ghApi(model: ForgeModel, route: string, args: ReadonlyArray<string>): A
           ? [jobsOf(base.base?.jobs ?? [], 1000), sha]
           : target !== undefined
             ? [jobsOf(target.target!.jobs, 2000), target.target!.at]
-            : [[], sha];
-    return json({
-      check_runs: jobs.flatMap((job) =>
-        name === undefined || job.name === decodeURIComponent(name)
-          ? [
-              {
-                id: job.id,
-                name: job.name,
-                head_sha: at,
-                ...GITHUB_RUN[job.state],
-                html_url: `https://github.com/${repo}/runs/${job.id}`,
-              },
-            ]
-          : [],
-      ),
-    });
+            : [jobsOf(model.checksAt?.[sha] ?? [], 0), sha];
+    const page = {
+      check_runs: jobs
+        .filter(
+          (job, at) =>
+            route.includes("filter=all") || jobs.findIndex((one) => one.name === job.name) === at,
+        )
+        .flatMap((job) =>
+          name === undefined || job.name === decodeURIComponent(name)
+            ? [
+                {
+                  id: job.id,
+                  name: job.name,
+                  head_sha: at,
+                  ...GITHUB_RUN[job.state],
+                  html_url: `https://github.com/${repo}/runs/${job.id}`,
+                },
+              ]
+            : [],
+        ),
+    };
+    return args.includes("--slurp")
+      ? json([page])
+      : json({ check_runs: pageOf(route, page.check_runs) });
   }
   const rerun = /^repos\/(.+)\/actions\/jobs\/(\d+)\/rerun$/.exec(route);
   if (rerun && args.includes("POST")) {
@@ -1042,7 +1487,7 @@ function ghApi(model: ForgeModel, route: string, args: ReadonlyArray<string>): A
       ...GITHUB_RUN[job.state],
       html_url: `https://github.com/${runJobs[1]}/actions/runs/${runJobs[2]}/job/${at + 1}`,
     }));
-    if (!args.includes("--paginate")) return json({ jobs: jobs.slice(0, 100) });
+    if (!args.includes("--paginate")) return json({ jobs: pageOf(route, jobs) });
     const pages = [];
     for (let at = 0; at === 0 || at < jobs.length; at += 100)
       pages.push({ jobs: jobs.slice(at, at + 100) });
@@ -1083,9 +1528,10 @@ function gh(model: ForgeModel, args: ReadonlyArray<string>): Answer {
   if (verb === "auth" && sub === "status")
     return model.loggedIn.includes(flag(args, "--hostname") ?? FORGE_HOST.github) ? ok() : no();
   if (!model.loggedIn.includes(FORGE_HOST.github)) return no(4);
+  if (verb === "auth" && sub === "token") return ok(`${tokenOf("github", model)}\n`);
   if (verb === "auth" && sub === "git-credential" && args[2] === "get")
     return ok(
-      `protocol=https\nhost=${FORGE_HOST.github}\nusername=x-access-token\npassword=${model.token ?? "gho-fake"}\n`,
+      `protocol=https\nhost=${FORGE_HOST.github}\nusername=x-access-token\npassword=${tokenOf("github", model)}\n`,
     );
   if (verb === "issue") return issueAnswer("github", model, args);
   if (verb === "api" && sub === "user")
@@ -1139,6 +1585,7 @@ function gh(model: ForgeModel, args: ReadonlyArray<string>): Answer {
       statusCheckRollup: (pull.checks ?? []).map((check) => ({
         __typename: "CheckRun",
         name: check.name,
+        detailsUrl: pull.checksUrl ?? null,
         status: check.state === "running" ? "QUEUED" : "COMPLETED",
         conclusion:
           check.state === "running" ? null : check.state === "passed" ? "SUCCESS" : "FAILURE",
@@ -1197,7 +1644,17 @@ export function answer(
   model: ForgeModel,
   cmd: string,
   args: ReadonlyArray<string>,
+  under: Under,
 ): Answered {
+  // `env -u NAME… <cmd> <args…>`: the command, without those variables.
+  if (cmd === "env" && args[0] === "-u") {
+    let at = 0;
+    while (args[at] === "-u") at += 2;
+    return answer(forge, model, args[at] ?? "", args.slice(at + 1), {
+      ...under,
+      environment: false,
+    });
+  }
   if (cmd === "git") {
     const said =
       args[0] === "remote" && args[1] === "get-url"
@@ -1224,8 +1681,9 @@ export function answer(
       model: { ...model, cloned: [...(model.cloned ?? []), `${cloning[1]} ${args.at(-1)}`] },
     };
   if (cmd !== CLI[forge]) return { ran: no(127).ran, model };
-  const said = forge === "gitlab" ? glab(model, args) : gh(model, args);
+  const said = forge === "gitlab" ? glab(model, args, under) : gh(model, args);
   let after = model;
+  if (said.oauth !== undefined) after = { ...after, oauth: said.oauth };
   if (said.filedIssue !== undefined)
     after = { ...after, issues: [...(after.issues ?? []), said.filedIssue] };
   if (said.issueNoted !== undefined) {
@@ -1299,21 +1757,244 @@ export function answer(
   return { ran: said.ran, model: after };
 }
 
-/** The Runner face: answers from the model, and logs `cmd args…` to `calls`. */
+/** One request the HTTP face got, with the token it carried. */
+export interface FakeRequest {
+  readonly method: string;
+  readonly url: string;
+  readonly token: string;
+}
+
+const API = { gitlab: "/api/v4/", github: "/" } as const;
+const GraphqlBody = Schema.fromJsonString(
+  Schema.Struct({
+    query: Schema.String,
+    variables: Schema.optionalKey(
+      Schema.Record(
+        Schema.String,
+        Schema.Union([Schema.String, Schema.Number, Schema.Boolean, Schema.Null]),
+      ),
+    ),
+  }),
+);
+
+/** A GraphQL request's query and variables, as `gh api graphql -f query=… -F name=…` carries them. */
+const graphqlFields = (body: RequestInit["body"]) => {
+  const sent = Schema.decodeUnknownOption(GraphqlBody)(body);
+  if (Option.isNone(sent)) return [];
+  return [
+    "-f",
+    `query=${sent.value.query}`,
+    ...Object.entries(sent.value.variables ?? {}).flatMap(([name, value]) =>
+      value === null ? [] : ["-F", `${name}=${String(value)}`],
+    ),
+  ];
+};
+
+const bodyFields = (body: RequestInit["body"]) => {
+  const read = Schema.decodeUnknownOption(
+    Schema.fromJsonString(
+      Schema.Record(
+        Schema.String,
+        Schema.Union([Schema.String, Schema.Number, Schema.Boolean, Schema.Null]),
+      ),
+    ),
+  )(body);
+  return Option.isNone(read)
+    ? []
+    : Object.entries(read.value).flatMap(([name, value]) =>
+        value === null ? [] : ["-f", `${name}=${String(value)}`],
+      );
+};
+
+/** An error body as the forges write one. */
+const Said = Schema.fromJsonString(Schema.Struct({ message: Schema.String }));
+
+/**
+ * The HTTP face: a `fetch` answering the routes the adapters request from the same model,
+ * as `<cli> api` would. It accepts only the token the CLI hands out for a host it is
+ * logged in to, and logs every request to `requests`; one it holds open and sees aborted
+ * goes to `aborted` too.
+ */
+export function httpFace(
+  forge: MrForge,
+  state: {
+    readonly read: Effect.Effect<ForgeModel>;
+    readonly write: (next: ForgeModel) => Effect.Effect<void>;
+  },
+  requests: Array<FakeRequest>,
+  aborted: Array<string>,
+) {
+  const answered = (status: number, body: string, headers: Record<string, string> = {}) =>
+    new Response(body === "" ? null : body, {
+      status,
+      headers: { "content-type": "application/json", ...headers },
+    });
+  const respond = Effect.fn("forge.httpFace")(function* (input: string, init: RequestInit) {
+    const method = (init.method ?? "GET").toUpperCase();
+    const token = (new Headers(init.headers).get("authorization") ?? "").replace(/^Bearer /, "");
+    requests.push({ method, url: input, token });
+    const model = yield* state.read;
+    const fault = model.httpFault;
+    if (fault === "network") return yield* Effect.die(new TypeError("fetch failed"));
+    if (fault === "hold")
+      return yield* Effect.callback<Response>((resume) => {
+        const abort = () => {
+          aborted.push(input);
+          resume(Effect.die(init.signal?.reason));
+        };
+        if (init.signal?.aborted) abort();
+        else init.signal?.addEventListener("abort", abort);
+      });
+    if (fault !== undefined)
+      return answered(fault.status, `{"message":"${fault.status}"}`, fault.headers);
+    const url = new URL(input);
+    const host = forge === "github" ? FORGE_HOST.github : url.host;
+    if (!model.loggedIn.includes(host) || model.revoked === true || token !== tokenOf(forge, model))
+      return answered(401, `{"message":"401 Unauthorized"}`);
+    const route = `${url.pathname.slice(API[forge].length)}${url.search}`;
+    const args =
+      forge === "github"
+        ? ["api", route, "-X", method, ...graphqlFields(init.body), ...bodyFields(init.body)]
+        : ["api", "--hostname", host, "-X", method, ...bodyFields(init.body), route];
+    const reachable = { ...model, installed: true };
+    const now = yield* Clock.currentTimeMillis;
+    const said = answer(forge, reachable, CLI[forge], args, { now, environment: true });
+    if (said.model !== reachable) yield* state.write({ ...said.model, installed: model.installed });
+    if (said.ran.code === 0) {
+      const headers: Record<string, string> = {};
+      const size = Number(url.searchParams.get("per_page"));
+      const page = Number(url.searchParams.get("page") ?? "1");
+      const items = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Array(Schema.Json)))(
+        said.ran.stdout,
+      );
+      if (size > 0 && Option.isSome(items) && items.value.length === size) {
+        url.searchParams.set("page", String(page + 1));
+        headers.link = `<${url.toString()}>; rel="next"`;
+      }
+      return answered(said.ran.stdout === "" ? 204 : 200, said.ran.stdout, headers);
+    }
+    const status = Number(/^(\d{3})\b/.exec(said.ran.stderr ?? "")?.[1] ?? "404");
+    return answered(status, Schema.encodeSync(Said)({ message: said.ran.stderr || `${status}` }));
+  });
+  return (input: string, init: RequestInit = {}) => Effect.runPromise(respond(input, init));
+}
+
+/**
+ * A `fetch` answering each request as `<cli> api` answers its route through `run`: the HTTP
+ * face of a CLI fake that only knows commands.
+ */
+export const cliFetch =
+  (run: Runner) =>
+  (input: string, init: RequestInit = {}): Promise<Response> =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const url = new URL(input);
+        const method = (init.method ?? "GET").toUpperCase();
+        const github = url.host === "api.github.com";
+        const route = `${url.pathname.slice((github ? API.github : API.gitlab).length)}${url.search}`;
+        const ran = github
+          ? yield* run(
+              "gh",
+              ["api", route, "-X", method, ...graphqlFields(init.body), ...bodyFields(init.body)],
+              ".",
+            )
+          : yield* run(
+              "glab",
+              ["api", "--hostname", url.host, "-X", method, ...bodyFields(init.body), route],
+              ".",
+            );
+        if (ran.code === 0)
+          return new Response(ran.stdout === "" ? null : ran.stdout, {
+            status: ran.stdout === "" ? 204 : 200,
+            headers: { "content-type": "application/json" },
+          });
+        const status = Number(/^(\d{3})\b/.exec(ran.stderr ?? "")?.[1] ?? "404");
+        return new Response(Schema.encodeSync(Said)({ message: ran.stderr || `${status}` }), {
+          status,
+          headers: { "content-type": "application/json" },
+        });
+      }),
+    );
+
+/** ForgeHttp over a CLI fake: its credential reads and its requests both through `run`. */
+export const forgeHttpOver = (run: Runner) => forgeHttpTest(run, cliFetch(run));
+
+/** ForgeHttp over the CLIs on PATH, each request answered as their `api` answers it. */
+export const forgeHttpOnPath = Layer.unwrap(
+  Effect.map(Effect.context<ChildProcessSpawner.ChildProcessSpawner>(), (spawner) =>
+    forgeHttpOver((cmd, args, cwd) => shell(cmd, args, cwd).pipe(Effect.provideContext(spawner))),
+  ),
+);
+
+/** `runEffect`, with a ForgeHttp of its own asking the forge CLIs on PATH. */
+export const runOnPath = <A, E>(
+  effect: Effect.Effect<A, E, ForgeHttp | Scope.Scope | BunServices.BunServices>,
+) => runEffect(effect.pipe(Effect.provide(Layer.fresh(forgeHttpOnPath))));
+
+/**
+ * The Runner face, which logs `cmd args…` to `calls`, and the HTTP face, which logs to
+ * `requests`, answering from one model; `layer` is ForgeHttp reaching the forge through both.
+ */
 export function fakeForge(forge: MrForge, start: ForgeModel) {
   const calls: string[] = [];
+  const requests: FakeRequest[] = [];
+  const aborted: string[] = [];
   let model = start;
   const run: Runner = (cmd, args) =>
-    Effect.sync(() => {
+    Effect.map(Clock.currentTimeMillis, (now) => {
       calls.push([cmd, ...args].join(" "));
-      const said = answer(forge, model, cmd, args);
+      const said = answer(forge, model, cmd, args, { now, environment: true });
       model = said.model;
       return said.ran;
     });
-  return { run, calls, model: () => model };
+  const fetch = httpFace(
+    forge,
+    {
+      read: Effect.sync(() => model),
+      write: (next) =>
+        Effect.sync(() => {
+          model = next;
+        }),
+    },
+    requests,
+    aborted,
+  );
+  return {
+    run,
+    calls,
+    requests,
+    aborted,
+    fetch,
+    layer: forgeHttpTest(run, fetch),
+    model: () => model,
+    set: (next: ForgeModel) => {
+      model = next;
+    },
+  };
 }
 
-/** The FakeBin face: the compiled fake or `bun forge-bin.ts`, with the same arguments. */
+/** Whether glab sees a token in its own environment, as it would answer one for any host. */
+const glabEnvironment = Effect.gen(function* () {
+  for (const name of ["GITLAB_TOKEN", "GITLAB_ACCESS_TOKEN", "OAUTH_TOKEN"])
+    if ((yield* Config.String(name).pipe(Config.withDefault(""))) !== "") return true;
+  return false;
+}).pipe(Effect.orElseSucceed(() => false));
+
+// Readers in the host and CLI must see a complete model while another face replaces it.
+let modelWrites = 0;
+const writeModel = (file: string, model: ForgeModel) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const staged = `${file}.${process.pid}.${++modelWrites}.tmp`;
+    yield* fs
+      .writeFileString(staged, Schema.encodeSync(ModelJson)(model))
+      .pipe(
+        Effect.andThen(fs.rename(staged, file)),
+        Effect.ensuring(fs.remove(staged).pipe(Effect.ignore)),
+      );
+  });
+
+/** The FakeBin face: what one start of the forge's CLI on PATH answers. */
 export const forgeBin = Effect.fn("forge.bin")(function* (
   forge: MrForge,
   file: string,
@@ -1322,10 +2003,12 @@ export const forgeBin = Effect.fn("forge.bin")(function* (
   const fs = yield* FileSystem.FileSystem;
   const model = Schema.decodeSync(ModelJson)(yield* fs.readFileString(file));
   yield* fs.writeFileString(`${file}.log`, `${[CLI[forge], ...args].join(" ")}\n`, { flag: "a" });
-  const said = answer(forge, model, CLI[forge], args);
+  const said = answer(forge, model, CLI[forge], args, {
+    now: yield* Clock.currentTimeMillis,
+    environment: yield* glabEnvironment,
+  });
   // Writing back an unchanged model would undo a test's write that landed since the read.
-  if (said.model !== model)
-    yield* fs.writeFileString(file, Schema.encodeSync(ModelJson)(said.model));
+  if (said.model !== model) yield* writeModel(file, said.model);
   return said.ran;
 });
 
@@ -1341,15 +2024,38 @@ export const forgeOnPath = Effect.fn("forge.onPath")(function* (
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const file = path.join(bin.dir, `${forge}.model.json`);
-  yield* fs.writeFileString(file, Schema.encodeSync(ModelJson)(model));
-  const script = yield* path.fromFileUrl(new URL("./forge-bin.ts", import.meta.url));
+  yield* writeModel(file, model);
   const binary = yield* Config.String("COLLIE_TEST_FAKE_FORGE").pipe(Config.withDefault(""));
-  const command = binary === "" ? [process.execPath, script] : [binary];
-  yield* bin.add(CLI[forge], `exec ${[...command, forge, file].map(shellQuote).join(" ")} "$@"`);
+  const line = yield* forwarding(binary, [forge, file], ([, , ...args], env) =>
+    recordStart(`forge ${forge}`, args).pipe(
+      Effect.andThen(forgeBin(forge, file, args)),
+      Effect.map(({ code, stdout }) => ({ code, stdout, stderr: "" })),
+      Effect.provide(
+        Layer.mergeAll(BunFileSystem.layer, ConfigProvider.layer(ConfigProvider.fromEnv({ env }))),
+      ),
+    ),
+  );
+  yield* bin.add(CLI[forge], line);
+  const requests: FakeRequest[] = [];
+  const face = httpFace(
+    forge,
+    {
+      read: Effect.orDie(Effect.map(fs.readFileString(file), Schema.decodeSync(ModelJson))),
+      write: (next) =>
+        Effect.orDie(writeModel(file, next).pipe(Effect.provideService(FileSystem.FileSystem, fs))),
+    },
+    requests,
+    [],
+  );
   return {
+    forge,
+    /** The HTTP face over the same model file; `serveForges` serves it. */
+    face,
+    requests: () => [...requests],
     /** The model file holding `next`, as an agent's scripted write would leave it. */
     holding: (next: ForgeModel) => ({ path: file, text: Schema.encodeSync(ModelJson)(next) }),
-    set: (next: ForgeModel) => fs.writeFileString(file, Schema.encodeSync(ModelJson)(next)),
+    set: (next: ForgeModel) =>
+      writeModel(file, next).pipe(Effect.provideService(FileSystem.FileSystem, fs)),
     model: () => Effect.map(fs.readFileString(file), Schema.decodeSync(ModelJson)),
     calls: () =>
       Effect.map(
@@ -1358,3 +2064,42 @@ export const forgeOnPath = Effect.fn("forge.onPath")(function* (
       ),
   };
 });
+
+/**
+ * The HTTP faces of forges on PATH on one loopback port, until the scope closes: what
+ * `COLLIE_FORGE_API` points a host at, each forge host's API under `/<its API host>`.
+ */
+export const serveForges = (
+  ...onPath: ReadonlyArray<{
+    readonly forge: MrForge;
+    readonly face: (input: string, init?: RequestInit) => Promise<Response>;
+  }>
+) =>
+  Effect.map(
+    Effect.acquireRelease(
+      Effect.sync(() =>
+        Bun.serve({
+          hostname: "127.0.0.1",
+          port: 0,
+          fetch: (request) => {
+            const url = new URL(request.url);
+            const [, apiHost = "", ...rest] = url.pathname.split("/");
+            const forge = apiHost === "api.github.com" ? "github" : "gitlab";
+            const face = onPath.find((one) => one.forge === forge)?.face;
+            if (face === undefined) return new Response(null, { status: 404 });
+            const body = request.body === null ? Promise.resolve(undefined) : request.text();
+            return body.then((body) =>
+              face(`https://${apiHost}/${rest.join("/")}${url.search}`, {
+                method: request.method,
+                headers: request.headers,
+                signal: request.signal,
+                body,
+              }),
+            );
+          },
+        }),
+      ),
+      (server) => Effect.promise(() => server.stop(true)),
+    ),
+    (server) => `http://127.0.0.1:${server.port}`,
+  );

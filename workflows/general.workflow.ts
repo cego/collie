@@ -1,4 +1,4 @@
-import { Host, Run, WorkflowError, agentWork, contentOf, defineWorkflow } from "collie";
+import { Host, Run, WorkflowError, agentWork, contentOf, defineWorkflow, step } from "collie";
 import { Effect, Schema } from "effect";
 import markdown from "./general.md" with { type: "text" };
 
@@ -20,6 +20,14 @@ const Done = Schema.Struct({
   }),
 });
 
+const taskStep = step({
+  id: "task",
+  title: "Task",
+  description: "The generalist completes the requested work in its checkout.",
+  kind: "agent",
+  role: "generalist",
+});
+
 export default defineWorkflow({
   id: "general",
   title: "general — one ad-hoc task, done in place",
@@ -29,6 +37,7 @@ export default defineWorkflow({
   hints: { goal: "goal" },
   output: Schema.String,
   agents: { harness: "claude", model: "opus", effort: "high" },
+  path: [taskStep],
   run: ({ input: asked }) =>
     Effect.gen(function* () {
       const host = yield* Host;
@@ -52,5 +61,5 @@ export default defineWorkflow({
         return yield* new WorkflowError({ reason: done.blocked });
       }
       return done.summary;
-    }),
+    }).pipe(taskStep),
 });

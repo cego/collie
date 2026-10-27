@@ -194,7 +194,6 @@ export class Rig {
   private constructor(
     readonly root: string,
     private readonly path: Path.Path,
-    private readonly fakeHerdrPath: string,
     private readonly pathValue: string,
   ) {
     this.logPath = path.join(root, "calls.jsonl");
@@ -211,9 +210,8 @@ export class Rig {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const root = yield* fs.makeTempDirectory({ prefix: "hw-test-" });
-      const fakeHerdrPath = yield* path.fromFileUrl(new URL("./fake-herdr.ts", import.meta.url));
       const pathValue = yield* Config.String("PATH").pipe(Config.withDefault(""));
-      const rig = new Rig(root, path, fakeHerdrPath, pathValue);
+      const rig = new Rig(root, path, pathValue);
       yield* rig.setup();
       return rig;
     });
@@ -227,14 +225,13 @@ export class Rig {
   private setup(): Effect.Effect<void, PlatformError.PlatformError, FileSystem.FileSystem> {
     const dirs = [this.stateDir, this.userDir, this.baselineDir, this.projectDir];
     const binPath = this.binPath;
-    const fakeHerdrPath = this.fakeHerdrPath;
     const memory = this.memory(50);
     return Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       for (const dir of dirs) {
         yield* fs.makeDirectory(dir, { recursive: true });
       }
-      yield* writeFakeHerdrShim(binPath, fakeHerdrPath);
+      yield* writeFakeHerdrShim(binPath);
       yield* memory;
     });
   }
@@ -695,6 +692,8 @@ export class Rig {
       "FAKE_HERDR_AGENT_STATUS",
       "FAKE_HERDR_PROMPT_ERROR",
       "FAKE_HERDR_PROMPT_ERROR_TIMES",
+      "FAKE_HERDR_PROMPT_ERROR_MESSAGE",
+      "FAKE_HERDR_NAME_TAKEN",
       "FAKE_HERDR_BLOCK_START",
       "FAKE_HERDR_VERSION",
       "FAKE_HERDR_PLUGINS",

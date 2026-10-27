@@ -49,6 +49,7 @@ import {
   cleanupListing,
   scheduleListing,
   runProgress,
+  runShown,
   reportFor,
   showOffers,
   type Door,
@@ -59,7 +60,7 @@ import { taskOfWorkspace } from "./task";
 import { pendingFor, proposalsPath, read as readProposals } from "./proposals";
 import { statusLine } from "./disposition";
 import { Herdr } from "./herdr";
-import { ASKED_KINDS, type FLOCK_READS } from "./board-model";
+import { ASKED_KINDS, Flow, type FLOCK_READS } from "./board-model";
 import { asText as newsText, NATIVE } from "./news";
 import { reportLines } from "./report";
 import { epochMs } from "./time";
@@ -356,6 +357,8 @@ export const checkLines = Effect.fn("Tools.checkLines")(function* (
 });
 
 /** One Run in detail, led by the check Collie is running for it, then where each finished one's output is. */
+const encodeFlow = Schema.encodeSync(Schema.fromJsonString(Flow));
+
 const runAnswer = Effect.fn("Tools.runAnswer")(function* (env: PluginEnv, run: RunFacts) {
   const runs = yield* listRuns(env);
   const facts = yield* runFacts(env, run, runs);
@@ -382,7 +385,20 @@ const runAnswer = Effect.fn("Tools.runAnswer")(function* (env: PluginEnv, run: R
     !progress.ok || progress.value === null
       ? []
       : ["", "### Ready to release", "", ...readyLines(progress.value.ready)];
-  return [...running, facts, ...done, ...offered, ...ready].join("\n");
+  const shown = yield* runShown(env, run.id);
+  // The value Desktop draws and `run show --json` carries, so an answer and a picture agree.
+  const flow =
+    !shown.ok || shown.flow == null
+      ? []
+      : [
+          "",
+          "### Flow, as `run show --json` carries it",
+          "",
+          "```json",
+          encodeFlow(shown.flow),
+          "```",
+        ];
+  return [...running, facts, ...done, ...offered, ...ready, ...flow].join("\n");
 });
 
 /** What `collie_herd` answers with: the board, so chat and board can never disagree about a card. */

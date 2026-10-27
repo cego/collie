@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
+import { runOnPath } from "./support/forge";
 import { runEffect } from "./support/effect";
 import {
   classifyGivenTarget,
@@ -52,19 +53,31 @@ afterEach(() =>
 
 const ctx = () => ({ cwd: rig.projectDir });
 
-/** A glab answering `mr list` for this branch, and for me as assignee and author. */
-const glabListing = (lists: { branch?: string; assignee?: string; author?: string }) =>
-  `case "$2 $3" in
-      "list --source-branch") echo '${lists.branch ?? "[]"}' ;;
-      "list --assignee") echo '${lists.assignee ?? "[]"}' ;;
-      "list --author") echo '${lists.author ?? "[]"}' ;;
+/** A glab logged in, answering this branch's open merge requests, and mine as assignee and author. */
+const glabListing = (lists: {
+  branch?: ReadonlyArray<number>;
+  assignee?: string;
+  author?: string;
+}) =>
+  `case "$1 $2 $3" in
+      "config get token") echo glpat-test ;;
+      "api --hostname "*) case "$*" in
+          *"merge_requests?source_branch="*) echo '${branchMrs(lists.branch ?? [])}' ;;
+          *"assignee_username="*) echo '${lists.assignee ?? "[]"}' ;;
+          *"author_username="*) echo '${lists.author ?? "[]"}' ;;
+          *"-X GET user") echo '{"id":1,"username":"me"}' ;;
+          *) exit 1 ;;
+        esac ;;
       *) exit 0 ;;
     esac`;
 
+const branchMrs = (iids: ReadonlyArray<number>) =>
+  `[${iids.map((iid) => `{"iid": ${iid}, "state": "opened", "created_at": "2026-10-20T12:00:00Z"}`).join(",")}]`;
+
 test("diff-target prefers the open merge request", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
-      yield* bin.add("glab", glabListing({ branch: '[{"iid": 42}]' }));
+      yield* bin.add("glab", glabListing({ branch: [42] }));
       yield* bin.add("git", gitOn("add-picker"));
 
       expect(yield* inferInput("target", "diff-target", ctx())).toMatchObject({
@@ -76,7 +89,7 @@ test("diff-target prefers the open merge request", () =>
   ));
 
 test("diff-target falls back to the branch diff when there is no open merge request", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* bin.add("glab", `exit 1`);
       yield* bin.add(
@@ -97,7 +110,7 @@ test("diff-target falls back to the branch diff when there is no open merge requ
   ));
 
 test("diff-target skips a merge request that is no longer open", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       // glab lists only open merge requests, so a merged one is not there.
       yield* bin.add("glab", glabListing({}));
@@ -118,7 +131,7 @@ test("diff-target skips a merge request that is no longer open", () =>
   ));
 
 test("diff-target ends at the working tree on the default branch", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* bin.add("glab", `exit 1`);
       yield* bin.add(
@@ -140,7 +153,7 @@ test("diff-target ends at the working tree on the default branch", () =>
   ));
 
 test("diff-target finds the base by name when origin/HEAD is missing", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* bin.add("glab", `exit 1`);
       yield* bin.add(
@@ -162,7 +175,7 @@ test("diff-target finds the base by name when origin/HEAD is missing", () =>
   ));
 
 test("no glab and no git leaves nothing to infer, so the human types it", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       // Also the non-repo case: a directory that is not a checkout has no branch and
       // no working tree to review, so the menu is one entry — Type it….
@@ -176,7 +189,7 @@ test("no glab and no git leaves nothing to infer, so the human types it", () =>
   ));
 
 test("goal is always asked and a flag always defaults to false", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       expect(yield* inferInput("goal", "goal", ctx())).toMatchObject({
         needsAsking: true,
@@ -191,7 +204,7 @@ test("goal is always asked and a flag always defaults to false", () =>
   ));
 
 test("the confirm line shows every input with where it came from", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* bin.add("glab", `exit 1`);
       yield* bin.add("git", `echo main`);
@@ -210,7 +223,7 @@ test("the confirm line shows every input with where it came from", () =>
   ));
 
 test("plan-dir takes the newest finished run with a SPEC in this repo, else asks", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       const ctxWithState = withState;
 
@@ -244,7 +257,7 @@ test("plan-dir takes the newest finished run with a SPEC in this repo, else asks
   ));
 
 test("a work-source with exactly one candidate is inferred, kind and all", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* bin.add("git", `echo add-picker`);
       const plan = yield* makePlanRun("newest-goal", rig.projectDir, "2026-08-27T09:00:00.000Z");
@@ -264,7 +277,7 @@ test("a work-source with exactly one candidate is inferred, kind and all", () =>
   ));
 
 test("a Linear id in the branch is the one candidate when nothing has been planned", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* bin.add("git", `echo feature/ENG-42-add-picker`);
 
@@ -278,7 +291,7 @@ test("a Linear id in the branch is the one candidate when nothing has been plann
   ));
 
 test("a work-source with no candidate has to be asked for", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* bin.add("git", `echo add-picker`);
 
@@ -290,7 +303,7 @@ test("a work-source with no candidate has to be asked for", () =>
   ));
 
 test("a work-source with several candidates offers all of them, newest plans first", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* bin.add("git", `echo feature/ENG-42-add-picker`);
       yield* makePlanRun("oldest", rig.projectDir, "2026-08-27T06:00:00.000Z");
@@ -313,7 +326,7 @@ test("a work-source with several candidates offers all of them, newest plans fir
   ));
 
 test("candidates come back empty rather than throwing without a state dir", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* bin.add("git", `exit 1`);
 
@@ -322,7 +335,7 @@ test("candidates come back empty rather than throwing without a state dir", () =
   ));
 
 test("what the human types is classified as a plan dir, a Linear issue or free text", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       const spec = join(rig.projectDir, "plan");
       yield* mkdir(spec);
@@ -355,7 +368,7 @@ test("what the human types is classified as a plan dir, a Linear issue or free t
   ));
 
 test("the menu resolves a work-source to a candidate", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* bin.add("git", `echo feature/ENG-42-add-picker`);
       const plan = yield* makePlanRun("newest-goal", rig.projectDir, "2026-08-27T09:00:00.000Z");
@@ -382,7 +395,7 @@ test("the menu resolves a work-source to a candidate", () =>
   ));
 
 test("the menu always offers Type it…, and classifies what comes back", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* bin.add("git", `echo add-picker`);
       const resolved = yield* inferInput("plan", "work-source", withState());
@@ -403,7 +416,7 @@ test("the menu always offers Type it…, and classifies what comes back", () =>
   ));
 
 test("free text typed into the menu is kept as the work source", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* bin.add("git", `echo add-picker`);
       const resolved = yield* inferInput("plan", "work-source", withState());
@@ -422,7 +435,7 @@ test("free text typed into the menu is kept as the work source", () =>
   ));
 
 test("escaping the menu or the question leaves the work-source unresolved", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* bin.add("git", `echo add-picker`);
 
@@ -447,7 +460,7 @@ test("escaping the menu or the question leaves the work-source unresolved", () =
   ));
 
 test("prompts see the resolved kind alongside the value", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* bin.add("git", `echo feature/ENG-42-add-picker`);
 
@@ -513,9 +526,9 @@ function gitOn(branch: string, base = "origin/main", porcelain = " M src/x.ts") 
 }
 
 test("diff-target offers the MR, the branch and the working tree, inference first", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
-      yield* bin.add("glab", glabListing({ branch: '[{"iid": 42}]' }));
+      yield* bin.add("glab", glabListing({ branch: [42] }));
       yield* bin.add("git", gitOn("add-picker"));
 
       const resolved = yield* inferInput("target", "diff-target", ctx());
@@ -532,7 +545,7 @@ test("diff-target offers the MR, the branch and the working tree, inference firs
   ));
 
 test("with no MR for this branch, my own open MRs are offered instead", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* bin.add(
         "glab",
@@ -559,7 +572,7 @@ test("with no MR for this branch, my own open MRs are offered instead", () =>
   ));
 
 test("my own open MRs are never what inference lands on by itself", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       // The shape that reviewed the wrong merge request: standing on the default
       // branch with a clean tree, so the only candidates are my open MRs, and the
@@ -583,7 +596,7 @@ test("my own open MRs are never what inference lands on by itself", () =>
   ));
 
 test("a clean tree on the default branch still offers the working tree", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* bin.add("glab", `exit 1`);
       yield* bin.add("git", gitOn("main", "origin/main", ""));
@@ -655,7 +668,7 @@ test.each([
 });
 
 test("a diff-target given on the command line is normalised, not just shaped", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* bin.add("git", gitOn("add-picker"));
 
@@ -688,7 +701,7 @@ test("a diff-target given on the command line is normalised, not just shaped", (
   ));
 
 test("the target menu always shows, and Type it… classifies what comes back", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* bin.add("glab", `exit 1`);
       yield* bin.add("git", gitOn("add-picker"));
@@ -715,7 +728,7 @@ test("the target menu always shows, and Type it… classifies what comes back", 
   ));
 
 test("picking the top of the target menu reproduces plain inference", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* bin.add("glab", `exit 1`);
       yield* bin.add("git", gitOn("add-picker"));
@@ -734,7 +747,7 @@ test("picking the top of the target menu reproduces plain inference", () =>
   ));
 
 test("escaping the target menu leaves the run unstarted", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* bin.add("glab", `exit 1`);
       yield* bin.add("git", gitOn("add-picker"));
@@ -750,7 +763,7 @@ test("escaping the target menu leaves the run unstarted", () =>
   ));
 
 test("targetCandidates offers nothing outside a checkout, and does not throw", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* bin.add("glab", `exit 1`);
       yield* bin.add("git", `exit 1`);
@@ -761,9 +774,9 @@ test("targetCandidates offers nothing outside a checkout, and does not throw", (
   ));
 
 test("an MR candidate carries the project its checkout pushes to", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
-      yield* bin.add("glab", glabListing({ branch: '[{"iid": 42}]' }));
+      yield* bin.add("glab", glabListing({ branch: [42] }));
       yield* bin.add(
         "git",
         `case "$*" in
@@ -786,7 +799,7 @@ test("an MR candidate carries the project its checkout pushes to", () =>
   ));
 
 test("the targets this repo has already reviewed are offered without pasting them", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       const reviewed = (slug: string, target: string, created: string, cwd = rig.projectDir) =>
         makePlanRun(slug, cwd, created, "succeeded", false, {

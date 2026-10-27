@@ -37,7 +37,7 @@ import {
   promptFor,
   type AgentHost,
 } from "../src/agents";
-import { Children, Host, Run, jsonSchemaFor, withAgents } from "../src/sdk";
+import { Children, Host, Run, WorkflowAgents, jsonSchemaFor, withAgents } from "../src/sdk";
 import { asRun, enveloped } from "./support/enveloped";
 import {
   PARKED,
@@ -53,7 +53,7 @@ import { readMetrics } from "../src/metrics";
 import { Launched, runAgents } from "../src/launches";
 import { Collected } from "../src/agents";
 import { Collecting } from "../src/collecting";
-import { memoryWaitOf, waitForMemory } from "../src/memory-wait";
+import { holdsBudgetOf, memoryWaitOf, waitForMemory } from "../src/memory-wait";
 import type { UsageReading } from "../src/usage-model";
 import { readCards } from "../src/cards";
 import { readDrift } from "../src/drift";
@@ -81,14 +81,16 @@ import { hostLockOf } from "../src/lock";
 import { claudeTrust } from "../src/trust";
 import { FALLBACK_DEFAULTS } from "../src/settings";
 import type { AgentProfile } from "../src/profile";
+import type { ClaudeSubagents } from "../src/subagents";
 import { FakeBin } from "./support/bin";
-import { forgeOnPath } from "./support/forge";
+import { forgeHttpOnPath, forgeOnPath } from "./support/forge";
 
 let rig: Rig;
 let dir: string;
 interface Clearing {
   readonly clears?: ReadonlyArray<string>;
   readonly skill?: string;
+  readonly claudeSubagents?: ClaudeSubagents;
 }
 let clearing: Clearing = {};
 
@@ -153,6 +155,7 @@ const hostOf = (): AgentHost => ({
   pollMs: 20,
   collectMs: 400,
   help: () => Effect.succeed(CLAUDE_HELP),
+  version: () => Effect.succeed("2.1.309 (Claude Code)"),
 });
 
 test(
@@ -219,7 +222,7 @@ const session = <A, E>(
 ) =>
   run.pipe(
     Effect.provide(body),
-    Effect.provide(agentsLayer({ ...hostOf(), ...over })),
+    Effect.provide(agentsLayer({ ...hostOf(), ...over }).pipe(Layer.provide(forgeHttpOnPath))),
     Effect.provide(foundationLayer({ dir })),
     Effect.scoped,
     Effect.orDie,
@@ -692,6 +695,26 @@ test("a reused agent that is gone before it was given its work is started again"
     }),
   ));
 
+test("a reused agent herdr still lists but no longer runs is started again in place of its pane", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.addAgent(agentFor("r1"), "1-9");
+      yield* rig.queueOutputs([{ verdict: "clean", note: "started again" }]);
+      const herdr = new FakeHerdr(
+        rig.pluginEnv({
+          FAKE_HERDR_PROMPT_ERROR: "agent_not_ready",
+          FAKE_HERDR_PROMPT_ERROR_TIMES: "1",
+          FAKE_HERDR_PROMPT_ERROR_MESSAGE: `agent ${agentFor("r1")} is not an active named agent`,
+          FAKE_HERDR_NAME_TAKEN: "1",
+        }),
+      );
+      const result = yield* session(started("r1"), { herdr });
+      expect(result._tag === "Success" && result.success.note).toBe("started again");
+      expect((yield* rig.cmds()).filter((cmd) => cmd === "agent start")).toHaveLength(1);
+      expect(sent(yield* rig.calls(), "Your task for this step")).toBe(2);
+    }),
+  ));
+
 const cardsOf = (runId: string) =>
   readCards(runDir(dir, runId)).pipe(
     Effect.orDie,
@@ -919,6 +942,66 @@ test(
         expect(result._tag === "Success" && result.success.note).toBe("revived");
         expect(yield* fs.exists(controlPath(dir, PARKED, "r1"))).toBe(false);
         expect(yield* starts).toBe(2);
+      }),
+    ),
+  120_000,
+);
+
+/** herdr still listing an agent whose process has gone, once `dead`, until one is started. */
+class ListsItDead extends FakeHerdr {
+  dead = false;
+  override agentStatus(target: string) {
+    return this.dead
+      ? Effect.fail(
+          new HerdrError({
+            message: "herdr agent get",
+            detail: `agent ${target} is not an active named agent`,
+            code: "agent_not_ready",
+            answered: true,
+          }),
+        )
+      : super.agentStatus(target);
+  }
+  override agentStart(...args: Parameters<FakeHerdr["agentStart"]>) {
+    this.dead = false;
+    return super.agentStart(...args);
+  }
+}
+
+test(
+  "an agent herdr still lists but no longer runs while it is collected is started again with its work",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        yield* rig.queueOutputs([null]);
+        const herdr = new ListsItDead(rig.pluginEnv({ FAKE_HERDR_NAME_TAKEN: "1" }));
+        const starts = rig.cmds().pipe(
+          Effect.orDie,
+          Effect.map((cmds) => cmds.filter((cmd) => cmd === "agent start").length),
+        );
+        const result = yield* session(
+          Effect.gen(function* () {
+            const fiber = yield* Effect.forkChild(started("r1"));
+            yield* pastTheBudget;
+            yield* until(
+              steps("r1").pipe(
+                Effect.provideService(Path.Path, yield* Path.Path),
+                Effect.map(
+                  (found) =>
+                    found.length > 0 && found.every((one) => one.delivery.state === "acknowledged"),
+                ),
+              ),
+            );
+            herdr.dead = true;
+            yield* until(starts.pipe(Effect.map((count) => count === 2)));
+            yield* fs.writeFileString(outputPath("r1"), `{"verdict":"clean","note":"revived"}`);
+            return yield* Fiber.join(fiber);
+          }),
+          { herdr, collectMs: 400 },
+        );
+        expect(result._tag === "Success" && result.success.note).toBe("revived");
+        expect(sent(yield* rig.calls(), "Your task for this step")).toBe(2);
       }),
     ),
   120_000,
@@ -1721,6 +1804,27 @@ test("the agent is started on the operator's harness, model and permissions, wit
       expect(permissionModeOf(args)).toBe("auto");
       const persona = args[args.indexOf("--append-system-prompt-file") + 1] ?? "";
       expect(yield* read(persona)).toContain("You are the reviewer.");
+    }),
+  ));
+
+test("a Claude agent is given its Run's directory", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+      yield* session(started("r1"));
+      const args = launchArgs(yield* rig.calls());
+      expect(args).toContain("--add-dir");
+      expect(args[args.indexOf("--add-dir") + 1]).toBe(runDir(dir, "r1"));
+    }),
+  ));
+
+test("a Codex agent is given no directory to add", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+      yield* session(started("r1"), { ...claudeOut, fallbacks: Effect.succeed(["codex"]) });
+      expect(harnessesStarted(yield* rig.calls())).toEqual(["codex"]);
+      expect(launchArgs(yield* rig.calls())).not.toContain("--add-dir");
     }),
   ));
 
@@ -2791,35 +2895,53 @@ test("an agent blocked during startup is waited for, not taken for a failed star
     }),
   ));
 
-test("a start herdr refused says what herdr said", () =>
+/** The run has parked or failed: either way its step has let go of the work. */
+const settled = (runId: string): Reached =>
+  Effect.gen(function* () {
+    const engine = yield* WorkflowEngine.WorkflowEngine;
+    const id = yield* work.executionId({ runId, input: { skip: false } });
+    const { status } = pollStatus(yield* engine.poll(work, id), "agent-work");
+    return status === "suspended" || status === "failed";
+  });
+
+const parkedOn = (failing: string) =>
+  Effect.gen(function* () {
+    yield* interrupted("r1", settled("r1"), {
+      herdr: new FakeHerdr(rig.pluginEnv({ FAKE_HERDR_FAIL: failing })),
+    });
+    expect(yield* statusNow("r1")).toBe("suspended");
+    return yield* read(controlPath(dir, PARKED, "r1"));
+  });
+
+test("a start herdr refused parks, saying what herdr said", () =>
   runEffect(
     Effect.gen(function* () {
-      const result = yield* session(started("r1"), {
-        herdr: new FakeHerdr(
-          rig.pluginEnv({ FAKE_HERDR_FAIL: `{"agent start":"claude exited: no API key"}` }),
-        ),
-      });
-      expect(result._tag).toBe("Failure");
-      expect(result._tag === "Failure" ? result.failure.reason : "").toContain(
-        "claude exited: no API key",
-      );
+      const why = yield* parkedOn(`{"agent start":"claude exited: no API key"}`);
+      expect(why).toContain("claude exited: no API key");
+      expect(why).toContain(promptPath("r1"));
     }),
   ));
 
-test("a herdr that cannot say what it has blocks the work rather than starting an agent", () =>
+test("a herdr that cannot say what it has parks the work rather than starting an agent", () =>
   runEffect(
     Effect.gen(function* () {
-      const result = yield* session(started("r1"), {
-        herdr: new FakeHerdr(
-          rig.pluginEnv({ FAKE_HERDR_FAIL: `{"agent list":"herdr is not answering"}` }),
-        ),
-      });
-      expect(result._tag).toBe("Failure");
-      const reason = result._tag === "Failure" ? result.failure.reason : "";
-      expect(reason).toContain("herdr cannot say which agents it has");
+      const why = yield* parkedOn(`{"agent list":"herdr is not answering"}`);
+      expect(why).toContain("herdr cannot say which agents it has");
+      expect(why).toContain("herdr is not answering");
       // What uncertainty must never be rounded down to.
-      expect(reason).toContain("Nothing here says the agent did no work.");
+      expect(why).toContain("Nothing here says the agent did no work.");
       expect((yield* rig.cmds()).filter((cmd) => cmd === "agent start")).toHaveLength(0);
+    }),
+  ));
+
+test("a step whose work was never sent parks, naming the file its work is in", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const why = yield* parkedOn(`{"agent prompt":"herdr lost the connection"}`);
+      expect(why).toContain("was not given its work");
+      expect(why).toContain("herdr lost the connection");
+      expect(why).toContain(promptPath("r1"));
+      expect((yield* rig.cmds()).filter((cmd) => cmd === "agent start")).toHaveLength(1);
     }),
   ));
 
@@ -3035,6 +3157,30 @@ test("a Run built from another Run's plan has that Run in its lineage, however i
       const host = yield* Host;
       expect((yield* host.place("run-c")).lineage).toEqual(["run-c", "run-i", "run-p"]);
       expect((yield* host.place("run-o")).lineage).toEqual(["run-o"]);
+    }).pipe(Effect.provide(foundationLayer({ dir })), Effect.scoped, Effect.orDie),
+  ));
+
+test("a placed Run has a handoffs directory before any agent of it is launched", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const store = yield* Store;
+      yield* store.admit({
+        request: "req-run-h",
+        run: "run-h",
+        workflow: "w",
+        project: dir,
+        input: {},
+        provenance: {},
+        options: {},
+        generation: "g",
+        execution: "exec-run-h",
+        task: null,
+        parent: null,
+      });
+      const place = yield* (yield* Host).place("run-h");
+      const info = yield* (yield* FileSystem.FileSystem).stat(`${place.dir}/handoffs`);
+      expect(info.type).toBe("Directory");
+      expect(yield* rig.calls()).toEqual([]);
     }).pipe(Effect.provide(foundationLayer({ dir })), Effect.scoped, Effect.orDie),
   ));
 
@@ -4767,6 +4913,263 @@ const settingsAt = (calls: ReadonlyArray<Call>) => {
   return read(args[args.indexOf("--settings") + 1] ?? "");
 };
 
+test.each([0, 1000])(
+  "Claude subagent policy reaches launch settings with compaction at %s",
+  (compactAtTokens) =>
+    runEffect(
+      Effect.gen(function* () {
+        const policy = {
+          enabled: false,
+          model: "sonnet",
+          forceModel: true,
+          cacheTtl: "1h",
+          maxDepth: 1,
+          maxConcurrent: 2,
+        } satisfies ClaudeSubagents;
+        yield* configured(
+          encodeJson({
+            claude_subagents: encodeJson(policy),
+            agent_profile: encodeJson({ "*": { claude: { disableClaudeAiConnectors: true } } }),
+          }),
+        );
+        yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+        yield* session(started("r1"), { compactAtTokens, ports: claudeSettingsControls() });
+        const settings = yield* Schema.decodeUnknownEffect(
+          Schema.fromJsonString(Schema.JsonObject),
+        )(yield* settingsAt(yield* rig.calls()));
+        expect(settings.env).toEqual({
+          CLAUDE_CODE_SUBAGENT_MODEL: "sonnet",
+          CLAUDE_CODE_SUBAGENT_MODEL_FORCE: "1",
+          CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH: "1",
+          CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS: "2",
+        });
+        expect(settings.subagentPromptCacheTtl).toBe("1h");
+        expect(settings.permissions).toEqual({ deny: ["Agent"] });
+        expect(settings.autoMode).toBeDefined();
+        expect(settings.disableClaudeAiConnectors).toBe(true);
+        expect(settings.promptCacheTtl).toBeUndefined();
+        if (compactAtTokens > 0) {
+          expect(settings.statusLine).toBeDefined();
+          expect(settings.hooks).toBeDefined();
+        }
+        expect(launchArgs(yield* rig.calls()).slice(0, 2)).toEqual(["--model", "opus"]);
+        expect((yield* launchOf("r1")).claudeSubagents).toEqual(policy);
+      }),
+    ),
+);
+
+test("subagent policy fields follow workflow, role, scope and call preferences without leaking to Pi", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* configured(
+        encodeJson({
+          claude_subagents: encodeJson({
+            enabled: false,
+            forceModel: true,
+            model: "sonnet",
+            maxConcurrent: 2,
+          }),
+        }),
+      );
+      const tasks = enveloped({
+        name: "subagent-scopes",
+        input: {},
+        success: Schema.Array(Schema.String),
+      });
+      const body = tasks.toLayer((payload) =>
+        Effect.all([
+          agentWork({
+            operation: "research",
+            role: "researcher",
+            instructions: "Read the code.",
+            claudeSubagents: { enabled: true, forceModel: false, maxConcurrent: undefined },
+          }),
+          agentWork({
+            operation: "small",
+            instructions: "A small fix.",
+            claudeSubagents: { enabled: false, model: "sonnet", cacheTtl: "5m" },
+          }),
+          agentWork({
+            operation: "review",
+            instructions: "Review.",
+            harness: "pi",
+            model: "openai-codex/gpt-6.1-sol",
+          }),
+        ]).pipe(
+          withAgents({ claudeSubagents: { model: "haiku" } }),
+          Effect.provideService(WorkflowAgents, {
+            claudeSubagents: { cacheTtl: "5m" },
+            roles: { researcher: { claudeSubagents: { cacheTtl: "1h", maxDepth: 1 } } },
+          }),
+          asRun(payload),
+        ),
+      );
+      yield* rig.queueOutputs(["done", "done", "done"]);
+      yield* tasks
+        .execute({ runId: "r1", input: {} })
+        .pipe(
+          Effect.provide(body),
+          Effect.provide(agentsLayer(hostOf())),
+          Effect.provide(foundationLayer({ dir })),
+          Effect.scoped,
+        );
+      const launches = yield* readLaunches(dir, "r1");
+      expect(launches.find((one) => one.operation === "research")?.claudeSubagents).toEqual({
+        enabled: true,
+        forceModel: false,
+        model: "haiku",
+        cacheTtl: "1h",
+        maxDepth: 1,
+        maxConcurrent: 2,
+      });
+      expect(launches.find((one) => one.harness === "pi")?.claudeSubagents).toBeUndefined();
+      const args =
+        everyLaunch(yield* rig.calls()).find((args) =>
+          args.some((arg) => arg.endsWith("/research.settings.json")),
+        ) ?? [];
+      const settings = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.JsonObject))(
+        yield* read(args[args.indexOf("--settings") + 1] ?? ""),
+      );
+      expect(settings.env).toMatchObject({
+        CLAUDE_CODE_SUBAGENT_MODEL: "haiku",
+        CLAUDE_CODE_SUBAGENT_MODEL_FORCE: "0",
+      });
+      expect(settings.permissions).toBeUndefined();
+      const smallArgs =
+        everyLaunch(yield* rig.calls()).find((args) =>
+          args.some((arg) => arg.endsWith("/small.settings.json")),
+        ) ?? [];
+      const small = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.JsonObject))(
+        yield* read(smallArgs[smallArgs.indexOf("--settings") + 1] ?? ""),
+      );
+      expect(small.env).toMatchObject({
+        CLAUDE_CODE_SUBAGENT_MODEL: "sonnet",
+        CLAUDE_CODE_SUBAGENT_MODEL_FORCE: "1",
+      });
+      expect(small.permissions).toEqual({ deny: ["Agent"] });
+      expect(small.subagentPromptCacheTtl).toBe("5m");
+    }),
+  ));
+
+test.each([
+  { enabled: "false" },
+  { cacheTtl: "2h" },
+  { maxDepth: 0 },
+  { maxConcurrent: 1.5 },
+  { model: "gpt-5" },
+  { forceModel: true },
+  { typo: true },
+  null,
+])("invalid subagent policy %j starts no agent", (policy) =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* configured(encodeJson({ claude_subagents: encodeJson(policy) }));
+      const result = yield* session(started("r1"));
+      expect(result._tag).toBe("Failure");
+      expect(result._tag === "Failure" ? result.failure.reason : "").toMatch(
+        /claude_?[Ss]ubagents/,
+      );
+      expect(everyLaunch(yield* rig.calls())).toEqual([]);
+      expect(yield* rig.cmds()).not.toContain("tab create");
+    }),
+  ),
+);
+
+test.each(["2.1.200 (Claude Code)", null])(
+  "an unsupported Claude version %j parks a subagent policy before opening a pane",
+  (installed) =>
+    runEffect(
+      Effect.gen(function* () {
+        clearing = { claudeSubagents: { cacheTtl: "1h" } };
+        yield* interrupted("r1", suspended("r1"), { version: () => Effect.succeed(installed) });
+        expect(yield* read(controlPath(dir, PARKED, "r1"))).toContain(
+          "requires Claude Code 2.1.242",
+        );
+        expect(yield* rig.cmds()).not.toContain("tab create");
+      }),
+    ),
+);
+
+test(
+  "a subagent policy stays recorded through recovery after the operator changes defaults",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* configured(
+          encodeJson({ claude_subagents: encodeJson({ model: "sonnet", cacheTtl: "1h" }) }),
+        );
+        yield* rig.queueOutputs([null, { verdict: "clean", note: "back" }]);
+        yield* interrupted("r1", prompted("Your task for this step"));
+        yield* session(halted("r1"), { collectMs: 30_000 });
+        yield* configured(
+          encodeJson({ claude_subagents: encodeJson({ model: "haiku", cacheTtl: "5m" }) }),
+        );
+        const result = yield* session(started("r1"));
+        expect(result._tag).toBe("Success");
+        expect((yield* launchOf("r1")).claudeSubagents).toEqual({
+          model: "sonnet",
+          cacheTtl: "1h",
+        });
+        for (const args of everyLaunch(yield* rig.calls())) {
+          const settings = yield* read(args[args.indexOf("--settings") + 1] ?? "");
+          expect(settings).toContain('"sonnet"');
+          expect(settings).toContain('"1h"');
+        }
+      }),
+    ),
+  120_000,
+);
+
+test.each([
+  { harness: "claude", model: "sonnet", next: "haiku", matches: false },
+  { harness: "claude", model: "default", next: "default", matches: true },
+  { harness: "pi", model: "sonnet", next: "haiku", matches: true },
+])(
+  "reusing an agent compares its explicit subagent policy %j",
+  ({ harness, model, next, matches }) =>
+    runEffect(
+      Effect.gen(function* () {
+        const continued = enveloped({ name: "subagent-reuse", input: {}, success: Schema.String });
+        const body = continued.toLayer((payload) =>
+          Effect.gen(function* () {
+            yield* agentWork({
+              operation: "first",
+              agent: "worker",
+              instructions: "One.",
+              claudeSubagents: { model },
+            });
+            return yield* agentWork({
+              operation: "second",
+              agent: "worker",
+              instructions: "Two.",
+              claudeSubagents: { model: next },
+            });
+          }).pipe(asRun(payload)),
+        );
+        yield* rig.queueOutputs(matches ? ["one", "two"] : ["one"]);
+        const result = yield* continued.execute({ runId: "r1", input: {} }).pipe(
+          Effect.result,
+          Effect.provide(body),
+          Effect.provide(
+            agentsLayer({
+              ...hostOf(),
+              harness,
+              model: harness === "pi" ? "openai-codex/gpt-6.1-sol" : "opus",
+            }),
+          ),
+          Effect.provide(foundationLayer({ dir })),
+          Effect.scoped,
+        );
+        if (matches) expect(result._tag).toBe("Success");
+        else
+          expect(result._tag === "Failure" ? result.failure.reason : "").toContain(
+            "different Claude subagent policy",
+          );
+        expect(everyLaunch(yield* rig.calls())).toHaveLength(1);
+      }),
+    ),
+);
+
 test("with no agent profile a launch types and passes what it always has", () =>
   runEffect(
     Effect.gen(function* () {
@@ -5128,6 +5531,7 @@ test(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         yield* rig.queueOutputs([null, null]);
+        const herdr = new BusyUntilWritten("working");
         const result = yield* session(
           Effect.gen(function* () {
             const fiber = yield* Effect.forkChild(started("r1"));
@@ -5144,16 +5548,21 @@ test(
                 asker: agentFor("r1"),
               }),
             );
+            // Setup IO can outlast the idle budget; finish the turns only once verify holds it.
+            yield* until(holdsBudgetOf(dir, "r1", agentFor("r1")));
+            herdr.written = true;
             yield* until(parked("r2"));
             yield* spend(5_000);
             expect(yield* parked("r1")).toBe(false);
 
+            herdr.written = false;
             yield* rig.memory(50);
             expect(yield* Fiber.join(verify)).toBe("waited");
             yield* fs.writeFileString(outputPath("r1"), `{"verdict":"clean","note":"verified"}`);
+            herdr.written = true;
             return yield* Fiber.join(fiber);
           }),
-          { collectMs: 400 },
+          { herdr, collectMs: 400 },
         );
         expect(result._tag === "Success" && result.success.note).toBe("verified");
       }),

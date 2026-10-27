@@ -13,6 +13,7 @@ import { FINDINGS_FILE, REVIEW_FILE } from "./output";
 import { ago } from "./time";
 import { type Runner, forgeHere, projectHere, shell as shellRun } from "./mr";
 import type { Forge } from "./forge/forge";
+import type { ForgeHttp } from "./forge/http";
 import { mrWords, readMrRef } from "./board-model";
 
 /**
@@ -111,7 +112,7 @@ export function inferInput(
 ): Effect.Effect<
   Resolution,
   PlatformError,
-  FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
+  FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner | ForgeHttp
 > {
   return Effect.gen(function* () {
     const run = ctx.run ?? shell;
@@ -220,7 +221,7 @@ export function inferInputs(
 ): Effect.Effect<
   Resolution[],
   PlatformError,
-  FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
+  FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner | ForgeHttp
 > {
   return Effect.forEach(Object.entries(inputs), ([name, strategy]) =>
     inferInput(name, strategy, ctx),
@@ -347,7 +348,7 @@ export function targetCandidates(
 ): Effect.Effect<
   Candidate[],
   PlatformError,
-  FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
+  FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner | ForgeHttp
 > {
   return Effect.gen(function* () {
     const run = ctx.run ?? shell;
@@ -427,7 +428,7 @@ function myOpenMrs(
   run: NonNullable<InferContext["run"]>,
   cwd: string,
   project: string | null,
-): Effect.Effect<Candidate[], never, ChildProcessSpawner.ChildProcessSpawner> {
+): Effect.Effect<Candidate[], never, ChildProcessSpawner.ChildProcessSpawner | ForgeHttp> {
   return Effect.map(forge.mine(project, cwd, run), (mine) =>
     [...mine]
       .sort((a, b) => Number(a.iid) - Number(b.iid))

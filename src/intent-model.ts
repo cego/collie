@@ -77,6 +77,8 @@ export const IntentSeedSchema = Schema.Struct({
 
 export const IntentChangeSchema = Schema.Union([
   Schema.Struct({ kind: Schema.Literal("set-goal"), goal: Schema.NullOr(Schema.String) }),
+  /** Null clears it; the host refuses a kind it does not know. */
+  Schema.Struct({ kind: Schema.Literal("set-outcome"), outcome: Schema.NullOr(Schema.String) }),
   Schema.Struct({
     kind: Schema.Literal("add-constraint"),
     constraint: Schema.Struct({

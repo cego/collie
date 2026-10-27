@@ -1,7 +1,16 @@
 // One day of Runs, read for what is wrong with the project it runs in (ADR-0053): filed on
 // that project's forge, and up to `improvements` of it planned and built, with nobody asked.
 
-import { Children, Host, Run, WorkflowError, agentWork, contentOf, defineWorkflow } from "collie";
+import {
+  Children,
+  Host,
+  Run,
+  WorkflowError,
+  agentWork,
+  contentOf,
+  defineWorkflow,
+  step,
+} from "collie";
 import { hostname } from "node:os";
 import { DateTime, Duration, Effect, FileSystem, Result, Schema } from "effect";
 import * as Activity from "effect/workflow/Activity";
@@ -69,6 +78,38 @@ const OutcomeSchema = Schema.Union([
   Schema.Struct({ kind: Schema.Literal("refused"), reason: Schema.String }),
 ]);
 
+const windowStep = step({
+  id: "window",
+  title: "Retrospective window",
+  kind: "check",
+  description: "Read the Runs in the requested retrospective window.",
+});
+const retroStep = step({
+  id: "retro",
+  title: "Retro",
+  kind: "check",
+  description: "Load the retrospective rules for this Machine.",
+});
+const triageStep = step({
+  id: "triage",
+  title: "Triage",
+  kind: "agent",
+  role: "retrospective",
+  description: "Find actionable problems in the Runs and choose improvements.",
+});
+const filing = step({
+  id: "filing",
+  title: "Filing",
+  kind: "check",
+  description: "File new issues and add recurring evidence to existing ones.",
+});
+const improvementsStep = step({
+  id: "improvements",
+  title: "Improvements",
+  kind: "workflow",
+  description: "Start a plan and implementation for each selected improvement.",
+});
+
 export default defineWorkflow({
   id: "self-improve",
   title: "self-improve — file and fix what a day of Runs shows is wrong with a project",
@@ -85,6 +126,7 @@ export default defineWorkflow({
   checkout: "roaming",
   output: Schema.String,
   agents: { harness: "claude", model: "opus", effort: "high" },
+  path: [windowStep, retroStep, triageStep, filing, improvementsStep],
   run: ({ input }) =>
     Effect.gen(function* () {
       const host = yield* Host;
@@ -93,60 +135,66 @@ export default defineWorkflow({
       const place = yield* host.place(run.id);
       const bound = input.improvements ?? 3;
 
-      const window = yield* Activity.make({
-        name: "window",
-        success: Window,
-        error: WorkflowError,
-        execute: Effect.gen(function* () {
-          const since = DateTime.formatIso(DateTime.subtractDuration(yield* DateTime.now, DAY));
-          const report = yield* host.report(since);
-          const own = report.runs.find(({ runId }) => runId === run.id);
-          if (own === undefined)
-            return yield* new WorkflowError({ reason: `${run.id} is not in its Machine's report` });
-          const kept = report.runs.filter(
-            ({ runId, parent, project }) =>
-              runId !== run.id &&
-              parent !== run.id &&
-              (input.runs === "machine" || project === own.project),
-          );
-          const ids = new Set(kept.map(({ runId }) => runId));
-          const read = <A extends { readonly runId: string }>(list: ReadonlyArray<A>) =>
-            list.filter(({ runId }) => ids.has(runId));
-          return {
-            since,
-            machine: hostname(),
-            runs: [...ids],
-            // Another project's tallies and measures are not this one's to read.
-            report:
-              input.runs === "machine"
-                ? report
-                : {
-                    since,
-                    runs: kept,
-                    failed: read(report.failed),
-                    completed: read(report.completed),
-                    stopped: read(report.stopped),
-                  },
-          };
+      const window = yield* windowStep(
+        Activity.make({
+          name: "window",
+          success: Window,
+          error: WorkflowError,
+          execute: Effect.gen(function* () {
+            const since = DateTime.formatIso(DateTime.subtractDuration(yield* DateTime.now, DAY));
+            const report = yield* host.report(since);
+            const own = report.runs.find(({ runId }) => runId === run.id);
+            if (own === undefined)
+              return yield* new WorkflowError({
+                reason: `${run.id} is not in its Machine's report`,
+              });
+            const kept = report.runs.filter(
+              ({ runId, parent, project }) =>
+                runId !== run.id &&
+                parent !== run.id &&
+                (input.runs === "machine" || project === own.project),
+            );
+            const ids = new Set(kept.map(({ runId }) => runId));
+            const read = <A extends { readonly runId: string }>(list: ReadonlyArray<A>) =>
+              list.filter(({ runId }) => ids.has(runId));
+            return {
+              since,
+              machine: hostname(),
+              runs: [...ids],
+              // Another project's tallies and measures are not this one's to read.
+              report:
+                input.runs === "machine"
+                  ? report
+                  : {
+                      since,
+                      runs: kept,
+                      failed: read(report.failed),
+                      completed: read(report.completed),
+                      stopped: read(report.stopped),
+                    },
+            };
+          }),
         }),
-      });
+      );
       if (window.runs.length === 0) return `No Runs since ${window.since}`;
 
-      yield* Activity.make({
-        name: "retro",
-        success: Schema.Void,
-        error: WorkflowError,
-        execute: host.skill("retro").pipe(
-          Effect.flatMap((file) =>
-            file === null
-              ? new WorkflowError({
-                  reason:
-                    "the retro skill is not installed on this Machine: run prepare.sh, or collie upgrade",
-                })
-              : Effect.void,
+      yield* retroStep(
+        Activity.make({
+          name: "retro",
+          success: Schema.Void,
+          error: WorkflowError,
+          execute: host.skill("retro").pipe(
+            Effect.flatMap((file) =>
+              file === null
+                ? new WorkflowError({
+                    reason:
+                      "the retro skill is not installed on this Machine: run prepare.sh, or collie upgrade",
+                  })
+                : Effect.void,
+            ),
           ),
-        ),
-      });
+        }),
+      );
 
       const open = yield* Activity.make({
         name: "issues",
@@ -159,30 +207,32 @@ export default defineWorkflow({
           ),
       });
 
-      const triaged = yield* agentWork({
-        operation: "triage",
-        role: "retrospective",
-        instructions: triage,
-        input: {
-          checkout: place.cwd,
-          state: host.dir,
-          since: window.since,
-          runs: window.runs.join("\n"),
-          report: asJson(window.report),
-          issues:
-            open.length === 0
-              ? "None."
-              : open
-                  .map(
-                    ({ number, title, url, body }) =>
-                      `### #${number} ${title}\n\n${url}\n\n${body}`,
-                  )
-                  .join("\n\n"),
-          bound: String(bound),
-          scope: content.sections.get(input.runs) ?? "",
-        },
-        output: Triage,
-      });
+      const triaged = yield* triageStep(
+        agentWork({
+          operation: "triage",
+          role: "retrospective",
+          instructions: triage,
+          input: {
+            checkout: place.cwd,
+            state: host.dir,
+            since: window.since,
+            runs: window.runs.join("\n"),
+            report: asJson(window.report),
+            issues:
+              open.length === 0
+                ? "None."
+                : open
+                    .map(
+                      ({ number, title, url, body }) =>
+                        `### #${number} ${title}\n\n${url}\n\n${body}`,
+                    )
+                    .join("\n\n"),
+            bound: String(bound),
+            scope: content.sections.get(input.runs) ?? "",
+          },
+          output: Triage,
+        }),
+      );
 
       const sorted = sortOut(
         triaged.findings,
@@ -191,44 +241,48 @@ export default defineWorkflow({
         input.runs === "machine",
       );
       const acted: Array<{ finding: Finding; outcome: Outcome }> = [];
-      for (const finding of sorted.kept.slice(0, MAX_FINDINGS)) {
-        const target = targetOf(finding, open);
-        const outcome = yield* Activity.make({
-          name: `finding.${finding.key}`,
-          success: OutcomeSchema,
-          execute: (target === null
-            ? host
-                .fileIssue({
-                  runId: run.id,
-                  title: finding.title,
-                  body: [
-                    finding.body,
-                    markerOf(finding.key),
-                    `Filed by Collie's self-improve Run ${run.id} on ${window.machine}.`,
-                  ].join("\n\n"),
-                })
-                .pipe(Effect.map((filed): Outcome => ({ kind: "filed", ...filed })))
-            : host
-                .commentIssue({
-                  runId: run.id,
-                  number: target.number,
-                  body: `Seen again in ${finding.runs.join(", ")} on ${window.machine}, by self-improve Run ${run.id}.\n\n${markerOf(finding.key)}`,
-                })
-                .pipe(
-                  Effect.as<Outcome>({
-                    kind: "commented",
-                    number: target.number,
-                    url: target.url,
-                  }),
-                )
-          ).pipe(
-            Effect.catch((refusal) =>
-              Effect.succeed<Outcome>({ kind: "refused", reason: refusal.reason }),
-            ),
-          ),
-        });
-        acted.push({ finding, outcome });
-      }
+      yield* filing(
+        Effect.gen(function* () {
+          for (const finding of sorted.kept.slice(0, MAX_FINDINGS)) {
+            const target = targetOf(finding, open);
+            const outcome = yield* Activity.make({
+              name: `finding.${finding.key}`,
+              success: OutcomeSchema,
+              execute: (target === null
+                ? host
+                    .fileIssue({
+                      runId: run.id,
+                      title: finding.title,
+                      body: [
+                        finding.body,
+                        markerOf(finding.key),
+                        `Filed by Collie's self-improve Run ${run.id} on ${window.machine}.`,
+                      ].join("\n\n"),
+                    })
+                    .pipe(Effect.map((filed): Outcome => ({ kind: "filed", ...filed })))
+                : host
+                    .commentIssue({
+                      runId: run.id,
+                      number: target.number,
+                      body: `Seen again in ${finding.runs.join(", ")} on ${window.machine}, by self-improve Run ${run.id}.\n\n${markerOf(finding.key)}`,
+                    })
+                    .pipe(
+                      Effect.as<Outcome>({
+                        kind: "commented",
+                        number: target.number,
+                        url: target.url,
+                      }),
+                    )
+              ).pipe(
+                Effect.catch((refusal) =>
+                  Effect.succeed<Outcome>({ kind: "refused", reason: refusal.reason }),
+                ),
+              ),
+            });
+            acted.push({ finding, outcome });
+          }
+        }),
+      );
 
       const outcomes = new Map(acted.map(({ finding, outcome }) => [finding.key, outcome]));
       const starting = chosen(triaged.improvements, outcomes, bound);
@@ -255,41 +309,48 @@ export default defineWorkflow({
         });
       const improvements: ReadonlyArray<Ended> = yield* Effect.all(
         starting.map((improvement) =>
-          Effect.gen(function* () {
-            if (Result.isFailure(published)) return yield* published.failure;
-            const issues = issuesOf(improvement, published.success);
-            if (issues.length < improvement.keys.length)
-              return yield* new WorkflowError({
-                reason: "an issue it fixes is not among the forge's open issues",
+          improvementsStep(
+            Effect.gen(function* () {
+              if (Result.isFailure(published)) return yield* published.failure;
+              const issues = issuesOf(improvement, published.success);
+              if (issues.length < improvement.keys.length)
+                return yield* new WorkflowError({
+                  reason: "an issue it fixes is not among the forge's open issues",
+                });
+              const child = yield* children.start({
+                invocation: `improvement-${improvement.name}`,
+                workflow: "plan",
+                input: {
+                  goal: goalOf(issues),
+                  // oxlint-disable-next-line unicorn/no-thenable -- plan's Input is named `then`
+                  then: "implement",
+                },
+                ownTask: true,
               });
-            const child = yield* children.start({
-              invocation: `improvement-${improvement.name}`,
-              workflow: "plan",
-              input: {
-                goal: goalOf(issues),
-                // oxlint-disable-next-line unicorn/no-thenable -- plan's Input is named `then`
-                then: "implement",
-              },
-              ownTask: true,
-            });
-            return yield* children.result(child).pipe(
-              Effect.as<Ended>({ name: improvement.name, runId: child.runId, ended: "succeeded" }),
+              return yield* children.result(child).pipe(
+                Effect.as<Ended>({
+                  name: improvement.name,
+                  runId: child.runId,
+                  ended: "succeeded",
+                }),
+                Effect.catch((failure) =>
+                  Effect.succeed<Ended>({
+                    name: improvement.name,
+                    runId: child.runId,
+                    ended: `failed: ${failure.reason}`,
+                  }),
+                ),
+              );
+            }).pipe(
               Effect.catch((failure) =>
                 Effect.succeed<Ended>({
                   name: improvement.name,
-                  runId: child.runId,
-                  ended: `failed: ${failure.reason}`,
+                  runId: null,
+                  ended: `failed to start: ${failure.reason}`,
                 }),
               ),
-            );
-          }).pipe(
-            Effect.catch((failure) =>
-              Effect.succeed<Ended>({
-                name: improvement.name,
-                runId: null,
-                ended: `failed to start: ${failure.reason}`,
-              }),
             ),
+            { item: improvement.name, items: starting.map((one) => one.name) },
           ),
         ),
         { concurrency: "unbounded" },

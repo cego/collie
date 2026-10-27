@@ -3,10 +3,11 @@
 
 import type { PaneAt } from "../../../../src/board-model";
 import type { PlacedTask } from "../../../src/shared/flock";
-import { paneWhere } from "../../../src/shared/terminal-input";
+import { paneLine, paneWhere } from "../../../src/shared/terminal-input";
 
 interface Shown {
   readonly where: string;
+  readonly line: string;
   readonly command: string | null;
 }
 
@@ -23,13 +24,21 @@ export const usePanes = () => {
     forget: (key: string) => shown.delete(key),
     /** The pane is shown in Desktop, here. */
     showing: (placed: Card, at: PaneAt) =>
-      shown.set(placed.key, { where: paneWhere(placed.machine, at), command: null }),
+      shown.set(placed.key, {
+        where: paneWhere(placed.machine, at),
+        line: paneLine(at),
+        command: null,
+      }),
     /** A new herdr client attached to the pane's session, in a terminal on this computer. */
     openInHerdr: (placed: Card) =>
       goToPane(placed.installation, placed.task.run).then((went) => {
         if (went === null) return;
         const where = paneWhere(placed.machine, went.at);
-        shown.set(placed.key, { where, command: went.opened ? null : went.command });
+        shown.set(placed.key, {
+          where,
+          line: paneLine(went.at),
+          command: went.opened ? null : went.command,
+        });
         toast.add(
           went.opened
             ? { title: `Opened ${where} in a terminal`, color: "success" }

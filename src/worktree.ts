@@ -20,7 +20,8 @@ import {
   type WorktreeListing,
 } from "./herdr";
 import type { CheckoutKind } from "./definitions";
-import { diffTargetOf, repositoryOf, workSourceOf } from "./strategies";
+import { diffTargetOf, planRunOf, repositoryOf, workSourceOf } from "./strategies";
+import { recordsIn } from "./check-processes";
 import { defaultBase, linearIssueOf } from "./inputs";
 import { disambiguate, GLYPH, tabLabel } from "./naming";
 import {
@@ -110,6 +111,8 @@ export interface BranchAsk {
    */
   sources?: Record<string, string> | undefined;
   explicit?: string | null | undefined;
+  /** The branch the Task whose plan this Run builds was placed on, which it continues. */
+  taskBranch?: string | null | undefined;
   /**
    * The GitLab login a generated branch is namespaced under, from the environment
    * (`PluginEnv.gitlabLogin`). Null or absent leaves it to glab.
@@ -226,12 +229,13 @@ const SLUG_MAX = 40;
  * 2. The branch the reviewed work is already on, for a Run fixing a review.
  * 3. The `<name>` of a `branch:<base>...<name>` target *a human gave*.
  * 4. `<login>/<task>`, from the `task` Input a handoff carried.
- * 5. `<login>/<plan directory's own name>`.
- * 6. `<login>/<slug of the work itself>` — the description, or the issue id.
- * 7. `<login>/<slug of the Run's own name>`.
+ * 5. The branch the Task of the Run whose plan this builds was placed on.
+ * 6. `<login>/<plan directory's own name>`, never for a Run's own plan directory.
+ * 7. `<login>/<slug of the work itself>` — the description, or the issue id.
+ * 8. `<login>/<slug of the Run's own name>`.
  *
- * The first three are branches that already exist, or that a human named, and are taken
- * verbatim. The rest name work that does not exist yet, and are namespaced under the
+ * The first three and the fifth are branches that already exist, or that a human named,
+ * and are taken verbatim. The rest name work that does not exist yet, and are namespaced under the
  * operator's GitLab login — which is what keeps two people's new work apart.
  *
  * One refusal rather than a guess. A review whose branch cannot be established gets no
@@ -345,11 +349,13 @@ const branchName = Effect.fn("worktree.branchName")(function* (
   if (fromTarget) return verbatim(fromTarget, "from target");
   const task = opts.inputs[TASK_INPUT]?.trim();
   if (task) return generated(task, "from the task");
+  const taskBranch = opts.taskBranch?.trim();
+  if (taskBranch) return verbatim(taskBranch, "from the task", true);
   // The plan directory's own name, not the path to it: every plan under one `tasks/`
-  // directory slugs the same way. Only one the operator named, though — a plan
-  // directory Collie itself pointed at is `<run.dir>/plan`, from a chained Run or from
-  // the picker's offer of a finished plan, and every one of those is called `plan`.
-  if (work?.kind === "plan-dir" && said(opts, work.name)) {
+  // directory slugs the same way. Only one the operator named, and never a Run's own
+  // `<run.dir>/plan` — chained, offered by the picker or typed — which is always `plan`.
+  const ownPlan = work !== null && planRunOf(work.value) !== null;
+  if (work?.kind === "plan-dir" && !ownPlan && said(opts, work.name)) {
     return generated(path.basename(work.value), "from plan", work.value);
   }
   // The work itself where the operator described it — the whole of what they said, not
@@ -360,7 +366,7 @@ const branchName = Effect.fn("worktree.branchName")(function* (
   // Two sources, because they are two answers: a description the operator typed is the
   // work itself, and the confirm line saying "from the run name" for it would name the
   // wrong thing as what decided.
-  const described = work !== null && said(opts, work.name);
+  const described = work !== null && !ownPlan && said(opts, work.name);
   // An issue's URL names the same work as its id, and slugging the URL names a branch after linear.app.
   const issue = work?.kind === "linear" ? linearIssueOf(work.value) : null;
   if (described) return generated(issue ?? work.value, "from the work");
@@ -1473,6 +1479,8 @@ function fromRuns(
   runs: ReadonlyArray<RunFacts>,
   registered: ReadonlyArray<AgentEntry>,
   settling: Settling,
+  /** Runs a check is still running for, whatever their state. */
+  checking: ReadonlySet<string>,
 ) {
   const mine = new Map<string, WorktreeRecord>();
   /** The project each checkout's Run was started for. */
@@ -1496,13 +1504,14 @@ function fromRuns(
       (run.state === "stopped" || (run.state === "failed" && !roaming.includes(at ?? ""))) &&
       !landed;
     if (going) paths.set(run.cwd, "a run is still working in it");
+    else if (checking.has(run.id)) paths.set(run.cwd, "its check is still running in it");
     else if (resumable) paths.set(run.cwd, `a ${run.state} run can resume in it`);
     if (worktree !== null) {
       mine.set(worktree.path, worktree);
       projects.set(worktree.path, run.project);
     }
     // A Run that may still go keeps its checkout anyway, so its agents are nobody's leftovers.
-    if (at === undefined || going || resumable) continue;
+    if (at === undefined || going || resumable || checking.has(run.id)) continue;
     const left = panes.get(at) ?? new Set<string>();
     for (const entry of registered) if (entry.runId === run.id) left.add(entry.paneId);
     panes.set(at, left);
@@ -1862,7 +1871,13 @@ export const reportedWorktrees = Effect.fn("worktree.reportedWorktrees")(functio
  */
 const sweep = Effect.fn("worktree.sweep")(function* (opts: PruneOptions) {
   const fs = yield* FileSystem.FileSystem;
-  const recorded = fromRuns(opts.runs, opts.registered, opts.settling ?? NOTHING_SETTLING);
+  const checking = new Set((yield* recordsIn(opts.stateDir)).map((record) => record.run));
+  const recorded = fromRuns(
+    opts.runs,
+    opts.registered,
+    opts.settling ?? NOTHING_SETTLING,
+    checking,
+  );
   const lines: string[] = [];
   const judged: Judged[] = [];
   const listed = new Set<string>();

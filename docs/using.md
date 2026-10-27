@@ -589,6 +589,10 @@ are ordinary panes — herdr's own keys move between them and resize them, and r
 Home reopens only a pane that has actually gone, so a divider you dragged stays where you
 put it.
 
+Each card carries a strip of its Task's [**Flow**](../CONTEXT.md): the Steps its leading
+Run has taken and expects, then its merge request's way to production, with each wait drawn
+on the Step it holds up. `collie run show --json` and chat's `collie_run` carry the whole of it.
+
 It is a board, not an engine: it draws the Runs the host holds, the register of live agents
 and the steering journals, so closing it loses nothing — the next run opens it again. The run
 itself is executed by the host, which has no pane at all.
@@ -1085,6 +1089,76 @@ the header sentence are counted across the Flock. Once there is more than one Ma
 card names its Machine, and its Herd too when that Machine runs more than one herdr
 session.
 
+Each card's **Flow** strip sits under its sentence: the leading Run's Steps, a gap,
+then the release. The glyphs show their states and the label names the current Step.
+With more than ten Steps, done Steps fold into one counted glyph; release glyphs stay
+separate. Press the strip to open the Task's record on **Flow**. Older hosts show no strip.
+
+The record opens on **Flow**, with one row per Run, oldest first, then Release. A row
+wraps its Steps to the record's width under a line naming the Run, its Machine and who
+started it; a long Step name is shortened, and its hover and spoken name give it whole.
+Selecting a Step turns the map into a rail: each Run on one line, its Steps
+scrolling along it, with the selected Step kept in view. Below the rail, a context
+column holds the Step's name, state, actions and, under **Details**, its description,
+agent and model, times, attempts, Slices, rounds and Repo runs; the rest of the record
+is the Step's work. Drag the line under the rail or beside the column to resize them,
+or focus the line and use the arrow keys; double-click resets it, and the sizes hold
+for every record. A record narrower than about 670 px puts the column above the work
+and folds its details behind **Details and runs**. Repo runs stay grouped under their
+Wave headings. A completed prefix of Slices or rounds folds into a counted entry that can
+be expanded. **Open in** follows the selected Step's work to Plan, Review, Evidence,
+the merge request, Terminal or Log. Selecting an earlier Run keeps the same Task's
+map in view; the header names that Run and links back to the leading one.
+
+The map is one Tab stop. Left and Right move along a row, Home and End go to its
+ends, and Up and Down move to the nearest position in the adjacent Run's row. Enter
+inspects a Step; Escape closes it and returns focus to the map. Current Steps
+and Steps that need you are announced once as they change. A link to a Machine out
+of reach is faded and says **as of** its last notice's time. A Run absent from the
+board is named **not on the board** and opens nothing. A host without a Flow keeps
+the record's earlier tabs and opens on Summary.
+
+Each Step's inspector and hover show its usual time once this Machine has three
+completed calls of that Step in the same Workflow. It is the median of the last
+ten calls, with each item or round counted separately. Past twice that time, a
+running Step says **Longer than usual**, and the line above the Flow offers its
+current action beside the warning. The warning changes no card sentence or section.
+
+**Pause before Review** arms a pause on the edge before Review; **Don't pause**
+takes it back. Reaching it holds every kind of Step before its work, and
+**Continue** releases it. The pause records who asked. **Note for Review…** leaves
+words for that Step's next prompt. Its unread count appears on the node, and the
+inspector lists authors, times and read status with Edit and Remove while unread.
+**Retry with a note…** starts with why the Step failed; **Send and retry** leaves
+the note and resumes the Run. The next prompt reads it, and a Step that makes no
+prompt keeps it unread.
+
+Each Flow node offers only what can work now. Its round button takes its first
+action: Watch the agent, Retry a resumable failed Step, Answer a question, Review a
+proposal, Continue a hold, Open the merge request or pipeline, or Start an offer.
+Retry says which done Steps it keeps. Questions and proposals can be answered in
+the inspector. **Tell the builder…** addresses that Step's agent. The node's menu
+and the inspector hold its remaining actions; the row's name and **Run controls**
+hold that Run's hold, release, stop, resume or follow-up. Shift+Enter takes the
+focused node's first action; Shift+F10, the menu key and a right-click open its menu.
+The line above the map carries the current node's action too. Saved Flows offer no
+actions until their Machine is reached again.
+
+The work shows the selected Step's own **Terminal**, **Log** and **Evidence**,
+or the Slice or round picked in its list, under why it failed or its question where it
+has one. Its terminal is the same live herdr pane as the Terminal tab: typing reaches
+that agent, and selecting a Step of another agent switches to that agent's pane.
+Switching away releases the pane. The pane is resized once a resize of the record
+settles, not at every step of a drag. **Focus**, or Ctrl+Shift+F (Cmd+Shift+F on a Mac)
+even from inside the terminal, gives the work the whole record below its header;
+the same keys or Escape restore it. Neither reconnects the terminal.
+The Log is bounded by Step start markers; where its beginning is older than the
+tail shown, it says so and links to the full Log. Evidence lists only that Step's
+Verifications, narrowed to the picked Slice or round. Each part shows its count.
+A working agent opens on Terminal; a failed Step shows its failing command and the
+last output above Retry, with its Log below; a check opens on Evidence; other recorded work opens on
+Log. **Full Terminal**, **Full Log** and **Full Evidence** open the Run's whole tab.
+
 Desktop is released with Collie, under the same tag and version. Install it for your user,
 on Linux with a desktop entry and on a Mac into `~/Applications`:
 
@@ -1258,8 +1332,9 @@ Leaving the tab or closing the record gives the pane back, so a herdr window sho
 returns to its own size. A terminal that ends says why — the pane closed, another client
 took it over, the Machine's connection dropped, or herdr refused — and **Reattach** finds
 the agent at work again, by the same rule. The tab stays while its Machine is away, and Reattach
-says that Machine is not connected until it is back. The card and the tab say where the pane is, as
-"vm-mk › workspace 3 › tab 2".
+says that Machine is not connected until it is back. The tab says where the pane is, as
+"vm-mk › workspace 3 › tab 2"; the card says it on one line, tab first, as
+"tab 2 · workspace 3", and the whole of it on hover.
 
 Where the Task has more than one live agent — a planner, an implementer and its reviewers,
 across a plan Run and its `.implement` Run — the tab lists every agent the card counts
@@ -1652,17 +1727,18 @@ and while focus is elsewhere in the window, such as the Flock chat.
 
 Until its details arrive, a record shows a row of placeholder tabs and a placeholder body;
 a Run whose details are not on its Machine says so, and a Machine out of reach shows its
-banner. A record opens on **Summary**, unless the board asked for a tab or a jump chose one: the
+banner. A record opens on **Flow** where the host supplies one, unless the board asked
+for a tab or a jump chose one. **Summary** gives the
 Run's status; why it needs attention, in the board's words, unless nothing needs it; its
 outcome — what kind it is, what it still has to prove, what is in its way, what to do next
-and what it delivered; its steps, each with its status, note, how long it took and its
-agents; and the Inputs it was given, each with whether it was given or inferred. A section
+and what it delivered; and the Inputs it was given, each with whether it was given or inferred. A section
 with nothing to say is left out. Each tab keeps its place while the record is open: switching
 back to one brings it back as you left it, with what you had opened or searched for, and
 scrolled where you left it, waiting for it to grow if it is still filling in; a tab's first
 visit starts at the top. A video on Evidence plays only while the tab is shown: it pauses when
 you leave, and one still being read then waits for Play. A jump to a finding lands on its
-target instead. Closing the record, or opening another Run's, forgets every place.
+target instead. Closing the record, or opening another Task's, forgets every place.
+Switching Runs in the same Task resets those tabs but keeps the Flow and its selection.
 
 The record's **Plan** tab renders the spec, read whole from the host where it is longer than the
 details carry, and lists the tickets, each expanding
@@ -1726,7 +1802,9 @@ has none of the rest. A report that keeps its attachments in files beside
 it shows without them. **Log**
 follows the end of the Run's log as it is written, with a search that keeps only the lines
 that match; it says "The log is empty so far." before the Run has logged anything, and "No
-line matches <search>." when the search keeps none. **Merge request** (**Pull request** for one on GitHub) shows what the host's
+line matches <search>." when the search keeps none. **Full log** reads the whole file
+on request. Each Step run starts with `── <title> ──`, with its item or round after
+the title where present; recovery does not write that start again. **Merge request** (**Pull request** for one on GitHub) shows what the host's
 merge watch last read — title, state, pipeline or checks, approvals and comments — with
 Open in browser. **Facts** shows the files the Run was
 given, when it was given any (an image as a thumbnail, any other file by its name, type and
@@ -2419,9 +2497,16 @@ to the branch is proved again before anything is asked.
 An `implement` Run starts one for you. Once its merge request is open, it asks **What
 next?**: answer **Release** from the card's answer menu, Desktop, chat or `collie run answer
 <run> Release --decision next`, and the release runs as its child, in its checkout and held
-to its Checks, or **Finish** to end there. To release it later, a succeeded implement Run
-whose merge request is still open offers **Release** in the card's Actions, through
-`collie run action`, and in chat: "release it" takes that offer.
+to its Checks. **Stage** starts a Stage Run of the unmerged merge request as its child, in
+the same checkout, and waits for testing to end. The Stage child's result or failure reason
+is recorded, then **What next?** is asked again with **Release**, **Stage** and **Finish**,
+as `next-2`, `next-3`, and so on. A failed Stage child still returns to that question.
+**Finish** ends with the merge request URL. `then=finish` and `then=release` ask nothing;
+`then` has no `stage` value, so an unattended Run never holds stage for testing.
+
+A succeeded implement Run whose merge request is still open offers **Release** and
+**Stage** in the card's Actions, through `collie run action`, and in chat, so it can be
+released or staged later: "release it" or "stage it" takes that offer.
 
 A reviewer's comment is taken up as it comes: the Run's agent fixes what holds and
 pushes, or disputes it, and Collie replies on the forge with the commit or the reason. An
@@ -2471,6 +2556,35 @@ Either way the Run holds the claim until the forge shows production carries the 
 application whose pipelines deploy nothing to stage is refused at the start. If a Run fails after
 it merged, **Release again** tags what it merged rather than merging anything again, and
 asks the second go afresh ([`release`](workflows.md#release)).
+
+## Staging a merge request for testing
+
+`collie run start stage --input mr=<target>` — or **stage** from the board's start menu, or
+"put !355 on stage" in chat — puts one open merge request's head on stage for you to test,
+unmerged, and nothing more. It does not wait for an approval, answered or resolved
+comments, a green pipeline or mergeability, asks for no go and runs none of the Run's
+checks: the stage checks of a merge request's pipeline run after its stage deploy anyway.
+It never merges, tags, pushes, posts or plays a production job. The target is the same as a
+review's, and the Run joins that merge request's Task.
+
+A merged merge request is refused, because its stage is its release's, and so is a closed
+one, a package, or an application whose merge request pipeline deploys nothing to stage.
+Otherwise it claims in Helle every project the stage deploys under, as a release does,
+plays the merge request pipeline's stage jobs at the head, and reads from the forge that
+every stage environment the pipeline deployed to carries it. Where a teammate holds some of
+those projects, it first asks **`claims-1`**: **Wait for all** queues for them, **Stage
+what is free** stages only the applications whose projects nobody else has, leaving the
+teammate's stage environments as they are, and **Finish** stages nothing. Then it asks
+**`staged-1`**, naming the head, the stage jobs at their addresses, any application left
+off and the claims it holds, while stage is yours to test:
+
+- **Done** rolls stage back, proves it off and gives the claims back.
+- **Stage again** stages the merge request's head as it is now, keeping the claims.
+- **Leave it on stage** gives the claims back and leaves stage as it is.
+
+A stage that fails is rolled back and its claims are given back; the Run fails saying what
+failed and offers **Stage again**. A rollback the forge cannot show fails the Run and keeps
+the claims ([`stage`](workflows.md#stage)).
 
 ## Your defaults
 
@@ -2602,6 +2716,9 @@ Claude Code's alone; Codex, OpenCode and Pi are passed nothing. See
 `agent_profile` is what the agents Collie launches get beyond Collie's own setup, per role.
 See [What Collie's agents get](#what-collies-agents-get).
 
+`claude_subagents` controls native Claude delegation for managed Run agents.
+See [Claude subagents](#claude-subagents).
+
 `gitlab_host` is the one GitLab this Machine works against, `gitlab.cego.dk` unless you
 change it under Settings, which refuses anything that is not a host name. `collie doctor`
 checks glab's login, the token and `git push` for that host alone, and `collie onboard` logs
@@ -2681,6 +2798,60 @@ chat is given it after its own prompt. It says that work which cannot be wrong, 
 **Tautology**, proves nothing: a builder makes none, and a reviewer or judge raises each one
 it finds. It also holds the code comment rules. Fork it like any persona to change what
 every agent is told; [authoring](authoring.md#every-agent) says how.
+
+### Claude subagents
+
+The shared **Claude subagents** setting accepts JSON for Claude agents launched by a Run.
+An empty setting preserves native behavior. It does not change other Harnesses, Home chat,
+Desktop chat, or your ordinary Claude sessions. Set it through either Settings view or the CLI:
+
+```sh
+collie settings set claude_subagents '{"model":"sonnet","maxDepth":1,"maxConcurrent":2,"cacheTtl":"1h"}'
+```
+
+This example sets a Sonnet fallback, prevents nested delegation, and limits ordinary Agent
+spawns to two concurrent workers. One-hour retention is an explicit choice for workers
+that resume after pauses. No values in this example are shipped defaults.
+
+| Field           | Values                        | Behavior                                                                                                        |
+| --------------- | ----------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `enabled`       | Boolean                       | `false` denies Claude's `Agent` tool. `true` adds no Collie denial and preserves native restrictions.           |
+| `model`         | Claude alias or full model ID | Sets the default subagent model. `default` uses Collie's pinned Claude default.                                 |
+| `forceModel`    | Boolean                       | `true` requires a model and requests Claude's force override. `false` explicitly disables that override.        |
+| `cacheTtl`      | `5m` or `1h`                  | Sets retention for Claude's subagent/background-request bucket. Leaves the main conversation's retention alone. |
+| `maxDepth`      | Positive whole number         | Maximum subagent layers below the managed agent. `1` prevents nested delegation.                                |
+| `maxConcurrent` | Positive whole number         | Limits ordinary concurrent Agent spawns within each managed agent.                                              |
+
+Every omitted field keeps its inherited or native value. Workflow, role, scope, and call
+preferences can override individual fields; see the [SDK guide](sdk.md#claude-subagent-policy).
+The choice is recorded before launch and survives recovery. Changed defaults affect new
+work; they do not reconfigure a live conversation.
+
+Without `forceModel`, invocation and agent-definition model choices take precedence over
+the fallback, including the built-in Explore and Plan agents. Forcing a model overrides
+specialist choices, but Claude's forks and skills using inherited models have exceptions.
+Check the running worker's model with `/tasks`. See
+[Claude's model precedence](https://code.claude.com/docs/en/sub-agents#choose-a-model).
+
+An ordinary subagent warms its own cache. Longer retention cannot transfer the parent's
+cache or increase context-window capacity. One-hour cache writes cost more than five-minute
+writes, so short workers can become more expensive. Native environment overrides and
+provider restrictions still apply; see
+[Claude's cache controls](https://code.claude.com/docs/en/prompt-caching#cache-lifetime).
+
+Concurrency is a native scheduling limit, not a spending quota. Resumes and `/subtask` can
+exceed it; ultracode, native workflow agents, and teammates have separate behavior. See
+[Claude's concurrent subagent limit](https://code.claude.com/docs/en/sub-agents#concurrent-subagent-limit).
+
+Keep delegation available for substantial research and verbose output. Audit skills that
+require background agents before disabling it. Denying Claude's Agent tool leaves
+Collie's own agents, panels, reviews, and child Runs available.
+
+Collie merges policy into the managed agent's additional settings, preserving hooks,
+profile overlays, and native settings sources. It also applies with compaction disabled.
+A configured unsupported control parks the launch before opening a pane and names the
+required Claude version: 2.1.63 for delegation, 2.1.217 for limits, 2.1.242 for retention,
+2.1.251 for fallback model precedence, and 2.1.257 for the force override.
 
 ### What a Claude agent's auto mode is told
 

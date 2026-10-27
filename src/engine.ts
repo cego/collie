@@ -10,7 +10,9 @@
 // pieces below is upstream's rather than Collie's.
 
 import type { Asker } from "./proposals";
-import { actorOf, readAudit, type ScheduledBy } from "./audit";
+import { actorOf, readAudit, whoActed, type ScheduledBy } from "./audit";
+import { LinkDelivery, readLinkDeliveries } from "./run-links";
+import { appendLogLine } from "./run-log";
 import * as BunCrypto from "@effect/platform-bun/BunCrypto";
 import * as SqliteClient from "@effect/sql-sqlite-bun/SqliteClient";
 import {
@@ -44,6 +46,7 @@ import type { PlatformError } from "effect/PlatformError";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as Reactivity from "effect/reactivity/Reactivity";
 import * as SqlClient from "effect/sql/SqlClient";
+import * as Activity from "effect/workflow/Activity";
 import * as DurableDeferred from "effect/workflow/DurableDeferred";
 import * as WorkflowModules from "effect/workflow";
 import * as ProcessModules from "effect/process";
@@ -81,7 +84,9 @@ import {
 } from "./sdk";
 import { FALLBACK_DEFAULTS, configValue, gitlabHostOf, loadDefaults, readConfig } from "./config";
 import { unlistedServers } from "./compaction";
-import { foldPreferences, preferencesIn, resolveChoice } from "./harness";
+import { foldPreferences, preferencesFromOptions, resolveChoice } from "./harness";
+import { handoffsDir } from "./handoffs";
+import { encodeSubagents, readSubagents } from "./subagents";
 import type { UsageReading } from "./usage-model";
 import { currentEnv } from "./env";
 import { waitForMemory } from "./memory-wait";
@@ -91,6 +96,7 @@ import {
   HelleClaimSchema,
   HelleError,
   credentials,
+  helleHolders,
   releaseClaim,
   waitForHelle,
   type HelleClaim,
@@ -100,6 +106,7 @@ import { currentPid, signalProcess } from "./lock";
 import { skillDirs, skillFile, type CheckoutKind, type InputStrategy } from "./definitions";
 import { EXCLUSIVE_STRATEGIES } from "./strategies";
 import { appendMetric, noteVerification, metricsOf, readMetrics } from "./metrics";
+import { ForgeHttp, forgeHttpLayer } from "./forge/http";
 import { ciJob } from "./ci-job";
 import { land, LandingSchema, readLanding, takeOver } from "./landing";
 import {
@@ -134,10 +141,11 @@ import { redact } from "./redact";
 import { reportOf, type Recorded } from "./report";
 import { outcomeRecordsOf, type OutcomeRecords } from "./outcomes";
 import type { Metrics } from "./board-model";
-import { mrRefOf, parseMrTarget, parseMrUrl } from "./board-model";
+import { mrLabel, mrRefOf, parseMrTarget, parseMrUrl } from "./board-model";
+import { readMrStates } from "./merges";
 import { forgeOf } from "./forge/forge";
 import { integrateDefault, integratedLine } from "./integrate";
-import { strategyNamed } from "./strategies";
+import { planRunOf, strategyNamed, workSourceOf } from "./strategies";
 import { Notifier, SOUND, notificationTitle, openedSubject, wanted, type Sound } from "./notify";
 import {
   Oversight,
@@ -164,6 +172,7 @@ import {
   propagate,
   readIntent,
   seedIntent,
+  withOutcome,
   writeIntent,
   type IntentSeed,
 } from "./intent";
@@ -183,7 +192,7 @@ import {
   RunReport,
   type Disposition,
 } from "./board-model";
-import { TASK_INPUT, checkoutFor, repositoryName, workOf } from "./worktree";
+import { TASK_INPUT, branchFor, checkoutFor, repositoryName, workOf } from "./worktree";
 import { Herdr, herdrFailureReason } from "./herdr";
 
 import type { PluginEnv } from "./env";
@@ -191,6 +200,26 @@ import { StartedSchema, type RunAuthority, type Started } from "./automode";
 import { WorktreeRecordSchema, type WorktreeRecord } from "./run";
 import { listTasks, newTask, readTask, taskOfWorkspace, writeTask } from "./task";
 import { nowIso, epochMs } from "./time";
+import {
+  pauseBefore,
+  reachPause,
+  clearReachedPause,
+  stepTarget,
+  leaveStepNote,
+  readStepNote,
+  readStepSteering,
+  StepNote as SteeringNote,
+} from "./step-steering";
+import { readLaunches } from "./launches";
+import { ensureStepDurations, rememberStepDurations } from "./step-durations";
+import {
+  CurrentStep,
+  encodeStepLine,
+  readStepLines,
+  STEPS_FILE,
+  type StepLine,
+  type StepNote,
+} from "./steps";
 import { classifyGivenTarget, classifyWorkSource, defaultBase } from "./inputs";
 import type { BunServices } from "@effect/platform-bun/BunServices";
 import {
@@ -399,11 +428,24 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     | { readonly _tag: "Refused"; readonly reason: string };
   export const MergeOutcomeSchema: Schema.Codec<MergeOutcome, unknown, never, never>;
 
-  /** What claim holds, or why the claims a Run needs could not be settled. */
+  /** What claim holds, with what a free-only claim left to whom, or why the claims a Run needs could not be settled. */
   export type Claimed =
-    | { readonly slugs: ReadonlyArray<string> }
+    | {
+        readonly slugs: ReadonlyArray<string>;
+        readonly left?: ReadonlyArray<{ readonly slug: string; readonly holder: string }>;
+      }
     | { readonly unresolved: string };
   export const ClaimedSchema: Schema.Codec<Claimed, unknown, never, never>;
+  /** Who else holds each project a claim needs (null: free), what each application needs, and the applications each deploy job names. */
+  export type Holders =
+    | {
+        readonly _tag: "Read";
+        readonly projects: ReadonlyArray<{ readonly slug: string; readonly holder: string | null }>;
+        readonly applications: ReadonlyArray<{ readonly name: string; readonly needs: ReadonlyArray<string> }>;
+        readonly jobs: ReadonlyArray<{ readonly name: string; readonly applications: ReadonlyArray<string> }>;
+      }
+    | { readonly _tag: "Unresolved"; readonly why: string };
+  export const HoldersSchema: Schema.Codec<Holders, unknown, never, never>;
 
   /** An external comment nobody has answered yet. */
   export interface OpenComment {
@@ -486,11 +528,11 @@ export const SDK_DECLARATIONS = `declare module "collie" {
   /** Stage shown back on what production carries, or why not. */
   export type RollbackRead = { readonly _tag: "Shown" } | { readonly _tag: "Unshown"; readonly why: string };
   export const RollbackReadSchema: Schema.Codec<RollbackRead, unknown, never, never>;
-  /** A merge request's head proved on stage, with its stage jobs; its head moved; or why not. */
+  /** A merge request's head proved on stage, with its stage jobs and environments; its head moved; or why not, with the environments its pipeline reached where read. */
   export type StageRead =
-    | { readonly _tag: "Staged"; readonly jobs: ReadonlyArray<JobLink> }
-    | { readonly _tag: "Moved"; readonly head: string }
-    | { readonly _tag: "Failed"; readonly why: string };
+    | { readonly _tag: "Staged"; readonly jobs: ReadonlyArray<JobLink>; readonly environments: ReadonlyArray<string> }
+    | { readonly _tag: "Moved"; readonly head: string; readonly environments?: ReadonlyArray<string> }
+    | { readonly _tag: "Failed"; readonly why: string; readonly environments?: ReadonlyArray<string> };
   export const StageReadSchema: Schema.Codec<StageRead, unknown, never, never>;
 
   /** A landing taken over from the Run that made it, or why there was none to take. */
@@ -552,6 +594,9 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     | { readonly cwd: string; readonly branch: string }
     | { readonly refused: string };
 
+  /** The reviewed branch, or why there is none. */
+  export type ReviewedBranch = { readonly branch: string } | { readonly refused: string };
+
   /** What opening a merge request from here needs, and what it would be filled in with. */
   export interface MrReady {
     readonly ok: boolean;
@@ -596,11 +641,17 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly skill: (name: string) => Effect.Effect<string | null>;
     /** This Run as the host admitted it; its directory is made as this is answered. */
     readonly place: (runId: string) => Effect.Effect<Place>;
+    /** Whether the branch this Run's diff target names can be established; cuts and records nothing. */
+    readonly reviewedBranch: (runId: string) => Effect.Effect<ReviewedBranch>;
     /** The checkout of the branch this Run's diff target names, recorded as the Run's own. */
     readonly checkoutReviewed: (runId: string) => Effect.Effect<ReviewedCheckout>;
     readonly held: (runId: string) => Effect.Effect<boolean>;
     readonly stopRequested: (runId: string) => Effect.Effect<boolean>;
     readonly record: (runId: string, event: string) => Effect.Effect<void>;
+    /** Records that its work waits on a Subscription to reset; null says it no longer does. */
+    readonly usageWait: (runId: string, wait: { readonly account: string; readonly resetsAt: string | null } | null) => Effect.Effect<void>;
+    /** Records where the Run's work is among its Steps; \`step\` and \`forecast\` call it. */
+    readonly step: (runId: string, note: { readonly kind: string } & Record<string, unknown>) => Effect.Effect<void>;
     /** Why this Run parked its own work, shown beside its status; null clears it. */
     readonly parked: (runId: string, why: string | null) => Effect.Effect<void>;
     readonly asking: (runId: string, question: DecisionSpec, asker?: string) => Effect.Effect<void>;
@@ -689,7 +740,18 @@ export const SDK_DECLARATIONS = `declare module "collie" {
         readonly applications: ReadonlyArray<string>;
         readonly jobs: ReadonlyArray<string>;
       };
+      /** Takes only what nobody else holds or queues for, waits for none, and names what it left. */
+      readonly free?: boolean;
     }) => Effect.Effect<Claimed, WorkflowError | E, R>;
+    /** Who holds each claim for the same deploys, joining no queue. */
+    readonly holders: (options: {
+      readonly runId: string;
+      readonly cwd: string;
+      readonly deploys?: {
+        readonly applications: ReadonlyArray<string>;
+        readonly jobs: ReadonlyArray<string>;
+      };
+    }) => Effect.Effect<Holders, WorkflowError>;
     /** Gives every claim back, answering those Helle kept. Only a finished Run releases. */
     readonly release: (runId: string) => Effect.Effect<ReadonlyArray<string>>;
     /** Records the merge request this Run opened, as a fact its card reads. */
@@ -770,18 +832,19 @@ export const SDK_DECLARATIONS = `declare module "collie" {
       readonly pipeline: string;
       readonly jobs: ReadonlyArray<string>;
     }) => Effect.Effect<ProductionRead>;
-    /** The merge request's head on stage: its \`jobs\` passed there, and stage carries it. Take it inside an Activity. */
+    /** The merge request's head on stage: its \`jobs\` passed there, and every stage environment its pipeline deployed to carries it. Take it inside an Activity. */
     readonly readStage: (options: {
       readonly runId: string;
       readonly cwd: string;
       readonly head: string;
       readonly jobs: ReadonlyArray<string>;
     }) => Effect.Effect<StageRead>;
-    /** Whether stage is shown back on what production carries, and off \`off\`. Take it inside an Activity. */
+    /** Whether stage is shown back on what production carries, and off \`off\`, in \`environments\` where named. Take it inside an Activity. */
     readonly readRollback: (options: {
       readonly runId: string;
       readonly cwd: string;
-      readonly off: string;
+      readonly off: ReadonlyArray<string>;
+      readonly environments?: ReadonlyArray<string>;
     }) => Effect.Effect<RollbackRead>;
     /** Takes over the landing of a merged merge request from the failed Run that made it. Take it inside an Activity. */
     readonly takeOverLanding: (options: {
@@ -868,11 +931,21 @@ export const SDK_DECLARATIONS = `declare module "collie" {
   export const Run: Context.Service<RunApi, RunApi>;
   export type Run = RunApi;
 
+  export interface ClaudeSubagents {
+    readonly enabled?: boolean;
+    readonly model?: string;
+    readonly forceModel?: boolean;
+    readonly cacheTtl?: "5m" | "1h";
+    readonly maxDepth?: number;
+    readonly maxConcurrent?: number;
+  }
+
   /** Which agent does the work: each is inherited from the configuration where it is left out. */
   export interface AgentPreferences {
     readonly harness?: string;
     readonly model?: string;
     readonly effort?: string;
+    readonly claudeSubagents?: ClaudeSubagents;
     /** Past this share of its busiest window, 1–100, this agent is not chosen for new work. */
     readonly upTo?: number;
     /** What to try past \`upTo\` or once Exhausted, before the human's \`fallbacks\`. */
@@ -974,8 +1047,10 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     | Path.Path
     | ChildProcessSpawner.ChildProcessSpawner;
 
-  /** What a definition declares about itself beside what it does. None of it is a step. */
+  /** What a definition declares about itself beside what it does. */
   export interface Declarations {
+    /** The Steps it expects to take, in order: a forecast, never a precondition. */
+    readonly path?: ReadonlyArray<Step>;
     readonly hints?: Readonly<Record<string, string>>;
     readonly outcome?: OutcomeContract;
     /** A worktree the host cuts before the Run exists; absent works where it was started. */
@@ -1070,6 +1145,54 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     ask: ChildAsk,
   ): Effect.Effect<unknown, WorkflowError, Children>;
 
+  export type StepKind = "agent" | "question" | "workflow" | "check";
+  export type Produces = "plan" | "review" | "evidence" | "merge-request";
+
+  /** What a reader needs of a Step before it runs. */
+  export interface StepMeta {
+    readonly id: string;
+    readonly title: string;
+    readonly description: string;
+    readonly kind: StepKind;
+    readonly role: string | null;
+    readonly produces: Produces | null;
+  }
+
+  /** What an author declares of a Step. */
+  export interface StepDeclaration {
+    readonly id: string;
+    readonly title: string;
+    readonly description?: string;
+    readonly kind: StepKind;
+    readonly role?: string;
+    readonly produces?: Produces;
+  }
+
+  /** Which run of a Step a call is: a round under its bound, or an item of its list. */
+  export type StepCall =
+    | { readonly round: number; readonly of?: number }
+    | { readonly item: string; readonly items: ReadonlyArray<string> };
+
+  /** Called around the Effect that does its work: it runs it unchanged and records it. */
+  export interface Step extends StepMeta {
+    <A, E, R>(
+      work: Effect.Effect<A, E, R>,
+      place?: StepCall,
+    ): Effect.Effect<A, E, R | Run | Host | WorkflowEngine | WorkflowInstance>;
+    readonly meta: StepMeta;
+  }
+
+  /** A Step, made where its work is written. */
+  export function step(declared: StepDeclaration): Step;
+
+  /** The path from here, once the Run knows which branch it takes. Never a precondition. */
+  export function forecast(
+    path: ReadonlyArray<Step>,
+  ): Effect.Effect<void, never, Run | Host | WorkflowEngine | WorkflowInstance>;
+
+  /** Records that the Step the work is in failed, for a Run that parks to be resumed. */
+  export function stepFailed(why: string): Effect.Effect<void, never, Run | Host>;
+
 
   /** A schema that decodes an agent's Output without services of its own. */
   export type OutputContract = Schema.Codec<unknown, unknown, never, never>;
@@ -1094,6 +1217,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly harness: string | null;
     readonly model: string | null;
     readonly effort: string | null;
+    readonly claudeSubagents?: ClaudeSubagents;
     readonly permissions: string | null;
   }
 
@@ -1227,6 +1351,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly model?: string;
     readonly effort?: string;
     readonly permissions?: "auto" | "bypass" | "harness";
+    readonly claudeSubagents?: ClaudeSubagents;
     /**
      * The panel seat this work sits at: its agent over the role's, and its persona and
      * instructions where it names them. Work for a role given none takes the agent of the
@@ -1746,6 +1871,9 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     got: { readonly verifications: ReadonlyArray<Verification>; readonly final: Snapshot },
   ): string;
 
+  /** Where a reference a Run's Outputs give may point: its own directory, its checkout, and a planning Run's. */
+  export function evidenceRoots(own: string, cwd: string, workSource: string): string[];
+
   /**
    * Every check this Run's journal holds, latest of each and its baseline, for a reviewer to
    * read; then each check left to CI, with its job's state where the Run has a merge request.
@@ -1789,6 +1917,10 @@ export const SDK_DECLARATIONS = `declare module "collie" {
   export function checkGapsOf(
     options: Parameters<typeof evidenceGapsOf>[0],
   ): ReadonlyArray<string>;
+  /** The gaps among those a fresh review could close: what is worth paying a reviewer for. */
+  export function reviewGapsOf(
+    options: Parameters<typeof evidenceGapsOf>[0],
+  ): ReadonlyArray<string>;
 
   /**
    * A Check's proof on this tree: passed, failed, unstable, passed only on an earlier tree, or
@@ -1812,6 +1944,9 @@ export const SDK_DECLARATIONS = `declare module "collie" {
   export function owedLocally<C extends { readonly name: string; readonly ci?: string }>(
     checks: ReadonlyArray<C>,
   ): ReadonlyArray<C>;
+
+  /** The fingerprint of a tree too large to measure: two of them are not the same tree. */
+  export const TOO_LARGE: "unstable:too-large";
 
   /** A Run's checks read against its journal, for which tests failed and how each rerun went. */
   type FailedChecks = CheckEvidence & { readonly approved: ReadonlyArray<VerifySpec> };
@@ -1982,6 +2117,7 @@ const isWritten = (exported: unknown): exported is WrittenDefinition =>
 /** A definition as the entry the rest of the host reads. */
 const entryOf = (definition: WorkflowDefinition): WorkflowEntry => {
   const { outcome, checkout, closes, followUps, actions } = definition;
+  const path = definition.path?.map((one) => one.meta);
   const hints =
     definition.hints === undefined
       ? undefined
@@ -1989,7 +2125,7 @@ const entryOf = (definition: WorkflowDefinition): WorkflowEntry => {
           Object.entries(definition.hints).map(([name, hint]) => [name, strategyNamed(hint)]),
         );
   const declared = Object.fromEntries(
-    Object.entries({ hints, outcome, checkout, closes, followUps, actions }).filter(
+    Object.entries({ hints, outcome, checkout, closes, followUps, actions, path }).filter(
       ([, value]) => value !== undefined,
     ),
   );
@@ -2013,6 +2149,21 @@ const WorkflowHints = Context.Reference<Readonly<Record<string, InputStrategy>>>
 
 /** The envelope a definition is executed with, read where the host hands it over. */
 const readEnvelope = Schema.decodeUnknownSync(Schema.Struct({ runId: Schema.String }));
+
+/** One line of a Run's Step records, stamped now. The host is their only writer. */
+const noteStep = (dir: string, note: StepNote) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    // SAFETY: a note is a line without its time, which is added here.
+    const line = { ...note, at: yield* nowIso() } as StepLine;
+    yield* fs.makeDirectory(dir, { recursive: true }).pipe(Effect.orDie);
+    yield* fs
+      .writeFileString(`${dir}/${STEPS_FILE}`, `${encodeStepLine(line)}\n`, { flag: "a" })
+      .pipe(Effect.orDie);
+  });
+
+/** Why a Run's work is about to be entered again, where it goes on with work left part-done. */
+const entryCauses = new Map<string, "restarted" | "resumed">();
 
 /** Observed Run entries; upstream resume returns no wake acknowledgment. */
 const entriesOf = new WeakMap<HostWorkflow, Map<string, number>>();
@@ -2045,12 +2196,26 @@ const registrationOf = (definition: WorkflowDefinition, name: string): Registrat
   });
   const entries = new Map<string, number>();
   entriesOf.set(workflow, entries);
+  const path = definition.path?.map((one) => one.meta) ?? [];
   const body = workflow.toLayer((envelope) => {
     // SAFETY: the envelope decoded against the definition's own input struct.
     const input = envelope.input as never;
     const run = Run.of({ id: readEnvelope(envelope).runId, workflow: definition.id });
-    entries.set(run.id, (entries.get(run.id) ?? 0) + 1);
-    return definition.run({ input }).pipe(
+    const before = entries.get(run.id) ?? 0;
+    entries.set(run.id, before + 1);
+    // A host's first entry into work some host entered before goes on where that one died.
+    const cause = entryCauses.get(run.id) ?? (before === 0 ? "restarted" : null);
+    entryCauses.delete(run.id);
+    const entered = Effect.gen(function* () {
+      const host = yield* Host;
+      yield* host.step(run.id, { kind: "entry", cause });
+      if (path.length > 0)
+        yield* Activity.make({
+          name: "path",
+          execute: host.step(run.id, { kind: "forecast", steps: path }),
+        });
+    });
+    return entered.pipe(Effect.andThen(definition.run({ input }))).pipe(
       Effect.provideService(Run, run),
       Effect.provideService(WorkflowAgents, definition.agents),
       Effect.provideService(WorkflowHints, definition.hints ?? {}),
@@ -2440,6 +2605,14 @@ export const STOP = "stop";
 export const PARKED = "parked";
 /** A wait that ends by itself; the host clears it when the wait ends. */
 export const AWAITING = "awaiting";
+/** Work waiting for a Subscription to reset; cleared once it goes on. */
+export const USAGE = "usage";
+
+export const UsageWaitSchema = Schema.Struct({
+  account: Schema.String,
+  resetsAt: Schema.NullOr(Schema.String),
+});
+const UsageWaitJson = Schema.fromJsonString(UsageWaitSchema);
 
 /** What a Run nobody classified proves: the approved set, and no ticket's evidence. */
 const UNSPECIFIED = "unspecified";
@@ -2472,10 +2645,6 @@ export const evidenceDir = (dir: string, runId: string): string => `${dir}/evide
  * a Run produces is files and the things that read them are ordinary readers of files.
  */
 export const runDir = (dir: string, runId: string): string => `${dir}/runs/${runId}`;
-
-/** The Run whose own plan directory this Input value is, and null where it is none. */
-const planRunOf = (value: string): string | null =>
-  /(?:^|\/)runs\/([^/]+)\/plan\/?$/.exec(value)?.[1] ?? null;
 
 /**
  * A Run, then the Runs it came from: its parent and the Run whose plan it builds. Stops at
@@ -2602,6 +2771,26 @@ const declaredProjects = (cwd: string) =>
       ),
     );
     return read.projects;
+  });
+
+const helleWhere = (
+  cwd: string,
+  deploys:
+    | { readonly applications: ReadonlyArray<string>; readonly jobs: ReadonlyArray<string> }
+    | undefined,
+) =>
+  Effect.gen(function* () {
+    const env = yield* currentEnv.pipe(Effect.orDie);
+    return {
+      home: env.home,
+      envFile: env.raw.HELLE_ENV_FILE ?? null,
+      url: helleUrlOf(env.raw),
+      repositoryPath: yield* projectHere(cwd, runShell),
+      // Roaming checkout names do not identify Helle projects.
+      repoName: (yield* repositoryName(runShell, cwd)) ?? (yield* Path.Path).basename(cwd),
+      deploys: deploys ?? null,
+      declared: yield* declaredProjects(cwd),
+    };
   });
 
 /**
@@ -2765,21 +2954,30 @@ export const hostLayer = (options: {
   readonly issuePrivacyBudget?: Duration.Input;
   /** How often a wait for review reads the merge request again. */
   readonly reviewPoll?: Duration.Input;
-}): Layer.Layer<Host | Notifier | Oversight | Reliance, never, Store | BunServices> =>
+}): Layer.Layer<Host | Notifier | Oversight | Reliance, never, Store | BunServices | ForgeHttp> =>
   Layer.effectContext(
     Effect.gen(function* () {
       const dir = options.dir;
       const fs = yield* FileSystem.FileSystem;
       const store = yield* Store;
       // Captured, so a workflow asks for a verification without asking for a filesystem.
-      type Collecting = FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner;
+      type Collecting =
+        | FileSystem.FileSystem
+        | Path.Path
+        | ChildProcessSpawner.ChildProcessSpawner
+        | ForgeHttp;
       const services = yield* Effect.context<Collecting>();
       const bun = yield* Effect.context<BunServices>();
       const under = <A, E>(effect: Effect.Effect<A, E, Collecting>) =>
         Effect.provideContext(effect, services);
       const set = (control: string, runId: string) =>
         fs.exists(controlPath(dir, control, runId)).pipe(Effect.orElseSucceed(() => false));
+      const untilStopped = (runId: string) =>
+        set(STOP, runId).pipe(
+          Effect.repeat({ until: (stop) => stop, schedule: Schedule.spaced("1 second") }),
+        );
       yield* fs.makeDirectory(dir, { recursive: true }).pipe(Effect.orDie);
+      yield* ensureStepDurations(dir, yield* store.runs);
       const toast = options.toast;
       const notify: Notifier["Service"]["notify"] = (runId, kind, body, about = {}) =>
         toast === undefined
@@ -2932,11 +3130,20 @@ export const hostLayer = (options: {
                   Effect.mapError((refused) => new WorkflowError({ reason: refused.why })),
                 );
               });
-            return yield* (
-              asked.at === "default-base"
+            // A stop ends the check and its processes; the Run parks, and a resume runs it again.
+            const ran = yield* Effect.raceFirst(
+              (asked.at === "default-base"
                 ? atDefaultBase(asked.cwd, away, verified)
                 : verified(null)
+              ).pipe(Effect.map(Option.some)),
+              untilStopped(asked.runId).pipe(Effect.as(Option.none<Verification>())),
             ).pipe(Effect.ensuring(fs.remove(marker).pipe(Effect.ignore)));
+            if (Option.isSome(ran)) return ran.value;
+            const instance = yield* Effect.serviceOption(WorkflowEngine.WorkflowInstance);
+            if (Option.isSome(instance)) return yield* Workflow.suspend(instance.value);
+            return yield* new WorkflowError({
+              reason: `${spec.name} did not finish: the Run was stopped while it ran`,
+            });
           }),
         );
       const placing = options.placing
@@ -2945,8 +3152,8 @@ export const hostLayer = (options: {
             Effect.map((env) => ({ herdr: new Herdr(env), env })),
             Effect.orDie,
           );
-      /** The reviewed branch's checkout, found or cut as a build of the review's findings is (ADR-0054). */
-      const checkoutReviewed = (runId: string) =>
+      /** What resolving a Run's reviewed branch needs, as a build of the review's findings is placed (ADR-0054). */
+      const reviewing = (runId: string) =>
         Effect.gen(function* () {
           const row = yield* store.run(runId);
           if (row === null) return { refused: `there is no Run ${runId}` };
@@ -2954,21 +3161,19 @@ export const hostLayer = (options: {
             Effect.orElseSucceed((): Record<string, string> => ({})),
           );
           const placed = placedOf(row, launch);
-          if (placed.worktree !== null) {
-            return { cwd: placed.cwd, branch: placed.branch ?? placed.worktree.branch };
-          }
           const input = yield* decodeInput(row.input).pipe(
             Effect.orElseSucceed((): Readonly<Record<string, Schema.Json>> => ({})),
           );
           const field = fieldWith(yield* WorkflowHints, "diff-target");
           const target = field === undefined ? undefined : input[field];
           const { herdr, env } = yield* placing;
-          const made = yield* Effect.result(
-            checkoutFor(herdr, {
+          return {
+            row,
+            placed,
+            herdr,
+            env,
+            ask: {
               cwd: placed.cwd,
-              stateDir: env.stateDir,
-              workflow: row.workflow,
-              checkout: "branch",
               name: runId,
               // As placement feeds a build of a review's findings: this Run is the review.
               inputs: {
@@ -2978,6 +3183,39 @@ export const hostLayer = (options: {
               },
               strategies: { [REVIEWED]: "diff-target", work: "work-source" },
               login: env.gitlabLogin,
+            },
+          };
+        });
+      /** The reviewed branch, or why there is none, by the checkout's own resolution; cuts nothing. */
+      const reviewedBranch = (runId: string) =>
+        Effect.gen(function* () {
+          const asked = yield* reviewing(runId);
+          if (asked.refused !== undefined) return { refused: asked.refused };
+          const { placed } = asked;
+          if (placed.worktree !== null) return { branch: placed.branch ?? placed.worktree.branch };
+          const plan = yield* Effect.result(branchFor(asked.ask));
+          if (plan._tag === "Failure") {
+            return { refused: `no branch could be established: ${String(plan.failure)}` };
+          }
+          return plan.success.refused
+            ? { refused: plan.success.refused }
+            : { branch: plan.success.branch };
+        }).pipe(Effect.provideContext(bun), under);
+      /** The reviewed branch's checkout, found or cut as a build of the review's findings is (ADR-0054). */
+      const checkoutReviewed = (runId: string) =>
+        Effect.gen(function* () {
+          const asked = yield* reviewing(runId);
+          if (asked.refused !== undefined) return { refused: asked.refused };
+          const { row, placed, herdr, env } = asked;
+          if (placed.worktree !== null) {
+            return { cwd: placed.cwd, branch: placed.branch ?? placed.worktree.branch };
+          }
+          const made = yield* Effect.result(
+            checkoutFor(herdr, {
+              ...asked.ask,
+              stateDir: env.stateDir,
+              workflow: row.workflow,
+              checkout: "branch",
               recordedBy: (at) =>
                 store.runs.pipe(
                   Effect.map((rows) => {
@@ -3009,7 +3247,14 @@ export const hostLayer = (options: {
             task: null,
           });
           return { cwd: checkout.cwd, branch: checkout.branch ?? "" };
-        }).pipe(Effect.provideContext(bun));
+        }).pipe(Effect.provideContext(bun), under);
+      /** Refuses what a Run would say outside Collie once it is stopped. */
+      const unstopped = (runId: string, what: string) =>
+        Effect.flatMap(set(STOP, runId), (stopped) =>
+          stopped
+            ? Effect.fail(new WorkflowError({ reason: `${runId} is stopped, so it ${what}` }))
+            : Effect.void,
+        );
       const issueCheckout = Effect.fn("Host.issueCheckout")(function* (runId: string) {
         const row = yield* store.run(runId);
         if (row === null) return yield* new WorkflowError({ reason: `there is no Run ${runId}` });
@@ -3245,6 +3490,7 @@ export const hostLayer = (options: {
         fileIssue: (asked) =>
           under(
             Effect.gen(function* () {
+              yield* unstopped(asked.runId, "files no issue");
               const here = yield* issueCheckout(asked.runId);
               yield* checkIssueText(here, `${asked.title}\n${asked.body}`);
               const filed = yield* here.forge.fileIssue(
@@ -3261,6 +3507,7 @@ export const hostLayer = (options: {
         commentIssue: (asked) =>
           under(
             Effect.gen(function* () {
+              yield* unstopped(asked.runId, "comments on no issue");
               const here = yield* issueCheckout(asked.runId);
               yield* checkIssueText(here, asked.body);
               const commented = yield* here.forge.commentIssue(
@@ -3292,6 +3539,7 @@ export const hostLayer = (options: {
                     ? Effect.succeed(null)
                     : decodeStrings(row.options ?? "{}").pipe(
                         Effect.orElseSucceed((): Record<string, string> => ({})),
+                        Effect.flatMap((admitted) => optionsNow(dir, runId, admitted)),
                         Effect.map((options) => ({
                           options,
                           task: row.task,
@@ -3308,7 +3556,7 @@ export const hostLayer = (options: {
                 Effect.tap((admitted) =>
                   admitted === null
                     ? Effect.void
-                    : fs.makeDirectory(runDir(dir, runId), { recursive: true }),
+                    : fs.makeDirectory(handoffsDir(runDir(dir, runId)), { recursive: true }),
                 ),
                 Effect.map((admitted) => ({
                   cwd: admitted?.placed.cwd ?? dir,
@@ -3331,9 +3579,68 @@ export const hostLayer = (options: {
               (at, lineage) => ({ ...at, lineage }),
             ),
           ),
+        reviewedBranch,
         checkoutReviewed,
         held: (runId) => set(HOLD, runId),
         stopRequested: (runId) => set(STOP, runId),
+        usageWait: (runId, wait) => {
+          const path = controlPath(dir, USAGE, runId);
+          return (
+            wait === null
+              ? fs.remove(path, { force: true })
+              : fs
+                  .makeDirectory(path.slice(0, path.lastIndexOf("/")), { recursive: true })
+                  .pipe(
+                    Effect.andThen(
+                      fs.writeFileString(path, Schema.encodeSync(UsageWaitJson)(wait)),
+                    ),
+                  )
+          ).pipe(Effect.orDie, Effect.andThen(store.announce));
+        },
+        step: (runId, note) =>
+          Effect.gen(function* () {
+            const where = runDir(dir, runId);
+            if (note.kind === "enter") {
+              if (
+                (yield* readStepLines(where)).some(
+                  (one) => one.kind === "enter" && one.key === note.key,
+                )
+              )
+                return;
+              const place =
+                note.place === null
+                  ? null
+                  : "item" in note.place
+                    ? note.place.item
+                    : `Round ${note.place.round}`;
+              const log = yield* appendLogLine(
+                where,
+                `── ${note.step.title}${place === null ? "" : ` · ${place}`} ──`,
+              ).pipe(Effect.orDie);
+              yield* noteStep(where, { ...note, log });
+              const pause = yield* reachPause(where, note.step.id);
+              if (pause !== null) {
+                yield* fs
+                  .writeFileString(
+                    controlPath(dir, HOLD, runId),
+                    `Paused before ${note.step.title}, as ${pause.by} asked`,
+                  )
+                  .pipe(Effect.orDie);
+                yield* store.announce;
+              }
+              return;
+            }
+            const first =
+              note.kind === "entry" &&
+              note.cause === "restarted" &&
+              !(yield* readStepLines(where)).some((line) => line.kind === "entry");
+            yield* noteStep(where, first ? { kind: "entry", cause: null } : note);
+            if (note.kind === "leave") {
+              const row = yield* store.run(runId);
+              if (row !== null)
+                yield* rememberStepDurations(dir, runId, row.workflow, yield* readStepLines(where));
+            }
+          }).pipe(Effect.provideService(FileSystem.FileSystem, fs)),
         record: (runId, event) =>
           // A replay writes its records again, as it re-enters every step: the log is what
           // the Run did each time it ran, not a deduplicated story.
@@ -3348,7 +3655,10 @@ export const hostLayer = (options: {
               ? fs.remove(path, { force: true }).pipe(Effect.orDie)
               : Effect.gen(function* () {
                   const before = yield* fs.readFileString(path).pipe(Effect.option);
-                  yield* fs.writeFileString(path, why).pipe(Effect.orDie);
+                  // Renamed into place, so a reader never sees it empty.
+                  yield* fs
+                    .writeFileString(`${path}.new`, why)
+                    .pipe(Effect.andThen(fs.rename(`${path}.new`, path)), Effect.orDie);
                   if (Option.getOrNull(before) === why) return;
                   yield* under(
                     Effect.gen(function* () {
@@ -3416,7 +3726,17 @@ export const hostLayer = (options: {
               });
             }),
           ).pipe(Effect.orDie),
-        verify: (asked) => check(asked, passAsked(asked)),
+        verify: (asked) =>
+          Effect.gen(function* () {
+            const at = yield* CurrentStep;
+            if (at !== null)
+              yield* noteStep(runDir(dir, asked.runId), {
+                kind: "check",
+                key: at.key,
+                name: asked.name,
+              }).pipe(Effect.provideService(FileSystem.FileSystem, fs));
+            return yield* check(asked, passAsked(asked));
+          }),
         approved: (runId) => under(approvedOf(dir, runId)),
         config: (dotted) =>
           under(
@@ -3486,8 +3806,7 @@ export const hostLayer = (options: {
                 };
               const own = yield* treeOf(yield* store.run(asked.runId), asked.runId, dir);
               // A stop ends the wait: the workflow suspends on it, as it does on an agent's.
-              const stopped = set(STOP, asked.runId).pipe(
-                Effect.repeat({ until: (stop) => stop, schedule: Schedule.spaced("1 second") }),
+              const stopped = untilStopped(asked.runId).pipe(
                 Effect.as({
                   unproved: `${spec.name} is left to CI and unproved: the Run was stopped while job ${spec.ci} was read`,
                   state: null,
@@ -3529,23 +3848,13 @@ export const hostLayer = (options: {
             readonly applications: ReadonlyArray<string>;
             readonly jobs: ReadonlyArray<string>;
           };
+          readonly free?: boolean;
         }): Effect.Effect<Sdk.Claimed, WorkflowError | E, R> =>
           Effect.gen(function* () {
-            const env = yield* currentEnv.pipe(Effect.orDie);
             const file = claimPath(dir, asked.runId);
             const held = yield* waitForHelle({
-              home: env.home,
-              envFile: env.raw.HELLE_ENV_FILE ?? null,
-              url: helleUrlOf(env.raw),
-              repositoryPath: yield* projectHere(asked.cwd, runShell),
-              // git's repository, never the checkout's basename: a roaming Run's directory
-              // is named after the workflow, and a Helle project under that name is a
-              // project that does not exist for a repository that has one.
-              repoName:
-                (yield* repositoryName(runShell, asked.cwd)) ??
-                (yield* Path.Path).basename(asked.cwd),
-              deploys: asked.deploys ?? null,
-              declared: yield* declaredProjects(asked.cwd),
+              ...(yield* helleWhere(asked.cwd, asked.deploys)),
+              free: asked.free ?? false,
               claimed: yield* recordedClaims(file),
               record: (claim) =>
                 Effect.gen(function* () {
@@ -3601,7 +3910,10 @@ export const hostLayer = (options: {
                 }),
               ended: () => waitOn(asked.runId, null),
             });
-            return held._tag === "Held" ? { slugs: held.slugs } : { unresolved: held.why };
+            if (held._tag === "Unresolved") return { unresolved: held.why };
+            return held.left === undefined
+              ? { slugs: held.slugs }
+              : { slugs: held.slugs, left: held.left };
           }).pipe(
             Effect.provide(FetchHttpClient.layer),
             Effect.provideContext(services),
@@ -3610,6 +3922,14 @@ export const hostLayer = (options: {
             Effect.mapError((cause: HelleError | E) =>
               cause instanceof HelleError ? new WorkflowError({ reason: cause.message }) : cause,
             ),
+          ),
+        holders: (asked) =>
+          Effect.gen(function* () {
+            return yield* helleHolders(yield* helleWhere(asked.cwd, asked.deploys));
+          }).pipe(
+            Effect.provide(FetchHttpClient.layer),
+            Effect.provideContext(services),
+            Effect.mapError((cause) => new WorkflowError({ reason: cause.message })),
           ),
         release: (runId) =>
           Effect.gen(function* () {
@@ -3876,6 +4196,20 @@ export const hostLayer = (options: {
           Effect.orElseSucceed(() => null),
         );
       });
+      const checkoutOf = (row: RunRow | null) =>
+        Effect.gen(function* () {
+          const placed =
+            row === null
+              ? null
+              : placedOf(
+                  row,
+                  yield* decodeStrings(row.options ?? "{}").pipe(
+                    Effect.orElseSucceed((): Record<string, string> => ({})),
+                  ),
+                );
+          const worktree = placed?.worktree?.path ?? null;
+          return { worktree, cwd: worktree ?? placed?.cwd ?? dir };
+        });
       /** A Run as a card sees it: where it works, and where its records are. */
       const watched = (runId: string): Effect.Effect<Watched> =>
         Effect.gen(function* () {
@@ -3887,29 +4221,25 @@ export const hostLayer = (options: {
                   Effect.provideContext(bun),
                   Effect.orElseSucceed(() => null),
                 );
-          const placed =
-            row === null
-              ? null
-              : placedOf(
-                  row,
-                  yield* decodeStrings(row.options ?? "{}").pipe(
-                    Effect.orElseSucceed((): Record<string, string> => ({})),
-                  ),
-                );
-          const worktree = placed?.worktree?.path ?? null;
+          const { worktree, cwd } = yield* checkoutOf(row);
           return {
             runId,
             stateDir: dir,
             runDir: runDir(dir, runId),
             evidenceDir: evidenceDir(dir, runId),
             agentsDir: `${dir}/agents/${runId}`,
-            cwd: worktree ?? placed?.cwd ?? dir,
+            cwd,
             worktree,
             mr: yield* mergeRequestOf(fs, dir, runId),
             asking: (yield* store.asked(runId)).some((one) => one.answer === null),
             held: yield* set(HOLD, runId),
             family: row === null ? [runId] : familyOf(yield* store.runs, row),
             dirOf: (id: string) => runDir(dir, id),
+            cwdOf: (id: string) =>
+              store.run(id).pipe(
+                Effect.flatMap(checkoutOf),
+                Effect.map((one) => one.cwd),
+              ),
             herd: task?.herd ?? (yield* hostHerd),
           };
         });
@@ -4332,7 +4662,10 @@ const refuseOptions = (
   generation: Generation,
   options: Readonly<Record<string, string>>,
 ): Effect.Effect<void, HostRefused> => {
-  const strange = Object.keys(options).filter((name) => !(name in RESERVED_INPUTS));
+  // Scoped policy travels separately from inputs without reserving another input name.
+  const strange = Object.keys(options).filter(
+    (name) => name !== "claudeSubagents" && !(name in RESERVED_INPUTS),
+  );
   if (strange.length > 0) {
     return refusedInput(
       `no host option is called ${strange.map((name) => `"${name}"`).join(", ")}: ` +
@@ -4496,6 +4829,12 @@ const workingPlace = (row: RunRow): Placed => {
 };
 
 /** Where a Run works: as the host placed it, or for a row from before that, as it started. */
+const optionsNow = (dir: string, runId: string, options: Readonly<Record<string, string>>) =>
+  readIntent(runDir(dir, runId)).pipe(
+    Effect.map((intent) => withOutcome(options, intent)),
+    Effect.orElseSucceed(() => options),
+  );
+
 const placedOf = (row: RunRow, options: Readonly<Record<string, string>>): Placed =>
   Option.getOrElse(decodePlaced(row.checkout ?? ""), () => ({
     cwd: options.workspace?.startsWith("/") ? options.workspace : row.project,
@@ -4664,11 +5003,17 @@ export const OpenDecision = Schema.Struct({
   options: Schema.Array(Schema.String),
   /** What settled it, or null while it is still open. */
   answer: Schema.NullOr(Schema.String),
+  /** When it was asked and answered; absent from an older host. */
+  asked: Schema.optionalKey(Schema.String),
+  answered: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  /** Who answered it, as an agent's name or the front door a human used. */
+  by: Schema.optionalKey(Schema.NullOr(Schema.String)),
 });
 export type OpenDecision = typeof OpenDecision.Type;
 
 /** What became of one delivery to a run's agent. */
 export const Steered = Schema.Struct({
+  note: Schema.optional(Schema.String),
   agent: Schema.String,
   /** What could be got out of herdr about it, never "it was accepted for sending". */
   delivered: Schema.Boolean,
@@ -4691,6 +5036,8 @@ export const Steered = Schema.Struct({
 export const RunView = Schema.Struct({
   requestedBy: Schema.optional(RequestedBy),
   report: Schema.optional(RunReport),
+  linkNotices: Schema.optional(Schema.Array(LinkDelivery)),
+  stepNotes: Schema.optional(Schema.Array(SteeringNote)),
   closes: Schema.optional(Schema.Literal("reported")),
   runId: Schema.String,
   workflow: Schema.String,
@@ -4736,6 +5083,10 @@ export const RunView = Schema.Struct({
   mr: Schema.NullOr(Schema.String),
   /** Its landing of that merge request through the host's merge, or null. */
   landing: Schema.NullOr(LandingSchema),
+  /** When a durable timer it sleeps on wakes it, or null; absent from an older host. */
+  wakes: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  /** The Subscription its work waits on to reset, or null; absent from an older host. */
+  usage: Schema.optionalKey(Schema.NullOr(UsageWaitSchema)),
 });
 export type RunView = typeof RunView.Type;
 
@@ -4795,7 +5146,8 @@ export type HostServices =
   | Agents
   | FileSystem.FileSystem
   | Path.Path
-  | ChildProcessSpawner.ChildProcessSpawner;
+  | ChildProcessSpawner.ChildProcessSpawner
+  | ForgeHttp;
 
 /**
  * Which modules a host holds and what it does with them, in front of one state directory.
@@ -4865,6 +5217,8 @@ export interface RegistryApi {
     readonly runId: string;
     readonly control: string;
     readonly set: boolean;
+    readonly before?: string;
+    readonly by?: string;
     /** A stop of this Run without the children it started. */
     readonly alone?: boolean;
     /** Why a stop ends the Run's agents, for its log. */
@@ -4885,6 +5239,7 @@ export interface RegistryApi {
     readonly text: string;
     /** The caller's claim on the delivery, so the same message twice is one message. */
     readonly request: string;
+    readonly step?: string;
     readonly to?: string;
     readonly operation?: string;
     readonly agent?: string;
@@ -5064,12 +5419,14 @@ export const foundationLayer = (options: {
   | WorkflowEngine.WorkflowEngine
   | MessageStorage.MessageStorage
   | SqlClient.SqlClient
-  | Reactivity.Reactivity,
+  | Reactivity.Reactivity
+  | ForgeHttp,
   ConfigError,
   BunServices
 > =>
   hostLayer(options).pipe(
     Layer.provideMerge(storeLayer.pipe(Layer.provideMerge(engineLayer(options)))),
+    Layer.provideMerge(forgeHttpLayer),
   );
 
 const makeRegistry: (
@@ -5144,7 +5501,10 @@ const makeRegistry: (
         Option.isSome(old) &&
         !(yield* fs.exists(controlPath(dir, PARKED, runId)).pipe(Effect.orDie))
       ) {
-        yield* fs.writeFileString(controlPath(dir, PARKED, runId), old.value).pipe(Effect.orDie);
+        const path = controlPath(dir, PARKED, runId);
+        yield* fs
+          .writeFileString(`${path}.new`, old.value)
+          .pipe(Effect.andThen(fs.rename(`${path}.new`, path)), Effect.orDie);
         yield* store.announce;
       }
     });
@@ -5269,6 +5629,7 @@ const makeRegistry: (
       run: runShell,
     }).pipe(
       Effect.catchTag("PlatformError", (cause) => Effect.die(cause)),
+      Effect.provideService(ForgeHttp, Context.get(hostServices, ForgeHttp)),
       Effect.provideContext(bun),
     );
   });
@@ -5311,15 +5672,27 @@ const makeRegistry: (
     generation: Generation,
     options: Readonly<Record<string, string>>,
   ) {
-    const asked = preferencesIn(options);
+    const asked = yield* preferencesFromOptions(options).pipe(
+      Effect.catch((cause) => refusedInput(`claudeSubagents: ${String(cause)}`)),
+    );
     if (Object.keys(asked).length === 0) return;
     const defaults = yield* loadDefaults(userDir).pipe(
       Effect.orElseSucceed(() => FALLBACK_DEFAULTS),
     );
+    const raw = (yield* readConfig(userDir).pipe(
+      Effect.catch((cause) => refusedInput(String(cause))),
+    )).claude_subagents;
+    const policy =
+      raw === undefined
+        ? undefined
+        : yield* readSubagents(raw).pipe(
+            Effect.catch((cause) => refusedInput(`claude_subagents: ${String(cause)}`)),
+          );
     const configured = {
       harness: defaults.harness,
       model: defaults.model,
       effort: defaults.effort,
+      claudeSubagents: policy,
     };
     const resolved = resolveChoice([configured, generation.agents, asked], defaults.models);
     if (!resolved.ok) return yield* refusedInput(resolved.problem);
@@ -5336,6 +5709,25 @@ const makeRegistry: (
       generation,
       yield* decodeInput(row.input).pipe(Effect.orElseSucceed(() => ({}))),
     );
+  });
+
+  /**
+   * The branch the Runs of this plan Run's lineage were placed on, and null where none was
+   * or its merge request has merged or closed, so its work there is done.
+   */
+  const plannedOn = Effect.fn("Engine.plannedOn")(function* (planRun: string, runId: string) {
+    const states = yield* readMrStates(dir).pipe(Effect.orElseSucceed(() => new Map()));
+    let branch: string | null = null;
+    for (const row of yield* store.runs) {
+      const on = row.run === runId || unplaced(row) ? null : placedOf(row, {}).branch;
+      if (on === null || (branch !== null && on !== branch)) continue;
+      if (!(yield* lineageIn(store)(row.run)).includes(planRun)) continue;
+      branch = on;
+      const mr = yield* mergeRequestOf(fs, dir, row.run);
+      const state = mr === null ? undefined : states.get(mrLabel(mr));
+      if (state !== undefined && state !== "open") return null;
+    }
+    return branch;
   });
 
   /**
@@ -5393,6 +5785,10 @@ const makeRegistry: (
           ? yield* reviewedTarget(inputs[source] ?? "")
           : null;
       if (reviewed !== null) inputs[REVIEWED] = reviewed;
+      const planRun = planRunOf(
+        workSourceOf({ inputs, strategies: generation.hints })?.value ?? "",
+      );
+      const taskBranch = planRun === null ? null : yield* plannedOn(planRun, ask.runId);
       if (
         generation.checkout === "branch" &&
         (yield* repositoryName(runShell, from).pipe(Effect.mapError(failed))) === null
@@ -5415,6 +5811,7 @@ const makeRegistry: (
         sources: ask.provenance,
         openLabel: ask.taskLabel ?? null,
         explicit: ask.options.branch ?? null,
+        taskBranch,
         branchBase: ask.branchBase,
         login: placing.env.gitlabLogin,
         githubLogin: placing.env.githubLogin,
@@ -5692,7 +6089,15 @@ const makeRegistry: (
     );
     // What the parent prefers where it starts the child, as options the child is given:
     // serializable, so no Context, service or Layer of the parent's crosses over.
-    const inherited = foldPreferences([preferencesIn(parentOptions), ...(yield* AgentScopes)]);
+    const parentPreferences = yield* preferencesFromOptions(parentOptions).pipe(
+      Effect.mapError((cause) => refused(`claudeSubagents: ${String(cause)}`)),
+    );
+    const { claudeSubagents, ...preferences } = foldPreferences([
+      parentPreferences,
+      ...(yield* AgentScopes),
+    ]);
+    const inherited: Record<string, string> = preferences;
+    if (claudeSubagents !== undefined) inherited.claudeSubagents = encodeSubagents(claudeSubagents);
     // The host's own options, held to the same rule a front door's are: a name that is
     // not the host's would be a field the child's author never declared.
     const asked = { ...inherited, ...ask.options };
@@ -5774,6 +6179,13 @@ const makeRegistry: (
     // The parent hands its own children over, so the receipt is written here: a host
     // sweep dispatching one would give the engine a child with no parent to wake.
     yield* store.accepted(claimed.row.run);
+    const at = yield* CurrentStep;
+    if (at !== null && claimed.fresh)
+      yield* noteStep(runDir(dir, parent.run), {
+        kind: "child",
+        key: at.key,
+        run: claimed.row.run,
+      }).pipe(Effect.provideService(FileSystem.FileSystem, fs));
     return {
       runId: claimed.row.run,
       workflow: generation.id,
@@ -5982,6 +6394,19 @@ const makeRegistry: (
     return status;
   });
 
+  /** When the engine's durable clock next wakes this execution, read from its own table. */
+  const wakeOf = Effect.fn("Engine.wakeOf")(function* (execution: string) {
+    const sql = yield* Effect.serviceOption(SqlClient.SqlClient);
+    if (Option.isNone(sql)) return null;
+    const rows = yield* sql.value<{ readonly deliver_at: number | null }>`
+      SELECT deliver_at FROM cluster_messages
+      WHERE entity_type = 'Workflow/-/DurableClock' AND entity_id = ${execution} AND processed = 0
+      ORDER BY deliver_at LIMIT 1
+    `.pipe(Effect.orElseSucceed(() => []));
+    const at = rows[0]?.deliver_at ?? null;
+    return at === null ? null : DateTime.formatIso(DateTime.makeUnsafe(Number(at)));
+  });
+
   const viewOf = Effect.fn("Engine.viewOf")(function* (row: RunRow) {
     const input = yield* decodeInput(row.input).pipe(Effect.orElseSucceed(() => ({})));
     const placing = Option.getOrUndefined(decodePlacing(row.placing ?? ""));
@@ -5992,10 +6417,17 @@ const makeRegistry: (
           .pipe(Effect.orElseSucceed(() => "")),
       ),
     );
+    const linkNotices = yield* readLinkDeliveries(runDir(dir, row.run)).pipe(
+      Effect.provideService(FileSystem.FileSystem, fs),
+    );
     const admitted = {
       requestedBy: placing?.requestedBy,
       closes: placing?.closes,
       report,
+      linkNotices: linkNotices.length === 0 ? undefined : linkNotices,
+      stepNotes: (yield* readStepSteering(runDir(dir, row.run)).pipe(
+        Effect.provideService(FileSystem.FileSystem, fs),
+      )).notes,
       runId: row.run,
       workflow: row.workflow,
       project: row.project,
@@ -6009,6 +6441,8 @@ const makeRegistry: (
       ),
       options: yield* decodeStrings(row.options ?? "{}").pipe(
         Effect.orElseSucceed((): Record<string, string> => ({})),
+        Effect.flatMap((options) => optionsNow(dir, row.run, options)),
+        Effect.provideContext(bun),
       ),
     };
     const { cwd, branch, workspace, worktree } = placedOf(row, admitted.options);
@@ -6032,6 +6466,10 @@ const makeRegistry: (
         Effect.flatMap(Schema.decodeUnknownEffect(AwaitingJson)),
         Effect.orElseSucceed(() => null),
       ),
+      usage: yield* fs.readFileString(controlPath(dir, USAGE, row.run)).pipe(
+        Effect.flatMap(Schema.decodeUnknownEffect(UsageWaitJson)),
+        Effect.orElseSucceed(() => null),
+      ),
       mr: yield* mergeRequestOf(fs, dir, row.run),
       landing: yield* readLanding(runDir(dir, row.run)).pipe(
         Effect.provideService(FileSystem.FileSystem, fs),
@@ -6053,6 +6491,7 @@ const makeRegistry: (
     return {
       ...about,
       status,
+      wakes: status.status === "suspended" ? yield* wakeOf(row.execution) : null,
       diagnostic:
         kept === null
           ? null
@@ -6140,6 +6579,9 @@ const makeRegistry: (
           prompt: row.prompt,
           options,
           answer: row.answer,
+          asked: row.asked,
+          answered: row.answered,
+          by: row.answerer === null ? null : whoActed(row.answerer),
         })),
       ),
     );
@@ -6397,6 +6839,8 @@ const makeRegistry: (
     const generation = yield* resolve({ project: row.project, id: row.workflow });
     const options = yield* decodeStrings(row.options ?? "{}").pipe(
       Effect.orElseSucceed((): Record<string, string> => ({})),
+      Effect.flatMap((admitted) => optionsNow(dir, runId, admitted)),
+      Effect.provideContext(bun),
     );
     const found = yield* routed(runId);
     const state = pollStatus(
@@ -6669,8 +7113,10 @@ const makeRegistry: (
 
     resume: Effect.fn("Engine.Registry.resume")(function* (runId: string) {
       const recovered = yield* recover();
+      entryCauses.set(runId, "resumed");
       const controlled = yield* applyControl(runId, STOP, false, recovered.takenUp).pipe(
         Effect.result,
+        Effect.ensuring(Effect.sync(() => entryCauses.delete(runId))),
       );
       const recorded = { runId, control: STOP, set: false, left: [] };
       if (controlled._tag === "Failure")
@@ -6847,9 +7293,36 @@ const makeRegistry: (
       readonly runId: string;
       readonly control: string;
       readonly set: boolean;
+      readonly before?: string;
+      readonly by?: string;
       readonly alone?: boolean;
       readonly reason?: string;
     }) {
+      if (options.before !== undefined) {
+        const target = yield* stepTarget(runDir(dir, options.runId), options.before);
+        if (target.refused !== undefined) return yield* new HostRefused({ reason: target.refused });
+        if (yield* hasEnded(options.runId))
+          return yield* new HostRefused({
+            reason: `Step ${options.before} has no work left in this finished Run`,
+          });
+        yield* pauseBefore(
+          runDir(dir, options.runId),
+          options.before,
+          options.by ?? "the CLI",
+          options.set,
+        );
+        yield* store.announce;
+        return {
+          runId: options.runId,
+          control: HOLD,
+          set: options.set,
+          left: [],
+          applied: true,
+          detail: "",
+        };
+      }
+      if (options.control === HOLD && !options.set)
+        yield* clearReachedPause(runDir(dir, options.runId));
       if (options.control === HOLD && (yield* hasEnded(options.runId)))
         return yield* new HostRefused({
           reason: "a finished Run has no step left to hold; stop closes its agents",
@@ -6918,6 +7391,7 @@ const makeRegistry: (
       readonly runId: string;
       readonly text: string;
       readonly request: string;
+      readonly step?: string;
       readonly to?: string;
       readonly operation?: string;
       readonly agent?: string;
@@ -6927,6 +7401,54 @@ const makeRegistry: (
       // A row is enough: a finished Run's agents need its launch journal, not its module.
       if ((yield* store.run(options.runId)) === null) {
         return yield* new HostRefused({ reason: `no run "${options.runId}" was started here` });
+      }
+      if (options.step !== undefined) {
+        if (
+          options.agent !== undefined ||
+          options.to !== undefined ||
+          options.operation !== undefined
+        )
+          return yield* new HostRefused({
+            reason: "A Step note takes --step alone, without an agent, role or operation",
+          });
+        const where = runDir(dir, options.runId);
+        const target = yield* stepTarget(where, options.step);
+        if (target.refused !== undefined) return yield* new HostRefused({ reason: target.refused });
+        if (target.step.kind === "question")
+          return yield* new HostRefused({
+            reason: `Step ${options.step} is a question; answer it rather than leave a note`,
+          });
+        if (yield* workflowEnded(options.runId))
+          return yield* new HostRefused({
+            reason: `Step ${options.step} has no next prompt in this finished Run`,
+          });
+        yield* leaveStepNote(where, {
+          id: options.request,
+          step: options.step,
+          by:
+            options.actor === undefined
+              ? "the CLI"
+              : whoActed(actorOf(options.actor, options.request)),
+          text: options.text,
+        });
+        const launch = (yield* readLaunches(dir, options.runId)).findLast(
+          (one) => one.step?.step === options.step,
+        );
+        if (launch !== undefined && !(yield* fs.exists(launch.output).pipe(Effect.orDie))) {
+          const sent = yield* (yield* Agents).steer({
+            ...options,
+            agent: launch.agent,
+            mode: "boundary",
+          });
+          if (sent.delivered) yield* readStepNote(where, options.request);
+        }
+        yield* store.announce;
+        return {
+          agent: launch?.agent ?? "",
+          delivered: true,
+          detail: "Note kept for the Step's next prompt",
+          note: options.request,
+        };
       }
       const sent = yield* (yield* Agents).steer(options);
       return sent.gone === true ? { ...sent, finished: yield* hasEnded(options.runId) } : sent;

@@ -1,6 +1,7 @@
 import * as BunServices from "@effect/platform-bun/BunServices";
 import { Clock, Config, Effect, ManagedRuntime, Scope } from "effect";
 import { TestClock } from "effect/testing";
+import { GIT_QUIET } from "./git-quiet";
 
 const runtime = ManagedRuntime.make(BunServices.layer);
 
@@ -27,7 +28,7 @@ export const suiteEnv = Config.all({
   COLLIE_TEST_STARTS: Config.String("COLLIE_TEST_STARTS").pipe(Config.withDefault("")),
   COLLIE_PROC: Config.String("COLLIE_PROC").pipe(Config.withDefault("")),
   COLLIE_MEMORY_EVERY: Config.String("COLLIE_MEMORY_EVERY").pipe(Config.withDefault("")),
-});
+}).pipe(Config.map((env) => ({ ...env, ...GIT_QUIET })));
 
 /**
  * Runs `effect` on a test clock that a fiber advances by `tick` between real one-millisecond

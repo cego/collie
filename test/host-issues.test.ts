@@ -1,10 +1,10 @@
 import { beforeEach, afterEach, expect, test } from "bun:test";
-import { Duration, Effect, FileSystem, Result, Schema } from "effect";
+import { ConfigProvider, Duration, Effect, FileSystem, Result, Schema } from "effect";
 import { Rig, FakeHerdr } from "./support/recorder";
 import { runEffect } from "./support/effect";
 import { exec } from "./support/command";
 import { FakeBin } from "./support/bin";
-import { forgeOnPath, PROJECT, FORGE_HOST } from "./support/forge";
+import { forgeOnPath, serveForges, PROJECT, FORGE_HOST } from "./support/forge";
 import { foundationLayer, registryLayer, Registry, evidenceDir, runDir } from "../src/engine";
 import { recordAudit } from "../src/audit";
 import { noteContext } from "../src/metrics";
@@ -14,10 +14,12 @@ import { agentsLayer } from "../src/agents";
 import { WorkflowError } from "../src/sdk";
 
 let rig: Rig;
+let forgeApi = "";
 beforeEach(() =>
   runEffect(
     Effect.gen(function* () {
       rig = yield* Rig.make();
+      forgeApi = "";
     }),
   ),
 );
@@ -53,6 +55,11 @@ const withMachine = <A, E, R>(
         userDir: rig.userDir,
         placing: { herdr: new FakeHerdr(rig.pluginEnv()), env: rig.pluginEnv() },
         issuePrivacyBudget,
+      }),
+    ),
+    Effect.provide(
+      ConfigProvider.layerAdd(ConfigProvider.fromUnknown({ COLLIE_FORGE_API: forgeApi }), {
+        asPrimary: true,
       }),
     ),
     Effect.scoped,
@@ -209,6 +216,7 @@ test(
             login: "me",
             mrs: [],
           });
+          forgeApi = yield* serveForges(fake);
           yield* Effect.gen(function* () {
             const registry = yield* Registry;
             const generation = yield* registry.load(
@@ -225,11 +233,15 @@ test(
               });
               expect((yield* registry.view(run.runId))?.cwd).toBe(rig.projectDir);
               const answer = yield* registry.result(run.runId).pipe(Effect.result);
+              expect(fake.requests().filter((one) => /\/issues(?:[/?]|$)/.test(one.url))).toEqual(
+                [],
+              );
               expect(Result.isFailure(answer)).toBe(true);
               if (Result.isFailure(answer)) expect(answer.failure.reason).toContain(source);
             }
           }).pipe(withMachine);
           expect((yield* fake.calls()).filter((line) => line.startsWith("gh issue"))).toEqual([]);
+          expect(fake.requests().filter((one) => /\/issues(?:[/?]|$)/.test(one.url))).toEqual([]);
         } finally {
           yield* bin.restore();
         }
@@ -262,6 +274,7 @@ test(
             login: "me",
             mrs: [],
           });
+          forgeApi = yield* serveForges(fake);
           yield* Effect.gen(function* () {
             const registry = yield* Registry;
             const generation = yield* registry.load(
@@ -325,6 +338,7 @@ for (const state of ["bare", "unreadable"] as const) {
               login: "me",
               mrs: [],
             });
+            forgeApi = yield* serveForges(fake);
             yield* Effect.gen(function* () {
               const registry = yield* Registry;
               const generation = yield* registry.load(
@@ -338,6 +352,9 @@ for (const state of ["bare", "unreadable"] as const) {
                 handsOver: true,
               });
               const answer = yield* registry.result(run.runId).pipe(Effect.result);
+              expect(fake.requests().filter((one) => /\/issues(?:[/?]|$)/.test(one.url))).toEqual(
+                [],
+              );
               expect(Result.isFailure(answer)).toBe(true);
               if (Result.isFailure(answer))
                 expect(answer.failure.reason).toBe(
@@ -347,6 +364,7 @@ for (const state of ["bare", "unreadable"] as const) {
                 );
             }).pipe(withMachine);
             expect((yield* fake.calls()).filter((line) => line.startsWith("gh issue"))).toEqual([]);
+            expect(fake.requests().filter((one) => /\/issues(?:[/?]|$)/.test(one.url))).toEqual([]);
           } finally {
             yield* bin.restore();
           }
@@ -381,6 +399,7 @@ for (const metadata of [" metadata", "metadata "]) {
               login: "me",
               mrs: [],
             });
+            forgeApi = yield* serveForges(fake);
             yield* Effect.gen(function* () {
               const registry = yield* Registry;
               const generation = yield* registry.load(
@@ -394,11 +413,15 @@ for (const metadata of [" metadata", "metadata "]) {
                 handsOver: true,
               });
               const answer = yield* registry.result(run.runId).pipe(Effect.result);
+              expect(fake.requests().filter((one) => /\/issues(?:[/?]|$)/.test(one.url))).toEqual(
+                [],
+              );
               expect(Result.isFailure(answer)).toBe(true);
               if (Result.isFailure(answer))
                 expect(answer.failure.reason).toBe(`issue text names another checkout: ${other}`);
             }).pipe(withMachine);
             expect((yield* fake.calls()).filter((line) => line.startsWith("gh issue"))).toEqual([]);
+            expect(fake.requests().filter((one) => /\/issues(?:[/?]|$)/.test(one.url))).toEqual([]);
           } finally {
             yield* bin.restore();
           }
@@ -432,6 +455,7 @@ test(
             login: "me",
             mrs: [],
           });
+          forgeApi = yield* serveForges(fake);
           yield* Effect.gen(function* () {
             const registry = yield* Registry;
             const generation = yield* registry.load(
@@ -471,6 +495,7 @@ for (const failure of ["configuration", "inventory"] as const) {
               login: "me",
               mrs: [],
             });
+            forgeApi = yield* serveForges(fake);
             yield* Effect.gen(function* () {
               const registry = yield* Registry;
               const generation = yield* registry.load(
@@ -490,6 +515,9 @@ for (const failure of ["configuration", "inventory"] as const) {
                   : json({ projects: { root: `${rig.root}/absent` } }),
               );
               const answer = yield* registry.result(run.runId).pipe(Effect.result);
+              expect(fake.requests().filter((one) => /\/issues(?:[/?]|$)/.test(one.url))).toEqual(
+                [],
+              );
               expect(Result.isFailure(answer)).toBe(true);
               if (Result.isFailure(answer)) {
                 expect(Schema.is(WorkflowError)(answer.failure)).toBe(true);
@@ -499,6 +527,7 @@ for (const failure of ["configuration", "inventory"] as const) {
               }
             }).pipe(withMachine);
             expect((yield* fake.calls()).filter((line) => line.startsWith("gh issue"))).toEqual([]);
+            expect(fake.requests().filter((one) => /\/issues(?:[/?]|$)/.test(one.url))).toEqual([]);
           } finally {
             yield* bin.restore();
           }
@@ -532,6 +561,7 @@ for (const forge of ["github", "gitlab"] as const) {
                 },
               ],
             });
+            forgeApi = yield* serveForges(fake);
             const answers = yield* Effect.gen(function* () {
               const registry = yield* Registry;
               const generation = yield* registry.load(
@@ -569,6 +599,51 @@ for (const forge of ["github", "gitlab"] as const) {
     30_000,
   );
 }
+
+test(
+  "a stopped Run files nothing, and its forge hears nothing of it",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        yield* repository(rig.projectDir, `https://${PROJECT.github}.git`);
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        try {
+          const fake = yield* forgeOnPath(bin, "github", {
+            installed: true,
+            loggedIn: [FORGE_HOST.github],
+            login: "me",
+            mrs: [],
+          });
+          forgeApi = yield* serveForges(fake);
+          const gate = `${rig.root}/gate`;
+          const answer = yield* Effect.gen(function* () {
+            const registry = yield* Registry;
+            const generation = yield* registry.load(
+              new URL("./fixtures/workflows/issues.workflow.ts", import.meta.url).pathname,
+            );
+            const run = yield* registry.start({
+              generation,
+              request: "gated",
+              project: rig.projectDir,
+              input: { operation: "file-when-open", text: gate },
+              handsOver: true,
+            });
+            yield* registry.control({ runId: run.runId, control: "stop", set: true });
+            yield* fs.writeFileString(gate, "");
+            return yield* registry.result(run.runId).pipe(Effect.result);
+          }).pipe(withMachine);
+          expect(Result.isFailure(answer)).toBe(true);
+          if (Result.isFailure(answer)) expect(answer.failure.reason).toContain("stopped");
+          expect(fake.requests().filter((one) => /\/issues(?:[/?]|$)/.test(one.url))).toEqual([]);
+          expect((yield* fake.model()).issues ?? []).toEqual([]);
+        } finally {
+          yield* bin.restore();
+        }
+      }),
+    ),
+  30_000,
+);
 
 test(
   "the host refuses another checkout's path and remote before filing or commenting",
@@ -622,6 +697,7 @@ test(
               },
             ],
           });
+          forgeApi = yield* serveForges(fake);
           yield* Effect.gen(function* () {
             const registry = yield* Registry;
             const generation = yield* registry.load(
@@ -653,6 +729,9 @@ test(
                       handsOver: true,
                     });
                     const answer = yield* registry.result(run.runId).pipe(Effect.result);
+                    expect(
+                      fake.requests().filter((one) => /\/issues(?:[/?]|$)/.test(one.url)),
+                    ).toEqual([]);
                     expect(Result.isFailure(answer)).toBe(true);
                     if (Result.isFailure(answer)) expect(answer.failure.reason).toContain(checkout);
                   }),
@@ -661,6 +740,7 @@ test(
             }
           }).pipe(withMachine);
           expect((yield* fake.calls()).filter((line) => line.startsWith("gh issue"))).toEqual([]);
+          expect(fake.requests().filter((one) => /\/issues(?:[/?]|$)/.test(one.url))).toEqual([]);
           expect((yield* fake.model()).issues).toHaveLength(1);
           expect((yield* fake.model()).issueNotes).toBeUndefined();
         } finally {
@@ -693,6 +773,7 @@ test(
             login: "me",
             mrs: [],
           });
+          forgeApi = yield* serveForges(fake);
           yield* Effect.gen(function* () {
             const registry = yield* Registry;
             const generation = yield* registry.load(
@@ -713,11 +794,13 @@ test(
               handsOver: true,
             });
             const answer = yield* registry.result(run.runId).pipe(Effect.result);
+            expect(fake.requests().filter((one) => /\/issues(?:[/?]|$)/.test(one.url))).toEqual([]);
             expect(Result.isFailure(answer)).toBe(true);
             if (Result.isFailure(answer))
               expect(answer.failure.reason).toBe(`issue text names another checkout: ${sibling}`);
           }).pipe(withMachine);
           expect((yield* fake.calls()).filter((line) => line.startsWith("gh issue"))).toEqual([]);
+          expect(fake.requests().filter((one) => /\/issues(?:[/?]|$)/.test(one.url))).toEqual([]);
         } finally {
           yield* bin.restore();
         }
@@ -745,6 +828,7 @@ test(
             login: "me",
             mrs: [],
           });
+          forgeApi = yield* serveForges(fake);
           yield* Effect.gen(function* () {
             const registry = yield* Registry;
             const generation = yield* registry.load(
@@ -796,6 +880,7 @@ test(
             login: "me",
             mrs: [],
           });
+          forgeApi = yield* serveForges(fake);
           yield* bin.add("git", `[ "$*" = "remote -v" ] && exec sleep 5\nexec "${git}" "$@"`);
           yield* Effect.gen(function* () {
             const registry = yield* Registry;
@@ -810,6 +895,7 @@ test(
               handsOver: true,
             });
             const answer = yield* registry.result(run.runId).pipe(Effect.result);
+            expect(fake.requests().filter((one) => /\/issues(?:[/?]|$)/.test(one.url))).toEqual([]);
             expect(Result.isFailure(answer)).toBe(true);
             if (Result.isFailure(answer)) {
               expect(Schema.is(WorkflowError)(answer.failure)).toBe(true);
@@ -817,6 +903,7 @@ test(
             }
           }).pipe((effect) => withMachine(effect, "200 millis"));
           expect((yield* fake.calls()).filter((line) => line.startsWith("gh issue"))).toEqual([]);
+          expect(fake.requests().filter((one) => /\/issues(?:[/?]|$)/.test(one.url))).toEqual([]);
         } finally {
           yield* bin.restore();
         }
@@ -851,6 +938,7 @@ test(
             login: "me",
             mrs: [],
           });
+          forgeApi = yield* serveForges(fake);
           yield* Effect.gen(function* () {
             const registry = yield* Registry;
             const generation = yield* registry.load(
@@ -935,6 +1023,7 @@ test(
             login: "me",
             mrs: [],
           });
+          forgeApi = yield* serveForges(fake);
           yield* bin.add(
             "git",
             `[ "$*" = "remote -v" ] && [ -e "${once}" ] && rm "${once}" && exit 1\nexec "${git}" "$@"`,

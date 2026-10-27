@@ -107,6 +107,20 @@ const decodeRecord = Schema.decodeUnknownOption(Schema.fromJsonString(RecordSche
 export const runningChecksDir = (stateDir: string) => `${stateDir}/running-checks`;
 const recordPath = (stateDir: string, id: string) => `${runningChecksDir(stateDir)}/${id}.json`;
 
+/** The records of the checks running in this state directory, as their hosts wrote them. */
+export const recordsIn = Effect.fn("CheckProcesses.recordsIn")(function* (stateDir: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const dir = runningChecksDir(stateDir);
+  const found: CheckRecord[] = [];
+  for (const file of yield* fs.readDirectory(dir).pipe(Effect.orElseSucceed(() => []))) {
+    if (!file.endsWith(".json")) continue;
+    const text = yield* fs.readFileString(`${dir}/${file}`).pipe(Effect.orElseSucceed(() => ""));
+    const read = decodeRecord(text);
+    if (Option.isSome(read)) found.push(read.value);
+  }
+  return found;
+});
+
 const spawnCheck = (command: CheckCommand, env?: Readonly<Record<string, string>>) =>
   Effect.flatMap(ChildProcessSpawner.ChildProcessSpawner, (spawner) =>
     spawner.spawn(
@@ -275,8 +289,8 @@ interface Collecting extends Ending {
 
 /**
  * The host's adapter for the state directory `dir`, whose installation id is `installation`.
- * Building it ends every check a previous host left. `onRun` is what ending one does on its
- * Run, given the line `host.log` gets.
+ * Building it ends every check a previous host left, unless `sweep` is false and the caller
+ * does. `onRun` is what ending one does on its Run, given the line `host.log` gets.
  */
 export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (options: {
   readonly dir: string;
@@ -287,6 +301,7 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
     line: string,
   ) => Effect.Effect<void, never, FileSystem.FileSystem>;
   readonly kill?: Kill;
+  readonly sweep?: boolean;
 }) {
   const { dir, installation, kill = processKill } = options;
   const fs = yield* FileSystem.FileSystem;
@@ -314,15 +329,10 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
 
   const left = Effect.gen(function* () {
     const found = new Map<string, Leftover>();
-    const records = runningChecksDir(dir);
-    for (const file of yield* fs.readDirectory(records).pipe(Effect.orElseSucceed(() => []))) {
-      if (!file.endsWith(".json")) continue;
-      const text = yield* fs
-        .readFileString(`${records}/${file}`)
-        .pipe(Effect.orElseSucceed(() => ""));
-      const read = decodeRecord(text);
-      if (Option.isNone(read) || ours.has(read.value.id)) continue;
-      const record = read.value;
+    for (const record of yield* recordsIn(dir).pipe(
+      Effect.provideService(FileSystem.FileSystem, fs),
+    )) {
+      if (ours.has(record.id)) continue;
       found.set(record.id, {
         id: record.id,
         run: record.run,
@@ -550,7 +560,8 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
     }
   }).pipe(Effect.provideContext(services));
 
-  yield* Effect.forEach(yield* left, endLeftover, { concurrency: "unbounded", discard: true });
+  if (options.sweep !== false)
+    yield* Effect.forEach(yield* left, endLeftover, { concurrency: "unbounded", discard: true });
   return {
     run,
     endAll,

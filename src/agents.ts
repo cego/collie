@@ -16,9 +16,11 @@
 import {
   Clock,
   Context,
+  Deferred,
   Duration,
   Effect,
   FileSystem,
+  Formatter,
   Layer,
   Option,
   Path,
@@ -30,6 +32,8 @@ import type { BunServices } from "@effect/platform-bun/BunServices";
 import * as Activity from "effect/workflow/Activity";
 import { attachmentsDir, listAttachments, type Attachment } from "./attachments";
 import { Launched, LAUNCH_ORDER, LAUNCH_SUFFIX, launchDir, readLaunches, stemOf } from "./launches";
+import { CurrentStep, type At } from "./steps";
+import { takeStepNotes } from "./step-steering";
 export { Launched } from "./launches";
 import * as Workflow from "effect/workflow/Workflow";
 import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
@@ -52,6 +56,8 @@ import {
 } from "./compaction";
 import {
   COMPACTION_PORTS,
+  atLeast,
+  installedVersion,
   questionsSince,
   ranOutSince,
   submittedDelivery,
@@ -70,6 +76,7 @@ import {
 } from "./config";
 import { autoModeBlock, autoModeFacts, type AutoModeBlock, type RunAuthority } from "./automode";
 import { shell } from "./mr";
+import type { ForgeHttp } from "./forge/http";
 import type { YamlMap } from "./yaml";
 import { RanOn } from "./board-model";
 import type { Asker } from "./proposals";
@@ -89,6 +96,7 @@ import {
   DEFAULT_MODEL,
   pinned,
   preferencesIn,
+  preferencesFromOptions,
   resolveWithRoom,
   said,
   startArgs,
@@ -110,7 +118,7 @@ import { machineName } from "./peers";
 import { askRouteTo } from "./handoff";
 import { nowIso } from "./time";
 import { noteContext } from "./metrics";
-import { roomFor, subscriptionOf, type UsageReading } from "./usage-model";
+import { roomFor, subscriptionOf, usedFor, type UsageReading } from "./usage-model";
 import { ownCodexReading } from "./usage";
 import {
   lineageAgent,
@@ -146,6 +154,7 @@ import {
   type ClaudeOverlay,
 } from "./profile";
 import { isString } from "./schema";
+import { ClaudeSubagents, readSubagents, subagentSettings, subagentVersion } from "./subagents";
 import { Collecting, collectingLayer, type CollectingApi } from "./collecting";
 import { holdsBudgetOf, waitForMemory } from "./memory-wait";
 import { causalKey, deliveriesOf, SENT_STATES, toldLine } from "./steering";
@@ -183,12 +192,15 @@ export interface AgentAsk {
   readonly harness: string | null;
   readonly model: string | null;
   readonly effort: string | null;
+  readonly claudeSubagents?: ClaudeSubagents;
   readonly permissions: string | null;
   /** What this work fell back from, and why, where it did. */
   readonly from?: AgentChoice;
   readonly why?: string;
   /** Which agent of this work it is: past 1, one taking over from an agent that ran out. */
   readonly sequence?: number;
+  /** The Step run this work is in, where it is in one. */
+  readonly step?: At;
 }
 
 /**
@@ -197,6 +209,7 @@ export interface AgentAsk {
  */
 export const AgentChoiceSchema = Schema.Struct({
   ...RanOn.fields,
+  claudeSubagents: Schema.optionalKey(ClaudeSubagents),
   from: Schema.optionalKey(RanOn),
   why: Schema.optionalKey(Schema.String),
 });
@@ -207,6 +220,8 @@ export const RanOut = Schema.TaggedStruct("RanOut", {
   why: Schema.String,
   /** Where its harness keeps the conversation, where it said. */
   transcript: Schema.NullOr(Schema.String),
+  /** When its Subscription resets, where a reading says. */
+  resetsAt: Schema.optionalKey(Schema.NullOr(Schema.String)),
 });
 export type RanOut = typeof RanOut.Type;
 const isRanOut = Schema.is(RanOut);
@@ -215,8 +230,9 @@ const isRanOut = Schema.is(RanOut);
 export const Collected = Schema.Union([Schema.String, Schema.Null, RanOut]);
 
 /**
- * Nobody can say whether this agent exists or whether it was given its work, so nothing
- * was started. Uncertainty is reported; it is never rounded down to "nothing happened".
+ * A failure nothing here could classify, so the Run fails. Uncertainty is reported; it is
+ * never rounded down to "nothing happened". A launch unsure whether it started its agent or
+ * gave it its work parks instead: a resume lists herdr's agents before it starts one.
  */
 export class AgentUncertain extends Schema.TaggedError<AgentUncertain>()("AgentUncertain", {
   operation: Schema.String,
@@ -505,6 +521,7 @@ interface Doing<Output extends OutputContract> {
   readonly harness?: string;
   readonly model?: string;
   readonly effort?: string;
+  readonly claudeSubagents?: ClaudeSubagents;
   readonly permissions?: PermissionMode;
   /**
    * The panel seat this work sits at: its agent over the role's, and its persona and
@@ -630,7 +647,7 @@ export const agentWork = <
     const requested = foldPreferences([...scopes, preferencesIn(given)]);
     if (held !== null && !agrees(held, requested)) {
       return yield* new WorkflowError({
-        reason: `${work.operation}: ${work.agent} is already running as ${held.harness}/${held.model}, and this work asks for ${requested.harness ?? held.harness}/${requested.model ?? held.model}. A conversation cannot become another agent: give this work an agent of its own, or ask for the one it is.`,
+        reason: `${work.operation}: ${work.agent} is already running as ${held.harness}/${held.model}, and this work asks for ${requested.harness ?? held.harness}/${requested.model ?? held.model} or a different Claude subagent policy. A conversation cannot become another agent: give this work an agent of its own, or ask for the one it is.`,
       });
     }
     // A boundary: the work so far is judged against the Intent before more is started.
@@ -648,7 +665,11 @@ export const agentWork = <
     const layers = [
       preferred,
       ceilingIn(seated),
-      preferencesIn(place.options),
+      yield* preferencesFromOptions(place.options).pipe(
+        Effect.mapError(
+          (cause) => new WorkflowError({ reason: `claudeSubagents: ${String(cause)}` }),
+        ),
+      ),
       ...scopes,
       ceilingIn(given),
     ];
@@ -677,8 +698,11 @@ export const agentWork = <
       permissions: work.permissions ?? null,
       authority: place.authority,
     };
+    if (choice.claudeSubagents !== undefined) ask.claudeSubagents = choice.claudeSubagents;
     fellBack(ask, choice.from, choice.why);
     if (held !== null && held.sequence > 1) ask.sequence = held.sequence;
+    const at = yield* CurrentStep;
+    if (at !== null) ask.step = at;
     if (given.clears !== undefined) ask.clears = given.clears;
     if ((given.clears ?? []).length > 0) {
       const step = agents.stepMessage(ask);
@@ -790,16 +814,18 @@ export const agentWork = <
         const instance = yield* WorkflowEngine.WorkflowInstance;
         if (yield* host.stopRequested(runId)) return yield* Workflow.suspend(instance);
         const launched = yield* parkedWhenStuck(
-          agents.launch(next, (why) => host.parked(work.runId, why)),
+          agents
+            .launch(next, (why) => host.parked(work.runId, why))
+            .pipe(
+              // A stop that landed while a start failed or parked still reaches the server it left.
+              Effect.tapError(() =>
+                Effect.gen(function* () {
+                  if (yield* host.stopRequested(runId)) yield* haltLate;
+                }),
+              ),
+            ),
           host,
           work.runId,
-        ).pipe(
-          // A stop that landed while a start failed still reaches the server it left.
-          Effect.tapError(() =>
-            Effect.gen(function* () {
-              if (yield* host.stopRequested(runId)) yield* haltLate;
-            }),
-          ),
         );
         // A stop that landed while it started: that agent is stopped too, and the work waits.
         if (yield* host.stopRequested(runId)) {
@@ -848,6 +874,12 @@ export const agentWork = <
             .say(runId, `${work.operation}: ${said(on)} ran out (${out.why}); ${next.why}`)
             .pipe(
               Effect.andThen(
+                host.usageWait(runId, {
+                  account: subscriptionOf(on) ?? on.harness,
+                  resetsAt: out.resetsAt ?? null,
+                }),
+              ),
+              Effect.andThen(
                 Effect.raceFirst(
                   collecting(
                     current,
@@ -857,6 +889,7 @@ export const agentWork = <
                   room,
                 ),
               ),
+              Effect.ensuring(host.usageWait(runId, null)),
             ),
         });
         if (isRanOut(collected)) continue;
@@ -878,6 +911,8 @@ export const agentWork = <
         from: currentAsk.from ?? on,
         why: out.why,
       };
+      delete nextAsk.claudeSubagents;
+      if (next.claudeSubagents !== undefined) nextAsk.claudeSubagents = next.claudeSubagents;
       yield* Activity.make({
         name: `${work.operation}.fallback-${n}.close`,
         error: AgentUncertain,
@@ -992,6 +1027,20 @@ const fellBack = (
  * took over from an agent that ran out, what that agent was.
  */
 const agrees = (held: ChosenAgent, requested: Preferences): boolean => {
+  const subagents =
+    requested.claudeSubagents?.model === DEFAULT_MODEL
+      ? { ...requested.claudeSubagents, model: HARNESSES.claude?.defaultModel ?? DEFAULT_MODEL }
+      : requested.claudeSubagents;
+  if (
+    held.harness === "claude" &&
+    subagents !== undefined &&
+    !Object.entries(subagents).every(([key, value]) =>
+      Object.entries(held.claudeSubagents ?? {}).some(
+        ([name, actual]) => name === key && actual === value,
+      ),
+    )
+  )
+    return false;
   const is = (on: AgentChoice) =>
     (requested.harness === undefined || requested.harness === on.harness) &&
     (requested.model === undefined || requested.model === on.model) &&
@@ -1251,6 +1300,7 @@ export interface AgentHost {
   readonly pollMs?: number;
   /** Idle time an agent has to write its Output; past it the work is uncertain, not finished. */
   readonly collectMs?: number;
+  readonly version?: typeof installedVersion;
   /** How long a new agent's harness has to show it can take its first prompt. */
   readonly readyMs?: number;
   /** How long a compaction may run before the Run shows it needs you; `COMPACTION_WAIT_MS` where left out. */
@@ -1269,17 +1319,21 @@ export interface AgentHost {
   readonly help?: (kind: string) => Effect.Effect<string>;
 }
 
-type AgentServices = FileSystem.FileSystem | Path.Path | BunServices;
+type AgentServices = FileSystem.FileSystem | Path.Path | BunServices | ForgeHttp;
 
 const DEFAULT_POLL_MS = 2000;
 const READING_EVERY_MS = 60_000;
 
 /** What a launch ran on, as a choice. */
-const choiceOfLaunch = (launched: Launched): AgentChoice => ({
-  harness: launched.harness,
-  model: launched.model ?? DEFAULT_MODEL,
-  effort: launched.effort ?? null,
-});
+const choiceOfLaunch = (launched: Launched): AgentChoice => {
+  const choice: Types.Mutable<AgentChoice> = {
+    harness: launched.harness,
+    model: launched.model ?? DEFAULT_MODEL,
+    effort: launched.effort ?? null,
+  };
+  if (launched.claudeSubagents !== undefined) choice.claudeSubagents = launched.claudeSubagents;
+  return choice;
+};
 
 /** A choice that stayed on its preferred agent only because nothing else had room. */
 const nothingHasRoom = (chosen: ChosenAgent) =>
@@ -1314,8 +1368,13 @@ const paneNotReady = (error: HerdrError) =>
  * herdr keeps the name of an agent blocked during startup — a first-run dialog in its
  * pane — so it is there, and its prompt waits for it as any blocked agent's does.
  */
-const blockedAtStartup = (error: HerdrError) =>
-  error.code === "agent_not_ready" || /blocked during startup/.test(error.detail);
+const blockedAtStartup = (error: HerdrError) => /blocked during startup/.test(error.detail);
+
+/** herdr still lists an agent whose process has gone, and refuses it with this. */
+const inactive = (refusal: string) => /not an active named agent/.test(refusal);
+
+const isGone = (agent: string, listed: ReadonlyArray<AgentInfo>, refusal: string) =>
+  !listed.some((one) => one.name === agent) || inactive(refusal);
 const DEFAULT_COLLECT_MS = 2 * 60 * 60 * 1000;
 
 /**
@@ -1347,6 +1406,12 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
   const sentPath = (about: Launched, kind: "step" | "repair") =>
     `${dirFor(about.runId)}/${stemOf(about)}.${kind}.md`;
   const promptFile = (ask: AgentAsk) => `${dirFor(ask.runId)}/${stemOf(ask)}.prompt.md`;
+  /** A launch nobody can say the fate of: a resume lists herdr's agents again before it starts one. */
+  const unsettled = (ask: AgentAsk, what: string) =>
+    new AgentParked({
+      operation: ask.operation,
+      reason: `${what}. Nothing here says the agent did no work. Its work is in ${promptFile(ask)}; \`collie run resume ${ask.runId}\` takes up the agent or starts it, then hands that to it.`,
+    });
   const log = (runId: string, line: string) => append(`${dirFor(runId)}/agents.log`, line);
 
   const skills = (names: ReadonlyArray<string>) => installedSkills(host.env, names);
@@ -1472,6 +1537,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       sent: false,
       why: `${outcome.reason}: ${outcome.detail}`,
       refused: outcome.reason === "exhausted",
+      gone: inactive(outcome.detail),
     };
   });
 
@@ -1744,6 +1810,19 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         reason: `${parsed.refused} in ${host.env.userDir}/config.json: fix it, then resume this Run`,
       });
     const profile = roleProfile(parsed.profile, ask.role);
+    if (
+      adapter.id === "claude" &&
+      ask.claudeSubagents !== undefined &&
+      Object.keys(ask.claudeSubagents).length > 0
+    ) {
+      const needed = subagentVersion(ask.claudeSubagents);
+      const installed = yield* (host.version ?? installedVersion)("claude");
+      if (installed === null || !atLeast(installed, needed))
+        return yield* new AgentParked({
+          operation: ask.operation,
+          reason: `claudeSubagents requires Claude Code ${needed} or later; installed: ${installed ?? "unknown"}. Upgrade Claude Code, then resume this Run`,
+        });
+    }
     const unreadable = yield* envFileProblems(profile.env ?? {}, host.env.home);
     if (unreadable.length > 0)
       return yield* new AgentParked({
@@ -1844,6 +1923,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
                   ),
                 ),
                 `${dirFor(ask.runId)}/${stemOf(ask)}`,
+                ask.claudeSubagents,
               )
             : controls;
         const workspace = ask.workspace ?? (yield* taskWorkspace(ask));
@@ -1871,6 +1951,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
                 permissions,
                 window.passed ?? undefined,
               ),
+              ...(adapter.dirArgs?.(`${host.dir}/runs/${ask.runId}`) ?? []),
               ...settingsArgs,
               ...mcp.args,
             ],
@@ -1884,12 +1965,11 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
             Effect.catchIf(blockedAtStartup, () =>
               log(ask.runId, `${agent}: blocked during startup in ${tab.paneId}; its prompt waits`),
             ),
-            Effect.mapError(
-              (cause) =>
-                new AgentUncertain({
-                  operation: ask.operation,
-                  reason: `${agent} did not start in ${tab.paneId}: ${herdrFailureReason(cause)}`,
-                }),
+            Effect.mapError((cause) =>
+              unsettled(
+                ask,
+                `${agent} did not start in ${tab.paneId}: ${herdrFailureReason(cause)}`,
+              ),
             ),
           );
         yield* log(
@@ -1911,11 +1991,32 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
     );
   });
 
-  /** `fresh` starts the agent even where herdr still lists it, as one gone at delivery. */
+  /** The agents whose step is being launched or given: a steer to one waits for it. */
+  const stepsGoingOut = new Map<string, Deferred.Deferred<void>>();
+
+  /** `fresh` starts again an agent gone at delivery, closing the pane herdr still lists it in. */
   const launch = (
     ask: AgentAsk,
     fresh = false,
     note: (why: string | null) => Effect.Effect<void> = () => Effect.void,
+  ): Effect.Effect<Launched, AgentUncertain | AgentParked> =>
+    Effect.gen(function* () {
+      const agent = agentName(ask.runId, ask.agent ?? ask.operation, null, ask.sequence ?? 1);
+      const out = yield* Deferred.make<void>();
+      stepsGoingOut.set(agent, out);
+      return yield* launching(ask, fresh, note).pipe(Effect.ensuring(stepGoneOut(agent, out)));
+    });
+  const stepGoneOut = (agent: string, out = stepsGoingOut.get(agent)) =>
+    Effect.suspend(() => {
+      if (out === undefined) return Effect.void;
+      if (stepsGoingOut.get(agent) === out) stepsGoingOut.delete(agent);
+      return Deferred.succeed(out, undefined);
+    });
+
+  const launching = (
+    ask: AgentAsk,
+    fresh: boolean,
+    note: (why: string | null) => Effect.Effect<void>,
   ): Effect.Effect<Launched, AgentUncertain | AgentParked> =>
     under(
       Effect.gen(function* () {
@@ -1927,13 +2028,26 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         if (listing._tag === "Failure") {
           // Nothing is started on a question nobody answered: a second agent on the same
           // work is worse than work that stops and says why it stopped.
-          return yield* new AgentUncertain({
-            operation: ask.operation,
-            reason: `herdr cannot say which agents it has (${reason(listing.failure)})`,
-          });
+          return yield* unsettled(
+            ask,
+            `herdr cannot say which agents it has (${herdrFailureReason(listing.failure)})`,
+          );
         }
         const live = listing.success.find((one) => one.name === agent);
         const alive = live !== undefined && !fresh;
+        // Only a new agent's first work holds a steer; one reused takes it at its boundary.
+        if (alive) yield* stepGoneOut(agent);
+        // herdr keeps a name while it lists it, so a new agent cannot take it until then.
+        if (fresh && live !== undefined)
+          yield* host.herdr.paneClose(live.paneId).pipe(
+            Effect.mapError(
+              (cause) =>
+                new AgentUncertain({
+                  operation: ask.operation,
+                  reason: `${agent} is gone, but its pane ${live.paneId} did not close, so it was not started again: ${herdrFailureReason(cause)}`,
+                }),
+            ),
+          );
         const memory = alive
           ? "free"
           : yield* waitForMemory({
@@ -1966,7 +2080,9 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
               model: ask.model ?? host.model,
               effort: ask.effort,
             };
+            if (ask.claudeSubagents !== undefined) landed.claudeSubagents = ask.claudeSubagents;
             if ((ask.sequence ?? 1) > 1) landed.sequence = ask.sequence;
+            if (ask.step !== undefined) landed.step = ask.step;
             landed.at = yield* Clock.currentTimeMillis;
             fellBack(landed, ask.from, ask.why);
             if (incarnation !== undefined) {
@@ -2000,12 +2116,16 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         const adapter = adapterFor(launched.harness);
         const prefix = personaPrefix(adapter, yield* personaOf(ask.persona ?? ask.role));
         const file = promptFile(ask);
+        const notes =
+          ask.step === undefined
+            ? ""
+            : yield* takeStepNotes(`${host.dir}/runs/${ask.runId}`, ask.step.step, file);
         // Written before it goes out and never rewritten: what a human reads to see what
         // was actually asked, rather than what a prompt would be built as now.
         const address = `You are ${agent} of ${ask.runId} on ${machineName()}. Message another Run's agent with collie_do deliver to its Run and agent, or collie run steer <run> --operation <agent> "<words>"; push your branch before starting work on another Machine. ${READING_DELIVERIES} ${SHELL_HABITS}`;
         yield* write(
           file,
-          `${address}\n\n${prefix === "" ? ask.prompt : `${prefix}\n\n${ask.prompt}`}`,
+          `${notes === "" ? "" : `${notes}\n\n`}${address}\n\n${prefix === "" ? ask.prompt : `${prefix}\n\n${ask.prompt}`}`,
         );
         if (!alive || !replayed) {
           const late = yield* awaitReady(
@@ -2047,7 +2167,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         // The sender reads a failed listing as no agent, so only one that answers settles it.
         if (alive && asked.gone === true) {
           const again = yield* host.herdr.agentList().pipe(Effect.result);
-          if (again._tag === "Success" && !again.success.some((one) => one.name === agent)) {
+          if (again._tag === "Success" && isGone(agent, again.success, asked.why)) {
             // Nothing reached it, so a new one is this work's agent rather than a second.
             yield* log(
               ask.runId,
@@ -2064,12 +2184,8 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         if (asked.refused) {
           return yield* refusedWith(ask, `${agent} was not given its work (${asked.why})`, file);
         }
-        if (!asked.sent) {
-          return yield* new AgentUncertain({
-            operation: ask.operation,
-            reason: `${agent} was not given its work (${asked.why})`,
-          });
-        }
+        if (!asked.sent)
+          return yield* unsettled(ask, `${agent} was not given its work (${asked.why})`);
         yield* log(
           ask.runId,
           `${agent}: ${alive ? "reattached to" : "launched for"} ${ask.operation}`,
@@ -2409,13 +2525,19 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         if (written.trim() !== "" && written !== unless) return false;
         const agent = agentName(ask.runId, ask.agent ?? ask.operation, null, ask.sequence ?? 1);
         const listing = yield* host.herdr.agentList().pipe(Effect.option);
-        if (listing._tag === "None" || listing.value.some((one) => one.name === agent))
-          return false;
+        if (listing._tag === "None") return false;
+        // Asked only of one herdr lists: it has no delivery to say whether it is inactive.
+        const refusal = listing.value.some((one) => one.name === agent)
+          ? yield* host.herdr
+              .agentStatus(agent)
+              .pipe(Effect.match({ onFailure: herdrFailureReason, onSuccess: () => "" }))
+          : "";
+        if (!isGone(agent, listing.value, refusal)) return false;
         yield* log(
           ask.runId,
           `${agent}: gone before ${ask.operation} was written; starting it again`,
         );
-        yield* launch(ask);
+        yield* launch(ask, true);
         return true;
       }),
     );
@@ -2487,6 +2609,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         const dir = yield* controlDir(host.env.stateDir, launched.agent);
         const on = pinned(choiceOfLaunch(launched));
         let readAt = Number.NEGATIVE_INFINITY;
+        let resetsAt: string | null = null;
         for (;;) {
           const reported = yield* ranOutSince(dir, launched.at ?? 0);
           const now = yield* Clock.currentTimeMillis;
@@ -2503,13 +2626,16 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
                 : [own, ...machine.filter((one) => one.subscription !== own.subscription)];
             const judged = roomFor(readings, now)(on, undefined);
             exhausted = judged.room ? null : judged.why;
+            resetsAt = usedFor(readings, on, now)?.resetsAt ?? null;
           }
           if (reported !== null)
             return RanOut.make({
               why: exhausted ?? reported.why,
               transcript: reported.transcript,
+              resetsAt,
             });
-          if (exhausted !== null) return RanOut.make({ why: exhausted, transcript: null });
+          if (exhausted !== null)
+            return RanOut.make({ why: exhausted, transcript: null, resetsAt });
           yield* Effect.sleep(Duration.millis(host.pollMs ?? DEFAULT_POLL_MS));
         }
       }).pipe(Effect.orDie),
@@ -2659,6 +2785,9 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
             gone: true,
           };
         }
+        // After the step it is being given, so its work reaches it first.
+        const out = stepsGoingOut.get(launched.agent);
+        if (out !== undefined) yield* Deferred.await(out);
         const sent = yield* deliver(launched, options.text, {
           kind: "steer",
           ref: options.request,
@@ -2677,7 +2806,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           agent: launched.agent,
           delivered: false,
           detail: sent.why,
-          gone: !alive.some((one) => one.name === launched.agent),
+          gone: isGone(launched.agent, alive, sent.why),
         };
       }).pipe(
         Effect.catch((cause) =>
@@ -2717,10 +2846,22 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
     choose: (layers, { runId, operation }, spent = []) =>
       under(
         Effect.gen(function* () {
+          const raw = (yield* readConfig(host.env.userDir).pipe(
+            Effect.mapError((cause) => new WorkflowError({ reason: String(cause) })),
+          )).claude_subagents;
+          const policy =
+            raw === undefined
+              ? undefined
+              : yield* readSubagents(raw).pipe(
+                  Effect.mapError(
+                    (cause) => new WorkflowError({ reason: `claude_subagents: ${String(cause)}` }),
+                  ),
+                );
           const configured = {
             harness: host.harness,
             model: host.model,
             effort: host.effort,
+            claudeSubagents: policy,
           };
           const readings = yield* host.readings ?? Effect.succeed([]);
           const chain =
@@ -2776,6 +2917,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
             effort: held.effort ?? null,
             sequence: held.sequence ?? 1,
           };
+          if (held.claudeSubagents !== undefined) running.claudeSubagents = held.claudeSubagents;
           fellBack(running, held.from, held.why);
           return running;
         }),
@@ -3009,7 +3151,8 @@ const undeliverable = (cause: unknown) => ({
   ok: false as const,
   id: null,
   reason: "failed" as const,
-  detail: reason(cause),
+  // A tagged error's fields say what its empty message does not.
+  detail: reason(cause) || Formatter.formatJson(cause),
 });
 
 /**
@@ -3074,6 +3217,7 @@ const claudeSettings = (
   overlay: ClaudeOverlay,
   autoMode: AutoModeBlock,
   stem: string,
+  policy?: ClaudeSubagents,
 ) =>
   Effect.gen(function* () {
     const at = controls.indexOf("--settings");
@@ -3087,7 +3231,11 @@ const claudeSettings = (
             Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.JsonObject))),
             Effect.orDie,
           );
-    const merged = { ...mergeClaudeSettings(collie, overlay), autoMode: { ...autoMode } };
+    const merged = {
+      ...mergeClaudeSettings(collie, overlay),
+      autoMode: { ...autoMode },
+    };
+    if (policy !== undefined) Object.assign(merged, subagentSettings(policy));
     yield* write(path, `${encodeSettings(merged)}\n`);
     return passed === undefined ? [...controls, "--settings", path] : controls;
   });

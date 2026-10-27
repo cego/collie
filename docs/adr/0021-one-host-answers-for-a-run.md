@@ -72,6 +72,15 @@ again was still taken up. Request replay returns the recorded outcome without an
 send. The host, lifecycle, admission, and Desktop tests cover these judgments through
 the existing interfaces.
 
+**Amended 2026-10-26: a stop holds wherever a Run acts.** A stopped Run enters no Step:
+Step entry suspends on a stop as it does on a hold, across a host restart too, and a resume
+clears the stop before it wakes the Run. The host refuses to file or comment on an issue
+for a stopped Run. A check the host runs for it, and a `collie verify` its agent runs, is
+ended with its process group when the stop is seen and records nothing: the host's own
+check parks the Run, so a resume runs it again, and the agent is refused with a reason that
+names the stop. A check that survives by any other route keeps its Run's card working and
+its worktree out of cleanup until its record is gone.
+
 ## What this does not decide
 
 Collie's model-mediated steering — where a model proposes actions and a human confirms one by

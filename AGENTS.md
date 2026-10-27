@@ -79,7 +79,9 @@ here are in [`src/README.md`](src/README.md).
   [ADR-0011](docs/adr/0011-the-conversation-is-a-native-harness.md), [ADR-0032](docs/adr/0032-a-chat-starts-new-on-the-latest-opus.md),
   [ADR-0012](docs/adr/0012-the-boards-selection-is-an-explicit-chat-input.md), `src/chat.ts`, `src/toolkit.ts`,
   `src/selection.ts`, `src/statusline.ts`.
-- **Workflow module contract** → [`docs/sdk.md`](docs/sdk.md), `src/sdk.ts`, `src/output.ts`.
+- **Workflow module contract**, Steps and the Flow → [`docs/sdk.md`](docs/sdk.md),
+  [ADR-draft-a-step-is-declared-where-its-work-is-written](docs/adr/draft-a-step-is-declared-where-its-work-is-written.md),
+  `src/sdk.ts`, `src/steps.ts`, `src/flow.ts`, `src/flow-read.ts`, `src/output.ts`, `test/flow.test.ts`.
 - **Engine, loading, recovery** → [ADR-0014](docs/adr/0014-native-workflows-run-on-effects-own-engine.md),
   `src/engine.ts`, `test/engine.test.ts`.
 - **Naming, host tests** → [ADR-0028](docs/adr/0028-names-are-the-domains-and-the-proof-drives-the-shipped-host.md),
@@ -102,7 +104,8 @@ here are in [`src/README.md`](src/README.md).
   `src/flows.ts`, `test/lifecycle.test.ts`.
 - **Inputs, strategies** → [ADR-0019](docs/adr/0019-a-strategy-not-a-field-name.md), `src/strategies.ts`,
   `src/inputs.ts`, `test/strategies.test.ts`.
-- **Forge** (`glab`, `gh`) → [ADR-0050](docs/adr/0050-a-merge-request-is-its-forges.md),
+- **Forge** (`glab`, `gh`, `forges`) → [ADR-0050](docs/adr/0050-a-merge-request-is-its-forges.md),
+  [ADR-draft-a-forge-is-asked-over-http-with-its-clis-login](docs/adr/draft-a-forge-is-asked-over-http-with-its-clis-login.md),
   [`docs/internals.md`](docs/internals.md#the-forge-boundary), `src/forge/`, `test/support/forge.ts`,
   `test/forge.test.ts`, `test/forge-boundary.test.ts`.
 - **Agent launch, prompt, Output** → [ADR-0020](docs/adr/0020-an-agent-is-launched-once-and-its-output-is-decoded.md),
@@ -119,7 +122,11 @@ here are in [`src/README.md`](src/README.md).
   [`docs/workflows.md`](docs/workflows.md#release), `workflows/release.workflow.ts`,
   `workflows/release.gitlab.md`, `workflows/release.github.md`, `src/review-wait.ts`,
   `src/releasing.ts`, `src/landing.ts`, `test/release-content.test.ts`, `test/review-wait.test.ts`,
-  `test/landing.test.ts`, `test/support/baseline.ts`.
+  `test/landing.test.ts`, `test/support/baseline.ts`. A **Stage Run** →
+  [ADR-draft-an-open-merge-request-is-staged-by-a-run-of-its-own](docs/adr/draft-an-open-merge-request-is-staged-by-a-run-of-its-own.md),
+  [`docs/workflows.md`](docs/workflows.md#stage), `workflows/stage.workflow.ts`,
+  `workflows/stage.gitlab.md`, `workflows/stage.github.md`, and the claims and staging both
+  share, `workflows/staging.ts`; `test/stage-content.test.ts`.
 - **Rallies, checks as proof** → [ADR-0023](docs/adr/0023-a-rally-is-a-loop-and-a-claim-is-not-proof.md),
   [ADR-0055](docs/adr/0055-a-run-never-asks-to-run-its-checks.md),
   [`docs/sdk.md`](docs/sdk.md#reviewing-and-fixing-until-it-converges), `settleRound`, `test/rally.test.ts`.
@@ -135,7 +142,7 @@ here are in [`src/README.md`](src/README.md).
   `test/harness.test.ts`.
 - **Anything in `src/` that reads a workflow id** →
   [ADR-0029](docs/adr/0029-one-host-acts-for-a-run-and-a-workflows-name-decides-nothing.md),
-  `test/workflow-names.test.ts`, `test/baseline-unrelated.test.ts`.
+  `test/workflow-names.test.ts`, `test/baseline-unrelated-*.test.ts`.
 - **Execution, coordination, records** → [`docs/internals.md`](docs/internals.md), [`docs/adr/`](docs/adr).
 - **Install, keybindings, Control Plane** → [`docs/using.md`](docs/using.md).
 - **Release signing, installers, macOS** → [ADR-0048](docs/adr/0048-collie-is-released-for-macos-on-apple-silicon.md),

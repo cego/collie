@@ -4,19 +4,13 @@
 import { Effect, FileSystem, Option, Path, Schema, Stream } from "effect";
 import * as Base64 from "effect/encoding/Base64";
 import type { ChildProcessSpawner } from "effect/process";
-import {
-  HostRefused,
-  PART_BYTES,
-  RunDiff,
-  type DiffFile,
-  type RunDetail,
-  type RunFile,
-} from "./board-model";
+import { HostRefused, PART_BYTES, RunDiff, type DiffFile, type RunFile } from "./board-model";
 import { attachmentsDir } from "./attachments";
 import { handoffsDir } from "./handoffs";
 import { classifyWorkSource } from "./inputs";
 import { shell } from "./mr";
 import { forgeOfUrl } from "./forge/forge";
+import type { ForgeHttp } from "./forge/http";
 import { REVIEW_FILE } from "./output";
 import { settled, type RunFacts } from "./runs";
 import { workSourceOf } from "./strategies";
@@ -260,7 +254,7 @@ export const fetchRef = Effect.fn("RunDetail.fetchRef")(function* (
 ): Effect.fn.Return<
   RunFile,
   HostRefused,
-  FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
+  FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner | ForgeHttp
 > {
   const part = {
     offset: Math.max(0, range.offset),
@@ -373,10 +367,10 @@ const asJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
 /** The details now, then again each time `changed` says they may have moved, when they have. */
 // ponytail: every change rebuilds the whole detail, its diff included; rebuild per part if open drawers cost.
-export const followDetail = <E, R, R2>(
-  build: Effect.Effect<RunDetail | null, E, R>,
+export const followDetail = <A, E, R, R2>(
+  build: Effect.Effect<A, E, R>,
   changed: Stream.Stream<unknown, never, R2>,
-): Stream.Stream<RunDetail | null, E, R | R2> =>
+): Stream.Stream<A, E, R | R2> =>
   Stream.concat(Stream.make(undefined), changed).pipe(
     Stream.mapEffect(() => build),
     Stream.changesWith((a, b) => asJson(a) === asJson(b)),

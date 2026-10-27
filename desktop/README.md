@@ -6,6 +6,27 @@ root's `test/desktop-*.test.ts` and `test/flock-*.test.ts`; the view's logic in 
 
 ## The board and the record
 
+`src/shared/flow-strip.ts`'s `cardFlow` gives BoardCard its glyph groups, fold, label
+and accessible name. `FlowGlyph.vue` draws the eight states with Nuxt UI tokens.
+`src/shared/flow.ts` owns `selectNode`, `selectEntry`, `inspectorOf`, `openIn`,
+`flowKey`, `nodeName` and `flowAnnouncements`. `FlowMap`, `FlowInspector` and
+`FlowTab` render those decisions. `recordTabs` puts Flow first where the host sends
+one; RunRecord can keep that map while subscribing to an earlier Run of its Task.
+`src/shared/flow-actions.ts` maps the host's node and lane capabilities to labels,
+icons and existing Desktop routes; `nextMove` and `retryCaption` supply their context.
+`useFlowActions` dispatches those routes, and `FlowActions` and `FlowDecision` render
+the inspector's controls without deriving capabilities themselves.
+`src/shared/step-steering.ts` describes pause marks, unread badges and note lists;
+`src/shared/step-timing.ts` supplies elapsed and usual text to the inspector and hover.
+
+`src/shared/step-inspector.ts` scopes log lines and Verifications and chooses the
+initial part and available parts. `StepWork` reuses TerminalTab, LogTab and EvidenceTab;
+only the visible terminal holds its pane, keyed by Run and agent so a Step of another
+agent opens that agent's pane. `src/shared/flow-layout.ts` sizes `FlowWorkspace`'s rail
+and context column, stacks them on a narrow record and reads the Focus keys;
+`useFlowLayout` keeps the chosen sizes across records. `src/shared/terminal-size.ts`
+sends a terminal's size once a resize settles.
+
 | File                                    | What it owns                                                                                                                                                                                                                                           |
 | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `src/bun/machine.ts`                    | A Machine reached through `collie bridge`; `act` carries out an action, `Deliver` as one `deliver`, word for word (`test/desktop-deliver.test.ts`)                                                                                                     |

@@ -8,6 +8,7 @@ import { Effect, Fiber, FileSystem, Path, Result, Schedule, Schema } from "effec
 import { runEffect } from "./support/effect";
 import {
   credentials,
+  helleHolders,
   helleProjects,
   releaseClaim,
   resolveProject,
@@ -28,14 +29,19 @@ interface Fake {
   projects: {
     slug: string;
     group?: string;
+    shorthand?: string[] | null;
     holder?: { user_id: string; display_name: string };
     queue: { user_id: string }[];
   }[];
   /** Status to answer `GET /projects` with, for the failures that are refusals. */
   listStatus: number;
   meStatus: number;
-  /** What a claim answers, in the order claims arrive. */
-  claims: { position: number; already_queued: boolean }[];
+  /** What a claim answers, in the order claims arrive; `taken` is who got there first. */
+  claims: {
+    position: number;
+    already_queued: boolean;
+    taken?: { user_id: string; display_name: string };
+  }[];
   calls: string[];
 }
 let fake: Fake;
@@ -64,7 +70,8 @@ function serve() {
       const project = one ? fake.projects.find((p) => p.slug === one[1]) : undefined;
       if (!one || !project) return Response.json({ detail: "not found" }, { status: 404 });
       if (one[2] === "/claim") {
-        const answer = fake.claims.shift() ?? { position: 0, already_queued: false };
+        const { taken, ...answer } = fake.claims.shift() ?? { position: 0, already_queued: false };
+        if (taken) project.holder = taken;
         if (answer.position === 0) project.holder = { user_id: ME, display_name: "mk" };
         return Response.json(answer);
       }
@@ -100,7 +107,10 @@ const envFile = Effect.fn("test.envFile")(function* (token = "token-abc") {
   return file;
 });
 
-const project = (slug: string, group?: string): HelleProject => ({ slug, group: group ?? null });
+const project = (slug: string, group?: string, shorthand?: string[]): HelleProject => {
+  const named: HelleProject = { slug, group: group ?? null };
+  return shorthand === undefined ? named : { ...named, shorthand };
+};
 
 test("the token comes from the env file the MCP wrapper sources; the URL is always Helle's", () =>
   runEffect(
@@ -275,6 +285,58 @@ test("a repository that declares its projects is held to exactly those, and [] d
   expect(unknown._tag === "Unresolved" && unknown.why).toContain("gone");
 });
 
+const SHORTHANDS = [
+  project("spilnu", "spilnu/frontend", ["sn"]),
+  project("happytiger", "spilnu/frontend"),
+  project("playground", "spilnu/frontend"),
+  project("sneaky", "Players", ["sn"]),
+];
+
+test("a shorthand resolves an application and a deploy job to its project's slug, within the repository's group", () => {
+  expect(resolveProjects(SHORTHANDS, release({ applications: ["SN"] }))).toEqual({
+    _tag: "Projects",
+    slugs: ["spilnu"],
+  });
+  expect(resolveProjects(SHORTHANDS, release({ jobs: ["stage:sn", "stage:happytiger"] }))).toEqual({
+    _tag: "Projects",
+    slugs: ["happytiger", "spilnu"],
+  });
+});
+
+test("a repository whose own name is a project's shorthand resolves to that project", () => {
+  const projects = [project("frontend-web", "spilnu/frontend", ["web"]), project("monolith")];
+  expect(resolveProject(projects, "gitlab.cego.dk/spilnu/frontend/web", "web")).toEqual({
+    _tag: "Project",
+    slug: "frontend-web",
+  });
+  expect(resolveProject([project("monolith", undefined, ["mono"])], null, "mono")).toEqual({
+    _tag: "Project",
+    slug: "monolith",
+  });
+});
+
+test("a .collie/helle.json entry naming a shorthand resolves to its slug, and one neither slug nor shorthand is unknown", () => {
+  const inGroup = SHORTHANDS.filter((one) => one.group === "spilnu/frontend");
+  expect(resolveProjects(inGroup, release({ declared: ["sn", "playground"] }))).toEqual({
+    _tag: "Projects",
+    slugs: ["playground", "spilnu"],
+  });
+  const unknown = resolveProjects(inGroup, release({ declared: ["spil"] }));
+  expect(unknown._tag === "Unresolved" && unknown.why).toBe(
+    ".collie/helle.json names spil, which Helle does not know",
+  );
+});
+
+test("a shorthand two projects answer to is unresolved, naming both", () => {
+  const twice = [...SHORTHANDS, project("snake", "spilnu/frontend", ["sn"])];
+  for (const over of [{ applications: ["sn"] }, { jobs: ["stage:sn"] }, { declared: ["sn"] }]) {
+    const resolved = resolveProjects(twice, release(over));
+    expect(resolved._tag).toBe("Unresolved");
+    expect(resolved._tag === "Unresolved" && resolved.why).toContain("spilnu");
+    expect(resolved._tag === "Unresolved" && resolved.why).toContain("snake");
+  }
+});
+
 test("a claim an earlier release journaled reads as what it held, and holding none asks again", () => {
   const decode = Schema.decodeUnknownSync(ClaimedSchema);
   expect(decode({ slug: "spilnu" })).toEqual({ slugs: ["spilnu"] });
@@ -309,6 +371,7 @@ function gate(opts: {
   repositoryPath?: string | null;
   repoName?: string;
   deploys?: { applications: string[]; jobs: string[] } | null;
+  free?: boolean;
   claimed?: HelleClaim[];
   answer?: string | null;
   lines: string[];
@@ -328,6 +391,7 @@ function gate(opts: {
     repoName: opts.repoName ?? "spilnu",
     deploys: opts.deploys ?? null,
     declared: null,
+    free: opts.free ?? false,
     claimed: opts.claimed ?? [],
     record: (claim) => Effect.sync(() => void opts.recorded.push(claim)),
     forget: (slug) => Effect.sync(() => void opts.forgotten?.push(slug)),
@@ -488,6 +552,50 @@ test("a monorepo's release holds every application's project before it answers",
     }),
   ));
 
+test("a project Helle lists with no shorthand, or a null one, still resolves by its slug", () =>
+  runEffect(
+    Effect.gen(function* () {
+      fake.projects = [
+        { slug: "spilnu", group: "spilnu/frontend", shorthand: null, queue: [] },
+        { slug: "happytiger", group: "spilnu/frontend", queue: [] },
+      ];
+      const held = yield* gate({
+        file: yield* envFile(),
+        repositoryPath: "gitlab.cego.dk/spilnu/frontend/monorepo",
+        repoName: "monorepo",
+        deploys: { applications: ["spilnu", "happytiger"], jobs: [] },
+        lines: [],
+        recorded: [],
+      });
+      expect(held).toEqual({ _tag: "Held", slugs: ["happytiger", "spilnu"] });
+    }),
+  ));
+
+test("the gate claims, holds and gives back a project named by its shorthand through its slug's routes", () =>
+  runEffect(
+    Effect.gen(function* () {
+      fake.projects = [{ slug: "spilnu", group: "spilnu/frontend", shorthand: ["sn"], queue: [] }];
+      const lines: string[] = [];
+      const recorded: (HelleClaim | null)[] = [];
+      const held = yield* gate({
+        file: yield* envFile(),
+        repositoryPath: "gitlab.cego.dk/spilnu/frontend/monorepo",
+        repoName: "monorepo",
+        deploys: { applications: ["sn"], jobs: ["stage:sn"] },
+        lines,
+        recorded,
+      });
+      expect(held).toEqual({ _tag: "Held", slugs: ["spilnu"] });
+      expect(recorded).toEqual([{ slug: "spilnu", claim: "mine" }]);
+      expect(lines).toContain("✓ this Run holds spilnu");
+      yield* releaseClaim({ url: server.base, token: "token-abc" }, recorded[0]!.slug);
+      expect(fake.calls.filter((call) => call.startsWith("POST"))).toEqual([
+        "POST /api/v1/projects/spilnu/claim",
+        "POST /api/v1/projects/spilnu/release",
+      ]);
+    }),
+  ));
+
 test("someone else's claim on one project keeps the gate waiting, and the next is not queued for meanwhile", () =>
   runEffect(
     Effect.scoped(
@@ -526,6 +634,172 @@ test("someone else's claim on one project keeps the gate waiting, and the next i
         expect(yield* Fiber.join(fiber)).toEqual({ _tag: "Held", slugs: ["happytiger", "spilnu"] });
       }),
     ),
+  ));
+
+const DANN = { user_id: OTHER, display_name: "Dann" };
+const busyFrontend = () => [
+  { slug: "spilnu", group: "spilnu/frontend", shorthand: ["sn"], holder: DANN, queue: [] },
+  { slug: "happytiger", group: "spilnu/frontend", queue: [] },
+  {
+    slug: "playground",
+    group: "spilnu/frontend",
+    holder: { user_id: ME, display_name: "mk" },
+    queue: [],
+  },
+];
+const monorepo = {
+  repositoryPath: "gitlab.cego.dk/spilnu/frontend/monorepo",
+  repoName: "monorepo",
+};
+
+test("who holds: each needed project's holder is read, and no queue is joined", () =>
+  runEffect(
+    Effect.gen(function* () {
+      fake.projects = [
+        ...busyFrontend(),
+        { slug: "chat", group: "spilnu/frontend", queue: [{ user_id: OTHER }] },
+      ];
+      const read = yield* helleHolders({
+        home: "/nowhere",
+        envFile: yield* envFile(),
+        url: server.base,
+        ...monorepo,
+        deploys: {
+          applications: ["spilnu", "happytiger", "playground", "chat"],
+          jobs: ["stage:sn", "deploy happytiger/stage", "deploy-stage-chat", "e2e-stage"],
+        },
+        declared: null,
+      });
+      expect(read).toEqual({
+        _tag: "Read",
+        projects: [
+          { slug: "chat", holder: "2dd236ac-other" },
+          { slug: "happytiger", holder: null },
+          { slug: "playground", holder: null },
+          { slug: "spilnu", holder: "Dann" },
+        ],
+        applications: [
+          { name: "spilnu", needs: ["spilnu"] },
+          { name: "happytiger", needs: ["happytiger"] },
+          { name: "playground", needs: ["playground"] },
+          { name: "chat", needs: ["chat"] },
+        ],
+        jobs: [
+          { name: "stage:sn", applications: ["spilnu"] },
+          { name: "deploy happytiger/stage", applications: ["happytiger"] },
+          { name: "deploy-stage-chat", applications: [] },
+          { name: "e2e-stage", applications: [] },
+        ],
+      });
+      expect(fake.calls.filter((call) => call.startsWith("POST"))).toEqual([]);
+    }),
+  ));
+
+test("who holds: every application needs the repository's own project, and every declared one", () =>
+  runEffect(
+    Effect.gen(function* () {
+      fake.projects = [
+        ...busyFrontend(),
+        { slug: "monorepo", group: "spilnu/frontend", queue: [] },
+      ];
+      const where = {
+        home: "/nowhere",
+        envFile: yield* envFile(),
+        url: server.base,
+        ...monorepo,
+        deploys: { applications: ["spilnu", "happytiger"], jobs: [] },
+      };
+      const own = yield* helleHolders({ ...where, declared: null });
+      expect(own._tag === "Read" && own.applications).toEqual([
+        { name: "spilnu", needs: ["monorepo", "spilnu"] },
+        { name: "happytiger", needs: ["happytiger", "monorepo"] },
+      ]);
+      const declared = yield* helleHolders({ ...where, declared: ["happytiger", "playground"] });
+      expect(declared._tag === "Read" && declared.applications).toEqual([
+        { name: "spilnu", needs: ["happytiger", "playground"] },
+        { name: "happytiger", needs: ["happytiger", "playground"] },
+      ]);
+    }),
+  ));
+
+test("what is free: only the free projects are claimed, in Helle's order, and no queue is waited on", () =>
+  runEffect(
+    Effect.gen(function* () {
+      fake.projects = busyFrontend().slice(0, 2);
+      const recorded: (HelleClaim | null)[] = [];
+      const held = yield* gate({
+        file: yield* envFile(),
+        ...monorepo,
+        deploys: { applications: ["spilnu", "happytiger"], jobs: [] },
+        free: true,
+        lines: [],
+        recorded,
+      }).pipe(Effect.timeout("2 seconds"));
+
+      expect(held).toEqual({
+        _tag: "Held",
+        slugs: ["happytiger"],
+        left: [{ slug: "spilnu", holder: "Dann" }],
+      });
+      expect(recorded).toEqual([{ slug: "happytiger", claim: "mine" }]);
+      expect(fake.calls.filter((call) => call.startsWith("POST"))).toEqual([
+        "POST /api/v1/projects/happytiger/claim",
+      ]);
+    }),
+  ));
+
+test("what is free: a project someone took before the claim came back queued is given back and named with its holder", () =>
+  runEffect(
+    Effect.gen(function* () {
+      fake.projects = busyFrontend().slice(1, 2);
+      fake.claims = [{ position: 1, already_queued: false, taken: DANN }];
+      const forgotten: string[] = [];
+      const held = yield* gate({
+        file: yield* envFile(),
+        ...monorepo,
+        deploys: { applications: ["happytiger"], jobs: [] },
+        free: true,
+        lines: [],
+        recorded: [],
+        forgotten,
+      }).pipe(Effect.timeout("2 seconds"));
+
+      expect(held).toEqual({
+        _tag: "Held",
+        slugs: [],
+        left: [{ slug: "happytiger", holder: "Dann" }],
+      });
+      expect(fake.calls.filter((call) => call.startsWith("POST"))).toEqual([
+        "POST /api/v1/projects/happytiger/claim",
+        "POST /api/v1/projects/happytiger/release",
+      ]);
+      expect(forgotten).toEqual(["happytiger"]);
+    }),
+  ));
+
+test("what is free: a project the operator already holds counts as free once they adopt it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      fake.projects = busyFrontend();
+      fake.claims = [{ position: 0, already_queued: true }];
+      const recorded: (HelleClaim | null)[] = [];
+      const held = yield* gate({
+        file: yield* envFile(),
+        ...monorepo,
+        deploys: { applications: ["spilnu", "playground"], jobs: [] },
+        free: true,
+        answer: "yes",
+        lines: [],
+        recorded,
+      }).pipe(Effect.timeout("2 seconds"));
+
+      expect(held).toEqual({
+        _tag: "Held",
+        slugs: ["playground"],
+        left: [{ slug: "spilnu", holder: "Dann" }],
+      });
+      expect(recorded).toEqual([{ slug: "playground", claim: "adopted" }]);
+    }),
   ));
 
 test("a claim lost while the gate waited for the next gives the later ones back and takes them again in order", () =>

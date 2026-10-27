@@ -1,7 +1,9 @@
 import { expect, test } from "bun:test";
 import { Config, Effect, FileSystem, Option, Schema } from "effect";
+import { FakeBin } from "./support/bin";
 import { exec } from "./support/command";
 import { runEffect, suiteEnv } from "./support/effect";
+import { forgeOnPath, serveForges } from "./support/forge";
 import { stopHost } from "./support/host";
 import { installFakeSkills } from "./support/defs";
 import { testBunfig } from "./support/packages";
@@ -409,7 +411,7 @@ test(
         const bin = yield* fs.makeTempDirectoryScoped({ prefix: "collie-bin-" });
         const checkout = join(bin, "project");
         yield* fs.makeDirectory(checkout);
-        yield* exec(["git", "init", "-q"], { cwd: checkout });
+        yield* exec(["git", "init", "-q", "-b", "main"], { cwd: checkout });
         yield* exec(
           [
             "git",
@@ -428,14 +430,26 @@ test(
         yield* exec(["git", "remote", "add", "origin", "git@gitlab.example.com:group/app.git"], {
           cwd: checkout,
         });
-        yield* fs.writeFileString(
-          join(bin, "glab"),
-          `#!/bin/sh\necho '[{"iid": 42, "state": "opened", "title": "t"}]'\n`,
-          { mode: 0o755 },
-        );
+        const fake = yield* FakeBin.make(join(bin, "fake"));
+        const gitlab = yield* forgeOnPath(fake, "gitlab", {
+          installed: true,
+          loggedIn: ["gitlab.example.com"],
+          login: "me",
+          mrs: [
+            {
+              project: "gitlab.example.com/group/app",
+              iid: "42",
+              state: "open",
+              title: "t",
+              sourceBranch: "main",
+            },
+          ],
+        });
+        const COLLIE_FORGE_API = yield* serveForges(gitlab);
+        yield* fake.restore();
         const bare = yield* cli(
           ["--json", "run", "start", "review", "--input", "plan=", "--input", "proves="],
-          { PATH: `${bin}:/usr/bin:/bin`, COLLIE_CWD: checkout },
+          { PATH: `${fake.dir}:/usr/bin:/bin`, COLLIE_CWD: checkout, COLLIE_FORGE_API },
         );
         expect(yield* parseEnvelope(bare.stdout)).toMatchObject({
           ok: false,

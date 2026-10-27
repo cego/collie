@@ -33,7 +33,7 @@ export function reached(
 export type FollowEvent =
   | { readonly type: "agent"; readonly agent: string; readonly operation: string }
   | {
-      readonly type: "step";
+      readonly type: "operation";
       readonly operation: string;
       readonly agent: string;
       readonly state: "started" | "finished";
@@ -64,14 +64,14 @@ export function followEvents(before: Followed, after: Followed): ReadonlyArray<F
       }
       if (prior === undefined)
         events.push({
-          type: "step",
+          type: "operation",
           operation: step.operation,
           agent: step.agent,
           state: "started",
         });
       if (step.done && prior?.done !== true)
         events.push({
-          type: "step",
+          type: "operation",
           operation: step.operation,
           agent: step.agent,
           state: "finished",
@@ -98,8 +98,8 @@ export function followLine(runId: string, event: FollowEvent): string {
   switch (event.type) {
     case "agent":
       return `${runId}: agent ${event.agent} launched for ${event.operation}`;
-    case "step":
-      return `${runId}: step ${event.operation} ${event.state}`;
+    case "operation":
+      return `${runId}: operation ${event.operation} ${event.state}`;
     case "parked":
       return `${runId}: parked: ${event.reason}`;
     case "awaiting":

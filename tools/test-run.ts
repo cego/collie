@@ -1,8 +1,11 @@
-// What a `bun run test` invocation is. One that names files or `--changed` is targeted: it
-// needs few cores and, built into a directory of its own, shares nothing with a whole suite,
-// so it takes no turn. Anything else is the whole suite.
+// What a `bun run test` invocation is, and what it holds from the Machine's budget. One that
+// names files or `--changed` is targeted: it builds into a directory of its own, shares nothing
+// with a whole suite, and takes its workers from the budget's reserve. Anything else is the
+// whole suite.
 
+import { loadavg } from "node:os";
 import { type Duration, Effect, FileSystem, Path } from "effect";
+import { admitted, type Budget, type Kind, shareOf } from "./budget";
 import { inTurn } from "./suite-lock";
 
 const exists = (path: string) =>
@@ -44,14 +47,43 @@ export const isTargeted = (args: ReadonlyArray<string>) => {
   ).pipe(Effect.map((each) => each.includes(true)));
 };
 
-/** Runs `run` at once when targeted, and in the suite's turn otherwise. */
+/** What a run asks of the budget, and its arguments less the `--parallel` it is given instead. */
+export const requestOf = (args: ReadonlyArray<string>, budget: Budget, targeted: boolean) => {
+  const kind: Kind = targeted ? "small" : "whole";
+  const operands = args.indexOf("--");
+  const isWorkers = (arg: string, at: number) =>
+    (operands === -1 || at < operands) &&
+    !TAKES_VALUE.has(args[at - 1] ?? "") &&
+    (arg === "--parallel" || arg.startsWith("--parallel="));
+  const given = args.findLast(isWorkers);
+  const asked =
+    given === undefined
+      ? targeted
+        ? 2
+        : shareOf(budget, kind)
+      : given === "--parallel"
+        ? shareOf(budget, kind)
+        : Number(given.slice("--parallel=".length));
+  return { kind, asked, args: args.filter((arg, at) => !isWorkers(arg, at)) };
+};
+
+/**
+ * Runs `run` on a hold from the budget. A whole suite then also takes the old suite lock, so
+ * a whole suite from a checkout without the budget still waits for it, and it for that one.
+ */
 export const turnFor = <A, E, R>(
-  targeted: boolean,
+  request: { readonly kind: Kind; readonly asked: number },
+  dir: string,
+  budget: Budget,
   lock: string,
-  run: Effect.Effect<A, E, R>,
+  run: (hold: Effect.Success<ReturnType<typeof admitted>>) => Effect.Effect<A, E, R>,
   say: (line: string) => Effect.Effect<void>,
   every?: Duration.Input,
-) => (targeted ? run : inTurn(lock, run, say, every));
+) =>
+  Effect.gen(function* () {
+    const hold = yield* admitted(dir, budget, request.kind, request.asked, say, every);
+    return yield* request.kind === "small" ? run(hold) : inTurn(lock, run(hold), say, every);
+  }).pipe(Effect.scoped);
 
 /** Where the executables are built: a targeted run's own, removed with its scope. */
 export const binDirectory = (targeted: boolean) =>
@@ -66,41 +98,6 @@ export const timingFlags = (targeted: boolean, timings: string, seed: string) =>
     ? Effect.map(exists(timings), (there) => [`--timings=${there ? timings : seed}`])
     : Effect.succeed([`--timings=${timings}`, "--update-timings"]);
 
-type CpuSample = ReadonlyArray<{ readonly times: Readonly<Record<string, number>> }>;
-
-const totals = (sample: CpuSample) =>
-  sample.reduce(
-    (sum, { times }) => {
-      const all = Object.values(times).reduce((a, b) => a + b, 0);
-      return { idle: sum.idle + times.idle!, all: sum.all + all };
-    },
-    { idle: 0, all: 0 },
-  );
-
-/**
- * How many workers `bun test` gets: the caller's `--parallel` before any `--`, or the cores
- * idle between two `os.cpus()` samples, rounded and held to `[2, cores]`.
- */
-export const workersFor = (
-  args: ReadonlyArray<string>,
-  before: CpuSample,
-  after: CpuSample,
-  cores: number,
-) => {
-  const operands = args.indexOf("--");
-  const given = (operands === -1 ? args : args.slice(0, operands)).find(
-    (arg) => arg === "--parallel" || arg.startsWith("--parallel="),
-  );
-  if (given)
-    return { workers: "caller" as const, line: `test: workers as the caller's ${given} says` };
-  const start = totals(before);
-  const end = totals(after);
-  const all = end.all - start.all;
-  const free = all > 0 ? (cores * (end.idle - start.idle)) / all : cores;
-  const workers = Math.min(cores, Math.max(2, Math.round(free)));
-  return { workers, line: `test: ${workers} workers (${free.toFixed(1)} of ${cores} cores free)` };
-};
-
 export const startsSummary = (starts: string) => {
   const lines = starts.split("\n").filter((line) => line !== "");
   const counts = new Map<string, number>();
@@ -110,4 +107,61 @@ export const startsSummary = (starts: string) => {
     .slice(0, 10)
     .map(([source, count]) => `${String(count).padStart(7)}  ${source}`);
   return [`test: ${lines.length} processes started`, ...largest];
+};
+
+export interface Pressure {
+  /** `/proc/pressure/cpu`'s `some avg60`, or null where the Machine has no such file. */
+  readonly psi: number | null;
+  readonly load: number;
+}
+
+export const pressureAt = (path = "/proc/pressure/cpu") =>
+  Effect.flatMap(FileSystem.FileSystem, (fs) => fs.readFileString(path)).pipe(
+    Effect.map((text) => {
+      const avg60 = text.match(/^some .*avg60=([0-9.]+)/m)?.[1];
+      return avg60 === undefined ? null : Number(avg60);
+    }),
+    Effect.orElseSucceed(() => null),
+    Effect.map((psi): Pressure => ({ psi, load: loadavg()[0]! })),
+  );
+
+const seconds = (value: number) => `${value.toFixed(2)} s`;
+const psiOf = (pressure: Pressure) =>
+  pressure.psi === null ? "not available" : `${pressure.psi.toFixed(2)} %`;
+
+export const report = (run: {
+  readonly queued: number;
+  readonly built: number;
+  readonly ran: number;
+  readonly workers: number;
+  readonly budget: Budget;
+  /** A whole suite's per-file milliseconds, from the timings it updated. */
+  readonly timings: Readonly<Record<string, number>> | null;
+  readonly starts: string;
+  readonly admitted: Pressure;
+  readonly ended: Pressure;
+}) => {
+  const { budget } = run;
+  const files = Object.entries(run.timings ?? {}).toSorted(([, a], [, b]) => b - a);
+  const longest = files[0];
+  const summed = files.reduce((sum, [, ms]) => sum + ms, 0) / 1_000;
+  const kept =
+    shareOf(budget, "small") === budget.total
+      ? "shared by every run"
+      : `${budget.reserve} of it kept for small runs`;
+  return [
+    `test: queued ${seconds(run.queued)}, built ${seconds(run.built)}, ran ${seconds(run.ran)}`,
+    `test: ${run.workers} workers of a budget of ${budget.total}, ${kept}`,
+    ...(longest === undefined
+      ? []
+      : [
+          `test: longest file ${longest[0]} at ${seconds(longest[1] / 1_000)}, ${Math.round(
+            (100 * longest[1]) / 1_000 / run.ran,
+          )} % of the run; per-file time summed ${seconds(summed)}`,
+        ]),
+    ...startsSummary(run.starts),
+    `test: CPU pressure (some avg60) ${psiOf(run.admitted)} at admission, ${psiOf(run.ended)} at the end`,
+    `test: 1-minute load ${run.admitted.load.toFixed(2)} at admission, ${run.ended.load.toFixed(2)} at the end`,
+    `test: ${seconds(run.built + run.ran)} including builds`,
+  ];
 };

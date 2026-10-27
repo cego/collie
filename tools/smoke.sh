@@ -46,6 +46,7 @@ envelope "invalid input" 2 '^{"ok":false' workflow show
 # this binary. A release that lost either would only fail at the next agent launch, in
 # someone else's session — so the binary is asked to be that helper here.
 grep -q "collie-compact" "$BIN" || fail "the binary does not carry its bundled compaction controls"
+bun run "$ROOT/tools/smoke-forge.ts" "$BIN" || fail "the compiled forge read failed"
 CONTROLS="$STATE/controls"
 mkdir -p "$CONTROLS"
 line=$(echo '{"session_id":"smoke","context_window":{"total_input_tokens":9,"total_output_tokens":1,"used_percentage":3,"current_usage":{"input_tokens":9}}}' \
@@ -103,4 +104,4 @@ placed=$(sed -n 's/^version = "\(.*\)"/\1/p' "$PLACE/dir/release/herdr-plugin.to
 [ "$placed" = "$own" ] || fail "the placed release is $placed, not the runner's own $own"
 [ -x "$PLACE/dir/release/bin/collie" ] || fail "the placed release has no runner"
 
-echo "smoke: $BIN answered --help, one JSON success and two typed failures, served its own compaction helper and placed its release"
+echo "smoke: $BIN answered --help, one JSON success and two typed failures, read its forge, served its own compaction helper and placed its release"

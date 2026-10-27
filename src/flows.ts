@@ -94,6 +94,7 @@ import { buildHistory, buildSettings, buildWorkflows } from "./views";
 import { nowIso } from "./time";
 import { shell } from "./mr";
 import { forgeOf } from "./forge/forge";
+import { forgeHttpLayer } from "./forge/http";
 import { parseMrTarget, readMrRef } from "./board-model";
 import type { ChildProcessSpawner } from "effect/process";
 import {
@@ -581,7 +582,10 @@ const infer = Effect.fn("Flows.infer")(function* (
     runs: yield* listRuns(env),
     task: opts.task.mode === "continue" ? opts.task.task.id : null,
     gitlabHost: yield* gitlabHostOf(env).pipe(Effect.orElseSucceed(() => undefined)),
-  }).pipe(Effect.orElseSucceed(() => null));
+  }).pipe(
+    Effect.provide(forgeHttpLayer),
+    Effect.orElseSucceed(() => null),
+  );
   if (settled === null || settled.needsAsking || settled.value === "") return null;
   return settled;
 });

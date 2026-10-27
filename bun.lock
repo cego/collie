@@ -12,6 +12,7 @@
         "@opentui/solid": "^0.5.14",
         "comark": "0.7.0",
         "effect": "4.0.1",
+        "forges": "0.2.0",
         "solid-js": "^1.9.16",
       },
       "devDependencies": {
@@ -394,6 +395,8 @@
     "find-babel-config": ["find-babel-config@2.1.2", "", { "dependencies": { "json5": "^2.2.3" } }, "sha512-ZfZp1rQyp4gyuxqt1ZqjFGVeVBvmpURMqdIWXbPRfB97Bf6BzdK/xSIbylEINzQ0kB5tlDQfn9HkNXXWsqTqLg=="],
 
     "find-up": ["find-up@3.0.0", "", { "dependencies": { "locate-path": "^3.0.0" } }, "sha512-1yD6RmLI1XBfxugvORwlck6f75tYL+iR0jqwsOrOxMZyGYqUuDhJ0l4AXdO1iX/FTs9cBAMEk1gWSEx1kSbylg=="],
+
+    "forges": ["forges@0.2.0", "", {}, "sha512-n7r9408sEp5U53P7JalJ0bPxqUO7uR0WXQ3HyWTcJc/M2ItXL+mDSUALU7cz4Uig0zNWBAOE68ITPjSVoFktww=="],
 
     "forwarded": ["forwarded@0.2.0", "", {}, "sha512-buRG0fpBtRHSTCOASe6hD258tEubFoRLb4ZNA6NxMVHNw2gOcwHo9wyablzMzOA5z9xA9L1KNjk/Nt6MT9aYow=="],
 

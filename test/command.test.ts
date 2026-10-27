@@ -109,10 +109,17 @@ test("interrupting a fixture command escalates when its leader ignores SIGTERM",
         const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-command-wedged-" });
         const pidFile = `${dir}/pid`;
         const running = yield* Effect.forkScoped(
-          exec(["/bin/sh", "-c", 'trap "" TERM; echo $$ > "$1"; sleep 60', "sh", pidFile]),
+          exec([
+            "/bin/sh",
+            "-c",
+            'trap "" TERM; echo $$ > "$1.next"; mv "$1.next" "$1"; sleep 60',
+            "sh",
+            pidFile,
+          ]),
         );
         yield* until(() => fs.exists(pidFile).pipe(Effect.orDie), Boolean);
         const pid = Number(yield* fs.readFileString(pidFile));
+        expect(pid).toBeGreaterThan(0);
         expect(alive(pid)).toBe(true);
         yield* Fiber.interrupt(running);
         expect(alive(pid)).toBe(false);

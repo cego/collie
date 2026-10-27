@@ -31,7 +31,10 @@ const installation = "check-processes-test-installation";
 /** A state directory, a directory the check notes its pids in, and the host's adapter. */
 const worldWith = (
   options: Omit<Parameters<typeof hostCheckProcesses>[0], "dir" | "installation"> = {},
-  adapterFs?: FileSystem.FileSystem,
+  adapters: {
+    readonly fileSystem?: FileSystem.FileSystem;
+    readonly spawner?: ReturnType<typeof ChildProcessSpawner.make>;
+  } = {},
 ) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -40,8 +43,10 @@ const worldWith = (
     const notes = `${root}/notes`;
     yield* fs.makeDirectory(state, { recursive: true });
     yield* fs.makeDirectory(notes, { recursive: true });
+    const spawner = adapters.spawner ?? (yield* ChildProcessSpawner.ChildProcessSpawner);
     const checks = yield* hostCheckProcesses({ dir: state, installation, ...options }).pipe(
-      Effect.provideService(FileSystem.FileSystem, adapterFs ?? fs),
+      Effect.provideService(FileSystem.FileSystem, adapters.fileSystem ?? fs),
+      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
     );
     return { root, state, notes, checks };
   });
@@ -446,40 +451,31 @@ interface Gate {
   readonly release: Deferred.Deferred<void>;
 }
 
-/** A FileSystem whose first `stat` read of the check given `armed`'s directory waits for `release`; no other check's, which the pre-spawn sweep reads. */
-const gatedStat = Effect.gen(function* () {
-  const fs = yield* FileSystem.FileSystem;
+const gatedSpawn = Effect.gen(function* () {
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const gate: Gate = {
     armed: null,
     reached: yield* Deferred.make<void>(),
     release: yield* Deferred.make<void>(),
   };
-  const gated: FileSystem.FileSystem = {
-    ...fs,
-    readFileString: (path, encoding) => {
-      if (gate.armed === null || !/^\/proc\/\d+\/stat$/.test(path))
-        return fs.readFileString(path, encoding);
-      const proc = path.replace(/stat$/, "");
-      return Effect.all([
-        fs.readFileString(`${proc}environ`).pipe(Effect.orElseSucceed(() => "")),
-        fs.readFileString(`${proc}cmdline`).pipe(Effect.orElseSucceed(() => "")),
-      ]).pipe(
-        Effect.flatMap(([environ, cmdline]) => {
+  const gated = ChildProcessSpawner.make((command) =>
+    spawner.spawn(command).pipe(
+      Effect.tap(() =>
+        Effect.suspend(() => {
           if (
             gate.armed === null ||
-            !environ.includes(`${CHECK_INSTALLATION}=${installation}\0`) ||
-            !cmdline.split("\0").includes(gate.armed)
+            command._tag !== "StandardCommand" ||
+            !command.args.includes(gate.armed)
           )
-            return fs.readFileString(path, encoding);
+            return Effect.void;
           gate.armed = null;
           return Deferred.succeed(gate.reached, undefined).pipe(
             Effect.andThen(Deferred.await(gate.release)),
-            Effect.andThen(fs.readFileString(path, encoding)),
           );
         }),
-      );
-    },
-  };
+      ),
+    ),
+  );
   return { gate, gated };
 });
 
@@ -497,10 +493,11 @@ test.skipIf(process.platform !== "linux")(
   () =>
     runEffect(
       Effect.gen(function* () {
-        const { gate, gated } = yield* gatedStat;
-        const { state, notes, checks } = yield* worldWith({}, gated);
+        const { gate, gated } = yield* gatedSpawn;
+        const { state, notes, checks } = yield* worldWith({}, { spawner: gated });
         gate.armed = notes;
         const running = yield* runHeld(checks, notes);
+        yield* Effect.addFinalizer(() => Deferred.succeed(gate.release, undefined));
         yield* Deferred.await(gate.reached);
         const ones = yield* startedIn(notes);
 
@@ -539,10 +536,11 @@ test.skipIf(process.platform !== "linux")(
   () =>
     runEffect(
       Effect.gen(function* () {
-        const { gate, gated } = yield* gatedStat;
-        const { notes, checks } = yield* worldWith({}, gated);
+        const { gate, gated } = yield* gatedSpawn;
+        const { notes, checks } = yield* worldWith({}, { spawner: gated });
         gate.armed = notes;
         const exit = yield* runHeld(checks, notes);
+        yield* Effect.addFinalizer(() => Deferred.succeed(gate.release, undefined));
         yield* Deferred.await(gate.reached);
         const ones = yield* startedIn(notes);
 
@@ -567,10 +565,11 @@ test.skipIf(process.platform !== "linux")(
   () =>
     runEffect(
       Effect.gen(function* () {
-        const { gate, gated } = yield* gatedStat;
-        const { notes, checks } = yield* worldWith({}, gated);
+        const { gate, gated } = yield* gatedSpawn;
+        const { notes, checks } = yield* worldWith({}, { spawner: gated });
         gate.armed = notes;
         yield* runHeld(checks, notes);
+        yield* Effect.addFinalizer(() => Deferred.succeed(gate.release, undefined));
         yield* Deferred.await(gate.reached);
         const ones = yield* startedIn(notes);
 
@@ -592,8 +591,8 @@ test.skipIf(process.platform !== "linux")(
   () =>
     runEffect(
       Effect.gen(function* () {
-        const { gate, gated } = yield* gatedStat;
-        const { notes, checks } = yield* worldWith({}, gated);
+        const { gate, gated } = yield* gatedSpawn;
+        const { notes, checks } = yield* worldWith({}, { spawner: gated });
         gate.armed = notes;
         yield* runHeld(checks, notes);
         // Before the check's own finalizer, which waits for it.
@@ -618,8 +617,8 @@ test.skipIf(process.platform !== "linux")(
     runEffect(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
-        const { gate, gated } = yield* gatedStat;
-        const { root, notes, checks } = yield* worldWith({}, gated);
+        const { gate, gated } = yield* gatedSpawn;
+        const { root, notes, checks } = yield* worldWith({}, { spawner: gated });
         const others = `${root}/others`;
         yield* fs.makeDirectory(others);
         yield* leftBehind(others, { installation, id: "run-2@1-left" });
@@ -641,6 +640,7 @@ test.skipIf(process.platform !== "linux")(
           Effect.timeoutOption("2 seconds"),
         );
         expect(Option.isSome(gone)).toBe(true);
+        expect(yield* Effect.forEach(another, stillRunning)).toEqual([true, true]);
       }),
     ),
   30_000,
@@ -663,7 +663,7 @@ test.skipIf(process.platform !== "linux")(
             );
           },
         };
-        const { notes, checks } = yield* worldWith({}, slow);
+        const { notes, checks } = yield* worldWith({}, { fileSystem: slow });
         yield* Effect.addFinalizer(() => Deferred.succeed(listing.release, undefined));
         yield* runHeld(checks, notes);
         const ones = yield* startedIn(notes);
@@ -697,7 +697,7 @@ for (const { delay, grace } of [
                   )
                 : fs.readDirectory(path, options),
           };
-          const { notes, checks } = yield* worldWith({}, slow);
+          const { notes, checks } = yield* worldWith({}, { fileSystem: slow });
           yield* Effect.forkScoped(
             Effect.scoped(
               checks
@@ -715,6 +715,41 @@ for (const { delay, grace } of [
       ),
     30_000,
   );
+
+test.skipIf(process.platform !== "linux")(
+  "slow reads of unrelated processes do not leave a check's child alive after its host stops",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const unrelated = Array.from({ length: 40 }, (_, i) => String(2 ** 22 + i));
+        let slow = false;
+        const proc: FileSystem.FileSystem = {
+          ...fs,
+          readDirectory: (path, options) =>
+            fs
+              .readDirectory(path, options)
+              .pipe(Effect.map((names) => (path === "/proc" ? [...unrelated, ...names] : names))),
+          readFileString: (path, encoding) => {
+            const read = fs.readFileString(path, encoding);
+            return slow && unrelated.some((pid) => path === `/proc/${pid}/stat`)
+              ? Effect.sleep("100 millis").pipe(Effect.andThen(read))
+              : read;
+          },
+        };
+        const { notes, checks } = yield* worldWith({}, { fileSystem: proc });
+        yield* runHeld(checks, notes);
+        const ones = yield* startedIn(notes);
+
+        slow = true;
+        yield* endAllWithin(checks, Duration.seconds(2), () => Effect.void).pipe(
+          Effect.ensuring(Effect.sync(() => (slow = false))),
+        );
+        expect(yield* noneRunning(ones)).toBe(true);
+      }),
+    ),
+  30_000,
+);
 
 test.skipIf(process.platform !== "linux")(
   "a child that leaves its check's group after the SIGTERM's look is killed before the stop ends",
@@ -738,7 +773,7 @@ test.skipIf(process.platform !== "linux")(
             });
           },
         };
-        const { notes, checks } = yield* worldWith({}, slow);
+        const { notes, checks } = yield* worldWith({}, { fileSystem: slow });
         yield* Effect.addFinalizer(() =>
           fs.writeFileString(`${notes}/release`, "").pipe(Effect.ignore),
         );

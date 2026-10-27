@@ -27,17 +27,36 @@ For larger work, break it into manageable pieces yourself.
 Glossary (`CONTEXT.md`) and ADR changes we agree on go into the repository as we agree
 them — they are domain knowledge. Nothing else does.
 
-Choose the result kind from the task: `feature`, `bug`, `refactor`, `investigation`,
-`docs` or `migration`. Leave it empty if none fits; this is metadata, not another question.
+Choose the result kind from the task; this is metadata, not another question. Each one
+decides what the build has to prove before it opens its merge request:
+
+- `feature` — every ticket built, and a reviewer saying the agreed scope was met.
+- `bug` — a `regression` verification that fails before the fix and passes after it.
+- `refactor` — a reviewer saying behaviour was preserved. Not for a change that alters
+  behaviour on purpose.
+- `investigation` — a conclusion with evidence inside the run, and a reviewer saying it
+  holds; there may be no patch.
+- `docs` — every documented command run and passing, and a reviewer saying the
+  instructions are accurate.
+- `migration` — passing `migrate-up` and `migrate-down` (or `rollback`) verifications, and
+  a reviewer saying it is compatible both ways.
+
+Leave it empty if none fits: then only the run's checks have to pass. A wrong kind can be
+changed later with `collie run intent set-outcome`.
 
 Then write your Output, with what we settled under `decided`.
 
 ## spec
 
-You were started with {{skill:to-spec}}. Write the spec to `{{run.dir}}/plan/SPEC.md`. It has the problem in one
-paragraph, what is explicitly out of scope, the ordered work with the seams that want
+You were started with {{skill:to-spec}}. Write the spec to `{{run.dir}}/plan/SPEC.md`. It opens with an
+`## Objective`: one paragraph saying what the plan's Runs are to achieve, which each of them
+takes as its goal. It has the problem in one paragraph, what is explicitly out of scope, the ordered work with the seams that want
 tests, and how we will know the whole thing works. The tickets carry each piece's detail
 and acceptance criteria, so the spec does not restate them.
+
+Where the work follows a design artifact known by a URL — a mock-up, a diagram, a design
+page — save a copy of it under `{{run.dir}}/plan/design/` and name that path in the spec
+before the URL: a link may change or close, and the implement Run reads the copy.
 
 Then write your Output, naming the spec you wrote.
 
@@ -45,7 +64,9 @@ Then write your Output, naming the spec you wrote.
 
 You were started with {{skill:to-tickets}}. Cut the spec into tickets: one file each at
 `{{run.dir}}/plan/issues/NN-<slug>.md`, numbered in the order they can land. Each says
-what to build, what blocks it, and criteria someone else can check.
+what to build, what blocks it, and criteria someone else can check. A ticket that follows a
+design artifact names its copy under `{{run.dir}}/plan/design/` before its URL, saving the
+copy there first where the spec step did not.
 
 A criterion is something the implement Run can show before its merge request: a test, a
 file, or a command's result on the branch. An outcome that only CI, a merge or a deploy can

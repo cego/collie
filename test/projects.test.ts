@@ -3,7 +3,7 @@
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, FileSystem, Schema } from "effect";
-import { runEffect } from "./support/effect";
+import { runOnPath } from "./support/forge";
 import { workspaceNamed } from "../src/operations";
 import { exec } from "./support/command";
 import { collie, proves } from "./support/world";
@@ -18,17 +18,17 @@ import { checkoutsUnder, projectsRoot } from "../src/projects";
 let rig: Rig;
 
 beforeEach(() =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       rig = yield* Rig.make();
     }),
   ),
 );
 
-afterEach(() => runEffect(rig.close()));
+afterEach(() => runOnPath(rig.close()));
 
 test("projects.root in the config wins, and says it came from there", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* writeConfigValue(rig.userDir, "projects.root", "/work/mine");
       const env = rig.pluginEnv({ GITTE_CWD: "/work/gitte" });
@@ -38,7 +38,7 @@ test("projects.root in the config wins, and says it came from there", () =>
   ));
 
 test("without a configured root, gitte's folder is the root", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       const env = rig.pluginEnv({ GITTE_CWD: "/work/gitte" });
 
@@ -47,7 +47,7 @@ test("without a configured root, gitte's folder is the root", () =>
   ));
 
 test("with neither, the human's home is the root", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       const env = rig.pluginEnv();
 
@@ -56,7 +56,7 @@ test("with neither, the human's home is the root", () =>
   ));
 
 test("the checkouts are the real ones, never a worktree, a hidden one or a dependency's", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const root = `${rig.root}/projects`;
@@ -80,7 +80,7 @@ test("the checkouts are the real ones, never a worktree, a hidden one or a depen
 test(
   "a repository URL or owner/name finds this Machine's origin or upstream checkout",
   () =>
-    runEffect(
+    runOnPath(
       Effect.gen(function* () {
         yield* exec(["git", "init", "-q"], { cwd: rig.projectDir });
         yield* exec(["git", "remote", "add", "origin", "git@github.com:cego/collie.git"], {
@@ -151,7 +151,7 @@ test(
 test(
   "interleaved remote branch fetches place each checkout on its own fetched commit",
   () =>
-    runEffect(
+    runOnPath(
       Effect.gen(function* () {
         const remote = `${rig.root}/remote.git`;
         yield* exec(["git", "init", "--bare", "-q", remote]);

@@ -25,6 +25,7 @@ export const MODULES = [
 export const hosted = <A, E>(
   prefix: string,
   body: (herd: { world: World; env: PluginEnv }) => Effect.Effect<A, E, BunServices | Scope.Scope>,
+  modules: ReadonlyArray<string> = MODULES,
 ) =>
   proves(
     prefix,
@@ -41,7 +42,7 @@ export const hosted = <A, E>(
         });
         return yield* body({ world, env }).pipe(Effect.ensuring(stopHost(world.state)));
       }),
-    MODULES,
+    modules,
   );
 
 /** A Run the host is holding, waiting on its decision, with an Intent to read and amend. */

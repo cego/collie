@@ -21,6 +21,7 @@ import type { PluginEnv } from "./env";
 import {
   answerRun,
   carriedResult,
+  changeIntentRun,
   controlRun,
   followUpRun,
   grantRun,
@@ -29,6 +30,7 @@ import {
   moduleFor,
   startRun,
   steerRun,
+  withdrawNoteRun,
   resumeRun,
   runViews,
   sweepNow,
@@ -57,6 +59,7 @@ import {
   describeDefaults,
   defaultsPath,
   EMPTY_DEFAULTS,
+  outcomeChange,
   parseConstraint,
   readDefaults,
   readIntent,
@@ -137,6 +140,7 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
     which: "hold" | "stop",
     set: boolean,
     reason?: string,
+    before?: string,
   ) =>
     carry(
       controlRun(env, {
@@ -146,6 +150,7 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
         set,
         request: by.requestId,
         reason,
+        before,
       }),
     );
   registerExecutor("stop", (action, by, env) => control(env, by, action.run, "stop", true));
@@ -168,9 +173,11 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
     ),
   );
   registerExecutor("hold", (action, by, env) =>
-    control(env, by, action.run, "hold", true, action.reason),
+    control(env, by, action.run, "hold", true, action.reason, action.before),
   );
-  registerExecutor("release", (action, by, env) => control(env, by, action.run, "hold", false));
+  registerExecutor("release", (action, by, env) =>
+    control(env, by, action.run, "hold", false, undefined, action.before),
+  );
   registerExecutor("clear_override", (action, by, env) =>
     carry(
       clearOverride(
@@ -193,9 +200,20 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
           text: action.text,
           request: by.requestId,
           mode: action.mode,
+          step: action.step,
           attachments: action.attachments,
           door: by,
         });
+      }),
+    ),
+  );
+  registerExecutor("withdraw_note", (action, by, env) =>
+    carry(
+      withdrawNoteRun(env, {
+        runId: action.run,
+        note: action.note,
+        request: by.requestId,
+        door: by,
       }),
     ),
   );
@@ -208,6 +226,18 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
   registerExecutor("update_intent", (action, by, env) =>
     Effect.gen(function* () {
       const dir = runDir(env.stateDir, action.run);
+      if (action.change === "set-outcome") {
+        const changed = yield* changeIntentRun(env, {
+          runId: action.run,
+          change: outcomeChange(action.patch),
+          request: by.requestId,
+          door: by,
+          expected: action.base_version,
+        });
+        return changed.ok
+          ? { state: "applied" as const, note: `intent v${changed.value.version}` }
+          : failed(changed.error.message);
+      }
       // The version check and the write under one lock: read outside it, two
       // confirmations both pass the check and the later rename erases the earlier.
       const next = yield* withDirLock(

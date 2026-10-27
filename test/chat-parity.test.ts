@@ -22,7 +22,7 @@
 //
 // A leaf with no row is what this file exists to fail on.
 
-import { Effect, Fiber, FileSystem, Schema } from "effect";
+import { Effect, Fiber, FileSystem, Option, Schema, Stream } from "effect";
 import { hostname } from "node:os";
 import { afterAll, expect, test } from "bun:test";
 import { app } from "../src/collie";
@@ -34,15 +34,15 @@ import type { JsonObject } from "../src/schema";
 import { checkLines, TOOLS, toolNamed } from "../src/tools";
 import { herdLines } from "../src/toolkit";
 import { boardLines, buildBoard } from "../src/board";
-import { SECTIONS, sortBoard } from "../src/board-model";
+import { Flow, SECTIONS, sortBoard } from "../src/board-model";
 import { encodeVerifying } from "../src/verify";
 import { memoryWaitOf, waitForMemory } from "../src/memory-wait";
 import { madeRun } from "./support/records";
 import { task } from "./support/task";
 import { runEffect } from "./support/effect";
 import { epochMs } from "../src/time";
-import { connect } from "../src/host";
-import { hosted } from "./support/hosted";
+import { connect, frontDoor, socketOf } from "../src/host";
+import { hosted, hostedRun } from "./support/hosted";
 import { until } from "./support/host";
 import { save } from "./support/world";
 
@@ -123,6 +123,14 @@ const INVENTORY: ReadonlyArray<readonly [string, Route]> = [
   ["run release", { route: "write", tool: "collie_do" }],
   ["run steer", { route: "shell" }],
   [
+    "run withdraw-note",
+    {
+      route: "propose",
+      kind: "withdraw_note",
+      action: { kind: "withdraw_note", run: RUN, note: "n1" },
+    },
+  ],
+  [
     "run clear-override",
     {
       route: "propose",
@@ -166,6 +174,20 @@ const INVENTORY: ReadonlyArray<readonly [string, Route]> = [
         run: RUN,
         change: "set-goal",
         patch: "ship the parity gate",
+        base_version: 1,
+      },
+    },
+  ],
+  [
+    "run intent set-outcome",
+    {
+      route: "propose",
+      kind: "update_intent",
+      action: {
+        kind: "update_intent",
+        run: RUN,
+        change: "set-outcome",
+        patch: "feature",
         base_version: 1,
       },
     },
@@ -324,6 +346,22 @@ const INVENTORY: ReadonlyArray<readonly [string, Route]> = [
     },
   ],
   ["run deliveries --reconcile", { route: "shell" }],
+  [
+    "run hold --before",
+    { route: "propose", kind: "hold", action: { kind: "hold", run: RUN, before: "review" } },
+  ],
+  [
+    "run release --before",
+    { route: "propose", kind: "release", action: { kind: "release", run: RUN, before: "review" } },
+  ],
+  [
+    "run steer --step",
+    {
+      route: "propose",
+      kind: "deliver",
+      action: { kind: "deliver", run: RUN, step: "review", text: "Check ordering" },
+    },
+  ],
   [
     "run steer --to",
     {
@@ -627,3 +665,30 @@ test("the card, collie_run and collie_herd say the same of a Run waiting for mem
       yield* Fiber.interrupt(waiting);
     }),
   ));
+
+test(
+  "collie_run carries the Flow Desktop draws for the Run, as run show does",
+  () =>
+    hosted("collie-parity-flow-", ({ world, env }) =>
+      Effect.gen(function* () {
+        const run = yield* hostedRun(world, "draw the work");
+        const door = yield* frontDoor(socketOf(world.state));
+        // Its question is asked a moment before the engine records the Run suspended.
+        const detail = yield* until(
+          () =>
+            door
+              .runDetail({ runId: run.id, tail: false, pages: 1, refreshMr: false })
+              .pipe(Stream.runHead, Effect.map(Option.getOrNull), Effect.orDie),
+          (shown) => shown?.flow?.lanes[0]?.execution === "suspended",
+        );
+        const said = yield* toolNamed("collie_run")!.call(env, { run: run.id });
+        const block = /### Flow, as `run show --json` carries it\n\n```json\n(.*)\n```/s.exec(said);
+        expect(Schema.decodeUnknownSync(Schema.fromJsonString(Flow))(block?.[1] ?? "")).toEqual(
+          detail!.flow!,
+        );
+        expect(detail!.flow!.lanes.map((lane) => lane.run)).toEqual([run.id]);
+      }),
+    ),
+  // A host, and a Run of it waiting on its decision.
+  60_000,
+);

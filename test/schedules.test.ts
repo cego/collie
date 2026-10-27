@@ -539,11 +539,16 @@ test(
           const fs = yield* FileSystem.FileSystem;
           yield* addAsking(world, "lost", "*/2 * * * * *");
           yield* stopHost(world.state);
+          // An occurrence that fired before the stop lost its Run's execution with the engine.
+          const before = new Set((yield* scheduled(world, "lost")).map((one) => one.run));
           for (const name of yield* fs.readDirectory(world.state))
             if (name.startsWith("host.db")) yield* fs.remove(`${world.state}/${name}`);
           yield* listed(world);
           const [run] = yield* until(
-            () => scheduled(world, "lost"),
+            () =>
+              Effect.map(scheduled(world, "lost"), (runs) =>
+                runs.filter((one) => !before.has(one.run)),
+              ),
             (runs) => runs.length >= 1,
           );
           yield* asking(world, run!.run);

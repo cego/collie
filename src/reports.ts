@@ -15,6 +15,7 @@ import { socketOf } from "./host";
 import { nowIso } from "./time";
 import { isJsonObject, isString } from "./schema";
 import type { Asker } from "./proposals";
+import { notifyRunLink } from "./run-link-delivery";
 
 const encodeReport = Schema.encodeSync(Schema.fromJsonString(RunReport));
 
@@ -162,6 +163,7 @@ export const reportsLayer = (opts: {
         Effect.gen(function* () {
           let report = view.report;
           if (report === undefined) {
+            yield* notifyRunLink(env, opts.installation, view, "settled");
             report = yield* tell(view);
             yield* write(view.runId, report);
           }

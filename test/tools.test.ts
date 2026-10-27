@@ -59,7 +59,13 @@ import { isSettled } from "../src/lifecycle";
 import { appendLog } from "../src/oversight";
 import { readAudit, trimAudit } from "../src/audit";
 import { writeMrStates } from "../src/merges";
-import { FrontDoorRpcs, mrLabel, type Declaration, type FLOCK_READS } from "../src/board-model";
+import {
+  Flow,
+  FrontDoorRpcs,
+  mrLabel,
+  type Declaration,
+  type FLOCK_READS,
+} from "../src/board-model";
 
 const encodeJson = Schema.encodeUnknownSync(Schema.fromJsonString(Schema.Any));
 
@@ -335,6 +341,44 @@ test("chat carries out a request immediately and records who asked", () =>
           new Map(),
         ),
       ).toMatchObject({ refused: "not_pending" });
+    }),
+  ));
+
+test("chat changes a Run's outcome kind through the host, which refuses one it does not know", () =>
+  inWorld(
+    Effect.gen(function* () {
+      const run = yield* aRun("add a picker");
+      const outcome = (patch: string, base_version: number) =>
+        call("collie_propose", {
+          interpretation: "change the kind",
+          actions: [
+            { kind: "update_intent", run: run.id, change: "set-outcome", patch, base_version },
+          ],
+        });
+      expect(yield* outcome("feature", 1)).toContain("applied");
+      expect((yield* readIntent(run.dir))?.outcome).toBe("feature");
+      expect(yield* outcome("chore", 2)).toContain('"chore" is not an outcome');
+      expect((yield* readIntent(run.dir))?.version).toBe(2);
+    }),
+  ));
+
+test("of two outcome changes made on the same Intent version at once, only one applies", () =>
+  inWorld(
+    Effect.gen(function* () {
+      const run = yield* aRun("add a picker");
+      const outcome = (patch: string) =>
+        call("collie_propose", {
+          interpretation: "change the kind",
+          actions: [
+            { kind: "update_intent", run: run.id, change: "set-outcome", patch, base_version: 1 },
+          ],
+        });
+      const said = yield* Effect.all([outcome("feature"), outcome("bug")], {
+        concurrency: "unbounded",
+      });
+      expect(said.filter((one) => one.includes("applied"))).toHaveLength(1);
+      expect(said.filter((one) => one.includes("not v1"))).toHaveLength(1);
+      expect((yield* readIntent(run.dir))?.version).toBe(2);
     }),
   ));
 
@@ -1536,12 +1580,25 @@ test("each answer says who gave it, the newest five are listed, and an unrecorde
       yield* trimAudit(run.dir, 4);
 
       const said = yield* call("collie_run", { run: run.id });
-      expect(said).toContain('- "q6": yes — desktop on mk-laptop at ');
-      expect(said).toContain('- "q5": yes — cli at ');
-      expect(said).toContain('- "q4": yes — board at ');
-      expect(said).toContain('- "q3": yes — chat flock@mk-pc at ');
-      expect(said).toContain('- "q2": yes — who answered is not recorded');
-      expect(said).not.toContain('"q1"');
+      const answered = said.split("### Answered\n\n")[1]!.split("\n\n")[0]!;
+      expect(answered.split("\n")).toHaveLength(5);
+      expect(answered).toContain('- "q6": yes — desktop on mk-laptop at ');
+      expect(answered).toContain('- "q5": yes — cli at ');
+      expect(answered).toContain('- "q4": yes — board at ');
+      expect(answered).toContain('- "q3": yes — chat flock@mk-pc at ');
+      expect(answered).toContain('- "q2": yes — who answered is not recorded');
+      expect(answered).not.toContain('"q1"');
+      const flow = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Flow))(
+        said.split("```json\n")[1]!.split("\n```")[0]!,
+      );
+      expect(flow.lanes[0]!.nodes.map((node) => [node.id, node.state])).toEqual([
+        ["q1", "done"],
+        ["q2", "done"],
+        ["q3", "done"],
+        ["q4", "done"],
+        ["q5", "done"],
+        ["q6", "done"],
+      ]);
     }),
   ));
 

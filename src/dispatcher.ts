@@ -5,7 +5,17 @@
 // already in the air about this work".
 
 import type { BunServices } from "@effect/platform-bun/BunServices";
-import { Clock, Data, DateTime, Duration, Effect, FileSystem, Path, Result } from "effect";
+import {
+  Clock,
+  Data,
+  DateTime,
+  Duration,
+  Effect,
+  FileSystem,
+  Path,
+  Predicate,
+  Result,
+} from "effect";
 import { ensureLockDir } from "./lock";
 import {
   herdrFailureReason,
@@ -30,6 +40,7 @@ import {
   withLedgerLock,
   type Cause,
   type Delivery,
+  type LedgerBusy,
 } from "./steering";
 import { gate, interruptKeys } from "./steering-caps";
 import { nowIso, took, epochMs } from "./time";
@@ -217,12 +228,18 @@ export class NotDeliverable extends Data.TaggedError("NotDeliverable")<{
   reason: string;
 }> {}
 
-/**
- * A programming error, not a runtime one: two transactions for one incarnation deadlock
- * on the ledger lock, and a channel used after its transaction closed sends outside the
- * lock that made it safe.
- */
+/** A programming error: a channel used after its transaction closed sends outside the lock that made it safe. */
 class DispatcherDefect extends Data.TaggedError("DispatcherDefect")<{ why: string }> {}
+
+/** Another caller in this process is sending to this incarnation; a second lock claim would deadlock on it. */
+class TransactionOpen extends Data.TaggedError("TransactionOpen")<{ agent: string }> {
+  override get message() {
+    return `a transaction for ${this.agent} is already open in this process`;
+  }
+}
+
+const isLedgerHeld = (cause: unknown): cause is TransactionOpen | LedgerBusy =>
+  Predicate.isTagged(cause, "TransactionOpen") || Predicate.isTagged(cause, "LedgerBusy");
 
 const open = new Set<string>();
 
@@ -279,10 +296,7 @@ export const transaction = Effect.fn("Dispatcher.transaction")(function* <A, E, 
   const terminalId = entry.incarnation?.terminalId;
   if (terminalId === undefined)
     return yield* new NotDeliverable({ agent: entry.agent, reason: "no_incarnation" });
-  if (open.has(terminalId))
-    return yield* new DispatcherDefect({
-      why: `a transaction for ${entry.agent} is already open in this process`,
-    });
+  if (open.has(terminalId)) return yield* new TransactionOpen({ agent: entry.agent });
 
   const file = yield* ledgerPath(deps.stateDir, terminalId);
   yield* ensureLockDir(file);
@@ -498,9 +512,9 @@ export interface Patience {
 export const PATIENCE: Patience = { firstMs: 2_000, maxMs: 30_000, forMs: 10 * 60_000 };
 
 /**
- * One delivery, tried again while herdr says the pane will clear by itself. Each try is a
- * transaction of its own, so nothing waits holding the agent's ledger lock, and the
- * incarnation is proven again before every send.
+ * One delivery, tried again while herdr says the pane will clear by itself or another sender
+ * holds the agent's ledger. Each try is a transaction of its own, so nothing waits holding
+ * the agent's ledger lock, and the incarnation is proven again before every send.
  */
 export const submitPatiently = Effect.fn("Dispatcher.submitPatiently")(function* (
   deps: DispatcherDeps,
@@ -510,9 +524,17 @@ export const submitPatiently = Effect.fn("Dispatcher.submitPatiently")(function*
   patience: Patience = PATIENCE,
 ) {
   const patient = { ...draft, patienceMs: patience.forMs };
+  let heldSince: number | null = null;
   for (let wait = patience.firstMs; ; wait = Math.min(wait * 2, patience.maxMs)) {
-    const outcome = yield* transaction(deps, entry, (channel) => channel.submit(text, patient));
-    if (outcome.ok || outcome.reason !== "deferred") return outcome;
+    const outcome = yield* transaction(deps, entry, (channel) =>
+      channel.submit(text, patient),
+    ).pipe(Effect.catchIf(isLedgerHeld, Effect.succeed));
+    if (isLedgerHeld(outcome)) {
+      const now = yield* Clock.currentTimeMillis;
+      heldSince ??= now;
+      if (now - heldSince >= patience.forMs)
+        return refuse(null, "exhausted", `${outcome.message} for ${took(now - heldSince)}`);
+    } else if (outcome.ok || outcome.reason !== "deferred") return outcome;
     yield* Effect.sleep(Duration.millis(wait));
   }
 });

@@ -2,11 +2,11 @@
 // and an attempt an earlier host left settled on the forge's word.
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { Effect, FileSystem, Result, Schema } from "effect";
+import { ConfigProvider, Effect, FileSystem, Result, Schema } from "effect";
 import { foundationLayer, Registry, registryLayer } from "../src/engine";
 import { agentsLayer } from "../src/agents";
 import { land, readLanding, takeOver, writeLanding, type Landing } from "../src/landing";
-import type { Runner } from "../src/mr";
+import { forgeHttpTest } from "../src/forge/http";
 import { WorkflowError } from "../src/sdk";
 import { FakeBin } from "./support/bin";
 import { exec } from "./support/command";
@@ -16,6 +16,7 @@ import {
   PROJECT,
   fakeForge,
   forgeOnPath,
+  serveForges,
   type FakeMr,
   type ForgeModel,
 } from "./support/forge";
@@ -46,9 +47,6 @@ const model = (forge: "gitlab" | "github", over: Partial<FakeMr> = {}): ForgeMod
   ],
 });
 
-const isMerge = (args: ReadonlyArray<string>) =>
-  args.includes("PUT") && args.some((arg) => arg.endsWith("/merge"));
-
 /** A Run's directory, and a forge whose merge also reads what the Run had recorded by then. */
 const landing = Effect.fn("landing.landing")(function* (
   forge: "gitlab" | "github",
@@ -58,13 +56,18 @@ const landing = Effect.fn("landing.landing")(function* (
   const runDir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-landing-" });
   const fake = fakeForge(forge, model(forge, over));
   const seen: Array<Landing | null> = [];
-  const run: Runner<FileSystem.FileSystem> = (cmd, args, cwd) =>
-    Effect.gen(function* () {
-      if (isMerge(args)) seen.push(yield* readLanding(runDir));
-      return yield* fake.run(cmd, args, cwd);
-    });
+  const services = yield* Effect.context<FileSystem.FileSystem>();
+  const http = forgeHttpTest(fake.run, (input, init = {}) =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        if (init.method === "PUT" && input.endsWith("/merge"))
+          seen.push(yield* readLanding(runDir));
+        return yield* Effect.promise(() => fake.fetch(input, init));
+      }).pipe(Effect.provideContext(services)),
+    ),
+  );
   const merge = (head = HEAD, mr: string | null = URL_OF[forge]) =>
-    land({ runDir, mr, head, cwd: "/w", run });
+    land({ runDir, mr, head, cwd: "/w", run: fake.run }).pipe(Effect.provide(http));
   return { runDir, fake, seen, merge };
 });
 
@@ -238,7 +241,13 @@ for (const forge of ["gitlab", "github"] as const) {
           lander(forge, "r-failed", failed),
           lander(forge, "r-other", null, { mr: `${URL_OF[forge]}0` }),
         ];
-        const took = yield* takeOver({ runDir, mr: URL_OF[forge], runs, cwd: "/w", run: fake.run });
+        const took = yield* takeOver({
+          runDir,
+          mr: URL_OF[forge],
+          runs,
+          cwd: "/w",
+          run: fake.run,
+        }).pipe(Effect.provide(fake.layer));
         expect(took).toEqual({
           _tag: "TakenOver",
           from: "r-failed",
@@ -258,7 +267,9 @@ for (const forge of ["gitlab", "github"] as const) {
         );
         // Asked again, as a replay would: the same answer from what it recorded.
         expect(
-          yield* takeOver({ runDir, mr: URL_OF[forge], runs, cwd: "/w", run: fake.run }),
+          yield* takeOver({ runDir, mr: URL_OF[forge], runs, cwd: "/w", run: fake.run }).pipe(
+            Effect.provide(fake.layer),
+          ),
         ).toEqual(took);
       }),
     ));
@@ -275,7 +286,7 @@ for (const forge of ["gitlab", "github"] as const) {
               runs,
               cwd: "/w",
               run: fake.run,
-            });
+            }).pipe(Effect.provide(fake.layer));
             expect(yield* readLanding(runDir)).toBeNull();
             return took._tag === "Refused" ? took.why : took._tag;
           });
@@ -333,6 +344,7 @@ test(
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
         try {
           const fake = yield* forgeOnPath(bin, "github", model("github"));
+          const forgeApi = yield* serveForges(fake);
           yield* Effect.gen(function* () {
             const registry = yield* Registry;
             const generation = yield* registry.load(
@@ -365,7 +377,12 @@ test(
             if (Result.isFailure(refused))
               expect(refused.failure.reason).toContain("no merge request");
             expect((yield* registry.view(none.runId))?.landing).toBeNull();
-          }).pipe(withMachine);
+          }).pipe(
+            withMachine,
+            Effect.provide(
+              ConfigProvider.layerAdd(ConfigProvider.fromUnknown({ COLLIE_FORGE_API: forgeApi })),
+            ),
+          );
           expect((yield* fake.model()).merges).toHaveLength(1);
         } finally {
           yield* bin.restore();

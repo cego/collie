@@ -4,7 +4,8 @@
 // message was addressed to.
 
 import type { BunServices } from "@effect/platform-bun/BunServices";
-import { DateTime, Effect, FileSystem } from "effect";
+import { Clock, DateTime, Deferred, Effect, Fiber, FileSystem } from "effect";
+import { TestClock } from "effect/testing";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { HerdrError, type AgentInfo } from "../src/herdr";
 import {
@@ -27,10 +28,13 @@ import {
   ledgerPath,
   newestById,
   readLedger,
+  withLedgerLock,
   type Delivery,
 } from "../src/steering";
+import { ensureLockDir } from "../src/lock";
+import { reason } from "../src/naming";
 import type { AgentEntry } from "../src/registry";
-import { runEffect } from "./support/effect";
+import { fastForward, runEffect } from "./support/effect";
 import { FakeBin } from "./support/bin";
 
 test("every delivery mode carries the agent Actor's sender line before its unchanged words", () =>
@@ -573,16 +577,65 @@ test("a message over the cap is refused, and nothing is reserved for it", () =>
     }),
   ));
 
-test("two transactions for one agent in one process is a defect, not a deadlock", () =>
+test("a second transaction for one agent in one process fails at once, saying the ledger is held", () =>
   runEffect(
     Effect.gen(function* () {
       const h = fake();
-      const died = yield* transaction(h.deps, entry, () =>
+      const refused = yield* transaction(h.deps, entry, () =>
         transaction(h.deps, entry, (inner) => inner.submit("hello", draft)),
-      ).pipe(Effect.exit);
-      expect(died._tag).toBe("Failure");
+      ).pipe(Effect.flip);
+      expect(reason(refused)).toContain("impl-1");
+      expect(reason(refused)).toContain("already open");
+      expect(prompted(h.calls)).toBe(0);
     }),
   ));
+
+const holdingTheLedger = {
+  "another transaction in this process": (until: Effect.Effect<void>) =>
+    transaction(fake().deps, entry, () => until),
+  "a lock another process holds": (until: Effect.Effect<void>) =>
+    Effect.flatMap(ledgerPath(stateDir, "term-1"), (file) =>
+      Effect.andThen(ensureLockDir(file), withLedgerLock(file, until)),
+    ),
+};
+
+for (const [holder, hold] of Object.entries(holdingTheLedger))
+  test(`a patient submission waits out ${holder} on the agent's ledger, then delivers once`, () =>
+    runEffect(
+      fastForward(
+        Effect.gen(function* () {
+          const entered = yield* Deferred.make<void>();
+          const release = yield* Deferred.make<void>();
+          const holding = yield* Effect.forkScoped(
+            hold(
+              Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release))),
+            ),
+          );
+          yield* Deferred.await(entered);
+          const h = fake();
+          const from = yield* Clock.currentTimeMillis;
+          const submitting = yield* Effect.forkScoped(
+            submitPatiently(h.deps, entry, "read the prompt file", draft),
+          );
+          while ((yield* Clock.currentTimeMillis) - from < 20_000)
+            yield* TestClock.withLive(Effect.sleep("5 millis"));
+
+          expect(submitting.pollUnsafe()).toBeUndefined();
+          expect(prompted(h.calls)).toBe(0);
+          yield* Deferred.succeed(release, undefined);
+          yield* Fiber.join(holding);
+          expect(yield* Fiber.join(submitting)).toMatchObject({ ok: true, id: "req-1-1" });
+          expect(h.calls.filter((call) => call.startsWith("agentPrompt"))).toEqual([
+            `agentPrompt impl-1 ${marked("read the prompt file", "req-1-1")}`,
+          ]);
+          expect(yield* states()).toEqual([
+            "req-1-1 reserved",
+            "req-1-1 submitted",
+            "req-1-1 acknowledged",
+          ]);
+        }),
+      ),
+    ));
 
 test("an interrupt presses nothing in a pane whose harness has not been shown to take one", () =>
   runEffect(
