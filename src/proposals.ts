@@ -350,7 +350,7 @@ export function judgeConfirmation(
     if (now !== undefined && now !== version)
       return {
         refused: "intent_moved",
-        detail: `run ${run} was v${version} when this was proposed and is v${now} now`,
+        detail: `run ${run}'s Intent is v${now}, not v${version}`,
       };
   }
   return { proposal: found, actions: found.actions };
@@ -603,7 +603,7 @@ export function admit(action: Action, ctx: AdmissionContext): string | null {
     ctx.intentVersion !== null &&
     ctx.intentVersion !== ctx.proposedIntentVersion
   )
-    return `the Intent was v${ctx.proposedIntentVersion} and is v${ctx.intentVersion}`;
+    return `the Intent is v${ctx.intentVersion}, not v${ctx.proposedIntentVersion}`;
   if (ctx.revision !== null && ctx.revision.card !== ctx.revision.now) return "revision_moved";
   return null;
 }
