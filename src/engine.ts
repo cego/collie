@@ -153,7 +153,9 @@ import {
   Oversight,
   cardCheckpoints,
   checkDrift,
+  familyOf,
   grantedToRun,
+  mergeRequestFile,
   appendLog,
   said,
   settleAtFinish,
@@ -2683,7 +2685,7 @@ const decodeAskedAttachments = Schema.decodeUnknownOption(
 );
 
 /** Where a Run keeps the merge request it opened. */
-const mergeRequestPath = (dir: string, runId: string) => `${runDir(dir, runId)}/merge-request`;
+const mergeRequestPath = (dir: string, runId: string) => mergeRequestFile(runDir(dir, runId));
 
 /** The merge request a Run opened, or null where it recorded none. */
 const mergeRequestOf = (fs: FileSystem.FileSystem, dir: string, runId: string) =>
@@ -4285,7 +4287,12 @@ export const hostLayer = (options: {
             mr: yield* mergeRequestOf(fs, dir, runId),
             asking: (yield* store.asked(runId)).some((one) => one.answer === null),
             held: yield* set(HOLD, runId),
-            family: row === null ? [runId] : familyOf(yield* store.runs, row),
+            family:
+              row === null
+                ? [runId]
+                : yield* familyOf(yield* store.runs, row, (id) => runDir(dir, id)).pipe(
+                    Effect.provideContext(bun),
+                  ),
             dirOf: (id: string) => runDir(dir, id),
             cwdOf: (id: string) =>
               store.run(id).pipe(
@@ -4430,20 +4437,6 @@ export const hostLayer = (options: {
       );
     }),
   );
-
-/**
- * A Run and every Run the cross-run question relates it to: its children, its parent, and
- * that parent's other children.
- */
-const familyOf = (rows: ReadonlyArray<RunRow>, row: RunRow): ReadonlyArray<string> => {
-  const related = new Set([row.run]);
-  for (const one of rows) {
-    if (one.parent === row.run) related.add(one.run);
-    if (row.parent !== null && (one.run === row.parent || one.parent === row.parent))
-      related.add(one.run);
-  }
-  return [...related];
-};
 
 /** Where a toast is raised: herdr's, in a host. */
 export type Toast = (title: string, body: string, sound: Sound) => Effect.Effect<void>;

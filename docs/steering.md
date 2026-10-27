@@ -497,8 +497,8 @@ finished Run's agent.
 
 ## Cross-run checks
 
-Related runs — a parent, its children, and siblings of one parent — are judged against
-each other's Intents, once per boundary for the whole Herd rather than once per Run. Each
+Related runs — a parent, its children, siblings of one parent, and Runs about one merge
+request — are judged against each other's Intents, once per boundary for the whole Herd rather than once per Run. Each
 Run with relatives stands for the check at every boundary and at its finish; one wins and
 asks the model about all of them, and a loser writes down that it moved, which is what
 tells the winner its snapshot is behind — it judges again, a bounded number of times.
@@ -517,6 +517,13 @@ of the judgement names each Run whose diff it could not show. Where no Run has a
 its diff or an Output to show, the model is not asked: the log says `cross-run judgement
 not asked at <when>: no related Run's work can be shown`, and nothing is written down as
 owed.
+
+A Run is about a merge request when it recorded it or its goal names it by URL, and it is
+related to every Run that recorded the same one, whatever their Task or repository; two
+Runs whose goals only name it are not. Each Run's section of the pack also carries the
+replies it posted to reviewers (`--- reply to <comment> (fixed|disputed)`), and the judge is
+told that a Run whose goal or work contradicts what another replied on their merge request
+is drift, reported on the contradicting Run and citing its own work.
 
 A report is kept only when it names a Run in the pack, one of that Run's own constraints,
 and cites that Run's work as the pack showed it: a file of its diff or one of its Outputs.
