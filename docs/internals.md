@@ -275,8 +275,8 @@ A worktree is **settled**, and only then removed, when all five hold
 3. nothing is in it: no live agent's pane (its start directory, the directory it has
    moved to, or its workspace) other than the idle agents of the runs that finished there,
    no run still going there, and no stopped or failed run a resume would carry on there
-   while its work has not landed — except that a failed run does not keep a roaming
-   checkout, which the next roaming start of its repository would take over anyway, and
+   while its work has not landed — except that a failed run does not keep any of its
+   repository's roaming checkouts, which the next roaming start would take over anyway, and
    the idle agents of the runs that finished or failed inside one hold it no more than
    their own run would;
 4. its work has landed: the merge watch read its merge request as merged or closed, on

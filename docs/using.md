@@ -488,6 +488,12 @@ at the repository's default branch as the remote has it, at
 `~/.herdr/worktrees/<repo>/roaming`, and no branch is created or claimed for the run.
 Where the repository has an `origin` that will not fetch, the start is refused rather
 than cut from a stale base.
+That is the first of three, `roaming`, `roaming-2` and `roaming-3`. One an ended run left
+uncommitted changes or commits on no branch or remote in, another clone's, or one no run
+recorded, is left exactly as it is and passed over for the next, and the run's log names
+each one passed over and why. A run of the repository that has not ended, stopped and
+waiting ones included, refuses the start instead, and so do three passed over, naming
+each.
 There is no `--input branch=` for it, and nothing it does binds a branch to its worktree:
 it fetches and checks out each Renovate branch inside that one checkout and pushes with an
 explicit refspec, so a Renovate branch that already has a checkout of yours is left where
@@ -3247,8 +3253,9 @@ asked anything, and nothing is merged. `improvements=0` files without building.
 It works in a worktree of its own, cut from the checkout it was started in and detached at
 `origin`'s default branch as just fetched, so a shared, dirty or stale checkout is neither
 touched nor read. The triage, the filing and the Improvements' `plan` Runs work there; the
-Runs it reads are still that checkout's. Another Run holding that repository's roaming
-checkout, such as a `renovate`, refuses the start. The [cleanup](#cleanup) sweep removes
+Runs it reads are still that checkout's. A Run of that repository that has not ended and
+holds one of its roaming checkouts, such as a `renovate`, refuses the start; one an ended
+Run kept work in is [passed over](#a-run-that-roams-across-branches). The [cleanup](#cleanup) sweep removes
 the worktree once the Run has ended, however it ended, and nothing works in it any longer.
 An `origin` that will not fetch refuses the start, so it never triages stale code.
 

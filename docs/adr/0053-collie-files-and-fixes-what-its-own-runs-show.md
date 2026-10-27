@@ -192,8 +192,10 @@ its remote, so a Run working there could collide with other work or triage stale
   fetches `origin` and cuts a worktree detached at the default branch from the checkout it
   was started in, before the Run exists. Triage, filing and its Improvements' `plan` Runs
   all work from there. An `origin` that will not fetch refuses the start rather than
-  cutting the worktree from a stale base. Another Run holding that repository's roaming checkout refuses the
-  start, as it refuses a second `renovate`.
+  cutting the worktree from a stale base. A Run of that repository that has not ended and holds one of
+  its roaming checkouts refuses the start, as it refuses a second `renovate`. A roaming checkout an
+  ended Run kept work in is passed over
+  ([ADR-draft-a-kept-roaming-checkout-is-passed-over](draft-a-kept-roaming-checkout-is-passed-over.md)).
 - **The Runs it reads are still that checkout's.** A Run's project is where it was started,
   not where it was placed, so `runs=checkout` and the Schedule's saved start are unchanged.
 - **The cleanup sweep removes the worktree** once the Run has ended, succeeded or failed,
