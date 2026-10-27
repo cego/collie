@@ -165,10 +165,12 @@ const statusOf = (node: FlowRun, timing: string | null) =>
       ),
     ...(timing === null ? [] : [timing]),
   ].join(" · ") || null;
+const factOf = (label: string, value: string | null | undefined): StepFact[] =>
+  value?.trim() ? [{ label, value: value.trim() }] : [];
 const factsOf = (node: FlowRun, when: (iso: string) => string): StepFact[] => [
-  ...(node.role === null ? [] : [{ label: "Role", value: node.role }]),
-  ...(node.agent == null ? [] : [{ label: "Agent", value: node.agent }]),
-  ...(node.ranOn === null ? [] : [{ label: "Model", value: node.ranOn }]),
+  ...factOf("Role", node.role),
+  ...factOf("Agent", node.agent),
+  ...factOf("Model", node.ranOn),
   ...(node.started === null ? [] : [{ label: "Started", value: when(node.started) }]),
   ...(node.ended === null ? [] : [{ label: "Ended", value: when(node.ended) }]),
   ...node.attempts.slice(1).map((attempt, i) => ({

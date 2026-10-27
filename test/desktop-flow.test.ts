@@ -353,6 +353,12 @@ test("the inspector leaves out a Step's empty purpose and facts", () => {
   expect(info.status).toBeNull();
 });
 
+test("the inspector leaves out a blank role, agent and model", () => {
+  const node = flowNode("merged", { kind: "release", role: "", agent: " ", ranOn: "\t" });
+  const info = inspectorOf(mainFlow([node]), { run: "build-run", node: "merged", item: null }, 0)!;
+  expect(info.facts).toEqual([]);
+});
+
 test("a picked Slice shows its own facts", () => {
   const info = inspectorOf(
     mainFlow(),
