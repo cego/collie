@@ -53,66 +53,71 @@ read -r approval < '${fifo}'`,
   30_000,
 );
 
+const Bound = Schema.Struct({ port: Schema.Number });
+
 test(
   "a paired listener's occupied port is reported by machine list and doctor",
   () =>
     runEffect(
-      twoMachines(
-        "collie-port-",
-        (first, second) =>
-          Effect.gen(function* () {
-            const server = createServer();
-            yield* Effect.callback<void>((resume) => {
-              server.listen(Number(second.env.COLLIE_PEER_PORT), "0.0.0.0", () =>
-                resume(Effect.void),
-              );
-            });
-            yield* Effect.addFinalizer(() =>
-              Effect.sync(() => {
-                server.close();
-              }),
-            );
-            yield* first.lists([second]);
-            const pair = yield* first.cli(["--machine", "second", "board"]);
-            expect(pair.envelope.ok).toBe(false);
-            const listed = yield* second.cli(["machine", "list"]);
-            const views = Schema.decodeUnknownSync(
-              Schema.Struct({
-                machines: Schema.Array(Schema.Struct({ failure: Schema.NullOr(Schema.String) })),
-              }),
-            )(listed.envelope.data).machines;
-            expect(
-              views.some((one) =>
-                one.failure?.includes(`could not listen on port ${second.env.COLLIE_PEER_PORT}`),
-              ),
-            ).toBe(true);
-            const owner = yield* ownerOf(second.world.state);
-            const checked = yield* second.cli(["doctor"]);
-            const checks = Schema.decodeUnknownSync(
-              Schema.Struct({
-                checks: Schema.Array(
-                  Schema.Struct({ name: Schema.String, ok: Schema.Boolean, detail: Schema.String }),
-                ),
-              }),
-            )(checked.envelope.data ?? checked.envelope.error?.details).checks;
-            expect(checks.find((one) => one.name === "paired links")).toMatchObject({
-              ok: false,
-              detail: expect.stringContaining(
-                `could not listen on port ${second.env.COLLIE_PEER_PORT}`,
-              ),
-            });
-            yield* Effect.callback<void>((resume) => {
-              server.close(() => resume(Effect.void));
-            });
-            const recovered = yield* second.cli(["machine", "list"]);
-            expect(recovered.envelope.data).toMatchObject({
-              machines: [{ failure: "no control link from it yet" }],
-            });
-            expect((yield* ownerOf(second.world.state))?.pid).toBe(owner?.pid);
-            expect((yield* first.cli(["--machine", "second", "board"])).envelope.ok).toBe(true);
+      Effect.gen(function* () {
+        const server = createServer();
+        const port = yield* Effect.callback<number>((resume) => {
+          server.listen(0, "0.0.0.0", () =>
+            resume(Effect.succeed(Schema.decodeUnknownSync(Bound)(server.address()).port)),
+          );
+        });
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => {
+            server.close();
           }),
-        [],
-      ),
+        );
+        return yield* twoMachines(
+          "collie-port-",
+          (first, second) =>
+            Effect.gen(function* () {
+              yield* first.lists([second]);
+              const pair = yield* first.cli(["--machine", "second", "board"]);
+              expect(pair.envelope.ok).toBe(false);
+              const listed = yield* second.cli(["machine", "list"]);
+              const views = Schema.decodeUnknownSync(
+                Schema.Struct({
+                  machines: Schema.Array(Schema.Struct({ failure: Schema.NullOr(Schema.String) })),
+                }),
+              )(listed.envelope.data).machines;
+              expect(
+                views.some((one) => one.failure?.includes(`could not listen on port ${port}`)),
+              ).toBe(true);
+              const owner = yield* ownerOf(second.world.state);
+              const checked = yield* second.cli(["doctor"]);
+              const checks = Schema.decodeUnknownSync(
+                Schema.Struct({
+                  checks: Schema.Array(
+                    Schema.Struct({
+                      name: Schema.String,
+                      ok: Schema.Boolean,
+                      detail: Schema.String,
+                    }),
+                  ),
+                }),
+              )(checked.envelope.data ?? checked.envelope.error?.details).checks;
+              expect(checks.find((one) => one.name === "paired links")).toMatchObject({
+                ok: false,
+                detail: expect.stringContaining(`could not listen on port ${port}`),
+              });
+              yield* Effect.callback<void>((resume) => {
+                server.close(() => resume(Effect.void));
+              });
+              const recovered = yield* second.cli(["machine", "list"]);
+              expect(recovered.envelope.data).toMatchObject({
+                machines: [{ failure: "no control link from it yet" }],
+              });
+              expect((yield* ownerOf(second.world.state))?.pid).toBe(owner?.pid);
+              expect((yield* first.cli(["--machine", "second", "board"])).envelope.ok).toBe(true);
+            }),
+          [],
+          { ports: { second: port } },
+        );
+      }),
     ),
   120_000,
 );

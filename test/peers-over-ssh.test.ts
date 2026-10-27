@@ -9,7 +9,7 @@ import { peersOf } from "../src/peers";
 import { runEffect } from "./support/effect";
 import { freePort, resetter } from "./support/fake-ssh";
 import { stopHost, until } from "./support/host";
-import { twoMachines, type Side } from "./support/peers";
+import { listenerPort, twoMachines, type Side } from "./support/peers";
 
 const encode = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const Listed = Schema.Struct({ machines: Schema.Array(PeerView) });
@@ -80,7 +80,7 @@ test(
             // Pairing's connection ends, as a laptop's does when it sleeps.
             yield* first.ssh.drop;
             const [laptop] = yield* peersOf(second.world.state);
-            const advertised = Number(second.env.COLLIE_PEER_PORT);
+            const advertised = Number(yield* listenerPort(first, second));
             const url = `wss://127.0.0.1:${advertised}`;
 
             // The network starts refusing the port: the listener moves, a resetter holds it.

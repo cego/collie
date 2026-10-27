@@ -6,7 +6,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { lockHolder, withLock } from "../src/lock";
 
 /** What `ps` says of a pid: when it started (`lstart` is always 24 characters) and its command. */
-const described = (pid: number) =>
+export const described = (pid: number) =>
   Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const handle = yield* spawner.spawn(
@@ -42,7 +42,7 @@ const holderLine = (lock: string) =>
       : `test: waiting for the suite in process ${holder.pid} (${ps.command}), running since ${ps.start}`;
   });
 
-const elapsed = (ms: number) => {
+export const elapsed = (ms: number) => {
   const seconds = Math.floor(ms / 1000);
   const minutes = Math.floor(seconds / 60);
   return minutes === 0 ? `${seconds}s` : `${minutes}m ${seconds % 60}s`;

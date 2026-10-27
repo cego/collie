@@ -19,6 +19,7 @@ import {
   staleAgainst,
 } from "../src/verify";
 import type { VerifySpec } from "../src/intent";
+import { loggedGit } from "./support/bin";
 import { exec } from "./support/command";
 import { runEffect } from "./support/effect";
 import { until } from "./support/host";
@@ -44,6 +45,37 @@ const inRepository: typeof runEffect = (effect) =>
       return yield* effect;
     }),
   );
+
+test("a fingerprint reads HEAD from the status it hashes, in three git starts", () =>
+  inRepository(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* fs.writeFileString(`${repo}/tracked.txt`, "two\n");
+      yield* fs.writeFileString(`${repo}/scratch.txt`, "a\n");
+      const aside = yield* fs.makeTempDirectoryScoped({ prefix: "hw-verify-git-" });
+      const starts = yield* loggedGit(`${aside}/bin`, `${aside}/git.log`);
+      const tree = yield* fingerprint(repo);
+      expect(tree.head_sha).toHaveLength(40);
+      expect((yield* starts).map((line) => line.split(" ")[0]).sort()).toEqual([
+        "diff",
+        "ls-files",
+        "status",
+      ]);
+    }),
+  ));
+
+test("a fingerprint is the value it was before HEAD came from the status", () =>
+  inRepository(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* fs.writeFileString(`${repo}/tracked.txt`, "two\n");
+      yield* git(["add", "-A"]);
+      yield* fs.writeFileString(`${repo}/tracked.txt`, "three\n");
+      yield* fs.writeFileString(`${repo}/scratch.txt`, "a\n");
+      // Records made before still have to match the same tree.
+      expect((yield* fingerprint(repo)).fingerprint).toBe("5924b814fb9f3819");
+    }),
+  ));
 
 test("the fingerprint moves for anything that changes what a command would see", () =>
   inRepository(

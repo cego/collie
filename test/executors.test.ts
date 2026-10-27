@@ -40,8 +40,7 @@ const fakeHerdrOn = Effect.fn("test.fakeHerdrOn")(function* (
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const binPath = path.join(root, "herdr");
-  const fake = path.join(process.cwd(), "test", "support", "fake-herdr.ts");
-  yield* writeFakeHerdrShim(binPath, fake);
+  yield* writeFakeHerdrShim(binPath);
   logPath = path.join(root, "fake.log");
   yield* fs.writeFileString(
     `${logPath}.state.json`,

@@ -141,7 +141,7 @@ here are in [`src/README.md`](src/README.md).
   `test/harness.test.ts`.
 - **Anything in `src/` that reads a workflow id** →
   [ADR-0029](docs/adr/0029-one-host-acts-for-a-run-and-a-workflows-name-decides-nothing.md),
-  `test/workflow-names.test.ts`, `test/baseline-unrelated.test.ts`.
+  `test/workflow-names.test.ts`, `test/baseline-unrelated-*.test.ts`.
 - **Execution, coordination, records** → [`docs/internals.md`](docs/internals.md), [`docs/adr/`](docs/adr).
 - **Install, keybindings, Control Plane** → [`docs/using.md`](docs/using.md).
 - **Release signing, installers, macOS** → [ADR-0048](docs/adr/0048-collie-is-released-for-macos-on-apple-silicon.md),

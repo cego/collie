@@ -500,7 +500,12 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
   const services = yield* Effect.context<
     FileSystem.FileSystem | Path.Path | Crypto.Crypto | ChildProcessSpawner.ChildProcessSpawner
   >();
-  const listenPort = yield* port;
+  // Port 0 takes what is free once; every later opening, by any host of the directory,
+  // binds that same port.
+  const keptPort = `${link.dir}/peer-port`;
+  let listenPort = yield* port;
+  if (listenPort === 0)
+    listenPort = Number(yield* fs.readFileString(keptPort).pipe(Effect.orElseSucceed(() => "0")));
   const listenHost = yield* bindHost;
   const startedAt = DateTime.formatIso(DateTime.makeUnsafe(clock.currentTimeMillisUnsafe()));
   let peers = [...(yield* peersOf(link.dir))];
@@ -1122,6 +1127,10 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
       const started = yield* startListener.pipe(Effect.result);
       if (started._tag === "Success") {
         listener = started.success;
+        if (listenPort === 0 && listener.port !== undefined) {
+          listenPort = listener.port;
+          yield* fs.writeFileString(keptPort, String(listenPort)).pipe(Effect.ignore);
+        }
         listening = null;
       } else {
         listening = `could not listen on port ${listenPort}: ${reason(started.failure)}`;

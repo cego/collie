@@ -4,7 +4,7 @@
 // directory and fake herdr, paired on 127.0.0.1.
 
 import { expect, test } from "bun:test";
-import { createConnection } from "node:net";
+import { createConnection, createServer, type Server } from "node:net";
 import { Clock, Deferred, Effect, Exit, Fiber, FileSystem, Schema } from "effect";
 import { readAudit } from "../src/audit";
 import { runDir } from "../src/engine";
@@ -14,7 +14,7 @@ import { connect, connectPeer, ownerOf } from "../src/host";
 import { certOf, certificateFor, keyOf, peersOf, relayOf } from "../src/peers";
 import { runEffect } from "./support/effect";
 import { stopHost, until } from "./support/host";
-import { twoMachines, type Side } from "./support/peers";
+import { listenerPort, twoMachines, type Side } from "./support/peers";
 
 const encode = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const Started = Schema.Struct({ runId: Schema.String });
@@ -191,6 +191,35 @@ test(
   180_000,
 );
 
+/** A listener of another process's on this port, for as long as the scope lasts. */
+const occupy = (port: string) =>
+  Effect.acquireRelease(
+    Effect.callback<Server>((resume) => {
+      const server = createServer();
+      server.once("error", (cause) => resume(Effect.die(cause)));
+      server.listen(Number(port), "0.0.0.0", () => resume(Effect.succeed(server)));
+    }),
+    (server) => Effect.callback<void>((resume) => void server.close(() => resume(Effect.void))),
+  );
+
+test(
+  "a port another process takes before any host starts is never the listener's, so pairing still succeeds",
+  () =>
+    runEffect(
+      twoMachines(
+        "collie-peers-taken-",
+        (first, second) =>
+          Effect.gen(function* () {
+            yield* first.lists([second]);
+            expect((yield* first.cli(["--machine", "second", "board"])).envelope.ok).toBe(true);
+          }),
+        [],
+        { before: (ports) => Effect.forEach(Object.values(ports), occupy, { discard: true }) },
+      ),
+    ),
+  180_000,
+);
+
 /** Whether something accepts a connection on this port of 127.0.0.1. */
 const listening = (port: string) =>
   Effect.callback<boolean>((resume) => {
@@ -201,6 +230,70 @@ const listening = (port: string) =>
     });
     conn.once("error", () => resume(Effect.succeed(false)));
   });
+
+test(
+  "a listener given port 0 keeps the port it got when it opens again, in a later host too, and invitations answer that port",
+  () =>
+    runEffect(
+      twoMachines(
+        "collie-peers-reopen-",
+        (first, second) =>
+          Effect.gen(function* () {
+            yield* first.lists([second]);
+            expect((yield* first.cli(["--machine", "second", "board"])).envelope.ok).toBe(true);
+            const port = yield* listenerPort(first, second);
+            expect(yield* listening(port)).toBe(true);
+
+            yield* first.lists([]);
+            yield* stopHost(first.world.state);
+            yield* first.cli(["machine", "list"]);
+            yield* until(
+              () => listening(port),
+              (open) => !open,
+            );
+
+            yield* first.lists([second]);
+            expect((yield* first.cli(["--machine", "second", "board"])).envelope.ok).toBe(true);
+            expect(yield* listenerPort(first, second)).toBe(port);
+            expect(yield* listening(port)).toBe(true);
+
+            yield* stopHost(second.world.state);
+            yield* second.cli(["machine", "list"]);
+            yield* until(
+              () => listening(port),
+              (open) => open,
+            );
+          }),
+        [],
+      ),
+    ),
+  180_000,
+);
+
+/** The TCP ports a process listens on: its sockets among the kernel's listening ones. */
+const listensOn = (pid: number) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const sockets = new Set<string>();
+    for (const fd of yield* fs.readDirectory(`/proc/${pid}/fd`)) {
+      const target = yield* fs
+        .readLink(`/proc/${pid}/fd/${fd}`)
+        .pipe(Effect.orElseSucceed(() => ""));
+      const inode = /^socket:\[(\d+)\]$/.exec(target)?.[1];
+      if (inode !== undefined) sockets.add(inode);
+    }
+    const ports: number[] = [];
+    for (const table of ["/proc/net/tcp", "/proc/net/tcp6"]) {
+      const rows = (yield* fs.readFileString(table)).split("\n").slice(1);
+      for (const row of rows) {
+        // local_address, rem_address, st, …, inode; st 0A is LISTEN.
+        const [, local, , state, , , , , , inode] = row.trim().split(/\s+/);
+        if (state === "0A" && inode !== undefined && sockets.has(inode))
+          ports.push(Number.parseInt(local!.split(":")[1]!, 16));
+      }
+    }
+    return ports;
+  }).pipe(Effect.orDie);
 
 /** A WebSocket to a listener: open, or refused. */
 const dialListener = (
@@ -233,8 +326,8 @@ test(
             expect((yield* first.cli(["--machine", "second", "board"])).envelope.ok).toBe(true);
             const [peer] = yield* peersOf(first.world.state);
             const [laptop] = yield* peersOf(second.world.state);
+            const port = yield* listenerPort(first, second);
             yield* stopHost(first.world.state);
-            const port = second.env.COLLIE_PEER_PORT!;
             const ca = peer!.certificate!;
             const headers = { Authorization: `Bearer ${peer!.secret}` };
             expect(
@@ -531,12 +624,16 @@ test(
           Effect.gen(function* () {
             const { runId } = yield* waitingRun(second);
             // A host nobody dials listens on nothing but its socket.
-            expect(yield* listening(second.env.COLLIE_PEER_PORT!)).toBe(false);
+            expect(yield* peersOf(first.world.state)).toEqual([]);
+            if (process.platform === "linux") {
+              const host = yield* ownerOf(second.world.state);
+              expect(yield* listensOn(host!.pid)).toEqual([]);
+            }
             yield* first.lists([second]);
             expect((yield* first.cli(["run", "show", runId])).envelope.ok).toBe(true);
-            expect(yield* listening(second.env.COLLIE_PEER_PORT!)).toBe(true);
+            const port = yield* listenerPort(first, second);
+            expect(yield* listening(port)).toBe(true);
 
-            const port = second.env.COLLIE_PEER_PORT!;
             const [paired] = yield* peersOf(first.world.state);
             const ca = paired!.certificate!;
             expect(
@@ -609,6 +706,7 @@ test(
             yield* first.lists([second]);
             expect((yield* first.cli(["run", "show", runId])).envelope.ok).toBe(true);
             expect(yield* peersOf(second.world.state)).toHaveLength(1);
+            const port = yield* listenerPort(first, second);
 
             yield* first.lists([]);
             const { stopHost } = yield* Effect.promise(() => import("./support/host"));
@@ -619,7 +717,7 @@ test(
               ([mine, theirs]) => mine.length === 0 && theirs.length === 0,
             );
             yield* until(
-              () => listening(second.env.COLLIE_PEER_PORT!),
+              () => listening(port),
               (open) => !open,
             );
           }),

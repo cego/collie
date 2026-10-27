@@ -289,8 +289,8 @@ interface Collecting extends Ending {
 
 /**
  * The host's adapter for the state directory `dir`, whose installation id is `installation`.
- * Building it ends every check a previous host left. `onRun` is what ending one does on its
- * Run, given the line `host.log` gets.
+ * Building it ends every check a previous host left, unless `sweep` is false and the caller
+ * does. `onRun` is what ending one does on its Run, given the line `host.log` gets.
  */
 export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (options: {
   readonly dir: string;
@@ -301,6 +301,7 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
     line: string,
   ) => Effect.Effect<void, never, FileSystem.FileSystem>;
   readonly kill?: Kill;
+  readonly sweep?: boolean;
 }) {
   const { dir, installation, kill = processKill } = options;
   const fs = yield* FileSystem.FileSystem;
@@ -559,7 +560,8 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
     }
   }).pipe(Effect.provideContext(services));
 
-  yield* Effect.forEach(yield* left, endLeftover, { concurrency: "unbounded", discard: true });
+  if (options.sweep !== false)
+    yield* Effect.forEach(yield* left, endLeftover, { concurrency: "unbounded", discard: true });
   return {
     run,
     endAll,
