@@ -99,6 +99,7 @@ export {
   ReviewStandingSchema,
   SettledAnswersSchema,
   settleAnswers,
+  waitsOnApproval,
   type Answer,
   type OpenComment,
   type ReviewHead,
@@ -770,9 +771,10 @@ export interface HostApi {
    */
   readonly approved: (runId: string) => Effect.Effect<ReadonlyArray<VerifySpec>>;
   /**
-   * One value from the operator's own configuration, by its dotted name, and empty where
-   * they have set none. What a shipped workflow must not hard-code — which team files its
-   * issues, where its logs are — is asked for here rather than written into its content.
+   * One value from the operator's own configuration, by its dotted name, as text (`true` for
+   * a setting turned on), and empty where they have set none. What a shipped workflow must
+   * not hard-code — which team files its issues, where its logs are — is asked for here
+   * rather than written into its content.
    */
   readonly config: (dotted: string) => Effect.Effect<string>;
   /**

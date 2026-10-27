@@ -469,6 +469,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     | { readonly _tag: "Waiting"; readonly why: ReadonlyArray<string> }
     | { readonly _tag: "Unreadable"; readonly reason: string };
   export const ReviewStandingSchema: Schema.Codec<ReviewStanding, unknown, never, never>;
+  /** Whether a standing is still waiting on a teammate's approval, among whatever else. */
+  export function waitsOnApproval(standing: ReviewStanding): boolean;
 
   /** The merge request's head, which of a round's commits it carries, and its open external comments. */
   export interface ReviewHead {
@@ -689,7 +691,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     }) => Effect.Effect<Posted>;
     /** This Run's checks as they stand now, which anyone may add to. */
     readonly approved: (runId: string) => Effect.Effect<ReadonlyArray<VerifySpec>>;
-    /** One value from the operator's own configuration, by dotted name; empty for none. */
+    /** One value from the operator's own configuration, by dotted name, as text; empty for none. */
     readonly config: (dotted: string) => Effect.Effect<string>;
     /** Whether a merge request can be opened from here, and what it would carry. */
     readonly mr: (options: {
@@ -3741,7 +3743,11 @@ export const hostLayer = (options: {
             readConfig(options.userDir ?? dir).pipe(
               Effect.map((raw) => {
                 const value = configValue(raw, dotted);
-                return Schema.is(Schema.String)(value) ? value : "";
+                return Schema.is(Schema.Union([Schema.String, Schema.Number, Schema.Boolean]))(
+                  value,
+                )
+                  ? String(value)
+                  : "";
               }),
               Effect.orElseSucceed(() => ""),
             ),

@@ -39,6 +39,12 @@ export type ReviewStanding = typeof ReviewStandingSchema.Type;
 
 const plural = (count: number, one: string) => `${count} ${one}${count === 1 ? "" : "s"}`;
 
+const UNAPPROVED = "the approval";
+
+/** Whether a standing is still waiting on a teammate's approval, among whatever else. */
+export const waitsOnApproval = (standing: ReviewStanding) =>
+  standing._tag === "Waiting" && standing.why.some((one) => one.startsWith(`${UNAPPROVED} (`));
+
 /**
  * Ready means approved, nothing external unanswered, the pipeline passed, mergeable, all at
  * `proved`. A moved head is checked first, so a new head that is ready still moved; a
@@ -77,7 +83,7 @@ export function standingOf(
     };
   const short = read.head.slice(0, 8);
   const why = [
-    ...(read.approved ? [] : [`the approval (${read.unapproved || "none yet"})`]),
+    ...(read.approved ? [] : [`${UNAPPROVED} (${read.unapproved || "none yet"})`]),
     ...(read.changesRequested ? ["changes requested"] : []),
     ...(open.length === 0 ? [] : [plural(open.length, "unanswered comment")]),
     ...(read.pipeline.state === "passed" || read.pipeline.state === "none"

@@ -348,6 +348,18 @@ export const SETTINGS: ReadonlyArray<Setting> = [
       "While available memory is under this percent of the Machine's total, or memory pressure is high, a new agent, Check pass or collie verify waits. 0 never holds, and turns the pressure rule off too.",
     unit: "percent",
   }),
+  of("release.share_for_approval", "boolean", "false", {
+    group: "Runs",
+    label: "Ask before sharing a merge request for approval",
+    description:
+      "Whether a release Run waiting on a teammate's approval asks you to post its merge request in the approval channel.",
+  }),
+  of("release.approval_channel", "text", "", {
+    group: "Runs",
+    label: "Slack channel for approval requests",
+    description:
+      "The Slack channel a release Run posts its merge request in for approval, e.g. #frontend. Empty shares nothing.",
+  }),
   choice("scope", SCOPES, D.scope, {
     group: "Board",
     label: "Board scope",

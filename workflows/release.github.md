@@ -248,3 +248,14 @@ environment's id, `state=approved` and a comment — and watch the job to succes
 
 Then write your Output, naming the jobs you started. Collie waits until GitHub shows
 production carries the merge, whatever your Output says.
+
+## share
+
+The human checked {{inputs.mr}} and asked for it to be shared for approval in the Slack
+channel {{channel}}. Read its title with `gh pr view`. Then post exactly one message
+in {{channel}}: {{inputs.mr}} as a Slack link whose text is that title, written
+`<URL|TITLE>`, with no other words, no emoji, no mention and no thread reply. Post nowhere
+else, and change nothing in this checkout or on the pull request.
+
+If you have no Slack tool, or cannot post in {{channel}}, post nothing and say why in your
+Output. Then write your Output: whether you posted, and the message's permalink.
