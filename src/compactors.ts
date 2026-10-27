@@ -656,7 +656,7 @@ const encodeAskedCall = Schema.encodeSync(Schema.fromJsonString(AskedCall));
 const decodeAskedCall = Schema.decodeUnknownOption(Schema.fromJsonString(AskedCall));
 
 /** Apart from the telemetry, whose cap trims lines: a question must not be trimmed away. */
-const QUESTIONS = "questions.jsonl";
+export const QUESTIONS = "questions.jsonl";
 
 const DENIED_QUESTION = JSON.stringify({
   hookSpecificOutput: {

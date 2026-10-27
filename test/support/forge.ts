@@ -2,10 +2,12 @@
 // a FakeBin executable answering from the same model for host-driven tests. Both log
 // every call they get.
 
+import * as BunFileSystem from "@effect/platform-bun/BunFileSystem";
 import type * as BunServices from "@effect/platform-bun/BunServices";
 import {
   Clock,
   Config,
+  ConfigProvider,
   DateTime,
   Effect,
   FileSystem,
@@ -22,7 +24,8 @@ import { runEffect } from "./effect";
 import { glabExpiry, MONTHS } from "../../src/forge/gitlab";
 import { shell, type Ran, type Runner } from "../../src/mr";
 import type { FakeBin } from "./bin";
-import { shellQuote } from "../../src/script";
+import { recordStart } from "../../src/starts";
+import { forwarding } from "./forwarding";
 
 export const Check = Schema.Struct({
   name: Schema.String,
@@ -1991,7 +1994,7 @@ const writeModel = (file: string, model: ForgeModel) =>
       );
   });
 
-/** The FakeBin face: the compiled fake or `bun forge-bin.ts`, with the same arguments. */
+/** The FakeBin face: what one start of the forge's CLI on PATH answers. */
 export const forgeBin = Effect.fn("forge.bin")(function* (
   forge: MrForge,
   file: string,
@@ -2022,10 +2025,17 @@ export const forgeOnPath = Effect.fn("forge.onPath")(function* (
   const path = yield* Path.Path;
   const file = path.join(bin.dir, `${forge}.model.json`);
   yield* writeModel(file, model);
-  const script = yield* path.fromFileUrl(new URL("./forge-bin.ts", import.meta.url));
   const binary = yield* Config.String("COLLIE_TEST_FAKE_FORGE").pipe(Config.withDefault(""));
-  const command = binary === "" ? [process.execPath, script] : [binary];
-  yield* bin.add(CLI[forge], `exec ${[...command, forge, file].map(shellQuote).join(" ")} "$@"`);
+  const line = yield* forwarding(binary, [forge, file], ([, , ...args], env) =>
+    recordStart(`forge ${forge}`, args).pipe(
+      Effect.andThen(forgeBin(forge, file, args)),
+      Effect.map(({ code, stdout }) => ({ code, stdout, stderr: "" })),
+      Effect.provide(
+        Layer.mergeAll(BunFileSystem.layer, ConfigProvider.layer(ConfigProvider.fromEnv({ env }))),
+      ),
+    ),
+  );
+  yield* bin.add(CLI[forge], line);
   const requests: FakeRequest[] = [];
   const face = httpFace(
     forge,

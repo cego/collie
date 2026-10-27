@@ -123,9 +123,8 @@ export const save = (into: string, names: ReadonlyArray<string>) =>
  */
 const fakeHerdrIn = Effect.fn("World.fakeHerdrIn")(function* (dir: string) {
   const fs = yield* FileSystem.FileSystem;
-  const fake = `${root}test/support/fake-herdr.ts`;
   const bin = `${dir}/herdr`;
-  yield* writeFakeHerdrShim(bin, fake).pipe(Effect.orDie);
+  yield* writeFakeHerdrShim(bin).pipe(Effect.orDie);
   // A host asks `claude --help` before an agent starts; the operator's claude, run under a
   // loaded suite, is slow enough to time a test out. Anything else fails, as on CI.
   const harnesses = `${dir}/harnesses`;

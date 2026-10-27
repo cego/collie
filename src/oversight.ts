@@ -80,7 +80,7 @@ import { capabilitiesOf } from "./steering-caps";
 import { externalSubmissions } from "./compactors";
 import { controlDir } from "./compaction";
 import { nowIso } from "./time";
-import { fingerprint, ranOneTest, readVerifications } from "./verify";
+import { ranOneTest, readVerifications, treeOf } from "./verify";
 import { owedLocally } from "./check-proof";
 
 /** One Run as the host has placed it: where it works, and where its records are. */
@@ -169,12 +169,12 @@ export const writeCard = Effect.fn("Oversight.writeCard")(function* (
       ),
     ),
   );
-  const [[base, files, commits], snapshot, dirty, branch] = yield* Effect.all(
+  const [[base, files, commits], tree] = yield* Effect.all(
     [
       facts,
-      fingerprint(at.cwd).pipe(Effect.orElseSucceed(() => ({ head_sha: "", fingerprint: "" }))),
-      shell("git", ["status", "--porcelain"], at.cwd),
-      shell("git", ["rev-parse", "--abbrev-ref", "HEAD"], at.cwd),
+      treeOf(at.cwd).pipe(
+        Effect.orElseSucceed(() => ({ head_sha: "", fingerprint: "", branch: null, dirty: false })),
+      ),
     ],
     { concurrency: "unbounded" },
   );
@@ -201,12 +201,7 @@ export const writeCard = Effect.fn("Oversight.writeCard")(function* (
     iteration: 0,
     at: yield* nowIso(),
     intentVersion: intent?.version ?? 0,
-    revision: {
-      branch: branch.code === 0 ? branch.stdout.trim() : null,
-      head_sha: snapshot.head_sha,
-      fingerprint: snapshot.fingerprint,
-      dirty: dirty.stdout.trim() !== "",
-    },
+    revision: tree,
     changes: { files: lines(files.stdout), commits: lines(commits.stdout) },
     requested: {
       goal: intent?.goal ?? null,
