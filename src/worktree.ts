@@ -878,7 +878,8 @@ const claimRoaming = Effect.fn("worktree.claimRoaming")(function* (opts: {
   const { run } = opts;
   // Listed under the lock: a slot another start has just added is one git lists now.
   const listing = yield* gitWorktrees(run, opts.repo);
-  const listed = new Set(listing?.checkouts.map((checkout) => checkout.path));
+  if (listing === null) return { refused: `could not list the worktrees of ${opts.repo}` };
+  const listed = new Set(listing.checkouts.map((checkout) => checkout.path));
   const seen: Array<{
     at: string;
     taken: { owner: string | null } | null;

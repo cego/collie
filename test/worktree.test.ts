@@ -2241,6 +2241,36 @@ test("an ended Run's checkout that holds work is kept for it and passed over, an
     }),
   ));
 
+test("a roaming start is refused when git will not list the worktrees under the lock, not passed past a live owner", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      const taken = join(rig.root, ".herdr", "worktrees", "project", "roaming");
+      yield* worktreeOwnedBy(taken, rig.projectDir);
+      const runId = yield* renovateRunAt(taken);
+      liveAs = `${runId} has not ended and may still go on in it`;
+      const listedOnce = join(rig.root, "listed-once");
+      const listing = porcelain([
+        { path: rig.projectDir, branch: "master" },
+        { path: taken, branch: "master" },
+      ]);
+      // Listed before the lock is taken, and refused once it is held.
+      yield* fakeGitWithRoaming(
+        taken,
+        {},
+        {},
+        {
+          "worktree list --porcelain": `if [ -e "${listedOnce}" ]; then exit 1; fi; touch "${listedOnce}"; printf '%s' "${listing}"`,
+        },
+      );
+
+      const checkout = yield* renovateCheckout();
+
+      expect(checkout.refused).toContain(`could not list the worktrees of ${rig.projectDir}`);
+      expect(checkout.cwd).toBe(rig.projectDir);
+      expect((yield* asked()).some((c) => c.startsWith("worktree add"))).toBe(false);
+    }),
+  ));
+
 test("an ended Run's checkout git cannot read is refused, never passed over for another", () =>
   runOnPath(
     Effect.gen(function* () {
