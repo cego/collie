@@ -29,8 +29,10 @@ import {
   type Screen,
   scrollOf,
 } from "../../../src/shared/terminal-input";
+import { settledResizes } from "../../../src/shared/terminal-size";
 
 const props = defineProps<{ placed: PlacedTask; wentToPane: boolean; agent?: string }>();
+const emit = defineEmits<{ focus: [] }>();
 const { terminal, terminalSend, openLink } = useActions();
 const panes = usePanes();
 const toast = useToast();
@@ -62,6 +64,10 @@ const TYPE = {
 let term: Terminal | undefined;
 let fiber: Fiber.Fiber<void> | undefined;
 const send = (command: TerminalCommand) => void terminalSend(command);
+const sizes = settledResizes((cols, rows) => send({ type: "terminal.resize", cols, rows }), {
+  set: (run, ms) => window.setTimeout(run, ms),
+  clear: (handle) => window.clearTimeout(handle),
+});
 
 const copy = (text: string) =>
   navigator.clipboard
@@ -95,7 +101,7 @@ const shown = (event: TerminalEvent) => {
   switch (event._tag) {
     case "Opened":
       // A resize sent while the controller was starting was refused.
-      if (term !== undefined) send({ type: "terminal.resize", cols: term.cols, rows: term.rows });
+      if (term !== undefined) sizes.opened(term.cols, term.rows);
       focused.value = event.at.agent;
       return panes.showing(props.placed, event.at);
     case "Frame":
@@ -202,7 +208,7 @@ onMounted(() => {
   fit.fit();
   listening = [
     term.onData((text) => isMouseReport(text) || send({ type: "terminal.input", text })),
-    term.onResize(({ cols, rows }) => send({ type: "terminal.resize", cols, rows })),
+    term.onResize(({ cols, rows }) => sizes.resized(cols, rows)),
     term.registerLinkProvider({ provideLinks: (line, links) => links(linksOn(line)) }),
   ];
   term.attachCustomWheelEventHandler((event) => {
@@ -214,6 +220,7 @@ onMounted(() => {
     if (event.type !== "keydown") return true;
     const action = keyAction(event, term!.hasSelection());
     if (action === "copy" && term!.hasSelection()) void copy(term!.getSelection());
+    if (action === "focus") emit("focus");
     return action === "pane";
   });
   // Only on the grid: a press beside it, in the box, just takes the keys.
@@ -248,6 +255,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   void switching.stop();
+  sizes.stop();
   window.removeEventListener("mouseup", released);
   resized?.disconnect();
   rescaled?.();
@@ -259,8 +267,9 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="flex min-h-0 flex-1 flex-col gap-2" data-testid="terminal-tab">
-    <div class="flex items-center justify-between gap-2 text-sm">
-      <span class="text-muted min-w-0 truncate" data-testid="terminal-where">{{
+    <div class="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
+      <slot name="lead" />
+      <span class="text-muted min-w-0 flex-1 basis-32 truncate" data-testid="terminal-where">{{
         panes.shownFor(placed.key)?.where ?? ""
       }}</span>
       <div
@@ -293,6 +302,7 @@ onBeforeUnmount(() => {
         data-testid="open-in-herdr"
         @click="panes.openInHerdr(placed)"
       />
+      <slot name="tail" />
     </div>
     <p v-if="noPane" class="text-muted text-sm" data-testid="terminal-no-pane">
       {{
@@ -304,7 +314,7 @@ onBeforeUnmount(() => {
     <!-- Esc and Ctrl+C are the pane's while it has focus, not the record's. -->
     <div
       v-show="!noPane"
-      class="min-h-64 flex-1 overflow-hidden rounded bg-black p-1"
+      class="min-h-40 flex-1 overflow-hidden rounded bg-black p-1"
       :class="{ 'opacity-50': ended !== null }"
       data-testid="terminal"
       @keydown.stop

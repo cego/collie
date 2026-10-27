@@ -5,6 +5,8 @@ import type { FlowSelection } from "../../../src/shared/flow";
 import {
   inspectorPart,
   inspectorParts,
+  quietWork,
+  shownPart,
   stepEvidence,
   stepLines,
   type InspectorPart,
@@ -17,8 +19,11 @@ const props = defineProps<{
   placed: PlacedTask;
   shown: boolean;
   asked: { part: InspectorPart; serial: number } | null;
+  focusing: boolean;
+  /** Nothing above it in the work pane, so it says when it has nothing to show. */
+  alone: boolean;
 }>();
-const emit = defineEmits<{ open: [run: string, tab: string, agent?: string] }>();
+const emit = defineEmits<{ open: [run: string, tab: string, agent?: string]; focus: [] }>();
 const row = computed(
   () => props.flow.lanes.find((one) => one.run === props.selected.run) ?? props.flow.lanes.at(-1),
 );
@@ -67,59 +72,70 @@ watch(
 watch(live, (now) => {
   if (part.value === "terminal" && !now) part.value = inspectorPart(props.node, now);
 });
+const showing = computed(() => shownPart(part.value, parts.value));
+const full = computed(() =>
+  showing.value === "terminal" && live.value
+    ? "Full Terminal"
+    : showing.value === "log"
+      ? "Full Log"
+      : showing.value === "evidence" && detail.value !== null
+        ? "Full Evidence"
+        : null,
+);
+const openFull = () =>
+  showing.value === "terminal"
+    ? emit("open", run.value, "terminal", props.node.agent ?? undefined)
+    : emit("open", run.value, showing.value);
 </script>
 
 <template>
-  <div class="flex min-h-0 flex-1 flex-col gap-3">
-    <div v-if="parts.length > 0" class="flex flex-wrap gap-1" role="group" aria-label="Step work">
-      <UButton
-        v-for="one in parts"
-        :key="one.value"
-        :label="one.label"
-        :variant="part === one.value ? 'soft' : 'ghost'"
-        color="neutral"
-        size="sm"
-        :aria-pressed="part === one.value"
-        @click="part = one.value"
-      />
-    </div>
-    <template v-if="part === 'terminal' && live">
-      <TerminalTab
-        v-if="shown"
-        class="min-h-64"
-        :placed="placed"
-        :went-to-pane="false"
-        :agent="node.agent ?? undefined"
-      />
-      <UButton
-        variant="link"
-        class="self-start"
-        label="Full Terminal"
-        @click="emit('open', run, 'terminal', node.agent ?? undefined)"
-      />
-    </template>
-    <template v-else-if="part === 'log'">
-      <p v-if="log.older !== null" class="text-sm text-muted">{{ log.older }}</p>
-      <LogTab v-if="detail !== null" :tail="log.panel" />
-      <UButton
-        variant="link"
-        class="self-start"
-        label="Full Log"
-        @click="emit('open', run, 'log')"
-      />
-    </template>
-    <template v-else-if="part === 'evidence' && detail !== null"
-      ><EvidenceTab
-        :detail="detail"
-        :installation="placed.installation"
-        :verifications="proofs" /><UButton
-        variant="link"
-        class="self-start"
-        label="Full Evidence"
-        @click="emit('open', run, 'evidence')"
+  <TerminalTab
+    v-if="showing === 'terminal' && live && shown"
+    :key="`${run} ${node.agent}`"
+    class="min-h-0 flex-1"
+    :placed="placed"
+    :went-to-pane="false"
+    :agent="node.agent ?? undefined"
+    @focus="emit('focus')"
+  >
+    <template #lead
+      ><StepParts
+        :parts="parts"
+        :part="showing"
+        :node="node"
+        :focusing="focusing"
+        @pick="part = $event"
     /></template>
-    <p v-if="detail === null && part !== 'terminal'" class="text-sm text-muted">
+    <template #tail
+      ><StepTools :full="full" :focusing="focusing" @full="openFull" @focus="emit('focus')"
+    /></template>
+  </TerminalTab>
+  <div v-else class="flex min-h-0 flex-1 flex-col gap-2">
+    <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
+      <StepParts
+        :parts="parts"
+        :part="showing"
+        :node="node"
+        :focusing="focusing"
+        @pick="part = $event"
+      />
+      <StepTools :full="full" :focusing="focusing" @full="openFull" @focus="emit('focus')" />
+    </div>
+    <template v-if="showing === 'log' && detail !== null">
+      <p v-if="log.older !== null" class="text-sm text-muted">{{ log.older }}</p>
+      <LogTab :tail="log.panel" fill class="min-h-0 flex-1" />
+    </template>
+    <div
+      v-else-if="showing === 'evidence' && detail !== null"
+      class="min-h-0 flex-1 overflow-y-auto"
+    >
+      <EvidenceTab :detail="detail" :installation="placed.installation" :verifications="proofs" />
+    </div>
+    <p v-else-if="detail === null && showing !== 'terminal'" class="text-sm text-muted">
       Loading this Run's work…
+    </p>
+    <p v-else-if="parts.length === 0 && alone" class="text-sm text-muted" data-testid="flow-quiet">
+      {{ quietWork(node) }}
     </p>
   </div>
 </template>

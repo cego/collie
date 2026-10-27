@@ -4,6 +4,7 @@ import {
   type InspectorPart,
   inspectorPart,
   inspectorParts,
+  shownPart,
   stepEvidence,
   stepLines,
 } from "../desktop/src/shared/step-inspector";
@@ -86,4 +87,11 @@ test("parts are offered with their counts only while they have something", () =>
     { value: "evidence", label: "Evidence · 3" },
   ]);
   expect(inspectorParts(flowNode("work"), false, 0, 0)).toEqual([]);
+});
+test("a Step opened on why it failed or its question shows its first part beneath that", () => {
+  const parts = inspectorParts(flowNode("work", { log: 1 }), false, 4, 2);
+  expect(shownPart("why", parts)).toBe("log");
+  expect(shownPart("decision", parts)).toBe("log");
+  expect(shownPart("evidence", parts)).toBe("evidence");
+  expect(shownPart("details", [])).toBe("details");
 });

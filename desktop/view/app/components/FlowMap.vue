@@ -26,6 +26,8 @@ const props = defineProps<{
   now: number;
   installation: string;
   live: boolean;
+  /** Each Run on one line, its Steps scrolling along it, beside the selected Step's work. */
+  rail: boolean;
 }>();
 const emit = defineEmits<{
   choose: [spot: FlowSpot];
@@ -139,10 +141,14 @@ defineExpose({
       :key="row.run"
       role="group"
       :aria-label="row.name"
-      class="flex flex-col gap-2 border-t border-default py-3 first:border-0 first:pt-0"
+      class="flex border-t border-default first:border-0 first:pt-0"
+      :class="rail ? 'items-center gap-2 py-1.5' : 'flex-col gap-2 py-3'"
     >
-      <div class="flex flex-wrap items-baseline gap-x-2 text-xs text-muted">
-        <h3 class="text-sm font-semibold text-highlighted">
+      <div
+        class="flex text-xs text-muted"
+        :class="rail ? 'w-40 shrink-0 flex-col items-start' : 'flex-wrap items-baseline gap-x-2'"
+      >
+        <h3 class="max-w-full truncate text-sm font-semibold text-highlighted">
           <UContextMenu :items="laneMenu(row.run)" :disabled="laneMenu(row.run).length === 0"
             ><UDropdownMenu :items="laneMenu(row.run)" :disabled="laneMenu(row.run).length === 0"
               ><button
@@ -156,12 +162,18 @@ defineExpose({
             ></UContextMenu
           >
         </h3>
-        <span>{{ row.machine }} · {{ row.execution }}</span>
+        <span
+          :class="{ 'max-w-full truncate': rail }"
+          :title="rail ? `${row.machine} · ${row.execution}` : undefined"
+          >{{
+            rail ? `${row.execution} · ${row.machine}` : `${row.machine} · ${row.execution}`
+          }}</span
+        >
         <button
           v-if="row.requestedBy"
           type="button"
           tabindex="-1"
-          class="text-left text-xs text-primary hover:underline"
+          class="max-w-full truncate text-left text-xs text-primary hover:underline"
           @click="emit('origin', row.requestedBy.run, row.requestedBy.machine.name)"
         >
           Started by {{ row.requestedBy.run }} on {{ row.requestedBy.machine.name }}
@@ -170,15 +182,27 @@ defineExpose({
           v-else-if="row.startedBy"
           type="button"
           tabindex="-1"
-          class="text-left text-xs text-primary hover:underline"
+          class="max-w-full truncate text-left text-xs text-primary hover:underline"
           @click="emit('origin', row.startedBy.run, row.machine)"
         >
           Started by {{ row.startedBy.run
           }}<template v-if="row.startedBy.step"> · {{ row.startedBy.step }}</template>
         </button>
       </div>
-      <ol class="grid grid-cols-[repeat(auto-fill,minmax(12rem,1fr))] gap-x-6 gap-y-2 pl-6">
-        <li v-for="(node, at) in row.nodes" :key="node.id" class="relative flex">
+      <ol
+        class="gap-x-6 pl-6"
+        :class="
+          rail
+            ? 'flex min-w-0 flex-1 overflow-x-auto py-1 pr-1 [scrollbar-width:thin]'
+            : 'grid grid-cols-[repeat(auto-fill,minmax(12rem,1fr))] gap-y-2'
+        "
+      >
+        <li
+          v-for="(node, at) in row.nodes"
+          :key="node.id"
+          class="relative flex"
+          :class="{ 'max-w-64 shrink-0': rail }"
+        >
           <span
             aria-hidden="true"
             class="absolute top-1/2 right-full flex w-6 items-center justify-center"
@@ -204,8 +228,9 @@ defineExpose({
                 <button
                   :ref="(el) => remember({ run: row.run, node: node.id }, el)"
                   type="button"
-                  class="flex min-h-12 w-full items-center gap-2 rounded border bg-default px-2.5 py-1.5 text-left focus-visible:outline-2 focus-visible:outline-primary"
+                  class="flex w-full items-center gap-2 rounded border bg-default px-2.5 py-1.5 text-left focus-visible:outline-2 focus-visible:outline-primary"
                   :class="[
+                    rail ? 'min-h-9' : 'min-h-12',
                     node.state === 'failed'
                       ? 'border-2 border-error'
                       : node.state === 'needs-you'
@@ -230,11 +255,15 @@ defineExpose({
                   @click="emit('choose', { run: row.run, node: node.id })"
                 >
                   <FlowGlyph :state="node.state" />
-                  <span class="min-w-0 flex-1"
-                    ><span class="block truncate text-sm font-semibold">{{ node.title }}</span
+                  <span class="min-w-0 flex-1" :class="{ 'flex items-baseline gap-2': rail }"
+                    ><span
+                      class="block truncate text-sm font-semibold"
+                      :class="{ 'max-w-40 shrink-0': rail }"
+                      >{{ node.title }}</span
                     ><span
                       v-if="stepSteering(node).badge !== null"
-                      class="mt-1 inline-block rounded-full bg-elevated px-2 text-xs"
+                      class="inline-block shrink-0 rounded-full bg-elevated px-2 text-xs"
+                      :class="{ 'mt-1': !rail }"
                       >{{ stepSteering(node).badge }}</span
                     ><span
                       v-if="node.said && (node.state !== 'expected' || node.pause != null)"

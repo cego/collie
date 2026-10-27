@@ -201,6 +201,8 @@ watch(shownRun, () => {
   logSearch.value = "";
   kept.value = new Set(["flow"]);
 });
+/** The Flow's Focus, which puts the tabs away while Flow is the tab shown. */
+const flowFocusing = ref(false);
 const openWork = (run: string, next: string, agent?: string) => {
   shownRun.value = run;
   chosen.value = next;
@@ -263,7 +265,14 @@ const locationOf = (file: string, line: number | null) =>
           <USkeleton class="h-4 w-5/6" />
           <USkeleton class="h-4 w-2/3" />
         </div>
-        <UTabs v-else v-model="tab" :items="tabs" :content="false" variant="link" />
+        <UTabs
+          v-else
+          v-show="!(flowFocusing && tab === 'flow')"
+          v-model="tab"
+          :items="tabs"
+          :content="false"
+          variant="link"
+        />
       </div>
       <div
         v-if="!loading"
@@ -283,6 +292,7 @@ const locationOf = (file: string, line: number | null) =>
           :shown="tab === 'flow'"
           @run="shownRun = $event"
           @open="openWork"
+          @focusing="flowFocusing = $event"
         />
         <template v-if="detail !== null">
           <ReviewComments

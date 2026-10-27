@@ -18,6 +18,7 @@ import {
   type FlowSelection,
   type FlowSpot,
 } from "../../../src/shared/flow";
+import { focusHandOff, workspaceKey } from "../../../src/shared/flow-layout";
 const props = defineProps<{
   flow: Flow;
   placed: PlacedTask;
@@ -27,6 +28,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   run: [run: string];
   open: [run: string, tab: string, agent?: string];
+  focusing: [focusing: boolean];
 }>();
 const { everyTask, now } = useFlock();
 const cards = computed(() =>
@@ -123,6 +125,32 @@ const actNode = (kind: FlowAction, spot: FlowSpot) => {
   );
   if (action !== null) press(action, spot);
 };
+/** The selected Step's work has the whole record, its tabs, map and details put away. */
+const focusing = ref(false);
+watch(focusing, (now) => emit("focusing", now));
+watch(selected, (now) => now === null && (focusing.value = false));
+const root = ref<HTMLElement | null>(null);
+const handOff = focusHandOff<HTMLElement>();
+const focusedElement = () => {
+  const active = document.activeElement;
+  return active instanceof HTMLElement && active !== document.body ? active : null;
+};
+const focus = async (now: boolean) => {
+  if (now === focusing.value) return;
+  if (now) {
+    const work = root.value?.querySelector<HTMLElement>('[data-testid="flow-work"]') ?? null;
+    handOff.focus(
+      focusedElement(),
+      (one) => work?.contains(one) ?? false,
+      work?.querySelector<HTMLElement>('[data-testid="flow-focus"]') ?? null,
+    );
+    focusing.value = true;
+    return;
+  }
+  focusing.value = false;
+  await nextTick();
+  handOff.restore(focusedElement());
+};
 const close = () => {
   const spot = selected.value;
   selected.value = null;
@@ -159,6 +187,13 @@ const origin = (run: string, machine: string) => {
   if (card !== undefined) take({ kind: "open", card: card.key, run });
 };
 const key = (event: KeyboardEvent) => {
+  const layout = selected.value === null ? null : workspaceKey(event, focusing.value);
+  if (layout !== null && !overlayOpen(document)) {
+    event.preventDefault();
+    event.stopPropagation();
+    void focus(layout === "focus");
+    return;
+  }
   if (
     event.ctrlKey ||
     event.metaKey ||
@@ -218,15 +253,17 @@ watch(
 
 <template>
   <div
+    ref="root"
     data-testid="flow"
     :data-escape-scope="selected !== null ? '' : undefined"
-    class="@container/flow flex min-h-0 flex-1 flex-col gap-4"
+    class="flex min-h-0 flex-1 flex-col gap-3"
     :class="{ 'opacity-50': placed.asOf !== null }"
     @keydown="key"
   >
     <div
+      v-show="!focusing"
       class="flex items-center justify-between gap-3"
-      :class="flow.notice ? 'rounded bg-warning/10 p-3 text-warning' : ''"
+      :class="flow.notice ? 'rounded bg-warning/10 px-3 py-2 text-warning' : ''"
     >
       <p class="text-sm">{{ flow.notice ?? placed.task.sentence }}</p>
       <UButton
@@ -240,94 +277,96 @@ watch(
       />
     </div>
     <p class="sr-only" aria-live="polite" aria-atomic="true">{{ announcement }}</p>
-    <div
-      class="flex min-h-0 flex-1 flex-col gap-4"
-      :class="{ '@5xl/flow:flex-row': selected !== null }"
-    >
-      <FlowMap
-        ref="map"
-        class="shrink-0"
-        :class="{
-          'max-h-72 @5xl/flow:max-h-none @5xl/flow:min-w-0 @5xl/flow:flex-1 @5xl/flow:shrink':
-            selected !== null,
-        }"
-        :flow="flow"
-        :focused="focused"
-        :selected="selected"
-        :cards="cards"
-        :away="away"
-        :now="now"
-        :installation="placed.installation"
-        :live="placed.asOf === null"
-        @choose="choose"
-        @focus="focused = $event"
-        @origin="origin"
-        @act="press"
-      />
-      <FlowInspector
-        v-if="info !== null && selected !== null"
-        :info="info"
-        :selected="selected"
-        class="@5xl/flow:flex-none @5xl/flow:border-t-0 @5xl/flow:border-l @5xl/flow:pt-0 @5xl/flow:pl-4 @5xl/flow:w-md @7xl/flow:w-xl"
-        @close="close"
-        @item="chooseItem"
-        @open="(run, tab) => emit('open', run, tab)"
-      >
-        <template #why
-          ><section v-if="info.state === 'failed'" class="flex flex-col gap-2">
-            <h4 class="text-sm font-semibold">Why it failed</h4>
-            <pre
-              class="max-h-64 overflow-auto whitespace-pre-wrap rounded bg-elevated p-3 text-xs"
-              >{{ info.node.why ?? info.said }}</pre>
-          </section></template
+    <FlowWorkspace :selected="info !== null && selected !== null" :focusing="focusing">
+      <template #map>
+        <FlowMap
+          ref="map"
+          :flow="flow"
+          :focused="focused"
+          :selected="selected"
+          :cards="cards"
+          :away="away"
+          :now="now"
+          :installation="placed.installation"
+          :live="placed.asOf === null"
+          :rail="info !== null && selected !== null"
+          @choose="choose"
+          @focus="focused = $event"
+          @origin="origin"
+          @act="press"
+        />
+      </template>
+      <template v-if="info !== null && selected !== null" #context="{ stacked }">
+        <FlowInspector
+          :info="info"
+          :selected="selected"
+          :stacked="stacked"
+          @close="close"
+          @item="chooseItem"
+          @open="(run, tab) => emit('open', run, tab)"
         >
-        <template #actions
-          ><FlowActions
-            v-if="lane !== undefined"
-            :node="info.node"
-            :lane="lane"
-            :installation="placed.installation"
-            :live="placed.asOf === null"
-            @act="press"
-        /></template>
-        <template #decision
-          ><FlowDecision
-            v-if="decision !== null"
-            :effect="decision"
-            :machine="placed.machine"
-            :perform="controls.perform"
-        /></template>
-        <template #work>
-          <FlowNotes
-            :node="lane?.nodes.find((node) => node.id === selected?.node) ?? info.node"
-            :run="selected.run"
-            :installation="placed.installation"
-            :live="placed.asOf === null"
-            @act="press" />
-          <StepWork
-            :flow="flow"
-            :node="info.node"
-            :selected="selected"
-            :detail="detail"
-            :placed="placed"
-            :shown="shown"
-            :asked="requestedPart"
-            @open="(run, tab, agent) => emit('open', run, tab, agent)"
-        /></template>
-        <template #default
-          ><UButton
-            v-if="source !== null"
-            variant="link"
-            size="xs"
-            class="self-start p-0"
-            :label="`Started by ${source.run} on ${source.machine}`"
-            @click="origin(source.run, source.machine)"
-        /></template>
-      </FlowInspector>
-      <p v-else class="text-sm text-muted">
-        Select a Step to inspect its work. Use the arrow keys to move between Steps and Runs.
-      </p>
-    </div>
+          <template #actions
+            ><FlowActions
+              v-if="lane !== undefined"
+              :node="info.node"
+              :lane="lane"
+              :installation="placed.installation"
+              :live="placed.asOf === null"
+              @act="press"
+          /></template>
+          <template #notes>
+            <FlowNotes
+              :node="lane?.nodes.find((node) => node.id === selected?.node) ?? info.node"
+              :run="selected.run"
+              :installation="placed.installation"
+              :live="placed.asOf === null"
+              @act="press"
+          /></template>
+          <template #default
+            ><UButton
+              v-if="source !== null"
+              variant="link"
+              size="xs"
+              class="self-start p-0"
+              :label="`Started by ${source.run} on ${source.machine}`"
+              @click="origin(source.run, source.machine)"
+          /></template>
+        </FlowInspector>
+      </template>
+      <template v-if="info !== null && selected !== null" #work>
+        <section v-if="info.state === 'failed'" class="flex shrink-0 flex-col gap-2">
+          <h4 class="text-sm font-semibold">Why it failed</h4>
+          <pre class="max-h-48 overflow-auto whitespace-pre-wrap rounded bg-elevated p-3 text-xs">{{
+            info.node.why ?? info.said
+          }}</pre>
+        </section>
+        <FlowDecision
+          v-if="decision !== null"
+          class="shrink-0"
+          :effect="decision"
+          :machine="placed.machine"
+          :perform="controls.perform"
+        />
+        <StepWork
+          :flow="flow"
+          :node="info.node"
+          :selected="selected"
+          :detail="detail"
+          :placed="placed"
+          :shown="shown"
+          :asked="requestedPart"
+          :focusing="focusing"
+          :alone="info.state !== 'failed' && decision === null"
+          @open="(run, tab, agent) => emit('open', run, tab, agent)"
+          @focus="focus(!focusing)"
+        />
+      </template>
+      <template #empty>
+        <p class="text-sm text-muted">
+          Select a Step to inspect its work. Use the arrow keys to move between Steps and Runs.
+        </p>
+      </template>
+    </FlowWorkspace>
     <OffersDialog
       v-if="offering !== null"
       :installation="placed.installation"
