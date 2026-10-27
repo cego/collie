@@ -3224,6 +3224,7 @@ export const hostLayer = (options: {
                       : {
                           run: one.run,
                           worktree: placedOf(one, {}).worktree ?? null,
+                          live: Effect.succeed(null),
                           release: Effect.succeed("a review's fix round takes over nothing"),
                         };
                   }),
@@ -5833,6 +5834,7 @@ const makeRegistry: (
             return {
               run: latest.run,
               worktree: workingPlace(latest).worktree ?? null,
+              live: unended([...runs]),
               release: releaseRuns([...runs]).pipe(
                 Effect.flatMap((why) => (why === null ? agentIn(here) : Effect.succeed(why))),
               ),
@@ -5867,6 +5869,7 @@ const makeRegistry: (
         worktree: checkout.worktree,
       };
       yield* ask.record({ checkout: { placed, opened } });
+      if (checkout.note !== "") yield* said({ runDir: runDir(dir, ask.runId) }, checkout.note);
     }
     if (ask.taskLabel === undefined) return { placed, task: ask.task };
     // One workspace per Task: a start about a Task's work — a release of its merge request,
@@ -6702,11 +6705,18 @@ const makeRegistry: (
     return null;
   }, Effect.provideContext(bun));
 
-  /** Closes ended Runs' agents; null once closed, or why not. A stopped Run may resume. */
-  const releaseRuns = Effect.fn("Engine.releaseRuns")(function* (runs: ReadonlyArray<string>) {
+  /** Why one of these Runs has not ended, or null once all have. A stopped Run may resume. */
+  const unended = Effect.fn("Engine.unended")(function* (runs: ReadonlyArray<string>) {
     for (const runId of runs) {
       if (!(yield* workflowEnded(runId))) return `${runId} has not ended and may still go on in it`;
     }
+    return null;
+  }, Effect.provideContext(hostServices));
+
+  /** Closes ended Runs' agents; null once closed, or why not. */
+  const releaseRuns = Effect.fn("Engine.releaseRuns")(function* (runs: ReadonlyArray<string>) {
+    const live = yield* unended(runs);
+    if (live !== null) return live;
     const agents = yield* Agents;
     const left: string[] = [];
     for (const runId of runs) left.push(...(yield* agents.halt(runId)).left);

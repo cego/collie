@@ -37,6 +37,8 @@ let registered: AgentEntry[];
 /** What a Run that recorded a checkout answers when asked to give it up, and how often it was. */
 let releasedAs: string | null;
 let releases: number;
+/** What the recorder's probe says about whether its Run has ended. */
+let liveAs: string | null;
 /** Each roaming checkout recorded as a Run's, and whether its destination was locked then. */
 let claims: Array<{ path: string; locked: boolean }>;
 /** What the merge watch and the Tasks say, beside the checkouts themselves. */
@@ -72,6 +74,7 @@ beforeEach(() =>
       registered = [];
       releasedAs = null;
       releases = 0;
+      liveAs = null;
       claims = [];
       settling = NOTHING_SETTLING;
     }),
@@ -1765,7 +1768,7 @@ const renovateCheckout = (inputs: Record<string, string> = {}, cwd = rig.project
           releases += 1;
           return releasedAs;
         });
-        return { run: run.id, worktree: run.worktree, release };
+        return { run: run.id, worktree: run.worktree, live: Effect.sync(() => liveAs), release };
       }),
     claimed: (worktree) =>
       FileSystem.FileSystem.pipe(
@@ -2107,17 +2110,21 @@ const renovateRunAt = (at: string) =>
 
 /** A git listing this repository's roaming checkout, in whatever state `answers` says it is. */
 const fakeGitWithRoaming = (taken: string, answers: Record<string, string>) =>
-  fakeGitAnswering({
-    ...gitAnswers(),
-    "worktree list --porcelain": porcelain([
-      { path: rig.projectDir, branch: "master" },
-      { path: taken, branch: "master" },
-    ]),
-    "status --porcelain": "",
-    "rev-list HEAD --not --branches --remotes": "",
-    "checkout --quiet --no-overwrite-ignore --detach": "",
-    ...answers,
-  });
+  fakeGitAnswering(
+    {
+      ...gitAnswers(),
+      "worktree list --porcelain": porcelain([
+        { path: rig.projectDir, branch: "master" },
+        { path: taken, branch: "master" },
+      ]),
+      "status --porcelain": "",
+      "rev-list HEAD --not --branches --remotes": "",
+      "checkout --quiet --no-overwrite-ignore --detach": "",
+      ...answers,
+    },
+    {},
+    { "worktree add --detach": 'mkdir -p "$4"' },
+  );
 
 test("a second Renovate Run on one repository is refused while the first may go on, never handed its tree", () =>
   runOnPath(
@@ -2127,7 +2134,7 @@ test("a second Renovate Run on one repository is refused while the first may go 
       // The earlier Run's own record, which is the only proof that this checkout is a
       // Renovate Run's rather than something that merely looks like one.
       const runId = yield* renovateRunAt(taken);
-      releasedAs = `${runId} has not ended and may still go on in it`;
+      liveAs = `${runId} has not ended and may still go on in it`;
       yield* fakeGitWithRoaming(taken, {});
 
       const checkout = yield* renovateCheckout();
@@ -2183,7 +2190,7 @@ test("a Renovate Run takes over the checkout an ended Run of the repository left
     }),
   ));
 
-test("a checkout made at a recorded path since the Run recorded it is never taken over", () =>
+test("a checkout made at a recorded path since the Run recorded it is passed over, never taken over", () =>
   runOnPath(
     Effect.gen(function* () {
       const taken = join(rig.root, ".herdr", "worktrees", "project", "roaming");
@@ -2194,22 +2201,22 @@ test("a checkout made at a recorded path since the Run recorded it is never take
 
       const checkout = yield* renovateCheckout();
 
-      expect(checkout.refused).toBe(
-        `no worktree for ${rig.projectDir}: ${taken} is a checkout of ${rig.projectDir}, recorded by Run ${runId}, but not the checkout that Run made`,
+      expect(checkout.cwd).toBe(`${taken}-2`);
+      expect(checkout.note).toBe(
+        `passed over ${taken}: a checkout of ${rig.projectDir}, recorded by Run ${runId}, kept: not the checkout that Run made; created worktree ${taken}-2 detached at origin/master`,
       );
       expect(releases).toBe(0);
-      expect(claims).toEqual([]);
       expect((yield* asked()).some((c) => c.startsWith("checkout"))).toBe(false);
     }),
   ));
 
-test("an ended Run's checkout that holds work is kept for it, and its agents are left alone", () =>
+test("an ended Run's checkout that holds work is kept for it and passed over, and its agents are left alone", () =>
   runOnPath(
     Effect.gen(function* () {
       const taken = join(rig.root, ".herdr", "worktrees", "project", "roaming");
       yield* worktreeOwnedBy(taken, rig.projectDir);
       const runId = yield* renovateRunAt(taken);
-      const held = `${taken} is a checkout of ${rig.projectDir}, recorded by Run ${runId}, kept:`;
+      const held = `passed over ${taken}: a checkout of ${rig.projectDir}, recorded by Run ${runId}, kept:`;
 
       yield* fakeGitWithRoaming(taken, { "status --porcelain": " M package.json\n" });
       const dirty = yield* renovateCheckout();
@@ -2219,16 +2226,15 @@ test("an ended Run's checkout that holds work is kept for it, and its agents are
       });
       const unpushed = yield* renovateCheckout();
 
-      expect(dirty.refused).toBe(`no worktree for ${rig.projectDir}: ${held} uncommitted changes`);
-      expect(unpushed.refused).toBe(
-        `no worktree for ${rig.projectDir}: ${held} 2 commit(s) on no branch or remote`,
-      );
+      expect(dirty.cwd).toBe(`${taken}-2`);
+      expect(dirty.note).toStartWith(`${held} uncommitted changes; created worktree ${taken}-2`);
+      expect(unpushed.note).toStartWith(`${held} 2 commits on no branch or remote; `);
       expect(releases).toBe(0);
       expect((yield* asked()).some((c) => c.startsWith("checkout"))).toBe(false);
     }),
   ));
 
-test("two repositories of the same name never share one Renovate checkout", () =>
+test("two repositories of the same name never share one Renovate checkout: the other's is passed over", () =>
   runOnPath(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -2243,32 +2249,30 @@ test("two repositories of the same name never share one Renovate checkout", () =
       const checkout = yield* renovateCheckout({ repository: other });
 
       // Named, so the operator knows which repository is holding it.
-      expect(checkout.refused).toBe(
-        `no worktree for ${other}: ${taken} is a checkout of ${rig.projectDir}`,
+      expect(checkout.note).toStartWith(
+        `passed over ${taken}: a checkout of ${rig.projectDir}, kept: another clone's; created worktree ${taken}-2`,
       );
-      expect(checkout.worktree).toBe(null);
-      // Refused, so the Run stays where it was started rather than in either repository.
-      expect(checkout.cwd).toBe(rig.projectDir);
+      expect(checkout.cwd).toBe(`${taken}-2`);
+      expect(yield* fs.readFileString(`${taken}/.git`)).toContain(`gitdir: ${rig.projectDir}/.git`);
     }),
   ));
 
-test("a path in the way that will not say whose it is refuses, rather than being built over", () =>
+test("a path in the way that will not say whose it is is passed over, rather than being built over", () =>
   runOnPath(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const at = join(rig.root, ".herdr", "worktrees", "project", "roaming");
-      // Something is there and nothing says what: the answer is a refusal naming it,
-      // never a worktree added on top of whatever it is.
+      // Something is there and nothing says what: it is named and left, never a
+      // worktree added on top of whatever it is.
       yield* fs.makeDirectory(at, { recursive: true });
       yield* fakeGitWithCheckouts([{ path: rig.projectDir, branch: "master" }]);
 
       const checkout = yield* renovateCheckout();
 
-      expect(checkout.refused).toBe(
-        `no worktree for ${rig.projectDir}: ${at} is a checkout that does not say which repository it belongs to`,
+      expect(checkout.note).toStartWith(
+        `passed over ${at}: a checkout that does not say which repository it belongs to, kept: recorded by no Run; created worktree ${at}-2`,
       );
-      expect(checkout.worktree).toBe(null);
-      expect((yield* asked()).some((command) => command.startsWith("worktree add"))).toBe(false);
+      expect(yield* asked()).not.toContainEqual(expect.stringMatching(`^worktree add .*${at} `));
     }),
   ));
 

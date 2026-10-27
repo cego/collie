@@ -30,6 +30,8 @@ import {
   type HostServices,
 } from "../src/engine";
 import { Store } from "../src/store";
+import { sweep, worktreesSweeper } from "../src/cleanup";
+import { factsOfView } from "../src/runs";
 import type * as MessageStorage from "effect/cluster/MessageStorage";
 import { SqlClient } from "effect/sql";
 import { VerifySpecSchema } from "../src/verify-spec";
@@ -1169,11 +1171,12 @@ test(
 );
 
 test(
-  "a roaming start is refused the checkout of a Run that may still go on, stopped or waiting, and of one that left changes",
+  "a roaming start is refused the checkout of a Run that may still go on, stopped or waiting, with its changes in it",
   () =>
     runEffect(
       Effect.gen(function* () {
         const roaming = `${rig.root}/.herdr/worktrees/project/roaming`;
+        const fs = yield* FileSystem.FileSystem;
         const refusals = yield* hosted(
           Effect.gen(function* () {
             const registry = yield* Registry;
@@ -1187,6 +1190,7 @@ test(
               () => registry.view(waiting.success.runId),
               (view) => view?.status.status === "suspended",
             );
+            yield* fs.writeFileString(`${roaming}/left.txt`, "live work");
             const whileWaiting = refusedWith(
               yield* start(roams!, { request: "r2", text: { work: "next" } }),
             );
@@ -1203,22 +1207,391 @@ test(
               value: "yes",
               request: "answer-go",
             });
-            yield* finished(waiting.success.runId);
-            yield* (yield* FileSystem.FileSystem).writeFileString(`${roaming}/left.txt`, "work");
-            const whileDirty = refusedWith(
-              yield* start(roams!, { request: "r3", text: { work: "next" } }),
-            );
-            return { whileWaiting, whileStopped, whileDirty };
+            const ended = yield* finished(waiting.success.runId);
+            return { whileWaiting, whileStopped, ended };
           }),
         );
 
         expect(refusals.whileWaiting).toContain(`${roaming} is a checkout of`);
         expect(refusals.whileWaiting).toContain("has not ended");
         expect(refusals.whileStopped).toContain("has not ended");
-        expect(refusals.whileDirty).toContain("uncommitted changes");
-        expect(yield* (yield* FileSystem.FileSystem).readFileString(`${roaming}/left.txt`)).toBe(
-          "work",
+        expect(refusals.whileWaiting).not.toContain("uncommitted changes");
+        expect(refusals.whileStopped).not.toContain("uncommitted changes");
+        // Nothing was closed under it: it answered and finished in its checkout.
+        expect(refusals.ended?.status).toEqual({ status: "complete", value: roaming });
+        expect(yield* fs.readFileString(`${roaming}/left.txt`)).toBe("live work");
+      }),
+    ),
+  120_000,
+);
+
+/** HEAD of the checkout at `at`. */
+const headOf = (at: string) =>
+  exec(["git", "rev-parse", "HEAD"], { cwd: at }).pipe(Effect.map((done) => done.stdout.trim()));
+
+const logOf = (runId: string) =>
+  FileSystem.FileSystem.pipe(
+    Effect.flatMap((fs) => fs.readFileString(`${runDir(dir(), runId)}/log.txt`)),
+    Effect.orElseSucceed(() => ""),
+  );
+
+const committing = (cwd: string, ...args: string[]) =>
+  exec(["git", "-c", "user.name=t", "-c", "user.email=t@example.com", ...args], { cwd });
+
+/** The project pushed to an `origin` of its own, as a repository Collie works on has. */
+const withOrigin = Effect.gen(function* () {
+  const origin = `${rig.root}/origin.git`;
+  yield* committing(rig.root, "init", "--quiet", "--bare", "-b", "master", origin);
+  yield* committing(rig.projectDir, "remote", "add", "origin", origin);
+  yield* committing(rig.projectDir, "push", "--quiet", "origin", "master");
+  return origin;
+});
+
+/** A roaming start that fails at once, leaving its checkout to the next one. */
+const endedIn = (roams: Generation, request: string) =>
+  Effect.gen(function* () {
+    const started = yield* start(roams, { request, text: { work: "fail" } });
+    if (started._tag === "Failure") return yield* Effect.die(started.failure);
+    const view = yield* finished(started.success.runId);
+    return { runId: started.success.runId, at: view?.worktree?.path ?? "" };
+  });
+
+test(
+  "a roaming start passes over the checkout an ended Run left changes in, and works in the next one",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const roaming = `${rig.root}/.herdr/worktrees/project/roaming`;
+        const fs = yield* FileSystem.FileSystem;
+        const seen = yield* hosted(
+          Effect.gen(function* () {
+            const registry = yield* Registry;
+            const [roams] = yield* loaded(registry, [`${fixtures}/roams.workflow.ts`]);
+            const left = yield* endedIn(roams!, "r1");
+            yield* fs.writeFileString(`${roaming}/left.txt`, "work");
+            const kept = yield* headOf(roaming);
+            const next = yield* start(roams!, { request: "r2", text: { work: "next" } });
+            if (next._tag === "Failure") return yield* Effect.die(next.failure);
+            return {
+              left: left.runId,
+              kept,
+              view: yield* finished(next.success.runId),
+              log: yield* logOf(next.success.runId),
+            };
+          }),
         );
+
+        expect(seen.view?.status).toEqual({ status: "complete", value: `${roaming}-2` });
+        expect(seen.log).toContain(
+          `passed over ${roaming}: a checkout of ${rig.projectDir}, recorded by Run ${seen.left}, kept: uncommitted changes`,
+        );
+        expect(yield* fs.readFileString(`${roaming}/left.txt`)).toBe("work");
+        expect(yield* headOf(roaming)).toBe(seen.kept);
+      }),
+    ),
+  120_000,
+);
+
+test(
+  "the cleanup sweep removes a clean roaming checkout an ended Run left past a kept one, and keeps the kept one",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const roaming = `${rig.root}/.herdr/worktrees/project/roaming`;
+        const fs = yield* FileSystem.FileSystem;
+        yield* withOrigin;
+        const runs = yield* hosted(
+          Effect.gen(function* () {
+            const registry = yield* Registry;
+            const [roams] = yield* loaded(registry, [`${fixtures}/roams.workflow.ts`]);
+            yield* endedIn(roams!, "r1");
+            yield* fs.writeFileString(`${roaming}/left.txt`, "work");
+            const next = yield* start(roams!, { request: "r2", text: { work: "next" } });
+            if (next._tag === "Failure") return yield* Effect.die(next.failure);
+            yield* finished(next.success.runId);
+            // herdr lists the repository's checkouts, as it would git's.
+            const state = `${rig.logPath}.state.json`;
+            const was = Schema.decodeUnknownSync(
+              Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown)),
+            )(yield* fs.readFileString(state).pipe(Effect.orElseSucceed(() => "{}")));
+            const worktrees = [roaming, `${roaming}-2`].map((path) => ({
+              path,
+              branch: "",
+              open_workspace_id: null,
+            }));
+            yield* fs.writeFileString(state, asJson({ ...was, worktrees }));
+            return (yield* registry.views(null)).map((view) => factsOfView(dir(), view));
+          }),
+        );
+        const herdr = new FakeHerdr(env());
+        const report = yield* sweep(
+          [
+            worktreesSweeper({
+              herdr,
+              sessions: [herdr],
+              stateDir: dir(),
+              runs,
+              registered: [],
+              cwd: rig.projectDir,
+            }),
+          ],
+          dir(),
+          "host",
+        );
+
+        expect(report.remove.map((one) => one.target)).toEqual([`${roaming}-2`]);
+        expect(report.keep).toContainEqual({
+          kind: "worktree",
+          target: roaming,
+          reason: "uncommitted changes",
+        });
+        expect(yield* fs.exists(`${roaming}-2`)).toBe(false);
+        expect(yield* fs.readFileString(`${roaming}/left.txt`)).toBe("work");
+      }),
+    ),
+  120_000,
+);
+
+test(
+  "a roaming start passes over the checkout an ended Run left a commit on no branch in",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const roaming = `${rig.root}/.herdr/worktrees/project/roaming`;
+        const seen = yield* hosted(
+          Effect.gen(function* () {
+            const registry = yield* Registry;
+            const [roams] = yield* loaded(registry, [`${fixtures}/roams.workflow.ts`]);
+            yield* endedIn(roams!, "r1");
+            yield* committing(roaming, "commit", "--quiet", "--allow-empty", "-m", "kept");
+            const kept = yield* headOf(roaming);
+            const next = yield* start(roams!, { request: "r2", text: { work: "next" } });
+            if (next._tag === "Failure") return yield* Effect.die(next.failure);
+            return {
+              kept,
+              view: yield* finished(next.success.runId),
+              log: yield* logOf(next.success.runId),
+            };
+          }),
+        );
+
+        expect(seen.view?.status).toEqual({ status: "complete", value: `${roaming}-2` });
+        expect(seen.log).toContain(`passed over ${roaming}: `);
+        expect(seen.log).toContain("kept: 1 commit on no branch or remote");
+        expect(yield* headOf(roaming)).toBe(seen.kept);
+      }),
+    ),
+  120_000,
+);
+
+test(
+  "a roaming start takes over the next checkout an ended Run left clean rather than making another",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const roaming = `${rig.root}/.herdr/worktrees/project/roaming`;
+        const fs = yield* FileSystem.FileSystem;
+        const seen = yield* hosted(
+          Effect.gen(function* () {
+            const registry = yield* Registry;
+            const [roams] = yield* loaded(registry, [`${fixtures}/roams.workflow.ts`]);
+            yield* endedIn(roams!, "r1");
+            yield* fs.writeFileString(`${roaming}/left.txt`, "work");
+            const first = yield* endedIn(roams!, "r2");
+            const next = yield* start(roams!, { request: "r3", text: { work: "next" } });
+            if (next._tag === "Failure") return yield* Effect.die(next.failure);
+            return {
+              first,
+              view: yield* finished(next.success.runId),
+              log: yield* logOf(next.success.runId),
+            };
+          }),
+        );
+
+        expect(seen.first.at).toBe(`${roaming}-2`);
+        expect(seen.view?.status).toEqual({ status: "complete", value: `${roaming}-2` });
+        expect(seen.log).toContain(`took worktree ${roaming}-2 over from Run ${seen.first.runId}`);
+        expect(yield* fs.exists(`${roaming}-3`)).toBe(false);
+      }),
+    ),
+  120_000,
+);
+
+test(
+  "two roaming starts at once past a kept checkout: one works, the other is refused while it has not ended",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const roaming = `${rig.root}/.herdr/worktrees/project/roaming`;
+        const fs = yield* FileSystem.FileSystem;
+        const seen = yield* hosted(
+          Effect.gen(function* () {
+            const registry = yield* Registry;
+            const [roams, waits] = yield* loaded(registry, [
+              `${fixtures}/roams.workflow.ts`,
+              `${fixtures}/roams-and-waits.workflow.ts`,
+            ]);
+            yield* endedIn(roams!, "r1");
+            yield* fs.writeFileString(`${roaming}/left.txt`, "work");
+            const kept = yield* headOf(roaming);
+            const both = yield* Effect.all(
+              [
+                start(waits!, { request: "r2", text: { work: "wait" } }),
+                start(waits!, { request: "r3", text: { work: "wait" } }),
+              ],
+              { concurrency: "unbounded" },
+            );
+            const worked = both.filter(Result.isSuccess).map((one) => one.success.runId);
+            const refused = both.filter(Result.isFailure).map(refusedWith);
+            const places: string[] = [];
+            for (const runId of worked) {
+              const view = yield* until(
+                () => registry.view(runId),
+                (view) => view?.status.status === "suspended",
+              );
+              places.push(view?.worktree?.path ?? "");
+              yield* registry.answer({
+                runId,
+                decision: "go",
+                value: "yes",
+                request: `go-${runId}`,
+              });
+              yield* finished(runId);
+            }
+            return { kept, worked, refused, places };
+          }),
+        );
+
+        expect(seen.worked).toHaveLength(1);
+        expect(seen.places).toEqual([`${roaming}-2`]);
+        expect(seen.refused).toHaveLength(1);
+        expect(seen.refused[0]).toContain(`${seen.worked[0]} has not ended`);
+        expect(yield* fs.readFileString(`${roaming}/left.txt`)).toBe("work");
+        expect(yield* headOf(roaming)).toBe(seen.kept);
+      }),
+    ),
+  120_000,
+);
+
+test(
+  "a roaming start passes over another clone's checkout of the same name and leaves it alone",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const roaming = `${rig.root}/.herdr/worktrees/project/roaming`;
+        const fs = yield* FileSystem.FileSystem;
+        const other = `${rig.root}/elsewhere/project`;
+        yield* committing(rig.root, "clone", "--quiet", yield* withOrigin, other);
+        yield* committing(other, "worktree", "add", "--quiet", "--detach", roaming, "master");
+        yield* fs.writeFileString(`${roaming}/theirs.txt`, "theirs");
+        const kept = yield* headOf(roaming);
+        const listed = (yield* committing(other, "worktree", "list", "--porcelain")).stdout;
+        const seen = yield* hosted(
+          Effect.gen(function* () {
+            const registry = yield* Registry;
+            const [roams] = yield* loaded(registry, [`${fixtures}/roams.workflow.ts`]);
+            const next = yield* start(roams!, { request: "r1", text: { work: "next" } });
+            if (next._tag === "Failure") return yield* Effect.die(next.failure);
+            return {
+              view: yield* finished(next.success.runId),
+              log: yield* logOf(next.success.runId),
+            };
+          }),
+        );
+
+        expect(seen.view?.status).toEqual({ status: "complete", value: `${roaming}-2` });
+        expect(seen.log).toContain(
+          `passed over ${roaming}: a checkout of ${other}, kept: another clone's`,
+        );
+        expect(yield* fs.readFileString(`${roaming}/theirs.txt`)).toBe("theirs");
+        expect(yield* headOf(roaming)).toBe(kept);
+        expect((yield* committing(other, "worktree", "list", "--porcelain")).stdout).toBe(listed);
+      }),
+    ),
+  120_000,
+);
+
+test(
+  "a roaming start is refused once all three checkouts are kept, naming each and why",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const roaming = `${rig.root}/.herdr/worktrees/project/roaming`;
+        const fs = yield* FileSystem.FileSystem;
+        const seen = yield* hosted(
+          Effect.gen(function* () {
+            const registry = yield* Registry;
+            const [roams] = yield* loaded(registry, [`${fixtures}/roams.workflow.ts`]);
+            const left: Array<{ runId: string; at: string; head: string }> = [];
+            for (const request of ["r1", "r2", "r3"]) {
+              const ended = yield* endedIn(roams!, request);
+              yield* fs.writeFileString(`${ended.at}/left.txt`, request);
+              left.push({ ...ended, head: yield* headOf(ended.at) });
+            }
+            const refused = refusedWith(
+              yield* start(roams!, { request: "r4", text: { work: "next" } }),
+            );
+            return { left, refused };
+          }),
+        );
+
+        expect(seen.left.map((one) => one.at)).toEqual([roaming, `${roaming}-2`, `${roaming}-3`]);
+        for (const [at, one] of seen.left.entries()) {
+          expect(seen.refused).toContain(
+            `${one.at} is a checkout of ${rig.projectDir}, recorded by Run ${one.runId}, kept: uncommitted changes`,
+          );
+          expect(yield* fs.readFileString(`${one.at}/left.txt`)).toBe(`r${at + 1}`);
+          expect(yield* headOf(one.at)).toBe(one.head);
+        }
+      }),
+    ),
+  120_000,
+);
+
+test(
+  "a roaming claim that fails past a kept checkout leaves nothing behind, and the next start works",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const roaming = `${rig.root}/.herdr/worktrees/project/roaming`;
+        const fs = yield* FileSystem.FileSystem;
+        const origin = yield* withOrigin;
+        const seen = yield* hosted(
+          Effect.gen(function* () {
+            const registry = yield* Registry;
+            const [roams] = yield* loaded(registry, [`${fixtures}/roams.workflow.ts`]);
+            yield* endedIn(roams!, "r1");
+            yield* fs.writeFileString(`${roaming}/left.txt`, "work");
+
+            yield* committing(
+              rig.projectDir,
+              "remote",
+              "set-url",
+              "origin",
+              `${rig.root}/gone.git`,
+            );
+            const unfetched = refusedWith(
+              yield* start(roams!, { request: "r2", text: { work: "next" } }),
+            );
+            yield* committing(rig.projectDir, "remote", "set-url", "origin", origin);
+            yield* fs.chmod(`${rig.root}/.herdr/worktrees/project`, 0o555);
+            const unadded = refusedWith(
+              yield* start(roams!, { request: "r3", text: { work: "next" } }),
+            );
+            yield* fs.chmod(`${rig.root}/.herdr/worktrees/project`, 0o755);
+            const recorded = (yield* registry.views(null)).flatMap((view) =>
+              view.worktree === null ? [] : [view.worktree.path],
+            );
+            const next = yield* start(roams!, { request: "r4", text: { work: "next" } });
+            if (next._tag === "Failure") return yield* Effect.die(next.failure);
+            return { unfetched, unadded, recorded, view: yield* finished(next.success.runId) };
+          }),
+        );
+
+        expect(seen.unfetched).toContain("could not fetch origin");
+        expect(seen.unadded).toContain(`${roaming}-2`);
+        expect(seen.recorded).not.toContain(`${roaming}-2`);
+        expect(seen.view?.status).toEqual({ status: "complete", value: `${roaming}-2` });
       }),
     ),
   120_000,
