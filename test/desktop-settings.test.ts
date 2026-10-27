@@ -511,6 +511,25 @@ test("Zoom is this computer's, under Board, 100% until set, and kept as a number
     }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
   ));
 
+test("the Flock chat's width is kept on this computer beside Zoom, a reset unsets it, and a file from before it reads unset", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "desktop-settings-" });
+      const held = yield* heldSettings(dir, () => NO_FLOCK_SETTINGS);
+      yield* held.save({ zoom: 1.25 });
+      yield* held.save({ chatWidth: 640 });
+      // As a restarted Desktop reads it.
+      expect(yield* readSettings(dir)).toEqual({ proactive: true, zoom: 1.25, chatWidth: 640 });
+
+      yield* held.save({ chatWidth: null });
+      expect(yield* readSettings(dir)).toEqual({ proactive: true, zoom: 1.25 });
+
+      yield* fs.writeFileString(`${dir}/settings.json`, '{"proactive":true}');
+      expect((yield* readSettings(dir)).chatWidth).toBeUndefined();
+    }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
+  ));
+
 test("the Flock chat's model is checked as a Run's is, with the Flock's extra models, and a refusal keeps nothing", () => {
   const before = { proactive: true, chatModel: "sonnet" };
   const refused = changeSettings(before, NO_FLOCK_SETTINGS, { chatModel: "gpt-6.1-sol" });

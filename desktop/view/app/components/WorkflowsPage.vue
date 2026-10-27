@@ -183,7 +183,10 @@ const SCHEMA = "rounded-md bg-muted p-3 font-mono text-xs whitespace-pre-wrap wr
         </div>
       </nav>
 
-      <div ref="detail" class="min-w-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
+      <div
+        ref="detail"
+        class="@container/detail min-w-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]"
+      >
         <article
           v-if="workflow"
           class="mx-auto flex w-full max-w-5xl flex-col gap-8 px-6 py-6"
@@ -255,7 +258,7 @@ const SCHEMA = "rounded-md bg-muted p-3 font-mono text-xs whitespace-pre-wrap wr
             </ul>
           </section>
 
-          <div class="grid grid-cols-1 gap-8 2xl:grid-cols-2">
+          <div class="grid grid-cols-1 gap-8 @3xl/detail:grid-cols-2">
             <section
               v-for="[label, drawn] in [
                 ['Result', workflow.success],

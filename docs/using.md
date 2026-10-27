@@ -2145,6 +2145,18 @@ reached again for it; **Put back**, or closing
 that window, returns it beside the board. **Hide the chat** folds the panel away, and the
 chat button in the board's header brings it back.
 
+Drag the edge between the board and the chat to make the chat wider or narrower; the
+board's cards re-lay out for the width left them. With the edge focused, ← widens the chat
+and → narrows it 16 px at a time, and a double-click puts back the default, 32rem or 40%
+of a narrower window. The chat is never narrower than 320 px, and leaves the board at least
+480 px unless the window is too narrow for both; a window resized, or a Zoom changed,
+clamps it again, and widening the window gives back the width you chose. Below 768 px the
+board's header shows its Workflows, Machines and Settings buttons as icons, and the
+Workflows page puts a workflow's Result and Failure side by side only where its own pane is
+768 px or wider. The width is kept for this computer beside Zoom in Desktop's
+`settings.json`, saved once when a drag ends or an arrow key is let go, so it survives a
+restart; a popped-out chat fills its own window.
+
 ```sh
 cd desktop
 bun install

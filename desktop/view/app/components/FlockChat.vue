@@ -60,7 +60,7 @@ const desktopSaid = (message: Message) => {
 };
 /** A message's markdown, with no margin above its first block or below its last. */
 const PROSE =
-  "prose prose-sm dark:prose-invert [&_.comark-content>:first-child]:mt-0 [&_.comark-content>:last-child]:mb-0";
+  "prose prose-sm max-w-none dark:prose-invert [&_.comark-content>:first-child]:mt-0 [&_.comark-content>:last-child]:mb-0";
 
 // Follows what arrives while the reader is near the bottom; scrolled up, it stays put.
 const NEAR_BOTTOM = 80;

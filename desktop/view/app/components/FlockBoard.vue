@@ -2,6 +2,7 @@
 import { SECTIONS } from "../../../../src/board-model";
 import { NOT_LIVE } from "../../../src/shared/flock";
 import { afterGesture, escapeOn, type Gesture, landedOn } from "../../../src/shared/board-clicks";
+import { CHAT_WIDTH, chatWidth, chatWidthMax } from "../../../src/shared/chat-width";
 import type { Level } from "../../../src/shared/usage";
 import { updatesAtom } from "../flock";
 import tile from "../../../../assets/brand/logos/collie-tile-256.png";
@@ -24,6 +25,8 @@ watch(everyTask, answering.settle, { immediate: true });
 const { summary } = useInSync();
 const usage = useUsage();
 usage.keepFresh();
+/** A header button's label, shown only where the board is wide enough for them all. */
+const NARROW_HIDDEN = "sr-only @3xl/board:not-sr-only";
 const LEVEL_CLASS = {
   ok: "text-muted",
   warn: "text-warning font-medium",
@@ -112,6 +115,30 @@ const popChatOut = async () => {
   popped.value = false;
 };
 
+const root = ref<HTMLElement | null>(null);
+/** The window's width in CSS pixels, which Zoom changes. */
+const windowWidth = ref(window.innerWidth);
+watch(root, (box, _, onCleanup) => {
+  if (box === null) return;
+  const resized = new ResizeObserver(([entry]) => {
+    if (entry !== undefined && entry.contentRect.width > 0)
+      windowWidth.value = entry.contentRect.width;
+  });
+  resized.observe(box);
+  onCleanup(() => resized.disconnect());
+});
+const chat = useChatWidth();
+const chatDrawn = computed(() => chatWidth(chat.chosen.value, windowWidth.value));
+const startChatDrag = (event: PointerEvent) => {
+  if (event.button !== 0 || !(event.currentTarget instanceof HTMLElement)) return;
+  event.preventDefault();
+  event.currentTarget.setPointerCapture(event.pointerId);
+  chat.startDrag(event.clientX, windowWidth.value);
+};
+const nudgeChat = (event: KeyboardEvent) => {
+  if (chat.nudge(event.key, windowWidth.value)) event.preventDefault();
+};
+
 watch(notices, (now, before) => {
   for (const text of now.slice(before.length)) toast.add({ title: text, color: "info" });
 });
@@ -150,8 +177,12 @@ watch(update, (now) => {
 </script>
 
 <template>
-  <div class="flex h-screen">
-    <div class="flex min-w-0 flex-1 flex-col">
+  <div
+    ref="root"
+    class="flex h-screen"
+    :class="chat.dragging.value !== null && 'cursor-col-resize select-none'"
+  >
+    <div class="@container/board flex min-w-0 flex-1 flex-col">
       <header class="flex items-center gap-3 border-b border-default px-4 py-3">
         <!-- The ring keeps the white tile's edge on a light header. -->
         <img :src="tile" alt="" class="size-6 rounded-md ring-1 ring-default" />
@@ -190,6 +221,7 @@ watch(update, (now) => {
           variant="outline"
           icon="i-lucide-workflow"
           label="Workflows"
+          :ui="{ label: NARROW_HIDDEN }"
           data-testid="workflows"
           :active="page?.kind === 'workflows'"
           active-variant="solid"
@@ -206,7 +238,7 @@ watch(update, (now) => {
           :aria-pressed="page?.kind === 'machines'"
           @click="toggle('machines')"
         >
-          Machines
+          <span :class="NARROW_HIDDEN">Machines</span>
           <UBadge
             v-if="(summary?.count ?? 0) > 0"
             size="sm"
@@ -221,6 +253,7 @@ watch(update, (now) => {
           variant="outline"
           icon="i-lucide-settings"
           label="Settings"
+          :ui="{ label: NARROW_HIDDEN }"
           data-testid="settings"
           :active="page?.kind === 'settings'"
           active-variant="solid"
@@ -339,12 +372,40 @@ watch(update, (now) => {
         />
       </div>
     </div>
-    <FlockChat
-      v-if="!popped"
-      v-show="chatShown"
-      class="w-[min(32rem,40vw)] shrink-0"
-      @pop-out="popChatOut"
-      @collapse="chatShown = false"
-    />
+    <template v-if="!popped">
+      <!-- Over the chat's border and edge, so it takes no width and the board's scrollbar stays clear. -->
+      <div
+        v-show="chatShown"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize the chat"
+        :aria-valuenow="Math.round(chatDrawn)"
+        :aria-valuemin="CHAT_WIDTH.min"
+        :aria-valuemax="Math.round(chatWidthMax(windowWidth))"
+        tabindex="0"
+        title="Drag to resize, double-click for the default width"
+        class="group relative z-10 -mr-2 flex w-2 shrink-0 cursor-col-resize touch-none outline-none"
+        data-testid="chat-resize"
+        @pointerdown="startChatDrag"
+        @pointermove="chat.drag($event.clientX, windowWidth)"
+        @lostpointercapture="chat.settle"
+        @keydown="nudgeChat"
+        @keyup="chat.settle"
+        @blur="chat.settle"
+        @dblclick="chat.reset"
+      >
+        <div
+          class="w-px transition-all group-hover:w-0.5 group-hover:bg-primary group-focus-visible:w-0.5 group-focus-visible:bg-primary"
+          :class="chat.dragging.value !== null && 'w-0.5 bg-primary'"
+        />
+      </div>
+      <FlockChat
+        v-show="chatShown"
+        class="shrink-0"
+        :style="{ width: `${chatDrawn}px` }"
+        @pop-out="popChatOut"
+        @collapse="chatShown = false"
+      />
+    </template>
   </div>
 </template>
