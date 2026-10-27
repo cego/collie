@@ -7,6 +7,7 @@
 import { Effect, FileSystem, Option, Path, Stream } from "effect";
 import { attachmentsDir, listAttachments } from "./attachments";
 import { handoffsIn } from "./handoffs";
+import { readReplies } from "./replies";
 import { attentionFor } from "./attention";
 import { configValue, readConfig, readSettingsSet } from "./config";
 import { settingOf, SETTINGS } from "./settings";
@@ -548,6 +549,7 @@ export const buildRunDetail = Effect.fn("Views.buildRunDetail")(function* (opts:
     ),
     evidence: yield* evidenceIn(run.evidence),
     handoffFiles: yield* handoffsIn(run.dir),
+    replies: yield* readReplies(run.dir).pipe(Effect.orElseSucceed(() => [])),
     attachments: (yield* listAttachments(attachmentsDir(run.dir))).map(
       ({ name, size, mediaType }) => ({ name, size, mediaType }),
     ),

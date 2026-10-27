@@ -824,7 +824,13 @@ export default defineWorkflow({
                     name: `answer-${n}.reply.${reply.id}`,
                     success: Schema.Literals(["posted", "already"]),
                     error: WorkflowError,
-                    execute: host.reply({ runId, cwd, comment: reply.id, body: reply.body }),
+                    execute: host.reply({
+                      runId,
+                      cwd,
+                      comment: reply.id,
+                      body: reply.body,
+                      ...(reply.kind !== undefined && { kind: reply.kind }),
+                    }),
                   });
                 return settled.head;
               }),

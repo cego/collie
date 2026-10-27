@@ -4,7 +4,8 @@ import { expect, test } from "bun:test";
 import { Effect, FileSystem, Schedule, Schema, Stream } from "effect";
 import { readAudit } from "../src/audit";
 import { readDispositions } from "../src/disposition";
-import { evidenceDir } from "../src/engine";
+import { recordReply } from "../src/replies";
+import { evidenceDir, runDir } from "../src/engine";
 import { factsOfView } from "../src/runs";
 import { readVerifications } from "../src/verify";
 import { currentEnv, readEnv } from "../src/env";
@@ -448,6 +449,60 @@ test(
           expect(lines.flatMap((line) => (line.kind === "superseded" ? [line.key] : []))).toEqual([
             ended,
           ]);
+        }),
+      ["plain.workflow.ts"],
+    ),
+  120_000,
+);
+
+test(
+  "a reply that disputed a reviewer is News, keyed by the comment, and a fixed one is not",
+  () =>
+    proves(
+      "collie-side-replied-",
+      (world) =>
+        Effect.gen(function* () {
+          const socket = `${world.home}/desk.sock`;
+          const env = yield* currentEnv.pipe(Effect.orDie);
+          const workspace = yield* new Herdr(env)
+            .workspaceCreate({ cwd: world.project, label: "desk" })
+            .pipe(Effect.orDie);
+          const desk = {
+            HERDR_SOCKET_PATH: socket,
+            HERDR_WORKSPACE_ID: workspace.workspaceId,
+            FAKE_HERDR_SESSIONS: asSessions([{ name: "desk", socket_path: socket }]),
+          };
+          const started = yield* collie(
+            world,
+            ["run", "start", "plain", "--here", "--input", "note=hi"],
+            desk,
+          );
+          const runId = yield* runIdOf(started.envelope);
+          const file = yield* newsPath(world.state, yield* herdOf(socket));
+          const items = readNews(file).pipe(
+            Effect.map((lines) => pending(lines, "flock@pc").items),
+          );
+          const ended = `${runId}:ended:succeeded`;
+          yield* until(items, (now) => now.some((item) => item.key === ended));
+          const mr = "https://github.com/acme/app/pull/7";
+          for (const [id, kind, body] of [
+            [41, "fixed", "Fixed in `c0ffee12`: renamed it"],
+            [42, "disputed", "Not changed: a map costs more here"],
+          ] as const)
+            yield* recordReply(runDir(world.state, runId), {
+              at: "2026-10-27T10:00:00Z",
+              mr,
+              comment: `${mr}#issuecomment-${id}`,
+              kind,
+              body,
+            });
+          const told = yield* until(items, (now) => now.length === 2);
+          yield* stopHost(world.state);
+          expect(told.map((item) => item.key)).toEqual([
+            ended,
+            `${runId}:disputed:${mr}#issuecomment-42`,
+          ]);
+          expect(told[1]!.text).toContain("Not changed: a map costs more here");
         }),
       ["plain.workflow.ts"],
     ),

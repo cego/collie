@@ -22,6 +22,7 @@ import { Herdr } from "../src/herdr";
 import { frontDoor, socketOf } from "../src/host";
 import { followRunDetail } from "../src/lifecycle";
 import { scopeFor } from "../src/registry";
+import { recordReply } from "../src/replies";
 import { diffOf, fetchRef, keepDiffs, runDiff } from "../src/run-detail";
 import { buildRunDetail, type PlanCache } from "../src/views";
 import { madeRun } from "./support/records";
@@ -142,6 +143,47 @@ test(
             .runFile({ runId, ref: "handoff:../log.txt" })
             .pipe(Effect.flip);
           expect(outside._tag).toBe("HostRefused");
+          yield* stopHost(world.state);
+        }).pipe(Effect.orDie),
+      ["plain.workflow.ts"],
+    ),
+  120_000,
+);
+
+test(
+  "the replies a Run posted to reviewers are on its record, in run show and the drawer",
+  () =>
+    proves(
+      "collie-detail-replies-",
+      (world) =>
+        Effect.gen(function* () {
+          const runId = yield* started(world, ["plain", "--input", "note=hi"]);
+          const mr = "https://github.com/acme/app/pull/7";
+          const replies = [
+            {
+              at: "2026-10-27T10:00:00Z",
+              mr,
+              comment: `${mr}#issuecomment-41`,
+              kind: "fixed" as const,
+              body: "Fixed in `c0ffee12`: renamed it",
+            },
+            {
+              at: "2026-10-27T10:01:00Z",
+              mr,
+              comment: `${mr}#issuecomment-42`,
+              kind: "disputed" as const,
+              body: "Not changed: a map costs more here",
+            },
+          ];
+          for (const reply of replies) yield* recordReply(runDir(world.state, runId), reply);
+
+          const shown = yield* collie(world, ["run", "show", runId]);
+          expect(shown.envelope.data).toMatchObject({ replies });
+
+          const detail = yield* (yield* frontDoor(socketOf(world.state)))
+            .runDetail({ runId, tail: false, pages: 1, refreshMr: false })
+            .pipe(Stream.runHead, Effect.timeout("30 seconds"));
+          expect(Option.getOrNull(detail)?.replies).toEqual(replies);
           yield* stopHost(world.state);
         }).pipe(Effect.orDie),
       ["plain.workflow.ts"],

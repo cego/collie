@@ -14,7 +14,7 @@ import { landingNow } from "./landing";
 import { settleMerges, type MrPanels } from "./merges";
 import { shell } from "./mr";
 import { append as appendNews, newsPath, read as readNews, retired, supersede } from "./news";
-import { eventsIn, holding, idleAgain, readSaid, remember } from "./proactive";
+import { disputesIn, eventsIn, holding, idleAgain, readSaid, remember } from "./proactive";
 import { latest, readDispositions } from "./disposition";
 import { readSeen } from "./seen";
 import { settled, type RunFacts } from "./runs";
@@ -56,8 +56,10 @@ const sayWhatHappened = Effect.fn("SideJobs.sayWhatHappened")(function* (
   const drifting = yield* escalatedDrift(runs);
   const ready = readyRuns(views);
   const gone = retired(yield* readNews(file));
+  const disputes = yield* disputesIn(runs);
   const held = holding(runs, drifting, yield* disposed(runs), ready, done);
-  for (const event of eventsIn(runs, drifting, ready, done)) {
+  for (const event of disputes) held.add(event.key);
+  for (const event of [...eventsIn(runs, drifting, ready, done), ...disputes]) {
     if (!held.has(event.key) || (said.has(event.key) && !gone.has(event.key))) continue;
     // Remembered only once it is in the journal, so a failed write is retried next round.
     const queued = yield* appendNews(file, {

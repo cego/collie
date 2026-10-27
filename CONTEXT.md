@@ -175,7 +175,8 @@ setting, apart from this one.
 
 **News** — What Collie noticed and the conversation has not been told: the approved
 triggers only — terminal outcomes, halts, pending Choices, evidence gaps, repeated-failure
-obstacles and unresolved drift. Written from the Run's own record with no model in the
+obstacles, unresolved drift and a reply a Run posted disputing a reviewer's comment, one
+per comment. Written from the Run's own record with no model in the
 path, so an unchanged Herd costs nothing; deduplicated by causal key, bounded into one
 batch that says what it left out. Each Herd keeps one journal of it, and every
 conversation keeps its own receipts on it, recorded by the host: what one conversation

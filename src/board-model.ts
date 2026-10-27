@@ -785,6 +785,17 @@ export const Flow = Schema.Struct({
 export type Flow = typeof Flow.Type;
 
 /** Everything the detail panel shows for the selected Run. */
+/** A reply a Run posted to a reviewer's comment, as posted. `kind` is absent where the workflow gave none. */
+export const RunReply = Schema.Struct({
+  at: Schema.String,
+  mr: Schema.String,
+  /** The comment's URL. */
+  comment: Schema.String,
+  kind: Schema.optionalKey(Schema.Literals(["fixed", "disputed"])),
+  body: Schema.String,
+});
+export type RunReply = typeof RunReply.Type;
+
 export const RunDetail = Schema.Struct({
   id: Schema.String,
   requestedBy: Schema.optional(RequestedBy),
@@ -858,6 +869,8 @@ export const RunDetail = Schema.Struct({
   handoffFiles: Schema.optional(Schema.Array(EvidenceFile)),
   /** Absent from a host older than attachments. */
   attachments: Schema.optional(Schema.Array(AttachmentFile)),
+  /** The replies it posted to reviewers. Absent from an older host. */
+  replies: Schema.optional(Schema.Array(RunReply)),
   /** Null for a Run with no branch or no checkout left to compare. */
   diff: Schema.NullOr(RunDiff),
   /** Every agent the Run started, in launch order. Absent from an older host. */

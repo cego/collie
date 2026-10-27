@@ -167,6 +167,7 @@ import {
   Flow,
   Controlled,
   Disposition,
+  RunReply,
   Seen,
   FrontDoorRpcs,
   HostRefused,
@@ -199,6 +200,7 @@ import {
 import { boardMessages, shareBoard } from "./board-stream";
 import { recordDisposition } from "./disposition";
 import { markSeenSince, readSeen, recordSeen } from "./seen";
+import { readReplies } from "./replies";
 import {
   NEWS_TRAIL,
   newsPath,
@@ -352,6 +354,8 @@ const RunShown = Schema.Struct({
   handoffs: Schema.optionalKey(
     Schema.Array(Schema.Struct({ path: Schema.String, bytes: Schema.Int })),
   ),
+  /** The replies it posted to reviewers. Absent from an older host. */
+  replies: Schema.optionalKey(Schema.Array(RunReply)),
   /** What of it waits for memory, as the card says it. Absent from an older host. */
   memory: Schema.optionalKey(Schema.NullOr(Schema.String)),
   /** The same Flow as its details carry. Absent from an older host. */
@@ -768,6 +772,7 @@ const handlers = (
                 path: `${handoffsDir(runDir(dir, runId))}/${file.name}`,
                 bytes: file.bytes,
               })),
+              replies: yield* readReplies(runDir(dir, runId)).pipe(Effect.orElseSucceed(() => [])),
               memory: yield* Effect.map(memoryWaitOf(runDir(dir, runId)), (wait) =>
                 wait === null ? null : waitLine(wait),
               ),

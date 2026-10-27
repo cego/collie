@@ -517,8 +517,12 @@ new external comment, or a reply in a thread after Collie's, starts a comment ro
 `answer-<n>`: the agent checks each against the code, fixes what holds test first and
 pushes with a plain push, and disputes what it judges wrong, with a reason. Collie then
 replies to each comment on the forge, linking it: "Fixed in `<sha>`: …" once the merge
-request's head carries that commit, or "Not changed: …" with the reason. It never
-resolves a thread, and a restart never posts a reply twice. A comment a round left out,
+request's head carries that commit, or "Not changed: …" with the reason. Each reply ends
+with a line naming the Run and its Machine ("Posted by Collie's Run … on …"), so a reviewer
+can tell it from your own words though it is posted as your login. The host records every
+reply on the Run, where `collie run show`, the drawer and Desktop's record list it, and a
+reply that disputes a comment reaches the board and chat as News; nothing waits for you. It
+never resolves a thread, and a restart never posts a reply twice. A comment a round left out,
 or whose commit the head does not carry, goes to the next round, and a round that
 answers none of its comments parks the Run, naming them. Comment rounds are not bounded:
 they follow the reviewers.

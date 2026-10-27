@@ -55,6 +55,8 @@ import { laneFor } from "../../src/flow-read";
 import type { RunState } from "../../src/runs";
 import { runFacts } from "./records";
 import { readLaunches } from "../../src/launches";
+import { readReplies } from "../../src/replies";
+import { disputesIn } from "../../src/proactive";
 import { AwaitingJson } from "../../src/awaiting";
 import { installFakeSkills } from "./defs";
 import { Agents, agentsLayer, type AgentHost } from "../../src/agents";
@@ -9173,6 +9175,9 @@ const POSTED = { posted: true, link: "https://example.slack.com/archives/C01/p17
 /** The replies Collie posted on the merge request, in order. */
 const repliesOf = (model: ForgeModel) => Object.values(model.replies ?? {}).flat();
 
+/** The last line of every reply a Run posts. */
+const signed = (runId: string) => `\n\nPosted by Collie's Run ${runId} on ${hostname()}.`;
+
 /** Collie's own Checks: `check`, left to CI's `test` job, counting any local run. */
 const ownCheck = (runId: string) =>
   FileSystem.FileSystem.pipe(
@@ -9939,10 +9944,19 @@ for (const name of ["gitlab", "github"] as const) {
           const model = yield* forge.model();
           yield* bin.restore();
           expect(outcomeText(status)).toBe(`${mr} was left open`);
-          expect(repliesOf(model).map((one) => one.body)).toEqual([
-            `${commentUrl(name, 41)}\n\nFixed in \`${fix.slice(0, 8)}\`: renamed it`,
-            `${commentUrl(name, 42)}\n\nNot changed: a map costs more here`,
+          const fixed = `${commentUrl(name, 41)}\n\nFixed in \`${fix.slice(0, 8)}\`: renamed it${signed(runId)}`;
+          const disputed = `${commentUrl(name, 42)}\n\nNot changed: a map costs more here${signed(runId)}`;
+          expect(repliesOf(model).map((one) => one.body)).toEqual([fixed, disputed]);
+          const recorded = yield* readReplies(runDir(dir, runId));
+          expect(
+            recorded.map(({ comment, kind, body, mr: on }) => ({ comment, kind, body, on })),
+          ).toEqual([
+            { comment: commentUrl(name, 41), kind: "fixed", body: fixed, on: mr },
+            { comment: commentUrl(name, 42), kind: "disputed", body: disputed, on: mr },
           ]);
+          expect(
+            (yield* disputesIn([{ id: runId, dir: runDir(dir, runId) }])).map((one) => one.key),
+          ).toEqual([`${runId}:disputed:${commentUrl(name, 42)}`]);
           const answering = yield* asked(runId, "answer-1");
           expect(answering).toContain(commentUrl(name, 41));
           expect(answering).toContain("please rename this");
@@ -9957,6 +9971,41 @@ for (const name of ["gitlab", "github"] as const) {
           );
           expect(proved).toEqual([head, fix]);
           expect((yield* prompts()).filter((one) => one.includes("/answer-"))).toHaveLength(1);
+        }),
+      ),
+    120_000,
+  );
+
+  scenario(
+    `release on ${name}: the host's reply is signed with the Run and its Machine, and a second reply to the comment is already`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const comment = { id: 46, author: "bob", at: "2026-10-20T11:00:00Z", body: "rename it" };
+          const { bin, forge } = yield* releasable(name, { comments: [comment] });
+          const runId = `r-signed-${name}`;
+          const fs = yield* FileSystem.FileSystem;
+          yield* fs.makeDirectory(runDir(dir, runId), { recursive: true });
+          yield* fs.writeFileString(`${runDir(dir, runId)}/merge-request`, `${mr}\n`);
+          const said = yield* session(
+            Effect.gen(function* () {
+              const host = yield* Host;
+              const asked = {
+                runId,
+                cwd: rig.projectDir,
+                comment: "46",
+                body: `${commentUrl(name, 46)}\n\nNot changed: the name is the domain's`,
+                kind: "disputed" as const,
+              };
+              return [yield* host.reply(asked), yield* host.reply(asked)];
+            }),
+          );
+          const model = yield* forge.model();
+          yield* bin.restore();
+          expect(said).toEqual(["posted", "already"]);
+          expect(repliesOf(model).map((one) => one.body)).toEqual([
+            `${commentUrl(name, 46)}\n\nNot changed: the name is the domain's${signed(runId)}`,
+          ]);
         }),
       ),
     120_000,
@@ -10081,8 +10130,8 @@ for (const name of ["gitlab", "github"] as const) {
           yield* bin.restore();
           expect(outcomeText(status)).toBe(`${mr} was left open`);
           expect(repliesOf(model).map((one) => one.body)).toEqual([
-            `${commentUrl(name, 61)}\n\nNot changed: not 61`,
-            `${commentUrl(name, 62)}\n\nNot changed: not 62`,
+            `${commentUrl(name, 61)}\n\nNot changed: not 61${signed(runId)}`,
+            `${commentUrl(name, 62)}\n\nNot changed: not 62${signed(runId)}`,
           ]);
         }),
       ),

@@ -188,6 +188,21 @@ describe("what the Summary shows", () => {
     });
   });
 
+  test("list the replies the Run posted to reviewers last", () => {
+    const reply = {
+      at: "2026-10-27T10:00:00Z",
+      mr: "https://github.com/acme/app/pull/7",
+      comment: "https://github.com/acme/app/pull/7#issuecomment-42",
+      kind: "disputed" as const,
+      body: "Not changed: a map costs more here",
+    };
+    expect(summaryOf({ ...full, replies: [reply] }).at(-1)).toEqual({
+      section: "replies",
+      replies: [reply],
+    });
+    expect(summaryOf({ ...bare, replies: [] })).toEqual([{ section: "status", status: "running" }]);
+  });
+
   test("for a Run with only a status are its status", () => {
     expect(summaryOf(bare)).toEqual([{ section: "status", status: "running" }]);
   });

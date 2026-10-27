@@ -123,7 +123,14 @@ export type Answer = typeof AnswerSchema.Type;
 
 /** The replies a round's answers earn, and the comments handed to the next round. */
 export const SettledAnswersSchema = Schema.Struct({
-  replies: Schema.Array(Schema.Struct({ id: Schema.String, body: Schema.String })),
+  replies: Schema.Array(
+    Schema.Struct({
+      id: Schema.String,
+      /** Absent from a round settled before replies were recorded. */
+      kind: Schema.optionalKey(Schema.Literals(["fixed", "disputed"])),
+      body: Schema.String,
+    }),
+  ),
   carried: Schema.Array(OpenCommentSchema),
 });
 export type SettledAnswers = typeof SettledAnswersSchema.Type;
@@ -139,7 +146,7 @@ export function settleAnswers(round: {
   readonly onHead: ReadonlyArray<string>;
   readonly open: ReadonlyArray<string>;
 }): SettledAnswers {
-  const replies: Array<{ id: string; body: string }> = [];
+  const replies: Array<SettledAnswers["replies"][number]> = [];
   const carried: OpenComment[] = [];
   for (const comment of round.given.filter((one) => round.open.includes(one.id))) {
     const answer = round.answers.find((one) => one.id === comment.id);
@@ -150,7 +157,12 @@ export function settleAnswers(round: {
           ? `Fixed in \`${answer.commit.slice(0, 8)}\`: ${answer.note}`
           : null;
     if (says === null) carried.push(comment);
-    else replies.push({ id: comment.id, body: `${comment.url}\n\n${says}` });
+    else
+      replies.push({
+        id: comment.id,
+        kind: answer!.answer,
+        body: `${comment.url}\n\n${says}`,
+      });
   }
   return { replies, carried };
 }

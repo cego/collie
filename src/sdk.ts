@@ -927,15 +927,18 @@ export interface HostApi {
   }) => Effect.Effect<ReviewStanding, WorkflowError>;
   /**
    * Replies to the comment with id `comment` on the merge request this Run recorded, posting
-   * `body` as it is, in the comment's thread where it has one. Never resolves a thread. A
-   * comment already answered, as after a restart that posted the reply before it was
-   * journaled, is `already` and gets no second reply. Take each inside its own Activity.
+   * `body` with a last line naming the Run and its Machine, in the comment's thread where it
+   * has one. Never resolves a thread. A comment already answered, as after a restart that
+   * posted the reply before it was journaled, is `already` and gets no second reply. A posted
+   * reply is recorded on the Run with its `kind`, and a `disputed` one is News. Take each
+   * inside its own Activity.
    */
   readonly reply: (options: {
     readonly runId: string;
     readonly cwd: string;
     readonly comment: string;
     readonly body: string;
+    readonly kind?: "fixed" | "disputed";
   }) => Effect.Effect<"posted" | "already", WorkflowError>;
   /**
    * The recorded merge request's head as the forge reports it, which of `commits` that head

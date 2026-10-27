@@ -633,7 +633,9 @@ A Run is watched from the host's own stream: every update
 is the whole current state rather than a change to apply, so a `wait` started long after
 the work — or resumed after the last one was interrupted — reads where the Run is instead
 of waiting for a notification that has already been and gone. `run show` lists the handoff notes the Run's agents left under its `handoffs/` directory,
-by path (`data.handoffs`). It names the module file the Run is on, and a
+by path (`data.handoffs`), and the replies it posted to reviewers, each with when, the merge
+request, the comment's URL, whether it was `fixed` or `disputed`, and its body as posted
+(`data.replies`). It names the module file the Run is on, and a
 Run whose module has been deleted still reads, pending, with that file named: its history
 is Collie's rows, and none of them went anywhere. `run list` shows those Runs beside the
 rest; where the host will not start it says so and still lists the others.

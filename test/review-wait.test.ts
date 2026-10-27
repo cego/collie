@@ -231,7 +231,7 @@ test("a fixed answer is replied to with its commit only where the head carries i
     open: ["1", "2"],
   });
   expect(settled.replies).toEqual([
-    { id: "1", body: `${given[0]!.url}\n\nFixed in \`c0ffee12\`: renamed it` },
+    { id: "1", kind: "fixed", body: `${given[0]!.url}\n\nFixed in \`c0ffee12\`: renamed it` },
   ]);
   expect(settled.carried.map((one) => one.id)).toEqual(["2"]);
 });
@@ -245,7 +245,11 @@ test("a disputed answer is replied to with its reason, and one left out is carri
     open: ["1", "2"],
   });
   expect(settled.replies).toEqual([
-    { id: "1", body: `${given[0]!.url}\n\nNot changed: the name is the domain's` },
+    {
+      id: "1",
+      kind: "disputed",
+      body: `${given[0]!.url}\n\nNot changed: the name is the domain's`,
+    },
   ]);
   expect(settled.carried.map((one) => one.id)).toEqual(["2"]);
 });

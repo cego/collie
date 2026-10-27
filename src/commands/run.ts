@@ -75,6 +75,7 @@ import {
 } from "../following";
 import { reportLines } from "../report";
 import { latest, statusLine } from "../disposition";
+import { replyLine } from "../replies";
 import { epochMs } from "../time";
 import type { PluginEnv } from "../env";
 import {
@@ -475,6 +476,7 @@ const runShow = Command.make(
             machine,
             startedBy,
             handoffs = [],
+            replies = [],
             memory = null,
             flow = null,
           } = shown;
@@ -498,6 +500,7 @@ const runShow = Command.make(
               next_action: view.waiting[0]?.name ?? null,
               machine,
               handoffs,
+              replies,
               ready,
               memory,
               flow,
@@ -531,6 +534,7 @@ const runShow = Command.make(
               ...describeWaiting(view),
               ...children.map((child) => `  ${child.runId}\t${child.workflow}\t${statusOf(child)}`),
               ...handoffs.map((file) => `  handoff ${file.path} (${file.bytes} bytes)`),
+              ...replies.map((reply) => `  ${replyLine(reply)}`),
               ...(ready === null ? [] : readyLines(ready).map((line) => `  ${line}`)),
             ].join("\n"),
           };

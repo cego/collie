@@ -159,7 +159,10 @@ export const keyAction = (facts: KeyFacts): KeyAction | null => {
  */
 export const typedIn = (composedPath: ReadonlyArray<Target>): Target => composedPath[0] ?? null;
 
-export type SummaryFacts = Pick<RunDetail, "status" | "attention" | "steps" | "inputs"> & {
+export type SummaryFacts = Pick<
+  RunDetail,
+  "status" | "attention" | "steps" | "inputs" | "replies"
+> & {
   readonly outcome: Omit<RunDetail["outcome"], "metrics">;
 };
 
@@ -173,7 +176,8 @@ export type SummarySection =
       readonly explanation: string;
     }
   | ({ readonly section: "outcome" } & Outcome)
-  | { readonly section: "inputs"; readonly inputs: RunDetail["inputs"] };
+  | { readonly section: "inputs"; readonly inputs: RunDetail["inputs"] }
+  | { readonly section: "replies"; readonly replies: NonNullable<RunDetail["replies"]> };
 
 const saysSomething = ({ kind, gaps, obstacle, next, delivered }: Outcome) =>
   gaps.length > 0 || [kind, obstacle, next, delivered].some((said) => said !== null);
@@ -189,5 +193,8 @@ export const summaryOf = (detail: SummaryFacts): ReadonlyArray<SummarySection> =
       ? [{ section: "outcome", kind, gaps, obstacle, next, delivered } as const]
       : []),
     ...(detail.inputs.length === 0 ? [] : [{ section: "inputs", inputs: detail.inputs } as const]),
+    ...(detail.replies === undefined || detail.replies.length === 0
+      ? []
+      : [{ section: "replies", replies: detail.replies } as const]),
   ];
 };

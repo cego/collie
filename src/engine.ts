@@ -13,6 +13,8 @@ import type { Asker } from "./proposals";
 import { actorOf, readAudit, whoActed, type ScheduledBy } from "./audit";
 import { LinkDelivery, readLinkDeliveries } from "./run-links";
 import { appendLogLine } from "./run-log";
+import { recordReply } from "./replies";
+import { hostname } from "node:os";
 import * as BunCrypto from "@effect/platform-bun/BunCrypto";
 import * as SqliteClient from "@effect/sql-sqlite-bun/SqliteClient";
 import {
@@ -500,7 +502,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
 
   /** The replies a round's answers earn, and the comments handed to the next round. */
   export interface SettledAnswers {
-    readonly replies: ReadonlyArray<{ readonly id: string; readonly body: string }>;
+    readonly replies: ReadonlyArray<{ readonly id: string; readonly kind?: "fixed" | "disputed"; readonly body: string }>;
     readonly carried: ReadonlyArray<OpenComment>;
   }
   export const SettledAnswersSchema: Schema.Codec<SettledAnswers, unknown, never, never>;
@@ -801,12 +803,13 @@ export const SDK_DECLARATIONS = `declare module "collie" {
       readonly proved: string;
       readonly seen: ReadonlyArray<string>;
     }) => Effect.Effect<ReviewStanding, WorkflowError>;
-    /** Replies to comment \`comment\` of the recorded merge request, unless it is answered already. Take it inside an Activity. */
+    /** Replies to comment \`comment\` of the recorded merge request, signed and recorded on the Run, unless it is answered already; a \`disputed\` one is News. Take it inside an Activity. */
     readonly reply: (options: {
       readonly runId: string;
       readonly cwd: string;
       readonly comment: string;
       readonly body: string;
+      readonly kind?: "fixed" | "disputed";
     }) => Effect.Effect<"posted" | "already", WorkflowError>;
     /** The recorded merge request's head, which of \`commits\` it carries, and its open external comments. Take it inside an Activity. */
     readonly reviewHead: (options: {
@@ -4069,13 +4072,25 @@ export const hostLayer = (options: {
                 reason: `${mr} has no comment ${asked.comment} to reply to`,
               });
             if (comment.answered) return "already" as const;
+            const body = redact(
+              `${asked.body}\n\nPosted by Collie's Run ${asked.runId} on ${hostname()}.`,
+            );
             const replied = yield* under(
-              forgeOf(ref).reply(ref, comment, redact(asked.body), asked.cwd, runShell),
+              forgeOf(ref).reply(ref, comment, body, asked.cwd, runShell),
             );
             if (!replied.ok)
               return yield* new WorkflowError({
                 reason: `the forge refused the reply to ${comment.url}: ${replied.reason}`,
               });
+            yield* under(
+              recordReply(runDir(dir, asked.runId), {
+                at: yield* nowIso(),
+                mr,
+                comment: comment.url,
+                ...(asked.kind !== undefined && { kind: asked.kind }),
+                body,
+              }),
+            ).pipe(Effect.orDie);
             return "posted" as const;
           }),
         reviewHead: (asked) =>
