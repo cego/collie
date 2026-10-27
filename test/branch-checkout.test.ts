@@ -162,6 +162,25 @@ test(
 );
 
 test(
+  "a symlink to nothing at the branch's path is passed over, and left pointing where it did",
+  () =>
+    runOnPath(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        yield* fs.makeDirectory(first.slice(0, first.lastIndexOf("/")), { recursive: true });
+        yield* fs.symlink(`${rig.root}/gone`, first);
+
+        const checkout = yield* ask();
+
+        expect(checkout.refused).toBeNull();
+        expect(checkout.cwd).toBe(`${first}-2`);
+        expect(yield* fs.readLink(first)).toBe(`${rig.root}/gone`);
+      }),
+    ),
+  60_000,
+);
+
+test(
   "this repository's checkout of another branch at the path is passed over, still on its branch",
   () =>
     runOnPath(

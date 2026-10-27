@@ -816,7 +816,10 @@ const madeAt = Effect.fn("worktree.madeAt")(function* (worktreePath: string) {
  */
 const occupant = Effect.fn("worktree.occupant")(function* (at: string) {
   const fs = yield* FileSystem.FileSystem;
-  const there = yield* fs.exists(at).pipe(Effect.catch(() => Effect.succeed(true)));
+  // A symlink holds the path even where its target has gone, and `exists` follows it.
+  const there =
+    Option.isSome(yield* fs.readLink(at).pipe(Effect.option)) ||
+    (yield* fs.exists(at).pipe(Effect.catch(() => Effect.succeed(true))));
   if (!there) return null;
   const marker = yield* fs
     .readFileString(`${at}/.git`)
