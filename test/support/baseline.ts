@@ -144,6 +144,14 @@ let started: ChildAsk[] = [];
 /** The invocations whose child ends in failure. */
 let failing = new Set<string>();
 let childWaits = new Map<string, Deferred.Deferred<void>>();
+/** A held invocation, and the invocation whose start it waits for. */
+let startsAfter = new Map<string, string>();
+let startSignals = new Map<string, Deferred.Deferred<void>>();
+const startSignal = (invocation: string) => {
+  const signal = startSignals.get(invocation) ?? Deferred.makeUnsafe<void>();
+  startSignals.set(invocation, signal);
+  return signal;
+};
 let renamed = false;
 
 /** The public id a shipped workflow is run under in this pass. */
@@ -187,7 +195,10 @@ const children = Layer.succeed(Children)(
   Children.of({
     start: (ask) =>
       Effect.gen(function* () {
+        const after = startsAfter.get(ask.invocation);
+        if (after !== undefined) yield* Deferred.await(startSignal(after));
         started.push(ask);
+        yield* Deferred.succeed(startSignal(ask.invocation), undefined);
         const parent = Option.getOrUndefined(yield* Effect.serviceOption(Run))?.id;
         return {
           runId: `${parent}-${ask.invocation}`,
@@ -13300,96 +13311,112 @@ scenario(
   120_000,
 );
 
-scenario(
-  "a day's findings are filed or commented, all-new Improvements start, and the summary says so",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        freshDay();
-        openIssues = [
-          { number: 7, title: "Reads are slow", body: "Slow.", url: "https://x/issues/7" },
-          {
-            number: 8,
-            title: "Checks unwired",
-            body: `Unwired.\n\n${markerOf("unwired-checks")}`,
-            url: "https://x/issues/8",
-          },
-        ];
-        refusing = new Set(["Project refused-text"]);
-        failing = new Set(["improvement-second"]);
-        yield* rig.queueOutputs([
-          triaged(
-            [
-              finding({
-                key: "host-crash",
-                category: "defect",
-                runs: ["r-a"],
-                body: `Leaked ${LEAKED} in its log.`,
-              }),
-              finding({ key: "once", runs: ["r-a"] }),
-              finding({ key: "costly-reads", category: "tool-economy" }),
-              finding({ key: "slow-reads", runs: ["r-a"], issue: 7 }),
-              finding({ key: "unwired-checks", category: "automated-checks", runs: ["r-a"] }),
-              finding({ key: "refused-text" }),
-              finding({ key: "third", severity: "low" }),
-            ],
-            [
-              { name: "first", keys: ["host-crash"], why: "one crash" },
-              { name: "with-open", keys: ["third", "slow-reads"], why: "related" },
-              { name: "second", keys: ["costly-reads"], why: "one read" },
-              { name: "beyond", keys: ["third"], why: "over the bound" },
-            ],
-          ),
-        ]);
+const aDay = () =>
+  runEffect(
+    Effect.gen(function* () {
+      freshDay();
+      openIssues = [
+        { number: 7, title: "Reads are slow", body: "Slow.", url: "https://x/issues/7" },
+        {
+          number: 8,
+          title: "Checks unwired",
+          body: `Unwired.\n\n${markerOf("unwired-checks")}`,
+          url: "https://x/issues/8",
+        },
+      ];
+      refusing = new Set(["Project refused-text"]);
+      failing = new Set(["improvement-second"]);
+      yield* rig.queueOutputs([
+        triaged(
+          [
+            finding({
+              key: "host-crash",
+              category: "defect",
+              runs: ["r-a"],
+              body: `Leaked ${LEAKED} in its log.`,
+            }),
+            finding({ key: "once", runs: ["r-a"] }),
+            finding({ key: "costly-reads", category: "tool-economy" }),
+            finding({ key: "slow-reads", runs: ["r-a"], issue: 7 }),
+            finding({ key: "unwired-checks", category: "automated-checks", runs: ["r-a"] }),
+            finding({ key: "refused-text" }),
+            finding({ key: "third", severity: "low" }),
+          ],
+          [
+            { name: "first", keys: ["host-crash"], why: "one crash" },
+            { name: "with-open", keys: ["third", "slow-reads"], why: "related" },
+            { name: "second", keys: ["costly-reads"], why: "one read" },
+            { name: "beyond", keys: ["third"], why: "over the bound" },
+          ],
+        ),
+      ]);
 
-        const result = yield* improved("r-day", { runs: "machine", improvements: 2 });
+      const result = yield* improved("r-day", { runs: "machine", improvements: 2 });
 
-        expect(saidBy(result)).toContain(
-          "Filed 3, commented 2, refused 1; 2 Improvements, 1 failed",
-        );
-        const retro = `${rig.root}/.agents/skills/retro/SKILL.md`;
-        const prompt = yield* readText(`${dir}/agents/r-day/triage.prompt.md`);
-        expect(prompt).toContain(`read \`${retro}\` and follow it`);
-        expect(prompt).toContain("this page wins");
-        const persona = yield* readText(`${dir}/agents/r-day/triage.persona.md`);
-        expect(persona).toContain("retrospective");
-        expect(persona).toContain(`read \`${retro}\` and follow it`);
+      expect(saidBy(result)).toContain("Filed 3, commented 2, refused 1; 2 Improvements, 1 failed");
+      const retro = `${rig.root}/.agents/skills/retro/SKILL.md`;
+      const prompt = yield* readText(`${dir}/agents/r-day/triage.prompt.md`);
+      expect(prompt).toContain(`read \`${retro}\` and follow it`);
+      expect(prompt).toContain("this page wins");
+      const persona = yield* readText(`${dir}/agents/r-day/triage.persona.md`);
+      expect(persona).toContain("retrospective");
+      expect(persona).toContain(`read \`${retro}\` and follow it`);
 
-        expect(filed.map(({ title }) => title)).toEqual([
-          "Project host-crash",
-          "Project costly-reads",
-          "Project third",
-        ]);
-        expect(filed[0]?.body).toEndWith(
-          `${markerOf("host-crash")}\n\nFiled by Collie's self-improve Run r-day on ${hostname()}.`,
-        );
-        expect(commented.map(({ number }) => number)).toEqual([7, 8]);
-        expect(commented[0]?.body).toStartWith("Seen again in r-a ");
+      expect(filed.map(({ title }) => title)).toEqual([
+        "Project host-crash",
+        "Project costly-reads",
+        "Project third",
+      ]);
+      expect(filed[0]?.body).toEndWith(
+        `${markerOf("host-crash")}\n\nFiled by Collie's self-improve Run r-day on ${hostname()}.`,
+      );
+      expect(commented.map(({ number }) => number)).toEqual([7, 8]);
+      expect(commented[0]?.body).toStartWith("Seen again in r-a ");
 
-        expect(
+      expect(started).toHaveLength(2);
+      expect(
+        new Set(
           started.map(({ invocation, workflow, ownTask }) => [invocation, workflow, ownTask]),
-        ).toEqual([
+        ),
+      ).toEqual(
+        new Set([
           ["improvement-first", "plan", true],
           ["improvement-second", "plan", true],
-        ]);
-        expect(started[0]?.input.then).toBe("implement");
-        expect(started[0]?.input.goal).toContain("`Closes #101`");
-        expect(started[0]?.input.goal).toContain("Leaked <github token> in its log.");
-        expect(asJson(started)).not.toContain(LEAKED);
-        expect(started[1]?.input.goal).toContain("`Closes #102`");
+        ]),
+      );
+      const first = started.find(({ invocation }) => invocation === "improvement-first");
+      const second = started.find(({ invocation }) => invocation === "improvement-second");
+      expect(first?.input.then).toBe("implement");
+      expect(first?.input.goal).toContain("`Closes #101`");
+      expect(first?.input.goal).toContain("Leaked <github token> in its log.");
+      expect(asJson(started)).not.toContain(LEAKED);
+      expect(second?.input.goal).toContain("`Closes #102`");
 
-        const summary = yield* readText(`${runDir(dir, "r-day")}/summary.md`);
-        expect(summary.indexOf("### defect")).toBeLessThan(summary.indexOf("### tool-economy"));
-        expect(summary).toContain("refused, it names another checkout");
-        expect(summary).toContain("commented #7");
-        expect(summary).toContain("r-day-improvement-second, failed: improvement-second failed");
-        expect(summary).toContain("Project once: seen once");
-        expect(summary).toContain("a service nobody here runs");
+      const summary = yield* readText(`${runDir(dir, "r-day")}/summary.md`);
+      expect(summary.indexOf("### defect")).toBeLessThan(summary.indexOf("### tool-economy"));
+      expect(summary).toContain("refused, it names another checkout");
+      expect(summary).toContain("commented #7");
+      expect(summary).toContain("r-day-improvement-second, failed: improvement-second failed");
+      expect(summary).toContain("Project once: seen once");
+      expect(summary).toContain("a service nobody here runs");
 
-        yield* improved("r-day", { runs: "machine", improvements: 2 });
-        expect([filed.length, commented.length, started.length]).toEqual([3, 2, 2]);
-      }),
-    ),
+      yield* improved("r-day", { runs: "machine", improvements: 2 });
+      expect([filed.length, commented.length, started.length]).toEqual([3, 2, 2]);
+    }),
+  );
+
+scenario(
+  "a day's findings are filed or commented, all-new Improvements start, and the summary says so",
+  aDay,
+  120_000,
+);
+
+scenario(
+  "a day's Improvements are each read by name, whichever starts first",
+  () => {
+    startsAfter = new Map([["improvement-first", "improvement-second"]]);
+    return aDay();
+  },
   120_000,
 );
 
@@ -13674,6 +13701,8 @@ export const register = (pass: "shipped" | "unrelated", share: number) => {
         failing = new Set();
         modules = new Map();
         childWaits = new Map();
+        startsAfter = new Map();
+        startSignals = new Map();
         yield* fs.makeDirectory(dir, { recursive: true });
         yield* fs.makeDirectory(rig.projectDir, { recursive: true });
         // The skills the shipped personas and steps name, installed where this machine
