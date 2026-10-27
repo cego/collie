@@ -270,6 +270,27 @@ test(
   180_000,
 );
 
+/** A /proc table's rows, under its header line; none where the kernel has no such table (no IPv6). */
+const procTable = (path: string) =>
+  Effect.flatMap(FileSystem.FileSystem, (fs) => fs.readFileString(path)).pipe(
+    Effect.map((text) => text.split("\n").slice(1)),
+    Effect.catchTag("PlatformError", (error) =>
+      error.reason._tag === "NotFound" ? Effect.succeed([]) : Effect.fail(error),
+    ),
+  );
+
+test("a /proc table the kernel does not have is no rows, and any other read failure fails", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-proc-" });
+      yield* fs.writeFileString(`${dir}/tcp`, "  sl  local_address\n   0: 0100007F:1F90\n");
+      expect(yield* procTable(`${dir}/tcp`)).toEqual(["   0: 0100007F:1F90", ""]);
+      expect(yield* procTable(`${dir}/tcp6`)).toEqual([]);
+      expect(Exit.isFailure(yield* Effect.exit(procTable(dir)))).toBe(true);
+    }),
+  ));
+
 /** The TCP ports a process listens on: its sockets among the kernel's listening ones. */
 const listensOn = (pid: number, tables = ["/proc/net/tcp", "/proc/net/tcp6"]) =>
   Effect.gen(function* () {
@@ -284,16 +305,7 @@ const listensOn = (pid: number, tables = ["/proc/net/tcp", "/proc/net/tcp6"]) =>
     }
     const ports: number[] = [];
     for (const table of tables) {
-      // A kernel booted without IPv6 has no tcp6 table.
-      const text = yield* fs
-        .readFileString(table)
-        .pipe(
-          Effect.catchTag("PlatformError", (error) =>
-            error.reason._tag === "NotFound" ? Effect.succeed("") : Effect.fail(error),
-          ),
-        );
-      const rows = text.split("\n").slice(1);
-      for (const row of rows) {
+      for (const row of yield* procTable(table)) {
         // local_address, rem_address, st, …, inode; st 0A is LISTEN.
         const [, local, , state, , , , , , inode] = row.trim().split(/\s+/);
         if (state === "0A" && inode !== undefined && sockets.has(inode))
