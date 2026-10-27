@@ -58,6 +58,7 @@ import {
   type Intent,
 } from "./intent";
 import { mrPath, parseMrUrl, type RunReply } from "./board-model";
+import type { Ref } from "./evaluator";
 import { readReplies } from "./replies";
 import { reason } from "./naming";
 import { appendPendingReport } from "./live";
@@ -760,7 +761,7 @@ const crossRunPack = (targets: ReadonlyArray<CrossRunTarget>) =>
   [
     "These Runs are related — a parent and its children, siblings of one parent, or Runs about one merge request.",
     "Report only where one Run's work breaks what another Run was told to respect.",
-    "A Run whose goal or work contradicts what another Run replied on the merge request they are both about is drift: report it on that Run, citing its own work.",
+    "A Run whose goal or work contradicts what another Run replied on the merge request they are both about is drift: report it on that Run, citing its own work, or, where it has none yet, the reply as a record whose path is the comment it replied to.",
     ...PLAN_NARROWS_GOAL,
     "",
     ...targets.flatMap((target) => [
@@ -791,11 +792,20 @@ const judgeCrossRun = Effect.fn("Oversight.judgeCrossRun")(function* (
   const byId = new Map(targets.map((target) => [target.id, target]));
   let filed = 0;
   for (const found of asked.reports) {
-    // Only a Run this question was about, one of its own constraints, and its work as the
-    // pack showed it: anything else is a model reaching outside what it was shown.
+    // Only a Run this question was about, one of its own constraints, and its work or another
+    // Run's reply as the pack showed them: anything else is a model reaching outside what it
+    // was shown.
     const target = byId.get(found.run);
     if (target === undefined || !target.constraintIds.includes(found.constraint)) continue;
-    const cited = citedIn(shownOf(target), target.cwd);
+    const work = citedIn(shownOf(target), target.cwd);
+    const othersReplied = new Set(
+      targets.flatMap((one) =>
+        one.id === target.id ? [] : one.replies.map((reply) => reply.comment),
+      ),
+    );
+    const cited = (ref: Ref) =>
+      work(ref) ??
+      (ref.kind === "record" && ref.path !== undefined && othersReplied.has(ref.path) ? ref : null);
     if (!found.evidence.some((ref) => cited(ref) !== null)) continue;
     const report = judgedReport(
       found,
@@ -880,7 +890,9 @@ export const standForElection = Effect.fn("Oversight.standForElection")(function
         if (
           targets.every((target) => {
             const shown = shownOf(target);
-            return shown.files.length === 0 && shown.outputs.length === 0;
+            return (
+              shown.files.length === 0 && shown.outputs.length === 0 && target.replies.length === 0
+            );
           })
         )
           return yield* said(

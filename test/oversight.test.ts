@@ -1489,8 +1489,37 @@ test("the cross-run judge is told a Run contradicting what another posted on the
         const { pack } = yield* judgedAcross(["r1", "r2"], yield* crossRunJudge([]));
 
         expect(pack.replace(/\s+/g, " ")).toContain(
-          "A Run whose goal or work contradicts what another Run replied on the merge request they are both about is drift: report it on that Run, citing its own work.",
+          "A Run whose goal or work contradicts what another Run replied on the merge request they are both about is drift: report it on that Run, citing its own work, or, where it has none yet, the reply as a record whose path is the comment it replied to.",
         );
+      }),
+    ),
+  ));
+
+test("a Run with no work yet whose goal contradicts another Run's reply on their merge request is reported, citing the reply", () =>
+  runEffect(
+    Effect.scoped(
+      Effect.gen(function* () {
+        yield* intended("r1", [R1_ONLY]);
+        yield* intended("r2", [SMALL]);
+        const note = `${MR_223}#note_1`;
+        yield* recordReply(runDir(dir, "r1"), {
+          at: "2026-10-20T10:00:00Z",
+          mr: MR_223,
+          comment: note,
+          kind: "disputed",
+          body: "Not changed: moving this into core is the human's call.",
+        });
+        const reply = [{ kind: "record" as const, path: note }];
+        const deps = yield* crossRunJudge([
+          reportOn("r2", "small", reply),
+          reportOn("r1", "r1-only", reply),
+        ]);
+        yield* judgedAcross(["r1", "r2"], deps);
+
+        expect(currentReports(yield* readDrift(runDir(dir, "r2")))).toMatchObject([
+          { constraint: "small", evidence: reply },
+        ]);
+        expect(currentReports(yield* readDrift(runDir(dir, "r1")))).toEqual([]);
       }),
     ),
   ));

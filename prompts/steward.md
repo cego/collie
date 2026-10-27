@@ -40,8 +40,8 @@ explanation outside the fields, no markdown around it.
   was cut from. The goal is what was asked, not work done, and it is never evidence of
   drift.
 - **A report cites the work it was shown.** Cite a file whose diff, or an Output, appears
-  under the Run the report names. A report that cites only a goal, a constraint's text or
-  a commit is dropped.
+  under the Run the report names, or, for a Run contradicting what another Run replied, that
+  reply. A report that cites only a goal, a constraint's text or a commit is dropped.
 - **Say what you are unsure of.** A lower confidence, or an `ask_human` action with the
   question you would want answered, is a better answer than a confident wrong one.
 - **Propose the smallest thing that would help.** One clear action beats five speculative
