@@ -13,10 +13,14 @@ export interface Answer {
   readonly stderr: string;
 }
 
-/** Answers one call: its argv, the fake's name first, and the environment it was started in. */
+/**
+ * Answers one call: its argv, the fake's name first, and the environment and directory it
+ * was started in.
+ */
 export type Answerer = (
   argv: ReadonlyArray<string>,
   env: Record<string, string>,
+  cwd: string,
 ) => Effect.Effect<Answer, unknown>;
 
 /** How a shim starts the forwarder: what `bun run test` compiled of it, or else its source. */
@@ -28,19 +32,21 @@ export const forwarderCommand = (compiled = Bun.env.COLLIE_TEST_FAKE_HERDR ?? ""
 const Call = Schema.fromJsonString(
   Schema.Struct({
     argv: Schema.Array(Schema.String),
+    cwd: Schema.String,
     env: Schema.Record(Schema.String, Schema.String),
   }),
 );
 
+const ANSWERER = "COLLIE_FAKE_ANSWERER";
 const answerers = new Map<string, Answerer>();
 
 const answer = (request: string) =>
   Schema.decodeUnknownEffect(Call)(request).pipe(
-    Effect.flatMap(({ argv, env }) => {
-      const answerer = answerers.get(argv[0] ?? "");
+    Effect.flatMap(({ argv, cwd, env }) => {
+      const answerer = answerers.get(env[ANSWERER] ?? "");
       return answerer === undefined
         ? Effect.succeed({ code: 70, stdout: "", stderr: `no fake answers ${argv[0]}\n` })
-        : answerer(argv, { ...env });
+        : answerer(argv, { ...env }, cwd);
     }),
     Effect.catchCause((cause) =>
       Effect.succeed({ code: 70, stdout: "", stderr: `${Cause.pretty(cause)}\n` }),
@@ -90,7 +96,7 @@ const socket = once.withPermits(1)(
 
 /**
  * A shim's command line: `compiled` (or the forwarder's source) with `args` and the shim's
- * own, its calls answered here by `answerer`, keyed by `args[0]`. Listens first, so the
+ * own, its calls answered here by `answerer`. Listens first, so the
  * shim's first call is answered.
  */
 export const forwarding = Effect.fn("forwarding")(function* (
@@ -98,8 +104,9 @@ export const forwarding = Effect.fn("forwarding")(function* (
   args: ReadonlyArray<string>,
   answerer: Answerer,
 ) {
-  answerers.set(args[0] ?? "", answerer);
+  const id = String(answerers.size);
+  answerers.set(id, answerer);
   const at = yield* socket;
   const command = [...forwarderCommand(compiled), ...args].map(shellQuote).join(" ");
-  return `COLLIE_FAKE_SOCKET=${shellQuote(at)} exec ${command} "$@"`;
+  return `COLLIE_FAKE_SOCKET=${shellQuote(at)} ${ANSWERER}=${id} exec ${command} "$@"`;
 });

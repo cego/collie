@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 // The fake herdr and fake forge as executables: a process started for every call, which
-// hands its argv and environment to the test process on COLLIE_FAKE_SOCKET and prints the
+// hands its argv, working directory and environment to the test process on COLLIE_FAKE_SOCKET and prints the
 // answer it gets back. No Effect, so a start costs about what a small CLI's does.
 
 import { connect } from "node:net";
@@ -18,7 +18,9 @@ const fail = (why: string) => {
 const socket = connect(path);
 socket.setEncoding("utf8");
 socket.on("connect", () =>
-  socket.end(`${JSON.stringify({ argv: process.argv.slice(2), env: process.env })}\n`),
+  socket.end(
+    `${JSON.stringify({ argv: process.argv.slice(2), cwd: process.cwd(), env: process.env })}\n`,
+  ),
 );
 socket.on("data", (chunk) => {
   reply += chunk;

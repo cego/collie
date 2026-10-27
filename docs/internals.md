@@ -520,9 +520,10 @@ what makes the fake herdr in `test/support/` enough to test everything above it.
 
 A process a test starts still runs a real executable at `HERDR_BIN_PATH` for every call, so
 the argv, stdout, stderr and exit code still cross a process boundary. That executable is
-only a forwarder (`test/support/forwarder.ts`): it hands its argv and environment over a
-unix socket to the test process, which answers with the same fake core the in-process fake
-uses (`test/support/forwarding.ts`). The fake forge's executable on `PATH` is the same
+only a forwarder (`test/support/forwarder.ts`): it hands its argv, working directory and
+environment over a unix socket to the test process, which answers with the same fake core the
+in-process fake uses (`test/support/forwarding.ts`). Each shim names its own answerer, so two
+fixtures of one fake keep their own state. The fake forge's executable on `PATH` is the same
 forwarder. With no test process listening, as for a host that outlived its test, the
 forwarder prints nothing, names the socket on stderr and exits 70: it never answers on its
 own.
