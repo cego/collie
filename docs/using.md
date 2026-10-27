@@ -471,10 +471,17 @@ The checkout lives under herdr's own worktree directory — `~/.herdr/worktrees/
 or whatever `[worktrees] directory` says in the `config.toml` herdr is reading, which
 `HERDR_CONFIG_PATH` may move — so herdr's own "open worktree" UI still finds it; the run's
 log says which one it got. A branch with a `/` in it nests, so `feature/foo` gets
-`…/<repo>/feature/foo` and never shares a directory with a branch actually called
-`feature-foo`. A branch that already has a checkout is given that one — git allows no
-second worktree on a checked-out branch, and a fix round has to land where the reviewed
-work already is. It is otherwise a fresh checkout, so the first thing the implementer does
+`…/<repo>/feature/foo`, apart from a branch actually called `feature-foo`. A branch that
+this repository's `git worktree list` already has a checkout of is given that one — git
+allows no second worktree on a checked-out branch, and a fix round has to land where the
+reviewed work already is. Otherwise the run gets a fresh checkout in the first free one of
+`…/<repo>/<branch>`, `…/<repo>/<branch>-2` and `…/<repo>/<branch>-3`. A path that holds
+anything else — another clone's checkout of a repository with the same name, a plain
+directory, or this repository's checkout of another branch — is left as it is and passed
+over, and the run's log says whose it is (ADR-draft-an-occupied-branch-checkout-path-is-passed-over).
+When all three are held, the run does not start, and its refusal names each path, what
+holds it, and asks you to free one and retry; a refused attempt leaves no new branch
+behind. A fresh checkout is a fresh checkout, so the first thing the implementer does
 there is install the project's dependencies. Where the run cannot be given a worktree, it
 does not start and says which branch it could not be given one for, in git's own words:
 working in the directory you started it from is what two runs sharing a checkout — and a
