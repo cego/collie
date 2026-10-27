@@ -653,7 +653,8 @@ afresh; where production already carries the merge it asks nothing and ends.
 **Its [Flow](../CONTEXT.md)** forecasts **Assess**, **Prove the head**, **Review wait**,
 **Merge go**, **Helle claim** and **Merge**, then for an application **Stage**, **Production
 go** and **Production**. Once the assessment finds a package, the path ends at **Tag**
-instead. A comment round and staging the merge request are drawn off the path, and the fix
+instead. A comment round, staging the merge request and, with sharing on, **Share for
+approval** and **Share** are drawn off the path, and the fix
 rounds belong to the Step that proved the head they fix. Proved checks that still fail park
 the Run with that Step failed, and a resume runs them again.
 

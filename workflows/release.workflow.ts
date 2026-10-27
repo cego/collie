@@ -255,6 +255,19 @@ const comments = step({
   kind: "agent",
   role: "implementer",
 });
+const shareAsk = step({
+  id: "share-for-approval",
+  title: "Share for approval",
+  description: "Whether the merge request, waiting on a teammate's approval, is posted for it.",
+  kind: "question",
+});
+const sharePost = step({
+  id: "share",
+  title: "Share",
+  description: "The agent posts the merge request in the approval channel, linked by its title.",
+  kind: "agent",
+  role: "implementer",
+});
 const mergeGo = step({
   id: "go",
   title: "Merge go",
@@ -705,11 +718,14 @@ export default defineWorkflow({
             if (!waitsOnApproval(yield* standingAt(`share-standing.${at}`))) return;
             shares += 1;
             askedAt = proved;
-            const answer = yield* ask({
-              name: nth("share-for-approval", shares),
-              prompt: `${mr} at ${short(proved)} waits for a teammate's approval. Check it first. ${SHARE.post} posts it in ${channel} as its title, linked, and nothing else; ${SHARE.wait} posts nothing and asks again once its head moves.`,
-              options: [SHARE.post, SHARE.wait],
-            });
+            const answer = yield* shareAsk(
+              ask({
+                name: nth("share-for-approval", shares),
+                prompt: `${mr} at ${short(proved)} waits for a teammate's approval. Check it first. ${SHARE.post} posts it in ${channel} as its title, linked, and nothing else; ${SHARE.wait} posts nothing and asks again once its head moves.`,
+                options: [SHARE.post, SHARE.wait],
+              }),
+              { round: shares },
+            );
             if (answer === SHARE.wait)
               return yield* host.record(
                 runId,
@@ -721,16 +737,19 @@ export default defineWorkflow({
                 runId,
                 `not shared: ${mr} no longer waits for a teammate's approval`,
               );
-            const posted = yield* agentWork({
-              ...as(nth("share", shares)),
-              clears: SHARE_CLEARS(mr, channel),
-              instructions: steps.share,
-              input: { ...input, channel },
-              output: Shared,
-            }).pipe(
-              Effect.catch((failed) =>
-                Effect.succeed<typeof Shared.Type>({ posted: false, why: failed.reason }),
+            const posted = yield* sharePost(
+              agentWork({
+                ...as(nth("share", shares)),
+                clears: SHARE_CLEARS(mr, channel),
+                instructions: steps.share,
+                input: { ...input, channel },
+                output: Shared,
+              }).pipe(
+                Effect.catch((failed) =>
+                  Effect.succeed<typeof Shared.Type>({ posted: false, why: failed.reason }),
+                ),
               ),
+              { round: shares },
             );
             shared = posted.posted;
             yield* host.record(

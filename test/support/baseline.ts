@@ -10184,7 +10184,14 @@ for (const name of ["gitlab", "github"] as const) {
                   (log) => log.includes(`shared ${mr}`),
                 );
                 moved = yield* pushedBySomebody(head);
-                yield* changed({ head: moved, ...approvedBy(name, "dave") });
+                yield* changed({ head: moved });
+                // Approved only once the Run waits at the new head: a read of the forge is
+                // several requests, and one spanning both changes would see the old head approved.
+                yield* until(
+                  () => Effect.all([revParse("refs/heads/feature"), awaitingOn(runId)]),
+                  ([at, on]) => at === moved && on.includes("approval"),
+                );
+                yield* changed(approvedBy(name, "dave"));
                 const go = yield* goAsked(run.asked, "go-1");
                 expect(go.prompt).toContain(moved.slice(0, 8));
                 yield* run.answer("go-1", "Finish");
