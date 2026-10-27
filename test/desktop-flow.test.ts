@@ -123,7 +123,7 @@ test("the inspector folds completed Slices and scopes its header to a picked Sli
   const whole = inspectorOf(flow, selection, now)!;
   expect(whole.lines).toContain("builder · claude/opus");
   expect(whole.lines).toContain("4 min so far");
-  expect(whole.description).toBe("Work on the current Slice.");
+  expect(whole.purpose).toBe("Work on the current Slice.");
   expect(whole.entries.map((entry) => entry.title)).toEqual(["3 done", "04", "05", "06"]);
   const picked = inspectorOf(flow, { ...selection, item: "build@04" }, now)!;
   expect(picked.title).toBe("04");
@@ -284,4 +284,114 @@ test("a linked Run opens its card, an absent Run opens nothing, and an offer ope
     run: "build-run",
     offer: "implement",
   });
+});
+
+test("the inspector names a Step's purpose and labels its facts in reading order", () => {
+  const node = flowNode("assess", {
+    title: "Assess",
+    state: "done",
+    description: "Whether the repository is an application,\nand its merge request's stage jobs.",
+    role: "implementer",
+    agent: "run-dd26b310-assess-r1",
+    ranOn: "codex/default (fell back from claude/opus: weekly limit)",
+    started: "2026-10-23T09:00:00.000Z",
+    ended: "2026-10-23T09:12:00.000Z",
+    attempts: [
+      { at: "2026-10-23T09:00:00.000Z", cause: null },
+      { at: "2026-10-23T09:04:00.000Z", cause: "resumed" },
+      { at: "2026-10-23T09:06:00.000Z", cause: null },
+    ],
+    questions: [
+      {
+        name: "go",
+        asked: "2026-10-23T09:01:00.000Z",
+        answered: "2026-10-23T09:03:00.000Z",
+        by: "mk",
+      },
+      {
+        name: "why",
+        asked: "2026-10-23T09:07:00.000Z",
+        answered: "2026-10-23T09:08:00.000Z",
+        by: null,
+      },
+    ],
+  });
+  const info = inspectorOf(
+    mainFlow([node]),
+    { run: "build-run", node: "assess", item: null },
+    epochMs("2026-10-23T15:00:00.000Z"),
+    "UTC",
+  )!;
+  expect(info.purpose).toBe(
+    "Whether the repository is an application,\nand its merge request's stage jobs.",
+  );
+  expect(info.facts).toEqual([
+    { label: "Role", value: "implementer" },
+    { label: "Agent", value: "run-dd26b310-assess-r1" },
+    {
+      label: "Model",
+      value: "codex/default (fell back from claude/opus: weekly limit)",
+    },
+    { label: "Started", value: "09:00" },
+    { label: "Ended", value: "09:12" },
+    { label: "Attempt 2", value: "resumed · 09:04" },
+    { label: "Attempt 3", value: "retried · 09:06" },
+    { label: "Answered", value: "09:03 by mk" },
+    { label: "Answered", value: "09:08" },
+  ]);
+});
+
+test("the inspector leaves out a Step's empty purpose and facts", () => {
+  const node = flowNode("merged", {
+    kind: "release",
+    description: "  ",
+    role: null,
+  });
+  const info = inspectorOf(mainFlow([node]), { run: "build-run", node: "merged", item: null }, 0)!;
+  expect(info.purpose).toBeNull();
+  expect(info.facts).toEqual([]);
+  expect(info.status).toBeNull();
+});
+
+test("the inspector leaves out a blank role, agent and model", () => {
+  const node = flowNode("merged", { kind: "release", role: "", agent: " ", ranOn: "\t" });
+  const info = inspectorOf(mainFlow([node]), { run: "build-run", node: "merged", item: null }, 0)!;
+  expect(info.facts).toEqual([]);
+});
+
+test("a picked Slice shows its own facts", () => {
+  const info = inspectorOf(
+    mainFlow(),
+    { run: "build-run", node: "build", item: "build@04" },
+    epochMs("2026-10-23T09:09:00.000Z"),
+    "UTC",
+  )!;
+  expect(info.facts).toEqual([
+    { label: "Role", value: "builder" },
+    { label: "Model", value: "codex/default" },
+    { label: "Started", value: "09:05" },
+  ]);
+});
+
+test.each([
+  [{ said: "Slice 4 of 6" }, "Slice 4 of 6 · 4 min so far"],
+  [{ said: "Still running", wait: "ci" }, "Still running · 4 min so far"],
+  [{ said: "4 min" }, "4 min so far"],
+  [{ said: "1 h 5 min · 2nd attempt" }, "2nd attempt · 4 min so far"],
+  [{ said: "Off the path · under a minute" }, "Off the path · 4 min so far"],
+  [{ said: "Longer than usual", long: true }, "4 min so far"],
+  [{ said: "Held by mk", started: null }, "Held by mk"],
+  [{ said: null, started: null }, null],
+] as const)("the inspector's status line for %j is %p", (over, status) => {
+  const node = flowNode("work", {
+    state: "running",
+    started: "2026-10-23T09:05:00.000Z",
+    ...over,
+  });
+  const info = inspectorOf(
+    mainFlow([node]),
+    { run: "build-run", node: "work", item: null },
+    epochMs("2026-10-23T09:09:00.000Z"),
+  )!;
+  expect(info.status).toBe(status);
 });

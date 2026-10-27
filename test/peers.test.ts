@@ -292,7 +292,7 @@ test("a /proc table the kernel does not have is no rows, and any other read fail
   ));
 
 /** The TCP ports a process listens on: its sockets among the kernel's listening ones. */
-const listensOn = (pid: number) =>
+const listensOn = (pid: number, tables = ["/proc/net/tcp", "/proc/net/tcp6"]) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const sockets = new Set<string>();
@@ -304,7 +304,7 @@ const listensOn = (pid: number) =>
       if (inode !== undefined) sockets.add(inode);
     }
     const ports: number[] = [];
-    for (const table of ["/proc/net/tcp", "/proc/net/tcp6"]) {
+    for (const table of tables) {
       for (const row of yield* procTable(table)) {
         // local_address, rem_address, st, …, inode; st 0A is LISTEN.
         const [, local, , state, , , , , , inode] = row.trim().split(/\s+/);
@@ -314,6 +314,20 @@ const listensOn = (pid: number) =>
     }
     return ports;
   }).pipe(Effect.orDie);
+
+test.skipIf(process.platform !== "linux")(
+  "a process's listening ports are found on a kernel without IPv6's table",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { port } = Schema.decodeUnknownSync(Schema.Struct({ port: Schema.Number }))(
+          (yield* occupy("0")).address(),
+        );
+        const ports = yield* listensOn(process.pid, ["/proc/net/tcp", "/proc/net/no-such-table"]);
+        expect(ports).toContain(port);
+      }),
+    ),
+);
 
 /** A WebSocket to a listener: open, or refused. */
 const dialListener = (
