@@ -2109,21 +2109,28 @@ const renovateRunAt = (at: string) =>
   });
 
 /** A git listing this repository's roaming checkout, in whatever state `answers` says it is. */
-const fakeGitWithRoaming = (taken: string, answers: Record<string, string>) =>
+const fakeGitWithRoaming = (
+  taken: string,
+  answers: Record<string, string>,
+  refusals: Record<string, string> = {},
+  scripts: Record<string, string> = {},
+) =>
   fakeGitAnswering(
-    {
-      ...gitAnswers(),
-      "worktree list --porcelain": porcelain([
-        { path: rig.projectDir, branch: "master" },
-        { path: taken, branch: "master" },
-      ]),
-      "status --porcelain": "",
-      "rev-list HEAD --not --branches --remotes": "",
-      "checkout --quiet --no-overwrite-ignore --detach": "",
-      ...answers,
-    },
-    {},
-    { "worktree add --detach": 'mkdir -p "$4"' },
+    Object.fromEntries(
+      Object.entries({
+        ...gitAnswers(),
+        "worktree list --porcelain": porcelain([
+          { path: rig.projectDir, branch: "master" },
+          { path: taken, branch: "master" },
+        ]),
+        "status --porcelain": "",
+        "rev-list HEAD --not --branches --remotes": "",
+        "checkout --quiet --no-overwrite-ignore --detach": "",
+        ...answers,
+      }).filter(([match]) => !(match in scripts)),
+    ),
+    refusals,
+    { "worktree add --detach": 'mkdir -p "$4"', ...scripts },
   );
 
 test("a second Renovate Run on one repository is refused while the first may go on, never handed its tree", () =>
@@ -2231,6 +2238,63 @@ test("an ended Run's checkout that holds work is kept for it and passed over, an
       expect(unpushed.note).toStartWith(`${held} 2 commits on no branch or remote; `);
       expect(releases).toBe(0);
       expect((yield* asked()).some((c) => c.startsWith("checkout"))).toBe(false);
+    }),
+  ));
+
+test("an ended Run's checkout git cannot read is refused, never passed over for another", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      const taken = join(rig.root, ".herdr", "worktrees", "project", "roaming");
+      yield* worktreeOwnedBy(taken, rig.projectDir);
+      const runId = yield* renovateRunAt(taken);
+      const held = `${taken} is a checkout of ${rig.projectDir}, recorded by Run ${runId}:`;
+
+      yield* fakeGitWithRoaming(taken, {}, { "status --porcelain": "fatal: index file corrupt" });
+      const status = yield* renovateCheckout();
+      yield* fakeGitWithRoaming(
+        taken,
+        {},
+        {
+          "rev-list HEAD --not --branches --remotes": "fatal: bad object HEAD",
+        },
+      );
+      const unpushed = yield* renovateCheckout();
+
+      expect(status.refused).toContain(`${held} could not read the working tree`);
+      expect(unpushed.refused).toContain(`${held} could not read what is unpushed`);
+      expect(status.cwd).toBe(rig.projectDir);
+      expect(releases).toBe(0);
+      expect((yield* asked()).some((c) => c.startsWith("worktree add"))).toBe(false);
+    }),
+  ));
+
+test("an ended Run's checkout its agents wrote to while being closed is refused, not passed over", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      const taken = join(rig.root, ".herdr", "worktrees", "project", "roaming");
+      yield* worktreeOwnedBy(taken, rig.projectDir);
+      const runId = yield* renovateRunAt(taken);
+      const read = join(rig.root, "status-read");
+      // Clean when first read, and changed by the time it is read again after release.
+      yield* fakeGitWithRoaming(
+        taken,
+        {},
+        {},
+        {
+          "status --porcelain": `if [ -e "${read}" ]; then printf ' M package.json\\n'; else touch "${read}"; fi`,
+        },
+      );
+
+      const checkout = yield* renovateCheckout();
+
+      expect(checkout.refused).toContain(
+        `${taken} is a checkout of ${rig.projectDir}, recorded by Run ${runId}, kept: uncommitted changes`,
+      );
+      expect(checkout.cwd).toBe(rig.projectDir);
+      expect(releases).toBe(1);
+      const commands = yield* asked();
+      expect(commands.some((c) => c.startsWith("worktree add"))).toBe(false);
+      expect(commands.some((c) => c.startsWith("checkout"))).toBe(false);
     }),
   ));
 

@@ -786,19 +786,24 @@ const isTheOneMade = Effect.fn("worktree.isTheOneMade")(function* (
   return (yield* madeAt(at)) === record.made_at;
 });
 
-/** What moving a roaming checkout to the default branch would lose, or null for nothing. */
+/**
+ * What moving a roaming checkout to the default branch would lose, why git could not
+ * say, or null for nothing.
+ */
 const wouldLose = Effect.fn("worktree.wouldLose")(function* (
   run: Runner<ChildProcessSpawner.ChildProcessSpawner>,
   at: string,
 ) {
   const dirty = yield* run("git", ["status", "--porcelain"], at);
-  if (dirty.code !== 0) return "could not read the working tree";
-  if (dirty.stdout.trim() !== "") return "uncommitted changes";
+  if (dirty.code !== 0) return { unread: "could not read the working tree" };
+  if (dirty.stdout.trim() !== "") return { lost: "uncommitted changes" };
   // Only commits no branch or remote has: moving HEAD is what would leave them behind.
   const only = yield* run("git", ["rev-list", "HEAD", "--not", "--branches", "--remotes"], at);
-  if (only.code !== 0) return "could not read what is unpushed";
+  if (only.code !== 0) return { unread: "could not read what is unpushed" };
   const count = commits(only);
-  return count === 0 ? null : `${count} commit${count === 1 ? "" : "s"} on no branch or remote`;
+  return count === 0
+    ? null
+    : { lost: `${count} commit${count === 1 ? "" : "s"} on no branch or remote` };
 });
 
 /**
@@ -928,17 +933,21 @@ const claimRoaming = Effect.fn("worktree.claimRoaming")(function* (opts: {
     else {
       // After the fetch, which can prune or rewrite the only ref a commit was on.
       const before = yield* wouldLose(run, at);
+      if (before !== null && "unread" in before)
+        return { refused: `${at} is ${held}: ${before.unread}` };
       if (before !== null) {
-        pass(before);
+        pass(before.lost);
         continue;
       }
       const released = yield* recorded.release;
       if (released !== null) return { refused: `${at} is ${held}: ${released}` };
-      // Again, now its agents are closed: one could have written to it until then.
+      // Again, now its agents are closed: one could have written to it until then. Past
+      // release a slot is refused, never passed over.
       const after = yield* wouldLose(run, at);
       if (after !== null) {
-        pass(after);
-        continue;
+        return {
+          refused: `${at} is ${held}${"lost" in after ? `, kept: ${after.lost}` : `: ${after.unread}`}`,
+        };
       }
       const moved = yield* run(
         "git",
