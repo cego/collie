@@ -3,6 +3,7 @@
 
 import {
   Config,
+  DateTime,
   Effect,
   Fiber,
   FileSystem,
@@ -482,8 +483,17 @@ export class Rig {
       const fs = yield* FileSystem.FileSystem;
       const state = yield* readJsonObject(statePath);
       for (const worktree of worktrees) {
+        const marker = `${worktree.path}/.git`;
+        const replaced = yield* fs
+          .stat(marker)
+          .pipe(Effect.option, Effect.map(Option.flatMap((info) => info.mtime)));
         yield* fs.makeDirectory(worktree.path, { recursive: true });
-        yield* fs.writeFileString(`${worktree.path}/.git`, `gitdir: ${worktree.path}/.gitdir\n`);
+        yield* fs.writeFileString(marker, `gitdir: ${worktree.path}/.gitdir\n`);
+        // A checkout made where another was is written after it, even within the same millisecond.
+        if (Option.isSome(replaced)) {
+          const later = DateTime.toDateUtc(DateTime.makeUnsafe(replaced.value.getTime() + 1000));
+          yield* fs.utimes(marker, later, later);
+        }
       }
       yield* fs.writeFileString(
         statePath,

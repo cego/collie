@@ -2501,6 +2501,22 @@ test("a hand-made checkout at the path a Collie one used is not a candidate", ()
     }),
   ));
 
+test("a checkout made again at a path is never the one made there before, however soon after", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const at = join(rig.root, "worktrees", "again");
+      const mtimeOf = (file: string) =>
+        fs.stat(file).pipe(Effect.map((info) => Option.getOrThrow(info.mtime).getTime()));
+      for (let round = 0; round < 50; round++) {
+        yield* rig.addWorktree("wt", at, "w7");
+        const made = yield* mtimeOf(`${at}/.git`);
+        yield* rig.setWorktrees([{ branch: "by-hand", path: at, open_workspace_id: "w9" }]);
+        expect(yield* mtimeOf(`${at}/.git`)).not.toBe(made);
+      }
+    }),
+  ));
+
 test("a merged branch whose remote-tracking ref was pruned away is settled", () =>
   runOnPath(
     Effect.gen(function* () {
