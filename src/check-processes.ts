@@ -5,6 +5,7 @@
 import {
   Clock,
   Context,
+  Data,
   Deferred,
   Duration,
   Effect,
@@ -26,7 +27,6 @@ export const CHECK_INSTALLATION = "COLLIE_CHECK_INSTALLATION";
 export const CHECK_ID = "COLLIE_CHECK_ID";
 const KILL_AFTER = "2 seconds";
 const KILL_WAIT = 1_000;
-const GUARD_RETRY = "1 second";
 
 /** Which check of which Run, as its record and the host's log name it. */
 export interface CheckOf {
@@ -43,6 +43,8 @@ export interface CheckCommand {
 }
 
 export interface RunningCheck {
+  /** Its leader's, where it was spawned. */
+  readonly pid: number | null;
   readonly stdout: Stream.Stream<Uint8Array, PlatformError>;
   readonly stderr: Stream.Stream<Uint8Array, PlatformError>;
   readonly exit: Effect.Effect<number, PlatformError>;
@@ -67,14 +69,21 @@ export interface Leftover {
 
 export type LeftoverEnd = "ended" | "already gone" | "still running";
 
+/** A new check of a Run not started, because a leftover of that Run survived its end (D6). */
+export class CheckRefused extends Data.TaggedError("CheckRefused")<{ readonly why: string }> {}
+
 export interface CheckProcessesApi {
-  /** Starts the check in the caller's Scope, whose close ends its processes for good. */
+  /**
+   * Starts the check in the caller's Scope, whose close ends its processes for good. `say`
+   * hears of each leftover of its Run before that is ended.
+   */
   readonly run: (
     check: CheckOf,
     command: CheckCommand,
+    say?: (line: string) => Effect.Effect<void>,
   ) => Effect.Effect<
     RunningCheck,
-    PlatformError,
+    PlatformError | CheckRefused,
     Scope.Scope | ChildProcessSpawner.ChildProcessSpawner
   >;
   /** Marks every check this host is collecting ended, then sends each, and each still being spawned, SIGTERM. */
@@ -139,6 +148,7 @@ const spawnCheck = (command: CheckCommand, env?: Readonly<Record<string, string>
 const unrecorded: CheckProcessesApi = {
   run: (_check, command) =>
     Effect.map(spawnCheck(command), (handle) => ({
+      pid: handle.pid,
       stdout: handle.stdout,
       stderr: handle.stderr,
       exit: Effect.map(handle.exitCode, Number),
@@ -154,6 +164,7 @@ const unrecorded: CheckProcessesApi = {
 
 /** A check this host ended, or would not start once it began to end. */
 const endedCheck: RunningCheck = {
+  pid: null,
   stdout: Stream.empty,
   stderr: Stream.empty,
   exit: Effect.never,
@@ -264,17 +275,18 @@ export const endCheck = Effect.fn("CheckProcesses.endCheck")(function* (
 const runOfId = (id: string) => id.slice(0, id.lastIndexOf("@"));
 const startOfId = (id: string) => Number(id.slice(id.lastIndexOf("@") + 1).split("-")[0]);
 
-const saidOf = (leftover: Leftover, outcome: LeftoverEnd) => {
-  const check =
-    leftover.name === null
-      ? `check ${leftover.id}`
-      : `check ${leftover.name}${leftover.pass === null ? "" : ` (pass ${leftover.pass})`}`;
-  const host =
-    leftover.host === null
-      ? "an earlier host"
-      : `host ${leftover.host.pid} (started ${leftover.host.started})`;
-  return `${check} of ${leftover.run}, left running by ${host}: ${outcome}`;
-};
+const checkNamed = (leftover: Leftover) =>
+  leftover.name === null
+    ? `check ${leftover.id}`
+    : `check ${leftover.name}${leftover.pass === null ? "" : ` (pass ${leftover.pass})`}`;
+const hostNamed = (leftover: Leftover) =>
+  leftover.host === null
+    ? "an earlier host"
+    : `host ${leftover.host.pid} (started ${leftover.host.started})`;
+const saidOf = (leftover: Leftover, outcome: LeftoverEnd) =>
+  `${checkNamed(leftover)} of ${leftover.run}, left running by ${hostNamed(leftover)}: ${outcome}`;
+const withPid = (leftover: Leftover) =>
+  `${checkNamed(leftover)} of ${leftover.run} (pid ${leftover.leader.pid}), left running by ${hostNamed(leftover)}`;
 
 interface Ending {
   readonly check: CheckOf;
@@ -445,20 +457,29 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
     });
   const unended = () => [...collecting.keys(), ...spawning.keys()];
 
-  /** Ends the Run's leftovers, and again while one survives that (D6). */
-  const clearOf = (run: string) =>
+  /** Ends each of the Run's leftovers once, announced first, and refuses where one survives (D6). */
+  const clearOf = (run: string, say: (line: string) => Effect.Effect<void>) =>
     Effect.gen(function* () {
-      while (!stopping) {
-        const leftovers = (yield* left).filter((leftover) => leftover.run === run);
-        const outcomes = yield* Effect.forEach(leftovers, endLeftover, {
-          concurrency: "unbounded",
+      if (stopping) return;
+      const leftovers = (yield* left).filter((leftover) => leftover.run === run);
+      const surviving = yield* Effect.forEach(
+        leftovers,
+        (leftover) =>
+          Effect.gen(function* () {
+            if (yield* stillRuns(leftover))
+              yield* say(`${withPid(leftover)}: ending it before this check starts`);
+            return (yield* endLeftover(leftover)) === "still running" ? [leftover] : [];
+          }),
+        { concurrency: "unbounded" },
+      ).pipe(Effect.map((ones) => ones.flat()));
+      const [first] = surviving;
+      if (first !== undefined && !stopping)
+        return yield* new CheckRefused({
+          why: `${withPid(first)}, survived SIGTERM and SIGKILL, so this check did not start`,
         });
-        if (!outcomes.includes("still running")) return;
-        yield* Effect.sleep(GUARD_RETRY);
-      }
     });
 
-  const run: CheckProcessesApi["run"] = (check, command) =>
+  const run: CheckProcessesApi["run"] = (check, command, say = () => Effect.void) =>
     Effect.gen(function* () {
       if (stopping) return endedCheck;
       const began = yield* nowIso();
@@ -466,7 +487,7 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
       const id = `${check.run}@${epochMs(began)}-${salt}`;
       ours.add(id);
       yield* Effect.addFinalizer(() => Effect.sync(() => ours.delete(id)));
-      yield* clearOf(check.run);
+      yield* clearOf(check.run, say);
       // From the spawn to its finalizer, so no interruption leaves it unended.
       return yield* Effect.uninterruptible(
         Effect.gen(function* () {
@@ -510,6 +531,7 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
             .pipe(Effect.andThen(fs.rename(`${recordPath(dir, id)}.new`, recordPath(dir, id))))
             .pipe(Effect.ignore);
           return {
+            pid: handle.pid,
             stdout: handle.stdout,
             stderr: handle.stderr,
             exit: Effect.map(handle.exitCode, Number),

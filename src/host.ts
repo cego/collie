@@ -2186,10 +2186,22 @@ const frontDoorHandlers = (
                           step: step?.step,
                           place: step?.place,
                         },
-                        { stdout: echo("stdout"), stderr: echo("stderr") },
+                        {
+                          stdout: echo("stdout"),
+                          stderr: echo("stderr"),
+                          said: (line) =>
+                            echo("stderr")(`${line}\n`).pipe(
+                              Effect.andThen(appendLog(runDir(env.stateDir, runId), line)),
+                              Effect.ignore,
+                              Effect.provideService(FileSystem.FileSystem, fs),
+                            ),
+                        },
                       ).pipe(
                         Effect.mapError(
-                          (cause) => new HostRefused({ reason: `${REFUSED_INPUT}: ${cause.why}` }),
+                          (cause) =>
+                            new HostRefused({
+                              reason: `${cause.state ? "invalid_state" : REFUSED_INPUT}: ${cause.why}`,
+                            }),
                         ),
                         Effect.result,
                       ),

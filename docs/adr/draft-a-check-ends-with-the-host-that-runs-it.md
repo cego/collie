@@ -76,8 +76,12 @@ one, for three reasons:
 Running it again costs what a restart costs today, without the second copy.
 
 **D6. One check of a Run at a time.** Before a check of a Run starts, any recorded check of
-that Run that this host is not collecting is ended. A check whose collection is
-interrupted gets SIGTERM and then SIGKILL, never SIGTERM alone.
+that Run that this host is not collecting is ended, once, by the bounded SIGTERM, SIGKILL
+and last look. Whoever asked for the new check is told of each such leftover before its end
+begins, by its check, pass, leader pid and the host that left it. One still running after
+that end refuses the new check, naming it and its pid, rather than waiting on it: `collie
+cleanup --apply` tries the end again. A host that is stopping starts no check either way. A
+check whose collection is interrupted gets SIGTERM and then SIGKILL, never SIGTERM alone.
 
 **D7. Cleanup and doctor see what is left.** A check process that no host is collecting is a
 Cleanup kind. `collie cleanup` lists it with its Run, its check, its pid and how long it

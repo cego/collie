@@ -1526,6 +1526,14 @@ and a human's `collie verify` waits as an agent's does. A stop of the Run ends t
 with `invalid_state`, and the command never runs. While a verify an agent asked for waits,
 that agent's Output budget does not run.
 
+Before the command starts, a check of the same Run that an earlier host left running is
+ended: `collie verify` first prints `check <name> (pass <pass>) of <run> (pid <pid>), left
+running by host <pid> (started <time>): ending it before this check starts`. One that is
+still running after its SIGTERM and SIGKILL refuses the verify with `invalid_state`, naming
+the check and its pid; `collie cleanup --apply` tries to end it again and reports what is
+left. Once the command is spawned, it prints `"<name>" started, pid <pid>`: a wait after
+that line is the command's own. Each of these lines is also written to the Run's log.
+
 `--expect fail` is how a bug is proved to exist. A regression test that exits non-zero on
 the tree before the fix is the evidence, so that record is a `pass`; the same command
 succeeding is the reproduction failing, not the bug being fixed. Stability comes first

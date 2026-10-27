@@ -45,7 +45,11 @@ export interface CheckPass {
 export type Verification = Schema.Schema.Type<typeof VerificationSchema>;
 const VerificationJson = Schema.fromJsonString(VerificationSchema);
 
-export class VerifyRefused extends Data.TaggedError("VerifyRefused")<{ why: string }> {}
+export class VerifyRefused extends Data.TaggedError("VerifyRefused")<{
+  why: string;
+  /** Where the refusal is about the Run's state rather than what was asked. */
+  state?: true;
+}> {}
 
 type Services = FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner;
 
@@ -295,6 +299,8 @@ function tail(text: string): string {
 export interface Echo {
   readonly stdout: (text: string) => Effect.Effect<void>;
   readonly stderr: (text: string) => Effect.Effect<void>;
+  /** A line of verify's own about what it waits on, for its client and the Run's log. */
+  readonly said?: (line: string) => Effect.Effect<void>;
 }
 
 export interface Collected {
@@ -361,7 +367,10 @@ export const collect = Effect.fn("Verify.collect")(function* (
     const handle = yield* checks.run(
       { run: what.run, name: what.name, by: what.by, ...(what.pass && { pass: what.pass }) },
       { executable: absolute, argv: what.argv, cwd: what.cwd },
+      echo?.said,
     );
+    if (handle.pid !== null && echo?.said !== undefined)
+      yield* echo.said(`"${what.name}" started, pid ${handle.pid}`);
     // Tailed as it arrives, never folded whole: only the last 4 KiB is recorded, and a
     // verification that prints for an hour must not allocate for an hour to say so.
     const drain = (stream: typeof handle.stdout, shown?: (text: string) => Effect.Effect<void>) =>
@@ -382,7 +391,19 @@ export const collect = Effect.fn("Verify.collect")(function* (
         },
       ),
     );
-  }).pipe(Effect.scoped, Effect.orDie);
+  }).pipe(
+    Effect.scoped,
+    Effect.catch((cause) =>
+      cause._tag === "CheckRefused"
+        ? Effect.fail(
+            new VerifyRefused({
+              why: `${cause.why}; \`collie cleanup --apply\` tries to end it again and reports what is left`,
+              state: true,
+            }),
+          )
+        : Effect.die(cause),
+    ),
+  );
   const end = yield* fingerprint(what.cwd);
   const at = yield* nowIso();
   const output = `${stdout}\n${stderr}`;
