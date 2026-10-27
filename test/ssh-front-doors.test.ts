@@ -10,7 +10,7 @@ import { controlPathOf } from "../src/ssh-connection";
 import { runEffect } from "./support/effect";
 import { blackhole, freePort, resetter } from "./support/fake-ssh";
 import { stopHost, until } from "./support/host";
-import { twoMachines, type Side } from "./support/peers";
+import { listenerPort, twoMachines, type Side } from "./support/peers";
 
 const encode = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const Listed = Schema.Struct({ machines: Schema.Array(PeerView) });
@@ -94,7 +94,7 @@ test(
             expect(rides[0]).toContain("'invite'");
 
             // The network starts refusing the port: the link comes up over the open connection.
-            const advertised = Number(second.env.COLLIE_PEER_PORT);
+            const advertised = Number(yield* listenerPort(first, second));
             const moved = yield* freePort;
             const blocking = yield* Scope.make();
             yield* stopHost(second.world.state);
@@ -171,7 +171,7 @@ test(
           Effect.gen(function* () {
             yield* first.lists([second]);
             expect((yield* first.cli(["--machine", "second", "board"])).envelope.ok).toBe(true);
-            const advertised = Number(second.env.COLLIE_PEER_PORT);
+            const advertised = Number(yield* listenerPort(first, second));
             const moved = yield* freePort;
             const muting = yield* Scope.make();
             yield* stopHost(second.world.state);

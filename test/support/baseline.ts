@@ -13,6 +13,7 @@ import type { ChildProcessSpawner } from "effect/process";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { hostname } from "node:os";
 import {
+  Config,
   ConfigProvider,
   DateTime,
   Deferred,
@@ -2587,21 +2588,47 @@ const noMergeRequests = Effect.acquireRelease(
  */
 const repository = () =>
   Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const made = yield* preparedRepository;
     // Fetched from a bare repository beside it, and known to the forge by `upstream`.
     const origin = `${rig.root}/project-origin.git`;
-    yield* exec(["git", "init", "-q", "--bare", origin], { cwd: rig.root });
-    for (const args of [
-      ["init", "-q"],
-      ["config", "user.email", "t@example.com"],
-      ["config", "user.name", "t"],
-      ["remote", "add", "origin", origin],
-      ["remote", "add", "upstream", "https://gitlab.example.com/group/project.git"],
-      ["commit", "-qm", "first", "--allow-empty"],
-      ["push", "-q", "origin", "HEAD"],
-    ]) {
-      yield* exec(["git", ...args], { cwd: rig.projectDir });
-    }
-  });
+    yield* fs.copy(`${made}/origin.git`, origin);
+    yield* fs.copy(`${made}/project`, rig.projectDir);
+    const config = `${rig.projectDir}/.git/config`;
+    const text = yield* fs.readFileString(config);
+    yield* fs.writeFileString(config, text.replace(`${made}/origin.git`, origin));
+  }).pipe(Effect.orDie);
+
+// Per home: a `--rerun-each` run removes the last run's.
+let prepared: { readonly home: string; readonly made: string } | undefined;
+
+const preparedRepository = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem;
+  // The default provider holds the environment the file started with, and its home.
+  const home = yield* Config.String("HOME").pipe(
+    Effect.provideService(ConfigProvider.ConfigProvider, ConfigProvider.fromEnv()),
+  );
+  if (prepared?.home === home) return prepared.made;
+  // Under the suite's home: what a test makes beside it is reported as left behind.
+  const made = yield* fs.makeTempDirectory({ directory: home, prefix: "baseline-repository-" });
+  const origin = `${made}/origin.git`;
+  const project = `${made}/project`;
+  yield* fs.makeDirectory(project);
+  yield* exec(["git", "init", "-q", "--bare", origin], { cwd: made });
+  for (const args of [
+    ["init", "-q"],
+    ["config", "user.email", "t@example.com"],
+    ["config", "user.name", "t"],
+    ["remote", "add", "origin", origin],
+    ["remote", "add", "upstream", "https://gitlab.example.com/group/project.git"],
+    ["commit", "-qm", "first", "--allow-empty"],
+    ["push", "-q", "origin", "HEAD"],
+  ]) {
+    yield* exec(["git", ...args], { cwd: project });
+  }
+  prepared = { home, made };
+  return made;
+}).pipe(Effect.orDie);
 
 /** That repository with a commit the default branch does not have, so its base is another tree. */
 const ahead = () =>
@@ -13239,7 +13266,20 @@ const withForges = (body: () => Promise<void>) =>
     }),
   );
 
-export const register = (pass: "shipped" | "unrelated") => {
+/** How many test files each pass is split into, so that no one file holds a whole pass. */
+export const SHARES = 12;
+
+/** Splits names into `of` shares by a hash of each name, so that adding one moves no other. */
+export const split = (names: ReadonlyArray<string>, of: number) => {
+  const shares = Array.from({ length: of }, (): string[] => []);
+  for (const name of names) shares[Bun.hash.crc32(name) % of]!.push(name);
+  return shares;
+};
+
+export const scenarioNames = () => scenarios.map((one) => one.name);
+
+export const register = (pass: "shipped" | "unrelated", share: number) => {
+  const mine = new Set(split(scenarioNames(), SHARES)[share]);
   beforeEach(() =>
     runEffect(
       Effect.gen(function* () {
@@ -13278,7 +13318,7 @@ export const register = (pass: "shipped" | "unrelated") => {
   );
 
   afterEach(() => runEffect(rig.close()));
-  for (const one of scenarios) {
+  for (const one of scenarios.filter((one) => mine.has(one.name))) {
     test(
       pass === "unrelated" ? `${one.name} (under an unrelated id)` : one.name,
       () => {
@@ -13294,5 +13334,5 @@ export const register = (pass: "shipped" | "unrelated") => {
       one.timeout,
     );
   }
-  if (pass === "shipped") for (const one of shippedOnly) one();
+  if (pass === "shipped" && share === 0) for (const one of shippedOnly) one();
 };
