@@ -250,6 +250,7 @@ export const DesktopAction = Schema.Union([
     runId: Schema.String,
     control: Schema.Literals(["hold", "stop"]),
     set: Schema.Boolean,
+    before: Schema.optional(Schema.String),
   }),
   Schema.TaggedStruct("Resume", { runId: Schema.String }),
   Schema.TaggedStruct("Confirm", { proposal: Schema.String, hash: Schema.String }),
@@ -266,10 +267,12 @@ export const DesktopAction = Schema.Union([
    */
   Schema.TaggedStruct("Deliver", {
     runId: Schema.String,
+    step: Schema.optional(Schema.String),
     agent: Schema.optionalKey(Schema.String),
     to: Schema.optionalKey(Schema.String),
     text: Schema.String,
   }),
+  Schema.TaggedStruct("WithdrawNote", { runId: Schema.String, note: Schema.String }),
   Schema.TaggedStruct("FollowUp", { runId: Schema.String, text: Schema.String }),
   Schema.TaggedStruct("Invoke", {
     runId: Schema.String,

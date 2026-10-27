@@ -51,6 +51,7 @@ const Member = Schema.Struct({
 const Project = Schema.Struct({
   slug: Schema.String,
   group: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  shorthand: Schema.optionalKey(Schema.NullOr(Schema.Array(Schema.String))),
   holder: Schema.optionalKey(Schema.NullOr(Member)),
   queue: Schema.optionalKey(Schema.NullOr(Schema.Array(Member))),
 });
@@ -138,10 +139,15 @@ export type Resolution =
   | { _tag: "None" }
   | { _tag: "Ambiguous"; slugs: string[] };
 
+const answersTo = (project: HelleProject, name: string) =>
+  [project.slug, ...(project.shorthand ?? [])].some(
+    (one) => one.toLowerCase() === name.toLowerCase(),
+  );
+
 /**
  * Which Helle project a repository is. `group` is the repository's group or owner path and
- * `slug` is normally the repository name, so `<group>/<slug>` is the tail of the
- * repository's own path on its forge; a project Helle lists without a group can only be
+ * the slug or a shorthand is normally the repository name, so `<group>/<name>` is the tail of
+ * the repository's own path on its forge; a project Helle lists without a group can only be
  * matched by name — the last segment of that path where there is one, else the name the
  * caller gives.
  * Group case is Helle's own typing (`Players` and `players` are both in there) and
@@ -153,13 +159,16 @@ export function resolveProject(
   repoName: string,
 ): Resolution {
   const path = repositoryPath?.toLowerCase() ?? "";
-  const byGroup = projects.filter(
-    (p) => p.group && path.endsWith(`/${p.group.toLowerCase()}/${p.slug.toLowerCase()}`),
-  );
   // The remote names the repository; the checkout's own clone may be named anything, and a
   // roaming Run's clone is named by a hash that no Helle project will ever be called.
   const name = repositoryPath?.split("/").pop() || repoName;
-  const matched = byGroup.length > 0 ? byGroup : projects.filter((p) => p.slug === name);
+  const byGroup = projects.filter(
+    (p) =>
+      p.group &&
+      answersTo(p, name) &&
+      path.endsWith(`/${p.group.toLowerCase()}/${name.toLowerCase()}`),
+  );
+  const matched = byGroup.length > 0 ? byGroup : projects.filter((p) => answersTo(p, name));
   if (matched.length === 1) return { _tag: "Project", slug: matched[0]!.slug };
   if (matched.length === 0) return { _tag: "None" };
   return { _tag: "Ambiguous", slugs: matched.map((p) => p.slug) };
@@ -171,27 +180,52 @@ export type Needed = { _tag: "Projects"; slugs: string[] } | { _tag: "Unresolved
 export interface Deploys {
   repositoryPath: string | null;
   repoName: string;
-  /** The applications it deploys, by the name their deploy jobs give them. */
+  /** The applications it deploys, by the name their deploy jobs give it. */
   applications: readonly string[];
   jobs: readonly string[];
   /** The repository's own `.collie/helle.json`, which is the whole answer where it is there. */
   declared: readonly string[] | null;
 }
 
+/** The path's first segment is the forge's host, which no Helle group names. */
+const groupOf = (repositoryPath: string | null) =>
+  repositoryPath?.toLowerCase().split("/").slice(1, -1).join("/") ?? null;
+
+const inGroupOf = (projects: readonly HelleProject[], repositoryPath: string | null) => {
+  const group = groupOf(repositoryPath);
+  return (name: string) =>
+    projects.filter(
+      (p) => group !== null && p.group?.toLowerCase() === group && answersTo(p, name),
+    );
+};
+
+const partsOf = (job: string) => job.split(/[:/\s]+/);
+
+const twice = (name: string, found: readonly HelleProject[]) =>
+  `${name} names ${found.length} Helle projects: ${found.map((p) => p.slug).join(", ")}`;
+
 /**
  * Every Helle project a release needs: the repository's own, and each project of the
- * repository's group that an application or a deploy job's name (`stage:spilnu`) names.
- * Anything it cannot settle is `Unresolved`, never an empty set.
+ * repository's group that an application or a deploy job's name (`stage:spilnu`) names, by
+ * slug or shorthand. Anything it cannot settle is `Unresolved`, never an empty set.
  */
 export function resolveProjects(projects: readonly HelleProject[], release: Deploys): Needed {
   if (release.declared !== null) {
-    const unknown = release.declared.filter((slug) => !projects.some((p) => p.slug === slug));
+    const slugs = new Set<string>();
+    const unknown: string[] = [];
+    for (const entry of release.declared) {
+      const found = projects.filter((p) => answersTo(p, entry));
+      if (found.length > 1)
+        return { _tag: "Unresolved", why: `.collie/helle.json's ${twice(entry, found)}` };
+      if (found.length === 0) unknown.push(entry);
+      else slugs.add(found[0]!.slug);
+    }
     return unknown.length > 0
       ? {
           _tag: "Unresolved",
           why: `.collie/helle.json names ${unknown.join(", ")}, which Helle does not know`,
         }
-      : { _tag: "Projects", slugs: [...new Set(release.declared)].sort() };
+      : { _tag: "Projects", slugs: [...slugs].sort() };
   }
   const own = resolveProject(projects, release.repositoryPath, release.repoName);
   if (own._tag === "Ambiguous")
@@ -199,29 +233,26 @@ export function resolveProjects(projects: readonly HelleProject[], release: Depl
       _tag: "Unresolved",
       why: `helle has ${own.slugs.length} projects matching ${release.repoName}: ${own.slugs.join(", ")}`,
     };
-  // The path's first segment is the forge's host, which no Helle group names.
-  const group = release.repositoryPath?.toLowerCase().split("/").slice(1, -1).join("/") ?? null;
-  const inGroup = (name: string) =>
-    projects.find(
-      (p) =>
-        group !== null &&
-        p.group?.toLowerCase() === group &&
-        p.slug.toLowerCase() === name.toLowerCase(),
-    );
+  const group = groupOf(release.repositoryPath);
+  const inGroup = inGroupOf(projects, release.repositoryPath);
   const slugs = new Set(own._tag === "Project" ? [own.slug] : []);
   for (const application of release.applications) {
     const found = inGroup(application);
-    if (!found)
+    if (found.length > 1)
+      return { _tag: "Unresolved", why: `the application ${twice(application, found)}` };
+    if (found.length === 0)
       return {
         _tag: "Unresolved",
         why: `no Helle project in ${group ?? release.repoName}'s group for the application ${application}`,
       };
-    slugs.add(found.slug);
+    slugs.add(found[0]!.slug);
   }
   for (const job of release.jobs)
-    for (const part of job.split(/[:/\s]+/)) {
+    for (const part of partsOf(job)) {
       const found = inGroup(part);
-      if (found) slugs.add(found.slug);
+      if (found.length > 1)
+        return { _tag: "Unresolved", why: `the deploy job ${job}'s ${twice(part, found)}` };
+      if (found.length === 1) slugs.add(found[0]!.slug);
     }
   if (slugs.size === 0)
     return {
@@ -238,7 +269,17 @@ function positionOf(project: HelleProject, user: string): number | null {
   return at < 0 ? null : at + 1;
 }
 
-export interface HelleGate<E, R> {
+/** Who holds or queues for a project ahead of this user, by name; null where nobody else does. */
+function holderOf(project: HelleProject, user: string): string | null {
+  if (project.holder?.user_id === user) return null;
+  const other = [project.holder, ...(project.queue ?? [])].find(
+    (member) => member != null && member.user_id !== user,
+  );
+  return other ? (other.display_name ?? other.user_id) : null;
+}
+
+/** Where the Helle projects a Run needs are resolved from. */
+export interface HelleWhere {
   home: string;
   envFile?: string | null;
   url?: string | null;
@@ -248,6 +289,91 @@ export interface HelleGate<E, R> {
   /** What a release deploys; null where only the repository's own project is needed. */
   deploys: Pick<Deploys, "applications" | "jobs"> | null;
   declared: readonly string[] | null;
+}
+
+const neededOf = Effect.fn("Helle.neededOf")(function* (
+  projects: readonly HelleProject[],
+  where: HelleWhere,
+) {
+  if (where.deploys !== null || where.declared !== null)
+    return resolveProjects(projects, {
+      repositoryPath: where.repositoryPath,
+      repoName: where.repoName,
+      applications: where.deploys?.applications ?? [],
+      jobs: where.deploys?.jobs ?? [],
+      declared: where.declared,
+    });
+  const resolved = resolveProject(projects, where.repositoryPath, where.repoName);
+  if (resolved._tag === "Ambiguous")
+    return yield* Effect.fail(
+      failed(
+        `helle has ${resolved.slugs.length} projects matching ${where.repoName}: ${resolved.slugs.join(", ")} — say which`,
+      ),
+    );
+  return resolved._tag === "Project"
+    ? ({ _tag: "Projects", slugs: [resolved.slug] } satisfies Needed)
+    : ({ _tag: "Unresolved", why: `no Helle project for ${where.repoName}` } satisfies Needed);
+});
+
+export const HoldersSchema = Schema.Union([
+  Schema.TaggedStruct("Read", {
+    /** Each needed project, and who else holds or queues for it; null where it is free. */
+    projects: Schema.Array(
+      Schema.Struct({ slug: Schema.String, holder: Schema.NullOr(Schema.String) }),
+    ),
+    /** The projects each application needs before it may go on stage. */
+    applications: Schema.Array(
+      Schema.Struct({ name: Schema.String, needs: Schema.Array(Schema.String) }),
+    ),
+    /** The applications each deploy job's name names; none means it belongs to every one. */
+    jobs: Schema.Array(
+      Schema.Struct({ name: Schema.String, applications: Schema.Array(Schema.String) }),
+    ),
+  }),
+  Schema.TaggedStruct("Unresolved", { why: Schema.String }),
+]);
+export type Holders = typeof HoldersSchema.Type;
+
+/** Who holds each project `where` needs, read without joining any queue. */
+export const helleHolders = Effect.fn("Helle.holders")(function* (where: HelleWhere) {
+  const creds = yield* credentials(where);
+  const projects = yield* helleProjects(creds);
+  const needed = yield* neededOf(projects, where);
+  if (needed._tag === "Unresolved") return needed satisfies Holders;
+  const me = yield* helleMe(creds);
+  const read: { slug: string; holder: string | null }[] = [];
+  for (const slug of needed.slugs)
+    read.push({ slug, holder: holderOf(yield* helleProject(creds, slug), me.user_id) });
+  const applications = where.deploys?.applications ?? [];
+  const inGroup = inGroupOf(projects, where.repositoryPath);
+  const names = (application: string, part: string) =>
+    part.toLowerCase() === application.toLowerCase() ||
+    inGroup(application).some((own) => answersTo(own, part));
+  return {
+    _tag: "Read",
+    projects: read,
+    applications: applications.map((name) => {
+      const needs = resolveProjects(projects, {
+        repositoryPath: where.repositoryPath,
+        repoName: where.repoName,
+        applications: [name],
+        jobs: [],
+        declared: where.declared,
+      });
+      return { name, needs: needs._tag === "Projects" ? needs.slugs : [] };
+    }),
+    jobs: (where.deploys?.jobs ?? []).map((name) => ({
+      name,
+      applications: applications.filter((application) =>
+        partsOf(name).some((part) => names(application, part)),
+      ),
+    })),
+  } satisfies Holders;
+});
+
+export interface HelleGate<E, R> extends HelleWhere {
+  /** Takes only what nobody else holds or queues for, waits for none, and says what it left. */
+  free?: boolean;
   /** What this Run already recorded, which is what makes it a resume rather than a start. */
   claimed: readonly HelleClaim[];
   record: (claim: HelleClaim) => Effect.Effect<void, E, R>;
@@ -261,7 +387,9 @@ export interface HelleGate<E, R> {
   pollMs?: number;
 }
 
-export type Held = { _tag: "Held"; slugs: string[] } | { _tag: "Unresolved"; why: string };
+export type Held =
+  | { _tag: "Held"; slugs: string[]; left?: { slug: string; holder: string }[] }
+  | { _tag: "Unresolved"; why: string };
 
 const AFFIRMATIVE = /^(y|yes)$/i;
 
@@ -283,29 +411,7 @@ export const waitForHelle = <E, R>(gate: HelleGate<E, R>) =>
 const gateOf = Effect.fn("Helle.waitForHelle")(function* <E, R>(gate: HelleGate<E, R>) {
   const creds = yield* credentials(gate);
   const projects = yield* helleProjects(creds);
-  let needed: Needed;
-  if (gate.deploys !== null || gate.declared !== null) {
-    needed = resolveProjects(projects, {
-      repositoryPath: gate.repositoryPath,
-      repoName: gate.repoName,
-      applications: gate.deploys?.applications ?? [],
-      jobs: gate.deploys?.jobs ?? [],
-      declared: gate.declared,
-    });
-  } else {
-    const resolved = resolveProject(projects, gate.repositoryPath, gate.repoName);
-    if (resolved._tag === "Ambiguous") {
-      return yield* Effect.fail(
-        failed(
-          `helle has ${resolved.slugs.length} projects matching ${gate.repoName}: ${resolved.slugs.join(", ")} — say which`,
-        ),
-      );
-    }
-    needed =
-      resolved._tag === "Project"
-        ? { _tag: "Projects", slugs: [resolved.slug] }
-        : { _tag: "Unresolved", why: `no Helle project for ${gate.repoName}` };
-  }
+  const needed = yield* neededOf(projects, gate);
   if (needed._tag === "Unresolved") return needed satisfies Held;
   const me = yield* helleMe(creds);
   const recorded = new Set(gate.claimed.map((one) => one.slug));
@@ -325,6 +431,33 @@ const gateOf = Effect.fn("Helle.waitForHelle")(function* <E, R>(gate: HelleGate<
     yield* gate.record({ slug, claim: "adopted" });
     recorded.add(slug);
   });
+
+  if (gate.free) {
+    const slugs: string[] = [];
+    const left: { slug: string; holder: string }[] = [];
+    for (const slug of needed.slugs) {
+      const holder = holderOf(yield* helleProject(creds, slug), me.user_id);
+      if (holder !== null) {
+        left.push({ slug, holder });
+        continue;
+      }
+      const claimed = yield* claimProject(creds, slug);
+      if (claimed.already_queued && !recorded.has(slug)) yield* takeOver(slug);
+      else if (!recorded.has(slug)) yield* gate.record({ slug, claim: "mine" });
+      recorded.add(slug);
+      if (claimed.position === 0) {
+        yield* gate.out(`✓ this Run holds ${slug}`);
+        slugs.push(slug);
+        continue;
+      }
+      const taker = holderOf(yield* helleProject(creds, slug), me.user_id);
+      yield* releaseClaim(creds, slug);
+      yield* gate.forget(slug);
+      recorded.delete(slug);
+      left.push({ slug, holder: taker ?? "someone" });
+    }
+    return { _tag: "Held", slugs, left } satisfies Held;
+  }
 
   const hold = Effect.fn("Helle.hold")(function* (slug: string) {
     // Claimed on every entry, resume included: an idempotent claim is the only way back

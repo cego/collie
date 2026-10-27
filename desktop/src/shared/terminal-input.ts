@@ -90,12 +90,17 @@ export interface Key {
   readonly shiftKey: boolean;
 }
 
+/** Ctrl or Cmd with Shift and F: Focus on the terminal, or Restore, from anywhere in the Flow. */
+export const isFocusKey = (key: Key) =>
+  key.key.toLowerCase() === "f" && key.shiftKey && (key.ctrlKey || key.metaKey);
+
 /**
  * What a key pressed in the terminal does: reaches the pane; copies the selection, as
- * Ctrl+C does while there is one; or is left to the browser, whose paste xterm.js sends
- * as one bracketed paste where the pane asked for that.
+ * Ctrl+C does while there is one; is left to the browser, whose paste xterm.js sends
+ * as one bracketed paste where the pane asked for that; or toggles Focus.
  */
-export const keyAction = (key: Key, hasSelection: boolean): "pane" | "copy" | "paste" => {
+export const keyAction = (key: Key, hasSelection: boolean): "pane" | "copy" | "paste" | "focus" => {
+  if (isFocusKey(key)) return "focus";
   const letter = key.key.toLowerCase();
   if (letter === "c" && (key.metaKey || (key.ctrlKey && (key.shiftKey || hasSelection))))
     return "copy";
@@ -114,3 +119,7 @@ export const linksIn = (line: string) =>
 /** Where a pane is, as its card says it: Machine › workspace › tab. */
 export const paneWhere = (machine: string, at: PaneAt) =>
   [machine, at.workspace, at.tab].filter((part) => part !== null).join(" › ");
+
+/** A pane on its card's one line, whose footer names the Machine: tab · workspace. */
+export const paneLine = (at: PaneAt) =>
+  [at.tab, at.workspace].filter((part) => part !== null).join(" · ");

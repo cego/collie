@@ -163,7 +163,11 @@ export function withLedgerLock<A, E, R>(file: string, effect: Effect.Effect<A, E
   return withLock(`${file}.lock`, Effect.fail(new LedgerBusy({ file })), effect);
 }
 
-export class LedgerBusy extends Data.TaggedError("LedgerBusy")<{ file: string }> {}
+export class LedgerBusy extends Data.TaggedError("LedgerBusy")<{ file: string }> {
+  override get message() {
+    return `${this.file} is locked by another process`;
+  }
+}
 
 export const appendLine = (file: string, line: LedgerLine) =>
   appendJournal(file, LedgerLineJson, line);

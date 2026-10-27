@@ -17,24 +17,25 @@ import { herdOf } from "../src/steering";
 import { writeTask } from "../src/task";
 import { FakeBin } from "./support/bin";
 import { exec } from "./support/command";
-import { fastForward, runEffect } from "./support/effect";
-import { forgeOnPath } from "./support/forge";
+import { fastForward } from "./support/effect";
+import { forgeOnPath, runOnPath, serveForges } from "./support/forge";
 import { stopHost } from "./support/host";
 import { collie, proves } from "./support/world";
 
 const MR = "mr:gitlab.example.com/mk/project!7";
 
-/** A glab that is logged in everywhere and says every merge request has merged. */
-const mergedGlab = Effect.fn("sideJobs.mergedGlab")(function* (dir: string) {
-  const fs = yield* FileSystem.FileSystem;
-  yield* fs.makeDirectory(dir, { recursive: true });
-  const view = `{"iid":7,"state":"merged","title":"Cards","web_url":"https://gitlab.example.com/mk/project/-/merge_requests/7"}`;
-  yield* fs.writeFileString(
-    `${dir}/glab`,
-    `#!/bin/sh\n[ "$1" = mr ] && [ "$2" = view ] && echo '${view}'\nexit 0\n`,
-    { mode: 0o755 },
-  );
-  return `${dir}:/usr/bin:/bin`;
+/** A glab on `PATH`, served over HTTP too, that says the merge request has merged. */
+const mergedForge = Effect.fn("sideJobs.mergedForge")(function* (dir: string) {
+  const bin = yield* FakeBin.make(dir);
+  const gitlab = yield* forgeOnPath(bin, "gitlab", {
+    installed: true,
+    loggedIn: ["gitlab.example.com"],
+    login: "me",
+    mrs: [{ project: "gitlab.example.com/mk/project", iid: "7", state: "merged", title: "Cards" }],
+  });
+  const COLLIE_FORGE_API = yield* serveForges(gitlab);
+  yield* bin.restore();
+  return { PATH: `${bin.dir}:/usr/bin:/bin`, COLLIE_FORGE_API };
 });
 
 const asSessions = Schema.encodeSync(
@@ -66,11 +67,11 @@ test(
             cwd: world.project,
             created_at: "2026-10-01T09:00:00Z",
           }).pipe(Effect.orDie);
-          const PATH = yield* mergedGlab(`${world.home}/bin`).pipe(Effect.orDie);
+          const forge = yield* mergedForge(`${world.home}/bin`);
           const started = yield* collie(
             world,
             ["run", "start", "targeted", "--task", "task-1", "--input", `target=${MR}`],
-            { PATH },
+            forge,
           );
           expect(started.envelope.ok).toBe(true);
           const runId = yield* runIdOf(started.envelope);
@@ -102,11 +103,11 @@ test(
             cwd: world.project,
             created_at: "2026-10-01T09:00:00Z",
           }).pipe(Effect.orDie);
-          const PATH = yield* mergedGlab(`${world.home}/bin`).pipe(Effect.orDie);
+          const forge = yield* mergedForge(`${world.home}/bin`);
           const started = yield* collie(
             world,
             ["run", "start", "targeted-parks", "--task", "task-1", "--input", `target=${MR}`],
-            { PATH },
+            forge,
           );
           expect(started.envelope.ok).toBe(true);
           const runId = yield* runIdOf(started.envelope);
@@ -141,11 +142,11 @@ test(
             cwd: world.project,
             created_at: "2026-10-01T09:00:00Z",
           }).pipe(Effect.orDie);
-          const PATH = yield* mergedGlab(`${world.home}/bin`).pipe(Effect.orDie);
+          const forge = yield* mergedForge(`${world.home}/bin`);
           const started = yield* collie(
             world,
             ["run", "start", "targeted-parent", "--task", "task-1", "--input", `target=${MR}`],
-            { PATH },
+            forge,
           );
           expect(started.envelope.ok).toBe(true);
           const runId = yield* runIdOf(started.envelope);
@@ -284,7 +285,7 @@ test(
 );
 
 test("News and the merge watch read the host's latest board, and list no Runs of their own", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-side-shared-" });
@@ -348,7 +349,7 @@ test(
             created_at: "2026-10-01T09:00:00Z",
           }).pipe(Effect.orDie);
           const bin = yield* FakeBin.make(`${world.home}/bin`);
-          yield* forgeOnPath(bin, "gitlab", {
+          const gitlab = yield* forgeOnPath(bin, "gitlab", {
             installed: true,
             loggedIn: ["gitlab.example.com"],
             login: "me",
@@ -364,6 +365,7 @@ test(
             ],
           });
           const PATH = `${bin.dir}:/usr/bin:/bin`;
+          const COLLIE_FORGE_API = yield* serveForges(gitlab);
           yield* bin.restore();
           const started = yield* collie(
             world,
@@ -380,7 +382,7 @@ test(
               "--verify",
               `{"name":"nuxi","executable":"true","argv":[],"cwd":".","ci":"nuxi-job"}`,
             ],
-            { PATH },
+            { PATH, COLLIE_FORGE_API },
           );
           expect(started.envelope.ok).toBe(true);
           const runId = yield* runIdOf(started.envelope);

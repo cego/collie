@@ -2,7 +2,7 @@
 // — only where something was inferred — one row saying where it starts and what it took.
 
 import { expect, test } from "bun:test";
-import { Effect, FileSystem, Schema, Scope } from "effect";
+import { ConfigProvider, Effect, FileSystem, Schema, Scope } from "effect";
 import type { BunServices } from "@effect/platform-bun/BunServices";
 import { writeConfigValue } from "../src/config";
 import { currentEnv, type PluginEnv } from "../src/env";
@@ -12,7 +12,9 @@ import type { PickItem } from "../src/inputs";
 import { homePath, writeHome } from "../src/home";
 import { runViews } from "../src/lifecycle";
 import { budgetPath, herdOf, readBudget } from "../src/steering";
+import { FakeBin } from "./support/bin";
 import { exec } from "./support/command";
+import { forgeOnPath, serveForges } from "./support/forge";
 import { stopHost } from "./support/host";
 import { collie, proves, type World } from "./support/world";
 
@@ -53,22 +55,32 @@ const launching = <A, E>(
 /** `glab` answering with this branch's open merge request, for the flow's own inference. */
 const withMergeRequest = <A, E, R>(world: World, effect: Effect.Effect<A, E, R>) =>
   Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const bin = `${world.home}/bin`;
-    yield* fs.makeDirectory(bin, { recursive: true });
-    yield* fs.writeFileString(
-      `${bin}/glab`,
-      `#!/bin/sh\n[ "$1 $2 $3" = "mr list --source-branch" ] && echo '[{"iid": 42}]'\nexit 0\n`,
-      { mode: 0o755 },
-    );
+    // As `FakeBin` restores it, but over the real PATH: this world's Config has none to read.
+    const path = Bun.env.PATH;
+    const bin = yield* FakeBin.make(`${world.home}/bin`);
+    Bun.env.PATH = `${bin.dir}:${path ?? ""}`;
+    const gitlab = yield* forgeOnPath(bin, "gitlab", {
+      installed: true,
+      loggedIn: ["gitlab.example.com"],
+      login: "me",
+      mrs: [
+        {
+          project: "gitlab.example.com/group/app",
+          iid: "42",
+          state: "open",
+          sourceBranch: "feature/x",
+        },
+      ],
+    });
+    const api = yield* serveForges(gitlab);
     // The checkout's forge is its origin's, which is what is asked for its open merge request.
     yield* exec(["git", "remote", "add", "origin", "git@gitlab.example.com:group/app.git"], {
       cwd: world.project,
     });
-    // As `FakeBin` does, but over the real PATH: this world's Config has none to read.
-    const path = Bun.env.PATH;
-    Bun.env.PATH = `${bin}:${path ?? ""}`;
     return yield* effect.pipe(
+      Effect.provide(
+        ConfigProvider.layerAdd(ConfigProvider.fromUnknown({ COLLIE_FORGE_API: api })),
+      ),
       Effect.ensuring(
         Effect.sync(() => {
           Bun.env.PATH = path;

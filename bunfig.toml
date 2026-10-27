@@ -1,4 +1,5 @@
 [test]
-preload = ["@opentui/solid/preload", "./test/support/hosts.ts"]
+# The budget's first: hosts.ts points TMPDIR, where the budget's store is, at the file's own root.
+preload = ["@opentui/solid/preload", "./test/support/budget-preload.ts", "./test/support/hosts.ts"]
 # Desktop's own tests drive its built app, and run from desktop/.
 root = "test"

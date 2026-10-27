@@ -1,6 +1,8 @@
 import { expect, test } from "bun:test";
 import type { BunServices } from "@effect/platform-bun/BunServices";
-import { Effect, FileSystem, Schema } from "effect";
+import { Effect, FileSystem, Layer, Schema, type Scope } from "effect";
+import type { FetchLike } from "forges";
+import { forgeHttpTest, type ForgeHttp } from "../src/forge/http";
 import { recordAudit } from "../src/audit";
 import { buildBoard } from "../src/board";
 import { sectionOf } from "../src/board-model";
@@ -32,7 +34,10 @@ import { fakeForge, type Check, type FakeMr, type ForgeModel } from "./support/f
 const GITLAB = "gitlab.cego.dk/mk/collie";
 const asLaunch = Schema.encodeSync(Schema.fromJsonString(Launched));
 
-/** The shared fake of a forge, with its calls also kept in `log`. */
+/** The fake of each forge `forge` made last, which ForgeHttp asks. */
+const latest = new Map<"gitlab" | "github", { readonly run: Runner; readonly fetch: FetchLike }>();
+
+/** The shared fake of a forge, with its calls and requests also kept in `log`. */
 function forge(name: "gitlab" | "github", over: Partial<ForgeModel>, log: string[] = []): Runner {
   const fake = fakeForge(name, {
     installed: true,
@@ -41,9 +46,28 @@ function forge(name: "gitlab" | "github", over: Partial<ForgeModel>, log: string
     mrs: [],
     ...over,
   });
-  return (cmd, args, cwd) =>
+  const run: Runner = (cmd, args, cwd) =>
     Effect.tap(fake.run(cmd, args, cwd), () => Effect.sync(() => log.push(fake.calls.at(-1)!)));
+  latest.set(name, {
+    run,
+    fetch: (input: string, init?: RequestInit) => {
+      log.push(`${init?.method ?? "GET"} ${input}`);
+      return fake.fetch(input, init);
+    },
+  });
+  return run;
 }
+
+/** ForgeHttp asking the fake of each forge made last. */
+const forgeHttp = forgeHttpTest(
+  (cmd, args, cwd) => latest.get(cmd === "gh" ? "github" : "gitlab")!.run(cmd, args, cwd),
+  (input, init) =>
+    latest.get(new URL(input).host === "api.github.com" ? "github" : "gitlab")!.fetch(input, init),
+);
+
+/** `runEffect`, with ForgeHttp asking the fake of each forge made last. */
+const runWithForge = <A, E>(effect: Effect.Effect<A, E, ForgeHttp | Scope.Scope | BunServices>) =>
+  runEffect(effect.pipe(Effect.provide(Layer.fresh(forgeHttp))));
 
 const mr65 = (over: Partial<FakeMr>): FakeMr => ({
   project: GITLAB,
@@ -78,7 +102,7 @@ const seeded = Effect.fn("merges.seeded")(function* () {
 });
 
 test("a merge GitLab reports lands the work: a disposition by gitlab, and the card moves", () =>
-  runEffect(
+  runWithForge(
     Effect.gen(function* () {
       const { stateDir, run, board: boardOf } = yield* seeded();
       const before = yield* boardOf({ mrStates: new Map() });
@@ -113,7 +137,7 @@ test("a merge GitLab reports lands the work: a disposition by gitlab, and the ca
   ));
 
 test("a closed merge request is news, not a verdict, and a fresh answer is not asked for again", () =>
-  runEffect(
+  runWithForge(
     Effect.gen(function* () {
       const { stateDir, run, board: boardOf } = yield* seeded();
       const views = yield* boardOf({ mrStates: new Map() });
@@ -180,7 +204,7 @@ function deployed(live: { stage: string; prod: string | null }, log: string[] = 
 }
 
 test("a merged card follows its deploy jobs: on stage, then in production, then asked no more", () =>
-  runEffect(
+  runWithForge(
     Effect.gen(function* () {
       const { stateDir, run, board: boardOf } = yield* seeded();
       const states = new Map();
@@ -232,7 +256,7 @@ test("a merged card follows its deploy jobs: on stage, then in production, then 
   ));
 
 test("what is working is asked about, and what is already disposed of is not", () =>
-  runEffect(
+  runWithForge(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-merges-" });
@@ -271,7 +295,7 @@ test("what is working is asked about, and what is already disposed of is not", (
         expect(
           (yield* readDispositions(runDir(stateDir, run))).map((line) => [line.by, line.ref]),
         ).toEqual([["gitlab", label]]);
-      expect(log.filter((call) => call.includes(" 66 "))).toEqual([]);
+      expect(log.filter((call) => /[ /]66\b/.test(call))).toEqual([]);
     }),
   ));
 
@@ -347,7 +371,7 @@ const onBranch = Effect.fn("merges.onBranch")(function* (
 const TEN = epochMs("2026-10-15T10:00:00Z");
 
 test("a merge request opened from a Task's branch by anyone is found, recorded as its Run's, and lands it", () =>
-  runEffect(
+  runWithForge(
     Effect.gen(function* () {
       for (const name of ["github", "gitlab"] as const) {
         const { run, recorded, card, round } = yield* onBranch(name, [
@@ -368,7 +392,7 @@ test("a merge request opened from a Task's branch by anyone is found, recorded a
   ));
 
 test("a merge request opened from a Task's branch that ended before the Task began is not its", () =>
-  runEffect(
+  runWithForge(
     Effect.gen(function* () {
       const { run, recorded, card, round } = yield* onBranch("github", [
         fromBranch("github", {
@@ -391,7 +415,7 @@ test("a merge request opened from a Task's branch that ended before the Task beg
   ));
 
 test("a merge request opened from a Task's branch is found in Working and in Needs you, and its checks read", () =>
-  runEffect(
+  runWithForge(
     Effect.gen(function* () {
       const lint = { name: "lint", state: "failed" } as const;
       for (const [over, section] of [
@@ -419,7 +443,7 @@ test("a merge request opened from a Task's branch is found in Working and in Nee
   ));
 
 test("a merge request opened from a Task's branch is looked for once a round at most, and a forge that cannot say changes nothing", () =>
-  runEffect(
+  runWithForge(
     Effect.gen(function* () {
       for (const model of [{ installed: false }, { loggedIn: [] }, {}]) {
         const { run, log, recorded, card, round } = yield* onBranch("github", [], { model });
@@ -511,7 +535,7 @@ const merging = Effect.fn("merges.merging")(function* (
 });
 
 test("a merge stops what in its Task is still going: the parked builder and the plan waiting on it, once", () =>
-  runEffect(
+  runWithForge(
     Effect.gen(function* () {
       const { stateDir, stops, round, stopped } = yield* merging([
         { id: "r-review", workflow: "review", state: "stopped" },
@@ -536,7 +560,7 @@ test("a merge stops what in its Task is still going: the parked builder and the 
   ));
 
 test("a merge's stop ends the Run's agents through the one end, and its log names the merge", () =>
-  runEffect(
+  runWithForge(
     Effect.gen(function* () {
       const rig = yield* Rig.make();
       yield* rig.startSocket();
@@ -595,7 +619,7 @@ test("a merge's stop ends the Run's agents through the one end, and its log name
   ));
 
 test("a Run of the Task started after the merge is not stopped by it", () =>
-  runEffect(
+  runWithForge(
     Effect.gen(function* () {
       const { stops, round } = yield* merging([
         {
@@ -611,7 +635,7 @@ test("a Run of the Task started after the merge is not stopped by it", () =>
   ));
 
 test("where the forge gives no merge time, the time the watch first read it merged is used", () =>
-  runEffect(
+  runWithForge(
     Effect.gen(function* () {
       const { stops, round } = yield* merging(
         [
@@ -626,7 +650,7 @@ test("where the forge gives no merge time, the time the watch first read it merg
   ));
 
 test("a Run that follows the merge is not stopped when it leads the Task, however the forge dates the merge", () =>
-  runEffect(
+  runWithForge(
     Effect.gen(function* () {
       const { stops, round, stopped, join } = yield* merging([], null);
       yield* round(TEN);
@@ -638,7 +662,7 @@ test("a Run that follows the merge is not stopped when it leads the Task, howeve
   ));
 
 test("the forge's merge time is the cutoff, not when a merge was recorded by hand", () =>
-  runEffect(
+  runWithForge(
     Effect.gen(function* () {
       const { stateDir, stops, round } = yield* merging([
         {
@@ -665,7 +689,7 @@ test("the forge's merge time is the cutoff, not when a merge was recorded by han
   ));
 
 test("a stop that did not take is asked again next round, before the forge is due and once it is in production", () =>
-  runEffect(
+  runWithForge(
     Effect.gen(function* () {
       const { stops, round } = yield* merging();
       yield* round(TEN);
@@ -717,7 +741,7 @@ const stoppedIds = (stops: ReadonlyArray<readonly [string, string]>) =>
 const EVERY_RUN = ["r-plan", "r-plan.implement", "r-release", "r-review"];
 
 test("a landed Run, its parent and its grandparent are spared by the merge; a sibling is stopped", () =>
-  runEffect(
+  runWithForge(
     Effect.gen(function* () {
       const { stateDir, stops, round } = yield* merging(RELEASE);
       const landed = attempt({ state: "landed", sha: "m1" });
@@ -729,7 +753,7 @@ test("a landed Run, its parent and its grandparent are spared by the merge; a si
   ));
 
 test("an attempt this host is making is spared, with its lineage, before it records landed", () =>
-  runEffect(
+  runWithForge(
     Effect.gen(function* () {
       const making = new Set<string>();
       const { stateDir, stops, round } = yield* merging(RELEASE, MERGED_AT, undefined, {
@@ -745,7 +769,7 @@ test("an attempt this host is making is spared, with its lineage, before it reco
   ));
 
 test("a withdrawn landing, or one of another merge request, spares nothing", () =>
-  runEffect(
+  runWithForge(
     Effect.gen(function* () {
       for (const landing of [
         attempt({ state: "withdrawn", why: "the head moved to head-2" }),
@@ -760,7 +784,7 @@ test("a withdrawn landing, or one of another merge request, spares nothing", () 
   ));
 
 test("an interrupted attempt is someone else's where another login, an earlier merge or another head merged it: withdrawn, and every Run stopped", () =>
-  runEffect(
+  runWithForge(
     Effect.gen(function* () {
       for (const mr of [
         { mergedBy: "alice", head: LANDED_HEAD, mergedAt: "2026-10-15T09:00:00Z" },
@@ -782,7 +806,7 @@ test("an interrupted attempt is someone else's where another login, an earlier m
   ));
 
 test("an interrupted attempt merged by Collie's login at its head after it was written is landed, and spared", () =>
-  runEffect(
+  runWithForge(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       // Within the minute the forge's clock may run behind the host's.
@@ -807,7 +831,7 @@ test("an interrupted attempt merged by Collie's login at its head after it was w
   ));
 
 test("a Task its merge stopped is Finished and reads as the merge; one a human stopped still says so", () =>
-  runEffect(
+  runWithForge(
     Effect.gen(function* () {
       for (const [origin, sentence] of [
         ["host", "Merged as mk/collie!65."],
@@ -833,7 +857,7 @@ test("a Task its merge stopped is Finished and reads as the merge; one a human s
   ));
 
 test("a card whose Run ended is still followed while its Reopened agent works or waits", () =>
-  runEffect(
+  runWithForge(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-merges-" });
@@ -962,7 +986,7 @@ const cardAfter = Effect.fn("merges.cardAfter")(function* (
 });
 
 test("a GitLab pipeline that failed, is running or passed is what the card's checks say", () =>
-  runEffect(
+  runWithForge(
     Effect.gen(function* () {
       const red = (yield* cardAfter(MR, piped("failed"))).card;
       expect(red.checks).toEqual({ state: "failed", name: "pipeline", at: HEAD });
@@ -982,7 +1006,7 @@ test("a GitLab pipeline that failed, is running or passed is what the card's che
   ));
 
 test("a GitHub check rollup that is red, pending or green is what the card's checks say", () =>
-  runEffect(
+  runWithForge(
     Effect.gen(function* () {
       const lint = { name: "lint", state: "failed" } as const;
       const tests = { name: "test", state: "passed" } as const;
@@ -1005,7 +1029,7 @@ test("a GitHub check rollup that is red, pending or green is what the card's che
   ));
 
 test("a draft, and what the forge says of merging, reach the card's readiness", () =>
-  runEffect(
+  runWithForge(
     Effect.gen(function* () {
       const green = [{ name: "build", state: "passed" }] as const;
       const draft = (yield* cardAfter(
@@ -1043,7 +1067,7 @@ test("a draft, and what the forge says of merging, reach the card's readiness", 
   ));
 
 test("a merged GitHub pull request lands its card, by github's word", () =>
-  runEffect(
+  runWithForge(
     Effect.gen(function* () {
       const { card, run } = yield* cardAfter(PR, github("merged", []));
       const recorded = yield* readDispositions(run.dir);
@@ -1056,7 +1080,7 @@ test("a merged GitHub pull request lands its card, by github's word", () =>
   ));
 
 test("no gh, or a gh nobody logged in to, leaves the card unchecked and says nothing of it", () =>
-  runEffect(
+  runWithForge(
     Effect.gen(function* () {
       for (const over of [{ installed: false }, { loggedIn: [] }]) {
         const { card } = yield* cardAfter(PR, github("open", [], over));
@@ -1067,7 +1091,7 @@ test("no gh, or a gh nobody logged in to, leaves the card unchecked and says not
   ));
 
 test("a board file in the old shape still reads, with nothing known of the forge's checks", () =>
-  runEffect(
+  runWithForge(
     Effect.gen(function* () {
       const { stateDir, board: boardOf } = yield* seeded();
       const fs = yield* FileSystem.FileSystem;
@@ -1082,7 +1106,7 @@ test("a board file in the old shape still reads, with nothing known of the forge
   ));
 
 test("green forge checks never stand in for Collie's own, which count only at the forge's head", () =>
-  runEffect(
+  runWithForge(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-forge-older-" });
@@ -1117,7 +1141,7 @@ test("green forge checks never stand in for Collie's own, which count only at th
   ));
 
 test("a pull request's panel is read for the drawer as a merge request's is, and says whether it moved", () =>
-  runEffect(
+  runWithForge(
     Effect.gen(function* () {
       const reviewedAt = epochMs("2026-09-17T09:00:00Z");
       for (const [target, run] of [
@@ -1155,7 +1179,7 @@ test("a pull request's panel is read for the drawer as a merge request's is, and
   ));
 
 test("a merged pull request is followed to stage, then production, then asked no more", () =>
-  runEffect(
+  runWithForge(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-pr-deploys-" });
@@ -1251,7 +1275,7 @@ const fannedOut = Effect.fn("merges.fannedOut")(function* (
 });
 
 test("a fan-out's Repo run's merge request is watched: its facts recorded, its merge landing and stopping that Repo run", () =>
-  runEffect(
+  runWithForge(
     Effect.gen(function* () {
       const { stateDir, env, runs } = yield* fannedOut([
         { repo: "api", iid: "65" },
@@ -1327,7 +1351,7 @@ const singleRepo = Effect.fn("merges.singleRepo")(function* () {
 });
 
 test("a single-repository fan-out's card is its one merge request's, watched, and no plan left to implement", () =>
-  runEffect(
+  runWithForge(
     Effect.gen(function* () {
       const { stateDir, env, runs } = yield* singleRepo();
       const states = new Map();
@@ -1364,7 +1388,7 @@ test("a single-repository fan-out's card is its one merge request's, watched, an
   ));
 
 test("a single-repository fan-out's card says what became of its Repo run's work", () =>
-  runEffect(
+  runWithForge(
     Effect.gen(function* () {
       const { stateDir, env, runs } = yield* singleRepo();
       yield* recordDisposition(runDir(stateDir, "r-fan.api"), {
@@ -1381,7 +1405,7 @@ test("a single-repository fan-out's card says what became of its Repo run's work
   ));
 
 test("a single-repository fan-out's merge request is not watched once its Repo run's work is abandoned", () =>
-  runEffect(
+  runWithForge(
     Effect.gen(function* () {
       const { stateDir, env, runs } = yield* singleRepo();
       yield* recordDisposition(runDir(stateDir, "r-fan.api"), {

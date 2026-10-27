@@ -48,6 +48,21 @@ const on = ({ choice }: ReturnType<typeof resolved>) =>
   `${choice.harness}/${choice.model}${choice.effort === null ? "" : ` ${choice.effort}`}`;
 
 describe("resolveWithRoom", () => {
+  test("Claude fallbacks keep their subagent policy and other harnesses clear it", () => {
+    const policy = { model: "haiku", maxDepth: 1 };
+    const result = resolveWithRoom(
+      [{ ...opus, claudeSubagents: policy }],
+      ["claude/sonnet"],
+      (choice) =>
+        choice.model === "sonnet" ? { room: true } : { room: false, why: "Opus is spent" },
+    );
+    expect(result.ok && result.chosen.choice.claudeSubagents).toEqual(policy);
+    expect(
+      resolved([{ ...opus, claudeSubagents: policy }], ["codex"], [claudeOut]).choice
+        .claudeSubagents,
+    ).toBeUndefined();
+  });
+
   test("the primary while it has room, with nothing to say", () => {
     const chosen = resolved([opus], ["codex"], [reading("claude", [window(40)])]);
     expect(on(chosen)).toBe("claude/opus xhigh");

@@ -5,11 +5,20 @@ import { expect, test } from "bun:test";
 import { Effect, Fiber, FileSystem, Schedule } from "effect";
 import { ciJob } from "../src/ci-job";
 import type { Runner } from "../src/mr";
+import type { FetchLike } from "forges";
 import { readVerifications, verifyingIn, type CheckCommand } from "../src/verify";
 import type { VerifySpec } from "../src/verify-spec";
 import { exec } from "./support/command";
 import { fastForward, runEffect } from "./support/effect";
-import { FORGE_HOST, PROJECT, fakeForge, type FakeJob, type FakeMr } from "./support/forge";
+import { forgeHttpTest } from "../src/forge/http";
+import {
+  FORGE_HOST,
+  PROJECT,
+  fakeForge,
+  type FakeJob,
+  type FakeMr,
+  type FakeRequest,
+} from "./support/forge";
 
 const NUXI: VerifySpec = {
   name: "nuxi",
@@ -81,6 +90,12 @@ const waiting = Effect.fn("ciJob.waiting")(function* (
   return { asked, at, root, forge };
 });
 
+/** `ciJob` asking the fake forge, its credential reads through the Run's runner. */
+const read = (
+  asked: Parameters<typeof ciJob>[0] & { readonly run: Runner },
+  forge: { readonly fetch: FetchLike },
+) => ciJob(asked).pipe(Effect.provide(forgeHttpTest(asked.run, forge.fetch)));
+
 /** Its runner, committing in the checkout on every call, as a commit made while the job is read. */
 const committing =
   (asked: { readonly cwd: string; readonly run: Runner }): Runner =>
@@ -107,8 +122,8 @@ test("a job still running is waited on, saying which check, job and commit, and 
   runEffect(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const { asked, at } = yield* waiting("running");
-      const fiber = yield* Effect.forkChild(ciJob(asked));
+      const { asked, at, forge } = yield* waiting("running");
+      const fiber = yield* Effect.forkChild(read(asked, forge));
       const marker = yield* Effect.retry(
         verifyingIn(asked.runDir).pipe(Effect.filterOrFail((one) => one !== null)),
         { schedule: Schedule.spaced("20 millis"), times: 250 },
@@ -136,14 +151,16 @@ test("a job not finished after 2 hours leaves its check unproved, saying so", ()
     fastForward(
       Effect.gen(function* () {
         const { asked, at, forge } = yield* waiting("pending");
-        expect(yield* ciJob(asked)).toEqual({
+        expect(yield* read(asked, forge)).toEqual({
           unproved: `nuxi is left to CI and unproved: job nuxi-typecheck on ${at.slice(0, 12)} is still pending after 2 hours`,
           state: "pending",
           url: `https://${PROJECT.gitlab}/-/jobs/1`,
           log: LOG,
         });
         // Every 30 s, so about 240 reads.
-        expect(forge.calls.filter((call) => call.includes("/jobs")).length).toBeGreaterThan(200);
+        expect(forge.requests.filter((one) => one.url.includes("/jobs")).length).toBeGreaterThan(
+          200,
+        );
         expect(yield* verifyingIn(asked.runDir)).toBeNull();
       }),
       60_000,
@@ -153,16 +170,16 @@ test("a job not finished after 2 hours leaves its check unproved, saying so", ()
 test("a merge request whose head is not yet this checkout's is waited on, and its pass then recorded once", () =>
   runEffect(
     Effect.gen(function* () {
-      const { asked } = yield* waiting("passed", MR, "an-older-head");
-      expect(yield* ciJob({ ...asked, wait: false })).toMatchObject({ state: "pending" });
-      const { asked: here, at } = yield* waiting("passed");
-      const proved = yield* ciJob(here);
+      const { asked, forge } = yield* waiting("passed", MR, "an-older-head");
+      expect(yield* read({ ...asked, wait: false }, forge)).toMatchObject({ state: "pending" });
+      const { asked: here, at, forge: there } = yield* waiting("passed");
+      const proved = yield* read(here, there);
       expect(proved).toMatchObject({ proved: { pass: "ci", name: "nuxi" } });
-      expect(yield* ciJob(here)).toEqual(proved);
+      expect(yield* read(here, there)).toEqual(proved);
       expect(yield* readVerifications(here.journal)).toHaveLength(1);
       // Its job rerun and failed on the same commit: the job's state now, the proof kept as it was.
-      const { asked: rerun } = yield* waiting("failed", MR, at);
-      expect(yield* ciJob({ ...here, run: rerun.run, wait: false })).toMatchObject({
+      const { asked: rerun, forge: rerunForge } = yield* waiting("failed", MR, at);
+      expect(yield* read({ ...here, run: rerun.run, wait: false }, rerunForge)).toMatchObject({
         state: "failed",
       });
       expect(yield* readVerifications(here.journal)).toHaveLength(1);
@@ -172,8 +189,8 @@ test("a merge request whose head is not yet this checkout's is waited on, and it
 test("a job that passes for a commit the checkout has left while it was waited on proves nothing", () =>
   runEffect(
     Effect.gen(function* () {
-      const { asked, at } = yield* waiting("passed");
-      expect(yield* ciJob({ ...asked, run: committing(asked) })).toEqual({
+      const { asked, at, forge } = yield* waiting("passed");
+      expect(yield* read({ ...asked, run: committing(asked) }, forge)).toEqual({
         unproved: `nuxi is left to CI and unproved: job nuxi-typecheck on ${at.slice(0, 12)} passed, but ${asked.cwd} has moved off it since`,
         state: null,
         url: null,
@@ -188,9 +205,9 @@ test("a job that passes for a commit the checkout has left while it was waited o
 test("a recorded pass is not returned for a checkout that moves while the job is read", () =>
   runEffect(
     Effect.gen(function* () {
-      const { asked, at } = yield* waiting("passed");
-      expect(yield* ciJob(asked)).toMatchObject({ proved: { pass: "ci" } });
-      expect(yield* ciJob({ ...asked, run: committing(asked) })).toMatchObject({
+      const { asked, at, forge } = yield* waiting("passed");
+      expect(yield* read(asked, forge)).toMatchObject({ proved: { pass: "ci" } });
+      expect(yield* read({ ...asked, run: committing(asked) }, forge)).toMatchObject({
         unproved: `nuxi is left to CI and unproved: job nuxi-typecheck on ${at.slice(0, 12)} passed, but ${asked.cwd} has moved off it since`,
       });
       expect(yield* readVerifications(asked.journal)).toHaveLength(1);
@@ -201,11 +218,11 @@ test("a job that passes for a checkout with changes it never saw proves nothing"
   runEffect(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const { asked, at } = yield* waiting("passed");
+      const { asked, at, forge } = yield* waiting("passed");
       // However git is set to show untracked files.
       yield* exec(["git", "config", "status.showUntrackedFiles", "no"], { cwd: asked.cwd });
       yield* fs.writeFileString(`${asked.cwd}/unseen.txt`, "x");
-      expect(yield* ciJob(asked)).toEqual({
+      expect(yield* read(asked, forge)).toEqual({
         unproved: `nuxi is left to CI and unproved: job nuxi-typecheck on ${at.slice(0, 12)} passed, but ${asked.cwd} has changes it never saw`,
         state: null,
         url: null,
@@ -221,19 +238,21 @@ test("a Run with no merge request has its check left to CI unproved, and the for
   runEffect(
     Effect.gen(function* () {
       const { asked, at, forge } = yield* waiting("passed", null);
-      expect(yield* ciJob(asked)).toEqual({
+      expect(yield* read(asked, forge)).toEqual({
         unproved: `nuxi is left to CI and unproved: job nuxi-typecheck on ${at.slice(0, 12)} was never read: this Run has no merge request`,
         state: null,
         url: null,
         log: null,
       });
       expect(forge.calls).toEqual([]);
+      expect(forge.requests).toEqual([]);
     }),
   ));
 
 const BASE = "b".repeat(40);
 const LOG = `glab ci trace 1 --repo ${PROJECT.gitlab}`;
-const retries = (calls: ReadonlyArray<string>) => calls.filter((call) => call.includes("/retry"));
+const retries = (requests: ReadonlyArray<FakeRequest>) =>
+  requests.filter((one) => one.url.includes("/retry"));
 
 test("a failed job that also fails where the branch leaves its target is reported, and not retried", () =>
   runEffect(
@@ -241,14 +260,14 @@ test("a failed job that also fails where the branch leaves its target is reporte
       const { asked, at, forge } = yield* waiting("failed", MR, undefined, {
         base: { at: BASE, jobs: [{ name: "nuxi-typecheck", state: "failed" }] },
       });
-      expect(yield* ciJob({ ...asked, settle: true })).toEqual({
+      expect(yield* read({ ...asked, settle: true }, forge)).toEqual({
         unproved: `nuxi is left to CI and unproved: job nuxi-typecheck on ${at.slice(0, 12)} is failed`,
         state: "failed",
         url: `https://${PROJECT.gitlab}/-/jobs/1`,
         log: LOG,
         before: { at: BASE, url: `https://${PROJECT.gitlab}/-/jobs/1001` },
       });
-      expect(retries(forge.calls)).toEqual([]);
+      expect(retries(forge.requests)).toEqual([]);
     }),
   ));
 
@@ -259,11 +278,11 @@ test("a failed job green where the branch leaves its target is retried once, and
         jobs: [{ name: "nuxi-typecheck", state: "failed", retried: "passed" }],
         base: { at: BASE, jobs: [{ name: "nuxi-typecheck", state: "passed" }] },
       });
-      expect(yield* ciJob({ ...asked, settle: true })).toMatchObject({
+      expect(yield* read({ ...asked, settle: true }, forge)).toMatchObject({
         proved: { pass: "ci", name: "nuxi" },
         retried: true,
       });
-      expect(retries(forge.calls)).toHaveLength(1);
+      expect(retries(forge.requests)).toHaveLength(1);
       expect(yield* readVerifications(asked.journal)).toHaveLength(1);
     }),
   ));
@@ -279,19 +298,19 @@ test("a failed job that fails its retry, or with no base to compare, is the Run'
           jobs: [{ name: "nuxi-typecheck", state: "failed", retried: "failed" }],
           ...over,
         });
-        expect(yield* ciJob({ ...asked, settle: true })).toEqual({
+        expect(yield* read({ ...asked, settle: true }, forge)).toEqual({
           unproved: `nuxi is left to CI and unproved: job nuxi-typecheck on ${at.slice(0, 12)} is failed`,
           state: "failed",
           // The retry's own job.
           url: `https://${PROJECT.gitlab}/-/jobs/101`,
           log: `glab ci trace 101 --repo ${PROJECT.gitlab}`,
         });
-        expect(retries(forge.calls)).toHaveLength(1);
+        expect(retries(forge.requests)).toHaveLength(1);
       }
       // Without `settle`, a failure is only read.
       const { asked, forge } = yield* waiting("failed");
-      expect(yield* ciJob(asked)).toMatchObject({ state: "failed", log: LOG });
-      expect(forge.calls.some((call) => call.includes("pipelines?sha="))).toBe(false);
-      expect(retries(forge.calls)).toEqual([]);
+      expect(yield* read(asked, forge)).toMatchObject({ state: "failed", log: LOG });
+      expect(forge.requests.some((one) => one.url.includes("pipelines?sha="))).toBe(false);
+      expect(retries(forge.requests)).toEqual([]);
     }),
   ));

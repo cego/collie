@@ -11,6 +11,7 @@ import type { Settled } from "./strategies";
 import type { WorktreeRecord } from "./run";
 import type { Landing } from "./landing";
 import { awaitingLine, type Awaiting } from "./awaiting";
+import type { AskedFact, Execution, UsageWait } from "./flow";
 
 /** Where a Run is, in the words every board and listing uses. */
 export type RunState = "running" | "waiting" | "succeeded" | "failed" | "stopped";
@@ -62,11 +63,22 @@ export interface RunFacts {
   readonly parked: string | null;
   /** What it waits for that ends without anyone repairing anything, or null. */
   readonly awaiting: Awaiting | null;
+  /** The Subscription its work waits on to reset, where it waits on one. */
+  readonly usage?: UsageWait | null;
   /** Whether the engine could not be asked about it, so nothing drives it. */
   readonly undriven: boolean;
   /** Why it is not moving or why it ended, in its own words, where it said. */
   readonly note: string | null;
   readonly summary: string | null;
+  /**
+   * What the engine stored of its work: every question it asked, when it next wakes on a
+   * durable timer, and where its execution is. Absent where it was not read from a view.
+   */
+  readonly engine?: {
+    readonly questions: ReadonlyArray<AskedFact>;
+    readonly wakes: string | null;
+    readonly execution: Execution;
+  };
 }
 
 const isText = Schema.is(Schema.String);
@@ -131,6 +143,7 @@ export const factsOfView = (stateDir: string, view: RunView): RunFacts => ({
   repo: view.options.repo ?? null,
   parked: view.parked,
   awaiting: view.awaiting,
+  usage: view.usage ?? null,
   undriven: view.diagnostic !== null,
   note:
     view.parked ??
@@ -139,7 +152,35 @@ export const factsOfView = (stateDir: string, view: RunView): RunFacts => ({
       ? [view.status.reason, view.diagnostic].filter((part) => part !== null).join(" — ")
       : view.diagnostic),
   summary: view.status.status === "complete" ? resultText(view.status.value) : null,
+  engine: {
+    questions: view.waiting.map((one) => ({
+      name: one.name,
+      asked: one.asked ?? null,
+      answered: one.answered ?? null,
+      by: one.by ?? null,
+      open: one.answer === null,
+      text: one.prompt,
+      options: one.options.map((value) => ({ id: value, title: value, subtitle: null })),
+    })),
+    wakes: view.wakes ?? null,
+    execution: executionOf(view),
+  },
 });
+
+const executionOf = (view: RunView): Execution => {
+  if (view.controls.includes(STOP)) return "stopped";
+  if (view.diagnostic !== null && view.status.status === "pending") return "died";
+  switch (view.status.status) {
+    case "pending":
+      return "running";
+    case "suspended":
+      return "suspended";
+    case "complete":
+      return "completed";
+    case "failed":
+      return "failed";
+  }
+};
 
 type Client = FileSystem.FileSystem | ChildProcessSpawner.ChildProcessSpawner;
 

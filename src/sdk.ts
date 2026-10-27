@@ -16,6 +16,7 @@
 // is why the engine underneath is Effect's.
 
 import {
+  Cause,
   Context,
   Effect,
   FileSystem,
@@ -32,10 +33,12 @@ import type { Issue, IssueRef } from "./forge/issues";
 export type { Issue, IssueRef } from "./forge/issues";
 import type { Report } from "./report";
 export type { Report } from "./report";
+export type { Produces, StepKind, StepMeta } from "./steps";
 import type { VerifySpec } from "./verify-spec";
 import type { CiJob } from "./ci-job";
 import type { ChildProcessSpawner } from "effect/process";
 import { WorkflowInstance, type WorkflowEngine } from "effect/workflow/WorkflowEngine";
+import * as Activity from "effect/workflow/Activity";
 import * as DurableDeferred from "effect/workflow/DurableDeferred";
 import * as Workflow from "effect/workflow/Workflow";
 import type { Agents } from "./agents";
@@ -48,17 +51,28 @@ import {
   REQUESTABLE,
   checkGaps,
   evidenceGaps,
+  reviewGaps,
   isOutcome,
   refInside,
   type Outcome,
 } from "./outcome";
 import type { Source } from "./offers";
+import {
+  CurrentStep,
+  runKey,
+  type Produces,
+  type StepKind,
+  type StepMeta,
+  type StepNote,
+  type StepPlace,
+} from "./steps";
 import type { Asker } from "./proposals";
 import type { UsageReading } from "./usage-model";
 import type { Integration } from "./integrate";
 import type { MergeOutcome, Takeover } from "./landing";
 import type { ReviewHead, ReviewStanding } from "./review-wait";
 import type { FastForward, ProductionRead, RollbackRead, StageRead, TagRead } from "./releasing";
+import type { Holders } from "./helle";
 
 export { EXCLUSIVE_STRATEGIES } from "./strategies";
 
@@ -109,6 +123,8 @@ export {
   type StageRead,
   type TagRead,
 } from "./releasing";
+/** Who holds the shared claims a Run needs (`HostApi.holders`). */
+export { HoldersSchema, type Holders } from "./helle";
 
 export {
   CheckSchema,
@@ -188,6 +204,7 @@ export { renderApproved } from "./verify-spec";
 export {
   baseFailuresOf,
   baselinesOwed,
+  evidenceRoots,
   flakesOf,
   isOutcome,
   recheckOwed,
@@ -201,6 +218,9 @@ export {
 
 /** A Check's proof on this tree, and which of a Run's Checks it runs itself. */
 export { checkProof, owedLocally, type CheckProof, type Unmatched } from "./check-proof";
+
+/** The fingerprint of a tree too large to measure: two of them are not the same tree. */
+export { TOO_LARGE } from "./verify";
 
 /**
  * Which of the five kinds of work a work source is. A workflow that reads a plan
@@ -358,6 +378,11 @@ export function checkGapsOf(options: EvidenceAsk): ReadonlyArray<string> {
   return checkGaps(options.kind, collectedOf(options));
 }
 
+/** The gaps among those a fresh review could close: what is worth paying a reviewer for. */
+export function reviewGapsOf(options: EvidenceAsk): ReadonlyArray<string> {
+  return reviewGaps(options.kind, collectedOf(options));
+}
+
 export interface EvidenceAsk {
   readonly kind: Outcome;
   readonly evidence: CheckEvidence;
@@ -408,11 +433,14 @@ export interface RunApi {
 
 export class Run extends Context.Service<Run, RunApi>()("collie/Run") {}
 
+export type { ClaudeSubagents } from "./subagents";
+
 /** Which agent does the work: each is inherited from the configuration where it is left out. */
 export interface AgentPreferences {
   readonly harness?: string;
   readonly model?: string;
   readonly effort?: string;
+  readonly claudeSubagents?: import("./subagents").ClaudeSubagents;
   /** Past this share of its busiest window, 1–100, this agent is not chosen for new work. */
   readonly upTo?: number;
   /**
@@ -496,8 +524,10 @@ export type Lent =
   | Path.Path
   | ChildProcessSpawner.ChildProcessSpawner;
 
-/** What a definition declares about itself beside what it does. None of it is a step. */
+/** What a definition declares about itself beside what it does. */
 export interface Declarations {
+  /** The Steps it expects to take, in order: a forecast, never a precondition. */
+  readonly path?: ReadonlyArray<Step>;
   /** Input field to the strategy that infers it. At most one field per exclusive one. */
   readonly hints?: Readonly<Record<string, InputStrategy>>;
   readonly outcome?: OutcomeContract;
@@ -589,10 +619,21 @@ export const definitionOf = (written: WrittenDefinition): WorkflowDefinition => 
  * from the attempt that first ran.
  */
 /** What `claim` holds, or why the claims a Run needs could not be settled. */
-export type Claimed = { readonly slugs: ReadonlyArray<string> } | { readonly unresolved: string };
+export type Claimed =
+  | {
+      readonly slugs: ReadonlyArray<string>;
+      /** What a free-only claim left to whoever holds it. */
+      readonly left?: ReadonlyArray<{ readonly slug: string; readonly holder: string }>;
+    }
+  | { readonly unresolved: string };
 
 const Holding = Schema.Union([
-  Schema.Struct({ slugs: Schema.Array(Schema.String) }),
+  Schema.Struct({
+    slugs: Schema.Array(Schema.String),
+    left: Schema.optionalKey(
+      Schema.Array(Schema.Struct({ slug: Schema.String, holder: Schema.String })),
+    ),
+  }),
   Schema.Struct({ unresolved: Schema.String }),
 ]);
 
@@ -647,6 +688,12 @@ export interface HostApi {
    */
   readonly place: (runId: string) => Effect.Effect<Place>;
   /**
+   * The branch `checkoutReviewed` would check out, or its refusal in the same words. It
+   * cuts and records nothing, so a workflow can ask before offering a fix. Take it inside
+   * an Activity, so a replay answers the same.
+   */
+  readonly reviewedBranch: (runId: string) => Effect.Effect<ReviewedBranch>;
+  /**
    * The checkout of the branch this Run's diff target names, recorded as the Run's own:
    * `place` answers with it from then on, and every verification is bound to it
    * (ADR-0054). The one git already has, else one cut from the branch; asking again
@@ -656,6 +703,13 @@ export interface HostApi {
   readonly held: (runId: string) => Effect.Effect<boolean>;
   readonly stopRequested: (runId: string) => Effect.Effect<boolean>;
   readonly record: (runId: string, event: string) => Effect.Effect<void>;
+  /** Records that its work waits on a Subscription to reset; null says it no longer does. */
+  readonly usageWait: (
+    runId: string,
+    wait: { readonly account: string; readonly resetsAt: string | null } | null,
+  ) => Effect.Effect<void>;
+  /** Records where the Run's work is among its Steps (ADR-draft-a-step-is-declared-where-its-work-is-written D4). */
+  readonly step: (runId: string, note: StepNote) => Effect.Effect<void>;
   /**
    * Why this Run has parked its own work and what picks it up again, shown beside its
    * status; null says it no longer has.
@@ -785,7 +839,25 @@ export interface HostApi {
       readonly applications: ReadonlyArray<string>;
       readonly jobs: ReadonlyArray<string>;
     };
+    /**
+     * Takes only the projects nobody else holds or queues for and waits for none; `left`
+     * names each it did not take, and who has it.
+     */
+    readonly free?: boolean;
   }) => Effect.Effect<Claimed, WorkflowError | E, R>;
+  /**
+   * Who holds each shared claim `claim` would take for the same `deploys`, read without
+   * joining any queue, with the projects each application needs and the applications each
+   * deploy job names.
+   */
+  readonly holders: (options: {
+    readonly runId: string;
+    readonly cwd: string;
+    readonly deploys?: {
+      readonly applications: ReadonlyArray<string>;
+      readonly jobs: ReadonlyArray<string>;
+    };
+  }) => Effect.Effect<Holders, WorkflowError>;
   /**
    * Gives every claim back, and answers those Helle would not take, which stay recorded.
    * Only a Run that has finished its work releases: holding it across a consultation is
@@ -927,9 +999,12 @@ export interface HostApi {
   }) => Effect.Effect<ProductionRead>;
   /**
    * Reads the recorded merge request's head on stage from the forge, rather than from an
-   * Output: `Staged` where each of `jobs`, one at least, passed on its head's pipeline and
-   * stage's newest successful deployment carries `head`, with each job's address; `Moved`
-   * where its head is no longer `head`; else `Failed` with why. Take it inside an Activity.
+   * Output, one stage environment at a time: `Staged` where each of `jobs`, one at least,
+   * passed on its head's pipeline, and the newest successful deployment of every stage
+   * environment that pipeline deployed to, one at least, carries `head`, with each job's
+   * address and those environments; `Moved` where its head is no longer `head`; else `Failed`
+   * with why, and the environments the pipeline reached where they could be read. Take it
+   * inside an Activity.
    */
   readonly readStage: (options: {
     readonly runId: string;
@@ -938,13 +1013,16 @@ export interface HostApi {
     readonly jobs: ReadonlyArray<string>;
   }) => Effect.Effect<StageRead>;
   /**
-   * Whether the forge shows stage rolled back: its newest successful deployment no longer
-   * carries `off` and carries what production's has. Take it inside an Activity.
+   * Whether the forge shows stage rolled back: the newest successful deployment of each of
+   * `environments` carries none of `off` and carries what production's has. Where
+   * `environments` is not given, stage's newest successful deployment is read instead. Take
+   * it inside an Activity.
    */
   readonly readRollback: (options: {
     readonly runId: string;
     readonly cwd: string;
-    readonly off: string;
+    readonly off: ReadonlyArray<string>;
+    readonly environments?: ReadonlyArray<string>;
   }) => Effect.Effect<RollbackRead>;
   /**
    * For a merged merge request this Run recorded: takes over the landing of the newest Run
@@ -1000,9 +1078,8 @@ export interface Place {
   readonly cwd: string;
   readonly dir: string;
   /**
-   * The host's own launch options for this Run — the `RESERVED_INPUTS` names — as a front
-   * door supplied them. They are not in the payload because they are not the author's
-   * fields, and this is where a workflow that wants one reads it.
+   * The host's own launch options, plus agent preferences inherited from a parent Run.
+   * They stay separate from the author's input payload.
    */
   readonly options: Readonly<Record<string, string>>;
   /** The Task this Run belongs to, whose workspace its agents open in; null for none. */
@@ -1019,6 +1096,9 @@ export interface Place {
 export type ReviewedCheckout =
   | { readonly cwd: string; readonly branch: string }
   | { readonly refused: string };
+
+/** The reviewed branch, or why there is none, in the resolver's own words. */
+export type ReviewedBranch = { readonly branch: string } | { readonly refused: string };
 
 /** What opening a merge request from here needs, and what it would be filled in with. */
 export interface MrReady {
@@ -1097,11 +1177,18 @@ export const ask = (question: {
 }): Effect.Effect<string, never, Run | Host | WorkflowEngine | WorkflowInstance> =>
   Effect.gen(function* () {
     const host = yield* Host;
-    yield* host.asking((yield* Run).id, {
+    const runId = (yield* Run).id;
+    yield* host.asking(runId, {
       name: question.name,
       prompt: question.prompt ?? question.name,
       options: question.options ?? [],
     });
+    const at = yield* CurrentStep;
+    if (at !== null)
+      yield* Activity.make({
+        name: `ask.${question.name}.step`,
+        execute: host.step(runId, { kind: "question", key: at.key, name: question.name }),
+      });
     return yield* DurableDeferred.await(
       DurableDeferred.make(question.name, { success: Schema.String }),
     );
@@ -1162,6 +1249,143 @@ export const child = (ask: ChildAsk): Effect.Effect<unknown, WorkflowError, Chil
     return yield* children.result(yield* children.start(ask));
   });
 
+/** What an author declares of a Step. Left out, its description is empty and it has no role. */
+export interface StepDeclaration {
+  readonly id: string;
+  readonly title: string;
+  readonly description?: string;
+  readonly kind: StepKind;
+  readonly role?: string;
+  readonly produces?: Produces;
+}
+
+/** Which run of a Step a call is: a round under its bound, or an item of the list it comes from. */
+export type StepCall =
+  | { readonly round: number; readonly of?: number }
+  | { readonly item: string; readonly items: ReadonlyArray<string> };
+
+type Recording = Run | Host | WorkflowEngine | WorkflowInstance;
+
+/**
+ * A Step: called around the Effect that does its work, it runs that Effect unchanged and
+ * records with the host when the work enters it and leaves it.
+ */
+export interface Step extends StepMeta {
+  <A, E, R>(work: Effect.Effect<A, E, R>, place?: StepCall): Effect.Effect<A, E, R | Recording>;
+  readonly meta: StepMeta;
+}
+
+/** Calls of each Step made without a place, per execution, so each is a run of its own. */
+const unplaced = new WeakMap<object, Map<string, number>>();
+
+const placeOf = (place: StepCall | undefined): StepPlace | null =>
+  place === undefined
+    ? null
+    : "item" in place
+      ? { item: place.item, items: [...place.items] }
+      : { round: place.round, of: place.of ?? null };
+
+/**
+ * A Step, made where its work is written (ADR-draft-a-step-is-declared-where-its-work-is-written).
+ * Its records are Activities, so a replay records nothing twice.
+ */
+export const step = (declared: StepDeclaration): Step => {
+  const meta: StepMeta = {
+    id: declared.id,
+    title: declared.title,
+    description: declared.description ?? "",
+    kind: declared.kind,
+    role: declared.role ?? null,
+    produces: declared.produces ?? null,
+  };
+  const call = <A, E, R>(work: Effect.Effect<A, E, R>, given?: StepCall) =>
+    Effect.gen(function* () {
+      const host = yield* Host;
+      const runId = (yield* Run).id;
+      const instance = yield* WorkflowInstance;
+      const place = placeOf(given);
+      const calls = unplaced.get(instance) ?? new Map<string, number>();
+      unplaced.set(instance, calls);
+      const n = place === null ? (calls.get(meta.id) ?? 0) + 1 : 0;
+      if (place === null) calls.set(meta.id, n);
+      const key = runKey(meta.id, place, n);
+      yield* Activity.make({
+        name: `step.${key}.enter`,
+        execute: host.step(runId, { kind: "enter", key, step: meta, place }),
+      });
+      if ((yield* host.held(runId)) || (yield* host.stopRequested(runId)))
+        return yield* Workflow.suspend(yield* WorkflowInstance);
+      const done = yield* Effect.provideService(work, CurrentStep, {
+        step: meta.id,
+        place,
+        key,
+      }).pipe(
+        Effect.tapCause((cause) =>
+          Cause.hasInterruptsOnly(cause)
+            ? Effect.void
+            : host.step(runId, { kind: "fail", key, why: failureOf(cause) }),
+        ),
+      );
+      yield* Activity.make({
+        name: `step.${key}.leave`,
+        execute: host.step(runId, { kind: "leave", key }),
+      });
+      return done;
+    });
+  return Object.assign(call, { ...meta, meta });
+};
+
+const Said = Schema.Union([
+  Schema.Struct({ reason: Schema.String }),
+  Schema.Struct({ message: Schema.String }),
+]);
+
+/** Why a Step's work failed: a `WorkflowError`'s reason, an error's message, or what it is. */
+const failureOf = (cause: Cause.Cause<unknown>): string => {
+  const error = Cause.squash(cause);
+  const said = Schema.decodeUnknownOption(Said)(error);
+  if (said._tag === "None") return String(error);
+  return "reason" in said.value ? said.value.reason : said.value.message;
+};
+
+/**
+ * Records that the Step the work is in failed, where the Run parks to be resumed rather than
+ * ending: the Step is drawn failed, saying why, until a resume enters it again.
+ */
+export const stepFailed = (why: string): Effect.Effect<void, never, Run | Host> =>
+  Effect.gen(function* () {
+    const at = yield* CurrentStep;
+    if (at === null) return;
+    yield* (yield* Host).step((yield* Run).id, { kind: "fail", key: at.key, why });
+  });
+
+/** Calls of `forecast`, per execution, so each forecast is an Activity of its own. */
+const forecasts = new WeakMap<object, number>();
+
+/**
+ * The path from here, once the Run knows which branch it takes. The Flow forecasts from
+ * the latest one; it is never a precondition.
+ */
+export const forecast = (path: ReadonlyArray<Step>): Effect.Effect<void, never, Recording> =>
+  Effect.gen(function* () {
+    const host = yield* Host;
+    const runId = (yield* Run).id;
+    const instance = yield* WorkflowInstance;
+    const n = (forecasts.get(instance) ?? 0) + 1;
+    forecasts.set(instance, n);
+    yield* Activity.make({
+      name: `forecast.${n}`,
+      execute: host.step(runId, { kind: "forecast", steps: path.map((one) => one.meta) }),
+    });
+  });
+
+/** The ids a path lists more than once: a Step is known by its id, so each is one Step. */
+export const repeatedIds = (
+  path: ReadonlyArray<{ readonly id: string }>,
+): ReadonlyArray<string> => [
+  ...new Set(path.map((one) => one.id).filter((id, at, ids) => ids.indexOf(id) !== at)),
+];
+
 /**
  * A workflow as the host sees one: any input and any result, no service of the host's to
  * encode them, and the one error contract above.
@@ -1221,9 +1445,9 @@ const DeclaredCheckout = Schema.Literals(["branch", "roaming"]);
 const isDeclaredCheckout = Schema.is(DeclaredCheckout);
 
 /**
- * What a card, a launch and a follow-up read. None of it is a step: a hint says how an
- * input is inferred, an outcome says what closing needs, an action says what may be
- * started next. A workflow's body never consults any of it.
+ * What a card, a launch and a follow-up read: a hint says how an input is inferred, an
+ * outcome says what closing needs, an action says what may be started next, a path what
+ * the Flow forecasts. A workflow's body never consults any of it.
  */
 export interface WorkflowMetadata {
   /** Input field to the strategy that infers it. At most one field per exclusive one. */
@@ -1238,6 +1462,7 @@ export interface WorkflowMetadata {
   readonly closes?: "reported";
   readonly followUps?: ReadonlyArray<FollowUp>;
   readonly actions?: ReadonlyArray<ActionProvider>;
+  readonly path?: ReadonlyArray<StepMeta>;
 }
 
 /**
@@ -1395,6 +1620,8 @@ export function checkEntry(entry: WorkflowEntry): ReadonlyArray<string> {
     problems.push(`checkout ${JSON.stringify(checkout)} is not branch or roaming`);
   }
   problems.push(...offerProblems(entry.metadata));
+  for (const id of repeatedIds(entry.metadata?.path ?? []))
+    problems.push(`path lists the Step "${id}" more than once`);
   return problems;
 }
 

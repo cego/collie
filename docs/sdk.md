@@ -47,6 +47,8 @@ an agent is told, and any input your work really needs stay yours to write.
 `run` is ordinary Effect code. Branches, loops, helpers in other files, parallel work and
 lists you build as you go are TypeScript, and a helper can itself ask an agent, ask a
 human, start a child or branch again: there is no step graph to keep in step with the code.
+A [`path`](#steps-and-the-path-a-run-expects) is a forecast of the Steps a Run expects to
+take, never a precondition, and nothing draws an edge the code did not take.
 
 The host executes `run` as a Run, and the Run is supplied rather than passed:
 `yield* Run` is its `id` and the public id of the workflow it is a Run of, and `agentWork`,
@@ -262,6 +264,13 @@ merge request, for a Clearance like the shipped one's), so a fork keeps a sectio
 sections, so a fork written before there were two reads what it read; `asRenovator`
 is who does the work and the `input` every shipped section reads.
 
+`Landing.merge` is called once per Renovate merge request on the same conversation.
+`at.input.merge_request` names that turn's request; `asRenovator` gives later turns
+distinct operations. Keep that scope in a fork's instructions, and return any newly
+opened requests in `Merged.remaining_requests` so each gets its own turn. For an
+application, the approved batch is merged once and each original request is then settled
+against it. The release and record functions are still called once for the repository.
+
 Nothing was added to Collie to make that possible, and nothing needs to be. A workflow
 that wants to be varied takes functions, or takes a service and lets a fork provide a
 different Layer for it. There is no step to patch and no engine to copy.
@@ -329,8 +338,10 @@ const verdict =
   launch that waits for memory spends none of it either: the budget starts once the agent
   is launched. Past the budget the Run parks saying how many minutes it sat idle, and Collie
   keeps collecting: an Output written later clears the park and the step goes on, with no
-  resume. An agent that has gone by the end of another idle budget is started again. A stop
-  still ends the wait.
+  resume. An agent that has gone by the end of another idle budget is started again. Gone is
+  an agent herdr no longer lists, or one it still lists but refuses as not active, as it
+  does when the agent's process died with its Machine; that one's pane is closed first, so
+  the new agent can take its name. A stop still ends the wait.
 - **`cwd` is where the host placed the Run** unless you name another checkout.
 - **`role`** defaults to the operation's name. The role is injected as a persona, and where
   `personas/<role>.md` exists in the project, on this machine or in the installation, that
@@ -457,6 +468,44 @@ for at the work itself — its options, or a scope around it — has to agree wi
 running as, and one that does not is refused rather than ignored. What only defaults below
 that decides for fresh agents alone. `permissions` is none of this: preferring a model never
 changes what an agent is allowed to do, or which commands Collie may run for the Run.
+
+### Claude subagent policy
+
+`claudeSubagents` belongs to agent preferences: operator defaults, a Workflow's `agents`,
+its role seats, `withAgents`, and an `agentWork` call. Its individual fields merge in the
+same order as other preferences. Explicit `false` overrides an inherited `true`.
+
+For a Workflow with `implementer` and `researcher` roles, this is an `agents` declaration:
+
+```ts
+agents: {
+  claudeSubagents: { model: "sonnet", maxDepth: 1, maxConcurrent: 2 },
+  roles: {
+    implementer: { claudeSubagents: { enabled: false } },
+    researcher: { claudeSubagents: { cacheTtl: "1h" } },
+  },
+}
+```
+
+The parent agent's Model remains its own preference. The `model` inside `claudeSubagents`
+is a fallback for native workers. Add `forceModel: true` to request enforcement, subject
+to [Claude's exceptions](using.md#claude-subagents). The available fields are `enabled`,
+`model`, `forceModel`, `cacheTtl`, `maxDepth`, and `maxConcurrent`.
+
+A Harness switch clears an inherited Claude policy alongside the old Model and effort.
+Pi, Codex, and OpenCode receive none of its settings. An explicit policy on later Claude
+work supplies a new choice; it does not recover one discarded by a Harness switch.
+
+Scopes carry policy into child Runs as a serialized host option. It is recorded with the
+agent choice before launch. A running agent keeps its policy: changed defaults apply to
+fresh agents, and incompatible policy explicitly requested by a call or scope is refused.
+Do not use a settings edit to reconfigure an existing conversation.
+
+Malformed values and unknown models are refused before an affected agent launches.
+The force override requires a model after inheritance. `cacheTtl` accepts `5m` or `1h`;
+limits require positive whole numbers. No policy is supplied by default.
+See the [operator guide](using.md#claude-subagents) for native precedence, compatibility,
+and the cost of longer retention.
 
 ### When a Subscription is running out
 
@@ -625,6 +674,9 @@ as the Run's own, so read `place` again after it rather than keeping `place.cwd`
 `{ cwd, branch }`, or `{ refused }` in the resolver's own words where the target has no
 branch to work on; asking again answers from the record. Take it inside an `Activity`, so a
 replay does not cut a second checkout. Shipped `review` takes it before its own fixer starts.
+`host.reviewedBranch(runId)` answers `{ branch }`, or the `{ refused }` the checkout would
+give, by the same resolution, and cuts and records nothing; shipped `review` asks it before
+its first menu, so a fix that cannot run is not offered.
 
 `place.dir` is where what a Run produces belongs, and where the things that read a Run look:
 a plan's tickets under `plan/issues/`, a review's prose in `review.md` and its findings in
@@ -638,6 +690,8 @@ it.
 `place.options` is the other half of the launch. The names in `RESERVED_INPUTS` are the
 host's, so they are never in your payload — a caller asking for extra review axes or naming
 an earlier Run to compare against is doing it there, and this is where you read it.
+`outcome` is the one that can change while the Run is live, with `run intent set-outcome`:
+read it again, inside an `Activity`, wherever the kind decides something.
 
 `host.post` puts a file on the merge request a Run was pointed at, as one note Collie sends
 rather than an agent writes out again, through the merge request's own forge. With
@@ -1071,6 +1125,59 @@ passes `--detach` because bodil's foreground mode holds until it is stopped, so 
 would never finish. The instance outlives the Run, however it ended, so the human can check
 the change in it; `bodil remote down <name>` takes it down once they are done.
 
+## Steps, and the path a Run expects
+
+A **Step** is a value made where its work is written, the way Prefect declares a task. Its
+metadata is what a reader needs before it runs: an `id`, a `title`, a `description`, its
+`kind` (`agent`, `question`, `workflow` or `check`), its `role`, and what it `produces`
+(`plan`, `review`, `evidence` or `merge-request`). Called around an Effect, it runs that
+Effect unchanged — no retry, timeout or schedule of its own — and records with the host when
+the work enters it and leaves it. An agent's work, a question, a child or a check pass made
+inside it is recorded as the Step's.
+
+```ts
+import { agentWork, ask, defineWorkflow, forecast, step } from "collie";
+
+const build = step({ id: "build", title: "Build it", kind: "agent", role: "implementer" });
+const decide = step({ id: "decide", title: "Ship it?", kind: "question" });
+const slice = step({ id: "slice", title: "Build a slice", kind: "agent" });
+const review = step({ id: "review", title: "Review", kind: "agent", produces: "review" });
+
+export default defineWorkflow({
+  id: "stepped",
+  path: [build, decide, review],
+  run: () =>
+    Effect.gen(function* () {
+      yield* build(agentWork({ operation: "build" /* … */ }));
+      yield* decide(ask({ name: "go", options: ["yes", "no"] }));
+      // Once the Run knows its branch, it may forecast again.
+      yield* forecast([build, slice, review]);
+      yield* Effect.forEach(items, (item) => slice(agentWork({/* … */}), { item, items }));
+      for (const round of [1, 2]) yield* review(agentWork({/* … */}), { round, of: 2 });
+    }),
+});
+```
+
+A call may give its place: `{ item, items }` for one item of a list, which is a
+[Slice](#a-list-of-work-one-item-at-a-time), or `{ round, of }` for a round under its bound.
+Each call is one run of the same Step, so a Step called per item is one node with a run per
+item, and the items it has not reached yet are expected runs.
+
+`path` lists the Steps the Workflow expects to take, in order. A Step is known by its id, so
+two values with one id are one Step, and a path that lists one id twice is refused by the
+definition check. `forecast` replaces the path from there once the Run knows which branch it
+takes; the Steps it drops are no longer drawn. A Step called off the path still runs and is
+drawn after the Step that ran before it, and a path Step the Run never reached ends `not run`.
+The records are Activities, so a replay records nothing twice, and the host is their only
+writer ([ADR-draft-a-step-is-declared-where-its-work-is-written](adr/draft-a-step-is-declared-where-its-work-is-written.md)).
+
+Work that fails in a way a resume can retry parks the Run rather than failing it. Call
+`stepFailed(why)` before parking, and the Step it is in is drawn failed, saying why, until
+the resume enters it again.
+
+A module that declares no Steps still runs. Its Run's Flow is what happened — its Operations,
+questions and children, titled by their names — and forecasts nothing.
+
 ## A list of work, one item at a time
 
 A list is `Effect.forEach` over whatever you enumerated; what Collie adds is the two things
@@ -1266,7 +1373,8 @@ const gaps = evidenceGapsOf({
 `checkGapsOf` takes the same question and answers only the gaps a verification on this
 tree could close: a check that failed, never ran, or passed on an earlier tree. Those are
 what a fix may be handed. A reviewer's judgement and an Output's claim are not moved by
-running anything, so a fix handed one spends a session and changes nothing.
+running anything, so a fix handed one spends a session and changes nothing. `reviewGapsOf` answers only the gaps a reviewer's verdict could close, such as
+`scope_met`: a fresh review is worth paying for only while one of those remains.
 
 Both read each check through `checkProof`, which you can call yourself. It gives a check's
 proof on the tree in `evidence`: `passed`, `failed`, `unstable`, `earlier` (it passed only
@@ -1359,8 +1467,8 @@ None of it is yours to implement, but it decides where your workflow can be inte
 ## What a definition declares
 
 Beside what it does, a definition says what the workflow _is_, in the same object. None of
-it is consulted by `run`, none of it is a step, and all of it is read without running
-anything — a listing, a card and a launch know it from the definition alone.
+it is consulted by `run`, and all of it is read without running anything — a listing, a
+card, a launch and a Run's Flow know it from the definition alone.
 
 ```ts
 export default defineWorkflow({
@@ -1383,6 +1491,8 @@ export default defineWorkflow({
 });
 ```
 
+- **`path`** is the [Steps it expects to take](#steps-and-the-path-a-run-expects), in
+  order: a forecast the Flow draws, never a precondition.
 - **`agents`** is what the workflow's own work prefers, under anything a Run or a scope
   prefers: [which agent does the work](#which-agent-does-the-work).
 
@@ -1461,8 +1571,11 @@ into a blocking finding against the ticket; an `after merge` answer is neither.
 shipped `implement` names in its merge request as not settled by the Run. `answerFor(criterion, answers)` is the
 answer a criterion has: one to its whole wording, where a copy that dropped the criterion's
 formatting still counts, so an answer to earlier wording does not answer an amended criterion. Shipped
-`implement` hands what is unmet back to the builder before any reviewer is launched, twice at
-most, and stops the work if any is still unmet, so no reviewer starts on it. A text work
+`implement` hands what is unmet back to the builder before any reviewer is launched, and
+stops the work if any is still unmet after two hand-backs, so no reviewer starts on it. A
+hand-back that leaves the head and fingerprint unchanged and reports a blocking finding is
+asked about instead (`<ticket>.criteria-stalled-<n>`): `Hand back` reads the ticket again and,
+if any criterion is still unmet, hands it back with two tries fresh; `Stop` stops the work. A text work
 source's criteria are its own checkboxes; a Linear issue's are read from `plan/SPEC.md`, the
 copy of its description the builder makes, and a copy that cannot be read stops the work. The reviewer's prompt
 shows every criterion, its answer and the builder's assumptions. A workflow that never reads

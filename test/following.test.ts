@@ -80,7 +80,7 @@ test("needs-human stops at ready, at attention, and at an end nothing will move 
   expect(reached("needs-human", view({ parked: "stuck" }), progress(), false)).toBe("reached");
 });
 
-test("follow says each step started and finished, each agent once, a park, the merge request and CI", () => {
+test("follow says each operation started and finished, each agent once, a park, the merge request and CI", () => {
   const first = { view: view(), progress: progress() };
   const building = {
     view: view(),
@@ -88,7 +88,7 @@ test("follow says each step started and finished, each agent once, a park, the m
   };
   expect(followEvents(first, building)).toEqual([
     { type: "agent", agent: "builder", operation: "01-a.md" },
-    { type: "step", operation: "01-a.md", agent: "builder", state: "started" },
+    { type: "operation", operation: "01-a.md", agent: "builder", state: "started" },
   ]);
   const reviewed = {
     view: view({ mr: "mr:github.com/cego/collie#30", parked: "the gate's checks failed" }),
@@ -102,15 +102,15 @@ test("follow says each step started and finished, each agent once, a park, the m
   };
   const events = followEvents(building, reviewed);
   expect(events).toEqual([
-    { type: "step", operation: "01-a.md", agent: "builder", state: "finished" },
-    { type: "step", operation: "02-b.md", agent: "builder", state: "started" },
+    { type: "operation", operation: "01-a.md", agent: "builder", state: "finished" },
+    { type: "operation", operation: "02-b.md", agent: "builder", state: "started" },
     { type: "ci", ci: { state: "running" } },
     { type: "parked", reason: "the gate's checks failed" },
     { type: "mr", mr: "mr:github.com/cego/collie#30" },
   ]);
   expect(events.map((event) => followLine("r1", event))).toEqual([
-    "r1: step 01-a.md finished",
-    "r1: step 02-b.md started",
+    "r1: operation 01-a.md finished",
+    "r1: operation 02-b.md started",
     "r1: CI running",
     "r1: parked: the gate's checks failed",
     "r1: merge request mr:github.com/cego/collie#30 opened",

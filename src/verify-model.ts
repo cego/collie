@@ -1,4 +1,5 @@
 import { Effect, Schema } from "effect";
+import { StepPlace } from "./steps";
 
 /**
  * Why a check was run (ADR-0042): the gate on the branch, a rerun of one of its failed tests
@@ -49,6 +50,8 @@ export const VerificationSchema = Schema.Struct({
   at: Schema.String,
   /** Who collected it. An agent may run one; only Collie may run an approved spec. */
   by: Schema.Literals(["agent", "collie"]),
+  step: Schema.optional(Schema.String),
+  place: Schema.optional(Schema.NullOr(StepPlace)),
   /** Why Collie ran it; absent on an agent's and on records written before passes were. */
   pass: Schema.optionalKey(Pass),
   round: Schema.optionalKey(Schema.Int),

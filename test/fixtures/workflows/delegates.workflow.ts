@@ -6,6 +6,9 @@ export default defineWorkflow({
   run: () =>
     child({ invocation: "quietly", workflow: "quiet", input: {} }).pipe(
       Effect.asVoid,
-      withAgents({ model: "sonnet" }),
+      withAgents({
+        model: "sonnet",
+        claudeSubagents: { forceModel: true, cacheTtl: "1h", maxDepth: 1 },
+      }),
     ),
 });

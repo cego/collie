@@ -59,6 +59,9 @@ describe("Collie's settings", () => {
       value: ["claude-x", "claude-y"],
     });
     expect(parseSetting("model", "  sonnet ")).toEqual({ value: "sonnet" });
+    expect(
+      parseSetting("claude_subagents", '{"model":"sonnet","forceModel":false,"cacheTtl":"1h"}'),
+    ).toEqual({ value: '{"model":"sonnet","forceModel":false,"cacheTtl":"1h"}' });
     // Empty is unset, never a configured empty string.
     expect(parseSetting("harness", "  ")).toEqual({ value: null });
   });
@@ -75,6 +78,9 @@ describe("Collie's settings", () => {
     expect(parseSetting("linear.team", "CEG")).toEqual({
       refused: "linear.team is not one of Collie's settings",
     });
+    expect(parseSetting("claude_subagents", '{"maxConcurrent":0}')).toHaveProperty("refused");
+    expect(parseSetting("claude_subagents", '{"enabeld":false}')).toHaveProperty("refused");
+    expect(parseSetting("claude_subagents", "[]")).toHaveProperty("refused");
   });
 });
 
@@ -123,6 +129,7 @@ describe("Each setting explains itself", () => {
       "quiet_ms",
       "idle_close_ms",
       "agent_profile",
+      "claude_subagents",
     ],
     Runs: ["max_iterations", "handoff_timeout_ms", "memory_hold"],
     Board: ["scope", "density", "board_quiet_ms"],

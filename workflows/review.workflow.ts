@@ -26,14 +26,26 @@ import {
   repoArgs,
   riskLine,
   findingKey,
+  forecast,
+  panelOf,
   settleRound,
   splitDisputed,
+  step,
   targetKind,
   type Finding,
 } from "collie";
 import { Effect, FileSystem, Schema } from "effect";
 import * as Activity from "effect/workflow/Activity";
-import { DEFAULT_BASE, FIX_PROMPT, IMPLEMENTER, NO_MR, REVIEWER, reviewPass } from "./reviewing.ts";
+import {
+  DEFAULT_BASE,
+  FIX_PROMPT,
+  IMPLEMENTER,
+  NO_MR,
+  REVIEWER,
+  reviewPass,
+  reviewRound,
+  synthesisStep,
+} from "./reviewing.ts";
 
 const FIX = "Fix findings";
 const IMPLEMENT = "Fix findings in a full implement run";
@@ -45,6 +57,25 @@ const ROUNDS = 4;
 
 const ReviewedCheckout = Schema.Union([
   Schema.Struct({ cwd: Schema.String, branch: Schema.String }),
+  Schema.Struct({ refused: Schema.String }),
+]);
+
+const menu = step({
+  id: "menu",
+  title: "What next",
+  kind: "question",
+  description: "Choose whether to fix, post, repeat or finish the review.",
+});
+const fixingStep = step({
+  id: "fix",
+  title: "Fix findings",
+  kind: "agent",
+  role: "implementer",
+  description: "The implementer fixes the findings before the next review.",
+});
+
+const ReviewedBranch = Schema.Union([
+  Schema.Struct({ branch: Schema.String }),
   Schema.Struct({ refused: Schema.String }),
 ]);
 
@@ -70,6 +101,7 @@ export default defineWorkflow({
   }),
   output: Schema.String,
   agents: { roles: { implementer: IMPLEMENTER, reviewer: REVIEWER } },
+  path: [reviewRound, menu],
   hints: { target: "diff-target" },
   // A review proves it wrote a review a human can read; nobody chooses that.
   outcome: { fixed: "review" },
@@ -100,6 +132,8 @@ export default defineWorkflow({
       const fs = yield* FileSystem.FileSystem;
       const run = yield* Run;
       const place = yield* host.place(run.id);
+      if ((yield* panelOf("reviewer")).length > 1)
+        yield* forecast([reviewRound, synthesisStep, menu]);
       const kind = targetKind(asked.target);
       // The option's label is fixed for the Run, because its target is.
       const POST = `Post to ${mrForgeFacts(asked.target)?.noun ?? "merge request"}`;
@@ -116,17 +150,20 @@ export default defineWorkflow({
               .pipe(Effect.orElseSucceed(() => ""));
 
       // The first review; "Fix findings" below rallies from it.
-      let synthesis = yield* reviewPass({
-        target: asked.target,
-        plan: asked.plan ?? "",
-        proves: asked.proves ?? "",
-        previous: before,
-        answered: "",
-        risks: place.options.risks ?? "",
-        at: 1,
-        of: 1,
-        disputed: [],
-      });
+      let synthesis = yield* reviewRound(
+        reviewPass({
+          target: asked.target,
+          plan: asked.plan ?? "",
+          proves: asked.proves ?? "",
+          previous: before,
+          answered: "",
+          risks: place.options.risks ?? "",
+          at: 1,
+          of: 1,
+          disputed: [],
+        }),
+        { round: 1 },
+      );
 
       const inputs = {
         target: asked.target,
@@ -156,19 +193,40 @@ export default defineWorkflow({
           const last = yield* fs
             .readFileString(`${place.dir}/${REVIEW_FILE}`)
             .pipe(Effect.orElseSucceed(() => ""));
-          return yield* reviewPass({
-            target: asked.target,
-            plan: asked.plan ?? "",
-            proves: asked.proves ?? "",
-            previous: last,
-            answered,
-            risks: place.options.risks ?? "",
-            at,
-            // This review, and one for every fix round the rally may still run after it.
-            of: at + (fixing ? ROUNDS - rallied : 0),
-            disputed: [...disputed],
-          });
+          return yield* reviewRound(
+            reviewPass({
+              target: asked.target,
+              plan: asked.plan ?? "",
+              proves: asked.proves ?? "",
+              previous: last,
+              answered,
+              risks: place.options.risks ?? "",
+              at,
+              // This review, and one for every fix round the rally may still run after it.
+              of: at + (fixing ? ROUNDS - rallied : 0),
+              disputed: [...disputed],
+            }),
+            { round: at },
+          );
         });
+
+      // Why no fix can run here, recorded inside its Activity so a replay logs it once.
+      const fixable = yield* Activity.make({
+        name: "fixable",
+        success: ReviewedBranch,
+        execute: host
+          .reviewedBranch(run.id)
+          .pipe(
+            Effect.tap((answer) =>
+              "refused" in answer
+                ? host.record(run.id, `no fix can run here: ${answer.refused}`)
+                : Effect.void,
+            ),
+          ),
+      });
+      let unfixable = "refused" in fixable ? fixable.refused : "";
+      // A hand-off needs no checkout, so a live implementer in the lineage may still take one.
+      let handOff = place.lineage.length > 1;
 
       let handed = false;
       // Reviews are numbered by how many there have been, not by how often the menu came.
@@ -202,16 +260,30 @@ export default defineWorkflow({
         // Posting is offered for a merge request and nothing else; whether this is one to
         // post to is decided when it is invoked, by whoever can actually see GitLab.
         if (!fixing) {
-          chosen = yield* ask({
-            name: `post-${(asks += 1)}`,
-            prompt: settled === "" ? "What next?" : `What next? The rally stopped: ${settled}.`,
-            options: [
-              ...(handed ? [AGAIN] : split.live.length > 0 ? [FIX] : []),
-              IMPLEMENT,
-              ...(kind === "mr" ? [POST] : []),
-              DONE,
-            ],
-          });
+          const fixOffered = unfixable === "" || handOff;
+          chosen = yield* menu(
+            ask({
+              name: `post-${(asks += 1)}`,
+              prompt: [
+                "What next?",
+                ...(settled === "" ? [] : [`The rally stopped: ${settled}.`]),
+                ...(unfixable === ""
+                  ? []
+                  : [
+                      fixOffered
+                        ? `Only a live implementer can take a fix: ${unfixable}.`
+                        : `No fix is offered: ${unfixable}.`,
+                    ]),
+              ].join(" "),
+              options: [
+                ...(handed ? [AGAIN] : split.live.length > 0 && fixOffered ? [FIX] : []),
+                ...(unfixable === "" ? [IMPLEMENT] : []),
+                ...(kind === "mr" ? [POST] : []),
+                DONE,
+              ],
+            }),
+            { round: asks },
+          );
           settled = "";
           if (chosen === FIX) {
             fixing = true;
@@ -277,35 +349,46 @@ export default defineWorkflow({
         const reviewed = yield* Activity.make({
           name: `${operation}-checkout`,
           success: ReviewedCheckout,
-          execute: host.checkoutReviewed(run.id),
+          execute: host
+            .checkoutReviewed(run.id)
+            .pipe(
+              Effect.tap((answer) =>
+                "refused" in answer
+                  ? host.record(run.id, `${operation}: nothing fixed, ${answer.refused}`)
+                  : Effect.void,
+              ),
+            ),
         });
         if ("refused" in reviewed) {
-          yield* host.record(run.id, `${operation}: nothing fixed, ${reviewed.refused}`);
           fixing = false;
-          settled = reviewed.refused;
+          unfixable = reviewed.refused;
+          handOff = false;
           continue;
         }
         const forge = yield* host.mr({ cwd: reviewed.cwd });
-        const fixed = yield* agentWork({
-          operation,
-          role: "implementer",
-          pushes: true,
-          clears: [
-            `pushing new commits to ${reviewed.branch} on origin${forge.url === undefined ? "" : ` (${forge.url})`} with a plain push`,
-          ],
-          instructions: FIX_PROMPT,
-          input: {
-            inputs,
-            ...input,
-            branch: reviewed.branch,
-            iteration: String(rallied),
-            max_iterations: String(ROUNDS),
-            // What the rally is fixing: a dispute raised again with no rebuttal is not work.
-            findings: formatFindings(split.live),
-            disputed: formatFindings(disputed),
-          },
-          output: FixOutputSchema,
-        });
+        const fixed = yield* fixingStep(
+          agentWork({
+            operation,
+            role: "implementer",
+            pushes: true,
+            clears: [
+              `pushing new commits to ${reviewed.branch} on origin${forge.url === undefined ? "" : ` (${forge.url})`} with a plain push`,
+            ],
+            instructions: FIX_PROMPT,
+            input: {
+              inputs,
+              ...input,
+              branch: reviewed.branch,
+              iteration: String(rallied),
+              max_iterations: String(ROUNDS),
+              // What the rally is fixing: a dispute raised again with no rebuttal is not work.
+              findings: formatFindings(split.live),
+              disputed: formatFindings(disputed),
+            },
+            output: FixOutputSchema,
+          }),
+          { round: fixes },
+        );
         yield* host.record(
           run.id,
           `${operation}: fixed ${fixed.fixed.length}, disputed ${fixed.disputed.length}`,

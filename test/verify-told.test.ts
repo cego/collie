@@ -203,9 +203,11 @@ test("the implementer, and every step prompt that has an agent use collie verify
       const flat = (text: string) => text.replace(/\s+/g, " ");
       expect(flat(yield* fs.readFileString(`${root}personas/implementer.md`))).toContain(line);
       for (const workflow of ["implement", "review"]) {
+        // A dotted section, such as `source.linear`, is spliced into a step's prompt, not one.
         const steps = (yield* fs.readFileString(`${root}workflows/${workflow}.md`))
           .split(/^## /m)
-          .slice(1);
+          .slice(1)
+          .filter((step) => !/^\S+\./.test(step));
         const verifying = steps.filter((step) => step.includes("collie verify"));
         expect(verifying.length).toBeGreaterThan(0);
         for (const step of verifying) expect(flat(step)).toContain(line);

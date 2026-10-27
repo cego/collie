@@ -7,7 +7,7 @@ import * as Rpc from "effect/rpc/Rpc";
 import * as RpcGroup from "effect/rpc/RpcGroup";
 import { IntentSeedSchema } from "./intent-model";
 import { ScheduleChange, ScheduleChanged, ScheduleListing } from "./schedule-model";
-import { VerifyEvent, Pass } from "./verify-model";
+import { VerifyEvent, Pass, VerificationSchema } from "./verify-model";
 export { PASSES, Pass } from "./verify-model";
 import { IntentChangeSchema, ChangedIntent } from "./intent-model";
 import { UsageReading } from "./usage-model";
@@ -34,6 +34,49 @@ export type StepState = typeof StepState.Type;
 
 export const BoardStep = Schema.Struct({ name: Schema.String, state: StepState });
 export type BoardStep = typeof BoardStep.Type;
+
+/** Where one Step stands, as every door draws it. */
+export const FlowState = Schema.Literals([
+  "done",
+  "running",
+  "needs-you",
+  "waiting",
+  "failed",
+  "stopped",
+  "not-run",
+  "expected",
+]);
+export type FlowState = typeof FlowState.Type;
+
+export const FlowAction = Schema.Literals([
+  "pause",
+  "note",
+  "retry-noted",
+  "terminal",
+  "tell",
+  "retry",
+  "answer",
+  "proposal",
+  "continue",
+  "open",
+  "start",
+  "log",
+  "evidence",
+]);
+export type FlowAction = typeof FlowAction.Type;
+export const FlowLaneAction = Schema.Literals(["hold", "release", "stop", "resume", "follow-up"]);
+export type FlowLaneAction = typeof FlowLaneAction.Type;
+
+/** The strip a card draws: the leading Run's Steps, then its merge request's way out. */
+export const FlowStrip = Schema.Struct({
+  glyphs: Schema.Array(Schema.Struct({ title: Schema.String, state: FlowState })),
+  /** How many of the glyphs, at the end, are the Release row's. */
+  release: Schema.Number,
+  current: Schema.NullOr(
+    Schema.Struct({ title: Schema.String, said: Schema.NullOr(Schema.String) }),
+  ),
+});
+export type FlowStrip = typeof FlowStrip.Type;
 
 /** A question a Run's Driver is holding open, with the options to answer it with. */
 export const Question = Schema.Struct({
@@ -116,8 +159,15 @@ export type Checks = typeof Checks.Type;
  * skipped, or run on an older head.
  */
 export const ForgeChecks = Schema.Union([
-  Schema.Struct({ state: Schema.Literals(["passed", "running", "unknown", "none"]) }),
-  Schema.Struct({ state: Schema.Literal("failed"), name: Schema.String }),
+  Schema.Struct({
+    state: Schema.Literals(["passed", "running", "unknown", "none"]),
+    url: Schema.optionalKey(Schema.String),
+  }),
+  Schema.Struct({
+    state: Schema.Literal("failed"),
+    name: Schema.String,
+    url: Schema.optionalKey(Schema.String),
+  }),
 ]);
 export type ForgeChecks = typeof ForgeChecks.Type;
 
@@ -297,6 +347,8 @@ export const TaskView = Schema.Struct({
   runs: Schema.Array(Schema.String),
   /** When this Task last changed, in epoch milliseconds, which is what orders the board. */
   at: Schema.Number,
+  /** The strip its card draws of its Flow; absent from an older host. */
+  flow: Schema.optionalKey(FlowStrip),
 });
 export type TaskView = typeof TaskView.Type;
 
@@ -462,6 +514,8 @@ export type RunDiff = typeof RunDiff.Type;
 
 /** One verification as the drawer lists it; its output is fetched as `verification:<id>`. */
 export const VerificationView = Schema.Struct({
+  step: VerificationSchema.fields.step,
+  place: VerificationSchema.fields.place,
   id: Schema.String,
   name: Schema.String,
   result: Schema.Literals(["pass", "fail", "unstable"]),
@@ -592,6 +646,142 @@ export const ranOn = (agent: RunAgent) => {
   return agent.why === null ? on : `${on} (${agent.why})`;
 };
 
+export const FlowAttempt = Schema.Struct({
+  at: Schema.String,
+  /** Why it ran again: the host restarted, or the Run was resumed. Null for the first. */
+  cause: Schema.NullOr(Schema.Literals(["restarted", "resumed"])),
+});
+export type FlowAttempt = typeof FlowAttempt.Type;
+
+export const FlowQuestion = Schema.Struct({
+  id: Schema.optionalKey(Schema.String),
+  open: Schema.optionalKey(Schema.Boolean),
+  text: Schema.optional(Schema.String),
+  options: Schema.optional(Question.fields.options),
+  name: Schema.String,
+  asked: Schema.NullOr(Schema.String),
+  answered: Schema.NullOr(Schema.String),
+  by: Schema.NullOr(Schema.String),
+});
+export type FlowQuestion = typeof FlowQuestion.Type;
+
+/** What holds a Step up, where something other than its own work does. */
+export const FlowWait = Schema.Literals([
+  "timer",
+  "proposal",
+  "stalled",
+  "parked",
+  "hold",
+  "memory",
+  "usage",
+  "check",
+  "ci",
+]);
+export type FlowWait = typeof FlowWait.Type;
+
+/** Another Run a node stands for: a child of a Task of its own, or a Repo run. */
+export const FlowLink = Schema.Struct({
+  /** Null for a Repo run its fan-out has not started yet. */
+  run: Schema.NullOr(Schema.String),
+  machine: Schema.NullOr(Schema.String),
+  state: FlowState,
+  said: Schema.NullOr(Schema.String),
+  /** When its host last told us; null on this host. */
+  asOf: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  canResume: Schema.optional(Schema.Boolean),
+});
+export type FlowLink = typeof FlowLink.Type;
+
+const FlowNodeFields = {
+  id: Schema.String,
+  title: Schema.String,
+  kind: Schema.Literals(["agent", "question", "workflow", "check", "release", "offer", "link"]),
+  description: Schema.String,
+  role: Schema.NullOr(Schema.String),
+  /** False for a node made from work no Step declared. */
+  declared: Schema.Boolean,
+  state: FlowState,
+  /** Its fact line, worded once by the host. */
+  said: Schema.NullOr(Schema.String),
+  wait: Schema.NullOr(FlowWait),
+  produces: Schema.NullOr(Schema.Literals(["plan", "review", "evidence", "merge-request"])),
+  offPath: Schema.Boolean,
+  /** The round or item a run of a Step is, as its title says it. */
+  place: Schema.NullOr(Schema.String),
+  started: Schema.NullOr(Schema.String),
+  ended: Schema.NullOr(Schema.String),
+  attempts: Schema.Array(FlowAttempt),
+  ranOn: Schema.NullOr(Schema.String),
+  questions: Schema.Array(FlowQuestion),
+  /** The Wave a Repo run's repository is in. */
+  wave: Schema.optional(Schema.Number),
+  link: Schema.optional(FlowLink),
+  agent: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  primary: Schema.optionalKey(Schema.NullOr(FlowAction)),
+  actions: Schema.optionalKey(Schema.Array(FlowAction)),
+  url: Schema.optional(Schema.String),
+  proposal: Schema.optional(Proposal),
+  log: Schema.optional(Schema.NullOr(Schema.Int)),
+  why: Schema.optional(Schema.NullOr(Schema.String)),
+  evidence: Schema.optional(Schema.Int),
+  usual: Schema.optional(Schema.NullOr(Schema.Number)),
+  long: Schema.optional(Schema.Boolean),
+  pauseTarget: Schema.optional(Schema.String),
+  notes: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        id: Schema.String,
+        by: Schema.String,
+        at: Schema.String,
+        text: Schema.String,
+        read: Schema.NullOr(Schema.String),
+      }),
+    ),
+  ),
+  pause: Schema.optional(Schema.NullOr(Schema.Struct({ by: Schema.String, at: Schema.String }))),
+};
+
+/** One round or item of a Step. */
+export const FlowRun = Schema.Struct(FlowNodeFields);
+export type FlowRun = typeof FlowRun.Type;
+
+export const FlowNode = Schema.Struct({
+  ...FlowNodeFields,
+  runs: Schema.Array(FlowRun),
+  /** Runs its agents started outside this Flow. */
+  links: Schema.optional(Schema.Array(FlowRun)),
+});
+export type FlowNode = typeof FlowNode.Type;
+
+/** One Run's row of Steps. */
+export const FlowLane = Schema.Struct({
+  run: Schema.String,
+  workflow: Schema.String,
+  title: Schema.String,
+  machine: Schema.String,
+  requestedBy: Schema.NullOr(RequestedBy),
+  execution: Schema.Literals(["running", "suspended", "completed", "failed", "stopped", "died"]),
+  declared: Schema.Boolean,
+  nodes: Schema.Array(FlowNode),
+  actions: Schema.optionalKey(Schema.Array(FlowLaneAction)),
+  /** The Run that started it into this Task, and that Run's Step it was started in. */
+  startedBy: Schema.optionalKey(
+    Schema.Struct({ run: Schema.String, step: Schema.NullOr(Schema.String) }),
+  ),
+});
+export type FlowLane = typeof FlowLane.Type;
+
+/** A Task drawn as the Steps its Runs took (ADR-draft-a-step-is-declared-where-its-work-is-written). */
+export const Flow = Schema.Struct({
+  notice: Schema.optional(Schema.NullOr(Schema.String)),
+  lanes: Schema.Array(FlowLane),
+  /** The Run and node the work is at, or null once it has settled. */
+  current: Schema.NullOr(Schema.Struct({ run: Schema.String, node: Schema.String })),
+  /** The merge request's way through CI, the merge and deploys, once the Task has one. */
+  release: Schema.NullOr(Schema.Array(FlowNode)),
+});
+export type Flow = typeof Flow.Type;
+
 /** Everything the detail panel shows for the selected Run. */
 export const RunDetail = Schema.Struct({
   id: Schema.String,
@@ -634,6 +824,7 @@ export const RunDetail = Schema.Struct({
   outputs: Schema.Array(OutputPanel),
   /** The end of the run's log while the panel's tail is toggled on; `null` while it is off. */
   tail: Schema.NullOr(Panel),
+  logStart: Schema.optional(Schema.Int),
   /**
    * Why the Run is where it is, and what is safe to do about it — the same value the
    * CLI's `run show` and attention wait return. One classification, so the board and an
@@ -669,6 +860,8 @@ export const RunDetail = Schema.Struct({
   diff: Schema.NullOr(RunDiff),
   /** Every agent the Run started, in launch order. Absent from an older host. */
   agents: Schema.optional(Schema.Array(RunAgent)),
+  /** Its Task's Flow. Absent from an older host. */
+  flow: Schema.optional(Flow),
 });
 export type RunDetail = typeof RunDetail.Type;
 
@@ -1169,11 +1362,17 @@ export const FrontDoorRpcs = RpcGroup.make(
       request: Schema.String,
       /** Why, in the asker's own words: what a held card's drawer says beside who held it. */
       reason: Schema.optional(Schema.String),
+      before: Schema.optional(Schema.String),
     },
     success: Controlled,
     error: Schema.Union([HostRefused, RequestConflict]),
   }),
   /** Picks a Run up again: what current files allow is registered, then its stop cleared. */
+  Rpc.make("withdrawNote", {
+    payload: { runId: Schema.String, note: Schema.String, request: Schema.String },
+    success: Schema.Boolean,
+    error: Schema.Union([HostRefused, RequestConflict]),
+  }),
   Rpc.make("resume", {
     payload: { runId: Schema.String, request: Schema.String },
     success: Controlled,
@@ -1272,6 +1471,7 @@ export const FrontDoorRpcs = RpcGroup.make(
       change: IntentChangeSchema,
       propagate: Schema.Boolean,
       request: Schema.String,
+      expected: Schema.optionalKey(Schema.Number),
     },
     success: ChangedIntent,
     error: Schema.Union([HostRefused, RequestConflict]),
@@ -1662,6 +1862,128 @@ export function isSettled(state: TaskState): boolean {
 /** It ended without finishing, so it can be taken up again where it stopped. */
 export function canResume(state: TaskState): boolean {
   return state === "failed" || state === "stopped" || state === "abandoned";
+}
+
+export interface FlowActionFacts {
+  readonly canResume: boolean;
+  readonly held: boolean;
+  readonly proposal: Proposal | null;
+}
+export function flowActions(
+  flow: Flow,
+  view: TaskView,
+  runs: ReadonlyMap<string, FlowActionFacts> = new Map(),
+): Flow {
+  const factsOf = (lane: FlowLane): FlowActionFacts =>
+    runs.get(lane.run) ?? {
+      canResume:
+        lane.execution !== "failed" &&
+        lane.execution !== "completed" &&
+        (lane.run === view.run
+          ? canResume(view.state)
+          : ["stopped", "died"].includes(lane.execution)),
+      held: lane.run === view.run && view.held !== null,
+      proposal: lane.run === view.run && view.decision?.kind === "proposal" ? view.decision : null,
+    };
+  const offered = (node: FlowRun, lane: FlowLane, facts: FlowActionFacts): FlowRun => {
+    let primary: FlowAction | null = null;
+    const actions: FlowAction[] = [];
+    const live = node.agent != null && view.agents.some((one) => one.name === node.agent);
+    const proposal = node.proposal ?? facts.proposal ?? undefined;
+    if (node.link !== undefined) {
+      if (node.link.run !== null) primary = "open";
+      if (node.link.canResume === true && node.link.machine === lane.machine) actions.push("retry");
+    } else if (node.kind === "offer") {
+      if (node.id === `offer:${view.offer?.id}` && lane.run === view.run) primary = "start";
+    } else if (
+      node.questions.some((one) => one.id !== undefined && (one.open ?? one.answered === null))
+    ) {
+      primary = "answer";
+      if (live) actions.push("terminal");
+    } else if (node.wait === "proposal" && proposal !== undefined) primary = "proposal";
+    else if (node.wait === "hold" && facts.held) primary = "continue";
+    else if (
+      node.kind !== "release" &&
+      (node.state === "failed" || node.state === "stopped") &&
+      facts.canResume
+    )
+      primary = "retry";
+    else if (
+      node.url !== undefined &&
+      (node.kind === "release" || node.produces === "merge-request")
+    )
+      primary = "open";
+    else if (live && node.state === "done") actions.push("tell");
+    else if (
+      live &&
+      (node.wait === "stalled" ||
+        node.wait === "parked" ||
+        (node.state === "running" && node.kind === "agent" && node.wait === null))
+    ) {
+      primary = "terminal";
+      actions.push("tell");
+    }
+    if (node.log != null) actions.push("log");
+    const running = ["running", "suspended"].includes(lane.execution) || facts.canResume;
+    const step = node.declared && ["agent", "check", "question", "workflow"].includes(node.kind);
+    const target =
+      node.state === "expected"
+        ? node
+        : flow.current?.run === lane.run && flow.current.node === node.id
+          ? lane.nodes
+              .slice(lane.nodes.findIndex((one) => one.id === node.id) + 1)
+              .find((one) => one.declared && !one.offPath && one.state === "expected")
+          : undefined;
+    if (running && step && target?.declared && !target.offPath) actions.push("pause");
+    if (
+      running &&
+      step &&
+      node.state !== "not-run" &&
+      node.kind !== "question" &&
+      (node.state !== "done" ||
+        lane.nodes.find((one) => one.id === node.id)?.runs.some((one) => one.state === "expected"))
+    )
+      actions.push("note");
+    if (primary === "retry" && step) actions.push("retry-noted");
+    if (node.kind === "check" || node.produces === "evidence" || (node.evidence ?? 0) > 0)
+      actions.push("evidence");
+    return {
+      ...node,
+      primary,
+      actions,
+      pauseTarget: target?.id,
+      proposal: node.wait === "proposal" ? proposal : undefined,
+    };
+  };
+  const lanes = flow.lanes.map((lane): FlowLane => {
+    const facts = factsOf(lane);
+    const settled =
+      lane.run === view.run
+        ? isSettled(view.state)
+        : !["running", "suspended"].includes(lane.execution);
+    const actions: FlowLaneAction[] = [];
+    if (!settled) actions.push(facts.held ? "release" : "hold", "stop");
+    if (facts.canResume) actions.push("resume");
+    if (lane.run === view.run && view.state === "done") actions.push("follow-up");
+    return {
+      ...lane,
+      actions,
+      nodes: lane.nodes.map((node): FlowNode => ({
+        ...offered(node, lane, facts),
+        runs: node.runs.map((one) => offered(one, lane, facts)),
+        links: node.links?.map((one) => offered(one, lane, facts)),
+      })),
+    };
+  });
+  const leading = lanes.find((lane) => lane.run === view.run);
+  const release =
+    flow.release === null || leading === undefined
+      ? flow.release
+      : flow.release.map((node): FlowNode => ({
+          ...offered(node, leading, factsOf(leading)),
+          runs: node.runs,
+        }));
+  return { ...flow, lanes, release };
 }
 
 /** However the Task names its merge request: the URL one opened, or the target one was pointed at. */

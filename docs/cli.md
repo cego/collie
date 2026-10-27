@@ -503,9 +503,14 @@ they came. Everything else is new work, and gets a new branch called
 
 4. `--input task=<slug>`, which is also what `plan` and `architecture` forward when you
    choose **Implement now**, and what a fan-out gives every repository run.
-5. The plan directory's own name, for a run given a plan directory.
-6. A slug of the work itself — the description, or the issue id.
-7. Otherwise a slug of the run's own name.
+5. For a run given another Run's own plan directory (`<state>/runs/<id>/plan`), the branch
+   that Run's Task was placed on, used as it is and cut from its remote tip, so the run
+   joins that Task. Not once its merge request has merged or closed: the run's own name
+   then names a fresh branch.
+6. The plan directory's own name, for a run given a plan directory that is no Run's own.
+7. A slug of the work itself — the description, or the issue id. Never a Run's own plan
+   directory, whose path names nothing.
+8. Otherwise a slug of the run's own name.
 
 The login is the checkout's forge's (ADR-0050 D5). On GitLab it is `GITLAB_USER_LOGIN`
 where the environment sets it, and otherwise whoever `glab` is logged in as for this
@@ -652,12 +657,13 @@ Answer what the wait returned with `run answer <run-id> <option> --decision <nam
 `--follow` streams instead of returning one envelope: one newline-delimited
 `{"type":"status","run":…}` line each time the run's status changes, carrying the same
 `run` object as `run show`, and one line for each other change, with the Run's id as `run`:
-`{"type":"step","operation":…,"agent":…,"state":"started"|"finished"}`,
+`{"type":"operation","operation":…,"agent":…,"state":"started"|"finished"}` for an agent's
+Operation, which a Step may hold several of or none,
 `{"type":"agent","agent":…,"operation":…}` when an agent is launched,
 `{"type":"parked","reason":…}`, `{"type":"awaiting","on":…,"who":…}` when it starts
 waiting for something that comes by itself, `{"type":"mr","mr":…}` when the merge request opens and
 `{"type":"ci","ci":…}` when the forge's pipeline changes state. Without `--json` each is
-one line: `run-1a2b: step 01-a.md finished`, `run-1a2b: parked: …`, `run-1a2b: CI running`. Failures still arrive as a normal envelope — a timeout, or a
+one line: `run-1a2b: operation 01-a.md finished`, `run-1a2b: parked: …`, `run-1a2b: CI running`. Failures still arrive as a normal envelope — a timeout, or a
 run the host could not watch — so a consumer reads each line as JSON and branches on
 whether `type` is present.
 
@@ -665,7 +671,64 @@ whether `type` is present.
 for this Run — `ready`, and `missing[]`, each a `fact` (`succeeded`, `leads`, `mr-open`,
 `not-draft`, `checks`, `ci`, `review` or `mergeable`), what is `said` of it, and whether it
 is `settling`, may still come by itself — or `null` from a host that cannot say. A Run that
-does not lead its Task's card is never ready. Its `run` object carries:
+does not lead its Task's card is never ready. `data.flow` is the **Flow** of the Run's Task,
+the same whichever of its Runs you asked for, and the same value its details carry to
+Desktop: `lanes`, one row per Run of the Task, oldest first, with its `execution`, the
+`startedBy` Run and Step of a child started into the Task, and its `nodes` — each Step's
+`state`, the `wait` holding it up, the one fact line it `said`, its `attempts`, `questions`,
+`ranOn`, the `link` to a child started as a Task of its own and, for a Step called per item
+or round or a fan-out's Repo runs by `wave`, its `runs`; then `current`, the node the
+leading Run's work is at, `null` once the Task has settled; and `release`, the merge
+request's CI, Merged and furthest deploy, `null` until there is one
+([ADR-draft-a-step-is-declared-where-its-work-is-written](adr/draft-a-step-is-declared-where-its-work-is-written.md)).
+A Step's `links` are Runs its agents started, without expanding those Runs' Steps.
+Each node's `usual` is a duration in milliseconds or null until three completed
+calls exist on this Machine for the same Workflow and Step. The median uses the
+last ten calls, counting each item and round separately. `long` is true while a
+running call exceeds twice its usual time. `data.flow.notice` names that current
+Step and its elapsed and usual times; it is null otherwise. These are observations
+and do not change the card's section or sentence.
+
+`pause` records who armed a pause and when, or is null. `notes` holds ids, authors,
+times, text and read times (null until read). Chat and CLI can arm a hold with
+`before`, deliver a note with `step`, or `withdraw_note` before it is read. A
+failed resumable Step also offers `retry-noted`, a note followed by resume.
+Their `link.asOf` is null for live local state, or the last admission or settlement
+notice from a paired Machine. `run.linkNotices` records those deliveries on the started
+Run; human output names undelivered notices. A missed notice is not retried or polled.
+
+Each node's optional `primary` names its first action and `actions` lists the rest,
+without repeating it. A lane's `actions` are its own Run controls. `agent` names the
+latest agent launched in that Step; open `questions` carry their Choice `id`, text
+and options. A supplied forge address is in `url`. These are the same capabilities
+Desktop draws, recomputed on every read. Their state-changing routes are:
+
+| Action                | Route                                                                                      |
+| --------------------- | ------------------------------------------------------------------------------------------ |
+| `retry`, `resume`     | `run resume <run>`; a linked Run's retry names `link.run`                                  |
+| `answer`              | `run answer <run> <value> --decision <questions[].id>`                                     |
+| `proposal`            | `confirm <proposal.id>` or `decline <proposal.id>`                                         |
+| `continue`, `release` | `run release <run>`                                                                        |
+| `hold`, `stop`        | `run hold <run>` or `run stop <run>`                                                       |
+| `tell`                | `run steer <run> --operation <agent> <text>`                                               |
+| `start`               | `run action <run> <offer-id>`                                                              |
+| `follow-up`           | `run actions <run>`, then `run action <run> <follow-up-offer> --input <work-field>=<text>` |
+
+`terminal` addresses `agent` in the inspector's live Terminal, through the bridge's
+existing `focus` route and herdr's pane controller. `open` follows `url`, or opens
+the record named by `link`. A terminal Workflow error has no retry: the engine
+cannot resume it. A resumable failed Step records its failure and parks, keeping
+the completed work before it.
+
+`log` and `evidence` open those inspector parts. A node's `log` is the one-based
+line of its latest run's start marker in `log.txt`; each item or round carries its
+own. `why` holds at most twenty lines of the failing command and output, or the
+failure reason. `evidence` counts the Step's Verifications. Verification records and
+RunDetail's verification list carry optional `step` and `place`, so another Step's
+checks are never presented as this Step's proof. `RunDetail.logStart` is the first
+absolute line in its bounded log tail.
+
+Its `run` object carries:
 
 | Field                                    | What it tells you                                                                                                                                                                                    |
 | ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -747,6 +810,7 @@ Task of its own; a Repo run of a fan-out is its parent's `children` rather than 
 | `check`                   | The check Collie is running for the leading Run, as `collie run checks` gives `running` (with its `log` and `lastLines`), or `null`.                            |
 | `reopened`                | A finished Run whose agent took a steer after it ended: the `delivery`, the `agent`, the first line it was `told` and its `status` now; else `null`.            |
 | `run`, `runs[]`           | The Run a card acts on, and every Run of the Task.                                                                                                              |
+| `flow`                    | The card's **Flow** strip: `glyphs`, the leading Run's then the Release row's, `release`, how many are the Release row's, and `current`, or `null`.             |
 
 A fan-out finds its plan from its work source even where the kind was never recorded with
 its input, as for an implement Run started from a plan's end menu: a plan directory is the
@@ -789,8 +853,10 @@ collie --json run stop <run-id> [--request-id <id>]
 collie --json run resume <run-id> [--request-id <id>]
 ```
 
-`stop` parks the run where it is — at its next boundary, or inside the wait it is in — and
-closes its agents' panes, and those of the Runs it started, which is what stops them; the
+`stop` parks the run where it is — at its next boundary, or inside the wait it is in. It
+enters no further Step, files or comments on no issue, and ends a check the host or one of
+its agents is running, with that check's processes; a resume runs the host's check again.
+It closes its agents' panes, and those of the Runs it started, which is what stops them; the
 workspace keeps its own tab. Only the process each launch recorded is closed, never another
 under the same name, and a pane that will not close fails the stop and names the agent
 still running. `resume`
@@ -798,7 +864,11 @@ asks the host to pick a suspended run up again. It re-enters the workflow's curr
 and reuses every Activity already done, so completed work and its Outputs are kept and
 never redone, and an agent still live is reattached to rather than started a second
 time; one a stop closed is started again with the prompt it had, once its predecessor is
-Quiet — otherwise the run parks again, saying which server may still be writing. The host
+Quiet — otherwise the run parks again, saying which server may still be writing. A launch
+that cannot say whether its agent started or was given its work — herdr refused or timed out
+the start, could not list its agents, or the step's prompt did not go out — parks the same
+way, naming the prompt file, since a resume lists herdr's agents again and takes up the
+agent or starts it. The host
 registers the modules as they are now, then clears the stop before waking work. A
 restored module is picked up without restarting the host.
 
@@ -837,6 +907,7 @@ collie --json run start implement --input plan=./plans/steering \
 
 collie --json run intent show <run-id>
 collie --json run intent set-goal <run-id> "<goal>" [--request-id <id>]
+collie --json run intent set-outcome <run-id> feature
 collie --json run intent add-constraint <run-id> "<text>" --severity block
 collie --json run intent remove-constraint <run-id> <constraint-id>
 collie --json run intent authority <run-id> auto_correct=true --propagate
@@ -856,6 +927,11 @@ Run on a worktree of its own, its `plan/SPEC.md`, written by its planner, is rea
 way at every work boundary: new bullets are added, dropped ones are removed, and a
 constraint anyone but the plan removed stays removed. **No text ever grants authority** —
 not a plan, not the repository, not a prompt.
+
+`set-outcome` changes the [outcome](#outcomes) a live Run is held to: `feature`, `bug`,
+`refactor`, `investigation`, `docs` or `migration`, or `unspecified` to clear it. Any other
+word is refused with `invalid_input`, and so is a Run whose workflow always proves one kind.
+Chat makes the same change with `update_intent`.
 
 `--severity` pairs with the `--constraint` in the same position; a constraint given
 without one is `warn`. A `block` constraint stops work; a `warn` one is reported.
@@ -1204,6 +1280,14 @@ What kind of result a run has to prove, and so what evidence closes it:
 | `docs`          | the documented commands, run as written, each with a passing verification                                                                                   |
 | `migration`     | `migrate-up` and `migrate-down` (or `rollback`) both passing                                                                                                |
 
+A reference inside the run is under its own directory or its checkout, or, for a run given
+another Run's own plan directory, under that Run's directory, where its handoffs are.
+
+Only a reviewer can move one kind of gap: the review's own verdict, `scope_met` for a
+feature, `behavior_preserved` for a refactor, `supported` for an investigation, `accurate`
+for docs and `compatible` for a migration. A check that has not passed, or a reference
+outside the run, is not a reviewer's to change.
+
 A text search proves none of the rows above: a pass of `grep`, `egrep`, `fgrep`, `rg`, `ag`,
 `ack` or `git grep`, also as the first word of a `sh -c` or `bash -c` script, shows the text
 is there, not that anything works. A promised check, `regression`, documented command or
@@ -1236,8 +1320,8 @@ Nor is a check that failed on a tree run again on it after a gate fix that left 
 it was: the round is read from the records already there, and the proof's whole `recheck`
 is only for a check whose failures named no tests and that has had none on that tree
 (ADR-0034, amended 2026-10-19). A changed tree or set of checks also gets fresh proof while
-completed build Activities are retained. Missing reviewer evidence gets a fresh review;
-if it still cannot prove the outcome, the Run fails with the gaps named and a follow-up
+completed build Activities are retained. A missing review verdict gets a fresh review, and no other gap does;
+if the outcome is still unproved, the Run fails with the gaps named and a follow-up
 can repair the work; implement offers one after success or failure on a branch. Apart from
 that disputed gate fix, the merge request is reached only once the outcome is proved. Only the latest
 record of a check's exact command on that tree counts, whoever asked for it, so a
@@ -1262,7 +1346,10 @@ merge.
 
 `plan` settles the outcome during its interview and forwards it, so a chained build is not
 asked again. A value that is not one of these is refused at the front door rather than
-discovered at the gate.
+discovered at the gate. A wrong one is corrected with `collie run intent set-outcome`
+while the Run is live: each review round, each gate pass and the merge request read the
+kind as it stands then, and the merge request names the kind the Run was finally held to.
+A dispute never changes the kind by itself.
 
 `plan` and `review` runs have a kind of their own that nobody chooses — `plan` proves it
 wrote tickets (`issues_dir` in its Output), `review` that it wrote a summary a human can
@@ -1504,6 +1591,10 @@ commit.
 ]
 ```
 
+Collie's own `.collie/verify.json` leaves its one check, `check` (`bun run check`), to CI's
+`test` job, which runs that script: its implement Runs and Releases wait for the job rather
+than run the suite again.
+
 A file that is there and does not decode is an error naming it, never an empty set, and
 the start is refused as `invalid_input`, so a typo is never quietly replaced by an agent's
 choice. So is `--verify` given to a plan that spans repositories: each repository is held to
@@ -1539,6 +1630,10 @@ to change the set, or delete it to withdraw it.
 
 ```sh
 collie --json run hold <run-id> [--request-id <id>]
+collie --json run hold <run-id> --before <step-id>
+collie --json run release <run-id> --before <step-id>
+collie --json run steer <run-id> --step <step-id> "check the race first"
+collie --json run withdraw-note <run-id> <note-id>
 collie --json run hold --workspace <workspace-id> [--request-id <id>]
 collie --json run release <run-id> [--request-id <id>]
 ```
@@ -2201,10 +2296,15 @@ fresh snapshot. The host builds one board, from when it starts, for every client
 its own merge watch and News. A client that subscribes is told the latest board that
 covers every change seen before it subscribed, so it reads its own writes: at once when no
 build is owed, or once the build under way or owed is done. It builds again when a Run is recorded, from any door, when
-anything under its state directory is written, when herdr pushes an event from any of its
-sessions (a pane opening or closing, or an agent's status changing), and every five
-seconds: one build at a time, with what changes meanwhile folded into the next. The other
-operations, `runs` and `run` among them, read fresh. The
+a file under its state directory that the board reads is written, when herdr pushes an
+event from any of its sessions (a pane opening or closing, or an agent's status changing),
+and every five seconds: one build at a time, with what changes meanwhile folded into the
+next. The host's own bookkeeping builds nothing: lock and temporary files, `host.log`,
+`host.out` and their rotations, the database's WAL and journal, `ssh/`, and `compaction/`
+except each agent's `questions.jsonl`. Nor does a file growing in a Run's `handoffs/` or in
+its evidence's `verify/` logs, though one created or removed there does; a Run's open
+detail follows every write under its own `handoffs/` and evidence. The other operations,
+`runs` and `run` among them, read fresh. The
 installation id is written once, by the first host to own the directory, and survives
 restarts and upgrades.
 

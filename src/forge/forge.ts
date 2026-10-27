@@ -10,6 +10,7 @@ import type { Ran, Runner } from "../mr";
 import type { Posted } from "../sdk";
 import { github } from "./github";
 import { gitlab } from "./gitlab";
+import type { ForgeHttp } from "./http";
 import type { FiledIssue, IssueList } from "./issues";
 import type { ForgeComment, MergeAnswer, ReviewRead } from "./review";
 
@@ -102,6 +103,18 @@ export type DeployedRead =
   | { readonly ok: true; readonly sha: string | null }
   | { readonly ok: false; readonly reason: string };
 
+/** A staging environment's live commit, and whether the requested commit was deployed by the selected jobs, or by any job where none were selected. */
+export interface StagingEnvironment {
+  readonly name: string;
+  readonly live: string | null;
+  readonly hasCommit: boolean;
+}
+
+/** Each staging environment, or why the forge could not say. */
+export type StagingRead =
+  | { readonly ok: true; readonly environments: ReadonlyArray<StagingEnvironment> }
+  | { readonly ok: false; readonly reason: string };
+
 /** The same job where the branch leaves its target, or on the target's latest pipeline. */
 export type BaseJobRead =
   | {
@@ -137,21 +150,21 @@ export interface Forge {
     project: string,
     cwd: string,
     run: Runner<R>,
-  ) => Effect.Effect<IssueList, never, R>;
+  ) => Effect.Effect<IssueList, never, R | ForgeHttp>;
   readonly fileIssue: <R>(
     project: string,
     title: string,
     body: string,
     cwd: string,
     run: Runner<R>,
-  ) => Effect.Effect<FiledIssue, never, R>;
+  ) => Effect.Effect<FiledIssue, never, R | ForgeHttp>;
   readonly commentIssue: <R>(
     project: string,
     number: number,
     body: string,
     cwd: string,
     run: Runner<R>,
-  ) => Effect.Effect<Readiness, never, R>;
+  ) => Effect.Effect<Readiness, never, R | ForgeHttp>;
   /** The CLI is installed and logged in to `project`'s host; a null project asks the checkout at `cwd`. */
   readonly ready: <R>(
     project: string | null,
@@ -163,34 +176,42 @@ export interface Forge {
     cwd: string,
     run: Runner<R>,
     project?: string | null,
-  ) => Effect.Effect<string | null, never, R>;
+  ) => Effect.Effect<string | null, never, R | ForgeHttp>;
   /** One merge request as the panel shows it. */
   readonly details: <R>(
     ref: MrRef,
     cwd: string,
     run: Runner<R>,
-  ) => Effect.Effect<MrPanel, never, R>;
+  ) => Effect.Effect<MrPanel, never, R | ForgeHttp>;
   /** How far a merged commit has been deployed, or null where the forge does not say. */
   readonly liveTier: <R>(
     ref: MrRef,
     mergedSha: string,
     cwd: string,
     run: Runner<R>,
-  ) => Effect.Effect<DeployTier | null, never, R>;
+  ) => Effect.Effect<DeployTier | null, never, R | ForgeHttp>;
   /** The commit `tier`'s newest successful deployment has, in `ref`'s project (ADR-0050 D7). */
   readonly deployed: <R>(
     ref: MrRef,
     tier: DeployTier,
     cwd: string,
     run: Runner<R>,
-  ) => Effect.Effect<DeployedRead, never, R>;
+  ) => Effect.Effect<DeployedRead, never, R | ForgeHttp>;
+  /** `ref`'s project's staging environments, one by one; a null `commit` asks for none. */
+  readonly stagingEnvironments: <R>(
+    ref: MrRef,
+    commit: string | null,
+    cwd: string,
+    run: Runner<R>,
+    jobs?: ReadonlyArray<string>,
+  ) => Effect.Effect<StagingRead, never, R | ForgeHttp>;
   /** The open merge request whose source branch is `branch`, if any. */
   readonly forBranch: <R>(
     project: string,
     branch: string,
     cwd: string,
     run: Runner<R>,
-  ) => Effect.Effect<ForBranch, never, R>;
+  ) => Effect.Effect<ForBranch, never, R | ForgeHttp>;
   /**
    * Whether `branch`, pushed or not, is the default branch or matches any protection rule
    * or ruleset, whatever the rule allows; null where the forge cannot say.
@@ -200,21 +221,21 @@ export interface Forge {
     branch: string,
     cwd: string,
     run: Runner<R>,
-  ) => Effect.Effect<boolean | null, never, R>;
+  ) => Effect.Effect<boolean | null, never, R | ForgeHttp>;
   /** Every merge request whose source branch is `branch`, whatever its state. */
   readonly fromBranch: <R>(
     project: string,
     branch: string,
     cwd: string,
     run: Runner<R>,
-  ) => Effect.Effect<FromBranchList, never, R>;
+  ) => Effect.Effect<FromBranchList, never, R | ForgeHttp>;
   /** The job named `name` in the pipeline on the merge request's head commit. */
   readonly job: <R>(
     ref: MrRef,
     name: string,
     cwd: string,
     run: Runner<R>,
-  ) => Effect.Effect<JobRead, never, R>;
+  ) => Effect.Effect<JobRead, never, R | ForgeHttp>;
   /**
    * The job named `name` at the merge-base of the merge request's head and its target
    * branch, or on the target branch's latest pipeline where that commit has none.
@@ -224,14 +245,14 @@ export interface Forge {
     name: string,
     cwd: string,
     run: Runner<R>,
-  ) => Effect.Effect<BaseJobRead, never, R>;
+  ) => Effect.Effect<BaseJobRead, never, R | ForgeHttp>;
   /** Runs the job `id` again: GitLab's retry, GitHub's rerun. */
   readonly retryJob: <R>(
     ref: MrRef,
     id: string,
     cwd: string,
     run: Runner<R>,
-  ) => Effect.Effect<Readiness, never, R>;
+  ) => Effect.Effect<Readiness, never, R | ForgeHttp>;
   /** The command line that prints job `id`'s log, for an agent to run. */
   readonly jobLog: (ref: MrRef, id: string) => string;
   /** The repository's merge request template, relative to the checkout, or null. */
@@ -250,20 +271,20 @@ export interface Forge {
     url: string,
     cwd: string,
     run: Runner<R>,
-  ) => Effect.Effect<string | null, never, R>;
+  ) => Effect.Effect<string | null, never, R | ForgeHttp>;
   /** The pipeline or Actions run at `url`, with its jobs; another forge's is refused. */
   readonly pipeline: <R>(
     url: string,
     cwd: string,
     run: Runner<R>,
-  ) => Effect.Effect<PipelineRead, never, R>;
+  ) => Effect.Effect<PipelineRead, never, R | ForgeHttp>;
   /** The newest pipeline or Actions run `tag` started in `ref`'s project. */
   readonly tagPipeline: <R>(
     ref: MrRef,
     tag: string,
     cwd: string,
     run: Runner<R>,
-  ) => Effect.Effect<TagPipelineRead, never, R>;
+  ) => Effect.Effect<TagPipelineRead, never, R | ForgeHttp>;
   /** Clones `project` (`host/path`) into `into`, or says why it could not. */
   readonly clone: <R>(
     project: string,
@@ -295,13 +316,13 @@ export interface Forge {
     approve: boolean,
     cwd: string,
     run: Runner<R>,
-  ) => Effect.Effect<Posted, never, R>;
+  ) => Effect.Effect<Posted, never, R | ForgeHttp>;
   /** The merge request's review: its state, approval, mergeability, pipeline and comments. */
   readonly readReview: <R>(
     ref: MrRef,
     cwd: string,
     run: Runner<R>,
-  ) => Effect.Effect<ReviewRead, never, R>;
+  ) => Effect.Effect<ReviewRead, never, R | ForgeHttp>;
   /** Posts `body` as it is, in the comment's thread where it has one; never resolves it. */
   readonly reply: <R>(
     ref: MrRef,
@@ -309,20 +330,24 @@ export interface Forge {
     body: string,
     cwd: string,
     run: Runner<R>,
-  ) => Effect.Effect<Readiness, never, R>;
+  ) => Effect.Effect<Readiness, never, R | ForgeHttp>;
   /** Merges through the forge's REST merge at `head`: never admin, never auto-merge. */
   readonly merge: <R>(
     ref: MrRef,
     head: string,
     cwd: string,
     run: Runner<R>,
-  ) => Effect.Effect<MergeAnswer, never, R>;
+  ) => Effect.Effect<MergeAnswer, never, R | ForgeHttp>;
   /** My open merge requests in `project`, as assignee or author, for a menu. */
   readonly mine: <R>(
     project: string | null,
     cwd: string,
     run: Runner<R>,
-  ) => Effect.Effect<ReadonlyArray<{ readonly iid: string; readonly title: string }>, never, R>;
+  ) => Effect.Effect<
+    ReadonlyArray<{ readonly iid: string; readonly title: string }>,
+    never,
+    R | ForgeHttp
+  >;
   /** Opens the merge request in a browser. */
   readonly open: <R>(ref: MrRef, cwd: string, run: Runner<R>) => Effect.Effect<Ran, never, R>;
   /** What a reviewer runs to read the change and its description, and to check it out. */

@@ -1,8 +1,7 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { BunServices } from "@effect/platform-bun";
-import { Clock, DateTime, Effect, FileSystem, Option, Schema } from "effect";
-import { runEffect } from "./support/effect";
-import { forgeOnPath } from "./support/forge";
+import { Clock, DateTime, Effect, FileSystem, Layer, Option, Schema } from "effect";
+import { forgeHttpOnPath, forgeOnPath, runOnPath } from "./support/forge";
 import { Rig, TEST_LOGIN as LOGIN } from "./support/recorder";
 import { FakeBin } from "./support/bin";
 import {
@@ -22,6 +21,7 @@ import type { RunFacts } from "../src/runs";
 import { runFacts } from "./support/records";
 import { renovateClonesSweeper, settlingOf, sweep, worktreesSweeper } from "../src/cleanup";
 import { NOTHING_SETTLING, onBranch, type Settling } from "../src/worktree";
+import { encodeCheckRecord, runningChecksDir } from "../src/check-processes";
 import { shell } from "../src/mr";
 import { Herdr } from "../src/herdr";
 import { processOf } from "../src/processes";
@@ -64,7 +64,7 @@ const asked = Effect.fn("worktreeTest.asked")(function* () {
 });
 
 beforeEach(() =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       rig = yield* Rig.make();
       bin = yield* FakeBin.make(join(rig.root, "bin"));
@@ -79,7 +79,7 @@ beforeEach(() =>
 );
 
 afterEach(() =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* bin.restore();
       yield* rig.close();
@@ -230,7 +230,7 @@ test("a roaming workflow owns a checkout but no branch, so none is asked for", (
 });
 
 test("a run described in words branches off the default branch, under the operator's login", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* fakeGit();
 
@@ -247,7 +247,7 @@ test("a run described in words branches off the default branch, under the operat
   ));
 
 test("a generated branch refuses a checkout on neither forge", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* fakeGitAnswering({
         ...gitAnswers(),
@@ -260,7 +260,7 @@ test("a generated branch refuses a checkout on neither forge", () =>
   ));
 
 test("the login comes from glab where the environment does not name one", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* fakeGit();
       yield* bin.add("glab", `echo '{"username": "kronborg"}'`);
@@ -272,7 +272,7 @@ test("the login comes from glab where the environment does not name one", () =>
   ));
 
 test("a login nobody can establish is an authentication error, not a branch question", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* fakeGit();
       yield* bin.add("glab", "exit 1");
@@ -288,7 +288,7 @@ const onGithub = () =>
   fakeGitAnswering({ ...gitAnswers(), "remote get-url origin": "git@github.com:acme/app.git" });
 
 test("on a GitHub checkout the branch is named under GITHUB_ACTOR, else gh's login, never glab's", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* onGithub();
       const glabAsked = `${rig.root}/glab-asked`;
@@ -308,7 +308,7 @@ test("on a GitHub checkout the branch is named under GITHUB_ACTOR, else gh's log
   ));
 
 test("a GitHub checkout with no login says to log in to gh or set GITHUB_ACTOR", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* onGithub();
       yield* bin.add("gh", "exit 1");
@@ -319,7 +319,7 @@ test("a GitHub checkout with no login says to log in to gh or set GITHUB_ACTOR",
   ));
 
 test("a generated name git will not have is refused rather than used", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* fakeGitAnswering(gitAnswers(), { "check-ref-format": "bad ref" });
 
@@ -330,7 +330,7 @@ test("a generated name git will not have is refused rather than used", () =>
   ));
 
 test("an explicit branch beats every inference", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* fakeGit();
 
@@ -342,7 +342,7 @@ test("an explicit branch beats every inference", () =>
   ));
 
 test("a review of a branch diff takes its head, and a review of a tree the branch it is on", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* fakeGit("on-this-one", ["their-work"]);
 
@@ -366,7 +366,7 @@ test("a review of a branch diff takes its head, and a review of a tree the branc
   ));
 
 test("a diff target names the branch the run works on", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* fakeGit();
 
@@ -384,7 +384,7 @@ test("a diff target names the branch the run works on", () =>
   ));
 
 test("a target whose head is not a branch name leaves the branch to be worked out", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* fakeGit();
 
@@ -401,7 +401,7 @@ test("a target whose head is not a branch name leaves the branch to be worked ou
   ));
 
 test("a plan directory names the branch after itself, not after its path", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* fakeGit();
 
@@ -416,7 +416,7 @@ test("a plan directory names the branch after itself, not after its path", () =>
   ));
 
 test("the target beats the plan directory, and an explicit branch beats both", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* fakeGit();
 
@@ -434,7 +434,7 @@ test("the target beats the plan directory, and an explicit branch beats both", (
   ));
 
 test("a name too long to slug is bounded and made distinct, never asked for", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* fakeGit();
 
@@ -455,7 +455,7 @@ test("a name too long to slug is bounded and made distinct, never asked for", ()
   ));
 
 test("a name with nothing sluggable in it still becomes a legal, distinct branch", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* fakeGit();
 
@@ -470,7 +470,7 @@ test("a name with nothing sluggable in it still becomes a legal, distinct branch
   ));
 
 test("work whose names differ only in letters a slug cannot spell stays two branches", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* fakeGit();
 
@@ -487,7 +487,7 @@ test("work whose names differ only in letters a slug cannot spell stays two bran
   ));
 
 test("the task a plan agreed on names the branch, not the path Collie chained", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* fakeGit();
 
@@ -511,7 +511,7 @@ test("the task a plan agreed on names the branch, not the path Collie chained", 
   ));
 
 test("a target Collie guessed names no branch; only one a human gave does", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* fakeGit();
 
@@ -533,7 +533,7 @@ test("a target Collie guessed names no branch; only one a human gave does", () =
   ));
 
 test("two descriptions that start alike are two branches", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* fakeGit();
 
@@ -587,7 +587,7 @@ test("two descriptions that start alike are two branches", () =>
   ));
 
 test("a plan directory Collie itself pointed at names no branch; the run's own name does", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* fakeGit();
 
@@ -612,8 +612,23 @@ test("a plan directory Collie itself pointed at names no branch; the run's own n
     }),
   ));
 
+test("a Run's own plan directory typed by hand names no branch either", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      yield* fakeGit();
+
+      expect(
+        yield* plan(
+          { plan_kind: "plan-dir", plan: `${rig.root}/state/runs/run-x/plan` },
+          undefined,
+          { name: "add-a-version-flag", sources: { plan: "typed" } },
+        ),
+      ).toMatchObject({ branch: `${LOGIN}/add-a-version-flag`, source: "from the run name" });
+    }),
+  ));
+
 test("a branch with a worktree is opened, and one without gets a new one", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       const herdr = new Herdr(rig.pluginEnv());
       const made = yield* worktreeFor(herdr, {
@@ -656,7 +671,7 @@ test("a branch with a worktree is opened, and one without gets a new one", () =>
   ));
 
 test("two unrelated runs never share a checkout", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       const herdr = new Herdr(rig.pluginEnv());
       const one = yield* worktreeFor(herdr, { cwd: rig.projectDir, branch: "one" });
@@ -774,7 +789,7 @@ const prune = () =>
   });
 
 test("a settled worktree is removed, and the board says why", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* collieWorktree("wt");
       yield* settledGit();
@@ -788,7 +803,7 @@ test("a settled worktree is removed, and the board says why", () =>
   ));
 
 test("a settled worktree whose git warns on stderr is still removed", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* collieWorktree("wt");
       yield* settledGit({}, {}, "warning: something git wants said");
@@ -799,7 +814,7 @@ test("a settled worktree whose git warns on stderr is still removed", () =>
   ));
 
 test("a Renovate Run's detached checkout is pruned by the same sweep, with no branch to delete", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       const at = join(rig.root, "worktrees", "project", "roaming");
       // No branch, in the record and in herdr's listing alike: that is what a detached
@@ -820,7 +835,7 @@ test("a Renovate Run's detached checkout is pruned by the same sweep, with no br
   ));
 
 test("a failed Run's clean roaming checkout is pruned, failed Runs inside it or not", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       const at = join(rig.root, "worktrees", "project", "roaming");
       yield* collieWorktree("", {
@@ -845,7 +860,7 @@ test("a failed Run's clean roaming checkout is pruned, failed Runs inside it or 
   ));
 
 test("a failed Run's roaming checkout is kept while one of its agents still works", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       const at = join(rig.root, "worktrees", "project", "roaming");
       yield* collieWorktree("", {
@@ -864,7 +879,7 @@ test("a failed Run's roaming checkout is kept while one of its agents still work
   ));
 
 test("a failed Run's roaming checkout is kept while a Run still works in it", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       const at = join(rig.root, "worktrees", "project", "roaming");
       yield* collieWorktree("", {
@@ -884,7 +899,7 @@ test("a failed Run's roaming checkout is kept while a Run still works in it", ()
   ));
 
 test("a Renovate checkout with work still in it is kept, like any other", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       const at = join(rig.root, "worktrees", "project", "roaming");
       yield* collieWorktree("", { workflow: "renovate", at, managedBy: "git", workspaceId: null });
@@ -896,7 +911,7 @@ test("a Renovate checkout with work still in it is kept, like any other", () =>
   ));
 
 test("uncommitted work keeps a worktree, and so does anything unpushed", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* collieWorktree("wt");
       yield* mergedMr();
@@ -908,7 +923,7 @@ test("uncommitted work keeps a worktree, and so does anything unpushed", () =>
   ));
 
 test("a branch with commits the remote has not seen keeps its worktree", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* collieWorktree("wt");
       yield* mergedMr();
@@ -919,7 +934,7 @@ test("a branch with commits the remote has not seen keeps its worktree", () =>
   ));
 
 test("with no upstream, commits no remote has keep the checkout", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* collieWorktree("wt");
       yield* mergedMr();
@@ -936,7 +951,7 @@ test("with no upstream, commits no remote has keep the checkout", () =>
   ));
 
 test("a worktree an agent is working in keeps it", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       const worktreePath = yield* collieWorktree("wt");
       yield* settledGit();
@@ -948,7 +963,7 @@ test("a worktree an agent is working in keeps it", () =>
   ));
 
 test("a worktree a server of an agent herdr no longer lists may write in keeps it", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       const worktreePath = yield* collieWorktree("wt");
       yield* settledGit();
@@ -977,7 +992,7 @@ test("a worktree a server of an agent herdr no longer lists may write in keeps i
   ));
 
 test("a worktree a failed stop left a process of its agent's server in keeps it, its server gone", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       const worktreePath = yield* collieWorktree("wt");
       yield* settledGit();
@@ -1016,7 +1031,7 @@ test("a worktree a failed stop left a process of its agent's server in keeps it,
   ));
 
 test("an open merge request keeps the worktree it was built in", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* collieWorktree("wt");
       yield* settledGit();
@@ -1027,7 +1042,7 @@ test("an open merge request keeps the worktree it was built in", () =>
   ));
 
 test("with no merge request, a branch still on the remote keeps its worktree", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* collieWorktree("wt");
       yield* bin.add("glab", `exit 1`);
@@ -1038,7 +1053,7 @@ test("with no merge request, a branch still on the remote keeps its worktree", (
   ));
 
 test("a worktree Collie did not create is never touched, settled or not", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* rig.addWorktree("by-hand", join(rig.root, "elsewhere"), "w9");
       yield* settledGit();
@@ -1050,7 +1065,7 @@ test("a worktree Collie did not create is never touched, settled or not", () =>
   ));
 
 test("a worktree is not re-checked on every refresh", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* collieWorktree("wt");
       yield* mergedMr();
@@ -1066,7 +1081,7 @@ test("a worktree is not re-checked on every refresh", () =>
   ));
 
 test("a settled git-managed checkout is removed with git, and its dead tabs go with it", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       const worktreePath = yield* collieWorktree("wt", {
         managedBy: "git",
@@ -1098,7 +1113,7 @@ test("a settled git-managed checkout is removed with git, and its dead tabs go w
   ));
 
 test("a dead tab herdr would not close is reported, because nothing comes back for it", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       const worktreePath = yield* collieWorktree("wt", {
         managedBy: "git",
@@ -1131,7 +1146,7 @@ test("a dead tab herdr would not close is reported, because nothing comes back f
   ));
 
 test("git's refusal to remove a checkout keeps it, in git's own words", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       const worktreePath = yield* collieWorktree("wt", {
         managedBy: "git",
@@ -1153,7 +1168,7 @@ test("git's refusal to remove a checkout keeps it, in git's own words", () =>
   ));
 
 test("a git-managed checkout herdr has a workspace on is still removed through herdr", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       const worktreePath = yield* collieWorktree("wt", {
         managedBy: "git",
@@ -1180,7 +1195,7 @@ test("a git-managed checkout herdr has a workspace on is still removed through h
   ));
 
 test("a checkout herdr will not remove is kept, in the words it refused with", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       const worktreePath = yield* collieWorktree("wt", { workspaceId: "" });
       yield* settledGit();
@@ -1213,7 +1228,7 @@ test("a checkout herdr will not remove is kept, in the words it refused with", (
   ));
 
 test("a checkout whose workspace was closed is opened again to be removed", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* collieWorktree("wt", { workspaceId: "" });
       yield* settledGit();
@@ -1230,7 +1245,7 @@ test("a checkout whose workspace was closed is opened again to be removed", () =
   ));
 
 test("a run starting in a checkout keeps it; its own board may still remove it", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       const worktreePath = yield* collieWorktree("wt");
       yield* settledGit();
@@ -1268,7 +1283,7 @@ test("a run starting in a checkout keeps it; its own board may still remove it",
   ));
 
 test("a checkout an agent in another herdr session works in is kept", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       const worktreePath = yield* collieWorktree("wt");
       yield* settledGit();
@@ -1309,7 +1324,7 @@ test("a checkout an agent in another herdr session works in is kept", () =>
   ));
 
 test("a herdr that will not list panes judges nothing, and says so", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* collieWorktree("wt");
       yield* settledGit();
@@ -1347,7 +1362,7 @@ test("a herdr that will not list panes judges nothing, and says so", () =>
   ));
 
 test("a run still going keeps its checkout, whether or not an agent is in it", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       const worktreePath = yield* collieWorktree("wt");
       // Nothing is working in it that herdr can see, and the Run is still going.
@@ -1369,7 +1384,7 @@ test("a run still going keeps its checkout, whether or not an agent is in it", (
   ));
 
 test("a review of a merge request whose branch is only on the remote is cut from it", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* fakeGit("somewhere-else", ["fix-the-parser"]);
       yield* bin.add("glab", `echo '{"source_branch": "fix-the-parser"}'`);
@@ -1393,7 +1408,7 @@ test("a review of a merge request whose branch is only on the remote is cut from
   ));
 
 test("a review of a pull request is fixed on its head branch, read through gh", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* fakeGitAnswering({
         ...gitAnswers("somewhere-else", ["fix-the-parser"]),
@@ -1435,7 +1450,7 @@ test("a review of a pull request is fixed on its head branch, read through gh", 
   ));
 
 test("a review whose target nobody normalised is refused, not fixed on the caller's branch", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       // The caller stands on another merge request's branch, which is what a guess took.
       yield* fakeGit("someone-elses-branch", []);
@@ -1456,7 +1471,7 @@ test("a review whose target nobody normalised is refused, not fixed on the calle
   ));
 
 test("a mutating run makes its checkout with git and stays in the workspace it started in", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* fakeGitWithCheckouts([{ path: rig.projectDir, branch: "master" }]);
 
@@ -1503,7 +1518,7 @@ test("a mutating run makes its checkout with git and stays in the workspace it s
   ));
 
 test("a workspace whose own directory is not a checkout still gets its run a worktree", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* fakeGitWithCheckouts([{ path: rig.projectDir, branch: "master" }]);
       // A workspace that is about a task rather than about a repo directory: nothing
@@ -1534,7 +1549,7 @@ test("a workspace whose own directory is not a checkout still gets its run a wor
   ));
 
 test("a branch with a slash in it nests, and never collides with the dashed name", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* fakeGitWithCheckouts([{ path: rig.projectDir, branch: "master" }]);
       const ask = (branch: string) =>
@@ -1562,7 +1577,7 @@ test("a branch with a slash in it nests, and never collides with the dashed name
   ));
 
 test("the checkout goes where herdr's own config says worktrees go", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       yield* fakeGitWithCheckouts([{ path: rig.projectDir, branch: "master" }]);
@@ -1587,7 +1602,7 @@ test("the checkout goes where herdr's own config says worktrees go", () =>
   ));
 
 test("the checkout a branch already has is reused, never added twice", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       const existing = join(rig.root, "somewhere", "add-a-picker");
       yield* fakeGitWithCheckouts([
@@ -1617,7 +1632,7 @@ test("the checkout a branch already has is reused, never added twice", () =>
   ));
 
 test("a Run that asks for its own workspace has herdr make the checkout, and takes that workspace", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* fakeGit();
 
@@ -1646,7 +1661,7 @@ test("a Run that asks for its own workspace has herdr make the checkout, and tak
   ));
 
 test("a branch neither local nor on origin is one the Run created, and one origin has is not", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       const branch = `${LOGIN}/add-a-picker`;
       const place = (remote: string) =>
@@ -1678,7 +1693,7 @@ test("a branch neither local nor on origin is one the Run created, and one origi
   ));
 
 test("a checkout git will not add is a run that does not start", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* fakeGitWithCheckouts([{ path: rig.projectDir, branch: "master" }], {
         refusals: { "worktree add": "fatal: could not create leading directories" },
@@ -1705,7 +1720,7 @@ test("a checkout git will not add is a run that does not start", () =>
   ));
 
 test("a checkout Collie cannot be given is a run that does not start", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* fakeGit();
       const herdr = new Herdr(
@@ -1764,7 +1779,7 @@ const renovateCheckout = (inputs: Record<string, string> = {}, cwd = rig.project
   });
 
 test("a roaming Run's repository is cloned through its URL's forge, and one on neither is refused", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* fakeGitAnswering(
         { ...gitAnswers(), "worktree list --porcelain": porcelain([]), config: "" },
@@ -1804,7 +1819,7 @@ test("a roaming Run's repository is cloned through its URL's forge, and one on n
   ));
 
 test("a clone made before Collie kept its credentials gets the helper on its next use", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const url = "https://gitlab.example.com/acme/old";
@@ -1841,7 +1856,7 @@ test("a clone made before Collie kept its credentials gets the helper on its nex
   ));
 
 test("a Renovate Run gets a detached checkout at the default branch, bound to no branch", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* fakeGitWithCheckouts([{ path: rig.projectDir, branch: "master" }]);
 
@@ -1883,7 +1898,7 @@ test("a Renovate Run gets a detached checkout at the default branch, bound to no
   ));
 
 test("the repository input says which local checkout the Renovate worktree is cut from", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const elsewhere = join(rig.root, "work", "spilnu");
@@ -1903,7 +1918,7 @@ test("the repository input says which local checkout the Renovate worktree is cu
   ));
 
 test("a GitLab URL is cloned before the Renovate worktree is cut", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       const url = "https://gitlab.example.com/acme/spilnu/-/merge_requests";
       const source = join(rig.stateDir, "renovate-repositories", Bun.hash(url).toString(16));
@@ -1937,7 +1952,7 @@ test("a GitLab URL is cloned before the Renovate worktree is cut", () =>
   ));
 
 test("two Renovate Runs on different repositories do not collide on a checkout path", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const other = join(rig.root, "work", "happytiger");
@@ -1957,7 +1972,7 @@ test("two Renovate Runs on different repositories do not collide on a checkout p
   ));
 
 test("the repository a checkout belongs to is git's, never the directory's own name", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       // The two cases whose basename lies: a Renovate Run's checkout, always called
@@ -1976,7 +1991,7 @@ test("the repository a checkout belongs to is git's, never the directory's own n
   ));
 
 test("a linked worktree of a repository picks the same destination the repository does", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       // A checkout of the same repository, one branch along. `worktree list` answers
@@ -1998,7 +2013,7 @@ test("a linked worktree of a repository picks the same destination the repositor
   ));
 
 test("the roaming checkout fetches first, and falls back to a local default branch", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* fakeGitWithCheckouts([{ path: rig.projectDir, branch: "master" }]);
 
@@ -2014,7 +2029,7 @@ test("the roaming checkout fetches first, and falls back to a local default bran
   ));
 
 test("a roaming checkout whose origin will not fetch is refused rather than cut from a stale base", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* fakeGitWithCheckouts([{ path: rig.projectDir, branch: "master" }], {
         refusals: { fetch: "fatal: Could not read from remote repository." },
@@ -2029,7 +2044,7 @@ test("a roaming checkout whose origin will not fetch is refused rather than cut 
   ));
 
 test("a repository with no remote-tracking default branch is detached at the local one", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       // No `origin/master` to verify: the same case `implement` already handles by
       // taking the local branch rather than refusing.
@@ -2105,7 +2120,7 @@ const fakeGitWithRoaming = (taken: string, answers: Record<string, string>) =>
   });
 
 test("a second Renovate Run on one repository is refused while the first may go on, never handed its tree", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       const taken = join(rig.root, ".herdr", "worktrees", "project", "roaming");
       yield* worktreeOwnedBy(taken, rig.projectDir);
@@ -2136,7 +2151,7 @@ test("a second Renovate Run on one repository is refused while the first may go 
   ));
 
 test("a Renovate Run takes over the checkout an ended Run of the repository left, at the default branch", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       const taken = join(rig.root, ".herdr", "worktrees", "project", "roaming");
       yield* worktreeOwnedBy(taken, rig.projectDir);
@@ -2169,7 +2184,7 @@ test("a Renovate Run takes over the checkout an ended Run of the repository left
   ));
 
 test("a checkout made at a recorded path since the Run recorded it is never taken over", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       const taken = join(rig.root, ".herdr", "worktrees", "project", "roaming");
       yield* worktreeOwnedBy(taken, rig.projectDir);
@@ -2189,7 +2204,7 @@ test("a checkout made at a recorded path since the Run recorded it is never take
   ));
 
 test("an ended Run's checkout that holds work is kept for it, and its agents are left alone", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       const taken = join(rig.root, ".herdr", "worktrees", "project", "roaming");
       yield* worktreeOwnedBy(taken, rig.projectDir);
@@ -2214,7 +2229,7 @@ test("an ended Run's checkout that holds work is kept for it, and its agents are
   ));
 
 test("two repositories of the same name never share one Renovate checkout", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       // Two `project`s in two directories want the same path under the worktrees
@@ -2238,7 +2253,7 @@ test("two repositories of the same name never share one Renovate checkout", () =
   ));
 
 test("a path in the way that will not say whose it is refuses, rather than being built over", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const at = join(rig.root, ".herdr", "worktrees", "project", "roaming");
@@ -2258,7 +2273,7 @@ test("a path in the way that will not say whose it is refuses, rather than being
   ));
 
 test("a destination another Run is claiming right now is refused, not looked at twice", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       yield* fakeGitWithCheckouts([{ path: rig.projectDir, branch: "master" }]);
@@ -2281,7 +2296,7 @@ test("a destination another Run is claiming right now is refused, not looked at 
   ));
 
 test("a repository git will not add a detached worktree in is a Run that does not start", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* fakeGitWithCheckouts([{ path: rig.projectDir, branch: "master" }], {
         refusals: { "worktree add": "fatal: could not create leading directories" },
@@ -2298,7 +2313,7 @@ test("a repository git will not add a detached worktree in is a Run that does no
   ));
 
 test("a workflow that changes nothing works where it was started, and is not refused", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       const checkout = yield* checkoutFor(new Herdr(rig.pluginEnv()), {
         stateDir: rig.stateDir,
@@ -2328,11 +2343,14 @@ test("a workflow that changes nothing works where it was started, and is not ref
   ));
 
 test("a merge request Collie cannot read is a run that does not start", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* fakeGit("some-other-branch");
-      // Installed and logged in, but the merge request will not be read.
-      yield* bin.add("glab", `[ "$1" = mr ] && exit 1; exit 0`);
+      // Logged in, but the merge request will not be read.
+      yield* bin.add(
+        "glab",
+        `case "$1 $2 $3" in "config get token") echo glpat-test ;; "api "*) exit 1 ;; esac; exit 0`,
+      );
 
       // Never `slugify(name)`: the fixes belong on the branch that was reviewed, and a
       // new branch named after the run would leave the merge request untouched.
@@ -2343,21 +2361,24 @@ test("a merge request Collie cannot read is a run that does not start", () =>
           target: "mr:42",
           target_kind: "mr",
         }),
-      ).toMatchObject({ refused: "glab could not read !42" });
+      ).toMatchObject({ refused: "could not read !42: GitLab answered 404: 404" });
       yield* bin.add("glab", `exit 1`);
+      // A host that has not yet read glab's token, as a fresh one has not.
       expect(
         yield* plan({
           plan: "/runs/review-1",
           plan_kind: "review",
           target: "mr:42",
           target_kind: "mr",
-        }),
-      ).toMatchObject({ refused: "glab is not installed" });
+        }).pipe(Effect.provide(Layer.fresh(forgeHttpOnPath))),
+      ).toMatchObject({
+        refused: "could not read !42: glab is not logged in to gitlab.example.com",
+      });
     }),
   ));
 
 test("a merge request in another project cannot be fixed from this checkout", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* fakeGitAnswering({
         "remote get-url origin": "git@gitlab.example.com:acme/app.git",
@@ -2381,7 +2402,7 @@ test("a merge request in another project cannot be fixed from this checkout", ()
   ));
 
 test("an agent working in a subdirectory of a checkout keeps it", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       const worktreePath = yield* collieWorktree("wt");
       yield* settledGit();
@@ -2394,7 +2415,7 @@ test("an agent working in a subdirectory of a checkout keeps it", () =>
   ));
 
 test("an agent in the checkout's own workspace keeps it, directory or no directory", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* collieWorktree("wt", { workspaceId: "w7" });
       yield* settledGit();
@@ -2407,7 +2428,7 @@ test("an agent in the checkout's own workspace keeps it, directory or no directo
   ));
 
 test("a finished Run's own agent, idle in the tab it left behind, does not keep its checkout", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       const worktreePath = yield* collieWorktree("wt", { panes: ["1-5"] });
       yield* settledGit();
@@ -2423,7 +2444,7 @@ test("a finished Run's own agent, idle in the tab it left behind, does not keep 
   ));
 
 test("a finished Run's own agent still working in its tab keeps the checkout", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       const worktreePath = yield* collieWorktree("wt", { panes: ["1-5"] });
       yield* settledGit();
@@ -2435,7 +2456,7 @@ test("a finished Run's own agent still working in its tab keeps the checkout", (
   ));
 
 test("a board outside any repository still sweeps the checkouts the Runs recorded", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const worktreePath = yield* collieWorktree("wt", { managedBy: "git", workspaceId: null });
@@ -2467,7 +2488,7 @@ test("a board outside any repository still sweeps the checkouts the Runs recorde
   ));
 
 test("a hand-made checkout at the path a Collie one used is not a candidate", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       const worktreePath = yield* collieWorktree("wt");
       // The Collie worktree was removed by hand and the path reused for another branch.
@@ -2481,7 +2502,7 @@ test("a hand-made checkout at the path a Collie one used is not a candidate", ()
   ));
 
 test("a merged branch whose remote-tracking ref was pruned away is settled", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* collieWorktree("wt");
       yield* mergedMr();
@@ -2498,7 +2519,7 @@ test("a merged branch whose remote-tracking ref was pruned away is settled", () 
   ));
 
 test("without an upstream, a commit that is on no other branch keeps the checkout", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* collieWorktree("wt");
       yield* mergedMr();
@@ -2513,7 +2534,7 @@ test("without an upstream, a commit that is on no other branch keeps the checkou
   ));
 
 test("the branch is deleted from the repository's own checkout, not the one that went", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       const worktreePath = yield* collieWorktree("wt");
       yield* settledGit();
@@ -2529,7 +2550,7 @@ test("the branch is deleted from the repository's own checkout, not the one that
   ));
 
 test("a diff of two refs that are not branches has nothing to fix on", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* fakeGit("on-this-one");
 
@@ -2559,7 +2580,7 @@ test("a diff of two refs that are not branches has nothing to fix on", () =>
   ));
 
 test("a run parked for a human keeps the checkout it will carry on in", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* collieWorktree("wt");
       // A question nobody answered, or a pane that would not take a prompt: the Run picks
@@ -2573,7 +2594,7 @@ test("a run parked for a human keeps the checkout it will carry on in", () =>
   ));
 
 test("a stopped run keeps the checkout a resume carries on in, until its work lands", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       const at = yield* collieWorktree("wt");
       recorded = recorded.map((run) => ({ ...run, state: "stopped" as const }));
@@ -2587,8 +2608,37 @@ test("a stopped run keeps the checkout a resume carries on in, until its work la
     }),
   ));
 
+test("a stopped run whose check still runs keeps its checkout, though its work landed", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const at = yield* collieWorktree("wt", { state: "stopped" });
+      yield* settledGit();
+      yield* mergedMr();
+      yield* fs.makeDirectory(runningChecksDir(rig.stateDir), { recursive: true });
+      yield* fs.writeFileString(
+        `${runningChecksDir(rig.stateDir)}/run-wt@1-a.json`,
+        encodeCheckRecord({
+          id: "run-wt@1-a",
+          run: "run-wt",
+          name: "check",
+          by: "collie",
+          leader: { pid: 4242, started: "1", group: 4242 },
+          host: { pid: 4241, started: "1" },
+          started: "2026-10-26T00:00:00.000Z",
+        }),
+      );
+
+      const judged = yield* sweeper().judge;
+      expect(judged.remove).toEqual([]);
+      expect(judged.keep).toEqual([
+        { kind: "worktree", target: at, reason: "its check is still running in it" },
+      ]);
+    }),
+  ));
+
 test("an agent that started elsewhere and moved into a checkout keeps it", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       const worktreePath = yield* collieWorktree("wt");
       yield* settledGit();
@@ -2602,7 +2652,7 @@ test("an agent that started elsewhere and moved into a checkout keeps it", () =>
   ));
 
 test("with no upstream, a branch the remote still has is kept", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* collieWorktree("wt");
       // No merge request to settle it, so the remote branch is the question — and a
@@ -2620,7 +2670,7 @@ test("with no upstream, a branch the remote still has is kept", () =>
   ));
 
 test("one repository's board neither forgets nor reports another's", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       yield* collieWorktree("wt");
@@ -2653,7 +2703,7 @@ test("one repository's board neither forgets nor reports another's", () =>
   ));
 
 test("a branch git will not delete is a removal that keeps saying so", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* collieWorktree("wt");
       yield* mergedMr();
@@ -2674,7 +2724,7 @@ test("a branch git will not delete is a removal that keeps saying so", () =>
   ));
 
 test("a run chained from inside a worktree still opens the branch's checkout", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       const herdr = new Herdr(rig.pluginEnv());
       // A fix round is started by a run whose own cwd is a worktree, and herdr refuses
@@ -2704,7 +2754,7 @@ test("a run chained from inside a worktree still opens the branch's checkout", (
   ));
 
 test("a reviewed branch that is not on the remote at all is refused", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* fakeGit();
       yield* bin.add("glab", `echo '{"source_branch": "long-gone"}'`);
@@ -2728,7 +2778,7 @@ test("a reviewed branch that is not on the remote at all is refused", () =>
   ));
 
 test("a reviewed branch that exists only here is checked out as it is", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* fakeGitAnswering(
         {
@@ -2765,7 +2815,7 @@ test("a reviewed branch that exists only here is checked out as it is", () =>
   ));
 
 test("a merge request from a fork is refused even where its branch name is local here", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* fakeGitAnswering({
         ...gitAnswers(),
@@ -2791,7 +2841,7 @@ test("a merge request from a fork is refused even where its branch name is local
   ));
 
 test("a checkout with no GitLab remote cannot be shown to be the reviewed project", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       // A group folder, or a checkout with no remote: nothing here says the merge
       // request belongs to it, and a bare `mr:42` came from this remote in the first
@@ -2813,7 +2863,7 @@ test("a checkout with no GitLab remote cannot be shown to be the reviewed projec
   ));
 
 test("a checkout made again by hand at the same path and branch is not a candidate", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const worktreePath = yield* collieWorktree("wt");
@@ -2844,7 +2894,7 @@ const sweeper = (herdr = new Herdr(rig.pluginEnv())) =>
   });
 
 test("cleanup lists a settled worktree as removable, and sweeping removes it", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       const at = yield* collieWorktree("wt");
       yield* settledGit();
@@ -2864,7 +2914,7 @@ test("cleanup lists a settled worktree as removable, and sweeping removes it", (
   ));
 
 test("cleanup keeps an unsettled worktree, naming the first condition it fails", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       const at = yield* collieWorktree("wt");
       yield* settledGit({ "status --porcelain": " M src/a.ts" });
@@ -2879,7 +2929,7 @@ test("cleanup keeps an unsettled worktree, naming the first condition it fails",
   ));
 
 test("cleanup keeps every worktree when herdr will not list panes, and says why", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       const at = yield* collieWorktree("wt");
       yield* settledGit();
@@ -2896,7 +2946,7 @@ test("cleanup keeps every worktree when herdr will not list panes, and says why"
   ));
 
 test("a merge the merge watch recorded on GitHub settles a branch still on the remote", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const at = yield* collieWorktree("wt");
@@ -2924,7 +2974,7 @@ test("a merge the merge watch recorded on GitHub settles a branch still on the r
   ));
 
 test("a squash-merged branch goes when its head is the head that merged", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* collieWorktree("wt");
       yield* mergedMr("abc123");
@@ -2939,7 +2989,7 @@ test("a squash-merged branch goes when its head is the head that merged", () =>
   ));
 
 test("a squash-merged branch whose head moved on since keeps its checkout", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* collieWorktree("wt");
       yield* mergedMr("abc123");
@@ -2954,7 +3004,7 @@ test("a squash-merged branch whose head moved on since keeps its checkout", () =
   ));
 
 test("a checkout whose Task's workspace is still open is kept, as the last condition", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       const at = yield* collieWorktree("wt");
       yield* settledGit();
@@ -2969,7 +3019,7 @@ test("a checkout whose Task's workspace is still open is kept, as the last condi
   ));
 
 test("the plugin root is never removed, even where a Run recorded it", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       const at = yield* collieWorktree("wt");
       yield* settledGit();
@@ -2982,7 +3032,7 @@ test("the plugin root is never removed, even where a Run recorded it", () =>
   ));
 
 test("a Collie checkout whose branch was switched is judged, and removed, as it is now", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const at = yield* collieWorktree("wt");
@@ -3005,7 +3055,7 @@ test("a Collie checkout whose branch was switched is judged, and removed, as it 
   ));
 
 test("a remote named other than origin settles a branch it no longer has", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       yield* collieWorktree("wt");
       yield* settledGit({
@@ -3020,7 +3070,7 @@ test("a remote named other than origin settles a branch it no longer has", () =>
   ));
 
 test("a Renovate clone no Run uses and no checkout is left of goes; one a Run used stays", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const root = `${rig.stateDir}/renovate-repositories`;
@@ -3133,7 +3183,7 @@ const pruneWith = (ports: CompactionPorts) =>
   });
 
 test("the worktree sweep stops a finished Run's Quiet agent before it closes the agent's tab", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       const worktreePath = yield* collieWorktree("wt", { panes: ["1-5"] });
       const { stops, ports } = yield* servedLeftover(worktreePath, "quiet");
@@ -3152,7 +3202,7 @@ test("the worktree sweep stops a finished Run's Quiet agent before it closes the
   ));
 
 test("the worktree sweep keeps the tab of an agent started again under a finished Run's agent's name", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       const worktreePath = yield* collieWorktree("wt", { panes: ["1-5"] });
       const { ports } = yield* servedLeftover(worktreePath, "quiet");
@@ -3168,7 +3218,7 @@ test("the worktree sweep keeps the tab of an agent started again under a finishe
   ));
 
 test("the worktree sweep keeps the tab of a finished Run's agent's pane another named agent has taken", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const worktreePath = yield* collieWorktree("wt", { panes: ["1-5"] });
@@ -3199,7 +3249,7 @@ test("the worktree sweep keeps the tab of a finished Run's agent's pane another 
   ));
 
 test("the worktree sweep keeps the tab of a finished Run's agent that is not Quiet", () =>
-  runEffect(
+  runOnPath(
     Effect.gen(function* () {
       const worktreePath = yield* collieWorktree("wt", { panes: ["1-5"] });
       const { stops, ports } = yield* servedLeftover(worktreePath, "acknowledged");

@@ -6,7 +6,6 @@
 // installation's are, and the link between them is the real listener on 127.0.0.1.
 
 import solidPlugin from "@opentui/solid/bun-plugin";
-import { createServer } from "node:net";
 import type { BunServices } from "@effect/platform-bun/BunServices";
 import { Effect, FileSystem, Schema, type Scope } from "effect";
 import { exec } from "./command";
@@ -14,6 +13,7 @@ import { suiteEnv } from "./effect";
 import { writeFakeHerdrShim } from "./fake-herdr-core";
 import { type FakeSsh, writeFakeSsh, socketDir } from "./fake-ssh";
 import { fixtures, root, stopHost } from "./host";
+import { peersOf } from "../../src/peers";
 import { collie, collieCommand, type World } from "./world";
 
 const asCommand = Schema.encodeSync(Schema.fromJsonString(Schema.Array(Schema.String)));
@@ -40,16 +40,16 @@ export interface Side {
   readonly lists: (machines: ReadonlyArray<Side>) => Effect.Effect<void>;
 }
 
-/** A port nothing on this computer is listening on now. */
-const freePort = Effect.callback<number>((resume) => {
-  const server = createServer();
-  server.listen(0, "127.0.0.1", () => {
-    const address = server.address();
-    const port = address !== null && Schema.is(Bound)(address) ? address.port : 0;
-    server.close(() => resume(Effect.succeed(port)));
+/** The port `listener`'s host answered `dialler`'s invitation with. */
+export const listenerPort = (dialler: Side, listener: Side) =>
+  Effect.gen(function* () {
+    const paired = (yield* peersOf(dialler.world.state)).find(
+      (peer) => peer.name === listener.name,
+    );
+    if (paired?.url === undefined)
+      return yield* Effect.die(new Error(`${dialler.name} has no url for ${listener.name}`));
+    return new URL(paired.url).port;
   });
-});
-const Bound = Schema.Struct({ port: Schema.Number });
 
 const machineOf = (side: Side) => ({
   id: side.name,
@@ -67,12 +67,20 @@ export const twoMachines = <A, E>(
   prefix: string,
   body: (first: Side, second: Side) => Effect.Effect<A, E, BunServices | Scope.Scope>,
   modules: ReadonlyArray<string>,
+  options: {
+    /** Each Machine's `COLLIE_PEER_PORT`, by name; 0, where its listener binds what is free. */
+    readonly ports?: Readonly<Record<string, number>>;
+    /** Runs before any host starts, with the `COLLIE_PEER_PORT` each Machine was given. */
+    readonly before?: (
+      ports: Readonly<Record<string, string>>,
+    ) => Effect.Effect<void, never, BunServices | Scope.Scope>;
+  } = {},
 ) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const command = yield* collieCommand;
     const suite = yield* suiteEnv;
-    const make = (name: string, port: number) =>
+    const make = (name: string) =>
       Effect.gen(function* () {
         const dir = yield* socketDir(`${prefix.slice(0, 12)}${name}-`);
         const world: World = {
@@ -93,7 +101,7 @@ export const twoMachines = <A, E>(
         const bin = `${dir}/bin`;
         yield* fs.makeDirectory(bin);
         const herdr = `${bin}/herdr`;
-        yield* writeFakeHerdrShim(herdr, `${root}test/support/fake-herdr.ts`);
+        yield* writeFakeHerdrShim(herdr);
         yield* fs.writeFileString(
           `${bin}/collie`,
           `#!/bin/sh\nexec ${command.map((part) => `'${part}'`).join(" ")} "$@"\n`,
@@ -109,7 +117,7 @@ export const twoMachines = <A, E>(
           COLLIE_USER_DIR: world.config,
           COLLIE_CWD: world.project,
           COLLIE_HOST: asCommand(command),
-          COLLIE_PEER_PORT: String(port),
+          COLLIE_PEER_PORT: String(options.ports?.[name] ?? 0),
           HERDR_BIN_PATH: herdr,
           FAKE_HERDR_LOG: herdrLog,
           ...suite,
@@ -131,8 +139,12 @@ export const twoMachines = <A, E>(
         });
         return { side, bin, sshDir, env };
       });
-    const first = yield* make("first", yield* freePort);
-    const second = yield* make("second", yield* freePort);
+    const first = yield* make("first");
+    const second = yield* make("second");
+    yield* (options.before ?? (() => Effect.void))({
+      first: first.env.COLLIE_PEER_PORT,
+      second: second.env.COLLIE_PEER_PORT,
+    });
     const toSecond = yield* writeFakeSsh(`${first.bin}/ssh`, first.sshDir, second.env);
     // Off the second's PATH: only the first reaches the other over SSH.
     const unused = yield* writeFakeSsh(`${second.sshDir}/ssh`, second.sshDir);

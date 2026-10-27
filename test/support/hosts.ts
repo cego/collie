@@ -23,12 +23,12 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { alive, kill, MARKER, marked } from "./sweep";
+import { GIT_QUIET } from "./git-quiet";
+import { alive, kill, MARKER, marked, rootBase } from "./sweep";
 import { testBunfig } from "./packages";
 
-const base = tmpdir();
+const base = rootBase();
 let root = "";
 const makeRoot = () => {
   root = mkdtempSync(join(base, `collie-test-${process.pid}-`));
@@ -37,8 +37,15 @@ const makeRoot = () => {
   process.env.HOME = join(root, "home");
   mkdirSync(process.env.HOME);
   writeFileSync(join(process.env.HOME, ".bunfig.toml"), testBunfig);
+  // Git 2.47+ detaches the maintenance a commit starts, which writes into a test's repository
+  // while the test removes it. Also for a git started with an environment of its own.
+  writeFileSync(
+    join(process.env.HOME, ".gitconfig"),
+    "[maintenance]\n\tauto = false\n[gc]\n\tauto = 0\n",
+  );
 };
 makeRoot();
+Object.assign(process.env, GIT_QUIET);
 process.env.COLLIE_HOST_WATCH_PID = String(process.pid);
 // A stopped host waits this long for its steps before exiting; well inside `settled` below,
 // so a host told to stop is gone before the check, not reported as left behind.

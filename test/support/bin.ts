@@ -9,6 +9,18 @@ export const gitWorktreeCases = (repo: string) =>
   `  "worktree list --porcelain") printf 'worktree %s\\nbranch refs/heads/master\\n' "${repo}" ;;
   "worktree add"*) mkdir -p "$3" && printf 'gitdir: %s/.gitdir\\n' "$3" > "$3/.git" ;;`;
 
+/** A git in `dir`, first on PATH while the scope lasts, that logs each start's arguments. */
+export const loggedGit = (dir: string, log: string) =>
+  Effect.gen(function* () {
+    const real = Bun.which("git");
+    const bin = yield* Effect.acquireRelease(FakeBin.make(dir), (bin) => bin.restore());
+    yield* bin.add("git", `echo "$*" >> "${log}"\nexec "${real}" "$@"`);
+    return Effect.flatMap(FileSystem.FileSystem, (fs) => fs.readFileString(log)).pipe(
+      Effect.map((text) => text.split("\n").filter((line) => line !== "")),
+      Effect.orElseSucceed((): string[] => []),
+    );
+  });
+
 /** A dir of fake executables put in front of PATH for the current test. */
 export class FakeBin {
   private constructor(

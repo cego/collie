@@ -656,7 +656,7 @@ const encodeAskedCall = Schema.encodeSync(Schema.fromJsonString(AskedCall));
 const decodeAskedCall = Schema.decodeUnknownOption(Schema.fromJsonString(AskedCall));
 
 /** Apart from the telemetry, whose cap trims lines: a question must not be trimmed away. */
-const QUESTIONS = "questions.jsonl";
+export const QUESTIONS = "questions.jsonl";
 
 const DENIED_QUESTION = JSON.stringify({
   hookSpecificOutput: {
@@ -1186,34 +1186,52 @@ const stopCodex = (
           if (!noted.some((seen) => seen.pid === one.pid && seen.started === one.started))
             noted.push(seen(one));
         yield* once(server);
+        const interrupt = (one: (typeof running)[number]) =>
+          Effect.gen(function* () {
+            const about = `thread ${one.thread} turn ${one.turn}, server ${target.endpoint} pid ${target.pid}${one.transcript === null ? "" : `, transcript ${one.transcript}`}`;
+            submitted++;
+            yield* note(`${target.agent}: interrupt submitted — ${about}`);
+            // A refusal is read back below rather than believed: the turn may have ended.
+            const answered = yield* interruptTurn(client, one.thread, one.turn).pipe(Effect.result);
+            if (answered._tag === "Success") {
+              acknowledged++;
+              yield* note(`${target.agent}: interrupt acknowledged — ${about}`);
+            } else {
+              yield* note(
+                `${target.agent}: interrupt refused (${reason(answered.failure)}) — ${about}`,
+              );
+            }
+          });
         for (const one of running) {
           // Its turns have all ended and it has gone: nothing is left to answer.
           if (!(yield* stillRunning(server))) break;
-          const about = `thread ${one.thread} turn ${one.turn}, server ${target.endpoint} pid ${target.pid}${one.transcript === null ? "" : `, transcript ${one.transcript}`}`;
-          submitted++;
-          yield* note(`${target.agent}: interrupt submitted — ${about}`);
-          // A refusal is read back below rather than believed: the turn may have ended.
-          const answered = yield* interruptTurn(client, one.thread, one.turn).pipe(Effect.result);
-          if (answered._tag === "Success") {
-            acknowledged++;
-            yield* note(`${target.agent}: interrupt acknowledged — ${about}`);
-          } else {
-            yield* note(
-              `${target.agent}: interrupt refused (${reason(answered.failure)}) — ${about}`,
-            );
-          }
+          yield* interrupt(one);
         }
+        const busy = threads.filter((thread) => thread.running.length > 0);
         for (;;) {
           if (!(yield* stillRunning(server)))
             return yield* survivors(target.pid, noted, running, deadline, short(), signalled, once);
           // Read back rather than assumed: a lost connection is not a turn that ended.
           let unread: string | null = null;
-          const unended = yield* Effect.forEach(running, (one) =>
-            runningTurns(client, one.thread).pipe(
-              Effect.map((now) => (now.includes(one.turn) ? [one] : [])),
-              Effect.catch((cause) => Effect.sync(() => ((unread = reason(cause)), [one]))),
-            ),
-          ).pipe(Effect.map((all) => all.flat()));
+          const unended: typeof running = [];
+          for (const thread of busy) {
+            const now = yield* runningTurns(client, thread.id).pipe(Effect.result);
+            if (now._tag === "Failure") {
+              unread = reason(now.failure);
+              unended.push(...running.filter((one) => one.thread === thread.id));
+              continue;
+            }
+            for (const turn of now.success) {
+              let one = running.find((asked) => asked.thread === thread.id && asked.turn === turn);
+              if (one === undefined) {
+                // A continuation the server started on an interrupt it read before its SIGTERM.
+                one = { thread: thread.id, turn, transcript: thread.transcript };
+                running.push(one);
+                yield* interrupt(one);
+              }
+              unended.push(one);
+            }
+          }
           if ((yield* Clock.currentTimeMillis) >= deadline) {
             const seconds = Math.round(budgetMs / 1000);
             return notQuiet(

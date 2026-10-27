@@ -6,6 +6,8 @@
 
 **Operation** — One piece of agent work inside a Run, named by the Workflow that asks for it. The name is its identity: the agent's name, its prompt and Output files and the Activities that make it durable come from it, so it is stable within a Run and differs from every other. It has a role, injected as a Persona, a Harness, a Model, optionally the Skill it starts, and the schema its Output must decode against. An agent it starts gets a Tab of its own in its Task's workspace, labelled with its role; an operation that reuses an agent opens nothing.
 
+**Step** — One declared piece of a Workflow's work: an agent's (an **Operation**), a question to a human, another Workflow, or a check. Like a Prefect task, it is made where its work is written and called from `run` when the work reaches it. Its metadata is what a reader needs before it runs: its id, title, description, kind, role, and what it produces. A definition may list the **path** it expects its Steps to take. The path is a forecast, never a precondition: a Step called off the path still runs, and a path Step the Run never reached ends `not run`. A Step called once per item has a run per **Slice**, and one a loop calls again has a run per round. A Workflow that declares none still runs, and its Steps are its Operations, questions and children as they happen. A Step can be paused before, so the Run holds as its work reaches it, and given a note its agent reads before its next prompt ([ADR-draft-a-step-is-declared-where-its-work-is-written](docs/adr/draft-a-step-is-declared-where-its-work-is-written.md)).
+
 **Trust** — A Harness's own answer to "may I work in this directory". Collie grants it for an agent's directory before that agent's harness starts, by default, without a duplicate Collie question. `never` leaves the question to the harness.
 
 **Permissions** — Who decides whether an agent's tool call runs: the harness's own automatic review (`auto`, the default, which starts each agent in its harness's auto mode), no one (`bypass`, which an operator opts into, and which is auto mode wherever the harness's managed settings forbid it), or the harness's prompt in the agent's own pane (`harness`). Trust is answered once per directory; this is decided per agent start, and an operation may name its own mode. Trust is about the directory, Permissions about the calls made inside it. Under `auto`, a Claude agent's review is told which Run it serves, the branch that Run created where the forge says it is unprotected, the words a human started it with, and each step's **Clearance**. Collie adds no permission rules of its own (ADR-draft-what-a-run-authorises-reaches-auto-mode).
@@ -367,7 +369,7 @@ A stop closes only its Run's agents' panes, and its own shell tab is never hande
 agent, so it outlives them. One herdr has dropped anyway is reopened on the Run's checkout
 at the next launch, and the Task records the new id.
 
-**TaskView** — One Task as the board draws it: name, project, state, the step glyphs, one
+**TaskView** — One Task as the board draws it: name, project, state, a glyph per Run, one
 plain sentence about what is happening, its age, drift, hold, pending **Decision**, agents,
 children, branch, merge request and disposition. Built by one function from the Runs the
 host reports, the live agents and what each Run left in its directory, so the Home's cards, the one-screen text view and
@@ -387,6 +389,11 @@ answer: an agent is waiting for a human in its own pane — at a dialog of its h
 that Collie could not put on the Run, which herdr reports as a `blocked` agent — or a Run parked because its agent's pane would
 not take a prompt. Either way the work has stopped, so the card says which pane to go to
 rather than what the step was doing.
+
+**Wait** — What holds a Run up at a moment: a **Decision** on it, **Stalled**, a **Hold**,
+**Short of memory**, or something it awaits that ends by itself. A Check Collie runs for it
+is shown the same way. A Run can have several at once, and each front door says the one it
+ranks first.
 
 **Working** — A Task something is actually doing: a Run the host holds that has not
 settled, or a **Reopened** Run whose agent herdr reports working. The board's third
@@ -564,6 +571,19 @@ implement Run's `Release` offer — on the card, from the CLI or from chat — o
 merge request it is (ADR-draft-a-merge-request-is-released-on-a-humans-go,
 ADR-draft-a-tasks-work-is-what-its-runs-worked-on).
 
+**Stage Run** — One execution of the `stage` Workflow: one open merge request's head put
+on stage for testing, unmerged. It is not a release. It asks for no approval, answered or
+resolved comments, passed pipeline, mergeability or **Go**. It never merges, tags, pushes,
+posts or plays a production job, and runs none of the Run's **Checks**, because it
+changes nothing. It holds the Helle claims, and never waits for one while it holds
+another. Where someone else holds some, it asks whether to wait for all or stage only what
+is free. Collie proves stage per environment from the forge. It holds stage until the
+human says `Done`, which rolls stage back, or `Leave it on stage`, and `Stage again` takes
+the head as it is then. A failed stage is rolled back. It starts from implement's "What
+next?", from a succeeded implement Run's `Stage` offer, or on its own, and it is the
+**Task**'s whose merge request it is
+(ADR-draft-an-open-merge-request-is-staged-by-a-run-of-its-own).
+
 **External review comment** — A comment on a merge request by anyone but the forge login
 Collie acts as, and not a bot's or the forge's own note. A reply in a thread is one of its
 own. A **Release Run** answers each one once: fixed, naming the commit, or disputed, saying
@@ -574,7 +594,8 @@ stage, merge, tag), and send one to production. It is asked on the Run once the 
 ready, never at its start. The first holds for one head: a head that moves takes it back.
 The second holds for what it sends. Before a merge, that is the head on stage, so the same
 rule applies. After one, it is one tag and the production jobs that tag names. Who answered
-is recorded, never a reason to refuse.
+is recorded, never a reason to refuse. Staging an open merge request without merging it is
+not one: a **Stage Run** asks for no Go, because its rollback takes it back.
 
 **Layer** — Where a definition is looked up, later wins by name. A Workflow is one `*.workflow.ts` entry, found project `.collie/workflows/` first, then the user's `~/.collie/user/workflows/`, then the installation's `workflows/`; a broken override is reported, never fallen through. A Persona is Markdown, found the same way: the project's `.collie/personas/`, then the user's `~/.collie/user/personas/`, then the installation's `personas/`. Forking takes a baseline definition into a later Layer. The user Layer's files are **shared definitions**: every Machine in a Flock holds the latest edit of each, its removal included, so the user Layer is the Flock's rather than one Machine's ([ADR-0061](docs/adr/0061-a-users-definitions-are-the-flocks.md)).
 
@@ -591,8 +612,9 @@ is recorded, never a reason to refuse.
 What each is for, what it needs, and how they chain: `docs/workflows.md`.
 
 - `plan` — interviews the human, then writes `SPEC.md` and one ticket per slice into its Run's plan directory (ADR-0002).
-- `implement` — builds from a work source, reviews what it built with the same pass `review` runs, loops on the findings, and opens or updates the merge request last, only where the evidence is there. Then it asks what next, unless started with `then=finish` or `then=release`: `Release` takes its merge request the rest of the way as a child **Release Run**. No architecture or simplification pass: those are work the change asks for, not work every Run does.
+- `implement` — builds from a work source, reviews what it built with the same pass `review` runs, loops on the findings, and opens or updates the merge request last, only where the evidence is there. Then it asks what next, unless started with `then=finish` or `then=release`: `Release` takes its merge request the rest of the way as a child **Release Run**, and `Stage` puts it on stage as a child **Stage Run**, after which it asks again. No architecture or simplification pass: those are work the change asks for, not work every Run does.
 - `release` — answers a merge request's External review comments until it is approved, then, on a Go, merges and tags it. An application is staged either from its merge request, for testing before the merge, or from its tag after it, and goes to production on a second Go.
+- `stage` — puts an open merge request's head on stage for testing, unmerged, with no approval or Go, under the Helle claims, until the human is done with it.
 - `review` — standalone; you pick the target; one complete review, and a synthesis that reconciles the reviewers where more than one axis is asked for.
 - `architecture` — runs the architect over the project and reports into its Run's plan directory.
 - `renovate` — claims the repository in Helle, merges or accounts for every Renovate Bot merge request, tags and watches the release, and records the result on the team's Renovate issue.
@@ -680,6 +702,15 @@ are asked when the Run reaches them, with the work they decide about in front of
 human. One set of components, two placements — a popup pane for the herdr action, and inline in the
 Collie tab for `＋ New run` — because a question a human answers is a component. A
 question a Run answers is a file in its Run directory, and those two never converge.
+
+**Flow** — A Task drawn as the work it took. Each of its Runs is shown on its Machine, as the
+**Steps** it ran and is running, each with its attempts, waits and evidence. Around them are
+the Steps its path still expects, its children and Repo runs by **Wave**, the follow-up it
+offers, and its merge request's way through CI, merge and deploy. The host builds it from
+what each Run recorded and what its module declares, so every front door reads one model. It
+draws what is recorded or declared and guesses nothing else. It is neither the forge's
+pipeline, which is one of its nodes, nor the **Launch flow**
+([ADR-draft-a-step-is-declared-where-its-work-is-written](docs/adr/draft-a-step-is-declared-where-its-work-is-written.md)).
 
 **Selection** — The Task whose record is open on the board, and what chat means by "it"
 ([ADR-0012](docs/adr/0012-the-boards-selection-is-an-explicit-chat-input.md)). Held by a

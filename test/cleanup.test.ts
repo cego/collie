@@ -629,7 +629,8 @@ test.skipIf(process.platform !== "linux")(
           const [record] = yield* until(
             () =>
               fs.readDirectory(runningChecksDir(world.state)).pipe(Effect.orElseSucceed(() => [])),
-            (files) => files.length === 1,
+            // Not its `.new`, which the host writes first and renames.
+            (files) => files.length === 1 && files[0]!.endsWith(".json"),
           );
           const kept = {
             kind: "check",

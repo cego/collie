@@ -14,6 +14,7 @@ import {
   ask,
   contentOf,
   defineWorkflow,
+  step,
 } from "collie";
 import { Effect, Schema } from "effect";
 import markdown from "./architecture.md" with { type: "text" };
@@ -61,6 +62,21 @@ const launch = (options: Record<string, string>): Record<string, string> =>
 const IMPLEMENT = "Implement now";
 const STOP = "Stop here";
 
+const architecture = step({
+  id: "architecture",
+  title: "Architecture",
+  description: "The architect surveys the project and writes an improvement plan.",
+  kind: "agent",
+  role: "architect",
+  produces: "plan",
+});
+const menu = step({
+  id: "menu",
+  title: "What next",
+  description: "Choose whether to implement the improvement or finish with its report.",
+  kind: "question",
+});
+
 export default defineWorkflow({
   id: "architecture",
   title: "architecture — look at what is there, then improve it",
@@ -71,27 +87,32 @@ export default defineWorkflow({
   output: Schema.String,
   // Design, like planning: the planner's model and effort.
   agents: { harness: "claude", model: "opus", effort: "high" },
+  path: [architecture, menu],
   run: ({ input: asked }) =>
     Effect.gen(function* () {
       const host = yield* Host;
       const run = yield* Run;
       const place = yield* host.place(run.id);
-      const report = yield* agentWork({
-        operation: "architecture",
-        role: "architect",
-        skill: "improve-codebase-architecture",
-        instructions: attended,
-        input: {
-          inputs: { goal: asked.goal },
-          run: { dir: place.dir },
-          rooting:
-            place.options.workspace === "projects-root"
-              ? (content.sections.get("projects-root") ?? "")
-              : "",
-        },
-        output: Report,
-      });
-      const next = yield* ask({ name: "next", prompt: "What next?", options: [IMPLEMENT, STOP] });
+      const report = yield* architecture(
+        agentWork({
+          operation: "architecture",
+          role: "architect",
+          skill: "improve-codebase-architecture",
+          instructions: attended,
+          input: {
+            inputs: { goal: asked.goal },
+            run: { dir: place.dir },
+            rooting:
+              place.options.workspace === "projects-root"
+                ? (content.sections.get("projects-root") ?? "")
+                : "",
+          },
+          output: Report,
+        }),
+      );
+      const next = yield* menu(
+        ask({ name: "next", prompt: "What next?", options: [IMPLEMENT, STOP] }),
+      );
       if (next === STOP) return `${report.report}: stopped there`;
 
       // The plan the architect wrote, built by the workflow that builds — and the kind of

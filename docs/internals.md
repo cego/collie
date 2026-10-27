@@ -89,13 +89,14 @@ value came from, its options, its decisions and its receipts. The request id is 
 the same request twice is one Run, and a Run recorded and not yet handed to the engine is
 handed over when the host starts again ([ADR-0017](adr/0017-one-request-is-one-run.md)).
 
-Before it hands any Run back, a starting host ends every check a previous host left
-running in its state directory: one recorded under `running-checks/`, or a process marked
-with this installation's id. It gets SIGTERM, then SIGKILL two seconds later, and is never
-adopted. The Run's log and `host.log` name the check and the host that left it, and the
-step that ran it runs it once more. No check of a Run starts while one a previous host left
-of that Run is still running: one that survives SIGKILL is ended again a second later, and
-named again, until it is gone.
+Once it answers, a starting host ends every check a previous host left running in its
+state directory: one recorded under `running-checks/`, or a process marked with this
+installation's id. A host that has just made that id looks for none, since no process can
+carry it. Each gets SIGTERM, then SIGKILL two seconds later, and is never adopted. The
+Run's log and `host.log` name the check and the host that left it, and the step that ran it
+runs it once more. No check of a Run starts while one a previous host left of that Run is
+still running: one that survives SIGKILL is ended again a second later, and named again,
+until it is gone.
 
 Recovery re-enters the module as it is now. Completed Activities are reused, a question
 already asked is still asked, and an agent already launched is reattached to. There is no
@@ -116,8 +117,10 @@ Beside the database, a Run's files are its audit trail: `agents/<run>/<operation
 with the Output it came back with, `evidence/<run>/` with its checks
 and the ones collected, and `runs/<run>/` with its cards, its `plan/`, the review it left and the notes its agents
 handed on in `handoffs/`, which the shipped workflows tell them to write there rather than in
-`/tmp` and which `run show` and the Run's record list. They are the Run's, so they go only
-when it does.
+`/tmp` and which `run show` and the Run's record list. `handoffs/` is made when the Run is
+placed, before any agent of it starts, and a Claude Code agent is started with
+`--add-dir <run dir>`, so its MCP servers count the Run's directory among the session's
+roots and may write there. They are the Run's, so they go only when it does.
 Nothing an older Collie recorded is read ([ADR-0027](adr/0027-one-engine-and-a-hard-cutover.md)),
 and the host's cleanup sweep removes it once it has not changed for a day.
 
@@ -337,6 +340,16 @@ workspace, which is what a merged branch is supposed to do.
 
 ## Reaching another Machine
 
+An agent-requested Run tells its requesting host twice over the paired link: at admission
+and at settlement, beside its outcome report. The `linkNotice` call validates the sending
+Machine and the requesting Run's agent, and records each request once on that Run. The
+Flow hangs the link under the Step whose launch made the start and keeps that placement
+when settlement arrives. Settlement takes precedence over an admission delivered late.
+The started Run records each notice's delivery result in `linkNotices`, shown by
+`collie run show`; an undelivered notice is recorded and not resent. Nothing polls another
+Machine for a linked Run. On one host, the Flow reads the requested Run's current facts
+directly, and its link's `asOf` is null.
+
 Run records are served by their owning host through `run-record.ts`. Intent changes,
 remembered checks and override clearing take the caller's Actor and request id there;
 verification runs in that host's checkout and streams its output. `verify-model.ts`
@@ -369,10 +382,14 @@ Each host keeps its peers in `src/peers.ts`, started in the host's scope
   pinning the peer's certificate as the only CA and sending the secret as a bearer, and
   pipes bytes. `as: "host"` is taken only with the relay's own host's stamp.
 - **The listener,** on `0.0.0.0:47217` (`COLLIE_PEER_PORT` for a test), only while a peer
-  that dials in is paired. It finds the installation a bearer was minted for, and declares
-  the channel on a fresh `host.sock` connection as `{frontDoor: as, from: {machine,
-  client}}` with the host's per-process stamp, which is what lets `from.machine` through
-  `declare`: a channel that sets it without the stamp is refused.
+  that dials in is paired. `COLLIE_PEER_PORT=0` binds whatever port is free the first time
+  and that same port every later time, by any host of the state directory (it is kept in
+  `peer-port` there), and an invitation answers it: the test rig's way to
+  a port no other process can take between its choice and the listen. It finds the
+  installation a bearer was minted for, and declares the channel on a fresh `host.sock`
+  connection as `{frontDoor: as, from: {machine, client}}` with the host's per-process
+  stamp, which is what lets `from.machine` through `declare`: a channel that sets it without
+  the stamp is refused.
 
 **Dial-back.** The dialling host keeps `/control` open, with the pinned certificate and
 bearer. The listener keeps one control link per installation; a newer one replaces it.
@@ -502,6 +519,16 @@ and are retried on the next link-up. Development checkouts never take part.
 `HERDR_BIN_PATH` for the commands that have one, and the socket at `HERDR_SOCKET_PATH` for
 the rest. Nothing else in the program shells out to `herdr` or opens that socket. That is
 what makes the fake herdr in `test/support/` enough to test everything above it.
+
+A process a test starts still runs a real executable at `HERDR_BIN_PATH` for every call, so
+the argv, stdout, stderr and exit code still cross a process boundary. That executable is
+only a forwarder (`test/support/forwarder.ts`): it hands its argv, working directory and
+environment over a unix socket to the test process, which answers with the same fake core the
+in-process fake uses (`test/support/forwarding.ts`). Each shim names its own answerer, so two
+fixtures of one fake keep their own state. The fake forge's executable on `PATH` is the same
+forwarder. With no test process listening, as for a host that outlived its test, the
+forwarder prints nothing, names the socket on stderr and exits 70: it never answers on its
+own.
 
 One thing outside the program does run a herdr binary: `tools/herdr-schema.ts` downloads a
 named release and asks it to print its bundled schema. It is the exception the invariant
@@ -765,7 +792,8 @@ falls all the way through to the current directory.
 
 Collie reaches GitLab and GitHub through one interface, `Forge` in `src/forge/forge.ts`,
 with an adapter per forge: `src/forge/gitlab.ts` runs `glab`, and `src/forge/github.ts`
-runs `gh` ([ADR-0050](adr/0050-a-merge-request-is-its-forges.md) D1). Each forge's doctor
+runs `gh` ([ADR-0050](adr/0050-a-merge-request-is-its-forges.md) D1), or asks its forge
+over HTTP with that CLI's token (below). Each forge's doctor
 checks sit beside its adapter, in `src/forge/gitlab-checks.ts` and
 `src/forge/github-checks.ts`, and a workflow's content file for one forge
 (`<name>.gitlab.md`, `<name>.github.md`) may name that forge's CLI. A caller asks the
@@ -779,6 +807,90 @@ its state and address, a job waiting to be started by hand as `manual`: GitLab's
 job, or a GitHub job waiting on its environment's approval.
 An operation is added to the interface when its first caller moves onto it.
 
+### The calls that go over HTTP
+
+These calls go to the forge in-process through the [`forges`](https://forges.link) library,
+pinned to one exact version, rather than through `gh` or `glab`
+([ADR-draft-a-forge-is-asked-over-http-with-its-clis-login](adr/draft-a-forge-is-asked-over-http-with-its-clis-login.md)):
+
+- The CI job reads a check left to CI is proved by: `job`, `baseJob`, `retryJob` and
+  `runStatus`. Each sends the REST requests its CLI sent, a merge request's head included.
+- The merge request reads: `details`, the panel, and `forBranch` and `fromBranch`, a
+  branch's merge requests. GitHub's `details` is one GraphQL query for every field `gh pr
+  view --json` asked for, its check contexts paged; GitLab's reads the merge request, its
+  `/approvals` and its `/discussions` together, and says it has unresolved threads when a
+  resolvable note is unresolved. A branch's merge requests are the REST list filtered by
+  source branch (GitHub's `head=<owner>:<branch>`, so a fork's same-named branch is not
+  one), read page by page until a short page.
+- Branch protection, `protects`, and deploy status, `liveTier`. GitHub pages its
+  deployments and reads their latest statuses and commit comparisons; GitLab reads
+  environments, successful deployments and their merge-bases on the same routes as glab.
+- Stage's `stagingEnvironments` pages environments and deployments through the same
+  transport. Selected-job attribution includes earlier attempts, and a refused read
+  leaves the deployed environments unknown so their claims cannot be given back.
+- Issues, review posting, my open merge requests and the login: `issues`, `fileIssue`,
+  `commentIssue`, `post`, `mine` and `login`. These use the library's modelled thread and
+  user operations. A review posts one note, then an approval only where asked. Lists are
+  read to the end; GitHub's issues exclude pull requests.
+- Review reads, replies, merging and release reads: `readReview`, `reply`, `merge`,
+  `deployed`, `tagPipeline` and `pipeline`. They keep their REST routes; GitHub reads the
+  pull request, review threads and default merge method through GraphQL. Comments,
+  reviews, threads, deployments and pipeline jobs are read to the end. A failed merge is
+  read back to distinguish one that landed, a moved head and a refusal; a timeout,
+  network failure or 5xx never resends the merge.
+
+The CLI keeps readiness and the doctor's checks,
+cloning, the credential helper, opening a browser, and commands an agent or reviewer is
+told to run, including job logs: the Machine still needs its CLI logged in. Only
+`src/forge/` imports `forges`, and
+`test/forge-boundary.test.ts` fails on an import anywhere else.
+
+**ForgeHttp** (`src/forge/http.ts`) is the Effect service that sends them. It keeps a
+`forges` provider per forge host, provided live in both front doors: the host's
+`foundationLayer` and the `collie` CLI. Its token is the CLI's login for that host, read
+by **credential reads**, the only commands it runs:
+
+- GitHub: `gh auth token --hostname github.com`. The token is kept until a 401.
+- GitLab: `glab config get oauth2_expiry_date --host <host>`, then `glab config get token
+  --host <host>`. An empty expiry is a personal access token, kept until a 401. An OAuth
+  token is kept until its expiry, checked against Effect's Clock before each request.
+  `glab config get` never refreshes one, so once the expiry has passed, ForgeHttp runs `glab
+  auth status --hostname <host>` first: that builds glab's API client, which refreshes the
+  token and writes it back. A refresh that fails answers as not ready.
+
+One credential read per host is in flight at a time, so concurrent calls on a cold cache
+share one, and two refreshes never race. A host whose CLI gives no token answers as not
+ready, with the reason `ready` gives, and is sent nothing. After a 401 the token is read
+again once and the rejected request sent once more, a write's included, since a forge that
+answers 401 applied nothing. A second 401 answers unavailable, naming the login command.
+No other request is resent by Collie: a write that times out, fails on the network or gets
+a 5xx may have been applied. A failure is an answer, never a defect: its reason names the
+forge, the HTTP status and the forge's message, and a rate limit's reset. Interrupting a
+call aborts its request.
+
+`runStatus` and `pipeline` take their addresses from agent text. GitHub accepts only
+github.com. GitLab's is asked only where glab's own
+config or keyring holds a token for that host, read with `env -u GITLAB_TOKEN -u
+GITLAB_ACCESS_TOKEN -u OAUTH_TOKEN glab config get token`: glab hands an environment token
+to every host, and that token is never sent to a host an agent named.
+
+The fake forge (`test/support/forge.ts`) answers from one model through three faces: the
+Runner face (argv), the FakeBin face (an executable on `PATH`) and the **HTTP face**, a
+`fetch` answering the same routes, accepting only the token the CLI hands out, and logging
+every request. In-process tests give `fakeForge(...).layer`, ForgeHttp over the HTTP face
+and the Runner face, to the operation. A spawned host's credential reads go to FakeBin, and
+`COLLIE_FORGE_API`, read only by ForgeHttp, points every forge host at the HTTP face
+`serveForges` serves on loopback. Baseline workflow scenarios serve both fake forges for
+the whole scenario, and replacing a forge's model on `PATH` switches its HTTP face too.
+Their host sessions are bounded to 30 seconds, so a missing fake response cannot leave
+the suite waiting for the test harness's longer timeout.
+
+A test that runs a merge request read through the CLI's
+`PATH`, rather than a model, gives it `forgeHttpOnPath` (ForgeHttp over whatever `glab` or
+`gh` is on `PATH`, answering each request as `<cli> api <route>`), or runs it with
+`runOnPath`. `tools/forges-benchmark.ts` times `job` or `details` over the CLI and over the
+library against a live pull request and merge request.
+
 A checkout Collie clones keeps a credential helper for its forge's host in its own git
 config, and no token: GitLab's asks `glab config get token --host <host>` at each use and
 answers as `oauth2`, and GitHub's is gh's own `gh auth git-credential`. An empty helper
@@ -787,10 +899,11 @@ never answers first. Setting it again changes nothing.
 
 `protects(project, branch)` says whether a branch, pushed or not, is protected: `true`
 where it is the default branch or matches any protection rule or ruleset, whatever the rule
-allows, and `null` where the forge cannot say. GitLab reads the project's default branch
-and its protected branches, matching their wildcards; GitHub reads the default branch, the
-rules active for the name (`rules/branches/<name>`), and the classic protection rules'
-patterns through GraphQL. A Claude agent's launch reads it for the branch its Run created,
+allows, and `null` where the forge cannot say. Both forges are read over HTTP with their
+CLI's login. GitLab reads the project's default branch and every page of its protected
+branches, matching their wildcards; GitHub reads the default branch, the rules active for
+the name (`rules/branches/<name>`), and the classic protection rules' patterns through
+GraphQL. A Claude agent's launch reads it for the branch its Run created,
 and only `false` gives the agent the history allowance
 ([What a Claude agent's auto mode is told](using.md#what-a-claude-agents-auto-mode-is-told)).
 
@@ -855,11 +968,10 @@ read, the watch stops nothing for that merge request until it can. Collie's logi
 operator's own, so a hand merge by that login, at the very head that was approved, after
 the attempt, cannot be told from Collie's, and is taken as the merge the go asked for.
 
-The interface also lists open issues, files issues, and comments on them. The adapters
-decode their own CLI answers into the shared issue shape. GitLab reads consecutive
-pages; GitHub requests all open issues through its list command. These flags follow the
-[GitLab issue list](https://docs.gitlab.com/cli/issue/list/) and
-[GitHub issue list](https://cli.github.com/manual/gh_issue_list) contracts.
+The interface decodes the library's issues into the shared issue shape. Filing an issue
+uses the returned number and URL. An issue or review write that fails is not sent again,
+apart from the single resend after a 401; its reason asks the caller to inspect the issue
+or merge request before retrying, since a lost answer may have followed a successful write.
 
 The Host service chooses the forge of the Run's recorded checkout. Before publishing,
 it applies Conversation redaction and checks text against other checkouts, including
@@ -880,8 +992,9 @@ Recovered workflows read reports after every saved generation has been registere
 
 An adapter runs its commands through a `Runner` (`src/mr.ts`), the same seam the tests
 fake. `test/support/forge.ts` is a fake of each forge built on one model of a forge, with
-two faces: a Runner answering the argv its adapter uses, and a `FakeBin` executable on
-PATH answering from the same model for host-driven tests. `test/forge.test.ts` runs one
+three faces: a Runner answering the argv its adapter uses, a `FakeBin` executable on
+PATH, and HTTP served on loopback for host-driven tests, all answering from the same model.
+`test/forge.test.ts` runs one
 contract against both. `test/forge-boundary.test.ts` fails on a `glab` or `gh` invocation
 in `src/` or `workflows/` outside its adapter, and on workflow content that names either; its
 allowlist names each file that still does, with the ticket that moves it.
@@ -1202,7 +1315,10 @@ tree and the runner into `<Collie directory>/release.new` with `placed.json`, ea
 sha256, copies every file of the current `release/` that differs from its own record into
 `kept/`, then swaps the two. In a placed release `install.sh` and `prepare.sh` leave
 `bin/collie` as it was placed. `tools/smoke.sh` checks the built runner places its release
-at its own version.
+at its own version. Its forge check asks the compiled runner for a missing review target
+against a temporary checkout: the missing-input response must offer the pull request
+served by the fake forge over HTTP. This exercises the lazily loaded provider without
+starting a Run.
 
 `install.sh` authenticates that download with `COLLIE_TOKEN` where it is set, and otherwise
 borrows the token `glab` or `gh` already holds for the release host — see
@@ -1347,6 +1463,15 @@ does not interrupt a timed-out test's own scope. `bun run test` first removes ev
 a killed suite is cleaned up by the next one; a live pid's root is another suite's and is
 left alone.
 
+The root is made on a memory filesystem, `/dev/shm` (`COLLIE_TEST_MEMORY` names another),
+while that is writable and has 2 GB free, and under `tmpdir()` otherwise, as on macOS. A
+test's hosts commit to SQLite and its fixtures write git objects, and on a disk each of
+those waits for an fsync: on vm-mk a baseline shard took 33.6 s on `/dev/shm` against
+40.4 s on `/tmp`. The sweep looks in `tmpdir()`, `/tmp` and the memory filesystem. Every
+git a test starts runs with `gc.auto=0` and `maintenance.auto=false`, set through
+`GIT_CONFIG_*` and the test home's `.gitconfig`: housekeeping in a repository a test is
+about to remove is work nobody reads.
+
 The same preload keeps the suite out of the operator's herd. Before any test file loads it
 drops `COLLIE_USER_DIR`, `COLLIE_CWD` and every `HERDR_*` variable but `HERDR_API_SCHEMA`,
 which the contract check is given on purpose, and sets `HOME` to a directory under that
@@ -1356,7 +1481,7 @@ that environment. A test that needs herdr sets up the fake under `test/support/`
 `test/isolation.test.ts` fails if the live socket or home gets through.
 
 `bun run test` (`tools/test.ts`) takes the per-user suite lock, then compiles `collie` the
-way a release does, and the fake herdr the same way, into `.scratch/test-bin/`, and runs the suite with
+way a release does, and the fakes' forwarder the same way, into `.scratch/test-bin/`, and runs the suite with
 `COLLIE_TEST_BINARY` and `COLLIE_TEST_FAKE_HERDR` naming them: the suite starts well over a
 thousand hosts, commands and herdr calls, and a bytecode build starts in a fraction of the
 time the sources take to load. A fixture's own Config provider carries that binary choice,
@@ -1386,7 +1511,8 @@ seconds, how long it has waited (`tools/suite-lock.ts`). Which forms take the lo
   temporary directory of its own that it removes when it ends, and reads
   `.scratch/test-timings.json` without updating it.
 - `bun test <file>`, `bun test -t <name>` and `bun run test:live` do not: they run the
-  sources directly, beside whatever suite is running.
+  sources directly, and join the budget as a small run (see [Keeping the suite and a start
+  fast](#keeping-the-suite-and-a-start-fast)).
 
 ### Tests against an installed harness
 
@@ -1438,25 +1564,60 @@ docs lint to catch a page that fell behind — a stale page is a defect like any
 Each of these, where it crept in, cost the suite minutes or every start a large share of
 its time.
 
-- **The suite shares the Machine.** After its builds, and once its turn is granted,
-  `bun run test` samples `os.cpus()` one second apart and runs one worker per idle core:
-  `cores × idle / total` over the sample, rounded, at least 2 and at most one per core
-  (`workersFor` in `tools/test-run.ts`). It prints `test: N workers (F of C cores free)`.
-  A targeted run is sized the same way. A `--parallel` or `--parallel=N` before any `--`
-  is passed through as given, and is how a human or agent sets a share themselves. #110
-  stopped subtracting load averages because they lag and count the suite's own previous
-  run and IO waits; a one-second sample of idle CPU just before the tests start counts
-  neither, and the builds and any suite this one waited for are over before it is taken.
+- **The suite shares the Machine.** Every `bun run test` takes its workers from one budget
+  of test processes per user per Machine
+  ([ADR-draft-test-processes-share-one-budget-per-machine](adr/draft-test-processes-share-one-budget-per-machine.md);
+  `tools/budget.ts`). The budget is two thirds of the cores, at least 2, and
+  `COLLIE_TEST_BUDGET` sets it. A quarter of it, at least 2, is kept for targeted runs. A
+  whole suite asks for all the rest, so whole suites run one at a time. A targeted run asks
+  for 2, and a `--parallel=N` before any `--` asks for N. A run gets no more than its kind's
+  share, and says so when it gets fewer than it asked for. On vm-mk that is 12 workers for a
+  whole suite out of 16. Where the rest would be under 2, as on two or three cores, every
+  run takes from the whole budget in turn. Waiters are admitted in the order they arrived.
+  A wait names who it is behind once, then says every 30 s how long it has waited. The store
+  is `collie-test-budget-<uid>` under the temporary directory, changed under
+  `src/lock.ts`'s lock. A hold names its runner and the `bun test` it started, and it is
+  reclaimed only once both are gone, each known by pid and start time. An interrupted run
+  gives back what it held. A whole suite admitted by the budget also takes the old
+  `collie-test-suite-<uid>.lock`, so a checkout from before the budget still takes turns
+  with it. The `bun test` a run starts is told its hold in `COLLIE_TEST_HOLD`. A run ends
+  with a report: seconds queued, built and run; workers and budget; for a whole suite, the
+  longest file, its share of the run, and the per-file time summed from the updated timings;
+  the processes started; and `/proc/pressure/cpu`'s `some avg60` and the 1-minute load at
+  admission and at the end. Where there is no `/proc/pressure`, as on macOS, the pressure is
+  not available. This replaces #135's one-second idle sample, which picked one worker per
+  idle core and so oversubscribed the Machine whenever the moment after the builds was idle.
+
+  A bare `bun test`, one `bun run test` did not start, joins the same budget as a small run
+  (`test/support/budget-preload.ts`). Three things Bun 1.4.4 does decide how:
+  - under `--parallel` with more than one file, only the `--test-worker` processes run the
+    preload, never the coordinator; a run of one file stays in one process, which runs it
+    once;
+  - a top-level `await` in the preload delays the first test and counts against no test's
+    timeout;
+  - `--isolate`, which every worker runs with, runs the preload and its `afterAll` again for
+    each file, and resets `process.env` between files.
+
+  So each run of the preload takes one worker from the reserve, in turn with the other small
+  runs, and gives it back when its files end: once per file in a worker, once for a whole
+  plain `bun test`. A worker holds nothing between files, so the reserve goes round in turn.
+  A wait says whom it is behind and how long it has waited, as a run of `bun run test`
+  does, and an admission says how long it queued and how many of their workers small runs
+  then hold. One that dies is reclaimed like any other hold. The preload runs before
+  `hosts.ts` points `TMPDIR` at the file's own root, so it finds the same store as
+  `bun run test`. A process with `COLLIE_TEST_HOLD` set already runs on a hold, and takes
+  nothing.
 
 - **A test starts a process.** Each start costs the Machine, and an endpoint sensor more
   again. `bun run test` sets `COLLIE_TEST_STARTS` to a fresh file, and the compiled
-  `collie`, fake herdr and fake forge each append a line naming themselves and what they
-  were asked, such as `herdr agent list` or `collie host` (`src/starts.ts`). The suite
+  `collie` and each call of the fake herdr and fake forge append a line naming themselves
+  and what they were asked, such as `herdr agent list` or `collie host` (`src/starts.ts`);
+  a fake's line is written by the test process that answers it. The suite
   ends with `test: <N> processes started` and the ten largest sources. The count leaves
   out what never reaches those entry points: `collie` running as bun under `BUN_BE_BUN`,
   real `git`, `ps` and `sleep`, the `sh` shims and stubs, and the fake `ssh` and the
   master it keeps. It first showed `herdr session list` as the largest source, at 3,970 of
-  11,125: every board build read the sessions again, and a build follows every write
+  11,125: every board build read the sessions again, and a build then followed every write
   under the state directory. A host's board now reads them once a minute, as often as its
   event watch does (`SESSIONS_EVERY` in `src/herds.ts`), so a session that starts later
   is on the board within that minute. A sweep still reads them fresh: cleanup must never
@@ -1483,13 +1644,13 @@ its time.
 - **A fixture runs a command.** `test/support/command.ts` uses asynchronous `Bun.spawn`,
   drains stdout and stderr together, and closes the process group when its scope ends.
   A nonzero exit remains visible; an interrupted fixture cannot leave its child running.
-  The fake herdr CLI provides only its filesystem and path services, while using the
-  same core as the in-process fake.
-  The forge CLI fake is compiled once too, as `COLLIE_TEST_FAKE_FORGE`; it provides only
-  its filesystem service and keeps the same model, call log and exit codes. An isolated
-  world's environment carries that executable through its Config provider. A focused
-  `bun test` still runs its sources with this process's Bun executable, without needing
-  `bun` on the fixture's PATH.
+  The fake herdr's and fake forge's executable is one forwarder, compiled once and named by
+  both `COLLIE_TEST_FAKE_HERDR` and `COLLIE_TEST_FAKE_FORGE`. The test process answers each
+  call with the fake's core, under the caller's environment and with only filesystem, path
+  and that environment as Config, so it keeps the same state, model, call log and exit
+  codes. An isolated world's environment carries that executable through its Config
+  provider. A focused `bun test` still runs the forwarder's source with this process's Bun
+  executable, without needing `bun` on the fixture's PATH.
 - **A test can go red.** Break `src/` the way its name says and watch it fail before relying
   on it. A test that cannot fail, or whose every failure another test already has, is
   deleted.
@@ -1507,6 +1668,79 @@ its time.
   `effect/http` by module rather than through their index. `test/startup.test.ts`
   holds the first and keeps the engine and the board out of the compaction helper; lint
   holds the second.
+
+### Test-suite measurements, 26 October 2026
+
+Measured on vm-mk (24 cores, Bun 1.4.4) on ef9b4555, under the Machine budget of 16 with 4
+kept for small runs
+([ADR-draft-test-processes-share-one-budget-per-machine](adr/draft-test-processes-share-one-budget-per-machine.md)).
+Each experiment started only once `/proc/pressure/cpu`'s `some avg60` was under 10 %, and
+none ran beside another. None had to be abandoned for pressure over 50 % for two minutes.
+Each suite ran through `collie verify`; the logs are run-a0ff8856.implement's
+`09-*` verifications, and the driver and its samples are that Run's
+`handoffs/09-measure/`. Every suite had 4,633 tests in 314 files. The base, 5a479a85, took
+753 s at 12 workers, with one file at 739 s.
+
+**Workers.** One whole suite at each worker count, one after another
+(`bun run test --parallel=N`; 16 with `COLLIE_TEST_BUDGET=21`):
+
+| Workers | Including builds |     Ran | Summed test time | Per test | Tests per second | Ran ÷ (summed ÷ workers) |
+| ------: | ---------------: | ------: | ---------------: | -------: | ---------------: | -----------------------: |
+|       4 |          911.5 s | 900.8 s |          3,602 s |   0.78 s |             5.13 |                     1.00 |
+|       8 |          574.4 s | 563.7 s |          4,409 s |   0.95 s |             8.20 |                     1.02 |
+|      12 |          473.6 s | 464.0 s |          5,310 s |   1.15 s |             9.96 |                     1.05 |
+|      16 |          438.1 s | 428.0 s |          6,615 s |   1.43 s |            10.80 |                     1.04 |
+
+Sixteen workers finish 8 % sooner than 12 for 25 % more test time, and use more cores than
+a whole suite's share of 12. The share stays at 12. No file is the critical path any more:
+the longest, `test/placement.test.ts` or `test/agents.test.ts`, took 40 to 45 % of a run at
+12 workers.
+
+**Cores per worker.** One whole suite at 12 workers in a cgroup of its own
+(`handoffs/redesign/cpu-of.sh`) used 5,505 CPU-s in 497 s: 11.1 cores, or 0.92 a worker.
+At `--parallel=8` on 9263ba29, before tickets 06 to 08, it was 5,582 CPU-s and 9.2 cores.
+Sampled every 250 ms, which misses most processes shorter than that, the test processes took
+2,438 CPU-s, 529 test hosts 1,346, 773 CLI starts 459, and 3,583 fake herdr and forge starts
+39, where 11,448 fake herdr starts had taken 12 % before.
+
+**Queueing.** Whole suites from separate worktrees on the same commit, started together,
+with targeted runs of `test/yaml.test.ts` started 120 s in and every 360 s after:
+
+| Case     | Suite |    Queued |  Built |     Ran | Ended after the start |
+| -------- | ----- | --------: | -----: | ------: | --------------------: |
+| 1 suite  | 1     |    0.06 s |  9.9 s | 464.2 s |               474.1 s |
+| 2 suites | 1     |    0.07 s | 10.2 s | 462.8 s |               473.6 s |
+|          | 2     |   473.2 s | 10.4 s | 458.9 s |               943.0 s |
+| 4 suites | 1     |    0.06 s | 10.1 s | 464.4 s |               475.1 s |
+|          | 2     |   474.6 s | 10.3 s | 469.7 s |               955.0 s |
+|          | 3     |   954.6 s | 10.1 s | 445.6 s |             1,410.8 s |
+|          | 4     | 1,410.3 s |  9.6 s | 473.8 s |             1,894.2 s |
+
+Four suites all finished in 4.0 times one alone. The six targeted runs queued 0.06 to
+0.19 s, each while no other small run held the reserve, and took about 15 s to build their
+own executables. Sampled once a second, the budget's store held at most 14 workers of 16
+(12 whole, 2 small), and at most 12 `--test-worker` processes ran.
+
+**Responsiveness.** `git rev-parse HEAD` in the checkout, once a second: on an idle Machine
+for 5 minutes, p50 4.99 ms and p95 7.72 ms; throughout the four-suite case, p50 6.87 ms and
+p95 16.34 ms, 2.12 times the idle p95.
+
+**Flakes.** Ten whole suites one after another took 457 to 498 s each including builds,
+477.6 s at the median. Eight passed. Two failed one test each, and each passed when run
+alone: two Flakes, both the self-improve scenario "a day's findings are filed or commented,
+all-new Improvements start, and the summary says so", once under an unrelated id
+(`test/baseline-unrelated-09.test.ts`) and once under its own (`test/baseline-09.test.ts`).
+The workflow starts its Improvements concurrently, and the scenario expects them started in
+order. The check logs of 14 to 26 October averaged about two Flakes a suite. No timeout was
+raised and no retry added. The tenth suite first waited 432 s for the old suite lock, held
+by a suite from a checkout without the budget.
+
+Against the goals: a whole suite alone takes 474 s including builds, over the 6 minutes
+aimed for, though it now runs at 1.03 times its summed test time over its workers (1.79 on
+the base). Four queued suites finish within 4.4 times one; targeted runs are admitted at
+once; the budget was never exceeded; and the suite fits its 12 cores. The probe's p95 under
+four queued suites is over twice its idle p95. Ten suites had two Flakes, over the one
+aimed for.
 
 ### Test-suite measurements, 12 October 2026
 

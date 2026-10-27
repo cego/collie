@@ -154,6 +154,8 @@ const Event = Schema.Struct({
   params: Schema.optionalKey(Schema.Unknown),
   pid: Schema.optionalKey(Schema.Number),
   child: Schema.optionalKey(Schema.Number),
+  turn: Schema.optionalKey(Schema.String),
+  thread: Schema.optionalKey(Schema.String),
 });
 const decodeEvent = Schema.decodeUnknownSync(Schema.fromJsonString(Event));
 const events = () =>
@@ -294,6 +296,37 @@ test("a continuation queued behind an interrupted turn never starts", () =>
       expect(yield* sizeOf(written())).toBeGreaterThan(0);
     }),
   ));
+
+const Turn = Schema.Struct({ threadId: Schema.String, turnId: Schema.String });
+const decodeTurn = Schema.decodeUnknownSync(Turn);
+const byTurn = (a: typeof Turn.Type, b: typeof Turn.Type) =>
+  `${a.threadId} ${a.turnId}`.localeCompare(`${b.threadId} ${b.turnId}`);
+
+test.each([1, 2])(
+  "a continuation that started before the server took its drain is interrupted too, the drain landing after interrupt %i",
+  (lateDrain) =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* working({ continuation: true, lateDrain });
+        expect(yield* halted()).toEqual({ stopped: [agent], left: [] });
+        const atStop = yield* sizeOf(written());
+        yield* aWhile;
+        expect(yield* sizeOf(written())).toBe(atStop);
+        const all = yield* events();
+        const interrupted = all
+          .filter((one) => one.method === "turn/interrupt")
+          .map((one) => decodeTurn(one.params));
+        const begun = all
+          .filter((one) => one.turn !== undefined)
+          .map((one) => decodeTurn({ threadId: one.thread, turnId: one.turn }));
+        expect(interrupted.slice(0, 2)).toEqual([
+          { threadId: THREAD, turnId: TURN },
+          { threadId: THREAD, turnId: `${TURN}-continued` },
+        ]);
+        expect(interrupted.toSorted(byTurn)).toEqual(begun.toSorted(byTurn));
+      }),
+    ),
+);
 
 test("a process left in the server's session gets one SIGTERM and ends", () =>
   runEffect(
@@ -925,17 +958,13 @@ const neverAdmits = () =>
     }),
   );
 
-test("a start herdr never admits fails naming its agent, and the next launch under that name stops its server first", () =>
+test("a start herdr never admits parks naming its agent, and the next launch under that name stops its server first", () =>
   runEffect(
     Effect.gen(function* () {
       yield* serve(unmaterialized());
-      const first = yield* session(
-        work.execute({ runId: "r1", input: { skip: false } }).pipe(Effect.result),
-        { herdr: neverAdmits() },
-      );
-      const why = first._tag === "Failure" ? first.failure.reason : "";
-      expect(why).toContain(agent);
-      expect(why).toContain("agent start failed");
+      yield* until(suspended, { herdr: neverAdmits() });
+      const why = yield* parkedWhy();
+      expect(why).toContain(`${agent} did not start`);
       expect(why).toContain("timed out waiting for agent startup");
       expect(yield* rig.cmds()).not.toContain("agent prompt");
       const stranded = yield* serverPid();
@@ -980,11 +1009,7 @@ test("a start herdr never admits fails naming its agent, and the next launch und
 /** r1's start, which herdr never admits, leaving its server up with no launch recorded. */
 const neverAdmitted = Effect.gen(function* () {
   yield* serve(unmaterialized());
-  const first = yield* session(
-    work.execute({ runId: "r1", input: { skip: false } }).pipe(Effect.result),
-    { herdr: neverAdmits() },
-  );
-  expect(first._tag).toBe("Failure");
+  yield* until(suspended, { herdr: neverAdmits() });
   return yield* serverPid();
 });
 
@@ -1120,16 +1145,12 @@ class StoppedWhileStarting extends FakeHerdr {
   }
 }
 
-test("a stop that lands in a start herdr then refuses stops that start's server once it fails", () =>
+test("a stop that lands in a start herdr then refuses stops that start's server once it parks", () =>
   runEffect(
     Effect.gen(function* () {
       yield* serve(unmaterialized());
       const herdr = new StoppedWhileStarting();
-      const first = yield* session(
-        work.execute({ runId: "r1", input: { skip: false } }).pipe(Effect.result),
-        { herdr },
-      );
-      expect(first._tag).toBe("Failure");
+      yield* until(suspended, { herdr });
       expect(herdr.halts).toEqual([
         {
           stopped: [],

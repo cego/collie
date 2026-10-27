@@ -1149,7 +1149,13 @@ export const act = (
       case "Control": {
         const verb = action.control === "stop" ? "Stopped" : action.set ? "Held" : "Released";
         return door
-          .control({ runId: action.runId, control: action.control, set: action.set, request })
+          .control({
+            runId: action.runId,
+            control: action.control,
+            set: action.set,
+            request,
+            before: action.before,
+          })
           .pipe(
             Effect.flatMap((done) => {
               const left = leftSaid(done);
@@ -1197,11 +1203,21 @@ export const act = (
                 : Effect.fail<Unsteered>({ _tag: "Unsteered", message: outcome.human }),
             ),
           );
+      case "WithdrawNote":
+        return door
+          .withdrawNote({ runId: action.runId, note: action.note, request })
+          .pipe(Effect.as("Note removed"));
       case "Deliver":
         return door
           .act({
             actions: [
-              { kind: "deliver", run: action.runId, ...addressOf(action), text: action.text },
+              {
+                kind: "deliver",
+                run: action.runId,
+                ...addressOf(action),
+                text: action.text,
+                step: action.step,
+              },
             ],
             request,
           })

@@ -11,7 +11,7 @@
 // than an edit — the account of what Collie thought and when survives being wrong.
 
 import type { BunServices } from "@effect/platform-bun/BunServices";
-import { Data, Effect, Path, Schema } from "effect";
+import { Data, Effect, FileSystem, Path, Schema } from "effect";
 import type { Constraint, Intent, RuleSpec } from "./intent";
 import { appendJournal, readJournal } from "./journal";
 import { shell } from "./mr";
@@ -298,6 +298,12 @@ export const merging = Effect.fn("Drift.merging")(function* (worktree: string) {
   return (yield* shell("git", ["rev-parse", "-q", "--verify", "MERGE_HEAD"], worktree)).code === 0;
 });
 
+/** Whether `dir` is in no git checkout at all, which is a Run with no diff to read. */
+const outsideGit = (dir: string) =>
+  shell("git", ["rev-parse", "--git-dir"], dir).pipe(
+    Effect.map((ran) => ran.code !== 0 && (ran.stderr ?? "").includes("not a git repository")),
+  );
+
 /**
  * The actual diff a judgement is made from, capped and redacted. Actual, because a
  * summary of a change is a second thing to be wrong about; capped, because a judgement
@@ -351,6 +357,48 @@ export function splitDiff(diff: string): EvidenceBlock[] {
   flush();
   return blocks;
 }
+
+/** One Output a judgement is shown, by the operation that wrote it. */
+export interface ShownOutput {
+  readonly operation: string;
+  readonly text: string;
+}
+
+const NOT_OUTPUTS = [".launch.json", ".mcp.json", ".settings.json"];
+
+const decodeJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown));
+const printJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown, { space: 2 }));
+
+/** Each Output in `agentsDir`, printed with a two-space indent, by operation; one named like a credential is not quoted. */
+export const outputsIn = Effect.fn("Drift.outputsIn")(function* (agentsDir: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const names = (yield* fs.readDirectory(agentsDir).pipe(Effect.orElseSucceed(() => [])))
+    .filter((name) => name.endsWith(".json") && !NOT_OUTPUTS.some((not) => name.endsWith(not)))
+    .sort();
+  const outputs: Array<ShownOutput & { readonly truncated: boolean }> = [];
+  for (const name of names.slice(0, MAX_FILES)) {
+    const operation = name.slice(0, -".json".length);
+    if (looksSecret(name)) {
+      outputs.push({ operation, text: "<redacted>", truncated: false });
+      continue;
+    }
+    const raw = yield* fs
+      .readFileString(`${agentsDir}/${name}`)
+      .pipe(Effect.orElseSucceed(() => ""));
+    const decoded = decodeJson(raw);
+    const printed = decoded._tag === "None" ? raw : printJson(decoded.value);
+    const lines = printed.split("\n");
+    outputs.push({
+      operation,
+      text: lines.slice(0, MAX_LINES_PER_FILE).join("\n"),
+      truncated: lines.length > MAX_LINES_PER_FILE,
+    });
+  }
+  return {
+    outputs: outputs.map(({ operation, text }) => ({ operation, text })),
+    truncated: names.length > MAX_FILES || outputs.some((one) => one.truncated),
+  };
+});
 
 /**
  * The reports this check found that are not already open. Deduped by finding rather than
@@ -470,7 +518,11 @@ export const PLAN_NARROWS_GOAL = [
  */
 export function judgementPack(
   intent: Intent,
-  evidence: { readonly blocks: ReadonlyArray<EvidenceBlock>; readonly truncated: boolean },
+  evidence: {
+    readonly blocks: ReadonlyArray<EvidenceBlock>;
+    readonly outputs: ReadonlyArray<ShownOutput>;
+    readonly truncated: boolean;
+  },
 ): string {
   const semantic = intent.constraints.filter((constraint) => constraint.kind === "semantic");
   return [
@@ -489,7 +541,10 @@ export function judgementPack(
       ? "evidence (TRUNCATED to the cap; judge only what is here):"
       : "evidence (the whole change):",
     ...evidence.blocks.map((block) => `--- ${block.path}\n${block.diff}`),
-    evidence.blocks.length === 0 ? "(nothing has changed yet)" : "",
+    ...evidence.outputs.map((output) => `--- output ${output.operation}\n${output.text}`),
+    evidence.blocks.length === 0 && evidence.outputs.length === 0
+      ? "(nothing has changed yet)"
+      : "",
   ]
     .filter((line) => line !== "")
     .join("\n");
@@ -609,9 +664,13 @@ export const judge = Effect.fn("Drift.judge")(function* (
   what: {
     readonly runDir: string;
     readonly worktree: string;
+    /** Where the Run's Outputs are, which are judged beside its diff. */
+    readonly agentsDir?: string;
     /** The revision the change is measured from, as `git diff <base>..HEAD`. */
     readonly base: string;
     readonly at: string;
+    /** The work boundary this is judged at; absent at the finish. */
+    readonly boundary?: string;
   },
 ) {
   const semantic = intent.constraints.filter((constraint) => constraint.kind === "semantic");
@@ -621,15 +680,32 @@ export const judge = Effect.fn("Drift.judge")(function* (
   const read = yield* evidenceFor(what.worktree, judgementPaths(intent), what.base).pipe(
     Effect.result,
   );
-  if (read._tag === "Failure") {
-    yield* recordSkipped(
-      what.runDir,
-      intent.run,
-      `the diff could not be read: ${read.failure.reason}`,
-    );
+  const unread =
+    read._tag === "Failure" ? `the diff could not be read: ${read.failure.reason}` : null;
+  // No checkout is an empty diff; any other git failure is never judged on nothing.
+  if (unread !== null && !(yield* outsideGit(what.worktree))) {
+    yield* recordSkipped(what.runDir, intent.run, unread);
     return NOTHING;
   }
-  const evidence = read.success;
+  const diff = read._tag === "Success" ? read.success : { blocks: [], truncated: false };
+  const shown =
+    what.agentsDir === undefined
+      ? { outputs: [], truncated: false }
+      : yield* outputsIn(what.agentsDir);
+  const evidence = {
+    blocks: diff.blocks,
+    outputs: shown.outputs,
+    truncated: diff.truncated || shown.truncated,
+  };
+  // A report must cite work it was shown, so with none the call could find nothing.
+  if (evidence.blocks.length === 0 && evidence.outputs.length === 0) {
+    yield* recordSkipped(what.runDir, intent.run, unread ?? "no change to judge");
+    return NOTHING;
+  }
+  if (evidence.truncated && what.boundary !== undefined) {
+    yield* deps.log(`not judged at ${what.boundary}: evidence past the cap; judged at the finish`);
+    return NOTHING;
+  }
 
   const asked = yield* askJudgement(deps, intent.run, judgementPack(intent, evidence));
   if (asked.refused !== null) {
@@ -641,7 +717,10 @@ export const judge = Effect.fn("Drift.judge")(function* (
   // was shown: one about something nobody asked for is a model inventing a rule.
   const known = new Set(semantic.map((constraint) => constraint.id));
   const cited = citedIn(
-    { files: evidence.blocks.map((block) => block.path), outputs: [] },
+    {
+      files: evidence.blocks.map((block) => block.path),
+      outputs: evidence.outputs.map((output) => output.operation),
+    },
     what.worktree,
   );
   const reports = asked.reports

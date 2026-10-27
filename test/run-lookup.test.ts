@@ -30,6 +30,7 @@ const Asked = RpcGroup.make(
   }),
   Rpc.make("progress", { payload: { runId: Schema.String }, success: Schema.Null }),
   Rpc.make("offers", { payload: { runId: Schema.String }, success: Schema.Array(OfferView) }),
+  Rpc.make("shown", { payload: { runId: Schema.String }, success: Schema.Null }),
 );
 
 const view = (runId: string, parent: string | null = null): RunView => ({
@@ -76,6 +77,7 @@ const hostOf = (dir: string, views: ReadonlyArray<RunView>, build = BUILD) =>
             runs: () => count("runs").pipe(Effect.as(views)),
             progress: () => Effect.succeed(null),
             offers: () => Effect.succeed([]),
+            shown: () => Effect.succeed(null),
           }),
         ),
         Layer.provide(RpcServer.layerProtocolSocketServer),
