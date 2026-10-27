@@ -1214,6 +1214,23 @@ readable. The most recent one is what `run show` reports.
 This is integrated here and not yet on the board: the Home's rows and Live region do not
 read it, so a Run whose work shipped still reads as a plain failure there.
 
+## Acknowledging a finished Run
+
+```sh
+collie --json run seen <run-id>
+```
+
+A Finished Task whose leading Run succeeded by itself with a summary, and has no
+disposition, is [Unseen](../CONTEXT.md) until someone opens or acknowledges it. `run seen`
+acknowledges it: the Run's host records who and when once, in the Run's own record beside
+its disposition, and every board in the Flock reads it from there. Asking again, under the
+same request id or another, records nothing new and answers with the first record. The
+board, a herdr action and an agent's `collie_do` `seen` go through the same operation.
+
+Reading a Run records nothing: `run show`, `collie_run` and the Flock chat's turn about it
+leave it unseen. A Run that ended before its host first started recording seen counts as
+seen; that host writes the moment into its state directory, as `seen-since`, once.
+
 ## What a finished Run offers next
 
 ```sh
@@ -2403,7 +2420,7 @@ records it `read`, `sent` or `uncertain` for that conversation alone. Given `key
 over every pending item and records only those keys: what Desktop's Flock chat actually
 gave the model, out of a batch it put together across Machines. Actions travel as
 JSON and the host decodes them. `collie confirm`, `decline`, `steer`, `run disposition`,
-`proposal reconcile`, `run deliveries --reconcile` and `chat news --sent`, the board and
+`run seen`, `proposal reconcile`, `run deliveries --reconcile` and `chat news --sent`, the board and
 chat's tools all go through these, so the host is the only writer of what they record
 ([ADR-0040](adr/0040-the-host-is-the-only-writer.md)).
 

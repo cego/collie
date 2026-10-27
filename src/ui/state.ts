@@ -310,6 +310,8 @@ export type Command =
       kind: "merged" | "abandoned" | "superseded";
       ref: string;
     }
+  /** A finished Run's report acknowledged, for every board in the Flock. */
+  | { _tag: "Acknowledge"; runId: string }
   /**
    * Go to the next unanswered question. The app answers this itself, like
    * `EditSetting`: it moves the Selection and clears a filter hiding the row, neither

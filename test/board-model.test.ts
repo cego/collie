@@ -308,6 +308,8 @@ test("a TaskView carries its open questions, and one from an older host without 
   expect(decode(older).questions).toBeUndefined();
   const newer = { ...older, questions: [question, { ...question, id: "c-2" }] };
   expect(decode(JSON.parse(JSON.stringify(newer))).questions).toEqual(newer.questions);
+  expect(decode(older).unseen).toBeUndefined();
+  expect(decode({ ...older, unseen: true }).unseen).toBe(true);
 });
 
 test("a TaskView and a RunDetail survive a round trip through JSON", () => {

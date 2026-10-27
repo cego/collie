@@ -14,6 +14,7 @@ import {
   controlRun,
   withdrawNoteRun,
   disposeRun,
+  seeRun,
   invokeOffer,
   showOffers,
   steerRun,
@@ -1335,6 +1336,41 @@ const runDisposition = Command.make(
   Command.withDescription("What became of a Run's work, recorded beside its status not over it"),
 );
 
+/** A finished Run's report acknowledged, for every board in the Flock; reading a Run never does this. */
+const runSeen = Command.make(
+  "seen",
+  { runId: runIdArg, requestId: requestIdFlag },
+  ({ runId, requestId }) =>
+    Effect.gen(function* () {
+      const global = yield* root;
+      yield* attempt(
+        Effect.gen(function* () {
+          const resolved = yield* resolveCommandRun(global, runId);
+          if (resolved._tag === "RunFailure") return resolved.result;
+          const facts = runFacts(resolved);
+          return yield* mutation(resolved.env, "run-seen", requestId, (id) =>
+            Effect.gen(function* () {
+              const done = yield* seeRun(resolved.env, {
+                door: yield* cliDoor(resolved.env),
+                runId: facts.id,
+                request: id,
+              });
+              if (!done.ok) return done;
+              return {
+                ok: true,
+                data: { run: facts.id, seen: done.value },
+                human: `${facts.id} seen by ${done.value.by} at ${done.value.at}`,
+              };
+            }),
+          );
+        }),
+        global.json,
+      );
+    }),
+).pipe(
+  Command.withDescription("Acknowledge a finished Run's report, for every board in the Flock"),
+);
+
 const runDrift = Command.make("drift", { runId: runIdArg }, ({ runId }) =>
   Effect.gen(function* () {
     const global = yield* root;
@@ -1924,6 +1960,7 @@ export const run = Command.make("run").pipe(
     runClearOverride,
     runDeliveries,
     runDisposition,
+    runSeen,
     runMetrics,
     runChecks,
     runReport,

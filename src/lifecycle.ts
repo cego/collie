@@ -58,6 +58,7 @@ import {
   Declaration,
   HostRefused,
   type Disposition,
+  type Seen,
   type ProposalCarried,
   type ProposalRefused,
   type RequestConflict,
@@ -1405,6 +1406,18 @@ export const disposeRun = (
         note: options.note,
         request: options.request,
       }),
+    options.door,
+  );
+
+/** A finished Run opened or acknowledged, recorded once by its host; the first line, or why not. */
+export const seeRun = (
+  env: PluginEnv,
+  options: { readonly door: Door; readonly runId: string; readonly request: string },
+): Effect.Effect<{ readonly ok: true; readonly value: Seen } | Failure, never, Client> =>
+  asksRun(
+    env,
+    options.runId,
+    (client) => client.seen({ runId: options.runId, request: options.request }),
     options.door,
   );
 

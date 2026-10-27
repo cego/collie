@@ -16,6 +16,7 @@ import { shell } from "./mr";
 import { append as appendNews, newsPath, read as readNews, retired, supersede } from "./news";
 import { eventsIn, holding, idleAgain, readSaid, remember } from "./proactive";
 import { latest, readDispositions } from "./disposition";
+import { readSeen } from "./seen";
 import { settled, type RunFacts } from "./runs";
 import { herdDir, herdOf } from "./steering";
 import { listTasks } from "./task";
@@ -70,13 +71,14 @@ const sayWhatHappened = Effect.fn("SideJobs.sayWhatHappened")(function* (
   yield* supersede(file, (item) => held.has(item.key));
 });
 
-/** The finished Runs whose work has a disposition. */
+/** The finished Runs whose work has a disposition, or that someone has seen. */
 const disposed = Effect.fn("SideJobs.disposed")(function* (runs: ReadonlyArray<RunFacts>) {
   const out = new Set<string>();
   for (const run of runs) {
     if (!settled(run)) continue;
     const lines = yield* readDispositions(run.dir).pipe(Effect.orElseSucceed(() => []));
-    if (latest(lines) !== null) out.add(run.id);
+    const seen = yield* readSeen(run.dir).pipe(Effect.orElseSucceed(() => []));
+    if (latest(lines) !== null || seen.length > 0) out.add(run.id);
   }
   return out;
 });

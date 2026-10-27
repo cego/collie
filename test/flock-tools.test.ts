@@ -80,6 +80,11 @@ const machine = (
         note("dispose", payload);
         return { at: "", by: "chat", kind: payload.kind, ref: payload.ref, note: null };
       }),
+    seen: (payload) =>
+      Effect.sync(() => {
+        note("seen", payload);
+        return { at: "", by: "chat" };
+      }),
     propose: (payload) =>
       Effect.sync(() => {
         note("propose", payload);

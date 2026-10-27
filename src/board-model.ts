@@ -323,6 +323,8 @@ export const TaskView = Schema.Struct({
    * Finished rather than Waiting on you.
    */
   landed: Schema.Boolean,
+  /** Its leading Run reported something nobody has seen yet; absent from an older host. */
+  unseen: Schema.optionalKey(Schema.Boolean),
   /** When the leading Run ended, or null while it has not. Orders Waiting on you. */
   ended: Schema.NullOr(Schema.Number),
   /** What the forge last said about the merge request, where Collie has asked. */
@@ -1080,6 +1082,10 @@ export const Disposition = Schema.Struct({
 });
 export type Disposition = typeof Disposition.Type;
 
+/** Someone opened or acknowledged a finished Run, once for the Flock. */
+export const Seen = Schema.Struct({ at: Schema.String, by: Schema.String });
+export type Seen = typeof Seen.Type;
+
 /** One action of a confirmed proposal, and what came of it. */
 export const StepResult = Schema.Struct({
   index: Schema.Int,
@@ -1511,6 +1517,12 @@ export const FrontDoorRpcs = RpcGroup.make(
       request: Schema.String,
     },
     success: Disposition,
+    error: Schema.Union([HostRefused, RequestConflict]),
+  }),
+  /** A finished Run opened or acknowledged; the first such line, however often it is asked. */
+  Rpc.make("seen", {
+    payload: { runId: Schema.String, request: Schema.String },
+    success: Seen,
     error: Schema.Union([HostRefused, RequestConflict]),
   }),
   /** Free words about one Run, which the evaluator turns into actions carried out now. */

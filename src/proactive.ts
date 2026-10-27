@@ -71,7 +71,7 @@ export function eventsIn(
 
 /**
  * The keys of every event whose cause still holds, including those a more pressing one
- * masks. A finished Run's outcome holds until its work has a disposition.
+ * masks. A finished Run's outcome holds until its work has a disposition or it is seen.
  */
 export function holding(
   runs: ReadonlyArray<RunFacts>,

@@ -12,6 +12,7 @@ import { describeAction } from "./lines";
 import type { PickItem } from "./inputs";
 import { LEADING_GLYPH, type AgentInfo } from "./herdr";
 import { latest, readDispositions } from "./disposition";
+import { readSeen, seenSince } from "./seen";
 import { runTitle } from "./naming";
 import { planIssuesIn, planReposOf } from "./plan";
 import { diffTargetOf } from "./strategies";
@@ -797,9 +798,9 @@ const FINISHED_FOR_MS = 24 * 60 * 60 * 1000;
 
 /**
  * When anything in this directory was last written, as `touchedDirAt` measures it but
- * without the files Collie writes about a Run from outside: a disposition, the diff kept
- * for its drawer and the trail of who asked for what are bookkeeping, and must not make
- * a dead Run look alive or ended just now.
+ * without the files Collie writes about a Run from outside: a disposition, who saw it, the
+ * diff kept for its drawer and the trail of who asked for what are bookkeeping, and must not
+ * make a dead Run look alive or ended just now.
  */
 const writtenIn = Effect.fn("Board.writtenIn")(function* (dir: string) {
   const fs = yield* FileSystem.FileSystem;
@@ -820,7 +821,7 @@ const writtenIn = Effect.fn("Board.writtenIn")(function* (dir: string) {
       .readDirectory(path.join(dir, name))
       .pipe(Effect.catch(() => Effect.succeed([])));
     for (const entry of inside) {
-      if (entry === "disposition.jsonl") continue;
+      if (entry === "disposition.jsonl" || entry === "seen.jsonl") continue;
       newest = Math.max(newest, yield* at(path.join(dir, name, entry)));
     }
   }
@@ -921,6 +922,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
   const proposals = opts.proposals ?? (yield* proposalsOf(stateDir));
   const mrStates = opts.mrStates ?? (yield* readMrStates(stateDir));
   const forge = opts.forge ?? (yield* readForge(stateDir));
+  const since = yield* seenSince(stateDir);
   const live = new Map((opts.alive ?? []).map((agent) => [agent.name, agent]));
   const records = yield* recordsIn(stateDir);
   const markers = yield* markersOf(all, records);
@@ -1140,6 +1142,14 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
           mergeable: forged?.mergeable ?? null,
         });
         const finishedAt = settledNow ? endedAt(leader) : 0;
+        const unseen =
+          landed &&
+          state === "done" &&
+          disposition === null &&
+          (leader.summary ?? "") !== "" &&
+          since !== null &&
+          finishedAt > since &&
+          (yield* readSeen(leader.dir).pipe(Effect.orElseSucceed(() => []))).length === 0;
         // Only a ready plan's first action is an offer; asking every card would ask every refresh.
         const offer = planReady ? primaryOf(yield* offersOfRun(leader.id)) : null;
         const holders = new Map<string, string | null>();
@@ -1259,6 +1269,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
                 ? disposition.kind
                 : `${disposition.kind} ${disposition.ref}`,
           landed,
+          unseen,
           ended: finishedAt > 0 ? finishedAt : null,
           mrState,
           checks,

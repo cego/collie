@@ -435,6 +435,12 @@ is **Finished**, the board's last section, as long as none of its Runs is still 
 asking or stalled and none of its agents is working. Finished is what **Cleanup** waits
 for before it closes anything of a Task.
 
+**Unseen** — A **Finished** Task's leading Run that ended by itself with something to
+report and that nobody has opened or acknowledged yet. The Run's host records **seen** once
+for the whole Flock. Opening the Run's record or acknowledging it records it, and reading
+the Run does not. An unseen card stays Finished but is drawn outside the collapsed list
+until it is seen (ADR-draft-a-finished-run-is-seen-once-for-the-flock).
+
 **Held** — A Task whose Runs are under a **Hold**, drawn as a `⏸` line under its sentence
 and lifted by a human.
 

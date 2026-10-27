@@ -57,6 +57,7 @@ export const chatDoor = (door: Door) => ({
   declare: (asked: Parameters<Door["declare"]>[0]) => door.declare(asked),
   decline: (asked: Parameters<Door["decline"]>[0]) => door.decline(asked),
   dispose: (asked: Parameters<Door["dispose"]>[0]) => door.dispose(asked),
+  seen: (asked: Parameters<Door["seen"]>[0]) => door.seen(asked),
   news: (asked: Parameters<Door["news"]>[0]) => door.news(asked),
   propose: (asked: Parameters<Door["propose"]>[0]) => door.propose(asked),
   readFile: (asked: Parameters<Door["readFile"]>[0]) => door.readFile(asked),
@@ -951,6 +952,10 @@ const doOne = (machine: Reached, kind: string, action: JsonObject, request: stri
           request,
         })
         .pipe(Effect.map((done) => ({ state: "applied", note: `marked ${done.kind}` })));
+    case "seen":
+      return door
+        .seen({ runId: text("run"), request })
+        .pipe(Effect.map((done) => ({ state: "applied", note: `seen by ${done.by}` })));
     default:
       return door
         .act({ actions: [action], request })

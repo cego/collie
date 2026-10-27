@@ -40,6 +40,7 @@ import {
 } from "../src/board-model";
 import { recordAudit } from "../src/audit";
 import { recordDisposition } from "../src/disposition";
+import { markSeenSince, recordSeen } from "../src/seen";
 import {
   appendVerification,
   encodeVerifying,
@@ -1091,6 +1092,56 @@ test("a Run whose work shipped by hand says so, without its status being edited"
       expect(card!.sentence).toBe(
         "Stopped: the tests never went green. Merged as cego/collie!43 1 hour ago.",
       );
+    }),
+  ));
+
+test("a Finished Task's report is unseen until someone sees it, and stays Finished either way", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      yield* markSeenSince(dir, "2026-09-14T09:00:00Z");
+      const reported = {
+        task: "task-1",
+        state: "succeeded",
+        summary: "two blockers remain",
+        created: "2026-09-14T09:10:00Z",
+        finished: "2026-09-14T10:00:00Z",
+      } as const;
+      const unseen = (run: RunFacts) =>
+        Effect.map(board(env, [run]), ([view]) => [view!.unseen ?? false, sectionOf(view!)]);
+
+      expect(yield* unseen(yield* madeRun(dir, { ...reported, id: "r-new" }))).toEqual([
+        true,
+        "finished",
+      ]);
+      const disposed = yield* madeRun(dir, { ...reported, id: "r-disposed" });
+      yield* recordDisposition(disposed.dir, {
+        at: "2026-09-14T10:01:00Z",
+        by: "mk",
+        kind: "abandoned",
+        ref: "",
+        note: null,
+      });
+      expect(yield* unseen(disposed)).toEqual([false, "finished"]);
+      expect(
+        yield* unseen(yield* madeRun(dir, { ...reported, id: "r-quiet", summary: "" })),
+      ).toEqual([false, "finished"]);
+      const seen = yield* madeRun(dir, { ...reported, id: "r-seen" });
+      yield* recordSeen(seen.dir, { at: "2026-09-14T10:02:00Z", by: "human:ack-1" });
+      expect(yield* unseen(seen)).toEqual([false, "finished"]);
+      expect(
+        yield* unseen(
+          yield* madeRun(dir, {
+            ...reported,
+            id: "r-old",
+            created: "2026-09-14T08:00:00Z",
+            finished: "2026-09-14T08:30:00Z",
+          }),
+        ),
+      ).toEqual([false, "finished"]);
+      expect(
+        yield* unseen(yield* madeRun(dir, { ...reported, id: "r-branch", branch: "mk/fix" })),
+      ).toEqual([false, "waiting"]);
     }),
   ));
 

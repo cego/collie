@@ -410,3 +410,46 @@ test(
     ),
   120_000,
 );
+
+test(
+  "a finished Run's News is retired once it is seen, for a conversation that never read it",
+  () =>
+    proves(
+      "collie-side-seen-",
+      (world) =>
+        Effect.gen(function* () {
+          const socket = `${world.home}/desk.sock`;
+          const env = yield* currentEnv.pipe(Effect.orDie);
+          const workspace = yield* new Herdr(env)
+            .workspaceCreate({ cwd: world.project, label: "desk" })
+            .pipe(Effect.orDie);
+          const desk = {
+            HERDR_SOCKET_PATH: socket,
+            HERDR_WORKSPACE_ID: workspace.workspaceId,
+            FAKE_HERDR_SESSIONS: asSessions([{ name: "desk", socket_path: socket }]),
+          };
+          const started = yield* collie(
+            world,
+            ["run", "start", "plain", "--here", "--input", "note=hi"],
+            desk,
+          );
+          const runId = yield* runIdOf(started.envelope);
+          const file = yield* newsPath(world.state, yield* herdOf(socket));
+          const keys = readNews(file).pipe(
+            Effect.map((lines) => pending(lines, "flock@pc").items.map((item) => item.key)),
+          );
+          const ended = `${runId}:ended:succeeded`;
+          expect(yield* until(keys, (now) => now.includes(ended))).toEqual([ended]);
+          expect((yield* collie(world, ["run", "seen", runId], desk)).envelope.ok).toBe(true);
+          const after = yield* until(keys, (now) => now.length === 0);
+          const lines = yield* readNews(file);
+          yield* stopHost(world.state);
+          expect(after).toEqual([]);
+          expect(lines.flatMap((line) => (line.kind === "superseded" ? [line.key] : []))).toEqual([
+            ended,
+          ]);
+        }),
+      ["plain.workflow.ts"],
+    ),
+  120_000,
+);

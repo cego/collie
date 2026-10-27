@@ -81,9 +81,11 @@ const SettleSchema = Schema.Union([
     /** What backs it up: a merge request, a commit, or the Run that took the work over. */
     ref: Schema.optionalKey(Schema.String),
   }),
+  /** A finished Run's report acknowledged, for every board in the Flock. */
+  Schema.Struct({ kind: Schema.Literal("seen"), run: Schema.String }),
 ]);
 export type Settle = Schema.Schema.Type<typeof SettleSchema>;
-export const SETTLE_KINDS = ["confirm", "decline", "disposition"] as const;
+export const SETTLE_KINDS = ["confirm", "decline", "disposition", "seen"] as const;
 
 const AskedInput = Schema.Struct({
   actions: Schema.Array(Schema.Union([ActionSchema, SettleSchema])),
@@ -323,8 +325,9 @@ export const CollieTools = Toolkit.make(
       "Carry out, at once, anything the board does: its own actions " +
       `on a named Run (${ASKED_KINDS.join(", ")}), and its decisions — ` +
       "`confirm` a waiting proposal by its id and the hash `collie_receipts` lists beside " +
-      "it, `decline` one by the same two, and `disposition` to record what became of a finished Run's " +
-      "work. `take_offer` takes one of a Run's offers by the id `collie_run` lists, with " +
+      "it, `decline` one by the same two, `disposition` to record what became of a finished Run's " +
+      "work, and `seen` to acknowledge a finished Run's report for every board. " +
+      "`take_offer` takes one of a Run's offers by the id `collie_run` lists, with " +
       "what its own arguments take as `inputs`: when the human asks for what a Run offers " +
       '("release it", "stage it", "fix the findings"), take the matching offer rather than ' +
       "start its Workflow fresh. `release` lifts a hold; it does not release a merge " +
