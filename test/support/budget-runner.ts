@@ -3,7 +3,6 @@ import { Console, Effect } from "effect";
 import { admitted, budgetOf, startOnHold } from "../../tools/budget";
 
 const dir = process.argv[2]!;
-// Given, the runner says it holds and waits for a line before it starts `touch marker; sleep`.
 const marker = process.argv[3];
 
 BunRuntime.runMain(
