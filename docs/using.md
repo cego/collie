@@ -1099,12 +1099,13 @@ wraps its Steps to the record's width under a line naming the Run, its Machine a
 started it; a long Step name is shortened, and its hover and spoken name give it whole.
 Selecting a Step turns the map into a rail: each Run on one line, its Steps
 scrolling along it, with the selected Step kept in view. Below the rail, a context
-column holds the Step's name, state, actions and, under **Details**, its description,
-agent and model, times, attempts, Slices, rounds and Repo runs; the rest of the record
-is the Step's work. Drag the line under the rail or beside the column to resize them,
+column holds the Step's name, its status and time, its actions, what the Step is for,
+then its role, agent, model, start and end, later attempts and answers, and its Slices,
+rounds and Repo runs; a fact a Step lacks is left out. The rest of the record is the
+Step's work. Drag the line under the rail or beside the column to resize them,
 or focus the line and use the arrow keys; double-click resets it, and the sizes hold
 for every record. A record narrower than about 670 px puts the column above the work
-and folds its details behind **Details and runs**. Repo runs stay grouped under their
+and folds all but what the Step is for behind **Details and runs**. Repo runs stay grouped under their
 Wave headings. A completed prefix of Slices or rounds folds into a counted entry that can
 be expanded. **Open in** follows the selected Step's work to Plan, Review, Evidence,
 the merge request, Terminal or Log. Selecting an earlier Run keeps the same Task's

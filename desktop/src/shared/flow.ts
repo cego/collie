@@ -149,6 +149,46 @@ export const whenOf = (iso: string, now: number, timeZone?: string): string => {
   return at.month === today.month && at.day === today.day ? time : `${at.day} ${at.month}, ${time}`;
 };
 
+export interface StepFact {
+  readonly label: string;
+  readonly value: string;
+}
+const DURATION = /^(under a minute|\d+ min|\d+ h( \d+ min)?)$/;
+/** The host's words for a Step, less what its timing and warning already say. */
+const statusOf = (node: FlowRun, timing: string | null) =>
+  [
+    ...(node.said ?? "")
+      .split(" · ")
+      .filter(
+        (part) =>
+          part !== "" && !DURATION.test(part) && !(node.long && part === "Longer than usual"),
+      ),
+    ...(timing === null ? [] : [timing]),
+  ].join(" · ") || null;
+const factOf = (label: string, value: string | null | undefined): StepFact[] =>
+  value?.trim() ? [{ label, value: value.trim() }] : [];
+const factsOf = (node: FlowRun, when: (iso: string) => string): StepFact[] => [
+  ...factOf("Role", node.role),
+  ...factOf("Agent", node.agent),
+  ...factOf("Model", node.ranOn),
+  ...(node.started === null ? [] : [{ label: "Started", value: when(node.started) }]),
+  ...(node.ended === null ? [] : [{ label: "Ended", value: when(node.ended) }]),
+  ...node.attempts.slice(1).map((attempt, i) => ({
+    label: `Attempt ${i + 2}`,
+    value: `${attempt.cause ?? "retried"} · ${when(attempt.at)}`,
+  })),
+  ...node.questions.flatMap((question) =>
+    question.answered === null
+      ? []
+      : [
+          {
+            label: "Answered",
+            value: `${when(question.answered)}${question.by === null ? "" : ` by ${question.by}`}`,
+          },
+        ],
+  ),
+];
+
 export const inspectorOf = (
   flow: Flow,
   selection: FlowSelection,
@@ -197,10 +237,11 @@ export const inspectorOf = (
     entries.push({ title: one.title, nodes: [one], folded: false });
   return {
     title: node.title,
-    timing,
     state: node.state,
     said: node.said,
-    description: node.description,
+    status: statusOf(node, timing),
+    purpose: node.description.trim() || null,
+    facts: factsOf(node, when),
     lines,
     entries,
     node,

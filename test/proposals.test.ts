@@ -329,6 +329,26 @@ test("admission asks again, immediately before the action runs", () => {
   expect(admit({ kind: "ask_human", question: "which?" }, ctx({ run: null }))).toBeNull();
 });
 
+test("a change made on a stale Intent is refused in the host's words, whichever check sees it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      // Which check sees the newer version first is timing, so none may say it differently.
+      const hold: Action = { kind: "hold", run: "r1" };
+      expect(admit(hold, ctx({ intentVersion: 3 }))).toBe("the Intent is v3, not v2");
+      const proposal = yield* written();
+      expect(
+        judgeConfirmation(
+          yield* read(file),
+          proposal.id,
+          proposal.content_hash,
+          human,
+          epochMs(proposal.created_at),
+          new Map([["r1", 3]]),
+        ),
+      ).toMatchObject({ refused: "intent_moved", detail: "run r1's Intent is v3, not v2" });
+    }),
+  ));
+
 const NO_STEP = "a finished Run has no step left to hold; stop closes its agents";
 const COLLECTED =
   "its checks were collected when it finished; remember_verification keeps them for the next Run";
