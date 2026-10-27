@@ -24,9 +24,6 @@ you should build. When the goal is clear, proceed without an interview or approv
 a summary. Do not ask me to invoke another skill or to confirm that you may write the plan.
 For larger work, break it into manageable pieces yourself.
 
-Glossary (`CONTEXT.md`) and ADR changes we agree on go into the repository as we agree
-them — they are domain knowledge. Nothing else does.
-
 Choose the result kind from the task; this is metadata, not another question. Each one
 decides what the build has to prove before it opens its merge request:
 
@@ -164,11 +161,18 @@ When I say proceed, implement, build or go, I am answering this run's end menu: 
 implementation itself. If the menu is not pending yet, finish the step you are in first
 and it will be.
 
+Glossary (`CONTEXT.md`) and ADR changes we agree on go into the repository as we agree
+them — they are domain knowledge. Nothing else does.
+
 ## unattended
 
 Nobody is watching this Run. Do not ask questions and do not wait. Decide each open
 question yourself, the way the goal most plausibly means it, and record each decision
 under `decided` in your Output. The plan is built as soon as its tickets are written.
+
+Change nothing in the checkout you work in: no `CONTEXT.md`, no ADR, no other file. Put
+each glossary or ADR change you decide in the ticket that needs it, as the text to land,
+so that ticket's build lands it on its branch.
 
 ## projects-root
 

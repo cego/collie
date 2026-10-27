@@ -34,9 +34,11 @@ written rather than before it exists.
 `then` is `implement` or empty. The Launch flow leaves it empty; an agent's start gives it,
 `--input then=` where unused. With `then=implement` nobody is asked anything: each prompt
 tells the planner that nobody is watching, so it decides what is open and records it under
-`decided`, and the end menu is skipped for **Implement now** at once. The `implement` it
-starts is given `then=finish`, so nobody is asked at its end either. A plan whose tickets
-cannot be built then fails with why, rather than asking again.
+`decided`, and it writes nothing in its checkout: each glossary or ADR change it decides goes
+into the ticket that needs it, for that ticket's build to land. The end menu is skipped for
+**Implement now** at once. The `implement` it starts is given `then=finish`, so nobody is
+asked at its end either. A plan whose tickets cannot be built then fails with why, rather
+than asking again.
 
 **What happens:** a planner reads the goal and repository, asks only when a missing
 decision changes the work, then writes `SPEC.md` and one ticket per slice into the run's
