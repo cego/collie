@@ -189,7 +189,6 @@ export function Drawer(props: DrawerProps) {
       right: `${file.bytes} bytes`,
     }));
 
-  /** What it said to reviewers in the human's name. */
   const replied = (): Line[] =>
     (props.detail?.replies ?? []).flatMap((reply) => [
       { text: replyLine(reply), mark: reply.kind === "disputed" ? "!" : "•" },

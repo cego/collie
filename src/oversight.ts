@@ -613,13 +613,11 @@ const committedWork = Effect.fn("Oversight.committedWork")(function* (
 /** Where a Run keeps the merge request it opened or was given. */
 export const mergeRequestFile = (runDir: string) => `${runDir}/merge-request`;
 
-/** A merge request as `project!iid`, however its URL was written. */
 const mrKey = (url: string) => {
   const ref = parseMrUrl(url);
   return ref?.project == null ? null : `${ref.project.toLowerCase()}!${ref.iid}`;
 };
 
-/** Each merge request a goal names by URL. */
 const namedIn = (goal: string | null) =>
   (goal?.match(/https?:\/\/\S+/g) ?? []).flatMap((url) => {
     const key = mrKey(url.replace(/[.,;:!?)\]'"]+$/, ""));

@@ -9175,7 +9175,6 @@ const POSTED = { posted: true, link: "https://example.slack.com/archives/C01/p17
 /** The replies Collie posted on the merge request, in order. */
 const repliesOf = (model: ForgeModel) => Object.values(model.replies ?? {}).flat();
 
-/** The last line of every reply a Run posts. */
 const signed = (runId: string) => `\n\nPosted by Collie's Run ${runId} on ${hostname()}.`;
 
 /** Collie's own Checks: `check`, left to CI's `test` job, counting any local run. */

@@ -1399,7 +1399,6 @@ const admitted = (runId: string, goal: string | null, recorded: string | null) =
     if (recorded !== null) yield* fs.writeFileString(`${at}/merge-request`, `${recorded}\n`);
   });
 
-/** The family of each of `runIds`, as the host computes it from its rows. */
 const familiesOf = (runIds: ReadonlyArray<string>) =>
   Effect.gen(function* () {
     const rows = yield* (yield* Store).runs;
