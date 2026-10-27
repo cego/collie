@@ -91,6 +91,31 @@ test("lock staleness follows the holder: dead breaks now, live and mid-claim are
     }),
   ));
 
+test("a run lock held past its budget is refused as busy, and nothing is written", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const lock = path.join(dir, "run.json.lock");
+      const held = `${encodeJson({ pid: globalThis.process.pid, start: yield* processStartTime(globalThis.process.pid) })}\n`;
+      yield* fs.writeFileString(lock, held);
+      const file = path.join(dir, "intent.json");
+
+      const started = yield* Clock.currentTimeMillis;
+      const refused = yield* withDirLock(
+        dir,
+        fs.writeFileString(file, "written while held"),
+        Duration.millis(100),
+      ).pipe(Effect.flip);
+
+      // Well short of the default budget: the shortened one is what was waited for.
+      expect((yield* Clock.currentTimeMillis) - started).toBeLessThan(1_000);
+      expect(refused.message).toContain("could not be acquired");
+      expect(yield* fs.exists(file)).toBe(false);
+      expect(yield* fs.readFileString(lock)).toBe(held);
+    }),
+  ));
+
 test("a lock that vanished before stale-lock inspection permits another claim", () =>
   runEffect(
     Effect.gen(function* () {
