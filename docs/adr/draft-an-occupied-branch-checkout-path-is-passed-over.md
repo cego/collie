@@ -26,8 +26,10 @@ contains and whichever commit it is at.
 **A path that is not free is passed over.** A new checkout goes in the first free slot of
 `<worktrees>/<basename>/<branch>`, `…/<branch>-2`, `…/<branch>-3`. The suffix goes on the
 last segment. One lock keyed by the first slot's path covers the whole look and cut, so two
-clones of one name contend on it, as they do for `roaming`. Under that lock git is asked for
-the list again, so a Run that waited finds the checkout the first one cut and reuses it.
+clones of one name contend on it, as they do for `roaming`. A checkout git already lists on
+the branch is reused only under that lock too, because git lists one before it has filled it.
+Under the lock git is asked for the list again, so a Run that waited finds the checkout the
+first one cut and reuses it.
 
 A slot that holds anything is left as it is and passed over. That includes another clone's
 checkout, a directory that does not say which repository it belongs to, and a checkout of
@@ -36,9 +38,11 @@ this repository on another branch. The Run's log names each slot it passed over 
 refusal names each slot, says whose it is, and says what the human can do.
 
 **A refused cut has no side effects.** What is at the path is read before git writes
-anything. A local branch is made only by a `worktree add -b` that succeeds. If git made the
-branch and then failed, Collie deletes that branch, but only while it still points where it
-was made. A branch that existed before is never moved, reset or deleted.
+anything. Collie makes a new local branch itself, at the commit it resolved the base to, with
+`git branch`, which refuses a branch somebody else made since the look. `worktree add -b`
+cannot be used: it fails the same way whether or not it made the branch. If the checkout
+then fails, Collie deletes the branch it made, but only while it still points where it was
+made. A branch that existed before is never moved, reset or deleted.
 
 **The head is checked where it is used.** A local branch is checked out as git has it.
 Stage and Release already fast-forward their checkout to the merge request's head. That

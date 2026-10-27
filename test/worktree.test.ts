@@ -141,6 +141,7 @@ const gitAnswers = (branch = "add-picker", remoteBranches: string[] = []) => ({
     ["master", ...remoteBranches].flatMap((ref) => [
       [`rev-parse --verify origin/${ref}`, "deadbeef"],
       [`rev-parse --verify --quiet refs/remotes/origin/${ref}`, "deadbeef"],
+      [`rev-parse --verify --quiet origin/${ref}^{commit}`, "deadbeef"],
     ]),
   ),
   "rev-parse --abbrev-ref HEAD": branch,
@@ -173,11 +174,12 @@ const fakeGitWithCheckouts = (
     {
       ...gitAnswers(opts.branch ?? "add-picker", opts.remoteBranches ?? []),
       "worktree list --porcelain": porcelain(checkouts),
+      "branch ": "",
     },
     opts.refusals ?? {},
     {
       // The path is the first absolute argument, which is what makes this answer both
-      // `worktree add <at> -b <branch>` and `worktree add --detach <at> <ref>`.
+      // `worktree add <at> <branch>` and `worktree add --detach <at> <ref>`.
       "worktree add":
         'for a in "$@"; do case "$a" in /*) mkdir -p "$a" && printf "gitdir: $a/.gitdir\\n" > "$a/.git"; break ;; esac; done',
       "worktree remove": 'rm -rf "$3"',
@@ -1511,7 +1513,7 @@ test("a mutating run makes its checkout with git and stays in the workspace it s
       // git itself, from the repository's own checkout, and no herdr workspace at all.
       expect(yield* askedIn()).toContainEqual({
         cwd: rig.projectDir,
-        command: `worktree add ${at} -b ${LOGIN}/add-a-picker origin/master`,
+        command: `worktree add ${at} ${LOGIN}/add-a-picker`,
       });
       expect(yield* rig.cmds()).toEqual([]);
     }),

@@ -2,7 +2,7 @@
 // name want the same directory, and neither may be handed or harmed by the other's (#220).
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { Effect, FileSystem } from "effect";
+import { Effect, Fiber, FileSystem, Schedule } from "effect";
 import { runOnPath } from "./support/forge";
 import { exec } from "./support/command";
 import { FakeBin } from "./support/bin";
@@ -27,7 +27,6 @@ const git = (cwd: string, ...args: string[]) =>
     }),
   );
 
-/** `git` that may fail, for questions whose answer is whether it did. */
 const gitCode = (cwd: string, ...args: string[]) =>
   exec(["git", ...args], { cwd }).pipe(Effect.map((ran) => ran.exitCode));
 
@@ -66,10 +65,8 @@ const ask = (recordedBy: RecordedBy = () => Effect.succeed(null)) =>
     recordedBy,
   });
 
-/** Clone B's checkout of the branch at the first slot, as in the incident. */
 const cloneBHoldsFirst = () => git(cloneB, "worktree", "add", "-q", first, BRANCH);
 
-/** Every file under `dir` with its content, git's own directory left out. */
 const filesUnder = Effect.fn("branchCheckoutTest.filesUnder")(function* (dir: string) {
   const fs = yield* FileSystem.FileSystem;
   const files: Record<string, string> = {};
@@ -81,7 +78,6 @@ const filesUnder = Effect.fn("branchCheckoutTest.filesUnder")(function* (dir: st
   return files;
 });
 
-/** What a human would look at in a checkout to see that nobody touched it. */
 const looksOf = (dir: string) =>
   Effect.gen(function* () {
     return {
@@ -128,6 +124,9 @@ test(
         expect(yield* git(checkout.cwd, "branch", "--show-current")).toBe(BRANCH);
         expect(yield* git(checkout.cwd, "rev-parse", "HEAD")).toBe(
           yield* git(origin, "rev-parse", BRANCH),
+        );
+        expect(yield* git(checkout.cwd, "rev-parse", "--abbrev-ref", "@{u}")).toBe(
+          `origin/${BRANCH}`,
         );
         expect(yield* looksOf(first)).toEqual(before);
         expect(checkout.note).toContain(
@@ -264,16 +263,16 @@ test(
   60_000,
 );
 
-/** A git that takes the path it is asked to add a worktree at just before it adds one. */
-const somebodyTakesTheSlot = Effect.fn("branchCheckoutTest.somebodyTakesTheSlot")(function* () {
-  const real = Bun.which("git");
+const gitThat = Effect.fn("branchCheckoutTest.gitThat")(function* (
+  before: (real: string) => string,
+) {
+  const real = Bun.which("git")!;
   const bin = yield* Effect.acquireRelease(FakeBin.make(`${rig.root}/bin`), (bin) => bin.restore());
-  yield* bin.add(
-    "git",
-    `if [ "$1" = worktree ] && [ "$2" = add ]; then mkdir -p "$3" && echo theirs > "$3/file"; fi
-exec "${real}" "$@"`,
-  );
+  yield* bin.add("git", `${before(real)}\nexec "${real}" "$@"`);
 });
+
+const takesTheSlot = `if [ "$1" = worktree ] && [ "$2" = add ]; then mkdir -p "$3" && echo theirs > "$3/file"; fi`;
+const somebodyTakesTheSlot = () => gitThat(() => takesTheSlot);
 
 test(
   "a cut that fails after the look leaves no branch it made",
@@ -304,6 +303,99 @@ test(
 
         expect(checkout.refused).toContain(`no worktree for ${BRANCH}`);
         expect(yield* git(cloneA, "rev-parse", BRANCH)).toBe(before);
+      }),
+    ),
+  60_000,
+);
+
+test(
+  "a branch somebody else makes between the look and the cut is left where they made it",
+  () =>
+    runOnPath(
+      Effect.gen(function* () {
+        yield* gitThat(
+          (real) =>
+            `case "$1 $4" in "rev-parse "*'^{commit}') "${real}" -C "${cloneA}" branch -q ${BRANCH} origin/${BRANCH} ;; esac`,
+        );
+
+        const checkout = yield* ask();
+
+        expect(checkout.refused).toContain(`no worktree for ${BRANCH}`);
+        expect(yield* git(cloneA, "rev-parse", BRANCH)).toBe(
+          yield* git(cloneA, "rev-parse", `origin/${BRANCH}`),
+        );
+      }),
+    ),
+  60_000,
+);
+
+test(
+  "a cut that fails after its base moved leaves no branch it made",
+  () =>
+    runOnPath(
+      Effect.gen(function* () {
+        yield* gitThat(
+          (real) => `case "$1 $4" in "rev-parse "*'^{commit}')
+  "${real}" "$@"; code=$?
+  "${real}" -C "${cloneA}" update-ref refs/remotes/origin/${BRANCH} origin/master
+  exit $code ;;
+esac
+${takesTheSlot}`,
+        );
+
+        const checkout = yield* ask();
+
+        expect(checkout.refused).toContain(`no worktree for ${BRANCH}`);
+        expect(yield* hasLocal(cloneA, BRANCH)).toBe(false);
+      }),
+    ),
+  60_000,
+);
+
+test(
+  "a checkout git lists while another attempt is still filling it is given only once filled",
+  () =>
+    runOnPath(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const seed = `${rig.root}/seed`;
+        yield* fs.writeFileString(`${seed}/.gitattributes`, "payload filter=slow\n");
+        yield* fs.writeFileString(`${seed}/payload`, "the work\n");
+        yield* git(seed, "add", ".");
+        yield* git(seed, "commit", "-qm", "payload");
+        yield* git(seed, "push", "-q", "origin", BRANCH);
+        yield* git(cloneA, "fetch", "-q", "origin");
+        // The smudge filter holds the first checkout half-written until `go` is written.
+        const smudging = `${rig.root}/smudging`;
+        const go = `${rig.root}/go`;
+        yield* exec(["mkfifo", go]);
+        const filter = `${rig.root}/smudge`;
+        yield* fs.writeFileString(
+          filter,
+          `#!/bin/sh\ntouch "${smudging}"\nread line < "${go}"\ncat\n`,
+        );
+        yield* fs.chmod(filter, 0o755);
+        yield* git(cloneA, "config", "filter.slow.smudge", filter);
+
+        const filling = yield* Effect.forkChild(ask());
+        yield* fs.exists(smudging).pipe(
+          Effect.flatMap((there) => (there ? Effect.void : Effect.fail("not yet"))),
+          Effect.retry({ schedule: Schedule.spaced("20 millis"), times: 1_000 }),
+        );
+        const waiting = yield* Effect.forkChild(
+          ask().pipe(
+            Effect.flatMap((checkout) =>
+              fs
+                .exists(`${checkout.cwd}/payload`)
+                .pipe(Effect.map((filled) => ({ cwd: checkout.cwd, filled }))),
+            ),
+          ),
+        );
+        yield* Effect.sleep("1 second");
+        yield* fs.writeFileString(go, "go\n");
+
+        const filled = yield* Fiber.join(filling);
+        expect(yield* Fiber.join(waiting)).toEqual({ cwd: filled.cwd, filled: true });
       }),
     ),
   60_000,

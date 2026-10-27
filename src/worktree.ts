@@ -647,9 +647,7 @@ const gitCheckout = Effect.fn("worktree.gitCheckout")(function* (opts: {
   const { run, branch } = opts;
   const listing = yield* gitWorktrees(run, opts.cwd);
   if (!listing) return { refused: `${opts.cwd} is not a git checkout` };
-  const existing = listing.checkouts.find((checkout) => checkout.branch === branch);
-  if (existing) return { path: existing.path, created: false, passed: [] };
-
+  // Even a listed checkout waits for the lock: git lists one before it has filled it.
   const first = path.join(opts.worktrees, path.basename(listing.repo), ...branchPath(branch));
   return yield* withLock(
     destinationLock(opts.stateDir, first),
@@ -691,28 +689,32 @@ const cutBranchCheckout = Effect.fn("worktree.cutBranchCheckout")(function* (opt
   }
   if (at === null) return { refused: `${passed.join("; ")}; free one of them and retry` };
 
-  // `-b` only for a branch that does not exist yet: git refuses to create one twice,
-  // and a branch this checkout already has is what a fix round works on.
+  // A branch this checkout already has is what a fix round works on.
   const known =
     (yield* run("git", ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`], opts.repo))
       .code === 0;
-  const start = known
-    ? ""
-    : (yield* run(
-        "git",
-        ["rev-parse", "--verify", "--quiet", `${opts.base || "HEAD"}^{commit}`],
-        opts.repo,
-      )).stdout.trim();
-  const args = known
-    ? ["worktree", "add", at, branch]
-    : ["worktree", "add", at, "-b", branch, ...(opts.base ? [opts.base] : [])];
-  const added = yield* run("git", args, opts.repo);
+  let start = "";
+  if (!known) {
+    const base = opts.base || "HEAD";
+    const resolved = yield* run(
+      "git",
+      ["rev-parse", "--verify", "--quiet", `${base}^{commit}`],
+      opts.repo,
+    );
+    if (resolved.code !== 0) return { refused: `${base} is not a commit` };
+    start = resolved.stdout.trim();
+    // Made here rather than by `worktree add -b`, which fails the same way whether or not
+    // it made the branch: `git branch` refuses one somebody else made since the look.
+    const made = yield* run("git", ["branch", branch, start], opts.repo);
+    if (made.code !== 0) return { refused: whatItSaid(made) || `git would not make ${branch}` };
+    // What `-b` would have tracked.
+    if (opts.base?.startsWith("origin/"))
+      yield* run("git", ["branch", "--set-upstream-to", opts.base, branch], opts.repo);
+  }
+  const added = yield* run("git", ["worktree", "add", at, branch], opts.repo);
   if (added.code !== 0) {
-    // git makes the branch before it fails to make the checkout, and keeps it. Deleted
-    // only while still where it was made, so nobody else's branch goes with it.
-    if (start !== "") {
-      yield* run("git", ["update-ref", "-d", `refs/heads/${branch}`, start], opts.repo);
-    }
+    // Deleted only while still where it was made, so nobody else's branch goes with it.
+    if (!known) yield* run("git", ["update-ref", "-d", `refs/heads/${branch}`, start], opts.repo);
     return { refused: whatItSaid(added) || `git would not add a worktree at ${at}` };
   }
   return { path: at, created: true, passed };
