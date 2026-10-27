@@ -327,7 +327,8 @@ watch(
               v-if="source !== null"
               variant="link"
               size="xs"
-              class="self-start p-0"
+              class="max-w-full self-start p-0 text-left"
+              :ui="{ label: 'whitespace-normal! [overflow-wrap:anywhere]' }"
               :label="`Started by ${source.run} on ${source.machine}`"
               @click="origin(source.run, source.machine)"
           /></template>
